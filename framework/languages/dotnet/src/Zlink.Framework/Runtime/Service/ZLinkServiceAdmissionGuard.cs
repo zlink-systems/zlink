@@ -6,31 +6,31 @@ internal enum ZLinkServiceAdmissionDecision
 {
     Accept = 1,
     Idempotent,
-    Reject
+    Reject,
 }
 
 internal enum ZLinkServiceConnectionDirection
 {
     Inbound = 1,
-    Outbound
+    Outbound,
 }
 
 internal enum ZLinkServiceDuplicateConnectionDecision
 {
     NotDuplicate = 1,
     KeepCurrent,
-    UseIncoming
+    UseIncoming,
 }
 
 internal static class ZLinkServiceAdmissionGuard
 {
-    private static readonly HashSet<byte> MutableExtensionFields =
-        [1, 5, 8, 9, 10, 11, 12];
+    private static readonly HashSet<byte> MutableExtensionFields = [1, 5, 8, 9, 10, 11, 12];
 
     internal static ZLinkServiceAdmissionDecision Evaluate(
         ZLinkServiceWireCodec.AdmissionRecord? current,
         ServiceWireConstants.Command command,
-        ZLinkServiceWireCodec.AdmissionRecord incoming)
+        ZLinkServiceWireCodec.AdmissionRecord incoming
+    )
     {
         if (current is null)
             return command == ServiceWireConstants.Command.Update
@@ -61,33 +61,33 @@ internal static class ZLinkServiceAdmissionGuard
         string expectedEndpoint,
         string expectedSecurityIdentity,
         ulong expectedLifecycleGeneration,
-        ZLinkServiceWireCodec.AdmissionRecord incoming) =>
-        string.Equals(
-            expectedEndpoint,
-            incoming.AdvertisedEndpoint,
-            StringComparison.Ordinal)
-        && SecurityIdentityMatches(
-            expectedSecurityIdentity,
-            incoming.SecurityIdentity)
-        && (expectedLifecycleGeneration == 0
-            || expectedLifecycleGeneration
-                == incoming.LifecycleGeneration);
+        ZLinkServiceWireCodec.AdmissionRecord incoming
+    ) =>
+        string.Equals(expectedEndpoint, incoming.AdvertisedEndpoint, StringComparison.Ordinal)
+        && SecurityIdentityMatches(expectedSecurityIdentity, incoming.SecurityIdentity)
+        && (
+            expectedLifecycleGeneration == 0
+            || expectedLifecycleGeneration == incoming.LifecycleGeneration
+        );
 
     internal static bool MatchesExpectedTransportRoute(
         string expectedEndpoint,
         string expectedSecurityIdentity,
         string authenticatedSecurityIdentity,
         ulong expectedLifecycleGeneration,
-        ZLinkServiceWireCodec.AdmissionRecord incoming) =>
+        ZLinkServiceWireCodec.AdmissionRecord incoming
+    ) =>
         MatchesExpectedRoute(
             expectedEndpoint,
             expectedSecurityIdentity,
             expectedLifecycleGeneration,
-            incoming)
+            incoming
+        )
         && string.Equals(
             expectedSecurityIdentity,
             authenticatedSecurityIdentity,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
 
     // C++ RouteMesh descriptors retain their historical unauthenticated
     // identity spelling ("default"). The actual ROUTER transport is still
@@ -95,11 +95,13 @@ internal static class ZLinkServiceAdmissionGuard
     // expectation; authenticated identities remain exact-match only.
     private static bool SecurityIdentityMatches(string expected, string actual) =>
         string.Equals(expected, actual, StringComparison.Ordinal)
-        || (string.Equals(
+        || (
+            string.Equals(
                 expected,
                 ZLinkServiceSecurityIdentity.Plaintext,
-                StringComparison.Ordinal)
-            && string.Equals(actual, "default", StringComparison.Ordinal));
+                StringComparison.Ordinal
+            ) && string.Equals(actual, "default", StringComparison.Ordinal)
+        );
 
     internal static ZLinkServiceDuplicateConnectionDecision SelectConnection(
         RoutingId localRid,
@@ -109,49 +111,54 @@ internal static class ZLinkServiceAdmissionGuard
         string currentDiscriminator,
         ulong incomingLifecycleGeneration,
         ZLinkServiceConnectionDirection incomingDirection,
-        string incomingDiscriminator)
+        string incomingDiscriminator
+    )
     {
-        if (currentLifecycleGeneration != 0
-            && currentLifecycleGeneration != incomingLifecycleGeneration)
+        if (
+            currentLifecycleGeneration != 0
+            && currentLifecycleGeneration != incomingLifecycleGeneration
+        )
             return ZLinkServiceDuplicateConnectionDecision.NotDuplicate;
 
         // Both peers derive the same surviving pipe: the lower RID owns the
         // outbound side. Same-direction candidates use their stable
         // connection-local discriminator as the final tie-breaker.
-        var preferredDirection = string.CompareOrdinal(
-                localRid.ToHex(),
-                peerRid.ToHex()) < 0
-            ? ZLinkServiceConnectionDirection.Outbound
-            : ZLinkServiceConnectionDirection.Inbound;
+        var preferredDirection =
+            string.CompareOrdinal(localRid.ToHex(), peerRid.ToHex()) < 0
+                ? ZLinkServiceConnectionDirection.Outbound
+                : ZLinkServiceConnectionDirection.Inbound;
         if (currentDirection != incomingDirection)
             return currentDirection == preferredDirection
                 ? ZLinkServiceDuplicateConnectionDecision.KeepCurrent
                 : ZLinkServiceDuplicateConnectionDecision.UseIncoming;
 
-        return StringComparer.Ordinal.Compare(
-                currentDiscriminator,
-                incomingDiscriminator) <= 0
+        return StringComparer.Ordinal.Compare(currentDiscriminator, incomingDiscriminator) <= 0
             ? ZLinkServiceDuplicateConnectionDecision.KeepCurrent
             : ZLinkServiceDuplicateConnectionDecision.UseIncoming;
     }
 
     private static bool ImmutableFieldsMatch(
         ZLinkServiceWireCodec.AdmissionRecord existing,
-        ZLinkServiceWireCodec.AdmissionRecord incoming)
+        ZLinkServiceWireCodec.AdmissionRecord incoming
+    )
     {
-        if (!string.Equals(existing.MeshName, incoming.MeshName, StringComparison.Ordinal)
+        if (
+            !string.Equals(existing.MeshName, incoming.MeshName, StringComparison.Ordinal)
             || !string.Equals(
                 existing.SecurityIdentity,
                 incoming.SecurityIdentity,
-                StringComparison.Ordinal)
+                StringComparison.Ordinal
+            )
             || !string.Equals(
                 existing.AdvertisedEndpoint,
                 incoming.AdvertisedEndpoint,
-                StringComparison.Ordinal)
+                StringComparison.Ordinal
+            )
             || existing.ObjectRole != incoming.ObjectRole
             || existing.ApplicationVersion != incoming.ApplicationVersion
             || existing.Channels.Count != incoming.Channels.Count
-            || existing.ExtensionFields.Count != incoming.ExtensionFields.Count)
+            || existing.ExtensionFields.Count != incoming.ExtensionFields.Count
+        )
             return false;
 
         foreach (var channel in existing.Channels.Keys)
@@ -162,13 +169,15 @@ internal static class ZLinkServiceAdmissionGuard
         {
             if (MutableExtensionFields.Contains(id))
                 continue;
-            if (!incoming.ExtensionFields.TryGetValue(id, out var candidate)
-                || !value.AsSpan().SequenceEqual(candidate))
+            if (
+                !incoming.ExtensionFields.TryGetValue(id, out var candidate)
+                || !value.AsSpan().SequenceEqual(candidate)
+            )
                 return false;
         }
 
-        return incoming.ExtensionFields.Keys.All(
-            id => MutableExtensionFields.Contains(id)
-                  || existing.ExtensionFields.ContainsKey(id));
+        return incoming.ExtensionFields.Keys.All(id =>
+            MutableExtensionFields.Contains(id) || existing.ExtensionFields.ContainsKey(id)
+        );
     }
 }

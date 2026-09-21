@@ -1,12 +1,13 @@
 package systems.zlink.framework.runtime.spots;
 
-import java.nio.charset.StandardCharsets;
-import java.util.List;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
+
+import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 final class ZLinkSpotFlowFrame {
     private static final String PREFIX = "__zlink.flow\n";
@@ -14,41 +15,44 @@ final class ZLinkSpotFlowFrame {
     //  name; larger route parts are payload frames and are never stringified.
     private static final int MAX_FRAME_BYTES = 96;
 
-    private ZLinkSpotFlowFrame() { }
+    private ZLinkSpotFlowFrame() {}
 
     /**
-     * Encodes an explicitly passed flow state (R1 value-passing): outbound
-     * entry points capture the state as a value and hand it to the encoder
-     * instead of installing a scope, so the stages they return stay bare.
+     * Encodes an explicitly passed flow state (R1 value-passing): outbound entry points capture the
+     * state as a value and hand it to the encoder instead of installing a scope, so the stages they
+     * return stay bare.
      */
     static Message encode(ZLinkFlowContext.State state) {
-        return state == null ? null : Message.from((PREFIX + state.flowId() + "\n" + state.origin().name())
-            .getBytes(StandardCharsets.UTF_8));
+        return state == null
+                ? null
+                : Message.from(
+                        (PREFIX + state.flowId() + "\n" + state.origin().name())
+                                .getBytes(StandardCharsets.UTF_8));
     }
 
     static ZLinkFlowContext.State fromEnvelopeHeader(
-        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header header) {
+            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header header) {
         return header.flowId() == null
-            ? null
-            : new ZLinkFlowContext.State(header.flowId(), header.flowOrigin());
+                ? null
+                : new ZLinkFlowContext.State(header.flowId(), header.flowOrigin());
     }
 
     /**
-     * Reads the inbound flow pair from a SPOT route message. A shared
-     * cross-language envelope carries the pair in its JSON header
-     * (spec 27 §4); legacy internal raw-parts packets may still carry the
-     * standalone flow frame behind the packet-name and payload parts. A
-     * malformed envelope header or a frame with the flow prefix but not a
-     * valid UUIDv7 pair is a protocol error (spec 27 §3).
+     * Reads the inbound flow pair from a SPOT route message. A shared cross-language envelope
+     * carries the pair in its JSON header (spec 27 §4); legacy internal raw-parts packets may still
+     * carry the standalone flow frame behind the packet-name and payload parts. A malformed
+     * envelope header or a frame with the flow prefix but not a valid UUIDv7 pair is a protocol
+     * error (spec 27 §3).
      */
     static ZLinkFlowContext.State decode(List<Message> parts) {
-        if (systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
-                .looksLikeEnvelope(parts)) {
-            var header = systems.zlink.framework.runtime.messaging
-                .ZLinkChannelEnvelope.decodeHeader(parts.get(0), true);
+        if (systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.looksLikeEnvelope(
+                parts)) {
+            var header =
+                    systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.decodeHeader(
+                            parts.get(0), true);
             return header.flowId() == null
-                ? null
-                : new ZLinkFlowContext.State(header.flowId(), header.flowOrigin());
+                    ? null
+                    : new ZLinkFlowContext.State(header.flowId(), header.flowOrigin());
         }
         //  The legacy encoder placed the flow frame at index 2, or at index 3
         //  when a content-type frame preceded it.
@@ -70,8 +74,7 @@ final class ZLinkSpotFlowFrame {
                 throw invalidFlow("SPOT route flow id must be UUIDv7", null);
             }
             try {
-                return new ZLinkFlowContext.State(
-                    fields[1], ZLinkFlowOrigin.valueOf(fields[2]));
+                return new ZLinkFlowContext.State(fields[1], ZLinkFlowOrigin.valueOf(fields[2]));
             } catch (IllegalArgumentException invalidOrigin) {
                 throw invalidFlow("SPOT route flow origin is invalid", invalidOrigin);
             }
@@ -79,10 +82,7 @@ final class ZLinkSpotFlowFrame {
         return null;
     }
 
-    private static ZLinkFrameworkException invalidFlow(
-        String message,
-        Throwable cause) {
-        return new ZLinkFrameworkException(
-            ZLinkFrameworkErrorKind.PROTOCOL_ERROR, message, cause);
+    private static ZLinkFrameworkException invalidFlow(String message, Throwable cause) {
+        return new ZLinkFrameworkException(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, message, cause);
     }
 }

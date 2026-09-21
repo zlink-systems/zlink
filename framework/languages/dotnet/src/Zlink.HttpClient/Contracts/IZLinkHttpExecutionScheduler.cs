@@ -21,7 +21,8 @@ public interface IZLinkHttpExecutionTurn
     /// </summary>
     ValueTask<TResult> YieldAsync<TResult>(
         Func<CancellationToken, ValueTask<TResult>> operation,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     /// <summary>Queues a completion callback as a new turn on the captured execution line.</summary>
     void Post(Action callback);

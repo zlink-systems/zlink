@@ -1,4 +1,8 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException, internalFrameworkErrorKind  } from '../framework-errors-internal';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException,
+  internalFrameworkErrorKind
+} from '../framework-errors-internal';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import {
   RequestResult,
@@ -15,10 +19,7 @@ import type {
   ZLinkMessageSerializer
 } from '../../contracts';
 import { ZLinkSpotKind } from '../../contracts';
-import {
-  ZLinkFrameworkException,
-  ZLinkFrameworkErrorKind
-} from '../../contracts';
+import { ZLinkFrameworkException, ZLinkFrameworkErrorKind } from '../../contracts';
 import {
   requireOneWayCompletion,
   throwAlreadySubmitted,
@@ -82,13 +83,15 @@ export interface ZLinkActorClientOptions {
   ) => Promise<unknown> | undefined;
   readonly sendErrorReporter?: (error: unknown) => void;
   readonly routeTransport?: ZLinkActorRoutedJoinTransport;
-  readonly transportDeliveryGate?: () => {
-    waitBeforeSubmit(
-      actorId: string,
-      kind: 'oneWay' | 'request',
-      signal?: AbortSignal
-    ): Promise<number | void>;
-  } | undefined;
+  readonly transportDeliveryGate?: () =>
+    | {
+        waitBeforeSubmit(
+          actorId: string,
+          kind: 'oneWay' | 'request',
+          signal?: AbortSignal
+        ): Promise<number | void>;
+      }
+    | undefined;
 }
 
 export class DefaultZLinkActorClient implements ZLinkActorClient {
@@ -97,8 +100,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
   sendToActor(actorId: string, message: unknown): ZLinkActorSendCall {
     requireActorId(actorId);
     return new DefaultZLinkActorSendCall(
-      (packetName, metadata, signal) =>
-        this.send(actorId, packetName, message, metadata, signal),
+      (packetName, metadata, signal) => this.send(actorId, packetName, message, metadata, signal),
       message
     );
   }
@@ -127,19 +129,20 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
     const route = await this.resolveActorRoute(actorId, signal);
     const { meshName, actorRef: actor } = route;
     this.throwIfKnownStale(meshName, actor);
-    const parts = this.createPacketParts(ZLinkStreamMessageKind.Send, undefined, explicitPacketName, message, metadata);
-    const messageFollow = createActorMessageFollowContext(
-      route,
-      parts,
-      false
+    const parts = this.createPacketParts(
+      ZLinkStreamMessageKind.Send,
+      undefined,
+      explicitPacketName,
+      message,
+      metadata
     );
+    const messageFollow = createActorMessageFollowContext(route, parts, false);
     const routedActor = attachActorMessageFollowContext(actor, messageFollow);
     try {
-      const submissionCopies = await this.options.transportDeliveryGate?.()?.waitBeforeSubmit(
-        actorId,
-        'oneWay',
-        signal
-      ) ?? 1;
+      const submissionCopies =
+        (await this.options
+          .transportDeliveryGate?.()
+          ?.waitBeforeSubmit(actorId, 'oneWay', signal)) ?? 1;
       const handoff = this.options.handoffCapture?.(
         meshName,
         actor.actorId,
@@ -164,8 +167,8 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
       }
       const node = this.requireNode(meshName);
       if (
-        this.options.routeTransport !== undefined
-        && String(node.status().routingId) !== String(actor.nodeRid)
+        this.options.routeTransport !== undefined &&
+        String(node.status().routingId) !== String(actor.nodeRid)
       ) {
         await this.options.routeTransport.sendToSpot(
           remoteActorRouteTarget(route),
@@ -205,20 +208,17 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
     waitPolicy: 'async' | 'yield' = 'async'
   ): Promise<TReply> {
     throwIfAborted(signal);
-    const sourceSpotId = currentZLinkActorExecution()?.spotId
-      ?? currentZLinkSpotSerialSourceId();
+    const sourceSpotId = currentZLinkActorExecution()?.spotId ?? currentZLinkSpotSerialSourceId();
     const effectiveTimeoutMs = timeoutMs ?? this.options.defaultRequestTimeoutMs;
-    const deadlineMs = effectiveTimeoutMs === undefined
-      ? undefined
-      : performance.now() + effectiveTimeoutMs;
-    const deadlineUnixMs = effectiveTimeoutMs === undefined
-      ? undefined
-      : Date.now() + effectiveTimeoutMs;
+    const deadlineMs =
+      effectiveTimeoutMs === undefined ? undefined : performance.now() + effectiveTimeoutMs;
+    const deadlineUnixMs =
+      effectiveTimeoutMs === undefined ? undefined : Date.now() + effectiveTimeoutMs;
     const route = await this.resolveActorRoute(actorId, signal);
     if (
-      waitPolicy === 'async'
-      && sourceSpotId !== undefined
-      && sameSpotRoute(sourceSpotId, route)
+      waitPolicy === 'async' &&
+      sourceSpotId !== undefined &&
+      sameSpotRoute(sourceSpotId, route)
     ) {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.InvalidOperation,
@@ -248,11 +248,10 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
     );
     const routedActor = attachActorMessageFollowContext(actor, messageFollow);
     try {
-      const submissionCopies = await this.options.transportDeliveryGate?.()?.waitBeforeSubmit(
-        actorId,
-        'request',
-        signal
-      ) ?? 1;
+      const submissionCopies =
+        (await this.options
+          .transportDeliveryGate?.()
+          ?.waitBeforeSubmit(actorId, 'request', signal)) ?? 1;
       const handoff = this.options.handoffCapture?.(
         meshName,
         actor.actorId,
@@ -349,9 +348,11 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
   ): readonly Message[] {
     const packetName = resolveFrameworkPacketName(message, explicitPacketName, 'Actor');
     const flags =
-      (requestSeq === undefined ? ZLinkStreamHeaderFlags.None : ZLinkStreamHeaderFlags.HasRequestSeq)
-      | (metadata.size === 0 ? ZLinkStreamHeaderFlags.None : ZLinkStreamHeaderFlags.HasMetadata)
-      | (correlationId === undefined
+      (requestSeq === undefined
+        ? ZLinkStreamHeaderFlags.None
+        : ZLinkStreamHeaderFlags.HasRequestSeq) |
+      (metadata.size === 0 ? ZLinkStreamHeaderFlags.None : ZLinkStreamHeaderFlags.HasMetadata) |
+      (correlationId === undefined
         ? ZLinkStreamHeaderFlags.None
         : ZLinkStreamHeaderFlags.HasCorrelationId);
     const encoded = encodeFrameworkPayload(
@@ -390,7 +391,9 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
     const node = this.requireNode(meshName);
     try {
       return mapSubmitResult(
-        await node.sendToActor(actor, toMessageLikeParts(parts), { flags: ZLINK_BACKEND_SEND_NONE }),
+        await node.sendToActor(actor, toMessageLikeParts(parts), {
+          flags: ZLINK_BACKEND_SEND_NONE
+        }),
         'Actor send'
       );
     } catch (error) {
@@ -414,9 +417,9 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
   ): Promise<TReply> {
     const node = this.requireNode(meshName);
     if (
-      this.options.routeTransport !== undefined
-      && String(node.status().routingId) !== String(actor.nodeRid)
-      && route !== undefined
+      this.options.routeTransport !== undefined &&
+      String(node.status().routingId) !== String(actor.nodeRid) &&
+      route !== undefined
     ) {
       const relay = encodeRemoteActorPacketRelayPayload({
         actorId: actor.actorId,
@@ -453,7 +456,9 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
       if (reply.ok !== true) {
         throw createInternalFrameworkException(
           remoteRelayErrorKind(reply.errorKind),
-          typeof reply.error === 'string' ? reply.error : `Remote Actor request failed for '${actor.actorId}'.`
+          typeof reply.error === 'string'
+            ? reply.error
+            : `Remote Actor request failed for '${actor.actorId}'.`
         );
       }
       return reply.response as TReply;
@@ -463,16 +468,16 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
       throw routeNotConnected('Actor request requires a running MeshNode completion table.');
     }
     const completion = await completions.submit(
-      () => node.requestToActor(actor, toMessageLikeParts(parts), {
-        flags: ZLINK_BACKEND_SEND_NONE,
-        timeoutMs
-      }),
+      () =>
+        node.requestToActor(actor, toMessageLikeParts(parts), {
+          flags: ZLINK_BACKEND_SEND_NONE,
+          timeoutMs
+        }),
       signal
     );
     if (completion.terminalResult !== RequestResult.Ok) {
       closeMeshCompletion(completion);
-      throw mapRequestResult(
-        completion.terminalResult, completion.failureErrno, 'Actor request');
+      throw mapRequestResult(completion.terminalResult, completion.failureErrno, 'Actor request');
     }
     return decodeActorReply<TReply>(
       completion.parts,
@@ -520,15 +525,18 @@ function createActorMessageFollowContext(
   correlationId?: string,
   operationId?: string
 ): ZLinkActorMessageFollowContext {
-  if (typeof route.ownerId !== 'string' || route.ownerId.length === 0
-      || typeof route.ownerLeaseGeneration !== 'bigint'
-      || route.ownerLeaseGeneration <= 0n
-      || typeof route.ownerNodeGeneration !== 'bigint'
-      || route.ownerNodeGeneration <= 0n
-      || typeof route.authorityOwnerGeneration !== 'bigint'
-      || route.authorityOwnerGeneration <= 0n
-      || typeof route.actorRef.objectGeneration !== 'bigint'
-      || route.actorRef.objectGeneration <= 0n) {
+  if (
+    typeof route.ownerId !== 'string' ||
+    route.ownerId.length === 0 ||
+    typeof route.ownerLeaseGeneration !== 'bigint' ||
+    route.ownerLeaseGeneration <= 0n ||
+    typeof route.ownerNodeGeneration !== 'bigint' ||
+    route.ownerNodeGeneration <= 0n ||
+    typeof route.authorityOwnerGeneration !== 'bigint' ||
+    route.authorityOwnerGeneration <= 0n ||
+    typeof route.actorRef.objectGeneration !== 'bigint' ||
+    route.actorRef.objectGeneration <= 0n
+  ) {
     throw actorLocationStale(
       route.actorRef.actorId,
       new Error('Resolved Actor route does not contain an exact authority owner fence.')
@@ -545,12 +553,17 @@ function createActorMessageFollowContext(
 }
 
 function remoteRelayErrorKind(value: unknown): ZLinkFrameworkInternalErrorKind {
-  return Object.values(ZLinkFrameworkInternalErrorKind).includes(value as ZLinkFrameworkInternalErrorKind)
-    ? value as ZLinkFrameworkInternalErrorKind
+  return Object.values(ZLinkFrameworkInternalErrorKind).includes(
+    value as ZLinkFrameworkInternalErrorKind
+  )
+    ? (value as ZLinkFrameworkInternalErrorKind)
     : ZLinkFrameworkInternalErrorKind.RequestFailed;
 }
 
-function remainingActorRequestTimeout(actorId: string, deadlineMs: number | undefined): number | undefined {
+function remainingActorRequestTimeout(
+  actorId: string,
+  deadlineMs: number | undefined
+): number | undefined {
   if (deadlineMs === undefined) return undefined;
   const remaining = deadlineMs - performance.now();
   if (remaining <= 0) {
@@ -573,18 +586,21 @@ async function waitHandoffReply<TReply>(
   reply: Promise<unknown>,
   timeoutMs: number | undefined
 ): Promise<TReply> {
-  if (timeoutMs === undefined) return await reply as TReply;
+  if (timeoutMs === undefined) return (await reply) as TReply;
   let deadline: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       reply as Promise<TReply>,
       new Promise<TReply>((_resolve, reject) => {
         deadline = setTimeout(
-          () => reject(createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.RequestFailed,
-            'Actor handoff request timed out.',
-            true
-          )),
+          () =>
+            reject(
+              createInternalFrameworkException(
+                ZLinkFrameworkInternalErrorKind.RequestFailed,
+                'Actor handoff request timed out.',
+                true
+              )
+            ),
           timeoutMs
         );
       })
@@ -608,23 +624,27 @@ export async function forwardEncodedActorPacket(
   const parts = [header, payload];
   const packetName = decodeStreamHeader(header).name;
   if (!returnResponse) {
-    if (await node.sendToActor(
-      target,
-      parts,
-      { flags: ZLINK_BACKEND_SEND_NONE }
-    ) !== SubmitResult.Ok) {
+    if (
+      (await node.sendToActor(target, parts, { flags: ZLINK_BACKEND_SEND_NONE })) !==
+      SubmitResult.Ok
+    ) {
       throw routeNotConnected('Actor handoff send submit was not accepted.');
     }
     return undefined;
   }
-  const completion = await completions.submit(() => node.requestToActor(target, parts, {
-    flags: ZLINK_BACKEND_SEND_NONE,
-    timeoutMs
-  }));
+  const completion = await completions.submit(() =>
+    node.requestToActor(target, parts, {
+      flags: ZLINK_BACKEND_SEND_NONE,
+      timeoutMs
+    })
+  );
   if (completion.terminalResult !== RequestResult.Ok) {
     closeMeshCompletion(completion);
     throw mapRequestResult(
-      completion.terminalResult, completion.failureErrno, 'Actor handoff request');
+      completion.terminalResult,
+      completion.failureErrno,
+      'Actor handoff request'
+    );
   }
   return decodeActorReply(completion.parts, serializers, packetName);
 }
@@ -752,17 +772,12 @@ class DefaultZLinkActorRequestCall implements ZLinkActorRequestCall {
     return turn.yieldPromise(pending);
   }
 
-  private execute<TReply>(
-    waitPolicy: 'async' | 'yield',
-    signal?: AbortSignal
-  ): Promise<TReply> {
+  private execute<TReply>(waitPolicy: 'async' | 'yield', signal?: AbortSignal): Promise<TReply> {
     ensureSingleSubmit(this.executed);
     this.rejectSelfActorRequest();
     this.executed = true;
     throwIfAborted(signal);
-    const submitter = waitPolicy === 'async'
-      ? this.asyncSubmitter
-      : this.yieldSubmitter;
+    const submitter = waitPolicy === 'async' ? this.asyncSubmitter : this.yieldSubmitter;
     return submitter<TReply>(
       this.packet ?? resolveFrameworkPacketName(this.request, undefined, 'Actor'),
       this.timeoutMs ?? this.defaultRequestTimeoutMs,
@@ -781,13 +796,9 @@ class DefaultZLinkActorRequestCall implements ZLinkActorRequestCall {
   }
 }
 
-function sameSpotRoute(
-  sourceSpotId: unknown,
-  route: ZLinkResolvedActorRoute
-): boolean {
+function sameSpotRoute(sourceSpotId: unknown, route: ZLinkResolvedActorRoute): boolean {
   const targetSpotId = route.enclosingSpotRoute?.spotId ?? route.spotId;
-  return targetSpotId !== undefined
-    && String(sourceSpotId) === String(targetSpotId);
+  return targetSpotId !== undefined && String(sourceSpotId) === String(targetSpotId);
 }
 
 function decodeActorReply<TReply>(
@@ -837,12 +848,13 @@ function decodeActorReplyPayload<TReply>(
       readonly kind?: number;
     }>(payload, serializers);
     const wireKind = error.kind;
-    const publicKind = typeof wireKind === 'number'
-      && Number.isInteger(wireKind)
-      && wireKind >= ZLinkFrameworkErrorKind.NotFound
-      && wireKind <= ZLinkFrameworkErrorKind.InternalFailure
-      ? wireKind as ZLinkFrameworkErrorKind
-      : ZLinkFrameworkErrorKind.InternalFailure;
+    const publicKind =
+      typeof wireKind === 'number' &&
+      Number.isInteger(wireKind) &&
+      wireKind >= ZLinkFrameworkErrorKind.NotFound &&
+      wireKind <= ZLinkFrameworkErrorKind.InternalFailure
+        ? (wireKind as ZLinkFrameworkErrorKind)
+        : ZLinkFrameworkErrorKind.InternalFailure;
     throw new ZLinkFrameworkException(publicKind, error.message ?? 'Actor request failed.');
   }
   return decodeFrameworkPayloadMessage<TReply>(
@@ -862,7 +874,10 @@ function mapSubmitError(error: unknown, operationName: string): Error {
   if (isZLinkBackendResultError(error)) {
     switch (error.result) {
       case SubmitResult.NotConnected:
-        return routeNotConnected(`${operationName} failed because the target route is not connected.`, error);
+        return routeNotConnected(
+          `${operationName} failed because the target route is not connected.`,
+          error
+        );
       case SubmitResult.NotFound:
         return createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.ActorRouteNotFound,
@@ -919,27 +934,44 @@ function submitted(): ZLinkSubmitResult {
 //  source-owned queue exhaustion. Backpressure never appears on this reply
 //  path. Internal kinds are preserved so the stale-actor re-resolve retry
 //  (isStaleActorError) keeps working.
-function actorFailureCodeKind(
-  failureErrno: number
-): ZLinkFrameworkInternalErrorKind | undefined {
+function actorFailureCodeKind(failureErrno: number): ZLinkFrameworkInternalErrorKind | undefined {
   switch (failureErrno) {
-    case 3: return ZLinkFrameworkInternalErrorKind.ActorAlreadyExists;
-    case 4: return ZLinkFrameworkInternalErrorKind.ActorTypeMismatch;
-    case 7: return ZLinkFrameworkInternalErrorKind.SpotTypeMismatch;
-    case 8: return ZLinkFrameworkInternalErrorKind.ActorSessionNotBound;
-    case 9: case 14: return ZLinkFrameworkInternalErrorKind.RequestTargetNotFound;
-    case 12: case 16: return ZLinkFrameworkInternalErrorKind.RequestProtocolError;
+    case 3:
+      return ZLinkFrameworkInternalErrorKind.ActorAlreadyExists;
+    case 4:
+      return ZLinkFrameworkInternalErrorKind.ActorTypeMismatch;
+    case 7:
+      return ZLinkFrameworkInternalErrorKind.SpotTypeMismatch;
+    case 8:
+      return ZLinkFrameworkInternalErrorKind.ActorSessionNotBound;
+    case 9:
+    case 14:
+      return ZLinkFrameworkInternalErrorKind.RequestTargetNotFound;
+    case 12:
+    case 16:
+      return ZLinkFrameworkInternalErrorKind.RequestProtocolError;
     //  routeNotConnected(13) and a remote worker queue full(18) are Unavailable.
-    case 13: case 18: return ZLinkFrameworkInternalErrorKind.RouteNotConnected;
-    case 15: return ZLinkFrameworkInternalErrorKind.RequestRejected;
-    case 19: return ZLinkFrameworkInternalErrorKind.WorkerTimedOut;
-    case 17: return ZLinkFrameworkInternalErrorKind.RequestFailed;
-    case 20: return ZLinkFrameworkInternalErrorKind.WorkerFailed;
-    case 21: return ZLinkFrameworkInternalErrorKind.ActorLocationStale;
-    case 33: return ZLinkFrameworkInternalErrorKind.ActorGenerationStale;
-    case 34: return ZLinkFrameworkInternalErrorKind.ActorMoving;
-    case 35: return ZLinkFrameworkInternalErrorKind.RelocationDataLost;
-    default: return undefined;
+    case 13:
+    case 18:
+      return ZLinkFrameworkInternalErrorKind.RouteNotConnected;
+    case 15:
+      return ZLinkFrameworkInternalErrorKind.RequestRejected;
+    case 19:
+      return ZLinkFrameworkInternalErrorKind.WorkerTimedOut;
+    case 17:
+      return ZLinkFrameworkInternalErrorKind.RequestFailed;
+    case 20:
+      return ZLinkFrameworkInternalErrorKind.WorkerFailed;
+    case 21:
+      return ZLinkFrameworkInternalErrorKind.ActorLocationStale;
+    case 33:
+      return ZLinkFrameworkInternalErrorKind.ActorGenerationStale;
+    case 34:
+      return ZLinkFrameworkInternalErrorKind.ActorMoving;
+    case 35:
+      return ZLinkFrameworkInternalErrorKind.RelocationDataLost;
+    default:
+      return undefined;
   }
 }
 
@@ -967,16 +999,12 @@ function actorTerminalKind(result: number): ZLinkFrameworkInternalErrorKind {
   }
 }
 
-function mapRequestResult(
-  result: number,
-  failureErrno: number,
-  operationName: string
-): Error {
+function mapRequestResult(result: number, failureErrno: number, operationName: string): Error {
   const kind = actorFailureCodeKind(failureErrno) ?? actorTerminalKind(result);
   return createInternalFrameworkException(
     kind,
-    `${operationName} failed with request result ${result}`
-      + (failureErrno !== 0 ? ` (failure code ${failureErrno}).` : '.')
+    `${operationName} failed with request result ${result}` +
+      (failureErrno !== 0 ? ` (failure code ${failureErrno}).` : '.')
   );
 }
 
@@ -986,7 +1014,6 @@ function mapRequestError(
 ): Error {
   return mapRequestResult(error.result, error.failureErrno ?? 0, operationName);
 }
-
 
 function routeNotConnected(message: string, cause?: unknown): ZLinkFrameworkException {
   return createInternalFrameworkException(
@@ -998,8 +1025,10 @@ function routeNotConnected(message: string, cause?: unknown): ZLinkFrameworkExce
 }
 
 function isStaleActorError(error: unknown): boolean {
-  return error instanceof ZLinkFrameworkException
-    && internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.ActorLocationStale;
+  return (
+    error instanceof ZLinkFrameworkException &&
+    internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.ActorLocationStale
+  );
 }
 
 function actorLocationStale(actorId: string, cause: unknown): ZLinkFrameworkException {

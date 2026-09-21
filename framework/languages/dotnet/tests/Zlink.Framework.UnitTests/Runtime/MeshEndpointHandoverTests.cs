@@ -1,5 +1,4 @@
 using Systems.Zlink.Framework.Runtime.Protocol;
-
 using Zlink.Framework.Runtime.Backend.Contracts;
 
 namespace Zlink.Framework.UnitTests;
@@ -9,7 +8,9 @@ public sealed partial class StatefulServiceRuntimeTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task OutboundInboundOutboundHandover_RemovesEndpointRegistrationAndCompletesRemoteJoin(bool removeBeforeInbound)
+    public async Task OutboundInboundOutboundHandover_RemovesEndpointRegistrationAndCompletesRemoteJoin(
+        bool removeBeforeInbound
+    )
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         var ownerContext = new CapturingMeshSocketContext(context);
@@ -25,12 +26,18 @@ public sealed partial class StatefulServiceRuntimeTests
             old.SetBind(endpoint);
             old.Start();
             oldIntent = owner.ConnectPeer(endpoint, old.RoutingId);
-            await WaitUntilAsync(() => owner.Status().AdmittedPeerCount == 1
-                && old.Status().AdmittedPeerCount == 1);
+            await WaitUntilAsync(() =>
+                owner.Status().AdmittedPeerCount == 1 && old.Status().AdmittedPeerCount == 1
+            );
         }
-        await WaitUntilAsync(() => owner.Status().AdmittedPeerCount == 0
-            && owner.Peers().Any(peer => peer.ConnectionIntentId == oldIntent
-                && peer.State == MeshPeerState.Connecting));
+        await WaitUntilAsync(() =>
+            owner.Status().AdmittedPeerCount == 0
+            && owner
+                .Peers()
+                .Any(peer =>
+                    peer.ConnectionIntentId == oldIntent && peer.State == MeshPeerState.Connecting
+                )
+        );
         if (removeBeforeInbound)
             Assert.True(owner.RemovePeerConnectionIfNotAdmitted(oldIntent));
         await using (var middle = NewNode(context, "mesh-a-middle"))
@@ -38,17 +45,23 @@ public sealed partial class StatefulServiceRuntimeTests
             middle.SetBind(endpoint);
             middle.ConnectPeer(ownerEndpoint, owner.RoutingId);
             middle.Start();
-            await WaitUntilAsync(() => owner.Peers().Any(peer =>
-                peer.RoutingId == middle.RoutingId && peer.State == MeshPeerState.Admitted)
-                && middle.Status().AdmittedPeerCount == 1);
+            await WaitUntilAsync(() =>
+                owner
+                    .Peers()
+                    .Any(peer =>
+                        peer.RoutingId == middle.RoutingId && peer.State == MeshPeerState.Admitted
+                    )
+                && middle.Status().AdmittedPeerCount == 1
+            );
             var inbound = Assert.Single(owner.Peers(), peer => peer.RoutingId == middle.RoutingId);
             if (!removeBeforeInbound)
                 Assert.True(owner.RemovePeerConnectionIfNotAdmitted(oldIntent));
             Assert.DoesNotContain(owner.Peers(), peer => peer.ConnectionIntentId == oldIntent);
             // The public disconnect reports NotFound only when the native
             // endpoint registration is gone; no binding internals are inspected.
-            var absent = Assert.Throws<ZlinkConnectException>(
-                () => ownerContext.Router!.Disconnect(endpoint));
+            var absent = Assert.Throws<ZlinkConnectException>(() =>
+                ownerContext.Router!.Disconnect(endpoint)
+            );
             Assert.Equal(ZlinkConnectException.ErrorCode.NotFound, absent.Result);
             var retained = Assert.Single(owner.Peers(), peer => peer.RoutingId == middle.RoutingId);
             Assert.Equal(MeshPeerState.Admitted, retained.State);
@@ -57,13 +70,21 @@ public sealed partial class StatefulServiceRuntimeTests
             Assert.Equal(inbound.DescriptorRevision, retained.DescriptorRevision);
             Assert.Equal(inbound.LastChangedMs, retained.LastChangedMs);
             middle.PublishDraining();
-            await WaitUntilAsync(() => owner.Peers().Any(peer =>
-                peer.RoutingId == middle.RoutingId && peer.State == MeshPeerState.Draining));
+            await WaitUntilAsync(() =>
+                owner
+                    .Peers()
+                    .Any(peer =>
+                        peer.RoutingId == middle.RoutingId && peer.State == MeshPeerState.Draining
+                    )
+            );
         }
         await WaitUntilAsync(() => owner.Status().AdmittedPeerCount == 0);
         var scheduler = new GatedTaskScheduler();
         await using var replacement = new ZLinkManagedMeshNode(
-            context, "mesh", routedSubmitScheduler: scheduler);
+            context,
+            "mesh",
+            routedSubmitScheduler: scheduler
+        );
         replacement.SetRoutingId(RoutingId.From("mesh-z-replacement"));
         replacement.SetBind(endpoint);
         replacement.Start();
@@ -76,33 +97,71 @@ public sealed partial class StatefulServiceRuntimeTests
             Assert.Equal(0U, replacement.Status().AdmittedPeerCount);
             Assert.Equal(MeshPeerState.Connecting, Assert.Single(replacement.Peers()).State);
             Assert.Equal(0U, owner.Status().AdmittedPeerCount);
-            replacement.ObserveSpotAuthority(owner.RoutingId, spot.SpotId,
-                spot.LifecycleGeneration, owner.Status().LifecycleGeneration,
-                spot.AuthorityOwnerGeneration, 7);
+            replacement.ObserveSpotAuthority(
+                owner.RoutingId,
+                spot.SpotId,
+                spot.LifecycleGeneration,
+                owner.Status().LifecycleGeneration,
+                spot.AuthorityOwnerGeneration,
+                7
+            );
             var operation = replacement.AllocateOperationId();
-            Assert.Equal(SubmitResult.Ok, replacement.TryRequestCanonicalActorJoin(
-                new ZLinkBackendCanonicalActorJoinRequest(
-                    new ZLinkBackendActorRef(replacement.RoutingId, "a1", 11),
-                    replacement.Status().LifecycleGeneration, 13, 7, false,
-                    owner.RoutingId, spot.SpotId, spot.LifecycleGeneration,
-                    owner.Status().LifecycleGeneration, spot.AuthorityOwnerGeneration,
-                    7, "ZLinkFrameworkActorJoinRequest", "application/json", "{}"u8.ToArray()),
-                operation, TimeSpan.FromSeconds(2)));
+            Assert.Equal(
+                SubmitResult.Ok,
+                replacement.TryRequestCanonicalActorJoin(
+                    new ZLinkBackendCanonicalActorJoinRequest(
+                        new ZLinkBackendActorRef(replacement.RoutingId, "a1", 11),
+                        replacement.Status().LifecycleGeneration,
+                        13,
+                        7,
+                        false,
+                        owner.RoutingId,
+                        spot.SpotId,
+                        spot.LifecycleGeneration,
+                        owner.Status().LifecycleGeneration,
+                        spot.AuthorityOwnerGeneration,
+                        7,
+                        "ZLinkFrameworkActorJoinRequest",
+                        "application/json",
+                        "{}"u8.ToArray()
+                    ),
+                    operation,
+                    TimeSpan.FromSeconds(2)
+                )
+            );
             // Model a reverse record arriving after remote Admit receipt but before
             // the local send continuation. The validated Hello authenticates ingress
             // independently of local outbound readiness; no binding internals are used.
-            using (var header = Message.From(ZLinkServiceWireCodec.EncodeApplication(
-                       ServiceWireConstants.Command.NodeSend, 0, null, false)))
-            using (var payload = Message.From(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(
-                       new ReadOnlyMemory<byte>[] { "reverse-before-ready"u8.ToArray() })))
-                ownerContext.Router!.Send(replacement.RoutingId).Message(header).Message(payload).Submit();
+            using (
+                var header = Message.From(
+                    ZLinkServiceWireCodec.EncodeApplication(
+                        ServiceWireConstants.Command.NodeSend,
+                        0,
+                        null,
+                        false
+                    )
+                )
+            )
+            using (
+                var payload = Message.From(
+                    ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(
+                        new ReadOnlyMemory<byte>[] { "reverse-before-ready"u8.ToArray() }
+                    )
+                )
+            )
+                ownerContext
+                    .Router!.Send(replacement.RoutingId)
+                    .Message(header)
+                    .Message(payload)
+                    .Submit();
             MeshReceiveRecord? reverse = null;
             await WaitUntilAsync(() =>
             {
                 foreach (var record in DrainRecords(replacement))
                 {
                     Assert.NotEqual(operation, record.OperationId);
-                    if (record.Kind == MeshRecordKind.NodeSend) reverse = record;
+                    if (record.Kind == MeshRecordKind.NodeSend)
+                        reverse = record;
                 }
                 return reverse is not null;
             });
@@ -115,21 +174,28 @@ public sealed partial class StatefulServiceRuntimeTests
             {
                 foreach (var record in DrainRecords(owner))
                 {
-                    if (record.OperationKind != MeshOperationKind.ActorJoin) continue;
+                    if (record.OperationKind != MeshOperationKind.ActorJoin)
+                        continue;
                     joins++;
-                    Assert.Equal(SubmitResult.Ok,
-                        record.ReplyJoin(ActorJoinResult.Accepted, Array.Empty<Message>()));
+                    Assert.Equal(
+                        SubmitResult.Ok,
+                        record.ReplyJoin(ActorJoinResult.Accepted, Array.Empty<Message>())
+                    );
                 }
                 foreach (var record in DrainRecords(replacement))
                 {
-                    if (record.OperationId != operation) continue;
+                    if (record.OperationId != operation)
+                        continue;
                     completion = record.TerminalResult;
                 }
                 return completion is not null;
             });
             Assert.Equal((int)RequestResult.Ok, completion);
             Assert.Equal(1, joins);
-            var outbound = Assert.Single(owner.Peers(), peer => peer.RoutingId == replacement.RoutingId);
+            var outbound = Assert.Single(
+                owner.Peers(),
+                peer => peer.RoutingId == replacement.RoutingId
+            );
             Assert.Equal(replacementIntent, outbound.ConnectionIntentId);
             Assert.Equal(MeshPeerState.Admitted, outbound.State);
             Assert.Equal(MeshPeerState.Admitted, Assert.Single(replacement.Peers()).State);
@@ -156,8 +222,9 @@ public sealed partial class StatefulServiceRuntimeTests
         Assert.Equal(replacementIntent, Assert.Single(owner.Peers()).ConnectionIntentId);
         replacement.SetBind(endpoint);
         replacement.Start();
-        await WaitUntilAsync(() => owner.Status().AdmittedPeerCount == 1
-            && replacement.Status().AdmittedPeerCount == 1);
+        await WaitUntilAsync(() =>
+            owner.Status().AdmittedPeerCount == 1 && replacement.Status().AdmittedPeerCount == 1
+        );
         Assert.Equal(replacementIntent, Assert.Single(owner.Peers()).ConnectionIntentId);
         Assert.False(owner.RemovePeerConnectionIfNotAdmitted(replacementIntent));
     }
@@ -166,19 +233,33 @@ public sealed partial class StatefulServiceRuntimeTests
     {
         public IRouterSocket? Router { get; private set; }
         public IContextOptions Options => inner.Options;
+
         public IRouterSocket CreateRouterSocket() => Router = inner.CreateRouterSocket();
+
         public IPairSocket CreatePairSocket() => inner.CreatePairSocket();
+
         public IDealerSocket CreateDealerSocket() => inner.CreateDealerSocket();
+
         public IPubSocket CreatePubSocket() => inner.CreatePubSocket();
+
         public ISubSocket CreateSubSocket() => inner.CreateSubSocket();
+
         public IXPubSocket CreateXPubSocket() => inner.CreateXPubSocket();
+
         public IXSubSocket CreateXSubSocket() => inner.CreateXSubSocket();
+
         public IStreamSocket CreateStreamSocket() => inner.CreateStreamSocket();
+
         public void Shutdown() => inner.Shutdown();
+
         public void RecalculateAutoHwm() => inner.RecalculateAutoHwm();
+
         public CoreHwmBudgetSnapshot GetCoreHwmBudgetSnapshot() => inner.GetCoreHwmBudgetSnapshot();
+
         public void ResetCoreHwmBudgetMetrics() => inner.ResetCoreHwmBudgetMetrics();
+
         public void Dispose() => inner.Dispose();
+
         public ValueTask DisposeAsync() => inner.DisposeAsync();
     }
 }

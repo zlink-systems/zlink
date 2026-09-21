@@ -1,5 +1,10 @@
 import type { RoutingId } from '../Common';
-import type { ZLinkChannelRequestCall, ZLinkPublishCall, ZLinkRequestCall, ZLinkSendCall } from './Calls';
+import type {
+  ZLinkChannelRequestCall,
+  ZLinkPublishCall,
+  ZLinkRequestCall,
+  ZLinkSendCall
+} from './Calls';
 
 export interface ZLinkRouteClient {
   sendToNode(meshName: string, targetNodeRid: RoutingId, message: unknown): ZLinkSendCall;

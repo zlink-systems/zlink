@@ -1,8 +1,9 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 package systems.zlink.httpclient;
 
-import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+
+import java.util.concurrent.CompletionStage;
 
 public final class ZLinkFrameworkHttpExecutionTurn implements ZLinkHttpExecutionTurn {
     @Override

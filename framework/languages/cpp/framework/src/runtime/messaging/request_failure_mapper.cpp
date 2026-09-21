@@ -12,7 +12,7 @@ request_failure_mapper_t::completion_exception (request_result_t result,
     switch (result) {
         case request_result_t::timed_out:
             return detail::make_boundary_exception (detail::boundary_error_t::timed_out,
-                                          operation_name + " timed out.");
+                                                    operation_name + " timed out.");
         case request_result_t::not_connected:
             return detail::make_boundary_exception (
               detail::boundary_error_t::disconnected,
@@ -54,9 +54,9 @@ request_failure_mapper_t::error_header_exception (const std::string &error_code,
                                                   const std::string &operation_name) const
 {
     if (error_code == "timeout") {
-        return detail::make_boundary_exception (detail::boundary_error_t::timed_out,
-                                      error_message.empty () ? operation_name + " timed out."
-                                                             : error_message);
+        return detail::make_boundary_exception (
+          detail::boundary_error_t::timed_out,
+          error_message.empty () ? operation_name + " timed out." : error_message);
     }
     if (error_code == "not_found") {
         return framework_exception_t (
@@ -82,9 +82,9 @@ request_failure_mapper_t::error_header_exception (const std::string &error_code,
           error_message.empty () ? operation_name + " is not configured." : error_message);
     }
     if (error_code == "rejected") {
-        return framework_exception_t (
-          framework_error_kind_t::rejected,
-          error_message.empty () ? operation_name + " was rejected." : error_message);
+        return framework_exception_t (framework_error_kind_t::rejected,
+                                      error_message.empty () ? operation_name + " was rejected."
+                                                             : error_message);
     }
     if (error_code == "unavailable") {
         return detail::make_boundary_exception (
@@ -110,27 +110,27 @@ request_failure_mapper_t::error_header_exception (const std::string &error_code,
                                  : error_message);
     }
     if (error_code == "protocol_error") {
-        return framework_exception_t (
-          framework_error_kind_t::protocol_error,
-          error_message.empty () ? operation_name + " failed with a protocol error."
-                                 : error_message);
+        return framework_exception_t (framework_error_kind_t::protocol_error,
+                                      error_message.empty ()
+                                        ? operation_name + " failed with a protocol error."
+                                        : error_message);
     }
     if (error_code == "invalid_operation") {
-        return framework_exception_t (
-          framework_error_kind_t::invalid_operation,
-          error_message.empty () ? operation_name + " is invalid in the current state."
-                                 : error_message);
+        return framework_exception_t (framework_error_kind_t::invalid_operation,
+                                      error_message.empty ()
+                                        ? operation_name + " is invalid in the current state."
+                                        : error_message);
     }
     if (error_code == "data_lost") {
-        return framework_exception_t (
-          framework_error_kind_t::data_lost,
-          error_message.empty () ? operation_name + " failed because required data was lost."
-                                 : error_message);
+        return framework_exception_t (framework_error_kind_t::data_lost,
+                                      error_message.empty ()
+                                        ? operation_name + " failed because required data was lost."
+                                        : error_message);
     }
     if (error_code == "internal_failure") {
-        return framework_exception_t (
-          framework_error_kind_t::internal_failure,
-          error_message.empty () ? operation_name + " failed." : error_message);
+        return framework_exception_t (framework_error_kind_t::internal_failure,
+                                      error_message.empty () ? operation_name + " failed."
+                                                             : error_message);
     }
     if (error_code == "route_not_connected") {
         return detail::make_boundary_exception (
@@ -163,10 +163,11 @@ request_failure_mapper_t::error_header_exception (const std::string &error_code,
                                  : error_message);
     }
     if (error_code == "payload_decode_failed") {
-        return framework_exception_t (
-          framework_error_kind_t::protocol_error,
-          error_message.empty () ? operation_name + " failed because the payload could not be decoded."
-                                 : error_message);
+        return framework_exception_t (framework_error_kind_t::protocol_error,
+                                      error_message.empty ()
+                                        ? operation_name
+                                            + " failed because the payload could not be decoded."
+                                        : error_message);
     }
     return framework_exception_t (framework_error_kind_t::internal_failure,
                                   error_message.empty () ? operation_name + " failed."
@@ -174,135 +175,111 @@ request_failure_mapper_t::error_header_exception (const std::string &error_code,
 }
 
 framework_exception_t
-request_failure_mapper_t::reply_header_exception (
-  std::uint32_t terminal_result,
-  std::uint32_t failure_code,
-  const std::string &operation_name) const
+request_failure_mapper_t::reply_header_exception (std::uint32_t terminal_result,
+                                                  std::uint32_t failure_code,
+                                                  const std::string &operation_name) const
 {
     switch (failure_code) {
         case 3:
-            return framework_exception_t (
-              framework_error_kind_t::already_exists,
-              operation_name + " failed because the actor already exists.");
+            return framework_exception_t (framework_error_kind_t::already_exists,
+                                          operation_name
+                                            + " failed because the actor already exists.");
         case 4:
         case 7:
-            return framework_exception_t (
-              framework_error_kind_t::type_mismatch,
-              operation_name + " failed because the object type did not match.");
+            return framework_exception_t (framework_error_kind_t::type_mismatch,
+                                          operation_name
+                                            + " failed because the object type did not match.");
         case 8:
-            return framework_exception_t (
-              framework_error_kind_t::invalid_operation,
-              operation_name
-                + " failed because the actor session is not bound.");
+            return framework_exception_t (framework_error_kind_t::invalid_operation,
+                                          operation_name
+                                            + " failed because the actor session is not bound.");
         case 9:
-            return framework_exception_t (
-              framework_error_kind_t::not_found,
-              operation_name + " failed because the handler was not found.");
+            return framework_exception_t (framework_error_kind_t::not_found,
+                                          operation_name
+                                            + " failed because the handler was not found.");
         case 12:
-            return framework_exception_t (
-              framework_error_kind_t::protocol_error,
-              operation_name
-                + " failed because the payload could not be decoded.");
+            return framework_exception_t (framework_error_kind_t::protocol_error,
+                                          operation_name
+                                            + " failed because the payload could not be decoded.");
         case 13:
-            return framework_exception_t (
-              framework_error_kind_t::unavailable,
-              operation_name
-                + " failed because the target route is not connected.");
+            return framework_exception_t (framework_error_kind_t::unavailable,
+                                          operation_name
+                                            + " failed because the target route is not connected.");
         case 14:
-            return framework_exception_t (
-              framework_error_kind_t::not_found,
-              operation_name + " failed because the target was not found.");
+            return framework_exception_t (framework_error_kind_t::not_found,
+                                          operation_name
+                                            + " failed because the target was not found.");
         case 15:
-            return framework_exception_t (
-              framework_error_kind_t::rejected,
-              operation_name + " was rejected.");
+            return framework_exception_t (framework_error_kind_t::rejected,
+                                          operation_name + " was rejected.");
         case 16:
-            return framework_exception_t (
-              framework_error_kind_t::protocol_error,
-              operation_name + " failed with a protocol error.");
+            return framework_exception_t (framework_error_kind_t::protocol_error,
+                                          operation_name + " failed with a protocol error.");
         case 17:
-            return framework_exception_t (
-              framework_error_kind_t::internal_failure,
-              operation_name + " failed.");
+            return framework_exception_t (framework_error_kind_t::internal_failure,
+                                          operation_name + " failed.");
         case 18:
             // Legacy peers may still send workerQueueFull for an unavailable
             // remote target.
-            return framework_exception_t (
-              framework_error_kind_t::unavailable,
-              operation_name + " failed because the remote worker queue is full.");
+            return framework_exception_t (framework_error_kind_t::unavailable,
+                                          operation_name
+                                            + " failed because the remote worker queue is full.");
         case 19:
-            return framework_exception_t (
-              framework_error_kind_t::deadline_exceeded,
-              operation_name + " timed out inside the worker.");
+            return framework_exception_t (framework_error_kind_t::deadline_exceeded,
+                                          operation_name + " timed out inside the worker.");
         case 20:
-            return framework_exception_t (
-              framework_error_kind_t::internal_failure,
-              operation_name + " failed inside the worker.");
+            return framework_exception_t (framework_error_kind_t::internal_failure,
+                                          operation_name + " failed inside the worker.");
         case 21:
-            return framework_exception_t (
-              framework_error_kind_t::unavailable,
-              operation_name
-                + " failed because the actor location was stale.");
+            return framework_exception_t (framework_error_kind_t::unavailable,
+                                          operation_name
+                                            + " failed because the actor location was stale.");
         case 33:
-            return framework_exception_t (
-              framework_error_kind_t::invalid_operation,
-              operation_name
-                + " failed because the spot generation was stale.");
+            return framework_exception_t (framework_error_kind_t::invalid_operation,
+                                          operation_name
+                                            + " failed because the spot generation was stale.");
         case 34:
-            return framework_exception_t (
-              framework_error_kind_t::unavailable,
-              operation_name + " failed because the spot is moving.");
+            return framework_exception_t (framework_error_kind_t::unavailable,
+                                          operation_name + " failed because the spot is moving.");
         case 35:
-            return framework_exception_t (
-              framework_error_kind_t::data_lost,
-              operation_name
-                + " failed because relocation data was lost.");
+            return framework_exception_t (framework_error_kind_t::data_lost,
+                                          operation_name
+                                            + " failed because relocation data was lost.");
         default:
             break;
     }
 
     switch (terminal_result) {
         case 101:
-            return completion_exception (
-              request_result_t::timed_out, operation_name);
+            return completion_exception (request_result_t::timed_out, operation_name);
         case 102:
-            return completion_exception (
-              request_result_t::not_found, operation_name);
+            return completion_exception (request_result_t::not_found, operation_name);
         case 103:
-            return completion_exception (
-              request_result_t::terminated, operation_name);
+            return completion_exception (request_result_t::terminated, operation_name);
         case 104:
-            return completion_exception (
-              request_result_t::protocol_error, operation_name);
+            return completion_exception (request_result_t::protocol_error, operation_name);
         case 106:
-            return completion_exception (
-              request_result_t::rejected, operation_name);
+            return completion_exception (request_result_t::rejected, operation_name);
         case 107:
         case 108:
             // A terminal-only conflict/busy reply identifies an unavailable
             // remote target. Fine failures are handled above.
-            return framework_exception_t (
-              framework_error_kind_t::unavailable,
-              operation_name + " failed because the remote target was busy.");
+            return framework_exception_t (framework_error_kind_t::unavailable,
+                                          operation_name
+                                            + " failed because the remote target was busy.");
         case 113:
-            return framework_exception_t (
-              framework_error_kind_t::unavailable,
-              operation_name + " target is unavailable.");
+            return framework_exception_t (framework_error_kind_t::unavailable,
+                                          operation_name + " target is unavailable.");
         case 109:
-            return completion_exception (
-              request_result_t::not_connected, operation_name);
+            return completion_exception (request_result_t::not_connected, operation_name);
         case 110:
-            return completion_exception (
-              request_result_t::invalid_argument, operation_name);
+            return completion_exception (request_result_t::invalid_argument, operation_name);
         case 111:
-            return completion_exception (
-              request_result_t::invalid_state, operation_name);
+            return completion_exception (request_result_t::invalid_state, operation_name);
         case 112:
-            return completion_exception (
-              request_result_t::not_supported, operation_name);
+            return completion_exception (request_result_t::not_supported, operation_name);
         default:
-            return completion_exception (
-              request_result_t::internal_error, operation_name);
+            return completion_exception (request_result_t::internal_error, operation_name);
     }
 }
 

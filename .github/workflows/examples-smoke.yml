@@ -752,19 +752,33 @@ jobs:
         run: |
           mkdir -p "${GITHUB_WORKSPACE}/.vcpkg-binary-cache"
           echo "VCPKG_BINARY_SOURCES=clear;files,${GITHUB_WORKSPACE}/.vcpkg-binary-cache,readwrite" >> "$GITHUB_ENV"
+          # What the restore actually delivered (#852: a 210 MB restore once yielded 0 vcpkg hits).
+          echo "restored: $(find "${GITHUB_WORKSPACE}/.vcpkg-binary-cache" -type f | wc -l) files, $(du -sh "${GITHUB_WORKSPACE}/.vcpkg-binary-cache" | cut -f1)"
+          find "${GITHUB_WORKSPACE}/.vcpkg-binary-cache" -type f | head -5
 
       - name: Tutorial install (README's own 내려받기와 설치/linux block)
         working-directory: examples/zlink-cpp-examples/tutorial
         run: bash ../../run_readme_step.sh README.ko.md "내려받기와 설치" linux
 
       - name: Tutorial build (README's own 빌드/linux block)
+        id: bootstrap
         working-directory: examples/zlink-cpp-examples/tutorial
         run: bash ../../run_readme_step.sh README.ko.md 빌드 linux
 
       # Saved right after the bootstrap and even when a later step fails: the
       # ports built here are what the next run must not build again.
+      - name: What the bootstrap left in the binary cache
+        if: always()
+        run: |
+          echo "to save: $(find "${GITHUB_WORKSPACE}/.vcpkg-binary-cache" -type f | wc -l) files, $(du -sh "${GITHUB_WORKSPACE}/.vcpkg-binary-cache" | cut -f1)"
+          find "${GITHUB_WORKSPACE}/.vcpkg-binary-cache" -type f | head -5
+
+      # Saved only when the bootstrap step succeeded: a save after a failed
+      # bootstrap stored an empty directory under the immutable key and every
+      # later run "hit" it (#852). A later step's failure does not matter, so
+      # the condition is the bootstrap step's outcome, not the job's.
       - name: Save the vcpkg binary cache
-        if: always() && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        if: always() && steps.bootstrap.outcome == 'success' && steps.vcpkg-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}/.vcpkg-binary-cache

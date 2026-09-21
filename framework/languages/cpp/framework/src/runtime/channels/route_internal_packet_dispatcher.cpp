@@ -17,10 +17,10 @@ bool no_route_internal_packet_dispatcher_t::can_handle_request (std::string_view
     return false;
 }
 
-result_t<void>
-no_route_internal_packet_dispatcher_t::dispatch_send (const route_received_packet_t &received,
-                                                      const runtime::messaging::envelope_header_t &header,
-                                                      service_provider_t &services) const
+result_t<void> no_route_internal_packet_dispatcher_t::dispatch_send (
+  const route_received_packet_t &received,
+  const runtime::messaging::envelope_header_t &header,
+  service_provider_t &services) const
 {
     (void) received;
     (void) header;
@@ -38,8 +38,7 @@ result_t<zlink::message_t> no_route_internal_packet_dispatcher_t::dispatch_reque
     (void) header;
     (void) services;
     return result_t<zlink::message_t>::failure (
-      framework_error_kind_t::not_found,
-      "no routed internal request dispatcher is configured");
+      framework_error_kind_t::not_found, "no routed internal request dispatcher is configured");
 }
 
 } // namespace zlink::framework::detail

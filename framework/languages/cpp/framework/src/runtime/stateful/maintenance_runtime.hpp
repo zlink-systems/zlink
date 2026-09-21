@@ -42,11 +42,9 @@ class relocation_store_port_t
 {
   public:
     virtual ~relocation_store_port_t () = default;
-    virtual relocation_stored_t put (
-      const std::vector<std::uint8_t> &payload,
-      std::chrono::hours retention) = 0;
-    virtual std::optional<std::vector<std::uint8_t>>
-    get (const std::string &reference) = 0;
+    virtual relocation_stored_t put (const std::vector<std::uint8_t> &payload,
+                                     std::chrono::hours retention) = 0;
+    virtual std::optional<std::vector<std::uint8_t>> get (const std::string &reference) = 0;
     virtual void remove (const std::string &reference) = 0;
 };
 
@@ -75,13 +73,11 @@ struct durable_session_journal_root_t
 class durable_session_journal_store_t
 {
   public:
-    explicit durable_session_journal_store_t (
-      std::shared_ptr<relocation_store_port_t> store);
+    explicit durable_session_journal_store_t (std::shared_ptr<relocation_store_port_t> store);
 
-    durable_session_journal_root_t prepare (
-      const durable_session_journal_record_t &record);
-    std::optional<durable_session_journal_record_t> recover (
-      const durable_session_journal_root_t &root) const;
+    durable_session_journal_root_t prepare (const durable_session_journal_record_t &record);
+    std::optional<durable_session_journal_record_t>
+    recover (const durable_session_journal_root_t &root) const;
     void cleanup (const durable_session_journal_root_t &root);
 
   private:
@@ -123,8 +119,7 @@ struct relocation_participant_identity_t
     std::optional<std::pair<std::string, std::uint64_t>> spot_membership;
 
     friend bool operator== (const relocation_participant_identity_t &,
-                            const relocation_participant_identity_t &)
-      = default;
+                            const relocation_participant_identity_t &) = default;
 };
 
 class authority_relocation_port_t
@@ -140,44 +135,38 @@ class authority_relocation_port_t
     {
         return std::nullopt;
     }
-    virtual authority_publish_result_t publish (
-      const object_ref_t &source,
-      const object_ref_t &target,
-      location_owner_token_t target_owner,
-      object_creation_target_t target_placement,
-      std::string relocation_reference,
-      std::uint32_t checksum_crc32c,
-      inventory_digest_t inventory_digest,
-      std::vector<std::byte> target_application_payload = {}) = 0;
-    virtual std::optional<authority_relocation_reference_t>
-    read (object_kind_t kind, const std::string &key) = 0;
-    virtual authority_publish_result_t publish_completion (
-      object_kind_t,
-      const std::string &,
-      const std::string &,
-      std::uint64_t,
-      std::string,
-      std::uint32_t)
+    virtual authority_publish_result_t
+    publish (const object_ref_t &source,
+             const object_ref_t &target,
+             location_owner_token_t target_owner,
+             object_creation_target_t target_placement,
+             std::string relocation_reference,
+             std::uint32_t checksum_crc32c,
+             inventory_digest_t inventory_digest,
+             std::vector<std::byte> target_application_payload = {}) = 0;
+    virtual std::optional<authority_relocation_reference_t> read (object_kind_t kind,
+                                                                  const std::string &key) = 0;
+    virtual authority_publish_result_t publish_completion (object_kind_t,
+                                                           const std::string &,
+                                                           const std::string &,
+                                                           std::uint64_t,
+                                                           std::string,
+                                                           std::uint32_t)
     {
         return {};
     }
-    virtual authority_publish_result_t replace_completion (
-      object_kind_t,
-      const std::string &,
-      std::uint64_t,
-      const std::string &,
-      std::uint32_t,
-      std::string,
-      std::uint32_t)
+    virtual authority_publish_result_t replace_completion (object_kind_t,
+                                                           const std::string &,
+                                                           std::uint64_t,
+                                                           const std::string &,
+                                                           std::uint32_t,
+                                                           std::string,
+                                                           std::uint32_t)
     {
         return {};
     }
     virtual bool release_completion (
-      object_kind_t,
-      const std::string &,
-      std::uint64_t,
-      const std::string &,
-      std::uint32_t)
+      object_kind_t, const std::string &, std::uint64_t, const std::string &, std::uint32_t)
     {
         return false;
     }
@@ -210,15 +199,13 @@ class aggregate_authority_port_t
 {
   public:
     virtual ~aggregate_authority_port_t () = default;
-    virtual aggregate_publish_result_t prepare (
-      const std::vector<object_ref_t> &sources,
-      std::string target_node_id,
-      location_owner_token_t target_owner,
-      std::string relocation_reference,
-      std::uint32_t checksum_crc32c,
-      inventory_digest_t inventory_digest) = 0;
-    virtual aggregate_publish_result_t commit (
-      aggregate_relocation_fence_t fence) = 0;
+    virtual aggregate_publish_result_t prepare (const std::vector<object_ref_t> &sources,
+                                                std::string target_node_id,
+                                                location_owner_token_t target_owner,
+                                                std::string relocation_reference,
+                                                std::uint32_t checksum_crc32c,
+                                                inventory_digest_t inventory_digest) = 0;
+    virtual aggregate_publish_result_t commit (aggregate_relocation_fence_t fence) = 0;
     virtual void abort (aggregate_relocation_fence_t fence) = 0;
 };
 
@@ -226,8 +213,7 @@ struct relocation_unit_t
 {
     std::vector<object_ref_t> participants;
 
-    friend bool operator== (const relocation_unit_t &,
-                            const relocation_unit_t &) = default;
+    friend bool operator== (const relocation_unit_t &, const relocation_unit_t &) = default;
 };
 
 enum class relocation_reason_t;
@@ -251,10 +237,8 @@ struct eligible_relocation_unit_t
         /* Join relocation appends its canonical ZLJR saved-work record to
          * the sealed Actor snapshot before the immutable envelope is
          * encoded. Ordinary relocation leaves this callback empty. */
-        std::function<bool (std::vector<frozen_object_state_t> &)>
-          augment_frozen;
-        std::function<task_t<std::optional<
-          std::vector<protocol::session_relocation_route_t>>> ()>
+        std::function<bool (std::vector<frozen_object_state_t> &)> augment_frozen;
+        std::function<task_t<std::optional<std::vector<protocol::session_relocation_route_t>>> ()>
           capture_session_routes;
         /* Sends the Restore request carrying the payload manifest. The
          * request frame must be enqueued on the ordered mesh connection
@@ -273,19 +257,18 @@ struct eligible_relocation_unit_t
           prepare_target;
         /* Sends one relocationState chunk on the same ordered mesh
          * connection as the Restore request and the relay lane. */
-        std::function<task_t<bool> (
-          const protocol::relocation_state_t &)> send_state_chunk;
-        std::function<task_t<bool> (
-          const std::vector<protocol::relocation_data_t> &,
-          const relocation_ingress_batch_t &)> send_relocation_data;
+        std::function<task_t<bool> (const protocol::relocation_state_t &)> send_state_chunk;
+        std::function<task_t<bool> (const std::vector<protocol::relocation_data_t> &,
+                                    const relocation_ingress_batch_t &)>
+          send_relocation_data;
         enum class cutover_enqueue_t
         {
             not_enqueued,
             enqueued,
             uncertain
         };
-        std::function<task_t<cutover_enqueue_t> (
-          const protocol::relocation_cutover_t &)> send_cutover;
+        std::function<task_t<cutover_enqueue_t> (const protocol::relocation_cutover_t &)>
+          send_cutover;
         // This is valid only after an exact target failure and before a
         // Cutover enqueue.  It fences source admission restoration.
         std::function<bool ()> abort_target_before_cutover;
@@ -304,8 +287,7 @@ enum class target_preflight_status_t
 
 struct target_preflight_result_t
 {
-    target_preflight_status_t status =
-      target_preflight_status_t::target_unavailable;
+    target_preflight_status_t status = target_preflight_status_t::target_unavailable;
     std::vector<eligible_relocation_unit_t> units;
 };
 
@@ -313,8 +295,7 @@ class target_preflight_port_t
 {
   public:
     virtual ~target_preflight_port_t () = default;
-    virtual target_preflight_result_t preflight (
-      const std::vector<relocation_unit_t> &units) = 0;
+    virtual target_preflight_result_t preflight (const std::vector<relocation_unit_t> &units) = 0;
 };
 
 struct maintenance_provider_set_t
@@ -346,8 +327,7 @@ struct relocation_limits_t
 /* Phase 1 conservative in-flight cap. Until the Core exposes per-pipe
  * effective HWM and accounted-charge observation, the effective budget is
  * min(configured, this constant). */
-inline constexpr std::uint64_t
-  relocation_conservative_in_flight_budget_bytes = 16777216;
+inline constexpr std::uint64_t relocation_conservative_in_flight_budget_bytes = 16777216;
 
 struct relocation_gate_snapshot_t
 {
@@ -425,19 +405,16 @@ class maintenance_runtime_t
   public:
     using observer_t = std::function<void (const relocation_result_t &)>;
 
-    maintenance_runtime_t (
-      stateful_object_runtime_t &objects,
-      std::shared_ptr<authority_relocation_port_t> authority,
-      std::shared_ptr<relocation_store_port_t> relocations,
-      relocation_limits_t limits = {},
-      observer_t observer = {},
-      std::shared_ptr<aggregate_authority_port_t>
-        aggregate_authority = {});
-    maintenance_runtime_t (
-      stateful_object_runtime_t &objects,
-      maintenance_provider_set_t providers,
-      relocation_limits_t limits = {},
-      observer_t observer = {});
+    maintenance_runtime_t (stateful_object_runtime_t &objects,
+                           std::shared_ptr<authority_relocation_port_t> authority,
+                           std::shared_ptr<relocation_store_port_t> relocations,
+                           relocation_limits_t limits = {},
+                           observer_t observer = {},
+                           std::shared_ptr<aggregate_authority_port_t> aggregate_authority = {});
+    maintenance_runtime_t (stateful_object_runtime_t &objects,
+                           maintenance_provider_set_t providers,
+                           relocation_limits_t limits = {},
+                           observer_t observer = {});
 
     task_t<relocation_result_t> relocate (
       const object_ref_t &source,
@@ -445,43 +422,39 @@ class maintenance_runtime_t
       location_owner_token_t target_owner,
       std::size_t encoded_upper_bound,
       inventory_digest_t inventory_digest,
-      const std::optional<eligible_relocation_unit_t::canonical_wire_context_t>
-        &canonical_wire = std::nullopt,
+      const std::optional<eligible_relocation_unit_t::canonical_wire_context_t> &canonical_wire =
+        std::nullopt,
       std::stop_token cancellation = {},
       /* Target-advertised inbound chunk-size cap (bytes), e.g. from a
        * join reply; 0 = not advertised, this unit's local budget applies
        * unchanged. */
       std::uint64_t advertised_receive_chunk_limit_bytes = 0);
-    relocation_result_t recover (
-      object_kind_t kind,
-      const std::string &key,
-      stateful_object_runtime_t &target,
-      std::stop_token cancellation = {});
-    aggregate_relocation_result_t recover_aggregate (
-      const std::vector<object_ref_t> &sources,
-      stateful_object_runtime_t &target,
-      std::stop_token cancellation = {});
+    relocation_result_t recover (object_kind_t kind,
+                                 const std::string &key,
+                                 stateful_object_runtime_t &target,
+                                 std::stop_token cancellation = {});
+    aggregate_relocation_result_t recover_aggregate (const std::vector<object_ref_t> &sources,
+                                                     stateful_object_runtime_t &target,
+                                                     std::stop_token cancellation = {});
     task_t<aggregate_relocation_result_t> relocate_aggregate (
       const std::vector<object_ref_t> &sources,
       std::string target_node_id,
       location_owner_token_t target_owner,
       std::size_t encoded_upper_bound,
       inventory_digest_t inventory_digest,
-      const std::optional<eligible_relocation_unit_t::canonical_wire_context_t>
-        &canonical_wire = std::nullopt,
+      const std::optional<eligible_relocation_unit_t::canonical_wire_context_t> &canonical_wire =
+        std::nullopt,
       std::stop_token cancellation = {},
       std::uint64_t advertised_receive_chunk_limit_bytes = 0);
 
-    void attach_relocation_wire (
-      raw_relocation_replay_coordinator_t &wire) noexcept;
+    void attach_relocation_wire (raw_relocation_replay_coordinator_t &wire) noexcept;
 
     relocation_gate_snapshot_t gate_snapshot () const;
 
     /* Optional source-local metric (25 §"zlink.relocation.route_convergence"):
      * one unit's cutover submit terminal to its retransmission window
      * closing. */
-    void configure_route_convergence_metric (
-      std::function<void (double)> metric) noexcept;
+    void configure_route_convergence_metric (std::function<void (double)> metric) noexcept;
 
     /* SafeToShutdown (24 §"State"): true only while no relocation unit this
      * source started still has an open retransmission window. A unit opens
@@ -492,39 +465,36 @@ class maintenance_runtime_t
      * in this runtime to measure that condition independently. */
     bool relocation_units_settled () const noexcept;
 
-    static std::uint32_t crc32c (
-      const std::vector<std::uint8_t> &payload) noexcept;
+    static std::uint32_t crc32c (const std::vector<std::uint8_t> &payload) noexcept;
     /* min(local_limit_bytes, advertised>0 ? advertised : local_limit_bytes)
      * — the direct-transfer chunk-plan cap applied when a target has
      * advertised a receive_chunk_limit_bytes (e.g. via a join reply); 0
      * for either side means "not advertised"/"unset", in which case the
      * other side's value applies unchanged. */
     static std::uint64_t apply_advertised_receive_chunk_limit (
-      std::uint64_t local_limit_bytes,
-      std::uint64_t advertised_receive_chunk_limit_bytes) noexcept;
+      std::uint64_t local_limit_bytes, std::uint64_t advertised_receive_chunk_limit_bytes) noexcept;
     /* The direct-transfer wire payload is exactly the schema's
      * relocation-envelope-v1 logical stream (28 §4.2). The codec owns the
      * bytes; these statics own the mapping between the runtime's frozen
      * object model and the stream. */
-    static std::vector<std::uint8_t> encode_envelope (
-      const std::vector<frozen_object_state_t> &participants,
-      const protocol::relocation_id_t &relocation,
-      std::uint64_t application_version = 1);
-    static std::optional<protocol::relocation_envelope_t> decode_envelope (
-      const std::vector<std::uint8_t> &payload) noexcept;
+    static std::vector<std::uint8_t>
+    encode_envelope (const std::vector<frozen_object_state_t> &participants,
+                     const protocol::relocation_id_t &relocation,
+                     std::uint64_t application_version = 1);
+    static std::optional<protocol::relocation_envelope_t>
+    decode_envelope (const std::vector<std::uint8_t> &payload) noexcept;
     /* Target-side model mapping: the caller supplies the store-derived
      * participant inventory (authority rows), which this method sorts by
      * UTF-8 authority-key bytes to assign participantId = index + 1. */
     static std::optional<std::vector<frozen_object_state_t>>
-    materialize_envelope (
-      const protocol::relocation_envelope_t &envelope,
-      std::vector<relocation_participant_identity_t> inventory) noexcept;
+    materialize_envelope (const protocol::relocation_envelope_t &envelope,
+                          std::vector<relocation_participant_identity_t> inventory) noexcept;
     /* The derived inventory digest (no wrapper digest exists any more):
      * SHA-256 over the (kind, key)-sorted participants' key bytes and
      * interleaved generation bytes — the same value every source computes
      * before publishing an authority row. */
-    static inventory_digest_t compute_inventory_digest (
-      const std::vector<object_ref_t> &participants);
+    static inventory_digest_t
+    compute_inventory_digest (const std::vector<object_ref_t> &participants);
 
   private:
     struct relocation_terminal_state_t;
@@ -547,28 +517,21 @@ class maintenance_runtime_t
     };
 
     permit_t try_acquire ();
-    task_t<relocation_result_t> relocate_terminal (
-      std::shared_ptr<relocation_terminal_state_t> state);
-    task_t<bool> relocate_seal (
-      std::shared_ptr<relocation_terminal_state_t> state);
+    task_t<relocation_result_t>
+    relocate_terminal (std::shared_ptr<relocation_terminal_state_t> state);
+    task_t<bool> relocate_seal (std::shared_ptr<relocation_terminal_state_t> state);
     task_t<bool> capture_relocation_session_routes (
       eligible_relocation_unit_t::canonical_wire_context_t &context);
-    bool relocate_encode (
-      const std::shared_ptr<relocation_terminal_state_t> &state);
-    task_t<bool> relocate_prepare_target (
-      std::shared_ptr<relocation_terminal_state_t> state);
-    task_t<bool> relocate_send_state_chunks (
-      std::shared_ptr<relocation_terminal_state_t> state,
-      std::function<bool ()> target_failed = {});
-    task_t<bool> relocate_boundary_and_send (
-      std::shared_ptr<relocation_terminal_state_t> state);
-    task_t<bool> relocate_cutover (
-      std::shared_ptr<relocation_terminal_state_t> state);
+    bool relocate_encode (const std::shared_ptr<relocation_terminal_state_t> &state);
+    task_t<bool> relocate_prepare_target (std::shared_ptr<relocation_terminal_state_t> state);
+    task_t<bool> relocate_send_state_chunks (std::shared_ptr<relocation_terminal_state_t> state,
+                                             std::function<bool ()> target_failed = {});
+    task_t<bool> relocate_boundary_and_send (std::shared_ptr<relocation_terminal_state_t> state);
+    task_t<bool> relocate_cutover (std::shared_ptr<relocation_terminal_state_t> state);
     std::uint64_t effective_in_flight_budget () const noexcept;
     task_t<void> acquire_transfer_budget (std::uint64_t bytes);
     void release_transfer_budget (std::uint64_t bytes) noexcept;
-    void retain_retransmission_copies (
-      std::shared_ptr<relocation_terminal_state_t> state);
+    void retain_retransmission_copies (std::shared_ptr<relocation_terminal_state_t> state);
     /* SafeToShutdown must observe a relocation unit as pending from the
      * moment it is sealed (registered), not only once it reaches S1
      * (cutover submit terminal, where retain_retransmission_copies used
@@ -583,19 +546,18 @@ class maintenance_runtime_t
     void release () noexcept;
     relocation_result_t finish (relocation_result_t result);
     std::optional<std::vector<protocol::relocation_data_t>>
-    build_boundary_records (
-      const std::vector<frozen_object_state_t> &participants,
-      const eligible_relocation_unit_t::canonical_wire_context_t &context,
-      const relocation_ingress_batch_t &batch,
-      relocation_reason_t &failure_reason) const;
-    task_t<relocation_reason_t> prepare_target (
-      const eligible_relocation_unit_t::canonical_wire_context_t &context,
-      const std::vector<frozen_object_state_t> &participants,
-      const relocation_payload_manifest_t &manifest);
-    task_t<bool> send_boundary_records (
-      const eligible_relocation_unit_t::canonical_wire_context_t &context,
-      const std::vector<protocol::relocation_data_t> &records,
-      const relocation_ingress_batch_t &batch);
+    build_boundary_records (const std::vector<frozen_object_state_t> &participants,
+                            const eligible_relocation_unit_t::canonical_wire_context_t &context,
+                            const relocation_ingress_batch_t &batch,
+                            relocation_reason_t &failure_reason) const;
+    task_t<relocation_reason_t>
+    prepare_target (const eligible_relocation_unit_t::canonical_wire_context_t &context,
+                    const std::vector<frozen_object_state_t> &participants,
+                    const relocation_payload_manifest_t &manifest);
+    task_t<bool>
+    send_boundary_records (const eligible_relocation_unit_t::canonical_wire_context_t &context,
+                           const std::vector<protocol::relocation_data_t> &records,
+                           const relocation_ingress_batch_t &batch);
     bool abort_target_before_cutover (
       const eligible_relocation_unit_t::canonical_wire_context_t &context) noexcept;
 
@@ -630,8 +592,7 @@ class maintenance_runtime_t
      * FIFO; a new unit acquires headroom before its source admission seal. */
     mutable std::mutex _budget_mutex;
     std::uint64_t _budget_in_flight_bytes = 0;
-    std::deque<std::pair<std::uint64_t,
-                         std::shared_ptr<detail::task_completion_source_t<bool>>>>
+    std::deque<std::pair<std::uint64_t, std::shared_ptr<detail::task_completion_source_t<bool>>>>
       _budget_waiters;
 };
 
@@ -676,13 +637,11 @@ enum class termination_reason_t
 
 struct termination_result_t
 {
-    termination_intent_t effective_intent =
-      termination_intent_t::shutdown;
+    termination_intent_t effective_intent = termination_intent_t::shutdown;
     termination_outcome_t outcome = termination_outcome_t::blocked;
     termination_reason_t reason = termination_reason_t::runtime_not_ready;
 
-    friend bool operator== (const termination_result_t &,
-                            const termination_result_t &) = default;
+    friend bool operator== (const termination_result_t &, const termination_result_t &) = default;
 };
 
 class host_maintenance_runtime_t
@@ -690,12 +649,11 @@ class host_maintenance_runtime_t
   public:
     using observer_t = std::function<void (const termination_result_t &)>;
 
-    host_maintenance_runtime_t (
-      stateful_object_runtime_t &objects,
-      stream_session_registry_t &sessions,
-      maintenance_runtime_t &relocation,
-      std::shared_ptr<target_preflight_port_t> targets,
-      observer_t observer = {});
+    host_maintenance_runtime_t (stateful_object_runtime_t &objects,
+                                stream_session_registry_t &sessions,
+                                maintenance_runtime_t &relocation,
+                                std::shared_ptr<target_preflight_port_t> targets,
+                                observer_t observer = {});
 
     void mark_serving ();
     void mark_error ();
@@ -705,15 +663,13 @@ class host_maintenance_runtime_t
     std::optional<termination_intent_t> intent_snapshot () const;
 
   private:
-    static std::vector<relocation_unit_t> inventory_units (
-      std::vector<object_inventory_t> inventory);
+    static std::vector<relocation_unit_t>
+    inventory_units (std::vector<object_inventory_t> inventory);
     task_t<termination_result_t> run_retire ();
-    task_t<termination_result_t> run_termination_attempt (
-      termination_intent_t intent, std::uint64_t attempt);
-    termination_result_t run_shutdown (
-      termination_intent_t effective_intent);
-    void complete_attempt (
-      std::uint64_t attempt, const termination_result_t &result);
+    task_t<termination_result_t> run_termination_attempt (termination_intent_t intent,
+                                                          std::uint64_t attempt);
+    termination_result_t run_shutdown (termination_intent_t effective_intent);
+    void complete_attempt (std::uint64_t attempt, const termination_result_t &result);
 
     stateful_object_runtime_t &_objects;
     stream_session_registry_t &_sessions;
@@ -722,8 +678,7 @@ class host_maintenance_runtime_t
     observer_t _observer;
     offload_executor_t _lane_executor;
     mutable state_lane_t _lane;
-    maintenance_admission_state_t _state =
-      maintenance_admission_state_t::preparing;
+    maintenance_admission_state_t _state = maintenance_admission_state_t::preparing;
     bool _active = false;
     bool _inventory_sealed = false;
     bool _shutdown_claimed = false;
@@ -731,8 +686,7 @@ class host_maintenance_runtime_t
     std::uint64_t _active_attempt = 0;
     std::uint64_t _next_attempt = 1;
     std::map<std::uint64_t, termination_result_t> _attempt_results;
-    std::shared_ptr<detail::task_completion_source_t<termination_result_t>>
-      _active_completion;
+    std::shared_ptr<detail::task_completion_source_t<termination_result_t>> _active_completion;
     std::optional<termination_result_t> _terminal;
 };
 

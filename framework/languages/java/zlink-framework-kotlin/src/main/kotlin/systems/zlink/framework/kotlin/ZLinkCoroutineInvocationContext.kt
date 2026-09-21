@@ -1,8 +1,8 @@
 package systems.zlink.framework.kotlin
 
+import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.asContextElement
-import kotlin.coroutines.CoroutineContext
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
 
@@ -16,9 +16,7 @@ internal object ZLinkCoroutineInvocationContext {
             ZLinkSuspendInvocationContext.actorDispatchThreadLocal()
                 .asContextElement(ZLinkSuspendInvocationContext.currentActorDispatch()) +
             ZLinkSuspendInvocationContext.deferredActorJoinThreadLocal()
-                .asContextElement(
-                    ZLinkSuspendInvocationContext.currentDeferredActorJoin(),
-                ) +
+                .asContextElement(ZLinkSuspendInvocationContext.currentDeferredActorJoin()) +
             ZLinkSuspendInvocationContext.serialExecutionTurnThreadLocal()
                 .asContextElement(ZLinkSuspendInvocationContext.currentSerialExecutionTurn()) +
             ZLinkSuspendInvocationContext.applicationExecutionThreadLocal()

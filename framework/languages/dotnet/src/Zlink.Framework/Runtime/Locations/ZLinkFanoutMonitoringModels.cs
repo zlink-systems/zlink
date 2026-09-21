@@ -10,7 +10,7 @@ internal enum ZLinkFanoutPublisherConnectionState
     Disconnected = 2,
     Reconnecting = 3,
     ExcludedDraining = 4,
-    ExcludedStale = 5
+    ExcludedStale = 5,
 }
 
 internal sealed record ZLinkFanoutPublisherConnectionSnapshot(
@@ -21,7 +21,8 @@ internal sealed record ZLinkFanoutPublisherConnectionSnapshot(
     bool ConnectionIntent,
     bool Ready,
     ZLinkFanoutPublisherConnectionState State,
-    string? LastFailure);
+    string? LastFailure
+);
 
 internal sealed record ZLinkFanoutChannelSnapshot(
     string ChannelName,
@@ -30,7 +31,8 @@ internal sealed record ZLinkFanoutChannelSnapshot(
     ulong Sequence,
     DateTimeOffset ObservedAt,
     IReadOnlyList<ZLinkFanoutPublisherConnectionSnapshot> Publishers,
-    ZLinkLocationRuntimeSnapshot Location);
+    ZLinkLocationRuntimeSnapshot Location
+);
 
 internal abstract record ZLinkFanoutRuntimeEvent
 {
@@ -38,7 +40,8 @@ internal abstract record ZLinkFanoutRuntimeEvent
         string identifier,
         ulong sequence,
         DateTimeOffset timestamp,
-        string channelName)
+        string channelName
+    )
     {
         Identifier = identifier;
         Sequence = sequence;
@@ -57,16 +60,17 @@ internal abstract record ZLinkFanoutRuntimeEvent
         ulong Sequence,
         DateTimeOffset Timestamp,
         string ChannelName,
-        ZLinkFanoutPublisherConnectionSnapshot Entry)
+        ZLinkFanoutPublisherConnectionSnapshot Entry
+    )
         : ZLinkFanoutRuntimeEvent(
             "zlink.runtime.fanout.publisher_changed",
             Sequence,
             Timestamp,
-            ChannelName)
+            ChannelName
+        )
     {
         internal override string SourceKey =>
-            $"{Identifier}:{Entry.PublisherRid.ToHex()}:"
-            + Entry.LifecycleGeneration;
+            $"{Identifier}:{Entry.PublisherRid.ToHex()}:" + Entry.LifecycleGeneration;
 
         internal override bool IsTerminal =>
             !Entry.ConnectionIntent
@@ -77,20 +81,24 @@ internal abstract record ZLinkFanoutRuntimeEvent
         ulong Sequence,
         DateTimeOffset Timestamp,
         string ChannelName,
-        ZLinkLocationRuntimeSnapshot Location)
+        ZLinkLocationRuntimeSnapshot Location
+    )
         : ZLinkFanoutRuntimeEvent(
             "zlink.runtime.location.store_changed",
             Sequence,
             Timestamp,
-            ChannelName);
+            ChannelName
+        );
 
     internal sealed record RuntimeChanged(
         ulong Sequence,
         DateTimeOffset Timestamp,
-        string ChannelName)
+        string ChannelName
+    )
         : ZLinkFanoutRuntimeEvent(
             "zlink.runtime.framework.state_changed",
             Sequence,
             Timestamp,
-            ChannelName);
+            ChannelName
+        );
 }

@@ -17,14 +17,8 @@ export type {
   ZLinkStoreWriteRequest,
   ZLinkStoreWriteResult
 } from './Stores';
-export {
-  ZLinkLocationKind,
-  ZLinkLocationRole
-} from './Values';
-export {
-  ZLinkFrameworkRuntimeState,
-  ZLinkObjectRole
-} from './Rows';
+export { ZLinkLocationKind, ZLinkLocationRole } from './Values';
+export { ZLinkFrameworkRuntimeState, ZLinkObjectRole } from './Rows';
 export type {
   ZLinkClientServerServerDescriptor,
   ZLinkFanoutPublisherDescriptor,

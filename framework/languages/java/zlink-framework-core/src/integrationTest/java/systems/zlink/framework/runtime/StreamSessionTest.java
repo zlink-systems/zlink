@@ -1,57 +1,57 @@
 package systems.zlink.framework.runtime;
-import java.util.EnumSet;
-import java.util.Map;
-import java.util.Optional;
-import java.util.concurrent.TimeUnit;
-import java.util.function.BooleanSupplier;
-import systems.zlink.framework.actors.ZLinkActorCreateResult;
-import systems.zlink.framework.streams.ZLinkStreamCodec;
-import systems.zlink.framework.streams.ZLinkStreamMessageKind;
-
-import com.fasterxml.jackson.databind.ObjectMapper;
-import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
-import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
-
-import systems.zlink.framework.runtime.internal.backend.*;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import org.junit.jupiter.api.Test;
+
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.core.Zlink;
+import systems.zlink.framework.ZLinkMessageContext;
+import systems.zlink.framework.actors.ZLinkActor;
+import systems.zlink.framework.actors.ZLinkActorContext;
+import systems.zlink.framework.actors.ZLinkActorCreateResult;
+import systems.zlink.framework.actors.ZLinkActorFactory;
+import systems.zlink.framework.actors.ZLinkActorManager;
+import systems.zlink.framework.handlers.ZLinkPacket;
+import systems.zlink.framework.handlers.ZLinkSpotActorRequest;
+import systems.zlink.framework.messaging.ZLinkMessage;
+import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
+import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
+import systems.zlink.framework.runtime.internal.backend.*;
+import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
+import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
+import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
+import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
+import systems.zlink.framework.spots.ZLinkEntrySpot;
+import systems.zlink.framework.spots.ZLinkEntrySpotActorRequestHandler;
+import systems.zlink.framework.spots.ZLinkEntrySpotContext;
+import systems.zlink.framework.spots.ZLinkSpot;
+import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
+import systems.zlink.framework.spots.ZLinkSpotContext;
+import systems.zlink.framework.streams.ZLinkSession;
+import systems.zlink.framework.streams.ZLinkSessionContext;
+import systems.zlink.framework.streams.ZLinkSessionDispatchContext;
+import systems.zlink.framework.streams.ZLinkStreamCodec;
+import systems.zlink.framework.streams.ZLinkStreamError;
+import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
 import java.io.InputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.EnumSet;
+import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import org.junit.jupiter.api.Test;
-import systems.zlink.contracts.messaging.Message;
-import systems.zlink.contracts.core.Zlink;
-import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.framework.actors.ZLinkActor;
-import systems.zlink.framework.handlers.ZLinkPacket;
-import systems.zlink.framework.actors.ZLinkActorContext;
-import systems.zlink.framework.actors.ZLinkActorFactory;
-import systems.zlink.framework.actors.ZLinkActorManager;
-import systems.zlink.framework.handlers.ZLinkSpotActorRequest;
-import systems.zlink.framework.messaging.ZLinkMessage;
-import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
-import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
-import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
-import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
-import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
-import systems.zlink.framework.spots.ZLinkEntrySpot;
-import systems.zlink.framework.spots.ZLinkEntrySpotContext;
-import systems.zlink.framework.spots.ZLinkEntrySpotActorRequestHandler;
-import systems.zlink.framework.spots.ZLinkSpot;
-import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
-import systems.zlink.framework.ZLinkMessageContext;
-import systems.zlink.framework.spots.ZLinkSpotContext;
-import systems.zlink.framework.streams.ZLinkSession;
-import systems.zlink.framework.streams.ZLinkSessionContext;
-import systems.zlink.framework.streams.ZLinkSessionDispatchContext;
-import systems.zlink.framework.streams.ZLinkStreamError;
+import java.util.function.BooleanSupplier;
 
 final class StreamSessionTest {
     @Test
@@ -59,14 +59,23 @@ final class StreamSessionTest {
         Zlink.version();
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(new ZLinkInMemoryLocationStore());
-        { var node = options.addRouteMesh("game"); node.listen("inproc://play-router-" + System.nanoTime());
-                node.objects().server().addSpotFactory("GameSpot", GameSpot.class, factory -> factory.disableRelocation()); }
-        { var stream = options.addStreamNode("gateway"); stream.bind("inproc://gateway-" + System.nanoTime());
-            stream.registerSession(GameSession.class); };
+        {
+            var node = options.addRouteMesh("game");
+            node.listen("inproc://play-router-" + System.nanoTime());
+            node.objects()
+                    .server()
+                    .addSpotFactory(
+                            "GameSpot", GameSpot.class, factory -> factory.disableRelocation());
+        }
+        {
+            var stream = options.addStreamNode("gateway");
+            stream.bind("inproc://gateway-" + System.nanoTime());
+            stream.registerSession(GameSession.class);
+        }
+        ;
 
         try (ZLinkFrameworkRuntime ignored =
-                 RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory())) {
-        }
+                RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory())) {}
     }
 
     @Test
@@ -75,12 +84,17 @@ final class StreamSessionTest {
         EchoSession.reset();
         int port = reservePort();
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-        { var stream = options.addStreamNode("gateway"); stream.bind("tcp://127.0.0.1:" + port);
-            stream.registerSession(EchoSession.class); };
+        {
+            var stream = options.addStreamNode("gateway");
+            stream.bind("tcp://127.0.0.1:" + port);
+            stream.registerSession(EchoSession.class);
+        }
+        ;
 
         try (ZLinkFrameworkRuntime ignored =
-                 RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory());
-             Socket client = new Socket("127.0.0.1", port)) {
+                        RuntimeTestSupport.startFramework(
+                                options, new ZLinkJavaBackendAdapterFactory());
+                Socket client = new Socket("127.0.0.1", port)) {
             client.setSoTimeout(3000);
             client.getOutputStream().write(frame(requestHeader(7L, "Ping"), bytes("ping")));
             client.getOutputStream().flush();
@@ -108,21 +122,23 @@ final class StreamSessionTest {
         RecoveringSession.reset();
         int port = reservePort();
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-        { var stream = options.addStreamNode("gateway"); stream.bind("tcp://127.0.0.1:" + port);
-            stream.registerSession(RecoveringSession.class); };
+        {
+            var stream = options.addStreamNode("gateway");
+            stream.bind("tcp://127.0.0.1:" + port);
+            stream.registerSession(RecoveringSession.class);
+        }
+        ;
 
         try (ZLinkFrameworkRuntime ignored =
-                 RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory());
-             Socket client = new Socket("127.0.0.1", port)) {
+                        RuntimeTestSupport.startFramework(
+                                options, new ZLinkJavaBackendAdapterFactory());
+                Socket client = new Socket("127.0.0.1", port)) {
             client.setSoTimeout(3000);
 
             client.getOutputStream().write(frame(requestHeader(11L, "MustFail"), bytes("bad")));
             client.getOutputStream().flush();
             assertErrorReply(
-                client.getInputStream(),
-                11L,
-                "IllegalStateException",
-                "public failure");
+                    client.getInputStream(), 11L, "IllegalStateException", "public failure");
 
             client.getOutputStream().write(frame(requestHeader(12L, "Ping"), bytes("again")));
             client.getOutputStream().flush();
@@ -137,22 +153,39 @@ final class StreamSessionTest {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.addHandlersFromPackageOf(StreamSessionTest.class);
         options.addLocationStore(new ZLinkInMemoryLocationStore());
-        { var node = options.addRouteMesh("game"); node.listen("inproc://stream-play-" + System.nanoTime()).setRoutingId(RoutingId.from("play-node"));
-                node.objects().server().addEntrySpot(GameEntrySpot.class); node.objects().server().addActorFactory("player", PlayerActor.class, PlayerActorFactory.class, factory -> factory.disableRelocation()); }
-        { var stream = options.addStreamNode("gateway"); stream.bind("tcp://127.0.0.1:" + port);
+        {
+            var node = options.addRouteMesh("game");
+            node.listen("inproc://stream-play-" + System.nanoTime())
+                    .setRoutingId(RoutingId.from("play-node"));
+            node.objects().server().addEntrySpot(GameEntrySpot.class);
+            node.objects()
+                    .server()
+                    .addActorFactory(
+                            "player",
+                            PlayerActor.class,
+                            PlayerActorFactory.class,
+                            factory -> factory.disableRelocation());
+        }
+        {
+            var stream = options.addStreamNode("gateway");
+            stream.bind("tcp://127.0.0.1:" + port);
             stream.enableActorDispatch();
-            stream.registerSession(ActorRelaySession.class); };
+            stream.registerSession(ActorRelaySession.class);
+        }
+        ;
 
         try (ZLinkFrameworkRuntime ignored =
-                 RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory());
-             Socket client = new Socket("127.0.0.1", port)) {
+                        RuntimeTestSupport.startFramework(
+                                options, new ZLinkJavaBackendAdapterFactory());
+                Socket client = new Socket("127.0.0.1", port)) {
             client.setSoTimeout(3000);
 
             client.getOutputStream().write(frame(requestHeader(1L, "Bind"), bytes("\"player-1\"")));
             client.getOutputStream().flush();
             assertReply(client.getInputStream(), 1L, "\"bound\"");
 
-            client.getOutputStream().write(frame(requestHeader(2L, "StreamActorEcho"), bytes("\"hello\"")));
+            client.getOutputStream()
+                    .write(frame(requestHeader(2L, "StreamActorEcho"), bytes("\"hello\"")));
             client.getOutputStream().flush();
             assertReply(client.getInputStream(), 2L, "\"player-1:hello\"");
         }
@@ -164,8 +197,15 @@ final class StreamSessionTest {
             return null;
         }
 
-        @Override public CompletionStage<Void> onJoinedActor(ZLinkActor actor) { return CompletableFuture.completedFuture(null); }
-        @Override public CompletionStage<Void> onLeaveActor(ZLinkActor actor) { return CompletableFuture.completedFuture(null); }
+        @Override
+        public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
+            return CompletableFuture.completedFuture(null);
+        }
     }
 
     public static final class GameEntrySpot implements ZLinkEntrySpot<ZLinkActor> {
@@ -185,8 +225,15 @@ final class StreamSessionTest {
             context.handlers().addHandler(JoinUserSpotHandler.class);
         }
 
-        @Override public CompletionStage<Void> onJoinedActor(ZLinkActor actor) { return CompletableFuture.completedFuture(null); }
-        @Override public CompletionStage<Void> onLeaveActor(ZLinkActor actor) { return CompletableFuture.completedFuture(null); }
+        @Override
+        public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
+            return CompletableFuture.completedFuture(null);
+        }
     }
 
     public static final class UserSpot implements ZLinkSpot<ZLinkActor> {
@@ -209,8 +256,7 @@ final class StreamSessionTest {
 
         @Override
         public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
-            String actorId,
-            ZLinkMessage request) {
+                String actorId, ZLinkMessage request) {
             return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept("joined"));
         }
 
@@ -249,41 +295,31 @@ final class StreamSessionTest {
     public static final class ActorEchoHandler {
         @ZLinkSpotActorRequest(packetName = "StreamActorEcho")
         public CompletionStage<String> handle(PlayerActor actor, String request) {
-            return CompletableFuture.completedFuture(
-                actor.context().actorId() + ":" + request);
+            return CompletableFuture.completedFuture(actor.context().actorId() + ":" + request);
         }
 
         @ZLinkSpotActorRequest(packetName = "StreamActorEchoWithPush")
         public CompletionStage<String> handleWithPush(PlayerActor actor, String request) {
-            actor.context()
-                .boundSession()
-                .send(new StreamActorPush("push:" + request))
-                .submit();
-            return CompletableFuture.completedFuture(
-                actor.context().actorId() + ":" + request);
+            actor.context().boundSession().send(new StreamActorPush("push:" + request)).submit();
+            return CompletableFuture.completedFuture(actor.context().actorId() + ":" + request);
         }
     }
 
     @ZLinkPacket("StreamActorPush")
-    public record StreamActorPush(String value) {
-    }
+    public record StreamActorPush(String value) {}
 
     @ZLinkPacket("JoinUserSpot")
-    public record JoinUserSpotRequest(String value) {
-    }
+    public record JoinUserSpotRequest(String value) {}
 
-    public static final class JoinUserSpotHandler implements
-        ZLinkEntrySpotActorRequestHandler<
-            GameEntrySpot,
-            PlayerActor,
-            JoinUserSpotRequest,
-            String> {
+    public static final class JoinUserSpotHandler
+            implements ZLinkEntrySpotActorRequestHandler<
+                    GameEntrySpot, PlayerActor, JoinUserSpotRequest, String> {
         @Override
         public CompletionStage<String> handle(
-            GameEntrySpot spot,
-            PlayerActor actor,
-            ZLinkMessageContext context,
-            JoinUserSpotRequest request) {
+                GameEntrySpot spot,
+                PlayerActor actor,
+                ZLinkMessageContext context,
+                JoinUserSpotRequest request) {
             actor.context().joinSpot("room-a", request.value()).defer();
             return CompletableFuture.completedFuture("deferred");
         }
@@ -292,10 +328,7 @@ final class StreamSessionTest {
     public static final class LeaveUserSpotHandler {
         @ZLinkSpotActorRequest(packetName = "LeaveUserSpot")
         public CompletionStage<String> handle(
-            UserSpot spot,
-            PlayerActor actor,
-            ZLinkMessageContext context,
-            String request) {
+                UserSpot spot, PlayerActor actor, ZLinkMessageContext context, String request) {
             return spot.context().leaveActor(actor).thenApply(ignored -> "left");
         }
     }
@@ -356,8 +389,7 @@ final class StreamSessionTest {
 
         @Override
         public CompletionStage<Void> onDispatch(
-            ZLinkSessionDispatchContext dispatch,
-            ZLinkMessage payload) {
+                ZLinkSessionDispatchContext dispatch, ZLinkMessage payload) {
             dispatchedOnVirtualThread.set(Thread.currentThread().isVirtual());
             if (!"Ping".equals(dispatch.packetName())) {
                 throw new IllegalArgumentException("unexpected packet: " + dispatch.packetName());
@@ -401,15 +433,12 @@ final class StreamSessionTest {
 
         @Override
         public CompletionStage<Void> onDispatch(
-            ZLinkSessionDispatchContext dispatch,
-            ZLinkMessage payload) {
+                ZLinkSessionDispatchContext dispatch, ZLinkMessage payload) {
             if ("MustFail".equals(dispatch.packetName())) {
                 throw new IllegalStateException("public failure");
             }
             recovered.set(true);
-            context.client()
-                .reply("pong")
-                .submit();
+            context.client().reply("pong").submit();
             return CompletableFuture.completedFuture(null);
         }
     }
@@ -418,9 +447,7 @@ final class StreamSessionTest {
         private final ZLinkSessionContext context;
         private final ZLinkActorManager actors;
 
-        public ActorRelaySession(
-            ZLinkSessionContext context,
-            ZLinkActorManager actors) {
+        public ActorRelaySession(ZLinkSessionContext context, ZLinkActorManager actors) {
             this.context = context;
             this.actors = actors;
         }
@@ -447,25 +474,27 @@ final class StreamSessionTest {
 
         @Override
         public CompletionStage<Void> onDispatch(
-            ZLinkSessionDispatchContext dispatch,
-            ZLinkMessage payload) {
+                ZLinkSessionDispatchContext dispatch, ZLinkMessage payload) {
             if ("Bind".equals(dispatch.packetName())) {
                 String actorId = payload.decode(String.class);
                 return actors.getOrCreate(actorId, "player")
-                    .submit()
-                    .thenCompose(result -> {
-                        var actor = switch (result) {
-                            case ZLinkActorCreateResult.Created created ->
-                                created.actor();
-                            case ZLinkActorCreateResult.Existing existing ->
-                                existing.actor();
-                            case ZLinkActorCreateResult.Rejected rejected ->
-                                throw new IllegalStateException(
-                                    "actor creation rejected: " + rejected.reply());
-                        };
-                        return context.actors().bind(actor);
-                    })
-                    .thenRun(() -> context.client().reply("bound").submit());
+                        .submit()
+                        .thenCompose(
+                                result -> {
+                                    var actor =
+                                            switch (result) {
+                                                case ZLinkActorCreateResult.Created created ->
+                                                        created.actor();
+                                                case ZLinkActorCreateResult.Existing existing ->
+                                                        existing.actor();
+                                                case ZLinkActorCreateResult.Rejected rejected ->
+                                                        throw new IllegalStateException(
+                                                                "actor creation rejected: "
+                                                                        + rejected.reply());
+                                            };
+                                    return context.actors().bind(actor);
+                                })
+                        .thenRun(() -> context.client().reply("bound").submit());
             }
             return context.actors().bound().get(0).relay(payload);
         }
@@ -478,14 +507,15 @@ final class StreamSessionTest {
     }
 
     private static byte[] requestHeader(long requestSeq, String packetName) {
-        return ZLinkStreamHeaderCodec.encode(new ZLinkStreamHeader(
-            ZLinkStreamMessageKind.REQUEST,
-            ZLinkStreamCodec.RAW,
-            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
-            Optional.of(requestSeq),
-            packetName,
-            Map.of(),
-            Optional.empty()));
+        return ZLinkStreamHeaderCodec.encode(
+                new ZLinkStreamHeader(
+                        ZLinkStreamMessageKind.REQUEST,
+                        ZLinkStreamCodec.RAW,
+                        EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                        Optional.of(requestSeq),
+                        packetName,
+                        Map.of(),
+                        Optional.empty()));
     }
 
     private static byte[] frame(byte[] header, byte[] body) {
@@ -504,7 +534,7 @@ final class StreamSessionTest {
     }
 
     private static void assertReply(InputStream input, long requestSeq, String expectedBody)
-        throws Exception {
+            throws Exception {
         byte[] prefix = input.readNBytes(6);
         assertEquals(6, prefix.length);
         ByteBuffer prefixBuffer = ByteBuffer.wrap(prefix);
@@ -514,20 +544,17 @@ final class StreamSessionTest {
         byte[] body = readExact(input, bodySize);
 
         assertEquals(
-            3,
-            Byte.toUnsignedInt(header[1]),
-            () -> "unexpected frame kind body=" + new String(body, StandardCharsets.UTF_8));
+                3,
+                Byte.toUnsignedInt(header[1]),
+                () -> "unexpected frame kind body=" + new String(body, StandardCharsets.UTF_8));
         assertEquals(0xF2, Byte.toUnsignedInt(header[0]));
         assertEquals(requestSeq, ByteBuffer.wrap(header, 4, Long.BYTES).getLong());
         assertEquals(expectedBody, new String(body, StandardCharsets.UTF_8));
     }
 
     private static void assertErrorReply(
-        InputStream input,
-        long requestSeq,
-        String expectedCode,
-        String expectedMessage)
-        throws Exception {
+            InputStream input, long requestSeq, String expectedCode, String expectedMessage)
+            throws Exception {
         byte[] prefix = input.readNBytes(6);
         assertEquals(6, prefix.length);
         ByteBuffer prefixBuffer = ByteBuffer.wrap(prefix);
@@ -537,8 +564,7 @@ final class StreamSessionTest {
         byte[] body = readExact(input, bodySize);
 
         if (Byte.toUnsignedInt(header[1]) == 5) {
-            assertErrorReply(
-                input, requestSeq, expectedCode, expectedMessage);
+            assertErrorReply(input, requestSeq, expectedCode, expectedMessage);
             return;
         }
         assertEquals(0xF2, Byte.toUnsignedInt(header[0]));
@@ -551,8 +577,8 @@ final class StreamSessionTest {
         assertEquals(expectedMessage, error.get("message").asText());
     }
 
-    private static void assertSend(InputStream input, String expectedPacketName, String expectedBody)
-        throws Exception {
+    private static void assertSend(
+            InputStream input, String expectedPacketName, String expectedBody) throws Exception {
         byte[] prefix = input.readNBytes(6);
         assertEquals(6, prefix.length);
         ByteBuffer prefixBuffer = ByteBuffer.wrap(prefix);
@@ -565,17 +591,13 @@ final class StreamSessionTest {
         assertEquals(1, Byte.toUnsignedInt(header[1]));
         int nameLengthOffset = 4;
         int nameLength = Byte.toUnsignedInt(header[nameLengthOffset]);
-        String packetName = new String(
-            header,
-            nameLengthOffset + 1,
-            nameLength,
-            StandardCharsets.UTF_8);
+        String packetName =
+                new String(header, nameLengthOffset + 1, nameLength, StandardCharsets.UTF_8);
         assertEquals(expectedPacketName, packetName);
         assertEquals(expectedBody, new String(body, StandardCharsets.UTF_8));
     }
 
-    private static void assertEventually(BooleanSupplier condition)
-        throws Exception {
+    private static void assertEventually(BooleanSupplier condition) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
         while (System.nanoTime() < deadline) {
             if (condition.getAsBoolean()) {

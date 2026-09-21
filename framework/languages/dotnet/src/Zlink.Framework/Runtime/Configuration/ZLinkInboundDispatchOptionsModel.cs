@@ -9,10 +9,8 @@ internal sealed class ZLinkInboundDispatchOptionsModel : IZLinkInboundDispatchOp
     private ZLinkCoreHwmProfile _coreHwmProfile = ZLinkCoreHwmProfile.Balanced;
     private ZLinkApplicationJobQueueProfile _applicationJobQueueProfile =
         ZLinkApplicationJobQueueProfile.Balanced;
-    private uint _applicationJobQueuePauseThresholdPercent =
-        DefaultPauseThresholdPercent;
-    private uint _applicationJobQueueResumeThresholdPercent =
-        DefaultResumeThresholdPercent;
+    private uint _applicationJobQueuePauseThresholdPercent = DefaultPauseThresholdPercent;
+    private uint _applicationJobQueueResumeThresholdPercent = DefaultResumeThresholdPercent;
 
     public ZLinkCoreHwmProfile CoreHwmProfile
     {
@@ -21,7 +19,8 @@ internal sealed class ZLinkInboundDispatchOptionsModel : IZLinkInboundDispatchOp
         {
             if (!Enum.IsDefined(value))
                 throw new ZLinkConfigurationException(
-                    $"Unknown CoreHwmProfile value '{(int)value}'.");
+                    $"Unknown CoreHwmProfile value '{(int)value}'."
+                );
             _coreHwmProfile = value;
         }
     }
@@ -37,7 +36,8 @@ internal sealed class ZLinkInboundDispatchOptionsModel : IZLinkInboundDispatchOp
         {
             if (!Enum.IsDefined(value))
                 throw new ZLinkConfigurationException(
-                    $"Unknown ApplicationJobQueueProfile value '{(int)value}'.");
+                    $"Unknown ApplicationJobQueueProfile value '{(int)value}'."
+                );
             _applicationJobQueueProfile = value;
         }
     }
@@ -51,7 +51,8 @@ internal sealed class ZLinkInboundDispatchOptionsModel : IZLinkInboundDispatchOp
         {
             if (value is 0 or > 100)
                 throw new ZLinkConfigurationException(
-                    "ApplicationJobQueuePauseThresholdPercent must be between 1 and 100.");
+                    "ApplicationJobQueuePauseThresholdPercent must be between 1 and 100."
+                );
             _applicationJobQueuePauseThresholdPercent = value;
         }
     }
@@ -63,7 +64,8 @@ internal sealed class ZLinkInboundDispatchOptionsModel : IZLinkInboundDispatchOp
         {
             if (value > 99)
                 throw new ZLinkConfigurationException(
-                    "ApplicationJobQueueResumeThresholdPercent must be between 0 and 99.");
+                    "ApplicationJobQueueResumeThresholdPercent must be between 0 and 99."
+                );
             _applicationJobQueueResumeThresholdPercent = value;
         }
     }

@@ -106,10 +106,7 @@ export interface ZLinkSpotActorTransferRuntime {
   bindRoutedActorRef(actor: ZLinkActor, actorRef: ActorRef): void;
   commitRoutedActor(actor: ZLinkActor, spotId: RoutingId, spot: ZLinkSpot): void;
   clearRoutedActor(actor: ZLinkActor): void;
-  rollbackNativeActorJoin(
-    actor: ZLinkActor,
-    snapshot: ZLinkNativeActorJoinSnapshot
-  ): Promise<void>;
+  rollbackNativeActorJoin(actor: ZLinkActor, snapshot: ZLinkNativeActorJoinSnapshot): Promise<void>;
   rollbackRoutedActor(actor: ZLinkActor, signal?: AbortSignal): Promise<void>;
   notifyCoreSourceLeave(actor: ZLinkActor, callback: () => Promise<void>): Promise<void>;
   actorEntryNodeRid(actor: ZLinkActor): RoutingId | undefined;
@@ -154,7 +151,10 @@ export interface ZLinkSpotBoundSessionRuntime {
     actorPacketTarget?: unknown,
     signal?: AbortSignal
   ): Promise<void>;
-  rememberRemoteBoundSessionTarget(actorId: string, target: ZLinkRemoteBoundSessionTarget | undefined): void;
+  rememberRemoteBoundSessionTarget(
+    actorId: string,
+    target: ZLinkRemoteBoundSessionTarget | undefined
+  ): void;
   resolveRemoteBoundSessionTarget(
     sourceNodeRid: RoutingId,
     sourceSessionRid: RoutingId

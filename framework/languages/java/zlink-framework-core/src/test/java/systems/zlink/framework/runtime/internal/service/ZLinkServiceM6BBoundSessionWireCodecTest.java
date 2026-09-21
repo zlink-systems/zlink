@@ -1,5 +1,4 @@
 package systems.zlink.framework.runtime.internal.service;
-import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -7,27 +6,32 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.util.Arrays;
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
+
+import java.util.Arrays;
 
 final class ZLinkServiceM6BBoundSessionWireCodecTest {
-    private final ZLinkServiceM6BWireCodec codec =
-        new ZLinkServiceM6BWireCodec();
+    private final ZLinkServiceM6BWireCodec codec = new ZLinkServiceM6BWireCodec();
 
     @Test
     void spotAndActorHeadersPreserveOperationAndForwardingFence() {
-        var spotRoute = new ZLinkServiceM6BWireCodec.SpotRouteFence(
-            "room", 2, RoutingId.from("target"), 3, 4, 5);
-        var spot = codec.decodeSpotHeader(codec.encodeSpotHeader(
-            true, 0, 7L, 11, 12, 3, "source", spotRoute));
+        var spotRoute =
+                new ZLinkServiceM6BWireCodec.SpotRouteFence(
+                        "room", 2, RoutingId.from("target"), 3, 4, 5);
+        var spot =
+                codec.decodeSpotHeader(
+                        codec.encodeSpotHeader(true, 0, 7L, 11, 12, 3, "source", spotRoute));
         assertEquals(11, spot.operationHigh());
         assertEquals(12, spot.operationLow());
         assertEquals(3, spot.messageFollowHopCount());
 
-        var actor = codec.decodeActorHeader(codec.encodeActorHeader(
-            false, 0, null, 21, 22, 4, null, route()));
+        var actor =
+                codec.decodeActorHeader(
+                        codec.encodeActorHeader(false, 0, null, 21, 22, 4, null, route()));
         assertEquals(21, actor.operationHigh());
         assertEquals(22, actor.operationLow());
         assertEquals(4, actor.messageFollowHopCount());
@@ -36,72 +40,73 @@ final class ZLinkServiceM6BBoundSessionWireCodecTest {
     @Test
     void highBitCorrelationRoundTripsAcrossSpotActorAndBoundSessionHeaders() {
         long highBit = Long.MIN_VALUE;
-        var spotRoute = new ZLinkServiceM6BWireCodec.SpotRouteFence(
-            "room", 2, RoutingId.from("target"), highBit, 4, 5);
+        var spotRoute =
+                new ZLinkServiceM6BWireCodec.SpotRouteFence(
+                        "room", 2, RoutingId.from("target"), highBit, 4, 5);
         assertEquals(
-            highBit,
-            codec.decodeSpotHeader(codec.encodeSpotHeader(
-                true, 0, highBit, highBit, 12, 0, "source", spotRoute))
-                .correlation());
+                highBit,
+                codec.decodeSpotHeader(
+                                codec.encodeSpotHeader(
+                                        true, 0, highBit, highBit, 12, 0, "source", spotRoute))
+                        .correlation());
         assertEquals(
-            highBit,
-            codec.decodeSpotHeader(codec.encodeSpotHeader(
-                true, 0, highBit, highBit, 12, 0, "source", spotRoute))
-                .operationHigh());
+                highBit,
+                codec.decodeSpotHeader(
+                                codec.encodeSpotHeader(
+                                        true, 0, highBit, highBit, 12, 0, "source", spotRoute))
+                        .operationHigh());
         assertEquals(
-            highBit,
-            codec.decodeActorHeader(codec.encodeActorHeader(
-                true, 0, highBit, highBit, 22, 0, null,
-                new ZLinkServiceM6BWireCodec.ActorRouteFence(
-                    new ZLinkBackendActorRef(
-                        RoutingId.from("target"), "actor", 2),
-                    highBit, 4, 5)))
-                .correlation());
-        var bind = new ZLinkServiceM6BWireCodec.BoundSessionBind(
-            highBit, route(), RoutingId.from("session"), true, 23);
+                highBit,
+                codec.decodeActorHeader(
+                                codec.encodeActorHeader(
+                                        true,
+                                        0,
+                                        highBit,
+                                        highBit,
+                                        22,
+                                        0,
+                                        null,
+                                        new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                                                new ZLinkBackendActorRef(
+                                                        RoutingId.from("target"), "actor", 2),
+                                                highBit,
+                                                4,
+                                                5)))
+                        .correlation());
+        var bind =
+                new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                        highBit, route(), RoutingId.from("session"), true, 23);
         assertEquals(
-            bind,
-            codec.decodeBoundSessionBindHeader(
-                codec.encodeBoundSessionBindHeader(bind)));
+                bind, codec.decodeBoundSessionBindHeader(codec.encodeBoundSessionBindHeader(bind)));
     }
 
     @Test
     void command36RoundTripsTheCompleteActorAndBindingFence() {
         var route = route();
-        byte[] encoded =
-            codec.encodeBoundSessionSendHeader(route, 19);
-        var decoded =
-            codec.decodeBoundSessionSendHeader(encoded);
+        byte[] encoded = codec.encodeBoundSessionSendHeader(route, 19);
+        var decoded = codec.decodeBoundSessionSendHeader(encoded);
 
         assertEquals(route, decoded.actor());
         assertEquals(19, decoded.expectedBindingGeneration());
         assertArrayEquals(
-            encoded,
-            codec.encodeBoundSessionSendHeader(
-                decoded.actor(),
-                decoded.expectedBindingGeneration()));
+                encoded,
+                codec.encodeBoundSessionSendHeader(
+                        decoded.actor(), decoded.expectedBindingGeneration()));
     }
 
     @Test
     void command38RoundTripsActiveAndTombstoneTransitions() {
-        var active = new ZLinkServiceM6BWireCodec.BoundSessionBind(
-            7,
-            route(),
-            RoutingId.from("session"),
-            true,
-            23);
+        var active =
+                new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                        7, route(), RoutingId.from("session"), true, 23);
         var tombstone =
-            new ZLinkServiceM6BWireCodec.BoundSessionBind(
-                8,
-                route(),
-                RoutingId.from("session"),
-                false,
-                23);
+                new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                        8, route(), RoutingId.from("session"), false, 23);
 
-        var decodedActive = codec.decodeBoundSessionBindHeader(
-            codec.encodeBoundSessionBindHeader(active));
-        var decodedTombstone = codec.decodeBoundSessionBindHeader(
-            codec.encodeBoundSessionBindHeader(tombstone));
+        var decodedActive =
+                codec.decodeBoundSessionBindHeader(codec.encodeBoundSessionBindHeader(active));
+        var decodedTombstone =
+                codec.decodeBoundSessionBindHeader(codec.encodeBoundSessionBindHeader(tombstone));
 
         assertTrue(decodedActive.active());
         assertFalse(decodedTombstone.active());
@@ -111,39 +116,39 @@ final class ZLinkServiceM6BBoundSessionWireCodecTest {
 
     @Test
     void command51RoundTripsTheExactRetiredSessionFence() {
-        var replacement = new ZLinkServiceM6BWireCodec.BoundSessionReplaced(
-            new ZLinkServiceM6BWireCodec.ActorRouteFence(
-                new ZLinkBackendActorRef(
-                    RoutingId.from("actor-owner"), "actor-a", 1),
-                2,
-                3,
-                4),
-            new ZLinkServiceM6BWireCodec.RetiredSessionRouteFence(
-                RoutingId.from("session-owner"),
-                5,
-                "session-runtime",
-                6,
-                RoutingId.from("session-a"),
-                7));
+        var replacement =
+                new ZLinkServiceM6BWireCodec.BoundSessionReplaced(
+                        new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                                new ZLinkBackendActorRef(
+                                        RoutingId.from("actor-owner"), "actor-a", 1),
+                                2,
+                                3,
+                                4),
+                        new ZLinkServiceM6BWireCodec.RetiredSessionRouteFence(
+                                RoutingId.from("session-owner"),
+                                5,
+                                "session-runtime",
+                                6,
+                                RoutingId.from("session-a"),
+                                7));
 
         byte[] encoded = codec.encodeBoundSessionReplaced(replacement);
         assertEquals(
-            ServiceWireConstants
-                .COMMAND_BOUND_SESSION_REPLACED,
-            Byte.toUnsignedInt(encoded[3]));
+                ServiceWireConstants.COMMAND_BOUND_SESSION_REPLACED,
+                Byte.toUnsignedInt(encoded[3]));
         assertEquals(replacement, codec.decodeBoundSessionReplaced(encoded));
         assertArrayEquals(
-            encoded,
-            codec.encodeBoundSessionReplaced(
-                codec.decodeBoundSessionReplaced(encoded)));
+                encoded,
+                codec.encodeBoundSessionReplaced(codec.decodeBoundSessionReplaced(encoded)));
 
         byte[] zeroOwnerGeneration = encoded.clone();
-        int retiredOwnerGeneration = 5
-            + (1 + "actor-a".length())
-            + Long.BYTES
-            + (1 + "actor-owner".length())
-            + Long.BYTES * 3
-            + (1 + "session-owner".length());
+        int retiredOwnerGeneration =
+                5
+                        + (1 + "actor-a".length())
+                        + Long.BYTES
+                        + (1 + "actor-owner".length())
+                        + Long.BYTES * 3
+                        + (1 + "session-owner".length());
         zeroOwnerGeneration[retiredOwnerGeneration + 1] = 0;
         zeroOwnerGeneration[retiredOwnerGeneration + 2] = 0;
         zeroOwnerGeneration[retiredOwnerGeneration + 3] = 0;
@@ -152,92 +157,71 @@ final class ZLinkServiceM6BBoundSessionWireCodecTest {
         zeroOwnerGeneration[retiredOwnerGeneration + 6] = 0;
         zeroOwnerGeneration[retiredOwnerGeneration + 7] = 0;
         assertThrows(
-            ZLinkServiceWireException.class,
-            () -> codec.decodeBoundSessionReplaced(zeroOwnerGeneration));
+                ZLinkServiceWireException.class,
+                () -> codec.decodeBoundSessionReplaced(zeroOwnerGeneration));
 
         byte[] trailing = Arrays.copyOf(encoded, encoded.length + 1);
         assertThrows(
-            ZLinkServiceWireException.class,
-            () -> codec.decodeBoundSessionReplaced(trailing));
+                ZLinkServiceWireException.class, () -> codec.decodeBoundSessionReplaced(trailing));
     }
 
     @Test
     void boundActorTailRequiresPairedFlagsAndRejectsMalformedFrames() {
         int flags =
-            ServiceWireConstants
-                .FLAG_BOUND_SESSION
-                | systems.zlink.framework.runtime.protocol
-                    .ServiceWireConstants.FLAG_SOURCE_SPOT_ID;
-        var tail = new ZLinkServiceM6BWireCodec.BoundSessionTail(
-            RoutingId.from("session"),
-            3,
-            4);
-        byte[] actor = codec.encodeActorHeader(
-            false,
-            flags,
-            null,
-            1,
-            2,
-            0,
-            null,
-            route(),
-            tail);
-        assertEquals(
-            tail,
-            codec.decodeActorHeader(actor).boundSession());
+                ServiceWireConstants.FLAG_BOUND_SESSION
+                        | systems.zlink.framework.runtime.protocol.ServiceWireConstants
+                                .FLAG_SOURCE_SPOT_ID;
+        var tail = new ZLinkServiceM6BWireCodec.BoundSessionTail(RoutingId.from("session"), 3, 4);
+        byte[] actor = codec.encodeActorHeader(false, flags, null, 1, 2, 0, null, route(), tail);
+        assertEquals(tail, codec.decodeActorHeader(actor).boundSession());
 
         assertThrows(
-            ZLinkServiceWireException.class,
-            () -> codec.encodeActorHeader(
-                false,
-                systems.zlink.framework.runtime.protocol
-                    .ServiceWireConstants.FLAG_BOUND_SESSION,
-                null,
-                1,
-                2,
-                0,
-                null,
-                route(),
-                tail));
+                ZLinkServiceWireException.class,
+                () ->
+                        codec.encodeActorHeader(
+                                false,
+                                systems.zlink.framework.runtime.protocol.ServiceWireConstants
+                                        .FLAG_BOUND_SESSION,
+                                null,
+                                1,
+                                2,
+                                0,
+                                null,
+                                route(),
+                                tail));
 
-        byte[] invalidFlags =
-            codec.encodeBoundSessionSendHeader(route(), 1);
+        byte[] invalidFlags = codec.encodeBoundSessionSendHeader(route(), 1);
         invalidFlags[4] = 1;
         assertThrows(
-            ZLinkServiceWireException.class,
-            () -> codec.decodeBoundSessionSendHeader(invalidFlags));
+                ZLinkServiceWireException.class,
+                () -> codec.decodeBoundSessionSendHeader(invalidFlags));
 
-        byte[] truncated = codec.encodeBoundSessionBindHeader(
-            new ZLinkServiceM6BWireCodec.BoundSessionBind(
-                1,
-                route(),
-                RoutingId.from("session"),
-                true,
-                1));
+        byte[] truncated =
+                codec.encodeBoundSessionBindHeader(
+                        new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                                1, route(), RoutingId.from("session"), true, 1));
         assertThrows(
-            ZLinkServiceWireException.class,
-            () -> codec.decodeBoundSessionBindHeader(
-                Arrays.copyOf(truncated, truncated.length - 1)));
+                ZLinkServiceWireException.class,
+                () ->
+                        codec.decodeBoundSessionBindHeader(
+                                Arrays.copyOf(truncated, truncated.length - 1)));
 
         byte[] trailing = Arrays.copyOf(truncated, truncated.length + 1);
         assertThrows(
-            ZLinkServiceWireException.class,
-            () -> codec.decodeBoundSessionBindHeader(trailing));
+                ZLinkServiceWireException.class,
+                () -> codec.decodeBoundSessionBindHeader(trailing));
 
         byte[] badUnionLength = truncated.clone();
         int lengthOffset = badUnionLength.length - Long.BYTES - 2;
         badUnionLength[lengthOffset + 1] = 7;
         assertThrows(
-            ZLinkServiceWireException.class,
-            () -> codec.decodeBoundSessionBindHeader(badUnionLength));
+                ZLinkServiceWireException.class,
+                () -> codec.decodeBoundSessionBindHeader(badUnionLength));
     }
 
     private static ZLinkServiceM6BWireCodec.ActorRouteFence route() {
         RoutingId node = RoutingId.from("actor-node");
         return new ZLinkServiceM6BWireCodec.ActorRouteFence(
-            new ZLinkBackendActorRef(node, "actor", 11),
-            13,
-            17,
-            19);
+                new ZLinkBackendActorRef(node, "actor", 11), 13, 17, 19);
     }
 }

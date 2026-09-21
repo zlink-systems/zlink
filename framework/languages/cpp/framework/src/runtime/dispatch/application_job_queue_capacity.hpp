@@ -49,8 +49,8 @@ inline std::uint32_t effective_application_job_processors (
     return result.value_or (1);
 }
 
-inline std::uint32_t application_job_queue_profile_multiplier (
-  application_job_queue_profile_t profile)
+inline std::uint32_t
+application_job_queue_profile_multiplier (application_job_queue_profile_t profile)
 {
     switch (profile) {
         case application_job_queue_profile_t::compact:
@@ -62,23 +62,17 @@ inline std::uint32_t application_job_queue_profile_multiplier (
         case application_job_queue_profile_t::throughput:
             return 256;
     }
-    throw framework_exception_t (
-      framework_error_kind_t::protocol_error,
-      "Application Job Queue profile is invalid");
+    throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                 "Application Job Queue profile is invalid");
 }
 
-inline std::uint32_t calculate_application_job_queue_limit (
-  application_job_queue_profile_t profile,
-  std::uint32_t effective_processors)
+inline std::uint32_t calculate_application_job_queue_limit (application_job_queue_profile_t profile,
+                                                            std::uint32_t effective_processors)
 {
-    const auto multiplier =
-      application_job_queue_profile_multiplier (profile);
+    const auto multiplier = application_job_queue_profile_multiplier (profile);
     const auto calculated =
-      static_cast<std::uint64_t> (multiplier)
-      * std::max<std::uint32_t> (1, effective_processors);
-    if (calculated
-        > static_cast<std::uint64_t> (
-          std::numeric_limits<std::int32_t>::max ())) {
+      static_cast<std::uint64_t> (multiplier) * std::max<std::uint32_t> (1, effective_processors);
+    if (calculated > static_cast<std::uint64_t> (std::numeric_limits<std::int32_t>::max ())) {
         throw framework_exception_t (
           framework_error_kind_t::protocol_error,
           "Application Job Queue effective capacity overflows signed 32-bit range");
@@ -89,8 +83,7 @@ inline std::uint32_t calculate_application_job_queue_limit (
 namespace application_job_queue_capacity_detail
 {
 
-inline std::optional<std::uint64_t> read_unsigned_file (
-  const char *path) noexcept
+inline std::optional<std::uint64_t> read_unsigned_file (const char *path) noexcept
 {
     try {
         std::ifstream input (path);
@@ -103,8 +96,7 @@ inline std::optional<std::uint64_t> read_unsigned_file (
     return std::nullopt;
 }
 
-inline std::optional<std::uint32_t> parse_cpuset_count (
-  std::string value) noexcept
+inline std::optional<std::uint32_t> parse_cpuset_count (std::string value) noexcept
 {
     try {
         std::uint64_t count = 0;
@@ -112,12 +104,11 @@ inline std::optional<std::uint32_t> parse_cpuset_count (
         std::string range;
         while (std::getline (ranges, range, ',')) {
             const auto dash = range.find ('-');
-            const auto first = static_cast<std::uint64_t> (
-              std::stoull (range.substr (0, dash)));
-            const auto last = dash == std::string::npos
-                                ? first
-                                : static_cast<std::uint64_t> (
-                                    std::stoull (range.substr (dash + 1)));
+            const auto first = static_cast<std::uint64_t> (std::stoull (range.substr (0, dash)));
+            const auto last =
+              dash == std::string::npos
+                ? first
+                : static_cast<std::uint64_t> (std::stoull (range.substr (dash + 1)));
             if (last < first)
                 return std::nullopt;
             count += last - first + 1;
@@ -125,8 +116,7 @@ inline std::optional<std::uint32_t> parse_cpuset_count (
         if (count == 0)
             return std::nullopt;
         return static_cast<std::uint32_t> (
-          std::min<std::uint64_t> (
-            count, std::numeric_limits<std::uint32_t>::max ()));
+          std::min<std::uint64_t> (count, std::numeric_limits<std::uint32_t>::max ()));
     }
     catch (...) {
         return std::nullopt;
@@ -136,9 +126,8 @@ inline std::optional<std::uint32_t> parse_cpuset_count (
 inline std::optional<std::uint32_t> read_cpuset_count () noexcept
 {
 #if defined(__linux__)
-    for (const char *path : {
-           "/sys/fs/cgroup/cpuset.cpus.effective",
-           "/sys/fs/cgroup/cpuset/cpuset.cpus"}) {
+    for (const char *path :
+         {"/sys/fs/cgroup/cpuset.cpus.effective", "/sys/fs/cgroup/cpuset/cpuset.cpus"}) {
         try {
             std::ifstream input (path);
             std::string value;
@@ -163,19 +152,15 @@ inline std::optional<std::uint32_t> read_quota_processors () noexcept
         std::uint64_t period = 0;
         if (input >> quota >> period && quota != "max" && period != 0) {
             const auto quota_value = std::stoull (quota);
-            return static_cast<std::uint32_t> (
-              std::max<std::uint64_t> (1, quota_value / period));
+            return static_cast<std::uint32_t> (std::max<std::uint64_t> (1, quota_value / period));
         }
     }
     catch (...) {
     }
-    const auto quota = read_unsigned_file (
-      "/sys/fs/cgroup/cpu/cpu.cfs_quota_us");
-    const auto period = read_unsigned_file (
-      "/sys/fs/cgroup/cpu/cpu.cfs_period_us");
+    const auto quota = read_unsigned_file ("/sys/fs/cgroup/cpu/cpu.cfs_quota_us");
+    const auto period = read_unsigned_file ("/sys/fs/cgroup/cpu/cpu.cfs_period_us");
     if (quota && period && *period != 0) {
-        return static_cast<std::uint32_t> (
-          std::max<std::uint64_t> (1, *quota / *period));
+        return static_cast<std::uint32_t> (std::max<std::uint64_t> (1, *quota / *period));
     }
 #endif
     return std::nullopt;
@@ -197,45 +182,38 @@ inline std::optional<std::uint32_t> affinity_processors () noexcept
 
 } // namespace application_job_queue_capacity_detail
 
-inline application_job_queue_processor_limits_t
-detect_application_job_queue_processor_limits (
+inline application_job_queue_processor_limits_t detect_application_job_queue_processor_limits (
   std::optional<std::uint32_t> executor_max_concurrency = std::nullopt)
 {
     const auto logical = std::thread::hardware_concurrency ();
-    return {
-      logical == 0 ? std::nullopt
-                   : std::optional<std::uint32_t> (logical),
-      application_job_queue_capacity_detail::affinity_processors (),
-      application_job_queue_capacity_detail::read_cpuset_count (),
-      application_job_queue_capacity_detail::read_quota_processors (),
-      executor_max_concurrency};
+    return {logical == 0 ? std::nullopt : std::optional<std::uint32_t> (logical),
+            application_job_queue_capacity_detail::affinity_processors (),
+            application_job_queue_capacity_detail::read_cpuset_count (),
+            application_job_queue_capacity_detail::read_quota_processors (),
+            executor_max_concurrency};
 }
 
 inline application_job_queue_configuration_t
-resolve_application_job_queue_configuration (
-  application_job_queue_profile_t profile,
-  std::optional<std::uint32_t> configured_manual_max,
-  const application_job_queue_processor_limits_t &limits,
-  std::uint32_t pause_threshold_percent = 80,
-  std::uint32_t resume_threshold_percent = 60)
+resolve_application_job_queue_configuration (application_job_queue_profile_t profile,
+                                             std::optional<std::uint32_t> configured_manual_max,
+                                             const application_job_queue_processor_limits_t &limits,
+                                             std::uint32_t pause_threshold_percent = 80,
+                                             std::uint32_t resume_threshold_percent = 60)
 {
     if (configured_manual_max
         && (*configured_manual_max == 0
             || *configured_manual_max
-                 > static_cast<std::uint32_t> (
-                   std::numeric_limits<std::int32_t>::max ()))) {
+                 > static_cast<std::uint32_t> (std::numeric_limits<std::int32_t>::max ()))) {
         throw framework_exception_t (
           framework_error_kind_t::protocol_error,
           "maximum queued application jobs must be between 1 and 2147483647");
     }
-    const auto processors =
-      effective_application_job_processors (limits);
+    const auto processors = effective_application_job_processors (limits);
     return {
       profile,
       configured_manual_max,
       processors,
-      configured_manual_max.value_or (
-        calculate_application_job_queue_limit (profile, processors)),
+      configured_manual_max.value_or (calculate_application_job_queue_limit (profile, processors)),
       pause_threshold_percent,
       resume_threshold_percent};
 }

@@ -47,19 +47,21 @@ internal static class ZLinkMeshMetadataCodec
         if (values.Count > MaxEntries)
             throw new ArgumentException(
                 $"Application metadata may carry at most {MaxEntries} entries, but {values.Count} were provided.",
-                nameof(metadata));
+                nameof(metadata)
+            );
 
         var totalSize = 2;
         foreach (var (key, value) in values)
         {
             ValidateKey(key);
             ValidateValue(key, value);
-            totalSize += 1 + Encoding.UTF8.GetByteCount(key)
-                + 2 + Encoding.UTF8.GetByteCount(value);
+            totalSize +=
+                1 + Encoding.UTF8.GetByteCount(key) + 2 + Encoding.UTF8.GetByteCount(value);
             if (totalSize > MaxEncodedSize)
                 throw new ArgumentException(
                     $"Encoded application metadata exceeds the {MaxEncodedSize}-byte limit.",
-                    nameof(metadata));
+                    nameof(metadata)
+                );
         }
 
         var buffer = new byte[totalSize];
@@ -89,22 +91,26 @@ internal static class ZLinkMeshMetadataCodec
         if (values.Count > MaxEntries)
             throw new ArgumentException(
                 $"Application metadata may carry at most {MaxEntries} entries, but {values.Count} were provided.",
-                nameof(metadata));
+                nameof(metadata)
+            );
 
         var totalSize = 2;
         foreach (var (key, value) in values)
         {
             ValidateKey(key);
             ValidateValue(key, value);
-            totalSize = checked(totalSize
+            totalSize = checked(
+                totalSize
                 + 1
                 + Encoding.UTF8.GetByteCount(key)
                 + 2
-                + Encoding.UTF8.GetByteCount(value));
+                + Encoding.UTF8.GetByteCount(value)
+            );
             if (totalSize > MaxEncodedSize)
                 throw new ArgumentException(
                     $"Encoded application metadata exceeds the {MaxEncodedSize}-byte limit.",
-                    nameof(metadata));
+                    nameof(metadata)
+                );
         }
         return totalSize;
     }
@@ -114,9 +120,7 @@ internal static class ZLinkMeshMetadataCodec
     // the empty/absent frame, which yields ZLinkMessageMetadata.Empty). Returns
     // false for any malformed frame so the dispatch pump can reject the ingress
     // as a protocol error and NOT deliver it to a handler (spec 03 §3).
-    public static bool TryDecode(
-        ReadOnlySpan<byte> frame,
-        out ZLinkMessageMetadata metadata)
+    public static bool TryDecode(ReadOnlySpan<byte> frame, out ZLinkMessageMetadata metadata)
     {
         metadata = ZLinkMessageMetadata.Empty;
         if (frame.Length == 0)
@@ -162,9 +166,7 @@ internal static class ZLinkMeshMetadataCodec
         if (offset != frame.Length)
             return false;
 
-        metadata = values is null
-            ? ZLinkMessageMetadata.Empty
-            : new ZLinkMessageMetadata(values);
+        metadata = values is null ? ZLinkMessageMetadata.Empty : new ZLinkMessageMetadata(values);
         return true;
     }
 
@@ -175,10 +177,12 @@ internal static class ZLinkMeshMetadataCodec
         var length = Encoding.UTF8.GetByteCount(key);
         if (length is 0 or > MaxKeyLength)
             throw new ArgumentException(
-                $"Application metadata key '{key}' must encode to 1..{MaxKeyLength} UTF-8 bytes.");
+                $"Application metadata key '{key}' must encode to 1..{MaxKeyLength} UTF-8 bytes."
+            );
         if (key.Contains('\0'))
             throw new ArgumentException(
-                $"Application metadata key '{key}' must not contain a NUL character.");
+                $"Application metadata key '{key}' must not contain a NUL character."
+            );
     }
 
     private static void ValidateValue(string key, string value)
@@ -186,10 +190,12 @@ internal static class ZLinkMeshMetadataCodec
         ArgumentNullException.ThrowIfNull(value);
         if (Encoding.UTF8.GetByteCount(value) > MaxValueLength)
             throw new ArgumentException(
-                $"Application metadata value for key '{key}' exceeds {MaxValueLength} UTF-8 bytes.");
+                $"Application metadata value for key '{key}' exceeds {MaxValueLength} UTF-8 bytes."
+            );
         if (value.Contains('\0'))
             throw new ArgumentException(
-                $"Application metadata value for key '{key}' must not contain a NUL character.");
+                $"Application metadata value for key '{key}' must not contain a NUL character."
+            );
     }
 
     private static bool TryDecodeUtf8(ReadOnlySpan<byte> bytes, out string text)

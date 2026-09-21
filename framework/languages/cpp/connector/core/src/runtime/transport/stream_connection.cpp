@@ -43,9 +43,8 @@ class readable_wait_state_t final
     };
 
   public:
-    readable_wait_state_t (
-      boost::asio::io_context &io_context,
-      std::chrono::steady_clock::time_point deadline) :
+    readable_wait_state_t (boost::asio::io_context &io_context,
+                           std::chrono::steady_clock::time_point deadline) :
         timer (io_context), deadline (deadline)
     {
     }
@@ -60,9 +59,7 @@ class readable_wait_state_t final
         report (handler_kind_t::socket, error_, readable_);
     }
 
-    void report (handler_kind_t handler,
-                 boost::system::error_code error_,
-                 bool readable_) noexcept
+    void report (handler_kind_t handler, boost::system::error_code error_, bool readable_) noexcept
     {
         {
             std::lock_guard<std::mutex> lock (mutex);
@@ -144,9 +141,8 @@ bool wait_readable_until_asio (boost::asio::io_context &io_context,
                 return available != 0;
             }
             const auto remaining = deadline - now;
-            std::this_thread::sleep_for (
-              std::min<std::chrono::steady_clock::duration> (
-                remaining, std::chrono::milliseconds (1)));
+            std::this_thread::sleep_for (std::min<std::chrono::steady_clock::duration> (
+              remaining, std::chrono::milliseconds (1)));
         }
     }
 
@@ -160,27 +156,25 @@ bool wait_readable_until_asio (boost::asio::io_context &io_context,
                       // Cancel only this readiness wait. socket.cancel() would
                       // also abort unrelated reads and writes on the same
                       // connection.
-                      state->wait_cancellation.emit (
-                        boost::asio::cancellation_type::terminal);
+                      state->wait_cancellation.emit (boost::asio::cancellation_type::terminal);
                   }
                   state->report_timer (timer_error == boost::asio::error::operation_aborted
                                          ? boost::system::error_code{}
                                          : timer_error,
                                        false);
               }));
-            socket.async_wait (
-              boost::asio::ip::tcp::socket::wait_read,
-              boost::asio::bind_cancellation_slot (
-                state->wait_cancellation.slot (),
-                boost::asio::bind_executor (
-                  strand, [state] (const boost::system::error_code &socket_error) {
-                      try {
-                          state->timer.cancel ();
-                      }
-                      catch (const boost::system::system_error &) {
-                      }
-                      state->report_socket (socket_error, !socket_error);
-                  })));
+            socket.async_wait (boost::asio::ip::tcp::socket::wait_read,
+                               boost::asio::bind_cancellation_slot (
+                                 state->wait_cancellation.slot (),
+                                 boost::asio::bind_executor (
+                                   strand, [state] (const boost::system::error_code &socket_error) {
+                                       try {
+                                           state->timer.cancel ();
+                                       }
+                                       catch (const boost::system::system_error &) {
+                                       }
+                                       state->report_socket (socket_error, !socket_error);
+                                   })));
         });
     }
     catch (const boost::system::system_error &exception) {
@@ -201,10 +195,8 @@ class tcp_stream_connection_t final : public stream_connection_t
 {
   public:
     explicit tcp_stream_connection_t (boost::asio::io_context &io_context,
-                                     boost::asio::ip::tcp::socket socket) :
-        _io_context (io_context),
-        _socket (std::move (socket)),
-        _strand (io_context.get_executor ())
+                                      boost::asio::ip::tcp::socket socket) :
+        _io_context (io_context), _socket (std::move (socket)), _strand (io_context.get_executor ())
     {
     }
 
@@ -215,8 +207,8 @@ class tcp_stream_connection_t final : public stream_connection_t
 
     std::size_t available (boost::system::error_code &error) override
     {
-        return run_serialized_sync (
-          _io_context, _strand, [this, &error] { return _socket.available (error); });
+        return run_serialized_sync (_io_context, _strand,
+                                    [this, &error] { return _socket.available (error); });
     }
 
     std::size_t
@@ -227,26 +219,23 @@ class tcp_stream_connection_t final : public stream_connection_t
         });
     }
 
-    void async_read_some (
-      std::size_t max_size,
-      std::function<void (boost::system::error_code, std::vector<std::uint8_t>)> completion) override
+    void async_read_some (std::size_t max_size,
+                          std::function<void (boost::system::error_code, std::vector<std::uint8_t>)>
+                            completion) override
     {
         auto buffer = std::make_shared<std::vector<std::uint8_t>> (max_size);
-        boost::asio::post (
-          _strand,
-          [this, buffer, completion = std::move (completion)] () mutable {
-              _socket.async_read_some (
-                boost::asio::buffer (*buffer),
-                boost::asio::bind_executor (
-                  _strand,
-                  [buffer, completion = std::move (completion)] (
-                    boost::system::error_code error, std::size_t bytes_read) mutable {
-                      buffer->resize (bytes_read);
-                      if (completion) {
-                          completion (error, std::move (*buffer));
-                      }
-                  }));
-          });
+        boost::asio::post (_strand, [this, buffer, completion = std::move (completion)] () mutable {
+            _socket.async_read_some (
+              boost::asio::buffer (*buffer),
+              boost::asio::bind_executor (
+                _strand, [buffer, completion = std::move (completion)] (
+                           boost::system::error_code error, std::size_t bytes_read) mutable {
+                    buffer->resize (bytes_read);
+                    if (completion) {
+                        completion (error, std::move (*buffer));
+                    }
+                }));
+        });
     }
 
     bool wait_readable_until (std::chrono::steady_clock::time_point deadline,
@@ -266,20 +255,17 @@ class tcp_stream_connection_t final : public stream_connection_t
                       std::function<void (boost::system::error_code)> completion) override
     {
         auto buffer = std::make_shared<std::vector<std::uint8_t>> (std::move (bytes));
-        boost::asio::post (
-          _strand,
-          [this, buffer, completion = std::move (completion)] () mutable {
-              boost::asio::async_write (
-                _socket, boost::asio::buffer (*buffer),
-                boost::asio::bind_executor (
-                  _strand,
-                  [buffer, completion = std::move (completion)] (
-                    boost::system::error_code error, std::size_t) mutable {
-                      if (completion) {
-                          completion (error);
-                      }
-                  }));
-          });
+        boost::asio::post (_strand, [this, buffer, completion = std::move (completion)] () mutable {
+            boost::asio::async_write (
+              _socket, boost::asio::buffer (*buffer),
+              boost::asio::bind_executor (_strand,
+                                          [buffer, completion = std::move (completion)] (
+                                            boost::system::error_code error, std::size_t) mutable {
+                                              if (completion) {
+                                                  completion (error);
+                                              }
+                                          }));
+        });
     }
 
     void shutdown_and_close () override
@@ -326,8 +312,8 @@ class tls_stream_connection_t final : public stream_connection_t
 {
   public:
     explicit tls_stream_connection_t (ssl::stream<boost::asio::ip::tcp::socket> stream,
-                                     boost::asio::io_context &io_context,
-                                     std::shared_ptr<ssl::context> context) :
+                                      boost::asio::io_context &io_context,
+                                      std::shared_ptr<ssl::context> context) :
         _context (std::move (context)),
         _io_context (io_context),
         _stream (std::move (stream)),
@@ -337,15 +323,14 @@ class tls_stream_connection_t final : public stream_connection_t
 
     bool is_open () const override
     {
-        return run_serialized_sync (
-          _io_context, _strand, [this] { return _stream.next_layer ().is_open (); });
+        return run_serialized_sync (_io_context, _strand,
+                                    [this] { return _stream.next_layer ().is_open (); });
     }
 
     std::size_t available (boost::system::error_code &error) override
     {
         return run_serialized_sync (
-          _io_context, _strand,
-          [this, &error] { return _stream.next_layer ().available (error); });
+          _io_context, _strand, [this, &error] { return _stream.next_layer ().available (error); });
     }
 
     std::size_t
@@ -356,33 +341,30 @@ class tls_stream_connection_t final : public stream_connection_t
         });
     }
 
-    void async_read_some (
-      std::size_t max_size,
-      std::function<void (boost::system::error_code, std::vector<std::uint8_t>)> completion) override
+    void async_read_some (std::size_t max_size,
+                          std::function<void (boost::system::error_code, std::vector<std::uint8_t>)>
+                            completion) override
     {
         auto buffer = std::make_shared<std::vector<std::uint8_t>> (max_size);
-        boost::asio::post (
-          _strand,
-          [this, buffer, completion = std::move (completion)] () mutable {
-              _stream.async_read_some (
-                boost::asio::buffer (*buffer),
-                boost::asio::bind_executor (
-                  _strand,
-                  [buffer, completion = std::move (completion)] (
-                    boost::system::error_code error, std::size_t bytes_read) mutable {
-                      buffer->resize (bytes_read);
-                      if (completion) {
-                          completion (error, std::move (*buffer));
-                      }
-                  }));
-          });
+        boost::asio::post (_strand, [this, buffer, completion = std::move (completion)] () mutable {
+            _stream.async_read_some (
+              boost::asio::buffer (*buffer),
+              boost::asio::bind_executor (
+                _strand, [buffer, completion = std::move (completion)] (
+                           boost::system::error_code error, std::size_t bytes_read) mutable {
+                    buffer->resize (bytes_read);
+                    if (completion) {
+                        completion (error, std::move (*buffer));
+                    }
+                }));
+        });
     }
 
     bool wait_readable_until (std::chrono::steady_clock::time_point deadline,
                               boost::system::error_code &error) override
     {
-        return wait_readable_until_asio (
-          _io_context, _strand, _stream.next_layer (), deadline, error);
+        return wait_readable_until_asio (_io_context, _strand, _stream.next_layer (), deadline,
+                                         error);
     }
 
     void write (const std::vector<std::uint8_t> &bytes) override
@@ -396,20 +378,17 @@ class tls_stream_connection_t final : public stream_connection_t
                       std::function<void (boost::system::error_code)> completion) override
     {
         auto buffer = std::make_shared<std::vector<std::uint8_t>> (std::move (bytes));
-        boost::asio::post (
-          _strand,
-          [this, buffer, completion = std::move (completion)] () mutable {
-              boost::asio::async_write (
-                _stream, boost::asio::buffer (*buffer),
-                boost::asio::bind_executor (
-                  _strand,
-                  [buffer, completion = std::move (completion)] (
-                    boost::system::error_code error, std::size_t) mutable {
-                      if (completion) {
-                          completion (error);
-                      }
-                  }));
-          });
+        boost::asio::post (_strand, [this, buffer, completion = std::move (completion)] () mutable {
+            boost::asio::async_write (
+              _stream, boost::asio::buffer (*buffer),
+              boost::asio::bind_executor (_strand,
+                                          [buffer, completion = std::move (completion)] (
+                                            boost::system::error_code error, std::size_t) mutable {
+                                              if (completion) {
+                                                  completion (error);
+                                              }
+                                          }));
+        });
     }
 
     void shutdown_and_close () override
@@ -528,8 +507,8 @@ std::unique_ptr<stream_connection_t> connect_tls (boost::asio::io_context &io_co
     auto endpoints = resolver.resolve (endpoint.host, endpoint.port);
     boost::asio::connect (stream.next_layer (), endpoints);
     stream.handshake (ssl::stream_base::client);
-    return std::make_unique<tls_stream_connection_t> (
-      std::move (stream), io_context, std::move (context));
+    return std::make_unique<tls_stream_connection_t> (std::move (stream), io_context,
+                                                      std::move (context));
 }
 
 void connect_tls_async (
@@ -575,9 +554,9 @@ void connect_tls_async (
           }
           boost::asio::async_connect (
             stream->next_layer (), endpoints,
-            [&io_context, context, stream, control, callback = std::move (callback)] (
-              boost::system::error_code connect_error,
-              const boost::asio::ip::tcp::endpoint &) mutable {
+            [&io_context, context, stream, control,
+             callback = std::move (callback)] (boost::system::error_code connect_error,
+                                               const boost::asio::ip::tcp::endpoint &) mutable {
                 if (control->cancelled ()) {
                     callback (boost::asio::error::operation_aborted, nullptr);
                     return;

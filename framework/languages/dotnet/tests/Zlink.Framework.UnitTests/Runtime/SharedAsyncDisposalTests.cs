@@ -1,16 +1,16 @@
+using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
+using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Contracts.Locations;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Configuration;
 using Zlink.Framework.Runtime.Dispatch;
-using Zlink.Framework.AspNetCore;
-using Zlink.Framework.Runtime.Locations;
-using Zlink.Framework.Runtime.Spots;
-using Zlink.Framework.Runtime.Host;
-using Zlink.Framework.Runtime.Streams;
-using System.Reflection;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Handlers;
+using Zlink.Framework.Runtime.Host;
+using Zlink.Framework.Runtime.Locations;
+using Zlink.Framework.Runtime.Spots;
+using Zlink.Framework.Runtime.Streams;
 
 namespace Zlink.Framework.UnitTests;
 
@@ -24,7 +24,8 @@ public sealed class SharedAsyncDisposalTests
             new ZLinkLocationRuntime(new ZLinkLocationOptions(), store),
             null!,
             new ZLinkLocationOptions(),
-            store: store);
+            store: store
+        );
         var first = host.DisposeAsync().AsTask();
         var second = host.DisposeAsync().AsTask();
         Assert.Same(first, second);
@@ -60,10 +61,14 @@ public sealed class SharedAsyncDisposalTests
     [Fact]
     public async Task LocationStoreOwner_Disposes_Distinct_Provider_Stores_Once()
     {
-        var locationStore =
-            DispatchProxy.Create<ITrackedLocationStore, TrackedLocationStoreProxy>();
-        var relocationStore =
-            DispatchProxy.Create<ITrackedRelocationStore, TrackedRelocationStoreProxy>();
+        var locationStore = DispatchProxy.Create<
+            ITrackedLocationStore,
+            TrackedLocationStoreProxy
+        >();
+        var relocationStore = DispatchProxy.Create<
+            ITrackedRelocationStore,
+            TrackedRelocationStoreProxy
+        >();
         var locationTracker = (TrackedLocationStoreProxy)(object)locationStore;
         var relocationTracker = (TrackedRelocationStoreProxy)(object)relocationStore;
         var owner = new ZLinkLocationStoreInstanceOwner(locationStore, relocationStore);
@@ -95,12 +100,18 @@ public sealed class SharedAsyncDisposalTests
         var queue = new ZLinkSerialExecutionQueue(
             new ZLinkRuntimeTaskRunner(errors, CancellationToken.None),
             errors,
-            CancellationToken.None);
-        Assert.True(queue.TryPost(async _ =>
-        {
-            entered.TrySetResult();
-            await release.Task.ConfigureAwait(false);
-        }, out _));
+            CancellationToken.None
+        );
+        Assert.True(
+            queue.TryPost(
+                async _ =>
+                {
+                    entered.TrySetResult();
+                    await release.Task.ConfigureAwait(false);
+                },
+                out _
+            )
+        );
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         var first = queue.DisposeAsync().AsTask();
@@ -134,11 +145,10 @@ public sealed class SharedAsyncDisposalTests
         var socket = new BlockingConnectableSocket();
         var bundle = new ZLinkChannelRuntimeBundle(socket, socket.Connect, socket.Disconnect);
         var connections = new ZLinkEndpointConnections();
-        bundle.OwnManualConnectionAttachment(connections.Attach(
-            bundle.ConnectManual,
-            bundle.DisconnectManual));
-        var connect = Task.Run(
-            () => connections.Connect("tcp://127.0.0.1:7401"));
+        bundle.OwnManualConnectionAttachment(
+            connections.Attach(bundle.ConnectManual, bundle.DisconnectManual)
+        );
+        var connect = Task.Run(() => connections.Connect("tcp://127.0.0.1:7401"));
         await socket.ConnectStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         var dispose = bundle.DisposeAsync().AsTask();
@@ -174,10 +184,11 @@ public sealed class SharedAsyncDisposalTests
     {
         await using var services = new ServiceCollection().BuildServiceProvider();
         var owner = new ZLinkScopedHandlerInstanceOwner(services);
-        var handler = (SynchronousThreadCapturingHandler)owner.Resolve(
-            typeof(SynchronousThreadCapturingHandler));
+        var handler = (SynchronousThreadCapturingHandler)
+            owner.Resolve(typeof(SynchronousThreadCapturingHandler));
         var completion = new TaskCompletionSource<(bool Completed, int CallerThreadId, Task Task)>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var caller = new Thread(() =>
         {
             try
@@ -211,12 +222,14 @@ public sealed class SharedAsyncDisposalTests
         _ = owner.Resolve(typeof(SecondFailingDisposableHandler));
 
         var exception = await Assert.ThrowsAsync<AggregateException>(() =>
-            owner.DisposeAsync().AsTask());
+            owner.DisposeAsync().AsTask()
+        );
 
         Assert.Collection(
             exception.InnerExceptions,
             first => Assert.Equal("second", first.Message),
-            second => Assert.Equal("first", second.Message));
+            second => Assert.Equal("first", second.Message)
+        );
     }
 
     [Fact]
@@ -226,17 +239,18 @@ public sealed class SharedAsyncDisposalTests
         var proxy = (SpotNodeProxy)(object)node;
         var registry = new ZLinkSpotNodeBundleRegistry(node);
 
-        var operations = Enumerable.Range(0, 100)
-            .Select(index => Task.Run(async () =>
-            {
-                try
+        var operations = Enumerable
+            .Range(0, 100)
+            .Select(index =>
+                Task.Run(async () =>
                 {
-                    await registry.GetOrCreatePublisherBundleAsync($"channel-{index}");
-                }
-                catch (ObjectDisposedException)
-                {
-                }
-            }))
+                    try
+                    {
+                        await registry.GetOrCreatePublisherBundleAsync($"channel-{index}");
+                    }
+                    catch (ObjectDisposedException) { }
+                })
+            )
             .Append(Task.Run(async () => await registry.DisposeAsync()))
             .ToArray();
 
@@ -246,9 +260,13 @@ public sealed class SharedAsyncDisposalTests
 
         Assert.Same(first, second);
         await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(proxy.CreatedSpots.Count, proxy.CreatedSpots.Sum(static spot => spot.DisposeCount));
+        Assert.Equal(
+            proxy.CreatedSpots.Count,
+            proxy.CreatedSpots.Sum(static spot => spot.DisposeCount)
+        );
         await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
-            await registry.GetOrCreatePublisherBundleAsync("after-close"));
+            await registry.GetOrCreatePublisherBundleAsync("after-close")
+        );
     }
 
     [Fact]
@@ -268,7 +286,9 @@ public sealed class SharedAsyncDisposalTests
             ZLinkApplicationJobQueueCapacityResolver.Resolve(
                 ZLinkApplicationJobQueueProfile.Balanced,
                 8,
-                1));
+                1
+            )
+        );
 
         var first = state.DisposeAsync().AsTask();
         await proxy.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -277,10 +297,12 @@ public sealed class SharedAsyncDisposalTests
         Assert.Same(first, second);
         Assert.False(second.IsCompleted);
         proxy.Release.TrySetResult();
-        var firstFailure = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => first.WaitAsync(TimeSpan.FromSeconds(5)));
-        var secondFailure = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => second.WaitAsync(TimeSpan.FromSeconds(5)));
+        var firstFailure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            first.WaitAsync(TimeSpan.FromSeconds(5))
+        );
+        var secondFailure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            second.WaitAsync(TimeSpan.FromSeconds(5))
+        );
         Assert.Same(failure, firstFailure);
         Assert.Same(firstFailure, secondFailure);
         Assert.Equal(1, proxy.DisposeCount);
@@ -293,11 +315,13 @@ public sealed class SharedAsyncDisposalTests
         var executor = new ZLinkSessionSerialExecutor(new object(), errors);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        Assert.True(executor.ExecuteInfrastructure(async () =>
-        {
-            entered.TrySetResult();
-            await release.Task.ConfigureAwait(false);
-        }));
+        Assert.True(
+            executor.ExecuteInfrastructure(async () =>
+            {
+                entered.TrySetResult();
+                await release.Task.ConfigureAwait(false);
+            })
+        );
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         var first = executor.DisposeAsync().AsTask();
@@ -309,18 +333,18 @@ public sealed class SharedAsyncDisposalTests
         await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(5));
     }
 
-    private interface ITrackedLocationStore :
-        Zlink.Framework.LocationProvider.IZLinkLocationStore,
-        IAsyncDisposable;
+    private interface ITrackedLocationStore
+        : Zlink.Framework.LocationProvider.IZLinkLocationStore,
+            IAsyncDisposable;
 
-    private interface ITrackedRelocationStore :
-        Zlink.Framework.LocationProvider.IZLinkRelocationStore,
-        IAsyncDisposable;
+    private interface ITrackedRelocationStore
+        : Zlink.Framework.LocationProvider.IZLinkRelocationStore,
+            IAsyncDisposable;
 
-    private interface ITrackedProviderStore :
-        Zlink.Framework.LocationProvider.IZLinkLocationStore,
-        Zlink.Framework.LocationProvider.IZLinkRelocationStore,
-        IAsyncDisposable;
+    private interface ITrackedProviderStore
+        : Zlink.Framework.LocationProvider.IZLinkLocationStore,
+            Zlink.Framework.LocationProvider.IZLinkRelocationStore,
+            IAsyncDisposable;
 
     private class TrackedLocationStoreProxy : DispatchProxy
     {
@@ -336,7 +360,8 @@ public sealed class SharedAsyncDisposalTests
             }
 
             throw new NotSupportedException(
-                "This disposal probe does not execute Store operations.");
+                "This disposal probe does not execute Store operations."
+            );
         }
     }
 
@@ -354,7 +379,8 @@ public sealed class SharedAsyncDisposalTests
             }
 
             throw new NotSupportedException(
-                "This disposal probe does not execute Store operations.");
+                "This disposal probe does not execute Store operations."
+            );
         }
     }
 
@@ -372,7 +398,8 @@ public sealed class SharedAsyncDisposalTests
             }
 
             throw new NotSupportedException(
-                "This disposal probe does not execute Store operations.");
+                "This disposal probe does not execute Store operations."
+            );
         }
     }
 
@@ -398,7 +425,9 @@ public sealed class SharedAsyncDisposalTests
         internal TaskCompletionSource Release { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal int DisposeCount => Volatile.Read(ref _disposeCount);
+
         public void Bind(string endpoint) { }
+
         public async ValueTask DisposeAsync()
         {
             Interlocked.Increment(ref _disposeCount);
@@ -441,7 +470,9 @@ public sealed class SharedAsyncDisposalTests
     private sealed class EmptyBackendAdapterFactory : IZLinkBackendAdapterFactory
     {
         public IZLinkBackendRuntimeContext CreateRuntimeContext() => null!;
-        public IZLinkMonitoringBackendAdapter CreateMonitoringAdapter() => new EmptyMonitoringAdapter();
+
+        public IZLinkMonitoringBackendAdapter CreateMonitoringAdapter() =>
+            new EmptyMonitoringAdapter();
     }
 
     private class SpotNodeProxy : DispatchProxy
@@ -482,7 +513,7 @@ public sealed class SharedAsyncDisposalTests
                 // does not exercise that path, so the proxy accepts it as a no-op.
                 nameof(IZLinkBackendRuntimeContext.ConfigureApplicationJobQueue) => null,
                 nameof(IAsyncDisposable.DisposeAsync) => Dispose(),
-                _ => throw new NotSupportedException(targetMethod.Name)
+                _ => throw new NotSupportedException(targetMethod.Name),
             };
         }
 
@@ -492,7 +523,9 @@ public sealed class SharedAsyncDisposalTests
             Started.TrySetResult();
             await Release.Task.ConfigureAwait(false);
             if (DisposeFailure is not null)
-                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(DisposeFailure).Throw();
+                System
+                    .Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(DisposeFailure)
+                    .Throw();
         }
     }
 
@@ -507,7 +540,7 @@ public sealed class SharedAsyncDisposalTests
             return targetMethod.Name switch
             {
                 nameof(IAsyncDisposable.DisposeAsync) => Dispose(),
-                _ => throw new NotSupportedException(targetMethod.Name)
+                _ => throw new NotSupportedException(targetMethod.Name),
             };
         }
 
@@ -531,6 +564,7 @@ public sealed class SharedAsyncDisposalTests
         internal TaskCompletionSource Release { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal int DisposeCount => Volatile.Read(ref _disposeCount);
+
         public async ValueTask DisposeAsync()
         {
             Interlocked.Increment(ref _disposeCount);
@@ -554,13 +588,12 @@ public sealed class SharedAsyncDisposalTests
 
     public sealed class FirstFailingAsyncHandler : IAsyncDisposable
     {
-        public ValueTask DisposeAsync() => ValueTask.FromException(
-            new InvalidOperationException("first"));
+        public ValueTask DisposeAsync() =>
+            ValueTask.FromException(new InvalidOperationException("first"));
     }
 
     public sealed class SecondFailingDisposableHandler : IDisposable
     {
         public void Dispose() => throw new InvalidOperationException("second");
     }
-
 }

@@ -6,32 +6,31 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 
 /**
- * Translates the failures of the observation surfaces
- * ({@code waitFor}, {@code expectNone}, {@code waitForSequence}) into the one
- * code common connector spec 32 10.1 assigns them: every failure of these
- * surfaces is {@code VALIDATION_FAILED}, delivered per 9.2 in an exception
- * that carries the code.
+ * Translates the failures of the observation surfaces ({@code waitFor}, {@code expectNone}, {@code
+ * waitForSequence}) into the one code common connector spec 32 10.1 assigns them: every failure of
+ * these surfaces is {@code VALIDATION_FAILED}, delivered per 9.2 in an exception that carries the
+ * code.
  */
 final class ZLinkStreamWaitFailure {
-    private ZLinkStreamWaitFailure() {
-    }
+    private ZLinkStreamWaitFailure() {}
 
     static <T> CompletableFuture<T> asValidationFailure(
-        CompletableFuture<T> source,
-        String message) {
+            CompletableFuture<T> source, String message) {
         CompletableFuture<T> result = new CompletableFuture<>();
-        source.whenComplete((value, error) -> {
-            if (error == null) {
-                result.complete(value);
-                return;
-            }
-            result.completeExceptionally(translate(error, message));
-        });
-        result.whenComplete((ignored, error) -> {
-            if (result.isCancelled()) {
-                source.cancel(false);
-            }
-        });
+        source.whenComplete(
+                (value, error) -> {
+                    if (error == null) {
+                        result.complete(value);
+                        return;
+                    }
+                    result.completeExceptionally(translate(error, message));
+                });
+        result.whenComplete(
+                (ignored, error) -> {
+                    if (result.isCancelled()) {
+                        source.cancel(false);
+                    }
+                });
         return result;
     }
 
@@ -50,9 +49,8 @@ final class ZLinkStreamWaitFailure {
 
     private static Throwable unwrap(Throwable error) {
         Throwable current = error;
-        while ((current instanceof CompletionException
-            || current instanceof ExecutionException)
-            && current.getCause() != null) {
+        while ((current instanceof CompletionException || current instanceof ExecutionException)
+                && current.getCause() != null) {
             current = current.getCause();
         }
         return current;

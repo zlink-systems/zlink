@@ -1,5 +1,14 @@
 package systems.zlink.framework.runtime.channels;
 
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSubscriberSocket;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget;
+
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.concurrent.ExecutorService;
@@ -7,14 +16,6 @@ import java.util.concurrent.Executors;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSubscriberSocket;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage;
-import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget;
-import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
-import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 
 final class ZLinkChannelReceiveLoops implements AutoCloseable {
     private static final Duration RECEIVE_POLL_TIMEOUT = Duration.ofMillis(250);
@@ -23,141 +24,149 @@ final class ZLinkChannelReceiveLoops implements AutoCloseable {
     private final Object capacityLock = new Object();
     private boolean closed;
     private final ExecutorService executor =
-        Executors.newCachedThreadPool(task -> {
-            Thread thread = new Thread(task, "zlink-java-channel-runtime");
-            thread.setDaemon(true);
-            return thread;
-        });
+            Executors.newCachedThreadPool(
+                    task -> {
+                        Thread thread = new Thread(task, "zlink-java-channel-runtime");
+                        thread.setDaemon(true);
+                        return thread;
+                    });
 
     ZLinkChannelReceiveLoops(
-        BooleanSupplier running,
-        ZLinkApplicationJobQueue applicationJobQueue) {
+            BooleanSupplier running, ZLinkApplicationJobQueue applicationJobQueue) {
         this.running = running;
-        this.applicationJobQueue = java.util.Objects.requireNonNull(
-            applicationJobQueue, "applicationJobQueue");
+        this.applicationJobQueue =
+                java.util.Objects.requireNonNull(applicationJobQueue, "applicationJobQueue");
     }
 
     void startRequest(
-        ZLinkBackendRouterSocket router,
-        Consumer<ZLinkBackendReceived> dispatch,
-        Consumer<Throwable> reportFailure) {
-        start(new ReceiveLoop(reportFailure) {
-            @Override
-            boolean receiveAndDispatch() {
-                if (!router.waitForReadable(RECEIVE_POLL_TIMEOUT)) {
-                    return false;
-                }
-                ZLinkReceiveBatchBudget batch = new ZLinkReceiveBatchBudget();
-                boolean dispatched = false;
-                while (batch.canReceiveNext()) {
-                    ZLinkApplicationJobQueue.Permit permit = reserveBeforeReceive();
-                    if (permit == null) {
-                        break;
-                    }
-                    try (var ignored = ZLinkApplicationJobContext.enter(permit)) {
-                        assertReceiveOwner();
-                        ZLinkBackendReceived received = router.recv(
-                            ZLinkBackendRecvMode.DONT_WAIT);
-                        if (received == null) {
-                            break;
+            ZLinkBackendRouterSocket router,
+            Consumer<ZLinkBackendReceived> dispatch,
+            Consumer<Throwable> reportFailure) {
+        start(
+                new ReceiveLoop(reportFailure) {
+                    @Override
+                    boolean receiveAndDispatch() {
+                        if (!router.waitForReadable(RECEIVE_POLL_TIMEOUT)) {
+                            return false;
                         }
-                        batch.record(ZLinkReceiveBatchBudget.bytesOf(
-                            received.parts(),
-                            received.applicationMetadataSize(),
-                            received.acceptedJournalRecordSize()));
-                        dispatch.accept(received);
-                        dispatched = true;
-                    } finally {
-                        permit.abandonReservation();
+                        ZLinkReceiveBatchBudget batch = new ZLinkReceiveBatchBudget();
+                        boolean dispatched = false;
+                        while (batch.canReceiveNext()) {
+                            ZLinkApplicationJobQueue.Permit permit = reserveBeforeReceive();
+                            if (permit == null) {
+                                break;
+                            }
+                            try (var ignored = ZLinkApplicationJobContext.enter(permit)) {
+                                assertReceiveOwner();
+                                ZLinkBackendReceived received =
+                                        router.recv(ZLinkBackendRecvMode.DONT_WAIT);
+                                if (received == null) {
+                                    break;
+                                }
+                                batch.record(
+                                        ZLinkReceiveBatchBudget.bytesOf(
+                                                received.parts(),
+                                                received.applicationMetadataSize(),
+                                                received.acceptedJournalRecordSize()));
+                                dispatch.accept(received);
+                                dispatched = true;
+                            } finally {
+                                permit.abandonReservation();
+                            }
+                        }
+                        return dispatched;
                     }
-                }
-                return dispatched;
-            }
-        });
+                });
     }
 
     void startSubscribe(
-        ZLinkBackendSubscriberSocket subscriber,
-        Consumer<ZLinkBackendTopicMessage> dispatch,
-        Consumer<Throwable> reportFailure) {
-        start(new ReceiveLoop(reportFailure) {
-            @Override
-            boolean receiveAndDispatch() {
-                if (!subscriber.waitForReadable(RECEIVE_POLL_TIMEOUT)) {
-                    return false;
-                }
-                ZLinkReceiveBatchBudget batch = new ZLinkReceiveBatchBudget();
-                boolean dispatched = false;
-                while (batch.canReceiveNext()) {
-                    ZLinkApplicationJobQueue.Permit permit = reserveBeforeReceive();
-                    if (permit == null) {
-                        break;
-                    }
-                    try (var ignored = ZLinkApplicationJobContext.enter(permit)) {
-                        assertReceiveOwner();
-                        ZLinkBackendTopicMessage received = subscriber.subscribe(
-                            ZLinkBackendRecvMode.DONT_WAIT);
-                        if (received == null) {
-                            break;
+            ZLinkBackendSubscriberSocket subscriber,
+            Consumer<ZLinkBackendTopicMessage> dispatch,
+            Consumer<Throwable> reportFailure) {
+        start(
+                new ReceiveLoop(reportFailure) {
+                    @Override
+                    boolean receiveAndDispatch() {
+                        if (!subscriber.waitForReadable(RECEIVE_POLL_TIMEOUT)) {
+                            return false;
                         }
-                        batch.record(ZLinkReceiveBatchBudget.bytesOf(
-                            received.parts(),
-                            received.applicationMetadataSize(),
-                            received.topic().getBytes(StandardCharsets.UTF_8).length));
-                        dispatch.accept(received);
-                        dispatched = true;
-                    } finally {
-                        permit.abandonReservation();
+                        ZLinkReceiveBatchBudget batch = new ZLinkReceiveBatchBudget();
+                        boolean dispatched = false;
+                        while (batch.canReceiveNext()) {
+                            ZLinkApplicationJobQueue.Permit permit = reserveBeforeReceive();
+                            if (permit == null) {
+                                break;
+                            }
+                            try (var ignored = ZLinkApplicationJobContext.enter(permit)) {
+                                assertReceiveOwner();
+                                ZLinkBackendTopicMessage received =
+                                        subscriber.subscribe(ZLinkBackendRecvMode.DONT_WAIT);
+                                if (received == null) {
+                                    break;
+                                }
+                                batch.record(
+                                        ZLinkReceiveBatchBudget.bytesOf(
+                                                received.parts(),
+                                                received.applicationMetadataSize(),
+                                                received.topic()
+                                                        .getBytes(StandardCharsets.UTF_8)
+                                                        .length));
+                                dispatch.accept(received);
+                                dispatched = true;
+                            } finally {
+                                permit.abandonReservation();
+                            }
+                        }
+                        return dispatched;
                     }
-                }
-                return dispatched;
-            }
-        });
+                });
     }
 
     void startRoute(
-        ZLinkBackendRouterSocket router,
-        Supplier<Object> socketLock,
-        Runnable drainBridge,
-        Consumer<ZLinkBackendReceived> dispatch,
-        Consumer<Throwable> reportFailure) {
-        start(new ReceiveLoop(reportFailure) {
-            @Override
-            boolean receiveAndDispatch() {
-                if (!router.waitForReadable(RECEIVE_POLL_TIMEOUT)) {
-                    return false;
-                }
-                ZLinkReceiveBatchBudget batch = new ZLinkReceiveBatchBudget();
-                boolean dispatched = false;
-                drainBridge.run();
-                while (batch.canReceiveNext()) {
-                    ZLinkApplicationJobQueue.Permit permit = reserveBeforeReceive();
-                    if (permit == null) {
-                        break;
-                    }
-                    try (var ignored = ZLinkApplicationJobContext.enter(permit)) {
-                        ZLinkBackendReceived received;
-                        synchronized (socketLock.get()) {
-                            assertReceiveOwner();
-                            received = router.recv(ZLinkBackendRecvMode.DONT_WAIT);
+            ZLinkBackendRouterSocket router,
+            Supplier<Object> socketLock,
+            Runnable drainBridge,
+            Consumer<ZLinkBackendReceived> dispatch,
+            Consumer<Throwable> reportFailure) {
+        start(
+                new ReceiveLoop(reportFailure) {
+                    @Override
+                    boolean receiveAndDispatch() {
+                        if (!router.waitForReadable(RECEIVE_POLL_TIMEOUT)) {
+                            return false;
                         }
-                        if (received == null) {
-                            break;
+                        ZLinkReceiveBatchBudget batch = new ZLinkReceiveBatchBudget();
+                        boolean dispatched = false;
+                        drainBridge.run();
+                        while (batch.canReceiveNext()) {
+                            ZLinkApplicationJobQueue.Permit permit = reserveBeforeReceive();
+                            if (permit == null) {
+                                break;
+                            }
+                            try (var ignored = ZLinkApplicationJobContext.enter(permit)) {
+                                ZLinkBackendReceived received;
+                                synchronized (socketLock.get()) {
+                                    assertReceiveOwner();
+                                    received = router.recv(ZLinkBackendRecvMode.DONT_WAIT);
+                                }
+                                if (received == null) {
+                                    break;
+                                }
+                                batch.record(
+                                        ZLinkReceiveBatchBudget.bytesOf(
+                                                received.parts(),
+                                                received.applicationMetadataSize(),
+                                                received.acceptedJournalRecordSize()));
+                                dispatch.accept(received);
+                                dispatched = true;
+                            } finally {
+                                permit.abandonReservation();
+                            }
                         }
-                        batch.record(ZLinkReceiveBatchBudget.bytesOf(
-                            received.parts(),
-                            received.applicationMetadataSize(),
-                            received.acceptedJournalRecordSize()));
-                        dispatch.accept(received);
-                        dispatched = true;
-                    } finally {
-                        permit.abandonReservation();
+                        drainBridge.run();
+                        return dispatched;
                     }
-                }
-                drainBridge.run();
-                return dispatched;
-            }
-        });
+                });
     }
 
     @Override
@@ -174,8 +183,7 @@ final class ZLinkChannelReceiveLoops implements AutoCloseable {
         while (!executor.isTerminated()) {
             try {
                 executor.awaitTermination(
-                    Long.MAX_VALUE,
-                    java.util.concurrent.TimeUnit.NANOSECONDS);
+                        Long.MAX_VALUE, java.util.concurrent.TimeUnit.NANOSECONDS);
             } catch (InterruptedException interruption) {
                 interrupted = true;
                 executor.shutdownNow();
@@ -201,8 +209,7 @@ final class ZLinkChannelReceiveLoops implements AutoCloseable {
         @Override
         public final void run() {
             if (ownerThread != null) {
-                throw new IllegalStateException(
-                    "socket receive loop already has an owner thread");
+                throw new IllegalStateException("socket receive loop already has an owner thread");
             }
             ownerThread = Thread.currentThread();
             while (running.getAsBoolean() && !isClosed()) {
@@ -225,7 +232,7 @@ final class ZLinkChannelReceiveLoops implements AutoCloseable {
         final void assertReceiveOwner() {
             if (Thread.currentThread() != ownerThread) {
                 throw new IllegalStateException(
-                    "socket receive must run on its receive-loop owner thread");
+                        "socket receive must run on its receive-loop owner thread");
             }
         }
 

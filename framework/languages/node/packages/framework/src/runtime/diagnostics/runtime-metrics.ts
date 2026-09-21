@@ -24,10 +24,7 @@ interface ZLinkObservableMeter extends ZLinkMeter {
     name: string,
     options?: { readonly unit?: string }
   ): ZLinkObservableGauge;
-  createObservableGauge?(
-    name: string,
-    options?: { readonly unit?: string }
-  ): ZLinkObservableGauge;
+  createObservableGauge?(name: string, options?: { readonly unit?: string }): ZLinkObservableGauge;
 }
 
 export interface ZLinkRuntimeMetricCapacity {
@@ -193,10 +190,12 @@ class MetricRegistry {
   }
 
   private observe(name: string, result: ZLinkObservableResult): void {
-    if (name === 'zlink.host.application_job_queue.pressure_state'
-        || name === 'zlink.host.application_job_queue.pressure_transitions'
-        || name === 'zlink.host.application_job_queue.pause_duration'
-        || name === 'zlink.host.application_job_queue.flow_state_config_failures') {
+    if (
+      name === 'zlink.host.application_job_queue.pressure_state' ||
+      name === 'zlink.host.application_job_queue.pressure_transitions' ||
+      name === 'zlink.host.application_job_queue.pause_duration' ||
+      name === 'zlink.host.application_job_queue.flow_state_config_failures'
+    ) {
       for (const provider of this.applicationJobQueuePressures) {
         try {
           this.observeApplicationJobQueuePressure(name, provider(), result);
@@ -206,8 +205,10 @@ class MetricRegistry {
       }
       return;
     }
-    if (name.startsWith('zlink.host.core_hwm.')
-        || name.startsWith('zlink.host.application_job_queue.')) {
+    if (
+      name.startsWith('zlink.host.core_hwm.') ||
+      name.startsWith('zlink.host.application_job_queue.')
+    ) {
       for (const provider of this.hostCapacities) {
         try {
           this.observeHostCapacity(name, provider(), result);
@@ -299,17 +300,29 @@ class MetricRegistry {
   ): void {
     const mesh = { mesh_name: snapshot.meshName };
     const peer = { ...mesh, source: snapshot.source };
-    if (name === 'zlink.mesh_node.peers.configured') result.observe(nonNegative(snapshot.configuredPeers), peer);
-    else if (name === 'zlink.mesh_node.peers.connected') result.observe(nonNegative(snapshot.connectedPeers), peer);
-    else if (name === 'zlink.mesh_node.peers.ready') result.observe(nonNegative(snapshot.readyPeers), peer);
+    if (name === 'zlink.mesh_node.peers.configured')
+      result.observe(nonNegative(snapshot.configuredPeers), peer);
+    else if (name === 'zlink.mesh_node.peers.connected')
+      result.observe(nonNegative(snapshot.connectedPeers), peer);
+    else if (name === 'zlink.mesh_node.peers.ready')
+      result.observe(nonNegative(snapshot.readyPeers), peer);
     else if (name === 'zlink.mesh_node.channels.ready_members') {
       for (const channel of snapshot.channels) {
-        result.observe(nonNegative(channel.readyMembers), { ...mesh, channel_name: channel.channelName });
+        result.observe(nonNegative(channel.readyMembers), {
+          ...mesh,
+          channel_name: channel.channelName
+        });
       }
     } else if (name.startsWith('zlink.object.capacity.')) {
       const field = metricSuffix(name);
-      result.observe(capacityValue(snapshot.actorCapacity, field), { ...mesh, capacity_scope: 'actor' });
-      result.observe(capacityValue(snapshot.spotCapacity, field), { ...mesh, capacity_scope: 'spot' });
+      result.observe(capacityValue(snapshot.actorCapacity, field), {
+        ...mesh,
+        capacity_scope: 'actor'
+      });
+      result.observe(capacityValue(snapshot.spotCapacity, field), {
+        ...mesh,
+        capacity_scope: 'spot'
+      });
     } else if (name.startsWith('zlink.spot.type.capacity.')) {
       const field = metricSuffix(name);
       for (const capacity of snapshot.spotTypeCapacities) {
@@ -350,7 +363,9 @@ export class ZLinkRuntimeMetrics {
     const owner = (provider ?? openTelemetryMetrics) as object;
     let registry = registries.get(owner);
     if (registry === undefined) {
-      const meter = (provider ?? openTelemetryMetrics).getMeter(ZLinkMeters.Framework) as ZLinkObservableMeter;
+      const meter = (provider ?? openTelemetryMetrics).getMeter(
+        ZLinkMeters.Framework
+      ) as ZLinkObservableMeter;
       registry = new MetricRegistry(meter);
       registries.set(owner, registry);
     }
@@ -365,7 +380,11 @@ export class ZLinkRuntimeMetrics {
     safe(() => this.registry.upDown.get(name)?.add(value, attributes));
   }
 
-  duration(name: HistogramName | string, seconds: number, attributes?: ZLinkMetricAttributes): void {
+  duration(
+    name: HistogramName | string,
+    seconds: number,
+    attributes?: ZLinkMetricAttributes
+  ): void {
     this.histogram(name, Math.max(0, seconds), 's', attributes);
   }
 
@@ -390,9 +409,7 @@ export class ZLinkRuntimeMetrics {
     return registration(() => this.registry.hostStates.delete(provider));
   }
 
-  registerHostCapacity(
-    provider: () => ZLinkHostCapacityStatus
-  ): ZLinkRuntimeMetricRegistration {
+  registerHostCapacity(provider: () => ZLinkHostCapacityStatus): ZLinkRuntimeMetricRegistration {
     this.registry.hostCapacities.add(provider);
     return registration(() => this.registry.hostCapacities.delete(provider));
   }
@@ -404,8 +421,10 @@ export class ZLinkRuntimeMetrics {
     return registration(() => this.registry.applicationJobQueuePressures.delete(provider));
   }
 
-  startRequest(meshName: string, surface: 'node' | 'channel' | 'spot' | 'instance_spot' | 'actor'):
-    ZLinkRequestMetricOperation {
+  startRequest(
+    meshName: string,
+    surface: 'node' | 'channel' | 'spot' | 'instance_spot' | 'actor'
+  ): ZLinkRequestMetricOperation {
     return new ZLinkRequestMetricOperation(this, meshName, surface);
   }
 
@@ -453,7 +472,10 @@ export class ZLinkRuntimeMetrics {
     });
   }
 
-  startInstanceSpotActivation(meshName: string, instanceSpotType: string): ZLinkRuntimeMetricOperation {
+  startInstanceSpotActivation(
+    meshName: string,
+    instanceSpotType: string
+  ): ZLinkRuntimeMetricOperation {
     const started = process.hrtime.bigint();
     let completed = false;
     return {

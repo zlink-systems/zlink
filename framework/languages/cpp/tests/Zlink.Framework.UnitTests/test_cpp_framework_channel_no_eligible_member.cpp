@@ -24,36 +24,36 @@ using zlink::framework::runtime::messaging::map_submit_result_exception;
 
 TEST (CppFrameworkChannelNoEligibleMember, ChannelNotFoundEndsUnavailable)
 {
-    const auto mapped = map_channel_submit_result_exception (
-      zlink::submit_result_t::not_found, "channel had no eligible member");
+    const auto mapped = map_channel_submit_result_exception (zlink::submit_result_t::not_found,
+                                                             "channel had no eligible member");
     EXPECT_EQ (framework_error_kind_t::unavailable, mapped.kind ());
 }
 
 TEST (CppFrameworkChannelNoEligibleMember, NodeDirectNotFoundStaysNotFound)
 {
-    const auto mapped = map_submit_result_exception (
-      zlink::submit_result_t::not_found, "node direct target is absent");
+    const auto mapped = map_submit_result_exception (zlink::submit_result_t::not_found,
+                                                     "node direct target is absent");
     EXPECT_EQ (framework_error_kind_t::not_found, mapped.kind ());
 }
 
 TEST (CppFrameworkChannelNoEligibleMember, ChannelKeepsEveryOtherSubmitResult)
 {
-    EXPECT_EQ (framework_error_kind_t::unavailable,
-               map_channel_submit_result_exception (
-                 zlink::submit_result_t::not_connected, "not connected")
-                 .kind ());
-    EXPECT_EQ (framework_error_kind_t::shutting_down,
-               map_channel_submit_result_exception (
-                 zlink::submit_result_t::terminated, "terminated")
-                 .kind ());
-    EXPECT_EQ (framework_error_kind_t::deadline_exceeded,
-               map_channel_submit_result_exception (
-                 zlink::submit_result_t::backpressured, "backpressured")
-                 .kind ());
-    EXPECT_EQ (framework_error_kind_t::rejected,
-               map_channel_submit_result_exception (
-                 zlink::submit_result_t::not_admitted, "not admitted")
-                 .kind ());
+    EXPECT_EQ (
+      framework_error_kind_t::unavailable,
+      map_channel_submit_result_exception (zlink::submit_result_t::not_connected, "not connected")
+        .kind ());
+    EXPECT_EQ (
+      framework_error_kind_t::shutting_down,
+      map_channel_submit_result_exception (zlink::submit_result_t::terminated, "terminated")
+        .kind ());
+    EXPECT_EQ (
+      framework_error_kind_t::deadline_exceeded,
+      map_channel_submit_result_exception (zlink::submit_result_t::backpressured, "backpressured")
+        .kind ());
+    EXPECT_EQ (
+      framework_error_kind_t::rejected,
+      map_channel_submit_result_exception (zlink::submit_result_t::not_admitted, "not admitted")
+        .kind ());
 }
 
 } // namespace

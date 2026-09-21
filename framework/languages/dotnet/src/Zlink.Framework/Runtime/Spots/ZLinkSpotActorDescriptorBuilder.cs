@@ -9,7 +9,8 @@ internal static class ZLinkSpotActorDescriptorBuilder
         Type actorType,
         Type messageType,
         Type? replyType,
-        string? packetName)
+        string? packetName
+    )
     {
         return CreatePacket(
             surface,
@@ -19,7 +20,8 @@ internal static class ZLinkSpotActorDescriptorBuilder
             messageType,
             replyType,
             packetName,
-            CreateInterfaceInvoker(handlerType));
+            CreateInterfaceInvoker(handlerType)
+        );
     }
 
     public static ZLinkSpotActorPacketDescriptor CreatePacket(
@@ -30,7 +32,8 @@ internal static class ZLinkSpotActorDescriptorBuilder
         Type messageType,
         Type? replyType,
         string? packetName,
-        ZLinkHandlerMethodInvoker invoker)
+        ZLinkHandlerMethodInvoker invoker
+    )
     {
         return new ZLinkSpotActorPacketDescriptor
         {
@@ -42,7 +45,7 @@ internal static class ZLinkSpotActorDescriptorBuilder
             Kind = replyType is null ? ZLinkMessageKind.Command : ZLinkMessageKind.Request,
             Invoker = invoker,
             MessageName = packetName ?? ZLinkMessageNameResolver.ResolveFromType(messageType),
-            Surface = surface
+            Surface = surface,
         };
     }
 
@@ -52,7 +55,8 @@ internal static class ZLinkSpotActorDescriptorBuilder
         Type spotType,
         Type actorType,
         ZLinkHandlerMethodInvoker invoker,
-        bool passRequestArgument = false)
+        bool passRequestArgument = false
+    )
     {
         return new ZLinkSpotActorLifecycleDescriptor
         {
@@ -62,38 +66,44 @@ internal static class ZLinkSpotActorDescriptorBuilder
             Invoker = invoker,
             Surface = surface,
             PassSpotArgument = false,
-            PassRequestArgument = passRequestArgument
+            PassRequestArgument = passRequestArgument,
         };
     }
 
     public static void ValidateSpotType(
         Type handlerType,
         Type? expectedSpotType,
-        Type actualSpotType)
+        Type actualSpotType
+    )
     {
         if (expectedSpotType is null)
             throw new InvalidOperationException(
-                $"SPOT actor handler '{handlerType}' targets SPOT '{actualSpotType}', but registration expects '{expectedSpotType}'.");
+                $"SPOT actor handler '{handlerType}' targets SPOT '{actualSpotType}', but registration expects '{expectedSpotType}'."
+            );
 
         ZLinkHandlerContractDescriptorSupport.RequireExactType(
             handlerType,
             expectedSpotType,
             actualSpotType,
-            "SPOT actor handler");
+            "SPOT actor handler"
+        );
     }
 
     public static void ValidateActorType(
         Type handlerType,
         Type? expectedActorType,
-        Type actualActorType)
+        Type actualActorType
+    )
     {
-        if (expectedActorType is null) return;
+        if (expectedActorType is null)
+            return;
 
         ZLinkHandlerContractDescriptorSupport.RequireAssignableFrom(
             handlerType,
             expectedActorType,
             actualActorType,
-            "SPOT actor handler");
+            "SPOT actor handler"
+        );
     }
 
     public static Type GetRequestReplyType(Type returnType)
@@ -103,6 +113,9 @@ internal static class ZLinkSpotActorDescriptorBuilder
 
     private static ZLinkHandlerMethodInvoker CreateInterfaceInvoker(Type handlerType)
     {
-        return ZLinkHandlerContractDescriptorSupport.CreateHandleAsyncInvoker(handlerType, "Handler");
+        return ZLinkHandlerContractDescriptorSupport.CreateHandleAsyncInvoker(
+            handlerType,
+            "Handler"
+        );
     }
 }

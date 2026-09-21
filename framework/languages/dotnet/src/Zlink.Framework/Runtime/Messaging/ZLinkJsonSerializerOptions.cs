@@ -24,7 +24,7 @@ internal static class ZLinkJsonSerializerOptions
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
         {
             PropertyNameCaseInsensitive = false,
-            NumberHandling = JsonNumberHandling.Strict
+            NumberHandling = JsonNumberHandling.Strict,
         };
         options.Converters.Add(new FrameworkSigned64JsonConverter());
         options.Converters.Add(new FrameworkUnsigned64JsonConverter());
@@ -39,27 +39,31 @@ internal static class ZLinkJsonSerializerOptions
 
     private static void RequireDeclaredNullability(JsonTypeInfo typeInfo)
     {
-        if (typeInfo.Kind != JsonTypeInfoKind.Object) return;
+        if (typeInfo.Kind != JsonTypeInfoKind.Object)
+            return;
         var nullability = new System.Reflection.NullabilityInfoContext();
         foreach (var property in typeInfo.Properties)
         {
-            if (property.PropertyType.IsValueType || property.Set is null) continue;
+            if (property.PropertyType.IsValueType || property.Set is null)
+                continue;
             var state = property.AttributeProvider switch
             {
-                System.Reflection.PropertyInfo reflectedProperty =>
-                    nullability.Create(reflectedProperty).WriteState,
-                System.Reflection.FieldInfo reflectedField =>
-                    nullability.Create(reflectedField).WriteState,
-                _ => System.Reflection.NullabilityState.Unknown
+                System.Reflection.PropertyInfo reflectedProperty => nullability
+                    .Create(reflectedProperty)
+                    .WriteState,
+                System.Reflection.FieldInfo reflectedField => nullability
+                    .Create(reflectedField)
+                    .WriteState,
+                _ => System.Reflection.NullabilityState.Unknown,
             };
-            if (state != System.Reflection.NullabilityState.NotNull) continue;
+            if (state != System.Reflection.NullabilityState.NotNull)
+                continue;
 
             var assign = property.Set;
             property.Set = (instance, value) =>
             {
                 if (value is null)
-                    throw new JsonException(
-                        $"Property '{property.Name}' does not allow null.");
+                    throw new JsonException($"Property '{property.Name}' does not allow null.");
                 assign(instance, value);
             };
         }
@@ -74,21 +78,26 @@ internal static class ZLinkJsonSerializerOptions
         public override long Read(
             ref Utf8JsonReader reader,
             Type typeToConvert,
-            JsonSerializerOptions options)
+            JsonSerializerOptions options
+        )
         {
             if (reader.TokenType != JsonTokenType.String)
                 throw new JsonException("Signed 64-bit integers must be decimal strings.");
             var encoded = reader.GetString();
-            if (encoded is null
+            if (
+                encoded is null
                 || !long.TryParse(
                     encoded,
                     System.Globalization.NumberStyles.AllowLeadingSign,
                     System.Globalization.CultureInfo.InvariantCulture,
-                    out var value)
+                    out var value
+                )
                 || !string.Equals(
                     encoded,
                     value.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                    StringComparison.Ordinal))
+                    StringComparison.Ordinal
+                )
+            )
                 throw new JsonException("Signed 64-bit integer string is not canonical.");
             return value;
         }
@@ -96,8 +105,11 @@ internal static class ZLinkJsonSerializerOptions
         public override void Write(
             Utf8JsonWriter writer,
             long value,
-            JsonSerializerOptions options) =>
-            writer.WriteStringValue(value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            JsonSerializerOptions options
+        ) =>
+            writer.WriteStringValue(
+                value.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            );
     }
 
     internal sealed class FrameworkUnsigned64JsonConverter : JsonConverter<ulong>
@@ -105,21 +117,26 @@ internal static class ZLinkJsonSerializerOptions
         public override ulong Read(
             ref Utf8JsonReader reader,
             Type typeToConvert,
-            JsonSerializerOptions options)
+            JsonSerializerOptions options
+        )
         {
             if (reader.TokenType != JsonTokenType.String)
                 throw new JsonException("Unsigned 64-bit integers must be decimal strings.");
             var encoded = reader.GetString();
-            if (encoded is null
+            if (
+                encoded is null
                 || !ulong.TryParse(
                     encoded,
                     System.Globalization.NumberStyles.None,
                     System.Globalization.CultureInfo.InvariantCulture,
-                    out var value)
+                    out var value
+                )
                 || !string.Equals(
                     encoded,
                     value.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                    StringComparison.Ordinal))
+                    StringComparison.Ordinal
+                )
+            )
                 throw new JsonException("Unsigned 64-bit integer string is not canonical.");
             return value;
         }
@@ -127,8 +144,11 @@ internal static class ZLinkJsonSerializerOptions
         public override void Write(
             Utf8JsonWriter writer,
             ulong value,
-            JsonSerializerOptions options) =>
-            writer.WriteStringValue(value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            JsonSerializerOptions options
+        ) =>
+            writer.WriteStringValue(
+                value.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            );
     }
 
     private sealed class FrameworkEnumJsonConverterFactory : JsonConverterFactory
@@ -137,43 +157,57 @@ internal static class ZLinkJsonSerializerOptions
 
         public override JsonConverter CreateConverter(
             Type typeToConvert,
-            JsonSerializerOptions options) =>
-            (JsonConverter)(Activator.CreateInstance(
-                typeof(FrameworkEnumJsonConverter<>).MakeGenericType(typeToConvert),
-                nonPublic: true)
+            JsonSerializerOptions options
+        ) =>
+            (JsonConverter)(
+                Activator.CreateInstance(
+                    typeof(FrameworkEnumJsonConverter<>).MakeGenericType(typeToConvert),
+                    nonPublic: true
+                )
                 ?? throw new InvalidOperationException(
-                    $"Cannot create a framework JSON converter for '{typeToConvert}'."));
+                    $"Cannot create a framework JSON converter for '{typeToConvert}'."
+                )
+            );
     }
 
     private sealed class FrameworkEnumJsonConverter<TEnum> : JsonConverter<TEnum>
         where TEnum : struct, Enum
     {
-        private static readonly IReadOnlyDictionary<string, TEnum> Values =
-            Enum.GetNames<TEnum>().ToDictionary(
+        private static readonly IReadOnlyDictionary<string, TEnum> Values = Enum.GetNames<TEnum>()
+            .ToDictionary(
                 static name => name,
                 static name => Enum.Parse<TEnum>(name),
-                StringComparer.Ordinal);
+                StringComparer.Ordinal
+            );
 
         public override TEnum Read(
             ref Utf8JsonReader reader,
             Type typeToConvert,
-            JsonSerializerOptions options)
+            JsonSerializerOptions options
+        )
         {
-            if (reader.TokenType != JsonTokenType.String
+            if (
+                reader.TokenType != JsonTokenType.String
                 || reader.GetString() is not { } name
-                || !Values.TryGetValue(name, out var value))
-                throw new JsonException($"Enum '{typeof(TEnum).Name}' requires an exact declared name.");
+                || !Values.TryGetValue(name, out var value)
+            )
+                throw new JsonException(
+                    $"Enum '{typeof(TEnum).Name}' requires an exact declared name."
+                );
             return value;
         }
 
         public override void Write(
             Utf8JsonWriter writer,
             TEnum value,
-            JsonSerializerOptions options)
+            JsonSerializerOptions options
+        )
         {
-            var name = Enum.GetName(value)
-                       ?? throw new JsonException(
-                           $"Enum '{typeof(TEnum).Name}' value '{value}' has no declared name.");
+            var name =
+                Enum.GetName(value)
+                ?? throw new JsonException(
+                    $"Enum '{typeof(TEnum).Name}' value '{value}' has no declared name."
+                );
             writer.WriteStringValue(name);
         }
     }
@@ -187,7 +221,7 @@ internal static class ZLinkJsonSerializerOptions
             typeof(DateOnly),
             typeof(TimeOnly),
             typeof(decimal),
-            typeof(Guid)
+            typeof(Guid),
         ];
 
         public override bool CanConvert(Type typeToConvert) =>
@@ -195,12 +229,17 @@ internal static class ZLinkJsonSerializerOptions
 
         public override JsonConverter CreateConverter(
             Type typeToConvert,
-            JsonSerializerOptions options) =>
-            (JsonConverter)(Activator.CreateInstance(
-                typeof(UnsupportedImplicitTypeJsonConverter<>).MakeGenericType(typeToConvert),
-                nonPublic: true)
+            JsonSerializerOptions options
+        ) =>
+            (JsonConverter)(
+                Activator.CreateInstance(
+                    typeof(UnsupportedImplicitTypeJsonConverter<>).MakeGenericType(typeToConvert),
+                    nonPublic: true
+                )
                 ?? throw new InvalidOperationException(
-                    $"Cannot create a rejecting JSON converter for '{typeToConvert}'."));
+                    $"Cannot create a rejecting JSON converter for '{typeToConvert}'."
+                )
+            );
     }
 
     private sealed class UnsupportedImplicitTypeJsonConverter<T> : JsonConverter<T>
@@ -208,27 +247,35 @@ internal static class ZLinkJsonSerializerOptions
         public override T? Read(
             ref Utf8JsonReader reader,
             Type typeToConvert,
-            JsonSerializerOptions options) =>
+            JsonSerializerOptions options
+        ) =>
             throw new JsonException(
-                $"Type '{typeof(T).Name}' requires an explicit framework JSON string or DTO contract.");
+                $"Type '{typeof(T).Name}' requires an explicit framework JSON string or DTO contract."
+            );
 
-        public override void Write(
-            Utf8JsonWriter writer,
-            T value,
-            JsonSerializerOptions options) =>
+        public override void Write(Utf8JsonWriter writer, T value, JsonSerializerOptions options) =>
             throw new JsonException(
-                $"Type '{typeof(T).Name}' requires an explicit framework JSON string or DTO contract.");
+                $"Type '{typeof(T).Name}' requires an explicit framework JSON string or DTO contract."
+            );
     }
 
     private sealed class RoutingIdJsonConverter : JsonConverter<RoutingId>
     {
-        public override RoutingId Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        public override RoutingId Read(
+            ref Utf8JsonReader reader,
+            Type typeToConvert,
+            JsonSerializerOptions options
+        )
         {
             var hex = reader.GetString();
             return string.IsNullOrEmpty(hex) ? default : RoutingId.FromHex(hex);
         }
 
-        public override void Write(Utf8JsonWriter writer, RoutingId value, JsonSerializerOptions options)
+        public override void Write(
+            Utf8JsonWriter writer,
+            RoutingId value,
+            JsonSerializerOptions options
+        )
         {
             writer.WriteStringValue(value.IsEmpty ? string.Empty : value.ToHex());
         }
@@ -240,19 +287,19 @@ internal sealed class ZLinkCanonicalGuidJsonConverter : JsonConverter<Guid>
     public override Guid Read(
         ref Utf8JsonReader reader,
         Type typeToConvert,
-        JsonSerializerOptions options)
+        JsonSerializerOptions options
+    )
     {
-        if (reader.TokenType != JsonTokenType.String
+        if (
+            reader.TokenType != JsonTokenType.String
             || reader.GetString() is not { } encoded
             || !Guid.TryParseExact(encoded, "D", out var value)
-            || !string.Equals(encoded, value.ToString("D"), StringComparison.Ordinal))
+            || !string.Equals(encoded, value.ToString("D"), StringComparison.Ordinal)
+        )
             throw new JsonException("UUID string is not canonical lowercase D format.");
         return value;
     }
 
-    public override void Write(
-        Utf8JsonWriter writer,
-        Guid value,
-        JsonSerializerOptions options) =>
+    public override void Write(Utf8JsonWriter writer, Guid value, JsonSerializerOptions options) =>
         writer.WriteStringValue(value.ToString("D"));
 }

@@ -18,10 +18,9 @@ namespace
 
 /// Builds the inbound context once from the decoded envelope so request, send and publish handlers
 /// see the same universal fields.
-inbound_message_context_t
-make_inbound_context (const std::string &channel_name,
-                      runtime::messaging::envelope_header_t &header,
-                      std::function<void ()> before_application_handler)
+inbound_message_context_t make_inbound_context (const std::string &channel_name,
+                                                runtime::messaging::envelope_header_t &header,
+                                                std::function<void ()> before_application_handler)
 {
     inbound_message_context_t inbound;
     inbound.message.channel_name = channel_name;
@@ -33,8 +32,7 @@ make_inbound_context (const std::string &channel_name,
     }
     inbound.topic = header.topic.value_or ("");
     inbound.source = header.source;
-    inbound.before_application_handler =
-      std::move (before_application_handler);
+    inbound.before_application_handler = std::move (before_application_handler);
     return inbound;
 }
 
@@ -57,7 +55,8 @@ result_t<runtime::messaging::message_parts_t> channel_packet_dispatcher_t::dispa
     message_flow_tracer_t flow (_runtime.dispatch_options_ref ());
     auto header = codec.decode_header (parts, flow.capture_enabled ());
     if (!header) {
-        return detail::propagate_failure<runtime::messaging::message_parts_t> (header, "channel envelope header decode failed");
+        return detail::propagate_failure<runtime::messaging::message_parts_t> (
+          header, "channel envelope header decode failed");
     }
     const auto inbound_kind = [&] {
         switch (header.value ().kind) {
@@ -70,8 +69,7 @@ result_t<runtime::messaging::message_parts_t> channel_packet_dispatcher_t::dispa
         }
     }();
     auto flow_scope = runtime::flow_context_t::enter (
-      header.value ().flow_id, header.value ().flow_origin, flow.mode (),
-      flow_origin_t::inbound);
+      header.value ().flow_id, header.value ().flow_origin, flow.mode (), flow_origin_t::inbound);
     if (inbound_kind != dispatch_message_kind_t::publish) {
         flow.trace (message_flow_outcome_t::received, [&] {
             return message_flow_event_t{message_flow_outcome_t::received,
@@ -90,16 +88,23 @@ result_t<runtime::messaging::message_parts_t> channel_packet_dispatcher_t::dispa
 
     auto body = codec.decode_body (parts);
     if (!body) {
-        dispatch_error_reporter_t (_runtime.dispatch_options_ref ())
-          .report_lazy ([&] { return message_dispatch_error_event_t{
-            dispatch_error_surface_t::channel, inbound_kind,
-            dispatch_error_reason_t::payload_decode_failed,
-            header.value ().kind == runtime::messaging::message_kind_t::request
-              ? dispatch_error_action_t::reply_error
-              : dispatch_error_action_t::drop,
-            header.value ().message_name, channel_name, header.value ().topic, std::nullopt,
-            std::nullopt, std::nullopt, header.value ().correlation_id,
-            body.error () ? std::make_exception_ptr (*body.error ()) : std::exception_ptr{}}; });
+        dispatch_error_reporter_t (_runtime.dispatch_options_ref ()).report_lazy ([&] {
+            return message_dispatch_error_event_t{
+              dispatch_error_surface_t::channel,
+              inbound_kind,
+              dispatch_error_reason_t::payload_decode_failed,
+              header.value ().kind == runtime::messaging::message_kind_t::request
+                ? dispatch_error_action_t::reply_error
+                : dispatch_error_action_t::drop,
+              header.value ().message_name,
+              channel_name,
+              header.value ().topic,
+              std::nullopt,
+              std::nullopt,
+              std::nullopt,
+              header.value ().correlation_id,
+              body.error () ? std::make_exception_ptr (*body.error ()) : std::exception_ptr{}};
+        });
         if (header.value ().kind == runtime::messaging::message_kind_t::request) {
             channel_reply_writer_t writer;
             framework_exception_t error (body.error_kind (), body.error ()
@@ -110,28 +115,36 @@ result_t<runtime::messaging::message_parts_t> channel_packet_dispatcher_t::dispa
                 writer.create_error_header (std::move (channel_name), header.value (), error),
                 zlink::message_t::from ("")));
         }
-        return detail::propagate_failure<runtime::messaging::message_parts_t> (body, "channel body decode failed");
+        return detail::propagate_failure<runtime::messaging::message_parts_t> (
+          body, "channel body decode failed");
     }
 
     if (header.value ().kind == runtime::messaging::message_kind_t::request) {
         auto reply = _runtime.dispatch_request (
           channel_name, header.value ().topic.value_or (""), header.value ().message_name, services,
           serializers, handlers, body.value (),
-          make_inbound_context (channel_name, header.value (),
-                                before_application_handler));
+          make_inbound_context (channel_name, header.value (), before_application_handler));
         channel_reply_writer_t writer;
         if (!reply) {
             framework_exception_t error (reply.error_kind (), reply.error ()
                                                                 ? reply.error ()->what ()
                                                                 : "channel request failed");
-            dispatch_error_reporter_t (_runtime.dispatch_options_ref ())
-              .report_lazy ([&] { return message_dispatch_error_event_t{
-                dispatch_error_surface_t::channel, dispatch_message_kind_t::request,
-                dispatch_reason_from_error (reply.error ()),
-                dispatch_error_action_t::reply_error, header.value ().message_name, channel_name,
-                header.value ().topic, std::nullopt, std::nullopt, std::nullopt,
-                header.value ().correlation_id,
-                reply.error () ? std::make_exception_ptr (*reply.error ()) : std::exception_ptr{}}; });
+            dispatch_error_reporter_t (_runtime.dispatch_options_ref ()).report_lazy ([&] {
+                return message_dispatch_error_event_t{dispatch_error_surface_t::channel,
+                                                      dispatch_message_kind_t::request,
+                                                      dispatch_reason_from_error (reply.error ()),
+                                                      dispatch_error_action_t::reply_error,
+                                                      header.value ().message_name,
+                                                      channel_name,
+                                                      header.value ().topic,
+                                                      std::nullopt,
+                                                      std::nullopt,
+                                                      std::nullopt,
+                                                      header.value ().correlation_id,
+                                                      reply.error ()
+                                                        ? std::make_exception_ptr (*reply.error ())
+                                                        : std::exception_ptr{}};
+            });
             return result_t<runtime::messaging::message_parts_t>::success (
               writer.reply_raw_envelope (
                 writer.create_error_header (std::move (channel_name), header.value (), error),
@@ -161,17 +174,24 @@ result_t<runtime::messaging::message_parts_t> channel_packet_dispatcher_t::dispa
         auto result = _runtime.dispatch_send (
           channel_name, header.value ().topic.value_or (""), header.value ().message_name, services,
           serializers, handlers, body.value (),
-          make_inbound_context (channel_name, header.value (),
-                                before_application_handler));
+          make_inbound_context (channel_name, header.value (), before_application_handler));
         if (!result) {
-            dispatch_error_reporter_t (_runtime.dispatch_options_ref ())
-              .report_lazy ([&] { return message_dispatch_error_event_t{
-                dispatch_error_surface_t::channel, inbound_kind,
-                dispatch_reason_from_error (result.error ()), dispatch_error_action_t::drop,
-                header.value ().message_name, channel_name, header.value ().topic, std::nullopt,
-                std::nullopt, std::nullopt, header.value ().correlation_id,
-                result.error () ? std::make_exception_ptr (*result.error ())
-                                : std::exception_ptr{}}; });
+            dispatch_error_reporter_t (_runtime.dispatch_options_ref ()).report_lazy ([&] {
+                return message_dispatch_error_event_t{dispatch_error_surface_t::channel,
+                                                      inbound_kind,
+                                                      dispatch_reason_from_error (result.error ()),
+                                                      dispatch_error_action_t::drop,
+                                                      header.value ().message_name,
+                                                      channel_name,
+                                                      header.value ().topic,
+                                                      std::nullopt,
+                                                      std::nullopt,
+                                                      std::nullopt,
+                                                      header.value ().correlation_id,
+                                                      result.error ()
+                                                        ? std::make_exception_ptr (*result.error ())
+                                                        : std::exception_ptr{}};
+            });
             return result_t<runtime::messaging::message_parts_t>::success (
               runtime::messaging::message_parts_t{});
         }

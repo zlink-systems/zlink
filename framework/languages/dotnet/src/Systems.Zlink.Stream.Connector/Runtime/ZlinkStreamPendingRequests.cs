@@ -14,7 +14,8 @@ internal sealed class ZlinkStreamPendingRequests
         if (!_pending.TryAdd(requestSeq.Value, pending))
             throw ZlinkStreamConnector.Error(
                 ZlinkStreamErrorCode.ValidationFailed,
-                "Duplicate request sequence.");
+                "Duplicate request sequence."
+            );
 
         return pending;
     }
@@ -22,27 +23,39 @@ internal sealed class ZlinkStreamPendingRequests
     public bool TryComplete(
         ZlinkStreamHeader header,
         ZlinkStreamFrame frame,
-        Func<ReadOnlyMemory<byte>, ZlinkStreamError> parseError)
+        Func<ReadOnlyMemory<byte>, ZlinkStreamError> parseError
+    )
     {
-        if (header.RequestSeq is not { } requestSeq
-            || (header.Kind != ZlinkStreamMessageKind.Response && header.Kind != ZlinkStreamMessageKind.Error)
-            || !_pending.TryRemove(requestSeq.Value, out var pending))
+        if (
+            header.RequestSeq is not { } requestSeq
+            || (
+                header.Kind != ZlinkStreamMessageKind.Response
+                && header.Kind != ZlinkStreamMessageKind.Error
+            )
+            || !_pending.TryRemove(requestSeq.Value, out var pending)
+        )
             return false;
 
         // Stream connector spec 5.2: a pending request is matched by request_seq alone.
         // New replies use an empty name; a legacy peer's non-empty name is ignored here.
-        pending.Complete(new ZlinkStreamPendingCompletion(
-            header,
-            frame,
-            header.Kind == ZlinkStreamMessageKind.Error ? parseError(frame.Payload) : null));
+        pending.Complete(
+            new ZlinkStreamPendingCompletion(
+                header,
+                frame,
+                header.Kind == ZlinkStreamMessageKind.Error ? parseError(frame.Payload) : null
+            )
+        );
         return true;
     }
 
     public ValueTask<ZlinkStreamPendingCompletion> WaitAsync(
         PendingRequest pending,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        return new ValueTask<ZlinkStreamPendingCompletion>(pending.Task.WaitAsync(cancellationToken));
+        return new ValueTask<ZlinkStreamPendingCompletion>(
+            pending.Task.WaitAsync(cancellationToken)
+        );
     }
 
     public void Remove(ZlinkStreamRequestSeq requestSeq)
@@ -62,14 +75,16 @@ internal sealed class ZlinkStreamPendingRequests
         while (true)
         {
             var value = unchecked((ulong)Interlocked.Increment(ref _nextRequestSeq));
-            if (value != 0) return new ZlinkStreamRequestSeq(value);
+            if (value != 0)
+                return new ZlinkStreamRequestSeq(value);
         }
     }
 
     internal sealed class PendingRequest(ZlinkStreamRequestSeq requestSeq, string packetName)
     {
-        private readonly TaskCompletionSource<ZlinkStreamPendingCompletion> _completion =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<ZlinkStreamPendingCompletion> _completion = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
 
         public ZlinkStreamRequestSeq RequestSeq { get; } = requestSeq;
 
@@ -92,4 +107,5 @@ internal sealed class ZlinkStreamPendingRequests
 internal sealed record ZlinkStreamPendingCompletion(
     ZlinkStreamHeader Header,
     ZlinkStreamFrame Frame,
-    ZlinkStreamError? Error);
+    ZlinkStreamError? Error
+);

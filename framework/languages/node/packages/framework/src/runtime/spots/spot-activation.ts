@@ -9,7 +9,7 @@ import type {
   ZLinkInstanceSpot,
   ZLinkSpot,
   ZLinkSpotCreateResponse,
-  ZLinkSpotPublisherClient,
+  ZLinkSpotPublisherClient
 } from '../../contracts';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
 import type { ZLinkRuntimeAdmissionGate } from '../admission';
@@ -71,7 +71,10 @@ import {
 import { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import { ZLinkSpotSerialExecutor } from './spot-serial-executor';
 import { createInstanceSpotContext, createSpotContext } from './spot-context';
-import type { ZLinkSpotActorJoinDispatch, ZLinkDetachedTaskRunner } from './spot-actor-join-dispatch';
+import type {
+  ZLinkSpotActorJoinDispatch,
+  ZLinkDetachedTaskRunner
+} from './spot-actor-join-dispatch';
 import { ZLinkSpotActorAdmissionCoordinator } from './spot-actor-admission-coordinator';
 import type { ZLinkRouteToActorJoinPrewarm } from './spot-actor-packet-dispatch';
 import { ZLinkSpotActivation, ZLinkSpotCloseOccupiedError } from './spot-activation-state';
@@ -165,14 +168,17 @@ interface UserSpotLocationClaim {
 
 export class ZLinkSpotActivationLifecycle {
   private readonly actorAdmission: ZLinkSpotActorAdmissionCoordinator;
-  private readonly cleanupStates = new WeakMap<ZLinkSpotActivation, {
-    closingAttempted: boolean;
-    timersDisposed: boolean;
-    handlersDisposed: boolean;
-    nativeDisposed: boolean;
-    locationReleased: boolean;
-    inFlight?: Promise<void>;
-  }>();
+  private readonly cleanupStates = new WeakMap<
+    ZLinkSpotActivation,
+    {
+      closingAttempted: boolean;
+      timersDisposed: boolean;
+      handlersDisposed: boolean;
+      nativeDisposed: boolean;
+      locationReleased: boolean;
+      inFlight?: Promise<void>;
+    }
+  >();
 
   constructor(private readonly options: ZLinkSpotActivationLifecycleOptions) {
     this.actorAdmission = new ZLinkSpotActorAdmissionCoordinator(options);
@@ -188,12 +194,13 @@ export class ZLinkSpotActivationLifecycle {
     authorityOwnerGeneration: bigint,
     signal?: AbortSignal
   ): Promise<ZLinkSpotActivation> {
-    const executionMode = objectKind === 'user_spot'
-      ? this.options.userSpotExecutionMode?.(
-          meshName,
-          implementation as unknown as Type<ZLinkSpot>
-        ) ?? ZLinkUserSpotExecutionMode.SpotWide
-      : ZLinkUserSpotExecutionMode.SpotWide;
+    const executionMode =
+      objectKind === 'user_spot'
+        ? (this.options.userSpotExecutionMode?.(
+            meshName,
+            implementation as unknown as Type<ZLinkSpot>
+          ) ?? ZLinkUserSpotExecutionMode.SpotWide)
+        : ZLinkUserSpotExecutionMode.SpotWide;
     const serial = new ZLinkSpotSerialTurnExecutor(
       executionMode === ZLinkUserSpotExecutionMode.SpotWide,
       spotId
@@ -254,26 +261,27 @@ export class ZLinkSpotActivationLifecycle {
       workerRuntime: this.options.workerRuntime,
       close: this.contextClose(meshName, spotId, () => activation)
     };
-    const context = objectKind === 'user_spot'
-      ? createSpotContext({
-          ...common,
-          handlers,
-          relocationReady: () => {
-            if (activation === undefined) {
-              throw new ZLinkConfigurationException(
-                'Spot relocation readiness is unavailable before activation.'
-              );
-            }
-            return activation.relocationReadyCall();
-          },
-          ensureOperationAllowed: () => activation?.ensureContextOperationAllowed(),
-          leaveActor: (actor, contextSignal) =>
-            this.options.leaveActor(spotId, actor, contextSignal, meshName)
-        })
-      : createInstanceSpotContext({
-          ...common,
-          handlers: new DefaultZLinkInstanceSpotHandlerRegistry(handlers)
-        });
+    const context =
+      objectKind === 'user_spot'
+        ? createSpotContext({
+            ...common,
+            handlers,
+            relocationReady: () => {
+              if (activation === undefined) {
+                throw new ZLinkConfigurationException(
+                  'Spot relocation readiness is unavailable before activation.'
+                );
+              }
+              return activation.relocationReadyCall();
+            },
+            ensureOperationAllowed: () => activation?.ensureContextOperationAllowed(),
+            leaveActor: (actor, contextSignal) =>
+              this.options.leaveActor(spotId, actor, contextSignal, meshName)
+          })
+        : createInstanceSpotContext({
+            ...common,
+            handlers: new DefaultZLinkInstanceSpotHandlerRegistry(handlers)
+          });
     try {
       instance = await createFreshProviderInstance(
         implementation,
@@ -302,16 +310,18 @@ export class ZLinkSpotActivationLifecycle {
       activation = new ZLinkSpotActivation({
         meshName,
         spotId,
-        domain: objectKind === 'user_spot'
-          ? {
-              kind: 'user',
-              executionMode,
-              relocationCoordinationMode: this.options.userSpotRelocationCoordinationMode?.(
-                meshName,
-                implementation as unknown as Type<ZLinkSpot>
-              ) ?? ZLinkSpotRelocationCoordinationMode.FrameworkManaged
-            }
-          : { kind: 'instance', objectGeneration },
+        domain:
+          objectKind === 'user_spot'
+            ? {
+                kind: 'user',
+                executionMode,
+                relocationCoordinationMode:
+                  this.options.userSpotRelocationCoordinationMode?.(
+                    meshName,
+                    implementation as unknown as Type<ZLinkSpot>
+                  ) ?? ZLinkSpotRelocationCoordinationMode.FrameworkManaged
+              }
+            : { kind: 'instance', objectGeneration },
         spotType: implementation as unknown as Type<ZLinkSpot>,
         spot: instance as unknown as ZLinkSpot,
         serial,
@@ -375,21 +385,21 @@ export class ZLinkSpotActivationLifecycle {
     });
     let instance: TSpot | undefined;
     const context = createInstanceSpotContext({
-        meshName,
-        spotId,
-        objectGeneration: toContextGeneration(objectGeneration),
-        handlers: instanceHandlers,
-        outbound,
-        timers,
-        serial,
-        getSpot: () => instance as unknown as ZLinkSpot,
-        nodeRid: this.options.nodeRid,
-        nodeRidProvider: () => this.options.nodeRidProvider?.(meshName),
-        providerResolver: this.options.providerResolver,
-        runtimeEventPublisher: this.options.runtimeEventPublisher,
-        workerRuntime: this.options.workerRuntime,
-        close: this.contextClose(meshName, spotId, () => activation)
-      });
+      meshName,
+      spotId,
+      objectGeneration: toContextGeneration(objectGeneration),
+      handlers: instanceHandlers,
+      outbound,
+      timers,
+      serial,
+      getSpot: () => instance as unknown as ZLinkSpot,
+      nodeRid: this.options.nodeRid,
+      nodeRidProvider: () => this.options.nodeRidProvider?.(meshName),
+      providerResolver: this.options.providerResolver,
+      runtimeEventPublisher: this.options.runtimeEventPublisher,
+      workerRuntime: this.options.workerRuntime,
+      close: this.contextClose(meshName, spotId, () => activation)
+    });
     instance = await createFreshProviderInstance(
       implementation,
       this.options.providerResolver,
@@ -411,7 +421,7 @@ export class ZLinkSpotActivationLifecycle {
       timers,
       actorHandlers,
       handlers,
-      externalActorCount: () => this.options.actorCountProvider?.(spotId) ?? 0,
+      externalActorCount: () => this.options.actorCountProvider?.(spotId) ?? 0
     });
     try {
       await instance.configure?.();
@@ -444,10 +454,12 @@ export class ZLinkSpotActivationLifecycle {
   async discardInstance(activation: ZLinkSpotActivation): Promise<void> {
     const errors: unknown[] = [];
     try {
-      await activation.serial.execute(() => invokeSpotClosing(
-        activation.spot.onClosing?.bind(activation.spot),
-        ZLinkSpotCloseReason.ExplicitClose
-      ));
+      await activation.serial.execute(() =>
+        invokeSpotClosing(
+          activation.spot.onClosing?.bind(activation.spot),
+          ZLinkSpotCloseReason.ExplicitClose
+        )
+      );
     } catch (error) {
       errors.push(error);
     }
@@ -477,10 +489,12 @@ export class ZLinkSpotActivationLifecycle {
 
   resourcesReleased(activation: ZLinkSpotActivation): boolean {
     const state = this.cleanupStates.get(activation);
-    return state?.timersDisposed === true &&
+    return (
+      state?.timersDisposed === true &&
       state.handlersDisposed === true &&
       state.nativeDisposed === true &&
-      state.locationReleased === true;
+      state.locationReleased === true
+    );
   }
 
   async create<TSpot extends ZLinkSpot>(
@@ -491,8 +505,9 @@ export class ZLinkSpotActivationLifecycle {
     signal?: AbortSignal,
     authority?: ZLinkNativeSpotAuthority
   ): Promise<ZLinkLocalSpotCreateResult> {
-    const executionMode = this.options.userSpotExecutionMode?.(meshName, spotType)
-      ?? ZLinkUserSpotExecutionMode.SpotWide;
+    const executionMode =
+      this.options.userSpotExecutionMode?.(meshName, spotType) ??
+      ZLinkUserSpotExecutionMode.SpotWide;
     const serial = new ZLinkSpotSerialTurnExecutor(
       executionMode === ZLinkUserSpotExecutionMode.SpotWide,
       spotId
@@ -610,10 +625,9 @@ export class ZLinkSpotActivationLifecycle {
         domain: {
           kind: 'user',
           executionMode,
-          relocationCoordinationMode: this.options.userSpotRelocationCoordinationMode?.(
-            meshName,
-            spotType
-          ) ?? ZLinkSpotRelocationCoordinationMode.FrameworkManaged
+          relocationCoordinationMode:
+            this.options.userSpotRelocationCoordinationMode?.(meshName, spotType) ??
+            ZLinkSpotRelocationCoordinationMode.FrameworkManaged
         },
         spotType,
         spot,
@@ -626,15 +640,30 @@ export class ZLinkSpotActivationLifecycle {
         nativeSpot,
         metrics: this.options.metrics
       });
-      const nativeDispatch = this.actorAdmission.attachNativeActorJoinDispatch(activation, nativeSpot);
+      const nativeDispatch = this.actorAdmission.attachNativeActorJoinDispatch(
+        activation,
+        nativeSpot
+      );
       activation.actorDispatch = nativeDispatch;
       lifecycleStarted = true;
-      return await this.runCreateLifecycle(activation, spotType, request, locationClaim, nativeDispatch, signal);
+      return await this.runCreateLifecycle(
+        activation,
+        spotType,
+        request,
+        locationClaim,
+        nativeDispatch,
+        signal
+      );
     } catch (error) {
       const cleanupErrors: unknown[] = [];
       try {
         if (activation !== undefined) {
-          await this.cleanupActivation(activation, locationClaim.meshName, lifecycleStarted, signal);
+          await this.cleanupActivation(
+            activation,
+            locationClaim.meshName,
+            lifecycleStarted,
+            signal
+          );
         } else {
           const partialCleanup = await Promise.allSettled([
             timers.dispose(),
@@ -647,14 +676,20 @@ export class ZLinkSpotActivationLifecycle {
             .map((result) => result.reason);
           if (partialErrors.length === 1) throw partialErrors[0];
           if (partialErrors.length > 1) {
-            throw new AggregateError(partialErrors, `Spot '${spotId}' partial creation cleanup failed.`);
+            throw new AggregateError(
+              partialErrors,
+              `Spot '${spotId}' partial creation cleanup failed.`
+            );
           }
         }
       } catch (cleanupError) {
         cleanupErrors.push(cleanupError);
       }
       if (cleanupErrors.length > 0) {
-        throw new AggregateError([error, ...cleanupErrors], `Spot '${spotId}' creation cleanup failed.`);
+        throw new AggregateError(
+          [error, ...cleanupErrors],
+          `Spot '${spotId}' creation cleanup failed.`
+        );
       }
       throw error;
     }
@@ -706,17 +741,20 @@ export class ZLinkSpotActivationLifecycle {
       close: this.contextClose(meshName, spotId, () => activation)
     });
     spot = await createFreshProviderInstance(spotType, this.options.providerResolver, context);
-    Object.defineProperty(spot, 'context', { configurable: true, enumerable: false, value: context });
+    Object.defineProperty(spot, 'context', {
+      configurable: true,
+      enumerable: false,
+      value: context
+    });
     activation = new ZLinkSpotActivation({
       meshName,
       spotId,
       domain: {
         kind: 'user',
         executionMode,
-        relocationCoordinationMode: this.options.userSpotRelocationCoordinationMode?.(
-          meshName,
-          spotType
-        ) ?? ZLinkSpotRelocationCoordinationMode.FrameworkManaged
+        relocationCoordinationMode:
+          this.options.userSpotRelocationCoordinationMode?.(meshName, spotType) ??
+          ZLinkSpotRelocationCoordinationMode.FrameworkManaged
       },
       spotType,
       spot,
@@ -728,7 +766,14 @@ export class ZLinkSpotActivationLifecycle {
       externalActorCount: () => this.options.actorCountProvider?.(spotId) ?? 0,
       metrics: this.options.metrics
     });
-    return await this.runCreateLifecycle(activation, spotType, request, locationClaim, undefined, signal);
+    return await this.runCreateLifecycle(
+      activation,
+      spotType,
+      request,
+      locationClaim,
+      undefined,
+      signal
+    );
   }
 
   private contextClose(
@@ -746,10 +791,9 @@ export class ZLinkSpotActivationLifecycle {
         const retry = activation.serial.post(() =>
           this.options.closeSpot(meshName, spotId, signal)
         );
-        this.options.detachedTaskRunner?.runDetached(
-          `spot close ${String(spotId)}`,
-          async () => { await retry; }
-        );
+        this.options.detachedTaskRunner?.runDetached(`spot close ${String(spotId)}`, async () => {
+          await retry;
+        });
         if (this.options.detachedTaskRunner === undefined) {
           void retry.catch(() => undefined);
         }
@@ -793,14 +837,7 @@ export class ZLinkSpotActivationLifecycle {
     if (!activation.commitExecutionSeal(seal)) {
       throw new Error(`Spot '${String(activation.spotId)}' close seal is stale.`);
     }
-    await this.cleanupActivation(
-      activation,
-      activation.meshName,
-      true,
-      signal,
-      reason,
-      deadline
-    );
+    await this.cleanupActivation(activation, activation.meshName, true, signal, reason, deadline);
   }
 
   async dispatchActorPacket(
@@ -850,11 +887,7 @@ export class ZLinkSpotActivationLifecycle {
     actorId: string,
     records: readonly ZLinkActorHandoffPrefixRecord[]
   ): ZLinkActorHandoffPrefixAdmission {
-    return this.actorAdmission.admitActorPacketPrefix(
-      activation,
-      actorId,
-      records
-    );
+    return this.actorAdmission.admitActorPacketPrefix(activation, actorId, records);
   }
 
   private async runCreateLifecycle<TSpot extends ZLinkSpot>(
@@ -913,7 +946,10 @@ export class ZLinkSpotActivationLifecycle {
       try {
         await this.cleanupActivation(activation, locationClaim.meshName, true, signal);
       } catch (cleanupError) {
-        throw new AggregateError([error, cleanupError], `Spot '${activation.spotId}' creation cleanup failed.`);
+        throw new AggregateError(
+          [error, cleanupError],
+          `Spot '${activation.spotId}' creation cleanup failed.`
+        );
       }
       throw error;
     }
@@ -937,8 +973,16 @@ export class ZLinkSpotActivationLifecycle {
     };
     this.cleanupStates.set(activation, state);
     if (state.inFlight !== undefined) return await state.inFlight;
-    state.inFlight = this.runCleanup(activation, locationMeshName, notifyClosing, reason, state, deadline)
-      .finally(() => { state.inFlight = undefined; });
+    state.inFlight = this.runCleanup(
+      activation,
+      locationMeshName,
+      notifyClosing,
+      reason,
+      state,
+      deadline
+    ).finally(() => {
+      state.inFlight = undefined;
+    });
     return await state.inFlight;
   }
 
@@ -967,30 +1011,49 @@ export class ZLinkSpotActivationLifecycle {
     };
     if (notifyClosing && !state.closingAttempted) {
       state.closingAttempted = true;
-      await cleanup(() => invokeSpotClosing(
-        activation.spot.onClosing?.bind(activation.spot),
-        reason,
-        deadline
-      ), () => undefined);
+      await cleanup(
+        () => invokeSpotClosing(activation.spot.onClosing?.bind(activation.spot), reason, deadline),
+        () => undefined
+      );
     }
     if (!state.timersDisposed) {
-      await cleanup(() => activation.timers.dispose(), () => { state.timersDisposed = true; });
+      await cleanup(
+        () => activation.timers.dispose(),
+        () => {
+          state.timersDisposed = true;
+        }
+      );
     }
-    await cleanup(() => activation.serialExecutor.close(), () => undefined);
+    await cleanup(
+      () => activation.serialExecutor.close(),
+      () => undefined
+    );
     if (!state.handlersDisposed) {
       await cleanup(
         () => disposeLifecycleHandlers(activation.spot),
-        () => { state.handlersDisposed = true; }
+        () => {
+          state.handlersDisposed = true;
+        }
       );
     }
     if (!state.nativeDisposed) {
-      await cleanup(() => activation.actorDispatch?.dispose(), () => undefined);
-      await cleanup(() => activation.nativeSpot?.dispose(), () => { state.nativeDisposed = true; });
+      await cleanup(
+        () => activation.actorDispatch?.dispose(),
+        () => undefined
+      );
+      await cleanup(
+        () => activation.nativeSpot?.dispose(),
+        () => {
+          state.nativeDisposed = true;
+        }
+      );
     }
     if (!state.locationReleased) {
       await cleanup(
         () => this.options.releaseLocation(activation, locationMeshName, activation.spotId),
-        () => { state.locationReleased = true; }
+        () => {
+          state.locationReleased = true;
+        }
       );
     }
     if (errors.length === 1) throw errors[0];

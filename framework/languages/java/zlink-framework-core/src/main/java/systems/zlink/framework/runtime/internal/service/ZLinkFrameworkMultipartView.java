@@ -1,13 +1,14 @@
 package systems.zlink.framework.runtime.internal.service;
 
+import systems.zlink.contracts.messaging.Message;
+
 import java.nio.ByteBuffer;
 import java.util.AbstractList;
 import java.util.List;
-import systems.zlink.contracts.messaging.Message;
 
 /** A retained multipart frame whose typed parts are materialized on first use. */
 public final class ZLinkFrameworkMultipartView extends AbstractList<Message>
-    implements AutoCloseable {
+        implements AutoCloseable {
     private final List<ByteBuffer> parts;
     private final Message[] materialized;
     private boolean detached;

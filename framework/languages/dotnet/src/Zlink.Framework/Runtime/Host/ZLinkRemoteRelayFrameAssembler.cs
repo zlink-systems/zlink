@@ -19,7 +19,8 @@ internal readonly record struct ZLinkRemoteRelayFrameKey(
     ulong ReplyRequestId,
     ulong TargetNodeGeneration,
     ulong AuthorityOwnerGeneration,
-    ulong OwnerLeaseGeneration);
+    ulong OwnerLeaseGeneration
+);
 
 internal sealed class ZLinkRemoteRelayFrameAssembler : IDisposable
 {
@@ -39,7 +40,8 @@ internal sealed class ZLinkRemoteRelayFrameAssembler : IDisposable
     internal ZLinkRemoteRelayFrameAssembler(
         TimeSpan timeout,
         Func<CancellationToken> getShutdownToken,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null
+    )
     {
         _timeout = timeout;
         _getShutdownToken = getShutdownToken;
@@ -49,97 +51,108 @@ internal sealed class ZLinkRemoteRelayFrameAssembler : IDisposable
     internal async ValueTask<ZLinkRemoteRelayFrameAppendResult> TryAppendAsync(
         ZLinkRemoteRelayFrameKey key,
         byte[] part,
-        bool hasMore)
+        bool hasMore
+    )
     {
         ArgumentNullException.ThrowIfNull(part);
         var shutdownToken = _getShutdownToken();
-        var prepared = await _lane.RunAsync(() =>
-        {
-            if (_disposed || shutdownToken.IsCancellationRequested)
-                return new AppendPreparation(new(false, null), null);
-
-            _pending.TryGetValue(key, out var pending);
-            if (pending is not null
-                && _time.GetElapsedTime(pending.StartedAt) >= _timeout)
+        var prepared = await _lane
+            .RunAsync(() =>
             {
-                Remove(key, pending);
-                pending = null;
-            }
+                if (_disposed || shutdownToken.IsCancellationRequested)
+                    return new AppendPreparation(new(false, null), null);
 
-            if (pending is null)
-            {
-                if (!hasMore)
+                _pending.TryGetValue(key, out var pending);
+                if (pending is not null && _time.GetElapsedTime(pending.StartedAt) >= _timeout)
                 {
-                    if (part.LongLength > MaxFrameBytes)
-                        return new AppendPreparation(new(false, null), null);
-                    return new AppendPreparation(
-                        new(true, new CompletedFrame(key, null, [part])),
-                        null);
+                    Remove(key, pending);
+                    pending = null;
                 }
-                if (_pending.Count >= MaxAssemblies
-                    || part.LongLength > MaxFrameBytes
-                    || _bufferedBytes + part.LongLength > MaxBufferedBytes)
+
+                if (pending is null)
+                {
+                    if (!hasMore)
+                    {
+                        if (part.LongLength > MaxFrameBytes)
+                            return new AppendPreparation(new(false, null), null);
+                        return new AppendPreparation(
+                            new(true, new CompletedFrame(key, null, [part])),
+                            null
+                        );
+                    }
+                    if (
+                        _pending.Count >= MaxAssemblies
+                        || part.LongLength > MaxFrameBytes
+                        || _bufferedBytes + part.LongLength > MaxBufferedBytes
+                    )
+                        return new AppendPreparation(new(false, null), null);
+
+                    pending = new PendingFrame(_time.GetTimestamp());
+                    _pending.Add(key, pending);
+                    pending.Parts.Add(part);
+                    pending.Bytes = part.LongLength;
+                    _bufferedBytes += part.LongLength;
+                    return new AppendPreparation(
+                        new(true, null),
+                        new ExpiryStart(key, pending, shutdownToken, pending.Cancellation.Token)
+                    );
+                }
+
+                if (pending.Completing)
                     return new AppendPreparation(new(false, null), null);
 
-                pending = new PendingFrame(_time.GetTimestamp());
-                _pending.Add(key, pending);
-                pending.Parts.Add(part);
-                pending.Bytes = part.LongLength;
-                _bufferedBytes += part.LongLength;
-                return new AppendPreparation(
-                    new(true, null),
-                    new ExpiryStart(key, pending, shutdownToken, pending.Cancellation.Token));
-            }
+                // A failed terminal submit can be retried in either form used by
+                // the runtime: the Message Follow worker resubmits only its terminal
+                // part, while the session coordinator resubmits the full frame.
+                // A new non-terminal part starts that full-frame retry and replaces
+                // the retained prefix so retry policy does not leak to either caller.
+                if (pending.RestartOnNextPrefix && hasMore)
+                {
+                    var retainedWithoutPrefix = _bufferedBytes - pending.Bytes;
+                    if (
+                        part.LongLength > MaxFrameBytes
+                        || retainedWithoutPrefix + part.LongLength > MaxBufferedBytes
+                    )
+                        return new AppendPreparation(new(false, null), null);
 
-            if (pending.Completing)
-                return new AppendPreparation(new(false, null), null);
+                    _bufferedBytes = retainedWithoutPrefix + part.LongLength;
+                    pending.Parts.Clear();
+                    pending.Parts.Add(part);
+                    pending.Bytes = part.LongLength;
+                    pending.RestartOnNextPrefix = false;
+                    return new AppendPreparation(new(true, null), null);
+                }
 
-            // A failed terminal submit can be retried in either form used by
-            // the runtime: the Message Follow worker resubmits only its terminal
-            // part, while the session coordinator resubmits the full frame.
-            // A new non-terminal part starts that full-frame retry and replaces
-            // the retained prefix so retry policy does not leak to either caller.
-            if (pending.RestartOnNextPrefix && hasMore)
-            {
-                var retainedWithoutPrefix = _bufferedBytes - pending.Bytes;
-                if (part.LongLength > MaxFrameBytes
-                    || retainedWithoutPrefix + part.LongLength > MaxBufferedBytes)
+                if (
+                    pending.Parts.Count + 1 > MaxPartsPerFrame
+                    || pending.Bytes + part.LongLength > MaxFrameBytes
+                    || _bufferedBytes + part.LongLength > MaxBufferedBytes
+                )
                     return new AppendPreparation(new(false, null), null);
 
-                _bufferedBytes = retainedWithoutPrefix + part.LongLength;
-                pending.Parts.Clear();
-                pending.Parts.Add(part);
-                pending.Bytes = part.LongLength;
+                if (hasMore)
+                {
+                    if (_bufferedBytes + part.LongLength > MaxBufferedBytes)
+                        return new AppendPreparation(new(false, null), null);
+                    pending.Parts.Add(part);
+                    pending.Bytes += part.LongLength;
+                    _bufferedBytes += part.LongLength;
+                    return new AppendPreparation(new(true, null), null);
+                }
+
                 pending.RestartOnNextPrefix = false;
-                return new AppendPreparation(new(true, null), null);
-            }
-
-            if (pending.Parts.Count + 1 > MaxPartsPerFrame
-                || pending.Bytes + part.LongLength > MaxFrameBytes
-                || _bufferedBytes + part.LongLength > MaxBufferedBytes)
-                return new AppendPreparation(new(false, null), null);
-
-            if (hasMore)
-            {
-                if (_bufferedBytes + part.LongLength > MaxBufferedBytes)
-                    return new AppendPreparation(new(false, null), null);
-                pending.Parts.Add(part);
-                pending.Bytes += part.LongLength;
+                pending.Completing = true;
+                pending.TerminalBytes = part.LongLength;
                 _bufferedBytes += part.LongLength;
-                return new AppendPreparation(new(true, null), null);
-            }
-
-            pending.RestartOnNextPrefix = false;
-            pending.Completing = true;
-            pending.TerminalBytes = part.LongLength;
-            _bufferedBytes += part.LongLength;
-            var parts = new byte[pending.Parts.Count + 1][];
-            pending.Parts.CopyTo(parts, 0);
-            parts[^1] = part;
-            return new AppendPreparation(
-                new(true, new CompletedFrame(key, pending, parts)),
-                null);
-        }).ConfigureAwait(false);
+                var parts = new byte[pending.Parts.Count + 1][];
+                pending.Parts.CopyTo(parts, 0);
+                parts[^1] = part;
+                return new AppendPreparation(
+                    new(true, new CompletedFrame(key, pending, parts)),
+                    null
+                );
+            })
+            .ConfigureAwait(false);
         if (prepared.Expiry is { } expiry)
             ArmExpiry(expiry);
         return prepared.Result;
@@ -152,8 +165,10 @@ internal sealed class ZLinkRemoteRelayFrameAssembler : IDisposable
             return ValueTask.CompletedTask;
         return _lane.RunAsync(() =>
         {
-            if (_pending.TryGetValue(completed.Key, out var current)
-                && ReferenceEquals(current, completed.Pending))
+            if (
+                _pending.TryGetValue(completed.Key, out var current)
+                && ReferenceEquals(current, completed.Pending)
+            )
                 Remove(completed.Key, current);
         });
     }
@@ -165,8 +180,10 @@ internal sealed class ZLinkRemoteRelayFrameAssembler : IDisposable
             return ValueTask.CompletedTask;
         return _lane.RunAsync(() =>
         {
-            if (_pending.TryGetValue(completed.Key, out var current)
-                && ReferenceEquals(current, completed.Pending))
+            if (
+                _pending.TryGetValue(completed.Key, out var current)
+                && ReferenceEquals(current, completed.Pending)
+            )
             {
                 current.Completing = false;
                 _bufferedBytes -= current.TerminalBytes;
@@ -178,29 +195,33 @@ internal sealed class ZLinkRemoteRelayFrameAssembler : IDisposable
 
     internal async ValueTask ClearAsync()
     {
-        var removed = await _lane.RunAsync(() =>
-        {
-            var cleared = _pending.Values.ToArray();
-            _pending.Clear();
-            _bufferedBytes = 0;
-            return cleared;
-        }).ConfigureAwait(false);
+        var removed = await _lane
+            .RunAsync(() =>
+            {
+                var cleared = _pending.Values.ToArray();
+                _pending.Clear();
+                _bufferedBytes = 0;
+                return cleared;
+            })
+            .ConfigureAwait(false);
         foreach (var pending in removed)
             pending.Cancel();
     }
 
     public void Dispose()
     {
-        var removed = AwaitStateLane(_lane.RunAsync(() =>
-        {
-            if (_disposed)
-                return Array.Empty<PendingFrame>();
-            _disposed = true;
-            var cleared = _pending.Values.ToArray();
-            _pending.Clear();
-            _bufferedBytes = 0;
-            return cleared;
-        }));
+        var removed = AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                if (_disposed)
+                    return Array.Empty<PendingFrame>();
+                _disposed = true;
+                var cleared = _pending.Values.ToArray();
+                _pending.Clear();
+                _bufferedBytes = 0;
+                return cleared;
+            })
+        );
         foreach (var pending in removed)
             pending.Cancel();
         AwaitStateLane(_lane.DisposeAsync());
@@ -216,7 +237,8 @@ internal sealed class ZLinkRemoteRelayFrameAssembler : IDisposable
     {
         using var linkedExpiry = CancellationTokenSource.CreateLinkedTokenSource(
             expiry.ShutdownToken,
-            expiry.PendingToken);
+            expiry.PendingToken
+        );
         try
         {
             await Task.Delay(_timeout, _time, linkedExpiry.Token).ConfigureAwait(false);
@@ -228,19 +250,21 @@ internal sealed class ZLinkRemoteRelayFrameAssembler : IDisposable
 
         try
         {
-            await _lane.RunAsync(() =>
-            {
-                if (_pending.TryGetValue(expiry.Key, out var current)
-                    && ReferenceEquals(current, expiry.Pending))
-                    Remove(expiry.Key, current);
-            }).ConfigureAwait(false);
+            await _lane
+                .RunAsync(() =>
+                {
+                    if (
+                        _pending.TryGetValue(expiry.Key, out var current)
+                        && ReferenceEquals(current, expiry.Pending)
+                    )
+                        Remove(expiry.Key, current);
+                })
+                .ConfigureAwait(false);
         }
         catch (ObjectDisposedException) { }
     }
 
-    private void Remove(
-        ZLinkRemoteRelayFrameKey key,
-        PendingFrame pending)
+    private void Remove(ZLinkRemoteRelayFrameKey key, PendingFrame pending)
     {
         _pending.Remove(key);
         _bufferedBytes -= pending.Bytes + pending.TerminalBytes;
@@ -250,7 +274,8 @@ internal sealed class ZLinkRemoteRelayFrameAssembler : IDisposable
     internal sealed class CompletedFrame(
         ZLinkRemoteRelayFrameKey key,
         PendingFrame? pending,
-        byte[][] parts)
+        byte[][] parts
+    )
     {
         internal ZLinkRemoteRelayFrameKey Key { get; } = key;
         internal PendingFrame? Pending { get; } = pending;
@@ -259,13 +284,15 @@ internal sealed class ZLinkRemoteRelayFrameAssembler : IDisposable
 
     private readonly record struct AppendPreparation(
         ZLinkRemoteRelayFrameAppendResult Result,
-        ExpiryStart? Expiry);
+        ExpiryStart? Expiry
+    );
 
     private readonly record struct ExpiryStart(
         ZLinkRemoteRelayFrameKey Key,
         PendingFrame Pending,
         CancellationToken ShutdownToken,
-        CancellationToken PendingToken);
+        CancellationToken PendingToken
+    );
 
     internal sealed class PendingFrame(long startedAt)
     {
@@ -276,6 +303,7 @@ internal sealed class ZLinkRemoteRelayFrameAssembler : IDisposable
         internal long TerminalBytes { get; set; }
         internal bool Completing { get; set; }
         internal bool RestartOnNextPrefix { get; set; }
+
         internal void Cancel()
         {
             Cancellation.Cancel();
@@ -286,10 +314,10 @@ internal sealed class ZLinkRemoteRelayFrameAssembler : IDisposable
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();
 
-    private static void AwaitStateLane(ValueTask operation) =>
-        operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 }
 
 internal readonly record struct ZLinkRemoteRelayFrameAppendResult(
     bool Accepted,
-    ZLinkRemoteRelayFrameAssembler.CompletedFrame? Completed);
+    ZLinkRemoteRelayFrameAssembler.CompletedFrame? Completed
+);

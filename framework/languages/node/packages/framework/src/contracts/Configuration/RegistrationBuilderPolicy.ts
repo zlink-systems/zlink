@@ -1,20 +1,20 @@
-import type {
-  Type,
-  ZLinkEntrySpot,
-  ZLinkSpot
-} from '../../contracts';
+import type { Type, ZLinkEntrySpot, ZLinkSpot } from '../../contracts';
 import { ZLinkConfigurationException } from './ConfigurationException';
 
 export function validateMessageFollowDuration(timeoutMs: number): number {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0) {
-    throw new ZLinkConfigurationException('Message Follow duration must be a non-negative safe integer.');
+    throw new ZLinkConfigurationException(
+      'Message Follow duration must be a non-negative safe integer.'
+    );
   }
   return timeoutMs;
 }
 
 export function validateActorTransferTimeout(timeoutMs: number): number {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
-    throw new ZLinkConfigurationException('actor transfer timeout must be a positive safe integer.');
+    throw new ZLinkConfigurationException(
+      'actor transfer timeout must be a positive safe integer.'
+    );
   }
   return timeoutMs;
 }
@@ -70,7 +70,9 @@ export function validateRoutingIdPrefix(prefix: string): string {
     throw new ZLinkConfigurationException('Routing-id prefix must not be empty or padded.');
   }
   if (Buffer.byteLength(`${prefix}-00000000-0000-0000-0000-000000000000`, 'utf8') > 255) {
-    throw new ZLinkConfigurationException('Routing-id prefix is too long for a generated routing id.');
+    throw new ZLinkConfigurationException(
+      'Routing-id prefix is too long for a generated routing id.'
+    );
   }
   return prefix;
 }

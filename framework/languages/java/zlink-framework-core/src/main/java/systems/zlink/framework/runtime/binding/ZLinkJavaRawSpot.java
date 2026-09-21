@@ -1,17 +1,5 @@
 package systems.zlink.framework.runtime.binding;
-import java.util.Objects;
 
-import java.time.Duration;
-import java.util.List;
-import java.util.Optional;
-import java.util.Queue;
-import java.util.Set;
-import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.atomic.AtomicBoolean;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SendFlags;
@@ -20,7 +8,6 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorLifecyc
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchEvent;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchHandler;
@@ -30,31 +17,35 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkInternalAsyncSpotDi
 import systems.zlink.framework.runtime.internal.completion.ZLinkTerminalWinner;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 
+import java.time.Duration;
+import java.util.List;
+import java.util.Objects;
+import java.util.Queue;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
+
 /**
- * Framework-owned local Spot mailbox. Raw bindings provide transport only;
- * Spot identity, lifecycle and turn dispatch stay in the Framework runtime.
+ * Framework-owned local Spot mailbox. Raw bindings provide transport only; Spot identity, lifecycle
+ * and turn dispatch stay in the Framework runtime.
  */
-final class ZLinkJavaRawSpot
-    implements ZLinkBackendSpot, ZLinkJavaAdmissionBacked {
+final class ZLinkJavaRawSpot implements ZLinkBackendSpot, ZLinkJavaAdmissionBacked {
     private final ZLinkJavaRawSpotNode owner;
     private final long lifecycleGeneration;
-    private final Queue<ZLinkBackendReceived> routes =
-        new ConcurrentLinkedQueue<>();
-    private final Queue<ZLinkBackendTopicMessage> subscriptions =
-        new ConcurrentLinkedQueue<>();
-    private final Queue<ZLinkBackendActorJoinRequest> actorJoins =
-        new ConcurrentLinkedQueue<>();
-    private final Queue<ZLinkBackendActorLifecycleEvent> lifecycles =
-        new ConcurrentLinkedQueue<>();
+    private final Queue<ZLinkBackendReceived> routes = new ConcurrentLinkedQueue<>();
+    private final Queue<ZLinkBackendTopicMessage> subscriptions = new ConcurrentLinkedQueue<>();
+    private final Queue<ZLinkBackendActorJoinRequest> actorJoins = new ConcurrentLinkedQueue<>();
+    private final Queue<ZLinkBackendActorLifecycleEvent> lifecycles = new ConcurrentLinkedQueue<>();
     private final Set<String> topics = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean closed = new AtomicBoolean();
     private volatile String spotId;
     private volatile ZLinkBackendSpotDispatchHandler dispatchHandler;
 
-    ZLinkJavaRawSpot(
-        ZLinkJavaRawSpotNode owner,
-        String spotId,
-        long lifecycleGeneration) {
+    ZLinkJavaRawSpot(ZLinkJavaRawSpotNode owner, String spotId, long lifecycleGeneration) {
         this.owner = owner;
         this.spotId = spotId;
         this.lifecycleGeneration = lifecycleGeneration;
@@ -82,8 +73,7 @@ final class ZLinkJavaRawSpot
 
     @Override
     public void setRoutingId(String value) {
-        owner.rekeySpot(this, spotId, Objects.requireNonNull(
-            value, "spotId"));
+        owner.rekeySpot(this, spotId, Objects.requireNonNull(value, "spotId"));
         spotId = value;
     }
 
@@ -107,148 +97,119 @@ final class ZLinkJavaRawSpot
 
     @Override
     public void rememberSpotAuthority(
-        RoutingId targetNodeRid,
-        String spotId,
-        long objectGeneration,
-        long authorityOwnerGeneration) {
+            RoutingId targetNodeRid,
+            String spotId,
+            long objectGeneration,
+            long authorityOwnerGeneration) {
         owner.rememberSpotAuthority(
-            targetNodeRid,
-            spotId,
-            objectGeneration,
-            authorityOwnerGeneration);
+                targetNodeRid, spotId, objectGeneration, authorityOwnerGeneration);
     }
 
     @Override
     public void rememberSpotAuthority(
-        RoutingId targetNodeRid,
-        String spotId,
-        long objectGeneration,
-        long authorityOwnerGeneration,
-        long ownerLeaseGeneration) {
+            RoutingId targetNodeRid,
+            String spotId,
+            long objectGeneration,
+            long authorityOwnerGeneration,
+            long ownerLeaseGeneration) {
         owner.rememberSpotAuthority(
-            targetNodeRid,
-            spotId,
-            objectGeneration,
-            authorityOwnerGeneration,
-            ownerLeaseGeneration);
+                targetNodeRid,
+                spotId,
+                objectGeneration,
+                authorityOwnerGeneration,
+                ownerLeaseGeneration);
     }
 
     @Override
-    public boolean publish(
-        String channelName,
-        String topic,
-        List<Message> parts,
-        SendFlags flags) {
+    public boolean publish(String channelName, String topic, List<Message> parts, SendFlags flags) {
         return owner.publish(this, channelName, topic, new byte[0], parts);
     }
 
     @Override
     public boolean publish(
-        String channelName,
-        String topic,
-        byte[] metadata,
-        List<Message> parts,
-        SendFlags flags) {
+            String channelName,
+            String topic,
+            byte[] metadata,
+            List<Message> parts,
+            SendFlags flags) {
         return owner.publish(this, channelName, topic, metadata, parts);
     }
 
     @Override
     public CompletionStage<Void> publishAsync(
-        String channelName,
-        String topic,
-        List<Message> parts,
-        SendFlags flags) {
-        return owner.publishAsync(
-            this, channelName, topic, new byte[0], parts);
+            String channelName, String topic, List<Message> parts, SendFlags flags) {
+        return owner.publishAsync(this, channelName, topic, new byte[0], parts);
     }
 
     @Override
     public CompletionStage<Void> publishAsync(
-        String channelName,
-        String topic,
-        byte[] metadata,
-        List<Message> parts,
-        SendFlags flags) {
-        return owner.publishAsync(
-            this, channelName, topic, metadata, parts);
+            String channelName,
+            String topic,
+            byte[] metadata,
+            List<Message> parts,
+            SendFlags flags) {
+        return owner.publishAsync(this, channelName, topic, metadata, parts);
     }
 
     @Override
     public CompletionStage<Void> sendToSpot(
-        RoutingId targetNodeRid,
-        String spotId,
-        long spotGeneration,
-        List<Message> parts) {
-        return owner.sendToSpot(
-            this, targetNodeRid, spotId, spotGeneration, new byte[0], parts);
+            RoutingId targetNodeRid, String spotId, long spotGeneration, List<Message> parts) {
+        return owner.sendToSpot(this, targetNodeRid, spotId, spotGeneration, new byte[0], parts);
     }
 
     @Override
     public CompletionStage<Void> sendToSpot(
-        RoutingId targetNodeRid,
-        String spotId,
-        long spotGeneration,
-        byte[] metadata,
-        List<Message> parts) {
-        return owner.sendToSpot(
-            this, targetNodeRid, spotId, spotGeneration, metadata, parts);
+            RoutingId targetNodeRid,
+            String spotId,
+            long spotGeneration,
+            byte[] metadata,
+            List<Message> parts) {
+        return owner.sendToSpot(this, targetNodeRid, spotId, spotGeneration, metadata, parts);
     }
 
     @Override
     public CompletionStage<ZLinkBackendReceived> requestToSpot(
-        RoutingId targetNodeRid,
-        String spotId,
-        long spotGeneration,
-        List<Message> parts,
-        Duration timeout) {
+            RoutingId targetNodeRid,
+            String spotId,
+            long spotGeneration,
+            List<Message> parts,
+            Duration timeout) {
         return owner.requestToSpot(
-            this,
-            targetNodeRid,
-            spotId,
-            spotGeneration,
-            new byte[0],
-            parts,
-            timeout);
+                this, targetNodeRid, spotId, spotGeneration, new byte[0], parts, timeout);
     }
 
     @Override
     public CompletionStage<ZLinkBackendReceived> requestToSpot(
-        RoutingId targetNodeRid,
-        String spotId,
-        long spotGeneration,
-        byte[] metadata,
-        List<Message> parts,
-        Duration timeout,
-        ZLinkServiceOperationRegistry operations,
-        UUID operationId) {
+            RoutingId targetNodeRid,
+            String spotId,
+            long spotGeneration,
+            byte[] metadata,
+            List<Message> parts,
+            Duration timeout,
+            ZLinkServiceOperationRegistry operations,
+            UUID operationId) {
         return owner.requestToSpot(
-            this,
-            targetNodeRid,
-            spotId,
-            spotGeneration,
-            metadata,
-            parts,
-            timeout,
-            operations,
-            operationId);
+                this,
+                targetNodeRid,
+                spotId,
+                spotGeneration,
+                metadata,
+                parts,
+                timeout,
+                operations,
+                operationId);
     }
 
     @Override
     public CompletionStage<ZLinkBackendReceived> requestToSpot(
-        RoutingId targetNodeRid,
-        String spotId,
-        long spotGeneration,
-        byte[] metadata,
-        List<Message> parts,
-        Duration timeout) {
+            RoutingId targetNodeRid,
+            String spotId,
+            long spotGeneration,
+            byte[] metadata,
+            List<Message> parts,
+            Duration timeout) {
         return owner.requestToSpot(
-            this,
-            targetNodeRid,
-            spotId,
-            spotGeneration,
-            metadata,
-            parts,
-            timeout);
+                this, targetNodeRid, spotId, spotGeneration, metadata, parts, timeout);
     }
 
     @Override
@@ -263,9 +224,7 @@ final class ZLinkJavaRawSpot
 
     @Override
     public void replyActorJoin(
-        ZLinkBackendActorJoinRequest request,
-        int joinResultCode,
-        List<Message> parts) {
+            ZLinkBackendActorJoinRequest request, int joinResultCode, List<Message> parts) {
         if (!(request.nativeRequest() instanceof PendingJoin pending)) {
             throw new IllegalArgumentException("unknown raw Spot join request");
         }
@@ -273,8 +232,7 @@ final class ZLinkJavaRawSpot
     }
 
     @Override
-    public ZLinkBackendActorLifecycleEvent recvActorLifecycle(
-        ZLinkBackendRecvMode mode) {
+    public ZLinkBackendActorLifecycleEvent recvActorLifecycle(ZLinkBackendRecvMode mode) {
         return lifecycles.poll();
     }
 
@@ -286,7 +244,7 @@ final class ZLinkJavaRawSpot
         if (closed.get()) {
             received.close();
             return CompletableFuture.failedFuture(
-                new IllegalStateException("target Spot is closed"));
+                    new IllegalStateException("target Spot is closed"));
         }
         routes.add(received);
         return raise(ZLinkBackendSpotDispatchEvent.ROUTED_READABLE);
@@ -306,14 +264,13 @@ final class ZLinkJavaRawSpot
         if (closed.get()) {
             request.parts().forEach(Message::close);
             return CompletableFuture.failedFuture(
-                new IllegalStateException("target Spot is closed"));
+                    new IllegalStateException("target Spot is closed"));
         }
         actorJoins.add(request);
         return raise(ZLinkBackendSpotDispatchEvent.ACTOR_JOIN_READABLE);
     }
 
-    CompletionStage<Void> enqueueLifecycle(
-        ZLinkBackendActorLifecycleEvent event) {
+    CompletionStage<Void> enqueueLifecycle(ZLinkBackendActorLifecycleEvent event) {
         if (closed.get()) {
             return CompletableFuture.completedFuture(null);
         }
@@ -321,15 +278,14 @@ final class ZLinkJavaRawSpot
         return raise(ZLinkBackendSpotDispatchEvent.ACTOR_LIFECYCLE_READABLE);
     }
 
-    CompletionStage<Void> enqueueActor(
-        List<ZLinkBackendActorReceived> messages) {
+    CompletionStage<Void> enqueueActor(List<ZLinkBackendActorReceived> messages) {
         if (closed.get()) {
             messages.forEach(ZLinkBackendActorReceived::close);
             return CompletableFuture.failedFuture(
-                new IllegalStateException("target Spot is closed"));
+                    new IllegalStateException("target Spot is closed"));
         }
-        CompletionStage<Void> raised = raise(
-            ZLinkBackendSpotDispatchEvent.ACTOR_READABLE, messages);
+        CompletionStage<Void> raised =
+                raise(ZLinkBackendSpotDispatchEvent.ACTOR_READABLE, messages);
         return raised;
     }
 
@@ -338,15 +294,13 @@ final class ZLinkJavaRawSpot
     }
 
     private CompletionStage<Void> raise(
-        ZLinkBackendSpotDispatchEvent event,
-        List<ZLinkBackendActorReceived> actorMessages) {
+            ZLinkBackendSpotDispatchEvent event, List<ZLinkBackendActorReceived> actorMessages) {
         ZLinkBackendSpotDispatchHandler handler = dispatchHandler;
         if (handler == null) {
             actorMessages.forEach(ZLinkBackendActorReceived::close);
             return CompletableFuture.completedFuture(null);
         }
-        ZLinkBackendSpotDispatchInfo info =
-            new ZLinkBackendSpotDispatchInfo(event, actorMessages);
+        ZLinkBackendSpotDispatchInfo info = new ZLinkBackendSpotDispatchInfo(event, actorMessages);
         if (handler instanceof ZLinkInternalAsyncSpotDispatchHandler async) {
             return async.handleAsync(info);
         }
@@ -379,14 +333,11 @@ final class ZLinkJavaRawSpot
     }
 
     static List<Message> copy(List<Message> parts) {
-        return parts.stream()
-            .map(Message::from)
-            .toList();
+        return parts.stream().map(Message::from).toList();
     }
 
     static final class PendingJoin {
-        private final CompletableFuture<JoinReply> completion =
-            new CompletableFuture<>();
+        private final CompletableFuture<JoinReply> completion = new CompletableFuture<>();
         private final ZLinkTerminalWinner terminal = new ZLinkTerminalWinner();
 
         CompletionStage<JoinReply> completion() {
@@ -408,6 +359,5 @@ final class ZLinkJavaRawSpot
         }
     }
 
-    record JoinReply(int resultCode, List<Message> parts) {
-    }
+    record JoinReply(int resultCode, List<Message> parts) {}
 }

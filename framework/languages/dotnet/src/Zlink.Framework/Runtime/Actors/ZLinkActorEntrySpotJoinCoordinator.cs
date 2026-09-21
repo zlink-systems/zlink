@@ -9,20 +9,27 @@ internal sealed class ZLinkActorEntrySpotJoinCoordinator(
     ZLinkActorSessionManager actorSessionManager,
     Func<ZLinkFrameworkComponentState> getState,
     Func<IZLinkBackendSpotNode?> getActorSpotNode,
-    ZLinkMessageFlowTracer flow)
+    ZLinkMessageFlowTracer flow
+)
 {
     public async ValueTask<ZLinkActorJoinResult> JoinAsync(
         RoutingId spotNodeRid,
         IZLinkActor actor,
         ZLinkMessage request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var actorState = actorSessionManager.GetOrCreateState(actor.Context.ActorId);
-        var node = getActorSpotNode()
-                   ?? throw new InvalidOperationException("Entry SPOT join requires a router-capable SpotNode.");
-        var actorRef = actorState.NativeActorRef
-                       ?? throw new InvalidOperationException(
-                           $"Actor '{actor.Context.ActorId}' does not have a native Actor ref.");
+        var node =
+            getActorSpotNode()
+            ?? throw new InvalidOperationException(
+                "Entry SPOT join requires a router-capable SpotNode."
+            );
+        var actorRef =
+            actorState.NativeActorRef
+            ?? throw new InvalidOperationException(
+                $"Actor '{actor.Context.ActorId}' does not have a native Actor ref."
+            );
         var previousActivation = actorState.LiveActivation;
 
         // A target registered in this process has a managed Entry Spot
@@ -35,7 +42,8 @@ internal sealed class ZLinkActorEntrySpotJoinCoordinator(
         {
             Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"entry_join_local_managed actor={actor.Context.ActorId} "
-                + $"target_node={spotNodeRid}");
+                    + $"target_node={spotNodeRid}"
+            );
             return await JoinLocalEntrySpotAsync(
                     localTarget,
                     actor,
@@ -43,38 +51,52 @@ internal sealed class ZLinkActorEntrySpotJoinCoordinator(
                     actorRef,
                     previousActivation,
                     request,
-                    cancellationToken)
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
         }
 
         using var completion = new ZLinkNativeReplyCompletion<ZLinkBackendActorJoinEntrySpotResult>(
-            cancellationToken);
+            cancellationToken
+        );
 
         var correlationId = ZlinkStreamCorrelation.Next();
         if (flow.Enabled(ZLinkMessageFlowOutcome.Sent))
-            flow.Trace(new ZLinkMessageFlowEvent(
-                ZLinkMessageFlowOutcome.Sent,
-                ZLinkDispatchErrorSurface.SpotActor,
-                ZLinkDispatchMessageKind.ActorRequest,
-                "JoinEntrySpot",
-                CorrelationId: correlationId,
-                SourceRid: spotNodeRid.ToString(),
-                ActorId: actor.Context.ActorId));
+            flow.Trace(
+                new ZLinkMessageFlowEvent(
+                    ZLinkMessageFlowOutcome.Sent,
+                    ZLinkDispatchErrorSurface.SpotActor,
+                    ZLinkDispatchMessageKind.ActorRequest,
+                    "JoinEntrySpot",
+                    CorrelationId: correlationId,
+                    SourceRid: spotNodeRid.ToString(),
+                    ActorId: actor.Context.ActorId
+                )
+            );
 
         var encodedRequest = request.Encode(registration.Codecs);
-        using (var nativeRequest = ZLinkEnvelopeCodec.EncodePart(new ZLinkActorJoinSinglePartEnvelope(
-                   encodedRequest.ContentType,
-                   encodedRequest.Payload.ToArray())))
+        using (
+            var nativeRequest = ZLinkEnvelopeCodec.EncodePart(
+                new ZLinkActorJoinSinglePartEnvelope(
+                    encodedRequest.ContentType,
+                    encodedRequest.Payload.ToArray()
+                )
+            )
+        )
         {
-            if (!node.JoinActorEntrySpot(
+            if (
+                !node.JoinActorEntrySpot(
                     actorRef,
                     spotNodeRid,
                     nativeRequest,
                     completion.Complete,
-                    registration.DefaultRequestTimeout))
+                    registration.DefaultRequestTimeout
+                )
+            )
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.NotFound,
-                    $"Actor entry SPOT join submit failed for '{actor.Context.ActorId}'.");
+                    $"Actor entry SPOT join submit failed for '{actor.Context.ActorId}'."
+                );
         }
 
         var (result, replyParts) = await completion.Task.ConfigureAwait(false);
@@ -91,26 +113,31 @@ internal sealed class ZLinkActorEntrySpotJoinCoordinator(
                     actorRef,
                     previousActivation,
                     request,
-                    cancellationToken)
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
         }
 
         if (flow.Enabled(ZLinkMessageFlowOutcome.ReplyReceived))
-            flow.Trace(new ZLinkMessageFlowEvent(
-                ZLinkMessageFlowOutcome.ReplyReceived,
-                ZLinkDispatchErrorSurface.SpotActor,
-                ZLinkDispatchMessageKind.Response,
-                "JoinEntrySpot",
-                CorrelationId: correlationId,
-                SourceRid: spotNodeRid.ToString(),
-                ActorId: actor.Context.ActorId));
+            flow.Trace(
+                new ZLinkMessageFlowEvent(
+                    ZLinkMessageFlowOutcome.ReplyReceived,
+                    ZLinkDispatchErrorSurface.SpotActor,
+                    ZLinkDispatchMessageKind.Response,
+                    "JoinEntrySpot",
+                    CorrelationId: correlationId,
+                    SourceRid: spotNodeRid.ToString(),
+                    ActorId: actor.Context.ActorId
+                )
+            );
 
         var reply = DecodeEntrySpotJoinReply(
             result.Result,
             result.FailureErrno,
             replyParts,
             actor.Context.ActorId,
-            spotNodeRid);
+            spotNodeRid
+        );
         var accepted = result.JoinResultCode == 0;
 
         if (accepted)
@@ -120,7 +147,8 @@ internal sealed class ZLinkActorEntrySpotJoinCoordinator(
                     actor,
                     previousActivation,
                     result.Actor.NodeRid,
-                    cancellationToken)
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
             if (result.Actor.NodeRid != actorRef.NodeRid)
             {
@@ -128,10 +156,12 @@ internal sealed class ZLinkActorEntrySpotJoinCoordinator(
                 // Native entry-spot join: no framework runtime claims the
                 // row on the target, so this owner renews it with the new
                 // node rid instead of releasing it.
-                await actorSessionManager.RenewActorLocationAfterEntrySpotMoveAsync(
+                await actorSessionManager
+                    .RenewActorLocationAfterEntrySpotMoveAsync(
                         actorState,
                         result.Actor.NodeRid,
-                        cancellationToken)
+                        cancellationToken
+                    )
                     .ConfigureAwait(false);
             }
         }
@@ -139,7 +169,8 @@ internal sealed class ZLinkActorEntrySpotJoinCoordinator(
         return accepted
             ? new ZLinkActorJoinResult.Accepted(
                 result.Actor.ToNative(node.MeshStatus().MeshName),
-                reply)
+                reply
+            )
             : new ZLinkActorJoinResult.Rejected(reply);
     }
 
@@ -151,7 +182,8 @@ internal sealed class ZLinkActorEntrySpotJoinCoordinator(
         ZLinkBackendActorRef sourceActorRef,
         ZLinkSpotActivation? previousActivation,
         ZLinkMessage joinRequest,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (state.FindSpotNodeByRoutingId(spotNodeRid) is { } targetNode)
             return await JoinLocalEntrySpotAsync(
@@ -161,17 +193,22 @@ internal sealed class ZLinkActorEntrySpotJoinCoordinator(
                     sourceActorRef,
                     previousActivation,
                     joinRequest,
-                    cancellationToken)
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
 
         var sourceNode = getActorSpotNode();
-        var nodeRuntime = state.SpotNodes.Values.FirstOrDefault(
-                              candidate => ReferenceEquals(candidate.Node, sourceNode))
-                          ?? state.SpotNodes.Values.FirstOrDefault(
-                              candidate => candidate.Registration.Router is not null)
-                          ?? throw new ZLinkFrameworkException(
-                              ZLinkFrameworkErrorKind.NotFound,
-                              $"Actor entry SPOT join failed for '{actor.Context.ActorId}' because no router-capable MeshNode is registered.");
+        var nodeRuntime =
+            state.SpotNodes.Values.FirstOrDefault(candidate =>
+                ReferenceEquals(candidate.Node, sourceNode)
+            )
+            ?? state.SpotNodes.Values.FirstOrDefault(candidate =>
+                candidate.Registration.Router is not null
+            )
+            ?? throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.NotFound,
+                $"Actor entry SPOT join failed for '{actor.Context.ActorId}' because no router-capable MeshNode is registered."
+            );
 
         var request = ZLinkActorEntrySpotRoutePackets.CreateJoinRequest(
             actor.Context.ActorId,
@@ -179,62 +216,66 @@ internal sealed class ZLinkActorEntrySpotJoinCoordinator(
             sourceActorRef,
             previousActivation?.SpotId,
             joinRequest,
-            registration.Codecs);
+            registration.Codecs
+        );
 
         var header = ZLinkClientCallCodec.CreateEnvelope(
             ZLinkMessageKind.Request,
             nodeRuntime.Name,
             ZLinkActorEntrySpotRoutePackets.JoinEntrySpotPacketName,
-            registration.DefaultRequestTimeout);
-        var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
-            header,
-            request,
-            registration.Codecs);
+            registration.DefaultRequestTimeout
+        );
+        var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(header, request, registration.Codecs);
         var replyParts = await nodeRuntime
             .RequestToNodeAsync(
                 spotNodeRid,
                 parts,
                 registration.DefaultRequestTimeout,
-                cancellationToken)
+                cancellationToken
+            )
             .ConfigureAwait(false);
-        var reply = ZLinkClientCallCodec
-            .DecodeEnvelopeReplyAndDispose<ZLinkActorEntrySpotRouteJoinReply>(
+        var reply =
+            ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<ZLinkActorEntrySpotRouteJoinReply>(
                 replyParts,
                 "Actor EntrySpot join reply is empty.",
                 $"Actor EntrySpot join failed for '{actor.Context.ActorId}'.",
-                registration.Codecs);
+                registration.Codecs
+            );
 
         var replyMessage = ZLinkActorEntrySpotRoutePackets.DecodeJoinReplyPayload(
             reply,
-            registration.Codecs);
+            registration.Codecs
+        );
         if (!reply.Accepted)
         {
             //  Application 정책이 거절한 것인지, framework가 다른 이유로 만든
             //  Accepted=false인지 밖에서 구분할 수 없다.
             Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"entry_join_rejected path=remote actor={actor.Context.ActorId}");
+                $"entry_join_rejected path=remote actor={actor.Context.ActorId}"
+            );
             return new ZLinkActorJoinResult.Rejected(replyMessage);
         }
 
         var targetRef = ZLinkActorEntrySpotRoutePackets.ToActorRef(reply);
         actorState.BindNativeActorRef(targetRef);
         if (previousActivation is not null)
-            await previousActivation.NotifyActorLeftAfterNativeJoinEntrySpotAsync(
-                    actor,
-                    cancellationToken)
+            await previousActivation
+                .NotifyActorLeftAfterNativeJoinEntrySpotAsync(actor, cancellationToken)
                 .ConfigureAwait(false);
         if (targetRef.NodeRid != sourceActorRef.NodeRid)
         {
             actorState.InvalidateContext();
             // Routed entry-spot join: the target runtime creates the actor
             // through its own claim (Takeover); this owner releases.
-            await actorSessionManager.ReleaseActorLocationAfterMoveAsync(actorState, cancellationToken)
+            await actorSessionManager
+                .ReleaseActorLocationAfterMoveAsync(actorState, cancellationToken)
                 .ConfigureAwait(false);
         }
 
         return new ZLinkActorJoinResult.Accepted(
             targetRef.ToNative(nodeRuntime.Node.MeshStatus().MeshName),
-            replyMessage);
+            replyMessage
+        );
     }
 
     private async ValueTask<ZLinkActorJoinResult> JoinLocalEntrySpotAsync(
@@ -244,12 +285,15 @@ internal sealed class ZLinkActorEntrySpotJoinCoordinator(
         ZLinkBackendActorRef sourceActorRef,
         ZLinkSpotActivation? previousActivation,
         ZLinkMessage joinRequest,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        var activation = targetNode.EntrySpotActivation
-                         ?? throw new ZLinkFrameworkException(
-                             ZLinkFrameworkErrorKind.NotFound,
-                             $"Actor entry SPOT join target node '{targetNode.Node.RoutingId}' does not have an Entry Spot activation.");
+        var activation =
+            targetNode.EntrySpotActivation
+            ?? throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.NotFound,
+                $"Actor entry SPOT join target node '{targetNode.Node.RoutingId}' does not have an Entry Spot activation."
+            );
         var localTargetRef = targetNode.Node.ActorLookup(actor.Context.ActorId);
         var createdHere = localTargetRef is null;
         ZLinkBackendActorRef targetRef;
@@ -276,10 +320,12 @@ internal sealed class ZLinkActorEntrySpotJoinCoordinator(
             if (createdHere)
                 try
                 {
-                    await actorSessionManager.CompensateUncommittedNativeActorAsync(
+                    await actorSessionManager
+                        .CompensateUncommittedNativeActorAsync(
                             targetNode.Node,
                             targetRef,
-                            "local-entry-spot-admission")
+                            "local-entry-spot-admission"
+                        )
                         .ConfigureAwait(false);
                 }
                 catch (Exception cleanupFailure)
@@ -293,14 +339,17 @@ internal sealed class ZLinkActorEntrySpotJoinCoordinator(
         if (!admission.Accepted)
         {
             if (createdHere)
-                await actorSessionManager.CompensateUncommittedNativeActorAsync(
+                await actorSessionManager
+                    .CompensateUncommittedNativeActorAsync(
                         targetNode.Node,
                         targetRef,
-                        "local-entry-spot-rejection")
+                        "local-entry-spot-rejection"
+                    )
                     .ConfigureAwait(false);
             Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"entry_join_rejected path=local actor={actorState.ActorId} "
-                + $"created_here={createdHere}");
+                    + $"created_here={createdHere}"
+            );
             return new ZLinkActorJoinResult.Rejected(reply);
         }
 
@@ -309,55 +358,59 @@ internal sealed class ZLinkActorEntrySpotJoinCoordinator(
                 actor,
                 previousActivation,
                 targetRef.NodeRid,
-                cancellationToken)
+                cancellationToken
+            )
             .ConfigureAwait(false);
         if (targetRef.NodeRid != sourceActorRef.NodeRid)
         {
             actorState.InvalidateContext();
             // Local cross-node entry-spot move within this process keeps
             // the same owner; renew the row with the new node rid.
-            await actorSessionManager.RenewActorLocationAfterEntrySpotMoveAsync(
+            await actorSessionManager
+                .RenewActorLocationAfterEntrySpotMoveAsync(
                     actorState,
                     targetRef.NodeRid,
-                    cancellationToken)
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
         }
 
         return new ZLinkActorJoinResult.Accepted(
             targetRef.ToNative(targetNode.Node.MeshStatus().MeshName),
-            reply);
+            reply
+        );
     }
 
     private async ValueTask NotifyManagedEntrySpotJoinLifecycleAsync(
         IZLinkActor actor,
         ZLinkSpotActivation? previousActivation,
         RoutingId targetNodeRid,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         await NotifyManagedUserSpotLeftForEntrySpotJoinAsync(
                 actor,
                 previousActivation,
-                cancellationToken)
+                cancellationToken
+            )
             .ConfigureAwait(false);
 
-        await spots.EntrySpotActors.NotifyJoinedAsync(
-                getState(),
-                actor,
-                targetNodeRid,
-                cancellationToken)
+        await spots
+            .EntrySpotActors.NotifyJoinedAsync(getState(), actor, targetNodeRid, cancellationToken)
             .ConfigureAwait(false);
     }
 
     private static async ValueTask NotifyManagedUserSpotLeftForEntrySpotJoinAsync(
         IZLinkActor actor,
         ZLinkSpotActivation? previousActivation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        if (previousActivation is null) return;
+        if (previousActivation is null)
+            return;
 
-        await previousActivation.NotifyActorLeftAfterNativeJoinEntrySpotAsync(
-                actor,
-                cancellationToken)
+        await previousActivation
+            .NotifyActorLeftAfterNativeJoinEntrySpotAsync(actor, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -371,7 +424,8 @@ internal sealed class ZLinkActorEntrySpotJoinCoordinator(
         int failureErrno,
         IReadOnlyList<Message> replyParts,
         string actorId,
-        RoutingId spotNodeRid)
+        RoutingId spotNodeRid
+    )
     {
         try
         {
@@ -383,20 +437,25 @@ internal sealed class ZLinkActorEntrySpotJoinCoordinator(
                 throw ZLinkRequestFailureMapper.CreateCompletionException(
                     result,
                     failureErrno,
-                    $"Actor entry SPOT join for '{actorId}' to node '{spotNodeRid}'");
+                    $"Actor entry SPOT join for '{actorId}' to node '{spotNodeRid}'"
+                );
 
-            if (replyParts.Count == 0) return ZLinkMessage.Empty;
+            if (replyParts.Count == 0)
+                return ZLinkMessage.Empty;
 
             if (replyParts.Count == 1)
                 return ZLinkMessage.FromEnvelopePayload(
                     ZLinkEnvelopeCodec.DefaultContentType,
                     replyParts[0],
-                    registration.Codecs);
+                    registration.Codecs
+                );
 
-            var header = ZLinkEnvelopeCodec.DecodeHeader(
-                replyParts,
-                flow.CaptureEnabled);
-            return ZLinkMessage.FromEnvelopePayload(header.ContentType, replyParts[1], registration.Codecs);
+            var header = ZLinkEnvelopeCodec.DecodeHeader(replyParts, flow.CaptureEnabled);
+            return ZLinkMessage.FromEnvelopePayload(
+                header.ContentType,
+                replyParts[1],
+                registration.Codecs
+            );
         }
         finally
         {

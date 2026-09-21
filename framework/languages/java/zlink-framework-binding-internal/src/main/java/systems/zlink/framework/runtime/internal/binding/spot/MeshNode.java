@@ -6,18 +6,18 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.SendFlags;
+
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 
 /**
- * A RouteMesh membership node: peers, node/channel messaging, actors, spots,
- * publishers and the pull-based dispatch surface.
+ * A RouteMesh membership node: peers, node/channel messaging, actors, spots, publishers and the
+ * pull-based dispatch surface.
  */
 public interface MeshNode extends AutoCloseable {
     /** The result of {@link #getOrCreateSpot}. */
-    record SpotGetOrCreateResult(Spot spot, boolean created) {
-    }
+    record SpotGetOrCreateResult(Spot spot, boolean created) {}
 
     /** Sets the node's local bind endpoint. */
     void setBind(String endpoint);
@@ -91,12 +91,16 @@ public interface MeshNode extends AutoCloseable {
     void sendToNode(RoutingId targetRid, byte[] metadata, List<Message> parts, SendFlags flags);
 
     /** Sends a request to a node. */
-    OperationId requestToNode(RoutingId targetRid, List<Message> parts, SendFlags flags,
-                              Duration timeout);
+    OperationId requestToNode(
+            RoutingId targetRid, List<Message> parts, SendFlags flags, Duration timeout);
 
     /** Sends a request with canonical application metadata to a node. */
-    OperationId requestToNode(RoutingId targetRid, byte[] metadata, List<Message> parts,
-                              SendFlags flags, Duration timeout);
+    OperationId requestToNode(
+            RoutingId targetRid,
+            byte[] metadata,
+            List<Message> parts,
+            SendFlags flags,
+            Duration timeout);
 
     /** Sends a message to a channel. */
     void sendToChannel(String channelName, List<Message> parts, SendFlags flags);
@@ -105,19 +109,23 @@ public interface MeshNode extends AutoCloseable {
     void sendToChannel(String channelName, byte[] metadata, List<Message> parts, SendFlags flags);
 
     /** Sends a request to a channel. */
-    OperationId requestToChannel(String channelName, List<Message> parts, SendFlags flags,
-                                 Duration timeout);
+    OperationId requestToChannel(
+            String channelName, List<Message> parts, SendFlags flags, Duration timeout);
 
     /** Sends a request with canonical application metadata to a channel. */
-    OperationId requestToChannel(String channelName, byte[] metadata, List<Message> parts,
-                                 SendFlags flags, Duration timeout);
+    OperationId requestToChannel(
+            String channelName,
+            byte[] metadata,
+            List<Message> parts,
+            SendFlags flags,
+            Duration timeout);
 
     /** Sends a message to an actor. */
     void sendToActor(ActorRef actor, List<Message> parts, SendFlags flags);
 
     /** Sends a request to an actor. */
-    OperationId requestToActor(ActorRef actor, List<Message> parts, SendFlags flags,
-                               Duration timeout);
+    OperationId requestToActor(
+            ActorRef actor, List<Message> parts, SendFlags flags, Duration timeout);
 
     /** Sends a message to an actor's bound STREAM session. */
     void sendActorBoundSession(ActorRef actor, List<Message> parts, SendFlags flags);
@@ -139,38 +147,28 @@ public interface MeshNode extends AutoCloseable {
 
     /** Joins an actor to a user spot. */
     OperationId joinActorSpot(
-        ActorRef actor,
-        RoutingId targetNodeRid,
-        RoutingId targetSpotId,
-        long targetSpotGeneration,
-        List<Message> creationParts,
-        Duration timeout);
+            ActorRef actor,
+            RoutingId targetNodeRid,
+            RoutingId targetSpotId,
+            long targetSpotGeneration,
+            List<Message> creationParts,
+            Duration timeout);
 
     /** Joins an actor to a node's entry spot. */
     OperationId joinActorEntrySpot(
-        ActorRef actor,
-        RoutingId targetNodeRid,
-        List<Message> creationParts,
-        Duration timeout);
+            ActorRef actor, RoutingId targetNodeRid, List<Message> creationParts, Duration timeout);
 
     /** Leaves the actor's current spot at the expected membership epoch. */
-    OperationId leaveActor(
-        ActorRef actor,
-        long expectedMembershipEpoch,
-        Duration timeout);
+    OperationId leaveActor(ActorRef actor, long expectedMembershipEpoch, Duration timeout);
 
     /** Closes the actor's bound STREAM session. */
     OperationId closeActorBoundSession(
-        ActorRef actor,
-        long expectedBindingGeneration,
-        Duration timeout);
+            ActorRef actor, long expectedBindingGeneration, Duration timeout);
 
     /**
-     * Fences one side of an actor transfer and returns its opaque token and
-     * negotiated reservation.
+     * Fences one side of an actor transfer and returns its opaque token and negotiated reservation.
      */
-    PrepareActorTransferResult prepareActorTransfer(
-        ActorTransferPrepare prepare, Duration timeout);
+    PrepareActorTransferResult prepareActorTransfer(ActorTransferPrepare prepare, Duration timeout);
 
     /** Commits a prepared actor transfer to the given membership epoch. */
     void commitActorTransfer(ActorTransferToken token, long newMembershipEpoch);

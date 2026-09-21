@@ -1,28 +1,28 @@
 package systems.zlink.framework.runtime.binding;
-import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.net.ServerSocket;
-import java.time.Duration;
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
-import java.util.OptionalLong;
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
-import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
-import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.contracts.sockets.SendFlags;
+import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
 import systems.zlink.framework.runtime.internal.binding.spot.RecordKind;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
+
+import java.net.ServerSocket;
+import java.time.Duration;
+import java.util.Arrays;
+import java.util.List;
+import java.util.OptionalLong;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 final class ZLinkJavaRawMeshNodeLargePayloadTest {
     @Test
@@ -34,8 +34,8 @@ final class ZLinkJavaRawMeshNodeLargePayloadTest {
         Arrays.fill(payloadBytes, (byte) 'x');
 
         try (var context = Zlink.createContext();
-             var source = meshNode(context);
-             var target = meshNode(context)) {
+                var source = meshNode(context);
+                var target = meshNode(context)) {
             source.setRoutingId(sourceRid);
             source.setBind("inproc://large-payload-source-" + System.nanoTime());
             source.setRouterHighWaterMark(4_096_000L);
@@ -49,28 +49,28 @@ final class ZLinkJavaRawMeshNodeLargePayloadTest {
             source.connectPeer(endpoint, targetRid);
             awaitAdmitted(source);
 
-            target.startDispatch(record -> {
-                try (record;
-                     Message packet = Message.from("reply");
-                     Message payload = Message.from(record.parts().get(1).toByteArray())) {
-                    assertEquals(RecordKind.NODE_REQUEST, record.receive().kind());
-                    record.reply(List.of(packet, payload));
-                }
-            });
+            target.startDispatch(
+                    record -> {
+                        try (record;
+                                Message packet = Message.from("reply");
+                                Message payload =
+                                        Message.from(record.parts().get(1).toByteArray())) {
+                            assertEquals(RecordKind.NODE_REQUEST, record.receive().kind());
+                            record.reply(List.of(packet, payload));
+                        }
+                    });
 
-            CompletableFuture<ZLinkBackendReceived> completed =
-                new CompletableFuture<>();
+            CompletableFuture<ZLinkBackendReceived> completed = new CompletableFuture<>();
             try (Message packet = Message.from("request");
-                 Message payload = Message.from(payloadBytes)) {
-                completed = source.spotNode().requestToNode(
-                        targetRid,
-                        List.of(packet, payload),
-                        Duration.ofSeconds(5))
-                    .toCompletableFuture();
+                    Message payload = Message.from(payloadBytes)) {
+                completed =
+                        source.spotNode()
+                                .requestToNode(
+                                        targetRid, List.of(packet, payload), Duration.ofSeconds(5))
+                                .toCompletableFuture();
             }
 
-            try (ZLinkBackendReceived reply =
-                completed.get(10, TimeUnit.SECONDS)) {
+            try (ZLinkBackendReceived reply = completed.get(10, TimeUnit.SECONDS)) {
                 assertEquals(ZLinkBackendRequestResult.OK, reply.result());
                 assertEquals("reply", reply.parts().getFirst().toUtf8String());
                 assertArrayEquals(payloadBytes, reply.parts().get(1).toByteArray());
@@ -83,19 +83,18 @@ final class ZLinkJavaRawMeshNodeLargePayloadTest {
     // without it. Mirror that wiring for the direct-node test.
     private static ZLinkJavaRawMeshNode meshNode(Context context) {
         ZLinkJavaRawMeshNode node = new ZLinkJavaRawMeshNode(context, "mesh");
-        node.setApplicationJobQueue(new ZLinkApplicationJobQueue(
-            ZLinkApplicationJobQueueProfile.BALANCED,
-            OptionalLong.empty(),
-            new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null)));
+        node.setApplicationJobQueue(
+                new ZLinkApplicationJobQueue(
+                        ZLinkApplicationJobQueueProfile.BALANCED,
+                        OptionalLong.empty(),
+                        new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null)));
         return node;
     }
 
-    private static void awaitAdmitted(ZLinkJavaRawMeshNode node)
-        throws Exception {
+    private static void awaitAdmitted(ZLinkJavaRawMeshNode node) throws Exception {
         long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
         while (System.nanoTime() < deadline) {
-            if (node.peers().stream().anyMatch(
-                    peer -> peer.state() == MeshPeerState.ADMITTED)) {
+            if (node.peers().stream().anyMatch(peer -> peer.state() == MeshPeerState.ADMITTED)) {
                 return;
             }
             Thread.sleep(5);

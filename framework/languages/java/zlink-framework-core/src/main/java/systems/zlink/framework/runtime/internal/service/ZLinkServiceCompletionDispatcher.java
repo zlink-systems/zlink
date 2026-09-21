@@ -3,13 +3,11 @@ package systems.zlink.framework.runtime.internal.service;
 import java.util.concurrent.locks.LockSupport;
 
 /**
- * Owns the process-wide execution lane for service operation terminals. A
- * registered work item is also its intrusive queue node, so a terminal winner
- * never needs a second queue allocation.
+ * Owns the process-wide execution lane for service operation terminals. A registered work item is
+ * also its intrusive queue node, so a terminal winner never needs a second queue allocation.
  */
 final class ZLinkServiceCompletionDispatcher {
-    static final ZLinkServiceCompletionDispatcher INSTANCE =
-        new ZLinkServiceCompletionDispatcher();
+    static final ZLinkServiceCompletionDispatcher INSTANCE = new ZLinkServiceCompletionDispatcher();
 
     private final Object gate = new Object();
     private final Thread worker;
@@ -17,18 +15,18 @@ final class ZLinkServiceCompletionDispatcher {
     private WorkItem tail;
 
     private ZLinkServiceCompletionDispatcher() {
-        worker = Thread.ofPlatform()
-            .daemon(true)
-            .name("zlink-jvm-service-completion")
-            .unstarted(this::run);
+        worker =
+                Thread.ofPlatform()
+                        .daemon(true)
+                        .name("zlink-jvm-service-completion")
+                        .unstarted(this::run);
         worker.start();
     }
 
     void register(WorkItem item) {
         synchronized (gate) {
             if (item.registered) {
-                throw new IllegalStateException(
-                    "completion work item is already registered");
+                throw new IllegalStateException("completion work item is already registered");
             }
             item.registered = true;
         }
@@ -68,7 +66,7 @@ final class ZLinkServiceCompletionDispatcher {
                 current = current.dispatchNext;
                 if (current == null) {
                     throw new IllegalStateException(
-                        "completion work chain does not reach its tail");
+                            "completion work chain does not reach its tail");
                 }
             }
             if (tail == null) {
@@ -122,8 +120,7 @@ final class ZLinkServiceCompletionDispatcher {
 
     private static void requireRegistered(WorkItem item) {
         if (!item.registered) {
-            throw new IllegalStateException(
-                "completion work item has no dispatcher registration");
+            throw new IllegalStateException("completion work item has no dispatcher registration");
         }
     }
 

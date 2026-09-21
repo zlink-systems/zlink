@@ -20,12 +20,14 @@ public sealed class FrameworkRuntimeContracts
     {
         var runtime = new ExampleFrameworkRuntime();
 
-        var relocated = await runtime.RelocateAsync(new ZLinkFrameworkRelocationOptions
-        {
-            Mode = ZLinkFrameworkRelocationMode.RollingUpdate,
-            TargetApplicationVersion = 8,
-            Deadline = TimeSpan.FromSeconds(30)
-        });
+        var relocated = await runtime.RelocateAsync(
+            new ZLinkFrameworkRelocationOptions
+            {
+                Mode = ZLinkFrameworkRelocationMode.RollingUpdate,
+                TargetApplicationVersion = 8,
+                Deadline = TimeSpan.FromSeconds(30),
+            }
+        );
 
         Assert.Equal(ZLinkFrameworkRelocationOutcome.Relocated, relocated.Outcome);
         Assert.Equal(ZLinkFrameworkRuntimeState.Relocated, runtime.Status.State);
@@ -56,58 +58,64 @@ public sealed class FrameworkRuntimeContracts
     {
         private ulong _sequence;
 
-        public ZLinkFrameworkRuntimeStatus Status { get; private set; } = Create(
-            ZLinkFrameworkRuntimeState.Serving,
-            sequence: 0);
+        public ZLinkFrameworkRuntimeStatus Status { get; private set; } =
+            Create(ZLinkFrameworkRuntimeState.Serving, sequence: 0);
 
-        public async IAsyncEnumerable<ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus>> ObserveAsync(
-            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        public async IAsyncEnumerable<
+            ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus>
+        > ObserveAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            yield return new ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus>(
-                Status,
-                default);
+            yield return new ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus>(Status, default);
             await Task.CompletedTask;
         }
 
-        public void ResetCapacityMetrics()
-        {
-        }
+        public void ResetCapacityMetrics() { }
 
         public ValueTask<ZLinkFrameworkRelocationResult> RelocateAsync(
             ZLinkFrameworkRelocationOptions options,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var target = options.Mode == ZLinkFrameworkRelocationMode.RollingUpdate
-                ? options.TargetApplicationVersion
-                  ?? throw new ArgumentException("A target version is required.", nameof(options))
-                : 7;
+            var target =
+                options.Mode == ZLinkFrameworkRelocationMode.RollingUpdate
+                    ? options.TargetApplicationVersion
+                        ?? throw new ArgumentException(
+                            "A target version is required.",
+                            nameof(options)
+                        )
+                    : 7;
             var result = new ZLinkFrameworkRelocationResult(
                 options.Mode,
                 target,
                 ZLinkFrameworkRelocationOutcome.Relocated,
-                ZLinkFrameworkRelocationReason.None);
+                ZLinkFrameworkRelocationReason.None
+            );
             Status = Create(
                 ZLinkFrameworkRuntimeState.Relocated,
                 checked(++_sequence),
-                relocation: result);
+                relocation: result
+            );
             return ValueTask.FromResult(result);
         }
 
         public ValueTask<ZLinkFrameworkTerminationResult> ShutdownAsync(
             TimeSpan? deadline = null,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             cancellationToken.ThrowIfCancellationRequested();
             var result = new ZLinkFrameworkTerminationResult(
                 ZLinkFrameworkTerminationOutcome.Stopped,
-                ZLinkFrameworkTerminationReason.None);
+                ZLinkFrameworkTerminationReason.None
+            );
             Status = Create(
                 ZLinkFrameworkRuntimeState.Stopped,
                 checked(++_sequence),
                 relocation: Status.RelocationResult,
-                termination: result);
+                termination: result
+            );
             return ValueTask.FromResult(result);
         }
 
@@ -115,7 +123,8 @@ public sealed class FrameworkRuntimeContracts
             ZLinkFrameworkRuntimeState state,
             ulong sequence,
             ZLinkFrameworkRelocationResult? relocation = null,
-            ZLinkFrameworkTerminationResult? termination = null) =>
+            ZLinkFrameworkTerminationResult? termination = null
+        ) =>
             new(
                 state,
                 state == ZLinkFrameworkRuntimeState.Serving,
@@ -124,6 +133,7 @@ public sealed class FrameworkRuntimeContracts
                 relocation,
                 termination,
                 sequence,
-                DateTimeOffset.UtcNow);
+                DateTimeOffset.UtcNow
+            );
     }
 }

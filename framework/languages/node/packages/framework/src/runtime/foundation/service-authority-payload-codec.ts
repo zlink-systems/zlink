@@ -23,7 +23,6 @@ export interface ServiceDecodedInstanceAuthority extends ServiceReadySpotAuthori
   readonly state: 'coldActivating' | 'ready' | 'closing';
 }
 
-
 export interface ServiceActivationRecoveryState {
   readonly reference: string;
   readonly sha256: Uint8Array;
@@ -104,11 +103,10 @@ export function replaceServiceAuthorityRelocationState(
 export function encodeServiceUserSpotAuthorityPayload(
   value: ServiceUserSpotAuthorityPayload
 ): Buffer {
-  const spot = conditional(2, concat(
-    rid(value.spotId, 'spotId'),
-    text8(value.stableType, 'stableType'),
-    Buffer.of(1)
-  ));
+  const spot = conditional(
+    2,
+    concat(rid(value.spotId, 'spotId'), text8(value.stableType, 'stableType'), Buffer.of(1))
+  );
   const object = conditional(2, spot);
   const body = concat(
     Buffer.of(value.state === 'creating' ? 1 : value.state === 'closing' ? 3 : 0),
@@ -137,28 +135,29 @@ export function encodeServiceInstanceAuthorityPayload(
   if (value.activationRecovery !== undefined && value.state !== 'ready') {
     throw new RangeError('activationRecovery is allowed only on a Ready Instance Spot authority.');
   }
-  const instanceBody = concat(
-    text8(value.stableType, 'stableType'),
-    rid(value.spotId, 'spotId')
-  );
+  const instanceBody = concat(text8(value.stableType, 'stableType'), rid(value.spotId, 'spotId'));
   const instance = conditional(
     value.state === 'coldActivating' ? 1 : value.state === 'closing' ? 3 : 2,
     instanceBody
   );
   const spot = conditional(3, instance);
   const object = conditional(2, spot);
-  const activationRecovery = value.activationRecovery === undefined
-    ? conditional32(0, Buffer.alloc(0))
-    : conditional32(1, concat(
-        text16(value.activationRecovery.reference, 'activationRecovery.reference'),
-        sha256(value.activationRecovery.sha256),
-        boundedU32(value.activationRecovery.encodedSize, 'activationRecovery.encodedSize'),
-        u64(value.activationRecovery.inboxSequence, 'activationRecovery.inboxSequence'),
-        ordinalU64(value.activationRecovery.replayCursor, 'activationRecovery.replayCursor')
-      ));
+  const activationRecovery =
+    value.activationRecovery === undefined
+      ? conditional32(0, Buffer.alloc(0))
+      : conditional32(
+          1,
+          concat(
+            text16(value.activationRecovery.reference, 'activationRecovery.reference'),
+            sha256(value.activationRecovery.sha256),
+            boundedU32(value.activationRecovery.encodedSize, 'activationRecovery.encodedSize'),
+            u64(value.activationRecovery.inboxSequence, 'activationRecovery.inboxSequence'),
+            ordinalU64(value.activationRecovery.replayCursor, 'activationRecovery.replayCursor')
+          )
+        );
   if (
-    value.activationRecovery !== undefined
-    && value.activationRecovery.replayCursor > value.activationRecovery.inboxSequence
+    value.activationRecovery !== undefined &&
+    value.activationRecovery.replayCursor > value.activationRecovery.inboxSequence
   ) {
     throw new RangeError('activationRecovery.replayCursor must not exceed inboxSequence.');
   }
@@ -187,9 +186,7 @@ export function decodeServiceReadySpotAuthority(
   payload: Uint8Array
 ): ServiceReadySpotAuthority | undefined {
   const decoded = decodeSpotAuthority(payload);
-  return decoded?.state === 'ready' && decoded.operationKind === 0
-    ? decoded
-    : undefined;
+  return decoded?.state === 'ready' && decoded.operationKind === 0 ? decoded : undefined;
 }
 
 export function decodeServiceInstanceAuthorityPayload(
@@ -197,11 +194,11 @@ export function decodeServiceInstanceAuthorityPayload(
 ): ServiceDecodedInstanceAuthority | undefined {
   const decoded = decodeSpotAuthority(payload);
   if (
-    decoded?.kind !== 'instance_spot'
-    || !(
-      decoded.state === 'coldActivating' && decoded.operationKind === 1
-      || decoded.state === 'ready' && decoded.operationKind === 0
-      || decoded.state === 'closing' && decoded.operationKind === 3
+    decoded?.kind !== 'instance_spot' ||
+    !(
+      (decoded.state === 'coldActivating' && decoded.operationKind === 1) ||
+      (decoded.state === 'ready' && decoded.operationKind === 0) ||
+      (decoded.state === 'closing' && decoded.operationKind === 3)
     )
   ) {
     return undefined;
@@ -260,13 +257,14 @@ function encodeRewrittenServiceAuthority(
     ownerNodeGeneration: target.nodeGeneration
   };
   if (decoded.kind === 'user_spot') {
-    const state = decoded.operationKind === 0
-      ? 'ready'
-      : decoded.operationKind === 1
-        ? 'creating'
-        : decoded.operationKind === 3
-          ? 'closing'
-          : undefined;
+    const state =
+      decoded.operationKind === 0
+        ? 'ready'
+        : decoded.operationKind === 1
+          ? 'creating'
+          : decoded.operationKind === 3
+            ? 'closing'
+            : undefined;
     return state === undefined
       ? undefined
       : encodeServiceUserSpotAuthorityPayload({ ...common, state });
@@ -281,12 +279,12 @@ function encodeRewrittenServiceAuthority(
   });
 }
 
-function decodeSpotAuthority(
-  payload: Uint8Array
-): (ServiceReadySpotAuthority & {
-  readonly state: 'coldActivating' | 'ready' | 'closing' | 'other';
-  readonly operationKind: number;
-}) | undefined {
+function decodeSpotAuthority(payload: Uint8Array):
+  | (ServiceReadySpotAuthority & {
+      readonly state: 'coldActivating' | 'ready' | 'closing' | 'other';
+      readonly operationKind: number;
+    })
+  | undefined {
   try {
     const reader = new AuthorityReader(payload);
     reader.expect(AUTHORITY_MAGIC);
@@ -356,27 +354,26 @@ function decodeSpotAuthority(
       };
     }
     if (
-      activationRecovery !== undefined
-      && (
-        kind !== 'instance_spot'
-        || state !== 2
-        || operationKind !== 0
-      )
+      activationRecovery !== undefined &&
+      (kind !== 'instance_spot' || state !== 2 || operationKind !== 0)
     ) {
       return undefined;
     }
     if (!activationRecoveryBody.done || !body.done) return undefined;
     return {
       kind,
-      state: kind === 'instance_spot'
-        ? state === 1
-          ? 'coldActivating'
-          : state === 2
+      state:
+        kind === 'instance_spot'
+          ? state === 1
+            ? 'coldActivating'
+            : state === 2
+              ? 'ready'
+              : state === 3
+                ? 'closing'
+                : 'other'
+          : state === 1
             ? 'ready'
-            : state === 3
-              ? 'closing'
-              : 'other'
-        : state === 1 ? 'ready' : 'other',
+            : 'other',
       operationKind,
       stableType,
       spotId,
@@ -469,7 +466,7 @@ function ordinalU64(value: bigint, name: string): Buffer {
 }
 
 function concat(...parts: readonly Uint8Array[]): Buffer {
-  return Buffer.concat(parts.map(part => Buffer.from(part)));
+  return Buffer.concat(parts.map((part) => Buffer.from(part)));
 }
 
 class AuthorityReader {

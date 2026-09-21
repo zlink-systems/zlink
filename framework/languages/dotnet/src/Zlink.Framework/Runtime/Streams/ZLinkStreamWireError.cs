@@ -1,8 +1,6 @@
 namespace Zlink.Framework.Runtime.Streams;
 
-internal sealed record ZLinkStreamWireError(
-    string? Code,
-    string? Message)
+internal sealed record ZLinkStreamWireError(string? Code, string? Message)
 {
     public static ZLinkStreamWireError FromException(Exception exception)
     {

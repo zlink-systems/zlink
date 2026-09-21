@@ -49,11 +49,10 @@ class stream_state_t
     std::vector<zlink::message_t> written_payloads;
     mutable std::mutex state_mutex;
     mutable std::mutex dispatch_mutex;
-    std::shared_ptr<zlink::framework::runtime::session_serial_executor_t>
-      session_serial_executor;
+    std::shared_ptr<zlink::framework::runtime::session_serial_executor_t> session_serial_executor;
     std::mutex transport_writer_mutex;
-    std::function<task_t<void> (const stream_header_t &, const zlink::message_t &,
-                                 std::optional<std::chrono::milliseconds>)>
+    std::function<task_t<void> (
+      const stream_header_t &, const zlink::message_t &, std::optional<std::chrono::milliseconds>)>
       transport_writer;
     serializer_registry_t *serializers = nullptr;
     std::atomic<session_actor_manager_t *> actors{nullptr};
@@ -82,17 +81,15 @@ class stream_runtime_t
 
     result_t<std::vector<std::uint8_t>> encode_header (const stream_header_t &header) const;
     result_t<stream_header_t> decode_header (const std::vector<std::uint8_t> &bytes) const;
-    static result_t<void> validate_frame_representation (
-      std::size_t header_size,
-      std::uint64_t payload_size);
-    result_t<std::vector<std::uint8_t>>
-    encode_frame (const stream_header_t &header,
-                  const zlink::message_t &payload) const;
+    static result_t<void> validate_frame_representation (std::size_t header_size,
+                                                         std::uint64_t payload_size);
+    result_t<std::vector<std::uint8_t>> encode_frame (const stream_header_t &header,
+                                                      const zlink::message_t &payload) const;
     /* Encodes the versioned session-closing control payload
      * (graceful-drain-handoff §7.1): u8 version=1, u8 reason, u16 diagnostic
      * length (network order, <=512), UTF-8 diagnostic bytes. */
-    static std::vector<std::uint8_t>
-    encode_session_closing_payload (stream_close_reason_t reason, std::string_view diagnostic);
+    static std::vector<std::uint8_t> encode_session_closing_payload (stream_close_reason_t reason,
+                                                                     std::string_view diagnostic);
 
     result_t<void> validate_header (const stream_header_t &header) const;
 
@@ -111,33 +108,28 @@ class stream_runtime_t
     result_t<void> dispatch_error (packet_stream_session_t &session,
                                    stream_t &stream,
                                    const stream_error_t &error) const;
-    using async_dispatch_completion_t =
-      std::function<void (const result_t<void> &)>;
+    using async_dispatch_completion_t = std::function<void (const result_t<void> &)>;
     using async_dispatch_started_t = std::function<void ()>;
     using async_dispatch_cancel_t = std::function<bool ()>;
-    using actor_binding_replaced_dispatch_t =
-      std::function<task_t<void> (stream_t &, std::string)>;
-    result_t<void> dispatch_connected_async (
-      packet_stream_session_t &session,
-      stream_t &stream,
-      async_dispatch_completion_t completion = {}) const;
-    result_t<void> dispatch_packet_async (
-      packet_stream_session_t &session,
-      stream_t &stream,
-      const stream_header_t &header,
-      const zlink::message_t &payload,
-      async_dispatch_completion_t completion = {},
-      async_dispatch_started_t started = {},
-      async_dispatch_cancel_t cancelled = {}) const;
-    result_t<void> dispatch_disconnected_async (
-      packet_stream_session_t &session,
-      stream_t &stream,
-      async_dispatch_completion_t completion = {}) const;
-    result_t<void> dispatch_actor_binding_replaced_async (
-      stream_t &stream,
-      std::string actor_id,
-      actor_binding_replaced_dispatch_t dispatch,
-      async_dispatch_completion_t completion = {}) const;
+    using actor_binding_replaced_dispatch_t = std::function<task_t<void> (stream_t &, std::string)>;
+    result_t<void> dispatch_connected_async (packet_stream_session_t &session,
+                                             stream_t &stream,
+                                             async_dispatch_completion_t completion = {}) const;
+    result_t<void> dispatch_packet_async (packet_stream_session_t &session,
+                                          stream_t &stream,
+                                          const stream_header_t &header,
+                                          const zlink::message_t &payload,
+                                          async_dispatch_completion_t completion = {},
+                                          async_dispatch_started_t started = {},
+                                          async_dispatch_cancel_t cancelled = {}) const;
+    result_t<void> dispatch_disconnected_async (packet_stream_session_t &session,
+                                                stream_t &stream,
+                                                async_dispatch_completion_t completion = {}) const;
+    result_t<void>
+    dispatch_actor_binding_replaced_async (stream_t &stream,
+                                           std::string actor_id,
+                                           actor_binding_replaced_dispatch_t dispatch,
+                                           async_dispatch_completion_t completion = {}) const;
     void drain_async_dispatch (stream_t &stream) const;
     void attach_transport_writer (
       stream_t &stream,

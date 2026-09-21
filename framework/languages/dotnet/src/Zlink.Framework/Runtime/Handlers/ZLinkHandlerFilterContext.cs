@@ -2,7 +2,8 @@ namespace Zlink.Framework.Runtime.Handlers;
 
 internal sealed class ZLinkHandlerFilterContext(
     IZLinkMessageContext message,
-    ZLinkHandlerDispatchKind dispatchKind) : IZLinkHandlerFilterContext
+    ZLinkHandlerDispatchKind dispatchKind
+) : IZLinkHandlerFilterContext
 {
     public string? MeshName => message.MeshName;
 

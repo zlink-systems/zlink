@@ -1,5 +1,5 @@
-using System.Reflection;
 using System.Collections.Frozen;
+using System.Reflection;
 
 namespace Zlink.Framework.Runtime.Configuration;
 
@@ -43,11 +43,14 @@ internal sealed class ZLinkFrameworkRegistration
 
     public bool ImplicitHandlerAutoRegistrationEnabled { get; set; } = true;
 
-    public Dictionary<string, ZLinkChannelRegistration> Channels { get; } = new(StringComparer.Ordinal);
+    public Dictionary<string, ZLinkChannelRegistration> Channels { get; } =
+        new(StringComparer.Ordinal);
 
-    public Dictionary<string, ZLinkStreamNodeRegistration> StreamNodes { get; } = new(StringComparer.Ordinal);
+    public Dictionary<string, ZLinkStreamNodeRegistration> StreamNodes { get; } =
+        new(StringComparer.Ordinal);
 
-    public Dictionary<string, ZLinkSpotNodeRegistration> SpotNodes { get; } = new(StringComparer.Ordinal);
+    public Dictionary<string, ZLinkSpotNodeRegistration> SpotNodes { get; } =
+        new(StringComparer.Ordinal);
 
     public ZLinkActorCatalog ActorCatalog { get; } = new();
 
@@ -71,31 +74,25 @@ internal sealed class ZLinkFrameworkRegistration
         foreach (var channel in Channels.Values)
         {
             if (channel.Server is not null)
-                maximum = Math.Max(
-                    maximum,
-                    channel.Server.SocketConfig.MaxMessageSize);
+                maximum = Math.Max(maximum, channel.Server.SocketConfig.MaxMessageSize);
             if (channel.Subscriber is not null)
-                maximum = Math.Max(
-                    maximum,
-                    channel.Subscriber.SocketConfig.MaxMessageSize);
+                maximum = Math.Max(maximum, channel.Subscriber.SocketConfig.MaxMessageSize);
         }
 
         foreach (var streamNode in StreamNodes.Values)
-            maximum = Math.Max(
-                maximum,
-                streamNode.SocketConfig.MaxMessageSize);
+            maximum = Math.Max(maximum, streamNode.SocketConfig.MaxMessageSize);
 
-        return maximum > 0
-            ? checked((ulong)maximum)
-            : 16UL * 1024 * 1024;
+        return maximum > 0 ? checked((ulong)maximum) : 16UL * 1024 * 1024;
     }
 
     public IEnumerable<Assembly> EnumerateHandlerScanAssemblies()
     {
         var assemblies = new HashSet<Assembly>(HandlerAssemblies);
-        if (!ImplicitHandlerAutoRegistrationEnabled) return assemblies;
+        if (!ImplicitHandlerAutoRegistrationEnabled)
+            return assemblies;
 
-        foreach (var filterType in Filters) assemblies.Add(filterType.Assembly);
+        foreach (var filterType in Filters)
+            assemblies.Add(filterType.Assembly);
 
         foreach (var stream in StreamNodes.Values)
             if (stream.HeaderSessionType is not null)
@@ -103,34 +100,44 @@ internal sealed class ZLinkFrameworkRegistration
 
         foreach (var spotNode in SpotNodes.Values)
         {
-            if (spotNode.EntrySpotType is not null) assemblies.Add(spotNode.EntrySpotType.Assembly);
+            if (spotNode.EntrySpotType is not null)
+                assemblies.Add(spotNode.EntrySpotType.Assembly);
 
-            foreach (var spotType in spotNode.SpotFactories) assemblies.Add(spotType.Assembly);
+            foreach (var spotType in spotNode.SpotFactories)
+                assemblies.Add(spotType.Assembly);
 
             foreach (var instanceSpot in spotNode.InstanceSpotFactories.Values)
                 assemblies.Add(instanceSpot.SpotType.Assembly);
 
-            foreach (var actorFactoryType in spotNode.ActorFactories.Values) assemblies.Add(actorFactoryType.Assembly);
+            foreach (var actorFactoryType in spotNode.ActorFactories.Values)
+                assemblies.Add(actorFactoryType.Assembly);
 
-            foreach (var handler in spotNode.RouteSendHandlers) assemblies.Add(handler.HandlerType.Assembly);
+            foreach (var handler in spotNode.RouteSendHandlers)
+                assemblies.Add(handler.HandlerType.Assembly);
 
-            foreach (var handler in spotNode.RouteRequestHandlers) assemblies.Add(handler.HandlerType.Assembly);
+            foreach (var handler in spotNode.RouteRequestHandlers)
+                assemblies.Add(handler.HandlerType.Assembly);
 
             foreach (var membership in spotNode.ChannelMemberships)
             {
-                foreach (var handler in membership.SendHandlers) assemblies.Add(handler.HandlerType.Assembly);
+                foreach (var handler in membership.SendHandlers)
+                    assemblies.Add(handler.HandlerType.Assembly);
 
-                foreach (var handler in membership.RequestHandlers) assemblies.Add(handler.HandlerType.Assembly);
+                foreach (var handler in membership.RequestHandlers)
+                    assemblies.Add(handler.HandlerType.Assembly);
             }
         }
 
         foreach (var channel in Channels.Values)
         {
-            foreach (var handler in channel.SendHandlers) assemblies.Add(handler.HandlerType.Assembly);
+            foreach (var handler in channel.SendHandlers)
+                assemblies.Add(handler.HandlerType.Assembly);
 
-            foreach (var handler in channel.RequestHandlers) assemblies.Add(handler.HandlerType.Assembly);
+            foreach (var handler in channel.RequestHandlers)
+                assemblies.Add(handler.HandlerType.Assembly);
 
-            foreach (var handler in channel.PublishHandlers) assemblies.Add(handler.HandlerType.Assembly);
+            foreach (var handler in channel.PublishHandlers)
+                assemblies.Add(handler.HandlerType.Assembly);
         }
 
         return assemblies;
@@ -139,30 +146,35 @@ internal sealed class ZLinkFrameworkRegistration
     public ZLinkScannedHandlerCatalog ScannedHandlerCatalog =>
         _scannedHandlerCatalog ??= ZLinkScannedHandlerCatalog.Build(
             EnumerateHandlerScanAssemblies(),
-            EnumerateSessionTypes());
+            EnumerateSessionTypes()
+        );
 
     public void FreezeScannedHandlerCatalog()
     {
         _scannedHandlerCatalog = ZLinkScannedHandlerCatalog.Build(
             EnumerateHandlerScanAssemblies(),
-            EnumerateSessionTypes());
+            EnumerateSessionTypes()
+        );
     }
 
-    private IReadOnlySet<Type> EnumerateSessionTypes() => StreamNodes.Values
-        .Select(static node => node.HeaderSessionType)
-        .Where(static type => type is not null)
-        .Cast<Type>()
-        .ToHashSet();
+    private IReadOnlySet<Type> EnumerateSessionTypes() =>
+        StreamNodes
+            .Values.Select(static node => node.HeaderSessionType)
+            .Where(static type => type is not null)
+            .Cast<Type>()
+            .ToHashSet();
 }
 
 internal sealed record ZLinkScannedHandlerCatalog(
     IReadOnlyList<ZLinkHandlerEndpointDescriptor> ChannelEndpoints,
     IReadOnlyList<ZLinkScannedSpotHandler> SpotHandlers,
-    IReadOnlyList<ZLinkScannedSessionHandler> SessionHandlers)
+    IReadOnlyList<ZLinkScannedSessionHandler> SessionHandlers
+)
 {
     public static ZLinkScannedHandlerCatalog Build(
         IEnumerable<Assembly> assemblies,
-        IReadOnlySet<Type> sessionTypes)
+        IReadOnlySet<Type> sessionTypes
+    )
     {
         var channelEndpoints = new List<ZLinkHandlerEndpointDescriptor>();
         var spotHandlers = new List<ZLinkScannedSpotHandler>();
@@ -171,13 +183,16 @@ internal sealed record ZLinkScannedHandlerCatalog(
         {
             channelEndpoints.AddRange(ZLinkHandlerScanner.Scan(assembly));
             spotHandlers.AddRange(ZLinkScannedSpotHandlerScanner.Scan(assembly));
-            sessionHandlers.AddRange(ZLinkScannedSessionHandlerScanner.Scan(assembly, sessionTypes));
+            sessionHandlers.AddRange(
+                ZLinkScannedSessionHandlerScanner.Scan(assembly, sessionTypes)
+            );
         }
 
         return new ZLinkScannedHandlerCatalog(
             Array.AsReadOnly(channelEndpoints.ToArray()),
             Array.AsReadOnly(spotHandlers.ToArray()),
-            Array.AsReadOnly(sessionHandlers.ToArray()));
+            Array.AsReadOnly(sessionHandlers.ToArray())
+        );
     }
 }
 
@@ -192,7 +207,7 @@ internal sealed class ZLinkMetadataPolicyRegistration
 internal enum ZLinkClientServerRole
 {
     Client = 1,
-    Server = 2
+    Server = 2,
 }
 
 // Mesh channel marker: AddRouteMesh(meshName) registers the mesh discovery
@@ -239,8 +254,7 @@ internal sealed class ZLinkChannelRegistration
 
 internal sealed class ZLinkChannelServerCapabilityRegistration
 {
-    public RoutingId ServerRid { get; } =
-        RoutingId.From($"cs-{Guid.NewGuid():N}");
+    public RoutingId ServerRid { get; } = RoutingId.From($"cs-{Guid.NewGuid():N}");
 
     public int ListenPort { get; set; }
 
@@ -255,8 +269,7 @@ internal sealed class ZLinkChannelServerCapabilityRegistration
 
 internal sealed class ZLinkChannelClientCapabilityRegistration
 {
-    public ZLinkPeerAcquisitionMode AcquisitionMode { get; set; } =
-        ZLinkPeerAcquisitionMode.Manual;
+    public ZLinkPeerAcquisitionMode AcquisitionMode { get; set; } = ZLinkPeerAcquisitionMode.Manual;
 
     public ZLinkSocketConfig SocketConfig { get; } = new();
 
@@ -320,19 +333,22 @@ internal sealed class ZLinkStreamNodeRegistration
 internal sealed record ZLinkStreamTlsServerRegistration(
     string CertPath,
     string KeyPath,
-    bool RequireClientCert);
+    bool RequireClientCert
+);
 
 internal sealed record ZLinkRouteHandlerRegistration(
     Type HandlerType,
     Type MessageType,
     Type? ReplyType,
-    string? PacketName);
+    string? PacketName
+);
 
 internal sealed record ZLinkChannelHandlerRegistration(
     Type HandlerType,
     Type MessageType,
     Type? ReplyType,
-    string? PacketName);
+    string? PacketName
+);
 
 // One logical channel membership on a MeshNode (spec 05-route-mesh §4). The
 // membership is (MeshName, ChannelName) scoped; weight is 0..10000 (0 excludes the
@@ -395,19 +411,19 @@ internal sealed class ZLinkSpotNodeRegistration
 
     public Dictionary<Type, ZLinkUserSpotFactoryConfiguration> UserSpotFactoryOptions { get; } = [];
 
-    public Dictionary<string, ZLinkInstanceSpotFactoryRegistration>
-        InstanceSpotFactories { get; } = new(StringComparer.Ordinal);
+    public Dictionary<string, ZLinkInstanceSpotFactoryRegistration> InstanceSpotFactories { get; } =
+        new(StringComparer.Ordinal);
 
     public Dictionary<string, Type> ActorFactories { get; } = new(StringComparer.Ordinal);
 
-    public Dictionary<string, ZLinkObjectRelocationRegistration>
-        SpotRelocations { get; } = new(StringComparer.Ordinal);
+    public Dictionary<string, ZLinkObjectRelocationRegistration> SpotRelocations { get; } =
+        new(StringComparer.Ordinal);
 
-    public Dictionary<string, ZLinkObjectRelocationRegistration>
-        InstanceSpotRelocations { get; } = new(StringComparer.Ordinal);
+    public Dictionary<string, ZLinkObjectRelocationRegistration> InstanceSpotRelocations { get; } =
+        new(StringComparer.Ordinal);
 
-    public Dictionary<string, ZLinkObjectRelocationRegistration>
-        ActorRelocations { get; } = new(StringComparer.Ordinal);
+    public Dictionary<string, ZLinkObjectRelocationRegistration> ActorRelocations { get; } =
+        new(StringComparer.Ordinal);
 
     public RoutingId RoutingId { get; set; }
 
@@ -445,23 +461,25 @@ internal sealed class ZLinkSpotNodeRegistration
 
 internal sealed record ZLinkInstanceSpotFactoryRegistration(
     Type SpotType,
-    ZLinkInstanceSpotFactoryConfiguration Options);
+    ZLinkInstanceSpotFactoryConfiguration Options
+);
 
 internal sealed record ZLinkUserSpotFactoryConfiguration(
     int StableTypeLimit = 0,
     ZLinkUserSpotExecutionMode ExecutionMode = ZLinkUserSpotExecutionMode.SpotWide,
     ZLinkSpotRelocationCoordinationMode RelocationCoordinationMode =
-        ZLinkSpotRelocationCoordinationMode.FrameworkManaged);
+        ZLinkSpotRelocationCoordinationMode.FrameworkManaged
+);
 
-internal sealed record ZLinkInstanceSpotFactoryConfiguration(
-    int StableTypeLimit = 0);
+internal sealed record ZLinkInstanceSpotFactoryConfiguration(int StableTypeLimit = 0);
 
 internal sealed record ZLinkObjectRelocationRegistration(
     Type InstanceType,
     ZLinkObjectPlacementOptions Placement,
     byte PolicyKind,
     Type? AdapterType,
-    IZLinkRelocationAdapterInvoker? AdapterInvoker);
+    IZLinkRelocationAdapterInvoker? AdapterInvoker
+);
 
 internal sealed record ZLinkObjectPlacementOptions
 {
@@ -493,7 +511,8 @@ internal sealed class ZLinkActorCatalog
             ? factoryType
             : throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.NotFound,
-                $"Actor factory '{actorType}' is not registered.");
+                $"Actor factory '{actorType}' is not registered."
+            );
     }
 }
 
@@ -532,9 +551,7 @@ internal sealed class ZLinkNetworkOptionsModel : IZLinkNetworkOptions
     public string? AdvertiseHost
     {
         get => _advertiseHost;
-        set => _advertiseHost = value is null
-            ? null
-            : ValidateHost(value, nameof(AdvertiseHost));
+        set => _advertiseHost = value is null ? null : ValidateHost(value, nameof(AdvertiseHost));
     }
 
     private static string ValidateHost(string host, string name)

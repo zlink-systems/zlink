@@ -18,9 +18,7 @@ type EncodedMessageHandler = (
  * directly. It returns true when it consumed the message and must not throw:
  * a failed predicate is reported through the waiting call, not to the queue.
  */
-type EncodedMessageObserver = (
-  message: ZlinkStreamMessage<ZlinkStreamEncodedPayload>
-) => boolean;
+type EncodedMessageObserver = (message: ZlinkStreamMessage<ZlinkStreamEncodedPayload>) => boolean;
 
 interface QueuedMessage {
   readonly message: ZlinkStreamMessage<ZlinkStreamEncodedPayload>;
@@ -183,7 +181,7 @@ export class ZlinkStreamReceivedMessages {
 
   enqueue(message: ZlinkStreamMessage<ZlinkStreamEncodedPayload>, signal?: AbortSignal): void {
     this.receivedCounts.set(message.name, (this.receivedCounts.get(message.name) ?? 0) + 1);
-    for (const registration of [...this.observers.get(message.name) ?? []]) {
+    for (const registration of [...(this.observers.get(message.name) ?? [])]) {
       if (registration.consume(message)) {
         return;
       }
@@ -243,7 +241,11 @@ export class ZlinkStreamReceivedMessages {
   private async drain(): Promise<void> {
     this.draining = true;
     try {
-      for (let index = this.findDeliverableIndex(); index >= 0; index = this.findDeliverableIndex()) {
+      for (
+        let index = this.findDeliverableIndex();
+        index >= 0;
+        index = this.findDeliverableIndex()
+      ) {
         const queued = this.queue[index];
         if (queued === undefined) continue;
         this.removeAt(index);
@@ -253,11 +255,14 @@ export class ZlinkStreamReceivedMessages {
           try {
             await handler(message, signal);
           } catch (cause) {
-            await this.events.publishError({
-              code: ZlinkStreamErrorCode.UserCallbackFailed,
-              message: 'Typed message handler failed.',
-              cause
-            }, signal);
+            await this.events.publishError(
+              {
+                code: ZlinkStreamErrorCode.UserCallbackFailed,
+                message: 'Typed message handler failed.',
+                cause
+              },
+              signal
+            );
           }
         }
       }

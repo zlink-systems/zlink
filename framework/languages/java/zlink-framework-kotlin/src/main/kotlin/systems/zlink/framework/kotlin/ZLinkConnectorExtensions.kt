@@ -1,44 +1,42 @@
 package systems.zlink.framework.kotlin
 
-
+import java.time.Duration
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CompletionStage
 import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.ThreadContextElement
-import kotlinx.coroutines.future.await
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
-import java.time.Duration
-import java.util.concurrent.CompletionStage
+import kotlinx.coroutines.future.await
+import systems.zlink.stream.connector.ZLinkStreamAssert
 import systems.zlink.stream.connector.ZLinkStreamCloseReason
-import systems.zlink.stream.connector.ZLinkStreamConnector
-import systems.zlink.stream.connector.ZLinkStreamDiagnosticsLevel
-import systems.zlink.stream.connector.ZLinkStreamEncodedPayload
-import systems.zlink.stream.connector.ZLinkStreamError
-import systems.zlink.stream.connector.ZLinkStreamLifecycleCall
-import systems.zlink.stream.connector.ZLinkStreamMessage
 import systems.zlink.stream.connector.ZLinkStreamCompression
 import systems.zlink.stream.connector.ZLinkStreamCompressionCodec
 import systems.zlink.stream.connector.ZLinkStreamCompressionCodecs
+import systems.zlink.stream.connector.ZLinkStreamConnectionState
+import systems.zlink.stream.connector.ZLinkStreamConnectionStateHandler
+import systems.zlink.stream.connector.ZLinkStreamConnector
+import systems.zlink.stream.connector.ZLinkStreamConnectorOptions
+import systems.zlink.stream.connector.ZLinkStreamDiagnosticsLevel
+import systems.zlink.stream.connector.ZLinkStreamDisconnectedHandler
+import systems.zlink.stream.connector.ZLinkStreamEncodedPayload
+import systems.zlink.stream.connector.ZLinkStreamError
+import systems.zlink.stream.connector.ZLinkStreamErrorHandler
+import systems.zlink.stream.connector.ZLinkStreamExpectNoneCall
+import systems.zlink.stream.connector.ZLinkStreamFlow
+import systems.zlink.stream.connector.ZLinkStreamFlowScope
+import systems.zlink.stream.connector.ZLinkStreamLifecycleCall
+import systems.zlink.stream.connector.ZLinkStreamMessage
+import systems.zlink.stream.connector.ZLinkStreamMessageHandler
 import systems.zlink.stream.connector.ZLinkStreamRequestCall
 import systems.zlink.stream.connector.ZLinkStreamSendCall
-import systems.zlink.stream.connector.ZLinkStreamConnectorOptions
+import systems.zlink.stream.connector.ZLinkStreamSequenceCall
 import systems.zlink.stream.connector.ZLinkStreamWaitCall
 import systems.zlink.stream.connector.ZLinkTypedStreamRequestCall
 import systems.zlink.stream.connector.ZLinkTypedStreamSendCall
-import systems.zlink.stream.connector.ZLinkStreamConnectionState
-import systems.zlink.stream.connector.ZLinkStreamConnectionStateHandler
-import systems.zlink.stream.connector.ZLinkStreamDisconnectedHandler
-import systems.zlink.stream.connector.ZLinkStreamErrorHandler
-import systems.zlink.stream.connector.ZLinkStreamExpectNoneCall
-import systems.zlink.stream.connector.ZLinkStreamMessageHandler
-import systems.zlink.stream.connector.ZLinkStreamSequenceCall
-import systems.zlink.stream.connector.ZLinkStreamAssert
-import systems.zlink.stream.connector.ZLinkStreamFlow
-import systems.zlink.stream.connector.ZLinkStreamFlowScope
 
-fun ZLinkStreamConnector.kotlin(): ZLinkKotlinStreamConnector =
-    ZLinkKotlinStreamConnector(this)
+fun ZLinkStreamConnector.kotlin(): ZLinkKotlinStreamConnector = ZLinkKotlinStreamConnector(this)
 
 fun ZLinkStreamConnectorOptions.withDefaultStreamCompression(): ZLinkStreamConnectorOptions =
     withStreamCompression(ZLinkStreamCompressionCodecs.lz4())
@@ -47,9 +45,8 @@ fun ZLinkStreamConnectorOptions.withLz4StreamCompression(): ZLinkStreamConnector
     withDefaultStreamCompression()
 
 fun ZLinkStreamConnectorOptions.withStreamCompression(
-    codec: ZLinkStreamCompressionCodec,
-): ZLinkStreamConnectorOptions =
-    copyStreamCompression(ZLinkStreamCompression.LZ4, codec)
+    codec: ZLinkStreamCompressionCodec
+): ZLinkStreamConnectorOptions = copyStreamCompression(ZLinkStreamCompression.LZ4, codec)
 
 fun ZLinkStreamConnectorOptions.withoutStreamCompression(): ZLinkStreamConnectorOptions =
     copyStreamCompression(ZLinkStreamCompression.NONE, null)
@@ -82,10 +79,7 @@ private fun ZLinkStreamConnectorOptions.copyStreamCompression(
         diagnosticsLevel(),
     )
 
-class ZLinkKotlinStreamConnector(
-    @PublishedApi
-    internal val inner: ZLinkStreamConnector,
-) {
+class ZLinkKotlinStreamConnector(@PublishedApi internal val inner: ZLinkStreamConnector) {
     val isConnected: Boolean
         get() = inner.isConnected
 
@@ -96,11 +90,10 @@ class ZLinkKotlinStreamConnector(
         get() = inner.options()
 
     /**
-     * The reason the connection last ended, or `null` when it has never
-     * ended (common connector spec 32 §6.2, Java/Kotlin spec §12). The Java
-     * connector returns an [java.util.Optional]; Kotlin reads the same value
-     * as a nullable, so code that holds only this wrapper reaches the reason
-     * without pulling [inner] back out.
+     * The reason the connection last ended, or `null` when it has never ended (common connector
+     * spec 32 §6.2, Java/Kotlin spec §12). The Java connector returns an [java.util.Optional];
+     * Kotlin reads the same value as a nullable, so code that holds only this wrapper reaches the
+     * reason without pulling [inner] back out.
      */
     fun closeReason(): ZLinkStreamCloseReason? = inner.closeReason().orElse(null)
 
@@ -113,9 +106,9 @@ class ZLinkKotlinStreamConnector(
         set(value) = inner.setDiagnosticsLevel(value)
 
     /**
-     * The suspending pair of the [diagnosticsLevel] setter (common connector
-     * spec 32 13). It changes the same value; the property setter stays the
-     * synchronous surface and does not wait for this one.
+     * The suspending pair of the [diagnosticsLevel] setter (common connector spec 32 13). It
+     * changes the same value; the property setter stays the synchronous surface and does not wait
+     * for this one.
      */
     suspend fun setDiagnosticsLevel(level: ZLinkStreamDiagnosticsLevel) {
         inner.setDiagnosticsLevelAsync(level).await()
@@ -124,17 +117,15 @@ class ZLinkKotlinStreamConnector(
     val pendingDispatchCount: Int
         get() = inner.pendingDispatchCount()
 
-    fun receivedCount(name: String): Int =
-        inner.receivedCount(name)
+    fun receivedCount(name: String): Int = inner.receivedCount(name)
 
     fun on(
         name: String,
         handler: ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>,
     ): AutoCloseable = inner.on(name, handler)
 
-    inline fun <reified TPayload> on(
-        handler: ZLinkStreamMessageHandler<TPayload>,
-    ): AutoCloseable = inner.on(TPayload::class.java, handler)
+    inline fun <reified TPayload> on(handler: ZLinkStreamMessageHandler<TPayload>): AutoCloseable =
+        inner.on(TPayload::class.java, handler)
 
     fun onErrorReceived(handler: ZLinkStreamErrorHandler): AutoCloseable =
         inner.onErrorReceived(handler)
@@ -145,26 +136,20 @@ class ZLinkKotlinStreamConnector(
     fun onConnectionStateChanged(handler: ZLinkStreamConnectionStateHandler): AutoCloseable =
         inner.onConnectionStateChanged(handler)
 
-    fun connect(): ZLinkKotlinLifecycleCall =
-        ZLinkKotlinLifecycleCall(inner.connect())
+    fun connect(): ZLinkKotlinLifecycleCall = ZLinkKotlinLifecycleCall(inner.connect())
 
-    fun close(): ZLinkKotlinLifecycleCall =
-        ZLinkKotlinLifecycleCall(inner.close())
+    fun close(): ZLinkKotlinLifecycleCall = ZLinkKotlinLifecycleCall(inner.close())
 
-    fun dispatch(): ZLinkKotlinLifecycleCall =
-        ZLinkKotlinLifecycleCall(inner.dispatch())
+    fun dispatch(): ZLinkKotlinLifecycleCall = ZLinkKotlinLifecycleCall(inner.dispatch())
 
     fun send(payload: ZLinkStreamEncodedPayload): ZLinkKotlinSendCall =
         ZLinkKotlinSendCall(inner.send(payload))
 
-    fun send(payload: Any): ZLinkKotlinSendCall =
-        ZLinkKotlinSendCall(inner.send(payload))
+    fun send(payload: Any): ZLinkKotlinSendCall = ZLinkKotlinSendCall(inner.send(payload))
 
-    fun request(payload: ZLinkStreamEncodedPayload): ZLinkStreamRequestCall =
-        inner.request(payload)
+    fun request(payload: ZLinkStreamEncodedPayload): ZLinkStreamRequestCall = inner.request(payload)
 
-    fun request(payload: Any): ZLinkTypedStreamRequestCall =
-        inner.request(payload)
+    fun request(payload: Any): ZLinkTypedStreamRequestCall = inner.request(payload)
 
     inline fun <reified TPayload> waitFor(): ZLinkStreamTypedWaitCall<TPayload> =
         ZLinkStreamTypedWaitCall(inner.waitFor(TPayload::class.java), TPayload::class.java)
@@ -173,20 +158,22 @@ class ZLinkKotlinStreamConnector(
         ZLinkStreamTypedWaitCall(inner.waitFor(name), TPayload::class.java)
 
     /**
-     * Expects no message of [TPayload] with the name its own resolution rules
-     * give it (Java/Kotlin spec §12, §5). The named overload stays for a
-     * packet whose name does not follow from the type.
+     * Expects no message of [TPayload] with the name its own resolution rules give it (Java/Kotlin
+     * spec §12, §5). The named overload stays for a packet whose name does not follow from the
+     * type.
      */
     inline fun <reified TPayload> expectNone(): ZLinkStreamTypedExpectNoneCall<TPayload> =
         ZLinkStreamTypedExpectNoneCall(inner.expectNone(TPayload::class.java))
 
-    inline fun <reified TPayload> expectNone(name: String): ZLinkStreamTypedExpectNoneCall<TPayload> =
+    inline fun <reified TPayload> expectNone(
+        name: String
+    ): ZLinkStreamTypedExpectNoneCall<TPayload> =
         ZLinkStreamTypedExpectNoneCall(inner.expectNone(name))
 
     /**
-     * Waits for a sequence of [TPayload] with the name its own resolution
-     * rules give it (Java/Kotlin spec §12, §5). The named overload stays for a
-     * packet whose name does not follow from the type.
+     * Waits for a sequence of [TPayload] with the name its own resolution rules give it
+     * (Java/Kotlin spec §12, §5). The named overload stays for a packet whose name does not follow
+     * from the type.
      */
     inline fun <reified TPayload> waitForSequence(): ZLinkStreamTypedSequenceCall<TPayload> =
         ZLinkStreamTypedSequenceCall(
@@ -194,19 +181,18 @@ class ZLinkKotlinStreamConnector(
             TPayload::class.java,
         )
 
-    inline fun <reified TPayload> waitForSequence(name: String): ZLinkStreamTypedSequenceCall<TPayload> =
+    inline fun <reified TPayload> waitForSequence(
+        name: String
+    ): ZLinkStreamTypedSequenceCall<TPayload> =
         ZLinkStreamTypedSequenceCall(inner.waitForSequence(name), TPayload::class.java)
 
     fun messages(packetName: String): Flow<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> =
         inner.messages(packetName)
 
-    fun errors(): Flow<ZLinkStreamError> =
-        inner.errors()
+    fun errors(): Flow<ZLinkStreamError> = inner.errors()
 }
 
-class ZLinkKotlinLifecycleCall(
-    private val inner: ZLinkStreamLifecycleCall,
-) {
+class ZLinkKotlinLifecycleCall(private val inner: ZLinkStreamLifecycleCall) {
     suspend fun await() {
         inner.submit().await()
     }
@@ -214,11 +200,11 @@ class ZLinkKotlinLifecycleCall(
 
 /**
  * The Kotlin one-way send builder (Java spec 03 12). It carries the same
- * `packetName`/`metadata`/`compress` steps the Java `ZLinkStreamSendCall`
- * has; without them a Kotlin caller that needs any of those has to drop out
- * of the wrapper and use the Java call.
+ * `packetName`/`metadata`/`compress` steps the Java `ZLinkStreamSendCall` has; without them a
+ * Kotlin caller that needs any of those has to drop out of the wrapper and use the Java call.
  */
-class ZLinkKotlinSendCall private constructor(
+class ZLinkKotlinSendCall
+private constructor(
     private val raw: ZLinkStreamSendCall?,
     private val typed: ZLinkTypedStreamSendCall?,
 ) {
@@ -235,11 +221,9 @@ class ZLinkKotlinSendCall private constructor(
     fun metadata(metadata: Map<String, String>): ZLinkKotlinSendCall =
         ZLinkKotlinSendCall(raw?.metadata(metadata), typed?.metadata(metadata))
 
-    fun compress(): ZLinkKotlinSendCall =
-        ZLinkKotlinSendCall(raw?.compress(), typed?.compress())
+    fun compress(): ZLinkKotlinSendCall = ZLinkKotlinSendCall(raw?.compress(), typed?.compress())
 
-    fun submit(): CompletionStage<Void> =
-        raw?.submit() ?: typed!!.submit()
+    fun submit(): CompletionStage<Void> = raw?.submit() ?: typed!!.submit()
 
     suspend fun await() {
         submit().await()
@@ -249,8 +233,7 @@ class ZLinkKotlinSendCall private constructor(
 suspend inline fun <reified TReply> ZLinkTypedStreamRequestCall.awaitReply(): TReply =
     submit(TReply::class.java).await()
 
-suspend fun ZLinkStreamRequestCall.await(): ZLinkStreamEncodedPayload =
-    submit().await()
+suspend fun ZLinkStreamRequestCall.await(): ZLinkStreamEncodedPayload = submit().await()
 
 suspend inline fun <reified TReply> ZLinkStreamRequestCall.awaitReply(): TReply =
     submit(TReply::class.java).await()
@@ -269,17 +252,14 @@ class ZLinkStreamTypedWaitCall<TPayload>(
         ZLinkStreamTypedWaitCall(inner.timeout(timeout), payloadType)
 
     fun where(
-        predicate: (ZLinkStreamMessage<TPayload>) -> Boolean,
+        predicate: (ZLinkStreamMessage<TPayload>) -> Boolean
     ): ZLinkStreamTypedWaitCall<TPayload> =
         ZLinkStreamTypedWaitCall(inner.where(payloadType, predicate), payloadType)
 
-    suspend fun await(): ZLinkStreamMessage<TPayload> =
-        inner.submit(payloadType).await()
+    suspend fun await(): ZLinkStreamMessage<TPayload> = inner.submit(payloadType).await()
 }
 
-class ZLinkStreamTypedExpectNoneCall<TPayload>(
-    private val inner: ZLinkStreamExpectNoneCall,
-) {
+class ZLinkStreamTypedExpectNoneCall<TPayload>(private val inner: ZLinkStreamExpectNoneCall) {
     fun within(window: Duration): ZLinkStreamTypedExpectNoneCall<TPayload> =
         ZLinkStreamTypedExpectNoneCall(inner.within(window))
 
@@ -293,15 +273,14 @@ class ZLinkStreamTypedSequenceCall<TPayload>(
     private val payloadType: Class<TPayload>,
 ) {
     fun expect(
-        predicate: (ZLinkStreamMessage<TPayload>) -> Boolean,
+        predicate: (ZLinkStreamMessage<TPayload>) -> Boolean
     ): ZLinkStreamTypedSequenceCall<TPayload> =
         ZLinkStreamTypedSequenceCall(inner.expect(payloadType, predicate), payloadType)
 
     fun timeout(timeout: Duration): ZLinkStreamTypedSequenceCall<TPayload> =
         ZLinkStreamTypedSequenceCall(inner.timeout(timeout), payloadType)
 
-    suspend fun await(): List<ZLinkStreamMessage<TPayload>> =
-        inner.submit(payloadType).await()
+    suspend fun await(): List<ZLinkStreamMessage<TPayload>> = inner.submit(payloadType).await()
 }
 
 object ZLinkKotlinStreamAssert {
@@ -335,17 +314,14 @@ object ZLinkKotlinStreamAssert {
 /**
  * Carries the connector's flow context across suspension points.
  *
- * The connector keeps the current flow in a thread local (Java spec 03 7.1).
- * A coroutine can resume on a different thread than the one that suspended
- * it, so without a [ThreadContextElement] an outbound call made after a
- * suspension point loses the inbound flow and starts a new `APPLICATION`
- * one. This element installs the captured flow on whatever thread the
- * continuation resumes on and restores that thread's previous flow when it
- * suspends again.
+ * The connector keeps the current flow in a thread local (Java spec 03 7.1). A coroutine can resume
+ * on a different thread than the one that suspended it, so without a [ThreadContextElement] an
+ * outbound call made after a suspension point loses the inbound flow and starts a new `APPLICATION`
+ * one. This element installs the captured flow on whatever thread the continuation resumes on and
+ * restores that thread's previous flow when it suspends again.
  */
-class ZLinkStreamFlowContextElement(
-    private val flow: ZLinkStreamFlow?,
-) : ThreadContextElement<ZLinkStreamFlowScope>, CoroutineContext.Element {
+class ZLinkStreamFlowContextElement(private val flow: ZLinkStreamFlow?) :
+    ThreadContextElement<ZLinkStreamFlowScope>, CoroutineContext.Element {
     companion object Key : CoroutineContext.Key<ZLinkStreamFlowContextElement>
 
     override val key: CoroutineContext.Key<ZLinkStreamFlowContextElement>
@@ -354,63 +330,52 @@ class ZLinkStreamFlowContextElement(
     override fun updateThreadContext(context: CoroutineContext): ZLinkStreamFlowScope =
         ZLinkStreamFlowScope.enter(flow)
 
-    override fun restoreThreadContext(
-        context: CoroutineContext,
-        oldState: ZLinkStreamFlowScope,
-    ) {
+    override fun restoreThreadContext(context: CoroutineContext, oldState: ZLinkStreamFlowScope) {
         oldState.close()
     }
 }
 
 /**
- * The flow the calling thread currently runs under, or `null` outside an
- * inbound handler. Pair it with [ZLinkStreamFlowContextElement] to keep that
- * flow across suspension points.
+ * The flow the calling thread currently runs under, or `null` outside an inbound handler. Pair it
+ * with [ZLinkStreamFlowContextElement] to keep that flow across suspension points.
  */
 fun currentZLinkStreamFlow(): ZLinkStreamFlow? = ZLinkStreamFlowScope.current()
 
 /**
- * Runs [block] with [flow] installed as the connector flow for every thread
- * the coroutine resumes on.
+ * Runs [block] with [flow] installed as the connector flow for every thread the coroutine resumes
+ * on.
  */
-suspend fun <T> withZLinkStreamFlow(
-    flow: ZLinkStreamFlow?,
-    block: suspend () -> T,
-): T = kotlinx.coroutines.withContext(ZLinkStreamFlowContextElement(flow)) { block() }
+suspend fun <T> withZLinkStreamFlow(flow: ZLinkStreamFlow?, block: suspend () -> T): T =
+    kotlinx.coroutines.withContext(ZLinkStreamFlowContextElement(flow)) { block() }
 
 fun ZLinkStreamConnector.messages(
-    packetName: String,
+    packetName: String
 ): Flow<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> = callbackFlow {
-    val registration = on(packetName) { message ->
-        if (trySend(message).isFailure) {
-            // Cancellation closes the Flow channel before the connector can
-            // remove this callback. Release the message that was handed to us
-            // instead of turning normal cancellation into a callback failure.
-            message.payload().payload().close()
+    val registration =
+        on(packetName) { message ->
+            if (trySend(message).isFailure) {
+                // Cancellation closes the Flow channel before the connector can
+                // remove this callback. Release the message that was handed to us
+                // instead of turning normal cancellation into a callback failure.
+                message.payload().payload().close()
+            }
+            CompletableFuture.completedFuture(null)
         }
-        CompletableFuture.completedFuture(null)
-    }
-    awaitClose {
-        registration.close()
-    }
+    awaitClose { registration.close() }
 }
 
 /**
- * Collects a push stream with each message's own flow installed while
- * [action] runs. An outbound call [action] makes then continues that flow
- * instead of starting a new `APPLICATION` one, and it keeps doing so across
- * [action]'s own suspension points.
+ * Collects a push stream with each message's own flow installed while [action] runs. An outbound
+ * call [action] makes then continues that flow instead of starting a new `APPLICATION` one, and it
+ * keeps doing so across [action]'s own suspension points.
  *
- * The flow is installed around [action] rather than around the emission,
- * because changing the coroutine context between a flow's emitter and its
- * collector is not allowed.
+ * The flow is installed around [action] rather than around the emission, because changing the
+ * coroutine context between a flow's emitter and its collector is not allowed.
  */
 suspend fun <TPayload> Flow<ZLinkStreamMessage<TPayload>>.collectInStreamFlow(
-    action: suspend (ZLinkStreamMessage<TPayload>) -> Unit,
+    action: suspend (ZLinkStreamMessage<TPayload>) -> Unit
 ) {
-    collect { message ->
-        withZLinkStreamFlow(message) { action(message) }
-    }
+    collect { message -> withZLinkStreamFlow(message) { action(message) } }
 }
 
 fun ZLinkStreamConnector.errors(): Flow<ZLinkStreamError> = callbackFlow {
@@ -418,7 +383,5 @@ fun ZLinkStreamConnector.errors(): Flow<ZLinkStreamError> = callbackFlow {
         trySend(error)
         CompletableFuture.completedFuture(null)
     }
-    awaitClose {
-        registration.close()
-    }
+    awaitClose { registration.close() }
 }

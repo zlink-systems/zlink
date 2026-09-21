@@ -1,8 +1,4 @@
-import type {
-  Type,
-  ZLinkSession,
-  ZLinkSessionFactory
-} from '../../contracts';
+import type { Type, ZLinkSession, ZLinkSessionFactory } from '../../contracts';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
 import type { DefaultZLinkSessionContext } from './session-context';
 
@@ -45,6 +41,8 @@ async function createProviderInstance<T>(
 }
 
 function isSessionFactory(value: unknown): value is ZLinkSessionFactory {
-  return typeof (value as { create?: unknown }).create === 'function'
-    && (value as { context?: unknown }).context === undefined;
+  return (
+    typeof (value as { create?: unknown }).create === 'function' &&
+    (value as { context?: unknown }).context === undefined
+  );
 }

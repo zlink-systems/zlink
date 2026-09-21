@@ -190,8 +190,8 @@ class request_builder_t
             raw = co_await raw_task;
         }
         catch (const zlink::framework::framework_exception_t &error) {
-            co_return zlink::framework::result_t<http_response_t<T>>::failure (
-              error.kind (), error.what ());
+            co_return zlink::framework::result_t<http_response_t<T>>::failure (error.kind (),
+                                                                               error.what ());
         }
 
         co_return decode<T> (raw);
@@ -235,7 +235,8 @@ class request_builder_t
     std::pair<std::optional<std::string>, std::map<std::string, std::string>>
     resolve_body_and_headers () const;
     detail::http_request_t make_request (std::function<void (std::string_view)> sink) const;
-    zlink::framework::task_t<raw_http_response_t> dispatch_request (detail::http_request_t request) const;
+    zlink::framework::task_t<raw_http_response_t>
+    dispatch_request (detail::http_request_t request) const;
 
     template <typename T>
     static zlink::framework::result_t<http_response_t<T>> decode (const raw_http_response_t &raw)
@@ -254,12 +255,11 @@ class request_builder_t
         }
 
         try {
-            return zlink::framework::result_t<http_response_t<T>>::success (
-              http_response_t<T>{
-                .status = raw.status,
-                .headers = raw.headers,
-                .body = zlink::message_t::from (raw.body).template parse_json<T> (),
-                .raw_body = raw.body});
+            return zlink::framework::result_t<http_response_t<T>>::success (http_response_t<T>{
+              .status = raw.status,
+              .headers = raw.headers,
+              .body = zlink::message_t::from (raw.body).template parse_json<T> (),
+              .raw_body = raw.body});
         }
         catch (const std::exception &ex) {
             return zlink::framework::result_t<http_response_t<T>>::failure (
@@ -363,18 +363,15 @@ class server_request_builder_t : public request_builder_t
         return schedule_raw (false);
     }
 
-    zlink::framework::task_t<raw_http_response_t> yield_raw () const
-    {
-        return schedule_raw (true);
-    }
+    zlink::framework::task_t<raw_http_response_t> yield_raw () const { return schedule_raw (true); }
 
     template <typename T, typename TCallback> void async (TCallback &&callback) const
     {
         auto task = request_builder_t::async<T> ();
         auto scheduler = _execution_turn->callback_scheduler ();
         if (scheduler) {
-            task = zlink::framework::detail::reschedule_task (std::move (task),
-                                                              std::move (scheduler));
+            task =
+              zlink::framework::detail::reschedule_task (std::move (task), std::move (scheduler));
         }
         zlink::framework::detail::observe_task_completion (task,
                                                            std::forward<TCallback> (callback));
@@ -389,8 +386,7 @@ class server_request_builder_t : public request_builder_t
         if (!scheduler) {
             return task;
         }
-        return zlink::framework::detail::reschedule_task (std::move (task),
-                                                          std::move (scheduler));
+        return zlink::framework::detail::reschedule_task (std::move (task), std::move (scheduler));
     }
 
     zlink::framework::task_t<raw_http_response_t> schedule_raw (bool release_turn) const
@@ -400,8 +396,7 @@ class server_request_builder_t : public request_builder_t
         if (!scheduler) {
             return task;
         }
-        return zlink::framework::detail::reschedule_task (std::move (task),
-                                                          std::move (scheduler));
+        return zlink::framework::detail::reschedule_task (std::move (task), std::move (scheduler));
     }
 
     std::shared_ptr<execution_turn_t> _execution_turn;
@@ -432,7 +427,9 @@ class server_client_t
 template <typename TName> class named_server_client_t : public server_client_t
 {
   public:
-    explicit named_server_client_t (server_client_t client) : server_client_t (std::move (client)) {}
+    explicit named_server_client_t (server_client_t client) : server_client_t (std::move (client))
+    {
+    }
 };
 
 template <typename TName>

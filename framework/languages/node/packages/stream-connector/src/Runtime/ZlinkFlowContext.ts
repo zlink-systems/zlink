@@ -40,7 +40,7 @@ export class BrowserZlinkFlowContext implements ZlinkFlowContext {
 export function formatUuidV7(bytes: Uint8Array): string {
   const timestamp = BigInt(Date.now());
   for (let index = 5; index >= 0; index -= 1) {
-    bytes[index] = Number(timestamp >> BigInt((5 - index) * 8) & 0xffn);
+    bytes[index] = Number((timestamp >> BigInt((5 - index) * 8)) & 0xffn);
   }
   bytes[6] = 0x70 | (bytes[6] & 0x0f);
   bytes[8] = 0x80 | (bytes[8] & 0x3f);

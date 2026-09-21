@@ -1,11 +1,6 @@
 import type { ZLinkActor } from '../Actors';
 import type { ZLinkChannelRequestCall, ZLinkPublishCall, ZLinkSendCall } from '../Channels';
-import type {
-  RoutingId,
-  SpotId,
-  Type,
-  ZLinkMessageMetadata
-} from '../Common';
+import type { RoutingId, SpotId, Type, ZLinkMessageMetadata } from '../Common';
 import type { ZLinkSpotTimerHandler } from '../Handlers';
 import type { ZLinkTimer, ZLinkTimerOptions } from '../Timers';
 import type {
@@ -67,8 +62,7 @@ export interface ZLinkSpotContext<
   close(signal?: AbortSignal): Promise<boolean>;
 }
 
-export interface ZLinkInstanceSpotContext
-  extends ZLinkSpotCommonContext<ZLinkInstanceSpot> {
+export interface ZLinkInstanceSpotContext extends ZLinkSpotCommonContext<ZLinkInstanceSpot> {
   readonly handlers: ZLinkInstanceSpotHandlerRegistry;
   close(signal?: AbortSignal): Promise<boolean>;
 }

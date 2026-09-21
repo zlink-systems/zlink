@@ -10,8 +10,6 @@ internal sealed class TestSession : IZLinkSession
     public ValueTask OnDisconnectedAsync(CancellationToken cancellationToken) =>
         ValueTask.CompletedTask;
 
-    public ValueTask OnErrorAsync(
-        ZLinkStreamError error,
-        CancellationToken cancellationToken) =>
+    public ValueTask OnErrorAsync(ZLinkStreamError error, CancellationToken cancellationToken) =>
         ValueTask.CompletedTask;
 }

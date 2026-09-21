@@ -12,9 +12,11 @@ internal static class ZLinkUnawaitedSubmit
     public static void Observe(
         ValueTask task,
         string operationName,
-        IZLinkRuntimeFailureReporter errorSink)
+        IZLinkRuntimeFailureReporter errorSink
+    )
     {
-        if (task.IsCompletedSuccessfully) return;
+        if (task.IsCompletedSuccessfully)
+            return;
 
         _ = ObserveAsync(task, operationName, errorSink);
     }
@@ -22,15 +24,14 @@ internal static class ZLinkUnawaitedSubmit
     private static async Task ObserveAsync(
         ValueTask task,
         string operationName,
-        IZLinkRuntimeFailureReporter errorSink)
+        IZLinkRuntimeFailureReporter errorSink
+    )
     {
         try
         {
             await task.ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
-        {
-        }
+        catch (OperationCanceledException) { }
         catch (Exception exception)
         {
             errorSink.ReportRuntimeTaskException(operationName, exception);

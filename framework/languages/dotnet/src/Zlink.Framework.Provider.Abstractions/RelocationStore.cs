@@ -4,52 +4,37 @@ public readonly record struct ZLinkBlobReference(string Value);
 
 public abstract record ZLinkBlobPutResult
 {
-    private protected ZLinkBlobPutResult()
-    {
-    }
+    private protected ZLinkBlobPutResult() { }
 
-    public sealed record Stored(
-        DateTimeOffset ExpiresAt,
-        DateTimeOffset StoreNow)
+    public sealed record Stored(DateTimeOffset ExpiresAt, DateTimeOffset StoreNow)
         : ZLinkBlobPutResult;
 
-    public sealed record AlreadyStored(
-        DateTimeOffset ExpiresAt,
-        DateTimeOffset StoreNow)
+    public sealed record AlreadyStored(DateTimeOffset ExpiresAt, DateTimeOffset StoreNow)
         : ZLinkBlobPutResult;
 
-    public sealed record Conflict(DateTimeOffset StoreNow)
-        : ZLinkBlobPutResult;
+    public sealed record Conflict(DateTimeOffset StoreNow) : ZLinkBlobPutResult;
 }
 
 public abstract record ZLinkBlobReadResult
 {
-    private protected ZLinkBlobReadResult()
-    {
-    }
+    private protected ZLinkBlobReadResult() { }
 
-    public sealed record Missing(DateTimeOffset StoreNow)
-        : ZLinkBlobReadResult;
+    public sealed record Missing(DateTimeOffset StoreNow) : ZLinkBlobReadResult;
 
     public sealed record Found(
         ReadOnlyMemory<byte> Bytes,
         DateTimeOffset ExpiresAt,
-        DateTimeOffset StoreNow)
-        : ZLinkBlobReadResult;
+        DateTimeOffset StoreNow
+    ) : ZLinkBlobReadResult;
 }
 
 public abstract record ZLinkBlobRenewResult
 {
-    private protected ZLinkBlobRenewResult()
-    {
-    }
+    private protected ZLinkBlobRenewResult() { }
 
-    public sealed record Missing(DateTimeOffset StoreNow)
-        : ZLinkBlobRenewResult;
+    public sealed record Missing(DateTimeOffset StoreNow) : ZLinkBlobRenewResult;
 
-    public sealed record Renewed(
-        DateTimeOffset ExpiresAt,
-        DateTimeOffset StoreNow)
+    public sealed record Renewed(DateTimeOffset ExpiresAt, DateTimeOffset StoreNow)
         : ZLinkBlobRenewResult;
 }
 
@@ -62,18 +47,22 @@ public interface IZLinkRelocationStore
         ZLinkBlobReference reference,
         ReadOnlyMemory<byte> payload,
         TimeSpan retention,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     ValueTask<ZLinkBlobReadResult> ReadAsync(
         ZLinkBlobReference reference,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     ValueTask<ZLinkBlobRenewResult> RenewAsync(
         ZLinkBlobReference reference,
         TimeSpan retention,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     ValueTask DeleteAsync(
         ZLinkBlobReference reference,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 }

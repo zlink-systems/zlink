@@ -16,13 +16,20 @@ internal static class TestCertificates
     {
         using var rsa = RSA.Create(2048);
         var request = new CertificateRequest(
-            $"CN={commonName}", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+            $"CN={commonName}",
+            rsa,
+            HashAlgorithmName.SHA256,
+            RSASignaturePadding.Pkcs1
+        );
         request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
         var san = new SubjectAlternativeNameBuilder();
         san.AddIpAddress(IPAddress.Loopback);
         san.AddDnsName("localhost");
         request.CertificateExtensions.Add(san.Build());
-        return request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(1));
+        return request.CreateSelfSigned(
+            DateTimeOffset.UtcNow.AddDays(-1),
+            DateTimeOffset.UtcNow.AddDays(1)
+        );
     }
 
     /// <summary>Writes the certificate (PEM) and its private key (PKCS#8 PEM) to two temp files.</summary>
@@ -44,8 +51,9 @@ internal static class TestCertificates
 /// </summary>
 internal sealed class TlsTestServer : IDisposable
 {
-    private readonly TaskCompletionSource<X509Certificate2?> _clientCertificate =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource<X509Certificate2?> _clientCertificate = new(
+        TaskCreationOptions.RunContinuationsAsynchronously
+    );
 
     private readonly CancellationTokenSource _cts = new();
     private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
@@ -86,24 +94,29 @@ internal sealed class TlsTestServer : IDisposable
     {
         try
         {
-            using var connection = await _listener.AcceptTcpClientAsync(_cts.Token).ConfigureAwait(false);
+            using var connection = await _listener
+                .AcceptTcpClientAsync(_cts.Token)
+                .ConfigureAwait(false);
             await using var ssl = new SslStream(connection.GetStream(), false);
             var options = new SslServerAuthenticationOptions
             {
                 ServerCertificate = _serverCertificate,
                 ClientCertificateRequired = _requireClientCertificate,
-                RemoteCertificateValidationCallback = (_, _, _, _) => true
+                RemoteCertificateValidationCallback = (_, _, _, _) => true,
             };
 
             await ssl.AuthenticateAsServerAsync(options, _cts.Token).ConfigureAwait(false);
-            _clientCertificate.TrySetResult(ssl.RemoteCertificate is { } c ? new X509Certificate2(c) : null);
+            _clientCertificate.TrySetResult(
+                ssl.RemoteCertificate is { } c ? new X509Certificate2(c) : null
+            );
 
             // Drain request headers.
             var buffer = new byte[4096];
             await ssl.ReadAsync(buffer, _cts.Token).ConfigureAwait(false);
 
             var response = Encoding.ASCII.GetBytes(
-                "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+                "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"
+            );
             await ssl.WriteAsync(response, _cts.Token).ConfigureAwait(false);
             await ssl.FlushAsync(_cts.Token).ConfigureAwait(false);
         }

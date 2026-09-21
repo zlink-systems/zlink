@@ -1,12 +1,13 @@
 package systems.zlink.framework.docexamples.stream;
 
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.streams.ZLinkSession;
 import systems.zlink.framework.streams.ZLinkSessionContext;
 import systems.zlink.framework.streams.ZLinkSessionDispatchContext;
 import systems.zlink.framework.streams.ZLinkStreamError;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 /** 가이드 9장 §2 — session lifecycle. */
 // --8<-- [start:session-lifecycle]
@@ -29,8 +30,7 @@ public final class PlayStreamSession implements ZLinkSession {
 
     @Override
     public CompletionStage<Void> onDispatch(
-        ZLinkSessionDispatchContext dispatch,
-        ZLinkMessage payload) {
+            ZLinkSessionDispatchContext dispatch, ZLinkMessage payload) {
         // typed handler가 처리하지 않은 packet만 여기로 온다.
         // application protocol에 없는 packet을 받으면 연결을 닫는다.
         return context.close();

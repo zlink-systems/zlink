@@ -23,13 +23,9 @@ internal sealed class ZLinkBackendSocketPoller : IZLinkBackendSocketPoller
         try
         {
             var events = PollEventFlags.PollIn;
-            if (socket is IPairSocket or IDealerSocket or IRouterSocket
-                or IStreamSocket)
+            if (socket is IPairSocket or IDealerSocket or IRouterSocket or IStreamSocket)
                 events |= PollEventFlags.PollCompletion;
-            poller.Add(
-                socket,
-                events,
-                Slot);
+            poller.Add(socket, events, Slot);
             return new ZLinkBackendSocketPoller(poller);
         }
         catch
@@ -48,8 +44,7 @@ internal sealed class ZLinkBackendSocketPoller : IZLinkBackendSocketPoller
 
     public void Dispose() => _poller.Dispose();
 
-    private static ZLinkBackendSocketReadiness MapReadiness(
-        PollEventFlags flags)
+    private static ZLinkBackendSocketReadiness MapReadiness(PollEventFlags flags)
     {
         var readiness = ZLinkBackendSocketReadiness.None;
         if ((flags & PollEventFlags.PollIn) != 0)

@@ -1,17 +1,16 @@
 package systems.zlink.framework.runtime.streams;
 
+import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
+import systems.zlink.framework.streams.ZLinkStreamCodec;
+import systems.zlink.framework.streams.ZLinkStreamMessageKind;
+
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
-import systems.zlink.framework.streams.ZLinkStreamCodec;
-import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
-import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
-import systems.zlink.framework.streams.ZLinkStreamMessageKind;
-import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
-import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 
 public final class ZLinkStreamHeaderCodec {
     static final int FORMAT_MARKER = 0xF2;
@@ -23,12 +22,12 @@ public final class ZLinkStreamHeaderCodec {
     private static final int CODEC_RAW = 0;
     private static final int FLAG_HAS_REQUEST_SEQ = 0x01;
 
-    private ZLinkStreamHeaderCodec() {
-    }
+    private ZLinkStreamHeaderCodec() {}
 
     public static ZLinkStreamHeader decodeOrPlain(byte[] bytes) {
         if (bytes.length < 5 || Byte.toUnsignedInt(bytes[0]) != FORMAT_MARKER) {
-            throw new IllegalArgumentException("STREAM header format marker is missing or unsupported");
+            throw new IllegalArgumentException(
+                    "STREAM header format marker is missing or unsupported");
         }
         int kind = Byte.toUnsignedInt(bytes[1]);
         int codec = Byte.toUnsignedInt(bytes[2]);
@@ -51,8 +50,9 @@ public final class ZLinkStreamHeaderCodec {
         }
         int nameLength = Byte.toUnsignedInt(bytes[offset++]);
         boolean reply = isReply(kind);
-        if ((reply && nameLength != 0) || (!reply && nameLength == 0)
-            || bytes.length - offset < nameLength) {
+        if ((reply && nameLength != 0)
+                || (!reply && nameLength == 0)
+                || bytes.length - offset < nameLength) {
             throw new IllegalArgumentException("STREAM header packet name is invalid");
         }
         String packetName = new String(bytes, offset, nameLength, StandardCharsets.UTF_8);
@@ -73,13 +73,15 @@ public final class ZLinkStreamHeaderCodec {
         Optional<String> correlationId = Optional.empty();
         if ((flags & ZLinkStreamHeaderFlag.HAS_CORRELATION_ID.value()) != 0) {
             if (bytes.length - offset < 1) {
-                throw new IllegalArgumentException("STREAM header correlation id length is missing");
+                throw new IllegalArgumentException(
+                        "STREAM header correlation id length is missing");
             }
             int corrLength = Byte.toUnsignedInt(bytes[offset++]);
             if (corrLength == 0 || bytes.length - offset < corrLength) {
                 throw new IllegalArgumentException("STREAM header correlation id is invalid");
             }
-            correlationId = Optional.of(new String(bytes, offset, corrLength, StandardCharsets.UTF_8));
+            correlationId =
+                    Optional.of(new String(bytes, offset, corrLength, StandardCharsets.UTF_8));
             offset += corrLength;
         }
         Optional<String> flowId = Optional.empty();
@@ -96,25 +98,25 @@ public final class ZLinkStreamHeaderCodec {
             throw new IllegalArgumentException("STREAM header contains trailing bytes");
         }
         if (kind == KIND_CONTROL
-            && (flags != 0
-                || codec != CODEC_RAW
-                || requestSeq.isPresent()
-                || !metadata.isEmpty()
-                || correlationId.isPresent()
-                || flowId.isPresent())) {
+                && (flags != 0
+                        || codec != CODEC_RAW
+                        || requestSeq.isPresent()
+                        || !metadata.isEmpty()
+                        || correlationId.isPresent()
+                        || flowId.isPresent())) {
             throw new IllegalArgumentException(
-                "STREAM control packet must use raw codec and must not contain flags");
+                    "STREAM control packet must use raw codec and must not contain flags");
         }
         return new ZLinkStreamHeader(
-            ZLinkStreamMessageKind.fromValue(kind),
-            ZLinkStreamCodec.fromValue(codec),
-            flagsFromValue(flags),
-            requestSeq,
-            packetName,
-            metadata,
-            correlationId,
-            flowId,
-            flowOrigin);
+                ZLinkStreamMessageKind.fromValue(kind),
+                ZLinkStreamCodec.fromValue(codec),
+                flagsFromValue(flags),
+                requestSeq,
+                packetName,
+                metadata,
+                correlationId,
+                flowId,
+                flowOrigin);
     }
 
     public static byte[] encode(ZLinkStreamHeader header) {
@@ -124,91 +126,100 @@ public final class ZLinkStreamHeaderCodec {
         ZLinkStreamHeader effective = header;
         ZLinkFlowContext.State current = ZLinkFlowContext.current();
         if (effective.flowId().isEmpty()
-            && current != null
-            && effective.kind() != ZLinkStreamMessageKind.CONTROL) {
+                && current != null
+                && effective.kind() != ZLinkStreamMessageKind.CONTROL) {
             effective = effective.withFlow(current.flowId(), current.origin());
         }
         return encode(
-            effective.kind().value(),
-            effective.codec().value(),
-            flagsValue(effective.flags()),
-            effective.packetName(),
-            effective.requestSequence(),
-            effective.metadata(),
-            effective.correlationId(),
-            effective.flowId(),
-            effective.flowOrigin());
+                effective.kind().value(),
+                effective.codec().value(),
+                flagsValue(effective.flags()),
+                effective.packetName(),
+                effective.requestSequence(),
+                effective.metadata(),
+                effective.correlationId(),
+                effective.flowId(),
+                effective.flowOrigin());
     }
 
     private static byte[] encode(
-        int kind,
-        int codec,
-        int initialFlags,
-        String packetName,
-        Optional<Long> requestSeq,
-        Map<String, String> metadata,
-        Optional<String> correlationId,
-        Optional<String> flowId,
-        Optional<ZLinkFlowOrigin> flowOrigin) {
+            int kind,
+            int codec,
+            int initialFlags,
+            String packetName,
+            Optional<Long> requestSeq,
+            Map<String, String> metadata,
+            Optional<String> correlationId,
+            Optional<String> flowId,
+            Optional<ZLinkFlowOrigin> flowOrigin) {
         boolean reply = isReply(kind);
         if (!reply && (packetName == null || packetName.isBlank())) {
             throw new IllegalArgumentException("packetName is required");
         }
-        byte[] name = reply
-            ? new byte[0]
-            : packetName.getBytes(StandardCharsets.UTF_8);
+        byte[] name = reply ? new byte[0] : packetName.getBytes(StandardCharsets.UTF_8);
         byte[] metadataBytes = encodeMetadata(metadata);
         boolean hasMetadata = metadataBytes.length > 0;
-        boolean hasCorrelationId = correlationId != null
-            && correlationId.isPresent()
-            && !correlationId.get().isEmpty();
+        boolean hasCorrelationId =
+                correlationId != null
+                        && correlationId.isPresent()
+                        && !correlationId.get().isEmpty();
         if (kind == KIND_CONTROL && hasCorrelationId) {
             throw new IllegalArgumentException(
-                "STREAM control packet must not contain a correlation id");
+                    "STREAM control packet must not contain a correlation id");
         }
         boolean hasFlow = flowId != null && flowId.isPresent();
         if (hasFlow != (flowOrigin != null && flowOrigin.isPresent())) {
-            throw new IllegalArgumentException("STREAM flow id and origin must be present together");
+            throw new IllegalArgumentException(
+                    "STREAM flow id and origin must be present together");
         }
         if (kind == KIND_CONTROL && hasFlow) {
-            throw new IllegalArgumentException("STREAM control packet must not contain flow fields");
+            throw new IllegalArgumentException(
+                    "STREAM control packet must not contain flow fields");
         }
-        byte[] correlationBytes = hasCorrelationId
-            ? correlationId.get().getBytes(StandardCharsets.UTF_8)
-            : new byte[0];
+        byte[] correlationBytes =
+                hasCorrelationId
+                        ? correlationId.get().getBytes(StandardCharsets.UTF_8)
+                        : new byte[0];
         if (correlationBytes.length > 255) {
             throw new IllegalArgumentException("STREAM correlation id is too long");
         }
-        int flags = requestSeq.isPresent()
-            ? initialFlags | FLAG_HAS_REQUEST_SEQ
-            : initialFlags & ~FLAG_HAS_REQUEST_SEQ;
-        flags = hasMetadata
-            ? flags | ZLinkStreamHeaderFlag.HAS_METADATA.value()
-            : flags & ~ZLinkStreamHeaderFlag.HAS_METADATA.value();
-        flags = hasCorrelationId
-            ? flags | ZLinkStreamHeaderFlag.HAS_CORRELATION_ID.value()
-            : flags & ~ZLinkStreamHeaderFlag.HAS_CORRELATION_ID.value();
-        flags = hasFlow
-            ? flags | ZLinkStreamHeaderFlag.HAS_FLOW_ID.value()
-            : flags & ~ZLinkStreamHeaderFlag.HAS_FLOW_ID.value();
-        ByteBuffer buffer = ByteBuffer.allocate(
-            4
-                + (requestSeq.isPresent() ? Long.BYTES : 0)
-                + 1
-                + name.length
-                + (hasMetadata ? 2 + metadataBytes.length : 0)
-                + (hasCorrelationId ? 1 + correlationBytes.length : 0)
-                + (hasFlow ? 37 : 0));
+        int flags =
+                requestSeq.isPresent()
+                        ? initialFlags | FLAG_HAS_REQUEST_SEQ
+                        : initialFlags & ~FLAG_HAS_REQUEST_SEQ;
+        flags =
+                hasMetadata
+                        ? flags | ZLinkStreamHeaderFlag.HAS_METADATA.value()
+                        : flags & ~ZLinkStreamHeaderFlag.HAS_METADATA.value();
+        flags =
+                hasCorrelationId
+                        ? flags | ZLinkStreamHeaderFlag.HAS_CORRELATION_ID.value()
+                        : flags & ~ZLinkStreamHeaderFlag.HAS_CORRELATION_ID.value();
+        flags =
+                hasFlow
+                        ? flags | ZLinkStreamHeaderFlag.HAS_FLOW_ID.value()
+                        : flags & ~ZLinkStreamHeaderFlag.HAS_FLOW_ID.value();
+        ByteBuffer buffer =
+                ByteBuffer.allocate(
+                        4
+                                + (requestSeq.isPresent() ? Long.BYTES : 0)
+                                + 1
+                                + name.length
+                                + (hasMetadata ? 2 + metadataBytes.length : 0)
+                                + (hasCorrelationId ? 1 + correlationBytes.length : 0)
+                                + (hasFlow ? 37 : 0));
         buffer.put((byte) FORMAT_MARKER);
         buffer.put((byte) kind);
         buffer.put((byte) codec);
         buffer.put((byte) flags);
-        requestSeq.ifPresent(value -> {
-            if (value == 0) {
-                throw new IllegalArgumentException("STREAM request sequence must not be zero");
-            }
-            buffer.putLong(value);
-        });
+        requestSeq.ifPresent(
+                value -> {
+                    if (value == 0) {
+                        throw new IllegalArgumentException(
+                                "STREAM request sequence must not be zero");
+                    }
+                    buffer.putLong(value);
+                });
         buffer.put((byte) name.length);
         buffer.put(name);
         if (hasMetadata) {
@@ -255,8 +266,7 @@ public final class ZLinkStreamHeaderCodec {
     }
 
     private static EnumSet<ZLinkStreamHeaderFlag> flagsFromValue(int value) {
-        EnumSet<ZLinkStreamHeaderFlag> flags =
-            EnumSet.noneOf(ZLinkStreamHeaderFlag.class);
+        EnumSet<ZLinkStreamHeaderFlag> flags = EnumSet.noneOf(ZLinkStreamHeaderFlag.class);
         for (ZLinkStreamHeaderFlag flag : ZLinkStreamHeaderFlag.values()) {
             if ((value & flag.value()) != 0) {
                 flags.add(flag);
@@ -336,9 +346,8 @@ public final class ZLinkStreamHeaderCodec {
             byte[] valueBytes = new byte[valueLength];
             buffer.get(valueBytes);
             String key = new String(keyBytes, StandardCharsets.UTF_8);
-            String previous = metadata.putIfAbsent(
-                key,
-                new String(valueBytes, StandardCharsets.UTF_8));
+            String previous =
+                    metadata.putIfAbsent(key, new String(valueBytes, StandardCharsets.UTF_8));
             if (previous != null) {
                 throw new IllegalArgumentException("STREAM metadata contains duplicate key");
             }

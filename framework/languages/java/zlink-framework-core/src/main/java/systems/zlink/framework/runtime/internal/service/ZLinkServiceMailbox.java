@@ -11,9 +11,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 
-/**
- * Owner-serialized mailbox that orders accepted records.
- */
+/** Owner-serialized mailbox that orders accepted records. */
 public final class ZLinkServiceMailbox implements AutoCloseable {
     private static final long RECORD_FIXED_BYTES = 96;
     private static final long PART_FIXED_BYTES = 16;
@@ -35,7 +33,7 @@ public final class ZLinkServiceMailbox implements AutoCloseable {
         DomainState domain = domain(record.domain());
         long bytes = record.retainedBytes();
         OwnerQueue queue =
-            domain.owners.computeIfAbsent(record.owner(), ignored -> new OwnerQueue());
+                domain.owners.computeIfAbsent(record.owner(), ignored -> new OwnerQueue());
         // Record owns immutable copies of all caller-provided byte arrays at
         // construction time. Retain that owned value instead of cloning the
         // full payload a second time on every enqueue.
@@ -50,9 +48,7 @@ public final class ZLinkServiceMailbox implements AutoCloseable {
     }
 
     public synchronized Optional<Claim> tryClaim(
-        Domain domainValue,
-        int messageBudget,
-        long byteBudget) {
+            Domain domainValue, int messageBudget, long byteBudget) {
         if (messageBudget <= 0 || byteBudget <= 0) {
             throw new IllegalArgumentException("claim budgets must be positive");
         }
@@ -76,18 +72,13 @@ public final class ZLinkServiceMailbox implements AutoCloseable {
                 }
                 queue.records.removeFirst();
                 queue.bytes -= nextBytes;
-                queue.claimedMessages = Math.addExact(
-                    queue.claimedMessages, 1);
-                queue.claimedBytes = Math.addExact(
-                    queue.claimedBytes, nextBytes);
+                queue.claimedMessages = Math.addExact(queue.claimedMessages, 1);
+                queue.claimedBytes = Math.addExact(queue.claimedBytes, nextBytes);
                 bytes = Math.addExact(bytes, nextBytes);
                 records.add(next);
             }
-            return Optional.of(new Claim(
-                owner,
-                domainValue,
-                queue.claimSerial,
-                List.copyOf(records)));
+            return Optional.of(
+                    new Claim(owner, domainValue, queue.claimSerial, List.copyOf(records)));
         }
         return Optional.empty();
     }
@@ -96,9 +87,7 @@ public final class ZLinkServiceMailbox implements AutoCloseable {
         Objects.requireNonNull(claim, "claim");
         DomainState domain = domain(claim.domain());
         OwnerQueue queue = domain.owners.get(claim.owner());
-        if (queue == null
-            || !queue.claimed
-            || queue.claimSerial != claim.serial()) {
+        if (queue == null || !queue.claimed || queue.claimSerial != claim.serial()) {
             return false;
         }
         queue.claimed = false;
@@ -153,20 +142,19 @@ public final class ZLinkServiceMailbox implements AutoCloseable {
     }
 
     public record Record(
-        String owner,
-        Domain domain,
-        List<byte[]> parts,
-        byte[] sourceRoutingId,
-        Long requestSequence,
-        Long correlation) {
+            String owner,
+            Domain domain,
+            List<byte[]> parts,
+            byte[] sourceRoutingId,
+            Long requestSequence,
+            Long correlation) {
         public Record {
             if (owner == null || owner.isBlank()) {
                 throw new IllegalArgumentException("owner is required");
             }
             Objects.requireNonNull(domain, "domain");
             parts = copyParts(parts);
-            sourceRoutingId =
-                sourceRoutingId == null ? null : sourceRoutingId.clone();
+            sourceRoutingId = sourceRoutingId == null ? null : sourceRoutingId.clone();
         }
 
         @Override
@@ -180,9 +168,10 @@ public final class ZLinkServiceMailbox implements AutoCloseable {
         }
 
         long retainedBytes() {
-            long bytes = RECORD_FIXED_BYTES
-                + (long) owner.length() * Character.BYTES
-                + (sourceRoutingId == null ? 0 : sourceRoutingId.length);
+            long bytes =
+                    RECORD_FIXED_BYTES
+                            + (long) owner.length() * Character.BYTES
+                            + (sourceRoutingId == null ? 0 : sourceRoutingId.length);
             for (byte[] part : parts) {
                 bytes = Math.addExact(bytes, PART_FIXED_BYTES + part.length);
             }
@@ -192,17 +181,12 @@ public final class ZLinkServiceMailbox implements AutoCloseable {
         private static List<byte[]> copyParts(List<byte[]> values) {
             Objects.requireNonNull(values, "parts");
             return values.stream()
-                .map(value -> Objects.requireNonNull(value, "part").clone())
-                .toList();
+                    .map(value -> Objects.requireNonNull(value, "part").clone())
+                    .toList();
         }
     }
 
-    public record Claim(
-        String owner,
-        Domain domain,
-        long serial,
-        List<Record> records) {
-    }
+    public record Claim(String owner, Domain domain, long serial, List<Record> records) {}
 
     private static final class DomainState {
         private final Map<String, OwnerQueue> owners = new HashMap<>();
@@ -211,8 +195,7 @@ public final class ZLinkServiceMailbox implements AutoCloseable {
         private long messages;
         private long bytes;
 
-        private DomainState() {
-        }
+        private DomainState() {}
 
         private void clear() {
             owners.clear();

@@ -238,7 +238,7 @@ result_t<packet_t> decode_packet (connector_state_t &state,
         }
         state.pending_close_reason = closing.value ().reason;
     }
-    packet_t packet{header.name, header.metadata, header.codec, compressed,
+    packet_t packet{header.name, header.metadata, header.codec,      compressed,
                     payload,     header.flow_id,  header.flow_origin};
     if (header.kind == message_kind_t::send) {
         note_received_packet (state, packet);
@@ -412,7 +412,7 @@ result_t<inbound_frame_t> read_inbound_frame (std::shared_ptr<connector_state_t>
     if (!prefix_result) {
         return result_t<inbound_frame_t>::failure (
           prefix_result.error ()->code, prefix_result.error () ? prefix_result.error ()->message
-                                                              : "stream connector read failed");
+                                                               : "stream connector read failed");
     }
     auto prefix = std::move (prefix_result.value ());
     const auto header_size = static_cast<std::size_t> ((prefix[0] << 8) | prefix[1]);
@@ -489,7 +489,8 @@ void cancel_timer (const std::shared_ptr<boost::asio::steady_timer> &timer)
     }
     try {
         (void) timer->cancel ();
-    } catch (const boost::system::system_error &) {
+    }
+    catch (const boost::system::system_error &) {
     }
 }
 
@@ -672,7 +673,8 @@ std::optional<result_t<inbound_frame_t>> try_take_inbound_frame (connector_state
     /* One atomic read for this inbound frame (stream-connector §13): see
      * read_inbound_frame() above for the same rule on the synchronous path. */
     const auto diagnostics_level = state.diagnostics_level_cell.load (std::memory_order_acquire);
-    auto decoded = header_codec.decode (header_bytes, diagnostics_level != diagnostics_level_t::off);
+    auto decoded =
+      header_codec.decode (header_bytes, diagnostics_level != diagnostics_level_t::off);
     if (!decoded) {
         return result_t<inbound_frame_t>::failure (decoded.error ()->code,
                                                    decoded.error ()->message);
@@ -776,8 +778,7 @@ std::chrono::milliseconds heartbeat_maintenance_delay (const heartbeat_options_t
 void schedule_heartbeat_maintenance (const std::shared_ptr<connector_state_t> &state,
                                      std::uint64_t generation);
 
-void run_heartbeat_maintenance (std::shared_ptr<connector_state_t> state,
-                                std::uint64_t generation)
+void run_heartbeat_maintenance (std::shared_ptr<connector_state_t> state, std::uint64_t generation)
 {
     std::vector<std::uint8_t> heartbeat_frame;
     std::optional<error_t> timeout_error;
@@ -822,8 +823,8 @@ void run_heartbeat_maintenance (std::shared_ptr<connector_state_t> state,
     if (timed_out_connection) {
         connection_ended (state, *timeout_error);
         if (timed_out_write_callback) {
-            timed_out_write_callback (result_t<void>::failure (
-              error_code_t::disconnected, timeout_error->message));
+            timed_out_write_callback (
+              result_t<void>::failure (error_code_t::disconnected, timeout_error->message));
         }
         timed_out_connection->shutdown_and_close_async ();
         schedule_reconnect (state);
@@ -905,8 +906,7 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
             auto value = std::move (frame->value ());
             trace_connector_write (
               *state, "read-dispatch",
-              "seq="
-                + (value.request_seq ? std::to_string (*value.request_seq) : std::string ("-"))
+              "seq=" + (value.request_seq ? std::to_string (*value.request_seq) : std::string ("-"))
                 + " name=" + value.packet.name + " kind=" + message_kind_name (value.kind));
             /* §5.2: pending request 매칭은 request_seq가 정본이다. packet name은 대조 조건이
              * 아니므로 이름이 달라도 응답을 버리지 않는다. */
@@ -937,11 +937,11 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
         reschedule =
           is_transport_connected (*state) && !state->close_requested.load () && !transport_error;
         if (!reschedule) {
-            trace_connector_write (*state, "read-pump-stop",
-                                   std::string ("connected=")
-                                     + (is_transport_connected (*state) ? "true" : "false")
-                                     + " close=" + (state->close_requested.load () ? "true" : "false")
-                                     + " transport_error=" + (transport_error ? "true" : "false"));
+            trace_connector_write (
+              *state, "read-pump-stop",
+              std::string ("connected=") + (is_transport_connected (*state) ? "true" : "false")
+                + " close=" + (state->close_requested.load () ? "true" : "false")
+                + " transport_error=" + (transport_error ? "true" : "false"));
         }
     }
 
@@ -980,8 +980,8 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
         // protocol or transport error with Operation canceled.
         connection_ended (state, *transport_error);
         if (failed_write_callback) {
-            failed_write_callback (result_t<void>::failure (
-              transport_error->code, transport_error->message));
+            failed_write_callback (
+              result_t<void>::failure (transport_error->code, transport_error->message));
         }
         if (failed_connection) {
             failed_connection->shutdown_and_close_async ();
@@ -1004,22 +1004,20 @@ void schedule_request_pump (std::shared_ptr<connector_state_t> state)
         std::lock_guard<std::mutex> lock (state->transport_mutex);
         if (state->read_in_progress || state->close_requested.load ()
             || !is_transport_connected (*state)) {
-            trace_connector_write (*state, "read-start-skip",
-                                   std::string ("in_progress=")
-                                     + (state->read_in_progress ? "true" : "false")
-                                     + " close=" + (state->close_requested.load () ? "true" : "false")
-                                     + " connected="
-                                     + (is_transport_connected (*state) ? "true" : "false"));
+            trace_connector_write (
+              *state, "read-start-skip",
+              std::string ("in_progress=") + (state->read_in_progress ? "true" : "false")
+                + " close=" + (state->close_requested.load () ? "true" : "false")
+                + " connected=" + (is_transport_connected (*state) ? "true" : "false"));
             return;
         }
         state->read_in_progress = true;
         connection = state->connection;
     }
     trace_connector_write (*state, "read-start");
-    connection->async_read_some (
-      8192,
-      [state, connection] (boost::system::error_code error,
-                           std::vector<std::uint8_t> bytes) mutable {
+    connection->async_read_some (8192, [state,
+                                        connection] (boost::system::error_code error,
+                                                     std::vector<std::uint8_t> bytes) mutable {
         std::optional<error_t> transport_error;
         trace_connector_write (*state, "read-completion",
                                error ? "result=failure error=" + error.message ()
@@ -1056,12 +1054,11 @@ void kick_async_write (std::shared_ptr<connector_state_t> state, std::string rea
     trace_connector_write (*state, "write-kick", "reason=" + reason);
     auto executor = state->write_strand;
     auto work_state = std::move (state);
-    boost::asio::post (executor,
-                       [state = std::move (work_state), reason = std::move (reason)] () mutable {
-                           trace_connector_write (*state, "write-kick-dispatch",
-                                                  "reason=" + reason);
-                           start_next_async_write (std::move (state));
-                       });
+    boost::asio::post (
+      executor, [state = std::move (work_state), reason = std::move (reason)] () mutable {
+          trace_connector_write (*state, "write-kick-dispatch", "reason=" + reason);
+          start_next_async_write (std::move (state));
+      });
 }
 
 void enqueue_async_write (std::shared_ptr<connector_state_t> state,
@@ -1101,8 +1098,8 @@ void finish_async_write (std::shared_ptr<connector_state_t> state,
             return;
         }
         if (expected_connection && state->connection != expected_connection) {
-            result = result_t<void>::failure (
-              error_code_t::disconnected, "stream connector connection was replaced");
+            result = result_t<void>::failure (error_code_t::disconnected,
+                                              "stream connector connection was replaced");
         }
         callback = std::move (state->active_write->callback);
         state->active_write.reset ();
@@ -1124,11 +1121,10 @@ void start_next_async_write (std::shared_ptr<connector_state_t> state)
     {
         std::lock_guard<std::mutex> lock (state->transport_mutex);
         if (state->active_write || state->write_in_progress || state->pending_writes.empty ()) {
-            trace_connector_write (*state, "write-start-skip",
-                                   "in_progress="
-                                     + std::string (state->write_in_progress ? "true" : "false")
-                                     + " pending_writes="
-                                     + std::to_string (state->pending_writes.size ()));
+            trace_connector_write (
+              *state, "write-start-skip",
+              "in_progress=" + std::string (state->write_in_progress ? "true" : "false")
+                + " pending_writes=" + std::to_string (state->pending_writes.size ()));
             return;
         }
         state->write_in_progress = true;
@@ -1159,41 +1155,39 @@ void start_next_async_write (std::shared_ptr<connector_state_t> state)
     try {
         const auto frame_size = frame.size ();
         trace_connector_write (*state, "write-start", "bytes=" + std::to_string (frame_size));
-        connection->async_write (
-          std::move (frame),
-          [state, connection, write_id, frame_size] (boost::system::error_code error) mutable {
-              auto complete = [state, connection, write_id, frame_size, error] () mutable {
-                  trace_connector_write (
-                    *state, "write-completion",
-                    error ? "result=failure bytes=" + std::to_string (frame_size)
-                              + " error=" + error.message ()
-                          : "result=success bytes=" + std::to_string (frame_size));
-                  if (error) {
-                      finish_async_write (
-                        state, write_id, connection,
-                        result_t<void>::failure (
-                          state->close_requested.load () ? error_code_t::disconnected
-                                                          : error_code_t::send_failed,
-                          state->close_requested.load () ? "stream connector is closed"
-                                                         : error.message ()));
-                      return;
-                  }
-                  finish_async_write (state, write_id, connection, result_t<void>::success ());
-              };
-              try {
-                  boost::asio::post (state->write_strand, std::move (complete));
-              }
-              catch (const std::exception &exception) {
-                  finish_async_write (
-                    state, write_id, connection,
-                    result_t<void>::failure (error_code_t::send_failed, exception.what ()));
-              }
-          });
+        connection->async_write (std::move (frame), [state, connection, write_id, frame_size] (
+                                                      boost::system::error_code error) mutable {
+            auto complete = [state, connection, write_id, frame_size, error] () mutable {
+                trace_connector_write (*state, "write-completion",
+                                       error
+                                         ? "result=failure bytes=" + std::to_string (frame_size)
+                                             + " error=" + error.message ()
+                                         : "result=success bytes=" + std::to_string (frame_size));
+                if (error) {
+                    finish_async_write (state, write_id, connection,
+                                        result_t<void>::failure (state->close_requested.load ()
+                                                                   ? error_code_t::disconnected
+                                                                   : error_code_t::send_failed,
+                                                                 state->close_requested.load ()
+                                                                   ? "stream connector is closed"
+                                                                   : error.message ()));
+                    return;
+                }
+                finish_async_write (state, write_id, connection, result_t<void>::success ());
+            };
+            try {
+                boost::asio::post (state->write_strand, std::move (complete));
+            }
+            catch (const std::exception &exception) {
+                finish_async_write (
+                  state, write_id, connection,
+                  result_t<void>::failure (error_code_t::send_failed, exception.what ()));
+            }
+        });
     }
     catch (const std::exception &ex) {
-        finish_async_write (
-          state, write_id, connection,
-          result_t<void>::failure (error_code_t::send_failed, ex.what ()));
+        finish_async_write (state, write_id, connection,
+                            result_t<void>::failure (error_code_t::send_failed, ex.what ()));
     }
 }
 
@@ -1277,23 +1271,22 @@ void start_next_async_send (std::shared_ptr<connector_state_t> state)
     }
 
     trace_request ("send-submit", std::nullopt, send.packet.name, "kind=send");
-    enqueue_async_write (state, std::move (frame),
-                         [state, packet = std::move (send.packet),
-                          callback = std::move (send.callback)] (result_t<void> result) mutable {
-                             trace_request (
-                               "send-write-completion", std::nullopt, packet.name,
-                               result ? "result=success"
-                                      : "result=failure error="
-                                          + std::to_string (
-                                            static_cast<int> (result.error ()->code)));
-                             if (!result) {
-                                 finish_async_send (state, std::move (packet), std::move (callback),
-                                                    std::move (result));
-                                 return;
-                             }
-                             finish_async_send (state, std::move (packet), std::move (callback),
-                                                result_t<void>::success ());
-                         });
+    enqueue_async_write (
+      state, std::move (frame),
+      [state, packet = std::move (send.packet),
+       callback = std::move (send.callback)] (result_t<void> result) mutable {
+          trace_request ("send-write-completion", std::nullopt, packet.name,
+                         result ? "result=success"
+                                : "result=failure error="
+                                    + std::to_string (static_cast<int> (result.error ()->code)));
+          if (!result) {
+              finish_async_send (state, std::move (packet), std::move (callback),
+                                 std::move (result));
+              return;
+          }
+          finish_async_send (state, std::move (packet), std::move (callback),
+                             result_t<void>::success ());
+      });
 }
 
 } // namespace
@@ -1414,7 +1407,8 @@ result_t<void> submit_send (std::shared_ptr<connector_state_t> state, packet_t p
     {
         std::lock_guard<std::mutex> lock (state->transport_mutex);
         if (state->close_requested.load ()) {
-            return result_t<void>::failure (error_code_t::disconnected, "stream connector is closed");
+            return result_t<void>::failure (error_code_t::disconnected,
+                                            "stream connector is closed");
         }
         if (!is_transport_connected (*state)) {
             return result_t<void>::failure (error_code_t::disconnected,
@@ -1440,11 +1434,10 @@ result_t<void> submit_send (std::shared_ptr<connector_state_t> state, packet_t p
     enqueue_async_write (
       state, std::move (frame),
       [state, packet = std::move (packet)] (result_t<void> result) mutable {
-          trace_request (
-            "send-write-completion", std::nullopt, packet.name,
-            result ? "result=success"
-                   : "result=failure error="
-                       + std::to_string (static_cast<int> (result.error ()->code)));
+          trace_request ("send-write-completion", std::nullopt, packet.name,
+                         result ? "result=success"
+                                : "result=failure error="
+                                    + std::to_string (static_cast<int> (result.error ()->code)));
           if (!result) {
               if (result.error ()) {
                   publish_error (*state, *result.error ());
@@ -1639,7 +1632,7 @@ void submit_request_async (std::shared_ptr<void> state_handle,
             publish_error (*state, *validation.error ());
             immediate_result = result_t<request_reply_t>::failure (
               validation.error ()->code, validation.error () ? validation.error ()->message
-                                                            : "stream request validation failed");
+                                                             : "stream request validation failed");
         } else {
             seq = state->next_request_seq++;
             request_packet_name = packet.name;
@@ -1753,9 +1746,9 @@ result_t<void> dispatch_pending (std::shared_ptr<connector_state_t> state)
     {
         std::unique_lock<std::mutex> lock (state->transport_mutex);
         if (!drained) {
-            inbound_error = error_t{
-              drained.error ()->code,
-              drained.error () ? drained.error ()->message : "stream connector frame read failed"};
+            inbound_error = error_t{drained.error ()->code,
+                                    drained.error () ? drained.error ()->message
+                                                     : "stream connector frame read failed"};
             inbound_error_connection = sync_connection;
         } else {
             for (auto &packet : drained.value ()) {
@@ -1830,10 +1823,9 @@ result_t<packet_t> receive_next (std::shared_ptr<connector_state_t> state,
         {
             std::unique_lock<std::mutex> lock (state->transport_mutex);
             if (!drained) {
-                inbound_error = error_t{
-                  drained.error ()->code,
-                  drained.error () ? drained.error ()->message
-                                    : "stream connector frame read failed"};
+                inbound_error = error_t{drained.error ()->code,
+                                        drained.error () ? drained.error ()->message
+                                                         : "stream connector frame read failed"};
                 inbound_error_connection = sync_connection;
             } else {
                 for (auto &packet : drained.value ()) {
@@ -1905,10 +1897,9 @@ result_t<packet_t> wait_for_packet (std::shared_ptr<connector_state_t> state,
         {
             std::unique_lock<std::mutex> lock (state->transport_mutex);
             if (!drained) {
-                inbound_error = error_t{
-                  drained.error ()->code,
-                  drained.error () ? drained.error ()->message
-                                    : "stream connector frame read failed"};
+                inbound_error = error_t{drained.error ()->code,
+                                        drained.error () ? drained.error ()->message
+                                                         : "stream connector frame read failed"};
                 inbound_error_connection = sync_connection;
             } else {
                 for (auto &packet : drained.value ()) {
@@ -1940,11 +1931,10 @@ result_t<packet_t> wait_for_packet (std::shared_ptr<connector_state_t> state,
                      * observed has ended, whatever ended it. The cause reached
                      * the error handler when the connection ended; the wait
                      * reports only that it has no place left to observe. */
-                    return result_t<packet_t>::failure (
-                      error_code_t::disconnected,
-                      state->last_disconnect_error
-                        ? state->last_disconnect_error->message
-                        : "stream connector is not connected");
+                    return result_t<packet_t>::failure (error_code_t::disconnected,
+                                                        state->last_disconnect_error
+                                                          ? state->last_disconnect_error->message
+                                                          : "stream connector is not connected");
                 }
                 const auto next_check =
                   std::min (deadline, steady_clock_t::now () + std::chrono::milliseconds (1));
@@ -1962,8 +1952,8 @@ result_t<packet_t> wait_for_packet (std::shared_ptr<connector_state_t> state,
             /* The same ending the asynchronous waits were released with:
              * connection_ended published the cause, and this wait ends as
              * disconnected like them (stream-connector §10.1.1). */
-            return result_t<packet_t>::failure (
-              error_code_t::disconnected, "the connection that the wait observed has ended");
+            return result_t<packet_t>::failure (error_code_t::disconnected,
+                                                "the connection that the wait observed has ended");
         }
 
         queue_due_pong (state);

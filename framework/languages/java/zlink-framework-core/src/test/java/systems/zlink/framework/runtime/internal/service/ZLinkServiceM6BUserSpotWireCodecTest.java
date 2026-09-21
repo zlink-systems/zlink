@@ -6,106 +6,116 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.util.Arrays;
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.contracts.core.RoutingId;
 
+import java.util.Arrays;
+
 final class ZLinkServiceM6BUserSpotWireCodecTest {
-    private final ZLinkServiceM6BWireCodec codec =
-        new ZLinkServiceM6BWireCodec();
+    private final ZLinkServiceM6BWireCodec codec = new ZLinkServiceM6BWireCodec();
 
     @Test
     void command47RoundTripsEveryReservationAndLifecycleFence() {
-        var command = new ZLinkServiceM6BWireCodec.UserSpotCreate(
-            11,
-            12,
-            13,
-            RoutingId.from("source"),
-            14,
-            "room",
-            "room-v1",
-            reservation(),
-            1_900_000_000_000L);
+        var command =
+                new ZLinkServiceM6BWireCodec.UserSpotCreate(
+                        11,
+                        12,
+                        13,
+                        RoutingId.from("source"),
+                        14,
+                        "room",
+                        "room-v1",
+                        reservation(),
+                        1_900_000_000_000L);
 
         byte[] encoded = codec.encodeUserSpotCreateHeader(command);
 
         assertEquals(command, codec.decodeUserSpotCreateHeader(encoded));
         assertArrayEquals(
-            encoded,
-            codec.encodeUserSpotCreateHeader(
-                codec.decodeUserSpotCreateHeader(encoded)));
+                encoded,
+                codec.encodeUserSpotCreateHeader(codec.decodeUserSpotCreateHeader(encoded)));
     }
 
     @Test
     void command48RoundTripsExactSpotAndStoreFence() {
-        var command = new ZLinkServiceM6BWireCodec.UserSpotClose(
-            21,
-            22,
-            23,
-            RoutingId.from("source"),
-            24,
-            new ZLinkServiceM6BWireCodec.UserSpotCloseFence(
-                "room",
-                25,
-                RoutingId.from("target"),
-                26,
-                27,
-                "store-28"),
-            1_900_000_000_100L);
+        var command =
+                new ZLinkServiceM6BWireCodec.UserSpotClose(
+                        21,
+                        22,
+                        23,
+                        RoutingId.from("source"),
+                        24,
+                        new ZLinkServiceM6BWireCodec.UserSpotCloseFence(
+                                "room", 25, RoutingId.from("target"), 26, 27, "store-28"),
+                        1_900_000_000_100L);
 
         byte[] encoded = codec.encodeUserSpotCloseHeader(command);
 
         assertEquals(command, codec.decodeUserSpotCloseHeader(encoded));
         assertArrayEquals(
-            encoded,
-            codec.encodeUserSpotCloseHeader(
-                codec.decodeUserSpotCloseHeader(encoded)));
+                encoded, codec.encodeUserSpotCloseHeader(codec.decodeUserSpotCloseHeader(encoded)));
     }
 
     @Test
     void highBitOpaqueTokensRoundTripAcrossUserSpotCommandsAndReplies() {
         long highBit = Long.MIN_VALUE;
-        var reservation = new ZLinkServiceM6BWireCodec.ReservationFence(
-            "reservation", "store-version", 15, 16,
-            RoutingId.from("target"), highBit, "owner", 18, 1);
-        var create = new ZLinkServiceM6BWireCodec.UserSpotCreate(
-            highBit, highBit, 13, RoutingId.from("source"), highBit,
-            "room", "room-v1", reservation, 1_900_000_000_000L);
+        var reservation =
+                new ZLinkServiceM6BWireCodec.ReservationFence(
+                        "reservation",
+                        "store-version",
+                        15,
+                        16,
+                        RoutingId.from("target"),
+                        highBit,
+                        "owner",
+                        18,
+                        1);
+        var create =
+                new ZLinkServiceM6BWireCodec.UserSpotCreate(
+                        highBit,
+                        highBit,
+                        13,
+                        RoutingId.from("source"),
+                        highBit,
+                        "room",
+                        "room-v1",
+                        reservation,
+                        1_900_000_000_000L);
         assertEquals(
-            create,
-            codec.decodeUserSpotCreateHeader(
-                codec.encodeUserSpotCreateHeader(create)));
-        var close = new ZLinkServiceM6BWireCodec.UserSpotClose(
-            highBit, highBit, 23, RoutingId.from("source"), highBit,
-            new ZLinkServiceM6BWireCodec.UserSpotCloseFence(
-                "room", 25, RoutingId.from("target"), highBit, 27,
-                "store-28"),
-            1_900_000_000_100L);
+                create, codec.decodeUserSpotCreateHeader(codec.encodeUserSpotCreateHeader(create)));
+        var close =
+                new ZLinkServiceM6BWireCodec.UserSpotClose(
+                        highBit,
+                        highBit,
+                        23,
+                        RoutingId.from("source"),
+                        highBit,
+                        new ZLinkServiceM6BWireCodec.UserSpotCloseFence(
+                                "room", 25, RoutingId.from("target"), highBit, 27, "store-28"),
+                        1_900_000_000_100L);
         assertEquals(
-            close,
-            codec.decodeUserSpotCloseHeader(
-                codec.encodeUserSpotCloseHeader(close)));
+                close, codec.decodeUserSpotCloseHeader(codec.encodeUserSpotCloseHeader(close)));
         assertEquals(
-            highBit,
-            codec.decodeUserSpotCreateReply(
-                codec.encodeUserSpotCreateReply(highBit, 107, 33, null))
-                .correlation());
+                highBit,
+                codec.decodeUserSpotCreateReply(
+                                codec.encodeUserSpotCreateReply(highBit, 107, 33, null))
+                        .correlation());
     }
 
     @Test
     void userSpotReplyTailIsPresentOnlyForSuccessfulMatchingOperation() {
-        var created = new ZLinkServiceM6BWireCodec.UserSpotCreateTerminal(
-            ZLinkServiceM6BWireCodec.UserSpotCreateResult.CREATED,
-            "room",
-            31);
-        var createReply = codec.decodeUserSpotCreateReply(
-            codec.encodeUserSpotCreateReply(30, 0, 0, created));
-        var closeTrue = codec.decodeUserSpotCloseReply(
-            codec.encodeUserSpotCloseReply(32, 0, 0, true));
-        var closeFalse = codec.decodeUserSpotCloseReply(
-            codec.encodeUserSpotCloseReply(33, 0, 0, false));
-        var failed = codec.decodeUserSpotCreateReply(
-            codec.encodeUserSpotCreateReply(34, 107, 33, null));
+        var created =
+                new ZLinkServiceM6BWireCodec.UserSpotCreateTerminal(
+                        ZLinkServiceM6BWireCodec.UserSpotCreateResult.CREATED, "room", 31);
+        var createReply =
+                codec.decodeUserSpotCreateReply(codec.encodeUserSpotCreateReply(30, 0, 0, created));
+        var closeTrue =
+                codec.decodeUserSpotCloseReply(codec.encodeUserSpotCloseReply(32, 0, 0, true));
+        var closeFalse =
+                codec.decodeUserSpotCloseReply(codec.encodeUserSpotCloseReply(33, 0, 0, false));
+        var failed =
+                codec.decodeUserSpotCreateReply(codec.encodeUserSpotCreateReply(34, 107, 33, null));
 
         assertEquals(created, createReply.success());
         assertTrue(closeTrue.closed());
@@ -114,58 +124,52 @@ final class ZLinkServiceM6BUserSpotWireCodecTest {
         assertEquals(33, failed.failureCode());
         assertEquals(null, failed.success());
         assertThrows(
-            ZLinkServiceWireException.class,
-            () -> codec.encodeUserSpotCreateReply(1, 0, 0, null));
+                ZLinkServiceWireException.class,
+                () -> codec.encodeUserSpotCreateReply(1, 0, 0, null));
         assertThrows(
-            ZLinkServiceWireException.class,
-            () -> codec.encodeUserSpotCloseReply(1, 107, 33, true));
+                ZLinkServiceWireException.class,
+                () -> codec.encodeUserSpotCloseReply(1, 107, 33, true));
     }
 
     @Test
     void malformedUserSpotCommandsAreRejectedBeforeDispatch() {
-        byte[] create = codec.encodeUserSpotCreateHeader(
-            new ZLinkServiceM6BWireCodec.UserSpotCreate(
-                1,
-                2,
-                3,
-                RoutingId.from("source"),
-                4,
-                "room",
-                "room-v1",
-                reservation(),
-                5));
-        byte[] close = codec.encodeUserSpotCloseHeader(
-            new ZLinkServiceM6BWireCodec.UserSpotClose(
-                1,
-                2,
-                3,
-                RoutingId.from("source"),
-                4,
-                new ZLinkServiceM6BWireCodec.UserSpotCloseFence(
-                    "room",
-                    5,
-                    RoutingId.from("target"),
-                    6,
-                    7,
-                    "store"),
-                8));
+        byte[] create =
+                codec.encodeUserSpotCreateHeader(
+                        new ZLinkServiceM6BWireCodec.UserSpotCreate(
+                                1,
+                                2,
+                                3,
+                                RoutingId.from("source"),
+                                4,
+                                "room",
+                                "room-v1",
+                                reservation(),
+                                5));
+        byte[] close =
+                codec.encodeUserSpotCloseHeader(
+                        new ZLinkServiceM6BWireCodec.UserSpotClose(
+                                1,
+                                2,
+                                3,
+                                RoutingId.from("source"),
+                                4,
+                                new ZLinkServiceM6BWireCodec.UserSpotCloseFence(
+                                        "room", 5, RoutingId.from("target"), 6, 7, "store"),
+                                8));
 
         assertThrows(
-            ZLinkServiceWireException.class,
-            () -> codec.decodeUserSpotCreateHeader(
-                Arrays.copyOf(create, create.length - 1)));
+                ZLinkServiceWireException.class,
+                () -> codec.decodeUserSpotCreateHeader(Arrays.copyOf(create, create.length - 1)));
         assertThrows(
-            ZLinkServiceWireException.class,
-            () -> codec.decodeUserSpotCloseHeader(
-                Arrays.copyOf(close, close.length - 1)));
+                ZLinkServiceWireException.class,
+                () -> codec.decodeUserSpotCloseHeader(Arrays.copyOf(close, close.length - 1)));
 
         byte[] wrongVersion = close.clone();
-        int versionOffset = 5 + 8 + 8 + 8
-            + 1 + "source".length() + 8;
+        int versionOffset = 5 + 8 + 8 + 8 + 1 + "source".length() + 8;
         wrongVersion[versionOffset] = 2;
         assertThrows(
-            ZLinkServiceWireException.class,
-            () -> codec.decodeUserSpotCloseHeader(wrongVersion));
+                ZLinkServiceWireException.class,
+                () -> codec.decodeUserSpotCloseHeader(wrongVersion));
     }
 
     @Test
@@ -176,12 +180,12 @@ final class ZLinkServiceM6BUserSpotWireCodecTest {
         //  ZLinkFrameworkException(PROTOCOL_ERROR): a reply that can't be
         //  processed is a ProtocolError (spec 32-framework-error-model:91-92).
         //  This pins the inheritance that conversion relies on.
-        assertTrue(IllegalArgumentException.class.isAssignableFrom(
-            ZLinkServiceWireException.class));
+        assertTrue(
+                IllegalArgumentException.class.isAssignableFrom(ZLinkServiceWireException.class));
         ZLinkServiceWireException failure =
-            assertThrows(
-                ZLinkServiceWireException.class,
-                () -> codec.decodeUserSpotCreateReply(new byte[] {1}));
+                assertThrows(
+                        ZLinkServiceWireException.class,
+                        () -> codec.decodeUserSpotCreateReply(new byte[] {1}));
         assertTrue(failure instanceof IllegalArgumentException);
     }
 
@@ -197,17 +201,17 @@ final class ZLinkServiceM6BUserSpotWireCodecTest {
         codec.encodeUserSpotCreateReply(3, 104, 16, null);
         codec.encodeUserSpotCreateReply(4, 108, 0, null);
         assertThrows(
-            ZLinkServiceWireException.class,
-            () -> codec.encodeUserSpotCreateReply(5, 102, 18, null));
+                ZLinkServiceWireException.class,
+                () -> codec.encodeUserSpotCreateReply(5, 102, 18, null));
         assertThrows(
-            ZLinkServiceWireException.class,
-            () -> codec.encodeUserSpotCreateReply(6, 104, 3, null));
+                ZLinkServiceWireException.class,
+                () -> codec.encodeUserSpotCreateReply(6, 104, 3, null));
         assertThrows(
-            ZLinkServiceWireException.class,
-            () -> codec.encodeUserSpotCreateReply(7, 105, 23, null));
+                ZLinkServiceWireException.class,
+                () -> codec.encodeUserSpotCreateReply(7, 105, 23, null));
         assertThrows(
-            ZLinkServiceWireException.class,
-            () -> codec.encodeUserSpotCreateReply(8, 106, 99, null));
+                ZLinkServiceWireException.class,
+                () -> codec.encodeUserSpotCreateReply(8, 106, 99, null));
 
         //  The decode side shares the same predicate: patch the failure-code
         //  byte of a legal failed reply (107+33 vs 107+34 differ only there)
@@ -225,21 +229,19 @@ final class ZLinkServiceM6BUserSpotWireCodecTest {
         byte[] mismatched = legal.clone();
         mismatched[failureOffset] = 18;
         assertThrows(
-            ZLinkServiceWireException.class,
-            () -> codec.decodeUserSpotCreateReply(mismatched));
+                ZLinkServiceWireException.class, () -> codec.decodeUserSpotCreateReply(mismatched));
     }
 
-    private static ZLinkServiceM6BWireCodec.ReservationFence
-        reservation() {
+    private static ZLinkServiceM6BWireCodec.ReservationFence reservation() {
         return new ZLinkServiceM6BWireCodec.ReservationFence(
-            "reservation",
-            "store-version",
-            15,
-            16,
-            RoutingId.from("target"),
-            17,
-            "owner",
-            18,
-            1);
+                "reservation",
+                "store-version",
+                15,
+                16,
+                RoutingId.from("target"),
+                17,
+                "owner",
+                18,
+                1);
     }
 }

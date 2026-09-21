@@ -48,8 +48,8 @@ class relocation_crc32c_accumulator_t
         for (const auto byte : bytes) {
             _state ^= byte;
             for (int bit = 0; bit < 8; ++bit) {
-                const auto mask = static_cast<std::uint32_t> (
-                  -static_cast<std::int32_t> (_state & 1u));
+                const auto mask =
+                  static_cast<std::uint32_t> (-static_cast<std::int32_t> (_state & 1u));
                 _state = (_state >> 1u) ^ (0x82f63b78u & mask);
             }
         }
@@ -69,12 +69,11 @@ inline std::uint32_t relocation_chunk_count (std::uint64_t total_length,
 {
     if (total_length == 0 || chunk_limit == 0)
         return 0;
-    return static_cast<std::uint32_t> (
-      (total_length + chunk_limit - 1) / chunk_limit);
+    return static_cast<std::uint32_t> ((total_length + chunk_limit - 1) / chunk_limit);
 }
 
-inline relocation_payload_manifest_t plan_relocation_payload (
-  std::span<const std::uint8_t> payload, std::uint64_t chunk_limit)
+inline relocation_payload_manifest_t plan_relocation_payload (std::span<const std::uint8_t> payload,
+                                                              std::uint64_t chunk_limit)
 {
     relocation_payload_manifest_t manifest;
     manifest.total_length = payload.size ();
@@ -86,14 +85,14 @@ inline relocation_payload_manifest_t plan_relocation_payload (
 /* One chunk of the payload as a relocationState wire record.  The chunk
  * bytes are copied out of the retained source payload; the identity fields
  * bind the chunk to exactly one relocation attempt. */
-inline protocol::relocation_state_t make_relocation_state_chunk (
-  const protocol::relocation_id_t &relocation,
-  std::uint64_t target_attempt_generation,
-  const protocol::relocation_coordinator_fence_t &coordinator,
-  const protocol::relocation_object_t &object,
-  std::span<const std::uint8_t> payload,
-  std::uint32_t chunk_ordinal,
-  std::uint64_t chunk_limit)
+inline protocol::relocation_state_t
+make_relocation_state_chunk (const protocol::relocation_id_t &relocation,
+                             std::uint64_t target_attempt_generation,
+                             const protocol::relocation_coordinator_fence_t &coordinator,
+                             const protocol::relocation_object_t &object,
+                             std::span<const std::uint8_t> payload,
+                             std::uint32_t chunk_ordinal,
+                             std::uint64_t chunk_limit)
 {
     protocol::relocation_state_t chunk;
     chunk.relocation = relocation;
@@ -102,13 +101,11 @@ inline protocol::relocation_state_t make_relocation_state_chunk (
     chunk.sender_role = protocol::relocation_role_t::source;
     chunk.object = object;
     chunk.chunk_ordinal = chunk_ordinal;
-    const auto offset =
-      static_cast<std::uint64_t> (chunk_ordinal) * chunk_limit;
+    const auto offset = static_cast<std::uint64_t> (chunk_ordinal) * chunk_limit;
     const auto remaining = payload.size () - offset;
     const auto length = remaining < chunk_limit ? remaining : chunk_limit;
     chunk.chunk_data.assign (payload.begin () + static_cast<std::ptrdiff_t> (offset),
-                             payload.begin ()
-                               + static_cast<std::ptrdiff_t> (offset + length));
+                             payload.begin () + static_cast<std::ptrdiff_t> (offset + length));
     return chunk;
 }
 
@@ -152,19 +149,14 @@ class relocation_state_assembly_t
 
     bool complete () const noexcept
     {
-        return _next_ordinal == _manifest.chunk_count
-               && _payload.size () == _manifest.total_length;
+        return _next_ordinal == _manifest.chunk_count && _payload.size () == _manifest.total_length;
     }
 
     bool failed () const noexcept { return _failed; }
 
-    const relocation_payload_manifest_t &manifest () const noexcept
-    {
-        return _manifest;
-    }
+    const relocation_payload_manifest_t &manifest () const noexcept { return _manifest; }
 
-    relocation_assembly_result_t accept (
-      const protocol::relocation_state_t &chunk)
+    relocation_assembly_result_t accept (const protocol::relocation_state_t &chunk)
     {
         /* Exact identity is RelocationId + targetAttemptGeneration +
          * coordinator fence; a chunk with a different identity is discarded
@@ -173,22 +165,18 @@ class relocation_state_assembly_t
             || chunk.target_attempt_generation != _target_attempt_generation
             || chunk.coordinator != _coordinator)
             return relocation_assembly_result_t::ignored;
-        if (_failed || complete ()
-            || chunk.chunk_ordinal != _next_ordinal
-            || _payload.size () + chunk.chunk_data.size ()
-                 > _manifest.total_length) {
+        if (_failed || complete () || chunk.chunk_ordinal != _next_ordinal
+            || _payload.size () + chunk.chunk_data.size () > _manifest.total_length) {
             _failed = true;
             _payload.clear ();
             return relocation_assembly_result_t::conflict;
         }
-        _payload.insert (_payload.end (), chunk.chunk_data.begin (),
-                         chunk.chunk_data.end ());
+        _payload.insert (_payload.end (), chunk.chunk_data.begin (), chunk.chunk_data.end ());
         ++_next_ordinal;
         if (_next_ordinal != _manifest.chunk_count)
             return relocation_assembly_result_t::accepted;
         if (_payload.size () != _manifest.total_length
-            || protocol::relocation_checksum_crc32c (_payload)
-                 != _manifest.checksum_crc32c) {
+            || protocol::relocation_checksum_crc32c (_payload) != _manifest.checksum_crc32c) {
             _failed = true;
             _payload.clear ();
             return relocation_assembly_result_t::conflict;
@@ -197,10 +185,7 @@ class relocation_state_assembly_t
     }
 
     /* The fully assembled payload. Valid only after completion. */
-    std::vector<std::uint8_t> take_payload () noexcept
-    {
-        return std::move (_payload);
-    }
+    std::vector<std::uint8_t> take_payload () noexcept { return std::move (_payload); }
 
   private:
     protocol::relocation_id_t _relocation;

@@ -1,5 +1,5 @@
-using Microsoft.Extensions.DependencyInjection;
 using System.Diagnostics.Metrics;
+using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink;
 using Zlink.Framework.Contracts.Errors;
 using Zlink.Framework.Runtime.Diagnostics;
@@ -22,7 +22,8 @@ public sealed class TransportFailFastTests
             ZLinkUnawaitedSubmit.Observe(
                 ValueTask.FromException(new InvalidOperationException("submit died")),
                 "test submit",
-                errorSink);
+                errorSink
+            );
 
             for (var i = 0; i < 100 && seen is null; i++)
             {
@@ -49,7 +50,8 @@ public sealed class TransportFailFastTests
             ZLinkUnawaitedSubmit.Observe(
                 ValueTask.FromException(new OperationCanceledException()),
                 "test submit",
-                errorSink);
+                errorSink
+            );
 
             Assert.Null(seen);
         }
@@ -63,37 +65,41 @@ public sealed class TransportFailFastTests
     [InlineData("timeout")]
     [InlineData("stale")]
     public async Task Unawaited_Channel_Submit_Without_Mesh_Context_Does_Not_Emit_Drop_Metric(
-        string failure)
+        string failure
+    )
     {
         var reasons = new List<string>();
         using var listener = new MeterListener
         {
             InstrumentPublished = (instrument, meterListener) =>
             {
-                if (instrument.Meter.Name == ZLinkMeters.Framework
-                    && instrument.Name == "zlink.mesh_node.messages.dropped")
+                if (
+                    instrument.Meter.Name == ZLinkMeters.Framework
+                    && instrument.Name == "zlink.mesh_node.messages.dropped"
+                )
                     meterListener.EnableMeasurementEvents(instrument);
-            }
+            },
         };
-        listener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
-        {
-            foreach (var tag in tags)
-                if (tag.Key == "reason" && tag.Value is string reason)
-                    reasons.Add(reason);
-        });
+        listener.SetMeasurementEventCallback<long>(
+            (_, _, tags, _) =>
+            {
+                foreach (var tag in tags)
+                    if (tag.Key == "reason" && tag.Value is string reason)
+                        reasons.Add(reason);
+            }
+        );
         listener.Start();
 
         using var errorSink = new ZLinkRuntimeErrorSink();
-        Exception exception = failure == "timeout"
-            ? new TimeoutException("backpressured")
-            : new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Unavailable,
-                "stale route",
-                ZLinkRetryAdvice.RetryAfterBackoff);
-        ZLinkUnawaitedSubmit.Observe(
-            ValueTask.FromException(exception),
-            "channel send",
-            errorSink);
+        Exception exception =
+            failure == "timeout"
+                ? new TimeoutException("backpressured")
+                : new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.Unavailable,
+                    "stale route",
+                    ZLinkRetryAdvice.RetryAfterBackoff
+                );
+        ZLinkUnawaitedSubmit.Observe(ValueTask.FromException(exception), "channel send", errorSink);
 
         for (var attempt = 0; attempt < 100 && reasons.Count == 0; attempt++)
             await Task.Delay(10);
@@ -144,9 +150,11 @@ public sealed class TransportFailFastTests
 
         using var releaseRegularWork = new ManualResetEventSlim(false);
         var regularWorkStarted = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var logicalWorkRan = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         try
         {
             var regularPool = runtime.WorkerPool;
@@ -159,12 +167,14 @@ public sealed class TransportFailFastTests
                 {
                     regularWorkStarted.TrySetResult();
                     releaseRegularWork.Wait();
-                }));
+                })
+            );
             await regularWorkStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
             Assert.Equal(
                 ZLinkWorkerSubmitResult.Accepted,
-                logicalMulticastPool.TrySubmit(_ => logicalWorkRan.TrySetResult()));
+                logicalMulticastPool.TrySubmit(_ => logicalWorkRan.TrySetResult())
+            );
             await logicalWorkRan.Task.WaitAsync(TimeSpan.FromSeconds(5));
         }
         finally
@@ -192,6 +202,8 @@ public sealed class TransportFailFastTests
             new ZLinkHandlerRegistry([]),
             new ZLinkHandlerDispatcher(
                 services.GetRequiredService<IServiceScopeFactory>(),
-                registration));
+                registration
+            )
+        );
     }
 }

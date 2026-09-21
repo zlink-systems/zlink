@@ -1,5 +1,7 @@
 package systems.zlink.framework.runtime.handlers;
 
+import systems.zlink.framework.errors.ZLinkConfigurationException;
+
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.lang.reflect.TypeVariable;
@@ -7,11 +9,9 @@ import java.lang.reflect.WildcardType;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.Predicate;
-import systems.zlink.framework.errors.ZLinkConfigurationException;
 
 public final class ZLinkGenericTypeResolver {
-    private ZLinkGenericTypeResolver() {
-    }
+    private ZLinkGenericTypeResolver() {}
 
     public static ParameterizedType findInterface(Class<?> type, Class<?> targetRawType) {
         return findInterface(type, targetRawType, Map.of());
@@ -27,31 +27,27 @@ public final class ZLinkGenericTypeResolver {
             return klass;
         }
         if (resolved instanceof ParameterizedType parameterized
-            && parameterized.getRawType() instanceof Class<?> raw) {
+                && parameterized.getRawType() instanceof Class<?> raw) {
             return raw;
         }
         throw new ZLinkConfigurationException(
-            "handler generic argument must resolve to a class: " + handlerType.getName());
+                "handler generic argument must resolve to a class: " + handlerType.getName());
     }
 
     private static ParameterizedType findInterface(
-        Class<?> type,
-        Class<?> targetRawType,
-        Map<TypeVariable<?>, Type> bindings) {
+            Class<?> type, Class<?> targetRawType, Map<TypeVariable<?>, Type> bindings) {
         return findInterface(type, raw -> raw == targetRawType, bindings);
     }
 
     private static ParameterizedType findInterface(
-        Class<?> type,
-        String targetRawTypeName,
-        Map<TypeVariable<?>, Type> bindings) {
+            Class<?> type, String targetRawTypeName, Map<TypeVariable<?>, Type> bindings) {
         return findInterface(type, raw -> raw.getName().equals(targetRawTypeName), bindings);
     }
 
     private static ParameterizedType findInterface(
-        Class<?> type,
-        Predicate<Class<?>> rawTypeMatches,
-        Map<TypeVariable<?>, Type> bindings) {
+            Class<?> type,
+            Predicate<Class<?>> rawTypeMatches,
+            Map<TypeVariable<?>, Type> bindings) {
         for (Type interfaceType : type.getGenericInterfaces()) {
             ParameterizedType matched = matchType(interfaceType, rawTypeMatches, bindings);
             if (matched != null) {
@@ -66,26 +62,20 @@ public final class ZLinkGenericTypeResolver {
     }
 
     private static ParameterizedType matchType(
-        Type type,
-        Class<?> targetRawType,
-        Map<TypeVariable<?>, Type> bindings) {
+            Type type, Class<?> targetRawType, Map<TypeVariable<?>, Type> bindings) {
         return matchType(type, raw -> raw == targetRawType, bindings);
     }
 
     private static ParameterizedType matchType(
-        Type type,
-        String targetRawTypeName,
-        Map<TypeVariable<?>, Type> bindings) {
+            Type type, String targetRawTypeName, Map<TypeVariable<?>, Type> bindings) {
         return matchType(type, raw -> raw.getName().equals(targetRawTypeName), bindings);
     }
 
     private static ParameterizedType matchType(
-        Type type,
-        Predicate<Class<?>> rawTypeMatches,
-        Map<TypeVariable<?>, Type> bindings) {
+            Type type, Predicate<Class<?>> rawTypeMatches, Map<TypeVariable<?>, Type> bindings) {
         Type resolved = resolve(type, bindings);
         if (resolved instanceof ParameterizedType parameterized
-            && parameterized.getRawType() instanceof Class<?> raw) {
+                && parameterized.getRawType() instanceof Class<?> raw) {
             ParameterizedType concrete = resolvedParameterized(parameterized, bindings);
             if (rawTypeMatches.test(raw)) {
                 return concrete;
@@ -125,23 +115,18 @@ public final class ZLinkGenericTypeResolver {
     }
 
     private static ParameterizedType resolvedParameterized(
-        ParameterizedType parameterized,
-        Map<TypeVariable<?>, Type> bindings) {
+            ParameterizedType parameterized, Map<TypeVariable<?>, Type> bindings) {
         Type[] arguments = parameterized.getActualTypeArguments();
         Type[] resolvedArguments = new Type[arguments.length];
         for (int index = 0; index < arguments.length; index++) {
             resolvedArguments[index] = resolve(arguments[index], bindings);
         }
         return new ResolvedParameterizedType(
-            parameterized.getOwnerType(),
-            parameterized.getRawType(),
-            resolvedArguments);
+                parameterized.getOwnerType(), parameterized.getRawType(), resolvedArguments);
     }
 
     private record ResolvedParameterizedType(
-        Type ownerType,
-        Type rawType,
-        Type[] actualTypeArguments) implements ParameterizedType {
+            Type ownerType, Type rawType, Type[] actualTypeArguments) implements ParameterizedType {
         @Override
         public Type[] getActualTypeArguments() {
             return actualTypeArguments.clone();

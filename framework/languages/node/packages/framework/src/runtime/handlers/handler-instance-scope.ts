@@ -38,12 +38,9 @@ interface LifecycleScopeDisposal {
   readonly idle: Promise<void> | undefined;
 }
 
-const HANDLER_SCOPE_FACTORY = Symbol.for(
-  '@zlink-systems/framework.handler-instance-scope-factory'
-);
+const HANDLER_SCOPE_FACTORY = Symbol.for('@zlink-systems/framework.handler-instance-scope-factory');
 const activeHandlerScope = new AsyncLocalStorage<ActiveHandlerScope>();
-const activeLifecycleScope =
-  new AsyncLocalStorage<LifecycleHandlerInstanceScope>();
+const activeLifecycleScope = new AsyncLocalStorage<LifecycleHandlerInstanceScope>();
 const detachedStateLaneResource = new AsyncResource('zlink:handler-instance-scope');
 const dispatchScopes = new WeakMap<object, ZLinkHandlerInstanceScope>();
 const lifecycleScopes = new WeakMap<object, Promise<LifecycleHandlerInstanceScope>>();
@@ -69,10 +66,7 @@ export async function runInHandlerInstanceScope<T>(
     dispatchScopes.set(context, scope);
   }
   try {
-    return await activeHandlerScope.run(
-      { scope },
-      () => callback(scope)
-    );
+    return await activeHandlerScope.run({ scope }, () => callback(scope));
   } finally {
     if (context !== undefined && dispatchScopes.get(context) === scope) {
       dispatchScopes.delete(context);
@@ -89,9 +83,7 @@ export async function resolveLifecycleHandler<T>(
   let scope = lifecycleScopes.get(owner);
   if (scope === undefined) {
     scope = Promise.resolve(
-      new LifecycleHandlerInstanceScope(
-        createHandlerInstanceScope(providerResolver)
-      )
+      new LifecycleHandlerInstanceScope(createHandlerInstanceScope(providerResolver))
     );
     lifecycleScopes.set(owner, scope);
   }
@@ -107,9 +99,7 @@ export async function runWithLifecycleHandler<THandler, TResult>(
   let scope = lifecycleScopes.get(owner);
   if (scope === undefined) {
     scope = Promise.resolve(
-      new LifecycleHandlerInstanceScope(
-        createHandlerInstanceScope(providerResolver)
-      )
+      new LifecycleHandlerInstanceScope(createHandlerInstanceScope(providerResolver))
     );
     lifecycleScopes.set(owner, scope);
   }
@@ -129,21 +119,22 @@ function createHandlerInstanceScope(
   providerResolver?: ZLinkProviderResolver,
   context?: ZLinkMessageContext
 ): ZLinkHandlerInstanceScope {
-  const factory = providerResolver === undefined
-    ? undefined
-    : (providerResolver as unknown as Record<PropertyKey, unknown>)[HANDLER_SCOPE_FACTORY];
+  const factory =
+    providerResolver === undefined
+      ? undefined
+      : (providerResolver as unknown as Record<PropertyKey, unknown>)[HANDLER_SCOPE_FACTORY];
   if (isHandlerInstanceScopeFactory(factory)) {
     return factory.create(context);
   }
   return new DefaultHandlerInstanceScope(providerResolver);
 }
 
-function isHandlerInstanceScopeFactory(
-  value: unknown
-): value is ZLinkHandlerInstanceScopeFactory {
-  return typeof value === 'object'
-    && value !== null
-    && typeof (value as { create?: unknown }).create === 'function';
+function isHandlerInstanceScopeFactory(value: unknown): value is ZLinkHandlerInstanceScopeFactory {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { create?: unknown }).create === 'function'
+  );
 }
 
 class DefaultHandlerInstanceScope implements ZLinkHandlerInstanceScope {
@@ -205,8 +196,7 @@ class DefaultHandlerInstanceScope implements ZLinkHandlerInstanceScope {
   private async activate<T>(type: Type<T>, activation: Deferred<unknown>): Promise<void> {
     let instance: T;
     try {
-      instance = await this.providerResolver?.create?.(type)
-        ?? new type();
+      instance = (await this.providerResolver?.create?.(type)) ?? new type();
     } catch (error) {
       activation.reject(error);
       return;
@@ -258,9 +248,8 @@ class LifecycleHandlerInstanceScope {
   ): Promise<TResult> {
     await this.lane.run(() => this.beginInvocationCore());
     try {
-      return await activeLifecycleScope.run(
-        this,
-        async () => callback(await this.instances.resolve(type))
+      return await activeLifecycleScope.run(this, async () =>
+        callback(await this.instances.resolve(type))
       );
     } finally {
       await this.lane.run(() => this.completeInvocationCore());

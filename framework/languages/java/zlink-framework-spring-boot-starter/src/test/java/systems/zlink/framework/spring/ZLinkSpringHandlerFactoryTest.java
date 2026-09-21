@@ -5,10 +5,6 @@ import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -21,14 +17,20 @@ import org.springframework.context.annotation.AnnotationConfigApplicationContext
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Scope;
+
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
+
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkSpringHandlerFactoryTest {
     @Test
     void preparesConstructorAndScalarDependencyBeforeFirstActivation() throws Exception {
         CountingBeanFactory beanFactory = new CountingBeanFactory();
         try (AnnotationConfigApplicationContext context =
-                 new AnnotationConfigApplicationContext(beanFactory)) {
+                new AnnotationConfigApplicationContext(beanFactory)) {
             context.register(ShortcutConfig.class);
             context.refresh();
             ZLinkSpringHandlerFactory factory = new ZLinkSpringHandlerFactory(beanFactory);
@@ -36,17 +38,20 @@ final class ZLinkSpringHandlerFactoryTest {
 
             factory.prepare(PreparedHandler.class);
             beanFactory.resetCandidateSearches();
-            assertEquals(0, ScopedDependency.instances.get(),
-                "preparation must not create a scoped dependency");
+            assertEquals(
+                    0,
+                    ScopedDependency.instances.get(),
+                    "preparation must not create a scoped dependency");
 
             try (var owner = new ZLinkHandlerInstanceOwner(factory)) {
-                PreparedHandler handler = (PreparedHandler) owner.instance(
-                    PreparedHandler.class);
+                PreparedHandler handler = (PreparedHandler) owner.instance(PreparedHandler.class);
                 assertEquals("selected", handler.dependency.value);
             }
 
-            assertEquals(0, beanFactory.candidateSearches(),
-                "the first activation must use registration-time dependency metadata");
+            assertEquals(
+                    0,
+                    beanFactory.candidateSearches(),
+                    "the first activation must use registration-time dependency metadata");
             assertEquals(1, ScopedDependency.instances.get());
         }
     }
@@ -55,7 +60,7 @@ final class ZLinkSpringHandlerFactoryTest {
     void cachesFrozenScalarCandidateWithoutChangingScopeOrBeanLifecycle() {
         CountingBeanFactory beanFactory = new CountingBeanFactory();
         try (AnnotationConfigApplicationContext context =
-                 new AnnotationConfigApplicationContext(beanFactory)) {
+                new AnnotationConfigApplicationContext(beanFactory)) {
             context.register(ShortcutConfig.class);
             context.refresh();
             beanFactory.resetCandidateSearches();
@@ -64,10 +69,8 @@ final class ZLinkSpringHandlerFactoryTest {
 
             ScopedDependency first;
             try (var owner = new ZLinkHandlerInstanceOwner(factory)) {
-                ShortcutHandler handler = (ShortcutHandler) owner.instance(
-                    ShortcutHandler.class);
-                ShortcutFilter filter = (ShortcutFilter) owner.instance(
-                    ShortcutFilter.class);
+                ShortcutHandler handler = (ShortcutHandler) owner.instance(ShortcutHandler.class);
+                ShortcutFilter filter = (ShortcutFilter) owner.instance(ShortcutFilter.class);
                 first = handler.dependency;
 
                 assertEquals("selected", first.value);
@@ -75,16 +78,13 @@ final class ZLinkSpringHandlerFactoryTest {
                 assertEquals("field", handler.field.value);
                 assertEquals("method", handler.method.value);
             }
-            int candidateSearchesAfterFirstActivation =
-                beanFactory.candidateSearches();
+            int candidateSearchesAfterFirstActivation = beanFactory.candidateSearches();
             assertTrue(candidateSearchesAfterFirstActivation > 0);
             assertEquals(2, ShortcutPostProcessor.initialized.get());
 
             try (var owner = new ZLinkHandlerInstanceOwner(factory)) {
-                ShortcutHandler handler = (ShortcutHandler) owner.instance(
-                    ShortcutHandler.class);
-                ShortcutFilter filter = (ShortcutFilter) owner.instance(
-                    ShortcutFilter.class);
+                ShortcutHandler handler = (ShortcutHandler) owner.instance(ShortcutHandler.class);
+                ShortcutFilter filter = (ShortcutFilter) owner.instance(ShortcutFilter.class);
 
                 assertNotSame(first, handler.dependency);
                 assertSame(handler.dependency, filter.dependency);
@@ -93,9 +93,9 @@ final class ZLinkSpringHandlerFactoryTest {
             }
 
             assertEquals(
-                candidateSearchesAfterFirstActivation,
-                beanFactory.candidateSearches(),
-                "the second activation must use the cached name shortcut");
+                    candidateSearchesAfterFirstActivation,
+                    beanFactory.candidateSearches(),
+                    "the second activation must use the cached name shortcut");
             assertEquals(4, ShortcutPostProcessor.initialized.get());
         }
     }
@@ -104,7 +104,7 @@ final class ZLinkSpringHandlerFactoryTest {
     void preservesAggregateOptionalAndProviderResolutionOutsideTheShortcut() {
         CountingBeanFactory beanFactory = new CountingBeanFactory();
         try (AnnotationConfigApplicationContext context =
-                 new AnnotationConfigApplicationContext(beanFactory)) {
+                new AnnotationConfigApplicationContext(beanFactory)) {
             context.register(ShortcutConfig.class);
             context.refresh();
             beanFactory.resetCandidateSearches();
@@ -114,10 +114,10 @@ final class ZLinkSpringHandlerFactoryTest {
             List<FieldDependency> firstSingleAggregate;
             ScopedDependency firstProvided;
             try (var owner = new ZLinkHandlerInstanceOwner(factory)) {
-                AggregateHandler aggregate = (AggregateHandler) owner.instance(
-                    AggregateHandler.class);
+                AggregateHandler aggregate =
+                        (AggregateHandler) owner.instance(AggregateHandler.class);
                 SingleAggregateHandler singleAggregate =
-                    (SingleAggregateHandler) owner.instance(SingleAggregateHandler.class);
+                        (SingleAggregateHandler) owner.instance(SingleAggregateHandler.class);
                 LazyHandler lazy = (LazyHandler) owner.instance(LazyHandler.class);
                 firstAggregate = aggregate.dependencies;
                 firstSingleAggregate = singleAggregate.dependencies;
@@ -129,28 +129,28 @@ final class ZLinkSpringHandlerFactoryTest {
                 assertTrue(lazy.missing.isEmpty());
                 assertEquals("selected", firstProvided.value);
             }
-            int candidateSearchesAfterFirstActivation =
-                beanFactory.candidateSearches();
+            int candidateSearchesAfterFirstActivation = beanFactory.candidateSearches();
 
             try (var owner = new ZLinkHandlerInstanceOwner(factory)) {
-                AggregateHandler aggregate = (AggregateHandler) owner.instance(
-                    AggregateHandler.class);
+                AggregateHandler aggregate =
+                        (AggregateHandler) owner.instance(AggregateHandler.class);
                 SingleAggregateHandler singleAggregate =
-                    (SingleAggregateHandler) owner.instance(SingleAggregateHandler.class);
+                        (SingleAggregateHandler) owner.instance(SingleAggregateHandler.class);
                 LazyHandler lazy = (LazyHandler) owner.instance(LazyHandler.class);
 
                 assertNotSame(firstAggregate, aggregate.dependencies);
                 assertEquals(2, aggregate.dependencies.size());
                 assertNotSame(firstSingleAggregate, singleAggregate.dependencies);
                 assertEquals(1, singleAggregate.dependencies.size());
-                assertSame(firstSingleAggregate.getFirst(), singleAggregate.dependencies.getFirst());
+                assertSame(
+                        firstSingleAggregate.getFirst(), singleAggregate.dependencies.getFirst());
                 assertTrue(lazy.missing.isEmpty());
                 assertNotSame(firstProvided, lazy.selected.getObject());
             }
 
             assertTrue(
-                beanFactory.candidateSearches() > candidateSearchesAfterFirstActivation,
-                "aggregate resolution must remain on Spring's normal path");
+                    beanFactory.candidateSearches() > candidateSearchesAfterFirstActivation,
+                    "aggregate resolution must remain on Spring's normal path");
         }
     }
 
@@ -191,9 +191,7 @@ final class ZLinkSpringHandlerFactoryTest {
 
         @Override
         protected Map<String, Object> findAutowireCandidates(
-            String beanName,
-            Class<?> requiredType,
-            DependencyDescriptor descriptor) {
+                String beanName, Class<?> requiredType, DependencyDescriptor descriptor) {
             candidateSearches.incrementAndGet();
             return super.findAutowireCandidates(beanName, requiredType, descriptor);
         }
@@ -209,8 +207,7 @@ final class ZLinkSpringHandlerFactoryTest {
 
     public static final class ShortcutHandler {
         private final ScopedDependency dependency;
-        @Autowired
-        private FieldDependency field;
+        @Autowired private FieldDependency field;
         private MethodDependency method;
 
         public ShortcutHandler(@Qualifier("selected") ScopedDependency dependency) {
@@ -226,8 +223,7 @@ final class ZLinkSpringHandlerFactoryTest {
     public static final class PreparedHandler {
         private final ScopedDependency dependency;
 
-        public PreparedHandler(
-            @Qualifier("selected") ScopedDependency dependency) {
+        public PreparedHandler(@Qualifier("selected") ScopedDependency dependency) {
             this.dependency = dependency;
         }
     }
@@ -261,8 +257,8 @@ final class ZLinkSpringHandlerFactoryTest {
         private final ObjectProvider<ScopedDependency> selected;
 
         public LazyHandler(
-            Optional<MissingDependency> missing,
-            @Qualifier("selected") ObjectProvider<ScopedDependency> selected) {
+                Optional<MissingDependency> missing,
+                @Qualifier("selected") ObjectProvider<ScopedDependency> selected) {
             this.missing = missing;
             this.selected = selected;
         }
@@ -294,8 +290,7 @@ final class ZLinkSpringHandlerFactoryTest {
         }
     }
 
-    static final class MissingDependency {
-    }
+    static final class MissingDependency {}
 
     static final class ShortcutPostProcessor implements BeanPostProcessor {
         private static final AtomicInteger initialized = new AtomicInteger();

@@ -10,7 +10,8 @@ internal sealed record ZLinkTimerLogicalSnapshot(
     ulong DeliveryIndex,
     ulong LastScheduledIndex,
     DateTimeOffset? NextScheduledAt,
-    ZLinkTimerTick? PendingTick);
+    ZLinkTimerTick? PendingTick
+);
 
 internal sealed class ZLinkTimer : IZLinkTimer
 {
@@ -39,9 +40,16 @@ internal sealed class ZLinkTimer : IZLinkTimer
         ZLinkTimerOptions options,
         CancellationToken spotStopToken,
         Func<ZLinkTimerTick, CancellationToken, ValueTask> onTickAsync,
-        Func<ZLinkTimerTick, Exception, bool, CancellationToken, ValueTask> onUnhandledExceptionAsync,
+        Func<
+            ZLinkTimerTick,
+            Exception,
+            bool,
+            CancellationToken,
+            ValueTask
+        > onUnhandledExceptionAsync,
         Func<IDisposable>? enterTickScope = null,
-        ZLinkTimerScheduler? scheduler = null)
+        ZLinkTimerScheduler? scheduler = null
+    )
         : this(
             new ZLinkTimerLogicalSnapshot(
                 name,
@@ -51,7 +59,8 @@ internal sealed class ZLinkTimer : IZLinkTimer
                 0,
                 0,
                 null,
-                null),
+                null
+            ),
             spotStopToken,
             async (tick, cancellationToken) =>
             {
@@ -61,56 +70,65 @@ internal sealed class ZLinkTimer : IZLinkTimer
             onUnhandledExceptionAsync,
             enterTickScope,
             false,
-            scheduler)
-    {
-    }
+            scheduler
+        ) { }
 
     internal ZLinkTimer(
         ZLinkTimerLogicalSnapshot snapshot,
         CancellationToken spotStopToken,
         Func<ZLinkTimerTick, CancellationToken, ValueTask<bool>> onTickAsync,
-        Func<ZLinkTimerTick, Exception, bool, CancellationToken, ValueTask> onUnhandledExceptionAsync,
+        Func<
+            ZLinkTimerTick,
+            Exception,
+            bool,
+            CancellationToken,
+            ValueTask
+        > onUnhandledExceptionAsync,
         Func<IDisposable>? enterTickScope = null,
         bool startFrozen = false,
-        ZLinkTimerScheduler? scheduler = null)
+        ZLinkTimerScheduler? scheduler = null
+    )
     {
         ArgumentNullException.ThrowIfNull(snapshot);
-        _scheduler = scheduler
-            ?? throw new ArgumentNullException(nameof(scheduler));
+        _scheduler = scheduler ?? throw new ArgumentNullException(nameof(scheduler));
         _name = snapshot.Name;
         _period = snapshot.Period;
         _callbacks = new ZLinkTimerCallbacks(
             snapshot.Options,
             onTickAsync,
             onUnhandledExceptionAsync,
-            enterTickScope);
+            enterTickScope
+        );
         _startedAt = snapshot.StartedAt;
-        _startedElapsed = _scheduler.Elapsed
-            - (_scheduler.TimeProvider.GetUtcNow() - snapshot.StartedAt);
+        _startedElapsed =
+            _scheduler.Elapsed - (_scheduler.TimeProvider.GetUtcNow() - snapshot.StartedAt);
         _deliveryIndex = snapshot.DeliveryIndex;
         _lastScheduledIndex = snapshot.LastScheduledIndex;
         _nextScheduledAt = snapshot.NextScheduledAt;
         _pendingTick = snapshot.PendingTick;
         if (startFrozen)
-            _resume = new TaskCompletionSource(
-                TaskCreationOptions.RunContinuationsAsynchronously);
+            _resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _stopSource = CancellationTokenSource.CreateLinkedTokenSource(spotStopToken);
         _scheduler.Register(this);
 
         SchedulerSchedule? schedule = null;
         var startDispatch = false;
-        (schedule, startDispatch) = AwaitStateLane(_lane.RunAsync(() =>
-        {
-            if (!startFrozen && _pendingTick is null)
-                return (PrepareScheduleOnLane(
-                    _nextScheduledAt ?? ComputeNextScheduledAtOnLane()), false);
-            if (!startFrozen && _pendingTick is not null)
+        (schedule, startDispatch) = AwaitStateLane(
+            _lane.RunAsync(() =>
             {
-                _activeDispatch = NewDispatchSource();
-                return ((SchedulerSchedule?)null, true);
-            }
-            return ((SchedulerSchedule?)null, false);
-        }));
+                if (!startFrozen && _pendingTick is null)
+                    return (
+                        PrepareScheduleOnLane(_nextScheduledAt ?? ComputeNextScheduledAtOnLane()),
+                        false
+                    );
+                if (!startFrozen && _pendingTick is not null)
+                {
+                    _activeDispatch = NewDispatchSource();
+                    return ((SchedulerSchedule?)null, true);
+                }
+                return ((SchedulerSchedule?)null, false);
+            })
+        );
         PublishSchedule(schedule);
         if (startDispatch)
             StartPendingDispatch();
@@ -118,73 +136,82 @@ internal sealed class ZLinkTimer : IZLinkTimer
 
     public bool IsDisposed => AwaitStateLane(_lane.RunAsync(() => _disposed != 0));
 
-    internal ZLinkTimerLogicalSnapshot Freeze()
-        => AwaitStateLane(_lane.RunAsync(() =>
-        {
-            ObjectDisposedException.ThrowIf(IsDisposedOnLane, this);
-            _resume ??= NewResumeSource();
-            return SnapshotOnLane();
-        }));
+    internal ZLinkTimerLogicalSnapshot Freeze() =>
+        AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                ObjectDisposedException.ThrowIf(IsDisposedOnLane, this);
+                _resume ??= NewResumeSource();
+                return SnapshotOnLane();
+            })
+        );
 
-    internal ZLinkTimerLogicalSnapshot Snapshot()
-        => AwaitStateLane(_lane.RunAsync(SnapshotOnLane));
+    internal ZLinkTimerLogicalSnapshot Snapshot() => AwaitStateLane(_lane.RunAsync(SnapshotOnLane));
 
-    internal Task WaitForFrozenDispatchAsync()
-        => AwaitStateLane(_lane.RunAsync(() =>
-        {
-            if (_resume is null)
-                throw new InvalidOperationException(
-                    "A logical timer dispatch can be drained only while frozen.");
-            return _activeDispatch?.Task ?? Task.CompletedTask;
-        }));
+    internal Task WaitForFrozenDispatchAsync() =>
+        AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                if (_resume is null)
+                    throw new InvalidOperationException(
+                        "A logical timer dispatch can be drained only while frozen."
+                    );
+                return _activeDispatch?.Task ?? Task.CompletedTask;
+            })
+        );
 
     internal void RestoreFrozen(ZLinkTimerLogicalSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
-        AwaitStateLane(_lane.RunAsync(() =>
-        {
-            ObjectDisposedException.ThrowIf(IsDisposedOnLane, this);
-            if (_resume is null)
-                throw new InvalidOperationException(
-                    "A logical timer can only be restored while frozen.");
-            if (!string.Equals(_name, snapshot.Name, StringComparison.Ordinal)
-                || _period != snapshot.Period
-                || _callbacks.Options != snapshot.Options)
-                throw new InvalidDataException(
-                    $"Logical timer '{snapshot.Name}' does not match its target registration.");
+        AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                ObjectDisposedException.ThrowIf(IsDisposedOnLane, this);
+                if (_resume is null)
+                    throw new InvalidOperationException(
+                        "A logical timer can only be restored while frozen."
+                    );
+                if (
+                    !string.Equals(_name, snapshot.Name, StringComparison.Ordinal)
+                    || _period != snapshot.Period
+                    || _callbacks.Options != snapshot.Options
+                )
+                    throw new InvalidDataException(
+                        $"Logical timer '{snapshot.Name}' does not match its target registration."
+                    );
 
-            _startedAt = snapshot.StartedAt;
-            _startedElapsed = _scheduler.Elapsed
-                - (_scheduler.TimeProvider.GetUtcNow() - snapshot.StartedAt);
-            _deliveryIndex = snapshot.DeliveryIndex;
-            _lastScheduledIndex = snapshot.LastScheduledIndex;
-            _nextScheduledAt = snapshot.NextScheduledAt;
-            _pendingTick = snapshot.PendingTick;
-        }));
+                _startedAt = snapshot.StartedAt;
+                _startedElapsed =
+                    _scheduler.Elapsed - (_scheduler.TimeProvider.GetUtcNow() - snapshot.StartedAt);
+                _deliveryIndex = snapshot.DeliveryIndex;
+                _lastScheduledIndex = snapshot.LastScheduledIndex;
+                _nextScheduledAt = snapshot.NextScheduledAt;
+                _pendingTick = snapshot.PendingTick;
+            })
+        );
     }
 
-    internal bool IsScheduleCurrent(long version)
-        => AwaitStateLane(_lane.RunAsync(() =>
-            !IsDisposedOnLane && _scheduleVersion == version));
+    internal bool IsScheduleCurrent(long version) =>
+        AwaitStateLane(_lane.RunAsync(() => !IsDisposedOnLane && _scheduleVersion == version));
 
     internal void NotifyDue(long version)
     {
-        var startDispatch = AwaitStateLane(_lane.RunAsync(() =>
-        {
-            if (IsDisposedOnLane
-                || _scheduleVersion != version
-                || _resume is not null)
-                return false;
-
-            _nextScheduledAt = null;
-            _pendingTick ??= CreateNextTickOnLane(_scheduler.TimeProvider.GetUtcNow());
-            if (_activeDispatch is null)
+        var startDispatch = AwaitStateLane(
+            _lane.RunAsync(() =>
             {
-                _activeDispatch = NewDispatchSource();
-                return true;
-            }
-            return false;
-        }));
+                if (IsDisposedOnLane || _scheduleVersion != version || _resume is not null)
+                    return false;
+
+                _nextScheduledAt = null;
+                _pendingTick ??= CreateNextTickOnLane(_scheduler.TimeProvider.GetUtcNow());
+                if (_activeDispatch is null)
+                {
+                    _activeDispatch = NewDispatchSource();
+                    return true;
+                }
+                return false;
+            })
+        );
 
         if (startDispatch)
             StartPendingDispatch();
@@ -192,30 +219,33 @@ internal sealed class ZLinkTimer : IZLinkTimer
 
     internal void Resume()
     {
-        var resumeState = AwaitStateLane(_lane.RunAsync(() =>
-        {
-            var resume = _resume;
-            _resume = null;
-            SchedulerSchedule? schedule = null;
-            var startDispatch = false;
-            if (resume is not null && !IsDisposedOnLane)
+        var resumeState = AwaitStateLane(
+            _lane.RunAsync(() =>
             {
-                if (_pendingTick is not null)
+                var resume = _resume;
+                _resume = null;
+                SchedulerSchedule? schedule = null;
+                var startDispatch = false;
+                if (resume is not null && !IsDisposedOnLane)
                 {
-                    if (_activeDispatch is null)
+                    if (_pendingTick is not null)
                     {
-                        _activeDispatch = NewDispatchSource();
-                        startDispatch = true;
+                        if (_activeDispatch is null)
+                        {
+                            _activeDispatch = NewDispatchSource();
+                            startDispatch = true;
+                        }
+                    }
+                    else
+                    {
+                        schedule = PrepareScheduleOnLane(
+                            _nextScheduledAt ?? ComputeNextScheduledAtOnLane()
+                        );
                     }
                 }
-                else
-                {
-                    schedule = PrepareScheduleOnLane(
-                        _nextScheduledAt ?? ComputeNextScheduledAtOnLane());
-                }
-            }
-            return (resume, schedule, startDispatch);
-        }));
+                return (resume, schedule, startDispatch);
+            })
+        );
 
         resumeState.resume?.TrySetResult();
         PublishSchedule(resumeState.schedule);
@@ -223,8 +253,7 @@ internal sealed class ZLinkTimer : IZLinkTimer
             StartPendingDispatch();
     }
 
-    public ValueTask CancelAsync() =>
-        new(GetOrStartFinalization());
+    public ValueTask CancelAsync() => new(GetOrStartFinalization());
 
     public ValueTask DisposeAsync() => CancelAsync();
 
@@ -246,23 +275,27 @@ internal sealed class ZLinkTimer : IZLinkTimer
             _deliveryIndex,
             _lastScheduledIndex,
             _nextScheduledAt,
-            _pendingTick);
+            _pendingTick
+        );
     }
 
     private Task GetOrStartFinalization()
     {
         TaskCompletionSource? completion = null;
-        var finalization = AwaitStateLane(_lane.RunAsync(() =>
-        {
-            if (_finalization is not null)
-                return _finalization;
+        var finalization = AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                if (_finalization is not null)
+                    return _finalization;
 
-            _disposed = 1;
-            completion = new TaskCompletionSource(
-                TaskCreationOptions.RunContinuationsAsynchronously);
-            _finalization = completion.Task;
-            return _finalization;
-        }));
+                _disposed = 1;
+                completion = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously
+                );
+                _finalization = completion.Task;
+                return _finalization;
+            })
+        );
 
         // Start cancellation before returning, outside the state lane: a
         // queued worker could run after the active callback unregisters.
@@ -303,8 +336,7 @@ internal sealed class ZLinkTimer : IZLinkTimer
 
         try
         {
-            var activeDispatch = AwaitStateLane(_lane.RunAsync(
-                () => _activeDispatch?.Task));
+            var activeDispatch = AwaitStateLane(_lane.RunAsync(() => _activeDispatch?.Task));
             if (activeDispatch is not null)
                 await activeDispatch.ConfigureAwait(false);
         }
@@ -340,21 +372,21 @@ internal sealed class ZLinkTimer : IZLinkTimer
 
     private async Task DispatchPendingAsync()
     {
-        var prepared = AwaitStateLane(_lane.RunAsync(() =>
-        {
-            var dispatch = _activeDispatch;
-            if (dispatch is null)
-                return (Dispatch: (TaskCompletionSource?)null, Tick: default(ZLinkTimerTick?));
-            if (IsDisposedOnLane
-                || _resume is not null
-                || _pendingTick is not { } pending)
+        var prepared = AwaitStateLane(
+            _lane.RunAsync(() =>
             {
-                _activeDispatch = null;
-                dispatch.TrySetResult();
-                return (Dispatch: (TaskCompletionSource?)null, Tick: default(ZLinkTimerTick?));
-            }
-            return (Dispatch: dispatch, Tick: (ZLinkTimerTick?)pending);
-        }));
+                var dispatch = _activeDispatch;
+                if (dispatch is null)
+                    return (Dispatch: (TaskCompletionSource?)null, Tick: default(ZLinkTimerTick?));
+                if (IsDisposedOnLane || _resume is not null || _pendingTick is not { } pending)
+                {
+                    _activeDispatch = null;
+                    dispatch.TrySetResult();
+                    return (Dispatch: (TaskCompletionSource?)null, Tick: default(ZLinkTimerTick?));
+                }
+                return (Dispatch: dispatch, Tick: (ZLinkTimerTick?)pending);
+            })
+        );
         if (prepared.Dispatch is null || prepared.Tick is not { } tick)
             return;
 
@@ -366,47 +398,46 @@ internal sealed class ZLinkTimer : IZLinkTimer
                 .DispatchTickAsync(tick, _stopSource.Token)
                 .ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
-            when (_stopSource.IsCancellationRequested)
-        {
-        }
+        catch (OperationCanceledException) when (_stopSource.IsCancellationRequested) { }
         catch (Exception exception)
         {
             failure = exception;
         }
 
-        var nextSchedule = AwaitStateLane(_lane.RunAsync(() =>
-        {
-            SchedulerSchedule? nextSchedule = null;
-            if (failure is not null)
+        var nextSchedule = AwaitStateLane(
+            _lane.RunAsync(() =>
             {
-                _dispatchFailure ??= failure;
-            }
-            else if (_pendingTick == tick)
-            {
-                if (outcome.Delivered)
+                SchedulerSchedule? nextSchedule = null;
+                if (failure is not null)
                 {
-                    if (outcome.KeepRunning)
+                    _dispatchFailure ??= failure;
+                }
+                else if (_pendingTick == tick)
+                {
+                    if (outcome.Delivered)
                     {
-                        _deliveryIndex = tick.DeliveryIndex;
-                        _lastScheduledIndex = tick.ScheduledIndex;
+                        if (outcome.KeepRunning)
+                        {
+                            _deliveryIndex = tick.DeliveryIndex;
+                            _lastScheduledIndex = tick.ScheduledIndex;
+                        }
+                        _pendingTick = null;
                     }
-                    _pendingTick = null;
+
+                    if (!IsDisposedOnLane && _resume is null && outcome.KeepRunning)
+                    {
+                        var due = outcome.Delivered
+                            ? ComputeNextScheduledAtOnLane()
+                            : _startedAt + (_scheduler.Elapsed - _startedElapsed) + _period;
+                        nextSchedule = PrepareScheduleOnLane(due);
+                    }
                 }
 
-                if (!IsDisposedOnLane && _resume is null && outcome.KeepRunning)
-                {
-                    var due = outcome.Delivered
-                        ? ComputeNextScheduledAtOnLane()
-                        : _startedAt + (_scheduler.Elapsed - _startedElapsed) + _period;
-                    nextSchedule = PrepareScheduleOnLane(due);
-                }
-            }
-
-            if (ReferenceEquals(_activeDispatch, prepared.Dispatch))
-                _activeDispatch = null;
-            return nextSchedule;
-        }));
+                if (ReferenceEquals(_activeDispatch, prepared.Dispatch))
+                    _activeDispatch = null;
+                return nextSchedule;
+            })
+        );
         prepared.Dispatch.TrySetResult();
         PublishSchedule(nextSchedule);
     }
@@ -415,8 +446,7 @@ internal sealed class ZLinkTimer : IZLinkTimer
     {
         var version = checked(++_scheduleVersion);
         _nextScheduledAt = dueAt;
-        return new SchedulerSchedule(
-            _startedElapsed + (dueAt - _startedAt), version);
+        return new SchedulerSchedule(_startedElapsed + (dueAt - _startedAt), version);
     }
 
     private void PublishSchedule(SchedulerSchedule? schedule)
@@ -427,8 +457,7 @@ internal sealed class ZLinkTimer : IZLinkTimer
 
     private DateTimeOffset ComputeNextScheduledAtOnLane()
     {
-        if (_callbacks.Options.OverrunPolicy
-            == ZLinkTimerOverrunPolicy.DelayNextTick)
+        if (_callbacks.Options.OverrunPolicy == ZLinkTimerOverrunPolicy.DelayNextTick)
             return _startedAt + (_scheduler.Elapsed - _startedElapsed) + _period;
 
         return AddPeriods(_startedAt, _lastScheduledIndex + 1, _period);
@@ -437,8 +466,7 @@ internal sealed class ZLinkTimer : IZLinkTimer
     private ZLinkTimerTick CreateNextTickOnLane(DateTimeOffset startedAt)
     {
         ulong scheduledIndex;
-        if (_callbacks.Options.OverrunPolicy
-            == ZLinkTimerOverrunPolicy.DelayNextTick)
+        if (_callbacks.Options.OverrunPolicy == ZLinkTimerOverrunPolicy.DelayNextTick)
         {
             scheduledIndex = _lastScheduledIndex + 1;
         }
@@ -447,11 +475,13 @@ internal sealed class ZLinkTimer : IZLinkTimer
             var elapsedTicks = Math.Max(0, (_scheduler.Elapsed - _startedElapsed).Ticks);
             var dueIndex = Math.Max(
                 _lastScheduledIndex + 1,
-                (ulong)Math.Max(1, elapsedTicks / _period.Ticks));
+                (ulong)Math.Max(1, elapsedTicks / _period.Ticks)
+            );
             scheduledIndex = SelectScheduledIndex(
                 _callbacks.Options,
                 _lastScheduledIndex,
-                dueIndex);
+                dueIndex
+            );
         }
 
         var deliveryIndex = _deliveryIndex + 1;
@@ -468,13 +498,15 @@ internal sealed class ZLinkTimer : IZLinkTimer
             scheduledElapsed,
             startedElapsed,
             startedElapsed - scheduledElapsed,
-            scheduledIndex - _lastScheduledIndex - 1);
+            scheduledIndex - _lastScheduledIndex - 1
+        );
     }
 
     private static ulong SelectScheduledIndex(
         ZLinkTimerOptions options,
         ulong lastScheduledIndex,
-        ulong dueScheduledIndex)
+        ulong dueScheduledIndex
+    )
     {
         if (options.OverrunPolicy == ZLinkTimerOverrunPolicy.SkipLateTicks)
             return dueScheduledIndex;
@@ -486,40 +518,44 @@ internal sealed class ZLinkTimer : IZLinkTimer
         return lastScheduledIndex + 1;
     }
 
-    private static DateTimeOffset AddPeriods(
-        DateTimeOffset startedAt,
-        ulong index,
-        TimeSpan period)
+    private static DateTimeOffset AddPeriods(DateTimeOffset startedAt, ulong index, TimeSpan period)
     {
         var ticks = Math.Min(
             DateTimeOffset.MaxValue.Ticks - startedAt.Ticks,
-            index * (double)period.Ticks);
+            index * (double)period.Ticks
+        );
         return startedAt.AddTicks((long)ticks);
     }
 
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();
 
-    private static void AwaitStateLane(ValueTask operation) =>
-        operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 
     private readonly struct ZLinkTimerCallbacks(
         ZLinkTimerOptions options,
         Func<ZLinkTimerTick, CancellationToken, ValueTask<bool>> onTickAsync,
-        Func<ZLinkTimerTick, Exception, bool, CancellationToken, ValueTask> onUnhandledExceptionAsync,
-        Func<IDisposable>? enterTickScope)
+        Func<
+            ZLinkTimerTick,
+            Exception,
+            bool,
+            CancellationToken,
+            ValueTask
+        > onUnhandledExceptionAsync,
+        Func<IDisposable>? enterTickScope
+    )
     {
         public ZLinkTimerOptions Options => options;
 
         public async ValueTask<ZLinkTimerDispatchOutcome> DispatchTickAsync(
             ZLinkTimerTick tick,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             using var tickScope = enterTickScope?.Invoke();
             try
             {
-                var delivered = await onTickAsync(tick, cancellationToken)
-                    .ConfigureAwait(false);
+                var delivered = await onTickAsync(tick, cancellationToken).ConfigureAwait(false);
                 return new ZLinkTimerDispatchOutcome(true, delivered);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -544,11 +580,7 @@ internal sealed class ZLinkTimer : IZLinkTimer
         }
     }
 
-    private readonly record struct SchedulerSchedule(
-        TimeSpan DueAt,
-        long Version);
+    private readonly record struct SchedulerSchedule(TimeSpan DueAt, long Version);
 
-    private readonly record struct ZLinkTimerDispatchOutcome(
-        bool KeepRunning,
-        bool Delivered);
+    private readonly record struct ZLinkTimerDispatchOutcome(bool KeepRunning, bool Delivered);
 }

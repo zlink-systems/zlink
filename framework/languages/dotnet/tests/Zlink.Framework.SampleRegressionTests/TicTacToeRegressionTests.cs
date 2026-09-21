@@ -8,14 +8,21 @@ public sealed partial class RegressionTests
     public void TicTacToeUsesOnlyExplicitManualHandlerRegistration()
     {
         var sampleRoot = ResolveSampleRoot("TicTacToe");
-        var sourceFiles = Directory.GetFiles(sampleRoot, "*.cs", SearchOption.AllDirectories)
-            .Where(static path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"))
+        var sourceFiles = Directory
+            .GetFiles(sampleRoot, "*.cs", SearchOption.AllDirectories)
+            .Where(static path =>
+                !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
+            )
             .Select(ReadSource)
             .ToArray();
         var combined = string.Join('\n', sourceFiles);
 
-        Assert.Equal(2,
-            combined.Split("DisableImplicitHandlerAutoRegistration()", StringSplitOptions.None).Length - 1);
+        Assert.Equal(
+            2,
+            combined
+                .Split("DisableImplicitHandlerAutoRegistration()", StringSplitOptions.None)
+                .Length - 1
+        );
         Assert.DoesNotContain("AddHandlersFromAssembly", combined, StringComparison.Ordinal);
         Assert.DoesNotContain("AddHandlerGroup(", combined, StringComparison.Ordinal);
         Assert.DoesNotContain("[ZLinkHandlerGroup(", combined, StringComparison.Ordinal);
@@ -32,13 +39,15 @@ public sealed partial class RegressionTests
             "Context.Handlers.AddHandler<PlayActorGetCurrentGameStateHandler>(nameof(JoinGameMsg))",
             "Context.Handlers.AddHandler<PlayActorLeaveGameHandler>(nameof(LeaveGameMsg))",
             "Context.Handlers.AddHandler<PlayActorPlaceMarkHandler>(nameof(PlaceMarkReq))",
-            "Context.AddTimer<TicTacToeGameTimerHandler>("
+            "Context.AddTimer<TicTacToeGameTimerHandler>(",
         };
         var normalizedCombined = NormalizeWhitespace(combined);
         foreach (var registration in registrations)
             Assert.Equal(
                 1,
-                normalizedCombined.Split(NormalizeWhitespace(registration), StringSplitOptions.None).Length - 1
+                normalizedCombined
+                    .Split(NormalizeWhitespace(registration), StringSplitOptions.None)
+                    .Length - 1
             );
 
         Assert.Equal(7, combined.Split("Context.Handlers.Add", StringSplitOptions.None).Length - 1);
@@ -53,17 +62,37 @@ public sealed partial class RegressionTests
         var sampleRoot = ResolveSampleRoot("TicTacToe");
         var apiServer = ReadSource(Path.Combine(sampleRoot, "Server", "Api", "ApiServer.cs"));
         var playServer = ReadSource(Path.Combine(sampleRoot, "Server", "Play", "PlayServer.cs"));
-        var createGame = ReadSource(Path.Combine(
-            sampleRoot, "Server", "Api", "Handlers", "CreateGameHttpHandler.cs"));
-        var authenticate = ReadSource(Path.Combine(
-            sampleRoot, "Server", "Play", "Infrastructure", "ZLink", "Sessions", "Handlers",
-            "AuthenticatePlaySessionHandler.cs"));
-        var entrySpot = ReadSource(Path.Combine(
-            sampleRoot, "Server", "Play", "Infrastructure", "ZLink", "Spots", "EntrySpot",
-            "PlayEntrySpot.cs"));
+        var createGame = ReadSource(
+            Path.Combine(sampleRoot, "Server", "Api", "Handlers", "CreateGameHttpHandler.cs")
+        );
+        var authenticate = ReadSource(
+            Path.Combine(
+                sampleRoot,
+                "Server",
+                "Play",
+                "Infrastructure",
+                "ZLink",
+                "Sessions",
+                "Handlers",
+                "AuthenticatePlaySessionHandler.cs"
+            )
+        );
+        var entrySpot = ReadSource(
+            Path.Combine(
+                sampleRoot,
+                "Server",
+                "Play",
+                "Infrastructure",
+                "ZLink",
+                "Spots",
+                "EntrySpot",
+                "PlayEntrySpot.cs"
+            )
+        );
         var messages = ReadSource(Path.Combine(sampleRoot, "Shared", "Contracts", "Messages.cs"));
-        var settings = ReadSource(Path.Combine(
-            sampleRoot, "Server", "Configuration", "SampleSettings.cs"));
+        var settings = ReadSource(
+            Path.Combine(sampleRoot, "Server", "Configuration", "SampleSettings.cs")
+        );
         var shellRunner = ReadSource(Path.Combine(sampleRoot, "run_sample.sh"));
         var powershellRunner = ReadSource(Path.Combine(sampleRoot, "run_sample.ps1"));
 
@@ -76,11 +105,24 @@ public sealed partial class RegressionTests
         Assert.Contains(
             NormalizeWhitespace("mesh.Objects().Server()"),
             NormalizeWhitespace(playServer),
-            StringComparison.Ordinal);
-        Assert.DoesNotContain("mesh.Channel(SampleChannels.Api)", apiServer, StringComparison.Ordinal);
-        Assert.DoesNotContain("mesh.Channel(SampleChannels.Api)", playServer, StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "mesh.Channel(SampleChannels.Api)",
+            apiServer,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "mesh.Channel(SampleChannels.Api)",
+            playServer,
+            StringComparison.Ordinal
+        );
 
-        Assert.Contains("AddClientServerChannel(SampleChannels.Api)", apiServer, StringComparison.Ordinal);
+        Assert.Contains(
+            "AddClientServerChannel(SampleChannels.Api)",
+            apiServer,
+            StringComparison.Ordinal
+        );
         Assert.Contains(".Server()", apiServer, StringComparison.Ordinal);
         Assert.Contains(".Listen(apiChannelEndpoint.Port)", apiServer, StringComparison.Ordinal);
         Assert.Contains(
@@ -88,16 +130,27 @@ public sealed partial class RegressionTests
                 ".AddRequestHandler<AuthenticatePlayerHandler, AuthenticatePlayerReq, AuthenticatePlayerRes>()"
             ),
             NormalizeWhitespace(apiServer),
-            StringComparison.Ordinal);
-        Assert.Contains("AddClientServerChannel(SampleChannels.Api)", playServer, StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "AddClientServerChannel(SampleChannels.Api)",
+            playServer,
+            StringComparison.Ordinal
+        );
         Assert.Contains(".Client()", playServer, StringComparison.Ordinal);
         Assert.Contains("settings.ApiChannelPeerEndpoints", playServer, StringComparison.Ordinal);
         Assert.Contains("apiChannel.Connect(endpoint)", playServer, StringComparison.Ordinal);
 
-        Assert.DoesNotContain("Channel(SampleTopics.PlayerMilestoneChannel)", apiServer,
-            StringComparison.Ordinal);
-        Assert.Contains("mesh.Channel(SampleTopics.PlayerMilestoneChannel).Server()", playServer,
-            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Channel(SampleTopics.PlayerMilestoneChannel)",
+            apiServer,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "mesh.Channel(SampleTopics.PlayerMilestoneChannel).Server()",
+            playServer,
+            StringComparison.Ordinal
+        );
 
         Assert.Contains(".EnableActorDispatch()", playServer, StringComparison.Ordinal);
         Assert.Contains(".Create(SampleTypes.GameSpot)", createGame, StringComparison.Ordinal);
@@ -105,74 +158,138 @@ public sealed partial class RegressionTests
         Assert.Contains(
             NormalizeWhitespace(".Request(new TicTacToeGameCreateReq("),
             NormalizeWhitespace(createGame),
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain(".GetOrCreate(", createGame, StringComparison.Ordinal);
         Assert.DoesNotContain("Guid.NewGuid", createGame, StringComparison.Ordinal);
         Assert.Contains(
             NormalizeWhitespace("RequestToChannel(SampleChannels.Api,"),
             NormalizeWhitespace(authenticate),
-            StringComparison.Ordinal);
-        Assert.Contains("record PlayerActorCreateReq(PlayerInfo Player)", messages,
-            StringComparison.Ordinal);
-        Assert.Contains(".Request(new PlayerActorCreateReq(player))", authenticate,
-            StringComparison.Ordinal);
-        Assert.Contains("Decode<PlayerActorCreateReq>().Player", entrySpot,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "record PlayerActorCreateReq(PlayerInfo Player)",
+            messages,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            ".Request(new PlayerActorCreateReq(player))",
+            authenticate,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "Decode<PlayerActorCreateReq>().Player",
+            entrySpot,
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain(".Request(player)", authenticate, StringComparison.Ordinal);
-        var game = ReadSource(Path.Combine(
-            sampleRoot, "Server", "Play", "Infrastructure", "ZLink", "Spots", "TicTacToeGameSpot",
-            "TicTacToeGame.cs"));
+        var game = ReadSource(
+            Path.Combine(
+                sampleRoot,
+                "Server",
+                "Play",
+                "Infrastructure",
+                "ZLink",
+                "Spots",
+                "TicTacToeGameSpot",
+                "TicTacToeGame.cs"
+            )
+        );
         Assert.Contains(
             NormalizeWhitespace("Context.Outbound.Publish("),
             NormalizeWhitespace(game),
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain("ZLinkPublishResult", game, StringComparison.Ordinal);
         Assert.DoesNotContain("result.Detail", game, StringComparison.Ordinal);
         Assert.Contains("string MeshEndpoint", settings, StringComparison.Ordinal);
-        Assert.Contains("IReadOnlyList<string> PeerMeshEndpoints", settings, StringComparison.Ordinal);
+        Assert.Contains(
+            "IReadOnlyList<string> PeerMeshEndpoints",
+            settings,
+            StringComparison.Ordinal
+        );
         Assert.Contains("string ApiChannelListenEndpoint", settings, StringComparison.Ordinal);
-        Assert.Contains("IReadOnlyList<string> ApiChannelPeerEndpoints", settings, StringComparison.Ordinal);
+        Assert.Contains(
+            "IReadOnlyList<string> ApiChannelPeerEndpoints",
+            settings,
+            StringComparison.Ordinal
+        );
         Assert.Contains(
             "\"PeerMeshEndpoints\":[\"${PLAY_A_MESH_ENDPOINT}\",\"${PLAY_B_MESH_ENDPOINT}\"]",
             shellRunner,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
         Assert.Contains(
             "\"InstanceName\":\"play-a\",\"MeshEndpoint\":\"${PLAY_A_MESH_ENDPOINT}\",\"PeerMeshEndpoints\":[]",
             shellRunner,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
         Assert.Contains(
             "\"InstanceName\":\"play-b\",\"MeshEndpoint\":\"${PLAY_B_MESH_ENDPOINT}\",\"PeerMeshEndpoints\":[\"${PLAY_A_MESH_ENDPOINT}\"]",
             shellRunner,
-            StringComparison.Ordinal);
-        Assert.Contains("API_A_CHANNEL_ENDPOINT=\"tcp://127.0.0.1:${PORTS[8]}\"", shellRunner,
-            StringComparison.Ordinal);
-        Assert.Contains("API_B_CHANNEL_ENDPOINT=\"tcp://127.0.0.1:${PORTS[9]}\"", shellRunner,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "API_A_CHANNEL_ENDPOINT=\"tcp://127.0.0.1:${PORTS[8]}\"",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "API_B_CHANNEL_ENDPOINT=\"tcp://127.0.0.1:${PORTS[9]}\"",
+            shellRunner,
+            StringComparison.Ordinal
+        );
         Assert.Contains(
             "PeerMeshEndpoints = @($playAMeshEndpoint, $playBMeshEndpoint)",
             powershellRunner,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
         Assert.Contains(
             "New-TicTacToePlaySettings -InstanceName \"play-a\" -MeshEndpoint $playAMeshEndpoint -PeerMeshEndpoints @() -PlayEndpoint $playAEndpoint -ApiChannelPeerEndpoints @($apiAChannelEndpoint, $apiBChannelEndpoint)",
             powershellRunner,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
         Assert.Contains(
             "New-TicTacToePlaySettings -InstanceName \"play-b\" -MeshEndpoint $playBMeshEndpoint -PeerMeshEndpoints @($playAMeshEndpoint) -PlayEndpoint $playBEndpoint -ApiChannelPeerEndpoints @($apiAChannelEndpoint, $apiBChannelEndpoint)",
             powershellRunner,
-            StringComparison.Ordinal);
-        Assert.Contains("$apiAChannelEndpoint = \"tcp://127.0.0.1:$($ports[8])\"", powershellRunner,
-            StringComparison.Ordinal);
-        Assert.Contains("$apiBChannelEndpoint = \"tcp://127.0.0.1:$($ports[9])\"", powershellRunner,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "$apiAChannelEndpoint = \"tcp://127.0.0.1:$($ports[8])\"",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "$apiBChannelEndpoint = \"tcp://127.0.0.1:$($ports[9])\"",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
         Assert.Contains("zlink_sample_pick_ports 10", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("$ports = New-SamplePorts -Count 10 -BasePort 0", powershellRunner,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain("SpotPubSubEndpoint", settings + shellRunner + powershellRunner,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain("PlayChannelEndpoint", settings + shellRunner + powershellRunner,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain("SpotPubSubEndpoint", apiServer + playServer, StringComparison.Ordinal);
-        Assert.DoesNotContain("SampleNodes.PlaySpot", apiServer + playServer, StringComparison.Ordinal);
+        Assert.Contains(
+            "$ports = New-SamplePorts -Count 10 -BasePort 0",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "SpotPubSubEndpoint",
+            settings + shellRunner + powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "PlayChannelEndpoint",
+            settings + shellRunner + powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "SpotPubSubEndpoint",
+            apiServer + playServer,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "SampleNodes.PlaySpot",
+            apiServer + playServer,
+            StringComparison.Ordinal
+        );
     }
 
     [Fact]
@@ -184,29 +301,39 @@ public sealed partial class RegressionTests
                 sampleRoot,
                 "Server",
                 "Configuration",
-                "TicTacToe.Server.Configuration.csproj"));
+                "TicTacToe.Server.Configuration.csproj"
+            )
+        );
         var apiProject = ReadSource(
-            Path.Combine(sampleRoot, "Server", "Api", "TicTacToe.Server.Api.csproj"));
+            Path.Combine(sampleRoot, "Server", "Api", "TicTacToe.Server.Api.csproj")
+        );
         var playProject = ReadSource(
-            Path.Combine(sampleRoot, "Server", "Play", "TicTacToe.Server.Play.csproj"));
+            Path.Combine(sampleRoot, "Server", "Play", "TicTacToe.Server.Play.csproj")
+        );
 
-        Assert.Contains("<EnableDefaultCompileItems>false</EnableDefaultCompileItems>",
+        Assert.Contains(
+            "<EnableDefaultCompileItems>false</EnableDefaultCompileItems>",
             configurationProject,
-            StringComparison.Ordinal);
-        Assert.Contains("<Compile Include=\"*.cs\"/>",
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "<Compile Include=\"*.cs\"/>",
             configurationProject,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain("Api/**/*.cs", configurationProject, StringComparison.Ordinal);
         Assert.DoesNotContain("Play/**/*.cs", configurationProject, StringComparison.Ordinal);
         Assert.Contains(
             "<ProjectReference Include=\"../Configuration/TicTacToe.Server.Configuration.csproj\"",
             apiProject,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain("Play/**/*.cs", apiProject, StringComparison.Ordinal);
         Assert.Contains(
             "<ProjectReference Include=\"../Configuration/TicTacToe.Server.Configuration.csproj\"",
             playProject,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain("Api/**/*.cs", playProject, StringComparison.Ordinal);
     }
 
@@ -226,7 +353,8 @@ public sealed partial class RegressionTests
             Assert.Contains(
                 ".SetRoutingId(SampleNodes.RouteMeshRoutingId(settings.InstanceName))",
                 source,
-                StringComparison.Ordinal);
+                StringComparison.Ordinal
+            );
             Assert.DoesNotContain("revert to automatic RID", source, StringComparison.Ordinal);
             Assert.DoesNotContain(".NET cannot", source, StringComparison.Ordinal);
             Assert.DoesNotContain("known spec deviation", source, StringComparison.Ordinal);
@@ -238,12 +366,28 @@ public sealed partial class RegressionTests
     {
         var sampleRoot = ResolveSampleRoot("TicTacToe");
         var host = ReadSource(Path.Combine(sampleRoot, "Server", "Play", "PlayServer.cs"));
-        var adapter = ReadSource(Path.Combine(sampleRoot, "Server", "Play", "Infrastructure", "ZLink",
-            "Actors", "PlayActorRelocationAdapter.cs"));
+        var adapter = ReadSource(
+            Path.Combine(
+                sampleRoot,
+                "Server",
+                "Play",
+                "Infrastructure",
+                "ZLink",
+                "Actors",
+                "PlayActorRelocationAdapter.cs"
+            )
+        );
 
-        Assert.Contains("PreserveStateWith<PlayActorRelocationAdapter>()", host,
-            StringComparison.Ordinal);
-        Assert.Contains("IZLinkActorRelocationAdapter<PlayActor>", adapter, StringComparison.Ordinal);
+        Assert.Contains(
+            "PreserveStateWith<PlayActorRelocationAdapter>()",
+            host,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "IZLinkActorRelocationAdapter<PlayActor>",
+            adapter,
+            StringComparison.Ordinal
+        );
         Assert.Contains("ValueTask<byte[]> CaptureAsync", adapter, StringComparison.Ordinal);
         Assert.Contains("ValueTask RestoreAsync", adapter, StringComparison.Ordinal);
     }
@@ -254,105 +398,297 @@ public sealed partial class RegressionTests
         var sampleRoot = ResolveSampleRoot("TicTacToe");
         var shellRunner = ReadSource(Path.Combine(sampleRoot, "run_sample.sh"));
         var powershellRunner = ReadSource(Path.Combine(sampleRoot, "run_sample.ps1"));
-        var settings = ReadSource(Path.Combine(sampleRoot, "Server", "Configuration", "SampleSettings.cs"));
+        var settings = ReadSource(
+            Path.Combine(sampleRoot, "Server", "Configuration", "SampleSettings.cs")
+        );
         var readme = ReadSource(Path.Combine(sampleRoot, "README.md"));
 
-        Assert.Contains("RUN_ID=\"$(basename \"${RUN_DIR}\")-$$-${RANDOM}\"", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("TICTACTOE_REDIS_KEY_PREFIX=\"tictactoe:dotnet:${RUN_ID}:\"", shellRunner,
-            StringComparison.Ordinal);
+        Assert.Contains(
+            "RUN_ID=\"$(basename \"${RUN_DIR}\")-$$-${RANDOM}\"",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "TICTACTOE_REDIS_KEY_PREFIX=\"tictactoe:dotnet:${RUN_ID}:\"",
+            shellRunner,
+            StringComparison.Ordinal
+        );
         AssertShellRunnerUsesRedisDockerHelper(
             shellRunner,
             "zlink-tictactoe-dotnet-redis",
             "TICTACTOE_REDIS_ENDPOINT",
-            "REDIS_CONTAINER_ID");
-        Assert.Contains("SAMPLE_LOG_DIR=\"${RUN_DIR}/sample-logs\"", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("TICTACTOE_LOG_DIR=\"${SAMPLE_LOG_DIR}\"", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("if [[ -z \"${TICTACTOE_REDIS_ENDPOINT:-}\" ]]", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("when TICTACTOE_REDIS_ENDPOINT is not set", shellRunner, StringComparison.Ordinal);
+            "REDIS_CONTAINER_ID"
+        );
+        Assert.Contains(
+            "SAMPLE_LOG_DIR=\"${RUN_DIR}/sample-logs\"",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "TICTACTOE_LOG_DIR=\"${SAMPLE_LOG_DIR}\"",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "if [[ -z \"${TICTACTOE_REDIS_ENDPOINT:-}\" ]]",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "when TICTACTOE_REDIS_ENDPOINT is not set",
+            shellRunner,
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain("TICTACTOE_BASE_PORT", shellRunner, StringComparison.Ordinal);
         Assert.DoesNotContain("${TICTACTOE_API_A_BIND_URL", shellRunner, StringComparison.Ordinal);
         Assert.DoesNotContain("${TICTACTOE_API_B_BIND_URL", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("${TICTACTOE_API_A_PUBLIC_URL", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("${TICTACTOE_API_B_PUBLIC_URL", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("${TICTACTOE_API_A_CHANNEL_ENDPOINT", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("${TICTACTOE_API_B_CHANNEL_ENDPOINT", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("${TICTACTOE_PLAY_A_CHANNEL_ENDPOINT", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("${TICTACTOE_PLAY_B_CHANNEL_ENDPOINT", shellRunner, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "${TICTACTOE_API_A_PUBLIC_URL",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "${TICTACTOE_API_B_PUBLIC_URL",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "${TICTACTOE_API_A_CHANNEL_ENDPOINT",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "${TICTACTOE_API_B_CHANNEL_ENDPOINT",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "${TICTACTOE_PLAY_A_CHANNEL_ENDPOINT",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "${TICTACTOE_PLAY_B_CHANNEL_ENDPOINT",
+            shellRunner,
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain("${TICTACTOE_PLAY_A_ENDPOINT", shellRunner, StringComparison.Ordinal);
         Assert.DoesNotContain("${TICTACTOE_PLAY_B_ENDPOINT", shellRunner, StringComparison.Ordinal);
         Assert.DoesNotContain("${TICTACTOE_SPOT_A_ENDPOINT", shellRunner, StringComparison.Ordinal);
         Assert.DoesNotContain("${TICTACTOE_SPOT_B_ENDPOINT", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("${TICTACTOE_SPOT_A_PUBSUB_ENDPOINT", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("${TICTACTOE_SPOT_B_PUBSUB_ENDPOINT", shellRunner, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "${TICTACTOE_SPOT_A_PUBSUB_ENDPOINT",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "${TICTACTOE_SPOT_B_PUBSUB_ENDPOINT",
+            shellRunner,
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain("${TICTACTOE_LOG_DIR:-", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("rm -f \"${TICTACTOE_LOG_DIR}\"/*.log", shellRunner, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "rm -f \"${TICTACTOE_LOG_DIR}\"/*.log",
+            shellRunner,
+            StringComparison.Ordinal
+        );
         Assert.Contains("TICTACTOE_REDIS_KEY_PREFIX", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("\"RedisKeyPrefix\":\"${TICTACTOE_REDIS_KEY_PREFIX}\"", shellRunner,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain("intentionally derived here, not read", shellRunner, StringComparison.Ordinal);
+        Assert.Contains(
+            "\"RedisKeyPrefix\":\"${TICTACTOE_REDIS_KEY_PREFIX}\"",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "intentionally derived here, not read",
+            shellRunner,
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain("sleep 2", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("${SCRIPT_DIR}/Server/Play/bin/Debug/net8.0/TicTacToe.Server.Play.dll",
+        Assert.Contains(
+            "${SCRIPT_DIR}/Server/Play/bin/Debug/net8.0/TicTacToe.Server.Play.dll",
             shellRunner,
-            StringComparison.Ordinal);
-        Assert.Contains("${SCRIPT_DIR}/Server/Api/bin/Debug/net8.0/TicTacToe.Server.Api.dll",
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "${SCRIPT_DIR}/Server/Api/bin/Debug/net8.0/TicTacToe.Server.Api.dll",
             shellRunner,
-            StringComparison.Ordinal);
-        Assert.Contains("dotnet \"${assembly}\" --config \"${config_file}\"", shellRunner,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "dotnet \"${assembly}\" --config \"${config_file}\"",
+            shellRunner,
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain("local mode=", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("dotnet run --no-build --project \"${SCRIPT_DIR}/Server/TicTacToe.Server.csproj\"",
+        Assert.DoesNotContain(
+            "dotnet run --no-build --project \"${SCRIPT_DIR}/Server/TicTacToe.Server.csproj\"",
             shellRunner,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
 
-        Assert.Contains("$RunId = \"$PID-$([Guid]::NewGuid().ToString('N'))\"", powershellRunner,
-            StringComparison.Ordinal);
-        Assert.Contains("$TICTACTOE_REDIS_KEY_PREFIX = \"tictactoe:dotnet:${RunId}:\"", powershellRunner,
-            StringComparison.Ordinal);
-        Assert.Contains("Start-SampleRedisContainer \"zlink-tictactoe-dotnet-redis\"", powershellRunner,
-            StringComparison.Ordinal);
-        Assert.Contains("Remove-SampleRedisContainer $redisContainerId", powershellRunner,
-            StringComparison.Ordinal);
+        Assert.Contains(
+            "$RunId = \"$PID-$([Guid]::NewGuid().ToString('N'))\"",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "$TICTACTOE_REDIS_KEY_PREFIX = \"tictactoe:dotnet:${RunId}:\"",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "Start-SampleRedisContainer \"zlink-tictactoe-dotnet-redis\"",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "Remove-SampleRedisContainer $redisContainerId",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain("docker run", powershellRunner, StringComparison.Ordinal);
-        Assert.Contains("$SampleLogDir = Join-Path $RunDir \"sample-logs\"", powershellRunner,
-            StringComparison.Ordinal);
-        Assert.Contains("$ports = New-SamplePorts -Count 10 -BasePort 0", powershellRunner,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain("if (-not $TICTACTOE_REDIS_ENDPOINT)", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("when TICTACTOE_REDIS_ENDPOINT is not set", powershellRunner, StringComparison.Ordinal);
+        Assert.Contains(
+            "$SampleLogDir = Join-Path $RunDir \"sample-logs\"",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "$ports = New-SamplePorts -Count 10 -BasePort 0",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "if (-not $TICTACTOE_REDIS_ENDPOINT)",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "when TICTACTOE_REDIS_ENDPOINT is not set",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain("$TICTACTOE_BASE_PORT", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("$TICTACTOE_API_A_BIND_URL", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("$TICTACTOE_API_B_BIND_URL", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("$TICTACTOE_API_A_PUBLIC_URL", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("$TICTACTOE_API_B_PUBLIC_URL", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("$TICTACTOE_API_A_CHANNEL_ENDPOINT", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("$TICTACTOE_API_B_CHANNEL_ENDPOINT", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("$TICTACTOE_PLAY_A_CHANNEL_ENDPOINT", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("$TICTACTOE_PLAY_B_CHANNEL_ENDPOINT", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("$TICTACTOE_PLAY_A_ENDPOINT", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("$TICTACTOE_PLAY_B_ENDPOINT", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("$TICTACTOE_SPOT_A_ENDPOINT", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("$TICTACTOE_SPOT_B_ENDPOINT", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("$TICTACTOE_SPOT_A_PUBSUB_ENDPOINT", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("$TICTACTOE_SPOT_B_PUBSUB_ENDPOINT", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("if ($TICTACTOE_LOG_DIR)", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("Remove-Item -Path (Join-Path $SampleLogDir \"*.log\")", powershellRunner,
-            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "$TICTACTOE_API_A_BIND_URL",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "$TICTACTOE_API_B_BIND_URL",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "$TICTACTOE_API_A_PUBLIC_URL",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "$TICTACTOE_API_B_PUBLIC_URL",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "$TICTACTOE_API_A_CHANNEL_ENDPOINT",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "$TICTACTOE_API_B_CHANNEL_ENDPOINT",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "$TICTACTOE_PLAY_A_CHANNEL_ENDPOINT",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "$TICTACTOE_PLAY_B_CHANNEL_ENDPOINT",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "$TICTACTOE_PLAY_A_ENDPOINT",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "$TICTACTOE_PLAY_B_ENDPOINT",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "$TICTACTOE_SPOT_A_ENDPOINT",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "$TICTACTOE_SPOT_B_ENDPOINT",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "$TICTACTOE_SPOT_A_PUBSUB_ENDPOINT",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "$TICTACTOE_SPOT_B_PUBSUB_ENDPOINT",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "if ($TICTACTOE_LOG_DIR)",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "Remove-Item -Path (Join-Path $SampleLogDir \"*.log\")",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
         Assert.Contains("TICTACTOE_REDIS_KEY_PREFIX", powershellRunner, StringComparison.Ordinal);
-        Assert.Contains("RedisKeyPrefix = $TICTACTOE_REDIS_KEY_PREFIX", powershellRunner,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain("intentionally derived here, not read", powershellRunner, StringComparison.Ordinal);
+        Assert.Contains(
+            "RedisKeyPrefix = $TICTACTOE_REDIS_KEY_PREFIX",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "intentionally derived here, not read",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain("Start-Sleep -Seconds 2", powershellRunner, StringComparison.Ordinal);
 
-        Assert.DoesNotContain("AddEnvironmentVariables(\"TICTACTOE_\")", settings, StringComparison.Ordinal);
-        Assert.Contains("RequireString(section, nameof(RedisEndpoint))", settings, StringComparison.Ordinal);
-        Assert.Contains("RequireString(section, nameof(RedisKeyPrefix))", settings, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "AddEnvironmentVariables(\"TICTACTOE_\")",
+            settings,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "RequireString(section, nameof(RedisEndpoint))",
+            settings,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "RequireString(section, nameof(RedisKeyPrefix))",
+            settings,
+            StringComparison.Ordinal
+        );
 
-        Assert.Contains("Redis is required as the sample's official Location Store provider",
+        Assert.Contains(
+            "Redis is required as the sample's official Location Store provider",
             readme,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
         Assert.Contains("always provisions a", readme, StringComparison.Ordinal);
         Assert.Contains("does not", readme, StringComparison.Ordinal);
-        Assert.Contains("reuse an externally supplied Redis endpoint", readme, StringComparison.Ordinal);
+        Assert.Contains(
+            "reuse an externally supplied Redis endpoint",
+            readme,
+            StringComparison.Ordinal
+        );
         Assert.Contains("sample name and execution id", readme, StringComparison.Ordinal);
         Assert.Contains("`TICTACTOE_REDIS_KEY_PREFIX`", readme, StringComparison.Ordinal);
     }
@@ -366,61 +702,115 @@ public sealed partial class RegressionTests
 
         // Common sample §10.1 names the client self-check evidence and exact
         // server lifecycle counts; generic stream diagnostics are not evidence.
-        foreach (var evidence in new[]
-                 {
-                     "observer-subscription=verified subscribed=true",
-                     "observer-win-milestone=verified actor=player-x wins=100",
-                     "reconnected-game-state=verified actor=player-x room=",
-                     "tictactoe=completed"
-                 })
+        foreach (
+            var evidence in new[]
+            {
+                "observer-subscription=verified subscribed=true",
+                "observer-win-milestone=verified actor=player-x wins=100",
+                "reconnected-game-state=verified actor=player-x room=",
+                "tictactoe=completed",
+            }
+        )
         {
-            Assert.Contains($"wait_log_count 1 \"{evidence}\" \"${{LOG_DIR}}/client.log\"",
-                shellRunner, StringComparison.Ordinal);
-            Assert.Contains($"Wait-LogCount $clientLog \"{evidence}\" 1",
-                powershellRunner, StringComparison.Ordinal);
+            Assert.Contains(
+                $"wait_log_count 1 \"{evidence}\" \"${{LOG_DIR}}/client.log\"",
+                shellRunner,
+                StringComparison.Ordinal
+            );
+            Assert.Contains(
+                $"Wait-LogCount $clientLog \"{evidence}\" 1",
+                powershellRunner,
+                StringComparison.Ordinal
+            );
         }
-        Assert.Contains("wait_log_count 1 \"observer-connected endpoint=${PLAY_B_ENDPOINT}\" \"${LOG_DIR}/client.log\"",
-            shellRunner, StringComparison.Ordinal);
-        Assert.Contains("Wait-LogCount $clientLog \"observer-connected endpoint=$playBEndpoint\" 1",
-            powershellRunner, StringComparison.Ordinal);
-        foreach (var (evidence, count) in new[]
-                 {
-                     ("actor-bound actor=player-x", 1),
-                     ("leave-completed actor=player-x", 1),
-                     ("leave-completed actor=player-o", 1),
-                     ("actor-destroy-complete actor=player-x", 1),
-                     ("actor-destroy-complete actor=player-o", 1),
-                     ("actor-destroy-complete actor=observer", 0)
-                 })
+        Assert.Contains(
+            "wait_log_count 1 \"observer-connected endpoint=${PLAY_B_ENDPOINT}\" \"${LOG_DIR}/client.log\"",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "Wait-LogCount $clientLog \"observer-connected endpoint=$playBEndpoint\" 1",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        foreach (
+            var (evidence, count) in new[]
+            {
+                ("actor-bound actor=player-x", 1),
+                ("leave-completed actor=player-x", 1),
+                ("leave-completed actor=player-o", 1),
+                ("actor-destroy-complete actor=player-x", 1),
+                ("actor-destroy-complete actor=player-o", 1),
+                ("actor-destroy-complete actor=observer", 0),
+            }
+        )
         {
-            Assert.Contains($"wait_log_count {count} \"tictactoe-lifecycle {evidence}\" \"${{LOG_DIR}}\"/play-*.log",
-                shellRunner, StringComparison.Ordinal);
-            Assert.Contains($"Wait-LogCount $playLogs \"tictactoe-lifecycle {evidence}\" {count}",
-                powershellRunner, StringComparison.Ordinal);
+            Assert.Contains(
+                $"wait_log_count {count} \"tictactoe-lifecycle {evidence}\" \"${{LOG_DIR}}\"/play-*.log",
+                shellRunner,
+                StringComparison.Ordinal
+            );
+            Assert.Contains(
+                $"Wait-LogCount $playLogs \"tictactoe-lifecycle {evidence}\" {count}",
+                powershellRunner,
+                StringComparison.Ordinal
+            );
         }
         Assert.Contains("grep -R -q \"dispatch-error\"", shellRunner, StringComparison.Ordinal);
         Assert.DoesNotContain("message flow", shellRunner, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("message flow", powershellRunner, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("Select-String -Pattern \"dispatch-error\" -List", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("Select-String -Pattern \"dispatch-error\" -Quiet", powershellRunner,
-            StringComparison.Ordinal);
-        var leaveHandler = ReadSource(Path.Combine(sampleRoot, "Server", "Play", "Infrastructure",
-            "ZLink", "Spots", "TicTacToeGameSpot", "Handlers", "PlayActorLeaveGameHandler.cs"));
+        Assert.Contains(
+            "Select-String -Pattern \"dispatch-error\" -List",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "Select-String -Pattern \"dispatch-error\" -Quiet",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        var leaveHandler = ReadSource(
+            Path.Combine(
+                sampleRoot,
+                "Server",
+                "Play",
+                "Infrastructure",
+                "ZLink",
+                "Spots",
+                "TicTacToeGameSpot",
+                "Handlers",
+                "PlayActorLeaveGameHandler.cs"
+            )
+        );
         Assert.Contains("LeaveGameMsg", leaveHandler, StringComparison.Ordinal);
-        Assert.Contains("tictactoe-lifecycle leave-completed actor=", leaveHandler, StringComparison.Ordinal);
+        Assert.Contains(
+            "tictactoe-lifecycle leave-completed actor=",
+            leaveHandler,
+            StringComparison.Ordinal
+        );
     }
 
     [Fact]
     public void TicTacToe_Framework_LocationStore_Uses_The_Sample_Redis_Prefix()
     {
         var sampleRoot = ResolveSampleRoot("TicTacToe");
-        var settings = ReadSource(Path.Combine(sampleRoot, "Server", "Configuration", "SampleSettings.cs"));
+        var settings = ReadSource(
+            Path.Combine(sampleRoot, "Server", "Configuration", "SampleSettings.cs")
+        );
         var playServer = ReadSource(Path.Combine(sampleRoot, "Server", "Play", "PlayServer.cs"));
 
         Assert.Contains("string RedisKeyPrefix", settings, StringComparison.Ordinal);
-        Assert.Contains("RequireString(section, nameof(RedisKeyPrefix))", settings, StringComparison.Ordinal);
+        Assert.Contains(
+            "RequireString(section, nameof(RedisKeyPrefix))",
+            settings,
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain("\"--redis-key-prefix\"", settings, StringComparison.Ordinal);
-        Assert.Contains("KeyPrefix = settings.RedisKeyPrefix", playServer, StringComparison.Ordinal);
+        Assert.Contains(
+            "KeyPrefix = settings.RedisKeyPrefix",
+            playServer,
+            StringComparison.Ordinal
+        );
     }
 
     [Fact]
@@ -428,31 +818,85 @@ public sealed partial class RegressionTests
     {
         var sampleRoot = ResolveSampleRoot("TicTacToe");
         var messages = ReadSource(Path.Combine(sampleRoot, "Shared", "Contracts", "Messages.cs"));
-        var clientScenario = ReadSource(Path.Combine(sampleRoot, "Client", "TicTacToeClientScenario.cs"));
-        var authenticateHandler = ReadSource(Path.Combine(sampleRoot, "Server", "Play", "Infrastructure",
-            "ZLink", "Sessions", "Handlers", "AuthenticatePlaySessionHandler.cs"));
+        var clientScenario = ReadSource(
+            Path.Combine(sampleRoot, "Client", "TicTacToeClientScenario.cs")
+        );
+        var authenticateHandler = ReadSource(
+            Path.Combine(
+                sampleRoot,
+                "Server",
+                "Play",
+                "Infrastructure",
+                "ZLink",
+                "Sessions",
+                "Handlers",
+                "AuthenticatePlaySessionHandler.cs"
+            )
+        );
 
         Assert.Contains("record LeaveGameMsg", messages, StringComparison.Ordinal);
         Assert.DoesNotContain("LeaveGameReq", messages, StringComparison.Ordinal);
 
-        Assert.Contains("client1SawClient2Join.Payload.RoomId == room.RoomId", clientScenario,
-            StringComparison.Ordinal);
-        Assert.Contains("client1Move1.State.LastMoveActorId == options.XActorId", clientScenario,
-            StringComparison.Ordinal);
-        Assert.Contains("client1Move1.State.LastMoveCell == 0", clientScenario, StringComparison.Ordinal);
-        Assert.Contains("client2Move1.State.LastMoveActorId == options.OActorId", clientScenario,
-            StringComparison.Ordinal);
-        Assert.Contains("client2Move1.State.LastMoveCell == 3", clientScenario, StringComparison.Ordinal);
-        Assert.Contains("client1Move2.State.LastMoveActorId == options.XActorId", clientScenario,
-            StringComparison.Ordinal);
-        Assert.Contains("client1Move2.State.LastMoveCell == 1", clientScenario, StringComparison.Ordinal);
-        Assert.Contains("client2Move2.State.LastMoveActorId == options.OActorId", clientScenario,
-            StringComparison.Ordinal);
-        Assert.Contains("client2Move2.State.LastMoveCell == 4", clientScenario, StringComparison.Ordinal);
-        Assert.Contains("client1FinalMove.State.LastMoveActorId == options.XActorId", clientScenario,
-            StringComparison.Ordinal);
-        Assert.Contains("client1FinalMove.State.LastMoveCell == 2", clientScenario, StringComparison.Ordinal);
-        Assert.DoesNotContain("SampleSettings settings", authenticateHandler, StringComparison.Ordinal);
+        Assert.Contains(
+            "client1SawClient2Join.Payload.RoomId == room.RoomId",
+            clientScenario,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "client1Move1.State.LastMoveActorId == options.XActorId",
+            clientScenario,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "client1Move1.State.LastMoveCell == 0",
+            clientScenario,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "client2Move1.State.LastMoveActorId == options.OActorId",
+            clientScenario,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "client2Move1.State.LastMoveCell == 3",
+            clientScenario,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "client1Move2.State.LastMoveActorId == options.XActorId",
+            clientScenario,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "client1Move2.State.LastMoveCell == 1",
+            clientScenario,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "client2Move2.State.LastMoveActorId == options.OActorId",
+            clientScenario,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "client2Move2.State.LastMoveCell == 4",
+            clientScenario,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "client1FinalMove.State.LastMoveActorId == options.XActorId",
+            clientScenario,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "client1FinalMove.State.LastMoveCell == 2",
+            clientScenario,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "SampleSettings settings",
+            authenticateHandler,
+            StringComparison.Ordinal
+        );
     }
 
     [Fact]
@@ -468,10 +912,18 @@ public sealed partial class RegressionTests
         Assert.Contains("`PlayEndpoints` and `PlayNodes`", readme, StringComparison.Ordinal);
         Assert.Contains("host, guest, and observer", readme, StringComparison.Ordinal);
         Assert.Contains("observer milestone verification", readme, StringComparison.Ordinal);
-        Assert.Contains("`LeaveGameMsg` completion for both players", readme, StringComparison.Ordinal);
+        Assert.Contains(
+            "`LeaveGameMsg` completion for both players",
+            readme,
+            StringComparison.Ordinal
+        );
         Assert.Contains("entry-spot actor destroy evidence", readme, StringComparison.Ordinal);
         Assert.DoesNotContain("the play server to create a game", readme, StringComparison.Ordinal);
-        Assert.DoesNotContain("creates the two stream connectors", readme, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "creates the two stream connectors",
+            readme,
+            StringComparison.Ordinal
+        );
 
         Assert.Contains("--observer-actor-id", clientReadme, StringComparison.Ordinal);
         Assert.Contains("three STREAM connections", clientReadme, StringComparison.Ordinal);
@@ -479,20 +931,53 @@ public sealed partial class RegressionTests
         Assert.Contains("ObserveMilestoneReq", clientReadme, StringComparison.Ordinal);
         Assert.Contains("WinMilestoneNotify", clientReadme, StringComparison.Ordinal);
         Assert.Contains("LeaveGameMsg", clientReadme, StringComparison.Ordinal);
-        Assert.DoesNotContain("opens two STREAM connections", clientReadme, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "opens two STREAM connections",
+            clientReadme,
+            StringComparison.Ordinal
+        );
 
         Assert.Contains("Two API roles", samplesReadme, StringComparison.Ordinal);
         Assert.Contains("two Play roles", samplesReadme, StringComparison.Ordinal);
         Assert.Contains("Manual MeshNode peers", samplesReadme, StringComparison.Ordinal);
         Assert.Contains("Redis room route store", samplesReadme, StringComparison.Ordinal);
-        Assert.Contains("Server.Play -- --config ./appsettings.play-a.json", samplesReadme, StringComparison.Ordinal);
-        Assert.Contains("Server.Play -- --config ./appsettings.play-b.json", samplesReadme, StringComparison.Ordinal);
-        Assert.Contains("Server.Api -- --config ./appsettings.api-a.json", samplesReadme, StringComparison.Ordinal);
-        Assert.Contains("Server.Api -- --config ./appsettings.api-b.json", samplesReadme, StringComparison.Ordinal);
-        Assert.DoesNotContain("temporary appsettings.json", samplesReadme, StringComparison.Ordinal);
-        Assert.DoesNotContain("-- play --config ./appsettings.json", samplesReadme, StringComparison.Ordinal);
-        Assert.DoesNotContain("-- api --config ./appsettings.json", samplesReadme, StringComparison.Ordinal);
+        Assert.Contains(
+            "Server.Play -- --config ./appsettings.play-a.json",
+            samplesReadme,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "Server.Play -- --config ./appsettings.play-b.json",
+            samplesReadme,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "Server.Api -- --config ./appsettings.api-a.json",
+            samplesReadme,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "Server.Api -- --config ./appsettings.api-b.json",
+            samplesReadme,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "temporary appsettings.json",
+            samplesReadme,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "-- play --config ./appsettings.json",
+            samplesReadme,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "-- api --config ./appsettings.json",
+            samplesReadme,
+            StringComparison.Ordinal
+        );
     }
+
     [Fact]
     public void Bingo_And_TicTacToe_Samples_Implement_Actor_Lifecycle_Spec()
     {
@@ -501,14 +986,17 @@ public sealed partial class RegressionTests
             "Server/Play/Infrastructure/ZLink/Spots/EntrySpot/BingoEntrySpot.cs",
             "Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/BingoRoom.cs",
             "Server/Play/Infrastructure/ZLink/Actors/PlayerActor.cs",
-            "Server/Session/Sessions/BingoSession.cs");
+            "Server/Session/Sessions/BingoSession.cs"
+        );
         AssertActorLifecycleSpec(
             ResolveSampleRoot("TicTacToe"),
             "Server/Play/Infrastructure/ZLink/Spots/EntrySpot/PlayEntrySpot.cs",
             "Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/TicTacToeGame.cs",
             "Server/Play/Infrastructure/ZLink/Actors/PlayActor.cs",
-            "Server/Play/Infrastructure/ZLink/Sessions/PlaySession.cs");
+            "Server/Play/Infrastructure/ZLink/Sessions/PlaySession.cs"
+        );
     }
+
     [Fact]
     public void TicTacToe_SessionGateway_Sample_Is_Removed()
     {
@@ -520,9 +1008,14 @@ public sealed partial class RegressionTests
 
         Assert.False(
             Directory.Exists(sampleRoot),
-            "TicTacToe keeps only the direct Api + Play sample. The SessionGateway variant must not be restored.");
+            "TicTacToe keeps only the direct Api + Play sample. The SessionGateway variant must not be restored."
+        );
         Assert.DoesNotContain("TicTacToe.SessionGateway", solutionText, StringComparison.Ordinal);
-        Assert.DoesNotContain("samples\\TicTacToe.SessionGateway", solutionText, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "samples\\TicTacToe.SessionGateway",
+            solutionText,
+            StringComparison.Ordinal
+        );
     }
 
     [Fact]
@@ -553,16 +1046,21 @@ public sealed partial class RegressionTests
         {
             "Context.Handlers.AddHandler<",
             "Context.Handlers.AddPacket<",
-            "Context.Handlers.AddActorPacket<"
+            "Context.Handlers.AddActorPacket<",
         };
         var manualRegistrations = EnumerateSourceFiles(samplesRoot)
-            .Where(file => !file.Contains(
-                $"{Path.DirectorySeparatorChar}TicTacToe{Path.DirectorySeparatorChar}",
-                StringComparison.Ordinal))
+            .Where(file =>
+                !file.Contains(
+                    $"{Path.DirectorySeparatorChar}TicTacToe{Path.DirectorySeparatorChar}",
+                    StringComparison.Ordinal
+                )
+            )
             .Where(file =>
             {
                 var text = ReadSource(file);
-                return manualRegistrationTokens.Any(token => text.Contains(token, StringComparison.Ordinal));
+                return manualRegistrationTokens.Any(token =>
+                    text.Contains(token, StringComparison.Ordinal)
+                );
             })
             .ToArray();
 

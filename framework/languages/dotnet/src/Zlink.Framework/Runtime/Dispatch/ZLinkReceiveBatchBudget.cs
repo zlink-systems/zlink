@@ -11,26 +11,20 @@ internal static class ZLinkReceiveBatchBudget
     internal const long MaximumBytes = 4L * 1024 * 1024;
     internal const int MaximumMilliseconds = 1;
 
-    internal static bool IsExhausted(
-        int records,
-        long bytes,
-        long startedAt)
+    internal static bool IsExhausted(int records, long bytes, long startedAt)
     {
         return records >= MaximumRecords
-               || bytes >= MaximumBytes
-               || ElapsedMilliseconds(startedAt) >= MaximumMilliseconds;
+            || bytes >= MaximumBytes
+            || ElapsedMilliseconds(startedAt) >= MaximumMilliseconds;
     }
 
-    internal static bool WouldExceed(
-        int records,
-        long bytes,
-        long nextBytes,
-        long startedAt)
+    internal static bool WouldExceed(int records, long bytes, long nextBytes, long startedAt)
     {
-        if (records == 0) return false;
-        if (IsExhausted(records, bytes, startedAt)) return true;
-        return nextBytes > 0
-               && nextBytes > MaximumBytes - Math.Min(bytes, MaximumBytes);
+        if (records == 0)
+            return false;
+        if (IsExhausted(records, bytes, startedAt))
+            return true;
+        return nextBytes > 0 && nextBytes > MaximumBytes - Math.Min(bytes, MaximumBytes);
     }
 
     internal static long MeasureParts(IReadOnlyList<Message> parts)
@@ -44,7 +38,8 @@ internal static class ZLinkReceiveBatchBudget
     private static long ElapsedMilliseconds(long startedAt)
     {
         var elapsedTicks = Stopwatch.GetTimestamp() - startedAt;
-        if (elapsedTicks <= 0) return 0;
+        if (elapsedTicks <= 0)
+            return 0;
         return elapsedTicks * 1000L / Stopwatch.Frequency;
     }
 }

@@ -6,6 +6,7 @@ using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Contracts.Spots;
+using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Backend.DotNet;
 using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
@@ -15,7 +16,6 @@ using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Service;
 using Zlink.Framework.Runtime.Spots;
 using Zlink.Framework.Runtime.Timers;
-using Zlink.Framework.LocationProvider;
 
 namespace Zlink.Framework.UnitTests;
 
@@ -31,16 +31,12 @@ public sealed partial class StatefulServiceRuntimeTests
             31,
             RequestResult.Ok,
             ServiceWireConstants.FrameworkErrorCode.None,
-            completion);
-        Assert.True(ZLinkServiceWireCodec.TryDecodeReply(
-            replyFrame,
-            out var reply,
-            out _));
-        Assert.True(ZLinkServiceWireCodec.TryDecodeActorCreateReply(
-            reply,
-            "play",
-            out var decoded,
-            out _));
+            completion
+        );
+        Assert.True(ZLinkServiceWireCodec.TryDecodeReply(replyFrame, out var reply, out _));
+        Assert.True(
+            ZLinkServiceWireCodec.TryDecodeActorCreateReply(reply, "play", out var decoded, out _)
+        );
         Assert.Equal(actor, decoded!.Actor);
 
         var authority = new ZLinkActorAuthorityPayload(
@@ -54,11 +50,12 @@ public sealed partial class StatefulServiceRuntimeTests
             23,
             "mesh-a",
             target,
-            29);
+            29
+        );
         var encodedAuthority = ZLinkActorAuthorityPayloadCodec.Encode(authority);
-        Assert.True(ZLinkActorAuthorityPayloadCodec.TryDecode(
-            encodedAuthority,
-            out var decodedAuthority));
+        Assert.True(
+            ZLinkActorAuthorityPayloadCodec.TryDecode(encodedAuthority, out var decodedAuthority)
+        );
         Assert.Equal(authority, decodedAuthority);
 
         var codecs = new ZLinkCodecRegistryBuilder();
@@ -69,23 +66,33 @@ public sealed partial class StatefulServiceRuntimeTests
                 string.Empty,
                 ZLinkEnvelopeCodec.DefaultContentType,
                 "31",
-                null, null, null, null),
+                null,
+                null,
+                null,
+                null
+            ),
             ZLinkMessage.From(new byte[] { 7, 8, 9 }),
             typeof(ZLinkMessage),
-            codecs);
+            codecs
+        );
         var terminal = new ActorCreateOperationTerminal(
             RequestResult.Ok,
             ServiceWireConstants.FrameworkErrorCode.None,
             new ActorCreateCompletion(ActorCreateResult.Rejected, default),
-            applicationReply.Select(static part =>
-                (ReadOnlyMemory<byte>)part.AsReadOnlyMemory().ToArray()).ToArray());
+            applicationReply
+                .Select(static part => (ReadOnlyMemory<byte>)part.AsReadOnlyMemory().ToArray())
+                .ToArray()
+        );
         try
         {
             var encodedTerminal = ZLinkActorCreationTerminalCodec.Encode(terminal, codecs);
-            Assert.True(ZLinkActorCreationTerminalCodec.TryDecode(
-                encodedTerminal,
-                codecs,
-                out var decodedTerminal));
+            Assert.True(
+                ZLinkActorCreationTerminalCodec.TryDecode(
+                    encodedTerminal,
+                    codecs,
+                    out var decodedTerminal
+                )
+            );
             Assert.Equal(ActorCreateResult.Rejected, decodedTerminal.Completion!.Result);
             Assert.Equal(2, decodedTerminal.ReplyParts!.Count);
         }
@@ -101,11 +108,10 @@ public sealed partial class StatefulServiceRuntimeTests
         var encoded = ZLinkApplicationPayloadEnvelopeCodec.Encode(
             "create",
             "application/x-zlink-test",
-            [1, 2, 3, 4]);
+            [1, 2, 3, 4]
+        );
 
-        Assert.True(ZLinkApplicationPayloadEnvelopeCodec.TryDecode(
-            encoded,
-            out var decoded));
+        Assert.True(ZLinkApplicationPayloadEnvelopeCodec.TryDecode(encoded, out var decoded));
         Assert.Equal("create", decoded.PacketName);
         Assert.Equal("application/x-zlink-test", decoded.ContentType);
         Assert.Equal([1, 2, 3, 4], decoded.Payload.ToArray());
@@ -114,28 +120,37 @@ public sealed partial class StatefulServiceRuntimeTests
         var digest = System.Security.Cryptography.SHA256.HashData(encoded);
         Assert.StartsWith("inline-v1:", reference, StringComparison.Ordinal);
         Assert.DoesNotContain(":", reference["inline-v1:".Length..], StringComparison.Ordinal);
-        Assert.True(ZLinkInlineCreationIntentCodec.TryDecode(
-            reference,
-            digest,
-            encoded.Length,
-            out var restored));
+        Assert.True(
+            ZLinkInlineCreationIntentCodec.TryDecode(
+                reference,
+                digest,
+                encoded.Length,
+                out var restored
+            )
+        );
         Assert.Equal(encoded, restored);
         // Flipping the first encoded character always changes the first
         // decoded byte, so the record's SHA-256 is what refuses it -- no
         // checksum segment is involved.
         var body = reference["inline-v1:".Length..];
-        Assert.False(ZLinkInlineCreationIntentCodec.TryDecode(
-            "inline-v1:" + (body[0] == 'A' ? 'B' : 'A') + body[1..],
-            digest,
-            encoded.Length,
-            out _));
+        Assert.False(
+            ZLinkInlineCreationIntentCodec.TryDecode(
+                "inline-v1:" + (body[0] == 'A' ? 'B' : 'A') + body[1..],
+                digest,
+                encoded.Length,
+                out _
+            )
+        );
         // 21-location-runtime.md#2.4: the checksum-bearing form is not
         // recognized even when the record's own integrity values match.
-        Assert.False(ZLinkInlineCreationIntentCodec.TryDecode(
-            "inline-v1:00000000:" + reference["inline-v1:".Length..],
-            digest,
-            encoded.Length,
-            out _));
+        Assert.False(
+            ZLinkInlineCreationIntentCodec.TryDecode(
+                "inline-v1:00000000:" + reference["inline-v1:".Length..],
+                digest,
+                encoded.Length,
+                out _
+            )
+        );
     }
 
     [Fact]
@@ -144,17 +159,20 @@ public sealed partial class StatefulServiceRuntimeTests
         var frameworkRoot = Common.FrameworkTestEnvironment.GetFrameworkRoot();
         var fixturePath = Path.GetFullPath(
             "../../runtime/protocol/golden/framework-multipart-v1.json",
-            frameworkRoot);
+            frameworkRoot
+        );
         using var document = JsonDocument.Parse(File.ReadAllText(fixturePath));
 
         var valid = document.RootElement.GetProperty("valid")[0];
         var encoded = Convert.FromHexString(valid.GetProperty("encodedHex").GetString()!);
-        Assert.True(ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
-            encoded,
-            out var parts));
+        Assert.True(
+            ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(encoded, out var parts)
+        );
         try
         {
-            var expected = valid.GetProperty("partsHex").EnumerateArray()
+            var expected = valid
+                .GetProperty("partsHex")
+                .EnumerateArray()
                 .Select(static item => Convert.FromHexString(item.GetString()!))
                 .ToArray();
             Assert.Equal(expected.Length, parts.Length);
@@ -172,8 +190,10 @@ public sealed partial class StatefulServiceRuntimeTests
             Assert.False(
                 ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
                     bytes,
-                    out var rejected),
-                invalid.GetProperty("name").GetString());
+                    out var rejected
+                ),
+                invalid.GetProperty("name").GetString()
+            );
             ZLinkMessageParts.DisposeAll(rejected);
         }
     }
@@ -188,39 +208,51 @@ public sealed partial class StatefulServiceRuntimeTests
                 17,
                 "instance-spot",
                 "Sample.InstanceSpot",
-                "descriptor-23"),
+                "descriptor-23"
+            ),
             RoutingId.From("source-node"),
             29,
             "source-spot",
             new MeshOperationId(31, 37),
             IsRequest: true,
             ReplyRouteId: 41,
-            DeadlineUnixMs: 4_102_444_800_000);
+            DeadlineUnixMs: 4_102_444_800_000
+        );
 
         var encoded = ZLinkServiceWireCodec.EncodeInstanceSpotActivation(
             operation,
-            hasMetadata: true);
+            hasMetadata: true
+        );
 
-        Assert.True(ZLinkServiceWireCodec.TryDecodeInstanceSpotActivation(
-            encoded,
-            out var decoded,
-            out var error));
+        Assert.True(
+            ZLinkServiceWireCodec.TryDecodeInstanceSpotActivation(
+                encoded,
+                out var decoded,
+                out var error
+            )
+        );
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
         Assert.True(decoded.HasMetadata);
         Assert.Equal(operation, decoded.Operation);
 
         var invalidRouteKind = encoded.ToArray();
         invalidRouteKind[5] = 3;
-        Assert.False(ZLinkServiceWireCodec.TryDecodeInstanceSpotActivation(
-            invalidRouteKind,
-            out _,
-            out var routeKindError));
+        Assert.False(
+            ZLinkServiceWireCodec.TryDecodeInstanceSpotActivation(
+                invalidRouteKind,
+                out _,
+                out var routeKindError
+            )
+        );
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.InvalidField, routeKindError);
 
-        Assert.False(ZLinkServiceWireCodec.TryDecodeInstanceSpotActivation(
-            [.. encoded, 0],
-            out _,
-            out var trailingError));
+        Assert.False(
+            ZLinkServiceWireCodec.TryDecodeInstanceSpotActivation(
+                [.. encoded, 0],
+                out _,
+                out var trailingError
+            )
+        );
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.TrailingByte, trailingError);
     }
 
@@ -239,7 +271,8 @@ public sealed partial class StatefulServiceRuntimeTests
             29,
             "owner-b",
             31,
-            1);
+            1
+        );
         var create = new UserSpotCreateOperation(
             37,
             new MeshOperationId(41, 43),
@@ -248,13 +281,17 @@ public sealed partial class StatefulServiceRuntimeTests
             spotId,
             "Sample.UserSpot",
             reservation,
-            4_102_444_800_000);
+            4_102_444_800_000
+        );
 
         var encodedCreate = ZLinkServiceWireCodec.EncodeUserSpotCreate(create);
-        Assert.True(ZLinkServiceWireCodec.TryDecodeUserSpotOperation(
-            encodedCreate,
-            out var decodedCreate,
-            out var createError));
+        Assert.True(
+            ZLinkServiceWireCodec.TryDecodeUserSpotOperation(
+                encodedCreate,
+                out var decodedCreate,
+                out var createError
+            )
+        );
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, createError);
         Assert.Equal(ServiceWireConstants.Command.UserSpotCreate, decodedCreate.Command);
         Assert.Equal(create, decodedCreate.Create);
@@ -264,19 +301,17 @@ public sealed partial class StatefulServiceRuntimeTests
             new MeshOperationId(59, 61),
             sourceRid,
             47,
-            new UserSpotCloseFence(
-                spotId,
-                19,
-                targetRid,
-                29,
-                23,
-                "store-18"),
-            4_102_444_800_000);
+            new UserSpotCloseFence(spotId, 19, targetRid, 29, 23, "store-18"),
+            4_102_444_800_000
+        );
         var encodedClose = ZLinkServiceWireCodec.EncodeUserSpotClose(close);
-        Assert.True(ZLinkServiceWireCodec.TryDecodeUserSpotOperation(
-            encodedClose,
-            out var decodedClose,
-            out var closeError));
+        Assert.True(
+            ZLinkServiceWireCodec.TryDecodeUserSpotOperation(
+                encodedClose,
+                out var decodedClose,
+                out var closeError
+            )
+        );
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, closeError);
         Assert.Equal(ServiceWireConstants.Command.UserSpotClose, decodedClose.Command);
         Assert.Equal(close, decodedClose.Close);
@@ -285,52 +320,70 @@ public sealed partial class StatefulServiceRuntimeTests
             37,
             RequestResult.Ok,
             ServiceWireConstants.FrameworkErrorCode.None,
-            new UserSpotCreateCompletion(
-                UserSpotCreateResult.Created,
-                spotId,
-                19));
-        Assert.True(ZLinkServiceWireCodec.TryDecodeReply(
-            createReply,
-            out var decodedCreateReply,
-            out var createReplyError));
+            new UserSpotCreateCompletion(UserSpotCreateResult.Created, spotId, 19)
+        );
+        Assert.True(
+            ZLinkServiceWireCodec.TryDecodeReply(
+                createReply,
+                out var decodedCreateReply,
+                out var createReplyError
+            )
+        );
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, createReplyError);
-        Assert.True(ZLinkServiceWireCodec.TryDecodeUserSpotReply(
-            decodedCreateReply,
-            MeshOperationKind.UserSpotCreate,
-            out var createCompletion,
-            out var createTailError));
+        Assert.True(
+            ZLinkServiceWireCodec.TryDecodeUserSpotReply(
+                decodedCreateReply,
+                MeshOperationKind.UserSpotCreate,
+                out var createCompletion,
+                out var createTailError
+            )
+        );
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, createTailError);
         Assert.Equal(
             new UserSpotCreateCompletion(UserSpotCreateResult.Created, spotId, 19),
-            createCompletion);
+            createCompletion
+        );
 
         var closeReply = ZLinkServiceWireCodec.EncodeUserSpotCloseReply(
             53,
             RequestResult.Ok,
             ServiceWireConstants.FrameworkErrorCode.None,
-            new UserSpotCloseCompletion(true));
-        Assert.True(ZLinkServiceWireCodec.TryDecodeReply(
-            closeReply,
-            out var decodedCloseReply,
-            out var closeReplyError));
+            new UserSpotCloseCompletion(true)
+        );
+        Assert.True(
+            ZLinkServiceWireCodec.TryDecodeReply(
+                closeReply,
+                out var decodedCloseReply,
+                out var closeReplyError
+            )
+        );
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, closeReplyError);
-        Assert.True(ZLinkServiceWireCodec.TryDecodeUserSpotReply(
-            decodedCloseReply,
-            MeshOperationKind.UserSpotClose,
-            out var closeCompletion,
-            out var closeTailError));
+        Assert.True(
+            ZLinkServiceWireCodec.TryDecodeUserSpotReply(
+                decodedCloseReply,
+                MeshOperationKind.UserSpotClose,
+                out var closeCompletion,
+                out var closeTailError
+            )
+        );
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, closeTailError);
         Assert.Equal(new UserSpotCloseCompletion(true), closeCompletion);
 
-        Assert.False(ZLinkServiceWireCodec.TryDecodeUserSpotOperation(
-            [.. encodedCreate, 0],
-            out _,
-            out var trailingError));
+        Assert.False(
+            ZLinkServiceWireCodec.TryDecodeUserSpotOperation(
+                [.. encodedCreate, 0],
+                out _,
+                out var trailingError
+            )
+        );
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.TrailingByte, trailingError);
-        Assert.False(ZLinkServiceWireCodec.TryDecodeUserSpotOperation(
-            encodedClose.AsSpan(0, encodedClose.Length - 1),
-            out _,
-            out var truncatedError));
+        Assert.False(
+            ZLinkServiceWireCodec.TryDecodeUserSpotOperation(
+                encodedClose.AsSpan(0, encodedClose.Length - 1),
+                out _,
+                out var truncatedError
+            )
+        );
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.TruncatedField, truncatedError);
     }
 
@@ -354,12 +407,16 @@ public sealed partial class StatefulServiceRuntimeTests
             13,
             hasMetadata: true,
             messageFollowHopCount: 2,
-            deadlineUnixMs: deadlineUnixMs);
-        Assert.True(ZLinkServiceWireCodec.TryDecodeStateful(
-            spot,
-            "play",
-            out var spotRecord,
-            out var spotError));
+            deadlineUnixMs: deadlineUnixMs
+        );
+        Assert.True(
+            ZLinkServiceWireCodec.TryDecodeStateful(
+                spot,
+                "play",
+                out var spotRecord,
+                out var spotError
+            )
+        );
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, spotError);
         Assert.Equal(9UL, spotRecord.Correlation);
         Assert.Equal(new MeshOperationId(7, 8), spotRecord.OperationId);
@@ -382,7 +439,9 @@ public sealed partial class StatefulServiceRuntimeTests
                 12,
                 13,
                 hasMetadata: false,
-                deadlineUnixMs: 0));
+                deadlineUnixMs: 0
+            )
+        );
 
         var actor = new ActorRef("wire-actor", 13, "play", nodeRid);
         var actorBytes = ZLinkServiceWireCodec.EncodeActor(
@@ -394,12 +453,16 @@ public sealed partial class StatefulServiceRuntimeTests
             14,
             15,
             16,
-            hasMetadata: false);
-        Assert.True(ZLinkServiceWireCodec.TryDecodeStateful(
-            actorBytes,
-            "play",
-            out var actorRecord,
-            out var actorError));
+            hasMetadata: false
+        );
+        Assert.True(
+            ZLinkServiceWireCodec.TryDecodeStateful(
+                actorBytes,
+                "play",
+                out var actorRecord,
+                out var actorError
+            )
+        );
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, actorError);
         Assert.Equal(actor, actorRecord.TargetActor);
         Assert.Equal(new MeshOperationId(17, 18), actorRecord.OperationId);
@@ -418,14 +481,19 @@ public sealed partial class StatefulServiceRuntimeTests
                 14,
                 15,
                 16,
-                hasMetadata: false));
+                hasMetadata: false
+            )
+        );
 
         actorBytes.AsSpan(actorBytes.Length - sizeof(ulong)).Clear();
-        Assert.False(ZLinkServiceWireCodec.TryDecodeStateful(
-            actorBytes,
-            "play",
-            out _,
-            out var zeroLeaseError));
+        Assert.False(
+            ZLinkServiceWireCodec.TryDecodeStateful(
+                actorBytes,
+                "play",
+                out _,
+                out var zeroLeaseError
+            )
+        );
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.InvalidField, zeroLeaseError);
     }
 
@@ -444,14 +512,19 @@ public sealed partial class StatefulServiceRuntimeTests
         Assert.Equal(2, ready.Count);
         Assert.Contains(
             Enumerable.Range(0, ready.Count),
-            index => ready[index].OwnerKind == MeshOwnerKind.Actor
-                     && ready[index].Domain == MeshReadyDomains.Application);
+            index =>
+                ready[index].OwnerKind == MeshOwnerKind.Actor
+                && ready[index].Domain == MeshReadyDomains.Application
+        );
         Assert.Contains(
             Enumerable.Range(0, ready.Count),
-            index => ready[index].OwnerKind == MeshOwnerKind.Spot
-                     && ready[index].Domain == MeshReadyDomains.Application);
+            index =>
+                ready[index].OwnerKind == MeshOwnerKind.Spot
+                && ready[index].Domain == MeshReadyDomains.Application
+        );
 
-        var actorIndex = Enumerable.Range(0, ready.Count)
+        var actorIndex = Enumerable
+            .Range(0, ready.Count)
             .Single(index => ready[index].OwnerKind == MeshOwnerKind.Actor);
         using var actorClaim = ready.TakeClaim(actorIndex);
         using var received = new MeshReceiveBatch();
@@ -460,10 +533,13 @@ public sealed partial class StatefulServiceRuntimeTests
         Assert.Equal(actor, ready[actorIndex].Actor);
         Assert.NotEqual(default, received[0].OperationId);
         Assert.Equal(node.Status().LifecycleGeneration, received[0].TargetNodeGeneration);
-        Assert.True(node.TryGetActorAuthority(
-            actor,
-            out var authorityOwnerGeneration,
-            out var ownerLeaseGeneration));
+        Assert.True(
+            node.TryGetActorAuthority(
+                actor,
+                out var authorityOwnerGeneration,
+                out var ownerLeaseGeneration
+            )
+        );
         Assert.Equal(authorityOwnerGeneration, received[0].AuthorityOwnerGeneration);
         Assert.Equal(ownerLeaseGeneration, received[0].OwnerLeaseGeneration);
         Assert.Equal(1UL, ownerLeaseGeneration);
@@ -496,19 +572,12 @@ public sealed partial class StatefulServiceRuntimeTests
 
         using var firstPayload = Message.From(new byte[] { 1 });
         using var secondPayload = Message.From(new byte[] { 2 });
-        Assert.Equal(
-            SubmitResult.Ok,
-            node.SendToActor(firstActor, [firstPayload]));
-        Assert.Equal(
-            SubmitResult.Ok,
-            node.SendToActor(secondActor, [secondPayload]));
+        Assert.Equal(SubmitResult.Ok, node.SendToActor(firstActor, [firstPayload]));
+        Assert.Equal(SubmitResult.Ok, node.SendToActor(secondActor, [secondPayload]));
 
         using (var ready = new MeshReadyBatch())
         {
-            node.DrainReady(
-                MeshReadyDomains.Application,
-                ready,
-                RecvFlags.DontWait);
+            node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
             Assert.Equal(2, ready.Count);
             var deliveredActors = new HashSet<ActorRef>();
             for (var index = 0; index < ready.Count; index++)
@@ -519,7 +588,10 @@ public sealed partial class StatefulServiceRuntimeTests
                 Assert.True(claim.Receive(received, RecvFlags.DontWait));
                 Assert.Equal(MeshRecordKind.ActorSend, received[0].Kind);
             }
-            Assert.Equal([firstActor, secondActor], deliveredActors.OrderBy(static actor => actor.ActorId));
+            Assert.Equal(
+                [firstActor, secondActor],
+                deliveredActors.OrderBy(static actor => actor.ActorId)
+            );
         }
     }
 
@@ -533,28 +605,25 @@ public sealed partial class StatefulServiceRuntimeTests
         var secondActor = node.CreateActor("route-pump-hwm-second");
         DrainAndDispose(node);
 
-        await using var pump = new ZLinkMeshDispatchPump(
-            node,
-            new ZLinkMeshCompletionTable());
+        await using var pump = new ZLinkMeshDispatchPump(node, new ZLinkMeshCompletionTable());
 
         using var firstPayload = Message.From(new byte[] { 1 });
         using var secondPayload = Message.From(new byte[] { 2 });
-        Assert.Equal(
-            SubmitResult.Ok,
-            node.SendToActor(firstActor, [firstPayload]));
-        Assert.Equal(
-            SubmitResult.Ok,
-            node.SendToActor(secondActor, [secondPayload]));
+        Assert.Equal(SubmitResult.Ok, node.SendToActor(firstActor, [firstPayload]));
+        Assert.Equal(SubmitResult.Ok, node.SendToActor(secondActor, [secondPayload]));
 
         var dispatchCount = 0;
         var dispatched = new TaskCompletionSource<bool>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         pump.SetDispatchHandler(
             entrySpot.RoutingId.ToString(),
             info =>
             {
-                if (info.Event != ZLinkBackendSpotDispatchEvent.ActorReadable
-                    || info.ActorParts is not { Count: > 0 } parts)
+                if (
+                    info.Event != ZLinkBackendSpotDispatchEvent.ActorReadable
+                    || info.ActorParts is not { Count: > 0 } parts
+                )
                     return (ValueTask.CompletedTask, null);
 
                 try
@@ -569,7 +638,8 @@ public sealed partial class StatefulServiceRuntimeTests
                         dispatched.TrySetResult(true);
                 }
                 return (ValueTask.CompletedTask, null);
-            });
+            }
+        );
         pump.EnsureStarted();
 
         await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(3));
@@ -585,9 +655,7 @@ public sealed partial class StatefulServiceRuntimeTests
         var actor = node.CreateActor("route-pump-same-mailbox-hwm-actor");
         DrainAndDispose(node);
 
-        await using var pump = new ZLinkMeshDispatchPump(
-            node,
-            new ZLinkMeshCompletionTable());
+        await using var pump = new ZLinkMeshDispatchPump(node, new ZLinkMeshCompletionTable());
 
         using var firstPayload = Message.From(new byte[] { 1 });
         using var secondPayload = Message.From(new byte[] { 2 });
@@ -596,13 +664,16 @@ public sealed partial class StatefulServiceRuntimeTests
 
         var receivedValues = new ConcurrentQueue<byte>();
         var dispatched = new TaskCompletionSource<bool>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         pump.SetDispatchHandler(
             entrySpot.RoutingId.ToString(),
             info =>
             {
-                if (info.Event != ZLinkBackendSpotDispatchEvent.ActorReadable
-                    || info.ActorParts is not { Count: > 0 } parts)
+                if (
+                    info.Event != ZLinkBackendSpotDispatchEvent.ActorReadable
+                    || info.ActorParts is not { Count: > 0 } parts
+                )
                     return (ValueTask.CompletedTask, null);
 
                 try
@@ -617,7 +688,8 @@ public sealed partial class StatefulServiceRuntimeTests
                         dispatched.TrySetResult(true);
                 }
                 return (ValueTask.CompletedTask, null);
-            });
+            }
+        );
         pump.EnsureStarted();
 
         await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(3));
@@ -636,10 +708,7 @@ public sealed partial class StatefulServiceRuntimeTests
         second.SetSubscription("events", "room.updated");
 
         using var payload = Message.From(new byte[] { 2 });
-        publisher.Publish(
-            "events",
-            "room.updated",
-            [payload]);
+        publisher.Publish("events", "room.updated", [payload]);
 
         using var ready = new MeshReadyBatch();
         node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
@@ -681,10 +750,11 @@ public sealed partial class StatefulServiceRuntimeTests
         source.Start();
         light.Start();
         heavy.Start();
-        await WaitUntilAsync(
-            () => source.Status().AdmittedPeerCount == 2
-                  && light.Status().AdmittedPeerCount == 1
-                  && heavy.Status().AdmittedPeerCount == 1);
+        await WaitUntilAsync(() =>
+            source.Status().AdmittedPeerCount == 2
+            && light.Status().AdmittedPeerCount == 1
+            && heavy.Status().AdmittedPeerCount == 1
+        );
 
         var publisher = source.CreateSpot();
         var lightSubscriber = light.CreateSpot();
@@ -692,20 +762,14 @@ public sealed partial class StatefulServiceRuntimeTests
         lightSubscriber.SetSubscription("events", "room.updated");
         heavySubscriber.SetSubscription("events", "room.updated");
         using var payload = Message.From(new byte[] { 2 });
-        publisher.Publish(
-            "events",
-            "room.updated",
-            [payload]);
+        publisher.Publish("events", "room.updated", [payload]);
 
-        await WaitUntilAsync(
-            () => light.Status().PendingApplicationMessages == 1
-                  && heavy.Status().PendingApplicationMessages == 1);
-        Assert.Equal(
-            MeshRecordKind.SpotMulticast,
-            Assert.Single(DrainRecords(light)).Kind);
-        Assert.Equal(
-            MeshRecordKind.SpotMulticast,
-            Assert.Single(DrainRecords(heavy)).Kind);
+        await WaitUntilAsync(() =>
+            light.Status().PendingApplicationMessages == 1
+            && heavy.Status().PendingApplicationMessages == 1
+        );
+        Assert.Equal(MeshRecordKind.SpotMulticast, Assert.Single(DrainRecords(light)).Kind);
+        Assert.Equal(MeshRecordKind.SpotMulticast, Assert.Single(DrainRecords(heavy)).Kind);
     }
 
     [Fact]
@@ -719,17 +783,14 @@ public sealed partial class StatefulServiceRuntimeTests
         var target = node.GetOrCreateSpot(targetRid, out var created);
         Assert.True(created);
 
-        var operation = node.JoinSpot(
-            actor,
-            node.RoutingId,
-            targetRid,
-            target.LifecycleGeneration);
+        var operation = node.JoinSpot(actor, node.RoutingId, targetRid, target.LifecycleGeneration);
         Assert.True(node.ActorLookup(actor.ActorId, out var before));
         Assert.NotEqual(targetRid, before.SpotId);
 
         using var ready = new MeshReadyBatch();
         node.DrainReady(MeshReadyDomains.All, ready, RecvFlags.DontWait);
-        var joinIndex = Enumerable.Range(0, ready.Count)
+        var joinIndex = Enumerable
+            .Range(0, ready.Count)
             .Single(index => ready[index].SpotId == targetRid);
         using var claim = ready.TakeClaim(joinIndex);
         using var received = new MeshReceiveBatch();
@@ -738,9 +799,8 @@ public sealed partial class StatefulServiceRuntimeTests
         Assert.Equal(MeshOperationKind.ActorJoin, received[0].OperationKind);
         Assert.Equal(
             SubmitResult.Ok,
-            received[0].ReplyJoin(
-                ActorJoinResult.Accepted,
-                Array.Empty<Message>()));
+            received[0].ReplyJoin(ActorJoinResult.Accepted, Array.Empty<Message>())
+        );
 
         Assert.True(node.ActorLookup(actor.ActorId, out var after));
         Assert.Equal(targetRid, after.SpotId);
@@ -749,12 +809,14 @@ public sealed partial class StatefulServiceRuntimeTests
         var completions = DrainRecords(node);
         var completion = Assert.Single(
             completions.Where(record =>
-                record.Kind == MeshRecordKind.Completion
-                && record.OperationId == operation));
+                record.Kind == MeshRecordKind.Completion && record.OperationId == operation
+            )
+        );
         Assert.Equal((int)RequestResult.Ok, completion.TerminalResult);
         Assert.Equal(
             ActorJoinResult.Accepted,
-            Assert.IsType<ActorJoinCompletion>(completion.JoinCompletion).JoinResult);
+            Assert.IsType<ActorJoinCompletion>(completion.JoinCompletion).JoinResult
+        );
     }
 
     [Fact]
@@ -768,11 +830,8 @@ public sealed partial class StatefulServiceRuntimeTests
         using var request = Message.From(new byte[] { 3 });
         Assert.Equal(
             SubmitResult.Ok,
-            node.RequestToActor(
-                actor,
-                [request],
-                out var operation,
-                TimeSpan.FromSeconds(1)));
+            node.RequestToActor(actor, [request], out var operation, TimeSpan.FromSeconds(1))
+        );
 
         using var ready = new MeshReadyBatch();
         node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
@@ -784,24 +843,22 @@ public sealed partial class StatefulServiceRuntimeTests
         Parallel.For(
             0,
             32,
-            _ => Assert.Equal(
-                SubmitResult.Ok,
-                inbound.Reply(Array.Empty<Message>())));
+            _ => Assert.Equal(SubmitResult.Ok, inbound.Reply(Array.Empty<Message>()))
+        );
 
         var completions = DrainRecords(node);
         Assert.Single(
             completions.Where(record =>
-                record.Kind == MeshRecordKind.Completion
-                && record.OperationId == operation));
+                record.Kind == MeshRecordKind.Completion && record.OperationId == operation
+            )
+        );
     }
 
     [Fact]
     public async Task RequestOperationsDoNotHaveACompletionCapacityLimit()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
-        await using var node = new ZLinkManagedMeshNode(
-            context,
-            "mesh");
+        await using var node = new ZLinkManagedMeshNode(context, "mesh");
         node.SetRoutingId(RoutingId.From("capacity-node"));
         var actor = node.CreateActor("capacity-actor");
         DrainAndDispose(node);
@@ -809,20 +866,14 @@ public sealed partial class StatefulServiceRuntimeTests
         using var request = Message.From(new byte[] { 4 });
         Assert.Equal(
             SubmitResult.Ok,
-            node.RequestToActor(
-                actor,
-                [request],
-                out var first,
-                TimeSpan.FromSeconds(30)));
+            node.RequestToActor(actor, [request], out var first, TimeSpan.FromSeconds(30))
+        );
         Assert.NotEqual(default, first);
 
         Assert.Equal(
             SubmitResult.Ok,
-            node.RequestToActor(
-                actor,
-                [request],
-                out var rejected,
-                TimeSpan.FromSeconds(30)));
+            node.RequestToActor(actor, [request], out var rejected, TimeSpan.FromSeconds(30))
+        );
         Assert.NotEqual(default, rejected);
     }
 
@@ -830,9 +881,7 @@ public sealed partial class StatefulServiceRuntimeTests
     public async Task RemoteActorRequestsDoNotHaveACompletionCapacityLimit()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
-        await using var caller = new ZLinkManagedMeshNode(
-            context,
-            "mesh");
+        await using var caller = new ZLinkManagedMeshNode(context, "mesh");
         caller.SetRoutingId(RoutingId.From("capacity-remote-caller"));
         await using var owner = NewNode(context, "capacity-remote-owner");
         owner.SetLocalOwnerLeaseGeneration(127);
@@ -845,56 +894,52 @@ public sealed partial class StatefulServiceRuntimeTests
         owner.ConnectPeer(callerEndpoint, caller.RoutingId);
         caller.Start();
         owner.Start();
-        await WaitUntilAsync(() => caller.Status().AdmittedPeerCount == 1
-                                  && owner.Status().AdmittedPeerCount == 1);
+        await WaitUntilAsync(() =>
+            caller.Status().AdmittedPeerCount == 1 && owner.Status().AdmittedPeerCount == 1
+        );
 
         var actor = owner.CreateActor("capacity-remote-actor");
         DrainAndDispose(owner);
-        Assert.True(owner.TryGetActorAuthority(
-            actor,
-            out var authorityOwnerGeneration,
-            out var ownerLeaseGeneration));
+        Assert.True(
+            owner.TryGetActorAuthority(
+                actor,
+                out var authorityOwnerGeneration,
+                out var ownerLeaseGeneration
+            )
+        );
         caller.ObserveActorAuthority(
             actor,
             owner.Status().LifecycleGeneration,
             authorityOwnerGeneration,
-            ownerLeaseGeneration);
+            ownerLeaseGeneration
+        );
 
         using var request = Message.From(new byte[] { 131 });
         Assert.Equal(
             SubmitResult.Ok,
-            caller.RequestToActor(
-                actor,
-                [request],
-                out var admitted,
-                TimeSpan.FromSeconds(30)));
+            caller.RequestToActor(actor, [request], out var admitted, TimeSpan.FromSeconds(30))
+        );
         Assert.NotEqual(default, admitted);
         Assert.Equal(
             SubmitResult.Ok,
-            caller.RequestToActor(
-                actor,
-                [request],
-                out var second,
-                TimeSpan.FromSeconds(30)));
+            caller.RequestToActor(actor, [request], out var second, TimeSpan.FromSeconds(30))
+        );
         Assert.NotEqual(default, second);
 
-        await WaitUntilAsync(() =>
-            owner.Status().PendingApplicationMessages == 2);
+        await WaitUntilAsync(() => owner.Status().PendingApplicationMessages == 2);
         // Both requests are admitted; neither was refused for want of a completion slot.
         // How many arrive per receive turn is not fixed, so drain until both are seen.
         var delivered = new List<MeshOperationId>();
         await WaitUntilAsync(() =>
         {
             using var ready = new MeshReadyBatch();
-            owner.DrainReady(
-                MeshReadyDomains.Application,
-                ready,
-                RecvFlags.DontWait);
+            owner.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
             for (var index = 0; index < ready.Count; index++)
             {
                 using var claim = ready.TakeClaim(index);
                 using var received = new MeshReceiveBatch();
-                if (!claim.Receive(received, RecvFlags.DontWait)) continue;
+                if (!claim.Receive(received, RecvFlags.DontWait))
+                    continue;
                 for (var item = 0; item < received.Count; item++)
                     delivered.Add(received[item].OperationId);
             }
@@ -914,15 +959,19 @@ public sealed partial class StatefulServiceRuntimeTests
 
         var actor = owner.CreateActor("bilateral-request-actor");
         DrainAndDispose(owner);
-        Assert.True(owner.TryGetActorAuthority(
-            actor,
-            out var authorityOwnerGeneration,
-            out var ownerLeaseGeneration));
+        Assert.True(
+            owner.TryGetActorAuthority(
+                actor,
+                out var authorityOwnerGeneration,
+                out var ownerLeaseGeneration
+            )
+        );
         caller.ObserveActorAuthority(
             actor,
             owner.Status().LifecycleGeneration,
             authorityOwnerGeneration,
-            ownerLeaseGeneration);
+            ownerLeaseGeneration
+        );
 
         var suffix = Guid.NewGuid().ToString("N");
         var callerEndpoint = $"inproc://bilateral-request-aa-{suffix}";
@@ -933,25 +982,20 @@ public sealed partial class StatefulServiceRuntimeTests
         owner.ConnectPeer(callerEndpoint, caller.RoutingId);
         caller.Start();
         owner.Start();
-        await WaitUntilAsync(() => caller.Status().AdmittedPeerCount == 1
-                                  && owner.Status().AdmittedPeerCount == 1);
+        await WaitUntilAsync(() =>
+            caller.Status().AdmittedPeerCount == 1 && owner.Status().AdmittedPeerCount == 1
+        );
 
         using var request = Message.From(new byte[] { 137 });
         Assert.Equal(
             SubmitResult.Ok,
-            caller.RequestToActor(
-                actor,
-                [request],
-                out var operation,
-                TimeSpan.FromSeconds(3)));
+            caller.RequestToActor(actor, [request], out var operation, TimeSpan.FromSeconds(3))
+        );
 
         await WaitUntilAsync(() => owner.Status().PendingApplicationMessages == 1);
         using (var ready = new MeshReadyBatch())
         {
-            owner.DrainReady(
-                MeshReadyDomains.Application,
-                ready,
-                RecvFlags.DontWait);
+            owner.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
             Assert.Equal(1, ready.Count);
             using var claim = ready.TakeClaim(0);
             using var received = new MeshReceiveBatch();
@@ -960,22 +1004,22 @@ public sealed partial class StatefulServiceRuntimeTests
             Assert.Equal(MeshRecordKind.ActorRequest, received[0].Kind);
             Assert.Equal(operation, received[0].OperationId);
             using var reply = Message.From(new byte[] { 139 });
-            Assert.Equal(
-                SubmitResult.Ok,
-                received[0].Reply([reply]));
+            Assert.Equal(SubmitResult.Ok, received[0].Reply([reply]));
         }
 
-        await WaitUntilAsync(() =>
-            caller.Status().PendingInfrastructureMessages > 0);
-        var completion = Assert.Single(DrainRecords(caller).Where(record =>
-            record.Kind == MeshRecordKind.Completion
-            && record.OperationId == operation));
+        await WaitUntilAsync(() => caller.Status().PendingInfrastructureMessages > 0);
+        var completion = Assert.Single(
+            DrainRecords(caller)
+                .Where(record =>
+                    record.Kind == MeshRecordKind.Completion && record.OperationId == operation
+                )
+        );
         Assert.Equal((int)RequestResult.Ok, completion.TerminalResult);
         await Task.Delay(50);
         Assert.DoesNotContain(
             DrainRecords(caller),
-            record => record.Kind == MeshRecordKind.Completion
-                      && record.OperationId == operation);
+            record => record.Kind == MeshRecordKind.Completion && record.OperationId == operation
+        );
     }
 
     [Fact]
@@ -992,8 +1036,9 @@ public sealed partial class StatefulServiceRuntimeTests
         higher.ConnectPeer(lowerEndpoint, lower.RoutingId);
         lower.Start();
         higher.Start();
-        await WaitUntilAsync(() => lower.Status().AdmittedPeerCount == 1
-                                  && higher.Status().AdmittedPeerCount == 1);
+        await WaitUntilAsync(() =>
+            lower.Status().AdmittedPeerCount == 1 && higher.Status().AdmittedPeerCount == 1
+        );
 
         var inbound = Assert.Single(lower.Peers());
         var manual = lower.ConnectPeer(higherEndpoint, higher.RoutingId);
@@ -1002,10 +1047,9 @@ public sealed partial class StatefulServiceRuntimeTests
         await WaitUntilAsync(() =>
             lower.Status().AdmittedPeerCount == 1
             && lower.Peers().Count() == 1
-            && lower.Peers().Single().ConnectionIntentId == manual);
-        Assert.Equal(
-            manual,
-            Assert.Single(lower.Peers()).ConnectionIntentId);
+            && lower.Peers().Single().ConnectionIntentId == manual
+        );
+        Assert.Equal(manual, Assert.Single(lower.Peers()).ConnectionIntentId);
         Assert.Equal(1u, lower.Status().AdmittedPeerCount);
     }
 
@@ -1027,48 +1071,52 @@ public sealed partial class StatefulServiceRuntimeTests
             "stale-authority-caller-owner",
             1,
             caller.RoutingId,
-            caller.Status().LifecycleGeneration);
+            caller.Status().LifecycleGeneration
+        );
         caller.SetLocalRequestSourceFence(requestSource);
         caller.Start();
         owner.Start();
-        await WaitUntilAsync(() => caller.Status().AdmittedPeerCount == 1
-                                  && owner.Status().AdmittedPeerCount == 1);
+        await WaitUntilAsync(() =>
+            caller.Status().AdmittedPeerCount == 1 && owner.Status().AdmittedPeerCount == 1
+        );
 
         var actor = owner.CreateActor("stale-authority-actor");
         DrainAndDispose(owner);
-        Assert.True(owner.TryGetActorAuthority(
-            actor,
-            out var sourceAuthorityOwnerGeneration,
-            out var sourceOwnerLeaseGeneration));
+        Assert.True(
+            owner.TryGetActorAuthority(
+                actor,
+                out var sourceAuthorityOwnerGeneration,
+                out var sourceOwnerLeaseGeneration
+            )
+        );
         caller.ObserveActorAuthority(
             actor,
             owner.Status().LifecycleGeneration,
             sourceAuthorityOwnerGeneration,
-            sourceOwnerLeaseGeneration);
+            sourceOwnerLeaseGeneration
+        );
 
         // The caller submits with the immutable source fence while the owner
         // has already advanced to the target authority.
-        owner.SetActorAuthority(
-            actor,
-            checked(sourceAuthorityOwnerGeneration + 1));
+        owner.SetActorAuthority(actor, checked(sourceAuthorityOwnerGeneration + 1));
         using var request = Message.From(new byte[] { 139 });
         Assert.Equal(
             SubmitResult.Ok,
-            caller.RequestToActor(
-                actor,
-                [request],
-                out var operation,
-                TimeSpan.FromSeconds(3)));
+            caller.RequestToActor(actor, [request], out var operation, TimeSpan.FromSeconds(3))
+        );
 
-        await WaitUntilAsync(() =>
-            caller.Status().PendingInfrastructureMessages > 0);
-        var completion = Assert.Single(DrainRecords(caller).Where(record =>
-            record.Kind == MeshRecordKind.Completion
-            && record.OperationId == operation));
+        await WaitUntilAsync(() => caller.Status().PendingInfrastructureMessages > 0);
+        var completion = Assert.Single(
+            DrainRecords(caller)
+                .Where(record =>
+                    record.Kind == MeshRecordKind.Completion && record.OperationId == operation
+                )
+        );
         Assert.Equal((int)RequestResult.Conflict, completion.TerminalResult);
         Assert.Equal(
             (int)ServiceWireConstants.FrameworkErrorCode.ActorLocationStale,
-            completion.FailureErrno);
+            completion.FailureErrno
+        );
         Assert.Equal(0UL, owner.Status().PendingApplicationMessages);
 
         var lateRelay = new ZLinkServiceWireCodec.ReplyRelayRecord(
@@ -1081,26 +1129,23 @@ public sealed partial class StatefulServiceRuntimeTests
                 163,
                 RoutingId.From("stale-authority-target"),
                 167,
-                "stale-authority-root"),
+                "stale-authority-root"
+            ),
             173,
             179,
             (uint)RequestResult.Ok,
-            ServiceWireConstants.FrameworkErrorCode.None);
+            ServiceWireConstants.FrameworkErrorCode.None
+        );
         var latePayload = new[] { Message.From(new byte[] { 181 }) };
-        var duplicate = caller.TryCompleteRelocationReply(
-            lateRelay,
-            latePayload);
-        Assert.Equal(
-            ZLinkRelocationReplyCompletionState.AlreadyTerminal,
-            duplicate.State);
+        var duplicate = caller.TryCompleteRelocationReply(lateRelay, latePayload);
+        Assert.Equal(ZLinkRelocationReplyCompletionState.AlreadyTerminal, duplicate.State);
         Assert.Equal(requestSource, duplicate.RequestSource);
-        Assert.Throws<ObjectDisposedException>(
-            () => latePayload[0].AsReadOnlySpan());
+        Assert.Throws<ObjectDisposedException>(() => latePayload[0].AsReadOnlySpan());
         await Task.Delay(50);
         Assert.DoesNotContain(
             DrainRecords(caller),
-            record => record.Kind == MeshRecordKind.Completion
-                      && record.OperationId == operation);
+            record => record.Kind == MeshRecordKind.Completion && record.OperationId == operation
+        );
     }
 
     [Fact]
@@ -1114,12 +1159,12 @@ public sealed partial class StatefulServiceRuntimeTests
             "active-follower-caller-owner",
             181,
             caller.RoutingId,
-            caller.Status().LifecycleGeneration);
+            caller.Status().LifecycleGeneration
+        );
         caller.SetLocalRequestSourceFence(requestSource);
         var ownerBackend = new ZLinkBackendSpotNodeWrapper(owner);
         ownerBackend.ObserveRequestSourceFence(requestSource);
-        var follower = new CapturingBackendActorMessageFollowHandler(
-            acceptsOwnership: true);
+        var follower = new CapturingBackendActorMessageFollowHandler(acceptsOwnership: true);
         ownerBackend.SetActorMessageFollowIngressHandler(follower.TryFollow);
         var suffix = Guid.NewGuid().ToString("N");
         var callerEndpoint = $"inproc://active-follower-caller-{suffix}";
@@ -1130,51 +1175,47 @@ public sealed partial class StatefulServiceRuntimeTests
         owner.ConnectPeer(callerEndpoint, caller.RoutingId);
         caller.Start();
         owner.Start();
-        await WaitUntilAsync(() => caller.Status().AdmittedPeerCount == 1
-                                  && owner.Status().AdmittedPeerCount == 1);
+        await WaitUntilAsync(() =>
+            caller.Status().AdmittedPeerCount == 1 && owner.Status().AdmittedPeerCount == 1
+        );
 
         var actor = owner.CreateActor("active-follower-actor");
         DrainAndDispose(owner);
-        Assert.True(owner.TryGetActorAuthority(
-            actor,
-            out var sourceAuthorityOwnerGeneration,
-            out var sourceOwnerLeaseGeneration));
+        Assert.True(
+            owner.TryGetActorAuthority(
+                actor,
+                out var sourceAuthorityOwnerGeneration,
+                out var sourceOwnerLeaseGeneration
+            )
+        );
         caller.ObserveActorAuthority(
             actor,
             owner.Status().LifecycleGeneration,
             sourceAuthorityOwnerGeneration,
-            sourceOwnerLeaseGeneration);
-        owner.SetActorAuthority(
-            actor,
-            checked(sourceAuthorityOwnerGeneration + 1));
+            sourceOwnerLeaseGeneration
+        );
+        owner.SetActorAuthority(actor, checked(sourceAuthorityOwnerGeneration + 1));
 
         using var request = Message.From(new byte[] { 193 });
         Assert.Equal(
             SubmitResult.Ok,
-            caller.RequestToActor(
-                actor,
-                [request],
-                out var operation,
-                TimeSpan.FromSeconds(3)));
+            caller.RequestToActor(actor, [request], out var operation, TimeSpan.FromSeconds(3))
+        );
 
-        await WaitUntilAsync(() =>
-            caller.Status().PendingInfrastructureMessages > 0);
-        var completion = Assert.Single(DrainRecords(caller).Where(record =>
-            record.Kind == MeshRecordKind.Completion
-            && record.OperationId == operation));
+        await WaitUntilAsync(() => caller.Status().PendingInfrastructureMessages > 0);
+        var completion = Assert.Single(
+            DrainRecords(caller)
+                .Where(record =>
+                    record.Kind == MeshRecordKind.Completion && record.OperationId == operation
+                )
+        );
         Assert.Equal((int)RequestResult.Ok, completion.TerminalResult);
         Assert.Equal(1, follower.Count);
         Assert.Equal(operation, follower.LastRoute.OperationId);
         Assert.Equal(operation.Low, follower.LastRoute.ReplyRequestId);
-        Assert.Equal(
-            sourceAuthorityOwnerGeneration,
-            follower.LastRoute.AuthorityOwnerGeneration);
-        Assert.Equal(
-            sourceOwnerLeaseGeneration,
-            follower.LastRoute.OwnerLeaseGeneration);
-        Assert.Equal(
-            owner.Status().LifecycleGeneration,
-            follower.LastRoute.TargetNodeGeneration);
+        Assert.Equal(sourceAuthorityOwnerGeneration, follower.LastRoute.AuthorityOwnerGeneration);
+        Assert.Equal(sourceOwnerLeaseGeneration, follower.LastRoute.OwnerLeaseGeneration);
+        Assert.Equal(owner.Status().LifecycleGeneration, follower.LastRoute.TargetNodeGeneration);
         Assert.Equal(operation, follower.LastRoute.OperationId);
         Assert.Equal(operation.Low, follower.LastRoute.ReplyRequestId);
         Assert.Equal(requestSource, follower.LastRequestSource);
@@ -1183,15 +1224,15 @@ public sealed partial class StatefulServiceRuntimeTests
         Assert.True(follower.DisposedByHandler);
         Assert.All(
             follower.LastMessages,
-            message => Assert.Throws<ObjectDisposedException>(
-                () => message.AsReadOnlySpan()));
+            message => Assert.Throws<ObjectDisposedException>(() => message.AsReadOnlySpan())
+        );
         Assert.Equal(0UL, owner.Status().PendingApplicationMessages);
 
         await Task.Delay(50);
         Assert.DoesNotContain(
             DrainRecords(caller),
-            record => record.Kind == MeshRecordKind.Completion
-                      && record.OperationId == operation);
+            record => record.Kind == MeshRecordKind.Completion && record.OperationId == operation
+        );
     }
 
     [Fact]
@@ -1205,12 +1246,12 @@ public sealed partial class StatefulServiceRuntimeTests
             "rejected-follower-caller-owner",
             201,
             caller.RoutingId,
-            caller.Status().LifecycleGeneration);
+            caller.Status().LifecycleGeneration
+        );
         caller.SetLocalRequestSourceFence(requestSource);
         var ownerBackend = new ZLinkBackendSpotNodeWrapper(owner);
         ownerBackend.ObserveRequestSourceFence(requestSource);
-        var follower = new CapturingBackendActorMessageFollowHandler(
-            acceptsOwnership: false);
+        var follower = new CapturingBackendActorMessageFollowHandler(acceptsOwnership: false);
         ownerBackend.SetActorMessageFollowIngressHandler(follower.TryFollow);
         var suffix = Guid.NewGuid().ToString("N");
         var callerEndpoint = $"inproc://rejected-follower-caller-{suffix}";
@@ -1221,42 +1262,45 @@ public sealed partial class StatefulServiceRuntimeTests
         owner.ConnectPeer(callerEndpoint, caller.RoutingId);
         caller.Start();
         owner.Start();
-        await WaitUntilAsync(() => caller.Status().AdmittedPeerCount == 1
-                                  && owner.Status().AdmittedPeerCount == 1);
+        await WaitUntilAsync(() =>
+            caller.Status().AdmittedPeerCount == 1 && owner.Status().AdmittedPeerCount == 1
+        );
 
         var actor = owner.CreateActor("rejected-follower-actor");
         DrainAndDispose(owner);
-        Assert.True(owner.TryGetActorAuthority(
-            actor,
-            out var sourceAuthorityOwnerGeneration,
-            out var sourceOwnerLeaseGeneration));
+        Assert.True(
+            owner.TryGetActorAuthority(
+                actor,
+                out var sourceAuthorityOwnerGeneration,
+                out var sourceOwnerLeaseGeneration
+            )
+        );
         caller.ObserveActorAuthority(
             actor,
             owner.Status().LifecycleGeneration,
             sourceAuthorityOwnerGeneration,
-            sourceOwnerLeaseGeneration);
-        owner.SetActorAuthority(
-            actor,
-            checked(sourceAuthorityOwnerGeneration + 1));
+            sourceOwnerLeaseGeneration
+        );
+        owner.SetActorAuthority(actor, checked(sourceAuthorityOwnerGeneration + 1));
 
         using var request = Message.From(new byte[] { 213 });
         Assert.Equal(
             SubmitResult.Ok,
-            caller.RequestToActor(
-                actor,
-                [request],
-                out var operation,
-                TimeSpan.FromSeconds(3)));
+            caller.RequestToActor(actor, [request], out var operation, TimeSpan.FromSeconds(3))
+        );
 
-        await WaitUntilAsync(() =>
-            caller.Status().PendingInfrastructureMessages > 0);
-        var completion = Assert.Single(DrainRecords(caller).Where(record =>
-            record.Kind == MeshRecordKind.Completion
-            && record.OperationId == operation));
+        await WaitUntilAsync(() => caller.Status().PendingInfrastructureMessages > 0);
+        var completion = Assert.Single(
+            DrainRecords(caller)
+                .Where(record =>
+                    record.Kind == MeshRecordKind.Completion && record.OperationId == operation
+                )
+        );
         Assert.Equal((int)RequestResult.Conflict, completion.TerminalResult);
         Assert.Equal(
             (int)ServiceWireConstants.FrameworkErrorCode.ActorLocationStale,
-            completion.FailureErrno);
+            completion.FailureErrno
+        );
         Assert.Equal(1, follower.Count);
         Assert.False(follower.DisposedByHandler);
         Assert.Equal(operation, follower.LastRoute.OperationId);
@@ -1265,14 +1309,14 @@ public sealed partial class StatefulServiceRuntimeTests
         Assert.Equal([213], follower.LastPayload);
         Assert.All(
             follower.LastMessages,
-            message => Assert.Throws<ObjectDisposedException>(
-                () => message.AsReadOnlySpan()));
+            message => Assert.Throws<ObjectDisposedException>(() => message.AsReadOnlySpan())
+        );
 
         await Task.Delay(50);
         Assert.DoesNotContain(
             DrainRecords(caller),
-            record => record.Kind == MeshRecordKind.Completion
-                      && record.OperationId == operation);
+            record => record.Kind == MeshRecordKind.Completion && record.OperationId == operation
+        );
     }
 
     [Fact]
@@ -1280,50 +1324,54 @@ public sealed partial class StatefulServiceRuntimeTests
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var node = NewNode(context, "follow-adapter-node");
-        var pump = new ZLinkMeshDispatchPump(
-            node,
-            new ZLinkMeshCompletionTable());
+        var pump = new ZLinkMeshDispatchPump(node, new ZLinkMeshCompletionTable());
         var source = new ZLinkServiceWireCodec.RequestSourceFence(
             "follow-adapter-source-owner",
             223,
             RoutingId.From("follow-adapter-source"),
-            227);
+            227
+        );
         pump.ObserveRequestSourceFence(source);
-        var adapter =
-            new ZLinkBackendSpotNodeWrapper.ActorMessageFollowIngressAdapter(
-                pump);
+        var adapter = new ZLinkBackendSpotNodeWrapper.ActorMessageFollowIngressAdapter(pump);
         var follower = new CapturingBackendActorMessageFollowHandler(
             acceptsOwnership: true,
-            reply: false);
+            reply: false
+        );
         adapter.SetHandler(follower.TryFollow);
         var operation = new MeshOperationId(229, 233);
         var actor = new ActorRef(
             "follow-adapter-actor",
             239,
             "mesh",
-            RoutingId.From("follow-adapter-owner"));
+            RoutingId.From("follow-adapter-owner")
+        );
         var metadata = new byte[] { 241, 251 };
         var messages = new[]
         {
             Message.From(new byte[] { 2, 3 }),
-            Message.From(new byte[] { 5, 7 })
+            Message.From(new byte[] { 5, 7 }),
         };
 
-        Assert.True(adapter.TryFollow(new ActorMessageFollowIngress(
-            source.NodeRid,
-            source.NodeGeneration,
-            "source-spot",
-            actor,
-            operation,
-            ReplyRouteId: 257,
-            TargetNodeGeneration: 263,
-            AuthorityOwnerGeneration: 269,
-            OwnerLeaseGeneration: 271,
-            MessageFollowHopCount: 3,
-            DeadlineUnixMs: 277,
-            ApplicationMetadata: metadata,
-            Parts: messages,
-            Reply: static _ => SubmitResult.Ok)));
+        Assert.True(
+            adapter.TryFollow(
+                new ActorMessageFollowIngress(
+                    source.NodeRid,
+                    source.NodeGeneration,
+                    "source-spot",
+                    actor,
+                    operation,
+                    ReplyRouteId: 257,
+                    TargetNodeGeneration: 263,
+                    AuthorityOwnerGeneration: 269,
+                    OwnerLeaseGeneration: 271,
+                    MessageFollowHopCount: 3,
+                    DeadlineUnixMs: 277,
+                    ApplicationMetadata: metadata,
+                    Parts: messages,
+                    Reply: static _ => SubmitResult.Ok
+                )
+            )
+        );
 
         Assert.Equal(1, follower.Count);
         Assert.Equal(operation, follower.LastRoute.OperationId);
@@ -1339,8 +1387,8 @@ public sealed partial class StatefulServiceRuntimeTests
         Assert.True(follower.DisposedByHandler);
         Assert.All(
             messages,
-            message => Assert.Throws<ObjectDisposedException>(
-                () => message.AsReadOnlySpan()));
+            message => Assert.Throws<ObjectDisposedException>(() => message.AsReadOnlySpan())
+        );
 
         var admissionCalls = 0;
         adapter.SetAdmission(_ =>
@@ -1348,9 +1396,9 @@ public sealed partial class StatefulServiceRuntimeTests
             admissionCalls++;
             return false;
         });
-        var encodedPayload = ZLinkApplicationPayloadEnvelopeCodec
-            .EncodeFrameworkMultipart(
-                new ReadOnlyMemory<byte>[] { new byte[] { 11, 13, 17 } });
+        var encodedPayload = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(
+            new ReadOnlyMemory<byte>[] { new byte[] { 11, 13, 17 } }
+        );
         var rejected = new ActorMessageFollowIngress(
             source.NodeRid,
             source.NodeGeneration,
@@ -1365,29 +1413,28 @@ public sealed partial class StatefulServiceRuntimeTests
             DeadlineUnixMs: 313,
             ApplicationMetadata: ReadOnlyMemory<byte>.Empty,
             Parts: Array.Empty<Message>(),
-            Reply: null)
+            Reply: null
+        )
         {
-            EncodedPayload = encodedPayload
+            EncodedPayload = encodedPayload,
         };
 
         Assert.False(adapter.TryFollow(rejected));
         Assert.Equal(1, admissionCalls);
         Assert.Equal(1, follower.Count);
 
-        var ownershipAdapter =
-            new ZLinkBackendSpotNodeWrapper.ActorMessageFollowIngressAdapter(
-                pump);
+        var ownershipAdapter = new ZLinkBackendSpotNodeWrapper.ActorMessageFollowIngressAdapter(
+            pump
+        );
         var ownershipFollower = new CapturingBackendActorMessageFollowHandler(
             acceptsOwnership: true,
-            reply: false);
+            reply: false
+        );
         ownershipAdapter.SetHandler(ownershipFollower.TryFollow);
         ownershipAdapter.SetAdmission(_ => true);
         using (var metadataSource = Message.From(new byte[] { 19, 23, 29 }))
         {
-            var admitted = rejected with
-            {
-                ApplicationMetadataSource = metadataSource
-            };
+            var admitted = rejected with { ApplicationMetadataSource = metadataSource };
 
             Assert.True(ownershipAdapter.TryFollow(admitted));
         }
@@ -1413,18 +1460,18 @@ public sealed partial class StatefulServiceRuntimeTests
             1,
             0,
             0,
-            null);
+            null
+        );
         var queued = new ZLinkMeshQueuedRecord(
             record,
             new[] { Message.From(new byte[] { 31, 37 }) },
-            applicationPayloadBytes: 2);
+            applicationPayloadBytes: 2
+        );
 
         try
         {
             Assert.Equal(2UL, queued.PayloadBytes);
-            Assert.Equal(
-                2UL + 3UL + ZLinkMeshQueuedRecord.FixedRecordBytes,
-                queued.PendingBytes);
+            Assert.Equal(2UL + 3UL + ZLinkMeshQueuedRecord.FixedRecordBytes, queued.PendingBytes);
         }
         finally
         {
@@ -1451,7 +1498,8 @@ public sealed partial class StatefulServiceRuntimeTests
             2,
             0,
             0,
-            null);
+            null
+        );
         var header = ZLinkEnvelopeCodec.EncodeHeader(
             new ZLinkEnvelopeHeader(
                 ZLinkMessageKind.Command,
@@ -1463,16 +1511,19 @@ public sealed partial class StatefulServiceRuntimeTests
                 null,
                 null,
                 null,
-                null));
+                null
+            )
+        );
         var body = Message.From(new byte[] { 31, 37 });
         Assert.Equal(
             2UL,
-            ZLinkEnvelopeCodec.MeasureApplicationPayloadBytes(
-                new[] { header, body }));
+            ZLinkEnvelopeCodec.MeasureApplicationPayloadBytes(new[] { header, body })
+        );
         var queued = new ZLinkMeshQueuedRecord(
             record,
             new[] { header, body },
-            applicationPayloadBytes: 2);
+            applicationPayloadBytes: 2
+        );
 
         try
         {
@@ -1498,20 +1549,15 @@ public sealed partial class StatefulServiceRuntimeTests
 
         Assert.Equal(
             SubmitResult.Ok,
-            sessions.BindActor(
-                sessionRid,
-                actor,
-                out var bindOperation,
-                TimeSpan.FromSeconds(1)));
+            sessions.BindActor(sessionRid, actor, out var bindOperation, TimeSpan.FromSeconds(1))
+        );
         Assert.NotEqual(default, bindOperation);
         var binding = Assert.Single(sessions.Bindings(sessionRid));
         Assert.Equal(actor, binding.Actor);
         DrainAndDispose(node);
 
         using var payload = Message.From(new byte[] { 6 });
-        Assert.Equal(
-            SubmitResult.Ok,
-            sessions.SendToActor(sessionRid, actor, [payload]));
+        Assert.Equal(SubmitResult.Ok, sessions.SendToActor(sessionRid, actor, [payload]));
         using var ready = new MeshReadyBatch();
         node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
         using var claim = ready.TakeClaim(0);
@@ -1523,10 +1569,9 @@ public sealed partial class StatefulServiceRuntimeTests
             actor.ActorId,
             actor.ObjectGeneration + 1,
             actor.MeshName,
-            actor.NodeRid);
-        Assert.Equal(
-            SubmitResult.NotFound,
-            sessions.SendToActor(sessionRid, stale, [payload]));
+            actor.NodeRid
+        );
+        Assert.Equal(SubmitResult.NotFound, sessions.SendToActor(sessionRid, stale, [payload]));
     }
 
     [Fact]
@@ -1544,25 +1589,17 @@ public sealed partial class StatefulServiceRuntimeTests
         using var payload = Message.From(new byte[] { 7 });
         Assert.Equal(
             SubmitResult.Ok,
-            first.SendToSpot(
-                node.RoutingId,
-                spotId,
-                first.LifecycleGeneration + 1,
-                [payload]));
+            first.SendToSpot(node.RoutingId, spotId, first.LifecycleGeneration + 1, [payload])
+        );
         Assert.Equal(
             SubmitResult.Ok,
-            first.SendToSpot(
-                node.RoutingId,
-                spotId,
-                first.LifecycleGeneration,
-                [payload]));
+            first.SendToSpot(node.RoutingId, spotId, first.LifecycleGeneration, [payload])
+        );
         DrainAndDispose(node);
         await first.DisposeAsync();
         var reactivated = node.GetOrCreateSpot(spotId, out var reactivatedCreated);
         Assert.True(reactivatedCreated);
-        Assert.NotEqual(
-            first.LifecycleGeneration,
-            reactivated.LifecycleGeneration);
+        Assert.NotEqual(first.LifecycleGeneration, reactivated.LifecycleGeneration);
     }
 
     [Fact]
@@ -1582,7 +1619,8 @@ public sealed partial class StatefulServiceRuntimeTests
             [payload],
             SendFlags.None,
             default,
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         using var ready = new MeshReadyBatch();
         node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
@@ -1602,15 +1640,17 @@ public sealed partial class StatefulServiceRuntimeTests
 
         using var payload = Message.From(new byte[] { 9 });
         var request = node.RequestToSpotDirectAsync(
-            source.SpotId,
-            node.RoutingId,
-            target.SpotId,
-            target.LifecycleGeneration,
-            [payload],
-            SendFlags.None,
-            default,
-            TimeSpan.FromSeconds(1),
-            CancellationToken.None).AsTask();
+                source.SpotId,
+                node.RoutingId,
+                target.SpotId,
+                target.LifecycleGeneration,
+                [payload],
+                SendFlags.None,
+                default,
+                TimeSpan.FromSeconds(1),
+                CancellationToken.None
+            )
+            .AsTask();
 
         using var ready = new MeshReadyBatch();
         node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
@@ -1644,7 +1684,8 @@ public sealed partial class StatefulServiceRuntimeTests
             ulong.MaxValue,
             ulong.MaxValue,
             ulong.MaxValue,
-            ulong.MaxValue);
+            ulong.MaxValue
+        );
     }
 
     [Fact]
@@ -1663,9 +1704,9 @@ public sealed partial class StatefulServiceRuntimeTests
         source.ConnectPeer(targetEndpoint, target.RoutingId);
         source.Start();
         target.Start();
-        await WaitUntilAsync(
-            () => source.Status().AdmittedPeerCount == 1
-                  && target.Status().AdmittedPeerCount == 1);
+        await WaitUntilAsync(() =>
+            source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+        );
 
         var actor = target.CreateActor("remote-player");
         const string spotId = "remote-room";
@@ -1673,113 +1714,103 @@ public sealed partial class StatefulServiceRuntimeTests
         DrainAndDispose(target);
 
         using var payload = Message.From(new byte[] { 8 });
-        Assert.True(target.TryGetActorAuthority(
-            actor,
-            out var actorAuthority,
-            out var actorOwnerLeaseGeneration));
+        Assert.True(
+            target.TryGetActorAuthority(
+                actor,
+                out var actorAuthority,
+                out var actorOwnerLeaseGeneration
+            )
+        );
         Assert.Equal(17UL, actorOwnerLeaseGeneration);
         source.ObserveActorAuthority(
             actor,
             checked(target.Status().LifecycleGeneration + 1),
             actorAuthority,
-            17);
+            17
+        );
         source.ObserveSpotAuthority(
             target.RoutingId,
             spotId,
             spot.LifecycleGeneration,
             checked(target.Status().LifecycleGeneration + 1),
             spot.AuthorityOwnerGeneration,
-            17);
+            17
+        );
         Assert.Equal(SubmitResult.NotFound, source.SendToActor(actor, [payload]));
         Assert.Equal(
             SubmitResult.NotFound,
-            source.EntrySpot().SendToSpot(
-                target.RoutingId,
-                spotId,
-                spot.LifecycleGeneration,
-                [payload]));
+            source
+                .EntrySpot()
+                .SendToSpot(target.RoutingId, spotId, spot.LifecycleGeneration, [payload])
+        );
 
         source.ObserveActorAuthority(
             actor,
             target.Status().LifecycleGeneration,
             actorAuthority,
-            17);
+            17
+        );
         source.ObserveSpotAuthority(
             target.RoutingId,
             spotId,
             spot.LifecycleGeneration,
             target.Status().LifecycleGeneration,
             spot.AuthorityOwnerGeneration,
-            17);
+            17
+        );
         Assert.Equal(SubmitResult.Ok, source.SendToActor(actor, [payload]));
         Assert.Equal(
             SubmitResult.Ok,
-            source.EntrySpot().SendToSpot(
-                target.RoutingId,
-                spotId,
-                spot.LifecycleGeneration,
-                [payload]));
+            source
+                .EntrySpot()
+                .SendToSpot(target.RoutingId, spotId, spot.LifecycleGeneration, [payload])
+        );
 
         await WaitUntilAsync(() =>
         {
             using var ready = new MeshReadyBatch();
-            target.DrainReady(
-                MeshReadyDomains.Application,
-                ready,
-                RecvFlags.DontWait);
+            target.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
             return ready.Count == 2;
         });
         using var finalReady = new MeshReadyBatch();
-        target.DrainReady(
-            MeshReadyDomains.Application,
-            finalReady,
-            RecvFlags.DontWait);
+        target.DrainReady(MeshReadyDomains.Application, finalReady, RecvFlags.DontWait);
         Assert.Contains(
             Enumerable.Range(0, finalReady.Count),
-            index => finalReady[index].OwnerKind == MeshOwnerKind.Actor);
+            index => finalReady[index].OwnerKind == MeshOwnerKind.Actor
+        );
         Assert.Contains(
             Enumerable.Range(0, finalReady.Count),
-            index => finalReady[index].SpotId == spotId);
+            index => finalReady[index].SpotId == spotId
+        );
         finalReady.Reset();
         DrainAndDispose(target);
 
         Assert.Equal(
             SubmitResult.Ok,
-            source.RequestToActor(
-                actor,
-                [payload],
-                out var operation,
-                TimeSpan.FromSeconds(1)));
+            source.RequestToActor(actor, [payload], out var operation, TimeSpan.FromSeconds(1))
+        );
         await WaitUntilAsync(() =>
         {
             using var ready = new MeshReadyBatch();
-            target.DrainReady(
-                MeshReadyDomains.Application,
-                ready,
-                RecvFlags.DontWait);
+            target.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
             return ready.Count == 1;
         });
         using (var requestReady = new MeshReadyBatch())
         {
-            target.DrainReady(
-                MeshReadyDomains.Application,
-                requestReady,
-                RecvFlags.DontWait);
+            target.DrainReady(MeshReadyDomains.Application, requestReady, RecvFlags.DontWait);
             using var requestClaim = requestReady.TakeClaim(0);
             using var requestBatch = new MeshReceiveBatch();
             Assert.True(requestClaim.Receive(requestBatch, RecvFlags.DontWait));
             Assert.Equal(MeshRecordKind.ActorRequest, requestBatch[0].Kind);
-            Assert.Equal(
-                SubmitResult.Ok,
-                requestBatch[0].Reply(Array.Empty<Message>()));
+            Assert.Equal(SubmitResult.Ok, requestBatch[0].Reply(Array.Empty<Message>()));
         }
-        await WaitUntilAsync(() =>
-            source.Status().PendingInfrastructureMessages > 0);
+        await WaitUntilAsync(() => source.Status().PendingInfrastructureMessages > 0);
         var completions = DrainRecords(source);
         Assert.Single(
             completions.Where(record =>
-                record.Kind == MeshRecordKind.Completion
-                && record.OperationId == operation));
+                record.Kind == MeshRecordKind.Completion && record.OperationId == operation
+            )
+        );
     }
 
     [Fact]
@@ -1797,7 +1828,8 @@ public sealed partial class StatefulServiceRuntimeTests
                     return SubmitResult.Backpressured;
                 reply.Submit();
                 return SubmitResult.Ok;
-            });
+            }
+        );
         target.SetRoutingId(RoutingId.From("stateful-reply-target"));
         source.SetLocalOwnerLeaseGeneration(17);
         target.SetLocalOwnerLeaseGeneration(17);
@@ -1810,66 +1842,61 @@ public sealed partial class StatefulServiceRuntimeTests
         source.Start();
         target.Start();
         await WaitUntilAsync(() =>
-            source.Status().AdmittedPeerCount == 1
-            && target.Status().AdmittedPeerCount == 1);
+            source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+        );
 
         var actor = target.CreateActor("stateful-reply-actor");
         DrainAndDispose(target);
-        Assert.True(target.TryGetActorAuthority(
-            actor,
-            out var authorityOwnerGeneration,
-            out var ownerLeaseGeneration));
+        Assert.True(
+            target.TryGetActorAuthority(
+                actor,
+                out var authorityOwnerGeneration,
+                out var ownerLeaseGeneration
+            )
+        );
         source.ObserveActorAuthority(
             actor,
             target.Status().LifecycleGeneration,
             authorityOwnerGeneration,
-            ownerLeaseGeneration);
+            ownerLeaseGeneration
+        );
 
         using var payload = Message.From(new byte[] { 19 });
         Assert.Equal(
             SubmitResult.Ok,
-            source.RequestToActor(
-                actor,
-                [payload],
-                out var operation,
-                TimeSpan.FromSeconds(3)));
+            source.RequestToActor(actor, [payload], out var operation, TimeSpan.FromSeconds(3))
+        );
         await WaitUntilAsync(() =>
         {
             using var ready = new MeshReadyBatch();
-            target.DrainReady(
-                MeshReadyDomains.Application,
-                ready,
-                RecvFlags.DontWait);
+            target.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
             return ready.Count == 1;
         });
         using (var requestReady = new MeshReadyBatch())
         {
-            target.DrainReady(
-                MeshReadyDomains.Application,
-                requestReady,
-                RecvFlags.DontWait);
+            target.DrainReady(MeshReadyDomains.Application, requestReady, RecvFlags.DontWait);
             using var requestClaim = requestReady.TakeClaim(0);
             using var requestBatch = new MeshReceiveBatch();
             Assert.True(requestClaim.Receive(requestBatch, RecvFlags.DontWait));
             Assert.Equal(MeshRecordKind.ActorRequest, requestBatch[0].Kind);
-            Assert.Equal(
-                SubmitResult.Backpressured,
-                requestBatch[0].Reply(Array.Empty<Message>()));
+            Assert.Equal(SubmitResult.Backpressured, requestBatch[0].Reply(Array.Empty<Message>()));
         }
 
         await WaitUntilAsync(() =>
             Volatile.Read(ref replyAttempts) == 2
-            && source.Status().PendingInfrastructureMessages > 0);
+            && source.Status().PendingInfrastructureMessages > 0
+        );
         var completions = DrainRecords(source);
         Assert.Single(
             completions.Where(record =>
-                record.Kind == MeshRecordKind.Completion
-                && record.OperationId == operation));
+                record.Kind == MeshRecordKind.Completion && record.OperationId == operation
+            )
+        );
         await Task.Delay(100);
         Assert.DoesNotContain(
             DrainRecords(source),
-            record => record.Kind == MeshRecordKind.Completion
-                      && record.OperationId == operation);
+            record => record.Kind == MeshRecordKind.Completion && record.OperationId == operation
+        );
     }
 
     [Fact]
@@ -1890,9 +1917,11 @@ public sealed partial class StatefulServiceRuntimeTests
                 // Backpressured result is classified for retention or terminal failure.
                 deadlineTime.Advance(
                     wallClock: TimeSpan.FromSeconds(10),
-                    monotonic: TimeSpan.FromSeconds(10));
+                    monotonic: TimeSpan.FromSeconds(10)
+                );
                 return SubmitResult.Backpressured;
-            });
+            }
+        );
         target.SetRoutingId(RoutingId.From("expired-reply-target"));
         source.SetLocalOwnerLeaseGeneration(17);
         target.SetLocalOwnerLeaseGeneration(17);
@@ -1905,29 +1934,30 @@ public sealed partial class StatefulServiceRuntimeTests
         source.Start();
         target.Start();
         await WaitUntilAsync(() =>
-            source.Status().AdmittedPeerCount == 1
-            && target.Status().AdmittedPeerCount == 1);
+            source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+        );
 
         var actor = target.CreateActor("expired-reply-actor");
         DrainAndDispose(target);
-        Assert.True(target.TryGetActorAuthority(
-            actor,
-            out var authorityOwnerGeneration,
-            out var ownerLeaseGeneration));
+        Assert.True(
+            target.TryGetActorAuthority(
+                actor,
+                out var authorityOwnerGeneration,
+                out var ownerLeaseGeneration
+            )
+        );
         source.ObserveActorAuthority(
             actor,
             target.Status().LifecycleGeneration,
             authorityOwnerGeneration,
-            ownerLeaseGeneration);
+            ownerLeaseGeneration
+        );
 
         using var payload = Message.From(new byte[] { 19 });
         Assert.Equal(
             SubmitResult.Ok,
-            source.RequestToActor(
-                actor,
-                [payload],
-                out var operation,
-                TimeSpan.FromSeconds(3)));
+            source.RequestToActor(actor, [payload], out var operation, TimeSpan.FromSeconds(3))
+        );
         await WaitUntilAsync(() =>
         {
             using var ready = new MeshReadyBatch();
@@ -1949,17 +1979,15 @@ public sealed partial class StatefulServiceRuntimeTests
         Assert.Equal(1, Volatile.Read(ref replyAttempts));
         Assert.DoesNotContain(
             DrainRecords(source),
-            record => record.Kind == MeshRecordKind.Completion
-                      && record.OperationId == operation);
+            record => record.Kind == MeshRecordKind.Completion && record.OperationId == operation
+        );
     }
 
     [Fact]
     public async Task RelocatedActorReplyCompletesTheOriginalRemoteCallerExactlyOnce()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
-        await using var caller = new ZLinkManagedMeshNode(
-            context,
-            "mesh");
+        await using var caller = new ZLinkManagedMeshNode(context, "mesh");
         caller.SetRoutingId(RoutingId.From("relocated-reply-caller"));
         await using var owner = NewNode(context, "relocated-reply-owner");
         caller.SetLocalOwnerLeaseGeneration(41);
@@ -1975,49 +2003,50 @@ public sealed partial class StatefulServiceRuntimeTests
             "caller-owner",
             41,
             caller.RoutingId,
-            caller.Status().LifecycleGeneration);
+            caller.Status().LifecycleGeneration
+        );
         caller.SetLocalRequestSourceFence(requestSource);
         var callerBackend = new ZLinkBackendSpotNodeWrapper(caller);
-        caller.SetRelocationReplyRelayTarget(
-            new ZLinkRelocationReplyTarget(callerBackend));
+        caller.SetRelocationReplyRelayTarget(new ZLinkRelocationReplyTarget(callerBackend));
         caller.Start();
         owner.Start();
-        await WaitUntilAsync(() => caller.Status().AdmittedPeerCount == 1
-                                  && owner.Status().AdmittedPeerCount == 1);
+        await WaitUntilAsync(() =>
+            caller.Status().AdmittedPeerCount == 1 && owner.Status().AdmittedPeerCount == 1
+        );
 
         var actor = owner.CreateActor("relocated-reply-actor");
         DrainAndDispose(owner);
-        Assert.True(owner.TryGetActorAuthority(
-            actor,
-            out var authorityOwnerGeneration,
-            out var ownerLeaseGeneration));
+        Assert.True(
+            owner.TryGetActorAuthority(
+                actor,
+                out var authorityOwnerGeneration,
+                out var ownerLeaseGeneration
+            )
+        );
         caller.ObserveActorAuthority(
             actor,
             owner.Status().LifecycleGeneration,
             authorityOwnerGeneration,
-            ownerLeaseGeneration);
+            ownerLeaseGeneration
+        );
 
         using var request = Message.From(new byte[] { 31 });
         Assert.Equal(
             SubmitResult.Ok,
-            caller.RequestToActor(
-                actor,
-                [request],
-                out var operation,
-                TimeSpan.FromSeconds(3)));
+            caller.RequestToActor(actor, [request], out var operation, TimeSpan.FromSeconds(3))
+        );
 
         MeshReceiveRecord inbound = default;
         await WaitUntilAsync(() =>
         {
             using var ready = new MeshReadyBatch();
-            owner.DrainReady(
-                MeshReadyDomains.Application,
-                ready,
-                RecvFlags.DontWait);
-            if (ready.Count == 0) return false;
+            owner.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
+            if (ready.Count == 0)
+                return false;
             using var claim = ready.TakeClaim(0);
             using var received = new MeshReceiveBatch();
-            if (!claim.Receive(received, RecvFlags.DontWait)) return false;
+            if (!claim.Receive(received, RecvFlags.DontWait))
+                return false;
             inbound = received[0];
             return true;
         });
@@ -2036,14 +2065,14 @@ public sealed partial class StatefulServiceRuntimeTests
                 59,
                 owner.RoutingId,
                 owner.Status().LifecycleGeneration,
-                "relocation-root"),
+                "relocation-root"
+            ),
             61,
             67,
             (uint)RequestResult.Ok,
-            ServiceWireConstants.FrameworkErrorCode.None);
-        Assert.NotEqual(
-            relay.TargetAttemptGeneration,
-            relay.Coordinator.NodeGeneration);
+            ServiceWireConstants.FrameworkErrorCode.None
+        );
+        Assert.NotEqual(relay.TargetAttemptGeneration, relay.Coordinator.NodeGeneration);
         var response = new[] { Message.From(new byte[] { 37 }) };
         try
         {
@@ -2053,18 +2082,21 @@ public sealed partial class StatefulServiceRuntimeTests
                 requestSource,
                 response,
                 TimeSpan.FromSeconds(3),
-                CancellationToken.None);
+                CancellationToken.None
+            );
             Assert.Equal(
                 (byte)ZLinkRelocationReplyCompletionState.TerminalReceived,
-                firstAck.Status);
+                firstAck.Status
+            );
             Assert.Equal(requestSource, firstAck.RequestSource);
 
-            await WaitUntilAsync(() =>
-                caller.Status().PendingInfrastructureMessages > 0);
+            await WaitUntilAsync(() => caller.Status().PendingInfrastructureMessages > 0);
             var completions = DrainRecords(caller);
-            Assert.Single(completions.Where(record =>
-                record.Kind == MeshRecordKind.Completion
-                && record.OperationId == operation));
+            Assert.Single(
+                completions.Where(record =>
+                    record.Kind == MeshRecordKind.Completion && record.OperationId == operation
+                )
+            );
 
             // A lost ACK causes the coordinator to resend the same immutable
             // relay. The caller acknowledges its tombstone without publishing
@@ -2075,23 +2107,28 @@ public sealed partial class StatefulServiceRuntimeTests
                 requestSource,
                 response,
                 TimeSpan.FromSeconds(3),
-                CancellationToken.None);
+                CancellationToken.None
+            );
             Assert.Equal(
                 (byte)ZLinkRelocationReplyCompletionState.AlreadyTerminal,
-                duplicateAck.Status);
+                duplicateAck.Status
+            );
             Assert.Equal(requestSource, duplicateAck.RequestSource);
             await Task.Delay(50);
             Assert.DoesNotContain(
                 DrainRecords(caller),
-                record => record.Kind == MeshRecordKind.Completion
-                          && record.OperationId == operation);
+                record =>
+                    record.Kind == MeshRecordKind.Completion && record.OperationId == operation
+            );
             Assert.Equal(
                 SubmitResult.Ok,
                 caller.RequestToActor(
                     actor,
                     [request],
                     out var nextOperation,
-                    TimeSpan.FromSeconds(3)));
+                    TimeSpan.FromSeconds(3)
+                )
+            );
             Assert.NotEqual(default, nextOperation);
         }
         finally
@@ -2109,7 +2146,8 @@ public sealed partial class StatefulServiceRuntimeTests
             "reply-terminal-owner",
             1,
             caller.RoutingId,
-            caller.Status().LifecycleGeneration);
+            caller.Status().LifecycleGeneration
+        );
         caller.SetLocalRequestSourceFence(requestSource);
         var actor = caller.CreateActor("reply-terminal-actor");
         DrainAndDispose(caller);
@@ -2121,24 +2159,22 @@ public sealed partial class StatefulServiceRuntimeTests
                 actor,
                 [request],
                 out var completedOperation,
-                TimeSpan.FromSeconds(1)));
+                TimeSpan.FromSeconds(1)
+            )
+        );
         using (var ready = new MeshReadyBatch())
         {
-            caller.DrainReady(
-                MeshReadyDomains.Application,
-                ready,
-                RecvFlags.DontWait);
+            caller.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
             using var claim = ready.TakeClaim(0);
             using var received = new MeshReceiveBatch();
             Assert.True(claim.Receive(received, RecvFlags.DontWait));
-            Assert.Equal(
-                SubmitResult.Ok,
-                received[0].Reply(Array.Empty<Message>()));
+            Assert.Equal(SubmitResult.Ok, received[0].Reply(Array.Empty<Message>()));
         }
         Assert.Contains(
             DrainRecords(caller),
-            record => record.Kind == MeshRecordKind.Completion
-                      && record.OperationId == completedOperation);
+            record =>
+                record.Kind == MeshRecordKind.Completion && record.OperationId == completedOperation
+        );
 
         var relay = new ZLinkServiceWireCodec.ReplyRelayRecord(
             completedOperation,
@@ -2150,21 +2186,18 @@ public sealed partial class StatefulServiceRuntimeTests
                 113,
                 RoutingId.From("reply-terminal-target"),
                 127,
-                "reply-terminal-root"),
+                "reply-terminal-root"
+            ),
             131,
             137,
             (uint)RequestResult.Ok,
-            ServiceWireConstants.FrameworkErrorCode.None);
+            ServiceWireConstants.FrameworkErrorCode.None
+        );
         var duplicatePayload = new[] { Message.From(new byte[] { 139 }) };
-        var duplicate = caller.TryCompleteRelocationReply(
-            relay,
-            duplicatePayload);
-        Assert.Equal(
-            ZLinkRelocationReplyCompletionState.AlreadyTerminal,
-            duplicate.State);
+        var duplicate = caller.TryCompleteRelocationReply(relay, duplicatePayload);
+        Assert.Equal(ZLinkRelocationReplyCompletionState.AlreadyTerminal, duplicate.State);
         Assert.Equal(requestSource, duplicate.RequestSource);
-        Assert.Throws<ObjectDisposedException>(
-            () => duplicatePayload[0].AsReadOnlySpan());
+        Assert.Throws<ObjectDisposedException>(() => duplicatePayload[0].AsReadOnlySpan());
 
         Assert.Equal(
             SubmitResult.Ok,
@@ -2172,14 +2205,17 @@ public sealed partial class StatefulServiceRuntimeTests
                 actor,
                 [request],
                 out var timedOutOperation,
-                TimeSpan.FromMilliseconds(30)));
-        await WaitUntilAsync(() =>
-            caller.Status().PendingInfrastructureMessages > 0);
+                TimeSpan.FromMilliseconds(30)
+            )
+        );
+        await WaitUntilAsync(() => caller.Status().PendingInfrastructureMessages > 0);
         Assert.Contains(
             DrainRecords(caller),
-            record => record.Kind == MeshRecordKind.Completion
-                      && record.OperationId == timedOutOperation
-                      && record.TerminalResult == (int)RequestResult.TimedOut);
+            record =>
+                record.Kind == MeshRecordKind.Completion
+                && record.OperationId == timedOutOperation
+                && record.TerminalResult == (int)RequestResult.TimedOut
+        );
 
         var timedOutPayload = new[] { Message.From(new byte[] { 149 }) };
         var timedOutDuplicate = caller.TryCompleteRelocationReply(
@@ -2187,24 +2223,20 @@ public sealed partial class StatefulServiceRuntimeTests
             {
                 OperationId = timedOutOperation,
                 ReplyRouteId = timedOutOperation.Low,
-                Sequence = 151
+                Sequence = 151,
             },
-            timedOutPayload);
-        Assert.Equal(
-            ZLinkRelocationReplyCompletionState.AlreadyTerminal,
-            timedOutDuplicate.State);
+            timedOutPayload
+        );
+        Assert.Equal(ZLinkRelocationReplyCompletionState.AlreadyTerminal, timedOutDuplicate.State);
         Assert.Equal(requestSource, timedOutDuplicate.RequestSource);
-        Assert.Throws<ObjectDisposedException>(
-            () => timedOutPayload[0].AsReadOnlySpan());
+        Assert.Throws<ObjectDisposedException>(() => timedOutPayload[0].AsReadOnlySpan());
     }
 
     [Fact]
     public async Task RelocatedUserSpotReplyCompletesTheOriginalRemoteCallerExactlyOnce()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
-        await using var caller = new ZLinkManagedMeshNode(
-            context,
-            "mesh");
+        await using var caller = new ZLinkManagedMeshNode(context, "mesh");
         caller.SetRoutingId(RoutingId.From("relocated-spot-caller"));
         await using var oldOwner = NewNode(context, "relocated-spot-old-owner");
         await using var target = NewNode(context, "relocated-spot-target");
@@ -2225,17 +2257,19 @@ public sealed partial class StatefulServiceRuntimeTests
             "relocated-spot-caller-owner",
             131,
             caller.RoutingId,
-            caller.Status().LifecycleGeneration);
+            caller.Status().LifecycleGeneration
+        );
         caller.SetLocalRequestSourceFence(requestSource);
-        var replyTarget = new ZLinkRelocationReplyTarget(
-            new ZLinkBackendSpotNodeWrapper(caller));
+        var replyTarget = new ZLinkRelocationReplyTarget(new ZLinkBackendSpotNodeWrapper(caller));
         caller.SetRelocationReplyRelayTarget(replyTarget);
         caller.Start();
         oldOwner.Start();
         target.Start();
-        await WaitUntilAsync(() => caller.Status().AdmittedPeerCount == 2
-                                  && oldOwner.Status().AdmittedPeerCount == 1
-                                  && target.Status().AdmittedPeerCount == 1);
+        await WaitUntilAsync(() =>
+            caller.Status().AdmittedPeerCount == 2
+            && oldOwner.Status().AdmittedPeerCount == 1
+            && target.Status().AdmittedPeerCount == 1
+        );
 
         const string spotId = "relocated-user-spot";
         var spot = (ZLinkManagedSpot)oldOwner.GetOrCreateSpot(spotId, out _);
@@ -2246,53 +2280,60 @@ public sealed partial class StatefulServiceRuntimeTests
             spot.LifecycleGeneration,
             oldOwner.Status().LifecycleGeneration,
             spot.AuthorityOwnerGeneration,
-            137);
+            137
+        );
 
         using var request = Message.From(new byte[] { 139 });
         Assert.Equal(
             SubmitResult.Ok,
-            caller.EntrySpot().RequestToSpot(
-                oldOwner.RoutingId,
-                spotId,
-                spot.LifecycleGeneration,
-                [request],
-                out var operation,
-                TimeSpan.FromSeconds(3)));
+            caller
+                .EntrySpot()
+                .RequestToSpot(
+                    oldOwner.RoutingId,
+                    spotId,
+                    spot.LifecycleGeneration,
+                    [request],
+                    out var operation,
+                    TimeSpan.FromSeconds(3)
+                )
+        );
         // A second request is admitted too; nothing is refused for want of a completion slot.
         Assert.Equal(
             SubmitResult.Ok,
-            caller.EntrySpot().RequestToSpot(
-                oldOwner.RoutingId,
-                spotId,
-                spot.LifecycleGeneration,
-                [request],
-                out var second,
-                TimeSpan.FromSeconds(3)));
+            caller
+                .EntrySpot()
+                .RequestToSpot(
+                    oldOwner.RoutingId,
+                    spotId,
+                    spot.LifecycleGeneration,
+                    [request],
+                    out var second,
+                    TimeSpan.FromSeconds(3)
+                )
+        );
         Assert.NotEqual(default, second);
         Assert.NotEqual(operation, second);
 
-        await WaitUntilAsync(() =>
-            oldOwner.Status().PendingApplicationMessages == 2);
+        await WaitUntilAsync(() => oldOwner.Status().PendingApplicationMessages == 2);
         var inboundRecords = new List<MeshReceiveRecord>();
         await WaitUntilAsync(() =>
         {
             using var ready = new MeshReadyBatch();
-            oldOwner.DrainReady(
-                MeshReadyDomains.Application,
-                ready,
-                RecvFlags.DontWait);
+            oldOwner.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
             for (var index = 0; index < ready.Count; index++)
             {
                 using var claim = ready.TakeClaim(index);
                 using var received = new MeshReceiveBatch();
-                if (!claim.Receive(received, RecvFlags.DontWait)) continue;
+                if (!claim.Receive(received, RecvFlags.DontWait))
+                    continue;
                 for (var item = 0; item < received.Count; item++)
                     inboundRecords.Add(received[item]);
             }
             return inboundRecords.Count >= 2;
         });
         var inbound = Assert.Single(
-            inboundRecords.Where(record => record.OperationId == operation));
+            inboundRecords.Where(record => record.OperationId == operation)
+        );
         Assert.NotEqual(caller.RoutingId, oldOwner.RoutingId);
         Assert.NotEqual(oldOwner.RoutingId, target.RoutingId);
         Assert.Equal(MeshRecordKind.SpotRequest, inbound.Kind);
@@ -2309,11 +2350,13 @@ public sealed partial class StatefulServiceRuntimeTests
                 157,
                 target.RoutingId,
                 target.Status().LifecycleGeneration,
-                "relocated-spot-root"),
+                "relocated-spot-root"
+            ),
             163,
             167,
             (uint)RequestResult.Ok,
-            ServiceWireConstants.FrameworkErrorCode.None);
+            ServiceWireConstants.FrameworkErrorCode.None
+        );
         var response = new[] { Message.From(new byte[] { 173 }) };
         try
         {
@@ -2323,10 +2366,12 @@ public sealed partial class StatefulServiceRuntimeTests
                 target.RoutingId,
                 checked(target.Status().LifecycleGeneration + 1),
                 unauthenticatedPayload,
-                CancellationToken.None);
+                CancellationToken.None
+            );
             Assert.Null(unauthenticatedAck);
             Assert.Throws<ObjectDisposedException>(() =>
-                unauthenticatedPayload[0].AsReadOnlySpan());
+                unauthenticatedPayload[0].AsReadOnlySpan()
+            );
 
             var firstAck = await target.RelayRelocationReplyAsync(
                 caller.RoutingId,
@@ -2334,17 +2379,21 @@ public sealed partial class StatefulServiceRuntimeTests
                 requestSource,
                 response,
                 TimeSpan.FromSeconds(3),
-                CancellationToken.None);
+                CancellationToken.None
+            );
             Assert.Equal(
                 (byte)ZLinkRelocationReplyCompletionState.TerminalReceived,
-                firstAck.Status);
+                firstAck.Status
+            );
             Assert.Equal(requestSource, firstAck.RequestSource);
 
-            await WaitUntilAsync(() =>
-                caller.Status().PendingInfrastructureMessages > 0);
-            var completion = Assert.Single(DrainRecords(caller).Where(record =>
-                record.Kind == MeshRecordKind.Completion
-                && record.OperationId == operation));
+            await WaitUntilAsync(() => caller.Status().PendingInfrastructureMessages > 0);
+            var completion = Assert.Single(
+                DrainRecords(caller)
+                    .Where(record =>
+                        record.Kind == MeshRecordKind.Completion && record.OperationId == operation
+                    )
+            );
             Assert.Equal(MeshOperationKind.SpotRequest, completion.OperationKind);
 
             var duplicateAck = await target.RelayRelocationReplyAsync(
@@ -2353,24 +2402,31 @@ public sealed partial class StatefulServiceRuntimeTests
                 requestSource,
                 response,
                 TimeSpan.FromSeconds(3),
-                CancellationToken.None);
+                CancellationToken.None
+            );
             Assert.Equal(
                 (byte)ZLinkRelocationReplyCompletionState.AlreadyTerminal,
-                duplicateAck.Status);
+                duplicateAck.Status
+            );
             await Task.Delay(50);
             Assert.DoesNotContain(
                 DrainRecords(caller),
-                record => record.Kind == MeshRecordKind.Completion
-                          && record.OperationId == operation);
+                record =>
+                    record.Kind == MeshRecordKind.Completion && record.OperationId == operation
+            );
             Assert.Equal(
                 SubmitResult.Ok,
-                caller.EntrySpot().RequestToSpot(
-                    oldOwner.RoutingId,
-                    spotId,
-                    spot.LifecycleGeneration,
-                    [request],
-                    out var nextOperation,
-                    TimeSpan.FromSeconds(3)));
+                caller
+                    .EntrySpot()
+                    .RequestToSpot(
+                        oldOwner.RoutingId,
+                        spotId,
+                        spot.LifecycleGeneration,
+                        [request],
+                        out var nextOperation,
+                        TimeSpan.FromSeconds(3)
+                    )
+            );
             Assert.NotEqual(default, nextOperation);
         }
         finally
@@ -2392,7 +2448,8 @@ public sealed partial class StatefulServiceRuntimeTests
                 "old-caller-owner",
                 71,
                 oldCaller.RoutingId,
-                oldCaller.Status().LifecycleGeneration);
+                oldCaller.Status().LifecycleGeneration
+            );
             oldCaller.SetLocalRequestSourceFence(oldSource);
             var actor = oldCaller.CreateActor("old-caller-actor");
             DrainAndDispose(oldCaller);
@@ -2403,18 +2460,19 @@ public sealed partial class StatefulServiceRuntimeTests
                     actor,
                     [request],
                     out oldOperation,
-                    TimeSpan.FromSeconds(30)));
+                    TimeSpan.FromSeconds(30)
+                )
+            );
         }
 
         await using var restartedCaller = NewNode(context, rid);
-        Assert.NotEqual(
-            oldOperation.High,
-            restartedCaller.Status().LifecycleGeneration);
+        Assert.NotEqual(oldOperation.High, restartedCaller.Status().LifecycleGeneration);
         var restartedSource = new ZLinkServiceWireCodec.RequestSourceFence(
             "new-caller-owner",
             79,
             restartedCaller.RoutingId,
-            restartedCaller.Status().LifecycleGeneration);
+            restartedCaller.Status().LifecycleGeneration
+        );
         restartedCaller.SetLocalRequestSourceFence(restartedSource);
         var restartedActor = restartedCaller.CreateActor("new-caller-actor");
         DrainAndDispose(restartedCaller);
@@ -2425,7 +2483,9 @@ public sealed partial class StatefulServiceRuntimeTests
                 restartedActor,
                 [restartedRequest],
                 out var restartedOperation,
-                TimeSpan.FromSeconds(30)));
+                TimeSpan.FromSeconds(30)
+            )
+        );
         Assert.Equal(oldOperation.Low, restartedOperation.Low);
         Assert.NotEqual(oldOperation.High, restartedOperation.High);
 
@@ -2439,23 +2499,19 @@ public sealed partial class StatefulServiceRuntimeTests
                 103,
                 RoutingId.From("old-coordinator-node"),
                 101,
-                "old-root"),
+                "old-root"
+            ),
             107,
             109,
             (uint)RequestResult.Ok,
-            ServiceWireConstants.FrameworkErrorCode.None);
+            ServiceWireConstants.FrameworkErrorCode.None
+        );
         var stalePayload = new[] { Message.From(new byte[] { 113 }) };
         try
         {
-            var completion = restartedCaller.TryCompleteRelocationReply(
-                oldRelay,
-                stalePayload);
-            Assert.Equal(
-                ZLinkRelocationReplyCompletionState.NotFound,
-                completion.State);
-            Assert.Equal(
-                default,
-                completion.RequestSource);
+            var completion = restartedCaller.TryCompleteRelocationReply(oldRelay, stalePayload);
+            Assert.Equal(ZLinkRelocationReplyCompletionState.NotFound, completion.State);
+            Assert.Equal(default, completion.RequestSource);
         }
         finally
         {
@@ -2463,20 +2519,16 @@ public sealed partial class StatefulServiceRuntimeTests
         }
 
         using var ready = new MeshReadyBatch();
-        restartedCaller.DrainReady(
-            MeshReadyDomains.Application,
-            ready,
-            RecvFlags.DontWait);
+        restartedCaller.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
         using var claim = ready.TakeClaim(0);
         using var received = new MeshReceiveBatch();
         Assert.True(claim.Receive(received, RecvFlags.DontWait));
-        Assert.Equal(
-            SubmitResult.Ok,
-            received[0].Reply(Array.Empty<Message>()));
+        Assert.Equal(SubmitResult.Ok, received[0].Reply(Array.Empty<Message>()));
         Assert.Contains(
             DrainRecords(restartedCaller),
-            record => record.Kind == MeshRecordKind.Completion
-                      && record.OperationId == restartedOperation);
+            record =>
+                record.Kind == MeshRecordKind.Completion && record.OperationId == restartedOperation
+        );
     }
 
     [Fact]
@@ -2487,24 +2539,22 @@ public sealed partial class StatefulServiceRuntimeTests
         services.AddZLinkFramework(options =>
         {
             options.UseTestLocationStore();
-            var node = options.AddRouteMesh("objects")
+            var node = options
+                .AddRouteMesh("objects")
                 .Listen($"tcp://127.0.0.1:{FindFreeTcpPort()}")
                 .SetSpotLimit(1);
             node.Objects()
                 .Server()
                 .AddSpotFactory<ProductionUserSpot>(
                     "Tests.ProductionUserSpot",
-                    factory => factory
-                        .StableTypeLimit(1)
-                        .DisableRelocation());
+                    factory => factory.StableTypeLimit(1).DisableRelocation()
+                );
         });
 
         await using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
         var locations = provider.GetRequiredService<ZLinkLocationRuntime>();
-        await locations.StartAsync(
-            runtime.PrepareLocationNodeRoutingId(),
-            CancellationToken.None);
+        await locations.StartAsync(runtime.PrepareLocationNodeRoutingId(), CancellationToken.None);
         PreparedReservedSpot? prepared = null;
         ZLinkSpotNodeRuntime? node = null;
         ZLinkSpotNodeCatalog? generatedCatalog = null;
@@ -2519,20 +2569,22 @@ public sealed partial class StatefulServiceRuntimeTests
                 objectGeneration: 1,
                 authorityOwnerGeneration: 1,
                 ZLinkMessage.Empty,
-                CancellationToken.None);
+                CancellationToken.None
+            );
 
-            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(
-                () => node.Catalog.PrepareReservedAsync(
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                node
+                    .Catalog.PrepareReservedAsync(
                         typeof(ProductionUserSpot),
                         $"prepared-{Guid.NewGuid():D}",
                         objectGeneration: 2,
                         authorityOwnerGeneration: 2,
                         ZLinkMessage.Empty,
-                        CancellationToken.None)
-                    .AsTask());
-            Assert.Equal(
-                ZLinkFrameworkErrorKind.Unavailable,
-                error.Kind);
+                        CancellationToken.None
+                    )
+                    .AsTask()
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
 
             if (prepared is { } reservedPrepared)
             {
@@ -2547,26 +2599,25 @@ public sealed partial class StatefulServiceRuntimeTests
                 node.Node,
                 "objects",
                 lifecycle: null,
-                timerScheduler: timerScheduler);
+                timerScheduler: timerScheduler
+            );
             var createGate = ProductionUserSpot.BlockNextCreate();
-            var firstCreate = generatedCatalog.CreateAsync(
-                    typeof(ProductionUserSpot),
-                    ZLinkMessage.Empty,
-                    CancellationToken.None)
+            var firstCreate = generatedCatalog
+                .CreateAsync(typeof(ProductionUserSpot), ZLinkMessage.Empty, CancellationToken.None)
                 .AsTask();
             try
             {
-                await createGate.Entered.Task.WaitAsync(
-                    TimeSpan.FromSeconds(5));
-                var generatedError = await Assert.ThrowsAsync<ZLinkFrameworkException>(
-                    () => generatedCatalog.CreateAsync(
+                await createGate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                var generatedError = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                    generatedCatalog
+                        .CreateAsync(
                             typeof(ProductionUserSpot),
                             ZLinkMessage.Empty,
-                            CancellationToken.None)
-                        .AsTask());
-                Assert.Equal(
-                    ZLinkFrameworkErrorKind.Unavailable,
-                    generatedError.Kind);
+                            CancellationToken.None
+                        )
+                        .AsTask()
+                );
+                Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, generatedError.Kind);
             }
             finally
             {
@@ -2583,8 +2634,7 @@ public sealed partial class StatefulServiceRuntimeTests
                 await generatedCatalog.DisposeAsync();
             await timerScheduler.DisposeAsync();
             await runtime.StopAsync(CancellationToken.None);
-            await locations.RemoveOwnedRowsBeforeRoutingIdReleaseAsync(
-                CancellationToken.None);
+            await locations.RemoveOwnedRowsBeforeRoutingIdReleaseAsync(CancellationToken.None);
             await locations.StopAsync(CancellationToken.None);
         }
     }
@@ -2598,23 +2648,21 @@ public sealed partial class StatefulServiceRuntimeTests
         {
             options.UseTestLocationStore();
             options.AddRelocationStore(relocationStore);
-            var node = options.AddRouteMesh("objects")
+            var node = options
+                .AddRouteMesh("objects")
                 .Listen($"tcp://127.0.0.1:{FindFreeTcpPort()}");
             node.Objects()
                 .Server()
                 .AddInstanceSpotFactory<MonitoringInstanceSpot>(
                     "Tests.MonitoringInstanceSpot",
-                    factory => factory
-                        .StableTypeLimit(1)
-                        .DisableRelocation());
+                    factory => factory.StableTypeLimit(1).DisableRelocation()
+                );
         });
 
         await using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
         var locations = provider.GetRequiredService<ZLinkLocationRuntime>();
-        await locations.StartAsync(
-            runtime.PrepareLocationNodeRoutingId(),
-            CancellationToken.None);
+        await locations.StartAsync(runtime.PrepareLocationNodeRoutingId(), CancellationToken.None);
         PreparedReservedSpot? prepared = null;
         try
         {
@@ -2625,10 +2673,10 @@ public sealed partial class StatefulServiceRuntimeTests
                 $"instance-{Guid.NewGuid():D}",
                 objectGeneration: 1,
                 authorityOwnerGeneration: 1,
-                CancellationToken.None);
+                CancellationToken.None
+            );
 
-            var snapshot = Assert.Single(
-                node.GetInstanceSpotMonitoringSnapshots());
+            var snapshot = Assert.Single(node.GetInstanceSpotMonitoringSnapshots());
             Assert.Equal(0UL, snapshot.ActiveCount);
             Assert.Equal(1UL, snapshot.ActivatingCount);
             Assert.Equal(0UL, snapshot.ClosingCount);
@@ -2636,11 +2684,9 @@ public sealed partial class StatefulServiceRuntimeTests
         finally
         {
             if (prepared is { } reserved)
-                await runtime.GetSpotNodeRuntime("objects")
-                    .Catalog.DiscardReservedAsync(reserved);
+                await runtime.GetSpotNodeRuntime("objects").Catalog.DiscardReservedAsync(reserved);
             await runtime.StopAsync(CancellationToken.None);
-            await locations.RemoveOwnedRowsBeforeRoutingIdReleaseAsync(
-                CancellationToken.None);
+            await locations.RemoveOwnedRowsBeforeRoutingIdReleaseAsync(CancellationToken.None);
             await locations.StopAsync(CancellationToken.None);
         }
     }
@@ -2655,24 +2701,22 @@ public sealed partial class StatefulServiceRuntimeTests
         {
             options.UseTestLocationStore();
             options.AddRelocationStore(relocationStore);
-            var node = options.AddRouteMesh("objects")
+            var node = options
+                .AddRouteMesh("objects")
                 .Listen($"tcp://127.0.0.1:{FindFreeTcpPort()}")
                 .SetSpotLimit(128);
             node.Objects()
                 .Server()
                 .AddInstanceSpotFactory<MonitoringInstanceSpot>(
                     stableType,
-                    factory => factory
-                        .StableTypeLimit(128)
-                        .DisableRelocation());
+                    factory => factory.StableTypeLimit(128).DisableRelocation()
+                );
         });
 
         await using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
         var locations = provider.GetRequiredService<ZLinkLocationRuntime>();
-        await locations.StartAsync(
-            runtime.PrepareLocationNodeRoutingId(),
-            CancellationToken.None);
+        await locations.StartAsync(runtime.PrepareLocationNodeRoutingId(), CancellationToken.None);
         ZLinkSpotNodeCatalog? catalog = null;
         ZLinkTimerScheduler? timerScheduler = null;
         ZLinkSpotNodeCatalog? singleCatalog = null;
@@ -2690,7 +2734,8 @@ public sealed partial class StatefulServiceRuntimeTests
                 nodeRuntime.Node,
                 "objects",
                 lifecycle: null,
-                timerScheduler: timerScheduler!);
+                timerScheduler: timerScheduler!
+            );
             var total = ZLinkSpotNodeCatalog.IdleEvictionBatchSize + 1;
 
             for (var index = 0; index < total; index++)
@@ -2700,12 +2745,14 @@ public sealed partial class StatefulServiceRuntimeTests
                     $"idle-batch-{index}-{Guid.NewGuid():N}",
                     objectGeneration: 1,
                     authorityOwnerGeneration: 1,
-                    CancellationToken.None);
+                    CancellationToken.None
+                );
                 await catalog.PublishInstanceReservedAsync(
                     prepared,
                     objectGeneration: 1,
                     authorityOwnerGeneration: 1,
-                    CancellationToken.None);
+                    CancellationToken.None
+                );
             }
 
             var first = await catalog.SnapshotIdleEvictionCandidatesAsync();
@@ -2729,18 +2776,21 @@ public sealed partial class StatefulServiceRuntimeTests
                 nodeRuntime.Node,
                 "objects",
                 lifecycle: null,
-                timerScheduler: singleTimerScheduler);
+                timerScheduler: singleTimerScheduler
+            );
             var singlePrepared = await singleCatalog.PrepareInstanceReservedAsync(
                 stableType,
                 $"idle-single-{Guid.NewGuid():N}",
                 objectGeneration: 1,
                 authorityOwnerGeneration: 1,
-                CancellationToken.None);
+                CancellationToken.None
+            );
             await singleCatalog.PublishInstanceReservedAsync(
                 singlePrepared,
                 objectGeneration: 1,
                 authorityOwnerGeneration: 1,
-                CancellationToken.None);
+                CancellationToken.None
+            );
 
             var singleFirst = await singleCatalog.SnapshotIdleEvictionCandidatesAsync();
             var singleSecond = await singleCatalog.SnapshotIdleEvictionCandidatesAsync();
@@ -2759,8 +2809,7 @@ public sealed partial class StatefulServiceRuntimeTests
             if (timerScheduler is not null)
                 await timerScheduler.DisposeAsync();
             await runtime.StopAsync(CancellationToken.None);
-            await locations.RemoveOwnedRowsBeforeRoutingIdReleaseAsync(
-                CancellationToken.None);
+            await locations.RemoveOwnedRowsBeforeRoutingIdReleaseAsync(CancellationToken.None);
             await locations.StopAsync(CancellationToken.None);
         }
     }
@@ -2782,28 +2831,30 @@ public sealed partial class StatefulServiceRuntimeTests
         {
             options.UseTestLocationStore();
             options.AddRelocationStore(relocationStore);
-            var node = options.AddRouteMesh("objects")
+            var node = options
+                .AddRouteMesh("objects")
                 .Listen(targetEndpoint)
                 .SetRoutingIdPrefix($"production-target-{suffix}")
                 .SetSpotLimit(100);
-            node.Objects().Server().AddSpotFactory<ProductionUserSpot>(
-                stableType,
-                factory => factory
-                    .StableTypeLimit(100)
-                    .DisableRelocation());
+            node.Objects()
+                .Server()
+                .AddSpotFactory<ProductionUserSpot>(
+                    stableType,
+                    factory => factory.StableTypeLimit(100).DisableRelocation()
+                );
         });
 
         await using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
         var locations = provider.GetRequiredService<ZLinkLocationRuntime>();
-        var autoConnect =
-            provider.GetRequiredService<ZLinkLocationAutoConnectHost>();
+        var autoConnect = provider.GetRequiredService<ZLinkLocationAutoConnectHost>();
         targetRid = runtime.PrepareLocationNodeRoutingId();
         await locations.StartAsync(targetRid, CancellationToken.None);
         await runtime.StartAsync(CancellationToken.None);
         await autoConnect.StartAsync(
             await runtime.GetStartedStateForRoutingAsync(CancellationToken.None),
-            CancellationToken.None);
+            CancellationToken.None
+        );
         try
         {
             var target = runtime.GetSpotNodeRuntime("objects");
@@ -2818,10 +2869,12 @@ public sealed partial class StatefulServiceRuntimeTests
             source.Start();
             await WaitUntilAsync(() =>
                 source.Status().AdmittedPeerCount == 1
-                && target.Node.MeshStatus().AdmittedPeerCount == 1);
+                && target.Node.MeshStatus().AdmittedPeerCount == 1
+            );
 
             var store = Assert.IsAssignableFrom<IZLinkLocationRepository>(
-                runtime.Registration.Locations.ResolveStore());
+                runtime.Registration.Locations.ResolveStore()
+            );
             var owner = locations.OwnerToken;
             var targetGeneration = target.Node.MeshStatus().LifecycleGeneration;
             var descriptorKey = new ZLinkMeshNodeDescriptorKey("objects", targetRid);
@@ -2831,14 +2884,12 @@ public sealed partial class StatefulServiceRuntimeTests
                 targetGeneration,
                 1,
                 targetEndpoint,
-                new Dictionary<string, int>(StringComparer.Ordinal)
-                {
-                    ["objects"] = 100
-                },
+                new Dictionary<string, int>(StringComparer.Ordinal) { ["objects"] = 100 },
                 string.Empty,
                 owner.OwnerId,
                 owner.LeaseGeneration,
-                DateTimeOffset.UtcNow)
+                DateTimeOffset.UtcNow
+            )
             {
                 ObjectRole = ZLinkMeshNodeObjectRole.Server,
                 EntrySpotId = $"production-entry-{Guid.NewGuid():D}",
@@ -2850,7 +2901,8 @@ public sealed partial class StatefulServiceRuntimeTests
                         stableType,
                         ZLinkObjectMaintenancePolicyKind.Disabled,
                         false,
-                        100)
+                        100
+                    ),
                 ],
                 Capacity = new ZLinkPlacementCapacity(
                     new ZLinkPopulationCapacity(0, 0, 0),
@@ -2861,30 +2913,31 @@ public sealed partial class StatefulServiceRuntimeTests
                             stableType,
                             0,
                             0,
-                            100)
-                    ])
+                            100
+                        ),
+                    ]
+                ),
             };
-            var descriptors = (await store.ListMeshNodesAsync(
+            var descriptors = (
+                await store.ListMeshNodesAsync(
                     "objects",
                     new ZLinkPageRequest(100),
-                    CancellationToken.None))
-                .Items;
-            var descriptor = Assert.Single(
-                descriptors,
-                row => row.Rid == targetRid);
+                    CancellationToken.None
+                )
+            ).Items;
+            var descriptor = Assert.Single(descriptors, row => row.Rid == targetRid);
             Assert.Equal(targetGeneration, descriptor.LifecycleGeneration);
             Assert.Equal(expectedDescriptor.OwnerId, descriptor.OwnerId);
-            Assert.Equal(expectedDescriptor.LeaseGeneration,
-                descriptor.LeaseGeneration);
+            Assert.Equal(expectedDescriptor.LeaseGeneration, descriptor.LeaseGeneration);
 
             var spotId = $"production-spot-{suffix}";
             var authorityKey = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(spotId);
             var creationPayload = ZLinkApplicationPayloadEnvelopeCodec.Encode(
                 ZLinkApplicationPayloadEnvelopeCodec.CreationPacketName,
                 ZLinkEnvelopeCodec.DefaultContentType,
-                "{}"u8);
-            var creationReference =
-                ZLinkInlineCreationIntentCodec.Encode(creationPayload);
+                "{}"u8
+            );
+            var creationReference = ZLinkInlineCreationIntentCodec.Encode(creationPayload);
             var reservation = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
                 await store.ReserveAsync(
                     new ZLinkObjectReservationRequest(
@@ -2906,14 +2959,21 @@ public sealed partial class StatefulServiceRuntimeTests
                                 checked((ulong)owner.LeaseGeneration),
                                 "objects",
                                 targetRid,
-                                targetGeneration)),
+                                targetGeneration
+                            )
+                        ),
                         new ZLinkCapacityVector(
                             0,
                             1,
                             new ZLinkSpotTypeCapacityDelta(
                                 ZLinkPlacementObjectKind.UserSpot,
                                 stableType,
-                                1)))));
+                                1
+                            )
+                        )
+                    )
+                )
+            );
             var fence = new ObjectReservationFence(
                 reservation.Reservation.ReservationVersion,
                 reservation.Reservation.StoreVersion,
@@ -2923,9 +2983,11 @@ public sealed partial class StatefulServiceRuntimeTests
                 targetGeneration,
                 owner.OwnerId,
                 checked((ulong)owner.LeaseGeneration),
-                1);
+                1
+            );
             var deadline = checked(
-                (ulong)DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeMilliseconds());
+                (ulong)DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeMilliseconds()
+            );
 
             Assert.Equal(
                 SubmitResult.Ok,
@@ -2936,31 +2998,32 @@ public sealed partial class StatefulServiceRuntimeTests
                     fence,
                     deadline,
                     out var createOperation,
-                    TimeSpan.FromSeconds(3)));
-            await WaitUntilAsync(() =>
-                source.Status().PendingInfrastructureMessages > 0);
-            var (createCompletion, replyParts) = DrainCompletion(
-                source,
-                createOperation);
+                    TimeSpan.FromSeconds(3)
+                )
+            );
+            await WaitUntilAsync(() => source.Status().PendingInfrastructureMessages > 0);
+            var (createCompletion, replyParts) = DrainCompletion(source, createOperation);
             try
             {
                 Assert.Equal((int)RequestResult.Ok, createCompletion.TerminalResult);
                 Assert.Equal(
                     UserSpotCreateResult.Created,
-                    createCompletion.UserSpotCreateCompletion?.Result);
+                    createCompletion.UserSpotCreateCompletion?.Result
+                );
                 Assert.Equal(1, ProductionUserSpot.CreateCount);
                 Assert.Equal(
                     reservation.Reservation.ObjectGeneration,
-                    ProductionUserSpot.ObjectGenerationObservedDuringCreate);
+                    ProductionUserSpot.ObjectGenerationObservedDuringCreate
+                );
                 Assert.Equal(2, replyParts.Count);
                 var replyHeader = ZLinkEnvelopeCodec.DecodeHeader(replyParts);
                 Assert.Equal(ZLinkMessageKind.Response, replyHeader.Kind);
                 Assert.Equal(string.Empty, replyHeader.MessageName);
                 Assert.Contains(
                     "production-created",
-                    System.Text.Encoding.UTF8.GetString(
-                        replyParts[1].AsReadOnlySpan()),
-                    StringComparison.Ordinal);
+                    System.Text.Encoding.UTF8.GetString(replyParts[1].AsReadOnlySpan()),
+                    StringComparison.Ordinal
+                );
             }
             finally
             {
@@ -2968,14 +3031,16 @@ public sealed partial class StatefulServiceRuntimeTests
             }
 
             var active = Assert.IsType<ZLinkAuthorityReadResult.Found>(
-                await store.ReadAuthorityAsync(authorityKey));
+                await store.ReadAuthorityAsync(authorityKey)
+            );
             var closeFence = new UserSpotCloseFence(
                 spotId,
                 active.Snapshot.ObjectGeneration,
                 targetRid,
                 targetGeneration,
                 active.Snapshot.AuthorityOwnerGeneration,
-                active.Snapshot.StoreVersion);
+                active.Snapshot.StoreVersion
+            );
             Assert.Equal(
                 SubmitResult.Ok,
                 source.CloseUserSpot(
@@ -2983,26 +3048,26 @@ public sealed partial class StatefulServiceRuntimeTests
                     closeFence,
                     deadline,
                     out var closeOperation,
-                    TimeSpan.FromSeconds(3)));
-            await WaitUntilAsync(() =>
-                source.Status().PendingInfrastructureMessages > 0);
-            var (closeCompletion, closeParts) = DrainCompletion(
-                source,
-                closeOperation);
+                    TimeSpan.FromSeconds(3)
+                )
+            );
+            await WaitUntilAsync(() => source.Status().PendingInfrastructureMessages > 0);
+            var (closeCompletion, closeParts) = DrainCompletion(source, closeOperation);
             ZLinkMessageParts.DisposeAll(closeParts);
             Assert.Equal(
                 new UserSpotCloseCompletion(true),
-                closeCompletion.UserSpotCloseCompletion);
+                closeCompletion.UserSpotCloseCompletion
+            );
             Assert.Equal(1, ProductionUserSpot.CloseCount);
             Assert.Equal(
                 ZLinkSpotCloseReason.ExplicitClose,
-                ProductionUserSpot.LastClosingContext?.Reason);
-            Assert.True(
-                ProductionUserSpot.LastClosingContext?.Deadline
-                > DateTimeOffset.UtcNow);
+                ProductionUserSpot.LastClosingContext?.Reason
+            );
+            Assert.True(ProductionUserSpot.LastClosingContext?.Deadline > DateTimeOffset.UtcNow);
             Assert.False(ProductionUserSpot.CleanupTokenWasCanceledAtInvocation);
             Assert.IsType<ZLinkAuthorityReadResult.Missing>(
-                await store.ReadAuthorityAsync(authorityKey));
+                await store.ReadAuthorityAsync(authorityKey)
+            );
 
             var orphanRid = $"production-orphan-{suffix}";
             var orphanKey = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(orphanRid);
@@ -3027,14 +3092,21 @@ public sealed partial class StatefulServiceRuntimeTests
                                 checked((ulong)owner.LeaseGeneration),
                                 "objects",
                                 targetRid,
-                                targetGeneration)),
+                                targetGeneration
+                            )
+                        ),
                         new ZLinkCapacityVector(
                             0,
                             1,
                             new ZLinkSpotTypeCapacityDelta(
                                 ZLinkPlacementObjectKind.UserSpot,
                                 stableType,
-                                1)))));
+                                1
+                            )
+                        )
+                    )
+                )
+            );
             var orphanActive = Assert.IsType<ZLinkObjectCommitResult.Committed>(
                 await store.CommitAsync(
                     orphanReservation.Reservation,
@@ -3047,51 +3119,54 @@ public sealed partial class StatefulServiceRuntimeTests
                             checked((ulong)owner.LeaseGeneration),
                             "objects",
                             targetRid,
-                            targetGeneration))));
+                            targetGeneration
+                        )
+                    )
+                )
+            );
             var orphanFence = new UserSpotCloseFence(
                 orphanRid,
                 orphanActive.Snapshot.ObjectGeneration,
                 targetRid,
                 targetGeneration,
                 orphanActive.Snapshot.AuthorityOwnerGeneration,
-                orphanActive.Snapshot.StoreVersion);
+                orphanActive.Snapshot.StoreVersion
+            );
             Assert.Equal(
                 SubmitResult.Ok,
                 source.CloseUserSpot(
                     targetRid,
                     orphanFence,
-                    checked((ulong)DateTimeOffset.UtcNow.AddSeconds(5)
-                        .ToUnixTimeMilliseconds()),
+                    checked((ulong)DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeMilliseconds()),
                     out var orphanCloseOperation,
-                    TimeSpan.FromSeconds(3)));
-            await WaitUntilAsync(() =>
-                source.Status().PendingInfrastructureMessages > 0);
-            var (orphanCompletion, orphanParts) = DrainCompletion(
-                source,
-                orphanCloseOperation);
+                    TimeSpan.FromSeconds(3)
+                )
+            );
+            await WaitUntilAsync(() => source.Status().PendingInfrastructureMessages > 0);
+            var (orphanCompletion, orphanParts) = DrainCompletion(source, orphanCloseOperation);
             ZLinkMessageParts.DisposeAll(orphanParts);
-            Assert.Equal(
-                (int)RequestResult.Conflict,
-                orphanCompletion.TerminalResult);
+            Assert.Equal((int)RequestResult.Conflict, orphanCompletion.TerminalResult);
             Assert.Equal(
                 (int)ServiceWireConstants.FrameworkErrorCode.SpotMoving,
-                orphanCompletion.FailureErrno);
+                orphanCompletion.FailureErrno
+            );
             Assert.Null(orphanCompletion.UserSpotCloseCompletion);
             var retainedOrphan = Assert.IsType<ZLinkAuthorityReadResult.Found>(
-                await store.ReadAuthorityAsync(orphanKey));
-            Assert.True(ZLinkUserSpotAuthorityPayloadCodec.TryDecode(
-                retainedOrphan.Snapshot.Payload.Span,
-                out var retainedPayload));
-            Assert.Equal(
-                ZLinkUserSpotAuthorityState.Ready,
-                retainedPayload.State);
+                await store.ReadAuthorityAsync(orphanKey)
+            );
+            Assert.True(
+                ZLinkUserSpotAuthorityPayloadCodec.TryDecode(
+                    retainedOrphan.Snapshot.Payload.Span,
+                    out var retainedPayload
+                )
+            );
+            Assert.Equal(ZLinkUserSpotAuthorityState.Ready, retainedPayload.State);
         }
         finally
         {
             await autoConnect.StopAsync(CancellationToken.None);
             await runtime.StopAsync(CancellationToken.None);
-            await locations.RemoveOwnedRowsBeforeRoutingIdReleaseAsync(
-                CancellationToken.None);
+            await locations.RemoveOwnedRowsBeforeRoutingIdReleaseAsync(CancellationToken.None);
             await locations.StopAsync(CancellationToken.None);
         }
     }
@@ -3108,28 +3183,26 @@ public sealed partial class StatefulServiceRuntimeTests
         var sourceEndpoint = $"tcp://127.0.0.1:{FindFreeTcpPort()}";
         var targetEndpoint = $"tcp://127.0.0.1:{FindFreeTcpPort()}";
 
-        ServiceProvider Build(
-            RoutingId rid,
-            string endpoint,
-            bool server)
+        ServiceProvider Build(RoutingId rid, string endpoint, bool server)
         {
             var services = new ServiceCollection();
             services.AddZLinkFramework(options =>
             {
                 options.AddLocationStore(locationProvider);
-                var node = options.AddRouteMesh("objects")
+                var node = options
+                    .AddRouteMesh("objects")
                     .Listen(endpoint)
                     .SetRoutingIdPrefix(rid.ToString())
                     .SetSpotLimit(100);
                 var objects = node.Objects();
                 if (server)
                 {
-                    objects.Server()
+                    objects
+                        .Server()
                         .AddSpotFactory<ProductionUserSpot>(
                             "Tests.ProductionUserSpot",
-                            factory => factory
-                                .StableTypeLimit(100)
-                                .DisableRelocation());
+                            factory => factory.StableTypeLimit(100).DisableRelocation()
+                        );
                 }
                 else
                 {
@@ -3140,18 +3213,13 @@ public sealed partial class StatefulServiceRuntimeTests
         }
 
         await using var targetProvider = Build(targetRid, targetEndpoint, true);
-        await using var sourceProvider = Build(
-            sourceRid,
-            sourceEndpoint,
-            false);
+        await using var sourceProvider = Build(sourceRid, sourceEndpoint, false);
         var target = targetProvider.GetRequiredService<ZLinkFrameworkRuntime>();
         var source = sourceProvider.GetRequiredService<ZLinkFrameworkRuntime>();
         var targetLocations = targetProvider.GetRequiredService<ZLinkLocationRuntime>();
         var sourceLocations = sourceProvider.GetRequiredService<ZLinkLocationRuntime>();
-        var targetAutoConnect =
-            targetProvider.GetRequiredService<ZLinkLocationAutoConnectHost>();
-        var sourceAutoConnect =
-            sourceProvider.GetRequiredService<ZLinkLocationAutoConnectHost>();
+        var targetAutoConnect = targetProvider.GetRequiredService<ZLinkLocationAutoConnectHost>();
+        var sourceAutoConnect = sourceProvider.GetRequiredService<ZLinkLocationAutoConnectHost>();
         targetRid = target.PrepareLocationNodeRoutingId();
         sourceRid = source.PrepareLocationNodeRoutingId();
         await targetLocations.StartAsync(targetRid, CancellationToken.None);
@@ -3162,23 +3230,24 @@ public sealed partial class StatefulServiceRuntimeTests
         sourceRid = source.GetSpotNodeRuntime("objects").Node.RoutingId;
         await targetAutoConnect.StartAsync(
             await target.GetStartedStateForRoutingAsync(CancellationToken.None),
-            CancellationToken.None);
+            CancellationToken.None
+        );
         await sourceAutoConnect.StartAsync(
             await source.GetStartedStateForRoutingAsync(CancellationToken.None),
-            CancellationToken.None);
+            CancellationToken.None
+        );
         try
         {
-            target.GetSpotNodeRuntime("objects").Node.ConnectPeer(
-                sourceRid,
-                sourceEndpoint);
+            target.GetSpotNodeRuntime("objects").Node.ConnectPeer(sourceRid, sourceEndpoint);
             await WaitUntilAsync(() =>
-                source.GetSpotNodeRuntime("objects").Node.MeshStatus()
-                    .AdmittedPeerCount > 0);
+                source.GetSpotNodeRuntime("objects").Node.MeshStatus().AdmittedPeerCount > 0
+            );
             ZLinkMeshNodeDescriptor? currentDescriptor = null;
             for (var attempt = 0; attempt < 500 && currentDescriptor is null; attempt++)
             {
-                currentDescriptor = (await locationStore.ListMeshNodesAsync("objects", default)).Items
-                    .SingleOrDefault(row => row.Rid == targetRid);
+                currentDescriptor = (
+                    await locationStore.ListMeshNodesAsync("objects", default)
+                ).Items.SingleOrDefault(row => row.Rid == targetRid);
                 if (currentDescriptor is null)
                     await Task.Delay(10);
             }
@@ -3187,27 +3256,26 @@ public sealed partial class StatefulServiceRuntimeTests
                 descriptor.ObjectCapabilities,
                 capability =>
                     capability.ObjectKind == ZLinkPlacementObjectKind.UserSpot
-                    && capability.StableType == "Tests.ProductionUserSpot");
+                    && capability.StableType == "Tests.ProductionUserSpot"
+            );
             var spotId = $"public-spot-{suffix}";
-            using var operationTimeout = new CancellationTokenSource(
-                TimeSpan.FromSeconds(10));
+            using var operationTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             using var customPayload = Message.From([9, 8, 7]);
             var allocated = await source
                 .Create("Tests.ProductionUserSpot")
-                .Request(ZLinkMessage.FromEnvelopePayload(
-                    "application/x-zlink-test",
-                    customPayload,
-                    source.Registration.Codecs))
+                .Request(
+                    ZLinkMessage.FromEnvelopePayload(
+                        "application/x-zlink-test",
+                        customPayload,
+                        source.Registration.Codecs
+                    )
+                )
                 .Async(operationTimeout.Token);
             Assert.Equal(ZLinkSpotCreateState.Created, allocated.State);
-            Assert.Equal(
-                "application/x-zlink-test",
-                ProductionUserSpot.LastCreateContentType);
+            Assert.Equal("application/x-zlink-test", ProductionUserSpot.LastCreateContentType);
             Assert.Equal(allocated.Spot, await source.FindAsync(allocated.Spot.SpotId));
             Assert.NotNull(await target.FindAsync(allocated.Spot.SpotId));
-            Assert.True(await source.CloseAsync(
-                allocated.Spot,
-                operationTimeout.Token));
+            Assert.True(await source.CloseAsync(allocated.Spot, operationTimeout.Token));
             Assert.Null(await target.FindAsync(allocated.Spot.SpotId));
 
             var created = await source
@@ -3222,9 +3290,7 @@ public sealed partial class StatefulServiceRuntimeTests
                 .Async(operationTimeout.Token);
             Assert.Equal(ZLinkSpotCreateState.Existing, existing.State);
             Assert.Equal(created.Spot, existing.Spot);
-            Assert.True(await source.CloseAsync(
-                created.Spot,
-                operationTimeout.Token));
+            Assert.True(await source.CloseAsync(created.Spot, operationTimeout.Token));
             Assert.Null(await target.FindAsync(spotId));
 
             var joiningRid = $"joining-spot-{suffix}";
@@ -3237,15 +3303,18 @@ public sealed partial class StatefulServiceRuntimeTests
             var joiningPending = Assert.IsType<ZLinkAuthorityReadResult.Found>(
                 await locationStore.ReadAuthorityAsync(
                     ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(joiningRid),
-                    operationTimeout.Token));
+                    operationTimeout.Token
+                )
+            );
             Assert.Equal(
                 ZLinkPlacementAllocationState.Reserved,
-                joiningPending.Snapshot.Allocation.State);
+                joiningPending.Snapshot.Allocation.State
+            );
             Assert.StartsWith(
                 "inline-v1:",
-                joiningPending.Snapshot.ReservedCreation!
-                    .RequestContentReference,
-                StringComparison.Ordinal);
+                joiningPending.Snapshot.ReservedCreation!.RequestContentReference,
+                StringComparison.Ordinal
+            );
             var joinedCreate = source
                 .GetOrCreate(joiningRid, "Tests.ProductionUserSpot")
                 .Async(operationTimeout.Token)
@@ -3257,21 +3326,21 @@ public sealed partial class StatefulServiceRuntimeTests
             Assert.Equal(ZLinkSpotCreateState.Created, ownerResult.State);
             Assert.Equal(ZLinkSpotCreateState.Existing, joinedResult.State);
             Assert.Equal(ownerResult.Spot, joinedResult.Spot);
-            Assert.True(await source.CloseAsync(
-                ownerResult.Spot,
-                operationTimeout.Token));
+            Assert.True(await source.CloseAsync(ownerResult.Spot, operationTimeout.Token));
         }
         finally
         {
             await sourceAutoConnect.StopAsync(CancellationToken.None);
             await source.StopAsync(CancellationToken.None);
             await sourceLocations.RemoveOwnedRowsBeforeRoutingIdReleaseAsync(
-                CancellationToken.None);
+                CancellationToken.None
+            );
             await sourceLocations.StopAsync(CancellationToken.None);
             await targetAutoConnect.StopAsync(CancellationToken.None);
             await target.StopAsync(CancellationToken.None);
             await targetLocations.RemoveOwnedRowsBeforeRoutingIdReleaseAsync(
-                CancellationToken.None);
+                CancellationToken.None
+            );
             await targetLocations.StopAsync(CancellationToken.None);
         }
     }
@@ -3292,9 +3361,9 @@ public sealed partial class StatefulServiceRuntimeTests
         target.SetUserSpotOperationTarget(operationTarget);
         source.Start();
         target.Start();
-        await WaitUntilAsync(
-            () => source.Status().AdmittedPeerCount == 1
-                  && target.Status().AdmittedPeerCount == 1);
+        await WaitUntilAsync(() =>
+            source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+        );
 
         var sourceGeneration = source.Status().LifecycleGeneration;
         var targetGeneration = target.Status().LifecycleGeneration;
@@ -3308,9 +3377,9 @@ public sealed partial class StatefulServiceRuntimeTests
             targetGeneration,
             "target-owner",
             79,
-            1);
-        var deadline = checked(
-            (ulong)DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeMilliseconds());
+            1
+        );
+        var deadline = checked((ulong)DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeMilliseconds());
 
         Assert.Equal(
             SubmitResult.Ok,
@@ -3321,20 +3390,26 @@ public sealed partial class StatefulServiceRuntimeTests
                 reservation,
                 deadline,
                 out var createOperation,
-                TimeSpan.FromSeconds(3)));
+                TimeSpan.FromSeconds(3)
+            )
+        );
         await WaitUntilAsync(() => source.Status().PendingInfrastructureMessages > 0);
         var createRecords = DrainRecords(source);
-        var createCompletion = Assert.Single(createRecords.Where(record =>
-            record.Kind == MeshRecordKind.Completion
-            && record.OperationId == createOperation));
+        var createCompletion = Assert.Single(
+            createRecords.Where(record =>
+                record.Kind == MeshRecordKind.Completion && record.OperationId == createOperation
+            )
+        );
         Assert.Equal(MeshOperationKind.UserSpotCreate, createCompletion.OperationKind);
         Assert.Equal((int)RequestResult.Ok, createCompletion.TerminalResult);
         Assert.Equal(
             new UserSpotCreateCompletion(
                 UserSpotCreateResult.Created,
                 spotId,
-                reservation.ObjectGeneration),
-            createCompletion.UserSpotCreateCompletion);
+                reservation.ObjectGeneration
+            ),
+            createCompletion.UserSpotCreateCompletion
+        );
         Assert.Equal(1, createCompletion.PartCount);
         Assert.Equal(1, operationTarget.CreateCount);
         Assert.Equal(source.RoutingId, operationTarget.LastCreate.SourceNodeRid);
@@ -3347,7 +3422,8 @@ public sealed partial class StatefulServiceRuntimeTests
             target.RoutingId,
             targetGeneration,
             reservation.AuthorityOwnerGeneration,
-            "store-runtime-2");
+            "store-runtime-2"
+        );
         Assert.Equal(
             SubmitResult.Ok,
             source.CloseUserSpot(
@@ -3355,12 +3431,16 @@ public sealed partial class StatefulServiceRuntimeTests
                 closeFence,
                 deadline,
                 out var closeOperation,
-                TimeSpan.FromSeconds(3)));
+                TimeSpan.FromSeconds(3)
+            )
+        );
         await WaitUntilAsync(() => source.Status().PendingInfrastructureMessages > 0);
         var closeRecords = DrainRecords(source);
-        var closeCompletion = Assert.Single(closeRecords.Where(record =>
-            record.Kind == MeshRecordKind.Completion
-            && record.OperationId == closeOperation));
+        var closeCompletion = Assert.Single(
+            closeRecords.Where(record =>
+                record.Kind == MeshRecordKind.Completion && record.OperationId == closeOperation
+            )
+        );
         Assert.Equal(MeshOperationKind.UserSpotClose, closeCompletion.OperationKind);
         Assert.Equal((int)RequestResult.Ok, closeCompletion.TerminalResult);
         Assert.Equal(new UserSpotCloseCompletion(true), closeCompletion.UserSpotCloseCompletion);
@@ -3370,7 +3450,8 @@ public sealed partial class StatefulServiceRuntimeTests
         operationTarget.CloseError = new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.Unavailable,
             "The User Spot is sealed for relocation.",
-            ZLinkRetryAdvice.RetryAfterBackoff);
+            ZLinkRetryAdvice.RetryAfterBackoff
+        );
         Assert.Equal(
             SubmitResult.Ok,
             source.CloseUserSpot(
@@ -3378,16 +3459,21 @@ public sealed partial class StatefulServiceRuntimeTests
                 closeFence,
                 deadline,
                 out var movingOperation,
-                TimeSpan.FromSeconds(3)));
+                TimeSpan.FromSeconds(3)
+            )
+        );
         await WaitUntilAsync(() => source.Status().PendingInfrastructureMessages > 0);
         var movingRecords = DrainRecords(source);
-        var movingCompletion = Assert.Single(movingRecords.Where(record =>
-            record.Kind == MeshRecordKind.Completion
-            && record.OperationId == movingOperation));
+        var movingCompletion = Assert.Single(
+            movingRecords.Where(record =>
+                record.Kind == MeshRecordKind.Completion && record.OperationId == movingOperation
+            )
+        );
         Assert.Equal((int)RequestResult.Conflict, movingCompletion.TerminalResult);
         Assert.Equal(
             (int)ServiceWireConstants.FrameworkErrorCode.SpotMoving,
-            movingCompletion.FailureErrno);
+            movingCompletion.FailureErrno
+        );
         Assert.Null(movingCompletion.UserSpotCloseCompletion);
         Assert.Equal(2, operationTarget.CloseCount);
 
@@ -3395,10 +3481,15 @@ public sealed partial class StatefulServiceRuntimeTests
             SubmitResult.NotConnected,
             source.CloseUserSpot(
                 target.RoutingId,
-                closeFence with { TargetNodeGeneration = targetGeneration + 1 },
+                closeFence with
+                {
+                    TargetNodeGeneration = targetGeneration + 1,
+                },
                 deadline,
                 out var staleOperation,
-                TimeSpan.FromSeconds(1)));
+                TimeSpan.FromSeconds(1)
+            )
+        );
         Assert.Equal(default, staleOperation);
         Assert.Equal(2, operationTarget.CloseCount);
     }
@@ -3419,8 +3510,9 @@ public sealed partial class StatefulServiceRuntimeTests
         target.SetActorCreateOperationTarget(operationTarget);
         source.Start();
         target.Start();
-        await WaitUntilAsync(() => source.Status().AdmittedPeerCount == 1
-                                   && target.Status().AdmittedPeerCount == 1);
+        await WaitUntilAsync(() =>
+            source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+        );
 
         var targetGeneration = target.Status().LifecycleGeneration;
         var reservation = new ObjectReservationFence(
@@ -3432,9 +3524,9 @@ public sealed partial class StatefulServiceRuntimeTests
             targetGeneration,
             "target-owner",
             79,
-            1);
-        var deadline = checked(
-            (ulong)DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeMilliseconds());
+            1
+        );
+        var deadline = checked((ulong)DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeMilliseconds());
 
         Assert.Equal(
             SubmitResult.Ok,
@@ -3445,7 +3537,9 @@ public sealed partial class StatefulServiceRuntimeTests
                 reservation,
                 deadline,
                 out var operation,
-                TimeSpan.FromSeconds(3)));
+                TimeSpan.FromSeconds(3)
+            )
+        );
 
         await WaitUntilAsync(() => operationTarget.CreateCount == 1);
         var (completion, _) = DrainCompletion(source, operation);
@@ -3454,12 +3548,10 @@ public sealed partial class StatefulServiceRuntimeTests
         Assert.Equal(
             new ActorCreateCompletion(
                 ActorCreateResult.Created,
-                new ActorRef(
-                    "remote-actor",
-                    reservation.ObjectGeneration,
-                    "mesh",
-                    target.RoutingId)),
-            completion.ActorCreateCompletion);
+                new ActorRef("remote-actor", reservation.ObjectGeneration, "mesh", target.RoutingId)
+            ),
+            completion.ActorCreateCompletion
+        );
         Assert.Equal(1, operationTarget.CreateCount);
         Assert.Equal(source.RoutingId, operationTarget.LastOperation.SourceNodeRid);
         Assert.Equal(reservation, operationTarget.LastOperation.Reservation);
@@ -3484,25 +3576,34 @@ public sealed partial class StatefulServiceRuntimeTests
 
         using (var sourceHello = await ReceiveRouterEnvelopeAsync(target))
         {
-            Assert.True(ZLinkServiceWireCodec.TryDecodeRouteAdmission(
-                sourceHello.FirstPart().AsReadOnlyMemory().Span,
-                out var command,
-                out _,
-                out _));
+            Assert.True(
+                ZLinkServiceWireCodec.TryDecodeRouteAdmission(
+                    sourceHello.FirstPart().AsReadOnlyMemory().Span,
+                    out var command,
+                    out _,
+                    out _
+                )
+            );
             Assert.Equal(ServiceWireConstants.Command.Hello, command);
         }
-        using (var targetHello = Message.From(
-                   ZLinkServiceWireCodec.EncodeRouteAdmission(
-                       ServiceWireConstants.Command.Admit,
-                       "mesh",
-                       targetEndpoint,
-                       lifecycleGeneration: 1,
-                       descriptorRevision: 1,
-                       new Dictionary<string, uint>(StringComparer.Ordinal),
-                       objectRole: (byte)ZLinkMeshNodeObjectRole.Server)))
-            await target.Send(source.RoutingId)
+        using (
+            var targetHello = Message.From(
+                ZLinkServiceWireCodec.EncodeRouteAdmission(
+                    ServiceWireConstants.Command.Admit,
+                    "mesh",
+                    targetEndpoint,
+                    lifecycleGeneration: 1,
+                    descriptorRevision: 1,
+                    new Dictionary<string, uint>(StringComparer.Ordinal),
+                    objectRole: (byte)ZLinkMeshNodeObjectRole.Server
+                )
+            )
+        )
+            await target
+                .Send(source.RoutingId)
                 .Message(targetHello)
-                .Async(CancellationToken.None).Admitted;
+                .Async(CancellationToken.None)
+                .Admitted;
         await WaitUntilAsync(() => source.Status().AdmittedPeerCount == 1);
 
         var reservation = new ObjectReservationFence(
@@ -3514,9 +3615,9 @@ public sealed partial class StatefulServiceRuntimeTests
             1,
             "raw-reply-owner",
             23,
-            1);
-        var deadline = checked(
-            (ulong)DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeMilliseconds());
+            1
+        );
+        var deadline = checked((ulong)DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeMilliseconds());
 
         Assert.Equal(
             SubmitResult.Ok,
@@ -3527,7 +3628,9 @@ public sealed partial class StatefulServiceRuntimeTests
                 reservation,
                 deadline,
                 out var createOperation,
-                TimeSpan.FromSeconds(3)));
+                TimeSpan.FromSeconds(3)
+            )
+        );
         var create = await RejectRawReplyThenReceiveNativeTerminalAsync(
             source,
             target,
@@ -3540,7 +3643,10 @@ public sealed partial class StatefulServiceRuntimeTests
                 new UserSpotCreateCompletion(
                     UserSpotCreateResult.Created,
                     "raw-reply-spot",
-                    reservation.ObjectGeneration)));
+                    reservation.ObjectGeneration
+                )
+            )
+        );
         Assert.Equal(MeshOperationKind.UserSpotCreate, create.OperationKind);
         Assert.Equal((int)RequestResult.Ok, create.TerminalResult);
 
@@ -3550,7 +3656,8 @@ public sealed partial class StatefulServiceRuntimeTests
             targetRid,
             1,
             reservation.AuthorityOwnerGeneration,
-            "raw-reply-close-store");
+            "raw-reply-close-store"
+        );
         Assert.Equal(
             SubmitResult.Ok,
             source.CloseUserSpot(
@@ -3558,7 +3665,9 @@ public sealed partial class StatefulServiceRuntimeTests
                 closeFence,
                 deadline,
                 out var closeOperation,
-                TimeSpan.FromSeconds(3)));
+                TimeSpan.FromSeconds(3)
+            )
+        );
         var close = await RejectRawReplyThenReceiveNativeTerminalAsync(
             source,
             target,
@@ -3568,7 +3677,9 @@ public sealed partial class StatefulServiceRuntimeTests
                 closeOperation.Low,
                 RequestResult.Ok,
                 ServiceWireConstants.FrameworkErrorCode.None,
-                new UserSpotCloseCompletion(true)));
+                new UserSpotCloseCompletion(true)
+            )
+        );
         Assert.Equal(MeshOperationKind.UserSpotClose, close.OperationKind);
         Assert.Equal((int)RequestResult.Ok, close.TerminalResult);
 
@@ -3581,7 +3692,9 @@ public sealed partial class StatefulServiceRuntimeTests
                 reservation,
                 deadline,
                 out var actorCreateOperation,
-                TimeSpan.FromSeconds(3)));
+                TimeSpan.FromSeconds(3)
+            )
+        );
         var actorCreate = await RejectRawReplyThenReceiveNativeTerminalAsync(
             source,
             target,
@@ -3593,11 +3706,10 @@ public sealed partial class StatefulServiceRuntimeTests
                 ServiceWireConstants.FrameworkErrorCode.None,
                 new ActorCreateCompletion(
                     ActorCreateResult.Created,
-                    new ActorRef(
-                        "raw-reply-actor",
-                        reservation.ObjectGeneration,
-                        "mesh",
-                        targetRid))));
+                    new ActorRef("raw-reply-actor", reservation.ObjectGeneration, "mesh", targetRid)
+                )
+            )
+        );
         Assert.Equal(MeshOperationKind.ActorCreate, actorCreate.OperationKind);
         Assert.Equal((int)RequestResult.Ok, actorCreate.TerminalResult);
     }
@@ -3619,17 +3731,20 @@ public sealed partial class StatefulServiceRuntimeTests
             "request-owner",
             17,
             target.RoutingId,
-            target.Status().LifecycleGeneration);
+            target.Status().LifecycleGeneration
+        );
         var relayTarget = new RecordingReplyRelayTarget(
             requestSource,
             dropFirstAcknowledgement: true,
             corruptSecondSource: true,
-            corruptThirdReplyRoute: true);
+            corruptThirdReplyRoute: true
+        );
         target.SetRelocationReplyRelayTarget(relayTarget);
         source.Start();
         target.Start();
-        await WaitUntilAsync(() => source.Status().AdmittedPeerCount == 1
-                                  && target.Status().AdmittedPeerCount == 1);
+        await WaitUntilAsync(() =>
+            source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+        );
 
         var relay = new ZLinkServiceWireCodec.ReplyRelayRecord(
             new MeshOperationId(21, 22),
@@ -3641,11 +3756,13 @@ public sealed partial class StatefulServiceRuntimeTests
                 26,
                 source.RoutingId,
                 source.Status().LifecycleGeneration,
-                "store-27"),
+                "store-27"
+            ),
             28,
             29,
             0,
-            ServiceWireConstants.FrameworkErrorCode.None);
+            ServiceWireConstants.FrameworkErrorCode.None
+        );
         var payload = new[] { Message.From(new byte[] { 7, 8, 9 }) };
         try
         {
@@ -3656,7 +3773,9 @@ public sealed partial class StatefulServiceRuntimeTests
                     requestSource,
                     payload,
                     TimeSpan.FromMilliseconds(50),
-                    CancellationToken.None));
+                    CancellationToken.None
+                )
+            );
             await Assert.ThrowsAsync<TimeoutException>(async () =>
                 await source.RelayRelocationReplyAsync(
                     target.RoutingId,
@@ -3664,7 +3783,9 @@ public sealed partial class StatefulServiceRuntimeTests
                     requestSource,
                     payload,
                     TimeSpan.FromMilliseconds(50),
-                    CancellationToken.None));
+                    CancellationToken.None
+                )
+            );
             await Assert.ThrowsAsync<TimeoutException>(async () =>
                 await source.RelayRelocationReplyAsync(
                     target.RoutingId,
@@ -3672,33 +3793,36 @@ public sealed partial class StatefulServiceRuntimeTests
                     requestSource,
                     payload,
                     TimeSpan.FromMilliseconds(50),
-                    CancellationToken.None));
+                    CancellationToken.None
+                )
+            );
             var ack = await source.RelayRelocationReplyAsync(
                 target.RoutingId,
                 relay,
                 requestSource,
                 payload,
                 TimeSpan.FromSeconds(3),
-                CancellationToken.None);
+                CancellationToken.None
+            );
 
             Assert.Equal((byte)2, ack.Status);
             Assert.Equal(requestSource, ack.RequestSource);
             Assert.Equal(4, relayTarget.InvocationCount);
-            Assert.All(relayTarget.Payloads, bytes =>
-                Assert.Equal(new byte[] { 7, 8, 9 }, bytes));
+            Assert.All(relayTarget.Payloads, bytes => Assert.Equal(new byte[] { 7, 8, 9 }, bytes));
             await Assert.ThrowsAsync<ArgumentException>(async () =>
                 await source.RelayRelocationReplyAsync(
                     target.RoutingId,
                     relay with
                     {
                         TerminalResult = 105,
-                        FailureCode = ServiceWireConstants.FrameworkErrorCode
-                            .RequestFailed
+                        FailureCode = ServiceWireConstants.FrameworkErrorCode.RequestFailed,
                     },
                     requestSource,
                     payload,
                     TimeSpan.FromSeconds(1),
-                    CancellationToken.None));
+                    CancellationToken.None
+                )
+            );
         }
         finally
         {
@@ -3721,17 +3845,15 @@ public sealed partial class StatefulServiceRuntimeTests
                 47,
                 RoutingId.From("relay-target"),
                 48,
-                "store-49"),
+                "store-49"
+            ),
             48,
             49,
             0,
-            ServiceWireConstants.FrameworkErrorCode.None);
-        var keyA = ZLinkManagedMeshNode.PendingReplyRelayKey.Create(
-            sourceA,
-            relay);
-        var keyB = ZLinkManagedMeshNode.PendingReplyRelayKey.Create(
-            sourceB,
-            relay);
+            ServiceWireConstants.FrameworkErrorCode.None
+        );
+        var keyA = ZLinkManagedMeshNode.PendingReplyRelayKey.Create(sourceA, relay);
+        var keyB = ZLinkManagedMeshNode.PendingReplyRelayKey.Create(sourceB, relay);
 
         Assert.NotEqual(keyA, keyB);
         Assert.Equal(
@@ -3743,9 +3865,11 @@ public sealed partial class StatefulServiceRuntimeTests
                     relay.Coordinator,
                     relay.OperationId,
                     relay.ReplyRouteId,
-                    new ZLinkServiceWireCodec.RequestSourceFence(
-                        "owner-a", 50, sourceA, 51),
-                    1)));
+                    new ZLinkServiceWireCodec.RequestSourceFence("owner-a", 50, sourceA, 51),
+                    1
+                )
+            )
+        );
         Assert.NotEqual(
             keyA,
             ZLinkManagedMeshNode.PendingReplyRelayKey.Create(
@@ -3755,21 +3879,59 @@ public sealed partial class StatefulServiceRuntimeTests
                     relay.Coordinator,
                     relay.OperationId,
                     relay.ReplyRouteId + 1,
-                    new ZLinkServiceWireCodec.RequestSourceFence(
-                        "owner-a", 50, sourceA, 51),
-                    1)));
-        var exactSource = new ZLinkServiceWireCodec.RequestSourceFence(
-            "owner-a", 50, sourceA, 51);
-        Assert.True(ZLinkManagedMeshNode.IsExactReplyRelayAckSource(
-            sourceA, 51, exactSource, exactSource));
-        Assert.False(ZLinkManagedMeshNode.IsExactReplyRelayAckSource(
-            sourceA, 51, exactSource, exactSource with { OwnerId = "owner-b" }));
-        Assert.False(ZLinkManagedMeshNode.IsExactReplyRelayAckSource(
-            sourceA, 51, exactSource, exactSource with { LeaseGeneration = 52 }));
-        Assert.False(ZLinkManagedMeshNode.IsExactReplyRelayAckSource(
-            sourceA, 51, exactSource, exactSource with { NodeRid = sourceB }));
-        Assert.False(ZLinkManagedMeshNode.IsExactReplyRelayAckSource(
-            sourceA, 51, exactSource, exactSource with { NodeGeneration = 52 }));
+                    new ZLinkServiceWireCodec.RequestSourceFence("owner-a", 50, sourceA, 51),
+                    1
+                )
+            )
+        );
+        var exactSource = new ZLinkServiceWireCodec.RequestSourceFence("owner-a", 50, sourceA, 51);
+        Assert.True(
+            ZLinkManagedMeshNode.IsExactReplyRelayAckSource(sourceA, 51, exactSource, exactSource)
+        );
+        Assert.False(
+            ZLinkManagedMeshNode.IsExactReplyRelayAckSource(
+                sourceA,
+                51,
+                exactSource,
+                exactSource with
+                {
+                    OwnerId = "owner-b",
+                }
+            )
+        );
+        Assert.False(
+            ZLinkManagedMeshNode.IsExactReplyRelayAckSource(
+                sourceA,
+                51,
+                exactSource,
+                exactSource with
+                {
+                    LeaseGeneration = 52,
+                }
+            )
+        );
+        Assert.False(
+            ZLinkManagedMeshNode.IsExactReplyRelayAckSource(
+                sourceA,
+                51,
+                exactSource,
+                exactSource with
+                {
+                    NodeRid = sourceB,
+                }
+            )
+        );
+        Assert.False(
+            ZLinkManagedMeshNode.IsExactReplyRelayAckSource(
+                sourceA,
+                51,
+                exactSource,
+                exactSource with
+                {
+                    NodeGeneration = 52,
+                }
+            )
+        );
         Assert.True(ZLinkManagedMeshNode.IsReplyRelayPayloadAllowed(0, 1));
         Assert.True(ZLinkManagedMeshNode.IsReplyRelayPayloadAllowed(105, 0));
         Assert.False(ZLinkManagedMeshNode.IsReplyRelayPayloadAllowed(105, 1));
@@ -3792,9 +3954,9 @@ public sealed partial class StatefulServiceRuntimeTests
         target.SetInstanceSpotActivationTarget(activationTarget);
         source.Start();
         target.Start();
-        await WaitUntilAsync(
-            () => source.Status().AdmittedPeerCount == 1
-                  && target.Status().AdmittedPeerCount == 1);
+        await WaitUntilAsync(() =>
+            source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+        );
 
         using var firstMessage = Message.From([1, 2, 3]);
         var activation = new InstanceSpotActivationTarget(
@@ -3803,9 +3965,9 @@ public sealed partial class StatefulServiceRuntimeTests
             target.Status().LifecycleGeneration,
             "cold-instance",
             "Sample.InstanceSpot",
-            "descriptor-1");
-        var deadline = checked(
-            (ulong)DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeMilliseconds());
+            "descriptor-1"
+        );
+        var deadline = checked((ulong)DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeMilliseconds());
 
         Assert.Equal(
             SubmitResult.Ok,
@@ -3817,10 +3979,11 @@ public sealed partial class StatefulServiceRuntimeTests
                 out var operationId,
                 deadline,
                 TimeSpan.FromSeconds(3),
-                metadata: new byte[] { 9, 8 }));
+                metadata: new byte[] { 9, 8 }
+            )
+        );
 
-        await WaitUntilAsync(() =>
-            source.Status().PendingInfrastructureMessages > 0);
+        await WaitUntilAsync(() => source.Status().PendingInfrastructureMessages > 0);
         var completion = DrainCompletion(source, operationId);
         try
         {
@@ -3862,13 +4025,16 @@ public sealed partial class StatefulServiceRuntimeTests
         var winnerTarget = new RecordingInstanceSpotActivationTarget();
         winner.SetInstanceSpotActivationTarget(winnerTarget);
         loser.SetInstanceSpotActivationTarget(
-            new ForwardingInstanceSpotActivationTarget(loser, winner));
+            new ForwardingInstanceSpotActivationTarget(loser, winner)
+        );
         source.Start();
         loser.Start();
         winner.Start();
-        await WaitUntilAsync(() => source.Status().AdmittedPeerCount == 2
-                                  && loser.Status().AdmittedPeerCount == 2
-                                  && winner.Status().AdmittedPeerCount == 2);
+        await WaitUntilAsync(() =>
+            source.Status().AdmittedPeerCount == 2
+            && loser.Status().AdmittedPeerCount == 2
+            && winner.Status().AdmittedPeerCount == 2
+        );
 
         using var firstMessage = Message.From([4, 5, 6]);
         var activation = new InstanceSpotActivationTarget(
@@ -3877,9 +4043,9 @@ public sealed partial class StatefulServiceRuntimeTests
             loser.Status().LifecycleGeneration,
             "forwarded-instance",
             "Sample.InstanceSpot",
-            "descriptor-loser");
-        var deadline = checked(
-            (ulong)DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeMilliseconds());
+            "descriptor-loser"
+        );
+        var deadline = checked((ulong)DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeMilliseconds());
         Assert.Equal(
             SubmitResult.Ok,
             source.ActivateInstanceSpot(
@@ -3890,7 +4056,9 @@ public sealed partial class StatefulServiceRuntimeTests
                 out var operationId,
                 deadline,
                 TimeSpan.FromSeconds(3),
-                metadata: new byte[] { 7, 8 }));
+                metadata: new byte[] { 7, 8 }
+            )
+        );
 
         await WaitUntilAsync(() => source.Status().PendingInfrastructureMessages > 0);
         var completion = DrainCompletion(source, operationId);
@@ -3917,19 +4085,14 @@ public sealed partial class StatefulServiceRuntimeTests
     public async Task RelocatedInstanceSpotReplyCompletesTheOriginalRemoteCallerExactlyOnce()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
-        await using var caller = new ZLinkManagedMeshNode(
-            context,
-            "mesh");
+        await using var caller = new ZLinkManagedMeshNode(context, "mesh");
         caller.SetRoutingId(RoutingId.From("relocated-instance-caller"));
-        await using var oldOwner = NewNode(
-            context,
-            "relocated-instance-old-owner");
+        await using var oldOwner = NewNode(context, "relocated-instance-old-owner");
         await using var target = NewNode(context, "relocated-instance-target");
         caller.SetLocalOwnerLeaseGeneration(179);
         var suffix = Guid.NewGuid().ToString("N");
         var callerEndpoint = $"inproc://relocated-instance-caller-{suffix}";
-        var oldOwnerEndpoint =
-            $"inproc://relocated-instance-old-owner-{suffix}";
+        var oldOwnerEndpoint = $"inproc://relocated-instance-old-owner-{suffix}";
         var targetEndpoint = $"inproc://relocated-instance-target-{suffix}";
         caller.SetBind(callerEndpoint);
         oldOwner.SetBind(oldOwnerEndpoint);
@@ -3944,17 +4107,20 @@ public sealed partial class StatefulServiceRuntimeTests
             "relocated-instance-caller-owner",
             179,
             caller.RoutingId,
-            caller.Status().LifecycleGeneration);
+            caller.Status().LifecycleGeneration
+        );
         caller.SetLocalRequestSourceFence(requestSource);
         caller.SetRelocationReplyRelayTarget(
-            new ZLinkRelocationReplyTarget(
-                new ZLinkBackendSpotNodeWrapper(caller)));
+            new ZLinkRelocationReplyTarget(new ZLinkBackendSpotNodeWrapper(caller))
+        );
         caller.Start();
         oldOwner.Start();
         target.Start();
-        await WaitUntilAsync(() => caller.Status().AdmittedPeerCount == 2
-                                  && oldOwner.Status().AdmittedPeerCount == 1
-                                  && target.Status().AdmittedPeerCount == 1);
+        await WaitUntilAsync(() =>
+            caller.Status().AdmittedPeerCount == 2
+            && oldOwner.Status().AdmittedPeerCount == 1
+            && target.Status().AdmittedPeerCount == 1
+        );
 
         var activation = new InstanceSpotActivationTarget(
             "objects",
@@ -3962,9 +4128,11 @@ public sealed partial class StatefulServiceRuntimeTests
             oldOwner.Status().LifecycleGeneration,
             "relocated-instance",
             "Tests.RelocatedInstanceSpot",
-            "descriptor-instance");
+            "descriptor-instance"
+        );
         var deadline = checked(
-            (ulong)DateTimeOffset.UtcNow.AddSeconds(10).ToUnixTimeMilliseconds());
+            (ulong)DateTimeOffset.UtcNow.AddSeconds(10).ToUnixTimeMilliseconds()
+        );
         using var request = Message.From(new byte[] { 181 });
         Assert.Equal(
             SubmitResult.Ok,
@@ -3975,18 +4143,25 @@ public sealed partial class StatefulServiceRuntimeTests
                 request: true,
                 out var operation,
                 deadline,
-                TimeSpan.FromSeconds(3)));
+                TimeSpan.FromSeconds(3)
+            )
+        );
         // A second activation is admitted too; nothing is refused for want of a completion slot.
         Assert.Equal(
             SubmitResult.Ok,
             caller.ActivateInstanceSpot(
-                activation with { TargetSpotId = "rejected-instance" },
+                activation with
+                {
+                    TargetSpotId = "rejected-instance",
+                },
                 "caller-entry",
                 [request],
                 request: true,
                 out var second,
                 deadline,
-                TimeSpan.FromSeconds(3)));
+                TimeSpan.FromSeconds(3)
+            )
+        );
         Assert.NotEqual(default, second);
         Assert.NotEqual(operation, second);
         await WaitUntilAsync(() => activationTarget.Count == 2);
@@ -4001,11 +4176,13 @@ public sealed partial class StatefulServiceRuntimeTests
                 197,
                 target.RoutingId,
                 target.Status().LifecycleGeneration,
-                "relocated-instance-root"),
+                "relocated-instance-root"
+            ),
             199,
             211,
             (uint)RequestResult.Ok,
-            ServiceWireConstants.FrameworkErrorCode.None);
+            ServiceWireConstants.FrameworkErrorCode.None
+        );
         var response = new[] { Message.From(new byte[] { 223 }) };
         try
         {
@@ -4015,20 +4192,22 @@ public sealed partial class StatefulServiceRuntimeTests
                 requestSource,
                 response,
                 TimeSpan.FromSeconds(3),
-                CancellationToken.None);
+                CancellationToken.None
+            );
             Assert.Equal(
                 (byte)ZLinkRelocationReplyCompletionState.TerminalReceived,
-                firstAck.Status);
+                firstAck.Status
+            );
             Assert.Equal(requestSource, firstAck.RequestSource);
 
-            await WaitUntilAsync(() =>
-                caller.Status().PendingInfrastructureMessages > 0);
-            var completion = Assert.Single(DrainRecords(caller).Where(record =>
-                record.Kind == MeshRecordKind.Completion
-                && record.OperationId == operation));
-            Assert.Equal(
-                MeshOperationKind.InstanceSpotRequest,
-                completion.OperationKind);
+            await WaitUntilAsync(() => caller.Status().PendingInfrastructureMessages > 0);
+            var completion = Assert.Single(
+                DrainRecords(caller)
+                    .Where(record =>
+                        record.Kind == MeshRecordKind.Completion && record.OperationId == operation
+                    )
+            );
+            Assert.Equal(MeshOperationKind.InstanceSpotRequest, completion.OperationKind);
 
             var duplicateAck = await target.RelayRelocationReplyAsync(
                 caller.RoutingId,
@@ -4036,26 +4215,34 @@ public sealed partial class StatefulServiceRuntimeTests
                 requestSource,
                 response,
                 TimeSpan.FromSeconds(3),
-                CancellationToken.None);
+                CancellationToken.None
+            );
             Assert.Equal(
                 (byte)ZLinkRelocationReplyCompletionState.AlreadyTerminal,
-                duplicateAck.Status);
+                duplicateAck.Status
+            );
             activationTarget.Complete();
             await Task.Delay(50);
             Assert.DoesNotContain(
                 DrainRecords(caller),
-                record => record.Kind == MeshRecordKind.Completion
-                          && record.OperationId == operation);
+                record =>
+                    record.Kind == MeshRecordKind.Completion && record.OperationId == operation
+            );
             Assert.Equal(
                 SubmitResult.Ok,
                 caller.ActivateInstanceSpot(
-                    activation with { TargetSpotId = "next-instance" },
+                    activation with
+                    {
+                        TargetSpotId = "next-instance",
+                    },
                     "caller-entry",
                     [request],
                     request: true,
                     out var nextOperation,
                     deadline,
-                    TimeSpan.FromSeconds(3)));
+                    TimeSpan.FromSeconds(3)
+                )
+            );
             Assert.NotEqual(default, nextOperation);
         }
         finally
@@ -4075,7 +4262,8 @@ public sealed partial class StatefulServiceRuntimeTests
             context,
             "retention-target",
             TimeSpan.FromMilliseconds(500),
-            deadlineTime);
+            deadlineTime
+        );
         var suffix = Guid.NewGuid().ToString("N");
         var sourceEndpoint = $"inproc://retention-source-{suffix}";
         var targetEndpoint = $"inproc://retention-target-{suffix}";
@@ -4087,9 +4275,9 @@ public sealed partial class StatefulServiceRuntimeTests
         target.SetUserSpotOperationTarget(operationTarget);
         source.Start();
         target.Start();
-        await WaitUntilAsync(
-            () => source.Status().AdmittedPeerCount == 1
-                  && target.Status().AdmittedPeerCount == 1);
+        await WaitUntilAsync(() =>
+            source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+        );
 
         var targetGeneration = target.Status().LifecycleGeneration;
         var reservation = new ObjectReservationFence(
@@ -4101,10 +4289,11 @@ public sealed partial class StatefulServiceRuntimeTests
             targetGeneration,
             "retention-owner",
             107,
-            1);
+            1
+        );
         var deadline = checked(
-            (ulong)deadlineTime.GetUtcNow().AddMilliseconds(500)
-                .ToUnixTimeMilliseconds());
+            (ulong)deadlineTime.GetUtcNow().AddMilliseconds(500).ToUnixTimeMilliseconds()
+        );
         const string spotId = "retention-spot";
         Assert.Equal(
             SubmitResult.Ok,
@@ -4115,9 +4304,10 @@ public sealed partial class StatefulServiceRuntimeTests
                 reservation,
                 deadline,
                 out var operationId,
-                TimeSpan.FromSeconds(2)));
-        await WaitUntilAsync(() =>
-            source.Status().PendingInfrastructureMessages > 0);
+                TimeSpan.FromSeconds(2)
+            )
+        );
+        await WaitUntilAsync(() => source.Status().PendingInfrastructureMessages > 0);
         _ = DrainRecords(source);
         Assert.Equal(1, operationTarget.CreateCount);
         Assert.Equal(1, target.RetainedUserSpotOperationCount);
@@ -4132,24 +4322,26 @@ public sealed partial class StatefulServiceRuntimeTests
                 spotId,
                 "Sample.RetentionSpot",
                 reservation,
-                deadline),
-            default);
+                deadline
+            ),
+            default
+        );
         deadlineTime.Advance(
             wallClock: TimeSpan.FromMilliseconds(525),
-            monotonic: TimeSpan.FromMilliseconds(525));
-        Assert.Equal(
-            SubmitResult.Ok,
-            source.ResubmitUserSpotOperation(target.RoutingId, replay));
+            monotonic: TimeSpan.FromMilliseconds(525)
+        );
+        Assert.Equal(SubmitResult.Ok, source.ResubmitUserSpotOperation(target.RoutingId, replay));
         var closeFence = new UserSpotCloseFence(
             spotId,
             reservation.ObjectGeneration,
             target.RoutingId,
             targetGeneration,
             reservation.AuthorityOwnerGeneration,
-            "retention-close-store");
+            "retention-close-store"
+        );
         var barrierDeadline = checked(
-            (ulong)deadlineTime.GetUtcNow().AddMilliseconds(250)
-                .ToUnixTimeMilliseconds());
+            (ulong)deadlineTime.GetUtcNow().AddMilliseconds(250).ToUnixTimeMilliseconds()
+        );
         Assert.Equal(
             SubmitResult.Ok,
             source.CloseUserSpot(
@@ -4157,7 +4349,9 @@ public sealed partial class StatefulServiceRuntimeTests
                 closeFence,
                 barrierDeadline,
                 out var retainedBarrier,
-                TimeSpan.FromSeconds(2)));
+                TimeSpan.FromSeconds(2)
+            )
+        );
         var retainedBarrierCompletion = DrainCompletion(source, retainedBarrier).Record;
         Assert.Equal(MeshRecordKind.Completion, retainedBarrierCompletion.Kind);
         Assert.Equal(1, operationTarget.CreateCount);
@@ -4166,14 +4360,13 @@ public sealed partial class StatefulServiceRuntimeTests
 
         deadlineTime.Advance(
             wallClock: TimeSpan.FromMilliseconds(475),
-            monotonic: TimeSpan.FromMilliseconds(475));
+            monotonic: TimeSpan.FromMilliseconds(475)
+        );
         await WaitUntilAsync(() => target.RetainedUserSpotOperationCount == 1);
-        Assert.Equal(
-            SubmitResult.Ok,
-            source.ResubmitUserSpotOperation(target.RoutingId, replay));
+        Assert.Equal(SubmitResult.Ok, source.ResubmitUserSpotOperation(target.RoutingId, replay));
         barrierDeadline = checked(
-            (ulong)deadlineTime.GetUtcNow().AddMilliseconds(250)
-                .ToUnixTimeMilliseconds());
+            (ulong)deadlineTime.GetUtcNow().AddMilliseconds(250).ToUnixTimeMilliseconds()
+        );
         Assert.Equal(
             SubmitResult.Ok,
             source.CloseUserSpot(
@@ -4181,7 +4374,9 @@ public sealed partial class StatefulServiceRuntimeTests
                 closeFence,
                 barrierDeadline,
                 out var expiredBarrier,
-                TimeSpan.FromSeconds(2)));
+                TimeSpan.FromSeconds(2)
+            )
+        );
         var expiredBarrierCompletion = DrainCompletion(source, expiredBarrier).Record;
         Assert.Equal(MeshRecordKind.Completion, expiredBarrierCompletion.Kind);
         Assert.Equal(1, operationTarget.CreateCount);
@@ -4199,7 +4394,8 @@ public sealed partial class StatefulServiceRuntimeTests
             context,
             "rollback-target",
             TimeSpan.FromMilliseconds(50),
-            deadlineTime);
+            deadlineTime
+        );
         var suffix = Guid.NewGuid().ToString("N");
         var sourceEndpoint = $"inproc://rollback-source-{suffix}";
         var targetEndpoint = $"inproc://rollback-target-{suffix}";
@@ -4211,9 +4407,9 @@ public sealed partial class StatefulServiceRuntimeTests
         target.SetUserSpotOperationTarget(operationTarget);
         source.Start();
         target.Start();
-        await WaitUntilAsync(
-            () => source.Status().AdmittedPeerCount == 1
-                  && target.Status().AdmittedPeerCount == 1);
+        await WaitUntilAsync(() =>
+            source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+        );
 
         var targetGeneration = target.Status().LifecycleGeneration;
         var reservation = new ObjectReservationFence(
@@ -4225,10 +4421,11 @@ public sealed partial class StatefulServiceRuntimeTests
             targetGeneration,
             "rollback-owner",
             127,
-            1);
+            1
+        );
         var deadline = checked(
-            (ulong)deadlineTime.GetUtcNow().AddMilliseconds(50)
-                .ToUnixTimeMilliseconds());
+            (ulong)deadlineTime.GetUtcNow().AddMilliseconds(50).ToUnixTimeMilliseconds()
+        );
         Assert.Equal(
             SubmitResult.Ok,
             source.CreateUserSpot(
@@ -4238,9 +4435,10 @@ public sealed partial class StatefulServiceRuntimeTests
                 reservation,
                 deadline,
                 out var operationId,
-                TimeSpan.FromSeconds(2)));
-        await WaitUntilAsync(() =>
-            source.Status().PendingInfrastructureMessages > 0);
+                TimeSpan.FromSeconds(2)
+            )
+        );
+        await WaitUntilAsync(() => source.Status().PendingInfrastructureMessages > 0);
         _ = DrainRecords(source);
         Assert.Equal(1, operationTarget.CreateCount);
         Assert.Equal(1, target.RetainedUserSpotOperationCount);
@@ -4255,16 +4453,17 @@ public sealed partial class StatefulServiceRuntimeTests
                 "rollback-spot",
                 "Sample.RollbackSpot",
                 reservation,
-                deadline),
-            default);
+                deadline
+            ),
+            default
+        );
 
         deadlineTime.Advance(
             wallClock: TimeSpan.FromHours(-1),
-            monotonic: TimeSpan.FromMilliseconds(100));
+            monotonic: TimeSpan.FromMilliseconds(100)
+        );
         await WaitUntilAsync(() => target.RetainedUserSpotOperationCount == 0);
-        Assert.Equal(
-            SubmitResult.Ok,
-            source.ResubmitUserSpotOperation(target.RoutingId, replay));
+        Assert.Equal(SubmitResult.Ok, source.ResubmitUserSpotOperation(target.RoutingId, replay));
         await Task.Delay(TimeSpan.FromMilliseconds(100));
 
         Assert.Equal(1, operationTarget.CreateCount);
@@ -4275,14 +4474,15 @@ public sealed partial class StatefulServiceRuntimeTests
         IContext context,
         string rid,
         TimeSpan? remoteUserSpotTerminalRetention = null,
-        TimeProvider? deadlineTimeProvider = null)
+        TimeProvider? deadlineTimeProvider = null
+    )
     {
         var node = new ZLinkManagedMeshNode(
             context,
             "mesh",
-            remoteUserSpotTerminalRetention:
-                remoteUserSpotTerminalRetention,
-            deadlineTimeProvider: deadlineTimeProvider);
+            remoteUserSpotTerminalRetention: remoteUserSpotTerminalRetention,
+            deadlineTimeProvider: deadlineTimeProvider
+        );
         node.SetRoutingId(RoutingId.From(rid));
         return node;
     }
@@ -4297,12 +4497,14 @@ public sealed partial class StatefulServiceRuntimeTests
 
         public override DateTimeOffset GetUtcNow()
         {
-            lock (_gate) return _utcNow;
+            lock (_gate)
+                return _utcNow;
         }
 
         public override long GetTimestamp()
         {
-            lock (_gate) return _timestamp;
+            lock (_gate)
+                return _timestamp;
         }
 
         internal void Advance(TimeSpan wallClock, TimeSpan monotonic)
@@ -4319,7 +4521,8 @@ public sealed partial class StatefulServiceRuntimeTests
         ZLinkServiceWireCodec.RequestSourceFence requestSource,
         bool dropFirstAcknowledgement,
         bool corruptSecondSource = false,
-        bool corruptThirdReplyRoute = false) : IRelocationReplyRelayTarget
+        bool corruptThirdReplyRoute = false
+    ) : IRelocationReplyRelayTarget
     {
         internal int InvocationCount { get; private set; }
         internal List<byte[]> Payloads { get; } = [];
@@ -4329,20 +4532,23 @@ public sealed partial class StatefulServiceRuntimeTests
             RoutingId sourceNodeRid,
             ulong sourceNodeGeneration,
             IReadOnlyList<Message> payload,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             cancellationToken.ThrowIfCancellationRequested();
             InvocationCount++;
             Payloads.Add(Assert.Single(payload).ToArray());
             ZLinkMessageParts.DisposeAll(payload);
             if (dropFirstAcknowledgement && InvocationCount == 1)
-                return ValueTask.FromResult<
-                    ZLinkServiceWireCodec.ReplyRelayAckRecord?>(null);
-            var acknowledgedSource = corruptSecondSource && InvocationCount == 2
-                ? requestSource with { OwnerId = "wrong-owner" }
-                : requestSource;
-            return ValueTask.FromResult<
-                ZLinkServiceWireCodec.ReplyRelayAckRecord?>(
+                return ValueTask.FromResult<ZLinkServiceWireCodec.ReplyRelayAckRecord?>(null);
+            var acknowledgedSource =
+                corruptSecondSource && InvocationCount == 2
+                    ? requestSource with
+                    {
+                        OwnerId = "wrong-owner",
+                    }
+                    : requestSource;
+            return ValueTask.FromResult<ZLinkServiceWireCodec.ReplyRelayAckRecord?>(
                 new ZLinkServiceWireCodec.ReplyRelayAckRecord(
                     relay.RelocationId,
                     relay.Coordinator,
@@ -4351,35 +4557,40 @@ public sealed partial class StatefulServiceRuntimeTests
                         ? relay.ReplyRouteId + 1
                         : relay.ReplyRouteId,
                     acknowledgedSource,
-                    2));
+                    2
+                )
+            );
         }
     }
 
-    private static async Task<MeshReceiveRecord>
-        RejectRawReplyThenReceiveNativeTerminalAsync(
-            ZLinkManagedMeshNode source,
-            IRouterSocket target,
-            IMeshNodeMonitor monitor,
-            MeshOperationId operationId,
-            byte[] nativeTerminal)
+    private static async Task<MeshReceiveRecord> RejectRawReplyThenReceiveNativeTerminalAsync(
+        ZLinkManagedMeshNode source,
+        IRouterSocket target,
+        IMeshNodeMonitor monitor,
+        MeshOperationId operationId,
+        byte[] nativeTerminal
+    )
     {
         using var request = await ReceiveRouterRequestAsync(target);
         var sourceRid = Assert.IsType<RoutingId>(request.RoutingId);
         var replyToken = Assert.IsType<ReplyToken>(request.ReplyToken);
         var protocolErrors = monitor.Status().ProtocolErrors;
-        using (var rawReply = Message.From(ZLinkServiceWireCodec.EncodeReply(
-                   operationId.Low,
-                   (int)RequestResult.ProtocolError,
-                   (uint)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError)))
-            await target.Send(sourceRid)
-                .Message(rawReply)
-                .Async(CancellationToken.None).Admitted;
+        using (
+            var rawReply = Message.From(
+                ZLinkServiceWireCodec.EncodeReply(
+                    operationId.Low,
+                    (int)RequestResult.ProtocolError,
+                    (uint)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError
+                )
+            )
+        )
+            await target.Send(sourceRid).Message(rawReply).Async(CancellationToken.None).Admitted;
 
         await WaitUntilAsync(() => monitor.Status().ProtocolErrors > protocolErrors);
         Assert.DoesNotContain(
             DrainRecords(source),
-            record => record.Kind == MeshRecordKind.Completion
-                      && record.OperationId == operationId);
+            record => record.Kind == MeshRecordKind.Completion && record.OperationId == operationId
+        );
 
         using var reply = Message.From(nativeTerminal);
         target.Reply(sourceRid, replyToken).Message(reply).Submit();
@@ -4412,8 +4623,10 @@ public sealed partial class StatefulServiceRuntimeTests
                 await Task.Delay(10);
                 continue;
             }
-            if (received.MessageType == ReceivedMessageType.Request
-                && received.ReplyToken is not null)
+            if (
+                received.MessageType == ReceivedMessageType.Request
+                && received.ReplyToken is not null
+            )
                 return received;
             received.Dispose();
         }
@@ -4439,10 +4652,10 @@ public sealed partial class StatefulServiceRuntimeTests
         return records;
     }
 
-    private static (MeshReceiveRecord Record, IReadOnlyList<Message> Parts)
-        DrainCompletion(
-            ZLinkManagedMeshNode node,
-            MeshOperationId operationId)
+    private static (MeshReceiveRecord Record, IReadOnlyList<Message> Parts) DrainCompletion(
+        ZLinkManagedMeshNode node,
+        MeshOperationId operationId
+    )
     {
         var deadline = Stopwatch.GetTimestamp() + 5 * Stopwatch.Frequency;
         while (true)
@@ -4458,8 +4671,10 @@ public sealed partial class StatefulServiceRuntimeTests
                     for (var record = 0; record < received.Count; record++)
                     {
                         var value = received[record];
-                        if (value.Kind != MeshRecordKind.Completion
-                            || value.OperationId != operationId)
+                        if (
+                            value.Kind != MeshRecordKind.Completion
+                            || value.OperationId != operationId
+                        )
                             continue;
                         return (value, received.RetainMessage(record));
                     }
@@ -4468,14 +4683,12 @@ public sealed partial class StatefulServiceRuntimeTests
             }
 
             if (Stopwatch.GetTimestamp() >= deadline)
-                throw new InvalidOperationException(
-                    $"Completion '{operationId}' was not queued.");
+                throw new InvalidOperationException($"Completion '{operationId}' was not queued.");
             Thread.Sleep(10);
         }
     }
 
-    private static void DrainAndDispose(ZLinkManagedMeshNode node) =>
-        _ = DrainRecords(node);
+    private static void DrainAndDispose(ZLinkManagedMeshNode node) => _ = DrainRecords(node);
 
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
@@ -4493,9 +4706,7 @@ public sealed partial class StatefulServiceRuntimeTests
 
     private static int FindFreeTcpPort()
     {
-        using var listener = new System.Net.Sockets.TcpListener(
-            System.Net.IPAddress.Loopback,
-            0);
+        using var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
         listener.Start();
         return ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
     }
@@ -4513,34 +4724,43 @@ public sealed partial class StatefulServiceRuntimeTests
 
         public ValueTask<UserSpotOperationTerminal> CreateAsync(
             UserSpotCreateOperation operation,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             cancellationToken.ThrowIfCancellationRequested();
             LastCreate = operation;
             Interlocked.Increment(ref _createCount);
-            return ValueTask.FromResult(new UserSpotOperationTerminal(
-                RequestResult.Ok,
-                ServiceWireConstants.FrameworkErrorCode.None,
-                new UserSpotCreateCompletion(
-                    UserSpotCreateResult.Created,
-                    operation.SpotId,
-                    operation.Reservation.ObjectGeneration),
-                [new byte[] { 0x51 }]));
+            return ValueTask.FromResult(
+                new UserSpotOperationTerminal(
+                    RequestResult.Ok,
+                    ServiceWireConstants.FrameworkErrorCode.None,
+                    new UserSpotCreateCompletion(
+                        UserSpotCreateResult.Created,
+                        operation.SpotId,
+                        operation.Reservation.ObjectGeneration
+                    ),
+                    [new byte[] { 0x51 }]
+                )
+            );
         }
 
         public ValueTask<UserSpotOperationTerminal> CloseAsync(
             UserSpotCloseOperation operation,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             cancellationToken.ThrowIfCancellationRequested();
             LastClose = operation;
             Interlocked.Increment(ref _closeCount);
             if (CloseError is { } error)
                 throw error;
-            return ValueTask.FromResult(new UserSpotOperationTerminal(
-                RequestResult.Ok,
-                ServiceWireConstants.FrameworkErrorCode.None,
-                new UserSpotCloseCompletion(true)));
+            return ValueTask.FromResult(
+                new UserSpotOperationTerminal(
+                    RequestResult.Ok,
+                    ServiceWireConstants.FrameworkErrorCode.None,
+                    new UserSpotCloseCompletion(true)
+                )
+            );
         }
     }
 
@@ -4554,26 +4774,31 @@ public sealed partial class StatefulServiceRuntimeTests
 
         public ValueTask<ActorCreateOperationTerminal> CreateAsync(
             ActorCreateOperation operation,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             cancellationToken.ThrowIfCancellationRequested();
             LastOperation = operation;
             Interlocked.Increment(ref _createCount);
-            return ValueTask.FromResult(new ActorCreateOperationTerminal(
-                RequestResult.Ok,
-                ServiceWireConstants.FrameworkErrorCode.None,
-                new ActorCreateCompletion(
-                    ActorCreateResult.Created,
-                    new ActorRef(
-                        operation.ActorId,
-                        operation.Reservation.ObjectGeneration,
-                        meshName,
-                        operation.Reservation.TargetNodeRid))));
+            return ValueTask.FromResult(
+                new ActorCreateOperationTerminal(
+                    RequestResult.Ok,
+                    ServiceWireConstants.FrameworkErrorCode.None,
+                    new ActorCreateCompletion(
+                        ActorCreateResult.Created,
+                        new ActorRef(
+                            operation.ActorId,
+                            operation.Reservation.ObjectGeneration,
+                            meshName,
+                            operation.Reservation.TargetNodeRid
+                        )
+                    )
+                )
+            );
         }
     }
 
-    private sealed class RecordingInstanceSpotActivationTarget
-        : IInstanceSpotActivationTarget
+    private sealed class RecordingInstanceSpotActivationTarget : IInstanceSpotActivationTarget
     {
         private int _count;
 
@@ -4587,29 +4812,35 @@ public sealed partial class StatefulServiceRuntimeTests
             InstanceSpotActivationOperation operation,
             ReadOnlyMemory<byte>? metadata,
             IReadOnlyList<ReadOnlyMemory<byte>> payload,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             cancellationToken.ThrowIfCancellationRequested();
             LastOperation = operation;
             LastMetadata = metadata ?? ReadOnlyMemory<byte>.Empty;
             LastPayload = payload;
             Interlocked.Increment(ref _count);
-            return ValueTask.FromResult(new InstanceSpotActivationTerminal(
-                RequestResult.Ok,
-                ServiceWireConstants.FrameworkErrorCode.None,
-                [new byte[] { 7, 6 }]));
+            return ValueTask.FromResult(
+                new InstanceSpotActivationTerminal(
+                    RequestResult.Ok,
+                    ServiceWireConstants.FrameworkErrorCode.None,
+                    [new byte[] { 7, 6 }]
+                )
+            );
         }
     }
 
     private sealed class ForwardingInstanceSpotActivationTarget(
         ZLinkManagedMeshNode relay,
-        ZLinkManagedMeshNode winner) : IInstanceSpotActivationTarget
+        ZLinkManagedMeshNode winner
+    ) : IInstanceSpotActivationTarget
     {
         public async ValueTask<InstanceSpotActivationTerminal> ActivateAsync(
             InstanceSpotActivationOperation operation,
             ReadOnlyMemory<byte>? metadata,
             IReadOnlyList<ReadOnlyMemory<byte>> payload,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             cancellationToken.ThrowIfCancellationRequested();
             var forwarded = operation with
@@ -4618,57 +4849,55 @@ public sealed partial class StatefulServiceRuntimeTests
                 {
                     TargetNodeRid = winner.RoutingId,
                     TargetNodeGeneration = winner.Status().LifecycleGeneration,
-                    DescriptorVersion = "descriptor-winner"
-                }
+                    DescriptorVersion = "descriptor-winner",
+                },
             };
-            return await relay.ForwardInstanceSpotActivationAsync(
-                    forwarded,
-                    payload,
-                    metadata,
-                    cancellationToken)
+            return await relay
+                .ForwardInstanceSpotActivationAsync(forwarded, payload, metadata, cancellationToken)
                 .ConfigureAwait(false);
         }
     }
 
-    private sealed class BlockingInstanceSpotActivationTarget
-        : IInstanceSpotActivationTarget
+    private sealed class BlockingInstanceSpotActivationTarget : IInstanceSpotActivationTarget
     {
-        private readonly TaskCompletionSource<InstanceSpotActivationTerminal>
-            _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<InstanceSpotActivationTerminal> _completion = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         private int _count;
 
         internal int Count => Volatile.Read(ref _count);
-        internal void Complete() => _completion.TrySetResult(
-            new InstanceSpotActivationTerminal(
-                RequestResult.Ok,
-                ServiceWireConstants.FrameworkErrorCode.None,
-                [new byte[] { 227 }]));
+
+        internal void Complete() =>
+            _completion.TrySetResult(
+                new InstanceSpotActivationTerminal(
+                    RequestResult.Ok,
+                    ServiceWireConstants.FrameworkErrorCode.None,
+                    [new byte[] { 227 }]
+                )
+            );
 
         public async ValueTask<InstanceSpotActivationTerminal> ActivateAsync(
             InstanceSpotActivationOperation operation,
             ReadOnlyMemory<byte>? metadata,
             IReadOnlyList<ReadOnlyMemory<byte>> payload,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             Interlocked.Increment(ref _count);
-            return await _completion.Task.WaitAsync(cancellationToken)
-                .ConfigureAwait(false);
+            return await _completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
     }
 
     private sealed class CapturingBackendActorMessageFollowHandler(
         bool acceptsOwnership,
-        bool reply = true)
+        bool reply = true
+    )
     {
         public int Count { get; private set; }
 
         public ZLinkBackendActorRouteContext LastRoute { get; private set; }
 
-        public ZLinkServiceWireCodec.RequestSourceFence? LastRequestSource
-        {
-            get;
-            private set;
-        }
+        public ZLinkServiceWireCodec.RequestSourceFence? LastRequestSource { get; private set; }
 
         public byte[] LastPayload { get; private set; } = [];
 
@@ -4681,15 +4910,13 @@ public sealed partial class StatefulServiceRuntimeTests
         public bool TryFollow(IReadOnlyList<ZLinkBackendActorPart> parts)
         {
             Count++;
-            var header = Assert.IsType<ZLinkBackendActorPart>(
-                Assert.Single(parts.Take(1)));
+            var header = Assert.IsType<ZLinkBackendActorPart>(Assert.Single(parts.Take(1)));
             LastRoute = header.RouteContext;
             LastRequestSource = header.RequestSource;
             LastApplicationMetadata = header.ApplicationMetadata.ToArray();
             LastMessages = parts.Select(static part => part.Message).ToArray();
             LastPayload = parts
-                .SelectMany(static part =>
-                    part.Message.AsReadOnlySpan().ToArray())
+                .SelectMany(static part => part.Message.AsReadOnlySpan().ToArray())
                 .ToArray();
             if (!acceptsOwnership)
                 return false;
@@ -4698,13 +4925,9 @@ public sealed partial class StatefulServiceRuntimeTests
                 if (reply)
                 {
                     using var first = Message.From(new byte[] { 197 });
-                    Assert.Equal(
-                        SubmitResult.Ok,
-                        header.DirectReply!([first]));
+                    Assert.Equal(SubmitResult.Ok, header.DirectReply!([first]));
                     using var duplicate = Message.From(new byte[] { 199 });
-                    Assert.Equal(
-                        SubmitResult.Ok,
-                        header.DirectReply!([duplicate]));
+                    Assert.Equal(SubmitResult.Ok, header.DirectReply!([duplicate]));
                 }
                 return true;
             }
@@ -4731,10 +4954,8 @@ public sealed partial class StatefulServiceRuntimeTests
         internal static int CloseCount => Volatile.Read(ref _closeCount);
         internal static bool CleanupTokenWasCanceledAtInvocation =>
             Volatile.Read(ref _cleanupTokenWasCanceledAtInvocation) != 0;
-        internal static string? LastCreateContentType =>
-            Volatile.Read(ref _lastCreateContentType);
-        internal static ZLinkSpotClosingContext? LastClosingContext =>
-            _lastClosingContext;
+        internal static string? LastCreateContentType => Volatile.Read(ref _lastCreateContentType);
+        internal static ZLinkSpotClosingContext? LastClosingContext => _lastClosingContext;
         internal static ulong ObjectGenerationObservedDuringCreate =>
             _objectGenerationObservedDuringCreate;
 
@@ -4752,15 +4973,15 @@ public sealed partial class StatefulServiceRuntimeTests
         internal static CreateGate BlockNextCreate()
         {
             var gate = new CreateGate();
-            if (Interlocked.CompareExchange(ref _nextCreateGate, gate, null)
-                is not null)
+            if (Interlocked.CompareExchange(ref _nextCreateGate, gate, null) is not null)
                 throw new InvalidOperationException("A create gate is already installed.");
             return gate;
         }
 
         public async ValueTask<ZLinkSpotCreateResponse> OnCreateAsync(
             ZLinkMessage request,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             cancellationToken.ThrowIfCancellationRequested();
             Interlocked.Increment(ref _createCount);
@@ -4771,18 +4992,19 @@ public sealed partial class StatefulServiceRuntimeTests
                 gate.Entered.TrySetResult();
                 await gate.Release.Task.WaitAsync(cancellationToken);
             }
-            return ZLinkSpotCreateResponse.Accept(
-                new ProductionCreateReply("production-created"));
+            return ZLinkSpotCreateResponse.Accept(new ProductionCreateReply("production-created"));
         }
 
         public ValueTask OnClosingAsync(
             ZLinkSpotClosingContext context,
-            CancellationToken cleanupCancellationToken)
+            CancellationToken cleanupCancellationToken
+        )
         {
             _lastClosingContext = context;
             Volatile.Write(
                 ref _cleanupTokenWasCanceledAtInvocation,
-                cleanupCancellationToken.IsCancellationRequested ? 1 : 0);
+                cleanupCancellationToken.IsCancellationRequested ? 1 : 0
+            );
             cleanupCancellationToken.ThrowIfCancellationRequested();
             Interlocked.Increment(ref _closeCount);
             return ValueTask.CompletedTask;

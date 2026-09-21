@@ -63,16 +63,19 @@ public sealed class ZoneWorldOpsConsoleRegistryTests
 
         await registry.ApplyLiveRoutingIdsAsync(
             new HashSet<string> { routingId.ToString() },
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         var correlated = await registry.ApplyReportAsync(
             new ReportNodeStatusMsg(
                 NodeIds.East,
                 [ZoneIds.NorthEast, ZoneIds.SouthEast],
                 PlayerCount: 0,
-                Maintenance: false),
+                Maintenance: false
+            ),
             routingId,
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         Assert.True(correlated);
         var node = Assert.Single(registry.Snapshot());
@@ -85,9 +88,11 @@ public sealed class ZoneWorldOpsConsoleRegistryTests
                 NodeIds.East,
                 [ZoneIds.NorthEast, ZoneIds.SouthEast],
                 PlayerCount: 1,
-                Maintenance: false),
+                Maintenance: false
+            ),
             routingId,
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         Assert.False(duplicate);
     }
@@ -102,26 +107,28 @@ public sealed class ZoneWorldOpsConsoleRegistryTests
 
         await registry.ApplyLiveRoutingIdsAsync(
             new HashSet<string> { previousRoutingId.ToString() },
-            CancellationToken.None);
-        Assert.True(await registry.ApplyReportAsync(
-            new ReportNodeStatusMsg(NodeIds.East, zones, 0, false),
-            previousRoutingId,
-            CancellationToken.None));
+            CancellationToken.None
+        );
+        Assert.True(
+            await registry.ApplyReportAsync(
+                new ReportNodeStatusMsg(NodeIds.East, zones, 0, false),
+                previousRoutingId,
+                CancellationToken.None
+            )
+        );
 
         // The old lease can remain visible while the replacement publishes its
         // new descriptor, so both RIDs are live at this observation boundary.
         await registry.ApplyLiveRoutingIdsAsync(
-            new HashSet<string>
-            {
-                previousRoutingId.ToString(),
-                replacementRoutingId.ToString()
-            },
-            CancellationToken.None);
+            new HashSet<string> { previousRoutingId.ToString(), replacementRoutingId.ToString() },
+            CancellationToken.None
+        );
 
         var correlated = await registry.ApplyReportAsync(
             new ReportNodeStatusMsg(NodeIds.East, zones, 1, false),
             replacementRoutingId,
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         Assert.True(correlated);
         Assert.True(Assert.Single(registry.Snapshot()).Connected);
@@ -136,11 +143,13 @@ public sealed class ZoneWorldOpsConsoleRegistryTests
 
         await registry.ApplyLiveRoutingIdsAsync(
             new HashSet<string> { routingId.ToString() },
-            CancellationToken.None);
+            CancellationToken.None
+        );
         await registry.ApplyReportAsync(
             new ReportNodeStatusMsg(NodeIds.West, [ZoneIds.NorthWest], 0, false),
             routingId,
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         time.Advance(TimeSpan.FromSeconds(15) - TimeSpan.FromTicks(1));
         await registry.ExpireStaleReportsAsync(CancellationToken.None);
@@ -161,15 +170,18 @@ public sealed class ZoneWorldOpsConsoleRegistryTests
         var routingId = RoutingId.From("disconnect-node-rid");
         await registry.ApplyLiveRoutingIdsAsync(
             new HashSet<string> { routingId.ToString() },
-            CancellationToken.None);
+            CancellationToken.None
+        );
         await registry.ApplyReportAsync(
             new ReportNodeStatusMsg(NodeIds.East, [ZoneIds.NorthEast], 0, false),
             routingId,
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         await registry.ApplyLiveRoutingIdsAsync(
             new HashSet<string>(StringComparer.Ordinal),
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         var disconnected = Assert.Single(registry.Snapshot());
         Assert.True(disconnected.Registered);
@@ -191,6 +203,7 @@ public sealed class ZoneWorldOpsConsoleRegistryTests
         public IZLinkSessionActors Actors => null!;
         public IZLinkSessionHandlerRegistry Handlers => null!;
         public int SendCount => _client.SendCount;
+
         public ValueTask CloseAsync() => ValueTask.CompletedTask;
     }
 
@@ -204,19 +217,25 @@ public sealed class ZoneWorldOpsConsoleRegistryTests
             return new TestSendCall(() =>
             {
                 SendCount++;
-                if (failSend) throw new InvalidOperationException("session transport unavailable");
+                if (failSend)
+                    throw new InvalidOperationException("session transport unavailable");
             });
         }
 
-        public IZLinkSessionReplyCall Reply<TMessage>(TMessage message) => throw new NotSupportedException();
+        public IZLinkSessionReplyCall Reply<TMessage>(TMessage message) =>
+            throw new NotSupportedException();
     }
 
     private sealed class TestSendCall(Action submit) : IZLinkSessionSendCall
     {
         public IZLinkSessionSendCall Metadata(string key, string value) => this;
+
         public IZLinkSessionSendCall Metadata(ZLinkMessageMetadata metadata) => this;
+
         public IZLinkSessionSendCall Compress() => this;
+
         public IZLinkSessionSendCall Timeout(TimeSpan timeout) => this;
+
         public ValueTask Async(CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();

@@ -108,77 +108,57 @@ static_assert (static_cast<int> (zlink::framework::message_flow_log_mode_t::norm
 static_assert (static_cast<int> (zlink::framework::message_flow_log_mode_t::detailed) == 3);
 
 template <typename TContext>
-concept has_destroy_actor = requires (TContext & context, contract_actor_t &actor)
-{
-    context.destroy_actor (actor);
-};
+concept has_destroy_actor =
+  requires (TContext &context, contract_actor_t &actor) { context.destroy_actor (actor); };
 
 template <typename TContext>
-concept has_leave_actor = requires (
-  TContext & context, const zlink::framework::actor_ref_t &actor_ref, contract_actor_t &actor)
-{
-    context.leave_actor (actor_ref, actor);
-};
+concept has_leave_actor =
+  requires (TContext &context,
+            const zlink::framework::actor_ref_t &actor_ref,
+            contract_actor_t &actor) { context.leave_actor (actor_ref, actor); };
 
-template <typename TContext> concept has_run_worker = requires (TContext & context)
-{
-    context.run_worker ([] { return 1; });
-};
+template <typename TContext>
+concept has_run_worker = requires (TContext &context) { context.run_worker ([] { return 1; }); };
 
-template <typename TContext> concept has_split_workers = requires (TContext & context)
-{
+template <typename TContext>
+concept has_split_workers = requires (TContext &context) {
     context.run_cpu_worker ([] { return 1; });
     context.run_io_worker (
       [] { return zlink::framework::task_t<int> (zlink::framework::result_t<int>::success (1)); });
 };
 
-template <typename TRequest> concept has_http_async = requires (TRequest & request)
-{
-    request.template async<int> ();
-};
+template <typename TRequest>
+concept has_http_async = requires (TRequest &request) { request.template async<int> (); };
 
-template <typename TRequest> concept has_http_yield = requires (TRequest & request)
-{
-    request.template yield<int> ();
-};
+template <typename TRequest>
+concept has_http_yield = requires (TRequest &request) { request.template yield<int> (); };
 
-template <typename TRequest> concept has_http_response_submit = requires (TRequest & request)
-{
-    request.template submit<int> ();
-};
+template <typename TRequest>
+concept has_http_response_submit =
+  requires (TRequest &request) { request.template submit<int> (); };
 
-template <typename TRequest> concept has_http_one_way_submit = requires (TRequest & request)
-{
-    request.submit ();
-};
+template <typename TRequest>
+concept has_http_one_way_submit = requires (TRequest &request) { request.submit (); };
 
-template <typename TRequest> concept has_http_fetch = requires (TRequest & request)
-{
-    request.template fetch<int> ();
-};
+template <typename TRequest>
+concept has_http_fetch = requires (TRequest &request) { request.template fetch<int> (); };
 
-template <typename T> concept has_actor_location_spot_kind_member = requires (T value)
-{
-    value.spot_kind;
-};
+template <typename T>
+concept has_actor_location_spot_kind_member = requires (T value) { value.spot_kind; };
 
-template <typename T> concept has_actor_location_legacy_generation_member = requires (T value)
-{
-    value.generation;
-};
+template <typename T>
+concept has_actor_location_legacy_generation_member = requires (T value) { value.generation; };
 
-template <typename T> concept has_actor_location_legacy_location_kind_member = requires (T value)
-{
-    value.location_kind;
-};
+template <typename T>
+concept has_actor_location_legacy_location_kind_member =
+  requires (T value) { value.location_kind; };
 
-template <typename T> concept has_actor_directory_find = requires (T value)
-{
-    value.find (std::declval<std::string> ());
-};
+template <typename T>
+concept has_actor_directory_find =
+  requires (T value) { value.find (std::declval<std::string> ()); };
 
-template <typename T> concept has_location_readiness = requires (T value)
-{
+template <typename T>
+concept has_location_readiness = requires (T value) {
     value.is_peer_ready (std::declval<std::string> (), zlink::framework::location_role_t::router,
                          std::declval<std::optional<zlink::routing_id_t>> ());
 };
@@ -196,109 +176,74 @@ static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::request_call_t<int>> ().async ()),
                  zlink::framework::task_t<int>>);
 
-template <typename T> concept has_submit = requires (T value)
-{
-    value.submit ();
-};
+template <typename T>
+concept has_submit = requires (T value) { value.submit (); };
 
-template <typename T> concept has_yield = requires (T value)
-{
-    value.yield ();
-};
+template <typename T>
+concept has_yield = requires (T value) { value.yield (); };
 
-template <typename T, typename TReply> concept has_typed_yield = requires (T value)
-{
-    value.template yield<TReply> ();
-};
+template <typename T, typename TReply>
+concept has_typed_yield = requires (T value) { value.template yield<TReply> (); };
 
-template <typename T, typename TReply> concept has_typed_submit = requires (T value)
-{
-    value.template submit<TReply> ();
-};
+template <typename T, typename TReply>
+concept has_typed_submit = requires (T value) { value.template submit<TReply> (); };
 
-template <typename T> concept has_async = requires (T value)
-{
-    value.async ();
-};
+template <typename T>
+concept has_async = requires (T value) { value.async (); };
 
-template <typename T, typename TReply> concept has_typed_async = requires (T value)
-{
-    value.template async<TReply> ();
-};
+template <typename T, typename TReply>
+concept has_typed_async = requires (T value) { value.template async<TReply> (); };
 
-template <typename T> concept has_packet_name = requires (T value)
-{
-    value.packet_name ("packet");
-};
+template <typename T>
+concept has_packet_name = requires (T value) { value.packet_name ("packet"); };
 
-template <typename T> concept has_timeout = requires (T value)
-{
-    value.timeout (std::chrono::milliseconds (1));
-};
+template <typename T>
+concept has_timeout = requires (T value) { value.timeout (std::chrono::milliseconds (1)); };
 
-template <typename T> concept has_callback_submit = requires (T value)
-{
+template <typename T>
+concept has_callback_submit = requires (T value) {
     value.submit (
       std::declval<
         std::function<zlink::framework::task_t<void> (zlink::framework::result_t<int>)>> ());
 };
 
-template <typename T> concept has_create_scope = requires (T value)
-{
-    value.create_scope ();
-};
+template <typename T>
+concept has_create_scope = requires (T value) { value.create_scope (); };
 
-template <typename T> concept has_native_code = requires (T value)
-{
-    value.native_code ();
-};
+template <typename T>
+concept has_native_code = requires (T value) { value.native_code (); };
 
-template <typename T> concept has_raw_monitoring = requires (T value)
-{
-    value.monitoring ();
-};
+template <typename T>
+concept has_raw_monitoring = requires (T value) { value.monitoring (); };
 
-template <typename T> concept has_raw_metrics = requires (T value)
-{
-    value.metrics ();
-};
+template <typename T>
+concept has_raw_metrics = requires (T value) { value.metrics (); };
 
-template <typename T> concept has_max_message_size_member = requires (T value)
-{
-    value.max_message_size;
-};
+template <typename T>
+concept has_max_message_size_member = requires (T value) { value.max_message_size; };
 
 static_assert (has_yield<zlink::framework::request_call_t<int>>);
 
-template <typename T> concept has_framework_use_discovery = requires (T value)
-{
-    value.use_discovery ();
-};
+template <typename T>
+concept has_framework_use_discovery = requires (T value) { value.use_discovery (); };
 
-template <typename T> concept has_framework_add_registry_peer = requires (T value)
-{
-    value.add_registry_peer ("tcp://127.0.0.1:5501");
-};
+template <typename T>
+concept has_framework_add_registry_peer =
+  requires (T value) { value.add_registry_peer ("tcp://127.0.0.1:5501"); };
 
-template <typename T> concept has_zlink_enable_registry = requires (T value)
-{
-    value.enable_registry ();
-};
+template <typename T>
+concept has_zlink_enable_registry = requires (T value) { value.enable_registry (); };
 
-template <typename T> concept has_zlink_discovery = requires (T value)
-{
-    value.discovery ();
-};
+template <typename T>
+concept has_zlink_discovery = requires (T value) { value.discovery (); };
 
-template <typename T> concept has_spot_node_use_registry_spot_resolver = requires (T value)
-{
-    value.use_registry_spot_resolver ("route");
-};
+template <typename T>
+concept has_spot_node_use_registry_spot_resolver =
+  requires (T value) { value.use_registry_spot_resolver ("route"); };
 
-template <typename T, typename TResult> concept has_callback_async = requires (T value)
-{
-    value.async ([] (zlink::framework::result_t<TResult>) {});
-};
+template <typename T, typename TResult>
+concept has_callback_async =
+  requires (T value) { value.async ([] (zlink::framework::result_t<TResult>) {}); };
 
 // Submit-and-completion §16 and C++ channel interfaces define both terminals.
 static_assert (has_submit<zlink::framework::request_call_t<int>>);
@@ -347,9 +292,9 @@ static_assert (std::is_same_v<decltype (std::declval<zlink::framework::actor_cli
                                           .request (std::declval<zlink::framework::actor_id_t> (),
                                                     std::declval<zlink::framework::message_t> ())),
                               zlink::framework::actor_request_call_t>);
-static_assert (std::is_same_v<decltype (std::declval<zlink::framework::channel_request_call_t &> ()
-                                          .async<int> ()),
-                              zlink::framework::task_t<int>>);
+static_assert (std::is_same_v<
+               decltype (std::declval<zlink::framework::channel_request_call_t &> ().async<int> ()),
+               zlink::framework::task_t<int>>);
 static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::publish_call_t &> ().async ()),
                  zlink::framework::task_t<void>>);
@@ -358,9 +303,9 @@ static_assert (std::is_same_v<decltype (std::declval<zlink::framework::send_call
 static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::route_send_call_t &> ().async ()),
                  zlink::framework::task_t<void>>);
-static_assert (std::is_same_v<
-               decltype (std::declval<zlink::framework::bound_session_send_call_t &> ().async ()),
-               zlink::framework::task_t<void>>);
+static_assert (
+  std::is_same_v<decltype (std::declval<zlink::framework::bound_session_send_call_t &> ().async ()),
+                 zlink::framework::task_t<void>>);
 static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::stream_send_call_t &> ().async ()),
                  zlink::framework::task_t<void>>);
@@ -379,15 +324,11 @@ static_assert (
 static_assert (std::is_same_v<decltype (std::declval<zlink::framework::session_actor_t &> ().relay (
                                 std::declval<const zlink::message_t &> ())),
                               zlink::framework::task_t<void>>);
-template <typename T> concept has_blocking_wait = requires (T value)
-{
-    value.wait ();
-};
+template <typename T>
+concept has_blocking_wait = requires (T value) { value.wait (); };
 
-template <typename T> concept has_future_get = requires (T value)
-{
-    value.get ();
-};
+template <typename T>
+concept has_future_get = requires (T value) { value.get (); };
 
 static_assert (!has_blocking_wait<zlink::framework::task_t<int>>);
 static_assert (!has_future_get<zlink::framework::task_t<int>>);
@@ -495,10 +436,9 @@ static_assert (
   std::is_same_v<zlink::framework::store_mutation_t,
                  std::variant<zlink::framework::store_put_t, zlink::framework::store_delete_t>>);
 
-template <typename T> concept exposes_domain_location_operations = requires (T & store)
-{
-    store.claim_owner_lease (std::string{}, std::chrono::milliseconds{1});
-};
+template <typename T>
+concept exposes_domain_location_operations =
+  requires (T &store) { store.claim_owner_lease (std::string{}, std::chrono::milliseconds{1}); };
 
 static_assert (!exposes_domain_location_operations<zlink::framework::location_store_t>);
 static_assert (std::is_same_v<decltype (std::declval<zlink::framework::location_store_t &> ().read (
@@ -579,8 +519,7 @@ static_assert (static_cast<int> (zlink::framework::framework_error_kind_t::unava
 static_assert (static_cast<int> (zlink::framework::framework_error_kind_t::deadline_exceeded) == 6);
 static_assert (static_cast<int> (zlink::framework::framework_error_kind_t::shutting_down) == 7);
 static_assert (static_cast<int> (zlink::framework::framework_error_kind_t::protocol_error) == 8);
-static_assert (static_cast<int> (zlink::framework::framework_error_kind_t::invalid_operation)
-               == 9);
+static_assert (static_cast<int> (zlink::framework::framework_error_kind_t::invalid_operation) == 9);
 static_assert (static_cast<int> (zlink::framework::framework_error_kind_t::data_lost) == 10);
 static_assert (static_cast<int> (zlink::framework::framework_error_kind_t::internal_failure) == 11);
 
@@ -591,38 +530,36 @@ static_assert (
                  zlink::framework::task_t<std::optional<zlink::framework::actor_ref_t>>>);
 template <typename T>
 concept has_http_client_coroutine_resume_builder =
-  requires (T value, std::shared_ptr<zlink::http_client::coroutine_resume_scheduler_t> resume)
-{
-    value.coroutines (resume);
-};
+  requires (T value, std::shared_ptr<zlink::http_client::coroutine_resume_scheduler_t> resume) {
+      value.coroutines (resume);
+  };
 
 template <typename T>
 concept has_http_client_coroutine_execute_resume_builder =
   requires (T value,
             std::shared_ptr<zlink::http_client::coroutine_execute_scheduler_t> execute,
-            std::shared_ptr<zlink::http_client::coroutine_resume_scheduler_t> resume)
-{
-    value.coroutines (execute, resume);
-};
+            std::shared_ptr<zlink::http_client::coroutine_resume_scheduler_t> resume) {
+      value.coroutines (execute, resume);
+  };
 
 static_assert (has_http_client_coroutine_resume_builder<zlink::http_client::client_builder_t>);
 static_assert (
   has_http_client_coroutine_execute_resume_builder<zlink::http_client::client_builder_t>);
 
-template <typename T> concept has_channel_capability_socket_options = requires (T value)
-{
+template <typename T>
+concept has_channel_capability_socket_options = requires (T value) {
     value.max_message_size (zlink::byte_size_t::bytes (4096));
     value.peer_weight (zlink::peer_weight_t::value (75));
 };
 
-template <typename T> concept has_legacy_channel_hwm_options = requires (T value)
-{
+template <typename T>
+concept has_legacy_channel_hwm_options = requires (T value) {
     value.send_high_water_mark (zlink::byte_count_t::bytes (8));
     value.receive_high_water_mark (zlink::byte_count_t::bytes (8));
 };
 
-template <typename T> concept has_legacy_client_server_role_methods = requires (T value)
-{
+template <typename T>
+concept has_legacy_client_server_role_methods = requires (T value) {
     value.enable_client ();
     value.enable_server ("tcp://127.0.0.1:5000");
 };
@@ -1144,15 +1081,11 @@ static_assert (
       std::declval<std::function<void (zlink::framework::http_server_options_builder_t &)>> ())),
     zlink::framework::http_options_builder_t &>);
 
-template <typename T> concept exposes_http_snapshot = requires (T & builder)
-{
-    builder.snapshot ();
-};
+template <typename T>
+concept exposes_http_snapshot = requires (T &builder) { builder.snapshot (); };
 
-template <typename T> concept exposes_http_validation = requires (T & builder)
-{
-    builder.validate ();
-};
+template <typename T>
+concept exposes_http_validation = requires (T &builder) { builder.validate (); };
 
 static_assert (!exposes_http_snapshot<zlink::framework::http_options_builder_t>);
 static_assert (!exposes_http_validation<zlink::framework::http_options_builder_t>);
@@ -1666,10 +1599,8 @@ static_assert (
                    std::declval<zlink::framework::spot_id_t> (), std::declval<named_request_t> ())),
                  zlink::framework::spot_request_call_t>);
 
-template <typename T> concept exposes_retry_hint = requires (const T &value)
-{
-    value.is_retriable ();
-};
+template <typename T>
+concept exposes_retry_hint = requires (const T &value) { value.is_retriable (); };
 
 static_assert (!exposes_retry_hint<zlink::framework::framework_exception_t>);
 
@@ -1856,9 +1787,7 @@ int main ()
             return 12;
     }
     auto &worker_options = options.worker ();
-    worker_options.min_threads (2)
-      .max_threads (3)
-      .idle_timeout (std::chrono::milliseconds (17));
+    worker_options.min_threads (2).max_threads (3).idle_timeout (std::chrono::milliseconds (17));
     if (worker_options.min_threads () != 2 || worker_options.max_threads () != 3
         || worker_options.idle_timeout () != std::chrono::milliseconds (17)) {
         return 8;
@@ -1890,8 +1819,7 @@ int main ()
     google::protobuf::StringValue protobuf_value;
     protobuf_value.set_value ("direct-protobuf");
     const auto protobuf_serializer = protobuf_serializers.get<google::protobuf::StringValue> ();
-    const auto protobuf_encoded =
-      protobuf_serializer.serialize_with_content_type (protobuf_value);
+    const auto protobuf_encoded = protobuf_serializer.serialize_with_content_type (protobuf_value);
     const auto protobuf_round_trip = protobuf_serializer.deserialize (protobuf_encoded.payload);
     if (protobuf_serializer.content_type () != "application/x-protobuf"
         || protobuf_encoded.content_type != protobuf_serializer.content_type ()

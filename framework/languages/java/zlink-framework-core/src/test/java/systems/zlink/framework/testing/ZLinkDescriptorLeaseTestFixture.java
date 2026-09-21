@@ -1,16 +1,5 @@
 package systems.zlink.framework.testing;
 
-import java.lang.reflect.Proxy;
-import java.time.Clock;
-import java.time.Duration;
-import java.time.Instant;
-import java.time.ZoneOffset;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 import systems.zlink.framework.locationprovider.ZLinkStoreCancellation;
@@ -38,13 +27,23 @@ import systems.zlink.framework.runtime.locations.ZLinkInMemoryProviderLocationSt
 import systems.zlink.framework.runtime.locations.ZLinkRegisteredLocationStores;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 
+import java.lang.reflect.Proxy;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+
 /** Deterministic owner-lease reads for descriptor target-selection tests. */
 public final class ZLinkDescriptorLeaseTestFixture {
-    public static final Instant STORE_NOW =
-        Instant.parse("2026-07-27T00:00:00Z");
+    public static final Instant STORE_NOW = Instant.parse("2026-07-27T00:00:00Z");
 
-    private ZLinkDescriptorLeaseTestFixture() {
-    }
+    private ZLinkDescriptorLeaseTestFixture() {}
 
     public enum LeaseState {
         LIVE,
@@ -53,104 +52,107 @@ public final class ZLinkDescriptorLeaseTestFixture {
     }
 
     public static ZLinkStoreLocationResolvers resolver(
-        List<ZLinkMeshNodeDescriptor> descriptors,
-        Map<String, LeaseState> leases) {
+            List<ZLinkMeshNodeDescriptor> descriptors, Map<String, LeaseState> leases) {
         Map<String, ZLinkMeshNodeDescriptor> byOwner = new HashMap<>();
         for (ZLinkMeshNodeDescriptor descriptor : descriptors) {
             byOwner.put(descriptor.ownerId(), descriptor);
         }
         Map<String, ZLinkLocationRepository> corrupt = new HashMap<>();
-        leases.forEach((ownerId, state) -> {
-            if (state == LeaseState.MISSING_EXPIRY) {
-                corrupt.put(ownerId, corruptLeaseRepository(ownerId));
-            }
-        });
-        ZLinkLocationRepository store = (ZLinkLocationRepository)
-            Proxy.newProxyInstance(
-                ZLinkDescriptorLeaseTestFixture.class.getClassLoader(),
-                new Class<?>[] {ZLinkLocationRepository.class},
-                (proxy, method, arguments) -> switch (method.getName()) {
-                    case "listMeshNodes" -> CompletableFuture.completedFuture(
-                        new ZLinkLocationPage<>(descriptors, null));
-                    case "readOwnerLease" -> {
-                        String ownerId = (String) arguments[0];
-                        LeaseState state = leases.get(ownerId);
-                        ZLinkMeshNodeDescriptor descriptor = byOwner.get(ownerId);
-                        if (state == LeaseState.MISSING_EXPIRY) {
-                            yield corrupt.get(ownerId).readOwnerLease(ownerId);
-                        }
-                        Instant expiresAt = state == LeaseState.LIVE
-                            ? STORE_NOW.plusSeconds(30)
-                            : STORE_NOW;
-                        yield CompletableFuture.completedFuture(
-                            new ZLinkOwnerLeaseFound(
-                                new ZLinkLocationOwnerToken(
-                                    ownerId,
-                                    descriptor.leaseGeneration()),
-                                expiresAt,
-                                STORE_NOW));
+        leases.forEach(
+                (ownerId, state) -> {
+                    if (state == LeaseState.MISSING_EXPIRY) {
+                        corrupt.put(ownerId, corruptLeaseRepository(ownerId));
                     }
-                    default -> throw new UnsupportedOperationException(
-                        method.getName());
                 });
+        ZLinkLocationRepository store =
+                (ZLinkLocationRepository)
+                        Proxy.newProxyInstance(
+                                ZLinkDescriptorLeaseTestFixture.class.getClassLoader(),
+                                new Class<?>[] {ZLinkLocationRepository.class},
+                                (proxy, method, arguments) ->
+                                        switch (method.getName()) {
+                                            case "listMeshNodes" ->
+                                                    CompletableFuture.completedFuture(
+                                                            new ZLinkLocationPage<>(
+                                                                    descriptors, null));
+                                            case "readOwnerLease" -> {
+                                                String ownerId = (String) arguments[0];
+                                                LeaseState state = leases.get(ownerId);
+                                                ZLinkMeshNodeDescriptor descriptor =
+                                                        byOwner.get(ownerId);
+                                                if (state == LeaseState.MISSING_EXPIRY) {
+                                                    yield corrupt.get(ownerId)
+                                                            .readOwnerLease(ownerId);
+                                                }
+                                                Instant expiresAt =
+                                                        state == LeaseState.LIVE
+                                                                ? STORE_NOW.plusSeconds(30)
+                                                                : STORE_NOW;
+                                                yield CompletableFuture.completedFuture(
+                                                        new ZLinkOwnerLeaseFound(
+                                                                new ZLinkLocationOwnerToken(
+                                                                        ownerId,
+                                                                        descriptor
+                                                                                .leaseGeneration()),
+                                                                expiresAt,
+                                                                STORE_NOW));
+                                            }
+                                            default ->
+                                                    throw new UnsupportedOperationException(
+                                                            method.getName());
+                                        });
         return new ZLinkStoreLocationResolvers(
-            ZLinkRegisteredLocationStores.fromUnified(store),
-            new ZLinkLocationOptions());
+                ZLinkRegisteredLocationStores.fromUnified(store), new ZLinkLocationOptions());
     }
 
-    public static ZLinkStoreLocationResolvers resolver(
-        ZLinkLocationRepository repository) {
+    public static ZLinkStoreLocationResolvers resolver(ZLinkLocationRepository repository) {
         return new ZLinkStoreLocationResolvers(
-            ZLinkRegisteredLocationStores.fromUnified(repository),
-            new ZLinkLocationOptions());
+                ZLinkRegisteredLocationStores.fromUnified(repository), new ZLinkLocationOptions());
     }
 
-    public static ZLinkMeshNodeDescriptor descriptor(
-        String rid,
-        String endpoint,
-        String ownerId) {
+    public static ZLinkMeshNodeDescriptor descriptor(String rid, String endpoint, String ownerId) {
         return new ZLinkMeshNodeDescriptor(
-            "mesh",
-            RoutingId.from(rid),
-            1,
-            1,
-            endpoint,
-            Map.of(),
-            9,
-            List.of(),
-            ZLinkMeshNodeObjectRole.SERVER,
-            Optional.empty(),
-            100,
-            new ZLinkPlacementCapacity(
-                new ZLinkCapacityUsage(0, 0, 0),
-                new ZLinkCapacityUsage(0, 0, 0),
-                List.of()),
-            new ZLinkActivationConcurrency(0, 8),
-            Optional.empty(),
-            ZLinkFrameworkRuntimeState.SERVING,
-            "security-" + ownerId,
-            ownerId,
-            1,
-            STORE_NOW);
+                "mesh",
+                RoutingId.from(rid),
+                1,
+                1,
+                endpoint,
+                Map.of(),
+                9,
+                List.of(),
+                ZLinkMeshNodeObjectRole.SERVER,
+                Optional.empty(),
+                100,
+                new ZLinkPlacementCapacity(
+                        new ZLinkCapacityUsage(0, 0, 0),
+                        new ZLinkCapacityUsage(0, 0, 0),
+                        List.of()),
+                new ZLinkActivationConcurrency(0, 8),
+                Optional.empty(),
+                ZLinkFrameworkRuntimeState.SERVING,
+                "security-" + ownerId,
+                ownerId,
+                1,
+                STORE_NOW);
     }
 
-    private static ZLinkLocationRepository corruptLeaseRepository(
-        String ownerId) {
-        var provider = new ZLinkInMemoryProviderLocationStore(
-            Clock.fixed(STORE_NOW, ZoneOffset.UTC));
+    private static ZLinkLocationRepository corruptLeaseRepository(String ownerId) {
+        var provider =
+                new ZLinkInMemoryProviderLocationStore(Clock.fixed(STORE_NOW, ZoneOffset.UTC));
         var valid = new ZLinkProviderLocationRepository(provider);
-        ZLinkLocationOwnerToken token = ((ZLinkOwnerLeaseClaimed)
-            valid.claimOwnerLease(ownerId, Duration.ofMinutes(1))
-                .toCompletableFuture().join()).token();
+        ZLinkLocationOwnerToken token =
+                ((ZLinkOwnerLeaseClaimed)
+                                valid.claimOwnerLease(ownerId, Duration.ofMinutes(1))
+                                        .toCompletableFuture()
+                                        .join())
+                        .token();
         if (token.leaseGeneration() != 1) {
             throw new IllegalStateException("unexpected fixture generation");
         }
-        return new ZLinkProviderLocationRepository(
-            new MissingExpiryStore(provider));
+        return new ZLinkProviderLocationRepository(new MissingExpiryStore(provider));
     }
 
-    private static final class MissingExpiryStore
-        implements ZLinkLocationStore {
+    private static final class MissingExpiryStore implements ZLinkLocationStore {
         private final ZLinkLocationStore delegate;
 
         private MissingExpiryStore(ZLinkLocationStore delegate) {
@@ -159,32 +161,33 @@ public final class ZLinkDescriptorLeaseTestFixture {
 
         @Override
         public CompletionStage<ZLinkStoreReadResult> read(
-            systems.zlink.framework.locationprovider.ZLinkStoreKey key,
-            ZLinkStoreCancellation cancellation) {
-            return delegate.read(key, cancellation).thenApply(read -> {
-                if (!(read instanceof ZLinkStoreReadFound found)) {
-                    return read;
-                }
-                ZLinkStoreValue value = found.value();
-                return new ZLinkStoreReadFound(new ZLinkStoreValue(
-                    value.bytes(),
-                    value.version(),
-                    null,
-                    value.storeNow()));
-            });
+                systems.zlink.framework.locationprovider.ZLinkStoreKey key,
+                ZLinkStoreCancellation cancellation) {
+            return delegate.read(key, cancellation)
+                    .thenApply(
+                            read -> {
+                                if (!(read instanceof ZLinkStoreReadFound found)) {
+                                    return read;
+                                }
+                                ZLinkStoreValue value = found.value();
+                                return new ZLinkStoreReadFound(
+                                        new ZLinkStoreValue(
+                                                value.bytes(),
+                                                value.version(),
+                                                null,
+                                                value.storeNow()));
+                            });
         }
 
         @Override
         public CompletionStage<ZLinkStoreWriteResult> write(
-            ZLinkStoreWriteRequest request,
-            ZLinkStoreCancellation cancellation) {
+                ZLinkStoreWriteRequest request, ZLinkStoreCancellation cancellation) {
             return delegate.write(request, cancellation);
         }
 
         @Override
         public CompletionStage<ZLinkStoreScanResult> scan(
-            ZLinkStoreScanRequest request,
-            ZLinkStoreCancellation cancellation) {
+                ZLinkStoreScanRequest request, ZLinkStoreCancellation cancellation) {
             return delegate.scan(request, cancellation);
         }
     }

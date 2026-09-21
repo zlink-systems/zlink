@@ -1,13 +1,12 @@
 package systems.zlink.framework.runtime.internal.backend;
 
-import java.util.Objects;
-import java.util.Optional;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 
-/**
- * One complete PACKET-mode STREAM result owned by the framework receive loop.
- */
+import java.util.Objects;
+import java.util.Optional;
+
+/** One complete PACKET-mode STREAM result owned by the framework receive loop. */
 public final class ZLinkBackendStreamReceived implements AutoCloseable {
     private final Optional<RoutingId> routingId;
     private final Message header;
@@ -16,10 +15,7 @@ public final class ZLinkBackendStreamReceived implements AutoCloseable {
     private boolean closed;
 
     public ZLinkBackendStreamReceived(
-        Optional<RoutingId> routingId,
-        Message header,
-        Message body,
-        Runnable closeAction) {
+            Optional<RoutingId> routingId, Message header, Message body, Runnable closeAction) {
         this.routingId = routingId == null ? Optional.empty() : routingId;
         this.header = Objects.requireNonNull(header, "header");
         this.body = Objects.requireNonNull(body, "body");

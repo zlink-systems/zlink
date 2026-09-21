@@ -22,7 +22,8 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
         string? socketRole = null,
         ZLinkClientServerServerIdentity? clientServerServer = null,
         ZLinkFanoutPublisherIdentity? fanoutPublisher = null,
-        IDisposable? receiveFlowRegistration = null)
+        IDisposable? receiveFlowRegistration = null
+    )
     {
         Socket = socket;
         _connect = connect;
@@ -48,7 +49,9 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
 
     public ValueTask DisposeAsync()
     {
-        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completion = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0)
         {
             var spinner = new SpinWait();
@@ -84,11 +87,14 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
             await started.ConfigureAwait(false);
             var failures = new ZLinkFailureCollector();
             IDisposable? attachment = null;
-            await failures.CaptureAsync(async () =>
-            {
-                attachment = await _lane.RunAsync(DetachManualConnectionsCore)
-                    .ConfigureAwait(false);
-            }).ConfigureAwait(false);
+            await failures
+                .CaptureAsync(async () =>
+                {
+                    attachment = await _lane
+                        .RunAsync(DetachManualConnectionsCore)
+                        .ConfigureAwait(false);
+                })
+                .ConfigureAwait(false);
             failures.Capture(() => attachment?.Dispose());
             failures.Capture(DetachReceiveFlow);
             await _connectionGate.WaitAsync().ConfigureAwait(false);
@@ -114,16 +120,19 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
     internal void OwnManualConnectionAttachment(IDisposable attachment)
     {
         ArgumentNullException.ThrowIfNull(attachment);
-        var (previous, dispose) = AwaitStateLane(_lane.RunAsync(() =>
-        {
-            if (Volatile.Read(ref _disposed) != 0)
-                return ((IDisposable?)null, true);
-            var replaced = _manualConnectionAttachment;
-            _manualConnectionAttachment = attachment;
-            return (replaced, false);
-        }));
+        var (previous, dispose) = AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                if (Volatile.Read(ref _disposed) != 0)
+                    return ((IDisposable?)null, true);
+                var replaced = _manualConnectionAttachment;
+                _manualConnectionAttachment = attachment;
+                return (replaced, false);
+            })
+        );
         previous?.Dispose();
-        if (!dispose) return;
+        if (!dispose)
+            return;
         attachment.Dispose();
         throw new ObjectDisposedException(nameof(ZLinkChannelRuntimeBundle));
     }
@@ -167,11 +176,16 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
     private void ConnectManualCore(string endpoint)
     {
         ThrowIfDisposed();
-        if (!_manualConnections.Add(endpoint)) return;
+        if (!_manualConnections.Add(endpoint))
+            return;
         try
         {
-            (_connect ?? throw new InvalidOperationException(
-                "This channel socket does not support connections."))(endpoint);
+            (
+                _connect
+                ?? throw new InvalidOperationException(
+                    "This channel socket does not support connections."
+                )
+            )(endpoint);
         }
         catch
         {
@@ -183,11 +197,16 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
     private void DisconnectManualCore(string endpoint)
     {
         ThrowIfDisposed();
-        if (!_manualConnections.Remove(endpoint)) return;
+        if (!_manualConnections.Remove(endpoint))
+            return;
         try
         {
-            (_disconnect ?? throw new InvalidOperationException(
-                "This channel socket does not support disconnections."))(endpoint);
+            (
+                _disconnect
+                ?? throw new InvalidOperationException(
+                    "This channel socket does not support disconnections."
+                )
+            )(endpoint);
         }
         catch
         {
@@ -205,7 +224,5 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();
 
-    private static void AwaitStateLane(ValueTask operation) =>
-        operation.GetAwaiter().GetResult();
-
+    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 }

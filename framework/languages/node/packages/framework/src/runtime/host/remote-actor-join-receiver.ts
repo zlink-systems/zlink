@@ -15,11 +15,7 @@ import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
 } from '../framework-errors-internal';
-import {
-  normalizeRoutingId,
-  routingIdWireHex,
-  routingIdsEqual
-} from '../routing-id';
+import { normalizeRoutingId, routingIdWireHex, routingIdsEqual } from '../routing-id';
 
 export interface ZLinkCanonicalActorJoinAuthorityFence {
   readonly actorId: string;
@@ -81,14 +77,25 @@ export class ZLinkRemoteActorJoinReceiver {
       generation: BigInt(join.actorGeneration)
     };
     state.setNativeActorRef(actorRef as unknown as ZLinkBackendActorRef);
-    const refreshedTarget = mergeRemoteBoundSessionTarget({
-      routerChannelId: join.boundSessionRouterChannelId ?? join.routerChannelId ?? routeContext.channelName ?? '',
-      targetNodeRid: join.boundSessionTargetNodeRid ?? normalizeRoutingId(routeContext.sourceNodeRid),
-      spotId: join.boundSessionSpotId ?? join.sourceSpotId ?? normalizeRoutingId(routeContext.sourceNodeRid)
-    }, preferredRemoteBoundSessionTarget(
-      state.remoteBoundSessionTarget,
-      state.boundSessionTransferTarget
-    ));
+    const refreshedTarget = mergeRemoteBoundSessionTarget(
+      {
+        routerChannelId:
+          join.boundSessionRouterChannelId ??
+          join.routerChannelId ??
+          routeContext.channelName ??
+          '',
+        targetNodeRid:
+          join.boundSessionTargetNodeRid ?? normalizeRoutingId(routeContext.sourceNodeRid),
+        spotId:
+          join.boundSessionSpotId ??
+          join.sourceSpotId ??
+          normalizeRoutingId(routeContext.sourceNodeRid)
+      },
+      preferredRemoteBoundSessionTarget(
+        state.remoteBoundSessionTarget,
+        state.boundSessionTransferTarget
+      )
+    );
     state.setRemoteBoundSessionTarget(refreshedTarget);
     const request = RuntimeMessage.from(Buffer.from(join.request, 'base64'));
     try {
@@ -182,13 +189,13 @@ export class ZLinkRemoteActorJoinReceiver {
 
     const fence = decodeJoinAuthorityFence(join);
     if (
-      authority.allocation.state !== 'active'
-      || authority.allocation.objectKind !== 'actor'
-      || authority.objectGeneration !== fence.objectGeneration
-      || !routingIdsEqual(authority.allocation.descriptor.rid, join.actorNodeRid)
-      || authority.allocation.descriptorLifecycleGeneration !== fence.nodeGeneration
-      || authority.authorityOwnerGeneration !== fence.authorityOwnerGeneration
-      || authority.ownerLeaseGeneration !== fence.ownerLeaseGeneration
+      authority.allocation.state !== 'active' ||
+      authority.allocation.objectKind !== 'actor' ||
+      authority.objectGeneration !== fence.objectGeneration ||
+      !routingIdsEqual(authority.allocation.descriptor.rid, join.actorNodeRid) ||
+      authority.allocation.descriptorLifecycleGeneration !== fence.nodeGeneration ||
+      authority.authorityOwnerGeneration !== fence.authorityOwnerGeneration ||
+      authority.ownerLeaseGeneration !== fence.ownerLeaseGeneration
     ) {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.RequestProtocolError,
@@ -199,14 +206,16 @@ export class ZLinkRemoteActorJoinReceiver {
   }
 }
 
-type JoinAuthorityFence = ZLinkCanonicalActorJoinAuthorityFence | {
-  readonly actorId: string;
-  readonly actorNodeRid: RoutingId;
-  readonly actorGeneration: string;
-  readonly actorNodeGeneration: string;
-  readonly expectedAuthorityOwnerGeneration: string;
-  readonly expectedOwnerLeaseGeneration: string;
-};
+type JoinAuthorityFence =
+  | ZLinkCanonicalActorJoinAuthorityFence
+  | {
+      readonly actorId: string;
+      readonly actorNodeRid: RoutingId;
+      readonly actorGeneration: string;
+      readonly actorNodeGeneration: string;
+      readonly expectedAuthorityOwnerGeneration: string;
+      readonly expectedOwnerLeaseGeneration: string;
+    };
 
 function hasAuthorityFence(
   join: ReturnType<typeof decodeRemoteActorJoinPayload>
@@ -220,10 +229,10 @@ function hasAuthorityFence(
     join.expectedAuthorityOwnerGeneration,
     join.expectedOwnerLeaseGeneration
   ];
-  if (fields.every(value => value === undefined)) {
+  if (fields.every((value) => value === undefined)) {
     return false;
   }
-  if (fields.some(value => value === undefined)) {
+  if (fields.some((value) => value === undefined)) {
     throw createInternalFrameworkException(
       ZLinkFrameworkInternalErrorKind.RequestProtocolError,
       `Actor '${join.actorId}' Join carries an incomplete Authority fence.`
@@ -257,10 +266,10 @@ function decodeJoinAuthorityFence(join: JoinAuthorityFence): {
   // object/owner generations are bounded counters; the MeshNode lifecycle is
   // an opaque full-range token, for which only zero denotes absence.
   if (
-    objectGeneration <= 0n
-    || nodeGeneration === 0n
-    || authorityOwnerGeneration <= 0n
-    || ownerLeaseGeneration <= 0n
+    objectGeneration <= 0n ||
+    nodeGeneration === 0n ||
+    authorityOwnerGeneration <= 0n ||
+    ownerLeaseGeneration <= 0n
   ) {
     throw createInternalFrameworkException(
       ZLinkFrameworkInternalErrorKind.RequestProtocolError,

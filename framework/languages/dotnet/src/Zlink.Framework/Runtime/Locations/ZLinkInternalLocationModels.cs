@@ -11,7 +11,7 @@ internal enum ZLinkLocationAutoConnectType
     ClientServer = 2,
     DealerMesh = 3,
     Fanout = 4,
-    SpotMesh = 5
+    SpotMesh = 5,
 }
 
 internal readonly record struct ZLinkSpotLocationKey(string SpotId);
@@ -32,7 +32,8 @@ internal sealed record ZLinkSpotLocation(
     string SpotType,
     string OwnerId,
     long LeaseGeneration,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt
+);
 
 /// <summary>
 /// Runtime projection for the current location of one Actor. Authority and
@@ -50,4 +51,5 @@ internal sealed record ZLinkActorLocation(
     ZLinkSpotKind SpotKind,
     string OwnerId,
     long LeaseGeneration,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt
+);

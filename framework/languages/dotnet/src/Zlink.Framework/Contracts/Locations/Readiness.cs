@@ -13,5 +13,6 @@ public interface IZLinkLocationReadiness
         string meshName,
         ZLinkLocationRole role,
         RoutingId? nodeRid = null,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 }

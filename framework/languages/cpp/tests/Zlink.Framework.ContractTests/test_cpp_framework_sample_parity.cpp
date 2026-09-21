@@ -232,8 +232,8 @@ TEST (CppFrameworkSampleParity, BingoClientChecksEveryDocumentedScenarioState)
     const auto root = cpp_language_root () / "samples/Bingo";
     const auto scenario = read_text_file (root / "Client/bingo_client_scenario.hpp");
     const auto contracts = read_text_file (root / "Shared/Contracts/bingo_messages.proto");
-    const auto room =
-      read_text_file (root / "Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/bingo_room_spot.hpp");
+    const auto room = read_text_file (
+      root / "Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/bingo_room_spot.hpp");
     const auto runner = read_text_file (root / "run_sample.sh");
 
     EXPECT_NE (scenario.find ("client1_joined.payload.state ().players ()"), std::string::npos)
@@ -285,10 +285,10 @@ TEST (CppFrameworkSampleParity, BingoRoomGameCopyOwnsItsPlayerState)
 TEST (CppFrameworkSampleParity, BingoMatchmakingUsesInstanceSpotAndRedisReservation)
 {
     const auto api = read_text_file (cpp_language_root ()
-                                / "samples/Bingo/Server/Api/Handlers/match_bingo_handler.hpp");
+                                     / "samples/Bingo/Server/Api/Handlers/match_bingo_handler.hpp");
     const auto store = read_text_file (cpp_language_root ()
-                                  / "samples/Bingo/Server/Matchmaking/Infrastructure/Redis/"
-                                    "redis_bingo_match_reservation_store.hpp");
+                                       / "samples/Bingo/Server/Matchmaking/Infrastructure/Redis/"
+                                         "redis_bingo_match_reservation_store.hpp");
 
     EXPECT_NE (api.find (".instance_spot (sample_names_t::matchmaker_spot)"), std::string::npos);
     EXPECT_NE (api.find (".get_or_create ("), std::string::npos);
@@ -299,10 +299,10 @@ TEST (CppFrameworkSampleParity, BingoMatchmakingUsesInstanceSpotAndRedisReservat
 
 TEST (CppFrameworkSampleParity, BingoRewardSubscriptionDoesNotDriveRoomCleanup)
 {
-    const auto handler =
-      read_text_file (cpp_language_root ()
-                 / "samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/Handlers/"
-                   "bingo_reward_acquired_event_handler.hpp");
+    const auto handler = read_text_file (
+      cpp_language_root ()
+      / "samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/Handlers/"
+        "bingo_reward_acquired_event_handler.hpp");
 
     EXPECT_EQ (handler.find ("leave_finished_actors"), std::string::npos);
     EXPECT_NE (handler.find ("bingo_reward_announced_notify_t"), std::string::npos);
@@ -312,8 +312,8 @@ TEST (CppFrameworkSampleParity, BingoRoomClosesAfterItsLastActorLeaves)
 {
     const auto room =
       read_text_file (cpp_language_root ()
-                 / "samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/"
-                   "bingo_room_spot.hpp");
+                      / "samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/"
+                        "bingo_room_spot.hpp");
 
     EXPECT_NE (room.find ("if (actors.empty () && observers.empty ())"), std::string::npos)
       << "Bingo room must close only after both player and observer occupancy are empty";
@@ -323,10 +323,10 @@ TEST (CppFrameworkSampleParity, BingoRoomClosesAfterItsLastActorLeaves)
 
 TEST (CppFrameworkSampleParity, BingoFinalCleanupGuardsRelocationAfterClose)
 {
-    const auto handler =
-      read_text_file (cpp_language_root ()
-                 / "samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/Handlers/"
-                   "bingo_room_draw_timer_handler.hpp");
+    const auto handler = read_text_file (
+      cpp_language_root ()
+      / "samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/Handlers/"
+        "bingo_room_draw_timer_handler.hpp");
 
     const auto cleanup = handler.find ("co_await leave_finished_actors ()");
     const auto occupancy_guard = handler.find ("if (!actors.empty () || !observers.empty ())");
@@ -353,11 +353,13 @@ TEST (CppFrameworkSampleParity, DomainOwnsBingoJoinAndSupportChatTimeoutDecision
       / "samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/bingo_room_spot.hpp");
     EXPECT_NE (bingo_domain.find ("bingo_room_join_result_t"), std::string::npos);
     EXPECT_NE (bingo_domain.find ("game_started"), std::string::npos);
-    EXPECT_NE (bingo_spot.find ("_game.join (actor.actor_id"), std::string::npos);
+    // Whitespace-insensitive: the formatter decides where the argument list breaks.
+    EXPECT_NE (collapse_whitespace (bingo_spot).find ("_game.join ( actor.actor_id"),
+               std::string::npos);
     EXPECT_EQ (bingo_spot.find ("state.players.size () == 2"), std::string::npos);
 
-    const auto conversation =
-      read_text_file (root / "samples/SupportChat/Server/Support/Domain/SupportChat/conversation.hpp");
+    const auto conversation = read_text_file (
+      root / "samples/SupportChat/Server/Support/Domain/SupportChat/conversation.hpp");
     const auto support = read_text_file (root / "samples/SupportChat/Server/Support/main.cpp");
     EXPECT_NE (conversation.find ("advance_time"), std::string::npos);
     EXPECT_NE (conversation.find ("_close_deadline_unix_ms"), std::string::npos);
@@ -369,9 +371,10 @@ TEST (CppFrameworkSampleParity, DomainOwnsBingoJoinAndSupportChatTimeoutDecision
 TEST (CppFrameworkSampleParity, SupportChatServingPathUsesAgentAssignmentApplicationService)
 {
     const auto root = cpp_language_root ();
-    const auto assignment = read_text_file (root
-                                       / "samples/SupportChat/Server/Support/Application/"
-                                         "ConversationAssignment/agent_assignment_service.hpp");
+    const auto assignment =
+      read_text_file (root
+                      / "samples/SupportChat/Server/Support/Application/"
+                        "ConversationAssignment/agent_assignment_service.hpp");
     const auto support = read_text_file (root / "samples/SupportChat/Server/Support/main.cpp");
 
     EXPECT_NE (assignment.find ("assign_for_conversation"), std::string::npos);
@@ -384,7 +387,8 @@ TEST (CppFrameworkSampleParity, SupportChatServingPathUsesAgentAssignmentApplica
 TEST (CppFrameworkSampleParity, SupportChatSessionRelaysOpenConversationUnchanged)
 {
     const auto root = cpp_language_root ();
-    const auto messages = read_text_file (root / "samples/SupportChat/Shared/Contracts/messages.hpp");
+    const auto messages =
+      read_text_file (root / "samples/SupportChat/Shared/Contracts/messages.hpp");
     const auto session = read_text_file (root / "samples/SupportChat/Server/Session/main.cpp");
     const auto support = read_text_file (root / "samples/SupportChat/Server/Support/main.cpp");
 
@@ -480,16 +484,17 @@ TEST (CppFrameworkSampleParity, TicTacToeUsesDotNetSamplePacketSurface)
     EXPECT_EQ (first_move.next_turn, tictactoe_marks_t::o);
 
     const auto game_source = read_text_file (cpp_language_root ()
-                                        / "samples/TicTacToe/Server/Play/Infrastructure/ZLink/"
-                                          "Spots/TicTacToeGameSpot/tictactoe_game_spot.hpp");
+                                             / "samples/TicTacToe/Server/Play/Infrastructure/ZLink/"
+                                               "Spots/TicTacToeGameSpot/tictactoe_game_spot.hpp");
     EXPECT_NE (game_source.find ("add_actor_request<&tictactoe_game_spot_t::place_mark>"),
                std::string::npos);
     EXPECT_NE (game_source.find ("add_actor_send<&tictactoe_game_spot_t::leave_game>"),
                std::string::npos);
 
-    const auto entry_source = read_text_file (cpp_language_root ()
-                                         / "samples/TicTacToe/Server/Play/Infrastructure/ZLink/"
-                                           "Spots/EntrySpot/tictactoe_entry_spot.hpp");
+    const auto entry_source =
+      read_text_file (cpp_language_root ()
+                      / "samples/TicTacToe/Server/Play/Infrastructure/ZLink/"
+                        "Spots/EntrySpot/tictactoe_entry_spot.hpp");
     EXPECT_NE (entry_source.find ("add_actor_send<&tictactoe_entry_spot_t::join_game>"),
                std::string::npos);
     EXPECT_NE (entry_source.find ("add_actor_request<&tictactoe_entry_spot_t::observe_milestone>"),
@@ -501,9 +506,10 @@ TEST (CppFrameworkSampleParity, TicTacToeUsesDotNetSamplePacketSurface)
 
 TEST (CppFrameworkSampleParity, TicTacToeRegistersDeferredRoomJoin)
 {
-    const auto handler = read_text_file (cpp_language_root ()
-                                    / "samples/TicTacToe/Server/Play/Infrastructure/ZLink/Spots/"
-                                      "EntrySpot/Handlers/play_actor_join_game_handler.hpp");
+    const auto handler =
+      read_text_file (cpp_language_root ()
+                      / "samples/TicTacToe/Server/Play/Infrastructure/ZLink/Spots/"
+                        "EntrySpot/Handlers/play_actor_join_game_handler.hpp");
     EXPECT_NE (handler.find (".defer ()"), std::string::npos)
       << "actor join must register the exact deferred terminal";
     EXPECT_NE (handler.find ("track_deferred_join"), std::string::npos)
@@ -533,8 +539,7 @@ TEST (CppFrameworkSampleParity, SamplesConformToLifecycleAndDeliveryContracts)
                std::string::npos);
     EXPECT_EQ (bingo_host.find (".set_routing_id ("), std::string::npos);
     EXPECT_EQ (bingo_session.find ("notify_disconnected"), std::string::npos);
-    EXPECT_NE (bingo_session.find ("bingo-lifecycle session-disconnect actor="),
-               std::string::npos);
+    EXPECT_NE (bingo_session.find ("bingo-lifecycle session-disconnect actor="), std::string::npos);
 
     const auto tictactoe_host =
       read_text_file (samples / "TicTacToe/Server/Play/play_server_host_factory.hpp");
@@ -554,19 +559,15 @@ TEST (CppFrameworkSampleParity, SamplesConformToLifecycleAndDeliveryContracts)
     EXPECT_NE (shoppingmall.find (".recreate_on_relocation ()"), std::string::npos);
     EXPECT_NE (shoppingmall.find ("co_await _context.close ()"), std::string::npos);
 
-    const auto zoneworld =
-      read_text_file (samples / "ZoneWorld/Server/ZoneNode/main.cpp");
-    const auto zoneworld_relocation = read_text_file (
-      samples / "ZoneWorld/Server/ZoneNode/player_actor_relocation_adapter.hpp");
-    EXPECT_NE (zoneworld.find (
-                 ".add_handler<&zone_spot_t::update_position> "
-                 "(update_position_msg_t::packet_name)"),
+    const auto zoneworld = read_text_file (samples / "ZoneWorld/Server/ZoneNode/main.cpp");
+    const auto zoneworld_relocation =
+      read_text_file (samples / "ZoneWorld/Server/ZoneNode/player_actor_relocation_adapter.hpp");
+    EXPECT_NE (zoneworld.find (".add_handler<&zone_spot_t::update_position> "
+                               "(update_position_msg_t::packet_name)"),
                std::string::npos);
-    EXPECT_NE (zoneworld.find ("send_to_spot (_context.spot_id ()"),
-               std::string::npos);
+    EXPECT_NE (zoneworld.find ("send_to_spot (_context.spot_id ()"), std::string::npos);
     EXPECT_NE (zoneworld.find ("update_position_msg_t{"), std::string::npos);
-    EXPECT_NE (zoneworld_relocation.find (
-                 "completed_join_operations.contains (operation)"),
+    EXPECT_NE (zoneworld_relocation.find ("completed_join_operations.contains (operation)"),
                std::string::npos);
     EXPECT_NE (zoneworld_relocation.find ("remember_join_operation (operation)"),
                std::string::npos);
@@ -707,11 +708,11 @@ TEST (CppFrameworkSampleParity, DeliveryDispatchUsesDotNetSampleStatusSurface)
           << "common DeliveryDispatch doc still contains stale message name " << stale_message;
     }
 
-    const auto shared_contract =
-      read_text_file (cpp_language_root () / "samples/DeliveryDispatch/Shared/Contracts/messages.hpp");
+    const auto shared_contract = read_text_file (
+      cpp_language_root () / "samples/DeliveryDispatch/Shared/Contracts/messages.hpp");
     const auto tracking_handler =
       read_text_file (cpp_language_root ()
-                 / "samples/DeliveryDispatch/Server/Tracking/Handlers/tracking_handlers.hpp");
+                      / "samples/DeliveryDispatch/Server/Tracking/Handlers/tracking_handlers.hpp");
     EXPECT_EQ (tracking_handler.find ("sample_names_t::customer_id"), std::string::npos)
       << "Tracking must route each status update with DeliveryStatusChangedReq.customerId";
     for (const auto *extra_message :
@@ -775,8 +776,8 @@ TEST (CppFrameworkSampleParity, GameQuestActionsMatchCommonRequestAndSendSemanti
           << "GameQuest must not expose an undeclared public message " << extra;
     }
 
-    const auto scenario =
-      read_text_file (cpp_language_root () / "samples/GameQuest/Client/gamequest_client_scenario.hpp");
+    const auto scenario = read_text_file (
+      cpp_language_root () / "samples/GameQuest/Client/gamequest_client_scenario.hpp");
     EXPECT_NE (scenario.find ("api_a.send (collect_item_req_t"), std::string::npos);
     EXPECT_NE (scenario.find ("api_b.send (collect_item_req_t"), std::string::npos);
     EXPECT_NE (scenario.find ("alice_b.send (enter_area_req_t"), std::string::npos);
@@ -801,8 +802,8 @@ TEST (CppFrameworkSampleParity, GameQuestDoesNotExposeUnusedOrEvidenceMessagesAs
 
 TEST (CppFrameworkSampleParity, GameQuestProgressChecksRejectOvercount)
 {
-    const auto scenario =
-      read_text_file (cpp_language_root () / "samples/GameQuest/Client/gamequest_client_scenario.hpp");
+    const auto scenario = read_text_file (
+      cpp_language_root () / "samples/GameQuest/Client/gamequest_client_scenario.hpp");
     EXPECT_EQ (scenario.find ("progress.current_count >= current_count"), std::string::npos)
       << "GameQuest idempotency checks must reject duplicated progress";
     EXPECT_NE (scenario.find ("progress.current_count == current_count"), std::string::npos)
@@ -824,7 +825,8 @@ TEST (CppFrameworkSampleParity, ShoppingMallStartsAfterWorkflowPeerReadiness)
 {
     const auto api =
       read_text_file (cpp_language_root () / "samples/ShoppingMall/Server/CommerceApi/main.cpp");
-    const auto runner = read_text_file (cpp_language_root () / "samples/ShoppingMall/run_sample.sh");
+    const auto runner =
+      read_text_file (cpp_language_root () / "samples/ShoppingMall/run_sample.sh");
 
     //  Sample spec section 10.1 forbids proving readiness with a runner-sent request: the old
     //  /ready?targetRid= probe and its wait_route_ready helper were removed. Readiness is now a
@@ -847,8 +849,8 @@ TEST (CppFrameworkSampleParity, TicTacToeDisconnectRemovesMilestoneObserver)
 {
     const auto entry =
       read_text_file (cpp_language_root ()
-                 / "samples/TicTacToe/Server/Play/Infrastructure/ZLink/Spots/EntrySpot/"
-                   "tictactoe_entry_spot.hpp");
+                      / "samples/TicTacToe/Server/Play/Infrastructure/ZLink/Spots/EntrySpot/"
+                        "tictactoe_entry_spot.hpp");
     const auto disconnect = entry.find ("task_t<void> on_disconnect_actor");
     ASSERT_NE (disconnect, std::string::npos);
     const auto callback_end = entry.find ("std::vector<std::string> created_actor_ids", disconnect);
@@ -862,8 +864,8 @@ TEST (CppFrameworkSampleParity, TicTacToeDisconnectRemovesMilestoneObserver)
 TEST (CppFrameworkSampleParity, TicTacToeOwnsTurnTimeoutLifecycle)
 {
     const auto root = cpp_language_root () / "samples/TicTacToe/Server/Play";
-    const auto spot =
-      read_text_file (root / "Infrastructure/ZLink/Spots/TicTacToeGameSpot/tictactoe_game_spot.hpp");
+    const auto spot = read_text_file (
+      root / "Infrastructure/ZLink/Spots/TicTacToeGameSpot/tictactoe_game_spot.hpp");
     const auto match = read_text_file (root / "Domain/TicTacToe/tictactoe_match.hpp");
     const auto messages =
       read_text_file (cpp_language_root () / "samples/TicTacToe/Shared/Contracts/messages.hpp");
@@ -878,10 +880,10 @@ TEST (CppFrameworkSampleParity, TicTacToeOwnsTurnTimeoutLifecycle)
 
 TEST (CppFrameworkSampleParity, TicTacToeSpotComposesItsDomainMatch)
 {
-    const auto spot =
-      read_text_file (cpp_language_root ()
-                 / "samples/TicTacToe/Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/"
-                   "tictactoe_game_spot.hpp");
+    const auto spot = read_text_file (
+      cpp_language_root ()
+      / "samples/TicTacToe/Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/"
+        "tictactoe_game_spot.hpp");
 
     EXPECT_EQ (spot.find ("public tictactoe_match_t"), std::string::npos)
       << "framework Spot must not inherit the domain aggregate";
@@ -897,8 +899,8 @@ TEST (CppFrameworkSampleParity, TicTacToeNotificationPublisherDeliversToRoomActo
 {
     const auto publisher =
       read_text_file (cpp_language_root ()
-                 / "samples/TicTacToe/Server/Play/Infrastructure/ZLink/Spots/"
-                   "TicTacToeGameSpot/Notifications/game_notification_publisher.hpp");
+                      / "samples/TicTacToe/Server/Play/Infrastructure/ZLink/Spots/"
+                        "TicTacToeGameSpot/Notifications/game_notification_publisher.hpp");
 
     EXPECT_NE (publisher.find ("bound_session ().send"), std::string::npos)
       << "the notification publisher must deliver through each room actor session";
@@ -926,7 +928,7 @@ TEST (CppFrameworkSampleParity, DeliveryDispatchTrackingUsesActorDirectory)
 {
     const auto handler =
       read_text_file (cpp_language_root ()
-                 / "samples/DeliveryDispatch/Server/Tracking/Handlers/tracking_handlers.hpp");
+                      / "samples/DeliveryDispatch/Server/Tracking/Handlers/tracking_handlers.hpp");
 
     EXPECT_NE (handler.find ("actor_directory_t"), std::string::npos)
       << "Tracking must use the framework actor location abstraction";
@@ -1402,8 +1404,8 @@ TEST (CppFrameworkSampleParity, TicTacToeInventoryAndRunnersMatchCommonRedisCont
 
 TEST (CppFrameworkSampleParity, TicTacToeClientGateChecksCommonContractFields)
 {
-    const auto client =
-      read_text_file (cpp_language_root () / "samples/TicTacToe/Client/tictactoe_client_scenario.hpp");
+    const auto client = read_text_file (cpp_language_root ()
+                                        / "samples/TicTacToe/Client/tictactoe_client_scenario.hpp");
     const auto normalized_client = collapse_whitespace (client);
 
     EXPECT_NE (client.find ("room.play_nodes.size () == room.play_endpoints.size ()"),
@@ -1493,7 +1495,7 @@ TEST (CppFrameworkSampleParity, DeliveryDispatchClientGateChecksStatusArrivalOrd
 {
     const auto client =
       read_text_file (cpp_language_root ()
-                 / "samples/DeliveryDispatch/Client/delivery_dispatch_client_scenario.hpp");
+                      / "samples/DeliveryDispatch/Client/delivery_dispatch_client_scenario.hpp");
 
     EXPECT_NE (client.find ("wait_for_sequence<delivery_status_notify_t>"), std::string::npos);
     EXPECT_NE (client.find ("payload.status == delivery_status_t::assigned"), std::string::npos);
@@ -1652,7 +1654,8 @@ TEST (CppFrameworkSampleParity, SampleActorDestroyFlowStaysInEntrySpot)
 TEST (CppFrameworkSampleParity, TicTacToeHostsUseManualEndpointScaleOutWithActorGatewayRelay)
 {
     const auto tictactoe_root = cpp_language_root () / "samples/TicTacToe";
-    const auto api_factory = read_text_file (tictactoe_root / "Server/Api/api_server_host_factory.hpp");
+    const auto api_factory =
+      read_text_file (tictactoe_root / "Server/Api/api_server_host_factory.hpp");
     const auto client = read_text_file (tictactoe_root / "Client/tictactoe_client_scenario.hpp");
     const auto client_main = read_text_file (tictactoe_root / "Client/main.cpp");
     const auto create_game_handler =
@@ -1761,8 +1764,9 @@ TEST (CppFrameworkSampleParity, TicTacToeHostsUseManualEndpointScaleOutWithActor
                std::string::npos);
     EXPECT_NE (client.find ("reconnected_auth.player.actor_id == client1_auth.player.actor_id"),
                std::string::npos);
-    EXPECT_NE (client.find ("same_state (reconnected_join.payload.state, client1_winning_move.state)"),
-               std::string::npos);
+    EXPECT_NE (
+      client.find ("same_state (reconnected_join.payload.state, client1_winning_move.state)"),
+      std::string::npos);
     EXPECT_EQ (client.find ("run_recreate_check"), std::string::npos);
     EXPECT_EQ (client.find ("tictactoe-client.log"), std::string::npos);
     EXPECT_EQ (client.find ("std::ofstream"), std::string::npos);
@@ -1772,7 +1776,8 @@ TEST (CppFrameworkSampleParity, BingoHostsUseRouteMeshCapabilities)
 {
     const auto bingo_root = cpp_language_root () / "samples/Bingo";
     const auto api_framework = read_text_file (bingo_root / "Server/Api/api_server_framework.hpp");
-    const auto play_factory = read_text_file (bingo_root / "Server/Play/play_server_host_factory.hpp");
+    const auto play_factory =
+      read_text_file (bingo_root / "Server/Play/play_server_host_factory.hpp");
     const auto session_factory =
       read_text_file (bingo_root / "Server/Session/session_server_host_factory.hpp");
     const auto session = read_text_file (bingo_root / "Server/Session/Sessions/bingo_session.hpp");
@@ -2053,11 +2058,9 @@ TEST (CppFrameworkSampleParity, ClientScenariosUseBlockingHttpSubmit)
     for (const auto &relative : client_scenarios) {
         const auto source = read_text_file (cpp_language_root () / "samples" / relative);
         EXPECT_NE (source.find (".submit<"), std::string::npos)
-          << relative.generic_string ()
-          << " must complete HTTP requests synchronously";
+          << relative.generic_string () << " must complete HTTP requests synchronously";
         EXPECT_EQ (source.find (".fetch<"), std::string::npos)
-          << relative.generic_string ()
-          << " must not use the asynchronous body-only terminator";
+          << relative.generic_string () << " must not use the asynchronous body-only terminator";
     }
 }
 
@@ -2140,7 +2143,6 @@ TEST (CppFrameworkSampleParity, CppRunnerPortsAndRedisAreLanguageIsolated)
     EXPECT_NE (tictactoe_ps.find ("Get-ZlinkSamplePorts -Count $Count"), std::string::npos);
     EXPECT_EQ (bingo_ps.find ("TcpListener]::new"), std::string::npos);
     EXPECT_EQ (tictactoe_ps.find ("TcpListener]::new"), std::string::npos);
-
 }
 
 TEST (CppFrameworkSampleParity, CppZoneWorldRunnerUsesCanonicalVerdictLedger)
@@ -2148,10 +2150,9 @@ TEST (CppFrameworkSampleParity, CppZoneWorldRunnerUsesCanonicalVerdictLedger)
     const auto sample_root = cpp_language_root () / "samples/ZoneWorld";
     const auto manifest = read_text_file (sample_root / "sample-manifest.env");
     for (const char *required :
-         {"ZW-A1 ZW-A2 ZW-A3 ZW-A4 ZW-A5",
-          "ZW-B1 ZW-B2 ZW-B3 ZW-B4 ZW-B5 ZW-B6 ZW-B7 ZW-B8", "ZW-C1 ZW-C2 ZW-C3 ZW-C4",
-          "ZW-D1 ZW-D2", "ZW-E1 ZW-E2 ZW-E3 ZW-E4 ZW-E5 ZW-E6", "ZW-F1 ZW-F2 ZW-F3 ZW-F4",
-          "ZW-G1 ZW-G2 ZW-G3 ZW-G4 ZW-G5"}) {
+         {"ZW-A1 ZW-A2 ZW-A3 ZW-A4 ZW-A5", "ZW-B1 ZW-B2 ZW-B3 ZW-B4 ZW-B5 ZW-B6 ZW-B7 ZW-B8",
+          "ZW-C1 ZW-C2 ZW-C3 ZW-C4", "ZW-D1 ZW-D2", "ZW-E1 ZW-E2 ZW-E3 ZW-E4 ZW-E5 ZW-E6",
+          "ZW-F1 ZW-F2 ZW-F3 ZW-F4", "ZW-G1 ZW-G2 ZW-G3 ZW-G4 ZW-G5"}) {
         EXPECT_NE (manifest.find (required), std::string::npos) << required;
     }
 

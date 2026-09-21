@@ -58,13 +58,12 @@ public interface IZLinkSpot
 {
     IZLinkSpotContext Context { get; }
 
-    void Configure()
-    {
-    }
+    void Configure() { }
 
     ValueTask<ZLinkSpotCreateResponse> OnCreateAsync(
         ZLinkMessage request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         return ValueTask.FromResult(ZLinkSpotCreateResponse.Accept());
     }
@@ -76,14 +75,16 @@ public interface IZLinkSpot
 
     ValueTask OnClosingAsync(
         ZLinkSpotClosingContext context,
-        CancellationToken cleanupCancellationToken)
+        CancellationToken cleanupCancellationToken
+    )
     {
         return ValueTask.CompletedTask;
     }
 
     ValueTask OnRelocationReadyCompletedAsync(
         ZLinkSpotRelocationReadyCompletion completion,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         return ValueTask.CompletedTask;
     }
@@ -94,21 +95,23 @@ public enum ZLinkSpotCloseReason
     ExplicitClose = 0,
     HostShutdown = 1,
     RelocationOut = 2,
-    IdleEvicted = 3
+    IdleEvicted = 3,
 }
 
 public readonly record struct ZLinkSpotClosingContext(
     ZLinkSpotCloseReason Reason,
-    DateTimeOffset Deadline);
+    DateTimeOffset Deadline
+);
 
 public enum ZLinkSpotRelocationReadyOutcome
 {
     Continued = 0,
-    Relocated = 1
+    Relocated = 1,
 }
 
 public readonly record struct ZLinkSpotRelocationReadyCompletion(
-    ZLinkSpotRelocationReadyOutcome Outcome);
+    ZLinkSpotRelocationReadyOutcome Outcome
+);
 
 public interface IZLinkSpotRelocationReadyCall
 {
@@ -118,30 +121,24 @@ public interface IZLinkSpotRelocationReadyCall
 public interface IZLinkSpotActorMembershipLifecycle<TActor>
     where TActor : IZLinkActor
 {
-    ValueTask OnJoinedActorAsync(
-        TActor actor,
-        CancellationToken cancellationToken);
+    ValueTask OnJoinedActorAsync(TActor actor, CancellationToken cancellationToken);
 
-    ValueTask OnLeaveActorAsync(
-        TActor actor,
-        CancellationToken cancellationToken);
+    ValueTask OnLeaveActorAsync(TActor actor, CancellationToken cancellationToken);
 
-    ValueTask OnDisconnectActorAsync(
-        TActor actor,
-        CancellationToken cancellationToken)
+    ValueTask OnDisconnectActorAsync(TActor actor, CancellationToken cancellationToken)
     {
         return ValueTask.CompletedTask;
     }
 }
 
-public interface IZLinkUserSpotActorLifecycle<TActor>
-    : IZLinkSpotActorMembershipLifecycle<TActor>
+public interface IZLinkUserSpotActorLifecycle<TActor> : IZLinkSpotActorMembershipLifecycle<TActor>
     where TActor : IZLinkActor
 {
     ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
         string actorId,
         ZLinkMessage request,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 }
 
 public interface IZLinkSpot<TActor> : IZLinkSpot, IZLinkUserSpotActorLifecycle<TActor>
@@ -181,26 +178,15 @@ public interface IZLinkInstanceSpotHandlerRegistry
 
 public interface IZLinkSpotOutbound
 {
-    IZLinkSpotSendCall SendToSpot<TMessage>(
-        string spotId,
-        TMessage message);
+    IZLinkSpotSendCall SendToSpot<TMessage>(string spotId, TMessage message);
 
-    IZLinkSpotRequestCall RequestToSpot<TRequest>(
-        string spotId,
-        TRequest request);
+    IZLinkSpotRequestCall RequestToSpot<TRequest>(string spotId, TRequest request);
 
-    IZLinkPublishCall Publish<TEvent>(
-        string channelName,
-        string topic,
-        TEvent message);
+    IZLinkPublishCall Publish<TEvent>(string channelName, string topic, TEvent message);
 
-    IZLinkSendCall SendToChannel<TMessage>(
-        string channelName,
-        TMessage message);
+    IZLinkSendCall SendToChannel<TMessage>(string channelName, TMessage message);
 
-    IZLinkRequestCall RequestToChannel<TRequest>(
-        string channelName,
-        TRequest request);
+    IZLinkRequestCall RequestToChannel<TRequest>(string channelName, TRequest request);
 }
 
 public interface IZLinkSpotClient
@@ -208,7 +194,6 @@ public interface IZLinkSpotClient
     IZLinkSpotSendCall SendToSpot<TMessage>(string spotId, TMessage message);
 
     IZLinkSpotRequestCall RequestToSpot<TRequest>(string spotId, TRequest request);
-
 }
 
 public interface IZLinkSpotSendCall : IZLinkMetadataCall<IZLinkSpotSendCall>
@@ -253,14 +238,15 @@ public interface IZLinkSpotCommonContext
         string name,
         TimeSpan period,
         ZLinkTimerOptions? options = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
         where THandler : class;
 
-    IZLinkWorkerCall<TResult> RunCpuWorker<TResult>(
-        Func<CancellationToken, TResult> work);
+    IZLinkWorkerCall<TResult> RunCpuWorker<TResult>(Func<CancellationToken, TResult> work);
 
     IZLinkWorkerCall<TResult> RunIoWorker<TResult>(
-        Func<CancellationToken, ValueTask<TResult>> work);
+        Func<CancellationToken, ValueTask<TResult>> work
+    );
 }
 
 public interface IZLinkSpotContext : IZLinkSpotCommonContext
@@ -269,21 +255,16 @@ public interface IZLinkSpotContext : IZLinkSpotCommonContext
 
     IZLinkSpotRelocationReadyCall RelocationReady();
 
-    ValueTask LeaveActorAsync(
-        IZLinkActor actor,
-        CancellationToken cancellationToken = default);
+    ValueTask LeaveActorAsync(IZLinkActor actor, CancellationToken cancellationToken = default);
 
-    ValueTask<bool> CloseAsync(
-        CancellationToken cancellationToken = default);
+    ValueTask<bool> CloseAsync(CancellationToken cancellationToken = default);
 }
 
 public interface IZLinkEntrySpot
 {
     IZLinkEntrySpotContext Context { get; }
 
-    void Configure()
-    {
-    }
+    void Configure() { }
 
     ValueTask OnInitializeAsync(CancellationToken cancellationToken)
     {
@@ -292,20 +273,23 @@ public interface IZLinkEntrySpot
 
     ValueTask OnClosingAsync(
         ZLinkSpotClosingContext context,
-        CancellationToken cleanupCancellationToken)
+        CancellationToken cleanupCancellationToken
+    )
     {
         return ValueTask.CompletedTask;
     }
 }
 
 public interface IZLinkEntrySpot<TActor>
-    : IZLinkEntrySpot, IZLinkSpotActorMembershipLifecycle<TActor>
+    : IZLinkEntrySpot,
+        IZLinkSpotActorMembershipLifecycle<TActor>
     where TActor : IZLinkActor
 {
     ValueTask<ZLinkActorCreateResponse> OnCreateActorAsync(
         TActor actor,
         ZLinkMessage createRequest,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         return ValueTask.FromResult(ZLinkActorCreateResponse.Accept());
     }
@@ -315,9 +299,7 @@ public interface IZLinkEntrySpotContext : IZLinkSpotCommonContext
 {
     IZLinkSpotHandlerRegistry Handlers { get; }
 
-    ValueTask DestroyActorAsync(
-        IZLinkActor actor,
-        CancellationToken cancellationToken = default);
+    ValueTask DestroyActorAsync(IZLinkActor actor, CancellationToken cancellationToken = default);
 }
 
 public interface IZLinkSpotActorSendHandler<TSpot, TActor, in TMessage>
@@ -329,7 +311,8 @@ public interface IZLinkSpotActorSendHandler<TSpot, TActor, in TMessage>
         TActor actor,
         IZLinkMessageContext context,
         TMessage message,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 }
 
 public interface IZLinkSpotActorRequestHandler<TSpot, TActor, in TRequest, TReply>
@@ -341,7 +324,8 @@ public interface IZLinkSpotActorRequestHandler<TSpot, TActor, in TRequest, TRepl
         TActor actor,
         IZLinkMessageContext context,
         TRequest request,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 }
 
 public interface IZLinkEntrySpotActorSendHandler<TEntrySpot, TActor, in TMessage>
@@ -353,7 +337,8 @@ public interface IZLinkEntrySpotActorSendHandler<TEntrySpot, TActor, in TMessage
         TActor actor,
         IZLinkMessageContext context,
         TMessage message,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 }
 
 public interface IZLinkEntrySpotActorRequestHandler<TEntrySpot, TActor, in TRequest, TReply>
@@ -365,5 +350,6 @@ public interface IZLinkEntrySpotActorRequestHandler<TEntrySpot, TActor, in TRequ
         TActor actor,
         IZLinkMessageContext context,
         TRequest request,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 }

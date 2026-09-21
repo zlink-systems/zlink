@@ -11,20 +11,21 @@ internal enum ZLinkBackendSpotDispatchEvent
     ActorJoinReadable = 3,
     ActorReadable = 4,
     SubscribeReadable = 5,
-    ActorLifecycleReadable = 6
+    ActorLifecycleReadable = 6,
 }
 
 internal enum ZLinkBackendActorLifecycleEventKind
 {
     Joined = 1,
     Left = 2,
-    Disconnected = 3
+    Disconnected = 3,
 }
 
 internal readonly record struct ZLinkBackendActorRef(
     RoutingId NodeRid,
     string ActorId,
-    ulong Generation);
+    ulong Generation
+);
 
 internal interface IZLinkBackendAuthorityObserver
 {
@@ -34,7 +35,8 @@ internal interface IZLinkBackendAuthorityObserver
         ZLinkBackendActorRef actor,
         ulong targetNodeGeneration,
         ulong authorityOwnerGeneration,
-        ulong ownerLeaseGeneration);
+        ulong ownerLeaseGeneration
+    );
 
     void ObserveSpotAuthority(
         RoutingId nodeRid,
@@ -42,16 +44,15 @@ internal interface IZLinkBackendAuthorityObserver
         ulong objectGeneration,
         ulong targetNodeGeneration,
         ulong authorityOwnerGeneration,
-        ulong ownerLeaseGeneration);
+        ulong ownerLeaseGeneration
+    );
 }
 
 internal interface IZLinkBackendRequestSourceFenceObserver
 {
-    void SetLocalRequestSourceFence(
-        ZLinkServiceWireCodec.RequestSourceFence source);
+    void SetLocalRequestSourceFence(ZLinkServiceWireCodec.RequestSourceFence source);
 
-    void ObserveRequestSourceFence(
-        ZLinkServiceWireCodec.RequestSourceFence source);
+    void ObserveRequestSourceFence(ZLinkServiceWireCodec.RequestSourceFence source);
 }
 
 internal interface IZLinkBackendLocalActorAuthorityReader
@@ -59,7 +60,8 @@ internal interface IZLinkBackendLocalActorAuthorityReader
     bool TryGetLocalActorAuthority(
         ZLinkBackendActorRef actor,
         out ulong authorityOwnerGeneration,
-        out ulong ownerLeaseGeneration);
+        out ulong ownerLeaseGeneration
+    );
 }
 
 // The canonical command-28 transport is deliberately narrower than the
@@ -80,20 +82,21 @@ internal readonly record struct ZLinkBackendCanonicalActorJoinRequest(
     ulong TargetOwnerLeaseGeneration,
     string PacketName,
     string ContentType,
-    ReadOnlyMemory<byte> ApplicationPayload);
+    ReadOnlyMemory<byte> ApplicationPayload
+);
 
 internal interface IZLinkBackendCanonicalActorJoin
 {
     // False is an ordinary capability/authority fallback decision.  The
     // caller retains the established JSON admission path in that case.
-    bool CanRequestCanonicalActorJoin(
-        ZLinkBackendCanonicalActorJoinRequest request);
+    bool CanRequestCanonicalActorJoin(ZLinkBackendCanonicalActorJoinRequest request);
 
     bool RequestCanonicalActorJoin(
         ZLinkBackendCanonicalActorJoinRequest request,
         ActorJoinCallback callback,
         TimeSpan? timeout,
-        out ulong correlation);
+        out ulong correlation
+    );
 }
 
 internal readonly record struct ZLinkBackendActorJoinResult(
@@ -108,7 +111,8 @@ internal readonly record struct ZLinkBackendActorJoinResult(
     //  Defaulted so existing/test constructors need not thread it.
     int FailureErrno = 0,
     ulong JoinedSpotGeneration = 0,
-    string ReplyContentType = "");
+    string ReplyContentType = ""
+);
 
 internal readonly record struct ZLinkBackendActorJoinEntrySpotResult(
     RequestResult Result,
@@ -118,15 +122,18 @@ internal readonly record struct ZLinkBackendActorJoinEntrySpotResult(
     string JoinedSpotId,
     ulong JoinEpoch,
     uint Flags,
-    int FailureErrno = 0);
+    int FailureErrno = 0
+);
 
 internal delegate void ActorJoinCallback(
     ZLinkBackendActorJoinResult result,
-    IReadOnlyList<Message> parts);
+    IReadOnlyList<Message> parts
+);
 
 internal delegate void ActorJoinEntrySpotCallback(
     ZLinkBackendActorJoinEntrySpotResult result,
-    IReadOnlyList<Message> parts);
+    IReadOnlyList<Message> parts
+);
 
 internal readonly record struct ZLinkBackendSpotActorLifecycleInfo(
     ZLinkBackendActorRef? PreviousActor,
@@ -134,12 +141,14 @@ internal readonly record struct ZLinkBackendSpotActorLifecycleInfo(
     string? PreviousSpotId,
     string? CurrentSpotId,
     ulong JoinEpoch,
-    uint Flags);
+    uint Flags
+);
 
 internal readonly record struct ZLinkBackendSpotActorLifecycleEvent(
     ZLinkBackendActorLifecycleEventKind Kind,
     ZLinkBackendSpotActorLifecycleInfo Info,
-    ZLinkApplicationJobQueueLease? ApplicationJobAdmission = null);
+    ZLinkApplicationJobQueueLease? ApplicationJobAdmission = null
+);
 
 internal readonly record struct ZLinkBackendActorRouteContext(
     MeshOperationId OperationId,
@@ -151,7 +160,8 @@ internal readonly record struct ZLinkBackendActorRouteContext(
     uint ReplyFlags = 0,
     string? ReplyCapability = null,
     ulong DeadlineUnixMs = 0,
-    bool IsBoundSessionRoute = false)
+    bool IsBoundSessionRoute = false
+)
 {
     internal bool IsDirectRoute => OperationId != default && !IsBoundSessionRoute;
 }
@@ -169,35 +179,40 @@ internal sealed record ZLinkBackendActorPart(
     ulong SourceNodeGeneration = 0,
     ZLinkServiceWireCodec.RequestSourceFence? RequestSource = null,
     Func<IReadOnlyList<Message>, SubmitResult>? DirectReply = null,
-    ReadOnlyMemory<byte> ApplicationMetadata = default);
+    ReadOnlyMemory<byte> ApplicationMetadata = default
+);
 
 internal interface IZLinkBackendActorMessageFollowIngress
 {
-    void SetActorMessageFollowIngressAdmission(
-        Func<ActorMessageFollowIngress, bool> admission);
+    void SetActorMessageFollowIngressAdmission(Func<ActorMessageFollowIngress, bool> admission);
 
     void SetActorMessageFollowIngressHandler(
-        Func<IReadOnlyList<ZLinkBackendActorPart>, bool> handler);
+        Func<IReadOnlyList<ZLinkBackendActorPart>, bool> handler
+    );
 }
 
 internal interface IZLinkBackendMessageFollowNotifications
 {
     void SetMessageFollowNotificationHandler(
-        Action<RoutingId, ZLinkServiceWireCodec.MessageFollowRecord> handler);
+        Action<RoutingId, ZLinkServiceWireCodec.MessageFollowRecord> handler
+    );
 
     bool TrySendMessageFollowNotification(
         RoutingId targetNodeRid,
-        ZLinkServiceWireCodec.MessageFollowRecord record);
+        ZLinkServiceWireCodec.MessageFollowRecord record
+    );
 }
 
 internal interface IZLinkBackendBoundSessionReplacementNotifications
 {
     void SetBoundSessionReplacedNotificationHandler(
-        Action<RoutingId, ZLinkServiceWireCodec.BoundSessionReplacedRecord> handler);
+        Action<RoutingId, ZLinkServiceWireCodec.BoundSessionReplacedRecord> handler
+    );
 
     bool TrySendBoundSessionReplacedNotification(
         RoutingId targetNodeRid,
-        ZLinkServiceWireCodec.BoundSessionReplacedRecord record);
+        ZLinkServiceWireCodec.BoundSessionReplacedRecord record
+    );
 }
 
 internal class ZLinkBackendActorJoinRequest(
@@ -208,7 +223,8 @@ internal class ZLinkBackendActorJoinRequest(
     ulong joinEpoch,
     Message message,
     IReadOnlyList<Message> parts,
-    ZLinkCanonicalActorJoin? canonical = null) : IDisposable
+    ZLinkCanonicalActorJoin? canonical = null
+) : IDisposable
 {
     private IDisposable? _payloadOwner;
     public ZLinkBackendActorRef SourceActor { get; } = sourceActor;
@@ -258,18 +274,21 @@ internal class ZLinkBackendActorJoinRequest(
 // framework-owned adapter used by Store admission and typed Spot dispatch.
 internal sealed record ZLinkCanonicalActorJoin(
     ZLinkServiceWireCodec.ActorJoinRequestRecord Request,
-    ZLinkApplicationPayloadEnvelope? Payload);
+    ZLinkApplicationPayloadEnvelope? Payload
+);
 
 internal readonly record struct ZLinkBackendSpotDispatchInfo(
     ZLinkBackendSpotDispatchEvent Event,
     Action? DrainChannelReply = null,
     IReadOnlyList<ZLinkBackendActorPart>? ActorParts = null,
     IReadOnlyList<ZLinkBackendRouteReceived>? RoutedMessages = null,
-    IDisposable? ActorPayloadOwner = null);
+    IDisposable? ActorPayloadOwner = null
+);
 
 internal readonly record struct ZLinkBackendSocketMonitorEvent(
     ZLinkSocketNativeEventType NativeEvent,
     RoutingId? RoutingId,
     string LocalAddr,
     string RemoteAddr,
-    ulong Value);
+    ulong Value
+);

@@ -1,26 +1,26 @@
 package systems.zlink.framework.runtime;
 
-import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
-import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
-
-import systems.zlink.framework.runtime.internal.backend.*;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.contracts.core.Zlink;
+import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorContext;
 import systems.zlink.framework.actors.ZLinkActorCreateResult;
 import systems.zlink.framework.actors.ZLinkActorFactory;
-import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
+import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
+import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotContext;
+
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 final class ActorManagerTest {
     @Test
@@ -28,34 +28,42 @@ final class ActorManagerTest {
         Zlink.version();
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(new ZLinkInMemoryLocationStore());
-        { var node = options.addRouteMesh("game");
+        {
+            var node = options.addRouteMesh("game");
             node.listen("inproc://play-router-" + System.nanoTime());
-            node.objects().server().addSpotFactory(
-                "GameSpot", GameSpot.class, factory -> factory.disableRelocation());
-            node.objects().server().addActorFactory(
-                "player", PlayerActor.class, PlayerActorFactory.class,
-                factory -> factory.disableRelocation()); }
+            node.objects()
+                    .server()
+                    .addSpotFactory(
+                            "GameSpot", GameSpot.class, factory -> factory.disableRelocation());
+            node.objects()
+                    .server()
+                    .addActorFactory(
+                            "player",
+                            PlayerActor.class,
+                            PlayerActorFactory.class,
+                            factory -> factory.disableRelocation());
+        }
 
         try (ZLinkFrameworkRuntime runtime =
-                 RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory())) {
+                RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory())) {
             ZLinkActorCreateResult.Created createdResult =
-                (ZLinkActorCreateResult.Created) runtime.actorManager()
-                .create("player-1", "player")
-                .submit()
-                .toCompletableFuture()
-                .join();
+                    (ZLinkActorCreateResult.Created)
+                            runtime.actorManager()
+                                    .create("player-1", "player")
+                                    .submit()
+                                    .toCompletableFuture()
+                                    .join();
             ZLinkActorCreateResult.Existing reusedResult =
-                (ZLinkActorCreateResult.Existing) runtime.actorManager()
-                .getOrCreate("player-1", "player")
-                .submit()
-                .toCompletableFuture()
-                .join();
+                    (ZLinkActorCreateResult.Existing)
+                            runtime.actorManager()
+                                    .getOrCreate("player-1", "player")
+                                    .submit()
+                                    .toCompletableFuture()
+                                    .join();
             ActorRef created = createdResult.actor();
             ActorRef reused = reusedResult.actor();
-            Optional<ActorRef> found = runtime.actorManager()
-                .find("player-1")
-                .toCompletableFuture()
-                .join();
+            Optional<ActorRef> found =
+                    runtime.actorManager().find("player-1").toCompletableFuture().join();
 
             assertEquals(created, reused);
             assertEquals(Optional.of(created), found);
@@ -89,7 +97,14 @@ final class ActorManagerTest {
             return null;
         }
 
-        @Override public CompletionStage<Void> onJoinedActor(ZLinkActor actor) { return CompletableFuture.completedFuture(null); }
-        @Override public CompletionStage<Void> onLeaveActor(ZLinkActor actor) { return CompletableFuture.completedFuture(null); }
+        @Override
+        public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
+            return CompletableFuture.completedFuture(null);
+        }
     }
 }

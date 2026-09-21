@@ -4,8 +4,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEven
 
 /** Spec 26 structured-log projection. */
 final class ZLinkTraceFormat {
-    private ZLinkTraceFormat() {
-    }
+    private ZLinkTraceFormat() {}
 
     static String flowLine(ZLinkMessageFlowEvent flow, Long size) {
         StringBuilder builder = new StringBuilder("zlink flow:");
@@ -29,10 +28,14 @@ final class ZLinkTraceFormat {
         append(builder, "flow", flow.flowId());
         append(builder, "origin", token(flow.flowOrigin()));
         append(builder, "outcome", flow.outcome().traceName());
-        append(builder, "reason", flow.errorReason() == null
-            ? null : flow.errorReason().traceName());
-        append(builder, "action", flow.errorAction() == null
-            ? null : flow.errorAction().traceName());
+        append(
+                builder,
+                "reason",
+                flow.errorReason() == null ? null : flow.errorReason().traceName());
+        append(
+                builder,
+                "action",
+                flow.errorAction() == null ? null : flow.errorAction().traceName());
         if (size != null) {
             append(builder, "size", String.valueOf(size.longValue()));
         }

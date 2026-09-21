@@ -3,23 +3,25 @@ package systems.zlink.framework.runtime.channels;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import org.junit.jupiter.api.Test;
+
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotRouteBridge;
+
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import org.junit.jupiter.api.Test;
-import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.messaging.Message;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotRouteBridge;
 
 final class ZLinkSpotRouteBridgeDrainerTest {
     @Test
@@ -31,72 +33,63 @@ final class ZLinkSpotRouteBridgeDrainerTest {
         Map<String, ZLinkBackendSpotRouteBridge> bridges = new HashMap<>();
         bridges.put("z-channel", second);
         bridges.put("a-channel", first);
-        ScheduledExecutorService scheduler =
-            Executors.newSingleThreadScheduledExecutor();
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
         try {
             new ZLinkSpotRouteBridgeDrainer(
-                bridges,
-                scheduler,
-                () -> true,
-                (channel, failure) -> { throw new AssertionError(failure); })
-                .start();
+                            bridges,
+                            scheduler,
+                            () -> true,
+                            (channel, failure) -> {
+                                throw new AssertionError(failure);
+                            })
+                    .start();
 
             assertTrue(fourDrains.await(1, TimeUnit.SECONDS));
             scheduler.shutdownNow();
             assertEquals(
-                List.of("first", "second", "second", "first"),
-                List.copyOf(order.subList(0, 4)));
+                    List.of("first", "second", "second", "first"),
+                    List.copyOf(order.subList(0, 4)));
         } finally {
             scheduler.shutdownNow();
         }
     }
 
-    private static final class RecordingBridge
-        implements ZLinkBackendSpotRouteBridge {
+    private static final class RecordingBridge implements ZLinkBackendSpotRouteBridge {
         private final String name;
         private final List<String> order;
         private final CountDownLatch drainCount;
 
-        private RecordingBridge(
-            String name,
-            List<String> order,
-            CountDownLatch drainCount) {
+        private RecordingBridge(String name, List<String> order, CountDownLatch drainCount) {
             this.name = name;
             this.order = order;
             this.drainCount = drainCount;
         }
 
         @Override
-        public void attachRouterChannel(
-            String channelName,
-            ZLinkBackendRouterSocket router) {
-        }
+        public void attachRouterChannel(String channelName, ZLinkBackendRouterSocket router) {}
 
         @Override
         public CompletionStage<Void> send(
-            String channelName,
-            RoutingId targetNodeRid,
-            String targetSpotId,
-            List<Message> parts) {
+                String channelName,
+                RoutingId targetNodeRid,
+                String targetSpotId,
+                List<Message> parts) {
             return CompletableFuture.completedFuture(null);
         }
 
         @Override
         public CompletionStage<List<Message>> request(
-            String channelName,
-            RoutingId targetNodeRid,
-            String targetSpotId,
-            List<Message> parts,
-            Duration timeout) {
+                String channelName,
+                RoutingId targetNodeRid,
+                String targetSpotId,
+                List<Message> parts,
+                Duration timeout) {
             return CompletableFuture.completedFuture(List.of());
         }
 
         @Override
         public boolean handleRouterReceived(
-            String channelName,
-            RoutingId sourceNodeRid,
-            long requestSeq,
-            List<Message> parts) {
+                String channelName, RoutingId sourceNodeRid, long requestSeq, List<Message> parts) {
             return false;
         }
 
@@ -113,7 +106,6 @@ final class ZLinkSpotRouteBridgeDrainerTest {
         }
 
         @Override
-        public void close() {
-        }
+        public void close() {}
     }
 }

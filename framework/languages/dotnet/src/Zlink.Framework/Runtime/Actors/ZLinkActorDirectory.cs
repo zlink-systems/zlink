@@ -6,13 +6,15 @@ internal interface IZLinkActorResolver
 {
     ValueTask<(ActorRef? Ref, bool RowPresent)> FindWithPresenceAsync(
         string actorId,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 }
 
 internal sealed class ZLinkActorDirectory(
     ZLinkFrameworkRuntime runtime,
     ZLinkFrameworkRegistration registration,
-    ZLinkStoreLocationResolvers? locations = null) : IZLinkActorResolver
+    ZLinkStoreLocationResolvers? locations = null
+) : IZLinkActorResolver
 {
     private readonly ZLinkSpotMeshLocationResolver? _meshRows = locations is null
         ? null
@@ -24,15 +26,17 @@ internal sealed class ZLinkActorDirectory(
     /// confirmed miss — the actor was destroyed or never existed.</summary>
     public async ValueTask<(ActorRef? Ref, bool RowPresent)> FindWithPresenceAsync(
         string actorId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
 
-        if (runtime.TryGetCreatedActorState(actorId, out var state)
-            && state.NativeActorRef is { } localActorRef)
+        if (
+            runtime.TryGetCreatedActorState(actorId, out var state)
+            && state.NativeActorRef is { } localActorRef
+        )
         {
-            var meshName = state.Activation?.MeshName
-                           ?? state.Context?.MeshName;
+            var meshName = state.Activation?.MeshName ?? state.Context?.MeshName;
             if (string.IsNullOrWhiteSpace(meshName))
                 return (null, true);
             return (localActorRef.ToNative(meshName), true);
@@ -43,9 +47,9 @@ internal sealed class ZLinkActorDirectory(
             return (null, false);
         }
 
-        var (row, rowPresent) = await _meshRows!.ResolveActorWithPresenceAsync(actorId, cancellationToken)
+        var (row, rowPresent) = await _meshRows!
+            .ResolveActorWithPresenceAsync(actorId, cancellationToken)
             .ConfigureAwait(false);
         return (row?.ActorRef, rowPresent);
     }
-
 }

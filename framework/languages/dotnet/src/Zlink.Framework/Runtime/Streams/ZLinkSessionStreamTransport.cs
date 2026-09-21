@@ -2,7 +2,8 @@ namespace Zlink.Framework.Runtime.Streams;
 
 internal sealed class ZLinkSessionStreamTransport(
     IZLinkStream stream,
-    Action<ZlinkStreamHeader> traceWritten)
+    Action<ZlinkStreamHeader> traceWritten
+)
 {
     public bool Write(Message payload)
     {
@@ -12,15 +13,14 @@ internal sealed class ZLinkSessionStreamTransport(
         return stream.Write(ZLinkMessage.From(payload.ToArray()));
     }
 
-    public Task SubmitAsync(
-        Message payload,
-        CancellationToken cancellationToken)
-        => SubmitAsync(stream, payload, cancellationToken);
+    public Task SubmitAsync(Message payload, CancellationToken cancellationToken) =>
+        SubmitAsync(stream, payload, cancellationToken);
 
     internal static Task SubmitAsync(
         IZLinkStream stream,
         Message payload,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (stream is ZLinkManagedStream managedStream)
             return managedStream.SubmitRawAsync(payload, cancellationToken);
@@ -29,8 +29,7 @@ internal sealed class ZLinkSessionStreamTransport(
         try
         {
             if (!stream.Write(ZLinkMessage.From(payload.ToArray())))
-                throw new ZlinkSubmitException(
-                    ZlinkSubmitException.ErrorCode.NotConnected);
+                throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected);
         }
         finally
         {
@@ -42,7 +41,8 @@ internal sealed class ZLinkSessionStreamTransport(
     public ValueTask ReplyRawAsync(
         ZlinkStreamHeader requestHeader,
         ZLinkActorReply reply,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         var responseHeader = reply.CreateResponseHeader(requestHeader);
@@ -51,16 +51,19 @@ internal sealed class ZLinkSessionStreamTransport(
             Message.From(frame),
             cancellationToken,
             "Client stream reply send failed.",
-            responseHeader);
+            responseHeader
+        );
     }
 
     public ValueTask ReplyErrorAsync(
         ZlinkStreamHeader requestHeader,
         Exception exception,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (requestHeader.RequestSeq is not { } requestSeq) return ValueTask.CompletedTask;
+        if (requestHeader.RequestSeq is not { } requestSeq)
+            return ValueTask.CompletedTask;
 
         var header = ZLinkStreamReplyHeaders.CreateForRequest(
             requestHeader,
@@ -68,31 +71,37 @@ internal sealed class ZLinkSessionStreamTransport(
             ZlinkStreamCodec.Json,
             ZlinkStreamHeaderFlags.None,
             requestSeq,
-            ZlinkStreamMetadata.Empty);
+            ZlinkStreamMetadata.Empty
+        );
         var payload = ZLinkEnvelopeCodec.EncodeProtocolJsonBytes(
-            ZLinkStreamWireError.FromException(exception));
+            ZLinkStreamWireError.FromException(exception)
+        );
         var frame = ZLinkStreamFrameCodec.Encode(
             ZLinkStreamProtocolDefaults.EncodeHeader(header).Span,
-            payload);
+            payload
+        );
         return SendReplyAsync(
             Message.From(frame),
             cancellationToken,
             "Client stream error reply send failed.",
-            header);
+            header
+        );
     }
 
     private ValueTask SendReplyAsync(
         Message frame,
         CancellationToken cancellationToken,
         string failureMessage,
-        ZlinkStreamHeader responseHeader)
+        ZlinkStreamHeader responseHeader
+    )
     {
         using (frame)
         {
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                if (!Write(frame)) throw new InvalidOperationException(failureMessage);
+                if (!Write(frame))
+                    throw new InvalidOperationException(failureMessage);
             }
             catch
             {

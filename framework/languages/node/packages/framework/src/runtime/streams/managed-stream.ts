@@ -10,10 +10,7 @@ import type {
   ZLinkMessageSerializer,
   ZLinkStream
 } from '../../contracts';
-import {
-  ZLinkSubmitStatus,
-  type ZLinkSubmitResult
-} from '../messaging/submission-result';
+import { ZLinkSubmitStatus, type ZLinkSubmitResult } from '../messaging/submission-result';
 import type { Message } from '../../contracts/Common/Message';
 import { throwIfAborted } from '../abort';
 import { encodeFrameworkPayloadMessage } from '../messaging/payload-codec';
@@ -58,11 +55,14 @@ export class ZLinkManagedStream implements ZLinkStream {
   private currentLocalAddr: string | undefined;
   private currentRemoteAddr: string | undefined;
   private transportClosed = false;
-  private readonly nativeActorBindings = new Map<string, {
-    readonly actor: ZLinkBackendActorRef;
-    readonly bindingGeneration: bigint;
-    readonly route?: ZLinkNativeSessionRoute;
-  }>();
+  private readonly nativeActorBindings = new Map<
+    string,
+    {
+      readonly actor: ZLinkBackendActorRef;
+      readonly bindingGeneration: bigint;
+      readonly route?: ZLinkNativeSessionRoute;
+    }
+  >();
 
   constructor(
     private readonly socket: ZLinkBackendStreamSocket,
@@ -138,11 +138,10 @@ export class ZLinkManagedStream implements ZLinkStream {
     signal?: AbortSignal
   ): Promise<ZLinkSubmitResult> {
     throwIfAborted(signal);
-    return await this.sendBoundActor(actorId, parts, ZLINK_SEND_DONT_WAIT)
+    return (await this.sendBoundActor(actorId, parts, ZLINK_SEND_DONT_WAIT))
       ? { status: ZLinkSubmitStatus.Submitted }
       : { status: ZLinkSubmitStatus.Backpressured };
   }
-
 
   async close(signal?: AbortSignal): Promise<void> {
     throwIfAborted(signal);
@@ -211,25 +210,29 @@ export class ZLinkManagedStream implements ZLinkStream {
       }
       await this.requireSuccessfulCompletion(
         route.completions.submit(
-          () => route.service.bindActor(
-            this.backendRoutingId(),
-            nativeActor,
-            timeoutMs,
-            onBindingReplaced === undefined
-              ? undefined
-              : (_actorId, retiredSession, replacedActor) => {
-                  onBindingReplaced(replacedActor, retiredSession);
-                },
-            toStreamSessionActorAuthorityFence(authorityFence)
-          ),
+          () =>
+            route.service.bindActor(
+              this.backendRoutingId(),
+              nativeActor,
+              timeoutMs,
+              onBindingReplaced === undefined
+                ? undefined
+                : (_actorId, retiredSession, replacedActor) => {
+                    onBindingReplaced(replacedActor, retiredSession);
+                  },
+              toStreamSessionActorAuthorityFence(authorityFence)
+            ),
           signal
         ),
-        `Actor '${actor.actorId}' native session bind`,
+        `Actor '${actor.actorId}' native session bind`
       );
-      const binding = route.service.bindings(this.backendRoutingId())
-        .find((candidate) =>
-          candidate.actor.actorId === nativeActor.actorId
-          && candidate.actor.generation === nativeActor.generation);
+      const binding = route.service
+        .bindings(this.backendRoutingId())
+        .find(
+          (candidate) =>
+            candidate.actor.actorId === nativeActor.actorId &&
+            candidate.actor.generation === nativeActor.generation
+        );
       if (binding === undefined) {
         throw createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.RouteNotConnected,
@@ -240,12 +243,13 @@ export class ZLinkManagedStream implements ZLinkStream {
         try {
           await this.requireSuccessfulCompletion(
             route.completions.submit(
-              () => route.service.unbindActor(
-                this.backendRoutingId(),
-                nativeActor as never,
-                binding.bindingGeneration,
-                timeoutMs
-              ),
+              () =>
+                route.service.unbindActor(
+                  this.backendRoutingId(),
+                  nativeActor as never,
+                  binding.bindingGeneration,
+                  timeoutMs
+                ),
               signal
             ),
             `Actor '${actor.actorId}' native session unbind`,
@@ -268,7 +272,12 @@ export class ZLinkManagedStream implements ZLinkStream {
       });
       return;
     }
-    await this.socket.bindActor(this.backendRoutingId(), toBackendActorRef(actor), timeoutMs, signal);
+    await this.socket.bindActor(
+      this.backendRoutingId(),
+      toBackendActorRef(actor),
+      timeoutMs,
+      signal
+    );
   }
 
   private async ensureNativeActorRoute(
@@ -282,23 +291,24 @@ export class ZLinkManagedStream implements ZLinkStream {
       signal
     );
     try {
-      const resolved = completion.kindData?.kind === 'actorLookupCompletion'
-        ? completion.kindData.location.actor
-        : undefined;
+      const resolved =
+        completion.kindData?.kind === 'actorLookupCompletion'
+          ? completion.kindData.location.actor
+          : undefined;
       if (
-        completion.terminalResult !== 0
-        || completion.failureErrno !== 0
-        || resolved === undefined
-        || resolved.actorId !== actor.actorId
-        || resolved.generation !== actor.objectGeneration
-        || String(resolved.nodeRid) !== String(actor.nodeRid)
+        completion.terminalResult !== 0 ||
+        completion.failureErrno !== 0 ||
+        resolved === undefined ||
+        resolved.actorId !== actor.actorId ||
+        resolved.generation !== actor.objectGeneration ||
+        String(resolved.nodeRid) !== String(actor.nodeRid)
       ) {
         throw createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.ActorRouteNotFound,
-          `Actor '${actor.actorId}' native route fence does not match its ActorRef `
-          + `(expected ${String(actor.nodeRid)}/${actor.objectGeneration}, `
-          + `resolved ${resolved === undefined ? 'none' : `${String(resolved.nodeRid)}/${resolved.generation}`}, `
-          + `terminal=${completion.terminalResult}, failure=${completion.failureErrno}).`
+          `Actor '${actor.actorId}' native route fence does not match its ActorRef ` +
+            `(expected ${String(actor.nodeRid)}/${actor.objectGeneration}, ` +
+            `resolved ${resolved === undefined ? 'none' : `${String(resolved.nodeRid)}/${resolved.generation}`}, ` +
+            `terminal=${completion.terminalResult}, failure=${completion.failureErrno}).`
         );
       }
     } finally {
@@ -324,12 +334,13 @@ export class ZLinkManagedStream implements ZLinkStream {
       try {
         await this.requireSuccessfulCompletion(
           route.completions.submit(
-            () => route.service.unbindActor(
-              this.backendRoutingId(),
-              binding.actor as never,
-              binding.bindingGeneration,
-              timeoutMs
-            ),
+            () =>
+              route.service.unbindActor(
+                this.backendRoutingId(),
+                binding.actor as never,
+                binding.bindingGeneration,
+                timeoutMs
+              ),
             signal
           ),
           `Actor '${actorId}' native session unbind`,
@@ -370,24 +381,21 @@ export class ZLinkManagedStream implements ZLinkStream {
     if (binding?.route !== undefined) {
       const nativeParts = parts.map((part) => NativeMessage.from(part.data()));
       try {
-        return await binding.route.service.sendToActor(
-          this.backendRoutingId(),
-          binding.actor as never,
-          nativeParts,
-          { flags: flags ?? 0 }
-        ) === 0;
+        return (
+          (await binding.route.service.sendToActor(
+            this.backendRoutingId(),
+            binding.actor as never,
+            nativeParts,
+            { flags: flags ?? 0 }
+          )) === 0
+        );
       } finally {
         for (const part of nativeParts) {
           part.close();
         }
       }
     }
-    return this.socket.sendBoundActor(
-      this.backendRoutingId(),
-      actorId,
-      parts,
-      flags ?? 0
-    );
+    return this.socket.sendBoundActor(this.backendRoutingId(), actorId, parts, flags ?? 0);
   }
 
   updateAddresses(localAddr: string | undefined, remoteAddr: string | undefined): void {
@@ -406,9 +414,12 @@ export class ZLinkManagedStream implements ZLinkStream {
     bindingGeneration: bigint
   ): boolean {
     try {
-      return route.service.bindings(this.backendRoutingId()).some(candidate =>
-        candidate.actor.actorId === actorId
-        && candidate.bindingGeneration === bindingGeneration);
+      return route.service
+        .bindings(this.backendRoutingId())
+        .some(
+          (candidate) =>
+            candidate.actor.actorId === actorId && candidate.bindingGeneration === bindingGeneration
+        );
     } catch {
       // A closed native service owns the teardown state. Keep the original
       // error when its binding snapshot is unavailable.
@@ -428,8 +439,8 @@ export class ZLinkManagedStream implements ZLinkStream {
     const completion = await completionPromise;
     try {
       if (
-        completion.terminalResult !== 0
-        && !acceptedTerminalResults.has(completion.terminalResult)
+        completion.terminalResult !== 0 &&
+        !acceptedTerminalResults.has(completion.terminalResult)
       ) {
         throw wireReplyFailureException(
           completion.terminalResult,
@@ -443,15 +454,15 @@ export class ZLinkManagedStream implements ZLinkStream {
   }
 
   private nativeRoute(meshName: string): ZLinkNativeSessionRoute | undefined {
-    return this.nativeSessionRouteForMesh?.(meshName)
-      ?? (
-        this.nativeSessionService !== undefined && this.meshCompletions !== undefined
-          ? {
-              service: this.nativeSessionService,
-              completions: this.meshCompletions
-            }
-          : undefined
-      );
+    return (
+      this.nativeSessionRouteForMesh?.(meshName) ??
+      (this.nativeSessionService !== undefined && this.meshCompletions !== undefined
+        ? {
+            service: this.nativeSessionService,
+            completions: this.meshCompletions
+          }
+        : undefined)
+    );
   }
 }
 
@@ -460,18 +471,18 @@ export function streamSessionIdFromRoutingId(routingId: unknown): string {
     return routingId;
   }
   if (
-    typeof routingId === 'object'
-    && routingId !== null
-    && 'toHex' in routingId
-    && typeof (routingId as { toHex?: unknown }).toHex === 'function'
+    typeof routingId === 'object' &&
+    routingId !== null &&
+    'toHex' in routingId &&
+    typeof (routingId as { toHex?: unknown }).toHex === 'function'
   ) {
     return (routingId as { toHex(): string }).toHex();
   }
   if (
-    typeof routingId === 'object'
-    && routingId !== null
-    && 'toString' in routingId
-    && typeof (routingId as { toString?: unknown }).toString === 'function'
+    typeof routingId === 'object' &&
+    routingId !== null &&
+    'toString' in routingId &&
+    typeof (routingId as { toString?: unknown }).toString === 'function'
   ) {
     return (routingId as { toString(): string }).toString();
   }

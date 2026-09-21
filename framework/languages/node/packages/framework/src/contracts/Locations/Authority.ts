@@ -64,8 +64,7 @@ export interface ZLinkAuthoritySnapshot {
 }
 
 export type ZLinkAuthorityReadResult =
-  | { readonly kind: 'missing'; readonly storeNow: Date }
-  | ZLinkAuthoritySnapshot;
+  { readonly kind: 'missing'; readonly storeNow: Date } | ZLinkAuthoritySnapshot;
 
 export type ZLinkAuthorityMutation =
   | {
@@ -120,9 +119,7 @@ export interface ZLinkAuthorityPage {
   readonly nextCursor?: ZLinkAuthorityScanCursor;
 }
 
-export type ZLinkAuthorityScanResult =
-  | ZLinkAuthorityPage
-  | { readonly kind: 'scanExpired' };
+export type ZLinkAuthorityScanResult = ZLinkAuthorityPage | { readonly kind: 'scanExpired' };
 
 export interface ZLinkObjectCreationKey {
   readonly kind: ZLinkPlacementObjectKind;
@@ -249,9 +246,7 @@ export interface ZLinkObjectAbortRequest {
 }
 
 export type ZLinkObjectAbortResult =
-  | { readonly kind: 'aborted' }
-  | { readonly kind: 'alreadyAborted' }
-  | { readonly kind: 'stale' };
+  { readonly kind: 'aborted' } | { readonly kind: 'alreadyAborted' } | { readonly kind: 'stale' };
 
 export interface ZLinkAggregateId {
   readonly value: string;
@@ -296,6 +291,4 @@ export type ZLinkAggregateCommitResult =
   | { readonly kind: 'generationExhausted' };
 
 export type ZLinkAggregateAbortResult =
-  | { readonly kind: 'aborted' }
-  | { readonly kind: 'alreadyAborted' }
-  | { readonly kind: 'stale' };
+  { readonly kind: 'aborted' } | { readonly kind: 'alreadyAborted' } | { readonly kind: 'stale' };

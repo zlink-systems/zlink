@@ -1,43 +1,43 @@
 package systems.zlink.framework.runtime.channels;
-import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import org.junit.jupiter.api.Test;
+
+import systems.zlink.framework.ZLinkHandlerDispatchKind;
+import systems.zlink.framework.ZLinkHandlerFilter;
+import systems.zlink.framework.ZLinkHandlerFilterContext;
+import systems.zlink.framework.ZLinkHandlerFilterNext;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
+
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.junit.jupiter.api.Test;
-import systems.zlink.framework.ZLinkHandlerDispatchKind;
-import systems.zlink.framework.ZLinkHandlerFilter;
-import systems.zlink.framework.ZLinkHandlerFilterContext;
-import systems.zlink.framework.ZLinkHandlerFilterNext;
-import systems.zlink.framework.ZLinkMessageContext;
-import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
-import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
 
 final class ZLinkFilterPipelineTest {
     @Test
     void exposesFilterOnlyDispatchContextAndPreservesHandlerReply() {
         CapturingFilter filter = new CapturingFilter();
         try (var owner = owner(filter)) {
-            ZLinkFilterPipeline.Result<String> result = ZLinkFilterPipeline.invoke(
-                    List.of(CapturingFilter.class),
-                    owner,
-                    filterContext(ZLinkHandlerDispatchKind.CHANNEL_REQUEST),
-                    () -> CompletableFuture.completedFuture("handler"))
-                .toCompletableFuture()
-                .join();
+            ZLinkFilterPipeline.Result<String> result =
+                    ZLinkFilterPipeline.invoke(
+                                    List.of(CapturingFilter.class),
+                                    owner,
+                                    filterContext(ZLinkHandlerDispatchKind.CHANNEL_REQUEST),
+                                    () -> CompletableFuture.completedFuture("handler"))
+                            .toCompletableFuture()
+                            .join();
 
             assertTrue(result.handlerInvoked());
             assertEquals("handler", result.value());
-            assertEquals(
-                ZLinkHandlerDispatchKind.CHANNEL_REQUEST,
-                filter.dispatchKind);
+            assertEquals(ZLinkHandlerDispatchKind.CHANNEL_REQUEST, filter.dispatchKind);
             assertEquals("mesh-a", filter.meshName);
         }
     }
@@ -46,13 +46,14 @@ final class ZLinkFilterPipelineTest {
     void ignoresFilterReplyReplacement() {
         ReplacingFilter filter = new ReplacingFilter();
         try (var owner = owner(filter)) {
-            ZLinkFilterPipeline.Result<String> result = ZLinkFilterPipeline.invoke(
-                    List.of(ReplacingFilter.class),
-                    owner,
-                    filterContext(ZLinkHandlerDispatchKind.CHANNEL_REQUEST),
-                    () -> CompletableFuture.completedFuture("handler"))
-                .toCompletableFuture()
-                .join();
+            ZLinkFilterPipeline.Result<String> result =
+                    ZLinkFilterPipeline.invoke(
+                                    List.of(ReplacingFilter.class),
+                                    owner,
+                                    filterContext(ZLinkHandlerDispatchKind.CHANNEL_REQUEST),
+                                    () -> CompletableFuture.completedFuture("handler"))
+                            .toCompletableFuture()
+                            .join();
 
             assertTrue(result.handlerInvoked());
             assertEquals("handler", result.value());
@@ -63,13 +64,14 @@ final class ZLinkFilterPipelineTest {
     void reportsWhenFilterDoesNotInvokeNext() {
         ShortCircuitFilter filter = new ShortCircuitFilter();
         try (var owner = owner(filter)) {
-            ZLinkFilterPipeline.Result<String> result = ZLinkFilterPipeline.invoke(
-                    List.of(ShortCircuitFilter.class),
-                    owner,
-                    filterContext(ZLinkHandlerDispatchKind.NODE_DIRECT_REQUEST),
-                    () -> CompletableFuture.completedFuture("handler"))
-                .toCompletableFuture()
-                .join();
+            ZLinkFilterPipeline.Result<String> result =
+                    ZLinkFilterPipeline.invoke(
+                                    List.of(ShortCircuitFilter.class),
+                                    owner,
+                                    filterContext(ZLinkHandlerDispatchKind.NODE_DIRECT_REQUEST),
+                                    () -> CompletableFuture.completedFuture("handler"))
+                            .toCompletableFuture()
+                            .join();
 
             assertFalse(result.handlerInvoked());
             assertEquals(null, result.value());
@@ -82,15 +84,16 @@ final class ZLinkFilterPipelineTest {
         DuplicateNextFilter filter = new DuplicateNextFilter();
         try (var owner = owner(filter)) {
             assertThrows(
-                IllegalStateException.class,
-                () -> ZLinkFilterPipeline.invoke(
-                    List.of(DuplicateNextFilter.class),
-                    owner,
-                    filterContext(ZLinkHandlerDispatchKind.NODE_DIRECT_REQUEST),
-                    () -> {
-                        handlerCalls.incrementAndGet();
-                        return CompletableFuture.completedFuture("handler");
-                    }));
+                    IllegalStateException.class,
+                    () ->
+                            ZLinkFilterPipeline.invoke(
+                                    List.of(DuplicateNextFilter.class),
+                                    owner,
+                                    filterContext(ZLinkHandlerDispatchKind.NODE_DIRECT_REQUEST),
+                                    () -> {
+                                        handlerCalls.incrementAndGet();
+                                        return CompletableFuture.completedFuture("handler");
+                                    }));
         }
         assertEquals(1, handlerCalls.get());
     }
@@ -100,24 +103,24 @@ final class ZLinkFilterPipelineTest {
         AtomicInteger handlerCalls = new AtomicInteger();
         DuplicateNextFilter outer = new DuplicateNextFilter();
         ShortCircuitFilter inner = new ShortCircuitFilter();
-        ZLinkHandlerActivator activator = type -> {
-            if (type == DuplicateNextFilter.class) return outer;
-            if (type == ShortCircuitFilter.class) return inner;
-            throw new IllegalArgumentException("unexpected type: " + type);
-        };
+        ZLinkHandlerActivator activator =
+                type -> {
+                    if (type == DuplicateNextFilter.class) return outer;
+                    if (type == ShortCircuitFilter.class) return inner;
+                    throw new IllegalArgumentException("unexpected type: " + type);
+                };
         try (var owner = new ZLinkHandlerInstanceOwner(activator)) {
             assertThrows(
-                IllegalStateException.class,
-                () -> ZLinkFilterPipeline.invoke(
-                    List.of(
-                        DuplicateNextFilter.class,
-                        ShortCircuitFilter.class),
-                    owner,
-                    filterContext(ZLinkHandlerDispatchKind.CLASSIC_FANOUT),
-                    () -> {
-                        handlerCalls.incrementAndGet();
-                        return CompletableFuture.completedFuture("handler");
-                    }));
+                    IllegalStateException.class,
+                    () ->
+                            ZLinkFilterPipeline.invoke(
+                                    List.of(DuplicateNextFilter.class, ShortCircuitFilter.class),
+                                    owner,
+                                    filterContext(ZLinkHandlerDispatchKind.CLASSIC_FANOUT),
+                                    () -> {
+                                        handlerCalls.incrementAndGet();
+                                        return CompletableFuture.completedFuture("handler");
+                                    }));
         }
         assertEquals(0, handlerCalls.get());
     }
@@ -127,8 +130,7 @@ final class ZLinkFilterPipelineTest {
         return new ZLinkHandlerInstanceOwner(activator);
     }
 
-    private static ZLinkHandlerFilterContext filterContext(
-        ZLinkHandlerDispatchKind kind) {
+    private static ZLinkHandlerFilterContext filterContext(ZLinkHandlerDispatchKind kind) {
         return new ZLinkHandlerFilterContext() {
             @Override
             public Optional<String> meshName() {
@@ -173,8 +175,7 @@ final class ZLinkFilterPipelineTest {
 
         @Override
         public <T> CompletionStage<T> invoke(
-            ZLinkHandlerFilterContext context,
-            ZLinkHandlerFilterNext<T> next) {
+                ZLinkHandlerFilterContext context, ZLinkHandlerFilterNext<T> next) {
             dispatchKind = context.dispatchKind();
             meshName = context.meshName().orElse(null);
             return next.invoke();
@@ -184,21 +185,21 @@ final class ZLinkFilterPipelineTest {
     private static final class ReplacingFilter implements ZLinkHandlerFilter {
         @Override
         public <T> CompletionStage<T> invoke(
-            ZLinkHandlerFilterContext context,
-            ZLinkHandlerFilterNext<T> next) {
-            return next.invoke().thenApply(ignored -> {
-                @SuppressWarnings("unchecked")
-                T replacement = (T) "replacement";
-                return replacement;
-            });
+                ZLinkHandlerFilterContext context, ZLinkHandlerFilterNext<T> next) {
+            return next.invoke()
+                    .thenApply(
+                            ignored -> {
+                                @SuppressWarnings("unchecked")
+                                T replacement = (T) "replacement";
+                                return replacement;
+                            });
         }
     }
 
     private static final class ShortCircuitFilter implements ZLinkHandlerFilter {
         @Override
         public <T> CompletionStage<T> invoke(
-            ZLinkHandlerFilterContext context,
-            ZLinkHandlerFilterNext<T> next) {
+                ZLinkHandlerFilterContext context, ZLinkHandlerFilterNext<T> next) {
             @SuppressWarnings("unchecked")
             T replacement = (T) "replacement";
             return CompletableFuture.completedFuture(replacement);
@@ -208,8 +209,7 @@ final class ZLinkFilterPipelineTest {
     private static final class DuplicateNextFilter implements ZLinkHandlerFilter {
         @Override
         public <T> CompletionStage<T> invoke(
-            ZLinkHandlerFilterContext context,
-            ZLinkHandlerFilterNext<T> next) {
+                ZLinkHandlerFilterContext context, ZLinkHandlerFilterNext<T> next) {
             CompletionStage<T> first = next.invoke();
             next.invoke();
             return first;

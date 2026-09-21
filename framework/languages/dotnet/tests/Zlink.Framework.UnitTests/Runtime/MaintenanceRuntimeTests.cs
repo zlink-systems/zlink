@@ -1,6 +1,6 @@
+using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Locations;
-using Zlink.Framework.Runtime.Dispatch;
 
 namespace Zlink.Framework.UnitTests;
 
@@ -15,12 +15,21 @@ public sealed class MaintenanceRuntimeTests
         Assert.Same(coreAssembly, typeof(ZLinkFrameworkMaintenanceRuntime).Assembly);
         Assert.Same(coreAssembly, typeof(ZLinkDrainCoordinator).Assembly);
         Assert.Same(coreAssembly, typeof(ZLinkFrameworkDrainExecutor).Assembly);
-        Assert.Null(Type.GetType(
-            "Zlink.Framework.AspNetCore.ZLinkFrameworkMaintenanceRuntime, Zlink.Framework.AspNetCore"));
-        Assert.Null(Type.GetType(
-            "Zlink.Framework.AspNetCore.ZLinkDrainCoordinator, Zlink.Framework.AspNetCore"));
-        Assert.Null(Type.GetType(
-            "Zlink.Framework.AspNetCore.ZLinkFrameworkDrainExecutor, Zlink.Framework.AspNetCore"));
+        Assert.Null(
+            Type.GetType(
+                "Zlink.Framework.AspNetCore.ZLinkFrameworkMaintenanceRuntime, Zlink.Framework.AspNetCore"
+            )
+        );
+        Assert.Null(
+            Type.GetType(
+                "Zlink.Framework.AspNetCore.ZLinkDrainCoordinator, Zlink.Framework.AspNetCore"
+            )
+        );
+        Assert.Null(
+            Type.GetType(
+                "Zlink.Framework.AspNetCore.ZLinkFrameworkDrainExecutor, Zlink.Framework.AspNetCore"
+            )
+        );
     }
 
     [Fact]
@@ -68,17 +77,15 @@ public sealed class MaintenanceRuntimeTests
     public void Status_SafeToShutdown_ReflectsInjectedSnapshot()
     {
         var executor = new MaintenanceExecutor();
-        using var drain = new ZLinkDrainCoordinator(
-            new ZLinkDrainAdmissionGate(),
-            executor);
+        using var drain = new ZLinkDrainCoordinator(new ZLinkDrainAdmissionGate(), executor);
         var safeToShutdown = false;
         using var runtime = new ZLinkFrameworkMaintenanceRuntime(
             drain,
             new ZLinkFrameworkHostLifecycleState(),
-            static (_, _, _) =>
-                ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(null),
+            static (_, _, _) => ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(null),
             static _ => ValueTask.FromResult(true),
-            safeToShutdownSnapshot: () => safeToShutdown);
+            safeToShutdownSnapshot: () => safeToShutdown
+        );
 
         Assert.False(runtime.Status.SafeToShutdown);
 
@@ -90,24 +97,22 @@ public sealed class MaintenanceRuntimeTests
     public async Task Status_SafeToShutdown_Change_RepublishesToObservers()
     {
         var executor = new MaintenanceExecutor();
-        using var drain = new ZLinkDrainCoordinator(
-            new ZLinkDrainAdmissionGate(),
-            executor);
+        using var drain = new ZLinkDrainCoordinator(new ZLinkDrainAdmissionGate(), executor);
         var safeToShutdown = false;
         Action? changeHandler = null;
         using var runtime = new ZLinkFrameworkMaintenanceRuntime(
             drain,
             new ZLinkFrameworkHostLifecycleState(),
-            static (_, _, _) =>
-                ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(null),
+            static (_, _, _) => ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(null),
             static _ => ValueTask.FromResult(true),
             safeToShutdownSnapshot: () => safeToShutdown,
-            subscribeSafeToShutdownChanged: handler => changeHandler = handler);
+            subscribeSafeToShutdownChanged: handler => changeHandler = handler
+        );
 
         Assert.NotNull(changeHandler);
-        using var cancellation = new CancellationTokenSource(
-            TimeSpan.FromSeconds(5));
-        var observed = runtime.ObserveAsync(cancellation.Token)
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var observed = runtime
+            .ObserveAsync(cancellation.Token)
             .GetAsyncEnumerator(cancellation.Token);
         var initial = await observed.MoveNextAsync();
         Assert.True(initial);
@@ -140,40 +145,33 @@ public sealed class MaintenanceRuntimeTests
     [Fact]
     public async Task Runtime_Status_And_Reset_Expose_One_Host_Capacity_Epoch()
     {
-        await using var context = new ZLinkDotNetBackendAdapterFactory()
-            .CreateRuntimeContext();
+        await using var context = new ZLinkDotNetBackendAdapterFactory().CreateRuntimeContext();
         const ulong budgetBytes = 2 * 1024 * 1024;
-        context.ConfigureCoreHwm(
-            AutoHwmProfile.LowLatency,
-            memoryLimitBytes: 0,
-            budgetBytes);
+        context.ConfigureCoreHwm(AutoHwmProfile.LowLatency, memoryLimitBytes: 0, budgetBytes);
         var configuration = new ZLinkInboundDispatchOptionsModel
         {
             CoreHwmProfile = ZLinkCoreHwmProfile.LowLatency,
             CoreHwmBudgetBytes = budgetBytes,
-            MaxQueuedApplicationJobs = 8
+            MaxQueuedApplicationJobs = 8,
         };
         using var queue = new ZLinkApplicationJobQueue(
             ZLinkApplicationJobQueueCapacityResolver.Resolve(
                 configuration.ApplicationJobQueueProfile,
                 configuration.MaxQueuedApplicationJobs,
-                4));
-        var capacity = new ZLinkHostCapacityProjection(
-            context,
-            configuration,
-            queue);
+                4
+            )
+        );
+        var capacity = new ZLinkHostCapacityProjection(context, configuration, queue);
         var executor = new MaintenanceExecutor();
-        using var drain = new ZLinkDrainCoordinator(
-            new ZLinkDrainAdmissionGate(),
-            executor);
+        using var drain = new ZLinkDrainCoordinator(new ZLinkDrainAdmissionGate(), executor);
         using var runtime = new ZLinkFrameworkMaintenanceRuntime(
             drain,
             new ZLinkFrameworkHostLifecycleState(),
-            static (_, _, _) =>
-                ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(null),
+            static (_, _, _) => ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(null),
             static _ => ValueTask.FromResult(true),
             capacitySnapshot: () => capacity.GetStatus(),
-            resetCapacityMetrics: capacity.ResetMetrics);
+            resetCapacityMetrics: capacity.ResetMetrics
+        );
         runtime.MarkServing();
 
         var before = runtime.Status.Capacity;
@@ -184,9 +182,7 @@ public sealed class MaintenanceRuntimeTests
         var after = runtime.Status.Capacity;
 
         Assert.True(after.MeasurementEpoch > before.MeasurementEpoch);
-        Assert.Equal(
-            before.CoreHwm.EffectiveBudgetBytes,
-            after.CoreHwm.EffectiveBudgetBytes);
+        Assert.Equal(before.CoreHwm.EffectiveBudgetBytes, after.CoreHwm.EffectiveBudgetBytes);
     }
 
     [Fact]
@@ -195,8 +191,7 @@ public sealed class MaintenanceRuntimeTests
         using var fixture = Create();
 
         Assert.Equal(default, fixture.Runtime.Status.Capacity);
-        Assert.Throws<InvalidOperationException>(
-            fixture.Runtime.ResetCapacityMetrics);
+        Assert.Throws<InvalidOperationException>(fixture.Runtime.ResetCapacityMetrics);
     }
 
     [Fact]
@@ -206,10 +201,12 @@ public sealed class MaintenanceRuntimeTests
         fixture.Runtime.MarkServing();
         fixture.Executor.Complete.TrySetResult(null);
 
-        var result = await fixture.Runtime.RelocateAsync(new ZLinkFrameworkRelocationOptions
-        {
-            Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance
-        });
+        var result = await fixture.Runtime.RelocateAsync(
+            new ZLinkFrameworkRelocationOptions
+            {
+                Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
+            }
+        );
 
         Assert.Equal(ZLinkFrameworkRelocationOutcome.Relocated, result.Outcome);
         Assert.Equal(7, result.TargetApplicationVersion);
@@ -224,10 +221,12 @@ public sealed class MaintenanceRuntimeTests
         using var fixture = Create(sourceApplicationVersion: 7);
         fixture.Runtime.MarkServing();
         fixture.Executor.Complete.TrySetResult(null);
-        await fixture.Runtime.RelocateAsync(new ZLinkFrameworkRelocationOptions
-        {
-            Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance
-        });
+        await fixture.Runtime.RelocateAsync(
+            new ZLinkFrameworkRelocationOptions
+            {
+                Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
+            }
+        );
 
         var result = await fixture.Runtime.ShutdownAsync();
 
@@ -244,31 +243,46 @@ public sealed class MaintenanceRuntimeTests
         fixture.Runtime.MarkServing();
 
         await Assert.ThrowsAsync<ArgumentException>(() =>
-            fixture.Runtime.RelocateAsync(new ZLinkFrameworkRelocationOptions
-            {
-                Mode = ZLinkFrameworkRelocationMode.RollingUpdate,
-                TargetApplicationVersion = 7
-            }).AsTask());
+            fixture
+                .Runtime.RelocateAsync(
+                    new ZLinkFrameworkRelocationOptions
+                    {
+                        Mode = ZLinkFrameworkRelocationMode.RollingUpdate,
+                        TargetApplicationVersion = 7,
+                    }
+                )
+                .AsTask()
+        );
         await Assert.ThrowsAsync<ArgumentException>(() =>
-            fixture.Runtime.RelocateAsync(new ZLinkFrameworkRelocationOptions
-            {
-                Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
-                TargetApplicationVersion = 8
-            }).AsTask());
+            fixture
+                .Runtime.RelocateAsync(
+                    new ZLinkFrameworkRelocationOptions
+                    {
+                        Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
+                        TargetApplicationVersion = 8,
+                    }
+                )
+                .AsTask()
+        );
     }
 
     [Fact]
     public async Task Preflight_blocker_keeps_the_host_serving()
     {
         using var fixture = Create(
-            static (_, _, _) => ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(
-                ZLinkFrameworkRelocationReason.TargetUnavailable));
+            static (_, _, _) =>
+                ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(
+                    ZLinkFrameworkRelocationReason.TargetUnavailable
+                )
+        );
         fixture.Runtime.MarkServing();
 
-        var result = await fixture.Runtime.RelocateAsync(new ZLinkFrameworkRelocationOptions
-        {
-            Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance
-        });
+        var result = await fixture.Runtime.RelocateAsync(
+            new ZLinkFrameworkRelocationOptions
+            {
+                Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
+            }
+        );
 
         Assert.Equal(ZLinkFrameworkRelocationOutcome.Blocked, result.Outcome);
         Assert.Equal(ZLinkFrameworkRelocationReason.TargetUnavailable, result.Reason);
@@ -280,50 +294,52 @@ public sealed class MaintenanceRuntimeTests
     public async Task Target_wait_deadline_preserves_target_unavailable_reason()
     {
         using var cancellation = new CancellationTokenSource();
-        var wait = ZLinkFrameworkRuntime.WaitForTargetAvailabilityAsync(
-                TimeSpan.FromHours(1),
-                cancellation.Token)
+        var wait = ZLinkFrameworkRuntime
+            .WaitForTargetAvailabilityAsync(TimeSpan.FromHours(1), cancellation.Token)
             .AsTask();
 
         cancellation.Cancel();
 
-        Assert.Equal(
-            ZLinkFrameworkRelocationReason.TargetUnavailable,
-            await wait);
+        Assert.Equal(ZLinkFrameworkRelocationReason.TargetUnavailable, await wait);
     }
 
     [Fact]
     public async Task Partial_retiring_publication_failure_keeps_the_host_fail_closed()
     {
         var executor = new MaintenanceExecutor();
-        using var drain = new ZLinkDrainCoordinator(
-            new ZLinkDrainAdmissionGate(),
-            executor);
+        using var drain = new ZLinkDrainCoordinator(new ZLinkDrainAdmissionGate(), executor);
         using var runtime = new ZLinkFrameworkMaintenanceRuntime(
             drain,
             new ZLinkFrameworkHostLifecycleState(),
             static (_, _, _) => ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(null),
-            static _ => ValueTask.FromException<bool>(
-                new ZLinkRetiringPublicationRollbackException(
-                    [new InvalidOperationException("descriptor rollback failed")])),
-            sourceApplicationVersion: 7);
+            static _ =>
+                ValueTask.FromException<bool>(
+                    new ZLinkRetiringPublicationRollbackException([
+                        new InvalidOperationException("descriptor rollback failed"),
+                    ])
+                ),
+            sourceApplicationVersion: 7
+        );
         runtime.MarkServing();
 
         var result = await runtime.RelocateAsync(
             new ZLinkFrameworkRelocationOptions
             {
-                Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance
-            });
+                Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
+            }
+        );
 
         Assert.Equal(ZLinkFrameworkRelocationReason.RelocationFailed, result.Reason);
         Assert.Equal(ZLinkFrameworkRuntimeState.Stopped, runtime.Status.State);
         Assert.False(runtime.Status.AcceptingWork);
         Assert.Equal(
             ZLinkFrameworkTerminationOutcome.ForceStopped,
-            runtime.Status.TerminationResult?.Outcome);
+            runtime.Status.TerminationResult?.Outcome
+        );
         Assert.Equal(
             ZLinkFrameworkTerminationReason.TeardownFailed,
-            runtime.Status.TerminationResult?.Reason);
+            runtime.Status.TerminationResult?.Reason
+        );
     }
 
     [Theory]
@@ -332,7 +348,8 @@ public sealed class MaintenanceRuntimeTests
     public async Task Preflight_receives_mode_and_exact_effective_target_version(
         ZLinkFrameworkRelocationMode mode,
         long? requestedVersion,
-        long expectedVersion)
+        long expectedVersion
+    )
     {
         ZLinkFrameworkRelocationMode? observedMode = null;
         long? observedVersion = null;
@@ -342,17 +359,20 @@ public sealed class MaintenanceRuntimeTests
                 observedMode = candidateMode;
                 observedVersion = candidateVersion;
                 return ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(
-                    ZLinkFrameworkRelocationReason.TargetUnavailable);
+                    ZLinkFrameworkRelocationReason.TargetUnavailable
+                );
             },
-            sourceApplicationVersion: 7);
+            sourceApplicationVersion: 7
+        );
         fixture.Runtime.MarkServing();
 
         var result = await fixture.Runtime.RelocateAsync(
             new ZLinkFrameworkRelocationOptions
             {
                 Mode = mode,
-                TargetApplicationVersion = requestedVersion
-            });
+                TargetApplicationVersion = requestedVersion,
+            }
+        );
 
         Assert.Equal(mode, observedMode);
         Assert.Equal(expectedVersion, observedVersion);
@@ -370,11 +390,10 @@ public sealed class MaintenanceRuntimeTests
         ZLinkFrameworkRelocationMode mode,
         long exactTargetVersion,
         long candidateVersion,
-        bool expected)
+        bool expected
+    )
     {
-        var selection = new ZLinkRelocationTargetSelection(
-            mode,
-            exactTargetVersion);
+        var selection = new ZLinkRelocationTargetSelection(mode, exactTargetVersion);
 
         Assert.Equal(expected, selection.Matches(candidateVersion));
     }
@@ -385,10 +404,12 @@ public sealed class MaintenanceRuntimeTests
         using var fixture = Create();
         fixture.Executor.Complete.TrySetResult(null);
 
-        var blocked = await fixture.Runtime.RelocateAsync(new ZLinkFrameworkRelocationOptions
-        {
-            Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance
-        });
+        var blocked = await fixture.Runtime.RelocateAsync(
+            new ZLinkFrameworkRelocationOptions
+            {
+                Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
+            }
+        );
         var stopped = await fixture.Runtime.ShutdownAsync();
 
         Assert.Equal(ZLinkFrameworkRelocationReason.RuntimeNotReady, blocked.Reason);
@@ -414,22 +435,29 @@ public sealed class MaintenanceRuntimeTests
         });
 
         fixture.Executor.Complete.TrySetResult(null);
-        await fixture.Runtime.RelocateAsync(new ZLinkFrameworkRelocationOptions
-        {
-            Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance
-        });
+        await fixture.Runtime.RelocateAsync(
+            new ZLinkFrameworkRelocationOptions
+            {
+                Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
+            }
+        );
         await observer.WaitAsync(TimeSpan.FromSeconds(2));
 
-        Assert.Contains(observed, status =>
-            status.Status.State == ZLinkFrameworkRuntimeState.Relocated);
+        Assert.Contains(
+            observed,
+            status => status.Status.State == ZLinkFrameworkRuntimeState.Relocated
+        );
     }
 
     [Fact]
     public async Task Observe_preserves_transient_blocked_relocation_result()
     {
         using var fixture = Create(
-            static (_, _, _) => ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(
-                ZLinkFrameworkRelocationReason.TargetUnavailable));
+            static (_, _, _) =>
+                ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(
+                    ZLinkFrameworkRelocationReason.TargetUnavailable
+                )
+        );
         fixture.Runtime.MarkServing();
         await using var observer = fixture.Runtime.ObserveAsync().GetAsyncEnumerator();
 
@@ -437,16 +465,16 @@ public sealed class MaintenanceRuntimeTests
         var relocation = fixture.Runtime.RelocateAsync(
             new ZLinkFrameworkRelocationOptions
             {
-                Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance
-            });
+                Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
+            }
+        );
 
         ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus> terminal;
         do
         {
             Assert.True(await observer.MoveNextAsync());
             terminal = observer.Current;
-        }
-        while (terminal.Status.RelocationResult is null);
+        } while (terminal.Status.RelocationResult is null);
 
         var result = await relocation;
         Assert.Equal(ZLinkFrameworkRelocationReason.TargetUnavailable, result.Reason);
@@ -465,7 +493,7 @@ public sealed class MaintenanceRuntimeTests
         var rollingOptions = new ZLinkFrameworkRelocationOptions
         {
             Mode = ZLinkFrameworkRelocationMode.RollingUpdate,
-            TargetApplicationVersion = 8
+            TargetApplicationVersion = 8,
         };
 
         var first = await fixture.Runtime.RelocateAsync(rollingOptions);
@@ -473,8 +501,9 @@ public sealed class MaintenanceRuntimeTests
         var planned = await fixture.Runtime.RelocateAsync(
             new ZLinkFrameworkRelocationOptions
             {
-                Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance
-            });
+                Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
+            }
+        );
 
         Assert.Equal(first, replay);
         Assert.Equal(first, planned);
@@ -488,30 +517,30 @@ public sealed class MaintenanceRuntimeTests
     public async Task Shutdown_cancels_only_the_shared_relocation_operation_not_its_waiters()
     {
         var preflightEntered = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        using var fixture = Create(async (_, _, cancellationToken) =>
-        {
-            preflightEntered.TrySetResult();
-            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-            return null;
-        });
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        using var fixture = Create(
+            async (_, _, cancellationToken) =>
+            {
+                preflightEntered.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                return null;
+            }
+        );
         fixture.Runtime.MarkServing();
         fixture.Executor.Complete.TrySetResult(null);
         var options = new ZLinkFrameworkRelocationOptions
         {
             Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
-            Deadline = TimeSpan.FromSeconds(30)
+            Deadline = TimeSpan.FromSeconds(30),
         };
 
         var primary = fixture.Runtime.RelocateAsync(options).AsTask();
         await preflightEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
         using var cancelledWaiter = new CancellationTokenSource();
-        var waiter = fixture.Runtime.RelocateAsync(
-            options,
-            cancelledWaiter.Token).AsTask();
+        var waiter = fixture.Runtime.RelocateAsync(options, cancelledWaiter.Token).AsTask();
         cancelledWaiter.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => waiter);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiter);
 
         var shutdown = fixture.Runtime.ShutdownAsync().AsTask();
         var relocationResult = await primary;
@@ -519,9 +548,7 @@ public sealed class MaintenanceRuntimeTests
         var relocationReplay = await fixture.Runtime.RelocateAsync(options);
         var shutdownReplay = await fixture.Runtime.ShutdownAsync();
 
-        Assert.Equal(
-            ZLinkFrameworkRelocationReason.ShutdownRequested,
-            relocationResult.Reason);
+        Assert.Equal(ZLinkFrameworkRelocationReason.ShutdownRequested, relocationResult.Reason);
         Assert.Equal(ZLinkFrameworkRelocationOutcome.Blocked, relocationResult.Outcome);
         Assert.Equal(relocationResult, relocationReplay);
         Assert.Equal(ZLinkFrameworkTerminationOutcome.Stopped, shutdownResult.Outcome);
@@ -535,21 +562,29 @@ public sealed class MaintenanceRuntimeTests
         using var fixture = Create();
         fixture.Runtime.MarkServing();
 
-        var first = fixture.Runtime.RelocateAsync(new ZLinkFrameworkRelocationOptions
-        {
-            Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
-            Deadline = TimeSpan.FromSeconds(30)
-        }).AsTask();
+        var first = fixture
+            .Runtime.RelocateAsync(
+                new ZLinkFrameworkRelocationOptions
+                {
+                    Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
+                    Deadline = TimeSpan.FromSeconds(30),
+                }
+            )
+            .AsTask();
         await fixture.Executor.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
         // Same mode and effective target application version, different deadline:
         // the concurrent call joins the running operation and shares its terminal
         // result; its deadline neither extends nor shortens the operation.
-        var second = fixture.Runtime.RelocateAsync(new ZLinkFrameworkRelocationOptions
-        {
-            Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
-            Deadline = TimeSpan.FromSeconds(45)
-        }).AsTask();
+        var second = fixture
+            .Runtime.RelocateAsync(
+                new ZLinkFrameworkRelocationOptions
+                {
+                    Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
+                    Deadline = TimeSpan.FromSeconds(45),
+                }
+            )
+            .AsTask();
         Assert.False(second.IsCompleted);
 
         fixture.Executor.Complete.TrySetResult(null);
@@ -557,9 +592,7 @@ public sealed class MaintenanceRuntimeTests
         var secondResult = await second;
 
         Assert.Equal(firstResult, secondResult);
-        Assert.NotEqual(
-            ZLinkFrameworkRelocationReason.OperationInProgress,
-            secondResult.Reason);
+        Assert.NotEqual(ZLinkFrameworkRelocationReason.OperationInProgress, secondResult.Reason);
         Assert.Equal(1, fixture.Executor.ExecuteCount);
     }
 
@@ -569,11 +602,15 @@ public sealed class MaintenanceRuntimeTests
         using var fixture = Create(sourceApplicationVersion: 3);
         fixture.Runtime.MarkServing();
 
-        var first = fixture.Runtime.RelocateAsync(new ZLinkFrameworkRelocationOptions
-        {
-            Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
-            Deadline = TimeSpan.FromSeconds(30)
-        }).AsTask();
+        var first = fixture
+            .Runtime.RelocateAsync(
+                new ZLinkFrameworkRelocationOptions
+                {
+                    Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
+                    Deadline = TimeSpan.FromSeconds(30),
+                }
+            )
+            .AsTask();
         await fixture.Executor.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
         // Different mode and effective target: rejected with OperationInProgress.
@@ -584,13 +621,12 @@ public sealed class MaintenanceRuntimeTests
             {
                 Mode = ZLinkFrameworkRelocationMode.RollingUpdate,
                 TargetApplicationVersion = 7,
-                Deadline = TimeSpan.FromSeconds(45)
-            });
+                Deadline = TimeSpan.FromSeconds(45),
+            }
+        );
 
         Assert.Equal(ZLinkFrameworkRelocationOutcome.Blocked, rejected.Outcome);
-        Assert.Equal(
-            ZLinkFrameworkRelocationReason.OperationInProgress,
-            rejected.Reason);
+        Assert.Equal(ZLinkFrameworkRelocationReason.OperationInProgress, rejected.Reason);
         Assert.Equal(ZLinkFrameworkRelocationMode.RollingUpdate, rejected.Mode);
         Assert.Equal(7, rejected.TargetApplicationVersion);
 
@@ -606,33 +642,23 @@ public sealed class MaintenanceRuntimeTests
         var options = new ZLinkFrameworkRelocationOptions
         {
             Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
-            Deadline = TimeSpan.FromSeconds(30)
+            Deadline = TimeSpan.FromSeconds(30),
         };
 
         var relocation = fixture.Runtime.RelocateAsync(options).AsTask();
         await fixture.Executor.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        var shutdown = fixture.Runtime
-            .ShutdownAsync(TimeSpan.FromSeconds(2))
-            .AsTask();
+        var shutdown = fixture.Runtime.ShutdownAsync(TimeSpan.FromSeconds(2)).AsTask();
 
-        Assert.Equal(
-            ZLinkFrameworkRuntimeState.Draining,
-            fixture.Runtime.Status.State);
+        Assert.Equal(ZLinkFrameworkRuntimeState.Draining, fixture.Runtime.Status.State);
         Assert.Equal(1, fixture.Executor.ShutdownRequestCount);
 
         var relocationResult = await relocation;
-        Assert.Equal(
-            ZLinkFrameworkRelocationOutcome.Blocked,
-            relocationResult.Outcome);
-        Assert.Equal(
-            ZLinkFrameworkRelocationReason.ShutdownRequested,
-            relocationResult.Reason);
+        Assert.Equal(ZLinkFrameworkRelocationOutcome.Blocked, relocationResult.Outcome);
+        Assert.Equal(ZLinkFrameworkRelocationReason.ShutdownRequested, relocationResult.Reason);
 
         fixture.Executor.Complete.TrySetResult(null);
         var shutdownResult = await shutdown;
-        Assert.Equal(
-            ZLinkFrameworkTerminationOutcome.Stopped,
-            shutdownResult.Outcome);
+        Assert.Equal(ZLinkFrameworkTerminationOutcome.Stopped, shutdownResult.Outcome);
         Assert.Equal(2, fixture.Executor.ExecuteCount);
     }
 
@@ -643,15 +669,10 @@ public sealed class MaintenanceRuntimeTests
         fixture.Runtime.MarkServing();
         fixture.Executor.CancelForceStop = true;
 
-        var result = await fixture.Runtime.ShutdownAsync(
-            TimeSpan.FromMilliseconds(20));
+        var result = await fixture.Runtime.ShutdownAsync(TimeSpan.FromMilliseconds(20));
 
-        Assert.Equal(
-            ZLinkFrameworkTerminationOutcome.ForceStopped,
-            result.Outcome);
-        Assert.Equal(
-            ZLinkFrameworkTerminationReason.DeadlineExceeded,
-            result.Reason);
+        Assert.Equal(ZLinkFrameworkTerminationOutcome.ForceStopped, result.Outcome);
+        Assert.Equal(ZLinkFrameworkTerminationReason.DeadlineExceeded, result.Reason);
     }
 
     [Fact]
@@ -678,27 +699,31 @@ public sealed class MaintenanceRuntimeTests
             ZLinkFrameworkRelocationMode,
             long,
             CancellationToken,
-            ValueTask<ZLinkFrameworkRelocationReason?>>? preflight = null,
-        long sourceApplicationVersion = 0)
+            ValueTask<ZLinkFrameworkRelocationReason?>
+        >? preflight = null,
+        long sourceApplicationVersion = 0
+    )
     {
         var executor = new MaintenanceExecutor();
-        var drain = new ZLinkDrainCoordinator(
-            new ZLinkDrainAdmissionGate(),
-            executor);
+        var drain = new ZLinkDrainCoordinator(new ZLinkDrainAdmissionGate(), executor);
         var runtime = new ZLinkFrameworkMaintenanceRuntime(
             drain,
             new ZLinkFrameworkHostLifecycleState(),
-            preflight ?? (static (_, _, _) =>
-                ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(null)),
+            preflight
+                ?? (
+                    static (_, _, _) => ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(null)
+                ),
             static _ => ValueTask.FromResult(true),
-            sourceApplicationVersion);
+            sourceApplicationVersion
+        );
         return new Fixture(runtime, drain, executor);
     }
 
     private sealed record Fixture(
         ZLinkFrameworkMaintenanceRuntime Runtime,
         ZLinkDrainCoordinator Drain,
-        MaintenanceExecutor Executor) : IDisposable
+        MaintenanceExecutor Executor
+    ) : IDisposable
     {
         public void Dispose()
         {
@@ -739,13 +764,14 @@ public sealed class MaintenanceRuntimeTests
 
         public ValueTask<ZLinkDrainForceReason?> ExecuteAsync(
             TimeSpan deadline,
-            CancellationToken deadlineToken) =>
-            ExecuteAsync(ZLinkFrameworkLifecycleIntent.Shutdown, deadline, deadlineToken);
+            CancellationToken deadlineToken
+        ) => ExecuteAsync(ZLinkFrameworkLifecycleIntent.Shutdown, deadline, deadlineToken);
 
         public async ValueTask<ZLinkDrainForceReason?> ExecuteAsync(
             ZLinkFrameworkLifecycleIntent intent,
             TimeSpan deadline,
-            CancellationToken deadlineToken)
+            CancellationToken deadlineToken
+        )
         {
             _ = deadline;
             Intent = intent;
@@ -753,28 +779,25 @@ public sealed class MaintenanceRuntimeTests
             Started.TrySetResult();
             if (intent == ZLinkFrameworkLifecycleIntent.Relocate)
             {
-                var first = await Task.WhenAny(
-                        Complete.Task,
-                        ShutdownRequested.Task)
+                var first = await Task.WhenAny(Complete.Task, ShutdownRequested.Task)
                     .ConfigureAwait(false);
                 if (ReferenceEquals(first, ShutdownRequested.Task))
                     throw new ZLinkDrainBlockedException(
-                        ZLinkFrameworkRelocationReason.ShutdownRequested);
+                        ZLinkFrameworkRelocationReason.ShutdownRequested
+                    );
             }
             return await Complete.Task.WaitAsync(deadlineToken).ConfigureAwait(false);
         }
 
         public async ValueTask ForceStopAsync(
             ZLinkDrainForceReason reason,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             ForceStopCount++;
             ForceStopReason = reason;
             if (CancelForceStop)
-                await Task.Delay(
-                        Timeout.InfiniteTimeSpan,
-                        cancellationToken)
-                    .ConfigureAwait(false);
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
         }
     }
 }

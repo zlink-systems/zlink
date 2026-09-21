@@ -140,8 +140,7 @@ template <typename TMessage> class coroutine_wait_call_t
         return *this;
     }
 
-    coroutine_wait_call_t &where (
-      std::function<bool (const message_t<TMessage> &)> predicate)
+    coroutine_wait_call_t &where (std::function<bool (const message_t<TMessage> &)> predicate)
     {
         _inner.where (std::move (predicate));
         return *this;
@@ -243,8 +242,8 @@ template <typename TMessage> class coroutine_wait_for_sequence_call_t
     {
     }
 
-    coroutine_wait_for_sequence_call_t &expect (
-      std::function<bool (const message_t<TMessage> &)> predicate)
+    coroutine_wait_for_sequence_call_t &
+    expect (std::function<bool (const message_t<TMessage> &)> predicate)
     {
         _inner.expect (std::move (predicate));
         return *this;
@@ -395,8 +394,7 @@ class coroutine_connector_t
           _connector->wait_for_sequence (std::move (packet_name)));
     }
 
-    template <typename TMessage>
-    coroutine_wait_for_sequence_call_t<TMessage> wait_for_sequence ()
+    template <typename TMessage> coroutine_wait_for_sequence_call_t<TMessage> wait_for_sequence ()
     {
         return coroutine_wait_for_sequence_call_t<TMessage> (
           _connector->wait_for_sequence<TMessage> ());

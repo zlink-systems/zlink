@@ -14,10 +14,7 @@ export interface MessageFollowSuppressionFence {
   readonly targetOwnerLeaseGeneration: string;
 }
 
-export type MessageFollowSuppressionState =
-  | 'idle'
-  | 'inFlight'
-  | 'sentUntilExpiry';
+export type MessageFollowSuppressionState = 'idle' | 'inFlight' | 'sentUntilExpiry';
 
 export interface MessageFollowSuppressionClaim {
   readonly routeKey: string;
@@ -97,19 +94,13 @@ export class MessageFollowSuppressionRegistry {
     return this.markers.size;
   }
 
-  private currentClaim(
-    claim: MessageFollowSuppressionClaim
-  ): RetainedRouteMarker | undefined {
+  private currentClaim(claim: MessageFollowSuppressionClaim): RetainedRouteMarker | undefined {
     const marker = this.markers.get(claim.routeKey);
-    return marker?.state === 'inFlight' && marker.claimSerial === claim.serial
-      ? marker
-      : undefined;
+    return marker?.state === 'inFlight' && marker.claimSerial === claim.serial ? marker : undefined;
   }
 }
 
-export function messageFollowSuppressionKey(
-  fence: MessageFollowSuppressionFence
-): string {
+export function messageFollowSuppressionKey(fence: MessageFollowSuppressionFence): string {
   return [
     fence.objectKind,
     fence.logicalObjectId,
@@ -122,7 +113,9 @@ export function messageFollowSuppressionKey(
     fence.targetNodeGeneration,
     fence.targetAuthorityOwnerGeneration,
     fence.targetOwnerLeaseGeneration
-  ].map(lengthPrefixed).join('');
+  ]
+    .map(lengthPrefixed)
+    .join('');
 }
 
 function lengthPrefixed(value: string): string {

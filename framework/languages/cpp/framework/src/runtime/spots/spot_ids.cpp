@@ -17,8 +17,7 @@ namespace
 bool valid_utf8 (std::string_view value) noexcept
 {
     for (std::size_t index = 0; index < value.size ();) {
-        const auto first =
-          static_cast<std::uint8_t> (value[index]);
+        const auto first = static_cast<std::uint8_t> (value[index]);
         std::size_t continuation = 0;
         std::uint32_t codepoint = 0;
         if (first <= 0x7f) {
@@ -42,16 +41,13 @@ bool valid_utf8 (std::string_view value) noexcept
         if (value.size () - index - 1 < continuation)
             return false;
         for (std::size_t part = 0; part < continuation; ++part) {
-            const auto next =
-              static_cast<std::uint8_t> (value[index + part + 1]);
+            const auto next = static_cast<std::uint8_t> (value[index + part + 1]);
             if ((next & 0xc0u) != 0x80u)
                 return false;
             codepoint = (codepoint << 6u) | (next & 0x3fu);
         }
-        if ((continuation == 1 && codepoint < 0x80)
-            || (continuation == 2 && codepoint < 0x800)
-            || (continuation == 3 && codepoint < 0x10000)
-            || codepoint > 0x10ffff
+        if ((continuation == 1 && codepoint < 0x80) || (continuation == 2 && codepoint < 0x800)
+            || (continuation == 3 && codepoint < 0x10000) || codepoint > 0x10ffff
             || (codepoint >= 0xd800 && codepoint <= 0xdfff))
             return false;
         index += continuation + 1;
@@ -69,8 +65,7 @@ bool valid_spot_id (std::string_view value) noexcept
 void require_spot_id (std::string_view value)
 {
     if (!valid_spot_id (value))
-        throw std::invalid_argument (
-          "SpotId must contain 1..255 bytes of valid UTF-8");
+        throw std::invalid_argument ("SpotId must contain 1..255 bytes of valid UTF-8");
 }
 
 spot_id_t new_user_spot_id ()
@@ -90,8 +85,7 @@ spot_id_t new_entry_spot_id (std::string_view diagnostic_prefix)
 bool is_framework_entry_spot_id (std::string_view value) noexcept
 {
     const auto marker = value.rfind ("-entry-");
-    if (marker == std::string_view::npos
-        || value.size () - marker - 7 != 36)
+    if (marker == std::string_view::npos || value.size () - marker - 7 != 36)
         return false;
     const auto uuid = value.substr (marker + 7);
     for (std::size_t index = 0; index < uuid.size (); ++index) {
@@ -105,8 +99,7 @@ bool is_framework_entry_spot_id (std::string_view value) noexcept
             return false;
     }
     return uuid[14] == '4'
-           && (uuid[19] == '8' || uuid[19] == '9'
-               || uuid[19] == 'a' || uuid[19] == 'b');
+           && (uuid[19] == '8' || uuid[19] == '9' || uuid[19] == 'a' || uuid[19] == 'b');
 }
 } // namespace detail
 

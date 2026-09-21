@@ -30,10 +30,10 @@ export class ServiceLivenessRegistry {
     private readonly peerTimeoutMs = DEFAULT_SERVICE_PEER_TIMEOUT_MS
   ) {
     if (
-      !Number.isFinite(probeIntervalMs)
-      || probeIntervalMs <= 0
-      || !Number.isFinite(peerTimeoutMs)
-      || peerTimeoutMs <= probeIntervalMs
+      !Number.isFinite(probeIntervalMs) ||
+      probeIntervalMs <= 0 ||
+      !Number.isFinite(peerTimeoutMs) ||
+      peerTimeoutMs <= probeIntervalMs
     ) {
       throw new RangeError('Liveness requires a positive probe interval and a larger timeout.');
     }
@@ -55,11 +55,12 @@ export class ServiceLivenessRegistry {
   requestProbe(nodeRoutingId: string, connectionId: string, nowMs: number): boolean {
     const current = this.peers.get(nodeRoutingId);
     if (
-      current === undefined
-      || current.connectionId !== connectionId
-      || current.ready
-      || current.outstandingProbe !== undefined
-    ) return false;
+      current === undefined ||
+      current.connectionId !== connectionId ||
+      current.ready ||
+      current.outstandingProbe !== undefined
+    )
+      return false;
     current.nextProbeMs = Math.min(current.nextProbeMs, nowMs);
     return true;
   }
@@ -79,9 +80,9 @@ export class ServiceLivenessRegistry {
   ): boolean {
     const current = this.peers.get(nodeRoutingId);
     if (
-      current === undefined
-      || current.connectionId !== connectionId
-      || current.outstandingProbe !== probeId
+      current === undefined ||
+      current.connectionId !== connectionId ||
+      current.outstandingProbe !== probeId
     ) {
       return false;
     }
@@ -114,7 +115,11 @@ export class ServiceLivenessRegistry {
       }
       if (peer.nextProbeMs > nowMs) continue;
       peer.outstandingProbe ??= this.allocateProbeId();
-      probes.push({ nodeRoutingId, connectionId: peer.connectionId, probeId: peer.outstandingProbe });
+      probes.push({
+        nodeRoutingId,
+        connectionId: peer.connectionId,
+        probeId: peer.outstandingProbe
+      });
       do {
         peer.nextProbeMs += this.probeIntervalMs;
       } while (peer.nextProbeMs <= nowMs);

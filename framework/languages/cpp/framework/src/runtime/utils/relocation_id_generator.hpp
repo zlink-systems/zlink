@@ -19,8 +19,7 @@
 #include <bcrypt.h>
 #elif defined(__linux__)
 #include <sys/random.h>
-#elif defined(__APPLE__) || defined(__FreeBSD__) \
-  || defined(__OpenBSD__) || defined(__NetBSD__)
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
 #include <cstdlib>
 #else
 #error "Relocation ID generation requires an operating-system CSPRNG"
@@ -32,20 +31,14 @@ namespace zlink::framework::runtime
 class relocation_id_generator_t final
 {
   public:
-    using candidate_source_t =
-      std::function<protocol::relocation_id_t ()>;
+    using candidate_source_t = std::function<protocol::relocation_id_t ()>;
 
-    relocation_id_generator_t () :
-        relocation_id_generator_t (secure_candidate)
-    {
-    }
+    relocation_id_generator_t () : relocation_id_generator_t (secure_candidate) {}
 
-    explicit relocation_id_generator_t (candidate_source_t source) :
-        _source (std::move (source))
+    explicit relocation_id_generator_t (candidate_source_t source) : _source (std::move (source))
     {
         if (!_source)
-            throw std::invalid_argument (
-              "Relocation ID candidate source is required");
+            throw std::invalid_argument ("Relocation ID candidate source is required");
     }
 
     protocol::relocation_id_t issue ()
@@ -65,8 +58,7 @@ class relocation_id_generator_t final
             _retained.emplace_back (now + retention, candidate);
             return candidate;
         }
-        throw std::runtime_error (
-          "Relocation ID generation exhausted collision retries");
+        throw std::runtime_error ("Relocation ID generation exhausted collision retries");
     }
 
   private:
@@ -83,9 +75,8 @@ class relocation_id_generator_t final
     {
         std::array<unsigned char, 16> bytes{};
 #if defined(_WIN32)
-        if (BCryptGenRandom (
-              nullptr, bytes.data (), static_cast<ULONG> (bytes.size ()),
-              BCRYPT_USE_SYSTEM_PREFERRED_RNG)
+        if (BCryptGenRandom (nullptr, bytes.data (), static_cast<ULONG> (bytes.size ()),
+                             BCRYPT_USE_SYSTEM_PREFERRED_RNG)
             != 0) {
             throw std::runtime_error (
               "Platform CSPRNG is unavailable for Relocation ID generation");
@@ -93,8 +84,7 @@ class relocation_id_generator_t final
 #elif defined(__linux__)
         std::size_t offset = 0;
         while (offset != bytes.size ()) {
-            const auto read = getrandom (
-              bytes.data () + offset, bytes.size () - offset, 0);
+            const auto read = getrandom (bytes.data () + offset, bytes.size () - offset, 0);
             if (read < 0) {
                 if (errno == EINTR)
                     continue;
@@ -102,8 +92,7 @@ class relocation_id_generator_t final
                   "Platform CSPRNG is unavailable for Relocation ID generation");
             }
             if (read == 0)
-                throw std::runtime_error (
-                  "Platform CSPRNG returned an incomplete Relocation ID");
+                throw std::runtime_error ("Platform CSPRNG returned an incomplete Relocation ID");
             offset += static_cast<std::size_t> (read);
         }
 #else
@@ -120,9 +109,8 @@ class relocation_id_generator_t final
     candidate_source_t _source;
     std::mutex _mutex;
     std::set<id_key_t> _issued;
-    std::deque<std::pair<
-      std::chrono::steady_clock::time_point,
-      protocol::relocation_id_t>> _retained;
+    std::deque<std::pair<std::chrono::steady_clock::time_point, protocol::relocation_id_t>>
+      _retained;
 };
 
 } // namespace zlink::framework::runtime

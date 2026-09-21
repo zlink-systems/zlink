@@ -14,8 +14,10 @@ internal sealed class ZlinkStreamReceivedMessages
 {
     private readonly object _gate = new();
 
-    private readonly Dictionary<string, List<ZlinkStreamMessage<ZlinkStreamEncodedPayload>>> _messages =
-        new(StringComparer.Ordinal);
+    private readonly Dictionary<
+        string,
+        List<ZlinkStreamMessage<ZlinkStreamEncodedPayload>>
+    > _messages = new(StringComparer.Ordinal);
 
     private readonly Dictionary<string, int> _counts = new(StringComparer.Ordinal);
     private TaskCompletionSource _arrived = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -88,7 +90,8 @@ internal sealed class ZlinkStreamReceivedMessages
         TaskCompletionSource arrived;
         lock (_gate)
         {
-            if (connectionGeneration <= _establishedGeneration) return;
+            if (connectionGeneration <= _establishedGeneration)
+                return;
 
             _establishedGeneration = connectionGeneration;
             _connectionGeneration = connectionGeneration;
@@ -120,7 +123,8 @@ internal sealed class ZlinkStreamReceivedMessages
         TaskCompletionSource arrived;
         lock (_gate)
         {
-            if (_connectionGeneration == 0) return;
+            if (_connectionGeneration == 0)
+                return;
 
             _connectionGeneration = 0;
             arrived = _arrived;
@@ -168,10 +172,13 @@ internal sealed class ZlinkStreamReceivedMessages
         string name,
         Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, bool>? predicate,
         TimeSpan timeout,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken
+        );
         timeoutSource.CancelAfter(timeout);
 
         long observedGeneration;
@@ -183,7 +190,8 @@ internal sealed class ZlinkStreamReceivedMessages
         while (!timeoutSource.IsCancellationRequested)
         {
             var pending = TryTakeOrWait(name, predicate, observedGeneration, timeoutSource.Token);
-            if (pending.Message is not null) return pending.Message;
+            if (pending.Message is not null)
+                return pending.Message;
 
             if (pending.ConnectionLost)
             {
@@ -202,15 +210,18 @@ internal sealed class ZlinkStreamReceivedMessages
 
                 throw ZlinkStreamConnector.Error(
                     ZlinkStreamErrorCode.Disconnected,
-                    $"The connection this wait for '{name}' observed ended before the message arrived.");
+                    $"The connection this wait for '{name}' observed ended before the message arrived."
+                );
             }
 
             try
             {
                 await pending.WaitTask!.ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (timeoutSource.IsCancellationRequested
-                                                     && !cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException)
+                when (timeoutSource.IsCancellationRequested
+                    && !cancellationToken.IsCancellationRequested
+                )
             {
                 break;
             }
@@ -224,7 +235,8 @@ internal sealed class ZlinkStreamReceivedMessages
         string name,
         Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, bool>? predicate,
         long observedGeneration,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         while (true)
         {
@@ -233,7 +245,8 @@ internal sealed class ZlinkStreamReceivedMessages
             ZlinkStreamMessage<ZlinkStreamEncodedPayload>[] candidates;
             lock (_gate)
             {
-                if (_connectionGeneration != observedGeneration) return PendingMessage.ConnectionEnded;
+                if (_connectionGeneration != observedGeneration)
+                    return PendingMessage.ConnectionEnded;
 
                 observedVersion = _version;
                 arrived = _arrived;
@@ -244,18 +257,21 @@ internal sealed class ZlinkStreamReceivedMessages
             // payload first. It runs here, outside the lock the receive path takes for
             // every arrival, so a slow predicate delays this wait and nothing else.
             var index = IndexOfMatch(candidates, predicate);
-            if (index < 0) return new PendingMessage(null, arrived.Task.WaitAsync(cancellationToken), false);
+            if (index < 0)
+                return new PendingMessage(null, arrived.Task.WaitAsync(cancellationToken), false);
 
             lock (_gate)
             {
                 // The history changed while the predicate ran, so the copy the choice was
                 // made from no longer describes it. Choose again from what is there now.
-                if (_version != observedVersion) continue;
+                if (_version != observedVersion)
+                    continue;
 
                 var messages = _messages[name];
                 var message = messages[index];
                 messages.RemoveAt(index);
-                if (messages.Count == 0) _messages.Remove(name);
+                if (messages.Count == 0)
+                    _messages.Remove(name);
                 _version++;
                 return new PendingMessage(message, null, false);
             }
@@ -264,7 +280,8 @@ internal sealed class ZlinkStreamReceivedMessages
 
     private static int IndexOfMatch(
         ZlinkStreamMessage<ZlinkStreamEncodedPayload>[] candidates,
-        Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, bool>? predicate)
+        Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, bool>? predicate
+    )
     {
         for (var index = 0; index < candidates.Length; index++)
             if (predicate is null || predicate(candidates[index]))
@@ -276,7 +293,8 @@ internal sealed class ZlinkStreamReceivedMessages
     private readonly record struct PendingMessage(
         ZlinkStreamMessage<ZlinkStreamEncodedPayload>? Message,
         Task? WaitTask,
-        bool ConnectionLost)
+        bool ConnectionLost
+    )
     {
         internal static PendingMessage ConnectionEnded { get; } = new(null, null, true);
     }

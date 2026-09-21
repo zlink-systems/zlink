@@ -6,6 +6,5 @@ public interface ZLinkFanoutRuntime {
     ZLinkFanoutStatus snapshot(String channelName);
 
     Flow.Publisher<ZLinkObservedStatus<ZLinkFanoutStatus>> observe(
-        String channelName,
-        int capacity);
+            String channelName, int capacity);
 }

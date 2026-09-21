@@ -1,4 +1,3 @@
 package systems.zlink.framework.configuration;
 
-public interface ZLinkMeshChannelClientBuilder {
-}
+public interface ZLinkMeshChannelClientBuilder {}

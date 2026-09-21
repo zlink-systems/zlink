@@ -49,8 +49,7 @@ enum class placement_allocation_state_t : std::uint8_t
 
 struct spot_type_capacity_delta_t
 {
-    placement_object_kind_t object_kind =
-      placement_object_kind_t::user_spot;
+    placement_object_kind_t object_kind = placement_object_kind_t::user_spot;
     std::string stable_type;
     std::uint32_t slots = 0;
 };
@@ -64,10 +63,8 @@ struct placement_capacity_bundle_t
 
 struct placement_allocation_t
 {
-    placement_allocation_state_t state =
-      placement_allocation_state_t::reserved;
-    placement_object_kind_t object_kind =
-      placement_object_kind_t::actor;
+    placement_allocation_state_t state = placement_allocation_state_t::reserved;
+    placement_object_kind_t object_kind = placement_object_kind_t::actor;
     std::string stable_type;
     object_creation_target_t target;
     placement_capacity_bundle_t capacity_bundle;
@@ -98,8 +95,7 @@ struct authority_missing_t
     std::chrono::system_clock::time_point store_now;
 };
 
-using authority_read_result_t =
-  std::variant<authority_missing_t, authority_snapshot_t>;
+using authority_read_result_t = std::variant<authority_missing_t, authority_snapshot_t>;
 
 enum class authority_generation_transition_t
 {
@@ -116,12 +112,10 @@ struct authority_entry_t
 class authority_scan_cursor_t final
 {
   public:
-    explicit authority_scan_cursor_t (std::string encoded) :
-        _encoded (std::move (encoded))
+    explicit authority_scan_cursor_t (std::string encoded) : _encoded (std::move (encoded))
     {
         if (_encoded.empty () || _encoded.size () > 4096)
-            throw std::invalid_argument (
-              "authority scan cursor must contain 1..4096 bytes");
+            throw std::invalid_argument ("authority scan cursor must contain 1..4096 bytes");
     }
 
     std::string_view encoded () const noexcept { return _encoded; }
@@ -138,8 +132,7 @@ struct authority_page_t
 struct authority_scan_expired_t
 {
 };
-using authority_scan_result_t =
-  std::variant<authority_page_t, authority_scan_expired_t>;
+using authority_scan_result_t = std::variant<authority_page_t, authority_scan_expired_t>;
 
 struct authority_put_t
 {
@@ -159,10 +152,7 @@ struct authority_delete_t
 {
 };
 using authority_mutation_t =
-  std::variant<authority_put_t,
-               authority_retarget_t,
-               authority_restore_t,
-               authority_delete_t>;
+  std::variant<authority_put_t, authority_retarget_t, authority_restore_t, authority_delete_t>;
 
 struct authority_stored_t
 {
@@ -180,11 +170,10 @@ struct authority_conflict_t
 struct authority_generation_exhausted_t
 {
 };
-using authority_compare_exchange_result_t = std::variant<
-  authority_stored_t,
-  authority_deleted_t,
-  authority_conflict_t,
-  authority_generation_exhausted_t>;
+using authority_compare_exchange_result_t = std::variant<authority_stored_t,
+                                                         authority_deleted_t,
+                                                         authority_conflict_t,
+                                                         authority_generation_exhausted_t>;
 
 struct object_creation_key_t
 {
@@ -260,13 +249,12 @@ struct creation_terminal_record_t
     std::chrono::system_clock::time_point expires_at{};
 };
 
-using object_reserve_result_t = std::variant<
-  object_reserved_t,
-  object_already_exists_t,
-  object_type_mismatch_t,
-  object_placement_capacity_exhausted_t,
-  object_reserve_conflict_t,
-  authority_generation_exhausted_t>;
+using object_reserve_result_t = std::variant<object_reserved_t,
+                                             object_already_exists_t,
+                                             object_type_mismatch_t,
+                                             object_placement_capacity_exhausted_t,
+                                             object_reserve_conflict_t,
+                                             authority_generation_exhausted_t>;
 
 struct object_creation_completed_t
 {
@@ -282,9 +270,7 @@ struct object_creation_failed_t
     creation_terminal_publication_t terminal;
 };
 using object_creation_completion_t =
-  std::variant<object_creation_completed_t,
-               object_creation_rejected_t,
-               object_creation_failed_t>;
+  std::variant<object_creation_completed_t, object_creation_rejected_t, object_creation_failed_t>;
 
 struct object_complete_creation_request_t
 {
@@ -309,12 +295,11 @@ struct object_creation_completion_conflict_t
 {
     authority_read_result_t current;
 };
-using object_complete_creation_result_t =
-  std::variant<object_creation_completed_result_t,
-               object_creation_already_completed_result_t,
-               object_creation_completion_stale_t,
-               object_creation_completion_conflict_t,
-               authority_generation_exhausted_t>;
+using object_complete_creation_result_t = std::variant<object_creation_completed_result_t,
+                                                       object_creation_already_completed_result_t,
+                                                       object_creation_completion_stale_t,
+                                                       object_creation_completion_conflict_t,
+                                                       authority_generation_exhausted_t>;
 
 struct object_commit_request_t
 {
@@ -337,12 +322,11 @@ struct object_commit_conflict_t
 {
     authority_read_result_t current;
 };
-using object_commit_result_t = std::variant<
-  object_committed_t,
-  object_already_committed_t,
-  object_commit_stale_t,
-  object_commit_conflict_t,
-  authority_generation_exhausted_t>;
+using object_commit_result_t = std::variant<object_committed_t,
+                                            object_already_committed_t,
+                                            object_commit_stale_t,
+                                            object_commit_conflict_t,
+                                            authority_generation_exhausted_t>;
 
 struct object_abort_request_t
 {
@@ -362,12 +346,11 @@ struct object_abort_conflict_t
 {
     authority_read_result_t current;
 };
-using object_abort_result_t = std::variant<
-  object_aborted_t,
-  object_already_aborted_t,
-  object_abort_stale_t,
-  object_abort_conflict_t,
-  authority_generation_exhausted_t>;
+using object_abort_result_t = std::variant<object_aborted_t,
+                                           object_already_aborted_t,
+                                           object_abort_stale_t,
+                                           object_abort_conflict_t,
+                                           authority_generation_exhausted_t>;
 
 struct aggregate_id_t
 {
@@ -418,12 +401,11 @@ struct aggregate_prepare_conflict_t
 struct aggregate_prepare_stale_t
 {
 };
-using aggregate_prepare_result_t = std::variant<
-  aggregate_prepared_t,
-  aggregate_already_prepared_t,
-  aggregate_prepare_conflict_t,
-  aggregate_prepare_stale_t,
-  authority_generation_exhausted_t>;
+using aggregate_prepare_result_t = std::variant<aggregate_prepared_t,
+                                                aggregate_already_prepared_t,
+                                                aggregate_prepare_conflict_t,
+                                                aggregate_prepare_stale_t,
+                                                authority_generation_exhausted_t>;
 
 enum class aggregate_commit_result_t : std::uint8_t
 {
@@ -453,8 +435,7 @@ struct relocation_found_t
 struct relocation_missing_t
 {
 };
-using relocation_read_result_t =
-  std::variant<relocation_found_t, relocation_missing_t>;
+using relocation_read_result_t = std::variant<relocation_found_t, relocation_missing_t>;
 enum class relocation_delete_result_t
 {
     deleted = 0,
@@ -468,113 +449,87 @@ struct relocation_renewed_t
 struct relocation_renew_missing_t
 {
 };
-using relocation_renew_result_t =
-  std::variant<relocation_renewed_t, relocation_renew_missing_t>;
+using relocation_renew_result_t = std::variant<relocation_renewed_t, relocation_renew_missing_t>;
 
 class location_repository_t
 {
   public:
     virtual ~location_repository_t () = default;
-    virtual task_t<location_write_result_t> update_mesh_node (
-      mesh_node_descriptor_t descriptor,
-      location_write_intent_t intent) = 0;
-    virtual task_t<location_write_status_t> remove_mesh_node (
-      mesh_node_descriptor_key_t key,
-      location_owner_token_t owner) = 0;
+    virtual task_t<location_write_result_t> update_mesh_node (mesh_node_descriptor_t descriptor,
+                                                              location_write_intent_t intent) = 0;
+    virtual task_t<location_write_status_t> remove_mesh_node (mesh_node_descriptor_key_t key,
+                                                              location_owner_token_t owner) = 0;
     virtual task_t<location_page_t<mesh_node_descriptor_t>>
-    list_mesh_nodes (std::string mesh_name,
-                     location_page_request_t page = {}) = 0;
-    virtual task_t<location_write_result_t> update_client_server (
-      client_server_server_descriptor_t descriptor,
-      location_write_intent_t intent) = 0;
-    virtual task_t<location_write_status_t> remove_client_server (
-      client_server_server_descriptor_key_t key,
-      location_owner_token_t owner) = 0;
+    list_mesh_nodes (std::string mesh_name, location_page_request_t page = {}) = 0;
+    virtual task_t<location_write_result_t>
+    update_client_server (client_server_server_descriptor_t descriptor,
+                          location_write_intent_t intent) = 0;
+    virtual task_t<location_write_status_t>
+    remove_client_server (client_server_server_descriptor_key_t key,
+                          location_owner_token_t owner) = 0;
     virtual task_t<location_page_t<client_server_server_descriptor_t>>
-    list_client_servers (std::string channel_name,
-                         location_page_request_t page = {}) = 0;
-    virtual task_t<location_write_result_t> update_fanout_publisher (
-      fanout_publisher_descriptor_t descriptor,
-      location_write_intent_t intent) = 0;
-    virtual task_t<location_write_status_t> remove_fanout_publisher (
-      fanout_publisher_descriptor_key_t key,
-      location_owner_token_t owner) = 0;
+    list_client_servers (std::string channel_name, location_page_request_t page = {}) = 0;
+    virtual task_t<location_write_result_t>
+    update_fanout_publisher (fanout_publisher_descriptor_t descriptor,
+                             location_write_intent_t intent) = 0;
+    virtual task_t<location_write_status_t>
+    remove_fanout_publisher (fanout_publisher_descriptor_key_t key,
+                             location_owner_token_t owner) = 0;
     virtual task_t<location_page_t<fanout_publisher_descriptor_t>>
-    list_fanout_publishers (std::string channel_name,
-                            location_page_request_t page = {}) = 0;
-    virtual task_t<owner_lease_claim_result_t> claim_owner_lease (
-      std::string owner_id,
-      std::chrono::milliseconds lease_ttl) = 0;
-    virtual task_t<owner_lease_read_result_t> read_owner_lease (
-      std::string owner_id) = 0;
-    virtual task_t<owner_lease_renew_result_t> renew_owner_lease (
-      location_owner_token_t token,
-      std::chrono::milliseconds lease_ttl) = 0;
-    virtual task_t<owner_lease_release_result_t> release_owner_lease (
-      location_owner_token_t token) = 0;
-    virtual task_t<authority_read_result_t> read_authority (
-      authority_key_t key,
-      std::stop_token cancellation = {}) = 0;
+    list_fanout_publishers (std::string channel_name, location_page_request_t page = {}) = 0;
+    virtual task_t<owner_lease_claim_result_t>
+    claim_owner_lease (std::string owner_id, std::chrono::milliseconds lease_ttl) = 0;
+    virtual task_t<owner_lease_read_result_t> read_owner_lease (std::string owner_id) = 0;
+    virtual task_t<owner_lease_renew_result_t>
+    renew_owner_lease (location_owner_token_t token, std::chrono::milliseconds lease_ttl) = 0;
+    virtual task_t<owner_lease_release_result_t>
+    release_owner_lease (location_owner_token_t token) = 0;
+    virtual task_t<authority_read_result_t> read_authority (authority_key_t key,
+                                                            std::stop_token cancellation = {}) = 0;
     virtual task_t<authority_compare_exchange_result_t>
-    compare_exchange_authority (
-      authority_key_t key,
-      std::string expected_store_version,
-      authority_mutation_t mutation,
-      std::stop_token cancellation = {}) = 0;
-    virtual task_t<authority_scan_result_t> list_authorities (
-      std::string prefix,
-      std::optional<authority_scan_cursor_t> cursor,
-      std::size_t limit,
-      std::stop_token cancellation = {}) = 0;
+    compare_exchange_authority (authority_key_t key,
+                                std::string expected_store_version,
+                                authority_mutation_t mutation,
+                                std::stop_token cancellation = {}) = 0;
+    virtual task_t<authority_scan_result_t>
+    list_authorities (std::string prefix,
+                      std::optional<authority_scan_cursor_t> cursor,
+                      std::size_t limit,
+                      std::stop_token cancellation = {}) = 0;
     virtual task_t<std::optional<creation_terminal_record_t>>
-    read_creation_terminal (
-      creation_operation_identity_t operation,
-      std::stop_token cancellation = {}) = 0;
-    virtual task_t<object_reserve_result_t> reserve (
-      object_reserve_request_t request,
-      std::stop_token cancellation = {}) = 0;
-    virtual task_t<object_complete_creation_result_t> complete_creation (
-      object_complete_creation_request_t request,
-      std::stop_token cancellation = {}) = 0;
-    virtual task_t<object_commit_result_t> commit (
-      object_commit_request_t request,
-      std::stop_token cancellation = {}) = 0;
-    virtual task_t<object_abort_result_t> abort (
-      object_abort_request_t request,
-      std::stop_token cancellation = {}) = 0;
-    virtual task_t<aggregate_prepare_result_t> prepare_aggregate (
-      aggregate_prepare_request_t request,
-      std::stop_token cancellation = {}) = 0;
-    virtual task_t<aggregate_commit_result_t> commit_aggregate (
-      aggregate_fence_t fence,
-      std::stop_token cancellation = {}) = 0;
-    virtual task_t<aggregate_abort_result_t> abort_aggregate (
-      aggregate_fence_t fence,
-      std::stop_token cancellation = {}) = 0;
+    read_creation_terminal (creation_operation_identity_t operation,
+                            std::stop_token cancellation = {}) = 0;
+    virtual task_t<object_reserve_result_t> reserve (object_reserve_request_t request,
+                                                     std::stop_token cancellation = {}) = 0;
+    virtual task_t<object_complete_creation_result_t>
+    complete_creation (object_complete_creation_request_t request,
+                       std::stop_token cancellation = {}) = 0;
+    virtual task_t<object_commit_result_t> commit (object_commit_request_t request,
+                                                   std::stop_token cancellation = {}) = 0;
+    virtual task_t<object_abort_result_t> abort (object_abort_request_t request,
+                                                 std::stop_token cancellation = {}) = 0;
+    virtual task_t<aggregate_prepare_result_t>
+    prepare_aggregate (aggregate_prepare_request_t request, std::stop_token cancellation = {}) = 0;
+    virtual task_t<aggregate_commit_result_t>
+    commit_aggregate (aggregate_fence_t fence, std::stop_token cancellation = {}) = 0;
+    virtual task_t<aggregate_abort_result_t>
+    abort_aggregate (aggregate_fence_t fence, std::stop_token cancellation = {}) = 0;
     virtual task_t<std::optional<std::vector<aggregate_participant_t>>>
-    read_aggregate_participants (
-      aggregate_fence_t fence,
-      std::stop_token cancellation = {})
+    read_aggregate_participants (aggregate_fence_t fence, std::stop_token cancellation = {})
     {
         if (cancellation.stop_requested ())
             return task_t<std::optional<std::vector<aggregate_participant_t>>> (
-              detail::boundary_failure<
-                std::optional<std::vector<aggregate_participant_t>>> (
-                detail::boundary_error_t::cancelled,
-                "aggregate read cancelled"));
+              detail::boundary_failure<std::optional<std::vector<aggregate_participant_t>>> (
+                detail::boundary_error_t::cancelled, "aggregate read cancelled"));
         return task_t<std::optional<std::vector<aggregate_participant_t>>> (
-          result_t<std::optional<std::vector<aggregate_participant_t>>>::success (
-            std::nullopt));
+          result_t<std::optional<std::vector<aggregate_participant_t>>>::success (std::nullopt));
     }
-    virtual task_t<std::int64_t> remove_all_by_owner (
-      location_owner_token_t owner) = 0;
-    virtual task_t<std::optional<std::uint64_t>>
-    get_mesh_node_change_stamp (std::string mesh_name)
+    virtual task_t<std::int64_t> remove_all_by_owner (location_owner_token_t owner) = 0;
+    virtual task_t<std::optional<std::uint64_t>> get_mesh_node_change_stamp (std::string mesh_name)
     {
         (void) mesh_name;
         return task_t<std::optional<std::uint64_t>> (
-          result_t<std::optional<std::uint64_t>>::success (
-            std::nullopt));
+          result_t<std::optional<std::uint64_t>>::success (std::nullopt));
     }
 };
 
@@ -582,20 +537,15 @@ class relocation_repository_t
 {
   public:
     virtual ~relocation_repository_t () = default;
-    virtual task_t<relocation_stored_t> put_relocation (
-      std::vector<std::byte> payload,
-      std::chrono::hours retention,
-      std::stop_token cancellation = {}) = 0;
-    virtual task_t<relocation_read_result_t> get_relocation (
-      std::string reference,
-      std::stop_token cancellation = {}) = 0;
+    virtual task_t<relocation_stored_t> put_relocation (std::vector<std::byte> payload,
+                                                        std::chrono::hours retention,
+                                                        std::stop_token cancellation = {}) = 0;
+    virtual task_t<relocation_read_result_t> get_relocation (std::string reference,
+                                                             std::stop_token cancellation = {}) = 0;
     virtual task_t<relocation_renew_result_t> renew_relocation (
-      std::string reference,
-      std::chrono::hours retention,
-      std::stop_token cancellation = {}) = 0;
-    virtual task_t<relocation_delete_result_t> delete_relocation (
-      std::string reference,
-      std::stop_token cancellation = {}) = 0;
+      std::string reference, std::chrono::hours retention, std::stop_token cancellation = {}) = 0;
+    virtual task_t<relocation_delete_result_t>
+    delete_relocation (std::string reference, std::stop_token cancellation = {}) = 0;
 };
 
 } // namespace zlink::framework

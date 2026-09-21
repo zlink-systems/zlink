@@ -1,6 +1,7 @@
 package systems.zlink.framework.locations.redis;
 
 import io.lettuce.core.RedisURI;
+
 import java.time.Duration;
 import java.util.Objects;
 

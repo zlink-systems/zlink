@@ -1,13 +1,7 @@
 package systems.zlink.framework.runtime.internal.backend;
+
 import java.time.Duration;
 import java.util.function.Function;
-
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterOptions;
-import systems.zlink.framework.runtime.internal.backend.ZLinkChannelBackendAdapter;
-import systems.zlink.framework.runtime.internal.backend.ZLinkMonitoringBackendAdapter;
-import systems.zlink.framework.runtime.internal.backend.ZLinkMeshBackendAdapter;
-import systems.zlink.framework.runtime.internal.backend.ZLinkSpotBackendAdapter;
-import systems.zlink.framework.runtime.internal.backend.ZLinkStreamBackendAdapter;
 
 public interface ZLinkBackendAdapterProvider {
     ZLinkChannelBackendAdapter createChannelAdapter(ZLinkBackendAdapterOptions options);
@@ -22,9 +16,7 @@ public interface ZLinkBackendAdapterProvider {
 
     ZLinkMonitoringBackendAdapter createMonitoringAdapter(ZLinkBackendAdapterOptions options);
 
-    default Function<
-        ZLinkBackendObject,
-        Duration> admissionTimeout() {
+    default Function<ZLinkBackendObject, Duration> admissionTimeout() {
         return ignored -> Duration.ofSeconds(1);
     }
 }

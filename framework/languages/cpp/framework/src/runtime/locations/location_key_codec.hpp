@@ -30,8 +30,7 @@ class location_key_codec_t
         return encode (std::to_string (static_cast<int> (key.route_kind)), key.route_key);
     }
 
-    static std::optional<std::string> normalize_actor_type (
-      std::optional<std::string> actor_type)
+    static std::optional<std::string> normalize_actor_type (std::optional<std::string> actor_type)
     {
         return actor_type;
     }

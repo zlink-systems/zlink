@@ -16,7 +16,7 @@ export class ZLinkReceiveTaskTracker {
     this.tasks.add(task);
     void task.then(
       () => this.complete(task),
-      error => {
+      (error) => {
         this.complete(task);
         if (consumeError) {
           try {

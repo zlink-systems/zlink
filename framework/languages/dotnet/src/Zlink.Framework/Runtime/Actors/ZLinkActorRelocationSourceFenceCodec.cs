@@ -7,7 +7,8 @@ internal sealed record ZLinkActorRelocationSourceFence(
     string OwnerId,
     ulong OwnerLeaseGeneration,
     RoutingId NodeRid,
-    ulong NodeGeneration)
+    ulong NodeGeneration
+)
 {
     internal ReadOnlyMemory<byte> LegacyRemoteJoinRecovery { get; init; }
 }
@@ -21,19 +22,20 @@ internal static class ZLinkActorRelocationSourceFenceCodec
     internal static byte[] Encode(ZLinkActorRelocationSourceFence value)
     {
         ArgumentNullException.ThrowIfNull(value);
-        if (string.IsNullOrWhiteSpace(value.OwnerId)
+        if (
+            string.IsNullOrWhiteSpace(value.OwnerId)
             || value.OwnerId.Contains('\0')
             || value.OwnerLeaseGeneration == 0
             || value.NodeRid.IsEmpty
-            || value.NodeGeneration == 0)
+            || value.NodeGeneration == 0
+        )
             throw new ArgumentOutOfRangeException(nameof(value));
         var owner = StrictUtf8.GetBytes(value.OwnerId);
         var node = value.NodeRid.ToBytes();
         if (owner.Length > ushort.MaxValue || node.Length > byte.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(value));
 
-        var encoded = new byte[checked(4 + 1 + 2 + owner.Length + 8 + 1
-                                       + node.Length + 8)];
+        var encoded = new byte[checked(4 + 1 + 2 + owner.Length + 8 + 1 + node.Length + 8)];
         var offset = 0;
         WriteU32(encoded, ref offset, Magic);
         encoded[offset++] = Version;
@@ -47,12 +49,12 @@ internal static class ZLinkActorRelocationSourceFenceCodec
         WriteU64(encoded, ref offset, value.NodeGeneration);
         if (offset != encoded.Length)
             throw new InvalidOperationException(
-                "The standalone Actor source fence length is inconsistent.");
+                "The standalone Actor source fence length is inconsistent."
+            );
         return encoded;
     }
 
-    internal static ZLinkActorRelocationSourceFence Decode(
-        ReadOnlySpan<byte> encoded)
+    internal static ZLinkActorRelocationSourceFence Decode(ReadOnlySpan<byte> encoded)
     {
         try
         {
@@ -63,8 +65,7 @@ internal static class ZLinkActorRelocationSourceFenceCodec
             if (version is not (1 or 2))
                 throw new InvalidDataException();
             var ownerLength = ReadU16(encoded, ref offset);
-            var owner = StrictUtf8.GetString(Read(encoded, ref offset,
-                ownerLength));
+            var owner = StrictUtf8.GetString(Read(encoded, ref offset, ownerLength));
             var ownerLease = ReadU64(encoded, ref offset);
             var nodeLength = ReadU8(encoded, ref offset);
             var nodeRid = RoutingId.From(Read(encoded, ref offset, nodeLength));
@@ -72,41 +73,42 @@ internal static class ZLinkActorRelocationSourceFenceCodec
             ReadOnlyMemory<byte> legacyRemoteJoinRecovery = default;
             if (version == 2)
             {
-                var legacyRecoveryLength =
-                    checked((int)ReadU32(encoded, ref offset));
+                var legacyRecoveryLength = checked((int)ReadU32(encoded, ref offset));
                 if (legacyRecoveryLength > 1024 * 1024)
                     throw new InvalidDataException();
-                legacyRemoteJoinRecovery =
-                    Read(encoded, ref offset, legacyRecoveryLength).ToArray();
+                legacyRemoteJoinRecovery = Read(encoded, ref offset, legacyRecoveryLength)
+                    .ToArray();
             }
-            if (offset != encoded.Length
+            if (
+                offset != encoded.Length
                 || string.IsNullOrWhiteSpace(owner)
                 || owner.Contains('\0')
                 || ownerLease == 0
                 || nodeRid.IsEmpty
-                || nodeGeneration == 0)
+                || nodeGeneration == 0
+            )
                 throw new InvalidDataException();
-            return new ZLinkActorRelocationSourceFence(
-                owner, ownerLease, nodeRid, nodeGeneration)
+            return new ZLinkActorRelocationSourceFence(owner, ownerLease, nodeRid, nodeGeneration)
             {
-                LegacyRemoteJoinRecovery = legacyRemoteJoinRecovery
+                LegacyRemoteJoinRecovery = legacyRemoteJoinRecovery,
             };
         }
-        catch (Exception exception) when (exception is ArgumentException
-                                          or DecoderFallbackException
-                                          or OverflowException
-                                          or IndexOutOfRangeException)
+        catch (Exception exception)
+            when (exception
+                    is ArgumentException
+                        or DecoderFallbackException
+                        or OverflowException
+                        or IndexOutOfRangeException
+            )
         {
             throw new InvalidDataException(
                 "The standalone Actor source fence is malformed.",
-                exception);
+                exception
+            );
         }
     }
 
-    private static ReadOnlySpan<byte> Read(
-        ReadOnlySpan<byte> source,
-        ref int offset,
-        int length)
+    private static ReadOnlySpan<byte> Read(ReadOnlySpan<byte> source, ref int offset, int length)
     {
         if (length < 0 || offset > source.Length - length)
             throw new InvalidDataException();
@@ -115,17 +117,17 @@ internal static class ZLinkActorRelocationSourceFenceCodec
         return value;
     }
 
-    private static byte ReadU8(ReadOnlySpan<byte> source, ref int offset)
-        => Read(source, ref offset, 1)[0];
+    private static byte ReadU8(ReadOnlySpan<byte> source, ref int offset) =>
+        Read(source, ref offset, 1)[0];
 
-    private static ushort ReadU16(ReadOnlySpan<byte> source, ref int offset)
-        => BinaryPrimitives.ReadUInt16BigEndian(Read(source, ref offset, 2));
+    private static ushort ReadU16(ReadOnlySpan<byte> source, ref int offset) =>
+        BinaryPrimitives.ReadUInt16BigEndian(Read(source, ref offset, 2));
 
-    private static uint ReadU32(ReadOnlySpan<byte> source, ref int offset)
-        => BinaryPrimitives.ReadUInt32BigEndian(Read(source, ref offset, 4));
+    private static uint ReadU32(ReadOnlySpan<byte> source, ref int offset) =>
+        BinaryPrimitives.ReadUInt32BigEndian(Read(source, ref offset, 4));
 
-    private static ulong ReadU64(ReadOnlySpan<byte> source, ref int offset)
-        => BinaryPrimitives.ReadUInt64BigEndian(Read(source, ref offset, 8));
+    private static ulong ReadU64(ReadOnlySpan<byte> source, ref int offset) =>
+        BinaryPrimitives.ReadUInt64BigEndian(Read(source, ref offset, 8));
 
     private static void WriteU16(Span<byte> target, ref int offset, ushort value)
     {

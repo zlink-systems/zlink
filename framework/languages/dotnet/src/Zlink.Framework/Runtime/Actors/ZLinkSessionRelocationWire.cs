@@ -5,7 +5,8 @@ namespace Zlink.Framework.Runtime.Actors;
 
 internal readonly record struct ZLinkSessionRelocationContext(
     ZLinkServiceWireCodec.RelocationWireId RelocationId,
-    ZLinkServiceWireCodec.RelocationCoordinatorFence Coordinator)
+    ZLinkServiceWireCodec.RelocationCoordinatorFence Coordinator
+)
 {
     internal bool IsExact =>
         !RelocationId.IsEmpty
@@ -13,8 +14,7 @@ internal readonly record struct ZLinkSessionRelocationContext(
         && Coordinator.LeaseGeneration != 0
         && !Coordinator.NodeRid.IsEmpty
         && Coordinator.NodeGeneration != 0
-        && !string.IsNullOrWhiteSpace(
-            Coordinator.ExpectedAuthorityStoreVersion);
+        && !string.IsNullOrWhiteSpace(Coordinator.ExpectedAuthorityStoreVersion);
 
     internal static ZLinkSessionRelocationContext Create(
         Guid relocationId,
@@ -22,24 +22,29 @@ internal readonly record struct ZLinkSessionRelocationContext(
         ulong ownerLeaseGeneration,
         RoutingId sourceNodeRid,
         ulong sourceNodeGeneration,
-        string expectedAuthorityStoreVersion)
+        string expectedAuthorityStoreVersion
+    )
     {
         var bytes = relocationId.ToByteArray(bigEndian: true);
         var context = new ZLinkSessionRelocationContext(
             new ZLinkServiceWireCodec.RelocationWireId(
                 BinaryPrimitives.ReadUInt64BigEndian(bytes.AsSpan(0, 8)),
-                BinaryPrimitives.ReadUInt64BigEndian(bytes.AsSpan(8, 8))),
+                BinaryPrimitives.ReadUInt64BigEndian(bytes.AsSpan(8, 8))
+            ),
             new ZLinkServiceWireCodec.RelocationCoordinatorFence(
                 ownerId,
                 ownerLeaseGeneration,
                 sourceNodeRid,
                 sourceNodeGeneration,
-                expectedAuthorityStoreVersion));
+                expectedAuthorityStoreVersion
+            )
+        );
         if (!context.IsExact)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 "Session relocation requires the exact durable coordinator fence.",
-                ZLinkRetryAdvice.DoNotRetry);
+                ZLinkRetryAdvice.DoNotRetry
+            );
         return context;
     }
 }
@@ -50,7 +55,8 @@ internal static class ZLinkSessionRelocationWire
         string actorId,
         RoutingId actorNodeRid,
         ZLinkActorBoundSession session,
-        ZLinkSessionRelocationContext context)
+        ZLinkSessionRelocationContext context
+    )
     {
         var route = new ZLinkRemoteActorBoundSessionRoute(
             session.SessionNodeRid,
@@ -65,7 +71,8 @@ internal static class ZLinkSessionRelocationWire
             session.SessionOwnerNodeGeneration,
             session.AcceptedHighWater,
             session.SessionOwnerId,
-            session.SessionOwnerLeaseGeneration);
+            session.SessionOwnerLeaseGeneration
+        );
         return CreateSeal(actorId, actorNodeRid, route, context);
     }
 
@@ -73,14 +80,16 @@ internal static class ZLinkSessionRelocationWire
         string actorId,
         RoutingId actorNodeRid,
         ZLinkRemoteActorBoundSessionRoute route,
-        ZLinkSessionRelocationContext context)
+        ZLinkSessionRelocationContext context
+    )
     {
         RequireExact(route, context);
         if (actorNodeRid.IsEmpty)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 "Session relocation requires the exact Actor owner node.",
-                ZLinkRetryAdvice.DoNotRetry);
+                ZLinkRetryAdvice.DoNotRetry
+            );
         return new ZLinkServiceWireCodec.SessionRelocationSealRecord(
             context.RelocationId,
             context.Coordinator,
@@ -88,46 +97,51 @@ internal static class ZLinkSessionRelocationWire
             new ZLinkServiceWireCodec.SessionActorRouteFenceRecord(
                 new ZLinkServiceWireCodec.SessionActorIdentityRecord(
                     actorId,
-                    route.ObjectGeneration),
+                    route.ObjectGeneration
+                ),
                 // A bound Session route stores the Session owner's node. The
                 // Actor fence names the independent current Actor owner.
                 actorNodeRid,
                 route.TargetNodeGeneration,
                 route.AuthorityOwnerGeneration,
-                route.OwnerLeaseGeneration),
-            CreateSessionFence(route));
+                route.OwnerLeaseGeneration
+            ),
+            CreateSessionFence(route)
+        );
     }
 
-    internal static ZLinkServiceWireCodec.SessionRelocationRouteRecord
-        CreateCommit(
-            string actorId,
-            ZLinkPendingActorSessionRoute pending)
+    internal static ZLinkServiceWireCodec.SessionRelocationRouteRecord CreateCommit(
+        string actorId,
+        ZLinkPendingActorSessionRoute pending
+    )
     {
         var route = pending.Route;
         RequireExact(route, pending.WireContext);
-        var target = pending.TargetActor
-                     ?? throw new InvalidOperationException(
-                         "Session relocation commit requires a target Actor.");
+        var target =
+            pending.TargetActor
+            ?? throw new InvalidOperationException(
+                "Session relocation commit requires a target Actor."
+            );
         return new ZLinkServiceWireCodec.SessionRelocationRouteRecord(
             pending.WireContext.RelocationId,
             pending.WireContext.Coordinator,
             2,
-            new ZLinkServiceWireCodec.SessionActorIdentityRecord(
-                actorId,
-                route.ObjectGeneration),
+            new ZLinkServiceWireCodec.SessionActorIdentityRecord(actorId, route.ObjectGeneration),
             CreateSessionFence(route),
             ZLinkServiceWireCodec.SessionRelocationRouteUpdateRecord.Commit(
                 route.AuthorityOwnerGeneration,
                 pending.TargetAuthorityOwnerGeneration,
                 target.NodeRid,
-                pending.TargetNodeGeneration));
+                pending.TargetNodeGeneration
+            )
+        );
     }
 
-    internal static ZLinkServiceWireCodec.SessionRelocationRouteRecord
-        CreateAbort(
-            string actorId,
-            ZLinkActorBoundSession session,
-            ZLinkSessionRelocationContext context) =>
+    internal static ZLinkServiceWireCodec.SessionRelocationRouteRecord CreateAbort(
+        string actorId,
+        ZLinkActorBoundSession session,
+        ZLinkSessionRelocationContext context
+    ) =>
         CreateAbort(
             actorId,
             new ZLinkRemoteActorBoundSessionRoute(
@@ -143,51 +157,59 @@ internal static class ZLinkSessionRelocationWire
                 session.SessionOwnerNodeGeneration,
                 session.AcceptedHighWater,
                 session.SessionOwnerId,
-                session.SessionOwnerLeaseGeneration),
-            context);
+                session.SessionOwnerLeaseGeneration
+            ),
+            context
+        );
 
-    internal static ZLinkServiceWireCodec.SessionRelocationRouteRecord
-        CreateAbort(
-            string actorId,
-            ZLinkRemoteActorBoundSessionRoute route,
-            ZLinkSessionRelocationContext context)
+    internal static ZLinkServiceWireCodec.SessionRelocationRouteRecord CreateAbort(
+        string actorId,
+        ZLinkRemoteActorBoundSessionRoute route,
+        ZLinkSessionRelocationContext context
+    )
     {
         RequireExact(route, context);
         return new ZLinkServiceWireCodec.SessionRelocationRouteRecord(
             context.RelocationId,
             context.Coordinator,
             1,
-            new ZLinkServiceWireCodec.SessionActorIdentityRecord(
-                actorId,
-                route.ObjectGeneration),
+            new ZLinkServiceWireCodec.SessionActorIdentityRecord(actorId, route.ObjectGeneration),
             CreateSessionFence(route),
             ZLinkServiceWireCodec.SessionRelocationRouteUpdateRecord.Abort(
-                route.AuthorityOwnerGeneration));
+                route.AuthorityOwnerGeneration
+            )
+        );
     }
 
-    private static ZLinkServiceWireCodec.SessionOwnerFenceRecord
-        CreateSessionFence(ZLinkRemoteActorBoundSessionRoute route) =>
+    private static ZLinkServiceWireCodec.SessionOwnerFenceRecord CreateSessionFence(
+        ZLinkRemoteActorBoundSessionRoute route
+    ) =>
         new(
             route.NodeRid!.Value,
             route.SessionOwnerNodeGeneration,
             route.SessionOwnerId!,
             route.SessionOwnerLeaseGeneration,
             route.SessionRid!.Value,
-            route.BindingGeneration);
+            route.BindingGeneration
+        );
 
     private static void RequireExact(
         ZLinkRemoteActorBoundSessionRoute route,
-        ZLinkSessionRelocationContext context)
+        ZLinkSessionRelocationContext context
+    )
     {
-        if (!route.IsBound
+        if (
+            !route.IsBound
             || route.NodeRid is null
             || route.SessionRid is null
             || string.IsNullOrWhiteSpace(route.SessionOwnerId)
             || route.SessionOwnerLeaseGeneration == 0
-            || !context.IsExact)
+            || !context.IsExact
+        )
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 "Session relocation requires exact route, owner, and coordinator fences.",
-                ZLinkRetryAdvice.DoNotRetry);
+                ZLinkRetryAdvice.DoNotRetry
+            );
     }
 }

@@ -44,7 +44,8 @@ internal sealed class ZLinkBackendRouteReceived : IDisposable
         ZLinkServiceWireCodec.RequestSourceFence? requestSource = null,
         ulong deadlineUnixMs = 0,
         IDisposable? payloadOwner = null,
-        ZLinkMultipartPayloadView? applicationPayloadView = null)
+        ZLinkMultipartPayloadView? applicationPayloadView = null
+    )
     {
         Parts = parts;
         SourceNodeRid = sourceNodeRid;
@@ -110,14 +111,14 @@ internal sealed class ZLinkBackendRouteReceived : IDisposable
     public SubmitResult Reply(IReadOnlyList<Message> parts)
     {
         if (_reply is null)
-            throw new InvalidOperationException(
-                "This route record does not carry a reply token.");
+            throw new InvalidOperationException("This route record does not carry a reply token.");
         return _reply(parts);
     }
 
     public void Dispose()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
         try
         {
             ZLinkMessageParts.DisposeAll(Parts);
@@ -144,7 +145,8 @@ internal sealed class ZLinkBackendSubscribeMessage : IDisposable
         string topic,
         IReadOnlyList<Message> parts,
         ZLinkMessageMetadata? metadata = null,
-        IDisposable? payloadOwner = null)
+        IDisposable? payloadOwner = null
+    )
     {
         ChannelName = channelName;
         Topic = topic;
@@ -168,7 +170,8 @@ internal sealed class ZLinkBackendSubscribeMessage : IDisposable
 
     public void Dispose()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
         try
         {
             ZLinkMessageParts.DisposeAll(Parts);

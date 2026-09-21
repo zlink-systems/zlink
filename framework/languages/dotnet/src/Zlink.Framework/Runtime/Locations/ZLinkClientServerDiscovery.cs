@@ -16,7 +16,8 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
         IZLinkLocationRepository store,
         ZLinkLocationRuntime locationRuntime,
         ZLinkLocationOptions options,
-        ZLinkOwnerLeaseTracker? leases)
+        ZLinkOwnerLeaseTracker? leases
+    )
     {
         _store = store;
         _locationRuntime = locationRuntime;
@@ -26,33 +27,40 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
 
     internal async ValueTask StartAsync(
         ZLinkFrameworkComponentState state,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         foreach (var (channelName, registration) in state.Registration.Channels)
         {
-            if (registration.HasClientServerServer
-                && state.ClientServerServerBundles.TryGetValue(channelName, out var serverBundle))
+            if (
+                registration.HasClientServerServer
+                && state.ClientServerServerBundles.TryGetValue(channelName, out var serverBundle)
+            )
             {
                 var router = (IRouterSocket)serverBundle.Socket;
                 var server = new LocalServer(
                     serverBundle.ClientServerServer
-                    ?? throw new InvalidOperationException(
-                        "ClientServer server identity is not initialized."),
+                        ?? throw new InvalidOperationException(
+                            "ClientServer server identity is not initialized."
+                        ),
                     AdvertisedEndpoint(
                         router.Options.LastEndpoint,
-                        registration.Server!.AdvertiseHost),
-                    router);
-                await server.Identity.SetAdvertisedEndpointAsync(server.Endpoint)
+                        registration.Server!.AdvertiseHost
+                    ),
+                    router
+                );
+                await server
+                    .Identity.SetAdvertisedEndpointAsync(server.Endpoint)
                     .ConfigureAwait(false);
                 await PublishAsync(server, ZLinkLocationWriteIntent.NewClaim, cancellationToken)
                     .ConfigureAwait(false);
                 _servers.Add(server);
             }
 
-            if (registration.HasClientServerClient
-                && state.ClientServerClientRuntimes.TryGetValue(
-                    channelName,
-                    out var clientRuntime))
+            if (
+                registration.HasClientServerClient
+                && state.ClientServerClientRuntimes.TryGetValue(channelName, out var clientRuntime)
+            )
             {
                 var loop = new ClientLoop(
                     channelName,
@@ -60,15 +68,15 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
                     clientRuntime,
                     _options,
                     _leases,
-                    state.ErrorSink);
+                    state.ErrorSink
+                );
                 await loop.StartAsync(cancellationToken).ConfigureAwait(false);
                 _clients.Add(loop);
             }
         }
     }
 
-    internal async ValueTask<bool> MarkDrainingAsync(
-        CancellationToken cancellationToken)
+    internal async ValueTask<bool> MarkDrainingAsync(CancellationToken cancellationToken)
     {
         var published = true;
         foreach (var server in _servers)
@@ -77,7 +85,8 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
             var result = await PublishAsync(
                     server,
                     ZLinkLocationWriteIntent.Renew,
-                    cancellationToken)
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
             published &= result.Status == ZLinkLocationWriteStatus.Stored;
         }
@@ -92,8 +101,12 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
         PublishStateAsync(static identity => identity.MarkServingAsync(), cancellationToken);
 
     private async ValueTask<bool> PublishStateAsync(
-        Func<ZLinkClientServerServerIdentity, ValueTask<ZLinkClientServerServerIdentity.Snapshot>> transition,
-        CancellationToken cancellationToken)
+        Func<
+            ZLinkClientServerServerIdentity,
+            ValueTask<ZLinkClientServerServerIdentity.Snapshot>
+        > transition,
+        CancellationToken cancellationToken
+    )
     {
         var published = true;
         foreach (var server in _servers)
@@ -102,7 +115,8 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
             var result = await PublishAsync(
                     server,
                     ZLinkLocationWriteIntent.Renew,
-                    cancellationToken)
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
             published &= result.Status == ZLinkLocationWriteStatus.Stored;
         }
@@ -113,10 +127,8 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
     {
         ZLinkSocketConfig.ValidatePeerWeight(weight);
         var server = _servers.SingleOrDefault(candidate =>
-            string.Equals(
-                candidate.ChannelName,
-                channelName,
-                StringComparison.Ordinal));
+            string.Equals(candidate.ChannelName, channelName, StringComparison.Ordinal)
+        );
         if (server is null)
             return;
         _ = PublishWeightAsync(server);
@@ -126,10 +138,7 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
     {
         try
         {
-            await PublishAsync(
-                    server,
-                    ZLinkLocationWriteIntent.Renew,
-                    CancellationToken.None)
+            await PublishAsync(server, ZLinkLocationWriteIntent.Renew, CancellationToken.None)
                 .ConfigureAwait(false);
         }
         catch
@@ -156,12 +165,15 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
         foreach (var server in _servers)
             try
             {
-                _ = await _store.RemoveClientServerAsync(
+                _ = await _store
+                    .RemoveClientServerAsync(
                         new ZLinkClientServerServerDescriptorKey(
                             server.ChannelName,
-                            server.Identity.ServerRid),
+                            server.Identity.ServerRid
+                        ),
                         _locationRuntime.OwnerToken,
-                        CancellationToken.None)
+                        CancellationToken.None
+                    )
                     .ConfigureAwait(false);
             }
             catch (Exception exception)
@@ -180,7 +192,8 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
     private async ValueTask<ZLinkLocationWriteResult> PublishAsync(
         LocalServer server,
         ZLinkLocationWriteIntent intent,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var owner = _locationRuntime.AdmissionOwnerToken;
         var snapshot = await server.Identity.ReadAsync().ConfigureAwait(false);
@@ -195,28 +208,30 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
             server.Identity.SecurityIdentity,
             owner.OwnerId,
             owner.LeaseGeneration,
-            default);
-        var result = await _store.UpdateClientServerAsync(
-                descriptor,
-                intent,
-                cancellationToken)
+            default
+        );
+        var result = await _store
+            .UpdateClientServerAsync(descriptor, intent, cancellationToken)
             .ConfigureAwait(false);
-        if (result.Status == ZLinkLocationWriteStatus.RejectedConflict
-            && intent == ZLinkLocationWriteIntent.NewClaim)
-            result = await _store.UpdateClientServerAsync(
+        if (
+            result.Status == ZLinkLocationWriteStatus.RejectedConflict
+            && intent == ZLinkLocationWriteIntent.NewClaim
+        )
+            result = await _store
+                .UpdateClientServerAsync(
                     descriptor,
                     ZLinkLocationWriteIntent.Takeover,
-                    cancellationToken)
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
         if (result.Status != ZLinkLocationWriteStatus.Stored)
             throw new ZLinkConfigurationException(
-                $"ClientServer server descriptor '{server.ChannelName}' could not be published.");
+                $"ClientServer server descriptor '{server.ChannelName}' could not be published."
+            );
         return result;
     }
 
-    private static string AdvertisedEndpoint(
-        string boundEndpoint,
-        string? advertiseHost)
+    private static string AdvertisedEndpoint(string boundEndpoint, string? advertiseHost)
     {
         if (string.IsNullOrWhiteSpace(advertiseHost))
             return ZLinkEndpointNotation.Normalize(boundEndpoint);
@@ -228,7 +243,8 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
     private sealed class LocalServer(
         ZLinkClientServerServerIdentity identity,
         string endpoint,
-        IRouterSocket router)
+        IRouterSocket router
+    )
     {
         internal ZLinkClientServerServerIdentity Identity { get; } = identity;
         internal string ChannelName => Identity.ChannelName.Value;
@@ -242,10 +258,13 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
         ZLinkClientServerClientRuntime runtime,
         ZLinkLocationOptions options,
         ZLinkOwnerLeaseTracker? leases,
-        IZLinkRuntimeFailureReporter errorSink) : IAsyncDisposable
+        IZLinkRuntimeFailureReporter errorSink
+    ) : IAsyncDisposable
     {
-        private readonly Dictionary<(RoutingId ServerRid, ulong LifecycleGeneration), ulong>
-            _observedRevisions = [];
+        private readonly Dictionary<
+            (RoutingId ServerRid, ulong LifecycleGeneration),
+            ulong
+        > _observedRevisions = [];
         private CancellationTokenSource? _stop;
         private Task? _loop;
 
@@ -273,34 +292,42 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
                     // Fail-static: retain the last successful connection set.
                     errorSink.ReportRuntimeTaskException(
                         $"client-server-discovery:{channelName}",
-                        exception);
+                        exception
+                    );
                 }
         }
 
         private async ValueTask ReconcileAsync(CancellationToken cancellationToken)
         {
             var rows = await ListAllAsync(cancellationToken).ConfigureAwait(false);
-            var desired = new Dictionary<(RoutingId ServerRid, ulong LifecycleGeneration), Target>();
+            var desired =
+                new Dictionary<(RoutingId ServerRid, ulong LifecycleGeneration), Target>();
             foreach (var row in rows)
             {
-                if (row.ServerRid.Size == 0
+                if (
+                    row.ServerRid.Size == 0
                     || row.LifecycleGeneration == 0
                     || row.DescriptorRevision == 0
                     || string.IsNullOrWhiteSpace(row.Endpoint)
-                    || row.Weight is < 0 or > ZLinkSocketConfig.MaximumPeerWeight)
+                    || row.Weight is < 0 or > ZLinkSocketConfig.MaximumPeerWeight
+                )
                     continue;
-                if (leases is not null
-                    && !await leases.IsOwnerTokenLiveAsync(
-                            new ZLinkLocationOwnerToken(
-                                row.OwnerId,
-                                row.LeaseGeneration),
-                            cancellationToken)
-                        .ConfigureAwait(false))
+                if (
+                    leases is not null
+                    && !await leases
+                        .IsOwnerTokenLiveAsync(
+                            new ZLinkLocationOwnerToken(row.OwnerId, row.LeaseGeneration),
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false)
+                )
                     continue;
 
                 var revisionKey = (row.ServerRid, row.LifecycleGeneration);
-                if (_observedRevisions.TryGetValue(revisionKey, out var observed)
-                    && row.DescriptorRevision < observed)
+                if (
+                    _observedRevisions.TryGetValue(revisionKey, out var observed)
+                    && row.DescriptorRevision < observed
+                )
                     continue;
                 _observedRevisions[revisionKey] = row.DescriptorRevision;
                 desired[revisionKey] = new Target(
@@ -308,27 +335,30 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
                     row.LifecycleGeneration,
                     row.Endpoint,
                     row.Weight,
-                    row.State == ZLinkFrameworkRuntimeState.Serving
-                    && row.Weight > 0);
+                    row.State == ZLinkFrameworkRuntimeState.Serving && row.Weight > 0
+                );
             }
 
             runtime.ReplaceAutomatic(
-                rows.Where(row => desired.ContainsKey(
-                        (row.ServerRid, row.LifecycleGeneration)))
-                    .ToArray());
+                rows.Where(row => desired.ContainsKey((row.ServerRid, row.LifecycleGeneration)))
+                    .ToArray()
+            );
         }
 
-        private async ValueTask<IReadOnlyList<ZLinkClientServerServerDescriptor>>
-            ListAllAsync(CancellationToken cancellationToken)
+        private async ValueTask<IReadOnlyList<ZLinkClientServerServerDescriptor>> ListAllAsync(
+            CancellationToken cancellationToken
+        )
         {
             var result = new List<ZLinkClientServerServerDescriptor>();
             string? continuation = null;
             do
             {
-                var page = await store.ListClientServersAsync(
+                var page = await store
+                    .ListClientServersAsync(
                         channelName,
                         new ZLinkPageRequest(256, continuation),
-                        cancellationToken)
+                        cancellationToken
+                    )
                     .ConfigureAwait(false);
                 // Location Store rows are accepted from outside the process
                 // (another node's own write path, potentially another
@@ -340,8 +370,14 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
                 // language or an older build); normalize here so downstream
                 // Ordinal comparisons against the admission wire value
                 // cannot fail on notation alone.
-                result.AddRange(page.Items.Select(static row =>
-                    row with { Endpoint = ZLinkEndpointNotation.Normalize(row.Endpoint) }));
+                result.AddRange(
+                    page.Items.Select(static row =>
+                        row with
+                        {
+                            Endpoint = ZLinkEndpointNotation.Normalize(row.Endpoint),
+                        }
+                    )
+                );
                 continuation = page.ContinuationToken;
             } while (continuation is not null);
             return result;
@@ -357,9 +393,7 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
                     {
                         await _loop.ConfigureAwait(false);
                     }
-                    catch (OperationCanceledException)
-                    {
-                    }
+                    catch (OperationCanceledException) { }
                 _stop.Dispose();
                 _stop = null;
                 _loop = null;
@@ -372,6 +406,7 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
             ulong LifecycleGeneration,
             string Endpoint,
             int Weight,
-            bool Selectable);
+            bool Selectable
+        );
     }
 }

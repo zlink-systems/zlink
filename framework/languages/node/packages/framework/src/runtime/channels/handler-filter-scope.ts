@@ -1,7 +1,4 @@
-import type {
-  Type,
-  ZLinkHandlerFilterContext,
-} from '../../contracts';
+import type { Type, ZLinkHandlerFilterContext } from '../../contracts';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
 
 export interface ZLinkHandlerFilterScopeResolver {

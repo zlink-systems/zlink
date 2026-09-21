@@ -1,16 +1,17 @@
 package systems.zlink.framework.runtime.mesh;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.LinkedHashMap;
-import java.util.function.Function;
-import java.util.function.Consumer;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendContext;
-import systems.zlink.framework.runtime.internal.backend.ZLinkMeshBackendAdapter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.backend.ZLinkMeshBackendAdapter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshDispatchRecord;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Consumer;
+import java.util.function.Function;
 
 public final class ZLinkMeshNodesRuntime implements AutoCloseable {
     private final List<ZLinkMeshNodeRuntime> nodes;
@@ -24,54 +25,54 @@ public final class ZLinkMeshNodesRuntime implements AutoCloseable {
     }
 
     public static ZLinkMeshNodesRuntime start(
-        List<MeshNodeRegistration> registrations,
-        ZLinkMeshBackendAdapter adapter,
-        ZLinkBackendContext context) {
+            List<MeshNodeRegistration> registrations,
+            ZLinkMeshBackendAdapter adapter,
+            ZLinkBackendContext context) {
         return start(registrations, adapter, context, ignored -> null);
     }
 
     public static ZLinkMeshNodesRuntime start(
-        List<MeshNodeRegistration> registrations,
-        ZLinkMeshBackendAdapter adapter,
-        ZLinkBackendContext context,
-        Function<MeshNodeRegistration, Consumer<ZLinkMeshDispatchRecord>> receiverFactory) {
+            List<MeshNodeRegistration> registrations,
+            ZLinkMeshBackendAdapter adapter,
+            ZLinkBackendContext context,
+            Function<MeshNodeRegistration, Consumer<ZLinkMeshDispatchRecord>> receiverFactory) {
         return start(registrations, adapter, context, receiverFactory, false);
     }
 
     public static ZLinkMeshNodesRuntime start(
-        List<MeshNodeRegistration> registrations,
-        ZLinkMeshBackendAdapter adapter,
-        ZLinkBackendContext context,
-        Function<MeshNodeRegistration, Consumer<ZLinkMeshDispatchRecord>> receiverFactory,
-        boolean deferServiceReadyPublication) {
+            List<MeshNodeRegistration> registrations,
+            ZLinkMeshBackendAdapter adapter,
+            ZLinkBackendContext context,
+            Function<MeshNodeRegistration, Consumer<ZLinkMeshDispatchRecord>> receiverFactory,
+            boolean deferServiceReadyPublication) {
         return start(
-            registrations,
-            adapter,
-            context,
-            receiverFactory,
-            deferServiceReadyPublication,
-            null);
+                registrations,
+                adapter,
+                context,
+                receiverFactory,
+                deferServiceReadyPublication,
+                null);
     }
 
     public static ZLinkMeshNodesRuntime start(
-        List<MeshNodeRegistration> registrations,
-        ZLinkMeshBackendAdapter adapter,
-        ZLinkBackendContext context,
-        Function<MeshNodeRegistration, Consumer<ZLinkMeshDispatchRecord>> receiverFactory,
-        boolean deferServiceReadyPublication,
-        ZLinkApplicationJobQueue applicationJobQueue) {
+            List<MeshNodeRegistration> registrations,
+            ZLinkMeshBackendAdapter adapter,
+            ZLinkBackendContext context,
+            Function<MeshNodeRegistration, Consumer<ZLinkMeshDispatchRecord>> receiverFactory,
+            boolean deferServiceReadyPublication,
+            ZLinkApplicationJobQueue applicationJobQueue) {
         List<ZLinkMeshNodeRuntime> started = new ArrayList<>();
         try {
             for (MeshNodeRegistration registration : registrations) {
-                Consumer<ZLinkMeshDispatchRecord> receiver =
-                    receiverFactory.apply(registration);
-                ZLinkMeshNodeRuntime runtime = ZLinkMeshNodeRuntime.start(
-                    registration,
-                    adapter,
-                    context,
-                    deferServiceReadyPublication,
-                    receiver,
-                    applicationJobQueue);
+                Consumer<ZLinkMeshDispatchRecord> receiver = receiverFactory.apply(registration);
+                ZLinkMeshNodeRuntime runtime =
+                        ZLinkMeshNodeRuntime.start(
+                                registration,
+                                adapter,
+                                context,
+                                deferServiceReadyPublication,
+                                receiver,
+                                applicationJobQueue);
                 started.add(runtime);
             }
             return new ZLinkMeshNodesRuntime(started);
@@ -108,9 +109,7 @@ public final class ZLinkMeshNodesRuntime implements AutoCloseable {
         }
     }
 
-    private static void closeReverse(
-        List<ZLinkMeshNodeRuntime> nodes,
-        RuntimeException failure) {
+    private static void closeReverse(List<ZLinkMeshNodeRuntime> nodes, RuntimeException failure) {
         for (int index = nodes.size() - 1; index >= 0; index--) {
             try {
                 nodes.get(index).close();

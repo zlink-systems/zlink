@@ -1,25 +1,26 @@
 package systems.zlink.framework.runtime.host;
+
+import systems.zlink.framework.ZLinkMessageSerializer;
+import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
+import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterOptions;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendContext;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
+import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
+import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
+import systems.zlink.framework.runtime.locations.ZLinkLocationLifecycle;
+import systems.zlink.framework.runtime.locations.ZLinkLocationRuntime;
+import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
+import systems.zlink.framework.runtime.spots.ZLinkSpotRuntime;
+import systems.zlink.framework.spots.ZLinkSpotManager;
+
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Supplier;
-import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
-import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
-import systems.zlink.framework.runtime.locations.ZLinkLocationRuntime;
-import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
-
-import systems.zlink.framework.ZLinkMessageSerializer;
-import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterOptions;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendContext;
-import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
-import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
-import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
-import systems.zlink.framework.runtime.locations.ZLinkLocationLifecycle;
-import systems.zlink.framework.runtime.spots.ZLinkSpotRuntime;
-import systems.zlink.framework.spots.ZLinkSpotManager;
-import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
 
 final class ZLinkFrameworkSpotSubsystem {
     private final ZLinkSpotRuntime spots;
@@ -27,69 +28,64 @@ final class ZLinkFrameworkSpotSubsystem {
     private final Supplier<CompletionStage<Void>> startup;
 
     private ZLinkFrameworkSpotSubsystem(
-        ZLinkSpotRuntime spots,
-        SpotTransportAddressResolver remoteAddressResolver,
-        Supplier<CompletionStage<Void>> startup) {
+            ZLinkSpotRuntime spots,
+            SpotTransportAddressResolver remoteAddressResolver,
+            Supplier<CompletionStage<Void>> startup) {
         this.spots = spots;
         this.remoteAddressResolver = remoteAddressResolver;
         this.startup = startup;
     }
 
     static ZLinkFrameworkSpotSubsystem create(
-        DefaultZLinkFrameworkOptions options,
-        ZLinkBackendAdapterProvider backendFactory,
-        ZLinkBackendAdapterOptions adapterOptions,
-        ZLinkMessageSerializer serializer,
-        ZLinkHandlerActivator.MutableServices runtimeHandlers,
-        ZLinkRuntimeEventDispatcher eventDispatcher,
-        ZLinkChannelRuntime channels,
-        ZLinkBackendContext backendContext,
-        ZLinkLocationLifecycle locationLifecycle,
-        ZLinkLocationRepository authorityStore,
-        ZLinkLocationRepository locationStore,
-        ZLinkLocationRuntime
-            locationRuntime,
-        ZLinkStoreLocationResolvers locationResolvers,
-        SpotTransportAddressResolver locationTransportResolver,
-        Map<String, ZLinkInternalMeshNode>
-            meshNodes) {
+            DefaultZLinkFrameworkOptions options,
+            ZLinkBackendAdapterProvider backendFactory,
+            ZLinkBackendAdapterOptions adapterOptions,
+            ZLinkMessageSerializer serializer,
+            ZLinkHandlerActivator.MutableServices runtimeHandlers,
+            ZLinkRuntimeEventDispatcher eventDispatcher,
+            ZLinkChannelRuntime channels,
+            ZLinkBackendContext backendContext,
+            ZLinkLocationLifecycle locationLifecycle,
+            ZLinkLocationRepository authorityStore,
+            ZLinkLocationRepository locationStore,
+            ZLinkLocationRuntime locationRuntime,
+            ZLinkStoreLocationResolvers locationResolvers,
+            SpotTransportAddressResolver locationTransportResolver,
+            Map<String, ZLinkInternalMeshNode> meshNodes) {
         SpotTransportAddressResolver remoteAddressResolver = locationTransportResolver;
-        boolean hasMeshServices = options.registration().meshNodes().stream()
-            .anyMatch(node -> node.objectRoleEnabled()
-                || !node.spotFactories().isEmpty()
-                || !node.entrySpots().isEmpty()
-                || !node.actorFactories().isEmpty()
-                || !node.channelNames().isEmpty());
+        boolean hasMeshServices =
+                options.registration().meshNodes().stream()
+                        .anyMatch(
+                                node ->
+                                        node.objectRoleEnabled()
+                                                || !node.spotFactories().isEmpty()
+                                                || !node.entrySpots().isEmpty()
+                                                || !node.actorFactories().isEmpty()
+                                                || !node.channelNames().isEmpty());
         if (options.registration().spotNodes().isEmpty() && !hasMeshServices) {
             return new ZLinkFrameworkSpotSubsystem(
-                null, remoteAddressResolver,
-                () -> CompletableFuture.completedFuture(null));
+                    null, remoteAddressResolver, () -> CompletableFuture.completedFuture(null));
         }
 
-        ZLinkSpotRuntime spots = new ZLinkSpotRuntime(
-            backendFactory,
-            adapterOptions,
-            options.registration(),
-            channels,
-            backendContext,
-            serializer,
-            runtimeHandlers,
-            eventDispatcher,
-            meshNodes);
+        ZLinkSpotRuntime spots =
+                new ZLinkSpotRuntime(
+                        backendFactory,
+                        adapterOptions,
+                        options.registration(),
+                        channels,
+                        backendContext,
+                        serializer,
+                        runtimeHandlers,
+                        eventDispatcher,
+                        meshNodes);
         spots.setLocationLifecycle(locationLifecycle);
         if (channels != null) {
-            channels.registerInstanceSpotCallRuntime(
-                spots.instanceSpotCalls());
+            channels.registerInstanceSpotCallRuntime(spots.instanceSpotCalls());
             channels.registerRequestSourceMeshOwner(spots::primaryNode);
         }
-        if (authorityStore != null
-            && locationStore != null
-            && locationRuntime != null) {
+        if (authorityStore != null && locationStore != null && locationRuntime != null) {
             spots.installUserSpotOperationHandlers(
-                authorityStore,
-                locationStore,
-                locationRuntime,
-                locationResolvers);
+                    authorityStore, locationStore, locationRuntime, locationResolvers);
         }
         runtimeHandlers.add(ZLinkSpotManager.class, spots);
         if (!options.registration().spotNodes().isEmpty()) {
@@ -97,7 +93,7 @@ final class ZLinkFrameworkSpotSubsystem {
             channels.registerSpotRouteBridgeDispatchDrainer(spots::drainRoutedDispatchQueues);
         }
         return new ZLinkFrameworkSpotSubsystem(
-            spots, remoteAddressResolver, spots::claimEntrySpotLocations);
+                spots, remoteAddressResolver, spots::claimEntrySpotLocations);
     }
 
     ZLinkSpotRuntime spots() {
@@ -111,5 +107,4 @@ final class ZLinkFrameworkSpotSubsystem {
     CompletionStage<Void> startup() {
         return startup.get();
     }
-
 }

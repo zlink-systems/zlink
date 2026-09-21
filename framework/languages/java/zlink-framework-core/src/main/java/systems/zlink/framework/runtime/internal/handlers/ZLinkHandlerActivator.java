@@ -1,17 +1,18 @@
 package systems.zlink.framework.runtime.internal.handlers;
-import java.util.Collections;
-import java.util.IdentityHashMap;
-import java.util.List;
-import java.util.Set;
+
+import systems.zlink.framework.errors.ZLinkConfigurationException;
 
 import java.lang.reflect.Constructor;
 import java.util.ArrayDeque;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import systems.zlink.framework.errors.ZLinkConfigurationException;
+import java.util.Set;
 
 @FunctionalInterface
 public interface ZLinkHandlerActivator {
@@ -41,8 +42,7 @@ public interface ZLinkHandlerActivator {
             }
 
             @Override
-            public void close() {
-            }
+            public void close() {}
         };
     }
 
@@ -54,8 +54,7 @@ public interface ZLinkHandlerActivator {
                 throw error;
             } catch (Exception error) {
                 throw new ZLinkConfigurationException(
-                    "failed to destroy handler: " + instance.getClass().getName(),
-                    error);
+                        "failed to destroy handler: " + instance.getClass().getName(), error);
             }
         }
     }
@@ -75,9 +74,7 @@ public interface ZLinkHandlerActivator {
     interface Activation extends AutoCloseable {
         Object create(Class<?> handlerType);
 
-        default Object create(
-            Class<?> handlerType,
-            DependencyResolver dependencyResolver) {
+        default Object create(Class<?> handlerType, DependencyResolver dependencyResolver) {
             return create(handlerType);
         }
 
@@ -103,8 +100,8 @@ public interface ZLinkHandlerActivator {
 
         public synchronized MutableServices add(Class<?> serviceType, Object service) {
             services.put(
-                Objects.requireNonNull(serviceType, "serviceType"),
-                Objects.requireNonNull(service, "service"));
+                    Objects.requireNonNull(serviceType, "serviceType"),
+                    Objects.requireNonNull(service, "service"));
             serviceIndex = buildServiceIndex(services);
             return this;
         }
@@ -125,7 +122,7 @@ public interface ZLinkHandlerActivator {
                     return registered;
                 }
                 for (Constructor<?> constructor :
-                    PublicConstructorPlan.forType(handlerType).constructors()) {
+                        PublicConstructorPlan.forType(handlerType).constructors()) {
                     Object[] arguments = resolveArguments(constructor.getParameterTypes());
                     if (arguments != null && arguments.length > 0) {
                         return constructor.newInstance(arguments);
@@ -134,8 +131,7 @@ public interface ZLinkHandlerActivator {
                 return fallback.create(handlerType);
             } catch (ReflectiveOperationException ex) {
                 throw new ZLinkConfigurationException(
-                    "failed to create handler: " + handlerType.getName(),
-                    ex);
+                        "failed to create handler: " + handlerType.getName(), ex);
             }
         }
 
@@ -144,8 +140,7 @@ public interface ZLinkHandlerActivator {
             Activation fallbackActivation = fallback.openActivation();
             return new Activation() {
                 private final Set<Object> borrowed =
-                    Collections.newSetFromMap(
-                        new IdentityHashMap<>());
+                        Collections.newSetFromMap(new IdentityHashMap<>());
 
                 @Override
                 public Object create(Class<?> handlerType) {
@@ -155,27 +150,24 @@ public interface ZLinkHandlerActivator {
                         return runtimeService;
                     }
                     return fallbackActivation.create(
-                        handlerType,
-                        MutableServices.this::findRuntimeService);
+                            handlerType, MutableServices.this::findRuntimeService);
                 }
 
                 @Override
-                public Object create(
-                    Class<?> handlerType,
-                    DependencyResolver dependencyResolver) {
+                public Object create(Class<?> handlerType, DependencyResolver dependencyResolver) {
                     Object runtimeService = findRuntimeService(handlerType);
                     if (runtimeService != null) {
                         borrowed.add(runtimeService);
                         return runtimeService;
                     }
                     return fallbackActivation.create(
-                        handlerType,
-                        dependencyType -> {
-                            Object service = findRuntimeService(dependencyType);
-                            return service != null
-                                ? service
-                                : dependencyResolver.resolve(dependencyType);
-                        });
+                            handlerType,
+                            dependencyType -> {
+                                Object service = findRuntimeService(dependencyType);
+                                return service != null
+                                        ? service
+                                        : dependencyResolver.resolve(dependencyType);
+                            });
                 }
 
                 @Override
@@ -226,8 +218,7 @@ public interface ZLinkHandlerActivator {
             return null;
         }
 
-        private static Map<Class<?>, Object> buildServiceIndex(
-            Map<Class<?>, Object> services) {
+        private static Map<Class<?>, Object> buildServiceIndex(Map<Class<?>, Object> services) {
             Map<Class<?>, Object> index = new HashMap<>();
             for (Map.Entry<Class<?>, Object> entry : services.entrySet()) {
                 ArrayDeque<Class<?>> pending = new ArrayDeque<>();
@@ -271,25 +262,22 @@ final class ReflectionActivator implements ZLinkHandlerActivator {
 }
 
 record PublicConstructorPlan(
-    Class<?> handlerType,
-    List<Constructor<?>> constructors,
-    Constructor<?> noArgConstructor) {
+        Class<?> handlerType, List<Constructor<?>> constructors, Constructor<?> noArgConstructor) {
     private static final ClassValue<PublicConstructorPlan> PLANS =
-        new ClassValue<>() {
-            @Override
-            protected PublicConstructorPlan computeValue(Class<?> handlerType) {
-                List<Constructor<?>> constructors =
-                    List.of(handlerType.getConstructors());
-                Constructor<?> noArg = null;
-                for (Constructor<?> constructor : constructors) {
-                    if (constructor.getParameterCount() == 0) {
-                        noArg = constructor;
-                        break;
+            new ClassValue<>() {
+                @Override
+                protected PublicConstructorPlan computeValue(Class<?> handlerType) {
+                    List<Constructor<?>> constructors = List.of(handlerType.getConstructors());
+                    Constructor<?> noArg = null;
+                    for (Constructor<?> constructor : constructors) {
+                        if (constructor.getParameterCount() == 0) {
+                            noArg = constructor;
+                            break;
+                        }
                     }
+                    return new PublicConstructorPlan(handlerType, constructors, noArg);
                 }
-                return new PublicConstructorPlan(handlerType, constructors, noArg);
-            }
-        };
+            };
 
     static void prepare(Class<?> handlerType) {
         forType(handlerType);
@@ -301,8 +289,7 @@ record PublicConstructorPlan(
 
     Object createNoArg() {
         if (noArgConstructor == null) {
-            throw failure(new NoSuchMethodException(
-                handlerType.getName() + ".<init>()"));
+            throw failure(new NoSuchMethodException(handlerType.getName() + ".<init>()"));
         }
         try {
             return noArgConstructor.newInstance();
@@ -311,9 +298,8 @@ record PublicConstructorPlan(
         }
     }
 
-    private ZLinkConfigurationException failure(
-        ReflectiveOperationException cause) {
+    private ZLinkConfigurationException failure(ReflectiveOperationException cause) {
         return new ZLinkConfigurationException(
-            "failed to create handler: " + handlerType.getName(), cause);
+                "failed to create handler: " + handlerType.getName(), cause);
     }
 }

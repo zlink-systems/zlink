@@ -1,8 +1,9 @@
 package systems.zlink.framework.runtime.internal.binding.spot;
 
+import systems.zlink.contracts.messaging.Message;
+
 import java.util.ArrayList;
 import java.util.List;
-import systems.zlink.contracts.messaging.Message;
 
 /** Framework-owned reusable receive storage. */
 final class FrameworkReceiveBatch implements ReceiveBatch {
@@ -12,13 +13,9 @@ final class FrameworkReceiveBatch implements ReceiveBatch {
     private final List<Entry> entries = new ArrayList<>();
     private boolean closed;
 
-    FrameworkReceiveBatch(
-        int messageCapacity,
-        int partCapacity,
-        int byteCapacity) {
+    FrameworkReceiveBatch(int messageCapacity, int partCapacity, int byteCapacity) {
         if (messageCapacity <= 0 || partCapacity <= 0 || byteCapacity <= 0) {
-            throw new IllegalArgumentException(
-                "receive batch capacities must be positive");
+            throw new IllegalArgumentException("receive batch capacities must be positive");
         }
         this.messageCapacity = messageCapacity;
         this.partCapacity = partCapacity;
@@ -41,8 +38,8 @@ final class FrameworkReceiveBatch implements ReceiveBatch {
     public List<Message> retainMessage(int index) {
         ensureOpen();
         return entries.get(index).parts().stream()
-            .map(bytes -> Message.from(bytes.clone()))
-            .toList();
+                .map(bytes -> Message.from(bytes.clone()))
+                .toList();
     }
 
     @Override
@@ -59,22 +56,19 @@ final class FrameworkReceiveBatch implements ReceiveBatch {
 
     boolean tryAdd(ReceiveRecord record, List<byte[]> parts) {
         ensureOpen();
-        int currentParts = entries.stream()
-            .mapToInt(entry -> entry.parts().size())
-            .sum();
-        int currentBytes = entries.stream()
-            .flatMap(entry -> entry.parts().stream())
-            .mapToInt(bytes -> bytes.length)
-            .sum();
+        int currentParts = entries.stream().mapToInt(entry -> entry.parts().size()).sum();
+        int currentBytes =
+                entries.stream()
+                        .flatMap(entry -> entry.parts().stream())
+                        .mapToInt(bytes -> bytes.length)
+                        .sum();
         int addedBytes = parts.stream().mapToInt(bytes -> bytes.length).sum();
         if (entries.size() == messageCapacity
-            || currentParts + parts.size() > partCapacity
-            || currentBytes + addedBytes > byteCapacity) {
+                || currentParts + parts.size() > partCapacity
+                || currentBytes + addedBytes > byteCapacity) {
             return false;
         }
-        entries.add(new Entry(
-            record,
-            parts.stream().map(byte[]::clone).toList()));
+        entries.add(new Entry(record, parts.stream().map(byte[]::clone).toList()));
         return true;
     }
 
@@ -84,6 +78,5 @@ final class FrameworkReceiveBatch implements ReceiveBatch {
         }
     }
 
-    private record Entry(ReceiveRecord record, List<byte[]> parts) {
-    }
+    private record Entry(ReceiveRecord record, List<byte[]> parts) {}
 }

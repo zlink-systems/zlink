@@ -1,15 +1,10 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException  } from '../framework-errors-internal';
-import type {
-  RoutingId,
-  Type,
-  ZLinkSpot,
-  ZLinkSpotInfo
-} from '../../contracts';
-import type { ZLinkLocalSpotCreateResult } from './spot-manager-internal-contracts';
 import {
-  ZLinkSpotCreateState,
-  ZLinkSpotCloseReason
-} from '../../contracts';
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
+import type { RoutingId, Type, ZLinkSpot, ZLinkSpotInfo } from '../../contracts';
+import type { ZLinkLocalSpotCreateResult } from './spot-manager-internal-contracts';
+import { ZLinkSpotCreateState, ZLinkSpotCloseReason } from '../../contracts';
 import type { ZLinkSpotActivation } from './spot-activation-state';
 import { ZLinkSpotCloseOccupiedError } from './spot-activation-state';
 import { ZLinkConfigurationException } from '../configuration';
@@ -66,29 +61,34 @@ export class ZLinkSpotActivationRegistry {
   }
 
   resolveUnique(spotId: RoutingId): ZLinkSpotActivation | undefined {
-    const matches = [...this.activations.values()]
-      .filter((activation) =>
-        String(activation.spotId) === String(spotId)
-        && !this.staged.has(spotActivationKey(activation.meshName, activation.spotId))
-        && !this.closing.has(spotActivationKey(activation.meshName, activation.spotId))
-        && !this.failedClose.has(spotActivationKey(activation.meshName, activation.spotId)));
+    const matches = [...this.activations.values()].filter(
+      (activation) =>
+        String(activation.spotId) === String(spotId) &&
+        !this.staged.has(spotActivationKey(activation.meshName, activation.spotId)) &&
+        !this.closing.has(spotActivationKey(activation.meshName, activation.spotId)) &&
+        !this.failedClose.has(spotActivationKey(activation.meshName, activation.spotId))
+    );
     return matches.length === 1 ? matches[0] : undefined;
   }
 
   has(meshName: string, spotId: RoutingId): boolean {
     const key = spotActivationKey(meshName, spotId);
-    return !this.staged.has(key)
-      && !this.closing.has(key)
-      && !this.failedClose.has(key)
-      && this.activations.has(key);
+    return (
+      !this.staged.has(key) &&
+      !this.closing.has(key) &&
+      !this.failedClose.has(key) &&
+      this.activations.has(key)
+    );
   }
 
   canClose(meshName: string, spotId: RoutingId): boolean {
     const key = spotActivationKey(meshName, spotId);
-    return !this.staged.has(key)
-      && !this.closing.has(key)
-      && !this.failedClose.has(key)
-      && this.activations.get(key)?.canClose() === true;
+    return (
+      !this.staged.has(key) &&
+      !this.closing.has(key) &&
+      !this.failedClose.has(key) &&
+      this.activations.get(key)?.canClose() === true
+    );
   }
 
   list(meshName: string): readonly ZLinkSpotInfo[] {
@@ -112,7 +112,8 @@ export class ZLinkSpotActivationRegistry {
   }
 
   nextActiveActivationBatch(limit = 64): readonly ZLinkSpotActivation[] {
-    if (!Number.isInteger(limit) || limit <= 0) throw new RangeError('Activation scan limit must be positive.');
+    if (!Number.isInteger(limit) || limit <= 0)
+      throw new RangeError('Activation scan limit must be positive.');
     if (this.activations.size === 0) {
       this.activeScan = undefined;
       return [];
@@ -217,7 +218,9 @@ export class ZLinkSpotActivationRegistry {
     let occupiedAfterQuiescence = false;
     const ready = Promise.resolve()
       .then(() => close(activation))
-      .then(() => { completed = true; })
+      .then(() => {
+        completed = true;
+      })
       .catch((error: unknown) => {
         // The seal's post-quiescence recheck (spot-activation.ts
         // closeAfterSeal) found a new join and released the seal instead of
@@ -272,9 +275,9 @@ export class ZLinkSpotActivationRegistry {
     if (this.failedClose.has(key)) {
       return {
         owner: false,
-        ready: Promise.reject(new ZLinkConfigurationException(
-          `Spot '${spotId}' cleanup has not completed.`
-        ))
+        ready: Promise.reject(
+          new ZLinkConfigurationException(`Spot '${spotId}' cleanup has not completed.`)
+        )
       };
     }
     const existing = this.activations.get(key);
@@ -312,9 +315,11 @@ export class ZLinkSpotActivationRegistry {
     }
     return {
       owner: false,
-      ready: pending.ready.then((result) => result.state === ZLinkSpotCreateState.Created
-        ? { spotId, state: ZLinkSpotCreateState.Existing }
-        : { spotId, state: result.state, reply: result.reply })
+      ready: pending.ready.then((result) =>
+        result.state === ZLinkSpotCreateState.Created
+          ? { spotId, state: ZLinkSpotCreateState.Existing }
+          : { spotId, state: result.state, reply: result.reply }
+      )
     };
   }
 
@@ -327,7 +332,6 @@ export class ZLinkSpotActivationRegistry {
     for (const resolve of this.emptyWaiters) resolve();
     this.emptyWaiters.clear();
   }
-
 }
 
 function spotActivationKey(meshName: string, spotId: RoutingId): string {

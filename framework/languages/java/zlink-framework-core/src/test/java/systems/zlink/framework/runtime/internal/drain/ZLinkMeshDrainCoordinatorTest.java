@@ -4,14 +4,15 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.util.List;
 import org.junit.jupiter.api.Test;
+
+import java.util.List;
 
 final class ZLinkMeshDrainCoordinatorTest {
     @Test
     void sealAtomicallyRejectsNewClaimsAndWaitsForAcceptedClaim() {
         ZLinkMeshDrainCoordinator coordinator =
-            new ZLinkMeshDrainCoordinator(List.of("play", "api"));
+                new ZLinkMeshDrainCoordinator(List.of("play", "api"));
         ZLinkMeshDrainCoordinator.Claim accepted = coordinator.tryClaim("play");
 
         var barrier = coordinator.sealAndAwaitZero("play").toCompletableFuture();
@@ -28,8 +29,7 @@ final class ZLinkMeshDrainCoordinatorTest {
 
     @Test
     void claimReleaseIsIdempotent() {
-        ZLinkMeshDrainCoordinator coordinator =
-            new ZLinkMeshDrainCoordinator(List.of("mesh"));
+        ZLinkMeshDrainCoordinator coordinator = new ZLinkMeshDrainCoordinator(List.of("mesh"));
         ZLinkMeshDrainCoordinator.Claim accepted = coordinator.tryClaim("mesh");
         var barrier = coordinator.sealAndAwaitZero("mesh").toCompletableFuture();
 

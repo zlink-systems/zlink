@@ -5,19 +5,21 @@ import com.fasterxml.jackson.databind.MapperFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.google.protobuf.MessageLite;
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
+
 import systems.zlink.contracts.messaging.Message;
 
-final class ZLinkProtobufPayloads {
-    private static final ObjectMapper MAPPER = JsonMapper.builder()
-        .configure(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES, true)
-        .configure(MapperFeature.USE_STD_BEAN_NAMING, true)
-        .findAndAddModules()
-        .build();
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 
-    private ZLinkProtobufPayloads() {
-    }
+final class ZLinkProtobufPayloads {
+    private static final ObjectMapper MAPPER =
+            JsonMapper.builder()
+                    .configure(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES, true)
+                    .configure(MapperFeature.USE_STD_BEAN_NAMING, true)
+                    .findAndAddModules()
+                    .build();
+
+    private ZLinkProtobufPayloads() {}
 
     static byte[] encodeStream(Object value) {
         if (value instanceof byte[] bytes) {
@@ -36,8 +38,7 @@ final class ZLinkProtobufPayloads {
             return MAPPER.writeValueAsBytes(value);
         } catch (JsonProcessingException ex) {
             throw new IllegalArgumentException(
-                "failed to encode Protobuf stream payload: " + valueTypeName(value),
-                ex);
+                    "failed to encode Protobuf stream payload: " + valueTypeName(value), ex);
         }
     }
 
@@ -55,8 +56,7 @@ final class ZLinkProtobufPayloads {
             return MAPPER.readValue(bytes, type);
         } catch (IOException ex) {
             throw new IllegalArgumentException(
-                "failed to decode Protobuf stream payload as " + type.getName(),
-                ex);
+                    "failed to decode Protobuf stream payload as " + type.getName(), ex);
         }
     }
 

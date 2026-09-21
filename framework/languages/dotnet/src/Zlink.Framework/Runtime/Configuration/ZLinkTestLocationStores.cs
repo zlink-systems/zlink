@@ -17,7 +17,8 @@ internal static class ZLinkTestLocationStores
 
         if (options is not ZLinkFrameworkOptionsBuilder builder)
             throw new InvalidOperationException(
-                "UseTestLocationStore requires the framework options created by AddZLinkFramework.");
+                "UseTestLocationStore requires the framework options created by AddZLinkFramework."
+            );
 
         builder.UseTestLocationStore();
     }

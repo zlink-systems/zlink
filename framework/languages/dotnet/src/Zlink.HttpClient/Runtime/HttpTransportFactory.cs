@@ -21,7 +21,7 @@ internal static class HttpTransportFactory
         {
             AllowAutoRedirect = false,
             AutomaticDecompression = DecompressionMethods.None,
-            UseCookies = false
+            UseCookies = false,
         };
 
         if (options.Proxy is not null)
@@ -41,9 +41,13 @@ internal static class HttpTransportFactory
         return new HttpTransport(handler, ownedCertificates);
     }
 
-    private static IReadOnlyList<X509Certificate2> ConfigureTls(SocketsHttpHandler handler, HttpClientOptions options)
+    private static IReadOnlyList<X509Certificate2> ConfigureTls(
+        SocketsHttpHandler handler,
+        HttpClientOptions options
+    )
     {
-        if (options.TrustCertificateFile is null && options.ClientCertificate is null) return [];
+        if (options.TrustCertificateFile is null && options.ClientCertificate is null)
+            return [];
 
         var sslOptions = new SslClientAuthenticationOptions();
         var ownedCertificates = new List<X509Certificate2>();
@@ -51,7 +55,9 @@ internal static class HttpTransportFactory
         if (options.ClientCertificate is { } clientCertificate)
         {
             var certificate = X509Certificate2.CreateFromPemFile(
-                clientCertificate.CertificatePath, clientCertificate.KeyPath);
+                clientCertificate.CertificatePath,
+                clientCertificate.KeyPath
+            );
             sslOptions.ClientCertificates = new X509CertificateCollection { certificate };
             ownedCertificates.Add(certificate);
         }
@@ -62,23 +68,44 @@ internal static class HttpTransportFactory
             // would try to extract a matching key and fail.
             var trusted = X509Certificate2.CreateFromPem(File.ReadAllText(trustPath));
             ownedCertificates.Add(trusted);
-            sslOptions.RemoteCertificateValidationCallback = (_, presented, suppliedChain, errors) =>
+            sslOptions.RemoteCertificateValidationCallback = (
+                _,
+                presented,
+                suppliedChain,
+                errors
+            ) =>
             {
-                if (errors == SslPolicyErrors.None) return true;
+                if (errors == SslPolicyErrors.None)
+                    return true;
 
-                if (presented is null) return false;
+                if (presented is null)
+                    return false;
 
                 // Hostname verification stays enabled: a name mismatch (or missing cert) is never
                 // accepted, even when the thumbprint matches the pinned trust certificate.
-                if ((errors & (SslPolicyErrors.RemoteCertificateNameMismatch |
-                               SslPolicyErrors.RemoteCertificateNotAvailable)) != 0) return false;
+                if (
+                    (
+                        errors
+                        & (
+                            SslPolicyErrors.RemoteCertificateNameMismatch
+                            | SslPolicyErrors.RemoteCertificateNotAvailable
+                        )
+                    ) != 0
+                )
+                    return false;
 
                 using var presentedCertificate = new X509Certificate2(presented);
 
                 // Pinned trust: the server presents exactly the trusted certificate (the common
                 // case for a self-signed test certificate, which cannot act as a CA root).
-                if (string.Equals(presentedCertificate.Thumbprint, trusted.Thumbprint,
-                        StringComparison.OrdinalIgnoreCase)) return true;
+                if (
+                    string.Equals(
+                        presentedCertificate.Thumbprint,
+                        trusted.Thumbprint,
+                        StringComparison.OrdinalIgnoreCase
+                    )
+                )
+                    return true;
 
                 // CA trust: the presented certificate chains to the trusted certificate as root.
                 using var chain = new X509Chain();

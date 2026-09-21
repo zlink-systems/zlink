@@ -14,12 +14,17 @@ public sealed class MessagePayloadOwnershipConvergenceTests
     [Fact]
     public void ReadonlyAccessorAndDeserializeBudgetMatchSharedFixture()
     {
-        using var document = JsonDocument.Parse(File.ReadAllText(Path.Combine(
-            Common.FrameworkTestEnvironment.GetRepoRoot(),
-            "framework",
-            "runtime",
-            "conformance",
-            "payload-ownership-v1.json")));
+        using var document = JsonDocument.Parse(
+            File.ReadAllText(
+                Path.Combine(
+                    Common.FrameworkTestEnvironment.GetRepoRoot(),
+                    "framework",
+                    "runtime",
+                    "conformance",
+                    "payload-ownership-v1.json"
+                )
+            )
+        );
         var accessor = document.RootElement.GetProperty("accessorScenario");
         Assert.Equal(0, accessor.GetProperty("fullBufferCopies").GetInt32());
 
@@ -30,26 +35,25 @@ public sealed class MessagePayloadOwnershipConvergenceTests
         var message = ZLinkMessage.FromEnvelopePayload(
             "application/x-counting",
             nativePayload,
-            codecs);
+            codecs
+        );
 
-        var views = Enumerable.Range(
-                0,
-                accessor.GetProperty("reads").GetInt32())
+        var views = Enumerable
+            .Range(0, accessor.GetProperty("reads").GetInt32())
             .Select(_ => message.Decode<ReadOnlyMemory<byte>>())
             .ToArray();
         Assert.All(views, view => Assert.Equal("owned", Encoding.UTF8.GetString(view.Span)));
-        Assert.True(MemoryMarshal.TryGetArray(
-            views[0],
-            out ArraySegment<byte> first));
-        Assert.All(views.Skip(1), view =>
-        {
-            Assert.True(MemoryMarshal.TryGetArray(
-                view,
-                out ArraySegment<byte> next));
-            Assert.Same(first.Array, next.Array);
-            Assert.Equal(first.Offset, next.Offset);
-            Assert.Equal(first.Count, next.Count);
-        });
+        Assert.True(MemoryMarshal.TryGetArray(views[0], out ArraySegment<byte> first));
+        Assert.All(
+            views.Skip(1),
+            view =>
+            {
+                Assert.True(MemoryMarshal.TryGetArray(view, out ArraySegment<byte> next));
+                Assert.Same(first.Array, next.Array);
+                Assert.Equal(first.Offset, next.Offset);
+                Assert.Equal(first.Count, next.Count);
+            }
+        );
 
         var firstCopy = message.Decode<byte[]>();
         var secondCopy = message.Decode<byte[]>();
@@ -61,34 +65,37 @@ public sealed class MessagePayloadOwnershipConvergenceTests
         Assert.Equal("owned", message.Decode<Probe>().Value);
         Assert.Equal("owned", message.Decode<Probe>().Value);
         Assert.Equal(
-            document.RootElement
-                .GetProperty("copyBudget")
+            document
+                .RootElement.GetProperty("copyBudget")
                 .GetProperty("maximumDeserializationsAfterAdmission")
                 .GetInt32(),
-            serializer.DeserializeCalls);
+            serializer.DeserializeCalls
+        );
     }
 
     [Fact]
     public void AcceptedFrameReleaseExactlyOnce()
     {
-        using var document = JsonDocument.Parse(File.ReadAllText(Path.Combine(
-            Common.FrameworkTestEnvironment.GetRepoRoot(),
-            "framework",
-            "runtime",
-            "conformance",
-            "payload-ownership-v1.json")));
-        var expectedReleases = document.RootElement
-            .GetProperty("scenarios")
+        using var document = JsonDocument.Parse(
+            File.ReadAllText(
+                Path.Combine(
+                    Common.FrameworkTestEnvironment.GetRepoRoot(),
+                    "framework",
+                    "runtime",
+                    "conformance",
+                    "payload-ownership-v1.json"
+                )
+            )
+        );
+        var expectedReleases = document
+            .RootElement.GetProperty("scenarios")
             .EnumerateArray()
             .Single(static scenario =>
-                scenario.GetProperty("name").GetString()
-                == "accepted-handler-success")
+                scenario.GetProperty("name").GetString() == "accepted-handler-success"
+            )
             .GetProperty("frameworkReleases")
             .GetInt32();
-        var actor = new ZLinkBackendActorRef(
-            RoutingId.From("node"),
-            "actor",
-            1);
+        var actor = new ZLinkBackendActorRef(RoutingId.From("node"), "actor", 1);
         var frame = new ZLinkSpotActorFrame(
             actor,
             actor,
@@ -101,21 +108,25 @@ public sealed class MessagePayloadOwnershipConvergenceTests
                 MessageFollowHopCount: 1,
                 TargetNodeGeneration: 1,
                 AuthorityOwnerGeneration: 1,
-                OwnerLeaseGeneration: 1),
+                OwnerLeaseGeneration: 1
+            ),
             new ZlinkStreamHeader(
                 ZlinkStreamMessageKind.Send,
                 ZlinkStreamCodec.Raw,
                 ZlinkStreamHeaderFlags.None,
                 RequestSeq: null,
                 "ownership",
-                ZlinkStreamMetadata.Empty),
-            Message.From("owned"));
+                ZlinkStreamMetadata.Empty
+            ),
+            Message.From("owned")
+        );
         var releases = 0;
         var payloadOwner = new DisposeProbe();
         var batch = new ZLinkSpotActorFrameBatch(
             [frame],
             () => releases++,
-            payloadOwner: payloadOwner);
+            payloadOwner: payloadOwner
+        );
 
         batch.Dispose();
         batch.Dispose();
@@ -135,14 +146,18 @@ public sealed class MessagePayloadOwnershipConvergenceTests
         var message = ZLinkMessage.FromEnvelopePayload(
             "application/x-counting",
             nativePayload,
-            codecs);
+            codecs
+        );
         using var start = new ManualResetEventSlim();
-        var reads = Enumerable.Range(0, 64)
-            .Select(_ => Task.Run(() =>
-            {
-                start.Wait();
-                return message.Decode<Probe>();
-            }))
+        var reads = Enumerable
+            .Range(0, 64)
+            .Select(_ =>
+                Task.Run(() =>
+                {
+                    start.Wait();
+                    return message.Decode<Probe>();
+                })
+            )
             .ToArray();
 
         start.Set();
@@ -162,7 +177,8 @@ public sealed class MessagePayloadOwnershipConvergenceTests
         var message = ZLinkMessage.FromEnvelopePayload(
             "application/x-counting",
             nativePayload,
-            codecs);
+            codecs
+        );
 
         var decoded = message.Decode<Probe>();
 
@@ -171,7 +187,8 @@ public sealed class MessagePayloadOwnershipConvergenceTests
         var canonicalReply = ZLinkMessage.FromCanonicalActorJoinReply(
             "application/x-zlink-multipart",
             "recovered"u8.ToArray(),
-            codecs);
+            codecs
+        );
         Assert.Equal("recovered", canonicalReply.Decode<Probe>().Value);
         Assert.Equal(2, serializer.DeserializeCalls);
     }
@@ -183,7 +200,8 @@ public sealed class MessagePayloadOwnershipConvergenceTests
         var message = ZLinkMessage.FromStreamPayload(
             ZlinkStreamCodec.Raw,
             "owned"u8.ToArray(),
-            codecs);
+            codecs
+        );
 
         var decoded = message.Decode<string>();
 
@@ -199,7 +217,8 @@ public sealed class MessagePayloadOwnershipConvergenceTests
         var message = ZLinkMessage.FromEncoded(
             "application/json",
             ReadOnlyMemory<byte>.Empty,
-            codecs);
+            codecs
+        );
 
         Assert.Null(message.Decode<string>());
         Assert.Throws<InvalidCastException>(() => message.Decode<int>());
@@ -217,23 +236,27 @@ public sealed class MessagePayloadOwnershipConvergenceTests
         var message = ZLinkMessage.FromEnvelopePayload(
             "application/x-fail-first",
             nativePayload,
-            codecs);
+            codecs
+        );
 
         Exception? ownerFailure = null;
         var failedOwner = new Thread(() =>
-            ownerFailure = Record.Exception(() => message.Decode<Probe>()));
+            ownerFailure = Record.Exception(() => message.Decode<Probe>())
+        );
         failedOwner.Start();
         Assert.True(firstDecodeEntered.Wait(TimeSpan.FromSeconds(5)));
 
         using var retriesReady = new CountdownEvent(8);
         var concurrentFailures = new Exception?[retriesReady.InitialCount];
-        var concurrentReads = Enumerable.Range(0, retriesReady.InitialCount)
+        var concurrentReads = Enumerable
+            .Range(0, retriesReady.InitialCount)
             .Select(index => new Thread(() =>
             {
                 retriesReady.Signal();
-                concurrentFailures[index] = index % 2 == 0
-                    ? Record.Exception(() => message.Decode<Probe>())
-                    : Record.Exception(() => message.Decode<OtherProbe>());
+                concurrentFailures[index] =
+                    index % 2 == 0
+                        ? Record.Exception(() => message.Decode<Probe>())
+                        : Record.Exception(() => message.Decode<OtherProbe>());
             }))
             .ToArray();
         foreach (var concurrentRead in concurrentReads)
@@ -249,7 +272,8 @@ public sealed class MessagePayloadOwnershipConvergenceTests
         Assert.Equal(1, serializer.DeserializeCalls);
         Assert.Equal(
             "The first decode attempt fails.",
-            Assert.IsType<InvalidOperationException>(ownerFailure).Message);
+            Assert.IsType<InvalidOperationException>(ownerFailure).Message
+        );
         Assert.All(concurrentFailures, AssertDecodeFailure);
         AssertDecodeFailure(repeatedFailure);
 
@@ -267,31 +291,31 @@ public sealed class MessagePayloadOwnershipConvergenceTests
         using var deserializeEntered = new ManualResetEventSlim();
         using var releaseDeserialize = new ManualResetEventSlim();
         var codecs = new ZLinkCodecRegistryBuilder();
-        var serializer = new WrongTypeSerializer(
-            deserializeEntered,
-            releaseDeserialize);
+        var serializer = new WrongTypeSerializer(deserializeEntered, releaseDeserialize);
         codecs.AddSerializer("application/x-wrong-type", serializer);
         using var nativePayload = Message.From("owned");
         var message = ZLinkMessage.FromEnvelopePayload(
             "application/x-wrong-type",
             nativePayload,
-            codecs);
+            codecs
+        );
         Exception? ownerFailure = null;
         var owner = new Thread(() =>
-            ownerFailure = Record.Exception(() => message.Decode<Probe>()));
+            ownerFailure = Record.Exception(() => message.Decode<Probe>())
+        );
         owner.Start();
         Assert.True(deserializeEntered.Wait(TimeSpan.FromSeconds(5)));
 
         using var readersReady = new CountdownEvent(readerCount);
         using var startReaders = new ManualResetEventSlim();
         var readerFailures = new Exception?[readerCount];
-        var readers = Enumerable.Range(0, readerCount)
+        var readers = Enumerable
+            .Range(0, readerCount)
             .Select(index => new Thread(() =>
             {
                 readersReady.Signal();
                 startReaders.Wait();
-                readerFailures[index] = Record.Exception(
-                    () => message.Decode<object>());
+                readerFailures[index] = Record.Exception(() => message.Decode<object>());
             }))
             .ToArray();
         foreach (var reader in readers)
@@ -309,8 +333,10 @@ public sealed class MessagePayloadOwnershipConvergenceTests
             Assert.True(reader.Join(TimeSpan.FromSeconds(5)));
 
         var retainedFailure = Assert.IsType<InvalidCastException>(ownerFailure);
-        Assert.All(readerFailures, failure =>
-            Assert.Same(retainedFailure, Assert.IsType<InvalidCastException>(failure)));
+        Assert.All(
+            readerFailures,
+            failure => Assert.Same(retainedFailure, Assert.IsType<InvalidCastException>(failure))
+        );
         Assert.Equal(1, serializer.DeserializeCalls);
     }
 
@@ -330,8 +356,7 @@ public sealed class MessagePayloadOwnershipConvergenceTests
         internal int DeserializeCalls { get; private set; }
 
         public ZLinkEncodedPayload Serialize(object value, Type type) =>
-            ZLinkEncodedPayload.From(
-                Encoding.UTF8.GetBytes(((Probe)value).Value));
+            ZLinkEncodedPayload.From(Encoding.UTF8.GetBytes(((Probe)value).Value));
 
         public object? Deserialize(ZLinkEncodedPayload payload, Type type)
         {
@@ -342,15 +367,15 @@ public sealed class MessagePayloadOwnershipConvergenceTests
 
     private sealed class FailFirstSerializer(
         ManualResetEventSlim firstDecodeEntered,
-        ManualResetEventSlim releaseFirstFailure) : IZLinkMessageSerializer
+        ManualResetEventSlim releaseFirstFailure
+    ) : IZLinkMessageSerializer
     {
         private int _deserializeCalls;
 
         internal int DeserializeCalls => Volatile.Read(ref _deserializeCalls);
 
         public ZLinkEncodedPayload Serialize(object value, Type type) =>
-            ZLinkEncodedPayload.From(
-                Encoding.UTF8.GetBytes(((Probe)value).Value));
+            ZLinkEncodedPayload.From(Encoding.UTF8.GetBytes(((Probe)value).Value));
 
         public object? Deserialize(ZLinkEncodedPayload payload, Type type)
         {
@@ -359,7 +384,9 @@ public sealed class MessagePayloadOwnershipConvergenceTests
             {
                 firstDecodeEntered.Set();
                 if (!releaseFirstFailure.Wait(TimeSpan.FromSeconds(5)))
-                    throw new TimeoutException("Timed out waiting to release the first decode failure.");
+                    throw new TimeoutException(
+                        "Timed out waiting to release the first decode failure."
+                    );
                 throw new InvalidOperationException("The first decode attempt fails.");
             }
 
@@ -369,23 +396,22 @@ public sealed class MessagePayloadOwnershipConvergenceTests
 
     private sealed class WrongTypeSerializer(
         ManualResetEventSlim deserializeEntered,
-        ManualResetEventSlim releaseDeserialize) : IZLinkMessageSerializer
+        ManualResetEventSlim releaseDeserialize
+    ) : IZLinkMessageSerializer
     {
         private int _deserializeCalls;
 
         internal int DeserializeCalls => Volatile.Read(ref _deserializeCalls);
 
         public ZLinkEncodedPayload Serialize(object value, Type type) =>
-            ZLinkEncodedPayload.From(
-                Encoding.UTF8.GetBytes(((Probe)value).Value));
+            ZLinkEncodedPayload.From(Encoding.UTF8.GetBytes(((Probe)value).Value));
 
         public object? Deserialize(ZLinkEncodedPayload payload, Type type)
         {
             Interlocked.Increment(ref _deserializeCalls);
             deserializeEntered.Set();
             if (!releaseDeserialize.Wait(TimeSpan.FromSeconds(5)))
-                throw new TimeoutException(
-                    "Timed out waiting to return the invalid decoded type.");
+                throw new TimeoutException("Timed out waiting to return the invalid decoded type.");
             return new OtherProbe(Encoding.UTF8.GetString(payload.Bytes.Span));
         }
     }

@@ -18,8 +18,7 @@ suspend fun ZLinkLocationRuntimeQuery.status(): ZLinkLocationRuntimeStatus =
 suspend fun ZLinkLocationRuntimeQuery.listTopology(
     filter: ZLinkLocationTopologyFilter,
     page: ZLinkPageRequest = ZLinkPageRequest.firstPage(),
-): ZLinkLocationPage<ZLinkLocationTopologyEntry> =
-    awaitFrameworkStage(listTopology(filter, page))
+): ZLinkLocationPage<ZLinkLocationTopologyEntry> = awaitFrameworkStage(listTopology(filter, page))
 
 suspend fun ZLinkLocationRuntimeQuery.listServiceSummaries(
     filter: ZLinkLocationServiceSummaryFilter,

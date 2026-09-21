@@ -62,11 +62,11 @@ class provider_location_repository_t final : public location_repository_t
             if (generation == std::numeric_limits<std::int64_t>::max ())
                 return completed (owner_lease_claim_result_t{owner_lease_generation_exhausted_t{}});
 
-            const auto payload = to_bytes (
-              nlohmann::json{{"recordVersion", 1},
-                            {"ownerId", owner_id},
-                            {"leaseGeneration", std::to_string (generation)}}
-                .dump ());
+            const auto payload = to_bytes (nlohmann::json{
+              {"recordVersion", 1},
+              {"ownerId", owner_id},
+              {"leaseGeneration",
+               std::to_string (generation)}}.dump ());
             store_write_request_t request;
             request.conditions.push_back (missing_condition (owner_key));
             request.conditions.push_back (condition_for (counter_key, counter));
@@ -136,8 +136,7 @@ class provider_location_repository_t final : public location_repository_t
         auto current = read (key);
         if (const auto *found = std::get_if<store_found_t> (&current)) {
             const auto stored = decode_mesh_descriptor (
-              parse_canonical_record (found->value.bytes, "MeshNode descriptor")
-                .at ("descriptor"));
+              parse_canonical_record (found->value.bytes, "MeshNode descriptor").at ("descriptor"));
             descriptor.capacity.actors.active = stored.capacity.actors.active;
             descriptor.capacity.actors.reserved = stored.capacity.actors.reserved;
             descriptor.capacity.spots.active = stored.capacity.spots.active;
@@ -256,8 +255,8 @@ class provider_location_repository_t final : public location_repository_t
             auto snapshot = effective_authority (key.value, found->value.bytes,
                                                  found->value.version, found->value.store_now);
             if (!snapshot)
-                return completed (authority_read_result_t{
-                  authority_missing_t{found->value.store_now}});
+                return completed (
+                  authority_read_result_t{authority_missing_t{found->value.store_now}});
             return completed (authority_read_result_t{std::move (*snapshot)});
         }
         return completed (authority_read_result_t{
@@ -278,8 +277,8 @@ class provider_location_repository_t final : public location_repository_t
         if (!found)
             return authority_conflict (std::move (current));
         if (authority_mutation_locked (key.value))
-            return completed (authority_compare_exchange_result_t{authority_conflict_t{
-              read_authority_value (key.value)}});
+            return completed (authority_compare_exchange_result_t{
+              authority_conflict_t{read_authority_value (key.value)}});
         auto snapshot =
           decode_authority (found->value.bytes, found->value.version, found->value.store_now);
         if (snapshot.store_version != expected_store_version)
@@ -295,17 +294,15 @@ class provider_location_repository_t final : public location_repository_t
             auto capacity = read_capacity (snapshot.allocation.target, *target);
             if (!adjust_capacity (capacity.record, snapshot.allocation.capacity_bundle, 0, -1))
                 return authority_conflict (std::move (current));
-            const auto decoded_key = authority_key_codec_detail::decode_authority_key (
-              key.value);
+            const auto decoded_key = authority_key_codec_detail::decode_authority_key (key.value);
             if (!decoded_key)
                 return authority_conflict (std::move (current));
             store_write_request_t write_request;
-            write_request.conditions = {
-              version_condition (row_key, found->value.version),
-              version_condition (key_owner (snapshot.owner.owner_id),
-                                 target->owner_provider_version),
-              version_condition (target->key, target->provider_version),
-              capacity.condition};
+            write_request.conditions = {version_condition (row_key, found->value.version),
+                                        version_condition (key_owner (snapshot.owner.owner_id),
+                                                           target->owner_provider_version),
+                                        version_condition (target->key, target->provider_version),
+                                        capacity.condition};
             write_request.mutations = {
               store_delete_t{row_key},
               store_put_t{capacity.key, encode_capacity_record (capacity.record), std::nullopt}};
@@ -331,12 +328,10 @@ class provider_location_repository_t final : public location_repository_t
                 return authority_conflict (std::move (current));
             const auto source_owner_token = snapshot.owner;
             auto source_owner = read_live_owner (source_owner_token);
-            auto source_descriptor =
-              read_target_descriptor (snapshot.allocation.target, false);
+            auto source_descriptor = read_target_descriptor (snapshot.allocation.target, false);
             auto target_descriptor = read_target_descriptor (retarget->target);
             if (!source_owner || !source_descriptor || !target_descriptor
-                || !target_accepts (target_descriptor->descriptor,
-                                    snapshot.allocation.object_kind,
+                || !target_accepts (target_descriptor->descriptor, snapshot.allocation.object_kind,
                                     snapshot.allocation.stable_type))
                 return authority_conflict (std::move (current));
             const auto same_allocation_target =
@@ -357,8 +352,8 @@ class provider_location_repository_t final : public location_repository_t
                     return authority_conflict (std::move (current));
                 if (source_capacity->key.value == target_capacity->key.value)
                     target_capacity->record = source_capacity->record;
-                if (!adjust_capacity (target_capacity->record,
-                                      snapshot.allocation.capacity_bundle, 0, 1)) {
+                if (!adjust_capacity (target_capacity->record, snapshot.allocation.capacity_bundle,
+                                      0, 1)) {
                     return authority_conflict (std::move (current));
                 }
                 if (source_capacity->key.value == target_capacity->key.value)
@@ -395,16 +390,15 @@ class provider_location_repository_t final : public location_repository_t
             write_request.mutations = {
               store_put_t{row_key, encode_authority (snapshot), std::nullopt},
               store_put_t{authority_owner_counter_key,
-                          to_bytes (std::to_string (next_owner_generation + 1)),
-                          std::nullopt}};
+                          to_bytes (std::to_string (next_owner_generation + 1)), std::nullopt}};
             if (source_capacity) {
-                write_request.mutations.push_back (store_put_t{
-                  source_capacity->key, encode_capacity_record (source_capacity->record),
-                  std::nullopt});
+                write_request.mutations.push_back (
+                  store_put_t{source_capacity->key,
+                              encode_capacity_record (source_capacity->record), std::nullopt});
                 if (target_capacity->key.value != source_capacity->key.value)
-                    write_request.mutations.push_back (store_put_t{
-                      target_capacity->key, encode_capacity_record (target_capacity->record),
-                      std::nullopt});
+                    write_request.mutations.push_back (
+                      store_put_t{target_capacity->key,
+                                  encode_capacity_record (target_capacity->record), std::nullopt});
             }
             auto written = write (std::move (write_request));
             return authority_write_result (row_key, snapshot, std::move (written));
@@ -450,7 +444,8 @@ class provider_location_repository_t final : public location_repository_t
             // item.key.value is the §2.4 preimage "authority\0{actor|spot}\0{Id}".
             const auto &preimage = item.key.value;
             const auto domain_end = authority_domain.size ();
-            if (preimage.size () <= domain_end + 1 || preimage.compare (0, domain_end, authority_domain) != 0
+            if (preimage.size () <= domain_end + 1
+                || preimage.compare (0, domain_end, authority_domain) != 0
                 || preimage[domain_end] != '\0')
                 continue;
             const auto kind_start = domain_end + 1;
@@ -467,7 +462,8 @@ class provider_location_repository_t final : public location_repository_t
             else
                 continue;
             const auto logical_key =
-              (kind == 'a' ? actor_authority_key (object_id) : spot_authority_key (object_id)).value;
+              (kind == 'a' ? actor_authority_key (object_id) : spot_authority_key (object_id))
+                .value;
             if (!logical_key.starts_with (key_prefix))
                 continue;
             auto snapshot = effective_authority (logical_key, item.value.bytes, item.value.version,
@@ -502,18 +498,15 @@ class provider_location_repository_t final : public location_repository_t
                                              std::stop_token cancellation = {}) override
     {
         constexpr unsigned max_cas_retries = 3;
-        for (unsigned attempt = 0; ; ++attempt) {
+        for (unsigned attempt = 0;; ++attempt) {
             bool retry_reclaim = false;
             auto result = reserve_once (request, cancellation, &retry_reclaim).result ();
             if (!result)
                 return task_t<object_reserve_result_t> (std::move (result));
 
-            const auto *conflict =
-              std::get_if<object_reserve_conflict_t> (&result.value ());
+            const auto *conflict = std::get_if<object_reserve_conflict_t> (&result.value ());
             const bool authority_missing =
-              conflict
-              && std::holds_alternative<authority_missing_t> (
-                conflict->current);
+              conflict && std::holds_alternative<authority_missing_t> (conflict->current);
             if ((!authority_missing && !retry_reclaim) || attempt >= max_cas_retries)
                 return task_t<object_reserve_result_t> (std::move (result));
 
@@ -525,7 +518,7 @@ class provider_location_repository_t final : public location_repository_t
                 const auto target = read_target_descriptor (request.target);
                 if (!target
                     || !target_accepts (target->descriptor, request.key.kind,
-                                         request.intent.stable_type)
+                                        request.intent.stable_type)
                     || !owner_is_live (request.target.owner))
                     return task_t<object_reserve_result_t> (std::move (result));
             }
@@ -542,10 +535,9 @@ class provider_location_repository_t final : public location_repository_t
         recovery_required
     };
 
-    task_t<object_reserve_result_t> reserve_once (
-      object_reserve_request_t request,
-      std::stop_token cancellation,
-      bool *retry_reclaim)
+    task_t<object_reserve_result_t> reserve_once (object_reserve_request_t request,
+                                                  std::stop_token cancellation,
+                                                  bool *retry_reclaim)
     {
         if (cancellation.stop_requested ())
             return cancelled<object_reserve_result_t> ();
@@ -559,8 +551,8 @@ class provider_location_repository_t final : public location_repository_t
         const auto authority_key = key_authority (object_key (request.key));
         auto authority = read (authority_key);
         if (authority_mutation_locked (object_key (request.key)))
-            return completed (object_reserve_result_t{object_reserve_conflict_t{
-              read_authority_value (object_key (request.key))}});
+            return completed (object_reserve_result_t{
+              object_reserve_conflict_t{read_authority_value (object_key (request.key))}});
         if (const auto *found = std::get_if<store_found_t> (&authority)) {
             auto current =
               decode_authority (found->value.bytes, found->value.version, found->value.store_now);
@@ -570,13 +562,13 @@ class provider_location_repository_t final : public location_repository_t
             if (current.allocation.state == placement_allocation_state_t::active)
                 return completed (
                   object_reserve_result_t{object_already_exists_t{std::move (current)}});
-            const auto reclaim = try_reclaim_reserved_authority (
-              request.key, authority_key, *found, current);
+            const auto reclaim =
+              try_reclaim_reserved_authority (request.key, authority_key, *found, current);
             if (reclaim == stale_authority_reclaim_result_t::reclaimed
                 || reclaim == stale_authority_reclaim_result_t::conflict) {
                 *retry_reclaim = true;
-                return completed (object_reserve_result_t{object_reserve_conflict_t{
-                  read_authority_value (object_key (request.key))}});
+                return completed (object_reserve_result_t{
+                  object_reserve_conflict_t{read_authority_value (object_key (request.key))}});
             }
             return completed (
               object_reserve_result_t{object_reserve_conflict_t{std::move (current)}});
@@ -594,9 +586,8 @@ class provider_location_repository_t final : public location_repository_t
                                    request.intent.stable_type)) {
                 request.target.node_lifecycle_generation =
                   refreshed->descriptor.lifecycle_generation;
-                request.target.owner = {
-                  refreshed->descriptor.owner_id,
-                  refreshed->descriptor.lease_generation};
+                request.target.owner = {refreshed->descriptor.owner_id,
+                                        refreshed->descriptor.lease_generation};
                 target = std::move (refreshed);
             }
         }
@@ -654,8 +645,7 @@ class provider_location_repository_t final : public location_repository_t
             store_put_t{object_counter_key, to_bytes (std::to_string (object_generation + 1)),
                         std::nullopt},
             store_put_t{authority_owner_counter_key,
-                        to_bytes (std::to_string (owner_generation_value + 1)),
-                        std::nullopt},
+                        to_bytes (std::to_string (owner_generation_value + 1)), std::nullopt},
             store_put_t{capacity.key, encode_capacity_record (capacity.record), std::nullopt}}});
         const auto *applied = std::get_if<store_write_applied_t> (&written);
         if (!applied)
@@ -668,11 +658,11 @@ class provider_location_repository_t final : public location_repository_t
           object_reserve_result_t{object_reserved_t{std::move (fence), std::move (creating)}});
     }
 
-    stale_authority_reclaim_result_t try_reclaim_reserved_authority (
-      const object_creation_key_t &key,
-      const store_key_t &authority_key,
-      const store_found_t &stored_authority,
-      const authority_snapshot_t &current)
+    stale_authority_reclaim_result_t
+    try_reclaim_reserved_authority (const object_creation_key_t &key,
+                                    const store_key_t &authority_key,
+                                    const store_found_t &stored_authority,
+                                    const authority_snapshot_t &current)
     {
         const auto owner_key = key_owner (current.owner.owner_id);
         auto owner = read (owner_key);
@@ -704,8 +694,7 @@ class provider_location_repository_t final : public location_repository_t
 
         const auto written = write (
           {{version_condition (authority_key, stored_authority.value.version),
-            std::move (stale_owner_condition),
-            capacity.condition},
+            std::move (stale_owner_condition), capacity.condition},
            {store_delete_t{authority_key},
             store_put_t{capacity.key, encode_capacity_record (capacity.record), std::nullopt}}});
         return std::holds_alternative<store_write_applied_t> (written)
@@ -732,10 +721,9 @@ class provider_location_repository_t final : public location_repository_t
                 throw std::invalid_argument ("creation terminal record is missing expiry");
             return completed (
               object_complete_creation_result_t{object_creation_already_completed_result_t{
-                creation_terminal_record_t{
-                  publication.operation, found->value.bytes,
-                  std::chrono::time_point_cast<std::chrono::milliseconds> (
-                    *found->value.expires_at)}}});
+                creation_terminal_record_t{publication.operation, found->value.bytes,
+                                           std::chrono::time_point_cast<std::chrono::milliseconds> (
+                                             *found->value.expires_at)}}});
         }
 
         const auto store_now = std::get<store_missing_t> (existing).store_now;
@@ -743,17 +731,15 @@ class provider_location_repository_t final : public location_repository_t
             throw std::invalid_argument ("creation terminal expiry is not in the future");
         // Convert the provider timestamp once. Preparing the authority/capacity
         // write consumes this same monotonic retention deadline.
-        const auto terminal_deadline = std::chrono::steady_clock::now ()
-          + (expires_at - store_now);
-        creation_terminal_record_t terminal{
-          publication.operation,
-          publication.terminal_envelope,
-          expires_at};
+        const auto terminal_deadline = std::chrono::steady_clock::now () + (expires_at - store_now);
+        creation_terminal_record_t terminal{publication.operation, publication.terminal_envelope,
+                                            expires_at};
         object_complete_creation_result_t result{object_creation_completion_stale_t{}};
         if (const auto *created = std::get_if<object_creation_completed_t> (&request.completion)) {
-            const auto committed = commit (
-              {request.key, request.fence, created->ready_payload}, cancellation,
-              &terminal, terminal_deadline).result ().value ();
+            const auto committed = commit ({request.key, request.fence, created->ready_payload},
+                                           cancellation, &terminal, terminal_deadline)
+                                     .result ()
+                                     .value ();
             if (const auto *value = std::get_if<object_committed_t> (&committed))
                 return completed (object_complete_creation_result_t{
                   object_creation_completed_result_t{std::move (terminal), value->ready}});
@@ -762,9 +748,10 @@ class provider_location_repository_t final : public location_repository_t
             else if (std::holds_alternative<authority_generation_exhausted_t> (committed))
                 result = authority_generation_exhausted_t{};
         } else {
-            const auto aborted = abort (
-              {request.key, request.fence}, cancellation, &terminal, terminal_deadline)
-                .result ().value ();
+            const auto aborted =
+              abort ({request.key, request.fence}, cancellation, &terminal, terminal_deadline)
+                .result ()
+                .value ();
             if (std::holds_alternative<object_aborted_t> (aborted))
                 return completed (object_complete_creation_result_t{
                   object_creation_completed_result_t{std::move (terminal), std::nullopt}});
@@ -777,12 +764,11 @@ class provider_location_repository_t final : public location_repository_t
         if (const auto *found = std::get_if<store_found_t> (&concurrent)) {
             if (!found->value.expires_at)
                 throw std::invalid_argument ("creation terminal record is missing expiry");
-            return completed (object_complete_creation_result_t{
-              object_creation_already_completed_result_t{
-                creation_terminal_record_t{
-                  publication.operation, found->value.bytes,
-                  std::chrono::time_point_cast<std::chrono::milliseconds> (
-                    *found->value.expires_at)}}});
+            return completed (
+              object_complete_creation_result_t{object_creation_already_completed_result_t{
+                creation_terminal_record_t{publication.operation, found->value.bytes,
+                                           std::chrono::time_point_cast<std::chrono::milliseconds> (
+                                             *found->value.expires_at)}}});
         }
         return completed (std::move (result));
     }
@@ -800,10 +786,10 @@ class provider_location_repository_t final : public location_repository_t
     }
 
   private:
-    task_t<object_commit_result_t> commit (
-      object_commit_request_t request, std::stop_token cancellation,
-      const creation_terminal_record_t *terminal,
-      std::chrono::steady_clock::time_point terminal_deadline)
+    task_t<object_commit_result_t> commit (object_commit_request_t request,
+                                           std::stop_token cancellation,
+                                           const creation_terminal_record_t *terminal,
+                                           std::chrono::steady_clock::time_point terminal_deadline)
     {
         if (cancellation.stop_requested ())
             return cancelled<object_commit_result_t> ();
@@ -812,8 +798,8 @@ class provider_location_repository_t final : public location_repository_t
         const auto authority_key = key_authority (object_key (request.key));
         auto authority = read (authority_key);
         if (authority_mutation_locked (object_key (request.key)))
-            return completed (object_commit_result_t{object_commit_conflict_t{
-              read_authority_value (object_key (request.key))}});
+            return completed (object_commit_result_t{
+              object_commit_conflict_t{read_authority_value (object_key (request.key))}});
         const auto *stored_authority = std::get_if<store_found_t> (&authority);
         if (!stored_authority)
             return completed (object_commit_result_t{object_commit_conflict_t{
@@ -821,18 +807,15 @@ class provider_location_repository_t final : public location_repository_t
         auto snapshot =
           decode_authority (stored_authority->value.bytes, stored_authority->value.version,
                             stored_authority->value.store_now);
-        const auto matches_reservation = snapshot.pending_creation
-                                         && snapshot.object_generation
-                                              == request.fence.object_generation
-                                         && snapshot.authority_owner_generation
-                                              == request.fence.authority_owner_generation
-                                         && same_owner (snapshot.owner,
-                                                        request.fence.target.owner)
-                                         && snapshot.pending_creation->reservation_id
-                                              == request.fence.reservation_id;
+        const auto matches_reservation =
+          snapshot.pending_creation && snapshot.object_generation == request.fence.object_generation
+          && snapshot.authority_owner_generation == request.fence.authority_owner_generation
+          && same_owner (snapshot.owner, request.fence.target.owner)
+          && snapshot.pending_creation->reservation_id == request.fence.reservation_id;
         if (!matches_reservation) {
             if (!snapshot.pending_creation)
-                return completed (object_commit_result_t{object_already_committed_t{std::move (snapshot)}});
+                return completed (
+                  object_commit_result_t{object_already_committed_t{std::move (snapshot)}});
             return completed (object_commit_result_t{object_commit_stale_t{}});
         }
         if (snapshot.allocation.state != placement_allocation_state_t::reserved)
@@ -849,15 +832,14 @@ class provider_location_repository_t final : public location_repository_t
         snapshot.payload = std::move (request.ready_payload);
         snapshot.allocation.state = placement_allocation_state_t::active;
         snapshot.pending_creation.reset ();
-        auto written =
-          write ({{version_condition (authority_key, stored_authority->value.version),
-                   version_condition (key_owner (request.fence.target.owner.owner_id),
-                                      target->owner_provider_version),
-                   version_condition (target->key, target->provider_version),
-                   capacity.condition},
-                  {store_put_t{authority_key, encode_authority (snapshot), std::nullopt},
-                   store_put_t{capacity.key, encode_capacity_record (capacity.record),
-                               std::nullopt}}}, terminal, terminal_deadline);
+        auto written = write (
+          {{version_condition (authority_key, stored_authority->value.version),
+            version_condition (key_owner (request.fence.target.owner.owner_id),
+                               target->owner_provider_version),
+            version_condition (target->key, target->provider_version), capacity.condition},
+           {store_put_t{authority_key, encode_authority (snapshot), std::nullopt},
+            store_put_t{capacity.key, encode_capacity_record (capacity.record), std::nullopt}}},
+          terminal, terminal_deadline);
         const auto *applied = std::get_if<store_write_applied_t> (&written);
         if (!applied)
             return completed (object_commit_result_t{
@@ -867,18 +849,18 @@ class provider_location_repository_t final : public location_repository_t
         return completed (object_commit_result_t{object_committed_t{std::move (snapshot)}});
     }
 
-    task_t<object_abort_result_t> abort (
-      object_abort_request_t request, std::stop_token cancellation,
-      const creation_terminal_record_t *terminal,
-      std::chrono::steady_clock::time_point terminal_deadline)
+    task_t<object_abort_result_t> abort (object_abort_request_t request,
+                                         std::stop_token cancellation,
+                                         const creation_terminal_record_t *terminal,
+                                         std::chrono::steady_clock::time_point terminal_deadline)
     {
         if (cancellation.stop_requested ())
             return cancelled<object_abort_result_t> ();
         const auto authority_key = key_authority (object_key (request.key));
         auto authority = read (authority_key);
         if (authority_mutation_locked (object_key (request.key)))
-            return completed (object_abort_result_t{object_abort_conflict_t{
-              read_authority_value (object_key (request.key))}});
+            return completed (object_abort_result_t{
+              object_abort_conflict_t{read_authority_value (object_key (request.key))}});
         const auto *stored_authority = std::get_if<store_found_t> (&authority);
         if (!stored_authority)
             return completed (object_abort_result_t{object_abort_conflict_t{
@@ -886,15 +868,11 @@ class provider_location_repository_t final : public location_repository_t
         const auto snapshot =
           decode_authority (stored_authority->value.bytes, stored_authority->value.version,
                             stored_authority->value.store_now);
-        const auto matches_reservation = snapshot.pending_creation
-                                         && snapshot.object_generation
-                                              == request.fence.object_generation
-                                         && snapshot.authority_owner_generation
-                                              == request.fence.authority_owner_generation
-                                         && same_owner (snapshot.owner,
-                                                        request.fence.target.owner)
-                                         && snapshot.pending_creation->reservation_id
-                                              == request.fence.reservation_id;
+        const auto matches_reservation =
+          snapshot.pending_creation && snapshot.object_generation == request.fence.object_generation
+          && snapshot.authority_owner_generation == request.fence.authority_owner_generation
+          && same_owner (snapshot.owner, request.fence.target.owner)
+          && snapshot.pending_creation->reservation_id == request.fence.reservation_id;
         if (!matches_reservation)
             return completed (object_abort_result_t{object_abort_stale_t{}});
         auto target = read_target_descriptor (request.fence.target, false);
@@ -903,13 +881,12 @@ class provider_location_repository_t final : public location_repository_t
         auto capacity = read_capacity (request.fence.target, *target);
         if (!adjust_capacity (capacity.record, request.fence.capacity_bundle, -1, 0))
             return completed (object_abort_result_t{object_abort_conflict_t{snapshot}});
-        auto written =
-          write ({{version_condition (authority_key, stored_authority->value.version),
-                   version_condition (target->key, target->provider_version),
-                   capacity.condition},
-                  {store_delete_t{authority_key},
-                   store_put_t{capacity.key, encode_capacity_record (capacity.record),
-                               std::nullopt}}}, terminal, terminal_deadline);
+        auto written = write (
+          {{version_condition (authority_key, stored_authority->value.version),
+            version_condition (target->key, target->provider_version), capacity.condition},
+           {store_delete_t{authority_key},
+            store_put_t{capacity.key, encode_capacity_record (capacity.record), std::nullopt}}},
+          terminal, terminal_deadline);
         if (!std::holds_alternative<store_write_applied_t> (written))
             return completed (object_abort_result_t{
               object_abort_conflict_t{read_authority_value (object_key (request.key))}});
@@ -931,11 +908,10 @@ class provider_location_repository_t final : public location_repository_t
             || request.capacity_bundle.spot_slots != 1 || !request.capacity_bundle.spot_type
             || request.capacity_bundle.spot_type->object_kind != placement_object_kind_t::user_spot)
             return completed (aggregate_prepare_result_t{aggregate_prepare_conflict_t{}});
-        if (std::any_of (
-              request.participants.begin (), request.participants.end (),
-              [] (const aggregate_participant_t &participant) {
-                  return !participant.membership_mutation.empty ();
-              }))
+        if (std::any_of (request.participants.begin (), request.participants.end (),
+                         [] (const aggregate_participant_t &participant) {
+                             return !participant.membership_mutation.empty ();
+                         }))
             return completed (aggregate_prepare_result_t{aggregate_prepare_conflict_t{}});
         const auto inventory_tree = aggregate_inventory::build_tree (request.participants);
         if (!inventory_tree)
@@ -985,8 +961,7 @@ class provider_location_repository_t final : public location_repository_t
                 return completed (aggregate_prepare_result_t{aggregate_prepare_stale_t{}});
             if (status == "prepared" || status == "committing" || status == "committed")
                 return completed (aggregate_prepare_result_t{aggregate_already_prepared_t{
-                  {request.aggregate_id, request.aggregate_generation,
-                   request.inventory_digest}}});
+                  {request.aggregate_id, request.aggregate_generation, request.inventory_digest}}});
             if (status != "preparing")
                 return completed (aggregate_prepare_result_t{aggregate_prepare_stale_t{}});
         } else {
@@ -994,9 +969,9 @@ class provider_location_repository_t final : public location_repository_t
             // A restart can now find a partial prepare and abort those children
             // without guessing whether the claim reached the provider.
             const auto preparing = encode_aggregate (request, "preparing", *inventory_tree);
-            const auto claimed = write ({
-              {missing_condition (row_key)},
-              {store_put_t{row_key, to_bytes (preparing.dump ()), std::nullopt}}});
+            const auto claimed =
+              write ({{missing_condition (row_key)},
+                      {store_put_t{row_key, to_bytes (preparing.dump ()), std::nullopt}}});
             if (!std::holds_alternative<store_write_applied_t> (claimed))
                 return completed (aggregate_prepare_result_t{aggregate_prepare_conflict_t{}});
         }
@@ -1031,8 +1006,8 @@ class provider_location_repository_t final : public location_repository_t
             store_write_request_t lock_request;
             for (std::size_t index = 0; index < page.participants.size (); ++index) {
                 const auto participant_index = participant_offset + index;
-                const auto lock_key = key_aggregate_lock (
-                  request.participants[participant_index].key.value);
+                const auto lock_key =
+                  key_aggregate_lock (request.participants[participant_index].key.value);
                 auto existing_lock = read (lock_key);
                 if (const auto *found = std::get_if<store_found_t> (&existing_lock)) {
                     const auto lock = decode_aggregate_lock (found->value.bytes);
@@ -1049,8 +1024,7 @@ class provider_location_repository_t final : public location_repository_t
                         continue;
                     }
                     auto old_aggregate = read (key_aggregate (lock->aggregate_id));
-                    const auto *old_aggregate_found =
-                      std::get_if<store_found_t> (&old_aggregate);
+                    const auto *old_aggregate_found = std::get_if<store_found_t> (&old_aggregate);
                     if (!old_aggregate_found
                         || parse_json (old_aggregate_found->value.bytes).value ("status", "")
                              != "committed")
@@ -1061,9 +1035,9 @@ class provider_location_repository_t final : public location_repository_t
                 } else {
                     lock_request.conditions.push_back (missing_condition (lock_key));
                 }
-                lock_request.conditions.push_back (version_condition (
-                  authorities[participant_index].first,
-                  authorities[participant_index].second.value.version));
+                lock_request.conditions.push_back (
+                  version_condition (authorities[participant_index].first,
+                                     authorities[participant_index].second.value.version));
                 lock_request.mutations.push_back (store_put_t{
                   lock_key,
                   to_bytes (encode_aggregate_lock (
@@ -1083,9 +1057,8 @@ class provider_location_repository_t final : public location_repository_t
                     const auto &participant = request.participants[participant_index];
                     const auto raced_lock = read (key_aggregate_lock (participant.key.value));
                     const auto *raced_found = std::get_if<store_found_t> (&raced_lock);
-                    const auto raced = raced_found
-                      ? decode_aggregate_lock (raced_found->value.bytes)
-                      : std::nullopt;
+                    const auto raced =
+                      raced_found ? decode_aggregate_lock (raced_found->value.bytes) : std::nullopt;
                     if (!raced || raced->aggregate_id.value != request.aggregate_id.value
                         || raced->aggregate_generation != request.aggregate_generation
                         || raced->authority_key != participant.key.value
@@ -1117,18 +1090,15 @@ class provider_location_repository_t final : public location_repository_t
             auto current_index = read (index_key);
             if (const auto *found = std::get_if<store_found_t> (&current_index)) {
                 if (found->value.bytes != index_page.encoded)
-                    return completed (
-                      aggregate_prepare_result_t{aggregate_prepare_conflict_t{}});
+                    return completed (aggregate_prepare_result_t{aggregate_prepare_conflict_t{}});
                 continue;
             }
             store_write_request_t index_request;
             index_request.conditions.push_back (missing_condition (index_key));
             index_request.mutations.push_back (
               store_put_t{index_key, index_page.encoded, std::nullopt});
-            if (!std::holds_alternative<store_write_applied_t> (
-                  write (std::move (index_request))))
-                return completed (
-                  aggregate_prepare_result_t{aggregate_prepare_conflict_t{}});
+            if (!std::holds_alternative<store_write_applied_t> (write (std::move (index_request))))
+                return completed (aggregate_prepare_result_t{aggregate_prepare_conflict_t{}});
         }
 
         const object_creation_target_t target{
@@ -1153,8 +1123,7 @@ class provider_location_repository_t final : public location_repository_t
                 || preparing_record.value ("status", "") == "committing"
                 || preparing_record.value ("status", "") == "committed")
                 return completed (aggregate_prepare_result_t{aggregate_already_prepared_t{
-                  {request.aggregate_id, request.aggregate_generation,
-                   request.inventory_digest}}});
+                  {request.aggregate_id, request.aggregate_generation, request.inventory_digest}}});
             return completed (aggregate_prepare_result_t{aggregate_prepare_stale_t{}});
         }
         store_write_request_t write_request;
@@ -1172,9 +1141,8 @@ class provider_location_repository_t final : public location_repository_t
         auto written = write (std::move (write_request));
         if (!std::holds_alternative<store_write_applied_t> (written))
             return completed (aggregate_prepare_result_t{aggregate_prepare_conflict_t{}});
-        return completed (aggregate_prepare_result_t{
-          aggregate_prepared_t{{request.aggregate_id, request.aggregate_generation,
-                                request.inventory_digest}}});
+        return completed (aggregate_prepare_result_t{aggregate_prepared_t{
+          {request.aggregate_id, request.aggregate_generation, request.inventory_digest}}});
     }
 
     task_t<aggregate_commit_result_t> commit_aggregate (aggregate_fence_t fence,
@@ -1226,8 +1194,7 @@ class provider_location_repository_t final : public location_repository_t
             const auto *found = std::get_if<store_found_t> (&page);
             if (!found)
                 return completed (aggregate_commit_result_t::stale);
-            const auto decoded = aggregate_inventory::decode_page (
-              found->value.bytes, page_index);
+            const auto decoded = aggregate_inventory::decode_page (found->value.bytes, page_index);
             if (!decoded)
                 return completed (aggregate_commit_result_t::stale);
             participants.insert (participants.end (), decoded->begin (), decoded->end ());
@@ -1242,8 +1209,7 @@ class provider_location_repository_t final : public location_repository_t
         for (std::size_t page_index = 0; page_index < inventory_page_count; ++page_index) {
             const auto page = read (key_aggregate_inventory (fence.aggregate_id, page_index));
             const auto *found = std::get_if<store_found_t> (&page);
-            if (!found
-                || found->value.bytes != inventory_tree->pages[page_index].encoded
+            if (!found || found->value.bytes != inventory_tree->pages[page_index].encoded
                 || sha256 (found->value.bytes) != inventory_tree->pages[page_index].digest)
                 return completed (aggregate_commit_result_t::stale);
         }
@@ -1258,14 +1224,11 @@ class provider_location_repository_t final : public location_repository_t
             const auto index = read (key_aggregate_inventory_index (
               fence.aggregate_id, index_page.level, index_page.page_index));
             const auto *found = std::get_if<store_found_t> (&index);
-            const auto decoded = found
-                                   ? aggregate_inventory::decode_index_page (
-                                       found->value.bytes, index_page.level,
-                                       index_page.page_index,
-                                       index_page.child_start)
-                                   : std::optional<aggregate_inventory::index_page_t>{};
-            if (!found || !decoded
-                || found->value.bytes != index_page.encoded
+            const auto decoded = found ? aggregate_inventory::decode_index_page (
+                                           found->value.bytes, index_page.level,
+                                           index_page.page_index, index_page.child_start)
+                                       : std::optional<aggregate_inventory::index_page_t>{};
+            if (!found || !decoded || found->value.bytes != index_page.encoded
                 || decoded->digest != index_page.digest)
                 return completed (aggregate_commit_result_t::stale);
         }
@@ -1287,8 +1250,7 @@ class provider_location_repository_t final : public location_repository_t
                 return completed (aggregate_commit_result_t::generation_exhausted);
             owner_generation_start = next_owner_generation;
         } else {
-            owner_generation_start =
-              record.value ("ownerGenerationStart", std::uint64_t{0});
+            owner_generation_start = record.value ("ownerGenerationStart", std::uint64_t{0});
             if (owner_generation_start == 0
                 || record.value ("ownerGenerationEnd", std::uint64_t{0})
                      != owner_generation_start + participant_count - 1)
@@ -1304,8 +1266,7 @@ class provider_location_repository_t final : public location_repository_t
         const auto target_capacity_key = target_capacity.key.value;
         capacities.emplace (target_capacity_key, std::move (target_capacity));
 
-        for (std::size_t participant_index = 0;
-             participant_index < participants.size ();
+        for (std::size_t participant_index = 0; participant_index < participants.size ();
              ++participant_index) {
             const auto &participant = participants[participant_index];
             const auto authority_key = key_authority (participant.key.value);
@@ -1329,8 +1290,8 @@ class provider_location_repository_t final : public location_repository_t
             if (lock->status == "committing") {
                 if (!lock->page_index || !lock->entry_index)
                     return completed (aggregate_commit_result_t::stale);
-                auto page = read (key_aggregate_commit_page (
-                  fence.aggregate_id, *lock->page_index));
+                auto page =
+                  read (key_aggregate_commit_page (fence.aggregate_id, *lock->page_index));
                 const auto *stored_page = std::get_if<store_found_t> (&page);
                 if (!stored_page)
                     return completed (aggregate_commit_result_t::stale);
@@ -1345,8 +1306,7 @@ class provider_location_repository_t final : public location_repository_t
                 auto before = decode_authority (found->value.bytes, found->value.version,
                                                 found->value.store_now);
                 if (before.store_version != participant.expected_store_version
-                    || participant.owner_transition
-                         != authority_generation_transition_t::new_owner
+                    || participant.owner_transition != authority_generation_transition_t::new_owner
                     || !owner_is_live (before.owner))
                     return completed (aggregate_commit_result_t::stale);
                 auto after = before;
@@ -1362,8 +1322,8 @@ class provider_location_repository_t final : public location_repository_t
                 entry = {participant.key.value, found->value.bytes, encode_authority (after)};
             }
 
-            const auto before = decode_authority (entry.before, found->value.version,
-                                                 found->value.store_now);
+            const auto before =
+              decode_authority (entry.before, found->value.version, found->value.store_now);
             const auto source = read_target_descriptor (before.allocation.target, false);
             if (!source)
                 return completed (aggregate_commit_result_t::stale);
@@ -1371,11 +1331,11 @@ class provider_location_repository_t final : public location_repository_t
             if (!inserted && source_state->second.provider_version != source->provider_version)
                 return completed (aggregate_commit_result_t::stale);
             auto source_capacity = read_capacity (before.allocation.target, *source);
-            auto [capacity_state, capacity_inserted] = capacities.emplace (
-              source_capacity.key.value, std::move (source_capacity));
+            auto [capacity_state, capacity_inserted] =
+              capacities.emplace (source_capacity.key.value, std::move (source_capacity));
             (void) capacity_inserted;
-            if (!adjust_capacity (capacity_state->second.record,
-                                  before.allocation.capacity_bundle, 0, -1))
+            if (!adjust_capacity (capacity_state->second.record, before.allocation.capacity_bundle,
+                                  0, -1))
                 return completed (aggregate_commit_result_t::stale);
             entries.push_back (std::move (entry));
         }
@@ -1399,14 +1359,14 @@ class provider_location_repository_t final : public location_repository_t
             record["ownerGenerationStart"] = owner_generation_start;
             record["ownerGenerationEnd"] = owner_generation_start + participant_count - 1;
             record["commitPageCount"] = commit_pages->size ();
-            auto transition = write (
-              {{version_condition (row_key, stored->value.version),
-                condition_for (authority_owner_counter_key, owner_generations)},
-               {store_put_t{row_key, to_bytes (record.dump ()), std::nullopt},
-                store_put_t{authority_owner_counter_key,
-                            to_bytes (std::to_string (current_owner_generation
-                                                      + participant_count)),
-                            std::nullopt}}});
+            auto transition =
+              write ({{version_condition (row_key, stored->value.version),
+                       condition_for (authority_owner_counter_key, owner_generations)},
+                      {store_put_t{row_key, to_bytes (record.dump ()), std::nullopt},
+                       store_put_t{
+                         authority_owner_counter_key,
+                         to_bytes (std::to_string (current_owner_generation + participant_count)),
+                         std::nullopt}}});
             if (!std::holds_alternative<store_write_applied_t> (transition))
                 return completed (aggregate_commit_result_t::stale);
         }
@@ -1423,17 +1383,16 @@ class provider_location_repository_t final : public location_repository_t
             }
             store_write_request_t page_request;
             page_request.conditions.push_back (missing_condition (page_key));
-            for (std::size_t entry_index = 0;
-                 entry_index < (*commit_pages)[page_index].size ();
+            for (std::size_t entry_index = 0; entry_index < (*commit_pages)[page_index].size ();
                  ++entry_index) {
                 const auto participant_index =
-                  std::accumulate (commit_pages->begin (),
-                                   commit_pages->begin () + static_cast<std::ptrdiff_t> (page_index),
-                                   std::size_t{0},
-                                   [] (std::size_t count,
-                                       const std::vector<aggregate_commit_entry_t> &page) {
-                                       return count + page.size ();
-                                   })
+                  std::accumulate (
+                    commit_pages->begin (),
+                    commit_pages->begin () + static_cast<std::ptrdiff_t> (page_index),
+                    std::size_t{0},
+                    [] (std::size_t count, const std::vector<aggregate_commit_entry_t> &page) {
+                        return count + page.size ();
+                    })
                   + entry_index;
                 const auto &participant = participants[participant_index];
                 const auto &entry = (*commit_pages)[page_index][entry_index];
@@ -1446,26 +1405,23 @@ class provider_location_repository_t final : public location_repository_t
                 const auto lock = decode_aggregate_lock (found_lock->value.bytes);
                 if (!lock || lock->status != "prepared")
                     return completed (aggregate_commit_result_t::stale);
-                page_request.conditions.push_back (
-                  version_condition (key_authority (participant.key.value),
-                                     found_authority->value.version));
-                page_request.conditions.push_back (
-                  version_condition (key_aggregate_lock (participant.key.value),
-                                     found_lock->value.version));
+                page_request.conditions.push_back (version_condition (
+                  key_authority (participant.key.value), found_authority->value.version));
+                page_request.conditions.push_back (version_condition (
+                  key_aggregate_lock (participant.key.value), found_lock->value.version));
                 page_request.mutations.push_back (
                   store_put_t{key_authority (participant.key.value), entry.after, std::nullopt});
                 page_request.mutations.push_back (store_put_t{
                   key_aggregate_lock (participant.key.value),
-                  to_bytes (encode_aggregate_lock (
-                              fence.aggregate_id, fence.aggregate_generation,
-                              participant.key.value, participant.expected_store_version,
-                              "committing", page_index, entry_index)
+                  to_bytes (encode_aggregate_lock (fence.aggregate_id, fence.aggregate_generation,
+                                                   participant.key.value,
+                                                   participant.expected_store_version, "committing",
+                                                   page_index, entry_index)
                               .dump ()),
                   std::nullopt});
             }
             page_request.mutations.push_back (store_put_t{page_key, encoded_page, std::nullopt});
-            if (!std::holds_alternative<store_write_applied_t> (
-                  write (std::move (page_request))))
+            if (!std::holds_alternative<store_write_applied_t> (write (std::move (page_request))))
                 return completed (aggregate_commit_result_t::stale);
         }
 
@@ -1487,12 +1443,10 @@ class provider_location_repository_t final : public location_repository_t
                                  decode_bundle (record.at ("capacityBundle")), -1, 1))
             return completed (aggregate_commit_result_t::stale);
         store_write_request_t final_request;
-        final_request.conditions.push_back (version_condition (
-          row_key, stored->value.version));
+        final_request.conditions.push_back (version_condition (row_key, stored->value.version));
         if (!target_descriptor->owner_provider_version.empty ())
-            final_request.conditions.push_back (
-              version_condition (key_owner (target_owner.owner_id),
-                                 target_descriptor->owner_provider_version));
+            final_request.conditions.push_back (version_condition (
+              key_owner (target_owner.owner_id), target_descriptor->owner_provider_version));
         for (auto &[descriptor_key, descriptor] : descriptors) {
             (void) descriptor_key;
             final_request.conditions.push_back (
@@ -1501,8 +1455,8 @@ class provider_location_repository_t final : public location_repository_t
         for (auto &[capacity_key_value, capacity] : capacities) {
             (void) capacity_key_value;
             final_request.conditions.push_back (capacity.condition);
-            final_request.mutations.push_back (store_put_t{
-              capacity.key, encode_capacity_record (capacity.record), std::nullopt});
+            final_request.mutations.push_back (
+              store_put_t{capacity.key, encode_capacity_record (capacity.record), std::nullopt});
         }
         record["status"] = "committed";
         final_request.mutations.push_back (
@@ -1545,8 +1499,8 @@ class provider_location_repository_t final : public location_repository_t
                 const auto *stored_page = std::get_if<store_found_t> (&page);
                 if (!stored_page)
                     return completed (aggregate_abort_result_t::stale);
-                const auto entries = decode_aggregate_commit_page (
-                  stored_page->value.bytes, page_index);
+                const auto entries =
+                  decode_aggregate_commit_page (stored_page->value.bytes, page_index);
                 if (!entries)
                     return completed (aggregate_abort_result_t::stale);
                 store_write_request_t rollback;
@@ -1618,8 +1572,8 @@ class provider_location_repository_t final : public location_repository_t
                     break;
                 return completed (aggregate_abort_result_t::stale);
             }
-            const auto participants = aggregate_inventory::decode_page (
-              stored_page->value.bytes, page_index);
+            const auto participants =
+              aggregate_inventory::decode_page (stored_page->value.bytes, page_index);
             if (!participants)
                 return completed (aggregate_abort_result_t::stale);
             store_write_request_t cleanup;
@@ -1639,8 +1593,7 @@ class provider_location_repository_t final : public location_repository_t
                 }
             }
             if (!cleanup.mutations.empty ()
-                && !std::holds_alternative<store_write_applied_t> (
-                  write (std::move (cleanup))))
+                && !std::holds_alternative<store_write_applied_t> (write (std::move (cleanup))))
                 return completed (aggregate_abort_result_t::stale);
         }
         record["status"] = "aborted";
@@ -1655,9 +1608,9 @@ class provider_location_repository_t final : public location_repository_t
                 final_request.conditions.push_back (version_condition (
                   key_owner (target.owner.owner_id), target_descriptor->owner_provider_version));
             final_request.conditions.push_back (target_capacity->condition);
-            final_request.mutations.push_back (store_put_t{
-              target_capacity->key, encode_capacity_record (target_capacity->record),
-              std::nullopt});
+            final_request.mutations.push_back (
+              store_put_t{target_capacity->key, encode_capacity_record (target_capacity->record),
+                          std::nullopt});
         }
         auto written = write (std::move (final_request));
         return completed (std::holds_alternative<store_write_applied_t> (written)
@@ -1666,9 +1619,8 @@ class provider_location_repository_t final : public location_repository_t
     }
 
     task_t<std::optional<std::vector<aggregate_participant_t>>>
-    read_aggregate_participants (
-      aggregate_fence_t fence,
-      std::stop_token cancellation = {}) override
+    read_aggregate_participants (aggregate_fence_t fence,
+                                 std::stop_token cancellation = {}) override
     {
         if (cancellation.stop_requested ())
             return cancelled<std::optional<std::vector<aggregate_participant_t>>> ();
@@ -1676,99 +1628,72 @@ class provider_location_repository_t final : public location_repository_t
             const auto current = read (key_aggregate (fence.aggregate_id));
             const auto *found = std::get_if<store_found_t> (&current);
             if (!found)
-                return completed (
-                  std::optional<std::vector<aggregate_participant_t>>{});
+                return completed (std::optional<std::vector<aggregate_participant_t>>{});
             const auto record = parse_json (found->value.bytes);
             if (record.at ("aggregateGeneration").get<std::uint64_t> ()
-                    != fence.aggregate_generation)
-                return completed (
-                  std::optional<std::vector<aggregate_participant_t>>{});
+                != fence.aggregate_generation)
+                return completed (std::optional<std::vector<aggregate_participant_t>>{});
             const auto count = record.at ("inventoryCount").get<std::size_t> ();
-            const auto page_count =
-              record.at ("inventoryPageCount").get<std::size_t> ();
+            const auto page_count = record.at ("inventoryPageCount").get<std::size_t> ();
             const auto expected_page_count =
               count / aggregate_inventory::page_item_limit
               + (count % aggregate_inventory::page_item_limit != 0 ? 1 : 0);
             if (count < 2 || page_count == 0 || expected_page_count != page_count)
-                return completed (
-                  std::optional<std::vector<aggregate_participant_t>>{});
+                return completed (std::optional<std::vector<aggregate_participant_t>>{});
             std::vector<aggregate_participant_t> participants;
             participants.reserve (count);
             for (std::size_t page_index = 0; page_index < page_count; ++page_index) {
-                const auto page = read (
-                  key_aggregate_inventory (fence.aggregate_id, page_index));
+                const auto page = read (key_aggregate_inventory (fence.aggregate_id, page_index));
                 const auto *stored_page = std::get_if<store_found_t> (&page);
                 if (!stored_page)
-                    return completed (
-                      std::optional<std::vector<aggregate_participant_t>>{});
-                const auto decoded = aggregate_inventory::decode_page (
-                  stored_page->value.bytes, page_index);
+                    return completed (std::optional<std::vector<aggregate_participant_t>>{});
+                const auto decoded =
+                  aggregate_inventory::decode_page (stored_page->value.bytes, page_index);
                 if (!decoded)
-                    return completed (
-                      std::optional<std::vector<aggregate_participant_t>>{});
-                participants.insert (
-                  participants.end (), decoded->begin (), decoded->end ());
+                    return completed (std::optional<std::vector<aggregate_participant_t>>{});
+                participants.insert (participants.end (), decoded->begin (), decoded->end ());
             }
             if (participants.size () != count)
-                return completed (
-                  std::optional<std::vector<aggregate_participant_t>>{});
+                return completed (std::optional<std::vector<aggregate_participant_t>>{});
             const auto tree = aggregate_inventory::build_tree (participants);
-            if (!tree || tree->participant_count != count
-                || tree->pages.size () != page_count
-                || hex (tree->root)
-                     != record.at ("inventoryRoot").get<std::string> ())
-                return completed (
-                  std::optional<std::vector<aggregate_participant_t>>{});
+            if (!tree || tree->participant_count != count || tree->pages.size () != page_count
+                || hex (tree->root) != record.at ("inventoryRoot").get<std::string> ())
+                return completed (std::optional<std::vector<aggregate_participant_t>>{});
             for (std::size_t page_index = 0; page_index < page_count; ++page_index) {
-                const auto page = read (
-                  key_aggregate_inventory (fence.aggregate_id, page_index));
+                const auto page = read (key_aggregate_inventory (fence.aggregate_id, page_index));
                 const auto *stored_page = std::get_if<store_found_t> (&page);
-                if (!stored_page
-                    || stored_page->value.bytes
-                         != tree->pages[page_index].encoded
-                    || sha256 (stored_page->value.bytes)
-                         != tree->pages[page_index].digest)
-                    return completed (
-                      std::optional<std::vector<aggregate_participant_t>>{});
+                if (!stored_page || stored_page->value.bytes != tree->pages[page_index].encoded
+                    || sha256 (stored_page->value.bytes) != tree->pages[page_index].digest)
+                    return completed (std::optional<std::vector<aggregate_participant_t>>{});
             }
-            const auto index_page_count =
-              record.value ("inventoryIndexPageCount", std::size_t{0});
+            const auto index_page_count = record.value ("inventoryIndexPageCount", std::size_t{0});
             const auto index_level_count =
               record.value ("inventoryIndexLevelCount", std::size_t{0});
             if (index_page_count != tree->index_pages.size ()
                 || index_level_count != tree->index_level_count)
-                return completed (
-                  std::optional<std::vector<aggregate_participant_t>>{});
+                return completed (std::optional<std::vector<aggregate_participant_t>>{});
             for (const auto &index_page : tree->index_pages) {
                 const auto index = read (key_aggregate_inventory_index (
                   fence.aggregate_id, index_page.level, index_page.page_index));
                 const auto *stored_index = std::get_if<store_found_t> (&index);
                 const auto decoded = stored_index
                                        ? aggregate_inventory::decode_index_page (
-                                           stored_index->value.bytes,
-                                           index_page.level,
-                                           index_page.page_index,
-                                           index_page.child_start)
+                                           stored_index->value.bytes, index_page.level,
+                                           index_page.page_index, index_page.child_start)
                                        : std::optional<aggregate_inventory::index_page_t>{};
-                if (!stored_index || !decoded
-                    || stored_index->value.bytes != index_page.encoded
+                if (!stored_index || !decoded || stored_index->value.bytes != index_page.encoded
                     || decoded->digest != index_page.digest)
-                    return completed (
-                      std::optional<std::vector<aggregate_participant_t>>{});
+                    return completed (std::optional<std::vector<aggregate_participant_t>>{});
             }
             if (fence.inventory_digest
-                && unhex_array<32> (
-                     record.at ("inventoryDigest").get<std::string> ())
+                && unhex_array<32> (record.at ("inventoryDigest").get<std::string> ())
                      != fence.inventory_digest->value)
-                return completed (
-                  std::optional<std::vector<aggregate_participant_t>>{});
+                return completed (std::optional<std::vector<aggregate_participant_t>>{});
             return completed (
-              std::optional<std::vector<aggregate_participant_t>>{
-                std::move (participants)});
+              std::optional<std::vector<aggregate_participant_t>>{std::move (participants)});
         }
         catch (...) {
-            return completed (
-              std::optional<std::vector<aggregate_participant_t>>{});
+            return completed (std::optional<std::vector<aggregate_participant_t>>{});
         }
     }
 
@@ -1790,8 +1715,8 @@ class provider_location_repository_t final : public location_repository_t
     // Spec 22 §7's Store-wide, next-to-issue counters.  These are canonical
     // cross-language rows: bare decimal bytes, not canonical JSON records.
     inline static const store_key_t object_counter_key{std::string (prefix) + "object-counter"};
-    inline static const store_key_t authority_owner_counter_key{
-      std::string (prefix) + "authority-owner-counter"};
+    inline static const store_key_t authority_owner_counter_key{std::string (prefix)
+                                                                + "authority-owner-counter"};
 
     struct stored_target_t
     {
@@ -1851,35 +1776,31 @@ class provider_location_repository_t final : public location_repository_t
     static constexpr std::size_t aggregate_commit_page_byte_limit = 1024u * 1024u;
     static constexpr std::size_t aggregate_commit_final_key_limit = 2048;
 
-    static json_t encode_aggregate_commit_page (
-      std::size_t page_index,
-      const std::vector<aggregate_commit_entry_t> &entries)
+    static json_t
+    encode_aggregate_commit_page (std::size_t page_index,
+                                  const std::vector<aggregate_commit_entry_t> &entries)
     {
         json_t encoded_entries = json_t::array ();
         for (const auto &entry : entries)
-            encoded_entries.push_back (
-              { {"authorityKey", entry.authority_key},
-                {"before", hex (entry.before)},
-                {"after", hex (entry.after)} });
-        return {{"version", 1},
-                {"pageIndex", page_index},
-                {"entries", std::move (encoded_entries)}};
+            encoded_entries.push_back ({{"authorityKey", entry.authority_key},
+                                        {"before", hex (entry.before)},
+                                        {"after", hex (entry.after)}});
+        return {
+          {"version", 1}, {"pageIndex", page_index}, {"entries", std::move (encoded_entries)}};
     }
 
     static std::optional<std::vector<aggregate_commit_entry_t>>
-    decode_aggregate_commit_page (
-      const std::vector<std::byte> &bytes,
-      std::optional<std::size_t> expected_page_index = std::nullopt)
+    decode_aggregate_commit_page (const std::vector<std::byte> &bytes,
+                                  std::optional<std::size_t> expected_page_index = std::nullopt)
     {
         if (bytes.empty () || bytes.size () > aggregate_commit_page_byte_limit)
             return std::nullopt;
         try {
             const auto record = parse_json (bytes);
             if (record.value ("version", 0) != 1 || !record.at ("pageIndex").is_number_unsigned ()
-                || (expected_page_index && record.at ("pageIndex").get<std::size_t> ()
-                    != *expected_page_index)
-                || !record.at ("entries").is_array ()
-                || record.at ("entries").empty ()
+                || (expected_page_index
+                    && record.at ("pageIndex").get<std::size_t> () != *expected_page_index)
+                || !record.at ("entries").is_array () || record.at ("entries").empty ()
                 || record.at ("entries").size () > aggregate_commit_page_item_limit)
                 return std::nullopt;
             std::vector<aggregate_commit_entry_t> result;
@@ -1935,12 +1856,12 @@ class provider_location_repository_t final : public location_repository_t
     }
 
     static json_t encode_aggregate_lock (const aggregate_id_t &aggregate_id,
-                                          std::uint64_t aggregate_generation,
-                                          std::string_view authority_key,
-                                          std::string_view expected_store_version,
-                                          std::string_view status,
-                                          std::optional<std::size_t> page_index = std::nullopt,
-                                          std::optional<std::size_t> entry_index = std::nullopt)
+                                         std::uint64_t aggregate_generation,
+                                         std::string_view authority_key,
+                                         std::string_view expected_store_version,
+                                         std::string_view status,
+                                         std::optional<std::size_t> page_index = std::nullopt,
+                                         std::optional<std::size_t> entry_index = std::nullopt)
     {
         return {{"aggregateId", hex (aggregate_id.value)},
                 {"aggregateGeneration", aggregate_generation},
@@ -1959,11 +1880,9 @@ class provider_location_repository_t final : public location_repository_t
             aggregate_lock_t result;
             result.aggregate_id.value =
               unhex_array<16> (record.at ("aggregateId").get<std::string> ());
-            result.aggregate_generation =
-              record.at ("aggregateGeneration").get<std::uint64_t> ();
+            result.aggregate_generation = record.at ("aggregateGeneration").get<std::uint64_t> ();
             result.authority_key = record.at ("authorityKey").get<std::string> ();
-            result.expected_store_version =
-              record.at ("expectedStoreVersion").get<std::string> ();
+            result.expected_store_version = record.at ("expectedStoreVersion").get<std::string> ();
             result.status = record.at ("status").get<std::string> ();
             if (!record.at ("pageIndex").is_null ())
                 result.page_index = record.at ("pageIndex").get<std::size_t> ();
@@ -2045,88 +1964,63 @@ class provider_location_repository_t final : public location_repository_t
         return true;
     }
 
-    store_write_result_t write (
-      store_write_request_t request,
-      const creation_terminal_record_t *terminal = nullptr,
-      std::chrono::steady_clock::time_point terminal_deadline = {})
+    store_write_result_t write (store_write_request_t request,
+                                const creation_terminal_record_t *terminal = nullptr,
+                                std::chrono::steady_clock::time_point terminal_deadline = {})
     {
         if (terminal) {
             const auto retention = std::chrono::ceil<std::chrono::milliseconds> (
               terminal_deadline - std::chrono::steady_clock::now ());
             if (retention <= std::chrono::milliseconds::zero ())
-                throw std::invalid_argument ("creation terminal retention elapsed before publication");
+                throw std::invalid_argument (
+                  "creation terminal retention elapsed before publication");
             const auto terminal_key = key_creation_terminal (terminal->operation);
             request.conditions.push_back (missing_condition (terminal_key));
-            request.mutations.push_back (store_put_t{
-              terminal_key, terminal->terminal_envelope, retention});
+            request.mutations.push_back (
+              store_put_t{terminal_key, terminal->terminal_envelope, retention});
         }
         auto first = _store->write (request).result ();
         if (first)
             return first.value ();
         if (auto applied = reconcile_write (request))
             return store_write_result_t{std::move (*applied)};
-        if (first.error () != nullptr
-            && detail::is_transient_error (first.error ()->kind ())) {
+        if (first.error () != nullptr && detail::is_transient_error (first.error ()->kind ())) {
             auto retried = _store->write (request).result ();
             if (retried)
                 return retried.value ();
             if (auto applied = reconcile_write (request))
-                return store_write_result_t{
-                  std::move (*applied)};
+                return store_write_result_t{std::move (*applied)};
             return retried.value ();
         }
         return first.value ();
     }
 
-    std::optional<store_write_applied_t>
-    reconcile_write (
-      const store_write_request_t &request)
+    std::optional<store_write_applied_t> reconcile_write (const store_write_request_t &request)
     {
         if (request.mutations.empty ())
             return std::nullopt;
         store_write_applied_t applied;
         for (const auto &mutation : request.mutations) {
-            const auto key = std::visit (
-              [] (const auto &value) {
-                  return value.key;
-              },
-              mutation);
+            const auto key = std::visit ([] (const auto &value) { return value.key; }, mutation);
             auto observed = _store->read (key).result ();
             if (!observed)
                 return std::nullopt;
             const auto &read = observed.value ();
-            if (const auto *put =
-                  std::get_if<store_put_t> (
-                    &mutation)) {
-                const auto *found =
-                  std::get_if<store_found_t> (&read);
-                if (found == nullptr
-                    || found->value.bytes != put->bytes
-                    || static_cast<bool> (
-                         found->value.expires_at)
-                         != static_cast<bool> (
-                           put->retention))
+            if (const auto *put = std::get_if<store_put_t> (&mutation)) {
+                const auto *found = std::get_if<store_found_t> (&read);
+                if (found == nullptr || found->value.bytes != put->bytes
+                    || static_cast<bool> (found->value.expires_at)
+                         != static_cast<bool> (put->retention))
                     return std::nullopt;
-                if (put->retention
-                    && *found->value.expires_at
-                         <= found->value.store_now)
+                if (put->retention && *found->value.expires_at <= found->value.store_now)
                     return std::nullopt;
-                applied.put_versions.push_back (
-                  {key, found->value.version});
-                applied.store_now =
-                  std::max (
-                    applied.store_now,
-                    found->value.store_now);
-            }
-            else {
-                const auto *missing =
-                  std::get_if<store_missing_t> (&read);
+                applied.put_versions.push_back ({key, found->value.version});
+                applied.store_now = std::max (applied.store_now, found->value.store_now);
+            } else {
+                const auto *missing = std::get_if<store_missing_t> (&read);
                 if (missing == nullptr)
                     return std::nullopt;
-                applied.store_now =
-                  std::max (
-                    applied.store_now,
-                    missing->store_now);
+                applied.store_now = std::max (applied.store_now, missing->store_now);
             }
         }
         return applied;
@@ -2134,25 +2028,17 @@ class provider_location_repository_t final : public location_repository_t
 
     static store_condition_t missing_condition (store_key_t key)
     {
-        return store_missing_condition_t{
-          std::move (key)};
+        return store_missing_condition_t{std::move (key)};
     }
 
-    static store_condition_t version_condition (
-      store_key_t key,
-      store_version_t version)
+    static store_condition_t version_condition (store_key_t key, store_version_t version)
     {
-        return store_version_condition_t{
-          std::move (key), std::move (version)};
+        return store_version_condition_t{std::move (key), std::move (version)};
     }
 
-    static store_condition_t version_condition (
-      store_key_t key,
-      std::string version)
+    static store_condition_t version_condition (store_key_t key, std::string version)
     {
-        return version_condition (
-          std::move (key),
-          store_version_t{std::move (version)});
+        return version_condition (std::move (key), store_version_t{std::move (version)});
     }
 
     static store_condition_t condition_for (const store_key_t &key,
@@ -2191,8 +2077,7 @@ class provider_location_repository_t final : public location_repository_t
     // canonical contract and are not funneled through here.
     static void require_record_version (const json_t &record, const char *record_name)
     {
-        if (!record.contains ("recordVersion")
-            || !record.at ("recordVersion").is_number_integer ()
+        if (!record.contains ("recordVersion") || !record.at ("recordVersion").is_number_integer ()
             || record.at ("recordVersion").get<std::int64_t> () != 1) {
             throw std::invalid_argument (std::string ("unrecognized ") + record_name
                                          + " recordVersion");
@@ -2211,10 +2096,9 @@ class provider_location_repository_t final : public location_repository_t
     {
         const auto decimal = to_string (value);
         if (decimal.empty () || decimal.front () == '0'
-            || !std::all_of (decimal.begin (), decimal.end (),
-                             [] (unsigned char character) {
-                                 return character >= '0' && character <= '9';
-                             }))
+            || !std::all_of (decimal.begin (), decimal.end (), [] (unsigned char character) {
+                   return character >= '0' && character <= '9';
+               }))
             throw std::invalid_argument ("counter is not canonical decimal");
         const auto parsed = std::stoll (decimal);
         if (parsed <= 0)
@@ -2285,10 +2169,7 @@ class provider_location_repository_t final : public location_repository_t
 
     static constexpr std::string_view authority_domain = "authority";
 
-    static std::string prefix_authority ()
-    {
-        return preimage ({authority_domain, ""});
-    }
+    static std::string prefix_authority () { return preimage ({authority_domain, ""}); }
 
     static store_key_t key_authority (std::string_view value)
     {
@@ -2311,10 +2192,9 @@ class provider_location_repository_t final : public location_repository_t
         };
         const auto source_rid = hex (to_bytes (operation.source_node_rid.value ()));
         const auto source_generation = std::to_string (operation.source_node_generation);
-        const auto operation_id = fixed_hex (operation.operation_id.high)
-          + fixed_hex (operation.operation_id.low);
-        return {preimage (
-          {"creation-terminal", source_rid, source_generation, operation_id})};
+        const auto operation_id =
+          fixed_hex (operation.operation_id.high) + fixed_hex (operation.operation_id.low);
+        return {preimage ({"creation-terminal", source_rid, source_generation, operation_id})};
     }
 
     static store_key_t key_aggregate (const aggregate_id_t &id)
@@ -2322,25 +2202,21 @@ class provider_location_repository_t final : public location_repository_t
         return {std::string (prefix) + "aggregate:" + hex (id.value)};
     }
 
-    static store_key_t key_aggregate_inventory (const aggregate_id_t &id,
-                                                std::size_t page_index)
+    static store_key_t key_aggregate_inventory (const aggregate_id_t &id, std::size_t page_index)
     {
         return {std::string (prefix) + "aggregate-inventory:" + hex (id.value) + ":"
                 + std::to_string (page_index)};
     }
 
-    static store_key_t key_aggregate_inventory_index (
-      const aggregate_id_t &id,
-      std::size_t level,
-      std::size_t page_index)
+    static store_key_t key_aggregate_inventory_index (const aggregate_id_t &id,
+                                                      std::size_t level,
+                                                      std::size_t page_index)
     {
-        return {std::string (prefix) + "aggregate-inventory-index:"
-                + hex (id.value) + ":" + std::to_string (level) + ":"
-                + std::to_string (page_index)};
+        return {std::string (prefix) + "aggregate-inventory-index:" + hex (id.value) + ":"
+                + std::to_string (level) + ":" + std::to_string (page_index)};
     }
 
-    static store_key_t key_aggregate_commit_page (const aggregate_id_t &id,
-                                                  std::size_t page_index)
+    static store_key_t key_aggregate_commit_page (const aggregate_id_t &id, std::size_t page_index)
     {
         return {std::string (prefix) + "aggregate-commit:" + hex (id.value) + ":"
                 + std::to_string (page_index)};
@@ -2358,9 +2234,9 @@ class provider_location_repository_t final : public location_repository_t
 
     static std::string object_key (const object_creation_key_t &key)
     {
-        return (key.kind == placement_object_kind_t::actor
-                  ? actor_authority_key (key.global_id)
-                  : spot_authority_key (key.global_id)).value;
+        return (key.kind == placement_object_kind_t::actor ? actor_authority_key (key.global_id)
+                                                           : spot_authority_key (key.global_id))
+          .value;
     }
 
     template <std::size_t N> static std::string hex (const std::array<std::byte, N> &value)
@@ -2435,8 +2311,8 @@ class provider_location_repository_t final : public location_repository_t
                                      const zlink::routing_id_t &rid,
                                      std::uint64_t lifecycle_generation)
     {
-        return {std::string (prefix) + "capacity:" + segment (mesh_name)
-                + segment (rid.to_hex ()) + std::to_string (lifecycle_generation)};
+        return {std::string (prefix) + "capacity:" + segment (mesh_name) + segment (rid.to_hex ())
+                + std::to_string (lifecycle_generation)};
     }
 
     static std::string encode_uri_component (std::string_view value)
@@ -2447,9 +2323,9 @@ class provider_location_repository_t final : public location_repository_t
         for (const auto character : value) {
             const auto byte = static_cast<unsigned char> (character);
             if ((byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z')
-                || (byte >= '0' && byte <= '9') || byte == '-' || byte == '_'
-                || byte == '.' || byte == '!' || byte == '~' || byte == '*'
-                || byte == '\'' || byte == '(' || byte == ')') {
+                || (byte >= '0' && byte <= '9') || byte == '-' || byte == '_' || byte == '.'
+                || byte == '!' || byte == '~' || byte == '*' || byte == '\'' || byte == '('
+                || byte == ')') {
                 result.push_back (static_cast<char> (byte));
             } else {
                 result.push_back ('%');
@@ -2460,11 +2336,10 @@ class provider_location_repository_t final : public location_repository_t
         return result;
     }
 
-    static store_key_t key_node_capacity (std::string_view mesh_name,
-                                          std::string_view node_rid)
+    static store_key_t key_node_capacity (std::string_view mesh_name, std::string_view node_rid)
     {
-        return {std::string (prefix) + "capacity:" + encode_uri_component (mesh_name)
-                + ":" + encode_uri_component (node_rid)};
+        return {std::string (prefix) + "capacity:" + encode_uri_component (mesh_name) + ":"
+                + encode_uri_component (node_rid)};
     }
 
     static std::string prefix_client_server (std::string_view channel_name)
@@ -2547,7 +2422,7 @@ class provider_location_repository_t final : public location_repository_t
                     return completed (
                       location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
             } else if (provider_generation_known
-                      && provider_generation == std::numeric_limits<std::uint64_t>::max ()) {
+                       && provider_generation == std::numeric_limits<std::uint64_t>::max ()) {
                 return unavailable<location_write_result_t> ("descriptor generation exhausted");
             }
             generation = provider_generation_known ? provider_generation + 1 : 1;
@@ -2621,8 +2496,7 @@ class provider_location_repository_t final : public location_repository_t
                 throw framework_exception_t (framework_error_kind_t::internal_failure,
                                              "Location Store scan cursor expired");
             for (const auto &item : page->items) {
-                const auto record =
-                  parse_canonical_record (item.value.bytes, "descriptor");
+                const auto record = parse_canonical_record (item.value.bytes, "descriptor");
                 if (record_owner_id (record) != owner.owner_id
                     || record_lease_generation (record) != owner.lease_generation)
                     continue;
@@ -2641,7 +2515,8 @@ class provider_location_repository_t final : public location_repository_t
     // round-tripping) still use plain JSON numbers, so this accepts both.
     static std::int64_t parse_i64_field (const json_t &value)
     {
-        return value.is_string () ? std::stoll (value.get<std::string> ()) : value.get<std::int64_t> ();
+        return value.is_string () ? std::stoll (value.get<std::string> ())
+                                  : value.get<std::int64_t> ();
     }
 
     static std::uint64_t parse_u64_field (const json_t &value)
@@ -2761,13 +2636,13 @@ class provider_location_repository_t final : public location_repository_t
     static const char *object_kind3_name (placement_object_kind_t value)
     {
         switch (value) {
-        case placement_object_kind_t::actor:
-            return "actor";
-        case placement_object_kind_t::instance_spot:
-            return "instanceSpot";
-        case placement_object_kind_t::user_spot:
-        default:
-            return "userSpot";
+            case placement_object_kind_t::actor:
+                return "actor";
+            case placement_object_kind_t::instance_spot:
+                return "instanceSpot";
+            case placement_object_kind_t::user_spot:
+            default:
+                return "userSpot";
         }
     }
 
@@ -2819,7 +2694,7 @@ class provider_location_repository_t final : public location_repository_t
     {
         if (value.is_string ())
             return value.get<std::string> () == "active" ? placement_allocation_state_t::active
-                                                          : placement_allocation_state_t::reserved;
+                                                         : placement_allocation_state_t::reserved;
         return static_cast<placement_allocation_state_t> (value.get<int> ());
     }
 
@@ -2875,15 +2750,15 @@ class provider_location_repository_t final : public location_repository_t
     }
 
     static placement_allocation_t decode_allocation (const json_t &value,
-                                                      const location_owner_token_t &owner)
+                                                     const location_owner_token_t &owner)
     {
-        return {parse_allocation_state (value.at ("state")),
-                parse_object_kind3 (value.at ("objectKind").get<std::string> ()),
-                value.at ("stableType").get<std::string> (),
-                decode_target_descriptor (
-                  value.at ("descriptor"), owner,
-                  parse_u64_field (value.at ("descriptorLifecycleGeneration"))),
-                decode_bundle (value.at ("capacity"))};
+        return {
+          parse_allocation_state (value.at ("state")),
+          parse_object_kind3 (value.at ("objectKind").get<std::string> ()),
+          value.at ("stableType").get<std::string> (),
+          decode_target_descriptor (value.at ("descriptor"), owner,
+                                    parse_u64_field (value.at ("descriptorLifecycleGeneration"))),
+          decode_bundle (value.at ("capacity"))};
     }
 
     static json_t encode_pending (const std::optional<pending_object_creation_t> &value)
@@ -2920,17 +2795,16 @@ class provider_location_repository_t final : public location_repository_t
     // the record body.
     static std::vector<std::byte> encode_authority (const authority_snapshot_t &value)
     {
-        return to_bytes (json_t{{"recordVersion", 1},
-                                {"payload", base64_encode (value.payload)},
-                                {"objectGeneration", generation_string (value.object_generation)},
-                                {"authorityOwnerGeneration",
-                                 generation_string (value.authority_owner_generation)},
-                                {"ownerId", value.owner.owner_id},
-                                {"ownerLeaseGeneration",
-                                 generation_string (value.owner.lease_generation)},
-                                {"allocation", encode_allocation (value.allocation)},
-                                {"pendingCreation", encode_pending (value.pending_creation)}}
-                           .dump ());
+        return to_bytes (
+          json_t{{"recordVersion", 1},
+                 {"payload", base64_encode (value.payload)},
+                 {"objectGeneration", generation_string (value.object_generation)},
+                 {"authorityOwnerGeneration", generation_string (value.authority_owner_generation)},
+                 {"ownerId", value.owner.owner_id},
+                 {"ownerLeaseGeneration", generation_string (value.owner.lease_generation)},
+                 {"allocation", encode_allocation (value.allocation)},
+                 {"pendingCreation", encode_pending (value.pending_creation)}}
+            .dump ());
     }
 
     static authority_snapshot_t decode_authority (const std::vector<std::byte> &bytes,
@@ -2940,11 +2814,11 @@ class provider_location_repository_t final : public location_repository_t
         // Fail-closed on absent AND present-unknown recordVersion (spec 21
         // §2.4); tolerating absence would guess at the record layout.
         const auto value = parse_canonical_record (bytes, "authority");
-        const auto owner = value.contains ("owner")
-                             ? decode_owner (value.at ("owner"))
-                             : location_owner_token_t{value.at ("ownerId").get<std::string> (),
-                                                      parse_i64_field (
-                                                        value.at ("ownerLeaseGeneration"))};
+        const auto owner =
+          value.contains ("owner")
+            ? decode_owner (value.at ("owner"))
+            : location_owner_token_t{value.at ("ownerId").get<std::string> (),
+                                     parse_i64_field (value.at ("ownerLeaseGeneration"))};
         // Clean break (checklist C-4): payload was hex, now base64. There is
         // no dual-read fallback -- the whole opaque-record key/value scheme
         // changed in the same conversion, so no pre-conversion record can be
@@ -2959,13 +2833,11 @@ class provider_location_repository_t final : public location_repository_t
                 decode_pending (value.at ("pendingCreation"))};
     }
 
-    static authority_snapshot_t decode_authority (
-      const std::vector<std::byte> &bytes,
-      const store_version_t &provider_version,
-      std::chrono::system_clock::time_point store_now)
+    static authority_snapshot_t decode_authority (const std::vector<std::byte> &bytes,
+                                                  const store_version_t &provider_version,
+                                                  std::chrono::system_clock::time_point store_now)
     {
-        return decode_authority (
-          bytes, provider_version.value, store_now);
+        return decode_authority (bytes, provider_version.value, store_now);
     }
 
     // checklist C-4d's matches_reservation(): identifies a reservation by
@@ -2990,8 +2862,9 @@ class provider_location_repository_t final : public location_repository_t
     task_t<authority_compare_exchange_result_t> authority_conflict (store_read_result_t current)
     {
         if (const auto *found = std::get_if<store_found_t> (&current))
-            return completed (authority_compare_exchange_result_t{authority_conflict_t{
-              decode_authority (found->value.bytes, found->value.version, found->value.store_now)}});
+            return completed (
+              authority_compare_exchange_result_t{authority_conflict_t{decode_authority (
+                found->value.bytes, found->value.version, found->value.store_now)}});
         return completed (authority_compare_exchange_result_t{authority_conflict_t{
           authority_missing_t{std::get<store_missing_t> (current).store_now}}});
     }
@@ -3036,20 +2909,20 @@ class provider_location_repository_t final : public location_repository_t
     static const char *runtime_state_name (framework_runtime_state_t value)
     {
         switch (value) {
-        case framework_runtime_state_t::preparing:
-            return "preparing";
-        case framework_runtime_state_t::serving:
-            return "serving";
-        case framework_runtime_state_t::relocating:
-            return "relocating";
-        case framework_runtime_state_t::relocated:
-            return "relocated";
-        case framework_runtime_state_t::draining:
-            return "draining";
-        case framework_runtime_state_t::stopped:
-            return "stopped";
-        case framework_runtime_state_t::error:
-            return "error";
+            case framework_runtime_state_t::preparing:
+                return "preparing";
+            case framework_runtime_state_t::serving:
+                return "serving";
+            case framework_runtime_state_t::relocating:
+                return "relocating";
+            case framework_runtime_state_t::relocated:
+                return "relocated";
+            case framework_runtime_state_t::draining:
+                return "draining";
+            case framework_runtime_state_t::stopped:
+                return "stopped";
+            case framework_runtime_state_t::error:
+                return "error";
         }
         return "preparing";
     }
@@ -3071,12 +2944,12 @@ class provider_location_repository_t final : public location_repository_t
     static const char *maintenance_policy_name (maintenance_policy_kind_t value)
     {
         switch (value) {
-        case maintenance_policy_kind_t::disabled:
-            return "disabled";
-        case maintenance_policy_kind_t::recreate:
-            return "recreate";
-        case maintenance_policy_kind_t::snapshot:
-            return "snapshot";
+            case maintenance_policy_kind_t::disabled:
+                return "disabled";
+            case maintenance_policy_kind_t::recreate:
+                return "recreate";
+            case maintenance_policy_kind_t::snapshot:
+                return "snapshot";
         }
         return "disabled";
     }
@@ -3187,10 +3060,9 @@ class provider_location_repository_t final : public location_repository_t
                  });
     }
 
-    std::optional<stored_target_t> read_target_descriptor (
-      const object_creation_target_t &target,
-      bool require_live = true,
-      bool require_identity = true)
+    std::optional<stored_target_t> read_target_descriptor (const object_creation_target_t &target,
+                                                           bool require_live = true,
+                                                           bool require_identity = true)
     {
         const auto row_key = key_mesh (
           target.mesh_name, zlink::routing_id_t::from (std::string (target.node_rid.value ())));
@@ -3198,8 +3070,7 @@ class provider_location_repository_t final : public location_repository_t
         const auto *found = std::get_if<store_found_t> (&row);
         if (!found)
             return std::nullopt;
-        const auto record =
-          parse_canonical_record (found->value.bytes, "MeshNode descriptor");
+        const auto record = parse_canonical_record (found->value.bytes, "MeshNode descriptor");
         auto descriptor = decode_mesh_descriptor (record.at ("descriptor"));
         if ((require_identity
              && (descriptor.lifecycle_generation != target.node_lifecycle_generation
@@ -3207,20 +3078,15 @@ class provider_location_repository_t final : public location_repository_t
                  || descriptor.lease_generation != target.owner.lease_generation))
             || (require_live && descriptor.state != framework_runtime_state_t::serving))
             return std::nullopt;
-        const auto owner_id = require_identity
-                                ? target.owner.owner_id
-                                : descriptor.owner_id;
+        const auto owner_id = require_identity ? target.owner.owner_id : descriptor.owner_id;
         const auto owner = read (key_owner (owner_id));
         const auto *live = std::get_if<store_found_t> (&owner);
         if (require_live
-            && (!live
-                || owner_generation (live->value.bytes)
-                     != descriptor.lease_generation))
+            && (!live || owner_generation (live->value.bytes) != descriptor.lease_generation))
             return std::nullopt;
         return stored_target_t{row_key, found->value.version.value,
                                live ? live->value.version.value : std::string{},
-                               std::move (descriptor),
-                               record};
+                               std::move (descriptor), record};
     }
 
     static bool target_accepts (const mesh_node_descriptor_t &descriptor,
@@ -3254,11 +3120,10 @@ class provider_location_repository_t final : public location_repository_t
     static std::string node_capacity_type_key (placement_object_kind_t kind,
                                                std::string_view stable_type)
     {
-        const auto object_kind = kind == placement_object_kind_t::user_spot
-                                   ? "user_spot"
-                                   : (kind == placement_object_kind_t::instance_spot
-                                        ? "instance_spot"
-                                        : "actor");
+        const auto object_kind =
+          kind == placement_object_kind_t::user_spot
+            ? "user_spot"
+            : (kind == placement_object_kind_t::instance_spot ? "instance_spot" : "actor");
         return std::string (object_kind) + '\0' + std::string (stable_type);
     }
 
@@ -3312,12 +3177,14 @@ class provider_location_repository_t final : public location_repository_t
                 if (count.pending != 0)
                     pending_types[key] = count.pending;
             }
-            value = {{"active", {{"actors", record.actors.active},
-                                   {"spots", record.spots.active},
-                                   {"spotTypes", std::move (active_types)}}},
-                     {"pending", {{"actors", record.actors.pending},
-                                    {"spots", record.spots.pending},
-                                    {"spotTypes", std::move (pending_types)}}}};
+            value = {{"active",
+                      {{"actors", record.actors.active},
+                       {"spots", record.spots.active},
+                       {"spotTypes", std::move (active_types)}}},
+                     {"pending",
+                      {{"actors", record.actors.pending},
+                       {"spots", record.spots.pending},
+                       {"spotTypes", std::move (pending_types)}}}};
         } else {
             json_t typed = json_t::object ();
             for (const auto &[key, count] : record.spot_types)
@@ -3334,9 +3201,9 @@ class provider_location_repository_t final : public location_repository_t
     stored_capacity_t read_capacity (const object_creation_target_t &target,
                                      const stored_target_t &descriptor)
     {
-        const auto canonical_key = key_capacity (
-          descriptor.descriptor.mesh_name, descriptor.descriptor.rid,
-          target.node_lifecycle_generation);
+        const auto canonical_key =
+          key_capacity (descriptor.descriptor.mesh_name, descriptor.descriptor.rid,
+                        target.node_lifecycle_generation);
         auto current = read (canonical_key);
         if (const auto *found = std::get_if<store_found_t> (&current))
             return {canonical_key, version_condition (canonical_key, found->value.version),
@@ -3358,15 +3225,14 @@ class provider_location_repository_t final : public location_repository_t
                                     const capacity_record_t &capacity,
                                     const placement_capacity_bundle_t &bundle)
     {
-        const auto enough = [] (const capacity_count_t &usage,
-                                std::int32_t limit,
+        const auto enough = [] (const capacity_count_t &usage, std::int32_t limit,
                                 std::uint32_t requested) {
             if (requested == 0 || limit == 0)
                 return true;
             return usage.active <= limit && usage.pending <= limit
                    && static_cast<std::uint64_t> (usage.active)
-                        + static_cast<std::uint64_t> (usage.pending) + requested
-                      <= static_cast<std::uint64_t> (limit);
+                          + static_cast<std::uint64_t> (usage.pending) + requested
+                        <= static_cast<std::uint64_t> (limit);
         };
         if (!enough (capacity.actors, descriptor.capacity.actors.limit, bundle.actor_slots)
             || !enough (capacity.spots, descriptor.capacity.spots.limit, bundle.spot_slots))
@@ -3381,11 +3247,11 @@ class provider_location_repository_t final : public location_repository_t
           });
         if (limit == descriptor.capacity.spot_types.end ())
             return false;
-        const auto key = capacity.format == capacity_record_format_t::node_compatible
-                           ? node_capacity_type_key (bundle.spot_type->object_kind,
-                                                     bundle.spot_type->stable_type)
-                           : canonical_capacity_type_key (bundle.spot_type->object_kind,
-                                                          bundle.spot_type->stable_type);
+        const auto key =
+          capacity.format == capacity_record_format_t::node_compatible
+            ? node_capacity_type_key (bundle.spot_type->object_kind, bundle.spot_type->stable_type)
+            : canonical_capacity_type_key (bundle.spot_type->object_kind,
+                                           bundle.spot_type->stable_type);
         const auto found = capacity.spot_types.find (key);
         return enough (found == capacity.spot_types.end () ? capacity_count_t{} : found->second,
                        limit->usage.limit, bundle.spot_type->slots);
@@ -3404,8 +3270,7 @@ class provider_location_repository_t final : public location_repository_t
                     return false;
                 const auto amount = static_cast<std::int64_t> (slots);
                 if ((change < 0 && current < amount)
-                    || (change > 0
-                        && current > std::numeric_limits<std::int64_t>::max () - amount))
+                    || (change > 0 && current > std::numeric_limits<std::int64_t>::max () - amount))
                     return false;
                 next = current + change * amount;
                 return true;
@@ -3424,16 +3289,16 @@ class provider_location_repository_t final : public location_repository_t
             return false;
         if (!bundle.spot_type)
             return true;
-        const auto key = record.format == capacity_record_format_t::node_compatible
-                           ? node_capacity_type_key (bundle.spot_type->object_kind,
-                                                     bundle.spot_type->stable_type)
-                           : canonical_capacity_type_key (bundle.spot_type->object_kind,
-                                                          bundle.spot_type->stable_type);
+        const auto key =
+          record.format == capacity_record_format_t::node_compatible
+            ? node_capacity_type_key (bundle.spot_type->object_kind, bundle.spot_type->stable_type)
+            : canonical_capacity_type_key (bundle.spot_type->object_kind,
+                                           bundle.spot_type->stable_type);
         auto &typed = record.spot_types[key];
         if (!adjust (typed, bundle.spot_type->slots, pending_delta, active_delta))
             return false;
-        if (record.format == capacity_record_format_t::node_compatible
-            && typed.active == 0 && typed.pending == 0)
+        if (record.format == capacity_record_format_t::node_compatible && typed.active == 0
+            && typed.pending == 0)
             record.spot_types.erase (key);
         return true;
     }
@@ -3477,19 +3342,18 @@ class provider_location_repository_t final : public location_repository_t
                 {"targetOwner", encode_owner (request.target_owner)}};
     }
 
-    static bool aggregate_record_matches_request (
-      const json_t &record,
-      const aggregate_prepare_request_t &request,
-      const aggregate_inventory::tree_t &inventory)
+    static bool aggregate_record_matches_request (const json_t &record,
+                                                  const aggregate_prepare_request_t &request,
+                                                  const aggregate_inventory::tree_t &inventory)
     {
         try {
-            const auto expected = encode_aggregate (request, record.value ("status", ""), inventory);
-            for (const auto *field : {"aggregateId", "aggregateGeneration", "inventoryRoot",
-                                      "inventoryCount", "inventoryPageCount",
-                                      "inventoryIndexPageCount", "inventoryIndexLevelCount",
-                                      "inventoryDigest", "targetMeshName", "targetNodeRid",
-                                      "targetLifecycleGeneration", "capacityBundle",
-                                      "targetOwner"}) {
+            const auto expected =
+              encode_aggregate (request, record.value ("status", ""), inventory);
+            for (const auto *field :
+                 {"aggregateId", "aggregateGeneration", "inventoryRoot", "inventoryCount",
+                  "inventoryPageCount", "inventoryIndexPageCount", "inventoryIndexLevelCount",
+                  "inventoryDigest", "targetMeshName", "targetNodeRid", "targetLifecycleGeneration",
+                  "capacityBundle", "targetOwner"}) {
                 if (!record.contains (field) || record.at (field) != expected.at (field))
                     return false;
             }
@@ -3529,7 +3393,8 @@ class provider_location_repository_t final : public location_repository_t
             result.capacity.spot_types.push_back (
               {parse_object_kind3 (item.at ("objectKind").get<std::string> ()),
                item.at ("stableType").get<std::string> (),
-               {item.at ("active").get<std::uint64_t> (), item.at ("reserved").get<std::uint64_t> (),
+               {item.at ("active").get<std::uint64_t> (),
+                item.at ("reserved").get<std::uint64_t> (),
                 item.at ("limit").get<std::int32_t> ()}});
         const auto &activation = value.at ("activationConcurrency");
         result.activation_concurrency.active = activation.at ("active").get<std::uint32_t> ();
@@ -3657,8 +3522,8 @@ class provider_location_repository_t final : public location_repository_t
 
     template <typename T> static task_t<T> unavailable (std::string message)
     {
-        return task_t<T> (result_t<T>::failure (framework_error_kind_t::internal_failure,
-                                                std::move (message)));
+        return task_t<T> (
+          result_t<T>::failure (framework_error_kind_t::internal_failure, std::move (message)));
     }
 
     template <typename T> static task_t<T> cancelled ()

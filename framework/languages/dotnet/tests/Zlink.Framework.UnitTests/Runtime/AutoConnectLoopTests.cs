@@ -18,13 +18,17 @@ public sealed class AutoConnectLoopTests
         var runtime = new ZLinkLocationRuntime(options, store, time);
         var tracker = new ZLinkOwnerLeaseTracker(store, options, time);
         var resolvers = new ZLinkStoreLocationResolvers(
-            store, tracker, new ZLinkObservedLocationGenerations());
+            store,
+            tracker,
+            new ZLinkObservedLocationGenerations()
+        );
         var local = new ZLinkAutoConnectLocal(
             ZLinkLocationAutoConnectType.ClientServer,
             Mesh("dispose"),
             ZLinkLocationRole.Dealer,
             NodeRid: null,
-            Endpoint: string.Empty);
+            Endpoint: string.Empty
+        );
         var reconciler = new ZLinkAutoConnectReconciler(
             local,
             null,
@@ -32,9 +36,9 @@ public sealed class AutoConnectLoopTests
             resolvers,
             new NullExecutor(),
             options,
-            time);
-        var loop = new ZLinkAutoConnectLoop(
-            reconciler, local, options, store, timeProvider: time);
+            time
+        );
+        var loop = new ZLinkAutoConnectLoop(reconciler, local, options, store, timeProvider: time);
 
         var first = loop.DisposeAsync().AsTask();
         var second = loop.DisposeAsync().AsTask();
@@ -55,16 +59,29 @@ public sealed class AutoConnectLoopTests
 
         var tracker = new ZLinkOwnerLeaseTracker(store, options, time);
         var resolvers = new ZLinkStoreLocationResolvers(
-            store, tracker, new ZLinkObservedLocationGenerations());
+            store,
+            tracker,
+            new ZLinkObservedLocationGenerations()
+        );
         var countingResolver = new CountingPeerResolver(resolvers);
         var local = new ZLinkAutoConnectLocal(
-            ZLinkLocationAutoConnectType.ClientServer, Mesh("play"), ZLinkLocationRole.Dealer,
-            RoutingId.From("local"), "tcp://l:1");
+            ZLinkLocationAutoConnectType.ClientServer,
+            Mesh("play"),
+            ZLinkLocationRole.Dealer,
+            RoutingId.From("local"),
+            "tcp://l:1"
+        );
         var localRow = InMemoryLocationStoreTests.MeshNode("ignored", "tcp://l:1", "local");
         var reconciler = new ZLinkAutoConnectReconciler(
-            local, localRow, runtime, countingResolver, new NullExecutor(), options, time);
-        var loop = new ZLinkAutoConnectLoop(
-            reconciler, local, options, store, timeProvider: time);
+            local,
+            localRow,
+            runtime,
+            countingResolver,
+            new NullExecutor(),
+            options,
+            time
+        );
+        var loop = new ZLinkAutoConnectLoop(reconciler, local, options, store, timeProvider: time);
 
         // First tick always reads the list (and publishes the local row,
         // which bumps the stamp), so the second tick still reads once more
@@ -85,8 +102,10 @@ public sealed class AutoConnectLoopTests
                 "peer-owner",
                 "tcp://r:1",
                 "r1",
-                leaseGeneration: 2),
-            ZLinkLocationWriteIntent.NewClaim);
+                leaseGeneration: 2
+            ),
+            ZLinkLocationWriteIntent.NewClaim
+        );
         await loop.TickAsync();
         Assert.Equal(reads + 1, countingResolver.ListCalls);
     }
@@ -102,31 +121,50 @@ public sealed class AutoConnectLoopTests
 
         var tracker = new ZLinkOwnerLeaseTracker(store, options, time);
         var resolvers = new ZLinkStoreLocationResolvers(
-            store, tracker, new ZLinkObservedLocationGenerations());
+            store,
+            tracker,
+            new ZLinkObservedLocationGenerations()
+        );
         var executor = new RecordingAutoConnectExecutor();
         var local = new ZLinkAutoConnectLocal(
-            ZLinkLocationAutoConnectType.ClientServer, Mesh("play"), ZLinkLocationRole.Dealer,
-            NodeRid: null, Endpoint: string.Empty);
+            ZLinkLocationAutoConnectType.ClientServer,
+            Mesh("play"),
+            ZLinkLocationRole.Dealer,
+            NodeRid: null,
+            Endpoint: string.Empty
+        );
         var reconciler = new ZLinkAutoConnectReconciler(
-            local, localRow: null, runtime, resolvers, executor, options, time);
+            local,
+            localRow: null,
+            runtime,
+            resolvers,
+            executor,
+            options,
+            time
+        );
         var loop = new ZLinkAutoConnectLoop(
-            reconciler, local, options, store, timeProvider: time,
-            leaseTracker: tracker);
+            reconciler,
+            local,
+            options,
+            store,
+            timeProvider: time,
+            leaseTracker: tracker
+        );
 
-        await store.ClaimLiveOwnerAsync(
-            "late-owner",
-            TimeSpan.FromSeconds(15));
+        await store.ClaimLiveOwnerAsync("late-owner", TimeSpan.FromSeconds(15));
         await store.UpdateMeshNodeAsync(
             InMemoryLocationStoreTests.MeshNode(
                 "late-owner",
                 "tcp://r:1",
                 "r1",
-                leaseGeneration: 2),
-            ZLinkLocationWriteIntent.NewClaim);
+                leaseGeneration: 2
+            ),
+            ZLinkLocationWriteIntent.NewClaim
+        );
         Assert.Equal(
             ZLinkOwnerLeaseReleaseResult.Released,
-            await store.ReleaseOwnerLeaseAsync(
-                new ZLinkLocationOwnerToken("late-owner", 2)));
+            await store.ReleaseOwnerLeaseAsync(new ZLinkLocationOwnerToken("late-owner", 2))
+        );
         await loop.TickAsync();
         Assert.Empty(executor.Connected);
 
@@ -152,20 +190,41 @@ public sealed class AutoConnectLoopTests
                 "peer-owner",
                 "tcp://r:1",
                 "r1",
-                leaseGeneration: 2),
-            ZLinkLocationWriteIntent.NewClaim);
+                leaseGeneration: 2
+            ),
+            ZLinkLocationWriteIntent.NewClaim
+        );
         var tracker = new ZLinkOwnerLeaseTracker(store, options, time);
         var resolvers = new ZLinkStoreLocationResolvers(
-            store, tracker, new ZLinkObservedLocationGenerations());
+            store,
+            tracker,
+            new ZLinkObservedLocationGenerations()
+        );
         var executor = new RetryExecutor();
         var local = new ZLinkAutoConnectLocal(
-            ZLinkLocationAutoConnectType.ClientServer, Mesh("play"), ZLinkLocationRole.Dealer,
-            NodeRid: null, Endpoint: string.Empty);
+            ZLinkLocationAutoConnectType.ClientServer,
+            Mesh("play"),
+            ZLinkLocationRole.Dealer,
+            NodeRid: null,
+            Endpoint: string.Empty
+        );
         var reconciler = new ZLinkAutoConnectReconciler(
-            local, null, runtime, resolvers, executor, options, time);
+            local,
+            null,
+            runtime,
+            resolvers,
+            executor,
+            options,
+            time
+        );
         var loop = new ZLinkAutoConnectLoop(
-            reconciler, local, options, store, timeProvider: time,
-            leaseTracker: tracker);
+            reconciler,
+            local,
+            options,
+            store,
+            timeProvider: time,
+            leaseTracker: tracker
+        );
 
         await loop.TickAsync();
         await loop.TickAsync();
@@ -182,7 +241,7 @@ public sealed class AutoConnectLoopTests
         var options = new ZLinkLocationOptions
         {
             PollingInterval = TimeSpan.Zero,
-            OwnerLeaseRenewInterval = TimeSpan.FromSeconds(1)
+            OwnerLeaseRenewInterval = TimeSpan.FromSeconds(1),
         };
         var runtime = new ZLinkLocationRuntime(options, store, time);
         await runtime.RenewOwnerLeaseOnceAsync();
@@ -190,13 +249,23 @@ public sealed class AutoConnectLoopTests
         var resolver = new SwitchablePeerResolver([peer]);
         var executor = new RecordingAutoConnectExecutor();
         var local = new ZLinkAutoConnectLocal(
-            ZLinkLocationAutoConnectType.ClientServer, Mesh("play"), ZLinkLocationRole.Dealer,
-            NodeRid: null, Endpoint: string.Empty);
+            ZLinkLocationAutoConnectType.ClientServer,
+            Mesh("play"),
+            ZLinkLocationRole.Dealer,
+            NodeRid: null,
+            Endpoint: string.Empty
+        );
         var reconciler = new ZLinkAutoConnectReconciler(
-            local, null, runtime, resolver, executor, options, time);
+            local,
+            null,
+            runtime,
+            resolver,
+            executor,
+            options,
+            time
+        );
         var stamps = new FailingStampStore();
-        var loop = new ZLinkAutoConnectLoop(
-            reconciler, local, options, stamps, timeProvider: time);
+        var loop = new ZLinkAutoConnectLoop(reconciler, local, options, stamps, timeProvider: time);
 
         await loop.TickAsync();
         Assert.Single(reconciler.ActiveTargets);
@@ -223,7 +292,8 @@ public sealed class AutoConnectLoopTests
 
         public ValueTask<IReadOnlyList<ZLinkMeshNodeDescriptor>> ListLiveMeshNodesAsync(
             string meshName,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             ListCalls++;
             return inner.ListLiveMeshNodesAsync(meshName, cancellationToken);
@@ -237,7 +307,8 @@ public sealed class AutoConnectLoopTests
 
         public ValueTask<IReadOnlyList<ZLinkMeshNodeDescriptor>> ListLiveMeshNodesAsync(
             string meshName,
-            CancellationToken cancellationToken = default) => ValueTask.FromResult(Rows);
+            CancellationToken cancellationToken = default
+        ) => ValueTask.FromResult(Rows);
     }
 
     private sealed class FailingStampStore : ZLinkLocationStoreTestDouble
@@ -246,12 +317,16 @@ public sealed class AutoConnectLoopTests
 
         public override ValueTask<ulong?> GetMeshNodeChangeStampAsync(
             string meshName,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
-            if (!FailNext) return ValueTask.FromResult<ulong?>(1);
+            if (!FailNext)
+                return ValueTask.FromResult<ulong?>(1);
 
             FailNext = false;
-            return ValueTask.FromException<ulong?>(new InvalidOperationException("stamp unavailable"));
+            return ValueTask.FromException<ulong?>(
+                new InvalidOperationException("stamp unavailable")
+            );
         }
     }
 

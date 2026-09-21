@@ -8,19 +8,22 @@ import {
 } from './actor-message-follow-context';
 
 export const ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET = '__zlink.actor.packet.relay';
-export const ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET = 'zlink.framework.actor.session_disconnected';
+export const ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET =
+  'zlink.framework.actor.session_disconnected';
 export const ZLINK_REMOTE_ACTOR_SESSION_BIND_PACKET = 'framework.internal.actor-session-bind';
 
 export function encodeRemoteActorSessionBinding(input: {
   readonly sessionNodeRid: RoutingId;
   readonly sessionRid: RoutingId;
 }): Uint8Array {
-  return Buffer.from(JSON.stringify({
-    sessionNodeRid: String(input.sessionNodeRid),
-    sessionNodeRidHex: routingIdWireHex(input.sessionNodeRid),
-    sessionRid: String(input.sessionRid),
-    sessionRidHex: routingIdWireHex(input.sessionRid)
-  }));
+  return Buffer.from(
+    JSON.stringify({
+      sessionNodeRid: String(input.sessionNodeRid),
+      sessionNodeRidHex: routingIdWireHex(input.sessionNodeRid),
+      sessionRid: String(input.sessionRid),
+      sessionRidHex: routingIdWireHex(input.sessionRid)
+    })
+  );
 }
 
 export function decodeRemoteActorSessionBinding(payload: Uint8Array): {
@@ -57,18 +60,23 @@ export function encodeRemoteActorPacketRelayPayload(input: {
     boundSessionTargetNodeRid: input.boundSessionTargetNodeRid,
     boundSessionSpotId: input.boundSessionSpotId,
     actorNodeRid: input.actorRef === undefined ? undefined : String(input.actorRef.nodeRid),
-    actorNodeRidHex: input.actorRef === undefined
-      ? undefined
-      : routingIdWireHex(input.actorRef.nodeRid),
+    actorNodeRidHex:
+      input.actorRef === undefined ? undefined : routingIdWireHex(input.actorRef.nodeRid),
     actorGeneration: input.actorRef?.objectGeneration.toString(),
-    bindingActorNodeRid: input.bindingActorRef === undefined ? undefined : String(input.bindingActorRef.nodeRid),
-    bindingActorNodeRidHex: input.bindingActorRef === undefined
-      ? undefined
-      : routingIdWireHex(input.bindingActorRef.nodeRid),
+    bindingActorNodeRid:
+      input.bindingActorRef === undefined ? undefined : String(input.bindingActorRef.nodeRid),
+    bindingActorNodeRidHex:
+      input.bindingActorRef === undefined
+        ? undefined
+        : routingIdWireHex(input.bindingActorRef.nodeRid),
     bindingActorGeneration: input.bindingActorRef?.objectGeneration.toString(),
-    bindingGeneration: (input.bindingActorRef as (ActorRef & {
-      readonly bindingGeneration?: bigint;
-    }) | undefined)?.bindingGeneration?.toString(),
+    bindingGeneration: (
+      input.bindingActorRef as
+        | (ActorRef & {
+            readonly bindingGeneration?: bigint;
+          })
+        | undefined
+    )?.bindingGeneration?.toString(),
     returnResponse: input.returnResponse,
     messageFollowContext: input.messageFollowContext,
     header: Buffer.from(input.header).toString('base64'),
@@ -127,7 +135,9 @@ export function encodeRemoteActorPacketTarget(
   };
 }
 
-export function decodeRemoteActorPacketTarget(value: unknown): ZLinkRemoteActorPacketTarget | undefined {
+export function decodeRemoteActorPacketTarget(
+  value: unknown
+): ZLinkRemoteActorPacketTarget | undefined {
   if (
     typeof value !== 'object' ||
     value === null ||
@@ -144,9 +154,10 @@ export function decodeRemoteActorPacketTarget(value: unknown): ZLinkRemoteActorP
       (value as { targetNodeRidHex?: unknown }).targetNodeRidHex
     ),
     spotId: requireSpotId((value as { spotId: string }).spotId),
-    spotKind: (value as { spotKind?: unknown }).spotKind === ZLinkSpotKind.Entry
-      ? ZLinkSpotKind.Entry
-      : ZLinkSpotKind.User,
+    spotKind:
+      (value as { spotKind?: unknown }).spotKind === ZLinkSpotKind.Entry
+        ? ZLinkSpotKind.Entry
+        : ZLinkSpotKind.User,
     targetSpotGeneration: optionalBigInt(value, 'targetSpotGeneration'),
     targetNodeGeneration: optionalBigInt(value, 'targetNodeGeneration'),
     authorityOwnerGeneration: optionalBigInt(value, 'authorityOwnerGeneration'),

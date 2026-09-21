@@ -1,18 +1,19 @@
 package systems.zlink.framework.runtime.internal.service;
-import java.nio.ByteBuffer;
-import java.nio.charset.CharacterCodingException;
-import java.nio.charset.CodingErrorAction;
+
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
-import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 
 /** Canonical service-wire-v1 frozen Spot and Actor operation encoder. */
 public final class ZLinkServiceFrozenRecordCodec {
@@ -28,24 +29,22 @@ public final class ZLinkServiceFrozenRecordCodec {
     private static final int OPERATION_SPOT_REQUEST = 3;
     private static final int OPERATION_ACTOR_REQUEST = 4;
 
-    private ZLinkServiceFrozenRecordCodec() {
-    }
+    private ZLinkServiceFrozenRecordCodec() {}
 
     public static boolean isCanonical(byte[] encoded) {
         return encoded != null
-            && encoded.length != 0
-            && (encoded[0] == RECORD_SPOT_SEND
-                || encoded[0] == RECORD_SPOT_REQUEST
-                || encoded[0] == RECORD_ACTOR_SEND
-                || encoded[0] == RECORD_ACTOR_REQUEST);
+                && encoded.length != 0
+                && (encoded[0] == RECORD_SPOT_SEND
+                        || encoded[0] == RECORD_SPOT_REQUEST
+                        || encoded[0] == RECORD_ACTOR_SEND
+                        || encoded[0] == RECORD_ACTOR_REQUEST);
     }
 
     public static DecodedSpot decodeSpot(byte[] encoded) {
         Reader reader = new Reader(encoded);
         int kind = reader.u8();
         if (kind != RECORD_SPOT_SEND && kind != RECORD_SPOT_REQUEST) {
-            throw new IllegalArgumentException(
-                "frozen record is not a Spot operation");
+            throw new IllegalArgumentException("frozen record is not a Spot operation");
         }
         Source source = reader.source();
         Metadata metadata = reader.metadata();
@@ -53,10 +52,9 @@ public final class ZLinkServiceFrozenRecordCodec {
         int operationKind = reader.u32();
         Optional<Long> replyRoute = reader.replyRoute();
         if ((kind == RECORD_SPOT_REQUEST)
-            != (operationKind == OPERATION_SPOT_REQUEST
-                && replyRoute.isPresent())) {
+                != (operationKind == OPERATION_SPOT_REQUEST && replyRoute.isPresent())) {
             throw new IllegalArgumentException(
-                "frozen Spot operation kind does not match record kind");
+                    "frozen Spot operation kind does not match record kind");
         }
         String targetSpotId = reader.text8();
         long objectGeneration = reader.nonzeroU64();
@@ -67,28 +65,27 @@ public final class ZLinkServiceFrozenRecordCodec {
         ApplicationPayload payload = reader.applicationPayload();
         reader.end();
         return new DecodedSpot(
-            source.nodeRid(),
-            source.nodeGeneration(),
-            source.ownerId(),
-            source.ownerLeaseGeneration(),
-            source.spotId(),
-            operation.high(),
-            operation.low(),
-            replyRoute,
-            metadata.encoded(),
-            payload.packetName(),
-            payload.contentType(),
-            payload.payload(),
-            targetSpotId,
-            objectGeneration);
+                source.nodeRid(),
+                source.nodeGeneration(),
+                source.ownerId(),
+                source.ownerLeaseGeneration(),
+                source.spotId(),
+                operation.high(),
+                operation.low(),
+                replyRoute,
+                metadata.encoded(),
+                payload.packetName(),
+                payload.contentType(),
+                payload.payload(),
+                targetSpotId,
+                objectGeneration);
     }
 
     public static DecodedActor decodeActor(byte[] encoded) {
         Reader reader = new Reader(encoded);
         int kind = reader.u8();
         if (kind != RECORD_ACTOR_SEND && kind != RECORD_ACTOR_REQUEST) {
-            throw new IllegalArgumentException(
-                "frozen record is not an Actor operation");
+            throw new IllegalArgumentException("frozen record is not an Actor operation");
         }
         Source source = reader.source();
         Metadata metadata = reader.metadata();
@@ -96,10 +93,9 @@ public final class ZLinkServiceFrozenRecordCodec {
         int operationKind = reader.u32();
         Optional<Long> replyRoute = reader.replyRoute();
         if ((kind == RECORD_ACTOR_REQUEST)
-            != (operationKind == OPERATION_ACTOR_REQUEST
-                && replyRoute.isPresent())) {
+                != (operationKind == OPERATION_ACTOR_REQUEST && replyRoute.isPresent())) {
             throw new IllegalArgumentException(
-                "frozen Actor operation kind does not match record kind");
+                    "frozen Actor operation kind does not match record kind");
         }
         String targetActorId = reader.text8();
         long objectGeneration = reader.nonzeroU64();
@@ -110,212 +106,187 @@ public final class ZLinkServiceFrozenRecordCodec {
         ApplicationPayload payload = reader.applicationPayload();
         reader.end();
         return new DecodedActor(
-            targetActorId,
-            source.nodeRid(),
-            source.nodeGeneration(),
-            source.ownerId(),
-            source.ownerLeaseGeneration(),
-            source.sessionRid(),
-            source.bindingGeneration(),
-            source.sessionSequence(),
-            operation.high(),
-            operation.low(),
-            replyRoute,
-            metadata.entries(),
-            payload.packetName(),
-            payload.contentType(),
-            payload.payload(),
-            objectGeneration);
+                targetActorId,
+                source.nodeRid(),
+                source.nodeGeneration(),
+                source.ownerId(),
+                source.ownerLeaseGeneration(),
+                source.sessionRid(),
+                source.bindingGeneration(),
+                source.sessionSequence(),
+                operation.high(),
+                operation.low(),
+                replyRoute,
+                metadata.entries(),
+                payload.packetName(),
+                payload.contentType(),
+                payload.payload(),
+                objectGeneration);
     }
 
     public static byte[] encodeSpot(
-        ZLinkInternalMeshNode.PeerAuthorityFence source,
-        ZLinkInternalMeshNode.PeerAuthorityFence targetOwner,
-        ZLinkServiceM6BWireCodec.SpotMessage operation,
-        byte[] metadataFrame,
-        byte[] applicationPayloadEnvelope) {
+            ZLinkInternalMeshNode.PeerAuthorityFence source,
+            ZLinkInternalMeshNode.PeerAuthorityFence targetOwner,
+            ZLinkServiceM6BWireCodec.SpotMessage operation,
+            byte[] metadataFrame,
+            byte[] applicationPayloadEnvelope) {
         return encode(
-            operation.request() ? RECORD_SPOT_REQUEST : RECORD_SPOT_SEND,
-            sourceIdentity(source, operation.sourceSpotId(), null, null),
-            metadataFrame,
-            operation.operationHigh(),
-            operation.operationLow(),
-            operation.request()
-                ? OPERATION_SPOT_REQUEST
-                : OPERATION_NONE,
-            operation.request() ? operation.correlation() : null,
-            output -> {
-                writeText8(output, operation.target().spotId());
-                output.writeLong(operation.target().spotGeneration());
-                writeRid(output, operation.target().targetNodeRid());
-                output.writeLong(
-                    operation.target().targetNodeGeneration());
-                output.writeLong(
-                    operation.target().authorityOwnerGeneration());
-                output.writeLong(targetOwner.ownerLeaseGeneration());
-                output.write(applicationPayloadEnvelope);
-            });
+                operation.request() ? RECORD_SPOT_REQUEST : RECORD_SPOT_SEND,
+                sourceIdentity(source, operation.sourceSpotId(), null, null),
+                metadataFrame,
+                operation.operationHigh(),
+                operation.operationLow(),
+                operation.request() ? OPERATION_SPOT_REQUEST : OPERATION_NONE,
+                operation.request() ? operation.correlation() : null,
+                output -> {
+                    writeText8(output, operation.target().spotId());
+                    output.writeLong(operation.target().spotGeneration());
+                    writeRid(output, operation.target().targetNodeRid());
+                    output.writeLong(operation.target().targetNodeGeneration());
+                    output.writeLong(operation.target().authorityOwnerGeneration());
+                    output.writeLong(targetOwner.ownerLeaseGeneration());
+                    output.write(applicationPayloadEnvelope);
+                });
     }
 
     public static byte[] encodeActor(
-        ZLinkInternalMeshNode.PeerAuthorityFence source,
-        ZLinkInternalMeshNode.PeerAuthorityFence targetOwner,
-        ZLinkServiceM6BWireCodec.ActorMessage operation,
-        byte[] metadataFrame,
-        byte[] applicationPayloadEnvelope) {
+            ZLinkInternalMeshNode.PeerAuthorityFence source,
+            ZLinkInternalMeshNode.PeerAuthorityFence targetOwner,
+            ZLinkServiceM6BWireCodec.ActorMessage operation,
+            byte[] metadataFrame,
+            byte[] applicationPayloadEnvelope) {
         return encode(
-            operation.request() ? RECORD_ACTOR_REQUEST : RECORD_ACTOR_SEND,
-            sourceIdentity(
-                source,
-                null,
-                operation.sourceActor() != null
-                    ? operation.sourceActor()
-                    : operation.boundSession() == null
-                        ? null
-                        : new ZLinkServiceM6BWireCodec.ActorIdentity(
-                            operation.target().actor().actorId(),
-                            operation.target().actor().generation()),
-                operation.boundSession()),
-            metadataFrame,
-            operation.operationHigh(),
-            operation.operationLow(),
-            operation.request()
-                ? OPERATION_ACTOR_REQUEST
-                : OPERATION_NONE,
-            operation.request() ? operation.correlation() : null,
-            output -> {
-                writeText8(
-                    output, operation.target().actor().actorId());
-                output.writeLong(
-                    operation.target().actor().generation());
-                writeRid(
-                    output, operation.target().actor().nodeRid());
-                output.writeLong(
-                    operation.target().targetNodeGeneration());
-                output.writeLong(
-                    operation.target().authorityOwnerGeneration());
-                output.writeLong(targetOwner.ownerLeaseGeneration());
-                output.write(applicationPayloadEnvelope);
-            });
+                operation.request() ? RECORD_ACTOR_REQUEST : RECORD_ACTOR_SEND,
+                sourceIdentity(
+                        source,
+                        null,
+                        operation.sourceActor() != null
+                                ? operation.sourceActor()
+                                : operation.boundSession() == null
+                                        ? null
+                                        : new ZLinkServiceM6BWireCodec.ActorIdentity(
+                                                operation.target().actor().actorId(),
+                                                operation.target().actor().generation()),
+                        operation.boundSession()),
+                metadataFrame,
+                operation.operationHigh(),
+                operation.operationLow(),
+                operation.request() ? OPERATION_ACTOR_REQUEST : OPERATION_NONE,
+                operation.request() ? operation.correlation() : null,
+                output -> {
+                    writeText8(output, operation.target().actor().actorId());
+                    output.writeLong(operation.target().actor().generation());
+                    writeRid(output, operation.target().actor().nodeRid());
+                    output.writeLong(operation.target().targetNodeGeneration());
+                    output.writeLong(operation.target().authorityOwnerGeneration());
+                    output.writeLong(targetOwner.ownerLeaseGeneration());
+                    output.write(applicationPayloadEnvelope);
+                });
     }
 
     private static byte[] encode(
-        int recordKind,
-        byte[] source,
-        byte[] metadataFrame,
-        long operationHigh,
-        long operationLow,
-        int operationKind,
-        Long replyRouteId,
-        Writer body) {
+            int recordKind,
+            byte[] source,
+            byte[] metadataFrame,
+            long operationHigh,
+            long operationLow,
+            int operationKind,
+            Long replyRouteId,
+            Writer body) {
         if (operationHigh == 0 && operationLow == 0) {
-            throw new IllegalArgumentException(
-                "accepted operationId must not be zero");
+            throw new IllegalArgumentException("accepted operationId must not be zero");
         }
-        byte[] metadata = metadataFrame == null
-            ? new byte[0]
-            : metadataFrame.clone();
-        byte[] replyRoute = encodeSection(output -> {
-            if (replyRouteId != null) {
-                if (replyRouteId == 0) {
-                    throw new IllegalArgumentException(
-                        "replyRouteId must be non-zero");
-                }
-                output.writeLong(replyRouteId);
-            }
-        });
-        return encodeSection(output -> {
-            output.writeByte(recordKind);
-            output.write(source);
-            output.writeByte(metadata.length == 0 ? 0 : 1);
-            if (metadata.length != 0) {
-                output.write(metadata);
-            }
-            output.writeLong(operationHigh);
-            output.writeLong(operationLow);
-            output.writeInt(operationKind);
-            writeU16Section(output, replyRoute);
-            body.write(output);
-        });
+        byte[] metadata = metadataFrame == null ? new byte[0] : metadataFrame.clone();
+        byte[] replyRoute =
+                encodeSection(
+                        output -> {
+                            if (replyRouteId != null) {
+                                if (replyRouteId == 0) {
+                                    throw new IllegalArgumentException(
+                                            "replyRouteId must be non-zero");
+                                }
+                                output.writeLong(replyRouteId);
+                            }
+                        });
+        return encodeSection(
+                output -> {
+                    output.writeByte(recordKind);
+                    output.write(source);
+                    output.writeByte(metadata.length == 0 ? 0 : 1);
+                    if (metadata.length != 0) {
+                        output.write(metadata);
+                    }
+                    output.writeLong(operationHigh);
+                    output.writeLong(operationLow);
+                    output.writeInt(operationKind);
+                    writeU16Section(output, replyRoute);
+                    body.write(output);
+                });
     }
 
     private static byte[] sourceIdentity(
-        ZLinkInternalMeshNode.PeerAuthorityFence source,
-        String sourceSpotId,
-        ZLinkServiceM6BWireCodec.ActorIdentity sourceActor,
-        ZLinkServiceM6BWireCodec.BoundSessionTail boundSession) {
-        int sourceKind = boundSession != null
-            ? SOURCE_BOUND_SESSION
-            : sourceActor != null
-                ? SOURCE_ACTOR
-                : sourceSpotId != null && !sourceSpotId.isBlank()
-                    ? SOURCE_SPOT
-                    : SOURCE_NODE;
-        byte[] body = encodeSection(output -> {
-            writeRid(output, source.sourceNodeRid());
-            output.writeLong(source.sourceNodeGeneration());
-            writeText8(output, source.ownerId());
-            output.writeLong(source.ownerLeaseGeneration());
-            if (sourceKind == SOURCE_SPOT) {
-                writeText8(output, sourceSpotId);
-            } else if (sourceKind == SOURCE_ACTOR
-                || sourceKind == SOURCE_BOUND_SESSION) {
-                writeText8(output, sourceActor.actorId());
-                output.writeLong(sourceActor.generation());
-                if (sourceKind == SOURCE_BOUND_SESSION) {
-                    writeRid(output, boundSession.sourceSessionRid());
-                    output.writeLong(
-                        boundSession.sourceBindingGeneration());
-                    output.writeLong(
-                        boundSession.sourceSessionSequence());
-                }
-            }
-        });
-        return encodeSection(output -> {
-            output.writeByte(sourceKind);
-            writeU16Section(output, body);
-        });
+            ZLinkInternalMeshNode.PeerAuthorityFence source,
+            String sourceSpotId,
+            ZLinkServiceM6BWireCodec.ActorIdentity sourceActor,
+            ZLinkServiceM6BWireCodec.BoundSessionTail boundSession) {
+        int sourceKind =
+                boundSession != null
+                        ? SOURCE_BOUND_SESSION
+                        : sourceActor != null
+                                ? SOURCE_ACTOR
+                                : sourceSpotId != null && !sourceSpotId.isBlank()
+                                        ? SOURCE_SPOT
+                                        : SOURCE_NODE;
+        byte[] body =
+                encodeSection(
+                        output -> {
+                            writeRid(output, source.sourceNodeRid());
+                            output.writeLong(source.sourceNodeGeneration());
+                            writeText8(output, source.ownerId());
+                            output.writeLong(source.ownerLeaseGeneration());
+                            if (sourceKind == SOURCE_SPOT) {
+                                writeText8(output, sourceSpotId);
+                            } else if (sourceKind == SOURCE_ACTOR
+                                    || sourceKind == SOURCE_BOUND_SESSION) {
+                                writeText8(output, sourceActor.actorId());
+                                output.writeLong(sourceActor.generation());
+                                if (sourceKind == SOURCE_BOUND_SESSION) {
+                                    writeRid(output, boundSession.sourceSessionRid());
+                                    output.writeLong(boundSession.sourceBindingGeneration());
+                                    output.writeLong(boundSession.sourceSessionSequence());
+                                }
+                            }
+                        });
+        return encodeSection(
+                output -> {
+                    output.writeByte(sourceKind);
+                    writeU16Section(output, body);
+                });
     }
 
-    private static void writeRid(
-        DataOutputStream output,
-        RoutingId routingId) throws IOException {
+    private static void writeRid(DataOutputStream output, RoutingId routingId) throws IOException {
         writeU8Bytes(output, routingId.toBytes(), "RoutingId");
     }
 
-    private static void writeText8(
-        DataOutputStream output,
-        String value) throws IOException {
-        if (value == null
-            || value.isBlank()
-            || value.indexOf('\0') >= 0) {
-            throw new IllegalArgumentException(
-                "text8 must be non-blank and contain no NUL");
+    private static void writeText8(DataOutputStream output, String value) throws IOException {
+        if (value == null || value.isBlank() || value.indexOf('\0') >= 0) {
+            throw new IllegalArgumentException("text8 must be non-blank and contain no NUL");
         }
-        writeU8Bytes(
-            output,
-            value.getBytes(StandardCharsets.UTF_8),
-            "text8");
+        writeU8Bytes(output, value.getBytes(StandardCharsets.UTF_8), "text8");
     }
 
-    private static void writeU8Bytes(
-        DataOutputStream output,
-        byte[] value,
-        String name) throws IOException {
+    private static void writeU8Bytes(DataOutputStream output, byte[] value, String name)
+            throws IOException {
         if (value.length == 0 || value.length > 255) {
-            throw new IllegalArgumentException(
-                name + " length must be in 1..255");
+            throw new IllegalArgumentException(name + " length must be in 1..255");
         }
         output.writeByte(value.length);
         output.write(value);
     }
 
-    private static void writeU16Section(
-        DataOutputStream output,
-        byte[] value) throws IOException {
+    private static void writeU16Section(DataOutputStream output, byte[] value) throws IOException {
         if (value.length > 0xffff) {
-            throw new IllegalArgumentException(
-                "conditional body exceeds u16 length");
+            throw new IllegalArgumentException("conditional body exceeds u16 length");
         }
         output.writeShort(value.length);
         output.write(value);
@@ -329,8 +300,7 @@ public final class ZLinkServiceFrozenRecordCodec {
             output.flush();
             return bytes.toByteArray();
         } catch (IOException failure) {
-            throw new IllegalStateException(
-                "failed to encode canonical frozen record", failure);
+            throw new IllegalStateException("failed to encode canonical frozen record", failure);
         }
     }
 
@@ -340,20 +310,20 @@ public final class ZLinkServiceFrozenRecordCodec {
     }
 
     public record DecodedSpot(
-        RoutingId sourceNodeRid,
-        long sourceNodeGeneration,
-        String sourceOwnerId,
-        long sourceOwnerLeaseGeneration,
-        Optional<String> sourceSpotId,
-        long operationHigh,
-        long operationLow,
-        Optional<Long> replyRouteId,
-        byte[] metadataFrame,
-        String packetName,
-        String contentType,
-        byte[] payload,
-        String targetSpotId,
-        long objectGeneration) {
+            RoutingId sourceNodeRid,
+            long sourceNodeGeneration,
+            String sourceOwnerId,
+            long sourceOwnerLeaseGeneration,
+            Optional<String> sourceSpotId,
+            long operationHigh,
+            long operationLow,
+            Optional<Long> replyRouteId,
+            byte[] metadataFrame,
+            String packetName,
+            String contentType,
+            byte[] payload,
+            String targetSpotId,
+            long objectGeneration) {
         public DecodedSpot {
             metadataFrame = metadataFrame.clone();
             payload = payload.clone();
@@ -361,22 +331,22 @@ public final class ZLinkServiceFrozenRecordCodec {
     }
 
     public record DecodedActor(
-        String actorId,
-        RoutingId sourceNodeRid,
-        long sourceNodeGeneration,
-        String sourceOwnerId,
-        long sourceOwnerLeaseGeneration,
-        RoutingId sourceSessionRid,
-        long sourceBindingGeneration,
-        long sourceSessionSequence,
-        long operationHigh,
-        long operationLow,
-        Optional<Long> replyRouteId,
-        Map<String, String> metadata,
-        String packetName,
-        String contentType,
-        byte[] payload,
-        long objectGeneration) {
+            String actorId,
+            RoutingId sourceNodeRid,
+            long sourceNodeGeneration,
+            String sourceOwnerId,
+            long sourceOwnerLeaseGeneration,
+            RoutingId sourceSessionRid,
+            long sourceBindingGeneration,
+            long sourceSessionSequence,
+            long operationHigh,
+            long operationLow,
+            Optional<Long> replyRouteId,
+            Map<String, String> metadata,
+            String packetName,
+            String contentType,
+            byte[] payload,
+            long objectGeneration) {
         public DecodedActor {
             metadata = Map.copyOf(metadata);
             payload = payload.clone();
@@ -384,27 +354,20 @@ public final class ZLinkServiceFrozenRecordCodec {
     }
 
     private record Source(
-        RoutingId nodeRid,
-        long nodeGeneration,
-        String ownerId,
-        long ownerLeaseGeneration,
-        Optional<String> spotId,
-        RoutingId sessionRid,
-        long bindingGeneration,
-        long sessionSequence) {
-    }
+            RoutingId nodeRid,
+            long nodeGeneration,
+            String ownerId,
+            long ownerLeaseGeneration,
+            Optional<String> spotId,
+            RoutingId sessionRid,
+            long bindingGeneration,
+            long sessionSequence) {}
 
-    private record OperationId(long high, long low) {
-    }
+    private record OperationId(long high, long low) {}
 
-    private record Metadata(byte[] encoded, Map<String, String> entries) {
-    }
+    private record Metadata(byte[] encoded, Map<String, String> entries) {}
 
-    private record ApplicationPayload(
-        String packetName,
-        String contentType,
-        byte[] payload) {
-    }
+    private record ApplicationPayload(String packetName, String contentType, byte[] payload) {}
 
     private static final class Reader {
         private final byte[] bytes;
@@ -427,8 +390,7 @@ public final class ZLinkServiceFrozenRecordCodec {
             long sessionSequence = 0;
             if (kind == SOURCE_SPOT) {
                 spotId = Optional.of(text8());
-            } else if (kind == SOURCE_ACTOR
-                || kind == SOURCE_BOUND_SESSION) {
+            } else if (kind == SOURCE_ACTOR || kind == SOURCE_BOUND_SESSION) {
                 text8();
                 nonzeroU64();
                 if (kind == SOURCE_BOUND_SESSION) {
@@ -441,14 +403,14 @@ public final class ZLinkServiceFrozenRecordCodec {
             }
             requireOffset(end, "frozen source identity");
             return new Source(
-                nodeRid,
-                nodeGeneration,
-                ownerId,
-                ownerLeaseGeneration,
-                spotId,
-                sessionRid,
-                bindingGeneration,
-                sessionSequence);
+                    nodeRid,
+                    nodeGeneration,
+                    ownerId,
+                    ownerLeaseGeneration,
+                    spotId,
+                    sessionRid,
+                    bindingGeneration,
+                    sessionSequence);
         }
 
         private Metadata metadata() {
@@ -473,9 +435,7 @@ public final class ZLinkServiceFrozenRecordCodec {
                     throw invalid("duplicate metadata key");
                 }
             }
-            return new Metadata(
-                Arrays.copyOfRange(bytes, start, offset),
-                entries);
+            return new Metadata(Arrays.copyOfRange(bytes, start, offset), entries);
         }
 
         private OperationId operationId() {
@@ -489,9 +449,7 @@ public final class ZLinkServiceFrozenRecordCodec {
 
         private Optional<Long> replyRoute() {
             int end = sectionEnd(u16());
-            Optional<Long> value = offset == end
-                ? Optional.empty()
-                : Optional.of(nonzeroU64());
+            Optional<Long> value = offset == end ? Optional.empty() : Optional.of(nonzeroU64());
             requireOffset(end, "frozen reply route");
             return value;
         }
@@ -518,13 +476,12 @@ public final class ZLinkServiceFrozenRecordCodec {
 
         private String utf8(byte[] value) {
             try {
-                return StandardCharsets.UTF_8.newDecoder()
-                    .onMalformedInput(
-                        CodingErrorAction.REPORT)
-                    .onUnmappableCharacter(
-                        CodingErrorAction.REPORT)
-                    .decode(ByteBuffer.wrap(value))
-                    .toString();
+                return StandardCharsets.UTF_8
+                        .newDecoder()
+                        .onMalformedInput(CodingErrorAction.REPORT)
+                        .onUnmappableCharacter(CodingErrorAction.REPORT)
+                        .decode(ByteBuffer.wrap(value))
+                        .toString();
             } catch (CharacterCodingException failure) {
                 throw invalid("invalid UTF-8");
             }
@@ -540,16 +497,14 @@ public final class ZLinkServiceFrozenRecordCodec {
 
         private long u64() {
             require(8);
-            long value = ByteBuffer.wrap(bytes, offset, 8)
-                .getLong();
+            long value = ByteBuffer.wrap(bytes, offset, 8).getLong();
             offset += 8;
             return value;
         }
 
         private int u32() {
             require(4);
-            long value = Integer.toUnsignedLong(
-                ByteBuffer.wrap(bytes, offset, 4).getInt());
+            long value = Integer.toUnsignedLong(ByteBuffer.wrap(bytes, offset, 4).getInt());
             offset += 4;
             if (value > Integer.MAX_VALUE) {
                 throw invalid("u32 exceeds JVM buffer bound");
@@ -559,8 +514,7 @@ public final class ZLinkServiceFrozenRecordCodec {
 
         private int u16() {
             require(2);
-            int value = Short.toUnsignedInt(
-                ByteBuffer.wrap(bytes, offset, 2).getShort());
+            int value = Short.toUnsignedInt(ByteBuffer.wrap(bytes, offset, 2).getShort());
             offset += 2;
             return value;
         }
@@ -572,8 +526,7 @@ public final class ZLinkServiceFrozenRecordCodec {
 
         private byte[] take(int length) {
             require(length);
-            byte[] value = Arrays.copyOfRange(
-                bytes, offset, offset + length);
+            byte[] value = Arrays.copyOfRange(bytes, offset, offset + length);
             offset += length;
             return value;
         }

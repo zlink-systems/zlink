@@ -4,8 +4,9 @@ internal sealed class ZLinkSpotHttpExecutionScheduler : IZLinkHttpExecutionSched
 {
     public IZLinkHttpExecutionTurn? Capture()
     {
-        return ZLinkApplicationExecutionContext.Current is { YieldAllowed: true }
-               && ZLinkSerialTurn.Current is { } turn
+        return
+            ZLinkApplicationExecutionContext.Current is { YieldAllowed: true }
+            && ZLinkSerialTurn.Current is { } turn
             ? new ZLinkSpotHttpExecutionTurn(turn)
             : null;
     }
@@ -14,7 +15,8 @@ internal sealed class ZLinkSpotHttpExecutionScheduler : IZLinkHttpExecutionSched
     {
         public ValueTask<TResult> YieldAsync<TResult>(
             Func<CancellationToken, ValueTask<TResult>> operation,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             ArgumentNullException.ThrowIfNull(operation);
             return turn.YieldFrameworkCallAsync(operation, cancellationToken);
@@ -23,15 +25,19 @@ internal sealed class ZLinkSpotHttpExecutionScheduler : IZLinkHttpExecutionSched
         public void Post(Action callback)
         {
             ArgumentNullException.ThrowIfNull(callback);
-            if (!turn.TryPost(_ =>
+            if (
+                !turn.TryPost(_ =>
                 {
                     callback();
                     return ValueTask.CompletedTask;
-                }))
+                })
+            )
                 turn.ReportError(
                     new ObjectDisposedException(
                         nameof(ZLinkSerialExecutionQueue),
-                        "HTTP callback completion could not enter the framework execution queue."));
+                        "HTTP callback completion could not enter the framework execution queue."
+                    )
+                );
         }
 
         public void ReportError(Exception exception)

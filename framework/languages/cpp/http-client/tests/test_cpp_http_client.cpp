@@ -46,20 +46,18 @@ template <typename T>
 concept has_one_way_submit = requires (T builder) { builder.submit (); };
 
 static_assert (!has_one_way_submit<zlink::http_client::server_request_builder_t>);
-static_assert (std::is_same_v<
-               decltype (std::declval<zlink::http_client::request_builder_t> ().async_raw ()),
-               zlink::framework::task_t<zlink::http_client::raw_http_response_t>>);
-static_assert (std::is_same_v<
-               decltype (std::declval<zlink::http_client::request_builder_t> ().submit_raw ()),
-               zlink::framework::result_t<zlink::http_client::raw_http_response_t>>);
-static_assert (std::is_same_v<
-               decltype (std::declval<zlink::http_client::request_builder_t> ()
-                          .async<int> ()),
-               zlink::framework::task_t<zlink::http_client::http_response_t<int>>>);
-static_assert (std::is_same_v<
-               decltype (std::declval<zlink::http_client::request_builder_t> ()
-                          .fetch<int> ()),
-               zlink::framework::task_t<int>>);
+static_assert (
+  std::is_same_v<decltype (std::declval<zlink::http_client::request_builder_t> ().async_raw ()),
+                 zlink::framework::task_t<zlink::http_client::raw_http_response_t>>);
+static_assert (
+  std::is_same_v<decltype (std::declval<zlink::http_client::request_builder_t> ().submit_raw ()),
+                 zlink::framework::result_t<zlink::http_client::raw_http_response_t>>);
+static_assert (
+  std::is_same_v<decltype (std::declval<zlink::http_client::request_builder_t> ().async<int> ()),
+                 zlink::framework::task_t<zlink::http_client::http_response_t<int>>>);
+static_assert (
+  std::is_same_v<decltype (std::declval<zlink::http_client::request_builder_t> ().fetch<int> ()),
+                 zlink::framework::task_t<int>>);
 
 struct create_game_request_t
 {
@@ -454,8 +452,7 @@ class loopback_http_server_t
             ++_connections;
             auto shared_socket = std::make_shared<tcp::socket> (std::move (socket));
             _workers.emplace_back (
-              shared_socket,
-              std::thread ([this, shared_socket] { handle (*shared_socket); }));
+              shared_socket, std::thread ([this, shared_socket] { handle (*shared_socket); }));
         }
     }
 
@@ -548,12 +545,12 @@ class loopback_proxy_t
             }
             auto shared_socket = std::make_shared<tcp::socket> (std::move (socket));
             _workers.emplace_back (shared_socket, std::thread ([this, shared_socket] {
-                try {
-                    handle (*shared_socket);
-                }
-                catch (...) {
-                }
-            }));
+                                       try {
+                                           handle (*shared_socket);
+                                       }
+                                       catch (...) {
+                                       }
+                                   }));
         }
     }
 
@@ -675,8 +672,7 @@ class loopback_https_server_t
 {
   public:
     explicit loopback_https_server_t (bool require_client_certificate = false) :
-        _context (asio::ssl::context::tls_server),
-        _acceptor (_io)
+        _context (asio::ssl::context::tls_server), _acceptor (_io)
     {
         _acceptor.open (tcp::v6 ());
         _acceptor.set_option (asio::ip::v6_only (false));
@@ -737,8 +733,7 @@ class loopback_https_server_t
             }
             auto shared_socket = std::make_shared<tcp::socket> (std::move (socket));
             _workers.emplace_back (
-              shared_socket,
-              std::thread ([this, shared_socket] { handle (*shared_socket); }));
+              shared_socket, std::thread ([this, shared_socket] { handle (*shared_socket); }));
         }
     }
 
@@ -783,9 +778,8 @@ make_json_client (std::string base_url,
                   std::chrono::milliseconds timeout = std::chrono::milliseconds (500),
                   std::optional<std::string> trust_certificate_file = std::nullopt)
 {
-    auto builder = zlink::http_client::client_t::create ()
-                     .base_url (std::move (base_url))
-                     .timeout (timeout);
+    auto builder =
+      zlink::http_client::client_t::create ().base_url (std::move (base_url)).timeout (timeout);
     if (trust_certificate_file) {
         builder.trust_certificate_file (std::move (*trust_certificate_file));
     }
@@ -868,8 +862,7 @@ TEST (ZLinkHttpClient, ValidatesFluentInputAsProtocolErrors)
       },
       "trust certificate"));
 
-    auto client =
-      zlink::http_client::client_t::create ().base_url ("http://127.0.0.1").build ();
+    auto client = zlink::http_client::client_t::create ().base_url ("http://127.0.0.1").build ();
     EXPECT_TRUE (
       throws_protocol_error ([&client] { (void) client.get ("missing-leading-slash"); }, "path"));
 
@@ -881,7 +874,8 @@ TEST (ZLinkHttpClient, BlockingTerminatorsRejectRuntimeExecutionContext)
 {
     auto client = zlink::http_client::client_t::create ("http://127.0.0.1:1").build ();
     const auto previous = zlink::framework::detail::application_job_context_t::exchange (&client);
-    const auto rejected = throws_invalid_operation ([&client] { (void) client.get ("/games").submit_raw (); });
+    const auto rejected =
+      throws_invalid_operation ([&client] { (void) client.get ("/games").submit_raw (); });
     zlink::framework::detail::application_job_context_t::exchange (previous);
 
     EXPECT_TRUE (rejected);
@@ -944,8 +938,7 @@ TEST (ZLinkHttpClient, AsyncMapsFailureStatus)
 
     const auto response = client.get ("/bad-request").async<create_game_reply_t> ().result ();
     ASSERT_FALSE (response);
-    EXPECT_EQ (response.error_kind (),
-               zlink::framework::framework_error_kind_t::internal_failure);
+    EXPECT_EQ (response.error_kind (), zlink::framework::framework_error_kind_t::internal_failure);
 }
 
 TEST (ZLinkHttpClient, SupportsCoroutineSubmit)
@@ -1194,24 +1187,22 @@ TEST (ZLinkHttpClient, SupportsCommonMethodsAndCallbackSubmit)
                  .value ()
                  .body.method,
                "PUT");
-    EXPECT_EQ (
-      client.delete_ ("/games").fetch<create_game_reply_t> ().result ().value ().method,
-      "DELETE");
+    EXPECT_EQ (client.delete_ ("/games").fetch<create_game_reply_t> ().result ().value ().method,
+               "DELETE");
 
-    std::promise<zlink::framework::result_t<
-      zlink::http_client::http_response_t<create_game_reply_t>>>
+    std::promise<
+      zlink::framework::result_t<zlink::http_client::http_response_t<create_game_reply_t>>>
       callback_result;
     client.post ("/games")
       .body (create_game_request_t{.name = "callback"})
-      .async<create_game_reply_t> ([&callback_result] (const auto &result) {
-          callback_result.set_value (result);
-      });
+      .async<create_game_reply_t> (
+        [&callback_result] (const auto &result) { callback_result.set_value (result); });
     const auto callback = callback_result.get_future ().get ();
     ASSERT_TRUE (callback);
     EXPECT_EQ (callback.value ().body.name, "callback");
 
-    std::promise<zlink::framework::result_t<
-      zlink::http_client::http_response_t<create_game_reply_t>>>
+    std::promise<
+      zlink::framework::result_t<zlink::http_client::http_response_t<create_game_reply_t>>>
       failure_callback_result;
     client.get ("/invalid-json")
       .async<create_game_reply_t> ([&failure_callback_result] (const auto &result) {
@@ -1229,22 +1220,21 @@ TEST (ZLinkHttpClient, ServerClientDelegatesTurnPolicyToInjectedExecutionTurn)
     auto turn = std::make_shared<recording_execution_turn_t> ();
     auto client = zlink::http_client::client_t::create (server.base_url ()).build_server (turn);
 
-    const auto async_response =
-      client.get ("/games").async<create_game_reply_t> ().result ();
+    const auto async_response = client.get ("/games").async<create_game_reply_t> ().result ();
     ASSERT_TRUE (async_response);
     EXPECT_FALSE (turn->last_release.load ());
 
-    const auto yield_response =
-      client.get ("/games").yield<create_game_reply_t> ().result ();
+    const auto yield_response = client.get ("/games").yield<create_game_reply_t> ().result ();
     ASSERT_TRUE (yield_response);
     EXPECT_TRUE (turn->last_release.load ());
     EXPECT_EQ (turn->prepare_calls.load (), 2);
     EXPECT_EQ (turn->resume_calls.load (), 2);
 
-    std::promise<zlink::framework::result_t<
-      zlink::http_client::http_response_t<create_game_reply_t>>>
+    std::promise<
+      zlink::framework::result_t<zlink::http_client::http_response_t<create_game_reply_t>>>
       callback_result;
-    client.get ("/games").async<create_game_reply_t> ([&callback_result] (const auto &result) { callback_result.set_value (result); });
+    client.get ("/games").async<create_game_reply_t> (
+      [&callback_result] (const auto &result) { callback_result.set_value (result); });
     ASSERT_TRUE (callback_result.get_future ().get ());
     EXPECT_EQ (turn->callback_scheduler_calls.load (), 1);
     EXPECT_EQ (turn->callback_resume_calls.load (), 1);
@@ -1259,9 +1249,8 @@ TEST (ZLinkHttpClient, SendsDefaultHeadersAndRequestOverride)
                     .default_header ("X-ZLink-Override", "default")
                     .build ();
 
-    auto result = client.get ("/headers")
-                    .header ("X-ZLink-Override", "request")
-                    .submit<header_echo_reply_t> ();
+    auto result =
+      client.get ("/headers").header ("X-ZLink-Override", "request").submit<header_echo_reply_t> ();
 
     ASSERT_TRUE (result) << result.error ()->what ();
     EXPECT_EQ (result.value ().body.defaultHeader, "default@example.test");
@@ -1279,7 +1268,8 @@ TEST (ZLinkHttpClient, MapsStatusDecodeAndTimeoutFailures)
 
     const auto bad_request = client.get ("/bad-request").submit<create_game_reply_t> ();
     ASSERT_FALSE (bad_request);
-    EXPECT_EQ (bad_request.error_kind (), zlink::framework::framework_error_kind_t::internal_failure);
+    EXPECT_EQ (bad_request.error_kind (),
+               zlink::framework::framework_error_kind_t::internal_failure);
 
     const auto server_error = client.get ("/server-error").submit<create_game_reply_t> ();
     ASSERT_FALSE (server_error);
@@ -1294,8 +1284,7 @@ TEST (ZLinkHttpClient, MapsStatusDecodeAndTimeoutFailures)
     const auto timeout = client.get ("/slow").submit_raw ();
     ASSERT_FALSE (timeout);
     ASSERT_NE (timeout.error (), nullptr);
-    EXPECT_EQ (timeout.error_kind (),
-               zlink::framework::framework_error_kind_t::deadline_exceeded);
+    EXPECT_EQ (timeout.error_kind (), zlink::framework::framework_error_kind_t::deadline_exceeded);
     EXPECT_EQ (zlink::framework::detail::boundary_state (*timeout.error ()),
                zlink::framework::detail::boundary_error_t::timed_out);
 }
@@ -1305,12 +1294,10 @@ TEST (ZLinkHttpClient, SupportsPatchHeadAndOptionsMethods)
     loopback_http_server_t server;
     auto client = make_json_client (server.base_url ());
 
-    EXPECT_EQ (
-      client.patch ("/games").fetch<create_game_reply_t> ().result ().value ().method,
-      "PATCH");
-    EXPECT_EQ (
-      client.options ("/games").fetch<create_game_reply_t> ().result ().value ().method,
-      "OPTIONS");
+    EXPECT_EQ (client.patch ("/games").fetch<create_game_reply_t> ().result ().value ().method,
+               "PATCH");
+    EXPECT_EQ (client.options ("/games").fetch<create_game_reply_t> ().result ().value ().method,
+               "OPTIONS");
 
     const auto head = client.head ("/games").submit_raw ();
     ASSERT_TRUE (head) << head.error ()->what ();
@@ -1323,10 +1310,8 @@ TEST (ZLinkHttpClient, EncodesQueryParameters)
     loopback_http_server_t server;
     auto client = make_json_client (server.base_url ());
 
-    const auto result = client.get ("/echo-target")
-                          .query ("name", "hello world")
-                          .query ("tag", "a&b")
-                          .submit_raw ();
+    const auto result =
+      client.get ("/echo-target").query ("name", "hello world").query ("tag", "a&b").submit_raw ();
 
     ASSERT_TRUE (result) << result.error ()->what ();
     const auto echoed = nlohmann::json::parse (result.value ().body);
@@ -1407,9 +1392,8 @@ TEST (ZLinkHttpClient, FollowsRedirectsWhenEnabled)
 {
     loopback_http_server_t server;
 
-    auto following = zlink::http_client::client_t::create (server.base_url ())
-                       .follow_redirects ()
-                       .build ();
+    auto following =
+      zlink::http_client::client_t::create (server.base_url ()).follow_redirects ().build ();
     const auto followed = following.get ("/redirect-once").submit<create_game_reply_t> ();
     ASSERT_TRUE (followed) << followed.error ()->what ();
     EXPECT_EQ (followed.value ().status, 200);
@@ -1424,9 +1408,8 @@ TEST (ZLinkHttpClient, FollowsRedirectsWhenEnabled)
 TEST (ZLinkHttpClient, FollowsAbsoluteRedirectLocations)
 {
     loopback_http_server_t server;
-    auto client = zlink::http_client::client_t::create (server.base_url ())
-                    .follow_redirects ()
-                    .build ();
+    auto client =
+      zlink::http_client::client_t::create (server.base_url ()).follow_redirects ().build ();
 
     const auto result = client.get ("/redirect-absolute").submit<create_game_reply_t> ();
     ASSERT_TRUE (result) << result.error ()->what ();
@@ -1436,17 +1419,14 @@ TEST (ZLinkHttpClient, FollowsAbsoluteRedirectLocations)
 TEST (ZLinkHttpClient, RejectsUnsupportedRedirectLocationAsProtocolError)
 {
     loopback_http_server_t server;
-    auto client = zlink::http_client::client_t::create (server.base_url ())
-                    .follow_redirects ()
-                    .build ();
+    auto client =
+      zlink::http_client::client_t::create (server.base_url ()).follow_redirects ().build ();
 
-    const auto result = client.get ("/redirect-custom")
-                          .header ("X-ZLink-Redirect-Location", "games")
-                          .submit_raw ();
+    const auto result =
+      client.get ("/redirect-custom").header ("X-ZLink-Redirect-Location", "games").submit_raw ();
 
     ASSERT_FALSE (result);
-    EXPECT_EQ (result.error_kind (),
-               zlink::framework::framework_error_kind_t::protocol_error);
+    EXPECT_EQ (result.error_kind (), zlink::framework::framework_error_kind_t::protocol_error);
 }
 
 TEST (ZLinkHttpClient, RedirectStripsAuthorizationAcrossHosts)
@@ -1465,9 +1445,8 @@ TEST (ZLinkHttpClient, RedirectStripsAuthorizationAcrossHosts)
     ASSERT_TRUE (default_auth) << default_auth.error ()->what ();
     EXPECT_EQ (nlohmann::json::parse (default_auth.value ().body).at ("authorization"), "");
 
-    auto request_auth_client = zlink::http_client::client_t::create (origin.base_url ())
-                                 .follow_redirects ()
-                                 .build ();
+    auto request_auth_client =
+      zlink::http_client::client_t::create (origin.base_url ()).follow_redirects ().build ();
     const auto request_auth = request_auth_client.get ("/redirect-custom")
                                 .header ("X-ZLink-Redirect-Location", location)
                                 .header ("authorization", "Bearer request-token")
@@ -1485,9 +1464,8 @@ TEST (ZLinkHttpClient, RedirectKeepsAuthorizationForSameOrigin)
                     .follow_redirects ()
                     .build ();
 
-    const auto result = client.get ("/redirect-custom")
-                          .header ("X-ZLink-Redirect-Location", location)
-                          .submit_raw ();
+    const auto result =
+      client.get ("/redirect-custom").header ("X-ZLink-Redirect-Location", location).submit_raw ();
 
     ASSERT_TRUE (result) << result.error ()->what ();
     EXPECT_EQ (nlohmann::json::parse (result.value ().body).at ("authorization"),
@@ -1497,9 +1475,8 @@ TEST (ZLinkHttpClient, RedirectKeepsAuthorizationForSameOrigin)
 TEST (ZLinkHttpClient, RedirectTransformsPostIntoGet)
 {
     loopback_http_server_t server;
-    auto client = zlink::http_client::client_t::create (server.base_url ())
-                    .follow_redirects ()
-                    .build ();
+    auto client =
+      zlink::http_client::client_t::create (server.base_url ()).follow_redirects ().build ();
 
     const auto result = client.post ("/redirect-once")
                           .body (create_game_request_t{.name = "match-1"})
@@ -1511,22 +1488,19 @@ TEST (ZLinkHttpClient, RedirectTransformsPostIntoGet)
 TEST (ZLinkHttpClient, StopsAtTheRedirectLimit)
 {
     loopback_http_server_t server;
-    auto client = zlink::http_client::client_t::create (server.base_url ())
-                    .follow_redirects (3)
-                    .build ();
+    auto client =
+      zlink::http_client::client_t::create (server.base_url ()).follow_redirects (3).build ();
 
     const auto result = client.get ("/redirect-loop").submit_raw ();
     ASSERT_FALSE (result);
-    EXPECT_EQ (result.error_kind (),
-               zlink::framework::framework_error_kind_t::protocol_error);
+    EXPECT_EQ (result.error_kind (), zlink::framework::framework_error_kind_t::protocol_error);
     EXPECT_NE (std::string (result.error ()->what ()).find ("redirect limit"), std::string::npos);
 }
 
 TEST (ZLinkHttpClient, RetriesRetriableTransportFailures)
 {
     loopback_http_server_t server;
-    auto client =
-      zlink::http_client::client_t::create (server.base_url ()).retry (2).build ();
+    auto client = zlink::http_client::client_t::create (server.base_url ()).retry (2).build ();
 
     // The first /flaky connection is dropped without a response; the retry
     // must succeed against the recovered server.
@@ -1537,15 +1511,13 @@ TEST (ZLinkHttpClient, RetriesRetriableTransportFailures)
 
 TEST (ZLinkHttpClient, MapsConnectionRefusalToUnavailable)
 {
-    auto client = zlink::http_client::client_t::create ("http://127.0.0.1:1")
-                    .timeout (500ms)
-                    .build ();
+    auto client =
+      zlink::http_client::client_t::create ("http://127.0.0.1:1").timeout (500ms).build ();
 
     const auto result = client.get ("/games").submit_raw ();
 
     ASSERT_FALSE (result);
-    EXPECT_EQ (result.error_kind (),
-               zlink::framework::framework_error_kind_t::unavailable);
+    EXPECT_EQ (result.error_kind (), zlink::framework::framework_error_kind_t::unavailable);
 }
 
 TEST (ZLinkHttpClient, DoesNotInternallyRetryNonIdempotentRequestsOnStaleConnection)
@@ -1555,21 +1527,18 @@ TEST (ZLinkHttpClient, DoesNotInternallyRetryNonIdempotentRequestsOnStaleConnect
 
     ASSERT_TRUE (client.get ("/games").submit_raw ());
 
-    const auto result = client.post ("/flaky")
-                          .body (create_game_request_t{"post-on-stale-connection"})
-                          .submit_raw ();
+    const auto result =
+      client.post ("/flaky").body (create_game_request_t{"post-on-stale-connection"}).submit_raw ();
 
     ASSERT_FALSE (result);
     ASSERT_NE (result.error (), nullptr);
-    EXPECT_EQ (result.error_kind (),
-               zlink::framework::framework_error_kind_t::unavailable);
+    EXPECT_EQ (result.error_kind (), zlink::framework::framework_error_kind_t::unavailable);
 }
 
 TEST (ZLinkHttpClient, StoresAndSendsCookies)
 {
     loopback_http_server_t server;
-    auto client =
-      zlink::http_client::client_t::create (server.base_url ()).cookies ().build ();
+    auto client = zlink::http_client::client_t::create (server.base_url ()).cookies ().build ();
 
     ASSERT_TRUE (client.get ("/set-cookie").submit_raw ());
 
@@ -1590,8 +1559,7 @@ TEST (ZLinkHttpClient, StoresAndSendsCookies)
 TEST (ZLinkHttpClient, MatchesCookiePathsWithSegmentBoundaries)
 {
     loopback_http_server_t server;
-    auto client =
-      zlink::http_client::client_t::create (server.base_url ()).cookies ().build ();
+    auto client = zlink::http_client::client_t::create (server.base_url ()).cookies ().build ();
 
     ASSERT_TRUE (client.get ("/set-cookie-overlap").submit_raw ());
 
@@ -1616,9 +1584,8 @@ TEST (ZLinkHttpClient, RoutesPlainRequestsThroughHttpProxy)
 {
     loopback_http_server_t server;
     loopback_proxy_t proxy;
-    auto client = zlink::http_client::client_t::create (server.base_url ())
-                    .proxy (proxy.url ())
-                    .build ();
+    auto client =
+      zlink::http_client::client_t::create (server.base_url ()).proxy (proxy.url ()).build ();
 
     const auto result = client.get ("/games").submit<create_game_reply_t> ();
     ASSERT_TRUE (result) << result.error ()->what ();
@@ -1629,8 +1596,7 @@ TEST (ZLinkHttpClient, RoutesPlainRequestsThroughHttpProxy)
 TEST (ZLinkHttpClient, DecompressesGzipResponses)
 {
     loopback_http_server_t server;
-    auto client =
-      zlink::http_client::client_t::create (server.base_url ()).compression ().build ();
+    auto client = zlink::http_client::client_t::create (server.base_url ()).compression ().build ();
 
     const auto result = client.get ("/gzip").submit_raw ();
     ASSERT_TRUE (result) << result.error ()->what ();
@@ -1642,14 +1608,12 @@ TEST (ZLinkHttpClient, DecompressesGzipResponses)
 TEST (ZLinkHttpClient, RejectsMalformedCompressedResponseAsProtocolError)
 {
     loopback_http_server_t server;
-    auto client =
-      zlink::http_client::client_t::create (server.base_url ()).compression ().build ();
+    auto client = zlink::http_client::client_t::create (server.base_url ()).compression ().build ();
 
     const auto result = client.get ("/gzip-malformed").submit_raw ();
 
     ASSERT_FALSE (result);
-    EXPECT_EQ (result.error_kind (),
-               zlink::framework::framework_error_kind_t::protocol_error);
+    EXPECT_EQ (result.error_kind (), zlink::framework::framework_error_kind_t::protocol_error);
 }
 
 TEST (ZLinkHttpClient, RejectsDecompressedResponseAboveBodyLimit)
@@ -1663,8 +1627,7 @@ TEST (ZLinkHttpClient, RejectsDecompressedResponseAboveBodyLimit)
     const auto result = client.get ("/gzip-large").submit_raw ();
 
     ASSERT_FALSE (result);
-    EXPECT_EQ (result.error_kind (),
-               zlink::framework::framework_error_kind_t::rejected);
+    EXPECT_EQ (result.error_kind (), zlink::framework::framework_error_kind_t::rejected);
 }
 
 TEST (ZLinkHttpClient, DownloadStreamsResponseBody)
@@ -1699,8 +1662,7 @@ TEST (ZLinkHttpClient, RejectsBufferedResponseAboveBodyLimit)
     const auto result = client.get ("/big").submit_raw ();
 
     ASSERT_FALSE (result);
-    EXPECT_EQ (result.error_kind (),
-               zlink::framework::framework_error_kind_t::rejected);
+    EXPECT_EQ (result.error_kind (), zlink::framework::framework_error_kind_t::rejected);
 }
 
 TEST (ZLinkHttpClient, RejectsDownloadResponseAboveBodyLimit)
@@ -1717,8 +1679,7 @@ TEST (ZLinkHttpClient, RejectsDownloadResponseAboveBodyLimit)
                           .result ();
 
     ASSERT_FALSE (result);
-    EXPECT_EQ (result.error_kind (),
-               zlink::framework::framework_error_kind_t::rejected);
+    EXPECT_EQ (result.error_kind (), zlink::framework::framework_error_kind_t::rejected);
     EXPECT_LT (received.size (), big_download_body ().size ());
 }
 
@@ -1727,15 +1688,13 @@ TEST (ZLinkHttpClient, MapsDownloadSinkFailureToInternalFailure)
     loopback_http_server_t server;
     auto client = make_json_client (server.base_url (), std::chrono::milliseconds (2000));
 
-    const auto result = client.get ("/big")
-                          .download ([] (std::string_view) {
-                              throw std::runtime_error ("download sink failed");
-                          })
-                          .result ();
+    const auto result =
+      client.get ("/big")
+        .download ([] (std::string_view) { throw std::runtime_error ("download sink failed"); })
+        .result ();
 
     ASSERT_FALSE (result);
-    EXPECT_EQ (result.error_kind (),
-               zlink::framework::framework_error_kind_t::internal_failure);
+    EXPECT_EQ (result.error_kind (), zlink::framework::framework_error_kind_t::internal_failure);
 }
 
 TEST (ZLinkHttpClient, CoroutineDownloadSinkRunsOnExecuteSchedulerWorker)
@@ -1766,9 +1725,8 @@ TEST (ZLinkHttpClient, CoroutineDownloadSinkRunsOnExecuteSchedulerWorker)
 TEST (ZLinkHttpClient, DownloadFollowsRedirectsWithoutLeakingIntermediateBodies)
 {
     loopback_http_server_t server;
-    auto client = zlink::http_client::client_t::create (server.base_url ())
-                    .follow_redirects ()
-                    .build ();
+    auto client =
+      zlink::http_client::client_t::create (server.base_url ()).follow_redirects ().build ();
 
     std::string received;
     const auto result = client.get ("/redirect-once")
@@ -1857,20 +1815,19 @@ TEST (ZLinkHttpClient, UploadsStreamedRequestBody)
 TEST (ZLinkHttpClient, DropsConsumedStreamBodyOn307Redirect)
 {
     loopback_http_server_t server;
-    auto client = zlink::http_client::client_t::create (server.base_url ())
-                    .follow_redirects ()
-                    .build ();
+    auto client =
+      zlink::http_client::client_t::create (server.base_url ()).follow_redirects ().build ();
 
     int calls = 0;
-    const auto result = client.post ("/redirect-stream-307")
-                          .body_stream (
-                            [&] () -> std::optional<std::string> {
-                                ++calls;
-                                return calls == 1 ? std::optional<std::string> ("streamed")
-                                                  : std::nullopt;
-                            },
-                            "application/octet-stream")
-                          .submit_raw ();
+    const auto result =
+      client.post ("/redirect-stream-307")
+        .body_stream (
+          [&] () -> std::optional<std::string> {
+              ++calls;
+              return calls == 1 ? std::optional<std::string> ("streamed") : std::nullopt;
+          },
+          "application/octet-stream")
+        .submit_raw ();
 
     ASSERT_TRUE (result) << result.error ()->what ();
     const auto echoed = nlohmann::json::parse (result.value ().body);
@@ -1883,20 +1840,19 @@ TEST (ZLinkHttpClient, DropsConsumedStreamBodyOn307Redirect)
 TEST (ZLinkHttpClient, DropsConsumedStreamBodyOn303Redirect)
 {
     loopback_http_server_t server;
-    auto client = zlink::http_client::client_t::create (server.base_url ())
-                    .follow_redirects ()
-                    .build ();
+    auto client =
+      zlink::http_client::client_t::create (server.base_url ()).follow_redirects ().build ();
 
     int calls = 0;
-    const auto result = client.post ("/redirect-stream-303")
-                          .body_stream (
-                            [&] () -> std::optional<std::string> {
-                                ++calls;
-                                return calls == 1 ? std::optional<std::string> ("streamed")
-                                                  : std::nullopt;
-                            },
-                            "application/octet-stream")
-                          .submit_raw ();
+    const auto result =
+      client.post ("/redirect-stream-303")
+        .body_stream (
+          [&] () -> std::optional<std::string> {
+              ++calls;
+              return calls == 1 ? std::optional<std::string> ("streamed") : std::nullopt;
+          },
+          "application/octet-stream")
+        .submit_raw ();
 
     ASSERT_TRUE (result) << result.error ()->what ();
     const auto echoed = nlohmann::json::parse (result.value ().body);
@@ -1940,8 +1896,7 @@ TEST (ZLinkHttpClient, CoroutineBodyStreamProviderRunsOnExecuteSchedulerWorker)
 TEST (ZLinkHttpClient, DecompressesDeflateResponses)
 {
     loopback_http_server_t server;
-    auto client =
-      zlink::http_client::client_t::create (server.base_url ()).compression ().build ();
+    auto client = zlink::http_client::client_t::create (server.base_url ()).compression ().build ();
 
     const auto result = client.get ("/deflate").submit_raw ();
     ASSERT_TRUE (result) << result.error ()->what ();
@@ -2023,8 +1978,7 @@ TEST (ZLinkHttpClient, MapsProxyConnectFailureToUnavailable)
     const auto result = client.get ("/games").submit_raw ();
 
     ASSERT_FALSE (result);
-    EXPECT_EQ (result.error_kind (),
-               zlink::framework::framework_error_kind_t::unavailable);
+    EXPECT_EQ (result.error_kind (), zlink::framework::framework_error_kind_t::unavailable);
     EXPECT_GT (proxy.rejected_requests (), 0);
 }
 #endif

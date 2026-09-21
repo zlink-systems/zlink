@@ -2,9 +2,7 @@ using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Streams;
 
-internal sealed class ZLinkStreamInboundFrame(
-    Message header,
-    Message payload) : IDisposable
+internal sealed class ZLinkStreamInboundFrame(Message header, Message payload) : IDisposable
 {
     internal Message? Header { get; private set; } = header;
     internal Message? Payload { get; private set; } = payload;

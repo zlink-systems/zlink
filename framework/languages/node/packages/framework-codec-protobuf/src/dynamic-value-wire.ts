@@ -39,10 +39,7 @@ export function encodeDynamicValue(value: unknown): Buffer {
     ]);
   }
   if (typeof value === 'number') {
-    return encodeFields([
-      encodeVarintField(1, ValueKind.Number),
-      encodeDoubleField(3, value)
-    ]);
+    return encodeFields([encodeVarintField(1, ValueKind.Number), encodeDoubleField(3, value)]);
   }
   if (typeof value === 'string') {
     return encodeFields([
@@ -65,8 +62,9 @@ export function encodeDynamicValue(value: unknown): Buffer {
   if (typeof value === 'object') {
     return encodeFields([
       encodeVarintField(1, ValueKind.Object),
-      ...Object.entries(value as Record<string, unknown>)
-        .map(([key, entryValue]) => encodeBytesField(5, encodeObjectEntry(key, entryValue)))
+      ...Object.entries(value as Record<string, unknown>).map(([key, entryValue]) =>
+        encodeBytesField(5, encodeObjectEntry(key, entryValue))
+      )
     ]);
   }
   throw new Error(`Protobuf serializer cannot encode value of type '${typeof value}'.`);
@@ -112,14 +110,22 @@ export function decodeDynamicValue(bytes: Buffer): unknown {
   }
 
   switch (kind) {
-    case ValueKind.Null: return null;
-    case ValueKind.Bool: return boolValue;
-    case ValueKind.Number: return numberValue;
-    case ValueKind.String: return stringValue;
-    case ValueKind.Object: return objectValue;
-    case ValueKind.Array: return arrayValue;
-    case ValueKind.Bytes: return bytesValue;
-    default: throw new Error(`Protobuf serializer cannot decode value kind '${kind}'.`);
+    case ValueKind.Null:
+      return null;
+    case ValueKind.Bool:
+      return boolValue;
+    case ValueKind.Number:
+      return numberValue;
+    case ValueKind.String:
+      return stringValue;
+    case ValueKind.Object:
+      return objectValue;
+    case ValueKind.Array:
+      return arrayValue;
+    case ValueKind.Bytes:
+      return bytesValue;
+    default:
+      throw new Error(`Protobuf serializer cannot decode value kind '${kind}'.`);
   }
 }
 
@@ -233,11 +239,16 @@ function readBytesPayload(field: WireField): Buffer {
 
 function ensureWireType(field: WireField, expected: WireType): void {
   if (field.wireType !== expected) {
-    throw new Error(`Protobuf field '${field.fieldNumber}' has wire type '${field.wireType}', not '${expected}'.`);
+    throw new Error(
+      `Protobuf field '${field.fieldNumber}' has wire type '${field.wireType}', not '${expected}'.`
+    );
   }
 }
 
-function readVarint(bytes: Buffer, start: number): { readonly value: bigint; readonly offset: number } {
+function readVarint(
+  bytes: Buffer,
+  start: number
+): { readonly value: bigint; readonly offset: number } {
   let value = 0n;
   let shift = 0n;
   let offset = start;

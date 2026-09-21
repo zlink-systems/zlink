@@ -12,9 +12,7 @@ import {
   ZLinkInMemoryProviderLocationStore,
   storeKey
 } from '../../packages/framework/src/runtime/locations/in-memory-provider-location-store';
-import {
-  ZLinkLocationStoreRepository
-} from '../../packages/framework/src/runtime/locations/location-store-repository';
+import { ZLinkLocationStoreRepository } from '../../packages/framework/src/runtime/locations/location-store-repository';
 
 test('capacity rows serialize spotTypes in UTF-16 ordinal key order', async () => {
   const now = new Date('2026-08-23T00:00:00.000Z');
@@ -30,42 +28,45 @@ test('capacity rows serialize spotTypes in UTF-16 ordinal key order', async () =
     nodeLifecycleGeneration: 1n,
     owner: claimed.token
   };
-  const stored = await repository.updateMeshNode({
-    meshName: target.meshName,
-    rid: target.nodeRid,
-    lifecycleGeneration: target.nodeLifecycleGeneration,
-    descriptorRevision: 1n,
-    endpoint: 'tcp://node-a',
-    objectRole: ZLinkObjectRole.Server,
-    placementWeight: 100,
-    populationCapacity: {
-      actors: { active: 0, reserved: 0, limit: 0 },
-      spots: { active: 0, reserved: 0, limit: 2 },
-      spotTypes: ['Zulu', 'Alpha'].map(stableType => ({
+  const stored = await repository.updateMeshNode(
+    {
+      meshName: target.meshName,
+      rid: target.nodeRid,
+      lifecycleGeneration: target.nodeLifecycleGeneration,
+      descriptorRevision: 1n,
+      endpoint: 'tcp://node-a',
+      objectRole: ZLinkObjectRole.Server,
+      placementWeight: 100,
+      populationCapacity: {
+        actors: { active: 0, reserved: 0, limit: 0 },
+        spots: { active: 0, reserved: 0, limit: 2 },
+        spotTypes: ['Zulu', 'Alpha'].map((stableType) => ({
+          objectKind: 'user_spot' as const,
+          stableType,
+          active: 0,
+          reserved: 0,
+          limit: 1
+        }))
+      },
+      activationConcurrency: { active: 0, limit: 2 },
+      channelWeights: {},
+      applicationVersion: 1n,
+      spotTypes: ['Zulu', 'Alpha'],
+      objectCapabilities: ['Zulu', 'Alpha'].map((stableType) => ({
         objectKind: 'user_spot' as const,
         stableType,
-        active: 0,
-        reserved: 0,
+        policy: 'snapshot' as const,
+        hasSnapshotAdapter: true,
         limit: 1
-      }))
+      })),
+      state: ZLinkFrameworkRuntimeState.Serving,
+      securityIdentity: 'node-a',
+      ownerId: claimed.token.ownerId,
+      leaseGeneration: claimed.token.leaseGeneration,
+      updatedAt: now
     },
-    activationConcurrency: { active: 0, limit: 2 },
-    channelWeights: {},
-    applicationVersion: 1n,
-    spotTypes: ['Zulu', 'Alpha'],
-    objectCapabilities: ['Zulu', 'Alpha'].map(stableType => ({
-      objectKind: 'user_spot' as const,
-      stableType,
-      policy: 'snapshot' as const,
-      hasSnapshotAdapter: true,
-      limit: 1
-    })),
-    state: ZLinkFrameworkRuntimeState.Serving,
-    securityIdentity: 'node-a',
-    ownerId: claimed.token.ownerId,
-    leaseGeneration: claimed.token.leaseGeneration,
-    updatedAt: now
-  }, ZLinkLocationWriteIntent.NewClaim);
+    ZLinkLocationWriteIntent.NewClaim
+  );
   assert.equal(stored.status, ZLinkLocationWriteStatus.Stored);
 
   for (const stableType of ['Zulu', 'Alpha']) {

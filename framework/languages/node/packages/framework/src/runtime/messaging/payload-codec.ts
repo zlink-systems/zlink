@@ -1,4 +1,7 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException  } from '../framework-errors-internal';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import {
   isZLinkMessage,
@@ -13,18 +16,15 @@ import {
   materializeZLinkMessageValue,
   readZLinkMessageDeclaredType
 } from '../../contracts/Common/ZLinkMessage';
-import { adoptEncodedPayload, borrowEncodedPayload } from '../../contracts/Common/encoded-payload-storage';
-import { ZLinkConfigurationException } from '../configuration';
 import {
-  parseFrameworkJsonV1,
-  stringifyFrameworkJsonV1
-} from './framework-json-v1';
+  adoptEncodedPayload,
+  borrowEncodedPayload
+} from '../../contracts/Common/encoded-payload-storage';
+import { ZLinkConfigurationException } from '../configuration';
+import { parseFrameworkJsonV1, stringifyFrameworkJsonV1 } from './framework-json-v1';
 import type { ZLinkJsonSchema } from '../../contracts/Handlers/JsonContract';
 import { readZLinkPacketJsonContract } from '../../contracts/Handlers/Attributes';
-import {
-  readFrameworkPacketJsonContract,
-  resolveFrameworkPacketJsonContract
-} from './packet-name';
+import { readFrameworkPacketJsonContract, resolveFrameworkPacketJsonContract } from './packet-name';
 import { isCanonicalCodecContentType } from '../../contracts/Configuration/CodecContentType';
 import {
   codecSerializerSelectionsOf,
@@ -82,7 +82,10 @@ export function encodeFrameworkPayload(
   if (isZLinkMessage(payload)) {
     if (payload.isEncoded()) {
       return {
-        message: rememberContentType(toRuntimeMessage(payload.toEncodedPayload()), 'application/octet-stream'),
+        message: rememberContentType(
+          toRuntimeMessage(payload.toEncodedPayload()),
+          'application/octet-stream'
+        ),
         contentType: 'application/octet-stream'
       };
     }
@@ -113,11 +116,17 @@ export function encodeFrameworkPayload(
 
   return {
     message: rememberContentType(
-      RuntimeMessage.fromOwned(Buffer.from(stringifyFrameworkJsonV1(
-        payload,
-        (resolveFrameworkPacketJsonContract(payload, packetName)
-          ?? (packetName === undefined ? undefined : readZLinkPacketJsonContract(packetName)))?.[contractPart]
-      ))),
+      RuntimeMessage.fromOwned(
+        Buffer.from(
+          stringifyFrameworkJsonV1(
+            payload,
+            (resolveFrameworkPacketJsonContract(payload, packetName) ??
+              (packetName === undefined ? undefined : readZLinkPacketJsonContract(packetName)))?.[
+              contractPart
+            ]
+          )
+        )
+      ),
       JSON_CONTENT_TYPE
     ),
     contentType: JSON_CONTENT_TYPE
@@ -194,7 +203,8 @@ export function wrapFrameworkPayloadMessage(
 ): ZLinkMessage {
   const payload = encodedPayloadFromOwned(message.data());
   return createZLinkMessageFromEncoded(payload, <T>(type?: Type<T>) =>
-    decodeFrameworkEncodedPayload(payload, registry, type, contentType, packetName, contractPart));
+    decodeFrameworkEncodedPayload(payload, registry, type, contentType, packetName, contractPart)
+  );
 }
 
 function decodeFrameworkEncodedPayload<T>(
@@ -217,11 +227,10 @@ function decodeFrameworkEncodedPayload<T>(
   if (payload.isEmpty()) return undefined as T;
   const text = payload.getString('utf8');
   try {
-    return materializeZLinkMessageValue(parseFrameworkJsonV1(
-      text,
-      {},
-      schemaForDecode(type, packetName, contractPart)
-    ) as T, type);
+    return materializeZLinkMessageValue(
+      parseFrameworkJsonV1(text, {}, schemaForDecode(type, packetName, contractPart)) as T,
+      type
+    );
   } catch (error) {
     throw createInternalFrameworkException(
       ZLinkFrameworkInternalErrorKind.PayloadDecodeFailed,
@@ -237,10 +246,12 @@ function schemaForDecode(
   packetName: string | undefined,
   contractPart: 'payload' | 'reply'
 ): ZLinkJsonSchema | undefined {
-  const contract = type === undefined
-    ? undefined
-    : readFrameworkPacketJsonContract(type, packetName);
-  return (contract ?? (packetName === undefined ? undefined : readZLinkPacketJsonContract(packetName)))?.[contractPart];
+  const contract =
+    type === undefined ? undefined : readFrameworkPacketJsonContract(type, packetName);
+  return (contract ??
+    (packetName === undefined ? undefined : readZLinkPacketJsonContract(packetName)))?.[
+    contractPart
+  ];
 }
 
 export function selectDefaultSerializer(
@@ -262,9 +273,7 @@ export function selectSerializerWithContentType(
   registry?: ZLinkSerializerRegistryLike | ReadonlyMap<string, ZLinkMessageSerializer>,
   declaredType?: Type
 ): ZLinkSerializerSelectionEntry | undefined {
-  return serializerSelectionPlanOf(registry)?.select(
-    declaredType ?? outboundBusinessType(value)
-  );
+  return serializerSelectionPlanOf(registry)?.select(declaredType ?? outboundBusinessType(value));
 }
 
 function serializerSelectionPlanOf(
@@ -321,17 +330,21 @@ function serializerSelectionPlanOf(
 function outboundBusinessType(value: unknown): Type | undefined {
   if (value === null || value === undefined) return undefined;
   switch (typeof value) {
-    case 'string': return String as unknown as Type;
-    case 'number': return Number as unknown as Type;
-    case 'boolean': return Boolean as unknown as Type;
-    case 'bigint': return BigInt as unknown as Type;
-    case 'symbol': return Symbol as unknown as Type;
-    case 'function': return Function as unknown as Type;
+    case 'string':
+      return String as unknown as Type;
+    case 'number':
+      return Number as unknown as Type;
+    case 'boolean':
+      return Boolean as unknown as Type;
+    case 'bigint':
+      return BigInt as unknown as Type;
+    case 'symbol':
+      return Symbol as unknown as Type;
+    case 'function':
+      return Function as unknown as Type;
     case 'object': {
       const constructor = (value as { constructor?: unknown }).constructor;
-      return typeof constructor === 'function'
-        ? constructor as Type
-        : Object as Type;
+      return typeof constructor === 'function' ? (constructor as Type) : (Object as Type);
     }
   }
   throw new TypeError('Unsupported payload type.');
@@ -365,15 +378,20 @@ function unsupportedContentType(contentType: string): Error {
   );
 }
 
-function parseJsonPayload(message: Message, schema?: ZLinkJsonSchema): {
-  readonly valid: true;
-  readonly value: unknown;
-  readonly error?: undefined;
-} | {
-  readonly valid: false;
-  readonly value?: undefined;
-  readonly error: unknown;
-} {
+function parseJsonPayload(
+  message: Message,
+  schema?: ZLinkJsonSchema
+):
+  | {
+      readonly valid: true;
+      readonly value: unknown;
+      readonly error?: undefined;
+    }
+  | {
+      readonly valid: false;
+      readonly value?: undefined;
+      readonly error: unknown;
+    } {
   try {
     return { valid: true, value: parseFrameworkJsonV1(message.getString('utf8'), {}, schema) };
   } catch (error) {
@@ -391,9 +409,11 @@ function serializerMapOf(
 }
 
 function isMessage(value: unknown): value is Message {
-  return typeof value === 'object'
-    && value !== null
-    && typeof (value as { data?: unknown }).data === 'function';
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { data?: unknown }).data === 'function'
+  );
 }
 
 function toRuntimeMessage(payload: ZLinkEncodedPayload): Message {

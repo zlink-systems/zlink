@@ -26,7 +26,7 @@ class ImmutableMetadataMap implements ReadonlyMap<string, string> {
   constructor(values: ReadonlyMap<string, string> | Readonly<Record<string, string>>) {
     this.#values = new Map(
       typeof (values as ReadonlyMap<string, string>)[Symbol.iterator] === 'function'
-        ? values as ReadonlyMap<string, string>
+        ? (values as ReadonlyMap<string, string>)
         : Object.entries(values)
     );
   }
@@ -67,8 +67,9 @@ class ImmutableMetadataMap implements ReadonlyMap<string, string> {
   }
 }
 
-export const ZLinkMessageMetadataEmpty: ZLinkMessageMetadata =
-  Object.freeze(new ImmutableZLinkMessageMetadata());
+export const ZLinkMessageMetadataEmpty: ZLinkMessageMetadata = Object.freeze(
+  new ImmutableZLinkMessageMetadata()
+);
 
 export function zlinkMessageMetadata(
   values: ReadonlyMap<string, string> | Readonly<Record<string, string>>

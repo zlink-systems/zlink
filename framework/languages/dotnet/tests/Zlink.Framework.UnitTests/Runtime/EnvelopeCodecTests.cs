@@ -14,7 +14,8 @@ public sealed class EnvelopeCodecTests
             "channel",
             "request",
             includeCorrelationId: false,
-            includeDeadline: false);
+            includeDeadline: false
+        );
 
         Assert.False(string.IsNullOrWhiteSpace(header.CorrelationId));
         using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
@@ -24,12 +25,12 @@ public sealed class EnvelopeCodecTests
     [InlineData(2)]
     [InlineData(5)]
     public void Client_call_envelope_rejects_reply_kinds_that_require_the_request_correlation(
-        int kind)
+        int kind
+    )
     {
-        Assert.Throws<ArgumentOutOfRangeException>(() => ZLinkClientCallCodec.CreateEnvelope(
-            (ZLinkMessageKind)kind,
-            "channel",
-            "reply"));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ZLinkClientCallCodec.CreateEnvelope((ZLinkMessageKind)kind, "channel", "reply")
+        );
     }
 
     [Fact]
@@ -45,10 +46,11 @@ public sealed class EnvelopeCodecTests
             null,
             null,
             null,
-            null)
+            null
+        )
         {
             FlowId = flowId,
-            FlowOrigin = ZLinkFlowOrigin.Application
+            FlowOrigin = ZLinkFlowOrigin.Application,
         };
 
         using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
@@ -59,8 +61,11 @@ public sealed class EnvelopeCodecTests
         Assert.Equal(ZLinkFlowOrigin.Application, decoded.FlowOrigin);
 
         using var missingMarker = Message.From(
-            "{\"Kind\":3,\"ChannelName\":\"play\",\"MessageName\":\"Move\",\"ContentType\":\"application/json\"}");
-        Assert.Throws<ZLinkEnvelopeProtocolException>(() => ZLinkEnvelopeCodec.DecodeHeader(missingMarker));
+            "{\"Kind\":3,\"ChannelName\":\"play\",\"MessageName\":\"Move\",\"ContentType\":\"application/json\"}"
+        );
+        Assert.Throws<ZLinkEnvelopeProtocolException>(() =>
+            ZLinkEnvelopeCodec.DecodeHeader(missingMarker)
+        );
     }
 
     [Fact]
@@ -68,11 +73,13 @@ public sealed class EnvelopeCodecTests
     {
         using var encoded = Message.From(
             "{\"FormatMarker\":242,\"Kind\":3,\"ChannelName\":\"play\","
-            + "\"MessageName\":\"Move\",\"ContentType\":\"application/json\","
-            + "\"FlowId\":\"not-a-uuid\",\"FlowOrigin\":3}");
+                + "\"MessageName\":\"Move\",\"ContentType\":\"application/json\","
+                + "\"FlowId\":\"not-a-uuid\",\"FlowOrigin\":3}"
+        );
 
         Assert.Throws<ZLinkEnvelopeProtocolException>(() =>
-            ZLinkEnvelopeCodec.DecodeHeader(encoded));
+            ZLinkEnvelopeCodec.DecodeHeader(encoded)
+        );
 
         var decoded = ZLinkEnvelopeCodec.DecodeHeader(encoded, validateFlow: false);
         Assert.Null(decoded.FlowId);
@@ -89,7 +96,8 @@ public sealed class EnvelopeCodecTests
         int kind,
         string? correlationId,
         string? errorCode,
-        string? errorMessage)
+        string? errorMessage
+    )
     {
         var header = new ZLinkEnvelopeHeader(
             (ZLinkMessageKind)kind,
@@ -100,9 +108,12 @@ public sealed class EnvelopeCodecTests
             null,
             null,
             errorCode,
-            errorMessage);
+            errorMessage
+        );
 
-        Assert.Throws<ZLinkEnvelopeProtocolException>(() => ZLinkEnvelopeCodec.EncodeHeader(header));
+        Assert.Throws<ZLinkEnvelopeProtocolException>(() =>
+            ZLinkEnvelopeCodec.EncodeHeader(header)
+        );
     }
 
     [Fact]
@@ -110,16 +121,19 @@ public sealed class EnvelopeCodecTests
     {
         Assert.Equal(
             new[] { 1, 2, 3, 4, 5 },
-            Enum.GetValues<ZLinkMessageKind>().Select(static kind => (int)kind).ToArray());
+            Enum.GetValues<ZLinkMessageKind>().Select(static kind => (int)kind).ToArray()
+        );
 
-        foreach (var header in new[]
-                 {
-                     Header(ZLinkMessageKind.Request, "request-1"),
-                     Header(ZLinkMessageKind.Response, "request-1"),
-                     Header(ZLinkMessageKind.Command),
-                     Header(ZLinkMessageKind.Publish),
-                     Header(ZLinkMessageKind.Error, "request-1", "RequestFailed")
-                 })
+        foreach (
+            var header in new[]
+            {
+                Header(ZLinkMessageKind.Request, "request-1"),
+                Header(ZLinkMessageKind.Response, "request-1"),
+                Header(ZLinkMessageKind.Command),
+                Header(ZLinkMessageKind.Publish),
+                Header(ZLinkMessageKind.Error, "request-1", "RequestFailed"),
+            }
+        )
         {
             using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
             Assert.Equal(header.Kind, ZLinkEnvelopeCodec.DecodeHeader(encoded).Kind);
@@ -130,16 +144,19 @@ public sealed class EnvelopeCodecTests
         static ZLinkEnvelopeHeader Header(
             ZLinkMessageKind kind,
             string? correlationId = null,
-            string? errorCode = null) => new(
-            kind,
-            "play",
-            "Move",
-            ZLinkEnvelopeCodec.DefaultContentType,
-            correlationId,
-            null,
-            null,
-            errorCode,
-            errorCode is null ? null : "failed");
+            string? errorCode = null
+        ) =>
+            new(
+                kind,
+                "play",
+                "Move",
+                ZLinkEnvelopeCodec.DefaultContentType,
+                correlationId,
+                null,
+                null,
+                errorCode,
+                errorCode is null ? null : "failed"
+            );
     }
 
     [Fact]
@@ -151,7 +168,8 @@ public sealed class EnvelopeCodecTests
             body,
             typeof(Message),
             ZLinkEnvelopeCodec.DefaultContentType,
-            null);
+            null
+        );
 
         Assert.Same(body, decoded);
     }
@@ -166,7 +184,9 @@ public sealed class EnvelopeCodecTests
                 body,
                 typeof(object),
                 "application/x-unregistered",
-                new ZLinkCodecRegistryBuilder()));
+                new ZLinkCodecRegistryBuilder()
+            )
+        );
 
         Assert.Equal(ZLinkFrameworkErrorKind.ProtocolError, exception.Kind);
         Assert.Null(exception.InnerException);
@@ -186,7 +206,11 @@ public sealed class EnvelopeCodecTests
     public void BoundSessionBindPacketName_Can_Be_Encoded_As_Stream_Send()
     {
         Assert.False(
-            ZLinkRemoteActorJoinPackets.BoundSessionBindPacketName.StartsWith("__zlink.", StringComparison.Ordinal));
+            ZLinkRemoteActorJoinPackets.BoundSessionBindPacketName.StartsWith(
+                "__zlink.",
+                StringComparison.Ordinal
+            )
+        );
 
         var encoded = ZLinkStreamHeaderCodec.Encode(
             new ZlinkStreamHeader(
@@ -195,7 +219,9 @@ public sealed class EnvelopeCodecTests
                 ZlinkStreamHeaderFlags.None,
                 null,
                 ZLinkRemoteActorJoinPackets.BoundSessionBindPacketName,
-                ZlinkStreamMetadata.Empty));
+                ZlinkStreamMetadata.Empty
+            )
+        );
 
         Assert.False(encoded.IsEmpty);
     }
@@ -205,7 +231,8 @@ public sealed class EnvelopeCodecTests
     [InlineData(nameof(TaskCanceledException), typeof(TaskCanceledException))]
     public void DecodeEnvelopeReply_Restores_Cancellation_Error(
         string errorCode,
-        Type expectedExceptionType)
+        Type expectedExceptionType
+    )
     {
         var header = new ZLinkEnvelopeHeader(
             ZLinkMessageKind.Error,
@@ -216,15 +243,18 @@ public sealed class EnvelopeCodecTests
             null,
             null,
             errorCode,
-            "A task was canceled.");
+            "A task was canceled."
+        );
         var parts = ZLinkEnvelopeCodec.EncodeParts(header, null, null, null);
 
-        var exception = Assert.ThrowsAny<OperationCanceledException>(
-            () => ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<object>(
+        var exception = Assert.ThrowsAny<OperationCanceledException>(() =>
+            ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<object>(
                 parts,
                 "empty",
                 "failed",
-                null));
+                null
+            )
+        );
 
         Assert.IsType(expectedExceptionType, exception);
         Assert.Equal("A task was canceled.", exception.Message);
@@ -238,7 +268,9 @@ public sealed class EnvelopeCodecTests
                 [],
                 "reply was empty",
                 "failed",
-                null));
+                null
+            )
+        );
 
         Assert.Equal(ZLinkFrameworkErrorKind.ProtocolError, exception.Kind);
     }
@@ -248,14 +280,17 @@ public sealed class EnvelopeCodecTests
     {
         var parts = ZLinkMessageParts.Create(
             Message.From("not-json"u8),
-            Message.From(ReadOnlySpan<byte>.Empty));
+            Message.From(ReadOnlySpan<byte>.Empty)
+        );
 
         var exception = Assert.Throws<ZLinkFrameworkException>(() =>
             ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<object>(
                 parts,
                 "empty",
                 "failed",
-                null));
+                null
+            )
+        );
 
         Assert.Equal(ZLinkFrameworkErrorKind.ProtocolError, exception.Kind);
     }
@@ -272,17 +307,21 @@ public sealed class EnvelopeCodecTests
             null,
             null,
             null,
-            null);
+            null
+        );
         var parts = ZLinkMessageParts.Create(
             ZLinkEnvelopeCodec.EncodeHeader(header),
-            Message.From("""{"Value":"valid-json"}"""));
+            Message.From("""{"Value":"valid-json"}""")
+        );
 
         var exception = Assert.Throws<ZLinkFrameworkException>(() =>
             ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<object>(
                 parts,
                 "empty",
                 "failed",
-                new ZLinkCodecRegistryBuilder()));
+                new ZLinkCodecRegistryBuilder()
+            )
+        );
 
         Assert.Equal(ZLinkFrameworkErrorKind.ProtocolError, exception.Kind);
         Assert.Null(exception.InnerException);
@@ -302,7 +341,8 @@ public sealed class EnvelopeCodecTests
             null,
             null,
             errorCode,
-            "remote failed");
+            "remote failed"
+        );
         var parts = ZLinkEnvelopeCodec.EncodeParts(header, null, null, null);
 
         var exception = Assert.Throws<ZLinkFrameworkException>(() =>
@@ -310,7 +350,9 @@ public sealed class EnvelopeCodecTests
                 parts,
                 "empty",
                 "failed",
-                null));
+                null
+            )
+        );
 
         Assert.Equal(ZLinkFrameworkErrorKind.ProtocolError, exception.Kind);
     }
@@ -327,7 +369,8 @@ public sealed class EnvelopeCodecTests
             null,
             null,
             null,
-            null);
+            null
+        );
         var parts = ZLinkEnvelopeCodec.EncodeParts(header, new object(), typeof(object), null);
 
         var exception = Assert.Throws<ZLinkFrameworkException>(() =>
@@ -335,7 +378,9 @@ public sealed class EnvelopeCodecTests
                 parts,
                 "empty",
                 "failed",
-                null));
+                null
+            )
+        );
 
         Assert.Equal(ZLinkFrameworkErrorKind.ProtocolError, exception.Kind);
     }
@@ -352,7 +397,8 @@ public sealed class EnvelopeCodecTests
             null,
             null,
             null,
-            null);
+            null
+        );
         IReadOnlyList<Message> parts = [ZLinkEnvelopeCodec.EncodeHeader(header)];
 
         var exception = Assert.Throws<ZLinkFrameworkException>(() =>
@@ -360,9 +406,10 @@ public sealed class EnvelopeCodecTests
                 parts,
                 "empty",
                 "failed",
-                null));
+                null
+            )
+        );
 
         Assert.Equal(ZLinkFrameworkErrorKind.ProtocolError, exception.Kind);
     }
-
 }

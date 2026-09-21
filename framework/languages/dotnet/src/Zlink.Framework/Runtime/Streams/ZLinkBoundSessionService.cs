@@ -4,47 +4,44 @@ using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.Runtime.Streams;
 
-internal sealed class ZLinkBoundSessionService(
-    ZLinkFrameworkRuntime runtime) : IZLinkBoundSessionService
+internal sealed class ZLinkBoundSessionService(ZLinkFrameworkRuntime runtime)
+    : IZLinkBoundSessionService
 {
     public IZLinkBoundSession Create(string actorId)
     {
         return new ZLinkBoundSession(this, actorId);
     }
 
-    internal IZLinkBoundSessionSendCall Send<TMessage>(
-        string actorId,
-        TMessage message)
+    internal IZLinkBoundSessionSendCall Send<TMessage>(string actorId, TMessage message)
     {
-        return new ZLinkBoundSessionSendCall<TMessage>(
-            this,
-            actorId,
-            message);
+        return new ZLinkBoundSessionSendCall<TMessage>(this, actorId, message);
     }
 
     public async ValueTask DisconnectAsync(
         string actorId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         using var operation = runtime.EnterOperation();
-        if (ZLinkBoundSessionDispatchScope.TryDeferClose(
+        if (
+            ZLinkBoundSessionDispatchScope.TryDeferClose(
                 actorId,
-                ct => DisconnectNowAsync(actorId, ct)))
+                ct => DisconnectNowAsync(actorId, ct)
+            )
+        )
             return;
 
-        await DisconnectNowAsync(actorId, cancellationToken)
-            .ConfigureAwait(false);
+        await DisconnectNowAsync(actorId, cancellationToken).ConfigureAwait(false);
     }
 
-    private async ValueTask DisconnectNowAsync(
-        string actorId,
-        CancellationToken cancellationToken)
+    private async ValueTask DisconnectNowAsync(string actorId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var route = ResolveSessionRoute(actorId);
         try
         {
-            await runtime.CloseActorBoundSessionAsync(actorId, cancellationToken)
+            await runtime
+                .CloseActorBoundSessionAsync(actorId, cancellationToken)
                 .ConfigureAwait(false);
         }
         finally
@@ -61,24 +58,30 @@ internal sealed class ZLinkBoundSessionService(
         string? packetName,
         IReadOnlyDictionary<string, string> metadata,
         TMessage message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         using var operation = runtime.EnterOperation();
         cancellationToken.ThrowIfCancellationRequested();
         _ = ResolveSessionRoute(actorId);
         using var flow = ZLinkFlowContext.EnterCurrentOrCreate(
             ZLinkFlowOrigin.Application,
-            runtime.Flow.CaptureEnabled);
+            runtime.Flow.CaptureEnabled
+        );
         var frame = CreateBoundSessionFrame(
             packetName,
             metadata,
             message,
-            runtime.Registration.Codecs);
+            runtime.Registration.Codecs
+        );
         try
         {
-            if (ZLinkBoundSessionDispatchScope.TryDefer(
+            if (
+                ZLinkBoundSessionDispatchScope.TryDefer(
                     actorId,
-                    ct => SubmitDeferredFrameAsync(actorId, frame, ct)))
+                    ct => SubmitDeferredFrameAsync(actorId, frame, ct)
+                )
+            )
             {
                 TraceSent(actorId, packetName, frame);
                 return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Submitted);
@@ -100,65 +103,76 @@ internal sealed class ZLinkBoundSessionService(
     private async ValueTask SubmitDeferredFrameAsync(
         string actorId,
         byte[] frame,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var result = await SubmitFrameAsync(actorId, frame, cancellationToken)
             .ConfigureAwait(false);
         //  SkippedNotBound is the designed stale-binding drop: the session
         //  was replaced while the frame sat in the deferred queue, so there
         //  is nothing to deliver and nothing failed.
-        if (result.Status is not ZLinkOneWaySubmitStatus.Submitted
-            and not ZLinkOneWaySubmitStatus.SkippedNotBound)
+        if (
+            result.Status
+            is not ZLinkOneWaySubmitStatus.Submitted
+                and not ZLinkOneWaySubmitStatus.SkippedNotBound
+        )
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InternalFailure,
-                $"Deferred bound-session submit completed with '{result.Status}'.");
+                $"Deferred bound-session submit completed with '{result.Status}'."
+            );
     }
 
     private void TraceSent(string actorId, string? packetName, byte[] frame)
     {
-        if (!runtime.Flow.Enabled(ZLinkMessageFlowOutcome.Sent)) return;
+        if (!runtime.Flow.Enabled(ZLinkMessageFlowOutcome.Sent))
+            return;
         if (!ZLinkStreamFrameCodec.TryDecode(frame, out var headerBytes, out _))
             throw new InvalidOperationException("Actor bound session frame is invalid.");
 
         var header = ZLinkStreamProtocolDefaults.DecodeHeader(headerBytes.ToArray());
-        runtime.Flow.Trace(new ZLinkMessageFlowEvent(
-            ZLinkMessageFlowOutcome.Sent,
-            ZLinkDispatchErrorSurface.StreamSession,
-            ZLinkDispatchMessageKind.Send,
-            packetName,
-            CorrelationId: header.CorrelationId,
-            ActorId: actorId));
+        runtime.Flow.Trace(
+            new ZLinkMessageFlowEvent(
+                ZLinkMessageFlowOutcome.Sent,
+                ZLinkDispatchErrorSurface.StreamSession,
+                ZLinkDispatchMessageKind.Send,
+                packetName,
+                CorrelationId: header.CorrelationId,
+                ActorId: actorId
+            )
+        );
     }
 
     private async ValueTask<ZLinkOneWaySubmitResult> SubmitFrameAsync(
         string actorId,
         byte[] frame,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var route = ResolveSessionRoute(actorId);
         using var message = Message.From(frame);
         using var terminal = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
-            runtime.ShutdownToken);
+            runtime.ShutdownToken
+        );
         terminal.CancelAfter(runtime.Registration.DefaultSocketSendTimeout);
         try
         {
-            return await runtime.SendActorBoundSessionIfCurrentAsync(
+            return await runtime
+                .SendActorBoundSessionIfCurrentAsync(
                     actorId,
                     route.BindingToken,
                     [message],
-                    terminal.Token)
+                    terminal.Token
+                )
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (runtime.ShutdownToken.IsCancellationRequested)
         {
-            return new ZLinkOneWaySubmitResult(
-                ZLinkOneWaySubmitStatus.Shutdown);
+            return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Shutdown);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            return new ZLinkOneWaySubmitResult(
-                ZLinkOneWaySubmitStatus.TimedOut);
+            return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.TimedOut);
         }
     }
 
@@ -172,16 +186,22 @@ internal sealed class ZLinkBoundSessionService(
         throw new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.InvalidOperation,
             $"No current session binding exists for actor '{actorId}'.",
-            ZLinkRetryAdvice.RetryAfterBackoff);
+            ZLinkRetryAdvice.RetryAfterBackoff
+        );
     }
 
     private static byte[] CreateBoundSessionFrame<TPayload>(
         string? packetName,
         IReadOnlyDictionary<string, string> metadata,
         TPayload payload,
-        ZLinkCodecRegistryBuilder codecs)
+        ZLinkCodecRegistryBuilder codecs
+    )
     {
-        var encoded = ZLinkStreamPacketPayloadCodec.Encode(payload, payload?.GetType() ?? typeof(TPayload), codecs);
+        var encoded = ZLinkStreamPacketPayloadCodec.Encode(
+            payload,
+            payload?.GetType() ?? typeof(TPayload),
+            codecs
+        );
         var header = new ZlinkStreamHeader(
             ZlinkStreamMessageKind.Send,
             encoded.Codec,
@@ -189,37 +209,44 @@ internal sealed class ZLinkBoundSessionService(
             null,
             packetName ?? throw new InvalidOperationException("Packet name is required."),
             ToStreamMetadata(metadata),
-            ZlinkStreamCorrelation.Next());
-        return ZLinkStreamFrameCodec.Encode(ZLinkStreamProtocolDefaults.EncodeHeader(header).Span,
-            encoded.Payload.Span);
+            ZlinkStreamCorrelation.Next()
+        );
+        return ZLinkStreamFrameCodec.Encode(
+            ZLinkStreamProtocolDefaults.EncodeHeader(header).Span,
+            encoded.Payload.Span
+        );
     }
 
-    private static ZlinkStreamHeaderFlags MetadataFlags(IReadOnlyDictionary<string, string> metadata)
+    private static ZlinkStreamHeaderFlags MetadataFlags(
+        IReadOnlyDictionary<string, string> metadata
+    )
     {
-        return metadata.Count == 0 ? ZlinkStreamHeaderFlags.None : ZlinkStreamHeaderFlags.HasMetadata;
+        return metadata.Count == 0
+            ? ZlinkStreamHeaderFlags.None
+            : ZlinkStreamHeaderFlags.HasMetadata;
     }
 
-    private static ZlinkStreamMetadata ToStreamMetadata(IReadOnlyDictionary<string, string> metadata)
+    private static ZlinkStreamMetadata ToStreamMetadata(
+        IReadOnlyDictionary<string, string> metadata
+    )
     {
         var values = ZlinkStreamMetadata.Empty;
-        foreach (var (key, value) in metadata) values = values.With(key, value);
+        foreach (var (key, value) in metadata)
+            values = values.With(key, value);
 
         return values;
     }
 }
 
-internal sealed class ZLinkBoundSession(
-    ZLinkBoundSessionService service,
-    string actorId) : IZLinkBoundSession
+internal sealed class ZLinkBoundSession(ZLinkBoundSessionService service, string actorId)
+    : IZLinkBoundSession
 {
-    public IZLinkBoundSessionSendCall Send<TMessage>(
-        TMessage message)
+    public IZLinkBoundSessionSendCall Send<TMessage>(TMessage message)
     {
         return service.Send(actorId, message);
     }
 
-    public ValueTask DisconnectAsync(
-        CancellationToken cancellationToken = default)
+    public ValueTask DisconnectAsync(CancellationToken cancellationToken = default)
     {
         return service.DisconnectAsync(actorId, cancellationToken);
     }
@@ -228,13 +255,13 @@ internal sealed class ZLinkBoundSession(
 internal sealed class ZLinkBoundSessionSendCall<TMessage>(
     ZLinkBoundSessionService service,
     string actorId,
-    TMessage message) : IZLinkBoundSessionSendCall
+    TMessage message
+) : IZLinkBoundSessionSendCall
 {
     private readonly Dictionary<string, string> _metadata = new(StringComparer.Ordinal);
     private readonly ZLinkOneWayCallGate _submission = new("Bound session send");
-    public IZLinkBoundSessionSendCall Metadata(
-        string key,
-        string value)
+
+    public IZLinkBoundSessionSendCall Metadata(string key, string value)
     {
         _metadata[key] = value;
         return this;
@@ -243,21 +270,22 @@ internal sealed class ZLinkBoundSessionSendCall<TMessage>(
     public IZLinkBoundSessionSendCall Metadata(ZLinkMessageMetadata metadata)
     {
         ArgumentNullException.ThrowIfNull(metadata);
-        foreach (var (key, value) in metadata.Values) _metadata[key] = value;
+        foreach (var (key, value) in metadata.Values)
+            _metadata[key] = value;
         return this;
     }
 
-    public ValueTask Async(
-        CancellationToken cancellationToken = default)
+    public ValueTask Async(CancellationToken cancellationToken = default)
     {
         _submission.Claim();
-        return service.SubmitBoundSessionAsync(
-            actorId,
-            ZLinkMessageNameResolver.ResolveFromMessage(message),
-            _metadata,
-            message,
-            cancellationToken).EnsureAcceptedAsync(
-                "Bound session send",
-                ZLinkFrameworkErrorKind.InvalidOperation);
+        return service
+            .SubmitBoundSessionAsync(
+                actorId,
+                ZLinkMessageNameResolver.ResolveFromMessage(message),
+                _metadata,
+                message,
+                cancellationToken
+            )
+            .EnsureAcceptedAsync("Bound session send", ZLinkFrameworkErrorKind.InvalidOperation);
     }
 }

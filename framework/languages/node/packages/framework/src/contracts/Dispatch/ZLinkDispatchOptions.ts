@@ -53,12 +53,7 @@ export enum ZLinkRuntimeMessageFlowOutcome {
 }
 
 export type ZLinkRuntimeMessageFlowResult =
-  | 'succeeded'
-  | 'failed'
-  | 'backpressured'
-  | 'dropped'
-  | 'cancelled'
-  | 'shutdown';
+  'succeeded' | 'failed' | 'backpressured' | 'dropped' | 'cancelled' | 'shutdown';
 
 export interface ZLinkRuntimeMessageFlowEvent {
   readonly outcome: ZLinkRuntimeMessageFlowOutcome;

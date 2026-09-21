@@ -4,14 +4,11 @@ import java.util.concurrent.CompletionStage;
 
 public interface ZLinkLocationStore {
     CompletionStage<ZLinkStoreReadResult> read(
-        ZLinkStoreKey key,
-        ZLinkStoreCancellation cancellation);
+            ZLinkStoreKey key, ZLinkStoreCancellation cancellation);
 
     CompletionStage<ZLinkStoreWriteResult> write(
-        ZLinkStoreWriteRequest request,
-        ZLinkStoreCancellation cancellation);
+            ZLinkStoreWriteRequest request, ZLinkStoreCancellation cancellation);
 
     CompletionStage<ZLinkStoreScanResult> scan(
-        ZLinkStoreScanRequest request,
-        ZLinkStoreCancellation cancellation);
+            ZLinkStoreScanRequest request, ZLinkStoreCancellation cancellation);
 }

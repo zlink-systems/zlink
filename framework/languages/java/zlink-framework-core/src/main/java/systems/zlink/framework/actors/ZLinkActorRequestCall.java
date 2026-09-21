@@ -11,5 +11,4 @@ public interface ZLinkActorRequestCall {
     <TReply> CompletionStage<TReply> submit(Class<TReply> replyType);
 
     <TReply> CompletionStage<TReply> yield(Class<TReply> replyType);
-
 }

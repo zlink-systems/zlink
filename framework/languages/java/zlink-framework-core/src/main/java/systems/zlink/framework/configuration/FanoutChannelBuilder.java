@@ -29,14 +29,9 @@ public interface FanoutChannelBuilder {
 
     FanoutChannelBuilder addHandlerGroup(String groupName);
 
-    void addPublishHandler(
-        Class<?> handlerType,
-        Class<?> messageType);
+    void addPublishHandler(Class<?> handlerType, Class<?> messageType);
 
-    void addPublishHandler(
-        Class<?> handlerType,
-        Class<?> messageType,
-        String packetName);
+    void addPublishHandler(Class<?> handlerType, Class<?> messageType, String packetName);
 
     FanoutChannelBuilder addPublishHandler(Class<?> handlerType);
 

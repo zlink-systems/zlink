@@ -1,18 +1,18 @@
 package systems.zlink.framework.runtime.spots;
 
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.Executor;
-import java.util.function.Supplier;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ZLinkActor;
+import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
 import systems.zlink.framework.spots.ZLinkSpot;
-import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget;
+
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Executor;
+import java.util.function.Supplier;
 
 abstract class ZLinkSpotContextHost {
-    void ensureOwnerAdmissionOpen() {
-    }
+    void ensureOwnerAdmissionOpen() {}
 
     abstract Executor serialExecutor();
 
@@ -20,34 +20,26 @@ abstract class ZLinkSpotContextHost {
     abstract Executor infrastructureExecutor();
 
     abstract DefaultSpotOutbound createContextOutbound(
-        ZLinkBackendSpot backendSpot,
-        RoutingId nodeRid);
+            ZLinkBackendSpot backendSpot, RoutingId nodeRid);
 
     abstract ZLinkSpotTimerRegistry createTimerRegistry(
-        String spotId,
-        ZLinkHandlerInstanceOwner handlers,
-        ZLinkSpotTimerRegistry.Dispatch dispatch);
+            String spotId,
+            ZLinkHandlerInstanceOwner handlers,
+            ZLinkSpotTimerRegistry.Dispatch dispatch);
 
     abstract ZLinkHandlerInstanceOwner createHandlerInstances();
 
-    abstract CompletionStage<Void> destroyActorFromEntry(
-        RoutingId nodeRid,
-        ZLinkActor actor);
+    abstract CompletionStage<Void> destroyActorFromEntry(RoutingId nodeRid, ZLinkActor actor);
 
     abstract CompletionStage<Void> leaveActor(
-        RoutingId nodeRid,
-        ZLinkSpot<?> spot,
-        ZLinkActor actor,
-        String fallbackSpotId);
+            RoutingId nodeRid, ZLinkSpot<?> spot, ZLinkActor actor, String fallbackSpotId);
 
     abstract CompletionStage<Boolean> closeSpot(String spotId);
 
-    abstract CompletionStage<Boolean> closeInstanceSpot(
-        String spotId,
-        long objectGeneration);
+    abstract CompletionStage<Boolean> closeInstanceSpot(String spotId, long objectGeneration);
 
     abstract CompletionStage<Boolean> completeInstanceSpotClose(
-        ZLinkInstanceSpotActivation activation);
+            ZLinkInstanceSpotActivation activation);
 
     abstract boolean isActorMember(String spotId, String actorId);
 
@@ -56,56 +48,51 @@ abstract class ZLinkSpotContextHost {
     abstract Object deferredActorJoinRuntimeScope();
 
     abstract <T> CompletionStage<T> runWithOutbound(
-        DefaultSpotOutbound outbound,
-        Supplier<CompletionStage<T>> operation);
+            DefaultSpotOutbound outbound, Supplier<CompletionStage<T>> operation);
 
     abstract CompletionStage<Void> runEntryDispatch(
-        Object entryContext,
-        Supplier<CompletionStage<Void>> operation);
+            Object entryContext, Supplier<CompletionStage<Void>> operation);
 
     abstract CompletionStage<Void> runActorTimerDispatch(
-        String actorId,
-        Supplier<CompletionStage<Void>> operation);
+            String actorId, Supplier<CompletionStage<Void>> operation);
 
     CompletionStage<Void> runActorTimerDispatch(
-        ZLinkActorDispatchTarget target,
-        String actorId,
-        Supplier<CompletionStage<Void>> operation) {
+            ZLinkActorDispatchTarget target,
+            String actorId,
+            Supplier<CompletionStage<Void>> operation) {
         return runActorTimerDispatch(actorId, operation);
     }
 
     abstract CompletionStage<Void> enqueueActorDispatch(
-        String actorId,
-        long payloadBytes,
-        Supplier<CompletionStage<Void>> operation);
+            String actorId, long payloadBytes, Supplier<CompletionStage<Void>> operation);
 
     CompletionStage<Void> enqueueActorDispatch(
-        ZLinkActorDispatchTarget target,
-        String actorId,
-        long payloadBytes,
-        Supplier<CompletionStage<Void>> operation) {
+            ZLinkActorDispatchTarget target,
+            String actorId,
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation) {
         return enqueueActorDispatch(actorId, payloadBytes, operation);
     }
 
     abstract CompletionStage<Void> enqueueActorDispatch(
-        String actorId,
-        Supplier<byte[]> acceptedJournalRecord,
-        long acceptedJournalRecordSizeHint,
-        Supplier<CompletionStage<Void>> operation,
-        Runnable relocationRelease);
+            String actorId,
+            Supplier<byte[]> acceptedJournalRecord,
+            long acceptedJournalRecordSizeHint,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease);
 
     CompletionStage<Void> enqueueActorDispatch(
-        ZLinkActorDispatchTarget target,
-        String actorId,
-        Supplier<byte[]> acceptedJournalRecord,
-        long acceptedJournalRecordSizeHint,
-        Supplier<CompletionStage<Void>> operation,
-        Runnable relocationRelease) {
+            ZLinkActorDispatchTarget target,
+            String actorId,
+            Supplier<byte[]> acceptedJournalRecord,
+            long acceptedJournalRecordSizeHint,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease) {
         return enqueueActorDispatch(
-            actorId,
-            acceptedJournalRecord,
-            acceptedJournalRecordSizeHint,
-            operation,
-            relocationRelease);
+                actorId,
+                acceptedJournalRecord,
+                acceptedJournalRecordSizeHint,
+                operation,
+                relocationRelease);
     }
 }

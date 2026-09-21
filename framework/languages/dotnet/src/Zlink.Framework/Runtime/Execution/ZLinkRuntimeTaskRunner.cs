@@ -11,13 +11,12 @@ internal sealed class ZLinkRuntimeTaskRunner
     private readonly CancellationToken _shutdownToken;
     private bool _accepting = true;
 
-    public bool IsCurrentExecution
-        => AmbientExecution.Value is { IsActive: true } lease
-           && ReferenceEquals(lease.Owner, _executionOwner);
+    public bool IsCurrentExecution =>
+        AmbientExecution.Value is { IsActive: true } lease
+        && ReferenceEquals(lease.Owner, _executionOwner);
 
-    private bool IsCurrentRunnerExecution
-        => AmbientExecution.Value is { IsActive: true } lease
-           && ReferenceEquals(lease.Runner, this);
+    private bool IsCurrentRunnerExecution =>
+        AmbientExecution.Value is { IsActive: true } lease && ReferenceEquals(lease.Runner, this);
 
     internal object ExecutionOwner => _executionOwner;
 
@@ -33,15 +32,16 @@ internal sealed class ZLinkRuntimeTaskRunner
 
     internal HashSet<Task> ActiveOnSupervisorLane => _active;
 
-    internal static bool IsCurrentExecutionFor(object executionOwner)
-        => AmbientExecution.Value is { IsActive: true } lease
-           && ReferenceEquals(lease.Owner, executionOwner);
+    internal static bool IsCurrentExecutionFor(object executionOwner) =>
+        AmbientExecution.Value is { IsActive: true } lease
+        && ReferenceEquals(lease.Owner, executionOwner);
 
     public ZLinkRuntimeTaskRunner(
         IZLinkRuntimeFailureReporter errorSink,
         CancellationToken shutdownToken,
         object? executionOwner = null,
-        bool ownsSupervisor = false)
+        bool ownsSupervisor = false
+    )
     {
         _errorSink = errorSink;
         _shutdownToken = shutdownToken;
@@ -52,46 +52,26 @@ internal sealed class ZLinkRuntimeTaskRunner
         _ownsSupervisor = ownsSupervisor;
     }
 
-    public void RunDetached(
-        string name,
-        Func<CancellationToken, ValueTask> callback)
+    public void RunDetached(string name, Func<CancellationToken, ValueTask> callback)
     {
         TryRunDetached(name, callback);
     }
 
-    public bool TryRunDetached(
-        string name,
-        Func<CancellationToken, ValueTask> callback)
+    public bool TryRunDetached(string name, Func<CancellationToken, ValueTask> callback)
     {
-        return TryStart(
-            name,
-            callback,
-            TaskCreationOptions.None,
-            out _);
+        return TryStart(name, callback, TaskCreationOptions.None, out _);
     }
 
-    public Task Run(
-        string name,
-        Func<CancellationToken, ValueTask> callback)
+    public Task Run(string name, Func<CancellationToken, ValueTask> callback)
     {
-        return TryStart(
-                   name,
-                   callback,
-                   TaskCreationOptions.None,
-                   out var task)
+        return TryStart(name, callback, TaskCreationOptions.None, out var task)
             ? task
             : Task.CompletedTask;
     }
 
-    public Task RunLongRunning(
-        string name,
-        Func<CancellationToken, ValueTask> callback)
+    public Task RunLongRunning(string name, Func<CancellationToken, ValueTask> callback)
     {
-        return TryStart(
-                   name,
-                   callback,
-                   TaskCreationOptions.LongRunning,
-                   out var task)
+        return TryStart(name, callback, TaskCreationOptions.LongRunning, out var task)
             ? task
             : Task.CompletedTask;
     }
@@ -100,7 +80,8 @@ internal sealed class ZLinkRuntimeTaskRunner
     {
         if (IsCurrentRunnerExecution)
             throw new InvalidOperationException(
-                "A runtime task cannot synchronously stop the runner that owns it.");
+                "A runtime task cannot synchronously stop the runner that owns it."
+            );
 
         await _supervisor.StopRunnerAsync(this, _ownsSupervisor).ConfigureAwait(false);
     }
@@ -109,22 +90,29 @@ internal sealed class ZLinkRuntimeTaskRunner
         string name,
         Func<CancellationToken, ValueTask> callback,
         TaskCreationOptions creationOptions,
-        out Task task)
+        out Task task
+    )
     {
-        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completion = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var state = new TaskState(this, name, callback, _errorSink, _shutdownToken, completion);
         var startedTask = completion.Task;
-        var acceptsRunnerExecution = AmbientExecution.Value is { IsActive: true } lease
-                                     && (ReferenceEquals(lease.Runner, this)
-                                         || _ownsSupervisor
-                                         && ReferenceEquals(lease.Owner, _executionOwner));
-        var acceptsOwnerExecution = AmbientExecution.Value is { IsActive: true } ownerLease
-                                    && ReferenceEquals(ownerLease.Owner, _executionOwner);
+        var acceptsRunnerExecution =
+            AmbientExecution.Value is { IsActive: true } lease
+            && (
+                ReferenceEquals(lease.Runner, this)
+                || _ownsSupervisor && ReferenceEquals(lease.Owner, _executionOwner)
+            );
+        var acceptsOwnerExecution =
+            AmbientExecution.Value is { IsActive: true } ownerLease
+            && ReferenceEquals(ownerLease.Owner, _executionOwner);
         var accepted = _supervisor.TryStart(
             this,
             startedTask,
             acceptsRunnerExecution,
-            acceptsOwnerExecution);
+            acceptsOwnerExecution
+        );
 
         if (!accepted)
         {
@@ -137,13 +125,24 @@ internal sealed class ZLinkRuntimeTaskRunner
         // Unwrap task or completion-registration task is needed.
         if (creationOptions == TaskCreationOptions.LongRunning)
             _ = Task.Factory.StartNew(
-                static value => { _ = RunDetachedCoreAsync((TaskState)value!); },
-                state, CancellationToken.None,
+                static value =>
+                {
+                    _ = RunDetachedCoreAsync((TaskState)value!);
+                },
+                state,
+                CancellationToken.None,
                 TaskCreationOptions.DenyChildAttach | TaskCreationOptions.LongRunning,
-                TaskScheduler.Default);
+                TaskScheduler.Default
+            );
         else
             ThreadPool.QueueUserWorkItem(
-                static value => { _ = RunDetachedCoreAsync(value); }, state, preferLocal: false);
+                static value =>
+                {
+                    _ = RunDetachedCoreAsync(value);
+                },
+                state,
+                preferLocal: false
+            );
         return true;
     }
 
@@ -161,9 +160,7 @@ internal sealed class ZLinkRuntimeTaskRunner
         {
             await state.Callback(state.ShutdownToken).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (state.ShutdownToken.IsCancellationRequested)
-        {
-        }
+        catch (OperationCanceledException) when (state.ShutdownToken.IsCancellationRequested) { }
         catch (Exception ex)
         {
             try
@@ -184,9 +181,7 @@ internal sealed class ZLinkRuntimeTaskRunner
         }
     }
 
-    public void ReportErrorSinkFailure(
-        string name,
-        Exception exception)
+    public void ReportErrorSinkFailure(string name, Exception exception)
     {
         ZLinkFrameworkDebugLog.TaskFailure(name, exception);
     }
@@ -199,7 +194,8 @@ internal sealed class ZLinkRuntimeTaskRunner
         Func<CancellationToken, ValueTask> Callback,
         IZLinkRuntimeFailureReporter ErrorSink,
         CancellationToken ShutdownToken,
-        TaskCompletionSource Completion);
+        TaskCompletionSource Completion
+    );
 
     private sealed class ExecutionLease(object owner, ZLinkRuntimeTaskRunner runner)
     {
@@ -235,51 +231,55 @@ internal sealed class ZLinkRuntimeTaskSupervisor
         ZLinkRuntimeTaskRunner runner,
         Task task,
         bool acceptsRunnerExecution,
-        bool acceptsOwnerExecution)
+        bool acceptsOwnerExecution
+    )
     {
-        return AwaitStateLane(_lane.RunAsync(() =>
-        {
-            if (!runner.AcceptingOnSupervisorLane && !acceptsRunnerExecution)
-                return false;
+        return AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                if (!runner.AcceptingOnSupervisorLane && !acceptsRunnerExecution)
+                    return false;
 
-            if (!_accepting && !acceptsOwnerExecution)
-                return false;
+                if (!_accepting && !acceptsOwnerExecution)
+                    return false;
 
-            runner.ActiveOnSupervisorLane.Add(task);
-            _active.Add(task);
-            return true;
-        }));
+                runner.ActiveOnSupervisorLane.Add(task);
+                _active.Add(task);
+                return true;
+            })
+        );
     }
 
     public void Remove(ZLinkRuntimeTaskRunner runner, Task completed)
     {
-        AwaitStateLane(_lane.RunAsync(() =>
-        {
-            runner.ActiveOnSupervisorLane.Remove(completed);
-            _active.Remove(completed);
-            return true;
-        }));
+        AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                runner.ActiveOnSupervisorLane.Remove(completed);
+                _active.Remove(completed);
+                return true;
+            })
+        );
     }
 
-    public async ValueTask StopRunnerAsync(
-        ZLinkRuntimeTaskRunner runner,
-        bool ownsSupervisor)
+    public async ValueTask StopRunnerAsync(ZLinkRuntimeTaskRunner runner, bool ownsSupervisor)
     {
         while (true)
         {
-            var active = await _lane.RunAsync(() =>
-            {
-                runner.AcceptingOnSupervisorLane = false;
-                if (ownsSupervisor)
-                    _accepting = false;
+            var active = await _lane
+                .RunAsync(() =>
+                {
+                    runner.AcceptingOnSupervisorLane = false;
+                    if (ownsSupervisor)
+                        _accepting = false;
 
-                var activeSet = ownsSupervisor
-                    ? _active
-                    : runner.ActiveOnSupervisorLane;
-                activeSet.RemoveWhere(static candidate => candidate.IsCompleted);
-                return activeSet.ToArray();
-            }).ConfigureAwait(false);
-            if (active.Length == 0) return;
+                    var activeSet = ownsSupervisor ? _active : runner.ActiveOnSupervisorLane;
+                    activeSet.RemoveWhere(static candidate => candidate.IsCompleted);
+                    return activeSet.ToArray();
+                })
+                .ConfigureAwait(false);
+            if (active.Length == 0)
+                return;
 
             await Task.WhenAll(active).ConfigureAwait(false);
         }

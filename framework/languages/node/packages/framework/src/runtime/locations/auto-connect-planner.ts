@@ -6,10 +6,7 @@ import {
 import { zlinkLocationRoleName } from './canonical-codec';
 import { ZLinkLocationKeyCodec } from './key-codec';
 import { routingIdsEqual } from '../routing-id';
-import type {
-  ZLinkAutoConnectLocal,
-  ZLinkAutoConnectTarget
-} from './auto-connect-types';
+import type { ZLinkAutoConnectLocal, ZLinkAutoConnectTarget } from './auto-connect-types';
 import { routeMeshConnectionNotRequired } from '../foundation/route-mesh-connection-policy';
 
 const encodeRoutingIdHex = ZLinkLocationKeyCodec.encodeRoutingIdHex;
@@ -70,20 +67,24 @@ export const ZLinkAutoConnectPlanner = Object.freeze({
       return [];
     }
     return peers
-      .filter(peer =>
-        peer.autoConnectType === local.autoConnectType
-        && peer.meshName === local.meshName
-        && peer.endpoint.length > 0
-        && !isAutoConnectSelf(local, peer)
-        && routeMeshConnectionNotRequired(
-          local.objectRole ?? 'none',
-          local.hasRouteMeshServerChannel ?? false,
-          peer.metadata?.objectRole === 'client'
-            ? 'client'
-            : peer.metadata?.objectRole === 'server' ? 'server' : 'none',
-          peer.metadata?.hasRouteMeshServerChannel === 'true'
-        ))
-      .map(peer => ({
+      .filter(
+        (peer) =>
+          peer.autoConnectType === local.autoConnectType &&
+          peer.meshName === local.meshName &&
+          peer.endpoint.length > 0 &&
+          !isAutoConnectSelf(local, peer) &&
+          routeMeshConnectionNotRequired(
+            local.objectRole ?? 'none',
+            local.hasRouteMeshServerChannel ?? false,
+            peer.metadata?.objectRole === 'client'
+              ? 'client'
+              : peer.metadata?.objectRole === 'server'
+                ? 'server'
+                : 'none',
+            peer.metadata?.hasRouteMeshServerChannel === 'true'
+          )
+      )
+      .map((peer) => ({
         targetKey: autoConnectTargetKeyOf(peer),
         nodeRid: peer.nodeRid,
         lifecycleGeneration: peer.generation,
@@ -106,12 +107,14 @@ function isCandidate(
   peer: ZLinkPeerLocation,
   includeDraining: boolean
 ): boolean {
-  return peer.autoConnectType === local.autoConnectType
-    && peer.meshName === local.meshName
-    && (includeDraining || !peer.draining)
-    && ZLinkAutoConnectPlanner.isRoleAllowed(peer.autoConnectType, peer.role)
-    && peer.endpoint.length > 0
-    && !isAutoConnectSelf(local, peer);
+  return (
+    peer.autoConnectType === local.autoConnectType &&
+    peer.meshName === local.meshName &&
+    (includeDraining || !peer.draining) &&
+    ZLinkAutoConnectPlanner.isRoleAllowed(peer.autoConnectType, peer.role) &&
+    peer.endpoint.length > 0 &&
+    !isAutoConnectSelf(local, peer)
+  );
 }
 
 function targetOf(peer: ZLinkPeerLocation): ZLinkAutoConnectTarget {
@@ -127,7 +130,11 @@ function targetOf(peer: ZLinkPeerLocation): ZLinkAutoConnectTarget {
 }
 
 function isAutoConnectSelf(local: ZLinkAutoConnectLocal, peer: ZLinkPeerLocation): boolean {
-  if (local.nodeRid !== undefined && peer.nodeRid !== undefined && routingIdsEqual(local.nodeRid, peer.nodeRid)) {
+  if (
+    local.nodeRid !== undefined &&
+    peer.nodeRid !== undefined &&
+    routingIdsEqual(local.nodeRid, peer.nodeRid)
+  ) {
     return true;
   }
   return peer.endpoint === local.endpoint;
@@ -136,17 +143,21 @@ function isAutoConnectSelf(local: ZLinkAutoConnectLocal, peer: ZLinkPeerLocation
 function shouldDialAutoConnectPeer(local: ZLinkAutoConnectLocal, peer: ZLinkPeerLocation): boolean {
   switch (local.autoConnectType) {
     case ZLinkLocationAutoConnectType.RouteMesh:
-      return local.role === ZLinkLocationRole.Router
-        && peer.role === ZLinkLocationRole.Router
-        && !routeMeshConnectionNotRequired(
+      return (
+        local.role === ZLinkLocationRole.Router &&
+        peer.role === ZLinkLocationRole.Router &&
+        !routeMeshConnectionNotRequired(
           local.objectRole ?? 'none',
           local.hasRouteMeshServerChannel ?? false,
           peer.metadata?.objectRole === 'client'
             ? 'client'
-            : peer.metadata?.objectRole === 'server' ? 'server' : 'none',
+            : peer.metadata?.objectRole === 'server'
+              ? 'server'
+              : 'none',
           peer.metadata?.hasRouteMeshServerChannel === 'true'
-        )
-        && localIsPairwiseInitiator(local, peer);
+        ) &&
+        localIsPairwiseInitiator(local, peer)
+      );
     case ZLinkLocationAutoConnectType.Fanout:
       return local.role === ZLinkLocationRole.Sub && peer.role === ZLinkLocationRole.Pub;
     default:

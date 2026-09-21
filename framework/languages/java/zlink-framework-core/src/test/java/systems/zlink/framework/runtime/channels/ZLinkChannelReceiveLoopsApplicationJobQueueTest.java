@@ -4,6 +4,20 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import org.junit.jupiter.api.Test;
+
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
+import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
+
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.List;
@@ -19,48 +33,43 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.junit.jupiter.api.Test;
-import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.messaging.Message;
-import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
-import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
-import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
-import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
-import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 
 final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
     @Test
     void shutdownJoinsTheRouterReceiveOwnerBeforeSocketClose() throws Exception {
-        ZLinkApplicationJobQueue queue = new ZLinkApplicationJobQueue(
-            ZLinkApplicationJobQueueProfile.BALANCED,
-            OptionalLong.of(1),
-            new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null));
+        ZLinkApplicationJobQueue queue =
+                new ZLinkApplicationJobQueue(
+                        ZLinkApplicationJobQueueProfile.BALANCED,
+                        OptionalLong.of(1),
+                        new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null));
         AtomicBoolean running = new AtomicBoolean(true);
         BlockingRouter router = new BlockingRouter();
         ZLinkChannelReceiveLoops loops = new ZLinkChannelReceiveLoops(running::get, queue);
         ExecutorService lifecycle = Executors.newSingleThreadExecutor();
         CountDownLatch closeStarted = new CountDownLatch(1);
         try {
-            loops.startRequest(router, ignored -> { }, error -> {
-                throw new AssertionError(error);
-            });
+            loops.startRequest(
+                    router,
+                    ignored -> {},
+                    error -> {
+                        throw new AssertionError(error);
+                    });
             assertTrue(router.receiveEntered.await(1, TimeUnit.SECONDS));
 
-            var close = lifecycle.submit(() -> {
-                closeStarted.countDown();
-                running.set(false);
-                loops.close();
-                loops.awaitTermination();
-                router.close();
-            });
+            var close =
+                    lifecycle.submit(
+                            () -> {
+                                closeStarted.countDown();
+                                running.set(false);
+                                loops.close();
+                                loops.awaitTermination();
+                                router.close();
+                            });
 
             assertTrue(closeStarted.await(1, TimeUnit.SECONDS));
-            assertFalse(router.closeEntered.await(1500, TimeUnit.MILLISECONDS),
-                "socket close entered before the receive owner exited");
+            assertFalse(
+                    router.closeEntered.await(1500, TimeUnit.MILLISECONDS),
+                    "socket close entered before the receive owner exited");
             router.releaseReceive.countDown();
             close.get(2, TimeUnit.SECONDS);
             assertTrue(router.receiveExited.get());
@@ -75,36 +84,42 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
     }
 
     @Test
-    void ordinaryReceiveReservesBeforeRecvAndDoesNotBuildAHiddenSerialBacklog()
-        throws Exception {
-        ZLinkApplicationJobQueue queue = new ZLinkApplicationJobQueue(
-            ZLinkApplicationJobQueueProfile.BALANCED,
-            OptionalLong.of(1),
-            new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null));
+    void ordinaryReceiveReservesBeforeRecvAndDoesNotBuildAHiddenSerialBacklog() throws Exception {
+        ZLinkApplicationJobQueue queue =
+                new ZLinkApplicationJobQueue(
+                        ZLinkApplicationJobQueueProfile.BALANCED,
+                        OptionalLong.of(1),
+                        new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null));
         AtomicBoolean running = new AtomicBoolean(true);
         FakeRouter router = new FakeRouter();
         router.inbound.add(received("one"));
         router.inbound.add(received("two"));
         var handlerExecutor = Executors.newSingleThreadExecutor();
-        ZLinkSerialExecutionQueue serial = new ZLinkSerialExecutionQueue(
-            handlerExecutor, ZLinkExecutionLanePolicy.generic());
+        ZLinkSerialExecutionQueue serial =
+                new ZLinkSerialExecutionQueue(handlerExecutor, ZLinkExecutionLanePolicy.generic());
         CountDownLatch allowFirstInstruction = new CountDownLatch(1);
         CountDownLatch bothDispatched = new CountDownLatch(2);
         AtomicInteger job = new AtomicInteger();
         ZLinkChannelReceiveLoops loops = new ZLinkChannelReceiveLoops(running::get, queue);
 
         try {
-            loops.startRequest(router, ignored -> {
-                int index = job.incrementAndGet();
-                serial.enqueue(() -> {
-                    if (index == 1) {
-                        await(allowFirstInstruction);
-                    }
-                    ZLinkApplicationJobContext.beforeFirstApplicationInstruction();
-                    bothDispatched.countDown();
-                    return CompletableFuture.completedFuture(null);
-                });
-            }, error -> { throw new AssertionError(error); });
+            loops.startRequest(
+                    router,
+                    ignored -> {
+                        int index = job.incrementAndGet();
+                        serial.enqueue(
+                                () -> {
+                                    if (index == 1) {
+                                        await(allowFirstInstruction);
+                                    }
+                                    ZLinkApplicationJobContext.beforeFirstApplicationInstruction();
+                                    bothDispatched.countDown();
+                                    return CompletableFuture.completedFuture(null);
+                                });
+                    },
+                    error -> {
+                        throw new AssertionError(error);
+                    });
 
             awaitCondition(() -> queue.snapshot().capacityWaiters() == 1);
             assertEquals(1, router.receiveCount.get());
@@ -127,11 +142,11 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
 
     private static ZLinkBackendReceived received(String value) {
         return new ZLinkBackendReceived(
-            ZLinkBackendRequestResult.OK,
-            Optional.of(RoutingId.from("job-queue-peer")),
-            Optional.empty(),
-            Optional.of(1L),
-            List.of(Message.from(value)));
+                ZLinkBackendRequestResult.OK,
+                Optional.of(RoutingId.from("job-queue-peer")),
+                Optional.empty(),
+                Optional.of(1L),
+                List.of(Message.from(value)));
     }
 
     private static void await(CountDownLatch latch) {
@@ -146,7 +161,7 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
     }
 
     private static void awaitCondition(java.util.function.BooleanSupplier condition)
-        throws InterruptedException {
+            throws InterruptedException {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (!condition.getAsBoolean() && System.nanoTime() < deadline) {
             Thread.sleep(5);
@@ -159,23 +174,53 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
         private final AtomicInteger receiveCount = new AtomicInteger();
         private final Set<Thread> receiveThreads = ConcurrentHashMap.newKeySet();
 
-        @Override public void setReceiveFlowState(
-            systems.zlink.contracts.sockets.ReceiveFlowState state) { }
-        @Override public void setChannelName(String value) { }
-        @Override public void setRoutingId(RoutingId value) { }
-        @Override public void setConnectRoutingId(RoutingId value) { }
-        @Override public void setProbe(boolean value) { }
-        @Override public long maxMessageSize() { return 0; }
-        @Override public void setMaxMessageSize(long value) { }
-        @Override public int peerWeight() { return 100; }
-        @Override public void setPeerWeight(int value) { }
-        @Override public void bind(String endpoint) { }
-        @Override public void connect(String endpoint) { }
-        @Override public void disconnect(String endpoint) { }
-        @Override public boolean waitForReadable(Duration timeout) {
+        @Override
+        public void setReceiveFlowState(systems.zlink.contracts.sockets.ReceiveFlowState state) {}
+
+        @Override
+        public void setChannelName(String value) {}
+
+        @Override
+        public void setRoutingId(RoutingId value) {}
+
+        @Override
+        public void setConnectRoutingId(RoutingId value) {}
+
+        @Override
+        public void setProbe(boolean value) {}
+
+        @Override
+        public long maxMessageSize() {
+            return 0;
+        }
+
+        @Override
+        public void setMaxMessageSize(long value) {}
+
+        @Override
+        public int peerWeight() {
+            return 100;
+        }
+
+        @Override
+        public void setPeerWeight(int value) {}
+
+        @Override
+        public void bind(String endpoint) {}
+
+        @Override
+        public void connect(String endpoint) {}
+
+        @Override
+        public void disconnect(String endpoint) {}
+
+        @Override
+        public boolean waitForReadable(Duration timeout) {
             return !inbound.isEmpty();
         }
-        @Override public ZLinkBackendReceived recv(ZLinkBackendRecvMode mode) {
+
+        @Override
+        public ZLinkBackendReceived recv(ZLinkBackendRecvMode mode) {
             receiveThreads.add(Thread.currentThread());
             ZLinkBackendReceived result = inbound.poll();
             if (result != null) {
@@ -183,18 +228,28 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
             }
             return result;
         }
-        @Override public CompletionStage<Void> send(
-            RoutingId routingId, List<Message> parts) {
+
+        @Override
+        public CompletionStage<Void> send(RoutingId routingId, List<Message> parts) {
             return CompletableFuture.completedFuture(null);
         }
-        @Override public CompletionStage<ZLinkBackendReceived> request(
-            RoutingId routingId, List<Message> parts, Duration timeout) {
+
+        @Override
+        public CompletionStage<ZLinkBackendReceived> request(
+                RoutingId routingId, List<Message> parts, Duration timeout) {
             return CompletableFuture.failedFuture(new UnsupportedOperationException());
         }
-        @Override public void reply(
-            RoutingId routingId, long requestSeq, List<Message> parts) { }
-        @Override public String name() { return "job-queue-router"; }
-        @Override public void close() { }
+
+        @Override
+        public void reply(RoutingId routingId, long requestSeq, List<Message> parts) {}
+
+        @Override
+        public String name() {
+            return "job-queue-router";
+        }
+
+        @Override
+        public void close() {}
     }
 
     private static final class BlockingRouter implements ZLinkBackendRouterSocket {
@@ -203,21 +258,53 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
         private final CountDownLatch closeEntered = new CountDownLatch(1);
         private final AtomicBoolean receiveExited = new AtomicBoolean();
 
-        @Override public void setReceiveFlowState(
-            systems.zlink.contracts.sockets.ReceiveFlowState state) { }
-        @Override public void setChannelName(String value) { }
-        @Override public void setRoutingId(RoutingId value) { }
-        @Override public void setConnectRoutingId(RoutingId value) { }
-        @Override public void setProbe(boolean value) { }
-        @Override public long maxMessageSize() { return 0; }
-        @Override public void setMaxMessageSize(long value) { }
-        @Override public int peerWeight() { return 100; }
-        @Override public void setPeerWeight(int value) { }
-        @Override public void bind(String endpoint) { }
-        @Override public void connect(String endpoint) { }
-        @Override public void disconnect(String endpoint) { }
-        @Override public boolean waitForReadable(Duration timeout) { return true; }
-        @Override public ZLinkBackendReceived recv(ZLinkBackendRecvMode mode) {
+        @Override
+        public void setReceiveFlowState(systems.zlink.contracts.sockets.ReceiveFlowState state) {}
+
+        @Override
+        public void setChannelName(String value) {}
+
+        @Override
+        public void setRoutingId(RoutingId value) {}
+
+        @Override
+        public void setConnectRoutingId(RoutingId value) {}
+
+        @Override
+        public void setProbe(boolean value) {}
+
+        @Override
+        public long maxMessageSize() {
+            return 0;
+        }
+
+        @Override
+        public void setMaxMessageSize(long value) {}
+
+        @Override
+        public int peerWeight() {
+            return 100;
+        }
+
+        @Override
+        public void setPeerWeight(int value) {}
+
+        @Override
+        public void bind(String endpoint) {}
+
+        @Override
+        public void connect(String endpoint) {}
+
+        @Override
+        public void disconnect(String endpoint) {}
+
+        @Override
+        public boolean waitForReadable(Duration timeout) {
+            return true;
+        }
+
+        @Override
+        public ZLinkBackendReceived recv(ZLinkBackendRecvMode mode) {
             receiveEntered.countDown();
             boolean interrupted = false;
             while (true) {
@@ -234,17 +321,29 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
             receiveExited.set(true);
             return null;
         }
-        @Override public CompletionStage<Void> send(
-            RoutingId routingId, List<Message> parts) {
+
+        @Override
+        public CompletionStage<Void> send(RoutingId routingId, List<Message> parts) {
             return CompletableFuture.completedFuture(null);
         }
-        @Override public CompletionStage<ZLinkBackendReceived> request(
-            RoutingId routingId, List<Message> parts, Duration timeout) {
+
+        @Override
+        public CompletionStage<ZLinkBackendReceived> request(
+                RoutingId routingId, List<Message> parts, Duration timeout) {
             return CompletableFuture.failedFuture(new UnsupportedOperationException());
         }
-        @Override public void reply(
-            RoutingId routingId, long requestSeq, List<Message> parts) { }
-        @Override public String name() { return "blocking-router"; }
-        @Override public void close() { closeEntered.countDown(); }
+
+        @Override
+        public void reply(RoutingId routingId, long requestSeq, List<Message> parts) {}
+
+        @Override
+        public String name() {
+            return "blocking-router";
+        }
+
+        @Override
+        public void close() {
+            closeEntered.countDown();
+        }
     }
 }

@@ -1,5 +1,13 @@
 package systems.zlink.framework.spring;
 
+import org.springframework.beans.factory.config.BeanDefinition;
+import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
+import org.springframework.beans.factory.support.AbstractBeanDefinition;
+import org.springframework.beans.factory.support.BeanDefinitionRegistry;
+import org.springframework.beans.factory.support.RootBeanDefinition;
+
+import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+
 import java.beans.Introspector;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
@@ -7,22 +15,16 @@ import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
-import org.springframework.beans.factory.config.BeanDefinition;
-import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
-import org.springframework.beans.factory.support.AbstractBeanDefinition;
-import org.springframework.beans.factory.support.BeanDefinitionRegistry;
-import org.springframework.beans.factory.support.RootBeanDefinition;
-import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 
 final class ZLinkApplicationBeanRegistrar {
-    private ZLinkApplicationBeanRegistrar() {
-    }
+    private ZLinkApplicationBeanRegistrar() {}
 
     static void register(
-        BeanDefinitionRegistry registry,
-        ConfigurableListableBeanFactory beanFactory,
-        DefaultZLinkFrameworkOptions options) {
-        Set<Class<?>> applicationTypes = new LinkedHashSet<>(options.registration().applicationTypes());
+            BeanDefinitionRegistry registry,
+            ConfigurableListableBeanFactory beanFactory,
+            DefaultZLinkFrameworkOptions options) {
+        Set<Class<?>> applicationTypes =
+                new LinkedHashSet<>(options.registration().applicationTypes());
         for (Class<?> applicationType : List.copyOf(applicationTypes)) {
             applicationTypes.addAll(findCollectionDependencyImplementations(applicationType));
         }
@@ -40,13 +42,11 @@ final class ZLinkApplicationBeanRegistrar {
                     continue;
                 }
                 implementations.addAll(
-                    ZLinkClasspathTypeScanner.findAssignableTypes(
-                        applicationType.getPackageName(),
-                        serviceType));
+                        ZLinkClasspathTypeScanner.findAssignableTypes(
+                                applicationType.getPackageName(), serviceType));
                 implementations.addAll(
-                    ZLinkClasspathTypeScanner.findAssignableTypes(
-                        serviceType.getPackageName(),
-                        serviceType));
+                        ZLinkClasspathTypeScanner.findAssignableTypes(
+                                serviceType.getPackageName(), serviceType));
             }
         }
         implementations.remove(applicationType);
@@ -55,11 +55,11 @@ final class ZLinkApplicationBeanRegistrar {
 
     private static Class<?> collectionElementType(Type parameter) {
         if (!(parameter instanceof ParameterizedType parameterized)
-            || !(parameterized.getRawType() instanceof Class<?> rawType)
-            || !(rawType == List.class
-                || rawType == Collection.class
-                || rawType == Iterable.class
-                || rawType == Set.class)) {
+                || !(parameterized.getRawType() instanceof Class<?> rawType)
+                || !(rawType == List.class
+                        || rawType == Collection.class
+                        || rawType == Iterable.class
+                        || rawType == Set.class)) {
             return null;
         }
         Type argument = parameterized.getActualTypeArguments()[0];
@@ -67,9 +67,9 @@ final class ZLinkApplicationBeanRegistrar {
     }
 
     private static void registerPrototypeIfMissing(
-        BeanDefinitionRegistry registry,
-        ConfigurableListableBeanFactory beanFactory,
-        Class<?> beanClass) {
+            BeanDefinitionRegistry registry,
+            ConfigurableListableBeanFactory beanFactory,
+            Class<?> beanClass) {
         if (ZLinkSpringBeanDefinitions.hasBean(beanFactory, beanClass)) {
             return;
         }
@@ -77,7 +77,6 @@ final class ZLinkApplicationBeanRegistrar {
         definition.setAutowireMode(AbstractBeanDefinition.AUTOWIRE_CONSTRUCTOR);
         definition.setScope(BeanDefinition.SCOPE_PROTOTYPE);
         registry.registerBeanDefinition(
-            "zlinkApplication." + Introspector.decapitalize(beanClass.getName()),
-            definition);
+                "zlinkApplication." + Introspector.decapitalize(beanClass.getName()), definition);
     }
 }

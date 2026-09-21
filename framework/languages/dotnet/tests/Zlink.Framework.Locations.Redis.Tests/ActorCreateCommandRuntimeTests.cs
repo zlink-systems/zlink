@@ -1,8 +1,8 @@
 using Systems.Zlink;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Contracts.Configuration;
 using Zlink.Framework.Contracts.Locations;
 using Zlink.Framework.Runtime.Actors;
-using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Service;
 using Zlink.Framework.Runtime.Spots;
 
@@ -24,7 +24,8 @@ public sealed class ActorCreateCommandRuntimeTests
             "test",
             "owner",
             3,
-            DateTimeOffset.UtcNow)
+            DateTimeOffset.UtcNow
+        )
         {
             State = ZLinkFrameworkRuntimeState.Serving,
             ObjectRole = ZLinkMeshNodeObjectRole.Server,
@@ -37,33 +38,25 @@ public sealed class ActorCreateCommandRuntimeTests
                     "player",
                     ZLinkObjectMaintenancePolicyKind.Disabled,
                     false,
-                    0),
+                    0
+                ),
                 new(
                     ZLinkPlacementObjectKind.UserSpot,
                     "room",
                     ZLinkObjectMaintenancePolicyKind.Disabled,
                     false,
-                    10)
+                    10
+                ),
             ],
             Capacity = new(
                 new ZLinkPopulationCapacity(0, 0, 10),
                 new ZLinkPopulationCapacity(0, 0, 10),
-                [
-                    new ZLinkSpotTypeCapacity(
-                        ZLinkPlacementObjectKind.UserSpot,
-                        "room",
-                        0,
-                        0,
-                        10)
-                ])
+                [new ZLinkSpotTypeCapacity(ZLinkPlacementObjectKind.UserSpot, "room", 0, 0, 10)]
+            ),
         };
 
-        Assert.True(ZLinkActorManagerService.IsEligibleCandidate(
-            descriptor,
-            "player"));
-        Assert.True(ZLinkSpotRuntimeManager.IsEligibleCandidate(
-            descriptor,
-            "room"));
+        Assert.True(ZLinkActorManagerService.IsEligibleCandidate(descriptor, "player"));
+        Assert.True(ZLinkSpotRuntimeManager.IsEligibleCandidate(descriptor, "room"));
     }
 
     [Fact]
@@ -84,8 +77,8 @@ public sealed class ActorCreateCommandRuntimeTests
         source.Start();
         target.Start();
         await WaitUntilAsync(() =>
-            source.Status().AdmittedPeerCount == 1
-            && target.Status().AdmittedPeerCount == 1);
+            source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+        );
 
         var fence = new ObjectReservationFence(
             "reservation-actor",
@@ -96,9 +89,9 @@ public sealed class ActorCreateCommandRuntimeTests
             target.Status().LifecycleGeneration,
             "owner",
             23,
-            1);
-        var deadline = checked(
-            (ulong)DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeMilliseconds());
+            1
+        );
+        var deadline = checked((ulong)DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeMilliseconds());
         Assert.Equal(
             SubmitResult.Ok,
             source.CreateActorRemote(
@@ -108,7 +101,9 @@ public sealed class ActorCreateCommandRuntimeTests
                 fence,
                 deadline,
                 out var firstOperation,
-                TimeSpan.FromSeconds(5)));
+                TimeSpan.FromSeconds(5)
+            )
+        );
         await WaitUntilAsync(() => source.Status().PendingInfrastructureMessages > 0);
         var first = DrainCompletion(source, firstOperation);
         Assert.Equal(ActorCreateResult.Rejected, first.ActorCreateCompletion!.Result);
@@ -116,7 +111,8 @@ public sealed class ActorCreateCommandRuntimeTests
 
         Assert.Equal(
             SubmitResult.Ok,
-            source.ResubmitActorCreateOperation(target.RoutingId, operationTarget.Last));
+            source.ResubmitActorCreateOperation(target.RoutingId, operationTarget.Last)
+        );
         await Task.Delay(50);
         Assert.Equal(1, operationTarget.Count);
 
@@ -129,7 +125,9 @@ public sealed class ActorCreateCommandRuntimeTests
                 fence,
                 deadline,
                 out var secondOperation,
-                TimeSpan.FromSeconds(5)));
+                TimeSpan.FromSeconds(5)
+            )
+        );
         await WaitUntilAsync(() => source.Status().PendingInfrastructureMessages > 0);
         var second = DrainCompletion(source, secondOperation);
         Assert.Equal(ActorCreateResult.Rejected, second.ActorCreateCompletion!.Result);
@@ -155,8 +153,8 @@ public sealed class ActorCreateCommandRuntimeTests
         source.Start();
         target.Start();
         await WaitUntilAsync(() =>
-            source.Status().AdmittedPeerCount == 1
-            && target.Status().AdmittedPeerCount == 1);
+            source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+        );
 
         var actor = new ActorRef("actor-27", 17, "mesh", target.RoutingId);
         var targetGeneration = target.Status().LifecycleGeneration;
@@ -168,17 +166,16 @@ public sealed class ActorCreateCommandRuntimeTests
                 23,
                 29,
                 out var operationId,
-                TimeSpan.FromSeconds(5)));
-        await WaitUntilAsync(() =>
-            source.Status().PendingInfrastructureMessages > 0);
+                TimeSpan.FromSeconds(5)
+            )
+        );
+        await WaitUntilAsync(() => source.Status().PendingInfrastructureMessages > 0);
 
         var completion = DrainCompletion(source, operationId);
         Assert.True(completion.ActorDestroyCompletion!.Destroyed);
         Assert.Equal(actor, operationTarget.Last.Actor);
         Assert.Equal(target.RoutingId, operationTarget.Last.TargetNodeRid);
-        Assert.Equal(
-            targetGeneration,
-            operationTarget.Last.TargetNodeGeneration);
+        Assert.Equal(targetGeneration, operationTarget.Last.TargetNodeGeneration);
         Assert.Equal(29UL, operationTarget.Last.OwnerLeaseGeneration);
         Assert.Equal(23UL, operationTarget.Last.AuthorityOwnerGeneration);
     }
@@ -192,7 +189,8 @@ public sealed class ActorCreateCommandRuntimeTests
 
     private static MeshReceiveRecord DrainCompletion(
         ZLinkManagedMeshNode node,
-        MeshOperationId operationId)
+        MeshOperationId operationId
+    )
     {
         using var ready = new MeshReadyBatch();
         node.DrainReady(MeshReadyDomains.All, ready, RecvFlags.DontWait);
@@ -202,8 +200,10 @@ public sealed class ActorCreateCommandRuntimeTests
             using var received = new MeshReceiveBatch();
             while (claim.Receive(received, RecvFlags.DontWait))
                 for (var record = 0; record < received.Count; record++)
-                    if (received[record].Kind == MeshRecordKind.Completion
-                        && received[record].OperationId == operationId)
+                    if (
+                        received[record].Kind == MeshRecordKind.Completion
+                        && received[record].OperationId == operationId
+                    )
                         return received[record];
         }
         throw new InvalidOperationException("Actor completion was not queued.");
@@ -224,14 +224,18 @@ public sealed class ActorCreateCommandRuntimeTests
 
         public ValueTask<ActorCreateOperationTerminal> CreateAsync(
             ActorCreateOperation operation,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             Count++;
             Last = new ZLinkServiceWireCodec.ActorCreateOperationRecord(operation);
-            return ValueTask.FromResult(new ActorCreateOperationTerminal(
-                RequestResult.Ok,
-                ServiceWireConstants.FrameworkErrorCode.None,
-                new ActorCreateCompletion(ActorCreateResult.Rejected, default)));
+            return ValueTask.FromResult(
+                new ActorCreateOperationTerminal(
+                    RequestResult.Ok,
+                    ServiceWireConstants.FrameworkErrorCode.None,
+                    new ActorCreateCompletion(ActorCreateResult.Rejected, default)
+                )
+            );
         }
     }
 
@@ -241,13 +245,17 @@ public sealed class ActorCreateCommandRuntimeTests
 
         public ValueTask<ActorDestroyOperationTerminal> DestroyAsync(
             ActorDestroyOperation operation,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             Last = operation;
-            return ValueTask.FromResult(new ActorDestroyOperationTerminal(
-                RequestResult.Ok,
-                ServiceWireConstants.FrameworkErrorCode.None,
-                new ActorDestroyCompletion(true)));
+            return ValueTask.FromResult(
+                new ActorDestroyOperationTerminal(
+                    RequestResult.Ok,
+                    ServiceWireConstants.FrameworkErrorCode.None,
+                    new ActorDestroyCompletion(true)
+                )
+            );
         }
     }
 }

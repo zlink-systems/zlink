@@ -46,15 +46,18 @@ export function ZLinkPacket(
   jsonContract?: ZLinkPacketJsonContract
 ): ClassDecorator {
   return (target) => {
-    const normalized = jsonContract === undefined
-      ? undefined
-      : defineZLinkPacketJsonContract(packetName, jsonContract);
+    const normalized =
+      jsonContract === undefined
+        ? undefined
+        : defineZLinkPacketJsonContract(packetName, jsonContract);
     appendMetadata(target, { kind: 'packet', packetName, jsonContract: normalized });
   };
 }
 
 /** @internal */
-export function readZLinkPacketJsonContract(packetName: string): ZLinkPacketJsonContract | undefined {
+export function readZLinkPacketJsonContract(
+  packetName: string
+): ZLinkPacketJsonContract | undefined {
   return readDefinedZLinkPacketJsonContract(packetName);
 }
 
@@ -87,10 +90,11 @@ function classDecorator(metadata: ZLinkDecoratorMetadata): ClassDecorator {
 }
 
 function methodDecorator(metadata: ZLinkDecoratorMetadata): MethodDecorator {
-  return (target, propertyKey) => appendMetadata(target.constructor, {
-    ...metadata,
-    methodName: String(propertyKey)
-  });
+  return (target, propertyKey) =>
+    appendMetadata(target.constructor, {
+      ...metadata,
+      methodName: String(propertyKey)
+    });
 }
 
 function appendMetadata(target: object, metadata: ZLinkDecoratorMetadata): void {
@@ -107,5 +111,7 @@ export function readZLinkDecoratorMetadata(target: object): readonly ZLinkDecora
   if (!Object.prototype.hasOwnProperty.call(target, ZLINK_DECORATOR_METADATA)) {
     return [];
   }
-  return (target as Record<symbol, unknown>)[ZLINK_DECORATOR_METADATA] as readonly ZLinkDecoratorMetadata[];
+  return (target as Record<symbol, unknown>)[
+    ZLINK_DECORATOR_METADATA
+  ] as readonly ZLinkDecoratorMetadata[];
 }

@@ -8,6 +8,7 @@ public sealed partial class ZLinkRedisLocationStore
 {
     private const int MaximumKeyBytes = 1024;
     private const int MaximumVersionBytes = 4096;
+
     // Checklist C-2b: the authority record collapsed to one opaque row
     // (21-location-runtime.md#2.4) now embeds its payload as base64 inside
     // the same JSON value instead of a separate 1 MiB payload key. Spec §6
@@ -446,29 +447,35 @@ public sealed partial class ZLinkRedisLocationStore
 
     public async ValueTask<ZLinkStoreReadResult> ReadAsync(
         ZLinkStoreKey key,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ValidateOpaqueKey(key, nameof(key));
         var result = await ExecuteAsync(
-                async database => (RedisResult[])(await database
-                    .ScriptEvaluateAsync(
-                        OpaqueReadScript,
-                        [_keys.OpaqueRecordKey(key.Value)],
-                        [])
-                    .ConfigureAwait(false))!,
-                cancellationToken)
+                async database =>
+                    (RedisResult[])
+                        (
+                            await database
+                                .ScriptEvaluateAsync(
+                                    OpaqueReadScript,
+                                    [_keys.OpaqueRecordKey(key.Value)],
+                                    []
+                                )
+                                .ConfigureAwait(false)
+                        )!,
+                cancellationToken
+            )
             .ConfigureAwait(false);
-        var storeNow = DateTimeOffset.FromUnixTimeMilliseconds(
-            (long)result[1]);
+        var storeNow = DateTimeOffset.FromUnixTimeMilliseconds((long)result[1]);
         if ((string)result[0]! == "format-error")
-            throw new InvalidDataException(
-                "The Redis opaque record format tag is unrecognized.");
+            throw new InvalidDataException("The Redis opaque record format tag is unrecognized.");
         if ((string)result[0]! == "missing")
             return new ZLinkStoreReadResult.Missing(storeNow);
         if (!string.Equals((string)result[2]!, key.Value, StringComparison.Ordinal))
         {
             throw new InvalidDataException(
-                "The Redis opaque key digest resolved to a different key.");
+                "The Redis opaque key digest resolved to a different key."
+            );
         }
         // 0 is the wire sentinel for "no expiry" (21-location-runtime.md#2.4
         // / store-record-v1.json expiresAtMs), not -1 -- expiresAtMs is an
@@ -479,35 +486,44 @@ public sealed partial class ZLinkRedisLocationStore
             new ZLinkStoreValue(
                 (byte[])result[3]!,
                 new ZLinkStoreVersion((string)result[4]!),
-                expiresAtMs > 0
-                    ? DateTimeOffset.FromUnixTimeMilliseconds(expiresAtMs)
-                    : null,
-                storeNow));
+                expiresAtMs > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(expiresAtMs) : null,
+                storeNow
+            )
+        );
     }
 
     public async ValueTask<ZLinkStoreWriteResult> WriteAsync(
         ZLinkStoreWriteRequest request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentNullException.ThrowIfNull(request);
         ValidateWriteRequest(request);
-        var uniqueKeys = request.Conditions
-            .Select(static condition => condition switch
-            {
-                ZLinkStoreCondition.Missing missing => missing.Key,
-                ZLinkStoreCondition.Version version => version.Key,
-                _ => throw new ArgumentException(
-                    "Unknown Location Store condition.",
-                    nameof(request))
-            })
-            .Concat(request.Mutations.Select(static mutation => mutation switch
-            {
-                ZLinkStoreMutation.Put put => put.Key,
-                ZLinkStoreMutation.Delete delete => delete.Key,
-                _ => throw new ArgumentException(
-                    "Unknown Location Store mutation.",
-                    nameof(request))
-            }))
+        var uniqueKeys = request
+            .Conditions.Select(static condition =>
+                condition switch
+                {
+                    ZLinkStoreCondition.Missing missing => missing.Key,
+                    ZLinkStoreCondition.Version version => version.Key,
+                    _ => throw new ArgumentException(
+                        "Unknown Location Store condition.",
+                        nameof(request)
+                    ),
+                }
+            )
+            .Concat(
+                request.Mutations.Select(static mutation =>
+                    mutation switch
+                    {
+                        ZLinkStoreMutation.Put put => put.Key,
+                        ZLinkStoreMutation.Delete delete => delete.Key,
+                        _ => throw new ArgumentException(
+                            "Unknown Location Store mutation.",
+                            nameof(request)
+                        ),
+                    }
+                )
+            )
             .Distinct()
             .ToArray();
         var keyIndex = uniqueKeys
@@ -522,11 +538,7 @@ public sealed partial class ZLinkRedisLocationStore
             .Append(_keys.OpaqueSnapshotExpiryKey())
             .Append(_keys.OpaqueSnapshotBoundaryKey())
             .ToArray();
-        var args = new List<RedisValue>
-        {
-            request.Conditions.Count,
-            request.Mutations.Count
-        };
+        var args = new List<RedisValue> { request.Conditions.Count, request.Mutations.Count };
         foreach (var condition in request.Conditions)
         {
             switch (condition)
@@ -551,10 +563,11 @@ public sealed partial class ZLinkRedisLocationStore
                     args.Add(put.Key.Value);
                     args.Add(put.Bytes.ToArray());
                     args.Add(Guid.NewGuid().ToString("N"));
-                    args.Add(put.Retention is { } retention
-                        ? checked((long)Math.Ceiling(
-                            retention.TotalMilliseconds))
-                        : -1);
+                    args.Add(
+                        put.Retention is { } retention
+                            ? checked((long)Math.Ceiling(retention.TotalMilliseconds))
+                            : -1
+                    );
                     break;
                 case ZLinkStoreMutation.Delete delete:
                     args.Add(keyIndex[delete.Key]);
@@ -575,54 +588,57 @@ public sealed partial class ZLinkRedisLocationStore
         }
 
         var result = await ExecuteAsync(
-                async database => (RedisResult[])(await database
-                    .ScriptEvaluateAsync(
-                        OpaqueWriteScript,
-                        redisKeys,
-                        args.ToArray())
-                    .ConfigureAwait(false))!,
-                cancellationToken)
+                async database =>
+                    (RedisResult[])
+                        (
+                            await database
+                                .ScriptEvaluateAsync(OpaqueWriteScript, redisKeys, args.ToArray())
+                                .ConfigureAwait(false)
+                        )!,
+                cancellationToken
+            )
             .ConfigureAwait(false);
-        var storeNow = DateTimeOffset.FromUnixTimeMilliseconds(
-            (long)result[1]);
+        var storeNow = DateTimeOffset.FromUnixTimeMilliseconds((long)result[1]);
         var outcome = (string)result[0]!;
         if (outcome == "conflict")
             return new ZLinkStoreWriteResult.Conflict(storeNow);
         if (outcome == "backlog")
         {
-            throw new IOException(
-                "The Redis Location Store version backlog is full.");
+            throw new IOException("The Redis Location Store version backlog is full.");
         }
         if (outcome != "applied")
         {
             throw new InvalidDataException(
-                "Redis returned an unknown Location Store write result.");
+                "Redis returned an unknown Location Store write result."
+            );
         }
         var versions = new Dictionary<ZLinkStoreKey, ZLinkStoreVersion>();
         for (var index = 2; index < result.Length; index += 2)
         {
-            versions[new ZLinkStoreKey((string)result[index]!)] =
-                new ZLinkStoreVersion((string)result[index + 1]!);
+            versions[new ZLinkStoreKey((string)result[index]!)] = new ZLinkStoreVersion(
+                (string)result[index + 1]!
+            );
         }
         return new ZLinkStoreWriteResult.Applied(versions, storeNow);
     }
 
     public async ValueTask<ZLinkStoreScanResult> ScanAsync(
         ZLinkStoreScanRequest request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentNullException.ThrowIfNull(request);
         if (request.Limit is < 1 or > 1000)
             throw new ArgumentOutOfRangeException(nameof(request));
-        var prefix = request.Prefix
-                     ?? throw new ArgumentException(
-                         "The scan prefix cannot be null.",
-                         nameof(request));
+        var prefix =
+            request.Prefix
+            ?? throw new ArgumentException("The scan prefix cannot be null.", nameof(request));
         _ = Encoding.UTF8.GetByteCount(prefix) is <= MaximumKeyBytes
             ? 0
             : throw new ArgumentException(
                 "The scan prefix exceeds 1024 UTF-8 bytes.",
-                nameof(request));
+                nameof(request)
+            );
         string scanId;
         var lastKey = string.Empty;
         var create = request.Cursor is null;
@@ -633,13 +649,14 @@ public sealed partial class ZLinkRedisLocationStore
             if (cursorBytes is < 1 or > MaximumVersionBytes)
                 throw new ArgumentException(
                     "Store scan cursors must contain 1..4096 UTF-8 bytes.",
-                    nameof(request));
+                    nameof(request)
+                );
             var separator = cursorValue.LastIndexOf(':');
-            if (separator != 32
+            if (
+                separator != 32
                 || !Guid.TryParseExact(cursorValue[..separator], "N", out _)
-                || !TryDecodeCursorKey(
-                    cursorValue[(separator + 1)..],
-                    out lastKey))
+                || !TryDecodeCursorKey(cursorValue[(separator + 1)..], out lastKey)
+            )
             {
                 return new ZLinkStoreScanResult.Expired();
             }
@@ -650,47 +667,43 @@ public sealed partial class ZLinkRedisLocationStore
             scanId = Guid.NewGuid().ToString("N");
         }
         var result = await ExecuteAsync(
-                async database => (RedisResult[])(await database
-                    .ScriptEvaluateAsync(
-                        OpaqueScanScript,
-                        [
-                            _keys.OpaqueIndexKey(),
-                            _keys.OpaqueMapKey(),
-                            _keys.OpaqueScanKey(scanId),
-                            _keys.OpaqueCleanupKey(),
-                            _keys.OpaqueSequenceKey(),
-                            _keys.OpaqueSnapshotExpiryKey(),
-                            _keys.OpaqueSnapshotBoundaryKey()
-                        ],
-                        [
-                            prefix,
-                            lastKey,
-                            request.Limit,
-                            create ? 1 : 0,
-                            scanId
-                        ])
-                    .ConfigureAwait(false))!,
-                cancellationToken)
+                async database =>
+                    (RedisResult[])
+                        (
+                            await database
+                                .ScriptEvaluateAsync(
+                                    OpaqueScanScript,
+                                    [
+                                        _keys.OpaqueIndexKey(),
+                                        _keys.OpaqueMapKey(),
+                                        _keys.OpaqueScanKey(scanId),
+                                        _keys.OpaqueCleanupKey(),
+                                        _keys.OpaqueSequenceKey(),
+                                        _keys.OpaqueSnapshotExpiryKey(),
+                                        _keys.OpaqueSnapshotBoundaryKey(),
+                                    ],
+                                    [prefix, lastKey, request.Limit, create ? 1 : 0, scanId]
+                                )
+                                .ConfigureAwait(false)
+                        )!,
+                cancellationToken
+            )
             .ConfigureAwait(false);
         var outcome = (string)result[0]!;
         if (outcome == "expired")
             return new ZLinkStoreScanResult.Expired();
         if (outcome == "capacity")
         {
-            throw new IOException(
-                "The Redis Location Store snapshot capacity is full.");
+            throw new IOException("The Redis Location Store snapshot capacity is full.");
         }
         if (outcome != "page")
         {
-            throw new InvalidDataException(
-                "Redis returned an unknown Location Store scan result.");
+            throw new InvalidDataException("Redis returned an unknown Location Store scan result.");
         }
 
         var storeNow = DateTimeOffset.FromUnixTimeMilliseconds(
-            long.Parse(
-                (string)result[1]!,
-                NumberStyles.None,
-                CultureInfo.InvariantCulture));
+            long.Parse((string)result[1]!, NumberStyles.None, CultureInfo.InvariantCulture)
+        );
         var nextKey = (string)result[2]!;
         var items = new List<KeyValuePair<ZLinkStoreKey, ZLinkStoreValue>>();
         for (var index = 3; index < result.Length; index += 4)
@@ -698,16 +711,21 @@ public sealed partial class ZLinkRedisLocationStore
             var expiresAtMs = long.Parse(
                 (string)result[index + 3]!,
                 NumberStyles.AllowLeadingSign,
-                CultureInfo.InvariantCulture);
-            items.Add(new KeyValuePair<ZLinkStoreKey, ZLinkStoreValue>(
-                new ZLinkStoreKey((string)result[index]!),
-                new ZLinkStoreValue(
-                    (byte[])result[index + 1]!,
-                    new ZLinkStoreVersion((string)result[index + 2]!),
-                    expiresAtMs > 0
-                        ? DateTimeOffset.FromUnixTimeMilliseconds(expiresAtMs)
-                        : null,
-                    storeNow)));
+                CultureInfo.InvariantCulture
+            );
+            items.Add(
+                new KeyValuePair<ZLinkStoreKey, ZLinkStoreValue>(
+                    new ZLinkStoreKey((string)result[index]!),
+                    new ZLinkStoreValue(
+                        (byte[])result[index + 1]!,
+                        new ZLinkStoreVersion((string)result[index + 2]!),
+                        expiresAtMs > 0
+                            ? DateTimeOffset.FromUnixTimeMilliseconds(expiresAtMs)
+                            : null,
+                        storeNow
+                    )
+                )
+            );
         }
         return new ZLinkStoreScanResult.Page(
             new ZLinkStoreScanPage(
@@ -715,25 +733,25 @@ public sealed partial class ZLinkRedisLocationStore
                 nextKey.Length > 0
                     ? new ZLinkStoreScanCursor(
                         $"{scanId}:{Convert.ToHexString(
-                            Encoding.UTF8.GetBytes(nextKey))}")
+                            Encoding.UTF8.GetBytes(nextKey))}"
+                    )
                     : null,
-                storeNow));
+                storeNow
+            )
+        );
     }
 
-    private static bool TryDecodeCursorKey(
-        string encoded,
-        out string key)
+    private static bool TryDecodeCursorKey(string encoded, out string key)
     {
         key = string.Empty;
-        if (encoded.Length is < 2 or > MaximumKeyBytes * 2
-            || encoded.Length % 2 != 0)
+        if (encoded.Length is < 2 or > MaximumKeyBytes * 2 || encoded.Length % 2 != 0)
             return false;
         try
         {
             key = new UTF8Encoding(
-                    encoderShouldEmitUTF8Identifier: false,
-                    throwOnInvalidBytes: true)
-                .GetString(Convert.FromHexString(encoded));
+                encoderShouldEmitUTF8Identifier: false,
+                throwOnInvalidBytes: true
+            ).GetString(Convert.FromHexString(encoded));
             return Encoding.UTF8.GetByteCount(key) <= MaximumKeyBytes;
         }
         catch (FormatException)
@@ -746,49 +764,55 @@ public sealed partial class ZLinkRedisLocationStore
         }
     }
 
-    private static void ValidateOpaqueKey(
-        ZLinkStoreKey key,
-        string parameterName)
+    private static void ValidateOpaqueKey(ZLinkStoreKey key, string parameterName)
     {
         var length = Encoding.UTF8.GetByteCount(key.Value ?? string.Empty);
         if (length is < 1 or > MaximumKeyBytes)
             throw new ArgumentException(
                 "Location Store keys must contain 1..1024 UTF-8 bytes.",
-                parameterName);
+                parameterName
+            );
     }
 
     private static void ValidateWriteRequest(ZLinkStoreWriteRequest request)
     {
         var encodedBytes = 0L;
-        var conditionKeys = request.Conditions.Select(
-            static condition => condition switch
-            {
-                ZLinkStoreCondition.Missing missing => missing.Key,
-                ZLinkStoreCondition.Version version => version.Key,
-                _ => throw new ArgumentException(
-                    "Unknown Location Store condition.")
-            }).ToArray();
-        var mutationKeys = request.Mutations.Select(
-            static mutation => mutation switch
-            {
-                ZLinkStoreMutation.Put put => put.Key,
-                ZLinkStoreMutation.Delete delete => delete.Key,
-                _ => throw new ArgumentException(
-                    "Unknown Location Store mutation.")
-            }).ToArray();
-        if (conditionKeys.Distinct().Count() != conditionKeys.Length
-            || mutationKeys.Distinct().Count() != mutationKeys.Length)
+        var conditionKeys = request
+            .Conditions.Select(static condition =>
+                condition switch
+                {
+                    ZLinkStoreCondition.Missing missing => missing.Key,
+                    ZLinkStoreCondition.Version version => version.Key,
+                    _ => throw new ArgumentException("Unknown Location Store condition."),
+                }
+            )
+            .ToArray();
+        var mutationKeys = request
+            .Mutations.Select(static mutation =>
+                mutation switch
+                {
+                    ZLinkStoreMutation.Put put => put.Key,
+                    ZLinkStoreMutation.Delete delete => delete.Key,
+                    _ => throw new ArgumentException("Unknown Location Store mutation."),
+                }
+            )
+            .ToArray();
+        if (
+            conditionKeys.Distinct().Count() != conditionKeys.Length
+            || mutationKeys.Distinct().Count() != mutationKeys.Length
+        )
         {
             throw new ArgumentException(
                 "A key cannot occur twice in conditions or mutations.",
-                nameof(request));
+                nameof(request)
+            );
         }
-        if (conditionKeys.Concat(mutationKeys).Distinct().Count()
-            > MaximumBatchKeys)
+        if (conditionKeys.Concat(mutationKeys).Distinct().Count() > MaximumBatchKeys)
         {
             throw new ArgumentException(
                 "A conditional batch can reference at most 2048 keys.",
-                nameof(request));
+                nameof(request)
+            );
         }
         foreach (var condition in request.Conditions)
         {
@@ -796,19 +820,17 @@ public sealed partial class ZLinkRedisLocationStore
             {
                 case ZLinkStoreCondition.Missing missing:
                     ValidateOpaqueKey(missing.Key, nameof(request));
-                    encodedBytes += Encoding.UTF8.GetByteCount(
-                        missing.Key.Value);
+                    encodedBytes += Encoding.UTF8.GetByteCount(missing.Key.Value);
                     break;
                 case ZLinkStoreCondition.Version version:
                     ValidateOpaqueKey(version.Key, nameof(request));
-                    encodedBytes += Encoding.UTF8.GetByteCount(
-                        version.Key.Value);
-                    var length = Encoding.UTF8.GetByteCount(
-                        version.Expected.Value ?? string.Empty);
+                    encodedBytes += Encoding.UTF8.GetByteCount(version.Key.Value);
+                    var length = Encoding.UTF8.GetByteCount(version.Expected.Value ?? string.Empty);
                     if (length is < 1 or > MaximumVersionBytes)
                         throw new ArgumentException(
                             "Store versions must contain 1..4096 UTF-8 bytes.",
-                            nameof(request));
+                            nameof(request)
+                        );
                     encodedBytes += length;
                     break;
             }
@@ -823,24 +845,19 @@ public sealed partial class ZLinkRedisLocationStore
                     if (put.Bytes.Length > MaximumValueBytes)
                         throw new ArgumentException(
                             "A Location Store value can contain at most 1 MiB.",
-                            nameof(request));
-                    if (put.Retention is { } retention
-                        && retention <= TimeSpan.Zero)
-                        throw new ArgumentException(
-                            "Retention must be positive.",
-                            nameof(request));
+                            nameof(request)
+                        );
+                    if (put.Retention is { } retention && retention <= TimeSpan.Zero)
+                        throw new ArgumentException("Retention must be positive.", nameof(request));
                     encodedBytes += put.Bytes.Length;
                     break;
                 case ZLinkStoreMutation.Delete delete:
                     ValidateOpaqueKey(delete.Key, nameof(request));
-                    encodedBytes += Encoding.UTF8.GetByteCount(
-                        delete.Key.Value);
+                    encodedBytes += Encoding.UTF8.GetByteCount(delete.Key.Value);
                     break;
             }
         }
         if (encodedBytes > MaximumEncodedBatchBytes)
-            throw new ArgumentException(
-                "The encoded Store batch exceeds 4 MiB.",
-                nameof(request));
+            throw new ArgumentException("The encoded Store batch exceeds 4 MiB.", nameof(request));
     }
 }

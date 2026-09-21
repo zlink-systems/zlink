@@ -78,9 +78,8 @@ public class ZLinkHttpClient : IDisposable
 /// </summary>
 public sealed class ZLinkHttpServerClient : ZLinkHttpClient
 {
-    internal ZLinkHttpServerClient(HttpClientRuntime runtime) : base(runtime)
-    {
-    }
+    internal ZLinkHttpServerClient(HttpClientRuntime runtime)
+        : base(runtime) { }
 
     public override ZLinkHttpServerRequestBuilder Get(string path) =>
         new(this, ZLinkHttpMethod.Get, path);

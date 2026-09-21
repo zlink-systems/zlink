@@ -4,9 +4,7 @@ internal sealed class ZLinkObservedLocationGenerations
 {
     internal bool AcceptDescriptor(ZLinkMeshNodeDescriptor row) => true;
 
-    internal bool AcceptDescriptor(
-        ZLinkMeshNodeDescriptor row,
-        out bool rejectedByOlderRevision)
+    internal bool AcceptDescriptor(ZLinkMeshNodeDescriptor row, out bool rejectedByOlderRevision)
     {
         rejectedByOlderRevision = false;
         return true;
@@ -20,7 +18,8 @@ internal sealed class ZLinkObservedLocationGenerations
 
     internal void ReconcileDescriptors(
         string meshName,
-        IReadOnlyList<ZLinkMeshNodeDescriptor> rows) { }
+        IReadOnlyList<ZLinkMeshNodeDescriptor> rows
+    ) { }
 
     internal void ForgetActor(ZLinkActorLocationKey key) { }
 

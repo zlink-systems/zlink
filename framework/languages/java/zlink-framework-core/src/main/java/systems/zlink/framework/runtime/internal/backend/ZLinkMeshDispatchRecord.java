@@ -1,42 +1,41 @@
 package systems.zlink.framework.runtime.internal.backend;
-import java.util.function.Consumer;
-import java.util.concurrent.atomic.AtomicBoolean;
 
-import java.util.List;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.runtime.internal.binding.spot.ReadyRecord;
 import systems.zlink.framework.runtime.internal.binding.spot.ReceiveRecord;
 
+import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
+
 /**
  * One retained RouteMesh dispatch message.
  *
- * <p>The receiver owns the retained message parts and must close this record
- * after dispatch completes.
+ * <p>The receiver owns the retained message parts and must close this record after dispatch
+ * completes.
  */
 public record ZLinkMeshDispatchRecord(
-    ReadyRecord owner,
-    ReceiveRecord receive,
-    List<Message> parts,
-    Consumer<List<Message>> frameworkReply,
-    Runnable terminalRelease) implements AutoCloseable {
+        ReadyRecord owner,
+        ReceiveRecord receive,
+        List<Message> parts,
+        Consumer<List<Message>> frameworkReply,
+        Runnable terminalRelease)
+        implements AutoCloseable {
     public ZLinkMeshDispatchRecord {
         parts = parts instanceof AutoCloseable ? parts : List.copyOf(parts);
         terminalRelease = once(terminalRelease);
     }
 
-    public ZLinkMeshDispatchRecord(
-        ReadyRecord owner,
-        ReceiveRecord receive,
-        List<Message> parts) {
-        this(owner, receive, parts, null, () -> { });
+    public ZLinkMeshDispatchRecord(ReadyRecord owner, ReceiveRecord receive, List<Message> parts) {
+        this(owner, receive, parts, null, () -> {});
     }
 
     public ZLinkMeshDispatchRecord(
-        ReadyRecord owner,
-        ReceiveRecord receive,
-        List<Message> parts,
-        Consumer<List<Message>> frameworkReply) {
-        this(owner, receive, parts, frameworkReply, () -> { });
+            ReadyRecord owner,
+            ReceiveRecord receive,
+            List<Message> parts,
+            Consumer<List<Message>> frameworkReply) {
+        this(owner, receive, parts, frameworkReply, () -> {});
     }
 
     public boolean canReply() {
@@ -59,7 +58,7 @@ public record ZLinkMeshDispatchRecord(
                 throw failure;
             } catch (Exception failure) {
                 throw new IllegalStateException(
-                    "retained message parts could not be closed", failure);
+                        "retained message parts could not be closed", failure);
             }
         } else {
             parts.forEach(Message::close);

@@ -17,8 +17,9 @@ export class ZLinkSpotRouteTargetResolver {
     if (named?.router !== undefined) {
       return this.spotNodes?.get(routerChannelId);
     }
-    const channelOwners = [...this.registration.spotNodes.entries()]
-      .filter(([, node]) => Object.prototype.hasOwnProperty.call(node.meshChannels ?? {}, routerChannelId));
+    const channelOwners = [...this.registration.spotNodes.entries()].filter(([, node]) =>
+      Object.prototype.hasOwnProperty.call(node.meshChannels ?? {}, routerChannelId)
+    );
     if (channelOwners.length === 1) {
       return this.spotNodes?.get(channelOwners[0][0]);
     }
@@ -40,8 +41,10 @@ export class ZLinkSpotRouteTargetResolver {
   }
 
   localRouteNode(target: ZLinkSpotRouteTarget): ZLinkBackendSpotNode | undefined {
-    const routeNode = this.routeNode(target.routerChannelId) ?? this.spotNodes?.get(target.routerChannelId);
-    return routeNode !== undefined && routingIdsMatchSpotRoute(routeNode.routingId, target.targetNodeRid)
+    const routeNode =
+      this.routeNode(target.routerChannelId) ?? this.spotNodes?.get(target.routerChannelId);
+    return routeNode !== undefined &&
+      routingIdsMatchSpotRoute(routeNode.routingId, target.targetNodeRid)
       ? routeNode
       : undefined;
   }
@@ -55,8 +58,10 @@ export class ZLinkSpotRouteTargetResolver {
   }
 
   canRouteChannel(routerChannelId: string): boolean {
-    return this.registration.routeChannels.has(routerChannelId)
-      || this.spotNodeRouter(routerChannelId) !== undefined;
+    return (
+      this.registration.routeChannels.has(routerChannelId) ||
+      this.spotNodeRouter(routerChannelId) !== undefined
+    );
   }
 
   canRoutePacketChannel(routerChannelId: string): boolean {
@@ -73,15 +78,19 @@ export class ZLinkSpotRouteTargetResolver {
   hasNamedSpotNode(routerChannelId: string): boolean {
     return this.registration.spotNodes.has(routerChannelId);
   }
-
 }
 
-function routingIdsMatchSpotRoute(left: RoutingId | undefined, right: RoutingId | undefined): boolean {
+function routingIdsMatchSpotRoute(
+  left: RoutingId | undefined,
+  right: RoutingId | undefined
+): boolean {
   if (left === undefined || right === undefined) {
     return false;
   }
   const rightCandidates = spotRouteRoutingIdCandidates(right);
-  return [...spotRouteRoutingIdCandidates(left)].some(candidate => rightCandidates.has(candidate));
+  return [...spotRouteRoutingIdCandidates(left)].some((candidate) =>
+    rightCandidates.has(candidate)
+  );
 }
 
 function spotRouteRoutingIdCandidates(routingId: RoutingId): ReadonlySet<string> {

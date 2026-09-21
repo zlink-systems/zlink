@@ -14,8 +14,7 @@ internal sealed class ZLinkCallMetadata
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         ArgumentNullException.ThrowIfNull(value);
-        (_values ??= new Dictionary<string, string>(StringComparer.Ordinal))[key] =
-            value;
+        (_values ??= new Dictionary<string, string>(StringComparer.Ordinal))[key] = value;
     }
 
     public void Merge(ZLinkMessageMetadata metadata)
@@ -47,8 +46,10 @@ internal sealed class ZLinkCallMetadata
     {
         _ = Encode();
         var metadata = ZlinkStreamMetadata.Empty;
-        if (_values is null) return metadata;
-        foreach (var (key, value) in _values) metadata = metadata.With(key, value);
+        if (_values is null)
+            return metadata;
+        foreach (var (key, value) in _values)
+            metadata = metadata.With(key, value);
         return metadata;
     }
 }

@@ -22,8 +22,15 @@ import {
   ZlinkStreamSequenceCall,
   ZlinkStreamWaitCall
 } from '../Contracts';
-import { ZlinkStreamRequestBuilder, ZlinkStreamSendBuilder, ZlinkStreamWaitBuilder } from './Calls/ZlinkStreamCallBuilders';
-import { ZlinkStreamExpectNoneBuilder, ZlinkStreamSequenceBuilder } from './Calls/ZlinkStreamObservationBuilders';
+import {
+  ZlinkStreamRequestBuilder,
+  ZlinkStreamSendBuilder,
+  ZlinkStreamWaitBuilder
+} from './Calls/ZlinkStreamCallBuilders';
+import {
+  ZlinkStreamExpectNoneBuilder,
+  ZlinkStreamSequenceBuilder
+} from './Calls/ZlinkStreamObservationBuilders';
 import {
   ZLINK_STREAM_HEARTBEAT_PING,
   ZLINK_STREAM_HEARTBEAT_PONG,
@@ -158,7 +165,9 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
     return Promise.resolve();
   }
 
-  onErrorReceived(handler: (error: ZlinkStreamError, signal?: AbortSignal) => Promise<void> | void): Disposable {
+  onErrorReceived(
+    handler: (error: ZlinkStreamError, signal?: AbortSignal) => Promise<void> | void
+  ): Disposable {
     return this.events.onError(handler);
   }
 
@@ -166,7 +175,12 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
     return this.events.onDisconnected(handler);
   }
 
-  onConnectionStateChanged(handler: (change: ZlinkStreamConnectionStateChanged, signal?: AbortSignal) => Promise<void> | void): Disposable {
+  onConnectionStateChanged(
+    handler: (
+      change: ZlinkStreamConnectionStateChanged,
+      signal?: AbortSignal
+    ) => Promise<void> | void
+  ): Disposable {
     return this.events.onStateChanged(handler);
   }
 
@@ -197,25 +211,38 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
     handler: (message: ZlinkStreamMessage<TPayload>, signal?: AbortSignal) => Promise<void> | void,
     messageType?: Function
   ): Disposable {
-    const encodedHandler = (message: ZlinkStreamMessage<ZlinkStreamEncodedPayload>, signal?: AbortSignal) => handler({
-      name: message.name,
-      metadata: message.metadata,
-      payload: this.decodePayload<TPayload>(message.payload, messageType),
-      flowId: message.flowId,
-      flowOrigin: message.flowOrigin
-    }, signal);
+    const encodedHandler = (
+      message: ZlinkStreamMessage<ZlinkStreamEncodedPayload>,
+      signal?: AbortSignal
+    ) =>
+      handler(
+        {
+          name: message.name,
+          metadata: message.metadata,
+          payload: this.decodePayload<TPayload>(message.payload, messageType),
+          flowId: message.flowId,
+          flowOrigin: message.flowOrigin
+        },
+        signal
+      );
     return this.receivedMessages.on(name, encodedHandler);
   }
 
-  waitFor<TPayload = ZlinkStreamEncodedPayload>(nameOrType: string | Function): ZlinkStreamWaitCall<TPayload> {
+  waitFor<TPayload = ZlinkStreamEncodedPayload>(
+    nameOrType: string | Function
+  ): ZlinkStreamWaitCall<TPayload> {
     return new ZlinkStreamWaitBuilder<TPayload>(this, this.observedName(nameOrType));
   }
 
-  expectNone<TPayload = ZlinkStreamEncodedPayload>(nameOrType: string | Function): ZlinkStreamExpectNoneCall<TPayload> {
+  expectNone<TPayload = ZlinkStreamEncodedPayload>(
+    nameOrType: string | Function
+  ): ZlinkStreamExpectNoneCall<TPayload> {
     return new ZlinkStreamExpectNoneBuilder<TPayload>(this, this.observedName(nameOrType));
   }
 
-  waitForSequence<TPayload = ZlinkStreamEncodedPayload>(nameOrType: string | Function): ZlinkStreamSequenceCall<TPayload> {
+  waitForSequence<TPayload = ZlinkStreamEncodedPayload>(
+    nameOrType: string | Function
+  ): ZlinkStreamSequenceCall<TPayload> {
     return new ZlinkStreamSequenceBuilder<TPayload>(this, this.observedName(nameOrType));
   }
 
@@ -226,11 +253,13 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
    * `send` and `request` use, so both paths land on one name for one type.
    */
   private observedName(nameOrType: string | Function): string {
-    const name = typeof nameOrType === 'function'
-      ? this.options.nameResolver.resolve(nameOrType)
-      : nameOrType;
+    const name =
+      typeof nameOrType === 'function' ? this.options.nameResolver.resolve(nameOrType) : nameOrType;
     if (typeof name !== 'string') {
-      throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Packet name must be a string or a payload constructor.');
+      throw connectorError(
+        ZlinkStreamErrorCode.ValidationFailed,
+        'Packet name must be a string or a payload constructor.'
+      );
     }
     validateName(name);
     return name;
@@ -256,14 +285,18 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
   ): Promise<ZlinkStreamMessage<TPayload> | undefined> {
     validateName(name);
     if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
-      throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Timeout must be a non-negative finite number.');
+      throw connectorError(
+        ZlinkStreamErrorCode.ValidationFailed,
+        'Timeout must be a non-negative finite number.'
+      );
     }
     throwIfAborted(signal);
     return new Promise((resolve, reject) => {
       let done = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
       let disposable: Disposable | undefined;
-      const onAbort = () => finish(connectorError(ZlinkStreamErrorCode.Disconnected, 'Operation canceled.'));
+      const onAbort = () =>
+        finish(connectorError(ZlinkStreamErrorCode.Disconnected, 'Operation canceled.'));
       const finish = (error?: unknown, message?: ZlinkStreamMessage<TPayload>) => {
         if (done) {
           return;
@@ -286,30 +319,37 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
       // callback. It observes the packets the receive queue has not delivered
       // yet and consumes the one it matches, in both dispatch modes, so
       // `Manual` completes this wait without a dispatch pump.
-      disposable = this.receivedMessages.observe(name, (message) => {
-        if (done) {
-          return false;
-        }
-        try {
-          const decoded = {
-            name: message.name,
-            metadata: message.metadata,
-            payload: this.decodeWaitPayload<TPayload>(message.payload),
-            flowId: message.flowId,
-            flowOrigin: message.flowOrigin
-          };
-          if (!predicate(decoded)) {
+      disposable = this.receivedMessages.observe(
+        name,
+        (message) => {
+          if (done) {
             return false;
           }
-          finish(undefined, decoded);
-        } catch (cause) {
-          finish(cause);
-        }
-        return true;
-      }, () => finish(connectorError(
-        ZlinkStreamErrorCode.Disconnected,
-        `The connection this wait for '${name}' observed has ended.`
-      )));
+          try {
+            const decoded = {
+              name: message.name,
+              metadata: message.metadata,
+              payload: this.decodeWaitPayload<TPayload>(message.payload),
+              flowId: message.flowId,
+              flowOrigin: message.flowOrigin
+            };
+            if (!predicate(decoded)) {
+              return false;
+            }
+            finish(undefined, decoded);
+          } catch (cause) {
+            finish(cause);
+          }
+          return true;
+        },
+        () =>
+          finish(
+            connectorError(
+              ZlinkStreamErrorCode.Disconnected,
+              `The connection this wait for '${name}' observed has ended.`
+            )
+          )
+      );
     });
   }
 
@@ -321,7 +361,10 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
     return codec.encode(payload, messageType);
   }
 
-  private decodePayload<TPayload>(payload: ZlinkStreamEncodedPayload, messageType?: Function): TPayload {
+  private decodePayload<TPayload>(
+    payload: ZlinkStreamEncodedPayload,
+    messageType?: Function
+  ): TPayload {
     if (messageType === undefined && this.options.codec === undefined) {
       return payload as TPayload;
     }
@@ -404,7 +447,6 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
     }
     return this.options.nameResolver.resolve(payload.messageType);
   }
-
 }
 
 function isEncodedPayload(value: unknown): value is ZlinkStreamEncodedPayload {

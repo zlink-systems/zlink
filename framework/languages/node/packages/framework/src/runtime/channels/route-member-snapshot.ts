@@ -14,14 +14,20 @@ export class ZLinkRouteMemberSnapshot {
   observeReady(channel: string, routingId: string, endpoint: string): void {
     getOrCreateSet(this.members, channel).add(routingId);
     getOrCreateSet(this.connected, channel).add(routingId);
-    if (endpoint.length > 0) getOrCreateMap(this.memberByEndpoint, channel).set(endpoint, routingId);
+    if (endpoint.length > 0)
+      getOrCreateMap(this.memberByEndpoint, channel).set(endpoint, routingId);
   }
 
-  observeTermination(channel: string, routingId: string | undefined, endpoint: string): string | undefined {
+  observeTermination(
+    channel: string,
+    routingId: string | undefined,
+    endpoint: string
+  ): string | undefined {
     const connected = this.connected.get(channel);
-    const disconnected = routingId
-      ?? this.memberByEndpoint.get(channel)?.get(endpoint)
-      ?? (connected?.size === 1 ? connected.values().next().value : undefined);
+    const disconnected =
+      routingId ??
+      this.memberByEndpoint.get(channel)?.get(endpoint) ??
+      (connected?.size === 1 ? connected.values().next().value : undefined);
     if (disconnected === undefined) return undefined;
     getOrCreateSet(this.members, channel).add(disconnected);
     connected?.delete(disconnected);

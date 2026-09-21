@@ -10,9 +10,7 @@ using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Messaging;
 
-internal sealed class ZLinkMultipartPayloadView(
-    Message frame,
-    int[] ranges)
+internal sealed class ZLinkMultipartPayloadView(Message frame, int[] ranges)
 {
     private ReadOnlyMemory<byte>? _managedFrame;
 
@@ -21,9 +19,7 @@ internal sealed class ZLinkMultipartPayloadView(
     internal ReadOnlySpan<byte> GetSpan(int index)
     {
         EnsureIndex(index);
-        return frame.AsReadOnlySpan().Slice(
-            ranges[index * 2],
-            ranges[index * 2 + 1]);
+        return frame.AsReadOnlySpan().Slice(ranges[index * 2], ranges[index * 2 + 1]);
     }
 
     internal ReadOnlyMemory<byte> GetMemory(int index)
@@ -64,7 +60,7 @@ internal enum ZLinkMessageKind
     Response = 2,
     Command = 3,
     Publish = 4,
-    Error = 5
+    Error = 5,
 }
 
 internal sealed record ZLinkEnvelopeHeader(
@@ -77,7 +73,8 @@ internal sealed record ZLinkEnvelopeHeader(
     string? Topic,
     string? ErrorCode,
     string? ErrorMessage,
-    string? Source = null)
+    string? Source = null
+)
 {
     [System.Text.Json.Serialization.JsonPropertyOrder(-100)]
     public byte FormatMarker { get; init; }
@@ -90,13 +87,13 @@ internal sealed record ZLinkEnvelopeHeader(
     // the C++/Node codecs). Omitted from the wire when absent; peers that
     // always emit an empty object decode identically.
     [System.Text.Json.Serialization.JsonIgnore(
-        Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+        Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+    )]
     public Dictionary<string, string>? Metadata { get; init; }
 }
 
-internal sealed class ZLinkEnvelopeProtocolException(
-    ZLinkEnvelopeHeader header,
-    string message) : InvalidOperationException(message)
+internal sealed class ZLinkEnvelopeProtocolException(ZLinkEnvelopeHeader header, string message)
+    : InvalidOperationException(message)
 {
     public ZLinkEnvelopeHeader Header { get; } = header;
 }
@@ -117,14 +114,13 @@ internal static class ZLinkEnvelopeCodec
         ZLinkEnvelopeHeader header,
         object? body,
         Type? bodyType,
-        ZLinkCodecRegistryBuilder? codecs)
+        ZLinkCodecRegistryBuilder? codecs
+    )
     {
         var bodyMessage = EncodeBody(body, bodyType, codecs, out var contentType);
         try
         {
-            return ZLinkMessageParts.Create(
-                EncodeHeader(header, contentType),
-                bodyMessage);
+            return ZLinkMessageParts.Create(EncodeHeader(header, contentType), bodyMessage);
         }
         catch
         {
@@ -135,7 +131,8 @@ internal static class ZLinkEnvelopeCodec
 
     public static IReadOnlyList<Message> EncodeRawBodyParts(
         ZLinkEnvelopeHeader header,
-        Message body)
+        Message body
+    )
     {
         return ZLinkMessageParts.Create(EncodeHeader(header), body);
     }
@@ -156,7 +153,8 @@ internal static class ZLinkEnvelopeCodec
         // included), so a simple, valid header needs neither the record clone
         // nor the full validation walk. Correlated kinds are excluded here so
         // their missing-correlation failure still surfaces via the slow path.
-        if (flowId is null
+        if (
+            flowId is null
             && flowOrigin is null
             && header.CorrelationId is null
             && header.Deadline is null
@@ -165,16 +163,21 @@ internal static class ZLinkEnvelopeCodec
             && header.ErrorMessage is null
             && header.Source is null
             && header.Metadata is not { Count: > 0 }
-            && header.Kind is not (ZLinkMessageKind.Request
-                or ZLinkMessageKind.Response
-                or ZLinkMessageKind.Error)
-            && Enum.IsDefined(header.Kind))
+            && header.Kind
+                is not (
+                    ZLinkMessageKind.Request
+                    or ZLinkMessageKind.Response
+                    or ZLinkMessageKind.Error
+                )
+            && Enum.IsDefined(header.Kind)
+        )
         {
             var key = new SimpleHeaderKey(
                 header.Kind,
                 header.ChannelName,
                 header.MessageName,
-                contentType);
+                contentType
+            );
             var bytes = GetSimpleHeaderBytes(key);
             return Message.From(bytes);
         }
@@ -184,7 +187,7 @@ internal static class ZLinkEnvelopeCodec
             FormatMarker = ZlinkStreamFlowId.FormatMarker,
             FlowId = flowId,
             FlowOrigin = flowOrigin,
-            ContentType = contentType
+            ContentType = contentType,
         };
         ValidateProtocolHeader(header);
         if (IsSimpleHeader(header))
@@ -193,15 +196,29 @@ internal static class ZLinkEnvelopeCodec
                 header.Kind,
                 header.ChannelName,
                 header.MessageName,
-                header.ContentType);
+                header.ContentType
+            );
             return Message.From(GetSimpleHeaderBytes(key));
         }
 
-        return EncodePlannedHeader(header, GetHeaderPlan(new SimpleHeaderKey(
-            header.Kind, header.ChannelName, header.MessageName, header.ContentType)));
+        return EncodePlannedHeader(
+            header,
+            GetHeaderPlan(
+                new SimpleHeaderKey(
+                    header.Kind,
+                    header.ChannelName,
+                    header.MessageName,
+                    header.ContentType
+                )
+            )
+        );
     }
 
-    public static Message EncodeBody(object? body, Type? bodyType, ZLinkCodecRegistryBuilder? codecs)
+    public static Message EncodeBody(
+        object? body,
+        Type? bodyType,
+        ZLinkCodecRegistryBuilder? codecs
+    )
     {
         return EncodeBody(body, bodyType, codecs, out _);
     }
@@ -214,13 +231,15 @@ internal static class ZLinkEnvelopeCodec
         object? body,
         Type? bodyType,
         ZLinkCodecRegistryBuilder? codecs,
-        out string contentType)
+        out string contentType
+    )
     {
         if (bodyType == typeof(ZLinkMessage))
         {
             if (body is not ZLinkMessage message)
                 throw new InvalidOperationException(
-                    $"Envelope body type is ZLinkMessage, but body instance is '{body?.GetType()}'.");
+                    $"Envelope body type is ZLinkMessage, but body instance is '{body?.GetType()}'."
+                );
 
             return message.ToRawMessage(codecs ?? new ZLinkCodecRegistryBuilder(), out contentType);
         }
@@ -231,28 +250,27 @@ internal static class ZLinkEnvelopeCodec
             codecs,
             out var resolvedContentType,
             out var serializer,
-            out var resolutionCompleted);
-        contentType = resolutionCompleted
-            ? resolvedContentType
-            : JsonContentType;
-        return EncodeBody(
-            body,
-            bodyType,
-            hasSerializer ? serializer : null);
+            out var resolutionCompleted
+        );
+        contentType = resolutionCompleted ? resolvedContentType : JsonContentType;
+        return EncodeBody(body, bodyType, hasSerializer ? serializer : null);
     }
 
     private static Message EncodeBody(
         object? body,
         Type? bodyType,
-        IZLinkMessageSerializer? serializer)
+        IZLinkMessageSerializer? serializer
+    )
     {
-        if (bodyType is null || body is null) return Message.From(ReadOnlySpan<byte>.Empty);
+        if (bodyType is null || body is null)
+            return Message.From(ReadOnlySpan<byte>.Empty);
 
         if (bodyType == typeof(Message))
         {
             if (body is not Message message)
                 throw new InvalidOperationException(
-                    $"Envelope body type is Message, but body instance is '{body.GetType()}'.");
+                    $"Envelope body type is Message, but body instance is '{body.GetType()}'."
+                );
 
             return Message.From(message);
         }
@@ -261,7 +279,10 @@ internal static class ZLinkEnvelopeCodec
     }
 
     internal static Message EncodeSerializedPart(
-        object? body, Type bodyType, IZLinkMessageSerializer? serializer)
+        object? body,
+        Type bodyType,
+        IZLinkMessageSerializer? serializer
+    )
     {
         if (body is null)
             return Message.From(ReadOnlySpan<byte>.Empty);
@@ -278,8 +299,10 @@ internal static class ZLinkEnvelopeCodec
 
     public static T DecodePart<T>(Message message)
     {
-        return JsonSerializer.Deserialize<T>(message.AsReadOnlySpan(), ZLinkJsonSerializerOptions.Default)
-               ?? throw new InvalidOperationException($"Invalid {typeof(T).Name} message part.");
+        return JsonSerializer.Deserialize<T>(
+                message.AsReadOnlySpan(),
+                ZLinkJsonSerializerOptions.Default
+            ) ?? throw new InvalidOperationException($"Invalid {typeof(T).Name} message part.");
     }
 
     public static Message EncodePart<T>(T value)
@@ -287,14 +310,10 @@ internal static class ZLinkEnvelopeCodec
         return EncodeProtocolPart(value);
     }
 
-    public static ZLinkEnvelopeHeader DecodeHeader(
-        Message message,
-        bool validateFlow = true) =>
+    public static ZLinkEnvelopeHeader DecodeHeader(Message message, bool validateFlow = true) =>
         DecodeHeader(message.AsReadOnlySpan(), validateFlow);
 
-    private static ZLinkEnvelopeHeader DecodeHeader(
-        ReadOnlySpan<byte> bytes,
-        bool validateFlow)
+    private static ZLinkEnvelopeHeader DecodeHeader(ReadOnlySpan<byte> bytes, bool validateFlow)
     {
         var hash = HashBytes(bytes);
         var cached = FindDecodedHeaderCacheEntry(bytes, hash);
@@ -310,7 +329,8 @@ internal static class ZLinkEnvelopeCodec
         {
             throw new ZLinkEnvelopeProtocolException(
                 InvalidProtocolHeader(),
-                $"ZLink envelope header is invalid: {error.Message}");
+                $"ZLink envelope header is invalid: {error.Message}"
+            );
         }
         ValidateProtocolHeader(header, validateFlow);
         // Correlated, deadline-stamped, or flow-stamped headers are byte-unique
@@ -318,10 +338,12 @@ internal static class ZLinkEnvelopeCodec
         // guarantees misses while evicting the repeatable command/publish
         // entries this cache exists for. Populated metadata is skipped so the
         // shared cached dictionary instance never carries per-message entries.
-        if (header.CorrelationId is null
+        if (
+            header.CorrelationId is null
             && header.Deadline is null
             && header.FlowId is null
-            && header.Metadata is not { Count: > 0 })
+            && header.Metadata is not { Count: > 0 }
+        )
             AddDecodedHeaderCacheEntry(bytes, hash, header);
         return ValidateDecodedFlow(header, validateFlow);
     }
@@ -334,8 +356,14 @@ internal static class ZLinkEnvelopeCodec
 
         byte formatMarker = 0;
         ZLinkMessageKind kind = default;
-        string? channelName = null, messageName = null, contentType = null;
-        string? correlationId = null, topic = null, errorCode = null, errorMessage = null, source = null;
+        string? channelName = null,
+            messageName = null,
+            contentType = null;
+        string? correlationId = null,
+            topic = null,
+            errorCode = null,
+            errorMessage = null,
+            source = null;
         string? flowId = null;
         ZLinkFlowOrigin? flowOrigin = null;
         DateTimeOffset? deadline = null;
@@ -351,47 +379,93 @@ internal static class ZLinkEnvelopeCodec
             if (reader.TokenType != JsonTokenType.PropertyName)
                 throw new JsonException("ZLink envelope header property is invalid.");
             var field = ReadHeaderField(ref reader);
-            if (!reader.Read()) throw new JsonException("ZLink envelope header value is missing.");
+            if (!reader.Read())
+                throw new JsonException("ZLink envelope header value is missing.");
             switch (field)
             {
                 case HeaderField.FormatMarker:
                     // The Web JSON profile accepts a quoted byte for this
                     // numeric property; enum fields retain integer-only input.
-                    formatMarker = JsonSerializer.Deserialize<byte>(ref reader, ZLinkJsonSerializerOptions.Default);
+                    formatMarker = JsonSerializer.Deserialize<byte>(
+                        ref reader,
+                        ZLinkJsonSerializerOptions.Default
+                    );
                     break;
-                case HeaderField.Kind: kind = (ZLinkMessageKind)ReadHeaderInteger(ref reader); break;
-                case HeaderField.ChannelName: channelName = ReadHeaderString(ref reader); break;
-                case HeaderField.MessageName: messageName = ReadHeaderString(ref reader); break;
-                case HeaderField.ContentType: contentType = ReadHeaderString(ref reader); break;
-                case HeaderField.CorrelationId: correlationId = ReadHeaderString(ref reader); break;
+                case HeaderField.Kind:
+                    kind = (ZLinkMessageKind)ReadHeaderInteger(ref reader);
+                    break;
+                case HeaderField.ChannelName:
+                    channelName = ReadHeaderString(ref reader);
+                    break;
+                case HeaderField.MessageName:
+                    messageName = ReadHeaderString(ref reader);
+                    break;
+                case HeaderField.ContentType:
+                    contentType = ReadHeaderString(ref reader);
+                    break;
+                case HeaderField.CorrelationId:
+                    correlationId = ReadHeaderString(ref reader);
+                    break;
                 case HeaderField.Deadline:
-                    if (reader.TokenType == JsonTokenType.Null) deadline = null;
-                    else if (reader.TokenType == JsonTokenType.String && reader.TryGetDateTimeOffset(out var timestamp))
+                    if (reader.TokenType == JsonTokenType.Null)
+                        deadline = null;
+                    else if (
+                        reader.TokenType == JsonTokenType.String
+                        && reader.TryGetDateTimeOffset(out var timestamp)
+                    )
                         deadline = timestamp;
-                    else throw new JsonException("ZLink envelope deadline is invalid.");
+                    else
+                        throw new JsonException("ZLink envelope deadline is invalid.");
                     break;
-                case HeaderField.Topic: topic = ReadHeaderString(ref reader); break;
-                case HeaderField.ErrorCode: errorCode = ReadHeaderString(ref reader); break;
-                case HeaderField.ErrorMessage: errorMessage = ReadHeaderString(ref reader); break;
-                case HeaderField.Source: source = ReadHeaderString(ref reader); break;
-                case HeaderField.FlowId: flowId = ReadHeaderString(ref reader); break;
+                case HeaderField.Topic:
+                    topic = ReadHeaderString(ref reader);
+                    break;
+                case HeaderField.ErrorCode:
+                    errorCode = ReadHeaderString(ref reader);
+                    break;
+                case HeaderField.ErrorMessage:
+                    errorMessage = ReadHeaderString(ref reader);
+                    break;
+                case HeaderField.Source:
+                    source = ReadHeaderString(ref reader);
+                    break;
+                case HeaderField.FlowId:
+                    flowId = ReadHeaderString(ref reader);
+                    break;
                 case HeaderField.FlowOrigin:
-                    flowOrigin = reader.TokenType == JsonTokenType.Null
-                        ? null : (ZLinkFlowOrigin)ReadHeaderInteger(ref reader);
+                    flowOrigin =
+                        reader.TokenType == JsonTokenType.Null
+                            ? null
+                            : (ZLinkFlowOrigin)ReadHeaderInteger(ref reader);
                     break;
-                case HeaderField.Metadata: metadata = ReadHeaderMetadata(ref reader); break;
-                default: reader.Skip(); break;
+                case HeaderField.Metadata:
+                    metadata = ReadHeaderMetadata(ref reader);
+                    break;
+                default:
+                    reader.Skip();
+                    break;
             }
         }
-        if (!complete || reader.Read()) throw new JsonException("ZLink envelope header is incomplete.");
+        if (!complete || reader.Read())
+            throw new JsonException("ZLink envelope header is incomplete.");
 
-        return new ZLinkEnvelopeHeader(kind, channelName!, messageName!, contentType!,
-            correlationId, deadline, topic, errorCode, errorMessage, source)
+        return new ZLinkEnvelopeHeader(
+            kind,
+            channelName!,
+            messageName!,
+            contentType!,
+            correlationId,
+            deadline,
+            topic,
+            errorCode,
+            errorMessage,
+            source
+        )
         {
             FormatMarker = formatMarker,
             FlowId = flowId,
             FlowOrigin = flowOrigin,
-            Metadata = metadata
+            Metadata = metadata,
         };
     }
 
@@ -402,21 +476,25 @@ internal static class ZLinkEnvelopeCodec
 
     private static int ReadHeaderInteger(ref Utf8JsonReader reader) =>
         reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out var value)
-            ? value : throw new JsonException("ZLink envelope integer field is invalid.");
+            ? value
+            : throw new JsonException("ZLink envelope integer field is invalid.");
 
     private static Dictionary<string, string>? ReadHeaderMetadata(ref Utf8JsonReader reader)
     {
-        if (reader.TokenType == JsonTokenType.Null) return null;
+        if (reader.TokenType == JsonTokenType.Null)
+            return null;
         if (reader.TokenType != JsonTokenType.StartObject)
             throw new JsonException("ZLink envelope metadata must be an object.");
         var metadata = new Dictionary<string, string>();
         while (reader.Read())
         {
-            if (reader.TokenType == JsonTokenType.EndObject) return metadata;
+            if (reader.TokenType == JsonTokenType.EndObject)
+                return metadata;
             if (reader.TokenType != JsonTokenType.PropertyName)
                 throw new JsonException("ZLink envelope metadata key is invalid.");
             var key = reader.GetString()!;
-            if (!reader.Read()) throw new JsonException("ZLink envelope metadata value is missing.");
+            if (!reader.Read())
+                throw new JsonException("ZLink envelope metadata value is missing.");
             metadata[key] = ReadHeaderString(ref reader)!;
         }
         throw new JsonException("ZLink envelope metadata is incomplete.");
@@ -427,8 +505,10 @@ internal static class ZLinkEnvelopeCodec
         // Canonical field names fit on the stack. Escaped/long names still use
         // the reader's unescaping and the original ordinal case-insensitive match.
         Span<char> buffer = stackalloc char[14];
-        ReadOnlySpan<char> name = reader.ValueSpan.Length <= buffer.Length
-            ? buffer[..reader.CopyString(buffer)] : reader.GetString().AsSpan();
+        ReadOnlySpan<char> name =
+            reader.ValueSpan.Length <= buffer.Length
+                ? buffer[..reader.CopyString(buffer)]
+                : reader.GetString().AsSpan();
         // Length partitions keep the field mapping in one place while retaining
         // the original ordinal case-insensitive property-name contract.
         return name.Length switch
@@ -437,29 +517,53 @@ internal static class ZLinkEnvelopeCodec
             5 when name.Equals("topic", StringComparison.OrdinalIgnoreCase) => HeaderField.Topic,
             6 when name.Equals("source", StringComparison.OrdinalIgnoreCase) => HeaderField.Source,
             6 when name.Equals("flowId", StringComparison.OrdinalIgnoreCase) => HeaderField.FlowId,
-            8 when name.Equals("deadline", StringComparison.OrdinalIgnoreCase) => HeaderField.Deadline,
-            8 when name.Equals("metadata", StringComparison.OrdinalIgnoreCase) => HeaderField.Metadata,
-            9 when name.Equals("errorCode", StringComparison.OrdinalIgnoreCase) => HeaderField.ErrorCode,
-            10 when name.Equals("flowOrigin", StringComparison.OrdinalIgnoreCase) => HeaderField.FlowOrigin,
-            11 when name.Equals("channelName", StringComparison.OrdinalIgnoreCase) => HeaderField.ChannelName,
-            11 when name.Equals("messageName", StringComparison.OrdinalIgnoreCase) => HeaderField.MessageName,
-            11 when name.Equals("contentType", StringComparison.OrdinalIgnoreCase) => HeaderField.ContentType,
-            12 when name.Equals("formatMarker", StringComparison.OrdinalIgnoreCase) => HeaderField.FormatMarker,
-            12 when name.Equals("errorMessage", StringComparison.OrdinalIgnoreCase) => HeaderField.ErrorMessage,
-            13 when name.Equals("correlationId", StringComparison.OrdinalIgnoreCase) => HeaderField.CorrelationId,
-            _ => HeaderField.Unknown
+            8 when name.Equals("deadline", StringComparison.OrdinalIgnoreCase) =>
+                HeaderField.Deadline,
+            8 when name.Equals("metadata", StringComparison.OrdinalIgnoreCase) =>
+                HeaderField.Metadata,
+            9 when name.Equals("errorCode", StringComparison.OrdinalIgnoreCase) =>
+                HeaderField.ErrorCode,
+            10 when name.Equals("flowOrigin", StringComparison.OrdinalIgnoreCase) =>
+                HeaderField.FlowOrigin,
+            11 when name.Equals("channelName", StringComparison.OrdinalIgnoreCase) =>
+                HeaderField.ChannelName,
+            11 when name.Equals("messageName", StringComparison.OrdinalIgnoreCase) =>
+                HeaderField.MessageName,
+            11 when name.Equals("contentType", StringComparison.OrdinalIgnoreCase) =>
+                HeaderField.ContentType,
+            12 when name.Equals("formatMarker", StringComparison.OrdinalIgnoreCase) =>
+                HeaderField.FormatMarker,
+            12 when name.Equals("errorMessage", StringComparison.OrdinalIgnoreCase) =>
+                HeaderField.ErrorMessage,
+            13 when name.Equals("correlationId", StringComparison.OrdinalIgnoreCase) =>
+                HeaderField.CorrelationId,
+            _ => HeaderField.Unknown,
         };
     }
 
     private enum HeaderField
     {
-        Unknown, FormatMarker, Kind, ChannelName, MessageName, ContentType, CorrelationId,
-        Deadline, Topic, ErrorCode, ErrorMessage, Source, FlowId, FlowOrigin, Metadata
+        Unknown,
+        FormatMarker,
+        Kind,
+        ChannelName,
+        MessageName,
+        ContentType,
+        CorrelationId,
+        Deadline,
+        Topic,
+        ErrorCode,
+        ErrorMessage,
+        Source,
+        FlowId,
+        FlowOrigin,
+        Metadata,
     }
 
     public static ZLinkEnvelopeHeader DecodeHeader(
         IReadOnlyList<Message> parts,
-        bool validateFlow = true)
+        bool validateFlow = true
+    )
     {
         EnsurePart(parts, 0, "header");
         return DecodeHeader(parts[0], validateFlow);
@@ -467,14 +571,14 @@ internal static class ZLinkEnvelopeCodec
 
     internal static ZLinkEnvelopeHeader DecodeHeader(
         ZLinkMultipartPayloadView parts,
-        bool validateFlow = true)
+        bool validateFlow = true
+    )
     {
         EnsurePart(parts, 0, "header");
         return DecodeHeader(parts.GetSpan(0), validateFlow);
     }
 
-    internal static ulong MeasureApplicationPayloadBytes(
-        IReadOnlyList<Message> parts)
+    internal static ulong MeasureApplicationPayloadBytes(IReadOnlyList<Message> parts)
     {
         var firstApplicationPart = 0;
         if (parts.Count != 0 && IsEnvelopeHeader(parts[0]))
@@ -495,8 +599,10 @@ internal static class ZLinkEnvelopeCodec
     {
         var bytes = message.AsReadOnlySpan();
         var first = 0;
-        while (first < bytes.Length
-               && bytes[first] is (byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n')
+        while (
+            first < bytes.Length
+            && bytes[first] is (byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n'
+        )
             first++;
         if (first == bytes.Length || bytes[first] != (byte)'{')
             return false;
@@ -512,9 +618,8 @@ internal static class ZLinkEnvelopeCodec
         }
     }
 
-    public static ZLinkEnvelopeProtocolException MissingHeader() => new(
-        InvalidProtocolHeader(),
-        "ZLink envelope header is missing.");
+    public static ZLinkEnvelopeProtocolException MissingHeader() =>
+        new(InvalidProtocolHeader(), "ZLink envelope header is missing.");
 
     public static object? DecodeBody(IReadOnlyList<Message> parts, Type bodyType)
     {
@@ -524,7 +629,8 @@ internal static class ZLinkEnvelopeCodec
     public static object? DecodeBody(
         IReadOnlyList<Message> parts,
         Type bodyType,
-        ZLinkCodecRegistryBuilder? codecs)
+        ZLinkCodecRegistryBuilder? codecs
+    )
     {
         EnsurePart(parts, 0, "header");
         return DecodeBody(parts, bodyType, DecodeHeader(parts[0]).ContentType, codecs);
@@ -534,7 +640,8 @@ internal static class ZLinkEnvelopeCodec
         IReadOnlyList<Message> parts,
         Type bodyType,
         string contentType,
-        ZLinkCodecRegistryBuilder? codecs)
+        ZLinkCodecRegistryBuilder? codecs
+    )
     {
         EnsurePart(parts, 1, "body");
         return DecodeBody(parts[1], bodyType, contentType, codecs);
@@ -544,27 +651,34 @@ internal static class ZLinkEnvelopeCodec
         Message bodyMessage,
         Type bodyType,
         string contentType,
-        ZLinkCodecRegistryBuilder? codecs)
+        ZLinkCodecRegistryBuilder? codecs
+    )
     {
         IZLinkMessageSerializer? customSerializer = null;
-        if (!contentType.Equals(JsonContentType, StringComparison.OrdinalIgnoreCase)
-            && (codecs is null || !codecs.TryGetSerializer(contentType, out customSerializer)))
+        if (
+            !contentType.Equals(JsonContentType, StringComparison.OrdinalIgnoreCase)
+            && (codecs is null || !codecs.TryGetSerializer(contentType, out customSerializer))
+        )
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ProtocolError,
-                $"No payload serializer is registered for received content type '{contentType}'.");
+                $"No payload serializer is registered for received content type '{contentType}'."
+            );
 
-        if (bodyType == typeof(Message)) return bodyMessage;
+        if (bodyType == typeof(Message))
+            return bodyMessage;
 
         if (bodyType == typeof(ZLinkMessage))
-            return ZLinkMessage.FromEnvelopePayload(contentType, bodyMessage,
-                codecs ?? new ZLinkCodecRegistryBuilder());
+            return ZLinkMessage.FromEnvelopePayload(
+                contentType,
+                bodyMessage,
+                codecs ?? new ZLinkCodecRegistryBuilder()
+            );
 
-        if (bodyType == typeof(ReadOnlyMemory<byte>)) return bodyMessage.AsReadOnlyMemory();
+        if (bodyType == typeof(ReadOnlyMemory<byte>))
+            return bodyMessage.AsReadOnlyMemory();
 
         if (bodyMessage.Size == 0)
-            return bodyType.IsValueType
-                ? Activator.CreateInstance(bodyType)
-                : null;
+            return bodyType.IsValueType ? Activator.CreateInstance(bodyType) : null;
 
         if (customSerializer is not null)
         {
@@ -576,29 +690,31 @@ internal static class ZLinkEnvelopeCodec
 
             return customSerializer.Deserialize(
                 ZLinkEncodedPayload.FromOwned(bodyMessage.AsReadOnlyMemory()),
-                bodyType);
+                bodyType
+            );
         }
 
-        return ZLinkFrameworkJsonPayloadCodec.Deserialize(
-            bodyMessage.AsReadOnlySpan(),
-            bodyType);
+        return ZLinkFrameworkJsonPayloadCodec.Deserialize(bodyMessage.AsReadOnlySpan(), bodyType);
     }
 
     internal static object? DecodeBody(
         ZLinkMultipartPayloadView parts,
         Type bodyType,
         string contentType,
-        ZLinkCodecRegistryBuilder? codecs)
+        ZLinkCodecRegistryBuilder? codecs
+    )
     {
         EnsurePart(parts, 1, "body");
         var body = parts.GetSpan(1);
         IZLinkMessageSerializer? customSerializer = null;
-        if (!contentType.Equals(JsonContentType, StringComparison.OrdinalIgnoreCase)
-            && (codecs is null
-                || !codecs.TryGetSerializer(contentType, out customSerializer)))
+        if (
+            !contentType.Equals(JsonContentType, StringComparison.OrdinalIgnoreCase)
+            && (codecs is null || !codecs.TryGetSerializer(contentType, out customSerializer))
+        )
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ProtocolError,
-                $"No payload serializer is registered for received content type '{contentType}'.");
+                $"No payload serializer is registered for received content type '{contentType}'."
+            );
 
         if (bodyType == typeof(Message))
             return Message.From(body);
@@ -606,20 +722,20 @@ internal static class ZLinkEnvelopeCodec
             return ZLinkMessage.FromEncoded(
                 contentType,
                 parts.GetMemory(1),
-                codecs ?? new ZLinkCodecRegistryBuilder());
+                codecs ?? new ZLinkCodecRegistryBuilder()
+            );
         if (bodyType == typeof(ReadOnlyMemory<byte>))
             return parts.GetMemory(1);
         if (body.IsEmpty)
-            return bodyType.IsValueType
-                ? Activator.CreateInstance(bodyType)
-                : null;
+            return bodyType.IsValueType ? Activator.CreateInstance(bodyType) : null;
         if (customSerializer is not null)
         {
             if (customSerializer is IZLinkMessageSpanDeserializer spanDeserializer)
                 return spanDeserializer.Deserialize(body, bodyType);
             return customSerializer.Deserialize(
                 ZLinkEncodedPayload.FromOwned(parts.GetMemory(1)),
-                bodyType);
+                bodyType
+            );
         }
         return ZLinkFrameworkJsonPayloadCodec.Deserialize(body, bodyType);
     }
@@ -656,19 +772,25 @@ internal static class ZLinkEnvelopeCodec
         ZLinkCodecRegistryBuilder? codecs,
         out string contentType,
         out IZLinkMessageSerializer? serializer,
-        out bool resolutionCompleted)
+        out bool resolutionCompleted
+    )
     {
         contentType = JsonContentType;
         serializer = null;
         resolutionCompleted = false;
-        if (body is null || bodyType is null) return false;
-        if (bodyType == typeof(Message) || body is Message) return false;
-        if (bodyType == typeof(ZLinkMessage) || body is ZLinkMessage) return false;
+        if (body is null || bodyType is null)
+            return false;
+        if (bodyType == typeof(Message) || body is Message)
+            return false;
+        if (bodyType == typeof(ZLinkMessage) || body is ZLinkMessage)
+            return false;
 
         resolutionCompleted = true;
 
-        if (codecs is not null
-            && codecs.TryResolveSerializer(bodyType, out contentType, out serializer))
+        if (
+            codecs is not null
+            && codecs.TryResolveSerializer(bodyType, out contentType, out serializer)
+        )
             return true;
 
         if (codecs?.SingleCustomSerializer() is { } custom)
@@ -684,46 +806,45 @@ internal static class ZLinkEnvelopeCodec
 
     private static void EnsurePart(IReadOnlyList<Message> parts, int index, string name)
     {
-        if (parts.Count <= index) throw new InvalidOperationException($"ZLink envelope {name} part is missing.");
+        if (parts.Count <= index)
+            throw new InvalidOperationException($"ZLink envelope {name} part is missing.");
     }
 
-    private static void EnsurePart(
-        ZLinkMultipartPayloadView parts,
-        int index,
-        string name)
+    private static void EnsurePart(ZLinkMultipartPayloadView parts, int index, string name)
     {
         if (parts.Count <= index)
             throw new ZLinkEnvelopeProtocolException(
                 InvalidProtocolHeader(),
-                $"ZLink envelope {name} part is missing.");
+                $"ZLink envelope {name} part is missing."
+            );
     }
 
     private static bool IsSimpleHeader(ZLinkEnvelopeHeader header)
     {
         return header.CorrelationId is null
-               && header.Deadline is null
-               && header.Topic is null
-               && header.ErrorCode is null
-               && header.ErrorMessage is null
-               && header.Source is null
-               && header.Metadata is not { Count: > 0 }
-               && header.FlowId is null
-               && header.FlowOrigin is null;
+            && header.Deadline is null
+            && header.Topic is null
+            && header.ErrorCode is null
+            && header.ErrorMessage is null
+            && header.Source is null
+            && header.Metadata is not { Count: > 0 }
+            && header.FlowId is null
+            && header.FlowOrigin is null;
     }
 
-    private static void ValidateProtocolHeader(
-        ZLinkEnvelopeHeader header,
-        bool validateFlow = true)
+    private static void ValidateProtocolHeader(ZLinkEnvelopeHeader header, bool validateFlow = true)
     {
         if (!Enum.IsDefined(header.Kind))
             throw new ZLinkEnvelopeProtocolException(
                 header,
-                "ZLink envelope message kind is invalid.");
+                "ZLink envelope message kind is invalid."
+            );
 
         if (header.FormatMarker != ZlinkStreamFlowId.FormatMarker)
             throw new ZLinkEnvelopeProtocolException(
                 header,
-                "ZLink envelope format marker is invalid.");
+                "ZLink envelope format marker is invalid."
+            );
 
         if (validateFlow)
         {
@@ -732,47 +853,57 @@ internal static class ZLinkEnvelopeCodec
             if (hasFlowId != hasFlowOrigin)
                 throw new ZLinkEnvelopeProtocolException(
                     header,
-                    "ZLink envelope flow id and origin must be present together.");
+                    "ZLink envelope flow id and origin must be present together."
+                );
 
             if (hasFlowId && !ZlinkStreamFlowId.IsValid(header.FlowId))
                 throw new ZLinkEnvelopeProtocolException(
                     header,
-                    "ZLink envelope flow id must be UUIDv7.");
+                    "ZLink envelope flow id must be UUIDv7."
+                );
 
             if (header.FlowOrigin is { } origin && !Enum.IsDefined(origin))
                 throw new ZLinkEnvelopeProtocolException(
                     header,
-                    "ZLink envelope flow origin is invalid.");
+                    "ZLink envelope flow origin is invalid."
+                );
         }
 
-        var isReplyCorrelated = header.Kind is ZLinkMessageKind.Request
-            or ZLinkMessageKind.Response
-            or ZLinkMessageKind.Error;
+        var isReplyCorrelated =
+            header.Kind
+            is ZLinkMessageKind.Request
+                or ZLinkMessageKind.Response
+                or ZLinkMessageKind.Error;
         if (isReplyCorrelated && string.IsNullOrWhiteSpace(header.CorrelationId))
             throw new ZLinkEnvelopeProtocolException(
                 header,
-                $"ZLink {header.Kind} envelope requires a correlation id.");
+                $"ZLink {header.Kind} envelope requires a correlation id."
+            );
 
         if (header.Kind == ZLinkMessageKind.Error)
         {
             if (string.IsNullOrWhiteSpace(header.ErrorCode))
                 throw new ZLinkEnvelopeProtocolException(
                     header,
-                    "ZLink Error envelope requires a non-empty error code.");
+                    "ZLink Error envelope requires a non-empty error code."
+                );
         }
         else if (header.ErrorCode is not null || header.ErrorMessage is not null)
         {
             throw new ZLinkEnvelopeProtocolException(
                 header,
-                "ZLink envelope error fields are valid only for Error messages.");
+                "ZLink envelope error fields are valid only for Error messages."
+            );
         }
     }
 
     private static ZLinkEnvelopeHeader ValidateDecodedFlow(
         ZLinkEnvelopeHeader header,
-        bool validateFlow)
+        bool validateFlow
+    )
     {
-        if (validateFlow) return header;
+        if (validateFlow)
+            return header;
 
         // Spec 27 section 4: Off ingress does not retain observation-only
         // fields where a later forwarder or reply encoder could copy them.
@@ -781,24 +912,29 @@ internal static class ZLinkEnvelopeCodec
         return header;
     }
 
-    private static ZLinkEnvelopeHeader InvalidProtocolHeader() => new(
-        ZLinkMessageKind.Command,
-        string.Empty,
-        string.Empty,
-        DefaultContentType,
-        null,
-        null,
-        null,
-        null,
-        null);
+    private static ZLinkEnvelopeHeader InvalidProtocolHeader() =>
+        new(
+            ZLinkMessageKind.Command,
+            string.Empty,
+            string.Empty,
+            DefaultContentType,
+            null,
+            null,
+            null,
+            null,
+            null
+        );
 
     public static (string? FlowId, ZLinkFlowOrigin? FlowOrigin) ValidFlow(
-        ZLinkEnvelopeHeader header)
+        ZLinkEnvelopeHeader header
+    )
     {
-        if (header.FlowId is null
+        if (
+            header.FlowId is null
             || header.FlowOrigin is not { } origin
             || !ZlinkStreamFlowId.IsValid(header.FlowId)
-            || !Enum.IsDefined(origin))
+            || !Enum.IsDefined(origin)
+        )
             return (null, null);
 
         return (header.FlowId, origin);
@@ -817,22 +953,26 @@ internal static class ZLinkEnvelopeCodec
         if (string.IsNullOrWhiteSpace(header.ChannelName))
             throw new ZLinkEnvelopeProtocolException(
                 header,
-                "ZLink envelope channel name is missing.");
+                "ZLink envelope channel name is missing."
+            );
         if (string.IsNullOrWhiteSpace(header.MessageName))
             throw new ZLinkEnvelopeProtocolException(
                 header,
-                "ZLink envelope message name is missing.");
+                "ZLink envelope message name is missing."
+            );
         if (string.IsNullOrWhiteSpace(header.ContentType))
             throw new ZLinkEnvelopeProtocolException(
                 header,
-                "ZLink envelope content type is missing.");
+                "ZLink envelope content type is missing."
+            );
     }
 
     private readonly record struct SimpleHeaderKey(
         ZLinkMessageKind Kind,
         string ChannelName,
         string MessageName,
-        string ContentType);
+        string ContentType
+    );
 
     private static byte[] GetSimpleHeaderBytes(SimpleHeaderKey key) => GetHeaderPlan(key).Bytes;
 
@@ -848,40 +988,47 @@ internal static class ZLinkEnvelopeCodec
         // Keep the mutation closure on the miss path; a warm lookup does not
         // allocate an owner-turn callback merely to return immutable bytes.
         static HeaderPlan AddOnMiss(SimpleHeaderKey key) =>
-            AwaitStateLane(CacheLane.RunAsync(() =>
-            {
-                var cache = SimpleHeaderCache;
-                if (cache.TryGetValue(key, out var cached))
-                    return cached;
+            AwaitStateLane(
+                CacheLane.RunAsync(() =>
+                {
+                    var cache = SimpleHeaderCache;
+                    if (cache.TryGetValue(key, out var cached))
+                        return cached;
 
-                while (cache.Count >= MaximumSimpleHeaderCacheEntries
-                       && SimpleHeaderCacheOrder.TryDequeue(out var evicted))
-                    cache = cache.Remove(evicted);
+                    while (
+                        cache.Count >= MaximumSimpleHeaderCacheEntries
+                        && SimpleHeaderCacheOrder.TryDequeue(out var evicted)
+                    )
+                        cache = cache.Remove(evicted);
 
-                var bytes = EncodeSimpleHeaderBytes(key);
-                ReadOnlySpan<byte> dynamicField = ",\"correlationId\":"u8;
-                var dynamicOffset = bytes.AsSpan().IndexOf(dynamicField) + dynamicField.Length;
-                var encoded = new HeaderPlan(bytes, dynamicOffset);
-                SimpleHeaderCacheOrder.Enqueue(key);
-                Volatile.Write(ref SimpleHeaderCache, cache.Add(key, encoded));
-                return encoded;
-            }));
+                    var bytes = EncodeSimpleHeaderBytes(key);
+                    ReadOnlySpan<byte> dynamicField = ",\"correlationId\":"u8;
+                    var dynamicOffset = bytes.AsSpan().IndexOf(dynamicField) + dynamicField.Length;
+                    var encoded = new HeaderPlan(bytes, dynamicOffset);
+                    SimpleHeaderCacheOrder.Enqueue(key);
+                    Volatile.Write(ref SimpleHeaderCache, cache.Add(key, encoded));
+                    return encoded;
+                })
+            );
     }
 
     private static byte[] EncodeSimpleHeaderBytes(SimpleHeaderKey key) =>
-        EncodeProtocolJsonBytes(new ZLinkEnvelopeHeader(
-            key.Kind,
-            key.ChannelName,
-            key.MessageName,
-            key.ContentType,
-            null,
-            null,
-            null,
-            null,
-            null)
-        {
-            FormatMarker = ZlinkStreamFlowId.FormatMarker
-        });
+        EncodeProtocolJsonBytes(
+            new ZLinkEnvelopeHeader(
+                key.Kind,
+                key.ChannelName,
+                key.MessageName,
+                key.ContentType,
+                null,
+                null,
+                null,
+                null,
+                null
+            )
+            {
+                FormatMarker = ZlinkStreamFlowId.FormatMarker,
+            }
+        );
 
     private static Message EncodePlannedHeader(ZLinkEnvelopeHeader header, HeaderPlan plan)
     {
@@ -901,7 +1048,10 @@ internal static class ZLinkEnvelopeCodec
     }
 
     private static int WritePlannedHeader(
-        Span<byte> destination, ZLinkEnvelopeHeader header, HeaderPlan plan)
+        Span<byte> destination,
+        ZLinkEnvelopeHeader header,
+        HeaderPlan plan
+    )
     {
         var written = 0;
         WriteHeaderToken(plan.Bytes.AsSpan(0, plan.DynamicOffset), destination, ref written);
@@ -935,7 +1085,8 @@ internal static class ZLinkEnvelopeCodec
             var first = true;
             foreach (var entry in metadata)
             {
-                if (!first) WriteHeaderToken(","u8, destination, ref written);
+                if (!first)
+                    WriteHeaderToken(","u8, destination, ref written);
                 first = false;
                 WriteHeaderString(entry.Key, destination, ref written);
                 WriteHeaderToken(":"u8, destination, ref written);
@@ -948,9 +1099,13 @@ internal static class ZLinkEnvelopeCodec
     }
 
     private static void WriteHeaderToken(
-        ReadOnlySpan<byte> token, Span<byte> destination, ref int written)
+        ReadOnlySpan<byte> token,
+        Span<byte> destination,
+        ref int written
+    )
     {
-        if (!destination.IsEmpty) token.CopyTo(destination[written..]);
+        if (!destination.IsEmpty)
+            token.CopyTo(destination[written..]);
         written = checked(written + token.Length);
     }
 
@@ -970,15 +1125,20 @@ internal static class ZLinkEnvelopeCodec
             if (JavaScriptEncoder.Default.WillEncode(rune.Value))
             {
                 var scalarLength = rune.EncodeToUtf16(scalar);
-                JavaScriptEncoder.Default.Encode(scalar[..scalarLength], escaped,
-                    out _, out var escapedLength);
+                JavaScriptEncoder.Default.Encode(
+                    scalar[..scalarLength],
+                    escaped,
+                    out _,
+                    out var escapedLength
+                );
                 if (!destination.IsEmpty)
                     Encoding.UTF8.GetBytes(escaped[..escapedLength], destination[written..]);
                 written = checked(written + Encoding.UTF8.GetByteCount(escaped[..escapedLength]));
             }
             else
             {
-                if (!destination.IsEmpty) rune.EncodeToUtf8(destination[written..]);
+                if (!destination.IsEmpty)
+                    rune.EncodeToUtf8(destination[written..]);
                 written = checked(written + rune.Utf8SequenceLength);
             }
         }
@@ -987,15 +1147,18 @@ internal static class ZLinkEnvelopeCodec
 
     private static ReadOnlySpan<byte> FormatHeaderDeadline(DateTimeOffset? value, Span<byte> buffer)
     {
-        if (value is null) return "null"u8;
+        if (value is null)
+            return "null"u8;
 
         buffer[0] = (byte)'"';
         Utf8Formatter.TryFormat(value.Value, buffer[1..], out var length, new StandardFormat('O'));
         // System.Text.Json uses the round-trip timestamp with trailing zero
         // fractions removed, while retaining the DateTimeOffset's UTC offset.
         var end = 27;
-        while (buffer[end] == (byte)'0') end--;
-        if (buffer[end] == (byte)'.') end--;
+        while (buffer[end] == (byte)'0')
+            end--;
+        if (buffer[end] == (byte)'.')
+            end--;
         buffer.Slice(28, length - 27).CopyTo(buffer[(end + 1)..]);
         length = end + 1 + length - 27;
         buffer[length] = (byte)'"';
@@ -1007,16 +1170,19 @@ internal static class ZLinkEnvelopeCodec
     private static void AddDecodedHeaderCacheEntry(
         ReadOnlySpan<byte> bytes,
         ulong hash,
-        ZLinkEnvelopeHeader header)
+        ZLinkEnvelopeHeader header
+    )
     {
-        if (bytes.Length > 1024) return;
+        if (bytes.Length > 1024)
+            return;
         var copy = bytes.ToArray();
         AddDecodedHeaderCacheEntry(copy, hash, header);
     }
 
     private static ZLinkEnvelopeHeader? FindDecodedHeaderCacheEntry(
         ReadOnlySpan<byte> bytes,
-        ulong hash)
+        ulong hash
+    )
     {
         foreach (var entry in Volatile.Read(ref DecodedHeaderCache))
         {
@@ -1029,38 +1195,41 @@ internal static class ZLinkEnvelopeCodec
     private static void AddDecodedHeaderCacheEntry(
         byte[] copy,
         ulong hash,
-        ZLinkEnvelopeHeader header) =>
-        AwaitStateLane(CacheLane.RunAsync(() =>
-        {
-            var cache = DecodedHeaderCache;
-            foreach (var entry in cache)
+        ZLinkEnvelopeHeader header
+    ) =>
+        AwaitStateLane(
+            CacheLane.RunAsync(() =>
             {
-                if (entry.Hash == hash && entry.Bytes.AsSpan().SequenceEqual(copy))
-                    return;
-            }
+                var cache = DecodedHeaderCache;
+                foreach (var entry in cache)
+                {
+                    if (entry.Hash == hash && entry.Bytes.AsSpan().SequenceEqual(copy))
+                        return;
+                }
 
-            var next = cache.Length < 64
-                ? new HeaderCacheEntry[cache.Length + 1]
-                : new HeaderCacheEntry[cache.Length];
-            if (cache.Length == next.Length)
-            {
-                Array.Copy(cache, 1, next, 0, next.Length - 1);
-                next[^1] = new HeaderCacheEntry(copy, hash, header);
-            }
-            else
-            {
-                Array.Copy(cache, next, cache.Length);
-                next[^1] = new HeaderCacheEntry(copy, hash, header);
-            }
+                var next =
+                    cache.Length < 64
+                        ? new HeaderCacheEntry[cache.Length + 1]
+                        : new HeaderCacheEntry[cache.Length];
+                if (cache.Length == next.Length)
+                {
+                    Array.Copy(cache, 1, next, 0, next.Length - 1);
+                    next[^1] = new HeaderCacheEntry(copy, hash, header);
+                }
+                else
+                {
+                    Array.Copy(cache, next, cache.Length);
+                    next[^1] = new HeaderCacheEntry(copy, hash, header);
+                }
 
-            Volatile.Write(ref DecodedHeaderCache, next);
-        }));
+                Volatile.Write(ref DecodedHeaderCache, next);
+            })
+        );
 
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();
 
-    private static void AwaitStateLane(ValueTask operation) =>
-        operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 
     private static ulong HashBytes(ReadOnlySpan<byte> bytes)
     {
@@ -1079,5 +1248,6 @@ internal static class ZLinkEnvelopeCodec
     private readonly record struct HeaderCacheEntry(
         byte[] Bytes,
         ulong Hash,
-        ZLinkEnvelopeHeader Header);
+        ZLinkEnvelopeHeader Header
+    );
 }

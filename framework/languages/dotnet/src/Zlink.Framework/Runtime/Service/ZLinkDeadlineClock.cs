@@ -20,25 +20,24 @@ internal sealed class ZLinkDeadlineClock
 
     internal long GetUnixTimeMilliseconds()
     {
-        return AwaitStateLane(_lane.RunAsync(() =>
-        {
-            var wallUtc = _timeProvider.GetUtcNow();
-            var timestamp = _timeProvider.GetTimestamp();
-            var elapsed = _timeProvider.GetElapsedTime(
-                _observedTimestamp,
-                timestamp);
-            if (elapsed < TimeSpan.Zero)
-                elapsed = TimeSpan.Zero;
+        return AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                var wallUtc = _timeProvider.GetUtcNow();
+                var timestamp = _timeProvider.GetTimestamp();
+                var elapsed = _timeProvider.GetElapsedTime(_observedTimestamp, timestamp);
+                if (elapsed < TimeSpan.Zero)
+                    elapsed = TimeSpan.Zero;
 
-            var monotonicUtc = _observedUtc.Add(elapsed);
-            _observedUtc = wallUtc > monotonicUtc ? wallUtc : monotonicUtc;
-            _observedTimestamp = timestamp;
-            return _observedUtc.ToUnixTimeMilliseconds();
-        }));
+                var monotonicUtc = _observedUtc.Add(elapsed);
+                _observedUtc = wallUtc > monotonicUtc ? wallUtc : monotonicUtc;
+                _observedTimestamp = timestamp;
+                return _observedUtc.ToUnixTimeMilliseconds();
+            })
+        );
     }
 
-    internal TimeSpan Elapsed =>
-        _timeProvider.GetElapsedTime(0, _timeProvider.GetTimestamp());
+    internal TimeSpan Elapsed => _timeProvider.GetElapsedTime(0, _timeProvider.GetTimestamp());
 
     internal TimeSpan FromUnixTimeMilliseconds(long deadline) =>
         Elapsed + TimeSpan.FromMilliseconds(deadline - GetUnixTimeMilliseconds());

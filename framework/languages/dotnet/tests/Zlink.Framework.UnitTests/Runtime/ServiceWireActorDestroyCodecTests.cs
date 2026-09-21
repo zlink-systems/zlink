@@ -17,7 +17,8 @@ public sealed class ServiceWireActorDestroyCodecTests
             targetNodeRid,
             19,
             23,
-            29);
+            29
+        );
         var generated = ServiceWirePilotCodec.EncodeActorDestroy27(
             new ServiceWirePilotCodec.ActorDestroy27(
                 operation.Correlation,
@@ -27,13 +28,22 @@ public sealed class ServiceWireActorDestroyCodecTests
                     operation.TargetNodeRid.ToBytes().ToArray(),
                     operation.TargetNodeGeneration,
                     operation.AuthorityOwnerGeneration,
-                    operation.OwnerLeaseGeneration)));
+                    operation.OwnerLeaseGeneration
+                )
+            )
+        );
 
         var encoded = ZLinkServiceWireCodec.EncodeActorDestroy(operation);
 
         Assert.Equal(generated, encoded);
-        Assert.True(ZLinkServiceWireCodec.TryDecodeActorDestroy(
-            generated, "mesh", out var decoded, out var error));
+        Assert.True(
+            ZLinkServiceWireCodec.TryDecodeActorDestroy(
+                generated,
+                "mesh",
+                out var decoded,
+                out var error
+            )
+        );
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
         Assert.Equal(operation, decoded.Operation);
         Assert.Equal(29UL, decoded.Operation.OwnerLeaseGeneration);
@@ -50,30 +60,57 @@ public sealed class ServiceWireActorDestroyCodecTests
     [InlineData("trailing-body", "TrailingByte")]
     public void DecodedPrefix_PreservesActorDestroySchemaValidation(
         string vector,
-        string expectedError)
+        string expectedError
+    )
     {
         // Canonical command 27: correlation 42, actor-27 generation 17,
         // RID 01:02:03, node/authority/lease generations 19/23/29.
         var bytes = Convert.FromHexString(
             "5A4D011B00000000000000002A086163746F722D3237"
-            + "0000000000000011030102030000000000000013"
-            + "0000000000000017000000000000001D");
+                + "0000000000000011030102030000000000000013"
+                + "0000000000000017000000000000001D"
+        );
         switch (vector)
         {
-            case "truncated-prefix": bytes = bytes[..4]; break;
-            case "magic": bytes[0] = 0; break;
-            case "version": bytes[2] = 2; break;
-            case "command": bytes[3] = 255; break;
-            case "flags": bytes[4] = 1; break;
-            case "truncated-body": bytes = bytes[..^1]; break;
-            case "trailing-body": bytes = [.. bytes, 0]; break;
+            case "truncated-prefix":
+                bytes = bytes[..4];
+                break;
+            case "magic":
+                bytes[0] = 0;
+                break;
+            case "version":
+                bytes[2] = 2;
+                break;
+            case "command":
+                bytes[3] = 255;
+                break;
+            case "flags":
+                bytes[4] = 1;
+                break;
+            case "truncated-body":
+                bytes = bytes[..^1];
+                break;
+            case "trailing-body":
+                bytes = [.. bytes, 0];
+                break;
         }
 
         var decoded = default(ZLinkServiceWireCodec.ActorDestroyOperationRecord);
-        var accepted = ZLinkServiceWireCodec.TryDecodePrefix(
-            bytes, out var command, out var flags, out var error)
+        var accepted =
+            ZLinkServiceWireCodec.TryDecodePrefix(
+                bytes,
+                out var command,
+                out var flags,
+                out var error
+            )
             && ZLinkServiceWireCodec.TryDecodeActorDestroy(
-                bytes, command, flags, "mesh", out decoded, out error);
+                bytes,
+                command,
+                flags,
+                "mesh",
+                out decoded,
+                out error
+            );
 
         Assert.Equal(expectedError, error.ToString());
         Assert.Equal(vector == "valid", accepted);

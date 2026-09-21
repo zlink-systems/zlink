@@ -6,12 +6,8 @@ import {
   ServiceMaintenanceRuntime,
   classifyRelocationRecovery
 } from '../../packages/framework/src/runtime/foundation/service-maintenance-runtime';
-import {
-  ServiceMailbox
-} from '../../packages/framework/src/runtime/foundation/service-mailbox';
-import {
-  ZLinkInMemoryAuthorityStore
-} from '../../packages/framework/src/runtime/locations/in-memory-authority-store';
+import { ServiceMailbox } from '../../packages/framework/src/runtime/foundation/service-mailbox';
+import { ZLinkInMemoryAuthorityStore } from '../../packages/framework/src/runtime/locations/in-memory-authority-store';
 import type {
   ZLinkAuthorityKey,
   ZLinkAuthoritySnapshot,
@@ -31,12 +27,8 @@ import {
   ServiceRelocationObjectRestoreOwner,
   type ServiceRelocationCaptureUnit
 } from '../../packages/framework/src/runtime/foundation/service-relocation-object-owner';
-import {
-  ZLinkManagedTimer
-} from '../../packages/framework/src/runtime/spots/spot-timer';
-import {
-  ZLinkStatefulAuthorityRouteRuntime
-} from '../../packages/framework/src/runtime/host/stateful-authority-route-runtime';
+import { ZLinkManagedTimer } from '../../packages/framework/src/runtime/spots/spot-timer';
+import { ZLinkStatefulAuthorityRouteRuntime } from '../../packages/framework/src/runtime/host/stateful-authority-route-runtime';
 import { encodeAuthorityKey } from '../../packages/framework/src/runtime/locations/authority-key-codec';
 import { encodeActorAuthorityIdentity } from '../../packages/framework/src/runtime/actors';
 import {
@@ -73,40 +65,37 @@ import {
 } from '../../packages/framework/src/runtime/routing-id';
 
 test('stateful service wire separates opaque routing IDs from canonical UTF-8 text', () => {
-  const fixture = JSON.parse(readFileSync(
-    '../../runtime/protocol/golden/session-relocation-barrier-v1.json',
-    'utf8'
-  )) as { readonly canonical: readonly { readonly command: number; readonly hex: string }[] };
+  const fixture = JSON.parse(
+    readFileSync('../../runtime/protocol/golden/session-relocation-barrier-v1.json', 'utf8')
+  ) as { readonly canonical: readonly { readonly command: number; readonly hex: string }[] };
   const sealBytes = Buffer.from(
-    fixture.canonical.find(entry => entry.command === 42)!.hex,
+    fixture.canonical.find((entry) => entry.command === 42)!.hex,
     'hex'
   );
   const seal = decodeSessionRelocationSeal(sealBytes);
   const opaqueNodeRid = decodeRoutingId('opaque-node', 'ff00fe');
-  const roundTrip = decodeSessionRelocationSeal(encodeSessionRelocationSeal({
-    ...seal,
-    coordinator: {
-      ...seal.coordinator,
-      nodeRid: opaqueNodeRid as never
-    }
-  }));
-  assert.equal(
-    encodeRoutingIdStorageHex(roundTrip.coordinator.nodeRid as never),
-    'ff00fe'
+  const roundTrip = decodeSessionRelocationSeal(
+    encodeSessionRelocationSeal({
+      ...seal,
+      coordinator: {
+        ...seal.coordinator,
+        nodeRid: opaqueNodeRid as never
+      }
+    })
   );
+  assert.equal(encodeRoutingIdStorageHex(roundTrip.coordinator.nodeRid as never), 'ff00fe');
 
   const ownerId = 'canonical-utf8-owner';
-  const malformed = Buffer.from(encodeSessionRelocationSeal({
-    ...seal,
-    coordinator: { ...seal.coordinator, ownerId }
-  }));
+  const malformed = Buffer.from(
+    encodeSessionRelocationSeal({
+      ...seal,
+      coordinator: { ...seal.coordinator, ownerId }
+    })
+  );
   const ownerOffset = malformed.indexOf(Buffer.from(ownerId, 'utf8'));
   assert.ok(ownerOffset > 0);
   malformed[ownerOffset] = 0xff;
-  assert.throws(
-    () => decodeSessionRelocationSeal(malformed),
-    Error
-  );
+  assert.throws(() => decodeSessionRelocationSeal(malformed), Error);
 });
 
 test('ApplicationSignaled relocation consumes one deferred boundary and reports exact completion', async () => {
@@ -136,9 +125,7 @@ test('ApplicationSignaled relocation consumes one deferred boundary and reports 
   await serial.execute(() => activation.relocationReadyCall().defer());
   assert.equal(await boundary, true);
   assert.deepEqual(completions, []);
-  await activation.completeConsumedRelocationBoundary(
-    ZLinkSpotRelocationReadyOutcome.Continued
-  );
+  await activation.completeConsumedRelocationBoundary(ZLinkSpotRelocationReadyOutcome.Continued);
   assert.deepEqual(completions, [ZLinkSpotRelocationReadyOutcome.Continued]);
   await activation.notifyRelocatedBoundary();
   assert.deepEqual(completions, [
@@ -148,8 +135,8 @@ test('ApplicationSignaled relocation consumes one deferred boundary and reports 
   assert.throws(
     () => activation.relocationReadyCall().defer(),
     (error: unknown) =>
-      error instanceof ZLinkFrameworkException
-      && error.kind === ZLinkFrameworkErrorKind.InvalidOperation
+      error instanceof ZLinkFrameworkException &&
+      error.kind === ZLinkFrameworkErrorKind.InvalidOperation
   );
 
   const duplicateBoundary = activation.waitForRelocationBoundary();
@@ -159,20 +146,18 @@ test('ApplicationSignaled relocation consumes one deferred boundary and reports 
     assert.throws(
       () => activation.ensureContextOperationAllowed(),
       (error: unknown) =>
-        error instanceof ZLinkFrameworkException
-        && error.kind === ZLinkFrameworkErrorKind.InvalidOperation
+        error instanceof ZLinkFrameworkException &&
+        error.kind === ZLinkFrameworkErrorKind.InvalidOperation
     );
     assert.throws(
       () => call.defer(),
       (error: unknown) =>
-        error instanceof ZLinkFrameworkException
-        && error.kind === ZLinkFrameworkErrorKind.InvalidOperation
+        error instanceof ZLinkFrameworkException &&
+        error.kind === ZLinkFrameworkErrorKind.InvalidOperation
     );
   });
   assert.equal(await duplicateBoundary, true);
-  await activation.completeConsumedRelocationBoundary(
-    ZLinkSpotRelocationReadyOutcome.Continued
-  );
+  await activation.completeConsumedRelocationBoundary(ZLinkSpotRelocationReadyOutcome.Continued);
 
   const anyTurn = new ZLinkSpotActivation({
     meshName: 'mesh-a',
@@ -189,10 +174,7 @@ test('ApplicationSignaled relocation consumes one deferred boundary and reports 
     actorHandlers: {} as never,
     handlers: {} as never
   });
-  assert.throws(
-    () => anyTurn.relocationReadyCall().defer(),
-    /requires ApplicationSignaled/
-  );
+  assert.throws(() => anyTurn.relocationReadyCall().defer(), /requires ApplicationSignaled/);
 });
 
 test('ApplicationSignaled defer without active relocation completes before the next application turn', async () => {
@@ -208,9 +190,7 @@ test('ApplicationSignaled defer without active relocation completes before the n
     },
     spotType: class {} as never,
     spot: {
-      async onRelocationReadyCompleted(
-        completion: { outcome: ZLinkSpotRelocationReadyOutcome }
-      ) {
+      async onRelocationReadyCompleted(completion: { outcome: ZLinkSpotRelocationReadyOutcome }) {
         events.push(`completion:${completion.outcome}`);
       }
     } as never,
@@ -228,8 +208,8 @@ test('ApplicationSignaled defer without active relocation completes before the n
     assert.throws(
       () => call.defer(),
       (error: unknown) =>
-        error instanceof ZLinkFrameworkException
-        && error.kind === ZLinkFrameworkErrorKind.InvalidOperation
+        error instanceof ZLinkFrameworkException &&
+        error.kind === ZLinkFrameworkErrorKind.InvalidOperation
     );
     nextTurn = serial.post(() => {
       events.push('next-application-turn');
@@ -278,7 +258,10 @@ function frozenBody16(value: Uint8Array): Buffer {
 
 function frozenPayload(): Buffer {
   const body = Buffer.concat([
-    frozenText8('Packet'), frozenText8('application/json'), frozenU32(2), Buffer.of(1, 2)
+    frozenText8('Packet'),
+    frozenText8('application/json'),
+    frozenU32(2),
+    Buffer.of(1, 2)
   ]);
   return Buffer.concat([Buffer.of(1), frozenU32(body.byteLength), body]);
 }
@@ -293,20 +276,26 @@ function frozenSpotRef(spotId = 'spot'): Buffer {
 
 function frozenActorRoute(): Buffer {
   return Buffer.concat([
-    frozenActorRef(), frozenText8('node-t'), frozenU64(5n), frozenU64(6n), frozenU64(7n)
+    frozenActorRef(),
+    frozenText8('node-t'),
+    frozenU64(5n),
+    frozenU64(6n),
+    frozenU64(7n)
   ]);
 }
 
 function frozenSpotRoute(): Buffer {
   return Buffer.concat([
-    frozenSpotRef(), frozenText8('node-t'), frozenU64(5n), frozenU64(6n), frozenU64(7n)
+    frozenSpotRef(),
+    frozenText8('node-t'),
+    frozenU64(5n),
+    frozenU64(6n),
+    frozenU64(7n)
   ]);
 }
 
 function frozenSource(kind: number): Buffer {
-  const fields = [
-    frozenText8('node-s'), frozenU64(8n), frozenText8('owner-s'), frozenU64(9n)
-  ];
+  const fields = [frozenText8('node-s'), frozenU64(8n), frozenText8('owner-s'), frozenU64(9n)];
   if (kind === 2) fields.push(frozenText8('spot-s'));
   else if (kind === 3 || kind === 4) {
     fields.push(frozenActorRef('actor-s'));
@@ -331,9 +320,14 @@ function frozenRecord(
     : Buffer.of(0);
   const reply = replyRouteId === undefined ? Buffer.alloc(0) : frozenU64(replyRouteId);
   return Buffer.concat([
-    Buffer.of(recordKind), frozenSource(sourceKind), metadataFrame,
-    frozenU64(0n), frozenU64(operationLow), frozenU32(operationKind),
-    frozenBody16(reply), body
+    Buffer.of(recordKind),
+    frozenSource(sourceKind),
+    metadataFrame,
+    frozenU64(0n),
+    frozenU64(operationLow),
+    frozenU32(operationKind),
+    frozenBody16(reply),
+    body
   ]);
 }
 
@@ -344,8 +338,13 @@ test('canonical frozen-record closed union validates all 14 bodies and bound-ses
   const actorBody = Buffer.concat([frozenActorRoute(), payload]);
   const snapshot = Buffer.concat([frozenActorRef(), frozenSpotRef()]);
   const instanceRoute = Buffer.concat([
-    frozenText8('node-t'), frozenU64(5n), frozenText8('spot-1'), frozenText8('mesh'),
-    frozenText8('instance-type'), frozenText8('descriptor-v1'), frozenU64(1000n)
+    frozenText8('node-t'),
+    frozenU64(5n),
+    frozenText8('spot-1'),
+    frozenText8('mesh'),
+    frozenText8('instance-type'),
+    frozenText8('descriptor-v1'),
+    frozenU64(1000n)
   ]);
   const records = [
     frozenRecord(1, 1, 0, 0n, undefined, payload, true),
@@ -354,24 +353,65 @@ test('canonical frozen-record closed union validates all 14 bodies and bound-ses
     frozenRecord(4, 3, 2, 2n, 13n, channelBody, true),
     frozenRecord(5, 1, 0, 3n, undefined, spotBody, true),
     frozenRecord(6, 4, 3, 4n, 14n, spotBody, true),
-    frozenRecord(7, 2, 0, 0n, undefined,
-      Buffer.concat([frozenText8('channel'), frozenText8('topic'), payload]), true),
-    frozenRecord(8, 1, 7, 5n, undefined,
-      Buffer.concat([Buffer.of(1), frozenBody16(snapshot)])),
+    frozenRecord(
+      7,
+      2,
+      0,
+      0n,
+      undefined,
+      Buffer.concat([frozenText8('channel'), frozenText8('topic'), payload]),
+      true
+    ),
+    frozenRecord(8, 1, 7, 5n, undefined, Buffer.concat([Buffer.of(1), frozenBody16(snapshot)])),
     frozenRecord(9, 3, 0, 6n, undefined, actorBody, true),
     frozenRecord(10, 4, 4, 7n, 15n, actorBody, true),
-    frozenRecord(11, 3, 4, 8n, 16n,
-      Buffer.concat([frozenU32(0), frozenU32(0), Buffer.of(1), payload])),
-    frozenRecord(12, 1, 0, 0n, undefined,
-      Buffer.concat([Buffer.of(1), frozenBody16(frozenText8('node-t'))])),
-    frozenRecord(13, 1, 0, 0n, undefined, Buffer.concat([
-      Buffer.of(4, 1), frozenU64(4n), frozenU64(5n), Buffer.of(2),
-      frozenBody16(Buffer.concat([frozenText8('spot-1'), frozenU64(9n), frozenU64(10n)])),
-      frozenU32(0), frozenU32(0)
-    ])),
-    frozenRecord(14, 2, 12, 9n, 17n, Buffer.concat([
-      Buffer.of(2), frozenBody16(instanceRoute), frozenU64(8n), Buffer.of(2), payload
-    ]), true)
+    frozenRecord(
+      11,
+      3,
+      4,
+      8n,
+      16n,
+      Buffer.concat([frozenU32(0), frozenU32(0), Buffer.of(1), payload])
+    ),
+    frozenRecord(
+      12,
+      1,
+      0,
+      0n,
+      undefined,
+      Buffer.concat([Buffer.of(1), frozenBody16(frozenText8('node-t'))])
+    ),
+    frozenRecord(
+      13,
+      1,
+      0,
+      0n,
+      undefined,
+      Buffer.concat([
+        Buffer.of(4, 1),
+        frozenU64(4n),
+        frozenU64(5n),
+        Buffer.of(2),
+        frozenBody16(Buffer.concat([frozenText8('spot-1'), frozenU64(9n), frozenU64(10n)])),
+        frozenU32(0),
+        frozenU32(0)
+      ])
+    ),
+    frozenRecord(
+      14,
+      2,
+      12,
+      9n,
+      17n,
+      Buffer.concat([
+        Buffer.of(2),
+        frozenBody16(instanceRoute),
+        frozenU64(8n),
+        Buffer.of(2),
+        payload
+      ]),
+      true
+    )
   ];
   for (const [index, record] of records.entries()) {
     const decoded = decodeServiceWireFrozenRecord(record);
@@ -387,21 +427,24 @@ test('canonical frozen-record closed union validates all 14 bodies and bound-ses
   assert.equal(boundRequest.sourceSessionSequence, 11n);
   assert.equal(boundRequest.replyRouteId, 12n);
   assert.throws(() => encodeServiceWireFrozenRecord({ ...boundRequest, operationKind: 2 }));
-  assert.throws(() =>
-    decodeServiceWireFrozenRecord(frozenRecord(2, 4, 1, 0n, 12n, payload, true))
-  );
+  assert.throws(() => decodeServiceWireFrozenRecord(frozenRecord(2, 4, 1, 0n, 12n, payload, true)));
 
   const encodedData = encodeMaintenanceRelocationControl({
     kind: 'data',
     relocation: { high: 4n, low: 5n },
     targetAttemptGeneration: 6n,
     coordinator: {
-      ownerId: 'coordinator', leaseGeneration: 7n, nodeRid: 'node-a',
-      nodeGeneration: 11n, expectedAuthorityStoreVersion: 'store-3'
+      ownerId: 'coordinator',
+      leaseGeneration: 7n,
+      nodeRid: 'node-a',
+      nodeGeneration: 11n,
+      expectedAuthorityStoreVersion: 'store-3'
     },
     senderRole: 'source',
     object: {
-      kind: 'userSpot', spotId: 'spot-1', objectGeneration: 9n,
+      kind: 'userSpot',
+      spotId: 'spot-1',
+      objectGeneration: 9n,
       expectedAuthorityOwnerGeneration: 10n
     },
     frozenRecord: boundRequest
@@ -416,16 +459,15 @@ test('canonical frozen-record closed union validates all 14 bodies and bound-ses
 });
 
 test('canonical command 33 and 46 match the shared reply-relay byte fixture', () => {
-  const fixture = JSON.parse(readFileSync(
-    '../../runtime/protocol/golden/reply-relay-v1.json',
-    'utf8'
-  )) as { readonly canonical: readonly { readonly name: string; readonly hex: string }[] };
+  const fixture = JSON.parse(
+    readFileSync('../../runtime/protocol/golden/reply-relay-v1.json', 'utf8')
+  ) as { readonly canonical: readonly { readonly name: string; readonly hex: string }[] };
   const command33 = Buffer.from(
-    fixture.canonical.find(value => value.name === 'maintenanceReplyRelay')!.hex,
+    fixture.canonical.find((value) => value.name === 'maintenanceReplyRelay')!.hex,
     'hex'
   );
   const command46 = Buffer.from(
-    fixture.canonical.find(value => value.name === 'replyRelayAlreadyTerminalAck')!.hex,
+    fixture.canonical.find((value) => value.name === 'replyRelayAlreadyTerminalAck')!.hex,
     'hex'
   );
   const coordinator = {
@@ -448,19 +490,27 @@ test('canonical command 33 and 46 match the shared reply-relay byte fixture', ()
   };
   assert.deepEqual(encodeMaintenanceReplyRelay(relay), [command33]);
   assert.deepEqual(decodeMaintenanceReplyRelay([command33]), relay);
-  assert.throws(() => encodeMaintenanceReplyRelay({
-    ...relay,
-    terminalResult: 105,
-    failureCode: 1
-  }), /typed failure/);
-  assert.throws(() => encodeMaintenanceReplyRelay({
-    ...relay,
-    payload: {
-      packetName: 'Reply',
-      contentType: 'application/json',
-      bytes: Buffer.from('{}')
-    }
-  }), /failure payload/);
+  assert.throws(
+    () =>
+      encodeMaintenanceReplyRelay({
+        ...relay,
+        terminalResult: 105,
+        failureCode: 1
+      }),
+    /typed failure/
+  );
+  assert.throws(
+    () =>
+      encodeMaintenanceReplyRelay({
+        ...relay,
+        payload: {
+          packetName: 'Reply',
+          contentType: 'application/json',
+          bytes: Buffer.from('{}')
+        }
+      }),
+    /failure payload/
+  );
 
   const successfulPayloadRelay = {
     ...relay,
@@ -490,25 +540,28 @@ test('canonical command 33 and 46 match the shared reply-relay byte fixture', ()
   };
   assert.deepEqual(encodeMaintenanceReplyRelayAck(ack), command46);
   assert.deepEqual(decodeMaintenanceReplyRelayAck(command46), ack);
-  assert.throws(() => encodeMaintenanceReplyRelayAck({
-    ...ack,
-    replyRouteId: 0n
-  }), /reply route/);
+  assert.throws(
+    () =>
+      encodeMaintenanceReplyRelayAck({
+        ...ack,
+        replyRouteId: 0n
+      }),
+    /reply route/
+  );
   assert.throws(() => decodeMaintenanceReplyRelay([command33.subarray(0, -1)]));
   assert.throws(() => decodeMaintenanceReplyRelayAck(Buffer.concat([command46, Buffer.of(0)])));
 });
 
 test('batch-3 reply-relay hand/generated codecs are byte-equal and reject the same malformed bytes', () => {
-  const fixture = JSON.parse(readFileSync(
-    '../../runtime/protocol/golden/reply-relay-v1.json',
-    'utf8'
-  )) as { readonly canonical: readonly { readonly name: string; readonly hex: string }[] };
+  const fixture = JSON.parse(
+    readFileSync('../../runtime/protocol/golden/reply-relay-v1.json', 'utf8')
+  ) as { readonly canonical: readonly { readonly name: string; readonly hex: string }[] };
   const command33 = Buffer.from(
-    fixture.canonical.find(value => value.name === 'maintenanceReplyRelay')!.hex,
+    fixture.canonical.find((value) => value.name === 'maintenanceReplyRelay')!.hex,
     'hex'
   );
   const command46 = Buffer.from(
-    fixture.canonical.find(value => value.name === 'replyRelayAlreadyTerminalAck')!.hex,
+    fixture.canonical.find((value) => value.name === 'replyRelayAlreadyTerminalAck')!.hex,
     'hex'
   );
 
@@ -542,8 +595,10 @@ test('startup authority scan submits published Actor roots before admission', as
     meshNodes: new Map(),
     pollingIntervalMs: 60_000,
     pageSize: 32,
-    reportError: error => { throw error; },
-    recoverActor: async snapshot => {
+    reportError: (error) => {
+      throw error;
+    },
+    recoverActor: async (snapshot) => {
       recovered.push(snapshot);
     }
   });
@@ -566,12 +621,12 @@ test('Retire preflight precedes publication and starts every ready unit without 
       events.push('preflight');
       return true;
     },
-    publishState: state => events.push(state),
+    publishState: (state) => events.push(state),
     forceStop: () => {
       events.push('force');
     }
   });
-  runtime.observe(snapshot => states.push(snapshot.state));
+  runtime.observe((snapshot) => states.push(snapshot.state));
   for (let index = 0; index < 4; index++) {
     runtime.enqueue({
       id: `unit-${index}`,
@@ -579,7 +634,7 @@ test('Retire preflight precedes publication and starts every ready unit without 
       relocate: async () => {
         active++;
         peak = Math.max(peak, active);
-        await new Promise(resolve => setImmediate(resolve));
+        await new Promise((resolve) => setImmediate(resolve));
         active--;
       }
     });
@@ -588,12 +643,7 @@ test('Retire preflight precedes publication and starts every ready unit without 
   assert.equal(terminal.state, 'completed');
   assert.equal(peak, 4);
   assert.deepEqual(events.slice(0, 3), ['preflight', 'retiring', 'draining']);
-  assert.deepEqual(states.slice(0, 4), [
-    'serving',
-    'serving',
-    'serving',
-    'serving'
-  ]);
+  assert.deepEqual(states.slice(0, 4), ['serving', 'serving', 'serving', 'serving']);
   assert.ok(states.includes('preparing'));
   assert.ok(states.includes('retiring'));
   assert.ok(states.includes('draining'));
@@ -605,22 +655,31 @@ test('external maintenance abort cancels an admitted relocation unit', async () 
   let started!: () => void;
   let observedAbort = false;
   let forced = 0;
-  const startedPromise = new Promise<void>(resolve => { started = resolve; });
+  const startedPromise = new Promise<void>((resolve) => {
+    started = resolve;
+  });
   const runtime = new ServiceMaintenanceRuntime({
     preflight: async () => true,
     publishState: () => undefined,
-    forceStop: () => { forced++; }
+    forceStop: () => {
+      forced++;
+    }
   });
   runtime.enqueue({
     id: 'active',
     ready: () => true,
-    relocate: signal => new Promise<void>((_resolve, reject) => {
-      started();
-      signal.addEventListener('abort', () => {
-        observedAbort = true;
-        reject(signal.reason);
-      }, { once: true });
-    })
+    relocate: (signal) =>
+      new Promise<void>((_resolve, reject) => {
+        started();
+        signal.addEventListener(
+          'abort',
+          () => {
+            observedAbort = true;
+            reject(signal.reason);
+          },
+          { once: true }
+        );
+      })
   });
 
   const operation = runtime.start('retire', 2_000, undefined, abort.signal);
@@ -656,13 +715,14 @@ test('deadline after publication forces bounded terminal shutdown and observers 
       forced++;
     }
   });
-  runtime.observe(snapshot => states.push(snapshot.state));
+  runtime.observe((snapshot) => states.push(snapshot.state));
   runtime.enqueue({
     id: 'slow',
     ready: () => true,
-    relocate: signal => new Promise((_, reject) => {
-      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
-    })
+    relocate: (signal) =>
+      new Promise((_, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      })
   });
   const terminal = await runtime.start('retire', 5);
   assert.equal(terminal.state, 'forceStopped');
@@ -686,10 +746,7 @@ test('relocation envelope preserves queued work and logical timers deterministic
     decoded.participants.map(({ participantId }) => participantId),
     [1n, 2n]
   );
-  assert.deepEqual(
-    decoded.participants[0]?.rootSpotId,
-    'room'
-  );
+  assert.deepEqual(decoded.participants[0]?.rootSpotId, 'room');
   const actor = decoded.participants[0]!;
   const spot = decoded.participants[1]!;
   assert.deepEqual(
@@ -701,34 +758,43 @@ test('relocation envelope preserves queued work and logical timers deterministic
     ['heartbeat', 'idle']
   );
   assert.deepEqual(
-    decoded.participants.map(participant => Buffer.from(participant.applicationState).toString('utf8')),
+    decoded.participants.map((participant) =>
+      Buffer.from(participant.applicationState).toString('utf8')
+    ),
     ['actor-state', 'spot-state']
   );
 
-  const standalone = envelope.participants.find(value => value.objectKind === 'actor')!;
-  const standaloneEncoded = encodeServiceRelocationEnvelope({
-    aggregateId: '22222222-2222-4222-8222-222222222222',
-    aggregateGeneration: 1n,
-    participants: [standalone],
-    memberships: []
-  }, 7n);
-  assert.notEqual(standaloneEncoded[0], 0x7b, 'standalone Actor must not use the legacy JSON envelope');
-  const standaloneDecoded = decodeServiceRelocationEnvelope(
-    standaloneEncoded,
-    1n
+  const standalone = envelope.participants.find((value) => value.objectKind === 'actor')!;
+  const standaloneEncoded = encodeServiceRelocationEnvelope(
+    {
+      aggregateId: '22222222-2222-4222-8222-222222222222',
+      aggregateGeneration: 1n,
+      participants: [standalone],
+      memberships: []
+    },
+    7n
   );
+  assert.notEqual(
+    standaloneEncoded[0],
+    0x7b,
+    'standalone Actor must not use the legacy JSON envelope'
+  );
+  const standaloneDecoded = decodeServiceRelocationEnvelope(standaloneEncoded, 1n);
   assert.deepEqual(standaloneDecoded.participants[0]?.participantId, 1n);
   assert.deepEqual(standaloneDecoded.participants[0]?.rootObjectKind, 'actor');
   assert.deepEqual(standaloneDecoded.participants[0]?.rootSpotId, 'a');
   assert.deepEqual(standaloneDecoded.participants[0]?.queuedMessages, standalone.queuedMessages);
 
   const zeroVersionDecoded = decodeServiceRelocationEnvelope(
-    encodeServiceRelocationEnvelope({
-      aggregateId: '33333333-3333-4333-8333-333333333333',
-      aggregateGeneration: 0n,
-      participants: [standalone],
-      memberships: []
-    }, 0n),
+    encodeServiceRelocationEnvelope(
+      {
+        aggregateId: '33333333-3333-4333-8333-333333333333',
+        aggregateGeneration: 0n,
+        participants: [standalone],
+        memberships: []
+      },
+      0n
+    ),
     9n
   );
   assert.equal(
@@ -755,14 +821,18 @@ test('relocation envelope rejects malformed root and trailing stream bytes', () 
 
 test('relocation envelope rejects duplicate participant queue and timer identities', () => {
   const envelope = relocationEnvelope();
-  const actor = envelope.participants.find(value => value.objectKind === 'actor')!;
-  const spot = envelope.participants.find(value => value.objectKind === 'user_spot')!;
+  const actor = envelope.participants.find((value) => value.objectKind === 'actor')!;
+  const spot = envelope.participants.find((value) => value.objectKind === 'user_spot')!;
   const queueEnvelope: ServiceRelocationEnvelope = {
     ...envelope,
-    participants: envelope.participants.map(value => value === actor ? {
-      ...actor,
-      queuedMessages: [actor.queuedMessages[0]!, actor.queuedMessages[0]!]
-    } : value)
+    participants: envelope.participants.map((value) =>
+      value === actor
+        ? {
+            ...actor,
+            queuedMessages: [actor.queuedMessages[0]!, actor.queuedMessages[0]!]
+          }
+        : value
+    )
   };
   assert.throws(
     () => encodeServiceRelocationEnvelope(queueEnvelope, 1n),
@@ -771,10 +841,14 @@ test('relocation envelope rejects duplicate participant queue and timer identiti
 
   const timerEnvelope: ServiceRelocationEnvelope = {
     ...envelope,
-    participants: envelope.participants.map(value => value === spot ? {
-      ...spot,
-      timers: [spot.timers[0]!, spot.timers[0]!]
-    } : value)
+    participants: envelope.participants.map((value) =>
+      value === spot
+        ? {
+            ...spot,
+            timers: [spot.timers[0]!, spot.timers[0]!]
+          }
+        : value
+    )
   };
   assert.throws(
     () => encodeServiceRelocationEnvelope(timerEnvelope, 1n),
@@ -859,15 +933,9 @@ test('relocation ingress hold adds no relocation-specific message or byte cap', 
   const countSeal = byCount.trySealApplicationOwner('spot:count');
   assert.ok(countSeal);
   for (let index = 0; index < 1024; index++) {
-    assert.equal(
-      byCount.tryEnqueue(mailboxRecord('spot:count', 'application', 'x')),
-      true
-    );
+    assert.equal(byCount.tryEnqueue(mailboxRecord('spot:count', 'application', 'x')), true);
   }
-  assert.equal(
-    byCount.tryEnqueue(mailboxRecord('spot:count', 'application', 'overflow')),
-    true
-  );
+  assert.equal(byCount.tryEnqueue(mailboxRecord('spot:count', 'application', 'overflow')), true);
   assert.equal(byCount.abortRelocation(countSeal), true);
   const restored = byCount.tryClaim('application', 2048, 32 * 1024 * 1024);
   assert.equal(restored?.records.length, 1025);
@@ -878,16 +946,22 @@ test('relocation ingress hold adds no relocation-specific message or byte cap', 
   const byBytes = new ServiceMailbox();
   const byteSeal = byBytes.trySealApplicationOwner('spot:bytes');
   assert.ok(byteSeal);
-  assert.equal(byBytes.tryEnqueue({
-    owner: 'spot:bytes',
-    domain: 'application',
-    parts: [Buffer.alloc(16 * 1024 * 1024)]
-  }), true);
-  assert.equal(byBytes.tryEnqueue({
-    owner: 'spot:bytes',
-    domain: 'application',
-    parts: [Buffer.alloc(1)]
-  }), true);
+  assert.equal(
+    byBytes.tryEnqueue({
+      owner: 'spot:bytes',
+      domain: 'application',
+      parts: [Buffer.alloc(16 * 1024 * 1024)]
+    }),
+    true
+  );
+  assert.equal(
+    byBytes.tryEnqueue({
+      owner: 'spot:bytes',
+      domain: 'application',
+      parts: [Buffer.alloc(1)]
+    }),
+    true
+  );
   assert.equal(byBytes.commitRelocation(byteSeal)?.length, 2);
   byBytes.close();
 });
@@ -954,7 +1028,7 @@ test('SpotWide Capture and Restore callbacks run eight at a time and preserve pa
     async captureApplicationState() {
       captureActive++;
       capturePeak = Math.max(capturePeak, captureActive);
-      await new Promise<void>(resolve => captureReleases.push(resolve));
+      await new Promise<void>((resolve) => captureReleases.push(resolve));
       captureActive--;
       return Buffer.from(String(index));
     },
@@ -979,12 +1053,12 @@ test('SpotWide Capture and Restore callbacks run eight at a time and preserve pa
   await waitUntil(() => captureReleases.length === 8);
   assert.equal(capturePeak, 8);
   while (captureReleases.length > 0) {
-    captureReleases.splice(0).forEach(resolve => resolve());
-    await new Promise(resolve => setImmediate(resolve));
+    captureReleases.splice(0).forEach((resolve) => resolve());
+    await new Promise((resolve) => setImmediate(resolve));
   }
   const captured = await capturing;
   assert.deepEqual(
-    captured.envelope.participants.map(value => Buffer.from(value.applicationState).toString()),
+    captured.envelope.participants.map((value) => Buffer.from(value.applicationState).toString()),
     Array.from({ length: 17 }, (_, index) => String(index))
   );
 
@@ -992,32 +1066,36 @@ test('SpotWide Capture and Restore callbacks run eight at a time and preserve pa
   let restorePeak = 0;
   const restoreReleases: Array<() => void> = [];
   const restored: string[] = [];
-  const restoreOwner = new ServiceRelocationObjectRestoreOwner({
-    async createHidden(participant) {
-      return { authorityKey: participant.key };
+  const restoreOwner = new ServiceRelocationObjectRestoreOwner(
+    {
+      async createHidden(participant) {
+        return { authorityKey: participant.key };
+      },
+      async restoreApplicationState(_hidden, payload) {
+        restoreActive++;
+        restorePeak = Math.max(restorePeak, restoreActive);
+        await new Promise<void>((resolve) => restoreReleases.push(resolve));
+        restored.push(Buffer.from(payload).toString());
+        restoreActive--;
+      },
+      async restoreMemberships() {},
+      async publish() {},
+      async restoreBoundSession() {},
+      async replayQueuedMessage() {},
+      async restoreTimer() {},
+      async normalize() {},
+      async openAdmission() {},
+      abort() {}
     },
-    async restoreApplicationState(_hidden, payload) {
-      restoreActive++;
-      restorePeak = Math.max(restorePeak, restoreActive);
-      await new Promise<void>(resolve => restoreReleases.push(resolve));
-      restored.push(Buffer.from(payload).toString());
-      restoreActive--;
-    },
-    async restoreMemberships() {},
-    async publish() {},
-    async restoreBoundSession() {},
-    async replayQueuedMessage() {},
-    async restoreTimer() {},
-    async normalize() {},
-    async openAdmission() {},
-    abort() {}
-  }, authorityKey, 8);
+    authorityKey,
+    8
+  );
   const restoring = restoreOwner.prepare(captured.envelope);
   await waitUntil(() => restoreReleases.length === 8);
   assert.equal(restorePeak, 8);
   while (restoreReleases.length > 0) {
-    restoreReleases.splice(0).forEach(resolve => resolve());
-    await new Promise(resolve => setImmediate(resolve));
+    restoreReleases.splice(0).forEach((resolve) => resolve());
+    await new Promise((resolve) => setImmediate(resolve));
   }
   await restoring;
   assert.equal(restored.length, 17);
@@ -1049,33 +1127,34 @@ test('concrete standalone Actor owner preserves external membership and exact ge
     }
   );
   const restored: string[] = [];
-  const ownerRuntime = new ServiceRelocationObjectRestoreOwner({
-    async createHidden(participant) {
-      restored.push(`factory:${participant.objectGeneration}:${participant.authorityOwnerGeneration}`);
-      return { authorityKey: participant.key };
+  const ownerRuntime = new ServiceRelocationObjectRestoreOwner(
+    {
+      async createHidden(participant) {
+        restored.push(
+          `factory:${participant.objectGeneration}:${participant.authorityOwnerGeneration}`
+        );
+        return { authorityKey: participant.key };
+      },
+      async restoreApplicationState(_hidden, payload) {
+        restored.push(`state:${Buffer.from(payload).toString()}`);
+      },
+      async restoreMemberships(_hidden, memberships) {
+        restored.push(`membership:${memberships[0]?.spotKey}:${memberships[0]?.membershipEpoch}`);
+      },
+      async publish() {},
+      async restoreBoundSession() {},
+      async replayQueuedMessage() {},
+      async restoreTimer() {},
+      async normalize() {},
+      async openAdmission() {},
+      abort() {
+        restored.push('abort');
+      }
     },
-    async restoreApplicationState(_hidden, payload) {
-      restored.push(`state:${Buffer.from(payload).toString()}`);
-    },
-    async restoreMemberships(_hidden, memberships) {
-      restored.push(`membership:${memberships[0]?.spotKey}:${memberships[0]?.membershipEpoch}`);
-    },
-    async publish() {},
-    async restoreBoundSession() {},
-    async replayQueuedMessage() {},
-    async restoreTimer() {},
-    async normalize() {},
-    async openAdmission() {},
-    abort() {
-      restored.push('abort');
-    }
-  }, authorityKey);
+    authorityKey
+  );
   const staging = await ownerRuntime.prepare(captured.envelope);
-  assert.deepEqual(restored, [
-    'factory:13:7',
-    'state:solo-state',
-    'membership:entry:node-a:11'
-  ]);
+  assert.deepEqual(restored, ['factory:13:7', 'state:solo-state', 'membership:entry:node-a:11']);
   assert.equal(staging.envelope.participants[0]?.queuedMessages[0]?.sequence, 9n);
   await ownerRuntime.abort(staging);
   assert.equal(restored.at(-1), 'abort');
@@ -1114,16 +1193,18 @@ test('concrete Instance Spot aggregate preserves Actor membership and relocation
     3n,
     spot,
     [actor],
-    [{
-      actorKey: 'actor:player',
-      spotKey: 'instance:match:42',
-      spotObjectGeneration: 5n,
-      membershipEpoch: 12n
-    }]
+    [
+      {
+        actorKey: 'actor:player',
+        spotKey: 'instance:match:42',
+        spotObjectGeneration: 5n,
+        membershipEpoch: 12n
+      }
+    ]
   );
 
   assert.deepEqual(
-    captured.envelope.participants.map(participant => participant.objectKind),
+    captured.envelope.participants.map((participant) => participant.objectKind),
     ['instance_spot', 'actor']
   );
   assert.equal(captured.envelope.memberships[0]?.membershipEpoch, 12n);
@@ -1178,7 +1259,7 @@ function captureUnit(
 async function waitUntil(predicate: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 1000; attempt++) {
     if (predicate()) return;
-    await new Promise(resolve => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
   }
   throw new Error('Timed out waiting for the relocation callback gate.');
 }
@@ -1259,12 +1340,14 @@ function relocationEnvelope(): ServiceRelocationEnvelope {
   return {
     aggregateId: '11111111-1111-4111-8111-111111111111',
     aggregateGeneration: 1n,
-    memberships: [{
-      actorKey: 'actor:a',
-      spotKey: 'spot:room',
-      spotObjectGeneration: 3n,
-      membershipEpoch: 4n
-    }],
+    memberships: [
+      {
+        actorKey: 'actor:a',
+        spotKey: 'spot:room',
+        spotObjectGeneration: 3n,
+        membershipEpoch: 4n
+      }
+    ],
     participants: [
       {
         key: 'spot:room',
@@ -1300,12 +1383,14 @@ function relocationEnvelope(): ServiceRelocationEnvelope {
             overrunPolicy: 'catchUpBounded',
             maxCatchUpTicks: 2,
             stopOnUnhandledException: true,
-            pendingTicks: [{
-              deliveryIndex: 4n,
-              scheduledIndex: 5n,
-              scheduledAtUnixMs: 600,
-              skippedTicks: 0n
-            }]
+            pendingTicks: [
+              {
+                deliveryIndex: 4n,
+                scheduledIndex: 5n,
+                scheduledAtUnixMs: 600,
+                skippedTicks: 0n
+              }
+            ]
           }
         ]
       },
@@ -1317,22 +1402,27 @@ function relocationEnvelope(): ServiceRelocationEnvelope {
         authorityOwnerGeneration: 5n,
         applicationState: Buffer.from('actor-state'),
         boundSessionState: Buffer.from('actor-journal'),
-        queuedMessages: [{
-          sequence: 1n,
-          payload: frozenRecord(9, 1, 0, 1n, undefined,
-            Buffer.concat([frozenActorRoute(), frozenPayload()]), true)
-        }],
+        queuedMessages: [
+          {
+            sequence: 1n,
+            payload: frozenRecord(
+              9,
+              1,
+              0,
+              1n,
+              undefined,
+              Buffer.concat([frozenActorRoute(), frozenPayload()]),
+              true
+            )
+          }
+        ],
         timers: []
       }
     ]
   };
 }
 
-function mailboxRecord(
-  owner: string,
-  domain: 'application' | 'infrastructure',
-  value: string
-) {
+function mailboxRecord(owner: string, domain: 'application' | 'infrastructure', value: string) {
   return { owner, domain, parts: [Buffer.from(value)] } as const;
 }
 

@@ -33,15 +33,20 @@ export interface SelectedClientServer {
 export class ServiceDiscoveryRegistry {
   private readonly clientServers = new Map<string, Current<ClientServerDescriptor>>();
   private readonly fanoutPublishers = new Map<string, Current<FanoutPublisherDescriptor>>();
-  private readonly clientServerSelections = new Map<string, SmoothWeightedSelection<SelectedClientServer>>();
+  private readonly clientServerSelections = new Map<
+    string,
+    SmoothWeightedSelection<SelectedClientServer>
+  >();
 
   admitClientServer(descriptor: ClientServerDescriptor, connectionId: string): boolean {
     validateClientServer(descriptor);
     const key = `${descriptor.channelName}\0${descriptor.serverRoutingId}`;
     const current = this.clientServers.get(key);
-    if (current !== undefined
-      && current.descriptor.state === 'disconnected'
-      && sameClientServerDescriptorExceptState(current.descriptor, descriptor)) {
+    if (
+      current !== undefined &&
+      current.descriptor.state === 'disconnected' &&
+      sameClientServerDescriptorExceptState(current.descriptor, descriptor)
+    ) {
       this.clientServers.set(key, { descriptor: { ...descriptor }, connectionId });
       this.invalidateClientServerCandidates(descriptor.channelName);
       return true;
@@ -69,12 +74,12 @@ export class ServiceDiscoveryRegistry {
     return true;
   }
 
-  removeClientServer(
-    channelName: string,
-    serverRoutingId: string,
-    connectionId: string
-  ): boolean {
-    const removed = removeCurrent(this.clientServers, `${channelName}\0${serverRoutingId}`, connectionId);
+  removeClientServer(channelName: string, serverRoutingId: string, connectionId: string): boolean {
+    const removed = removeCurrent(
+      this.clientServers,
+      `${channelName}\0${serverRoutingId}`,
+      connectionId
+    );
     if (removed) this.invalidateClientServerCandidates(channelName);
     return removed;
   }
@@ -98,10 +103,10 @@ export class ServiceDiscoveryRegistry {
 
   clientServerDescriptors(channelName: string): readonly ClientServerDescriptor[] {
     return [...this.clientServers.values()]
-      .map(value => value.descriptor)
-      .filter(value => value.channelName === channelName)
+      .map((value) => value.descriptor)
+      .filter((value) => value.channelName === channelName)
       .sort((left, right) => compareOrdinal(left.serverRoutingId, right.serverRoutingId))
-      .map(value => ({ ...value }));
+      .map((value) => ({ ...value }));
   }
 
   admitFanoutPublisher(descriptor: FanoutPublisherDescriptor, connectionId: string): boolean {
@@ -128,30 +133,23 @@ export class ServiceDiscoveryRegistry {
 
   fanoutEndpoints(channelName: string): readonly FanoutPublisherDescriptor[] {
     return [...this.fanoutPublishers.values()]
-      .map(value => value.descriptor)
-      .filter(value => value.channelName === channelName && value.state === 'serving')
+      .map((value) => value.descriptor)
+      .filter((value) => value.channelName === channelName && value.state === 'serving')
       .sort((left, right) => left.publisherRoutingId.localeCompare(right.publisherRoutingId))
-      .map(value => ({ ...value }));
+      .map((value) => ({ ...value }));
   }
 
-  private admit<T extends { readonly lifecycleGeneration: bigint; readonly descriptorRevision: bigint }>(
-    rows: Map<string, Current<T>>,
-    key: string,
-    descriptor: T,
-    connectionId: string
-  ): boolean {
+  private admit<
+    T extends { readonly lifecycleGeneration: bigint; readonly descriptorRevision: bigint }
+  >(rows: Map<string, Current<T>>, key: string, descriptor: T, connectionId: string): boolean {
     requireText(connectionId, 'connectionId');
     const current = rows.get(key);
     if (
-      current !== undefined
-      && current.descriptor.lifecycleGeneration === descriptor.lifecycleGeneration
-      && (
-        current.descriptor.descriptorRevision > descriptor.descriptorRevision
-        || (
-          current.descriptor.descriptorRevision === descriptor.descriptorRevision
-          && !sameDescriptor(current.descriptor, descriptor)
-        )
-      )
+      current !== undefined &&
+      current.descriptor.lifecycleGeneration === descriptor.lifecycleGeneration &&
+      (current.descriptor.descriptorRevision > descriptor.descriptorRevision ||
+        (current.descriptor.descriptorRevision === descriptor.descriptorRevision &&
+          !sameDescriptor(current.descriptor, descriptor)))
     ) {
       return false;
     }
@@ -167,13 +165,16 @@ export class ServiceDiscoveryRegistry {
 
   private clientServerCandidates(channelName: string) {
     return [...this.clientServers.values()]
-      .filter(value =>
-        value.descriptor.channelName === channelName
-        && value.descriptor.state === 'serving'
-        && value.descriptor.weight > 0)
+      .filter(
+        (value) =>
+          value.descriptor.channelName === channelName &&
+          value.descriptor.state === 'serving' &&
+          value.descriptor.weight > 0
+      )
       .sort((left, right) =>
-        compareOrdinal(left.descriptor.serverRoutingId, right.descriptor.serverRoutingId))
-      .map(value => ({
+        compareOrdinal(left.descriptor.serverRoutingId, right.descriptor.serverRoutingId)
+      )
+      .map((value) => ({
         id: value.descriptor.serverRoutingId,
         weight: value.descriptor.weight,
         value: Object.freeze({
@@ -188,33 +189,37 @@ function compareOrdinal(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function sameDescriptor<T extends { readonly lifecycleGeneration: bigint; readonly descriptorRevision: bigint }>(
-  left: T,
-  right: T
-): boolean {
-  return JSON.stringify({
-    ...left,
-    lifecycleGeneration: left.lifecycleGeneration.toString(),
-    descriptorRevision: left.descriptorRevision.toString()
-  }) === JSON.stringify({
-    ...right,
-    lifecycleGeneration: right.lifecycleGeneration.toString(),
-    descriptorRevision: right.descriptorRevision.toString()
-  });
+function sameDescriptor<
+  T extends { readonly lifecycleGeneration: bigint; readonly descriptorRevision: bigint }
+>(left: T, right: T): boolean {
+  return (
+    JSON.stringify({
+      ...left,
+      lifecycleGeneration: left.lifecycleGeneration.toString(),
+      descriptorRevision: left.descriptorRevision.toString()
+    }) ===
+    JSON.stringify({
+      ...right,
+      lifecycleGeneration: right.lifecycleGeneration.toString(),
+      descriptorRevision: right.descriptorRevision.toString()
+    })
+  );
 }
 
 function sameClientServerDescriptorExceptState(
   left: ClientServerDescriptor,
   right: ClientServerDescriptor
 ): boolean {
-  return left.channelName === right.channelName
-    && left.serverRoutingId === right.serverRoutingId
-    && left.lifecycleGeneration === right.lifecycleGeneration
-    && left.descriptorRevision === right.descriptorRevision
-    && left.weight === right.weight
-    && left.securityIdentity === right.securityIdentity
-    && left.effectiveMaxMessageBytes === right.effectiveMaxMessageBytes
-    && left.advertisedEndpoint === right.advertisedEndpoint;
+  return (
+    left.channelName === right.channelName &&
+    left.serverRoutingId === right.serverRoutingId &&
+    left.lifecycleGeneration === right.lifecycleGeneration &&
+    left.descriptorRevision === right.descriptorRevision &&
+    left.weight === right.weight &&
+    left.securityIdentity === right.securityIdentity &&
+    left.effectiveMaxMessageBytes === right.effectiveMaxMessageBytes &&
+    left.advertisedEndpoint === right.advertisedEndpoint
+  );
 }
 
 function removeCurrent<T>(
@@ -237,7 +242,10 @@ function validateClientServer(descriptor: ClientServerDescriptor): void {
   if (!Number.isInteger(descriptor.weight) || descriptor.weight < 0 || descriptor.weight > 10_000) {
     throw new RangeError('ClientServer weight must be an integer in 0..10000.');
   }
-  if (!Number.isSafeInteger(descriptor.effectiveMaxMessageBytes) || descriptor.effectiveMaxMessageBytes < 1) {
+  if (
+    !Number.isSafeInteger(descriptor.effectiveMaxMessageBytes) ||
+    descriptor.effectiveMaxMessageBytes < 1
+  ) {
     throw new RangeError('ClientServer message bound must be positive.');
   }
 }

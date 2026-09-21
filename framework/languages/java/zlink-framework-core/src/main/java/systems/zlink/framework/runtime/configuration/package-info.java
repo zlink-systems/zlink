@@ -1,4 +1,2 @@
-/**
- * Runtime configuration model and builder adapters.
- */
+/** Runtime configuration model and builder adapters. */
 package systems.zlink.framework.runtime.configuration;

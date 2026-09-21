@@ -46,10 +46,13 @@ export interface ZLinkActorSessionBindingRuntimeOwner {
     applyFingerprint: string
   ): Promise<void>;
   clearRelocation(actorId: string, error: unknown): Promise<void>;
-  committedRoute(actorId: string): Promise<{
-    readonly actor: ActorRef;
-    readonly authorityFence?: ZLinkActorSessionAuthorityFence;
-  } | undefined>;
+  committedRoute(actorId: string): Promise<
+    | {
+        readonly actor: ActorRef;
+        readonly authorityFence?: ZLinkActorSessionAuthorityFence;
+      }
+    | undefined
+  >;
 }
 
 const owners = new WeakMap<object, ZLinkActorSessionBindingRuntimeOwner>();

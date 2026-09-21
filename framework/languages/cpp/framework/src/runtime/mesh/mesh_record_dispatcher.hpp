@@ -22,11 +22,9 @@ class mesh_record_dispatcher_t
                               const route_handler_registry_t &handlers,
                               const handler_registry_t &filters,
                               dispatch_options_t dispatch_options = {},
-                              std::function<void ()>
-                                before_application_handler = {});
+                              std::function<void ()> before_application_handler = {});
 
-    result_t<void> dispatch (
-      const runtime::host::receive_record_t &record,
+    result_t<void> dispatch (const runtime::host::receive_record_t &record,
                              std::vector<zlink::message_t> parts) const;
 
   private:

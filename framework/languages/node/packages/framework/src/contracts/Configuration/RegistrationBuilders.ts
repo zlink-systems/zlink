@@ -39,10 +39,7 @@ import type {
   ZLinkSpotRelocationAdapter,
   ZLinkUserSpotFactoryBuilder
 } from './ObjectRoles';
-import {
-  ZLinkSpotRelocationCoordinationMode,
-  ZLinkUserSpotExecutionMode
-} from './ObjectRoles';
+import { ZLinkSpotRelocationCoordinationMode, ZLinkUserSpotExecutionMode } from './ObjectRoles';
 import type { ZLinkSpotNodeBuilder } from '../Spots/Builders';
 import { readZLinkDecoratorMetadata } from '../Handlers/Attributes';
 import type { ZLinkCodecRegistryBuilder } from '../Codecs';
@@ -60,11 +57,7 @@ import {
 import { AutoHwmProfile } from '@zlink-systems/zlink';
 import { endpointConnections } from './RuntimeEndpointConnections';
 import type { ZLinkEndpointConnections } from './Connections';
-import type {
-  ZLinkLocationOptions,
-  ZLinkLocationStore,
-  ZLinkRelocationStore
-} from '../Locations';
+import type { ZLinkLocationOptions, ZLinkLocationStore, ZLinkRelocationStore } from '../Locations';
 import { ZLinkConfigurationException } from './ConfigurationException';
 import {
   RegistrationCodecRegistryBuilder,
@@ -176,7 +169,8 @@ class ZLinkFrameworkOptionsBuilder implements ZLinkFrameworkOptions {
   }
 
   setSessionReplacementCallbackTimeout(timeoutMs: number): this {
-    this.options.sessionReplacementCallbackTimeoutMs = validateSessionReplacementCallbackTimeout(timeoutMs);
+    this.options.sessionReplacementCallbackTimeoutMs =
+      validateSessionReplacementCallbackTimeout(timeoutMs);
     return this;
   }
 
@@ -199,10 +193,7 @@ class ZLinkFrameworkOptionsBuilder implements ZLinkFrameworkOptions {
     this.spotMeshes.add(meshName);
     const node = this.spotNodeOptions(meshName);
     node.router ??= { port: 0 };
-    return new DefaultMeshNodeBuilder(
-      meshName,
-      node
-    );
+    return new DefaultMeshNodeBuilder(meshName, node);
   }
 
   addFanoutChannel(name: string): ZLinkFanoutChannelBuilder {
@@ -301,7 +292,6 @@ export class DefaultDispatchOptionsBuilder implements ZLinkDispatchOptionsBuilde
     this.dispatch.diagnostics.includeMessageSizes = include;
     return this;
   }
-
 }
 
 interface MutableInboundDispatchRegistrationOptions {
@@ -363,13 +353,20 @@ export class DefaultInboundDispatchOptionsBuilder implements ZLinkInboundDispatc
   }
 }
 
-function coreHwmProfileValue(value: ZLinkCoreHwmProfile): (typeof AutoHwmProfile)[keyof typeof AutoHwmProfile] {
+function coreHwmProfileValue(
+  value: ZLinkCoreHwmProfile
+): (typeof AutoHwmProfile)[keyof typeof AutoHwmProfile] {
   switch (value) {
-    case ZLinkCoreHwmProfile.Compact: return AutoHwmProfile.Compact;
-    case ZLinkCoreHwmProfile.LowLatency: return AutoHwmProfile.LowLatency;
-    case ZLinkCoreHwmProfile.Balanced: return AutoHwmProfile.Balanced;
-    case ZLinkCoreHwmProfile.Throughput: return AutoHwmProfile.Throughput;
-    default: throw new TypeError('coreHwmProfile must be a supported profile.');
+    case ZLinkCoreHwmProfile.Compact:
+      return AutoHwmProfile.Compact;
+    case ZLinkCoreHwmProfile.LowLatency:
+      return AutoHwmProfile.LowLatency;
+    case ZLinkCoreHwmProfile.Balanced:
+      return AutoHwmProfile.Balanced;
+    case ZLinkCoreHwmProfile.Throughput:
+      return AutoHwmProfile.Throughput;
+    default:
+      throw new TypeError('coreHwmProfile must be a supported profile.');
   }
 }
 
@@ -644,10 +641,7 @@ class DefaultClientServerChannelServerBuilder implements ZLinkClientServerChanne
   }
 
   setWeight(weight: number): this {
-    this.server.weight = requirePublicWeight(
-      weight,
-      `ClientServer channel '${this.name}' weight`
-    );
+    this.server.weight = requirePublicWeight(weight, `ClientServer channel '${this.name}' weight`);
     return this;
   }
 
@@ -658,7 +652,9 @@ class DefaultClientServerChannelServerBuilder implements ZLinkClientServerChanne
     return this;
   }
 
-  addSendHandler<TMessage>(handlerType: Type<import('../Handlers').ZLinkSendHandler<TMessage>>): this {
+  addSendHandler<TMessage>(
+    handlerType: Type<import('../Handlers').ZLinkSendHandler<TMessage>>
+  ): this {
     this.channel.sendHandlers ??= [];
     this.channel.sendHandlers.push({ packetName: handlerPacketName(handlerType), handlerType });
     return this;
@@ -723,7 +719,11 @@ class DefaultStreamNodeBuilder implements ZLinkStreamNodeBuilder {
     return this;
   }
 
-  setTlsServer(certificatePath: string, keyPath: string, requireClientCertificate: boolean = false): this {
+  setTlsServer(
+    certificatePath: string,
+    keyPath: string,
+    requireClientCertificate: boolean = false
+  ): this {
     this.streamNode.tlsServer = {
       certificatePath,
       keyPath,
@@ -732,9 +732,13 @@ class DefaultStreamNodeBuilder implements ZLinkStreamNodeBuilder {
     return this;
   }
 
-  registerSession<TSession extends ZLinkSession>(sessionType: Type<TSession> | Type<ZLinkSessionFactory<TSession>>): this {
+  registerSession<TSession extends ZLinkSession>(
+    sessionType: Type<TSession> | Type<ZLinkSessionFactory<TSession>>
+  ): this {
     if (this.streamNode.session !== undefined) {
-      throw new ZLinkConfigurationException('STREAM node cannot register more than one header stream session.');
+      throw new ZLinkConfigurationException(
+        'STREAM node cannot register more than one header stream session.'
+      );
     }
     this.streamNode.session = sessionType;
     return this;
@@ -764,7 +768,9 @@ export class DefaultStreamCompressionBuilder implements ZLinkStreamCompressionBu
 
   use(codec: ZLinkStreamCompressionCodec): this {
     if (!isStreamCompressionCodec(codec)) {
-      throw new ZLinkConfigurationException('STREAM compression codec must provide compress and decompress functions.');
+      throw new ZLinkConfigurationException(
+        'STREAM compression codec must provide compress and decompress functions.'
+      );
     }
     this.options.disabled = false;
     this.options.codec = codec;
@@ -802,12 +808,17 @@ class DefaultSpotNodeBuilder implements ZLinkSpotNodeBuilder {
     return this;
   }
 
-  enableRouter(endpoint: string, routingId?: RoutingId, connect?: string | readonly string[]): this {
+  enableRouter(
+    endpoint: string,
+    routingId?: RoutingId,
+    connect?: string | readonly string[]
+  ): this {
     this.spotNode.router = {
       ...(this.spotNode.router ?? {}),
       bind: endpoint,
       routingId: routingId ?? this.spotNode.routingId,
-      manualConnections: connect === undefined ? this.spotNode.router?.manualConnections : endpointList(connect)
+      manualConnections:
+        connect === undefined ? this.spotNode.router?.manualConnections : endpointList(connect)
     };
     return this;
   }
@@ -829,12 +840,17 @@ class DefaultSpotNodeBuilder implements ZLinkSpotNodeBuilder {
     return this;
   }
 
-  enablePubSub(endpoint: string, routingId?: RoutingId, connect?: string | readonly string[]): this {
+  enablePubSub(
+    endpoint: string,
+    routingId?: RoutingId,
+    connect?: string | readonly string[]
+  ): this {
     this.spotNode.pubSub = {
       ...(this.spotNode.pubSub ?? {}),
       bind: endpoint,
       routingId: routingId ?? this.spotNode.routingId,
-      manualConnections: connect === undefined ? this.spotNode.pubSub?.manualConnections : endpointList(connect)
+      manualConnections:
+        connect === undefined ? this.spotNode.pubSub?.manualConnections : endpointList(connect)
     };
     return this;
   }
@@ -845,7 +861,6 @@ class DefaultSpotNodeBuilder implements ZLinkSpotNodeBuilder {
     this.spotNode.pubSub.manualConnections.push(endpoint);
     return this;
   }
-
 }
 
 class DefaultMeshNodeBuilder implements ZLinkMeshNodeBuilder {
@@ -972,7 +987,9 @@ class DefaultMeshNodeBuilder implements ZLinkMeshNodeBuilder {
     return new DefaultMeshObjectRoleBuilder(this.name, this.node);
   }
 
-  addRouteSendHandler<TMessage>(handlerType: Type<import('../Handlers').ZLinkRouteSendHandler<TMessage>>): this {
+  addRouteSendHandler<TMessage>(
+    handlerType: Type<import('../Handlers').ZLinkRouteSendHandler<TMessage>>
+  ): this {
     this.node.routeSendHandlers ??= [];
     this.node.routeSendHandlers.push({ packetName: handlerPacketName(handlerType), handlerType });
     return this;
@@ -982,7 +999,10 @@ class DefaultMeshNodeBuilder implements ZLinkMeshNodeBuilder {
     handlerType: Type<import('../Handlers').ZLinkRouteRequestHandler<TRequest, TReply>>
   ): this {
     this.node.routeRequestHandlers ??= [];
-    this.node.routeRequestHandlers.push({ packetName: handlerPacketName(handlerType), handlerType });
+    this.node.routeRequestHandlers.push({
+      packetName: handlerPacketName(handlerType),
+      handlerType
+    });
     return this;
   }
 
@@ -990,9 +1010,7 @@ class DefaultMeshNodeBuilder implements ZLinkMeshNodeBuilder {
     const router = this.node.router;
     if (router?.port === undefined) return;
     const bindHost = router.bindHost ?? '127.0.0.1';
-    const host = bindHost.includes(':') && !bindHost.startsWith('[')
-      ? `[${bindHost}]`
-      : bindHost;
+    const host = bindHost.includes(':') && !bindHost.startsWith('[') ? `[${bindHost}]` : bindHost;
     router.bind = `tcp://${host}:${router.port}`;
   }
 }
@@ -1069,7 +1087,8 @@ abstract class DefaultFactoryBuilder<TInstance> {
 
 class DefaultActorFactoryBuilder<TActor extends ZLinkActor>
   extends DefaultFactoryBuilder<TActor>
-  implements ZLinkActorFactoryBuilder<TActor> {
+  implements ZLinkActorFactoryBuilder<TActor>
+{
   disableRelocation(): void {
     this.disable();
   }
@@ -1078,9 +1097,7 @@ class DefaultActorFactoryBuilder<TActor extends ZLinkActor>
     this.recreate();
   }
 
-  preserveStateWith(
-    adapterType: Type<ZLinkActorRelocationAdapter<TActor>>
-  ): void {
+  preserveStateWith(adapterType: Type<ZLinkActorRelocationAdapter<TActor>>): void {
     this.preserve(adapterType);
   }
 
@@ -1097,7 +1114,8 @@ class DefaultActorFactoryBuilder<TActor extends ZLinkActor>
 
 class DefaultUserSpotFactoryBuilder<TSpot extends ZLinkSpot>
   extends DefaultFactoryBuilder<TSpot>
-  implements ZLinkUserSpotFactoryBuilder<TSpot> {
+  implements ZLinkUserSpotFactoryBuilder<TSpot>
+{
   private stableTypeLimitValue: number | undefined;
   private executionModeValue = ZLinkUserSpotExecutionMode.SpotWide;
   private relocationCoordinationModeValue = ZLinkSpotRelocationCoordinationMode.FrameworkManaged;
@@ -1129,9 +1147,7 @@ class DefaultUserSpotFactoryBuilder<TSpot extends ZLinkSpot>
     this.recreate();
   }
 
-  preserveStateWith(
-    adapterType: Type<ZLinkSpotRelocationAdapter<TSpot>>
-  ): void {
+  preserveStateWith(adapterType: Type<ZLinkSpotRelocationAdapter<TSpot>>): void {
     this.preserve(adapterType);
   }
 
@@ -1147,12 +1163,10 @@ class DefaultUserSpotFactoryBuilder<TSpot extends ZLinkSpot>
     };
     validateUserSpotFactoryOptions(options);
     if (
-      options.executionMode === ZLinkUserSpotExecutionMode.PerActor
-      && relocation.kind !== 'recreate'
+      options.executionMode === ZLinkUserSpotExecutionMode.PerActor &&
+      relocation.kind !== 'recreate'
     ) {
-      throw new ZLinkConfigurationException(
-        'PerActor User Spots require RecreateOnRelocation.'
-      );
+      throw new ZLinkConfigurationException('PerActor User Spots require RecreateOnRelocation.');
     }
     return { options, relocation };
   }
@@ -1160,7 +1174,8 @@ class DefaultUserSpotFactoryBuilder<TSpot extends ZLinkSpot>
 
 class DefaultInstanceSpotFactoryBuilder<TSpot extends ZLinkInstanceSpot>
   extends DefaultFactoryBuilder<TSpot>
-  implements ZLinkInstanceSpotFactoryBuilder<TSpot> {
+  implements ZLinkInstanceSpotFactoryBuilder<TSpot>
+{
   private stableTypeLimitValue: number | undefined;
 
   stableTypeLimit(limit: number): this {
@@ -1178,9 +1193,7 @@ class DefaultInstanceSpotFactoryBuilder<TSpot extends ZLinkInstanceSpot>
     this.recreate();
   }
 
-  preserveStateWith(
-    adapterType: Type<ZLinkSpotRelocationAdapter<TSpot>>
-  ): void {
+  preserveStateWith(adapterType: Type<ZLinkSpotRelocationAdapter<TSpot>>): void {
     this.preserve(adapterType);
   }
 
@@ -1339,7 +1352,9 @@ class DefaultMeshChannelServerBuilder implements ZLinkMeshChannelServerBuilder {
     return this;
   }
 
-  addSendHandler<TMessage>(handlerType: Type<import('../Handlers').ZLinkSendHandler<TMessage>>): this {
+  addSendHandler<TMessage>(
+    handlerType: Type<import('../Handlers').ZLinkSendHandler<TMessage>>
+  ): this {
     this.channel.sendHandlers ??= [];
     this.channel.sendHandlers.push({ packetName: handlerPacketName(handlerType), handlerType });
     return this;
@@ -1372,10 +1387,16 @@ class DefaultMeshPeerConnections implements ZLinkMeshPeerConnections {
     requireRegistrationName(endpoint, 'Mesh peer endpoint');
     const normalizedEndpoint = normalizeEndpoint(endpoint);
     this.router.manualPeerConnections ??= [];
-    if (!this.router.manualPeerConnections.some(
-      (peer) => peer.endpoint === normalizedEndpoint && peer.peerRid === expectedRoutingIdOrEndpoint
-    )) {
-      this.router.manualPeerConnections.push({ peerRid: expectedRoutingIdOrEndpoint, endpoint: normalizedEndpoint });
+    if (
+      !this.router.manualPeerConnections.some(
+        (peer) =>
+          peer.endpoint === normalizedEndpoint && peer.peerRid === expectedRoutingIdOrEndpoint
+      )
+    ) {
+      this.router.manualPeerConnections.push({
+        peerRid: expectedRoutingIdOrEndpoint,
+        endpoint: normalizedEndpoint
+      });
     }
   }
 
@@ -1385,7 +1406,9 @@ class DefaultMeshPeerConnections implements ZLinkMeshPeerConnections {
     // (see connect() above); without normalizing here, disconnect() with a
     // differently-cased or -formatted endpoint would silently no-op.
     const normalizedEndpoint = normalizeEndpoint(endpoint);
-    this.router.manualConnections = this.router.manualConnections?.filter((value) => value !== normalizedEndpoint);
+    this.router.manualConnections = this.router.manualConnections?.filter(
+      (value) => value !== normalizedEndpoint
+    );
     this.router.manualPeerConnections = this.router.manualPeerConnections?.filter(
       (value) => value.endpoint !== normalizedEndpoint
     );
@@ -1409,9 +1432,7 @@ function endpointList(endpoint: string | readonly string[]): string[] {
 function requireStableObjectType(value: string, label: string): string {
   const byteLength = Buffer.byteLength(value, 'utf8');
   if (byteLength < 1 || byteLength > 255 || value.includes('\0')) {
-    throw new ZLinkConfigurationException(
-      `${label} must contain 1..255 UTF-8 bytes and no NUL.`
-    );
+    throw new ZLinkConfigurationException(`${label} must contain 1..255 UTF-8 bytes and no NUL.`);
   }
   return value;
 }
@@ -1432,9 +1453,7 @@ function requireCapacity(value: number, label: string): number {
 
 function requireNonNegativeSafeInteger(value: number, label: string): number {
   if (!Number.isSafeInteger(value) || value < 0) {
-    throw new ZLinkConfigurationException(
-      `${label} must be a non-negative safe integer.`
-    );
+    throw new ZLinkConfigurationException(`${label} must be a non-negative safe integer.`);
   }
   return value;
 }
@@ -1450,9 +1469,7 @@ function requireFactoryConfigure(
   configure: unknown
 ): asserts configure is (builder: unknown) => void {
   if (typeof configure !== 'function') {
-    throw new ZLinkConfigurationException(
-      'Object factory requires a configure callback.'
-    );
+    throw new ZLinkConfigurationException('Object factory requires a configure callback.');
   }
 }
 
@@ -1462,21 +1479,21 @@ function validateUserSpotFactoryOptions(
   validateStableTypeLimit(options?.stableTypeLimit);
   const executionMode: unknown = options?.executionMode;
   if (
-    executionMode !== undefined
-    && executionMode !== ZLinkUserSpotExecutionMode.SpotWide
-    && executionMode !== ZLinkUserSpotExecutionMode.PerActor
+    executionMode !== undefined &&
+    executionMode !== ZLinkUserSpotExecutionMode.SpotWide &&
+    executionMode !== ZLinkUserSpotExecutionMode.PerActor
   ) {
     throw new ZLinkConfigurationException('User Spot executionMode is invalid.');
   }
   if (
-    options?.relocationCoordinationMode !== ZLinkSpotRelocationCoordinationMode.FrameworkManaged
-    && options?.relocationCoordinationMode !== ZLinkSpotRelocationCoordinationMode.ApplicationSignaled
+    options?.relocationCoordinationMode !== ZLinkSpotRelocationCoordinationMode.FrameworkManaged &&
+    options?.relocationCoordinationMode !== ZLinkSpotRelocationCoordinationMode.ApplicationSignaled
   ) {
     throw new ZLinkConfigurationException('User Spot relocationCoordinationMode is invalid.');
   }
   if (
-    options.executionMode === ZLinkUserSpotExecutionMode.PerActor
-    && options.relocationCoordinationMode === ZLinkSpotRelocationCoordinationMode.ApplicationSignaled
+    options.executionMode === ZLinkUserSpotExecutionMode.PerActor &&
+    options.relocationCoordinationMode === ZLinkSpotRelocationCoordinationMode.ApplicationSignaled
   ) {
     throw new ZLinkConfigurationException(
       'ApplicationSignaled relocation coordination mode is valid only for SpotWide User Spots.'
@@ -1485,10 +1502,7 @@ function validateUserSpotFactoryOptions(
 }
 
 function validateStableTypeLimit(value: number | undefined): void {
-  if (
-    value !== undefined
-    && (!Number.isInteger(value) || value < 0 || value > 2_147_483_647)
-  ) {
+  if (value !== undefined && (!Number.isInteger(value) || value < 0 || value > 2_147_483_647)) {
     throw new ZLinkConfigurationException(
       'stableTypeLimit must be an integer from 0 through 2147483647.'
     );
@@ -1612,11 +1626,10 @@ interface MutableSpotNodeOptions {
   pubSub?: MutableSpotPubSubCapabilityOptions;
   entrySpotType?: Type<ZLinkEntrySpot>;
   spotFactories?: Type<ZLinkSpot>[];
-  spotFactoryRegistrations?: Record<string, MutableObjectFactoryRegistration<
-    ZLinkSpot,
-    ZLinkSpot,
-    ZLinkUserSpotFactoryConfiguration
-  >>;
+  spotFactoryRegistrations?: Record<
+    string,
+    MutableObjectFactoryRegistration<ZLinkSpot, ZLinkSpot, ZLinkUserSpotFactoryConfiguration>
+  >;
   instanceSpotFactories?: Record<string, Type<ZLinkInstanceSpot>>;
   instanceSpotFactoryRegistrations?: Record<
     string,
@@ -1629,11 +1642,7 @@ interface MutableSpotNodeOptions {
   actorFactories?: Record<string, Type>;
   actorFactoryRegistrations?: Record<
     string,
-    MutableObjectFactoryRegistration<
-      ZLinkActor,
-      ZLinkActorFactory,
-      ZLinkActorFactoryConfiguration
-    >
+    MutableObjectFactoryRegistration<ZLinkActor, ZLinkActorFactory, ZLinkActorFactoryConfiguration>
   >;
   meshChannels?: Record<string, MutableMeshChannelOptions>;
   routeSendHandlers?: Array<{ packetName: string; handlerType: Type }>;
@@ -1682,9 +1691,11 @@ interface MutableSpotPubSubCapabilityOptions {
 }
 
 function handlerPacketName(handlerType: Type): string {
-  return readZLinkDecoratorMetadata(handlerType)
-    .find((metadata) => metadata.kind === 'packet' && metadata.packetName !== undefined)
-    ?.packetName ?? handlerType.name;
+  return (
+    readZLinkDecoratorMetadata(handlerType).find(
+      (metadata) => metadata.kind === 'packet' && metadata.packetName !== undefined
+    )?.packetName ?? handlerType.name
+  );
 }
 
 function requireRegistrationName(value: string, label: string): void {

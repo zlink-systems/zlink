@@ -1,8 +1,8 @@
 using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Framework.Runtime.Protocol;
-using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Contracts.Messaging;
+using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Locations;
@@ -14,11 +14,9 @@ public sealed partial class EntrySpotActorDispatchTests
 {
     //  Long enough that a join which keeps re-running the reservation ends on
     //  the deadline, short enough that such a regression costs seconds.
-    private static readonly TimeSpan JoinDecisionRequestTimeout =
-        TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan JoinDecisionRequestTimeout = TimeSpan.FromSeconds(5);
 
-    private static readonly TimeSpan JoinDecisionBudget =
-        TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan JoinDecisionBudget = TimeSpan.FromSeconds(1);
 
     [Fact]
     public async Task ColdActivation_ExcludesExpiredDescriptorAndSelectsLiveOwner()
@@ -30,7 +28,8 @@ public sealed partial class EntrySpotActorDispatchTests
             includeActorFactory: false,
             includeInstanceSpotRoute: true,
             relocationStore: new InMemoryRelocationStore(),
-            locationTimeProvider: time);
+            locationTimeProvider: time
+        );
         try
         {
             var store = RequireLocationStore(runtime);
@@ -39,18 +38,20 @@ public sealed partial class EntrySpotActorDispatchTests
                 "expired-cold-owner",
                 RoutingId.From("expired-cold-node"),
                 TimeSpan.FromSeconds(1),
-                placementWeight: 10_000);
+                placementWeight: 10_000
+            );
             time.Advance(TimeSpan.FromSeconds(2));
 
             await SendInstanceIntentAsync(runtime, "cold-expired-owner");
 
             var authority = await ReadAuthorityAsync(
                 store,
-                ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey("cold-expired-owner"));
+                ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey("cold-expired-owner")
+            );
             Assert.Equal(
-                runtime.Services.GetRequiredService<ZLinkLocationRuntime>()
-                    .OwnerToken.OwnerId,
-                authority.OwnerId);
+                runtime.Services.GetRequiredService<ZLinkLocationRuntime>().OwnerToken.OwnerId,
+                authority.OwnerId
+            );
         }
         finally
         {
@@ -68,7 +69,8 @@ public sealed partial class EntrySpotActorDispatchTests
             includeActorFactory: false,
             includeInstanceSpotRoute: true,
             relocationStore: new InMemoryRelocationStore(),
-            locationTimeProvider: time);
+            locationTimeProvider: time
+        );
         try
         {
             var store = RequireLocationStore(runtime);
@@ -77,11 +79,12 @@ public sealed partial class EntrySpotActorDispatchTests
 
             var authority = await ReadAuthorityAsync(
                 store,
-                ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey("cold-live-owner"));
+                ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey("cold-live-owner")
+            );
             Assert.Equal(
-                runtime.Services.GetRequiredService<ZLinkLocationRuntime>()
-                    .OwnerToken.OwnerId,
-                authority.OwnerId);
+                runtime.Services.GetRequiredService<ZLinkLocationRuntime>().OwnerToken.OwnerId,
+                authority.OwnerId
+            );
         }
         finally
         {
@@ -100,11 +103,11 @@ public sealed partial class EntrySpotActorDispatchTests
             node,
             includeActorFactory: false,
             includeInstanceSpotRoute: true,
-            locationStoreWrapper: inner => corruptStore = new(
-                inner,
-                ZLinkProviderLocationRepository.OwnerKey(corruptOwnerId)),
+            locationStoreWrapper: inner =>
+                corruptStore = new(inner, ZLinkProviderLocationRepository.OwnerKey(corruptOwnerId)),
             relocationStore: new InMemoryRelocationStore(),
-            locationTimeProvider: time);
+            locationTimeProvider: time
+        );
         try
         {
             var store = RequireLocationStore(runtime);
@@ -113,19 +116,20 @@ public sealed partial class EntrySpotActorDispatchTests
                 corruptOwnerId,
                 RoutingId.From("corrupt-cold-node"),
                 TimeSpan.FromMinutes(1),
-                placementWeight: 10_000);
+                placementWeight: 10_000
+            );
             corruptStore!.Enabled = true;
 
-            var error = await Assert.ThrowsAsync<InvalidDataException>(
-                () => SendInstanceIntentAsync(runtime, "cold-corrupt-owner"));
+            var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+                SendInstanceIntentAsync(runtime, "cold-corrupt-owner")
+            );
 
-            Assert.Equal(
-                "The Location Store owner lease record is invalid.",
-                error.Message);
+            Assert.Equal("The Location Store owner lease record is invalid.", error.Message);
         }
         finally
         {
-            if (corruptStore is not null) corruptStore.Enabled = false;
+            if (corruptStore is not null)
+                corruptStore.Enabled = false;
             await runtime.StopAsync(CancellationToken.None);
         }
     }
@@ -135,9 +139,7 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         var time = new ManualTimeProvider();
         var node = new CapturingSpotNode();
-        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
-            node,
-            locationTimeProvider: time);
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node, locationTimeProvider: time);
         try
         {
             var store = RequireLocationStore(runtime);
@@ -146,7 +148,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 "expired-entry-owner",
                 RoutingId.From("expired-entry-node"),
                 TimeSpan.FromSeconds(1),
-                placementWeight: 10_000);
+                placementWeight: 10_000
+            );
             time.Advance(TimeSpan.FromSeconds(2));
             var actor = RegisterProbeActor(runtime, actorRef);
             await using var sourceActivation = AttachActorToUserSpot(runtime, actor);
@@ -155,7 +158,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 actor,
                 ZLinkMessage.Empty,
                 operationId: null,
-                CancellationToken.None);
+                CancellationToken.None
+            );
 
             Assert.IsType<ZLinkActorJoinResult.Accepted>(result);
             Assert.Equal(default, node.LastActorJoinTargetNodeRid);
@@ -171,9 +175,7 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         var time = new ManualTimeProvider();
         var node = new CapturingSpotNode();
-        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
-            node,
-            locationTimeProvider: time);
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node, locationTimeProvider: time);
         try
         {
             var actor = RegisterProbeActor(runtime, actorRef);
@@ -183,7 +185,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 actor,
                 ZLinkMessage.Empty,
                 operationId: null,
-                CancellationToken.None);
+                CancellationToken.None
+            );
 
             Assert.IsType<ZLinkActorJoinResult.Accepted>(result);
             Assert.Equal(default, node.LastActorJoinTargetNodeRid);
@@ -203,10 +206,10 @@ public sealed partial class EntrySpotActorDispatchTests
         var node = new CapturingSpotNode();
         var (runtime, actorRef) = await CreateStartedRuntimeAsync(
             node,
-            locationStoreWrapper: inner => corruptStore = new(
-                inner,
-                ZLinkProviderLocationRepository.OwnerKey(corruptOwnerId)),
-            locationTimeProvider: time);
+            locationStoreWrapper: inner =>
+                corruptStore = new(inner, ZLinkProviderLocationRepository.OwnerKey(corruptOwnerId)),
+            locationTimeProvider: time
+        );
         try
         {
             var store = RequireLocationStore(runtime);
@@ -215,7 +218,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 corruptOwnerId,
                 RoutingId.From("corrupt-entry-node"),
                 TimeSpan.FromMinutes(1),
-                placementWeight: 10_000);
+                placementWeight: 10_000
+            );
             corruptStore!.Enabled = true;
             var actor = RegisterProbeActor(runtime, actorRef);
             await using var sourceActivation = AttachActorToUserSpot(runtime, actor);
@@ -225,15 +229,16 @@ public sealed partial class EntrySpotActorDispatchTests
                     actor,
                     ZLinkMessage.Empty,
                     operationId: null,
-                    CancellationToken.None));
+                    CancellationToken.None
+                )
+            );
 
-            Assert.Equal(
-                "The Location Store owner lease record is invalid.",
-                error.Message);
+            Assert.Equal("The Location Store owner lease record is invalid.", error.Message);
         }
         finally
         {
-            if (corruptStore is not null) corruptStore.Enabled = false;
+            if (corruptStore is not null)
+                corruptStore.Enabled = false;
             await runtime.StopAsync(CancellationToken.None);
         }
     }
@@ -245,7 +250,8 @@ public sealed partial class EntrySpotActorDispatchTests
             "expired-ready-spot-owner",
             RoutingId.From("expired-ready-spot-node"),
             TimeSpan.FromSeconds(1),
-            userSpot: true);
+            userSpot: true
+        );
         try
         {
             fixture.Time.Advance(TimeSpan.FromSeconds(2));
@@ -257,24 +263,25 @@ public sealed partial class EntrySpotActorDispatchTests
             //  that can never change.
             var started = Stopwatch.GetTimestamp();
             var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
-                await fixture.Runtime
-                    .GetOrCreate(fixture.ObjectId, fixture.StableType)
+                await fixture
+                    .Runtime.GetOrCreate(fixture.ObjectId, fixture.StableType)
                     .Timeout(JoinDecisionRequestTimeout)
-                    .Async());
+                    .Async()
+            );
             var elapsed = Stopwatch.GetElapsedTime(started);
 
             Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
-            Assert.Equal(
-                $"User Spot '{fixture.ObjectId}' owner lease is not live.",
-                error.Message);
+            Assert.Equal($"User Spot '{fixture.ObjectId}' owner lease is not live.", error.Message);
             Assert.Equal(ZLinkRetryAdvice.RetryAfterStateChange, error.RetryAdvice);
             Assert.True(
                 elapsed < JoinDecisionBudget,
                 $"The join consumed {elapsed} of the {JoinDecisionRequestTimeout} "
-                + "request timeout instead of deciding on the owner lease.");
+                    + "request timeout instead of deciding on the owner lease."
+            );
             Assert.Equal(
                 fixture.Owner.OwnerId,
-                (await ReadAuthorityAsync(fixture.Store, fixture.AuthorityKey)).OwnerId);
+                (await ReadAuthorityAsync(fixture.Store, fixture.AuthorityKey)).OwnerId
+            );
         }
         finally
         {
@@ -289,11 +296,12 @@ public sealed partial class EntrySpotActorDispatchTests
             "live-ready-spot-owner",
             RoutingId.From("live-ready-spot-node"),
             TimeSpan.FromMinutes(1),
-            userSpot: true);
+            userSpot: true
+        );
         try
         {
-            var result = await fixture.Runtime
-                .GetOrCreate(fixture.ObjectId, fixture.StableType)
+            var result = await fixture
+                .Runtime.GetOrCreate(fixture.ObjectId, fixture.StableType)
                 .Async();
 
             Assert.Equal(ZLinkSpotCreateState.Existing, result.State);
@@ -313,17 +321,15 @@ public sealed partial class EntrySpotActorDispatchTests
             RoutingId.From("corrupt-ready-spot-node"),
             TimeSpan.FromMinutes(1),
             userSpot: true,
-            corruptExpiry: true);
+            corruptExpiry: true
+        );
         try
         {
             var error = await Assert.ThrowsAsync<InvalidDataException>(async () =>
-                await fixture.Runtime
-                    .GetOrCreate(fixture.ObjectId, fixture.StableType)
-                    .Async());
+                await fixture.Runtime.GetOrCreate(fixture.ObjectId, fixture.StableType).Async()
+            );
 
-            Assert.Equal(
-                "The Location Store owner lease record is invalid.",
-                error.Message);
+            Assert.Equal("The Location Store owner lease record is invalid.", error.Message);
         }
         finally
         {
@@ -338,7 +344,8 @@ public sealed partial class EntrySpotActorDispatchTests
             "expired-ready-actor-owner",
             RoutingId.From("expired-ready-actor-node"),
             TimeSpan.FromSeconds(1),
-            userSpot: false);
+            userSpot: false
+        );
         try
         {
             fixture.Time.Advance(TimeSpan.FromSeconds(2));
@@ -346,24 +353,26 @@ public sealed partial class EntrySpotActorDispatchTests
 
             var started = Stopwatch.GetTimestamp();
             var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
-                await manager.GetOrCreate(fixture.ObjectId, fixture.StableType)
+                await manager
+                    .GetOrCreate(fixture.ObjectId, fixture.StableType)
                     .InMesh("entry")
                     .Timeout(JoinDecisionRequestTimeout)
-                    .Async());
+                    .Async()
+            );
             var elapsed = Stopwatch.GetElapsedTime(started);
 
             Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
-            Assert.Equal(
-                $"Actor '{fixture.ObjectId}' owner lease is not live.",
-                error.Message);
+            Assert.Equal($"Actor '{fixture.ObjectId}' owner lease is not live.", error.Message);
             Assert.Equal(ZLinkRetryAdvice.RetryAfterStateChange, error.RetryAdvice);
             Assert.True(
                 elapsed < JoinDecisionBudget,
                 $"The join consumed {elapsed} of the {JoinDecisionRequestTimeout} "
-                + "request timeout instead of deciding on the owner lease.");
+                    + "request timeout instead of deciding on the owner lease."
+            );
             Assert.Equal(
                 fixture.Owner.OwnerId,
-                (await ReadAuthorityAsync(fixture.Store, fixture.AuthorityKey)).OwnerId);
+                (await ReadAuthorityAsync(fixture.Store, fixture.AuthorityKey)).OwnerId
+            );
         }
         finally
         {
@@ -378,14 +387,14 @@ public sealed partial class EntrySpotActorDispatchTests
             "live-ready-actor-owner",
             RoutingId.From("live-ready-actor-node"),
             TimeSpan.FromMinutes(1),
-            userSpot: false);
+            userSpot: false
+        );
         try
         {
             var manager = new ZLinkActorManagerService(fixture.Runtime);
 
-            var result = await manager.GetOrCreate(
-                    fixture.ObjectId,
-                    fixture.StableType)
+            var result = await manager
+                .GetOrCreate(fixture.ObjectId, fixture.StableType)
                 .InMesh("entry")
                 .Async();
 
@@ -406,19 +415,20 @@ public sealed partial class EntrySpotActorDispatchTests
             RoutingId.From("corrupt-ready-actor-node"),
             TimeSpan.FromMinutes(1),
             userSpot: false,
-            corruptExpiry: true);
+            corruptExpiry: true
+        );
         try
         {
             var manager = new ZLinkActorManagerService(fixture.Runtime);
 
             var error = await Assert.ThrowsAsync<InvalidDataException>(async () =>
-                await manager.GetOrCreate(fixture.ObjectId, fixture.StableType)
+                await manager
+                    .GetOrCreate(fixture.ObjectId, fixture.StableType)
                     .InMesh("entry")
-                    .Async());
+                    .Async()
+            );
 
-            Assert.Equal(
-                "The Location Store owner lease record is invalid.",
-                error.Message);
+            Assert.Equal("The Location Store owner lease record is invalid.", error.Message);
         }
         finally
         {
@@ -442,39 +452,43 @@ public sealed partial class EntrySpotActorDispatchTests
         var (runtime, _) = await CreateStartedRuntimeAsync(
             node,
             preseedActorOwnership: false,
-            locationStoreWrapper: inner => failingStore = new(inner));
+            locationStoreWrapper: inner => failingStore = new(inner)
+        );
         try
         {
             var store = RequireLocationStore(runtime);
             var local = Assert.Single(
-                (await store.ListMeshNodesAsync(
-                    "entry",
-                    new ZLinkPageRequest(100))).Items,
-                descriptor => descriptor.Rid == node.RoutingId);
+                (await store.ListMeshNodesAsync("entry", new ZLinkPageRequest(100))).Items,
+                descriptor => descriptor.Rid == node.RoutingId
+            );
             Assert.Equal(
                 ZLinkLocationWriteStatus.Stored,
-                (await store.UpdateMeshNodeAsync(
-                    local with
-                    {
-                        DescriptorRevision = checked(local.DescriptorRevision + 1),
-                        ObjectCapabilities =
-                        [
-                            ..local.ObjectCapabilities,
-                            new ZLinkObjectCapability(
-                                ZLinkPlacementObjectKind.Actor,
-                                "probe",
-                                ZLinkObjectMaintenancePolicyKind.Disabled,
-                                false,
-                                0)
-                        ]
-                    },
-                    ZLinkLocationWriteIntent.Renew)).Status);
+                (
+                    await store.UpdateMeshNodeAsync(
+                        local with
+                        {
+                            DescriptorRevision = checked(local.DescriptorRevision + 1),
+                            ObjectCapabilities =
+                            [
+                                .. local.ObjectCapabilities,
+                                new ZLinkObjectCapability(
+                                    ZLinkPlacementObjectKind.Actor,
+                                    "probe",
+                                    ZLinkObjectMaintenancePolicyKind.Disabled,
+                                    false,
+                                    0
+                                ),
+                            ],
+                        },
+                        ZLinkLocationWriteIntent.Renew
+                    )
+                ).Status
+            );
             failingStore!.Enabled = true;
             var manager = new ZLinkActorManagerService(runtime);
 
-            var result = await manager.GetOrCreate(
-                    "local-completion-exception",
-                    "probe")
+            var result = await manager
+                .GetOrCreate("local-completion-exception", "probe")
                 .InMesh("entry")
                 .Async();
 
@@ -488,27 +502,27 @@ public sealed partial class EntrySpotActorDispatchTests
         }
     }
 
-    private static async Task AssertRemoteCreationTerminalReconciledAsync(
-        bool responseLost)
+    private static async Task AssertRemoteCreationTerminalReconciledAsync(bool responseLost)
     {
         const string actorId = "response-loss-actor";
         const string actorType = "response-loss-probe";
         var targetRid = RoutingId.From("response-loss-node");
         var node = new CapturingSpotNode();
-        node.AdmittedMeshPeers.Add(new MeshNodePeer(
-            1,
-            MeshPeerSource.Discovery,
-            MeshPeerState.Admitted,
-            targetRid,
-            1,
-            1,
-            "inproc://response-loss-node",
-            1,
-            0,
-            1));
-        var (runtime, _) = await CreateStartedRuntimeAsync(
-            node,
-            preseedActorOwnership: false);
+        node.AdmittedMeshPeers.Add(
+            new MeshNodePeer(
+                1,
+                MeshPeerSource.Discovery,
+                MeshPeerState.Admitted,
+                targetRid,
+                1,
+                1,
+                "inproc://response-loss-node",
+                1,
+                0,
+                1
+            )
+        );
+        var (runtime, _) = await CreateStartedRuntimeAsync(node, preseedActorOwnership: false);
         try
         {
             var store = RequireLocationStore(runtime);
@@ -517,12 +531,20 @@ public sealed partial class EntrySpotActorDispatchTests
                 "response-loss-owner",
                 targetRid,
                 TimeSpan.FromMinutes(1),
-                actorType: actorType);
+                actorType: actorType
+            );
             ZLinkCreationOperationId? submittedOperation = null;
             ulong submittedObjectGeneration = 0;
             node.ActorCreateRemoteHandler = async (
-                _, submittedActorId, stableType, fence, operation, deadlineUnixMs,
-                _, _) =>
+                _,
+                submittedActorId,
+                stableType,
+                fence,
+                operation,
+                deadlineUnixMs,
+                _,
+                _
+            ) =>
             {
                 submittedOperation = operation;
                 submittedObjectGeneration = fence.ObjectGeneration;
@@ -530,13 +552,16 @@ public sealed partial class EntrySpotActorDispatchTests
                     submittedActorId,
                     fence.ObjectGeneration,
                     "entry",
-                    targetRid);
+                    targetRid
+                );
                 var envelope = ZLinkActorCreationTerminalCodec.Encode(
                     new ActorCreateOperationTerminal(
                         RequestResult.Ok,
                         ServiceWireConstants.FrameworkErrorCode.None,
-                        new ActorCreateCompletion(ActorCreateResult.Created, actor)),
-                    runtime.Registration.Codecs);
+                        new ActorCreateCompletion(ActorCreateResult.Created, actor)
+                    ),
+                    runtime.Registration.Codecs
+                );
                 var reservation = new ZLinkObjectReservation(
                     ZLinkActorAuthorityPayloadCodec.AuthorityKey(submittedActorId),
                     fence.ExpectedStoreVersion,
@@ -547,7 +572,9 @@ public sealed partial class EntrySpotActorDispatchTests
                     fence.TargetNodeGeneration,
                     new ZLinkLocationOwnerToken(
                         fence.TargetOwnerId,
-                        fence.TargetOwnerLeaseGeneration));
+                        fence.TargetOwnerLeaseGeneration
+                    )
+                );
                 var ready = ZLinkActorAuthorityPayloadCodec.Encode(
                     new ZLinkActorAuthorityPayload(
                         ZLinkActorAuthorityState.Ready,
@@ -560,7 +587,9 @@ public sealed partial class EntrySpotActorDispatchTests
                         fence.TargetOwnerLeaseGeneration,
                         "entry",
                         targetRid,
-                        fence.TargetNodeGeneration));
+                        fence.TargetNodeGeneration
+                    )
+                );
                 var completed = await store.CompleteCreationAsync(
                     reservation,
                     new ZLinkObjectCreationCompletion.Created(
@@ -568,9 +597,12 @@ public sealed partial class EntrySpotActorDispatchTests
                         new ZLinkCreationTerminalPublication(
                             operation,
                             envelope,
-                            DateTimeOffset.FromUnixTimeMilliseconds(
-                                    checked((long)deadlineUnixMs))
-                                .AddMinutes(1))));
+                            DateTimeOffset
+                                .FromUnixTimeMilliseconds(checked((long)deadlineUnixMs))
+                                .AddMinutes(1)
+                        )
+                    )
+                );
                 Assert.IsType<ZLinkObjectCreationCompleteResult.Created>(completed);
                 if (responseLost)
                     throw new TimeoutException("response lost after terminal storage");
@@ -578,9 +610,7 @@ public sealed partial class EntrySpotActorDispatchTests
             };
 
             var manager = new ZLinkActorManagerService(runtime);
-            var result = await manager.GetOrCreate(actorId, actorType)
-                .InMesh("entry")
-                .Async();
+            var result = await manager.GetOrCreate(actorId, actorType).InMesh("entry").Async();
 
             var created = Assert.IsType<ZLinkActorCreateResult.Created>(result);
             Assert.Equal(actorId, created.Actor.ActorId);
@@ -589,7 +619,8 @@ public sealed partial class EntrySpotActorDispatchTests
             Assert.Equal(node.RoutingId, submittedOperation.Value.SourceNodeRid);
             Assert.Equal(
                 node.MeshStatus().LifecycleGeneration,
-                submittedOperation.Value.SourceNodeGeneration);
+                submittedOperation.Value.SourceNodeGeneration
+            );
         }
         finally
         {
@@ -606,23 +637,19 @@ public sealed partial class EntrySpotActorDispatchTests
         Assert.Equal(1UL, operation.Low);
     }
 
-    private static async Task SendInstanceIntentAsync(
-        ZLinkFrameworkRuntime runtime,
-        string spotId)
+    private static async Task SendInstanceIntentAsync(ZLinkFrameworkRuntime runtime, string spotId)
     {
         await new ZLinkInstanceSpotSendCall<ProbeRouteMessage>(
-                runtime,
-                new InstanceSpotIntentAddress(
-                    "entry",
-                    "Tests.InstanceSpot",
-                    spotId),
-                new ProbeRouteMessage("activate"))
-            .Async();
+            runtime,
+            new InstanceSpotIntentAddress("entry", "Tests.InstanceSpot", spotId),
+            new ProbeRouteMessage("activate")
+        ).Async();
     }
 
     private static ZLinkUserSpotActivation AttachActorToUserSpot(
         ZLinkFrameworkRuntime runtime,
-        IZLinkActor actor)
+        IZLinkActor actor
+    )
     {
         var activation = new ZLinkUserSpotActivation(
             runtime,
@@ -633,13 +660,13 @@ public sealed partial class EntrySpotActorDispatchTests
             "entry",
             "entry",
             TimeSpan.FromSeconds(1),
-            TimeSpan.FromSeconds(1));
+            TimeSpan.FromSeconds(1)
+        );
         runtime.GetOrCreateActorState(actor.Context.ActorId).JoinSpot(activation);
         return activation;
     }
 
-    private static IZLinkLocationRepository RequireLocationStore(
-        ZLinkFrameworkRuntime runtime) =>
+    private static IZLinkLocationRepository RequireLocationStore(ZLinkFrameworkRuntime runtime) =>
         runtime.Registration.Locations.ResolveStore()
         ?? throw new InvalidOperationException("A Location Store is required.");
 
@@ -649,12 +676,14 @@ public sealed partial class EntrySpotActorDispatchTests
         RoutingId routingId,
         TimeSpan leaseTtl,
         int placementWeight = 100,
-        string? actorType = null)
+        string? actorType = null
+    )
     {
         var owner = await store.ClaimLiveOwnerAsync(ownerId, leaseTtl);
         var local = Assert.Single(
             (await store.ListMeshNodesAsync("entry", new ZLinkPageRequest(100))).Items,
-            descriptor => descriptor.Rid == RoutingId.From("entry-node"));
+            descriptor => descriptor.Rid == RoutingId.From("entry-node")
+        );
         var descriptor = local with
         {
             Rid = routingId,
@@ -667,35 +696,36 @@ public sealed partial class EntrySpotActorDispatchTests
                 ? local.ObjectCapabilities
                 :
                 [
-                    ..local.ObjectCapabilities,
+                    .. local.ObjectCapabilities,
                     new ZLinkObjectCapability(
                         ZLinkPlacementObjectKind.Actor,
                         actorType,
                         ZLinkObjectMaintenancePolicyKind.Disabled,
                         false,
-                        0)
-                ]
+                        0
+                    ),
+                ],
         };
         Assert.Equal(
             ZLinkLocationWriteStatus.Stored,
-            (await store.UpdateMeshNodeAsync(
-                descriptor,
-                ZLinkLocationWriteIntent.NewClaim)).Status);
+            (await store.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim)).Status
+        );
         return owner;
     }
 
     private static async Task<ZLinkAuthoritySnapshot> ReadAuthorityAsync(
         IZLinkLocationRepository store,
-        ZLinkAuthorityKey key) =>
-        Assert.IsType<ZLinkAuthorityReadResult.Found>(
-            await store.ReadAuthorityAsync(key)).Snapshot;
+        ZLinkAuthorityKey key
+    ) =>
+        Assert.IsType<ZLinkAuthorityReadResult.Found>(await store.ReadAuthorityAsync(key)).Snapshot;
 
     private static async Task<ReadyAuthorityFixture> CreateReadyAuthorityFixtureAsync(
         string ownerId,
         RoutingId ownerNodeRid,
         TimeSpan leaseTtl,
         bool userSpot,
-        bool corruptExpiry = false)
+        bool corruptExpiry = false
+    )
     {
         var time = new ManualTimeProvider();
         ToggleMissingOwnerLeaseExpiryStore? corruptStore = null;
@@ -706,11 +736,11 @@ public sealed partial class EntrySpotActorDispatchTests
             userSpotType: userSpot ? typeof(EmptyUserSpot) : null,
             preseedActorOwnership: false,
             locationStoreWrapper: corruptExpiry
-                ? inner => corruptStore = new(
-                    inner,
-                    ZLinkProviderLocationRepository.OwnerKey(ownerId))
+                ? inner =>
+                    corruptStore = new(inner, ZLinkProviderLocationRepository.OwnerKey(ownerId))
                 : null,
-            locationTimeProvider: time);
+            locationTimeProvider: time
+        );
         try
         {
             var store = RequireLocationStore(runtime);
@@ -719,10 +749,9 @@ public sealed partial class EntrySpotActorDispatchTests
                 ownerId,
                 ownerNodeRid,
                 leaseTtl,
-                actorType: userSpot ? null : "probe");
-            var objectId = userSpot
-                ? $"ready-spot-{ownerId}"
-                : $"ready-actor-{ownerId}";
+                actorType: userSpot ? null : "probe"
+            );
+            var objectId = userSpot ? $"ready-spot-{ownerId}" : $"ready-actor-{ownerId}";
             var stableType = userSpot ? typeof(EmptyUserSpot).FullName! : "probe";
             var key = userSpot
                 ? ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(objectId)
@@ -737,7 +766,9 @@ public sealed partial class EntrySpotActorDispatchTests
                         checked((ulong)owner.LeaseGeneration),
                         "entry",
                         ownerNodeRid,
-                        1))
+                        1
+                    )
+                )
                 : ZLinkActorAuthorityPayloadCodec.Encode(
                     new ZLinkActorAuthorityPayload(
                         ZLinkActorAuthorityState.Ready,
@@ -750,13 +781,13 @@ public sealed partial class EntrySpotActorDispatchTests
                         checked((ulong)owner.LeaseGeneration),
                         "entry",
                         ownerNodeRid,
-                        1));
+                        1
+                    )
+                );
             await ReserveAndCommitLocalAuthorityAsync(
                 store,
                 key,
-                userSpot
-                    ? ZLinkPlacementObjectKind.UserSpot
-                    : ZLinkPlacementObjectKind.Actor,
+                userSpot ? ZLinkPlacementObjectKind.UserSpot : ZLinkPlacementObjectKind.Actor,
                 stableType,
                 ownerNodeRid,
                 owner,
@@ -768,41 +799,50 @@ public sealed partial class EntrySpotActorDispatchTests
                         new ZLinkSpotTypeCapacityDelta(
                             ZLinkPlacementObjectKind.UserSpot,
                             stableType,
-                            1))
-                    : new ZLinkCapacityVector(1, 0, null));
+                            1
+                        )
+                    )
+                    : new ZLinkCapacityVector(1, 0, null)
+            );
             Assert.Equal(
                 ZLinkLocationWriteStatus.Stored,
                 await store.RemoveMeshNodeAsync(
                     new ZLinkMeshNodeDescriptorKey("entry", ownerNodeRid),
-                    owner));
+                    owner
+                )
+            );
             if (!userSpot)
             {
                 var local = Assert.Single(
-                    (await store.ListMeshNodesAsync(
-                        "entry",
-                        new ZLinkPageRequest(100))).Items,
-                    descriptor => descriptor.Rid == RoutingId.From("entry-node"));
+                    (await store.ListMeshNodesAsync("entry", new ZLinkPageRequest(100))).Items,
+                    descriptor => descriptor.Rid == RoutingId.From("entry-node")
+                );
                 Assert.Equal(
                     ZLinkLocationWriteStatus.Stored,
-                    (await store.UpdateMeshNodeAsync(
-                        local with
-                        {
-                            DescriptorRevision = checked(
-                                local.DescriptorRevision + 1),
-                            ObjectCapabilities =
-                            [
-                                ..local.ObjectCapabilities,
-                                new ZLinkObjectCapability(
-                                    ZLinkPlacementObjectKind.Actor,
-                                    "probe",
-                                    ZLinkObjectMaintenancePolicyKind.Disabled,
-                                    false,
-                                    0)
-                            ]
-                        },
-                        ZLinkLocationWriteIntent.Renew)).Status);
+                    (
+                        await store.UpdateMeshNodeAsync(
+                            local with
+                            {
+                                DescriptorRevision = checked(local.DescriptorRevision + 1),
+                                ObjectCapabilities =
+                                [
+                                    .. local.ObjectCapabilities,
+                                    new ZLinkObjectCapability(
+                                        ZLinkPlacementObjectKind.Actor,
+                                        "probe",
+                                        ZLinkObjectMaintenancePolicyKind.Disabled,
+                                        false,
+                                        0
+                                    ),
+                                ],
+                            },
+                            ZLinkLocationWriteIntent.Renew
+                        )
+                    ).Status
+                );
             }
-            if (corruptStore is not null) corruptStore.Enabled = true;
+            if (corruptStore is not null)
+                corruptStore.Enabled = true;
             return new ReadyAuthorityFixture(
                 runtime,
                 store,
@@ -811,11 +851,13 @@ public sealed partial class EntrySpotActorDispatchTests
                 key,
                 objectId,
                 stableType,
-                corruptStore);
+                corruptStore
+            );
         }
         catch
         {
-            if (corruptStore is not null) corruptStore.Enabled = false;
+            if (corruptStore is not null)
+                corruptStore.Enabled = false;
             await runtime.StopAsync(CancellationToken.None);
             throw;
         }
@@ -829,11 +871,13 @@ public sealed partial class EntrySpotActorDispatchTests
         ZLinkAuthorityKey AuthorityKey,
         string ObjectId,
         string StableType,
-        ToggleMissingOwnerLeaseExpiryStore? CorruptStore) : IAsyncDisposable
+        ToggleMissingOwnerLeaseExpiryStore? CorruptStore
+    ) : IAsyncDisposable
     {
         public async ValueTask DisposeAsync()
         {
-            if (CorruptStore is not null) CorruptStore.Enabled = false;
+            if (CorruptStore is not null)
+                CorruptStore.Enabled = false;
             await Runtime.StopAsync(CancellationToken.None);
         }
     }
@@ -849,61 +893,62 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public ValueTask<ZLinkStoreReadResult> ReadAsync(
             ZLinkStoreKey key,
-            CancellationToken cancellationToken = default) =>
-            inner.ReadAsync(key, cancellationToken);
+            CancellationToken cancellationToken = default
+        ) => inner.ReadAsync(key, cancellationToken);
 
         public async ValueTask<ZLinkStoreWriteResult> WriteAsync(
             ZLinkStoreWriteRequest request,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             var result = await inner.WriteAsync(request, cancellationToken);
-            if (Enabled
+            if (
+                Enabled
                 && result is ZLinkStoreWriteResult.Applied
                 && request.Mutations.Any(static mutation =>
                     mutation is ZLinkStoreMutation.Put put
-                    && put.Key.Value.StartsWith(
-                        "creation-terminal\0",
-                        StringComparison.Ordinal))
-                && Interlocked.CompareExchange(ref _thrown, 1, 0) == 0)
+                    && put.Key.Value.StartsWith("creation-terminal\0", StringComparison.Ordinal)
+                )
+                && Interlocked.CompareExchange(ref _thrown, 1, 0) == 0
+            )
                 throw new InvalidOperationException(
-                    "completion failed after the terminal was stored");
+                    "completion failed after the terminal was stored"
+                );
             return result;
         }
 
         public ValueTask<ZLinkStoreScanResult> ScanAsync(
             ZLinkStoreScanRequest request,
-            CancellationToken cancellationToken = default) =>
-            inner.ScanAsync(request, cancellationToken);
+            CancellationToken cancellationToken = default
+        ) => inner.ScanAsync(request, cancellationToken);
     }
 
     private sealed class ToggleMissingOwnerLeaseExpiryStore(
         IZLinkLocationStore inner,
-        ZLinkStoreKey ownerKey) : IZLinkLocationStore
+        ZLinkStoreKey ownerKey
+    ) : IZLinkLocationStore
     {
         public bool Enabled { get; set; }
 
         public async ValueTask<ZLinkStoreReadResult> ReadAsync(
             ZLinkStoreKey key,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
-            var read = await inner.ReadAsync(key, cancellationToken)
-                .ConfigureAwait(false);
-            return Enabled
-                   && key == ownerKey
-                   && read is ZLinkStoreReadResult.Found found
-                ? new ZLinkStoreReadResult.Found(
-                    found.Value with { ExpiresAt = null })
+            var read = await inner.ReadAsync(key, cancellationToken).ConfigureAwait(false);
+            return Enabled && key == ownerKey && read is ZLinkStoreReadResult.Found found
+                ? new ZLinkStoreReadResult.Found(found.Value with { ExpiresAt = null })
                 : read;
         }
 
         public ValueTask<ZLinkStoreWriteResult> WriteAsync(
             ZLinkStoreWriteRequest request,
-            CancellationToken cancellationToken = default) =>
-            inner.WriteAsync(request, cancellationToken);
+            CancellationToken cancellationToken = default
+        ) => inner.WriteAsync(request, cancellationToken);
 
         public ValueTask<ZLinkStoreScanResult> ScanAsync(
             ZLinkStoreScanRequest request,
-            CancellationToken cancellationToken = default) =>
-            inner.ScanAsync(request, cancellationToken);
+            CancellationToken cancellationToken = default
+        ) => inner.ScanAsync(request, cancellationToken);
     }
 }

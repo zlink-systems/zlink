@@ -6,7 +6,8 @@ internal sealed class ZLinkMessageContext(
     string packetName,
     string? contentType,
     ZLinkMessageMetadata? metadata,
-    string? correlationId) : IZLinkMessageContext
+    string? correlationId
+) : IZLinkMessageContext
 {
     public string? MeshName { get; } = meshName;
 
@@ -16,8 +17,7 @@ internal sealed class ZLinkMessageContext(
 
     public string? ContentType { get; } = contentType;
 
-    public ZLinkMessageMetadata Metadata { get; } =
-        metadata ?? ZLinkMessageMetadata.Empty;
+    public ZLinkMessageMetadata Metadata { get; } = metadata ?? ZLinkMessageMetadata.Empty;
 
     public string? CorrelationId { get; } = correlationId;
 }

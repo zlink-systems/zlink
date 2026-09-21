@@ -1,10 +1,8 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException  } from '../framework-errors-internal';
-import type {
-  RoutingId,
-  Type,
-  ZLinkActor,
-  ZLinkSpot
-} from '../../contracts';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
+import type { RoutingId, Type, ZLinkActor, ZLinkSpot } from '../../contracts';
 import {
   ZLinkSpotCloseReason,
   ZLinkSpotRelocationCoordinationMode,
@@ -21,10 +19,7 @@ import { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import { ZLinkSpotSerialExecutor } from './spot-serial-executor';
 import type { ZLinkSpotTimerRegistry } from './spot-timer';
 import type { ZLinkSpotActorJoinDispatch } from './spot-actor-join-dispatch';
-import {
-  ZLinkExecutionBarrier,
-  type ZLinkExecutionBarrierSeal
-} from '../execution';
+import { ZLinkExecutionBarrier, type ZLinkExecutionBarrierSeal } from '../execution';
 import type { ZLinkTimerRelocationState } from './spot-timer';
 
 export type ZLinkSpotActivationDomain =
@@ -114,11 +109,9 @@ export class ZLinkSpotActivation {
     this.spotType = options.spotType;
     this.spot = options.spot;
     this.serial = options.serial;
-    this.serialExecutor = options.serialExecutor ?? new ZLinkSpotSerialExecutor(
-      this.serial,
-      this.executionMode,
-      options.spotId
-    );
+    this.serialExecutor =
+      options.serialExecutor ??
+      new ZLinkSpotSerialExecutor(this.serial, this.executionMode, options.spotId);
     this.executionBarrier = options.executionBarrier ?? new ZLinkExecutionBarrier();
     this.serialExecutor.setExecutionBarrier(this.executionBarrier);
     if (typeof options.timers.setExecutionBarrier === 'function') {
@@ -133,9 +126,7 @@ export class ZLinkSpotActivation {
   }
 
   get objectGeneration(): bigint | undefined {
-    return this.domain.kind === 'instance'
-      ? this.domain.objectGeneration
-      : undefined;
+    return this.domain.kind === 'instance' ? this.domain.objectGeneration : undefined;
   }
 
   get executionMode(): ZLinkUserSpotExecutionMode {
@@ -153,7 +144,10 @@ export class ZLinkSpotActivation {
   relocationReadyCall(): ZLinkSpotRelocationReadyCall {
     return {
       defer: () => {
-        if (this.relocationCoordinationMode !== ZLinkSpotRelocationCoordinationMode.ApplicationSignaled) {
+        if (
+          this.relocationCoordinationMode !==
+          ZLinkSpotRelocationCoordinationMode.ApplicationSignaled
+        ) {
           throw new ZLinkConfigurationException(
             'relocationReady().defer() requires ApplicationSignaled relocation readiness.'
           );
@@ -165,10 +159,7 @@ export class ZLinkSpotActivation {
           );
         }
         const turnId = this.serial.activeTurnId;
-        if (
-          this.relocationReadyDeferredTurnId === turnId
-          || this.relocationBoundaryConsumed
-        ) {
+        if (this.relocationReadyDeferredTurnId === turnId || this.relocationBoundaryConsumed) {
           throw createInternalFrameworkException(
             ZLinkFrameworkInternalErrorKind.InvalidOperation,
             'relocationReady().defer() was already called for this boundary.'
@@ -185,16 +176,16 @@ export class ZLinkSpotActivation {
           return;
         }
         const seal = this.executionBarrier.seal();
-        void this.serial.postBarrierTurn(async () => {
-          try {
-            await this.notifyRelocationReadyCompleted(
-              ZLinkSpotRelocationReadyOutcome.Continued
-            );
-          } finally {
-            this.relocationReadyDeferredTurnId = undefined;
-            this.executionBarrier.abort(seal);
-          }
-        }).catch(() => undefined);
+        void this.serial
+          .postBarrierTurn(async () => {
+            try {
+              await this.notifyRelocationReadyCompleted(ZLinkSpotRelocationReadyOutcome.Continued);
+            } finally {
+              this.relocationReadyDeferredTurnId = undefined;
+              this.executionBarrier.abort(seal);
+            }
+          })
+          .catch(() => undefined);
       }
     };
   }
@@ -211,7 +202,9 @@ export class ZLinkSpotActivation {
   }
 
   async waitForRelocationBoundary(signal?: AbortSignal): Promise<boolean> {
-    if (this.relocationCoordinationMode !== ZLinkSpotRelocationCoordinationMode.ApplicationSignaled) {
+    if (
+      this.relocationCoordinationMode !== ZLinkSpotRelocationCoordinationMode.ApplicationSignaled
+    ) {
       return false;
     }
     if (this.relocationReadyWaiter !== undefined) {
@@ -252,9 +245,9 @@ export class ZLinkSpotActivation {
   }
 
   async notifyRelocatedBoundary(): Promise<void> {
-    await this.serial.post(() => this.notifyRelocationReadyCompleted(
-      ZLinkSpotRelocationReadyOutcome.Relocated
-    ));
+    await this.serial.post(() =>
+      this.notifyRelocationReadyCompleted(ZLinkSpotRelocationReadyOutcome.Relocated)
+    );
   }
 
   executeActor<T>(
@@ -270,8 +263,9 @@ export class ZLinkSpotActivation {
     records: readonly {
       readonly operation: (
         executeChild: <TChild>(
-          child: (serial: import('./spot-serial-turn-executor').ZLinkSpotSerialTurnExecutor) =>
-            Promise<TChild> | TChild
+          child: (
+            serial: import('./spot-serial-turn-executor').ZLinkSpotSerialTurnExecutor
+          ) => Promise<TChild> | TChild
         ) => Promise<TChild>
       ) => Promise<void>;
       readonly workOptions?: import('../execution/serial-execution-queue').ZLinkSerialWorkOptions;
@@ -284,10 +278,7 @@ export class ZLinkSpotActivation {
     return this.executionBarrier.seal();
   }
 
-  waitForExecutionQuiescence(
-    seal: ZLinkExecutionBarrierSeal,
-    signal?: AbortSignal
-  ): Promise<void> {
+  waitForExecutionQuiescence(seal: ZLinkExecutionBarrierSeal, signal?: AbortSignal): Promise<void> {
     return this.executionBarrier.waitForQuiescence(seal, signal);
   }
 
@@ -397,12 +388,14 @@ export class ZLinkSpotActivation {
   }
 
   isIdleFor(nowMs: number, timeoutMs: number): boolean {
-    return !this.idleEvictionRequested
-      && !this.closeRequested
-      && !this.serial.isExecuting
-      && !this.serial.hasPendingWork
-      && !this.timers.hasActiveTimers
-      && nowMs - this.serial.lastActivityAt >= timeoutMs;
+    return (
+      !this.idleEvictionRequested &&
+      !this.closeRequested &&
+      !this.serial.isExecuting &&
+      !this.serial.hasPendingWork &&
+      !this.timers.hasActiveTimers &&
+      nowMs - this.serial.lastActivityAt >= timeoutMs
+    );
   }
 
   private async notifyRelocationReadyCompleted(
@@ -410,5 +403,4 @@ export class ZLinkSpotActivation {
   ): Promise<void> {
     await this.spot.onRelocationReadyCompleted?.({ outcome });
   }
-
 }

@@ -55,7 +55,9 @@ internal static class TestHostScenarioConfigurator
                 ConfigureStreamClient(services, options);
                 return;
             default:
-                throw new InvalidOperationException($"Unsupported test host mode '{options.Mode}'.");
+                throw new InvalidOperationException(
+                    $"Unsupported test host mode '{options.Mode}'."
+                );
         }
     }
 
@@ -64,17 +66,25 @@ internal static class TestHostScenarioConfigurator
         services.AddSingleton(new TestHostEventSink(options.EventFilePath));
         services.AddZLinkFramework(framework =>
         {
-            var meshName = options.ChannelName
-                           ?? throw new InvalidOperationException(
-                               "Channel server mode requires --channel-name.");
-            var serverEndpoint = options.ServerEndpoint
-                                 ?? throw new InvalidOperationException(
-                                     "Channel server mode requires --server-endpoint.");
-            var channel = framework.AddClientServerChannel(meshName)
+            var meshName =
+                options.ChannelName
+                ?? throw new InvalidOperationException(
+                    "Channel server mode requires --channel-name."
+                );
+            var serverEndpoint =
+                options.ServerEndpoint
+                ?? throw new InvalidOperationException(
+                    "Channel server mode requires --server-endpoint."
+                );
+            var channel = framework
+                .AddClientServerChannel(meshName)
                 .Server()
                 .Listen(new Uri(serverEndpoint).Port);
-            channel
-                .AddRequestHandler<TestHostProfileRequestHandler, TestHostProfileRequest, TestHostProfileReply>();
+            channel.AddRequestHandler<
+                TestHostProfileRequestHandler,
+                TestHostProfileRequest,
+                TestHostProfileReply
+            >();
             channel.AddSendHandler<TestHostProfileSendHandler, TestHostProfileSend>();
         });
     }
@@ -84,59 +94,82 @@ internal static class TestHostScenarioConfigurator
         services.AddSingleton(new TestHostEventSink(options.EventFilePath));
         services.AddZLinkFramework(framework =>
         {
-            var meshName = options.ChannelName
-                           ?? throw new InvalidOperationException(
-                               "Channel client mode requires --channel-name.");
-            framework.AddClientServerChannel(meshName)
+            var meshName =
+                options.ChannelName
+                ?? throw new InvalidOperationException(
+                    "Channel client mode requires --channel-name."
+                );
+            framework
+                .AddClientServerChannel(meshName)
                 .Client()
                 .Connect(
-                options.ServerEndpoint
-                ?? throw new InvalidOperationException(
-                    "Channel client mode requires --server-endpoint."));
+                    options.ServerEndpoint
+                        ?? throw new InvalidOperationException(
+                            "Channel client mode requires --server-endpoint."
+                        )
+                );
         });
-        services.AddHostedService(provider =>
-            new ChannelClientStartupRequestHostedService(
-                provider.GetRequiredService<IZLinkRouteClient>(),
-                provider.GetRequiredService<TestHostEventSink>(),
-                options.ChannelName!,
-                options.PublishValue ?? "dotnet-to-node"));
+        services.AddHostedService(provider => new ChannelClientStartupRequestHostedService(
+            provider.GetRequiredService<IZLinkRouteClient>(),
+            provider.GetRequiredService<TestHostEventSink>(),
+            options.ChannelName!,
+            options.PublishValue ?? "dotnet-to-node"
+        ));
     }
 
-    private static void ConfigureChannelSubscriber(IServiceCollection services, TestHostOptions options)
+    private static void ConfigureChannelSubscriber(
+        IServiceCollection services,
+        TestHostOptions options
+    )
     {
         services.AddSingleton(new TestHostEventSink(options.EventFilePath));
         services.AddZLinkFramework(framework =>
         {
-            var channel = framework.AddFanoutChannel(options.ChannelName
-                                                     ?? throw new InvalidOperationException(
-                                                         "Channel subscriber mode requires --channel-name."));
+            var channel = framework.AddFanoutChannel(
+                options.ChannelName
+                    ?? throw new InvalidOperationException(
+                        "Channel subscriber mode requires --channel-name."
+                    )
+            );
             channel.Connect(
                 options.PublisherEndpoint
-                ?? throw new InvalidOperationException(
-                    "Channel subscriber mode requires --publisher-endpoint."));
+                    ?? throw new InvalidOperationException(
+                        "Channel subscriber mode requires --publisher-endpoint."
+                    )
+            );
             channel.AddHandler<ChannelSubscriptionEventHandler, TestHostPublishedEvent>();
         });
     }
 
-    private static void ConfigureChannelPublisher(IServiceCollection services, TestHostOptions options)
+    private static void ConfigureChannelPublisher(
+        IServiceCollection services,
+        TestHostOptions options
+    )
     {
         services.AddZLinkFramework(framework =>
         {
-            framework.AddFanoutChannel(options.ChannelName
-                                       ?? throw new InvalidOperationException(
-                                           "Channel publisher mode requires --channel-name."))
-                .EnablePublisher(options.PublisherEndpoint
-                                 ?? throw new InvalidOperationException(
-                                     "Channel publisher mode requires --publisher-endpoint."));
+            framework
+                .AddFanoutChannel(
+                    options.ChannelName
+                        ?? throw new InvalidOperationException(
+                            "Channel publisher mode requires --channel-name."
+                        )
+                )
+                .EnablePublisher(
+                    options.PublisherEndpoint
+                        ?? throw new InvalidOperationException(
+                            "Channel publisher mode requires --publisher-endpoint."
+                        )
+                );
         });
 
         if (!string.IsNullOrWhiteSpace(options.PublishTopic))
-            services.AddHostedService(provider =>
-                new ChannelStartupPublishHostedService(
-                    provider.GetRequiredService<IZLinkFanoutClient>(),
-                    options.ChannelName!,
-                    options.PublishTopic!,
-                    options.PublishValue ?? "startup"));
+            services.AddHostedService(provider => new ChannelStartupPublishHostedService(
+                provider.GetRequiredService<IZLinkFanoutClient>(),
+                options.ChannelName!,
+                options.PublishTopic!,
+                options.PublishValue ?? "startup"
+            ));
     }
 
     private static void ConfigureRouteServer(IServiceCollection services, TestHostOptions options)
@@ -144,50 +177,79 @@ internal static class TestHostScenarioConfigurator
         services.AddSingleton(new TestHostEventSink(options.EventFilePath));
         services.AddZLinkFramework(framework =>
         {
-            var meshName = options.ChannelName
-                           ?? throw new InvalidOperationException(
-                               "Route server mode requires --channel-name.");
-            var mesh = framework.AddRouteMesh(meshName)
-                .Listen(options.ServerEndpoint
+            var meshName =
+                options.ChannelName
+                ?? throw new InvalidOperationException(
+                    "Route server mode requires --channel-name."
+                );
+            var mesh = framework
+                .AddRouteMesh(meshName)
+                .Listen(
+                    options.ServerEndpoint
                         ?? throw new InvalidOperationException(
-                            "Route server mode requires --server-endpoint."))
+                            "Route server mode requires --server-endpoint."
+                        )
+                )
                 .SetRoutingId(RoutingId.From("dotnet-route"));
             mesh.Channel(meshName).Client();
-            mesh.AddRouteRequestHandler<TestHostRouteRequestHandler, TestHostRouteRequest, TestHostRouteReply>();
+            mesh.AddRouteRequestHandler<
+                TestHostRouteRequestHandler,
+                TestHostRouteRequest,
+                TestHostRouteReply
+            >();
             // Cross-language spot route wire scenarios (a)/(c): echo handler and
             // an application handler that fails with a typed framework kind.
-            mesh.AddRouteRequestHandler<TestHostSpotRouteRequestHandler, TestHostSpotRouteRequest, TestHostSpotRouteReply>();
-            mesh.AddRouteRequestHandler<TestHostSpotRouteFailRequestHandler, TestHostSpotRouteFailRequest, TestHostSpotRouteReply>();
+            mesh.AddRouteRequestHandler<
+                TestHostSpotRouteRequestHandler,
+                TestHostSpotRouteRequest,
+                TestHostSpotRouteReply
+            >();
+            mesh.AddRouteRequestHandler<
+                TestHostSpotRouteFailRequestHandler,
+                TestHostSpotRouteFailRequest,
+                TestHostSpotRouteReply
+            >();
         });
     }
 
-    private static void ConfigureSpotRouteClient(IServiceCollection services, TestHostOptions options)
+    private static void ConfigureSpotRouteClient(
+        IServiceCollection services,
+        TestHostOptions options
+    )
     {
         services.AddSingleton(new TestHostEventSink(options.EventFilePath));
         services.AddZLinkFramework(framework =>
         {
-            var meshName = options.ChannelName
-                           ?? throw new InvalidOperationException(
-                               "Spot route client mode requires --channel-name.");
-            var mesh = framework.AddRouteMesh(meshName)
+            var meshName =
+                options.ChannelName
+                ?? throw new InvalidOperationException(
+                    "Spot route client mode requires --channel-name."
+                );
+            var mesh = framework
+                .AddRouteMesh(meshName)
                 .Listen(0)
                 .SetRoutingId(RoutingId.From("dotnet-spot-route-client"));
             mesh.Channel(meshName).Client();
             mesh.PeerConnections.Connect(
-                RoutingId.From(options.PeerRid
-                               ?? throw new InvalidOperationException(
-                                   "Spot route client mode requires --peer-rid.")),
+                RoutingId.From(
+                    options.PeerRid
+                        ?? throw new InvalidOperationException(
+                            "Spot route client mode requires --peer-rid."
+                        )
+                ),
                 options.ServerEndpoint
-                ?? throw new InvalidOperationException(
-                    "Spot route client mode requires --server-endpoint."));
+                    ?? throw new InvalidOperationException(
+                        "Spot route client mode requires --server-endpoint."
+                    )
+            );
         });
-        services.AddHostedService(provider =>
-            new SpotRouteClientScenarioHostedService(
-                provider.GetRequiredService<IZLinkRouteClient>(),
-                provider.GetRequiredService<TestHostEventSink>(),
-                options.ChannelName!,
-                options.PeerRid!,
-                options.PublishValue ?? "dotnet-spot-route"));
+        services.AddHostedService(provider => new SpotRouteClientScenarioHostedService(
+            provider.GetRequiredService<IZLinkRouteClient>(),
+            provider.GetRequiredService<TestHostEventSink>(),
+            options.ChannelName!,
+            options.PeerRid!,
+            options.PublishValue ?? "dotnet-spot-route"
+        ));
     }
 
     private static void ConfigureRouteClient(IServiceCollection services, TestHostOptions options)
@@ -195,25 +257,30 @@ internal static class TestHostScenarioConfigurator
         services.AddSingleton(new TestHostEventSink(options.EventFilePath));
         services.AddZLinkFramework(framework =>
         {
-            var meshName = options.ChannelName
-                           ?? throw new InvalidOperationException(
-                               "Route client mode requires --channel-name.");
-            var mesh = framework.AddRouteMesh(meshName)
+            var meshName =
+                options.ChannelName
+                ?? throw new InvalidOperationException(
+                    "Route client mode requires --channel-name."
+                );
+            var mesh = framework
+                .AddRouteMesh(meshName)
                 .Listen(0)
                 .SetRoutingId(RoutingId.From("dotnet-route-client"));
             mesh.Channel(meshName).Client();
             mesh.PeerConnections.Connect(
                 RoutingId.From("node-route"),
                 options.ServerEndpoint
-                ?? throw new InvalidOperationException(
-                    "Route client mode requires --server-endpoint."));
+                    ?? throw new InvalidOperationException(
+                        "Route client mode requires --server-endpoint."
+                    )
+            );
         });
-        services.AddHostedService(provider =>
-            new RouteClientStartupRequestHostedService(
-                provider.GetRequiredService<IZLinkRouteClient>(),
-                provider.GetRequiredService<TestHostEventSink>(),
-                options.ChannelName!,
-                options.PublishValue ?? "dotnet-route-to-node"));
+        services.AddHostedService(provider => new RouteClientStartupRequestHostedService(
+            provider.GetRequiredService<IZLinkRouteClient>(),
+            provider.GetRequiredService<TestHostEventSink>(),
+            options.ChannelName!,
+            options.PublishValue ?? "dotnet-route-to-node"
+        ));
     }
 
     private static void ConfigureSpotNode(IServiceCollection services, TestHostOptions options)
@@ -223,76 +290,103 @@ internal static class TestHostScenarioConfigurator
         services.AddZLinkFramework(framework =>
         {
             {
-                var mesh = framework.AddRouteMesh(options.DiscoveryChannelName
-                                                  ?? throw new InvalidOperationException(
-                                                      "SPOT node mode requires --discovery-channel."));
-                mesh.Channel(options.DiscoveryChannelName
-                             ?? throw new InvalidOperationException(
-                                 "SPOT node mode requires --discovery-channel."))
+                var mesh = framework.AddRouteMesh(
+                    options.DiscoveryChannelName
+                        ?? throw new InvalidOperationException(
+                            "SPOT node mode requires --discovery-channel."
+                        )
+                );
+                mesh.Channel(
+                        options.DiscoveryChannelName
+                            ?? throw new InvalidOperationException(
+                                "SPOT node mode requires --discovery-channel."
+                            )
+                    )
                     .Client();
-                _ = options.SpotNodeName
-                    ?? throw new InvalidOperationException("SPOT node mode requires --spot-node-name.");
-                var spotBindEndpoint = options.SpotBindEndpoint
-                                       ?? throw new InvalidOperationException(
-                                           "SPOT node mode requires --spot-bind-endpoint.");
+                _ =
+                    options.SpotNodeName
+                    ?? throw new InvalidOperationException(
+                        "SPOT node mode requires --spot-node-name."
+                    );
+                var spotBindEndpoint =
+                    options.SpotBindEndpoint
+                    ?? throw new InvalidOperationException(
+                        "SPOT node mode requires --spot-bind-endpoint."
+                    );
                 mesh.Listen(spotBindEndpoint);
 
                 if (options.EnableSpotFactory)
-                    mesh.Objects().Server().AddSpotFactory<StartupStageSpot>(
-                        "startup-stage", factory => factory.DisableRelocation());
+                    mesh.Objects()
+                        .Server()
+                        .AddSpotFactory<StartupStageSpot>(
+                            "startup-stage",
+                            factory => factory.DisableRelocation()
+                        );
             }
         });
 
         if (options.CreateSpot)
-            services.AddHostedService(provider =>
-                new StartupSpotCreationHostedService(
-                    provider.GetRequiredService<IZLinkSpotManager>(),
-                    options.DiscoveryChannelName
+            services.AddHostedService(provider => new StartupSpotCreationHostedService(
+                provider.GetRequiredService<IZLinkSpotManager>(),
+                options.DiscoveryChannelName
                     ?? throw new InvalidOperationException(
-                        "SPOT node mode requires --discovery-channel.")));
+                        "SPOT node mode requires --discovery-channel."
+                    )
+            ));
 
-        if (!string.IsNullOrWhiteSpace(options.AttachSpotPublisherChannel)
-            && !string.IsNullOrWhiteSpace(options.PublishTopic))
-            services.AddHostedService(provider =>
-                new SpotStartupPublishHostedService(
-                    provider.GetRequiredService<IZLinkSpotPublisherClient>(),
-                    options.AttachSpotPublisherChannel!,
-                    options.PublishTopic!,
-                    options.PublishValue ?? "startup"));
+        if (
+            !string.IsNullOrWhiteSpace(options.AttachSpotPublisherChannel)
+            && !string.IsNullOrWhiteSpace(options.PublishTopic)
+        )
+            services.AddHostedService(provider => new SpotStartupPublishHostedService(
+                provider.GetRequiredService<IZLinkSpotPublisherClient>(),
+                options.AttachSpotPublisherChannel!,
+                options.PublishTopic!,
+                options.PublishValue ?? "startup"
+            ));
     }
 
     private static void ConfigureEntryRelocation(
-        IServiceCollection services, TestHostOptions options, bool isSource)
+        IServiceCollection services,
+        TestHostOptions options,
+        bool isSource
+    )
     {
         services.AddSingleton(new TestHostEventSink(options.EventFilePath));
         if (!string.IsNullOrWhiteSpace(options.EventFilePath))
         {
-            services.AddSingleton(
-                new TestHostMessageFlowListener(options.EventFilePath + ".flow"));
+            services.AddSingleton(new TestHostMessageFlowListener(options.EventFilePath + ".flow"));
         }
         services.AddZLinkFramework(framework =>
         {
             if (!string.IsNullOrWhiteSpace(options.EventFilePath))
-                framework.ConfigureDispatch().Diagnostics
-                    .SetLevel(ZLinkDiagnosticsLevel.Normal);
-            var redisEndpoint = options.RedisEndpoint
-                                 ?? throw new InvalidOperationException(
-                                     "entry-spot-source/target mode requires --redis-endpoint.");
+                framework.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+            var redisEndpoint =
+                options.RedisEndpoint
+                ?? throw new InvalidOperationException(
+                    "entry-spot-source/target mode requires --redis-endpoint."
+                );
             var keyPrefix = options.RedisKeyPrefix ?? "zlink-cross-relocation";
-            framework.AddLocationStore(new ZLinkRedisLocationStore(o =>
-            {
-                o.ConnectionString = redisEndpoint;
-                o.KeyPrefix = $"{keyPrefix}:location";
-            }));
-            framework.AddRelocationStore(new ZLinkRedisRelocationStore(o =>
-            {
-                o.ConnectionString = redisEndpoint;
-                o.KeyPrefix = $"{keyPrefix}:relocation";
-            }));
+            framework.AddLocationStore(
+                new ZLinkRedisLocationStore(o =>
+                {
+                    o.ConnectionString = redisEndpoint;
+                    o.KeyPrefix = $"{keyPrefix}:location";
+                })
+            );
+            framework.AddRelocationStore(
+                new ZLinkRedisRelocationStore(o =>
+                {
+                    o.ConnectionString = redisEndpoint;
+                    o.KeyPrefix = $"{keyPrefix}:relocation";
+                })
+            );
 
-            var meshName = options.MeshName
-                           ?? throw new InvalidOperationException(
-                               "entry-spot-source/target mode requires --mesh-name.");
+            var meshName =
+                options.MeshName
+                ?? throw new InvalidOperationException(
+                    "entry-spot-source/target mode requires --mesh-name."
+                );
             // ZLinkFrameworkRegistrationValidator.ValidateSpotNode: an
             // Object-role MeshNode cannot use a fixed own routing ID (the
             // framework assigns one). Separately, confirmed by direct repro:
@@ -301,10 +395,14 @@ internal static class TestHostScenarioConfigurator
             // -- it only works under pure automatic discovery, so this mode
             // must NOT call PeerConnections.Connect at all; both nodes rely
             // solely on the shared Location Store to find each other.
-            var mesh = framework.AddRouteMesh(meshName)
-                .Listen(options.BindEndpoint
+            var mesh = framework
+                .AddRouteMesh(meshName)
+                .Listen(
+                    options.BindEndpoint
                         ?? throw new InvalidOperationException(
-                            "entry-spot-source/target mode requires --bind-endpoint."))
+                            "entry-spot-source/target mode requires --bind-endpoint."
+                        )
+                )
                 // Force deterministic placement: the source always wins
                 // actor creation, so the pre-relocation owner assertion is
                 // meaningful rather than an accident of the placement
@@ -315,164 +413,192 @@ internal static class TestHostScenarioConfigurator
             objects.AddEntrySpot<RelocationEntrySpot>();
             objects.AddActorFactory<RelocationActor, RelocationActorFactory>(
                 RelocationEntrySpot.ActorType,
-                factory => factory.PreserveStateWith<RelocationActorAdapter>());
+                factory => factory.PreserveStateWith<RelocationActorAdapter>()
+            );
         });
 
         if (isSource)
         {
-            services.AddHostedService(provider =>
-                new EntryRelocationSourceHostedService(
-                    provider.GetRequiredService<IZLinkActorManager>(),
-                    provider.GetRequiredService<IZLinkFrameworkRuntime>(),
-                    provider.GetRequiredService<TestHostEventSink>(),
-                    options.ActorId ?? "cross-lang-relocation-actor",
-                    options.PayloadBytes ?? 100000));
+            services.AddHostedService(provider => new EntryRelocationSourceHostedService(
+                provider.GetRequiredService<IZLinkActorManager>(),
+                provider.GetRequiredService<IZLinkFrameworkRuntime>(),
+                provider.GetRequiredService<TestHostEventSink>(),
+                options.ActorId ?? "cross-lang-relocation-actor",
+                options.PayloadBytes ?? 100000
+            ));
         }
         else
         {
-            services.AddHostedService(provider =>
-                new EntryRelocationTargetHostedService(
-                    provider.GetRequiredService<IZLinkActorClient>(),
-                    provider.GetRequiredService<IZLinkRouteMeshRuntimeOptions>(),
-                    provider.GetRequiredService<TestHostEventSink>(),
-                    options.ActorId ?? "cross-lang-relocation-actor",
-                    options.MeshName ?? "cross.relocation",
-                    // The source's routing id is fixed and known by the
-                    // caller (this node's own id is framework-assigned, see
-                    // the comment above); a probe reply is only proof of an
-                    // owner transition once it stops coming from the source.
-                    options.PeerRid
+            services.AddHostedService(provider => new EntryRelocationTargetHostedService(
+                provider.GetRequiredService<IZLinkActorClient>(),
+                provider.GetRequiredService<IZLinkRouteMeshRuntimeOptions>(),
+                provider.GetRequiredService<TestHostEventSink>(),
+                options.ActorId ?? "cross-lang-relocation-actor",
+                options.MeshName ?? "cross.relocation",
+                // The source's routing id is fixed and known by the
+                // caller (this node's own id is framework-assigned, see
+                // the comment above); a probe reply is only proof of an
+                // owner transition once it stops coming from the source.
+                options.PeerRid
                     ?? throw new InvalidOperationException(
-                        "entry-spot-target mode requires --peer-rid (the source's node rid).")));
+                        "entry-spot-target mode requires --peer-rid (the source's node rid)."
+                    )
+            ));
         }
     }
 
     private static void ConfigureUserSpotTarget(
-        IServiceCollection services, TestHostOptions options)
+        IServiceCollection services,
+        TestHostOptions options
+    )
     {
         services.AddSingleton(new TestHostEventSink(options.EventFilePath));
         services.AddSingleton<UserSpotJoinObserver>();
         if (!string.IsNullOrWhiteSpace(options.EventFilePath))
         {
-            services.AddSingleton(
-                new TestHostMessageFlowListener(options.EventFilePath + ".flow"));
+            services.AddSingleton(new TestHostMessageFlowListener(options.EventFilePath + ".flow"));
         }
         services.AddZLinkFramework(framework =>
         {
             if (!string.IsNullOrWhiteSpace(options.EventFilePath))
-                framework.ConfigureDispatch().Diagnostics
-                    .SetLevel(ZLinkDiagnosticsLevel.Normal);
-            var redisEndpoint = options.RedisEndpoint
-                                ?? throw new InvalidOperationException(
-                                    "user-spot-target mode requires --redis-endpoint.");
+                framework.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+            var redisEndpoint =
+                options.RedisEndpoint
+                ?? throw new InvalidOperationException(
+                    "user-spot-target mode requires --redis-endpoint."
+                );
             var keyPrefix = options.RedisKeyPrefix ?? "zlink-cross-user-spot-join";
-            framework.AddLocationStore(new ZLinkRedisLocationStore(o =>
-            {
-                o.ConnectionString = redisEndpoint;
-                o.KeyPrefix = $"{keyPrefix}:location";
-            }));
-            framework.AddRelocationStore(new ZLinkRedisRelocationStore(o =>
-            {
-                o.ConnectionString = redisEndpoint;
-                o.KeyPrefix = $"{keyPrefix}:relocation";
-            }));
+            framework.AddLocationStore(
+                new ZLinkRedisLocationStore(o =>
+                {
+                    o.ConnectionString = redisEndpoint;
+                    o.KeyPrefix = $"{keyPrefix}:location";
+                })
+            );
+            framework.AddRelocationStore(
+                new ZLinkRedisRelocationStore(o =>
+                {
+                    o.ConnectionString = redisEndpoint;
+                    o.KeyPrefix = $"{keyPrefix}:relocation";
+                })
+            );
 
-            var meshName = options.MeshName
-                           ?? throw new InvalidOperationException(
-                               "user-spot-target mode requires --mesh-name.");
-            var mesh = framework.AddRouteMesh(meshName)
-                .Listen(options.BindEndpoint
+            var meshName =
+                options.MeshName
+                ?? throw new InvalidOperationException(
+                    "user-spot-target mode requires --mesh-name."
+                );
+            var mesh = framework
+                .AddRouteMesh(meshName)
+                .Listen(
+                    options.BindEndpoint
                         ?? throw new InvalidOperationException(
-                            "user-spot-target mode requires --bind-endpoint."))
+                            "user-spot-target mode requires --bind-endpoint."
+                        )
+                )
                 .SetPlacementWeight(100);
             mesh.Channel(meshName).Server();
             var objects = mesh.Objects().Server();
             objects.AddSpotFactory<RelocationUserSpot>(
                 RelocationUserSpot.SpotType,
-                factory => factory.DisableRelocation());
+                factory => factory.DisableRelocation()
+            );
             objects.AddActorFactory<RelocationActor, RelocationActorFactory>(
                 RelocationEntrySpot.ActorType,
-                factory => factory.PreserveStateWith<RelocationActorAdapter>());
+                factory => factory.PreserveStateWith<RelocationActorAdapter>()
+            );
         });
 
-        services.AddHostedService(provider =>
-            new UserSpotTargetHostedService(
-                provider.GetRequiredService<IZLinkSpotManager>(),
-                provider.GetRequiredService<IZLinkActorClient>(),
-                provider.GetRequiredService<IZLinkRouteClient>(),
-                provider.GetRequiredService<IZLinkRouteMeshRuntime>(),
-                provider.GetRequiredService<IZLinkRouteMeshRuntimeOptions>(),
-                provider.GetRequiredService<UserSpotJoinObserver>(),
-                provider.GetRequiredService<TestHostEventSink>(),
-                options.SpotId
+        services.AddHostedService(provider => new UserSpotTargetHostedService(
+            provider.GetRequiredService<IZLinkSpotManager>(),
+            provider.GetRequiredService<IZLinkActorClient>(),
+            provider.GetRequiredService<IZLinkRouteClient>(),
+            provider.GetRequiredService<IZLinkRouteMeshRuntime>(),
+            provider.GetRequiredService<IZLinkRouteMeshRuntimeOptions>(),
+            provider.GetRequiredService<UserSpotJoinObserver>(),
+            provider.GetRequiredService<TestHostEventSink>(),
+            options.SpotId
+                ?? throw new InvalidOperationException("user-spot-target mode requires --spot-id."),
+            options.ActorId ?? "cross-lang-user-spot-actor",
+            options.MeshName ?? "cross.user-spot-join",
+            options.PeerRid
                 ?? throw new InvalidOperationException(
-                    "user-spot-target mode requires --spot-id."),
-                options.ActorId ?? "cross-lang-user-spot-actor",
-                options.MeshName ?? "cross.user-spot-join",
-                options.PeerRid
-                ?? throw new InvalidOperationException(
-                    "user-spot-target mode requires --peer-rid."),
-                options.PlacementWeight ?? 0));
+                    "user-spot-target mode requires --peer-rid."
+                ),
+            options.PlacementWeight ?? 0
+        ));
     }
 
     private static void ConfigureUserSpotSource(
-        IServiceCollection services, TestHostOptions options)
+        IServiceCollection services,
+        TestHostOptions options
+    )
     {
         services.AddSingleton(new TestHostEventSink(options.EventFilePath));
         if (!string.IsNullOrWhiteSpace(options.EventFilePath))
         {
-            services.AddSingleton(
-                new TestHostMessageFlowListener(options.EventFilePath + ".flow"));
+            services.AddSingleton(new TestHostMessageFlowListener(options.EventFilePath + ".flow"));
         }
         services.AddZLinkFramework(framework =>
         {
             if (!string.IsNullOrWhiteSpace(options.EventFilePath))
-                framework.ConfigureDispatch().Diagnostics
-                    .SetLevel(ZLinkDiagnosticsLevel.Normal);
-            var redisEndpoint = options.RedisEndpoint
-                                ?? throw new InvalidOperationException(
-                                    "user-spot-source mode requires --redis-endpoint.");
+                framework.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+            var redisEndpoint =
+                options.RedisEndpoint
+                ?? throw new InvalidOperationException(
+                    "user-spot-source mode requires --redis-endpoint."
+                );
             var keyPrefix = options.RedisKeyPrefix ?? "zlink-cross-user-spot-join";
-            framework.AddLocationStore(new ZLinkRedisLocationStore(o =>
-            {
-                o.ConnectionString = redisEndpoint;
-                o.KeyPrefix = $"{keyPrefix}:location";
-            }));
-            framework.AddRelocationStore(new ZLinkRedisRelocationStore(o =>
-            {
-                o.ConnectionString = redisEndpoint;
-                o.KeyPrefix = $"{keyPrefix}:relocation";
-            }));
+            framework.AddLocationStore(
+                new ZLinkRedisLocationStore(o =>
+                {
+                    o.ConnectionString = redisEndpoint;
+                    o.KeyPrefix = $"{keyPrefix}:location";
+                })
+            );
+            framework.AddRelocationStore(
+                new ZLinkRedisRelocationStore(o =>
+                {
+                    o.ConnectionString = redisEndpoint;
+                    o.KeyPrefix = $"{keyPrefix}:relocation";
+                })
+            );
 
-            var meshName = options.MeshName
-                           ?? throw new InvalidOperationException(
-                               "user-spot-source mode requires --mesh-name.");
-            var mesh = framework.AddRouteMesh(meshName)
-                .Listen(options.BindEndpoint
+            var meshName =
+                options.MeshName
+                ?? throw new InvalidOperationException(
+                    "user-spot-source mode requires --mesh-name."
+                );
+            var mesh = framework
+                .AddRouteMesh(meshName)
+                .Listen(
+                    options.BindEndpoint
                         ?? throw new InvalidOperationException(
-                            "user-spot-source mode requires --bind-endpoint."))
+                            "user-spot-source mode requires --bind-endpoint."
+                        )
+                )
                 .SetPlacementWeight(100);
             mesh.Channel(meshName).Server();
             var objects = mesh.Objects().Server();
             objects.AddEntrySpot<RelocationEntrySpot>();
             objects.AddActorFactory<RelocationActor, RelocationActorFactory>(
                 RelocationEntrySpot.ActorType,
-                factory => factory.PreserveStateWith<RelocationActorAdapter>());
+                factory => factory.PreserveStateWith<RelocationActorAdapter>()
+            );
         });
 
-        services.AddHostedService(provider =>
-            new UserSpotSourceHostedService(
-                provider.GetRequiredService<IZLinkActorManager>(),
-                provider.GetRequiredService<IZLinkActorClient>(),
-                provider.GetRequiredService<IZLinkRouteMeshRuntime>(),
-                provider.GetRequiredService<TestHostEventSink>(),
-                options.ActorId ?? "cross-lang-user-spot-actor",
-                options.SpotId
-                ?? throw new InvalidOperationException(
-                    "user-spot-source mode requires --spot-id."),
-                options.MeshName ?? "cross.user-spot-join",
-                provider.GetRequiredService<IZLinkRouteMeshRuntimeOptions>(),
-                options.PlacementWeight ?? 100));
+        services.AddHostedService(provider => new UserSpotSourceHostedService(
+            provider.GetRequiredService<IZLinkActorManager>(),
+            provider.GetRequiredService<IZLinkActorClient>(),
+            provider.GetRequiredService<IZLinkRouteMeshRuntime>(),
+            provider.GetRequiredService<TestHostEventSink>(),
+            options.ActorId ?? "cross-lang-user-spot-actor",
+            options.SpotId
+                ?? throw new InvalidOperationException("user-spot-source mode requires --spot-id."),
+            options.MeshName ?? "cross.user-spot-join",
+            provider.GetRequiredService<IZLinkRouteMeshRuntimeOptions>(),
+            options.PlacementWeight ?? 100
+        ));
     }
 
     private static void ConfigureStreamRawNode(IServiceCollection services, TestHostOptions options)
@@ -481,18 +607,20 @@ internal static class TestHostScenarioConfigurator
         services.AddSingleton<TestHostRawStreamRecorder>();
         if (!string.IsNullOrWhiteSpace(options.EventFilePath))
         {
-            services.AddSingleton(
-                new TestHostMessageFlowListener(options.EventFilePath + ".flow"));
+            services.AddSingleton(new TestHostMessageFlowListener(options.EventFilePath + ".flow"));
         }
         services.AddZLinkFramework(framework =>
         {
             if (!string.IsNullOrWhiteSpace(options.EventFilePath))
-                framework.ConfigureDispatch().Diagnostics
-                    .SetLevel(ZLinkDiagnosticsLevel.Normal);
+                framework.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
             {
                 var stream = framework.AddStreamNode("stream.raw");
-                stream.Bind(options.StreamEndpoint
-                            ?? throw new InvalidOperationException("STREAM raw mode requires --stream-endpoint."));
+                stream.Bind(
+                    options.StreamEndpoint
+                        ?? throw new InvalidOperationException(
+                            "STREAM raw mode requires --stream-endpoint."
+                        )
+                );
                 stream.AddSession<TestHostRawStreamSession>();
             }
         });
@@ -501,11 +629,13 @@ internal static class TestHostScenarioConfigurator
     private static void ConfigureStreamClient(IServiceCollection services, TestHostOptions options)
     {
         services.AddSingleton(new TestHostEventSink(options.EventFilePath));
-        services.AddHostedService(provider =>
-            new StreamClientStartupRequestHostedService(
-                provider.GetRequiredService<TestHostEventSink>(),
-                options.StreamEndpoint
-                ?? throw new InvalidOperationException("STREAM client mode requires --stream-endpoint."),
-                options.PublishValue ?? "dotnet-to-node"));
+        services.AddHostedService(provider => new StreamClientStartupRequestHostedService(
+            provider.GetRequiredService<TestHostEventSink>(),
+            options.StreamEndpoint
+                ?? throw new InvalidOperationException(
+                    "STREAM client mode requires --stream-endpoint."
+                ),
+            options.PublishValue ?? "dotnet-to-node"
+        ));
     }
 }

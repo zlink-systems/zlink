@@ -21,11 +21,11 @@ public sealed class ActorLifecycleContractTests
         Assert.Contains("OnActorJoinAsync", userMethods);
     }
 
-    private static IEnumerable<System.Reflection.MethodInfo> ContractMethods(
-        Type contract)
+    private static IEnumerable<System.Reflection.MethodInfo> ContractMethods(Type contract)
     {
-        return contract.GetMethods().Concat(
-            contract.GetInterfaces().SelectMany(static type => type.GetMethods()));
+        return contract
+            .GetMethods()
+            .Concat(contract.GetInterfaces().SelectMany(static type => type.GetMethods()));
     }
 
     [Fact]

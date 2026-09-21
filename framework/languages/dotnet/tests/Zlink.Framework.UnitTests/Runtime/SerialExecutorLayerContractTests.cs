@@ -11,12 +11,8 @@ public sealed class SerialExecutorLayerContractTests
     public async Task SubmissionPaths_SelectQueuesWithoutAnApplicationQueueArgument()
     {
         using var errorSink = new ZLinkRuntimeErrorSink();
-        await using var spot = CreateSpotExecutor(
-            errorSink,
-            ZLinkUserSpotExecutionMode.PerActor);
-        await using var session = new ZLinkSessionSerialExecutor(
-            new object(),
-            errorSink);
+        await using var spot = CreateSpotExecutor(errorSink, ZLinkUserSpotExecutionMode.PerActor);
+        await using var session = new ZLinkSessionSerialExecutor(new object(), errorSink);
         var observed = new ConcurrentQueue<string>();
 
         await spot.ExecuteAsync(
@@ -25,7 +21,8 @@ public sealed class SerialExecutorLayerContractTests
                 observed.Enqueue("spot");
                 return ValueTask.CompletedTask;
             },
-            CancellationToken.None);
+            CancellationToken.None
+        );
         await spot.ExecuteActorAsync(
             "actor-a",
             static (_, state, _) =>
@@ -34,7 +31,8 @@ public sealed class SerialExecutorLayerContractTests
                 return ValueTask.CompletedTask;
             },
             observed,
-            CancellationToken.None);
+            CancellationToken.None
+        );
         await spot.ExecuteTimerAsync(
             "tick",
             static (_, state, _) =>
@@ -43,30 +41,33 @@ public sealed class SerialExecutorLayerContractTests
                 return ValueTask.CompletedTask;
             },
             observed,
-            CancellationToken.None);
+            CancellationToken.None
+        );
         await spot.ExecuteLifecycleAsync(
             (_, _) =>
             {
                 observed.Enqueue("lifecycle");
                 return ValueTask.CompletedTask;
             },
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         var sessionRan = NewSignal();
         Assert.Equal(
             ZLinkSerialPostAdmission.Accepted,
-            session.ExecuteApplication(
-                _ =>
-                {
-                    observed.Enqueue("session");
-                    sessionRan.TrySetResult();
-                    return ValueTask.CompletedTask;
-                }));
+            session.ExecuteApplication(_ =>
+            {
+                observed.Enqueue("session");
+                sessionRan.TrySetResult();
+                return ValueTask.CompletedTask;
+            })
+        );
         await sessionRan.Task.WaitAsync(TestTimeout);
 
         Assert.Equal(
             new[] { "spot", "actor", "timer", "lifecycle", "session" },
-            observed.ToArray());
+            observed.ToArray()
+        );
     }
 
     [Fact]
@@ -75,7 +76,8 @@ public sealed class SerialExecutorLayerContractTests
         using var errorSink = new ZLinkRuntimeErrorSink();
         await using var executor = CreateSpotExecutor(
             errorSink,
-            ZLinkUserSpotExecutionMode.PerActor);
+            ZLinkUserSpotExecutionMode.PerActor
+        );
         var release = NewSignal();
         var bothStarted = NewSignal();
         var startedCount = 0;
@@ -103,7 +105,8 @@ public sealed class SerialExecutorLayerContractTests
         using var errorSink = new ZLinkRuntimeErrorSink();
         await using var executor = CreateSpotExecutor(
             errorSink,
-            ZLinkUserSpotExecutionMode.SpotWide);
+            ZLinkUserSpotExecutionMode.SpotWide
+        );
         var firstStarted = NewSignal();
         var releaseFirst = NewSignal();
         var secondStarted = NewSignal();
@@ -118,7 +121,8 @@ public sealed class SerialExecutorLayerContractTests
                 firstStarted.TrySetResult();
                 await releaseFirst.Task.ConfigureAwait(false);
                 order.Enqueue("first:end");
-            });
+            }
+        );
         await firstStarted.Task.WaitAsync(TestTimeout);
 
         var second = ExecuteActorAsync(
@@ -129,27 +133,26 @@ public sealed class SerialExecutorLayerContractTests
                 order.Enqueue("second:start");
                 secondStarted.TrySetResult();
                 return ValueTask.CompletedTask;
-            });
+            }
+        );
 
-        Assert.NotSame(
-            secondStarted.Task,
-            await Task.WhenAny(secondStarted.Task, Task.Delay(100)));
+        Assert.NotSame(secondStarted.Task, await Task.WhenAny(secondStarted.Task, Task.Delay(100)));
 
         releaseFirst.TrySetResult();
         await Task.WhenAll(first, second).WaitAsync(TestTimeout);
-        Assert.Equal(
-            new[] { "first:start", "first:end", "second:start" },
-            order.ToArray());
+        Assert.Equal(new[] { "first:start", "first:end", "second:start" }, order.ToArray());
     }
 
     [Fact]
     public async Task SameActor_RetainsSubmissionOrderInBothExecutionModes()
     {
-        foreach (var mode in new[]
-                 {
-                     ZLinkUserSpotExecutionMode.PerActor,
-                     ZLinkUserSpotExecutionMode.SpotWide
-                 })
+        foreach (
+            var mode in new[]
+            {
+                ZLinkUserSpotExecutionMode.PerActor,
+                ZLinkUserSpotExecutionMode.SpotWide,
+            }
+        )
         {
             using var errorSink = new ZLinkRuntimeErrorSink();
             await using var executor = CreateSpotExecutor(errorSink, mode);
@@ -167,7 +170,8 @@ public sealed class SerialExecutorLayerContractTests
                     firstStarted.TrySetResult();
                     await releaseFirst.Task.ConfigureAwait(false);
                     order.Enqueue("first:end");
-                });
+                }
+            );
             await firstStarted.Task.WaitAsync(TestTimeout);
             var second = ExecuteActorAsync(
                 executor,
@@ -177,16 +181,16 @@ public sealed class SerialExecutorLayerContractTests
                     order.Enqueue("second");
                     secondStarted.TrySetResult();
                     return ValueTask.CompletedTask;
-                });
+                }
+            );
 
             Assert.NotSame(
                 secondStarted.Task,
-                await Task.WhenAny(secondStarted.Task, Task.Delay(100)));
+                await Task.WhenAny(secondStarted.Task, Task.Delay(100))
+            );
             releaseFirst.TrySetResult();
             await Task.WhenAll(first, second).WaitAsync(TestTimeout);
-            Assert.Equal(
-                new[] { "first:start", "first:end", "second" },
-                order.ToArray());
+            Assert.Equal(new[] { "first:start", "first:end", "second" }, order.ToArray());
         }
     }
 
@@ -196,7 +200,8 @@ public sealed class SerialExecutorLayerContractTests
         using var errorSink = new ZLinkRuntimeErrorSink();
         await using var executor = CreateSpotExecutor(
             errorSink,
-            ZLinkUserSpotExecutionMode.PerActor);
+            ZLinkUserSpotExecutionMode.PerActor
+        );
         var tickStarted = NewSignal();
         var releaseTick = NewSignal();
         var tickSecondStarted = NewSignal();
@@ -212,7 +217,8 @@ public sealed class SerialExecutorLayerContractTests
                 tickStarted.TrySetResult();
                 await releaseTick.Task.ConfigureAwait(false);
                 order.Enqueue("tick:first:end");
-            });
+            }
+        );
         await tickStarted.Task.WaitAsync(TestTimeout);
         var tickSecond = ExecuteTimerAsync(
             executor,
@@ -222,7 +228,8 @@ public sealed class SerialExecutorLayerContractTests
                 order.Enqueue("tick:second");
                 tickSecondStarted.TrySetResult();
                 return ValueTask.CompletedTask;
-            });
+            }
+        );
         var beat = ExecuteTimerAsync(
             executor,
             "beat",
@@ -231,7 +238,8 @@ public sealed class SerialExecutorLayerContractTests
                 order.Enqueue("beat");
                 beatStarted.TrySetResult();
                 return ValueTask.CompletedTask;
-            });
+            }
+        );
 
         await beatStarted.Task.WaitAsync(TestTimeout);
         Assert.False(tickSecondStarted.Task.IsCompleted);
@@ -239,23 +247,27 @@ public sealed class SerialExecutorLayerContractTests
         await Task.WhenAll(tickFirst, tickSecond, beat).WaitAsync(TestTimeout);
         Assert.Equal(
             new[] { "tick:first:start", "beat", "tick:first:end", "tick:second" },
-            order.ToArray());
+            order.ToArray()
+        );
     }
 
     [Fact]
     public async Task ActorMailboxQueuesSameActorWorkInBothModes()
     {
-        foreach (var mode in new[]
-                 {
-                     ZLinkUserSpotExecutionMode.PerActor,
-                     ZLinkUserSpotExecutionMode.SpotWide
-                 })
+        foreach (
+            var mode in new[]
+            {
+                ZLinkUserSpotExecutionMode.PerActor,
+                ZLinkUserSpotExecutionMode.SpotWide,
+            }
+        )
         {
             using var errorSink = new ZLinkRuntimeErrorSink();
             await using var executor = CreateSpotExecutor(
                 errorSink,
                 mode,
-                actorLanePolicy: CreatePolicy());
+                actorLanePolicy: CreatePolicy()
+            );
             var firstStarted = NewSignal();
             var releaseFirst = NewSignal();
 
@@ -266,18 +278,21 @@ public sealed class SerialExecutorLayerContractTests
                 {
                     firstStarted.TrySetResult();
                     await releaseFirst.Task.ConfigureAwait(false);
-                });
+                }
+            );
             await firstStarted.Task.WaitAsync(TestTimeout);
 
             var queued = ExecuteActorAsync(
                 executor,
                 "actor-a",
-                static () => ValueTask.CompletedTask);
+                static () => ValueTask.CompletedTask
+            );
 
             var otherActor = ExecuteActorAsync(
                 executor,
                 "actor-b",
-                static () => ValueTask.CompletedTask);
+                static () => ValueTask.CompletedTask
+            );
             releaseFirst.TrySetResult();
             await Task.WhenAll(first, queued, otherActor).WaitAsync(TestTimeout);
         }
@@ -290,7 +305,8 @@ public sealed class SerialExecutorLayerContractTests
         await using var executor = CreateSpotExecutor(
             errorSink,
             ZLinkUserSpotExecutionMode.SpotWide,
-            actorLanePolicy: CreatePolicy());
+            actorLanePolicy: CreatePolicy()
+        );
         var firstStarted = NewSignal();
         var releaseFirst = NewSignal();
 
@@ -302,19 +318,22 @@ public sealed class SerialExecutorLayerContractTests
                 firstStarted.TrySetResult();
                 await releaseFirst.Task.ConfigureAwait(false);
             },
-            payloadBytes: 60);
+            payloadBytes: 60
+        );
         await firstStarted.Task.WaitAsync(TestTimeout);
 
         var large = ExecuteActorWithPayloadAsync(
             executor,
             "actor-a",
             static () => ValueTask.CompletedTask,
-            payloadBytes: 60);
+            payloadBytes: 60
+        );
         var small = ExecuteActorWithPayloadAsync(
             executor,
             "actor-a",
             static () => ValueTask.CompletedTask,
-            payloadBytes: 10);
+            payloadBytes: 10
+        );
 
         releaseFirst.TrySetResult();
         await Task.WhenAll(first, large, small).WaitAsync(TestTimeout);
@@ -334,44 +353,56 @@ public sealed class SerialExecutorLayerContractTests
         await using var executor = CreateSpotExecutor(
             errorSink,
             ZLinkUserSpotExecutionMode.SpotWide,
-            spotLanePolicy: CreatePolicy(lifecycleBurstLimit: 2));
+            spotLanePolicy: CreatePolicy(lifecycleBurstLimit: 2)
+        );
         var blockerStarted = NewSignal();
         var releaseBlocker = NewSignal();
         var order = new ConcurrentQueue<string>();
 
-        var blocker = executor.ExecuteAsync(
-            async (_, _) =>
-            {
-                blockerStarted.TrySetResult();
-                await releaseBlocker.Task.ConfigureAwait(false);
-            },
-            CancellationToken.None).AsTask();
+        var blocker = executor
+            .ExecuteAsync(
+                async (_, _) =>
+                {
+                    blockerStarted.TrySetResult();
+                    await releaseBlocker.Task.ConfigureAwait(false);
+                },
+                CancellationToken.None
+            )
+            .AsTask();
         await blockerStarted.Task.WaitAsync(TestTimeout);
 
-        var application = executor.ExecuteAsync(
-            (_, _) =>
-            {
-                order.Enqueue("application");
-                return ValueTask.CompletedTask;
-            },
-            CancellationToken.None).AsTask();
-        var lifecycle = Enumerable.Range(1, 3)
-            .Select(index => executor.ExecuteLifecycleAsync(
-                    (_, _) =>
-                    {
-                        order.Enqueue($"lifecycle-{index}");
-                        return ValueTask.CompletedTask;
-                    },
-                    CancellationToken.None)
-                .AsTask())
+        var application = executor
+            .ExecuteAsync(
+                (_, _) =>
+                {
+                    order.Enqueue("application");
+                    return ValueTask.CompletedTask;
+                },
+                CancellationToken.None
+            )
+            .AsTask();
+        var lifecycle = Enumerable
+            .Range(1, 3)
+            .Select(index =>
+                executor
+                    .ExecuteLifecycleAsync(
+                        (_, _) =>
+                        {
+                            order.Enqueue($"lifecycle-{index}");
+                            return ValueTask.CompletedTask;
+                        },
+                        CancellationToken.None
+                    )
+                    .AsTask()
+            )
             .ToArray();
 
         releaseBlocker.TrySetResult();
-        await Task.WhenAll(lifecycle.Append(application).Append(blocker))
-            .WaitAsync(TestTimeout);
+        await Task.WhenAll(lifecycle.Append(application).Append(blocker)).WaitAsync(TestTimeout);
         Assert.Equal(
             new[] { "lifecycle-1", "lifecycle-2", "application", "lifecycle-3" },
-            order.ToArray());
+            order.ToArray()
+        );
     }
 
     [Fact]
@@ -381,8 +412,8 @@ public sealed class SerialExecutorLayerContractTests
         await using var executor = CreateSpotExecutor(
             errorSink,
             ZLinkUserSpotExecutionMode.PerActor,
-            actorLanePolicy: CreatePolicy(
-                ownerTimeBudget: TimeSpan.FromMilliseconds(1)));
+            actorLanePolicy: CreatePolicy(ownerTimeBudget: TimeSpan.FromMilliseconds(1))
+        );
         using var releaseFirst = new ManualResetEventSlim();
         var firstStarted = NewSignal();
         var events = new ConcurrentQueue<string>();
@@ -397,19 +428,24 @@ public sealed class SerialExecutorLayerContractTests
                 BusyWait(TimeSpan.FromMilliseconds(2));
                 events.Enqueue("actor-a:0");
                 return ValueTask.CompletedTask;
-            });
+            }
+        );
         await firstStarted.Task.WaitAsync(TestTimeout);
 
-        var remaining = Enumerable.Range(1, 7)
-            .Select(index => ExecuteActorAsync(
-                executor,
-                "actor-a",
-                () =>
-                {
-                    BusyWait(TimeSpan.FromMilliseconds(2));
-                    events.Enqueue($"actor-a:{index}");
-                    return ValueTask.CompletedTask;
-                }))
+        var remaining = Enumerable
+            .Range(1, 7)
+            .Select(index =>
+                ExecuteActorAsync(
+                    executor,
+                    "actor-a",
+                    () =>
+                    {
+                        BusyWait(TimeSpan.FromMilliseconds(2));
+                        events.Enqueue($"actor-a:{index}");
+                        return ValueTask.CompletedTask;
+                    }
+                )
+            )
             .ToArray();
         var otherActor = ExecuteActorAsync(
             executor,
@@ -418,15 +454,13 @@ public sealed class SerialExecutorLayerContractTests
             {
                 events.Enqueue("actor-b");
                 return ValueTask.CompletedTask;
-            });
+            }
+        );
         releaseFirst.Set();
 
-        await Task.WhenAll(remaining.Append(first).Append(otherActor))
-            .WaitAsync(TestTimeout);
+        await Task.WhenAll(remaining.Append(first).Append(otherActor)).WaitAsync(TestTimeout);
         var recorded = events.ToArray();
-        Assert.True(
-            Array.IndexOf(recorded, "actor-b")
-            < Array.IndexOf(recorded, "actor-a:7"));
+        Assert.True(Array.IndexOf(recorded, "actor-b") < Array.IndexOf(recorded, "actor-a:7"));
     }
 
     [Fact]
@@ -435,7 +469,8 @@ public sealed class SerialExecutorLayerContractTests
         using var errorSink = new ZLinkRuntimeErrorSink();
         await using var executor = CreateSpotExecutor(
             errorSink,
-            ZLinkUserSpotExecutionMode.SpotWide);
+            ZLinkUserSpotExecutionMode.SpotWide
+        );
 
         await executor.ExecuteAsync(
             async (_, _) =>
@@ -443,14 +478,17 @@ public sealed class SerialExecutorLayerContractTests
                 var call = new ZLinkInstanceSpotRequestCall<object>(
                     null!,
                     "test-spot",
-                    new object());
+                    new object()
+                );
 
                 var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
-                    await call.Async<object>());
+                    await call.Async<object>()
+                );
 
                 Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, failure.Kind);
             },
-            CancellationToken.None);
+            CancellationToken.None
+        );
     }
 
     private static ZLinkSpotSerialExecutor CreateSpotExecutor(
@@ -458,7 +496,8 @@ public sealed class SerialExecutorLayerContractTests
         ZLinkUserSpotExecutionMode mode,
         ZLinkExecutionLanePolicy? spotLanePolicy = null,
         ZLinkExecutionLanePolicy? actorLanePolicy = null,
-        ZLinkExecutionLanePolicy? timerLanePolicy = null)
+        ZLinkExecutionLanePolicy? timerLanePolicy = null
+    )
     {
         return new ZLinkSpotSerialExecutor(
             null!,
@@ -468,67 +507,82 @@ public sealed class SerialExecutorLayerContractTests
             executionMode: mode,
             spotLanePolicy: spotLanePolicy,
             actorLanePolicy: actorLanePolicy,
-            timerLanePolicy: timerLanePolicy);
+            timerLanePolicy: timerLanePolicy
+        );
     }
 
     private static ZLinkExecutionLanePolicy CreatePolicy(
         int lifecycleBurstLimit = 8,
-        TimeSpan? ownerTimeBudget = null)
+        TimeSpan? ownerTimeBudget = null
+    )
     {
         return new ZLinkExecutionLanePolicy(
             lifecycleBurstLimit,
-            ownerTimeBudget ?? TimeSpan.FromSeconds(1));
+            ownerTimeBudget ?? TimeSpan.FromSeconds(1)
+        );
     }
 
     private static Task ExecuteActorAsync(
         ZLinkSpotSerialExecutor executor,
         string actorId,
-        Func<ValueTask> operation)
+        Func<ValueTask> operation
+    )
     {
-        return executor.ExecuteActorAsync(
-            actorId,
-            static (_, callback, _) => callback(),
-            operation,
-            CancellationToken.None).AsTask();
+        return executor
+            .ExecuteActorAsync(
+                actorId,
+                static (_, callback, _) => callback(),
+                operation,
+                CancellationToken.None
+            )
+            .AsTask();
     }
 
     private static Task ExecuteActorWithPayloadAsync(
         ZLinkSpotSerialExecutor executor,
         string actorId,
         Func<ValueTask> operation,
-        long payloadBytes)
+        long payloadBytes
+    )
     {
-        return executor.ExecuteActorAsync(
-            actorId,
-            static (_, callback, _) => callback(),
-            operation,
-            payloadBytes,
-            metadataBytes: 0,
-            transferred: false,
-            CancellationToken.None).AsTask();
+        return executor
+            .ExecuteActorAsync(
+                actorId,
+                static (_, callback, _) => callback(),
+                operation,
+                payloadBytes,
+                metadataBytes: 0,
+                transferred: false,
+                CancellationToken.None
+            )
+            .AsTask();
     }
 
     private static Task ExecuteTimerAsync(
         ZLinkSpotSerialExecutor executor,
         string timerName,
-        Func<ValueTask> operation)
+        Func<ValueTask> operation
+    )
     {
-        return executor.ExecuteTimerAsync(
-            timerName,
-            static (_, callback, _) => callback(),
-            operation,
-            CancellationToken.None).AsTask();
+        return executor
+            .ExecuteTimerAsync(
+                timerName,
+                static (_, callback, _) => callback(),
+                operation,
+                CancellationToken.None
+            )
+            .AsTask();
     }
 
-    private static async Task AssertUpperQueueAcceptsSecondActorAsync(
-        long payloadBytes)
+    private static async Task AssertUpperQueueAcceptsSecondActorAsync(long payloadBytes)
     {
         using var errorSink = new ZLinkRuntimeErrorSink();
         await using var executor = CreateSpotExecutor(
             errorSink,
             ZLinkUserSpotExecutionMode.SpotWide,
             spotLanePolicy: CreatePolicy(),
-            actorLanePolicy: CreatePolicy());
+            actorLanePolicy: CreatePolicy()
+        );
         var firstStarted = NewSignal();
         var releaseFirst = NewSignal();
 
@@ -540,14 +594,16 @@ public sealed class SerialExecutorLayerContractTests
                 firstStarted.TrySetResult();
                 await releaseFirst.Task.ConfigureAwait(false);
             },
-            payloadBytes: 1);
+            payloadBytes: 1
+        );
         await firstStarted.Task.WaitAsync(TestTimeout);
 
         var second = ExecuteActorWithPayloadAsync(
             executor,
             "actor-b",
             static () => ValueTask.CompletedTask,
-            payloadBytes);
+            payloadBytes
+        );
 
         releaseFirst.TrySetResult();
         await Task.WhenAll(first, second).WaitAsync(TestTimeout);
@@ -556,9 +612,7 @@ public sealed class SerialExecutorLayerContractTests
     private static void BusyWait(TimeSpan duration)
     {
         var startedAt = Stopwatch.GetTimestamp();
-        while (Stopwatch.GetElapsedTime(startedAt) < duration)
-        {
-        }
+        while (Stopwatch.GetElapsedTime(startedAt) < duration) { }
     }
 
     private static TaskCompletionSource NewSignal() =>

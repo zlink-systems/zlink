@@ -1,5 +1,5 @@
-using Systems.Zlink;
 using Microsoft.Extensions.Logging;
+using Systems.Zlink;
 using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 
 namespace Zlink.Framework.Runtime.Backend.DotNet.Adapters;
@@ -8,16 +8,14 @@ namespace Zlink.Framework.Runtime.Backend.DotNet.Adapters;
 /// Owns one binding context and the Framework backend-resource creation policy.
 /// The binding context never crosses this port into semantic runtime code.
 /// </summary>
-internal sealed class ZLinkDotNetBackendRuntimeContext
-    : IZLinkBackendRuntimeContext
+internal sealed class ZLinkDotNetBackendRuntimeContext : IZLinkBackendRuntimeContext
 {
     private readonly IContext _context;
     private readonly ILogger<ZLinkManagedMeshNode>? _meshNodeLogger;
     private ZLinkApplicationJobQueue? _applicationJobQueue;
     private int _disposed;
 
-    public ZLinkDotNetBackendRuntimeContext(
-        ILogger<ZLinkManagedMeshNode>? meshNodeLogger = null)
+    public ZLinkDotNetBackendRuntimeContext(ILogger<ZLinkManagedMeshNode>? meshNodeLogger = null)
     {
         _meshNodeLogger = meshNodeLogger;
         _context = Systems.Zlink.Zlink.CreateContext();
@@ -32,10 +30,7 @@ internal sealed class ZLinkDotNetBackendRuntimeContext
         }
     }
 
-    public void ConfigureCoreHwm(
-        AutoHwmProfile profile,
-        ulong memoryLimitBytes,
-        ulong budgetBytes)
+    public void ConfigureCoreHwm(AutoHwmProfile profile, ulong memoryLimitBytes, ulong budgetBytes)
     {
         ThrowIfDisposed();
         _context.Options.CoreHwmProfile = profile;
@@ -57,17 +52,15 @@ internal sealed class ZLinkDotNetBackendRuntimeContext
         _context.ResetCoreHwmBudgetMetrics();
     }
 
-    public void ConfigureApplicationJobQueue(
-        ZLinkApplicationJobQueue applicationJobQueue)
+    public void ConfigureApplicationJobQueue(ZLinkApplicationJobQueue applicationJobQueue)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(applicationJobQueue);
-        if (Interlocked.CompareExchange(
-                ref _applicationJobQueue,
-                applicationJobQueue,
-                null) is not null)
-            throw new InvalidOperationException(
-                "The Application Job Queue is already configured.");
+        if (
+            Interlocked.CompareExchange(ref _applicationJobQueue, applicationJobQueue, null)
+            is not null
+        )
+            throw new InvalidOperationException("The Application Job Queue is already configured.");
     }
 
     public IDealerSocket CreateDealerSocket()
@@ -102,13 +95,16 @@ internal sealed class ZLinkDotNetBackendRuntimeContext
                 _context,
                 meshName,
                 applicationJobQueue: _applicationJobQueue,
-                logger: _meshNodeLogger),
-            _applicationJobQueue);
+                logger: _meshNodeLogger
+            ),
+            _applicationJobQueue
+        );
     }
 
     public IZLinkBackendStreamSocket CreateStreamSocket(
         string standaloneMeshName,
-        IZLinkBackendSpotNode? actorDispatchNode = null)
+        IZLinkBackendSpotNode? actorDispatchNode = null
+    )
     {
         ThrowIfDisposed();
         var socket = _context.CreateStreamSocket();
@@ -119,18 +115,20 @@ internal sealed class ZLinkDotNetBackendRuntimeContext
         // node; the ownership decision remains at this integration boundary.
         if (actorDispatchNode is ZLinkBackendSpotNodeWrapper shared)
             return new ZLinkBackendStreamSocketWrapper(
-                socket, shared.NativeNode, shared.Completions, ownsNode: false);
+                socket,
+                shared.NativeNode,
+                shared.Completions,
+                ownsNode: false
+            );
 
         var node = new ZLinkManagedMeshNode(
             _context,
             standaloneMeshName,
             applicationJobQueue: _applicationJobQueue,
-            logger: _meshNodeLogger);
+            logger: _meshNodeLogger
+        );
         var completions = new ZLinkMeshCompletionTable();
-        var completionPump = new ZLinkMeshDispatchPump(
-            node,
-            completions,
-            _applicationJobQueue);
+        var completionPump = new ZLinkMeshDispatchPump(node, completions, _applicationJobQueue);
         node.SetRoutingId(RoutingId.From(Guid.NewGuid()));
         node.SetBind($"inproc://zlink-stream-{Guid.NewGuid():N}");
         node.Start();
@@ -140,7 +138,8 @@ internal sealed class ZLinkDotNetBackendRuntimeContext
             node,
             completions,
             ownsNode: true,
-            ownedCompletionPump: completionPump);
+            ownedCompletionPump: completionPump
+        );
     }
 
     public ValueTask DisposeAsync()
@@ -152,17 +151,13 @@ internal sealed class ZLinkDotNetBackendRuntimeContext
 
     private void ThrowIfDisposed()
     {
-        ObjectDisposedException.ThrowIf(
-            Volatile.Read(ref _disposed) != 0,
-            this);
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
     }
 }
 
-internal sealed class ZLinkDotNetMonitoringBackendAdapter
-    : IZLinkMonitoringBackendAdapter
+internal sealed class ZLinkDotNetMonitoringBackendAdapter : IZLinkMonitoringBackendAdapter
 {
-    public IZLinkBackendSocketMonitor OpenSocketMonitor(
-        IAsyncDisposable socket)
+    public IZLinkBackendSocketMonitor OpenSocketMonitor(IAsyncDisposable socket)
     {
         var nativeMonitor = socket switch
         {
@@ -171,8 +166,7 @@ internal sealed class ZLinkDotNetMonitoringBackendAdapter
             IPubSocket publisher => publisher.MonitorOpen(),
             ISubSocket subscriber => subscriber.MonitorOpen(),
             ZLinkBackendStreamSocketWrapper stream => stream.NativeSocket.MonitorOpen(),
-            _ => throw new InvalidOperationException(
-                "Expected a supported .NET binding socket.")
+            _ => throw new InvalidOperationException("Expected a supported .NET binding socket."),
         };
         return new ZLinkBackendSocketMonitorWrapper(nativeMonitor);
     }

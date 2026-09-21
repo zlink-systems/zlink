@@ -1,41 +1,43 @@
 package systems.zlink.framework.runtime.actors;
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.stream.Stream;
-import systems.zlink.framework.actors.ActorRef;
-import systems.zlink.framework.spots.ZLinkSpotKind;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.time.Duration;
-import java.util.List;
-import java.util.EnumSet;
-import java.util.Map;
-import java.util.Optional;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.actors.ActorRef;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollowWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollowWireCodec;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
+import systems.zlink.framework.spots.ZLinkSpotKind;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
+
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.EnumSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Stream;
 
 final class ZLinkActorTransferHandoffTest {
     @Test
@@ -47,8 +49,9 @@ final class ZLinkActorTransferHandoffTest {
         capture(handoff, "P3", Map.of());
 
         List<ZLinkActorHandoffPacket> backlog = handoff.take("actor");
-        assertEquals(List.of("P1", "P2", "P3"),
-            backlog.stream().map(packet -> packet.header().packetName()).toList());
+        assertEquals(
+                List.of("P1", "P2", "P3"),
+                backlog.stream().map(packet -> packet.header().packetName()).toList());
         assertTrue(backlog.get(0).arrivalIndex() < backlog.get(1).arrivalIndex());
         assertTrue(backlog.get(1).arrivalIndex() < backlog.get(2).arrivalIndex());
         backlog.forEach(ZLinkActorHandoffPacket::close);
@@ -64,9 +67,11 @@ final class ZLinkActorTransferHandoffTest {
         capture(handoff, "D1", Map.of());
         List<ZLinkActorHandoffPacket> trailing = handoff.finish("actor");
 
-        assertEquals(List.of("B1", "B2", "D1"),
-            Stream.concat(committed.stream(), trailing.stream())
-                .map(packet -> packet.header().packetName()).toList());
+        assertEquals(
+                List.of("B1", "B2", "D1"),
+                Stream.concat(committed.stream(), trailing.stream())
+                        .map(packet -> packet.header().packetName())
+                        .toList());
         committed.forEach(ZLinkActorHandoffPacket::close);
         trailing.forEach(ZLinkActorHandoffPacket::close);
     }
@@ -80,13 +85,10 @@ final class ZLinkActorTransferHandoffTest {
         List<ZLinkActorHandoffPacket> committed = handoff.take("actor");
         capture(handoff, "D1", Map.of());
 
-        List<ZLinkActorHandoffPacket> restored =
-            handoff.takeForRestore("actor", committed);
+        List<ZLinkActorHandoffPacket> restored = handoff.takeForRestore("actor", committed);
         assertEquals(
-            List.of("B1", "B2", "D1"),
-            restored.stream()
-                .map(packet -> packet.header().packetName())
-                .toList());
+                List.of("B1", "B2", "D1"),
+                restored.stream().map(packet -> packet.header().packetName()).toList());
         assertEquals(List.of(), handoff.finish("actor"));
         restored.forEach(ZLinkActorHandoffPacket::close);
         handoff.close();
@@ -111,11 +113,11 @@ final class ZLinkActorTransferHandoffTest {
         byte[] journal = new byte[] {9, 8, 7, 6};
         try (Message payload = Message.from("payload")) {
             handoff.capture(
-                "actor",
-                new ZLinkStreamHeader("DeferredSend", Map.of(), Optional.empty()),
-                payload,
-                null,
-                journal);
+                    "actor",
+                    new ZLinkStreamHeader("DeferredSend", Map.of(), Optional.empty()),
+                    payload,
+                    null,
+                    journal);
         }
 
         ZLinkActorHandoffPacket packet = handoff.take("actor").get(0);
@@ -130,8 +132,12 @@ final class ZLinkActorTransferHandoffTest {
     void messageFollowDurationRemovesRoute() throws Exception {
         ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
         CountDownLatch removed = new CountDownLatch(1);
-        handoff.retain("actor", ref("source", 1), ref("target", 2),
-            Duration.ofMillis(25), ignored -> removed.countDown());
+        handoff.retain(
+                "actor",
+                ref("source", 1),
+                ref("target", 2),
+                Duration.ofMillis(25),
+                ignored -> removed.countDown());
 
         assertEquals(1, handoff.messageFollowSourceCount());
         assertTrue(removed.await(1, TimeUnit.SECONDS));
@@ -140,27 +146,26 @@ final class ZLinkActorTransferHandoffTest {
     }
 
     @Test
-    void relocationFollowDurationStartsOnlyWhenTargetCommitIsObserved()
-        throws Exception {
+    void relocationFollowDurationStartsOnlyWhenTargetCommitIsObserved() throws Exception {
         ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
         var source = route("node-a", 11, 3);
         var target = route("node-b", 12, 5);
         handoff.stageRelocationRoute(source, target, rawRoute(target));
 
         Thread.sleep(60);
-        assertTrue(handoff.messageFollowSource(source).isPresent(),
-            "pre-commit capture time must not consume Message Follow duration");
+        assertTrue(
+                handoff.messageFollowSource(source).isPresent(),
+                "pre-commit capture time must not consume Message Follow duration");
         var committedTarget = route("node-b", 12, 8);
-        handoff.refreshRelocationRoute(
-            source, committedTarget, rawRoute(committedTarget));
+        handoff.refreshRelocationRoute(source, committedTarget, rawRoute(committedTarget));
 
         handoff.commitRelocationRoute(source, Duration.ofMillis(25));
-        assertEquals(committedTarget,
-            handoff.messageFollowSource(source).orElseThrow().targetRoute(),
-            "commit must retain the authority generation returned by target CAS");
+        assertEquals(
+                committedTarget,
+                handoff.messageFollowSource(source).orElseThrow().targetRoute(),
+                "commit must retain the authority generation returned by target CAS");
         long deadline = System.nanoTime() + Duration.ofSeconds(1).toNanos();
-        while (handoff.messageFollowSource(source).isPresent()
-            && System.nanoTime() < deadline) {
+        while (handoff.messageFollowSource(source).isPresent() && System.nanoTime() < deadline) {
             Thread.sleep(1);
         }
         assertTrue(handoff.messageFollowSource(source).isEmpty());
@@ -188,11 +193,9 @@ final class ZLinkActorTransferHandoffTest {
         var firstTarget = route("node-b", 12, 5);
         var secondSource = route("node-b", 13, 7);
         var secondTarget = route("node-a", 14, 9);
-        handoff.stageRelocationRoute(
-            firstSource, firstTarget, rawRoute(firstTarget));
+        handoff.stageRelocationRoute(firstSource, firstTarget, rawRoute(firstTarget));
         handoff.commitRelocationRoute(firstSource, Duration.ofMillis(25));
-        handoff.stageRelocationRoute(
-            secondSource, secondTarget, rawRoute(secondTarget));
+        handoff.stageRelocationRoute(secondSource, secondTarget, rawRoute(secondTarget));
         handoff.commitRelocationRoute(secondSource, Duration.ofMinutes(1));
 
         Thread.sleep(60);
@@ -204,10 +207,8 @@ final class ZLinkActorTransferHandoffTest {
 
     @Test
     void multiHopRelocationChainRetainsEachExactSourceTargetTenure() {
-        ZLinkActorTransferHandoff firstOwner =
-            new ZLinkActorTransferHandoff();
-        ZLinkActorTransferHandoff secondOwner =
-            new ZLinkActorTransferHandoff();
+        ZLinkActorTransferHandoff firstOwner = new ZLinkActorTransferHandoff();
+        ZLinkActorTransferHandoff secondOwner = new ZLinkActorTransferHandoff();
         var routeA = route("node-a", 11, 3);
         var routeB = route("node-b", 12, 5);
         var routeC = route("node-c", 13, 7);
@@ -216,14 +217,8 @@ final class ZLinkActorTransferHandoffTest {
         secondOwner.stageRelocationRoute(routeB, routeC, rawRoute(routeC));
         secondOwner.commitRelocationRoute(routeB, Duration.ofMinutes(1));
 
-        assertEquals(
-            routeB,
-            firstOwner.messageFollowSource(routeA).orElseThrow()
-                .targetRoute());
-        assertEquals(
-            routeC,
-            secondOwner.messageFollowSource(routeB).orElseThrow()
-                .targetRoute());
+        assertEquals(routeB, firstOwner.messageFollowSource(routeA).orElseThrow().targetRoute());
+        assertEquals(routeC, secondOwner.messageFollowSource(routeB).orElseThrow().targetRoute());
         firstOwner.close();
         secondOwner.close();
     }
@@ -233,20 +228,29 @@ final class ZLinkActorTransferHandoffTest {
         ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
         List<Long> removedTargets = new CopyOnWriteArrayList<>();
         CountDownLatch removed = new CountDownLatch(2);
-        handoff.retain("actor", ref("source", 1), ref("target", 2),
-            Duration.ofMillis(30), source -> {
-                removedTargets.add(source.targetActorRef().generation());
-                removed.countDown();
-            });
-        handoff.retain("actor", ref("source", 3), ref("target", 4),
-            Duration.ofMillis(60), source -> {
-                removedTargets.add(source.targetActorRef().generation());
-                removed.countDown();
-            });
+        handoff.retain(
+                "actor",
+                ref("source", 1),
+                ref("target", 2),
+                Duration.ofMillis(30),
+                source -> {
+                    removedTargets.add(source.targetActorRef().generation());
+                    removed.countDown();
+                });
+        handoff.retain(
+                "actor",
+                ref("source", 3),
+                ref("target", 4),
+                Duration.ofMillis(60),
+                source -> {
+                    removedTargets.add(source.targetActorRef().generation());
+                    removed.countDown();
+                });
 
         assertEquals(1, handoff.messageFollowSourceCount());
-        assertEquals(4, handoff.messageFollowSource("actor").orElseThrow()
-            .targetActorRef().generation());
+        assertEquals(
+                4,
+                handoff.messageFollowSource("actor").orElseThrow().targetActorRef().generation());
         assertTrue(removed.await(1, TimeUnit.SECONDS));
         assertEquals(List.of(2L, 4L), removedTargets);
         assertEquals(0, handoff.messageFollowSourceCount());
@@ -257,9 +261,12 @@ final class ZLinkActorTransferHandoffTest {
     void closeRemovesOwnedMessageFollowRoutesImmediately() {
         ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
         List<Long> removedTargets = new CopyOnWriteArrayList<>();
-        handoff.retain("actor", ref("source", 1), ref("target", 2),
-            Duration.ofMinutes(1), source ->
-                removedTargets.add(source.targetActorRef().generation()));
+        handoff.retain(
+                "actor",
+                ref("source", 1),
+                ref("target", 2),
+                Duration.ofMinutes(1),
+                source -> removedTargets.add(source.targetActorRef().generation()));
 
         handoff.close();
 
@@ -271,20 +278,24 @@ final class ZLinkActorTransferHandoffTest {
     void inFlightRequestPreservesReplyCorrelationFraming() {
         ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
         handoff.begin("actor");
-        ZLinkStreamHeader header = new ZLinkStreamHeader(
-            ZLinkStreamMessageKind.REQUEST,
-            ZLinkStreamCodec.JSON,
-            EnumSet.of(ZLinkStreamHeaderFlag.HAS_METADATA),
-            Optional.of(77L),
-            "ProbeReq",
-            Map.of("trace", "handoff"),
-            Optional.of("corr-77"));
-        ZLinkActorReplyRoute route = new ZLinkActorReplyRoute(
-            ref("source", 9), RoutingId.from("caller-node"),
-            RoutingId.from("caller-session"), 91L, 5);
+        ZLinkStreamHeader header =
+                new ZLinkStreamHeader(
+                        ZLinkStreamMessageKind.REQUEST,
+                        ZLinkStreamCodec.JSON,
+                        EnumSet.of(ZLinkStreamHeaderFlag.HAS_METADATA),
+                        Optional.of(77L),
+                        "ProbeReq",
+                        Map.of("trace", "handoff"),
+                        Optional.of("corr-77"));
+        ZLinkActorReplyRoute route =
+                new ZLinkActorReplyRoute(
+                        ref("source", 9),
+                        RoutingId.from("caller-node"),
+                        RoutingId.from("caller-session"),
+                        91L,
+                        5);
         try (Message payload = Message.from(new byte[] {1})) {
-            handoff.capture(
-                "actor", header, payload, route, new byte[] {1});
+            handoff.capture("actor", header, payload, route, new byte[] {1});
         }
 
         ZLinkActorHandoffPacket packet = handoff.take("actor").get(0);
@@ -301,8 +312,7 @@ final class ZLinkActorTransferHandoffTest {
     void committedMessageFollowRouteHasNoVolumeBound() {
         ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
         handoff.retain(
-            "actor", ref("source", 7), ref("target", 7),
-            Duration.ofMinutes(1), ignored -> { });
+                "actor", ref("source", 7), ref("target", 7), Duration.ofMinutes(1), ignored -> {});
         List<CompletableFuture<Void>> pending = new ArrayList<>();
         for (int index = 0; index < 2048; index++) {
             CompletableFuture<Void> operation = new CompletableFuture<>();
@@ -317,17 +327,22 @@ final class ZLinkActorTransferHandoffTest {
     void messageFollowRejectsDifferentObjectGeneration() {
         ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
         handoff.retain(
-            "actor", ref("source", 7), ref("target", 7),
-            Duration.ofMinutes(1), ignored -> { });
+                "actor", ref("source", 7), ref("target", 7), Duration.ofMinutes(1), ignored -> {});
 
-        CompletionException failure = assertThrows(CompletionException.class, () ->
-            handoff.follow(
-                    "actor", 8, 1,
-                () -> CompletableFuture.completedFuture(null))
-                .toCompletableFuture().join());
+        CompletionException failure =
+                assertThrows(
+                        CompletionException.class,
+                        () ->
+                                handoff.follow(
+                                                "actor",
+                                                8,
+                                                1,
+                                                () -> CompletableFuture.completedFuture(null))
+                                        .toCompletableFuture()
+                                        .join());
         assertEquals(
-            ZLinkFrameworkErrorKind.INVALID_OPERATION,
-            ((ZLinkFrameworkException) failure.getCause()).kind());
+                ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                ((ZLinkFrameworkException) failure.getCause()).kind());
         handoff.close();
     }
 
@@ -335,15 +350,21 @@ final class ZLinkActorTransferHandoffTest {
     void missingMessageFollowRouteIsUnavailable() {
         ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
 
-        CompletionException failure = assertThrows(CompletionException.class, () ->
-            handoff.follow(
-                    "actor", 7, 1,
-                    () -> CompletableFuture.completedFuture(null))
-                .toCompletableFuture().join());
+        CompletionException failure =
+                assertThrows(
+                        CompletionException.class,
+                        () ->
+                                handoff.follow(
+                                                "actor",
+                                                7,
+                                                1,
+                                                () -> CompletableFuture.completedFuture(null))
+                                        .toCompletableFuture()
+                                        .join());
 
         assertEquals(
-            ZLinkFrameworkErrorKind.UNAVAILABLE,
-            ((ZLinkFrameworkException) failure.getCause()).kind());
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                ((ZLinkFrameworkException) failure.getCause()).kind());
         handoff.close();
     }
 
@@ -364,11 +385,11 @@ final class ZLinkActorTransferHandoffTest {
         handoff.begin("actor");
         try (Message payload = Message.from(new byte[17 * 1024 * 1024])) {
             handoff.capture(
-                "actor",
-                new ZLinkStreamHeader("Large", Map.of(), Optional.empty()),
-                payload,
-                null,
-                new byte[] {1});
+                    "actor",
+                    new ZLinkStreamHeader("Large", Map.of(), Optional.empty()),
+                    payload,
+                    null,
+                    new byte[] {1});
         }
 
         assertEquals(1, handoff.pendingCount("actor"));
@@ -378,57 +399,65 @@ final class ZLinkActorTransferHandoffTest {
 
     @Test
     void messageFollowNoticeSaturatesLogicalQueueDiagnosticsAtUint32() {
-        var source = new ZLinkServiceMessageFollowWireCodec.ActorRoute(
-            "actor", 7, RoutingId.from("source"), 2, 3, 4);
-        var target = new ZLinkServiceMessageFollowWireCodec.ActorRoute(
-            "actor", 7, RoutingId.from("target"), 5, 6, 7);
+        var source =
+                new ZLinkServiceMessageFollowWireCodec.ActorRoute(
+                        "actor", 7, RoutingId.from("source"), 2, 3, 4);
+        var target =
+                new ZLinkServiceMessageFollowWireCodec.ActorRoute(
+                        "actor", 7, RoutingId.from("target"), 5, 6, 7);
         long overUint32 = 0x1_0000_0000L + 19L;
 
-        var notice = ZLinkActorRuntime.messageFollowNotice(
-            source,
-            target,
-            1,
-            new ZLinkActorTransferHandoff.MessageFollowQueueSnapshot(
-                overUint32, overUint32 + 1),
-            11,
-            13,
-            17);
+        var notice =
+                ZLinkActorRuntime.messageFollowNotice(
+                        source,
+                        target,
+                        1,
+                        new ZLinkActorTransferHandoff.MessageFollowQueueSnapshot(
+                                overUint32, overUint32 + 1),
+                        11,
+                        13,
+                        17);
 
         assertEquals(0xffff_ffffL, notice.queuedMessages());
         assertEquals(0xffff_ffffL, notice.queuedBytes());
         assertEquals(
-            notice,
-            new ZLinkServiceMessageFollowWireCodec().decode(
-                new ZLinkServiceMessageFollowWireCodec().encode(notice)));
+                notice,
+                new ZLinkServiceMessageFollowWireCodec()
+                        .decode(new ZLinkServiceMessageFollowWireCodec().encode(notice)));
     }
 
     @Test
     void messageFollowNoticeClaimIsSingleUseUntilMatchingClaimIsAborted() {
         ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
         ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute =
-            new ZLinkServiceMessageFollowWireCodec.ActorRoute(
-                "actor", 7, RoutingId.from("source"), 2, 3, 4);
+                new ZLinkServiceMessageFollowWireCodec.ActorRoute(
+                        "actor", 7, RoutingId.from("source"), 2, 3, 4);
         ZLinkServiceMessageFollowWireCodec.ActorRoute targetRoute =
-            new ZLinkServiceMessageFollowWireCodec.ActorRoute(
-                "actor", 7, RoutingId.from("target"), 5, 6, 7);
-        SpotTransportAddress targetAddress = new SpotTransportAddress(
-            "router", RoutingId.from("target"), "spot", 7, 5, 6, 7,
-            ZLinkSpotKind.USER);
+                new ZLinkServiceMessageFollowWireCodec.ActorRoute(
+                        "actor", 7, RoutingId.from("target"), 5, 6, 7);
+        SpotTransportAddress targetAddress =
+                new SpotTransportAddress(
+                        "router", RoutingId.from("target"), "spot", 7, 5, 6, 7, ZLinkSpotKind.USER);
         handoff.retain(
-            "actor", ref("source", 7), ref("target", 7),
-            targetAddress, sourceRoute, targetRoute,
-            Duration.ofMinutes(1), ignored -> { });
+                "actor",
+                ref("source", 7),
+                ref("target", 7),
+                targetAddress,
+                sourceRoute,
+                targetRoute,
+                Duration.ofMinutes(1),
+                ignored -> {});
 
         ZLinkActorTransferHandoff.MessageFollowSource source =
-            handoff.messageFollowSource("actor").orElseThrow();
+                handoff.messageFollowSource("actor").orElseThrow();
         ZLinkServiceMessageFollowWireCodec.ActorRoute newerSourceRoute =
-            new ZLinkServiceMessageFollowWireCodec.ActorRoute(
-                "actor", 7, RoutingId.from("source"), 2, 4, 4);
+                new ZLinkServiceMessageFollowWireCodec.ActorRoute(
+                        "actor", 7, RoutingId.from("source"), 2, 4, 4);
         assertTrue(source.matchesSourceRoute(sourceRoute));
         assertFalse(source.matchesSourceRoute(newerSourceRoute));
         assertTrue(source.beginMessageFollowNotice(newerSourceRoute).isEmpty());
         ZLinkMessageFollowSuppressionRegistry.Claim first =
-            source.beginMessageFollowNotice(sourceRoute).orElseThrow();
+                source.beginMessageFollowNotice(sourceRoute).orElseThrow();
         assertTrue(source.beginMessageFollowNotice(sourceRoute).isEmpty());
 
         source.abortMessageFollowNotice(first);
@@ -440,20 +469,19 @@ final class ZLinkActorTransferHandoffTest {
     void messageFollowQueueSnapshotSurvivesCompletionRelease() {
         ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
         handoff.retain(
-            "actor", ref("source", 7), ref("target", 7),
-            Duration.ofMinutes(1), ignored -> { });
+                "actor", ref("source", 7), ref("target", 7), Duration.ofMinutes(1), ignored -> {});
         CompletableFuture<String> operation = new CompletableFuture<>();
 
         CompletionStage<ZLinkActorTransferHandoff.FollowResult<String>> result =
-            handoff.followWithQueueSnapshot("actor", 7, 3, () -> operation);
+                handoff.followWithQueueSnapshot("actor", 7, 3, () -> operation);
         ZLinkActorTransferHandoff.MessageFollowSource source =
-            handoff.messageFollowSource("actor").orElseThrow();
+                handoff.messageFollowSource("actor").orElseThrow();
         assertEquals(1, source.pendingMessages());
         assertEquals(3, source.pendingBytes());
 
         operation.complete("relayed");
         ZLinkActorTransferHandoff.FollowResult<String> completed =
-            result.toCompletableFuture().join();
+                result.toCompletableFuture().join();
         assertEquals("relayed", completed.value());
         assertEquals(1, completed.queue().messages());
         assertEquals(3, completed.queue().bytes());
@@ -466,37 +494,62 @@ final class ZLinkActorTransferHandoffTest {
     void messageFollowRetainsTargetRouteFenceAtInstallation() {
         ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
         ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute =
-            new ZLinkServiceMessageFollowWireCodec.ActorRoute(
-                "actor", 7, RoutingId.from("source"), 2, 3, 4);
+                new ZLinkServiceMessageFollowWireCodec.ActorRoute(
+                        "actor", 7, RoutingId.from("source"), 2, 3, 4);
         ZLinkServiceMessageFollowWireCodec.ActorRoute targetRoute =
-            new ZLinkServiceMessageFollowWireCodec.ActorRoute(
-                "actor", 7, RoutingId.from("target"), 11, 13, 17);
-        SpotTransportAddress targetAddress = new SpotTransportAddress(
-            "router", RoutingId.from("target"), "spot", 7, 11, 13, 17,
-            ZLinkSpotKind.USER);
+                new ZLinkServiceMessageFollowWireCodec.ActorRoute(
+                        "actor", 7, RoutingId.from("target"), 11, 13, 17);
+        SpotTransportAddress targetAddress =
+                new SpotTransportAddress(
+                        "router",
+                        RoutingId.from("target"),
+                        "spot",
+                        7,
+                        11,
+                        13,
+                        17,
+                        ZLinkSpotKind.USER);
         handoff.retain(
-            "actor", ref("source", 7), ref("target", 7), targetAddress,
-            sourceRoute, targetRoute, Duration.ofMinutes(1), ignored -> { });
+                "actor",
+                ref("source", 7),
+                ref("target", 7),
+                targetAddress,
+                sourceRoute,
+                targetRoute,
+                Duration.ofMinutes(1),
+                ignored -> {});
 
-        assertEquals(
-            sourceRoute,
-            handoff.messageFollowSource("actor").orElseThrow().sourceRoute());
-        assertEquals(
-            targetRoute,
-            handoff.messageFollowSource("actor").orElseThrow().targetRoute());
+        assertEquals(sourceRoute, handoff.messageFollowSource("actor").orElseThrow().sourceRoute());
+        assertEquals(targetRoute, handoff.messageFollowSource("actor").orElseThrow().targetRoute());
         handoff.close();
     }
 
     @Test
     void messageFollowRejectsAddressWithoutTargetRouteFence() {
         ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
-        SpotTransportAddress targetAddress = new SpotTransportAddress(
-            "router", RoutingId.from("target"), "spot", 7, 11, 13, 17,
-            ZLinkSpotKind.USER);
+        SpotTransportAddress targetAddress =
+                new SpotTransportAddress(
+                        "router",
+                        RoutingId.from("target"),
+                        "spot",
+                        7,
+                        11,
+                        13,
+                        17,
+                        ZLinkSpotKind.USER);
 
-        assertThrows(IllegalArgumentException.class, () -> handoff.retain(
-            "actor", ref("source", 7), ref("target", 7), targetAddress,
-            null, null, Duration.ofMinutes(1), ignored -> { }));
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        handoff.retain(
+                                "actor",
+                                ref("source", 7),
+                                ref("target", 7),
+                                targetAddress,
+                                null,
+                                null,
+                                Duration.ofMinutes(1),
+                                ignored -> {}));
         handoff.close();
     }
 
@@ -504,41 +557,37 @@ final class ZLinkActorTransferHandoffTest {
     void messageFollowTargetRouteMatchesBackendActorRefByFields() {
         RoutingId targetNode = RoutingId.from("target");
         ZLinkStoreLocationResolvers.ActorRoute route =
-            new ZLinkStoreLocationResolvers.ActorRoute(
-                new ActorRef(
-                    "actor", 7, "mesh", targetNode),
-                ZLinkSpotKind.USER,
-                "spot",
-                "mesh",
-                targetNode,
-                11,
-                13,
-                17);
-        ZLinkBackendActorRef targetActor =
-            new ZLinkBackendActorRef(targetNode, "actor", 7);
-        SpotTransportAddress targetAddress = new SpotTransportAddress(
-            "router", targetNode, "spot", 7, 11, 13, 17,
-            ZLinkSpotKind.USER);
+                new ZLinkStoreLocationResolvers.ActorRoute(
+                        new ActorRef("actor", 7, "mesh", targetNode),
+                        ZLinkSpotKind.USER,
+                        "spot",
+                        "mesh",
+                        targetNode,
+                        11,
+                        13,
+                        17);
+        ZLinkBackendActorRef targetActor = new ZLinkBackendActorRef(targetNode, "actor", 7);
+        SpotTransportAddress targetAddress =
+                new SpotTransportAddress(
+                        "router", targetNode, "spot", 7, 11, 13, 17, ZLinkSpotKind.USER);
 
-        assertTrue(ZLinkActorRuntime.messageFollowTargetRouteMatches(
-            route, targetActor, targetAddress));
-        assertFalse(ZLinkActorRuntime.messageFollowTargetRouteMatches(
-            route,
-            new ZLinkBackendActorRef(targetNode, "actor", 8),
-            targetAddress));
+        assertTrue(
+                ZLinkActorRuntime.messageFollowTargetRouteMatches(
+                        route, targetActor, targetAddress));
+        assertFalse(
+                ZLinkActorRuntime.messageFollowTargetRouteMatches(
+                        route, new ZLinkBackendActorRef(targetNode, "actor", 8), targetAddress));
     }
 
     private static void capture(
-        ZLinkActorTransferHandoff handoff,
-        String packetName,
-        Map<String, String> metadata) {
+            ZLinkActorTransferHandoff handoff, String packetName, Map<String, String> metadata) {
         try (Message payload = Message.from(packetName.getBytes(StandardCharsets.UTF_8))) {
             handoff.capture(
-                "actor",
-                new ZLinkStreamHeader(packetName, metadata, Optional.empty()),
-                payload,
-                null,
-                new byte[] {1});
+                    "actor",
+                    new ZLinkStreamHeader(packetName, metadata, Optional.empty()),
+                    payload,
+                    null,
+                    new byte[] {1});
         }
     }
 
@@ -547,22 +596,23 @@ final class ZLinkActorTransferHandoffTest {
     }
 
     private static ZLinkServiceMessageFollowWireCodec.ActorRoute route(
-        String node,
-        long authorityGeneration,
-        long leaseGeneration) {
+            String node, long authorityGeneration, long leaseGeneration) {
         return new ZLinkServiceMessageFollowWireCodec.ActorRoute(
-            "actor", 7, RoutingId.from(node), authorityGeneration,
-            authorityGeneration, leaseGeneration);
+                "actor",
+                7,
+                RoutingId.from(node),
+                authorityGeneration,
+                authorityGeneration,
+                leaseGeneration);
     }
 
     private static ZLinkServiceM6BWireCodec.ActorRouteFence rawRoute(
-        ZLinkServiceMessageFollowWireCodec.ActorRoute route) {
+            ZLinkServiceMessageFollowWireCodec.ActorRoute route) {
         return new ZLinkServiceM6BWireCodec.ActorRouteFence(
-            new ZLinkBackendActorRef(
-                route.targetNodeRid(), route.actorId(),
-                route.objectGeneration()),
-            route.targetNodeGeneration(),
-            route.authorityOwnerGeneration(),
-            route.ownerLeaseGeneration());
+                new ZLinkBackendActorRef(
+                        route.targetNodeRid(), route.actorId(), route.objectGeneration()),
+                route.targetNodeGeneration(),
+                route.authorityOwnerGeneration(),
+                route.ownerLeaseGeneration());
     }
 }

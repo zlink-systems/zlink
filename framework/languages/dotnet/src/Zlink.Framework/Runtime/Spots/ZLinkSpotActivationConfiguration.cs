@@ -57,16 +57,19 @@ internal abstract partial class ZLinkSpotActivation
     protected void AttachUserSpotCore(IZLinkSpot spot)
     {
         ArgumentNullException.ThrowIfNull(spot);
-        if (_spot is not null) throw new InvalidOperationException("SPOT has already been attached to this context.");
+        if (_spot is not null)
+            throw new InvalidOperationException("SPOT has already been attached to this context.");
 
         if (!ReferenceEquals(spot.Context, this))
             throw new InvalidOperationException(
-                $"SPOT '{spot.GetType().FullName}' must expose the context provided by the runtime.");
+                $"SPOT '{spot.GetType().FullName}' must expose the context provided by the runtime."
+            );
 
         _spot = spot;
         _actorHandlers = new ZLinkSpotActorHandlerRegistry(
             ZLinkSpotActorHandlerSurface.UserSpot,
-            spot.GetType());
+            spot.GetType()
+        );
         _handlerInvoker = new ZLinkSpotHandlerInvoker(
             _handlerInstances,
             spot,
@@ -74,7 +77,8 @@ internal abstract partial class ZLinkSpotActivation
             _runtime.Registration.Codecs,
             _runtime.Registration.StreamCompressionCodec,
             this,
-            ResolveActorHandlerInstances);
+            ResolveActorHandlerInstances
+        );
     }
 
     protected void AttachInstanceSpotCore(IZLinkInstanceSpot spot)
@@ -84,7 +88,8 @@ internal abstract partial class ZLinkSpotActivation
             throw new InvalidOperationException("SPOT has already been attached to this context.");
         if (!ReferenceEquals(spot.Context, this))
             throw new InvalidOperationException(
-                $"Instance Spot '{spot.GetType().FullName}' must expose the context provided by the runtime.");
+                $"Instance Spot '{spot.GetType().FullName}' must expose the context provided by the runtime."
+            );
 
         _spot = spot;
         _handlerInvoker = new ZLinkSpotHandlerInvoker(
@@ -94,7 +99,8 @@ internal abstract partial class ZLinkSpotActivation
             _runtime.Registration.Codecs,
             _runtime.Registration.StreamCompressionCodec,
             this,
-            ResolveActorHandlerInstances);
+            ResolveActorHandlerInstances
+        );
     }
 
     public async ValueTask BindDescriptorsAsync(CancellationToken cancellationToken)
@@ -105,17 +111,12 @@ internal abstract partial class ZLinkSpotActivation
         await BindKindDescriptorsAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    protected abstract ValueTask BindKindDescriptorsAsync(
-        CancellationToken cancellationToken);
+    protected abstract ValueTask BindKindDescriptorsAsync(CancellationToken cancellationToken);
 
-    protected async ValueTask BindUserDescriptorsAsync(
-        CancellationToken cancellationToken)
+    protected async ValueTask BindUserDescriptorsAsync(CancellationToken cancellationToken)
     {
-        await _subscriptions.BindAsync(
-                Spot,
-                NativeSpot,
-                DefaultRequestTimeout,
-                cancellationToken)
+        await _subscriptions
+            .BindAsync(Spot, NativeSpot, DefaultRequestTimeout, cancellationToken)
             .ConfigureAwait(false);
         _actorJoins.Bind(Spot);
         _actorHandlers?.Bind();
@@ -123,9 +124,11 @@ internal abstract partial class ZLinkSpotActivation
 
     internal async ValueTask ApplyScannedHandlerAsync(
         ZLinkScannedSpotHandler handler,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        if (handler.SpotType != Spot.GetType()) return;
+        if (handler.SpotType != Spot.GetType())
+            return;
 
         EnsureConfigurationOpen();
         ValidateScannedHandlerKind(handler.Kind);
@@ -136,13 +139,21 @@ internal abstract partial class ZLinkSpotActivation
                 _packets.Add(handler);
                 return;
             case ZLinkScannedSpotHandlerKind.Subscription:
-                if (handler.SpotNodeName is not null
-                    && !string.Equals(handler.SpotNodeName, SpotNodeName, StringComparison.Ordinal)) return;
-                var topic = handler.Topic
-                            ?? throw new InvalidOperationException("Scanned SPOT subscription requires a topic.");
-                var channelName = handler.ChannelName
-                                  ?? throw new InvalidOperationException(
-                                      "Scanned SPOT subscription requires a channel name.");
+                if (
+                    handler.SpotNodeName is not null
+                    && !string.Equals(handler.SpotNodeName, SpotNodeName, StringComparison.Ordinal)
+                )
+                    return;
+                var topic =
+                    handler.Topic
+                    ?? throw new InvalidOperationException(
+                        "Scanned SPOT subscription requires a topic."
+                    );
+                var channelName =
+                    handler.ChannelName
+                    ?? throw new InvalidOperationException(
+                        "Scanned SPOT subscription requires a channel name."
+                    );
                 if (handler.Method is { } subscriptionMethod)
                     _subscriptions.Add(channelName, topic, handler.HandlerType, subscriptionMethod);
                 else
@@ -150,31 +161,42 @@ internal abstract partial class ZLinkSpotActivation
                 return;
             case ZLinkScannedSpotHandlerKind.ActorSend:
             case ZLinkScannedSpotHandlerKind.ActorRequest:
-                RequireActorHandlers().AddPacket(
-                    handler.HandlerType,
-                    handler.ActorType ??
-                    throw new InvalidOperationException("Scanned SPOT actor handler requires an actor type."),
-                    handler.PacketName);
+                RequireActorHandlers()
+                    .AddPacket(
+                        handler.HandlerType,
+                        handler.ActorType
+                            ?? throw new InvalidOperationException(
+                                "Scanned SPOT actor handler requires an actor type."
+                            ),
+                        handler.PacketName
+                    );
                 return;
             case ZLinkScannedSpotHandlerKind.Timer:
-                _ = await _timers.AddAsync(
-                    handler.TimerName ?? throw new InvalidOperationException("Scanned SPOT timer requires a name."),
-                    handler.TimerPeriod,
-                    null,
-                    handler.HandlerType,
-                    Spot.GetType(),
-                    StopToken,
-                    DispatchTimerAsync,
-                    PublishTimerFailureAsync,
-                    cancellationToken).ConfigureAwait(false);
+                _ = await _timers
+                    .AddAsync(
+                        handler.TimerName
+                            ?? throw new InvalidOperationException(
+                                "Scanned SPOT timer requires a name."
+                            ),
+                        handler.TimerPeriod,
+                        null,
+                        handler.HandlerType,
+                        Spot.GetType(),
+                        StopToken,
+                        DispatchTimerAsync,
+                        PublishTimerFailureAsync,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
                 return;
             default:
-                throw new InvalidOperationException($"Unsupported scanned SPOT handler kind '{handler.Kind}'.");
+                throw new InvalidOperationException(
+                    $"Unsupported scanned SPOT handler kind '{handler.Kind}'."
+                );
         }
     }
 
-    protected abstract void ValidateScannedHandlerKind(
-        ZLinkScannedSpotHandlerKind kind);
+    protected abstract void ValidateScannedHandlerKind(ZLinkScannedSpotHandlerKind kind);
 
     private void AddActorPacketRegistrationCore<THandler, TActor>(string? packetName)
         where THandler : class
@@ -188,11 +210,10 @@ internal abstract partial class ZLinkSpotActivation
     private ZLinkSpotActorHandlerRegistry RequireActorHandlers()
     {
         return _actorHandlers
-               ?? throw new InvalidOperationException("SPOT actor registry is not initialized.");
+            ?? throw new InvalidOperationException("SPOT actor registry is not initialized.");
     }
 
-    private ZLinkScopedHandlerInstanceOwner ResolveActorHandlerInstances(
-        IZLinkActor actor)
+    private ZLinkScopedHandlerInstanceOwner ResolveActorHandlerInstances(IZLinkActor actor)
     {
         var state = _runtime.GetOrCreateActorState(actor.Context.ActorId);
         return state.HandlerInstances;

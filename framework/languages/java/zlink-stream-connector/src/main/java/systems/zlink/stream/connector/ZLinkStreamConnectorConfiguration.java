@@ -33,33 +33,36 @@ final class ZLinkStreamConnectorConfiguration {
         this.endpoint = options.endpoint();
         this.dispatchMode = options.dispatchMode();
         this.diagnosticsLevelCell = new AtomicReference<>(options.diagnosticsLevel());
-        this.timeouts = new Timeouts(
-            options.connectTimeout(), options.requestTimeout(), options.waitTimeout());
-        this.limits = new Limits(
-            options.maxSendPayloadSize(),
-            options.maxReceivePayloadSize());
-        this.heartbeat = new Heartbeat(
-            options.heartbeatEnabled(), options.heartbeatInterval(), options.heartbeatTimeout());
-        this.reconnect = new Reconnect(
-            options.reconnectEnabled(),
-            options.maxReconnectAttempts(),
-            options.reconnectInitialDelay(),
-            options.reconnectMaxDelay(),
-            options.reconnectBackoffFactor());
-        this.transport = new Transport(
-            transportFor(options.endpoint()),
-            options.skipServerCertificateValidation(), options.compressionCodec());
+        this.timeouts =
+                new Timeouts(
+                        options.connectTimeout(), options.requestTimeout(), options.waitTimeout());
+        this.limits = new Limits(options.maxSendPayloadSize(), options.maxReceivePayloadSize());
+        this.heartbeat =
+                new Heartbeat(
+                        options.heartbeatEnabled(),
+                        options.heartbeatInterval(),
+                        options.heartbeatTimeout());
+        this.reconnect =
+                new Reconnect(
+                        options.reconnectEnabled(),
+                        options.maxReconnectAttempts(),
+                        options.reconnectInitialDelay(),
+                        options.reconnectMaxDelay(),
+                        options.reconnectBackoffFactor());
+        this.transport =
+                new Transport(
+                        transportFor(options.endpoint()),
+                        options.skipServerCertificateValidation(),
+                        options.compressionCodec());
     }
 
     /**
      * Validates every option and builds the runtime configuration.
      *
-     * <p>Common connector spec §6.3: all of the options are checked before a
-     * connection is attempted, a value outside its permitted range is
-     * {@code VALIDATION_FAILED}, and a disagreement between two options is
-     * {@code CONFIGURATION_ERROR}. §9.2 requires the caller to be able to
-     * read that code, so every rejection here is a
-     * {@link ZLinkStreamException}.
+     * <p>Common connector spec §6.3: all of the options are checked before a connection is
+     * attempted, a value outside its permitted range is {@code VALIDATION_FAILED}, and a
+     * disagreement between two options is {@code CONFIGURATION_ERROR}. §9.2 requires the caller to
+     * be able to read that code, so every rejection here is a {@link ZLinkStreamException}.
      */
     static ZLinkStreamConnectorConfiguration from(ZLinkStreamConnectorOptions options) {
         requireOption(options, "options");
@@ -75,20 +78,21 @@ final class ZLinkStreamConnectorConfiguration {
         requirePositive(options.heartbeatInterval(), "heartbeatInterval");
         requirePositive(options.heartbeatTimeout(), "heartbeatTimeout");
         if (options.heartbeatEnabled()
-            && !options.heartbeatTimeout().minus(options.heartbeatInterval()).isPositive()) {
+                && !options.heartbeatTimeout().minus(options.heartbeatInterval()).isPositive()) {
             throw ZLinkStreamException.configurationError(
-                "heartbeatTimeout must be greater than heartbeatInterval");
+                    "heartbeatTimeout must be greater than heartbeatInterval");
         }
         requirePositive(options.reconnectInitialDelay(), "reconnectInitialDelay");
         requirePositive(options.reconnectMaxDelay(), "reconnectMaxDelay");
         if (options.reconnectBackoffFactor() < 1.0) {
             throw ZLinkStreamException.validationFailed(
-                "reconnectBackoffFactor must be at least 1.0");
+                    "reconnectBackoffFactor must be at least 1.0");
         }
-        if (options.maxReconnectAttempts() < ZLinkStreamConnectorOptions.UNLIMITED_RECONNECT_ATTEMPTS
-            || (options.reconnectEnabled() && options.maxReconnectAttempts() == 0)) {
+        if (options.maxReconnectAttempts()
+                        < ZLinkStreamConnectorOptions.UNLIMITED_RECONNECT_ATTEMPTS
+                || (options.reconnectEnabled() && options.maxReconnectAttempts() == 0)) {
             throw ZLinkStreamException.validationFailed(
-                "maxReconnectAttempts must be unlimited or positive");
+                    "maxReconnectAttempts must be unlimited or positive");
         }
         if (options.maxSendPayloadSize() <= 0) {
             throw ZLinkStreamException.validationFailed("maxSendPayloadSize must be positive");
@@ -98,9 +102,9 @@ final class ZLinkStreamConnectorConfiguration {
         }
         requireOption(options.compression(), "compression");
         if (options.compression() == ZLinkStreamCompression.LZ4
-            && options.compressionCodec() == null) {
+                && options.compressionCodec() == null) {
             throw ZLinkStreamException.configurationError(
-                "compressionCodec is required when compression is lz4");
+                    "compressionCodec is required when compression is lz4");
         }
         requireOption(options.typedCodec(), "typedCodec");
         requireOption(options.diagnosticsLevel(), "diagnosticsLevel");
@@ -108,38 +112,57 @@ final class ZLinkStreamConnectorConfiguration {
     }
 
     /**
-     * Returns the options record with {@code diagnosticsLevel} refreshed to
-     * the current value of the runtime cell, so a caller reading
-     * {@code options().diagnosticsLevel()} always observes the level that is
-     * actually in effect (never the value frozen at construction time).
+     * Returns the options record with {@code diagnosticsLevel} refreshed to the current value of
+     * the runtime cell, so a caller reading {@code options().diagnosticsLevel()} always observes
+     * the level that is actually in effect (never the value frozen at construction time).
      */
     ZLinkStreamConnectorOptions publicOptions() {
         return publicOptionsBase.withDiagnosticsLevel(diagnosticsLevelCell.get());
     }
 
-    URI endpoint() { return endpoint; }
-    ZLinkStreamDispatchMode dispatchMode() { return dispatchMode; }
-    Timeouts timeouts() { return timeouts; }
-    Limits limits() { return limits; }
-    Heartbeat heartbeat() { return heartbeat; }
-    Reconnect reconnect() { return reconnect; }
-    Transport transport() { return transport; }
+    URI endpoint() {
+        return endpoint;
+    }
+
+    ZLinkStreamDispatchMode dispatchMode() {
+        return dispatchMode;
+    }
+
+    Timeouts timeouts() {
+        return timeouts;
+    }
+
+    Limits limits() {
+        return limits;
+    }
+
+    Heartbeat heartbeat() {
+        return heartbeat;
+    }
+
+    Reconnect reconnect() {
+        return reconnect;
+    }
+
+    Transport transport() {
+        return transport;
+    }
 
     /**
-     * Single atomic read of the current diagnostics level. Callers must read
-     * this exactly once per processing point (one outbound submit, one
-     * inbound frame dispatch) and thread the returned value through that
-     * processing instead of reading the cell again, so a level flip that
-     * lands mid-processing never produces an internally inconsistent
-     * decision (server spec 26 §4.1 / common connector spec §13).
+     * Single atomic read of the current diagnostics level. Callers must read this exactly once per
+     * processing point (one outbound submit, one inbound frame dispatch) and thread the returned
+     * value through that processing instead of reading the cell again, so a level flip that lands
+     * mid-processing never produces an internally inconsistent decision (server spec 26 §4.1 /
+     * common connector spec §13).
      */
-    ZLinkStreamDiagnosticsLevel diagnosticsLevel() { return diagnosticsLevelCell.get(); }
+    ZLinkStreamDiagnosticsLevel diagnosticsLevel() {
+        return diagnosticsLevelCell.get();
+    }
 
     /**
-     * Atomically installs a new diagnostics level. The change applies to
-     * processing points that read the level after this call returns;
-     * frames already built under the previous level are never retroactively
-     * changed.
+     * Atomically installs a new diagnostics level. The change applies to processing points that
+     * read the level after this call returns; frames already built under the previous level are
+     * never retroactively changed.
      */
     void diagnosticsLevel(ZLinkStreamDiagnosticsLevel level) {
         diagnosticsLevelCell.set(Objects.requireNonNull(level, "diagnosticsLevel"));
@@ -150,19 +173,23 @@ final class ZLinkStreamConnectorConfiguration {
         return level != ZLinkStreamDiagnosticsLevel.OFF;
     }
 
-    record Timeouts(Duration connect, Duration request, Duration waitForMessage) { }
-    record Limits(int sendPayload, int receivePayload) { }
-    record Heartbeat(boolean enabled, Duration interval, Duration timeout) { }
+    record Timeouts(Duration connect, Duration request, Duration waitForMessage) {}
+
+    record Limits(int sendPayload, int receivePayload) {}
+
+    record Heartbeat(boolean enabled, Duration interval, Duration timeout) {}
+
     record Reconnect(
-        boolean enabled,
-        int maxAttempts,
-        Duration initialDelay,
-        Duration maxDelay,
-        double backoffFactor) { }
+            boolean enabled,
+            int maxAttempts,
+            Duration initialDelay,
+            Duration maxDelay,
+            double backoffFactor) {}
+
     record Transport(
-        ZLinkStreamTransport kind,
-        boolean skipServerCertificateValidation,
-        ZLinkStreamCompressionCodec compressionCodec) { }
+            ZLinkStreamTransport kind,
+            boolean skipServerCertificateValidation,
+            ZLinkStreamCompressionCodec compressionCodec) {}
 
     private static <T> T requireOption(T value, String name) {
         if (value == null) {
@@ -190,8 +217,9 @@ final class ZLinkStreamConnectorConfiguration {
             case "tls" -> ZLinkStreamTransport.TLS;
             case "ws" -> ZLinkStreamTransport.WEB_SOCKET;
             case "wss" -> ZLinkStreamTransport.WEB_SOCKET_SECURE;
-            default -> throw ZLinkStreamException.configurationError(
-                "unsupported endpoint URI scheme: " + scheme);
+            default ->
+                    throw ZLinkStreamException.configurationError(
+                            "unsupported endpoint URI scheme: " + scheme);
         };
     }
 }

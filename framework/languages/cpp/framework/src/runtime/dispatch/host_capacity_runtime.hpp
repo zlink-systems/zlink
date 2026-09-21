@@ -31,37 +31,36 @@ struct host_capacity_metric_descriptor_t
     bool state_label = false;
 };
 
-inline constexpr std::array<host_capacity_metric_descriptor_t, 14>
-  host_capacity_metric_catalog{{
-    {"zlink.host.core_hwm.effective_budget",
-     ::zlink::framework::detail::metric_instrument_kind_t::observable, "By", false},
-    {"zlink.host.core_hwm.applied",
-     ::zlink::framework::detail::metric_instrument_kind_t::observable, "By", false},
-    {"zlink.host.core_hwm.accounted",
-     ::zlink::framework::detail::metric_instrument_kind_t::observable, "By", true},
-    {"zlink.host.core_hwm.completion_accounted",
-     ::zlink::framework::detail::metric_instrument_kind_t::observable, "By", true},
-    {"zlink.host.core_hwm.blocked_ratio",
-     ::zlink::framework::detail::metric_instrument_kind_t::observable, "{ppm}", false},
-    {"zlink.host.application_job_queue.limit",
-     ::zlink::framework::detail::metric_instrument_kind_t::observable, "{job}", false},
-    {"zlink.host.application_job_queue.jobs",
-     ::zlink::framework::detail::metric_instrument_kind_t::observable, "{job}", true},
-    {"zlink.host.application_job_queue.capacity_waiters",
-     ::zlink::framework::detail::metric_instrument_kind_t::observable, "{waiter}", false},
-    {"zlink.host.application_job_queue.capacity_waits",
-     ::zlink::framework::detail::metric_instrument_kind_t::counter, "{wait}", false},
-    {"zlink.host.application_job_queue.capacity_wait_duration",
-     ::zlink::framework::detail::metric_instrument_kind_t::counter, "s", false},
-    {"zlink.host.application_job_queue.pressure_state",
-     ::zlink::framework::detail::metric_instrument_kind_t::observable, "{state}", true},
-    {"zlink.host.application_job_queue.pressure_transitions",
-     ::zlink::framework::detail::metric_instrument_kind_t::counter, "{transition}", true},
-    {"zlink.host.application_job_queue.pause_duration",
-     ::zlink::framework::detail::metric_instrument_kind_t::observable, "s", true},
-    {"zlink.host.application_job_queue.flow_state_config_failures",
-     ::zlink::framework::detail::metric_instrument_kind_t::counter, "{failure}", false},
-  }};
+inline constexpr std::array<host_capacity_metric_descriptor_t, 14> host_capacity_metric_catalog{{
+  {"zlink.host.core_hwm.effective_budget",
+   ::zlink::framework::detail::metric_instrument_kind_t::observable, "By", false},
+  {"zlink.host.core_hwm.applied", ::zlink::framework::detail::metric_instrument_kind_t::observable,
+   "By", false},
+  {"zlink.host.core_hwm.accounted",
+   ::zlink::framework::detail::metric_instrument_kind_t::observable, "By", true},
+  {"zlink.host.core_hwm.completion_accounted",
+   ::zlink::framework::detail::metric_instrument_kind_t::observable, "By", true},
+  {"zlink.host.core_hwm.blocked_ratio",
+   ::zlink::framework::detail::metric_instrument_kind_t::observable, "{ppm}", false},
+  {"zlink.host.application_job_queue.limit",
+   ::zlink::framework::detail::metric_instrument_kind_t::observable, "{job}", false},
+  {"zlink.host.application_job_queue.jobs",
+   ::zlink::framework::detail::metric_instrument_kind_t::observable, "{job}", true},
+  {"zlink.host.application_job_queue.capacity_waiters",
+   ::zlink::framework::detail::metric_instrument_kind_t::observable, "{waiter}", false},
+  {"zlink.host.application_job_queue.capacity_waits",
+   ::zlink::framework::detail::metric_instrument_kind_t::counter, "{wait}", false},
+  {"zlink.host.application_job_queue.capacity_wait_duration",
+   ::zlink::framework::detail::metric_instrument_kind_t::counter, "s", false},
+  {"zlink.host.application_job_queue.pressure_state",
+   ::zlink::framework::detail::metric_instrument_kind_t::observable, "{state}", true},
+  {"zlink.host.application_job_queue.pressure_transitions",
+   ::zlink::framework::detail::metric_instrument_kind_t::counter, "{transition}", true},
+  {"zlink.host.application_job_queue.pause_duration",
+   ::zlink::framework::detail::metric_instrument_kind_t::observable, "s", true},
+  {"zlink.host.application_job_queue.flow_state_config_failures",
+   ::zlink::framework::detail::metric_instrument_kind_t::counter, "{failure}", false},
+}};
 
 class host_capacity_runtime_t
 {
@@ -118,8 +117,7 @@ class host_capacity_runtime_t
     {
         std::lock_guard lock (_mutex);
         const auto core = _core_context->core_hwm_budget_snapshot ();
-        const auto application_jobs =
-          _application_jobs->observation_snapshot ();
+        const auto application_jobs = _application_jobs->observation_snapshot ();
         host_capacity_status_t status;
         status.measurement_epoch = _measurement_epoch;
         status.core_hwm = project_core (core);
@@ -136,36 +134,34 @@ class host_capacity_runtime_t
     }
 
   private:
-    core_hwm_status_t project_core (
-      const zlink::core_hwm_budget_snapshot_t &core) const noexcept
+    core_hwm_status_t project_core (const zlink::core_hwm_budget_snapshot_t &core) const noexcept
     {
-        return {
-          _configured_core_memory_limit,
-          _configured_core_budget,
-          _configured_core_profile,
-          core.effective_core_budget_bytes (),
-          core.total_applied_hwm_bytes (),
-          core.core_queue_accounted_bytes (),
-          core.application_accounted_bytes (),
-          core.current_accounted_bytes (),
-          core.provisional_accounted_bytes (),
-          core.peak_accounted_bytes (),
-          core.completion_current_accounted_bytes (),
-          core.completion_peak_accounted_bytes (),
-          core.completion_pending_message_count (),
-          core.total_messaging_accounted_bytes (),
-          core.monitor_queue_applied_hwm_bytes (),
-          core.monitor_queue_accounted_bytes (),
-          core.total_instance_applied_hwm_bytes (),
-          core.total_instance_accounted_bytes (),
-          core.blocked_ratio_ppm (),
-          core.active_directional_queue_count (),
-          core.active_completion_directional_queue_count (),
-          core.active_send_queue_count (),
-          core.active_receive_queue_count (),
-          core.outstanding_application_lease_count (),
-          core.retired_queue_count (),
-          core.deferred_origin_credit_bytes ()};
+        return {_configured_core_memory_limit,
+                _configured_core_budget,
+                _configured_core_profile,
+                core.effective_core_budget_bytes (),
+                core.total_applied_hwm_bytes (),
+                core.core_queue_accounted_bytes (),
+                core.application_accounted_bytes (),
+                core.current_accounted_bytes (),
+                core.provisional_accounted_bytes (),
+                core.peak_accounted_bytes (),
+                core.completion_current_accounted_bytes (),
+                core.completion_peak_accounted_bytes (),
+                core.completion_pending_message_count (),
+                core.total_messaging_accounted_bytes (),
+                core.monitor_queue_applied_hwm_bytes (),
+                core.monitor_queue_accounted_bytes (),
+                core.total_instance_applied_hwm_bytes (),
+                core.total_instance_accounted_bytes (),
+                core.blocked_ratio_ppm (),
+                core.active_directional_queue_count (),
+                core.active_completion_directional_queue_count (),
+                core.active_send_queue_count (),
+                core.active_receive_queue_count (),
+                core.outstanding_application_lease_count (),
+                core.retired_queue_count (),
+                core.deferred_origin_credit_bytes ()};
     }
 
     struct metric_registration_t

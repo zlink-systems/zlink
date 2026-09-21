@@ -97,10 +97,7 @@ export interface ZLinkDomainLocationStore {
     leaseTtlMs: number,
     signal?: AbortSignal
   ): Promise<ZLinkOwnerLeaseClaimResult>;
-  readOwnerLease(
-    ownerId: string,
-    signal?: AbortSignal
-  ): Promise<ZLinkOwnerLeaseReadResult>;
+  readOwnerLease(ownerId: string, signal?: AbortSignal): Promise<ZLinkOwnerLeaseReadResult>;
   renewOwnerLease(
     token: ZLinkLocationOwnerToken,
     leaseTtlMs: number,
@@ -129,7 +126,10 @@ export interface ZLinkDomainLocationStore {
     operation: ZLinkCreationOperationIdentity,
     signal?: AbortSignal
   ): Promise<ZLinkCreationTerminalReadResult>;
-  reserve(request: ZLinkObjectReserveRequest, signal?: AbortSignal): Promise<ZLinkObjectReserveResult>;
+  reserve(
+    request: ZLinkObjectReserveRequest,
+    signal?: AbortSignal
+  ): Promise<ZLinkObjectReserveResult>;
   commit(request: ZLinkObjectCommitRequest, signal?: AbortSignal): Promise<ZLinkObjectCommitResult>;
   completeCreation(
     request: ZLinkObjectCreationCompleteRequest,
@@ -141,8 +141,14 @@ export interface ZLinkDomainLocationStore {
     request: ZLinkAggregatePrepareRequest,
     signal?: AbortSignal
   ): Promise<ZLinkAggregatePrepareResult>;
-  commitAggregate(fence: ZLinkAggregateFence, signal?: AbortSignal): Promise<ZLinkAggregateCommitResult>;
-  abortAggregate(fence: ZLinkAggregateFence, signal?: AbortSignal): Promise<ZLinkAggregateAbortResult>;
+  commitAggregate(
+    fence: ZLinkAggregateFence,
+    signal?: AbortSignal
+  ): Promise<ZLinkAggregateCommitResult>;
+  abortAggregate(
+    fence: ZLinkAggregateFence,
+    signal?: AbortSignal
+  ): Promise<ZLinkAggregateAbortResult>;
 
   removeAllByOwner(owner: ZLinkLocationOwnerToken, signal?: AbortSignal): Promise<bigint>;
   getMeshNodeChangeStamp?(meshName: string, signal?: AbortSignal): Promise<bigint | undefined>;

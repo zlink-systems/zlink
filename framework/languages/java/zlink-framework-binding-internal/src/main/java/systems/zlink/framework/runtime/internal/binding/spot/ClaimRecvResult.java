@@ -8,5 +8,4 @@ package systems.zlink.framework.runtime.internal.binding.spot;
  * @param resultCode the underlying recv result code (0 == OK)
  * @param required the batch capacity the claim requires, when insufficient
  */
-public record ClaimRecvResult(int resultCode, ReceiveRequirements required) {
-}
+public record ClaimRecvResult(int resultCode, ReceiveRequirements required) {}

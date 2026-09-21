@@ -1,7 +1,7 @@
-using System.Collections.Concurrent;
 using System.Buffers.Binary;
-using System.Security.Cryptography;
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Zlink.Framework.Runtime.Locations;
@@ -20,43 +20,45 @@ public sealed class RelocationTreeParallelIoTests
             store,
             envelope,
             TimeSpan.FromHours(24),
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
-        Assert.Equal(
-            ZLinkRelocationTreeStore.MaxOrderedStripes,
-            stored.ChunkCount);
+        Assert.Equal(ZLinkRelocationTreeStore.MaxOrderedStripes, stored.ChunkCount);
         Assert.InRange(
             store.MaxConcurrentChunkPuts,
             2,
-            ZLinkRelocationTreeStore.MaxConcurrentComponentIo);
+            ZLinkRelocationTreeStore.MaxConcurrentComponentIo
+        );
         Assert.Equal("manifest", store.CompletedPutKinds[^1]);
         Assert.Equal(
             ZLinkRelocationTreeStore.MaxOrderedStripes,
-            store.CompletedPutKinds.Count(
-                static kind => kind == "chunk"));
+            store.CompletedPutKinds.Count(static kind => kind == "chunk")
+        );
         Assert.True(
-            store.MaxChunkPayloadBytesInFlight
-            <= ZLinkRelocationTreeStore.MaxComponentIoBytes);
+            store.MaxChunkPayloadBytesInFlight <= ZLinkRelocationTreeStore.MaxComponentIoBytes
+        );
 
         store.ResetReadConcurrency();
         var restored = await ZLinkRelocationTreeStore.GetAsync(
             store,
             stored.Root.Reference,
             stored.Root.ChecksumCrc32c,
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         Assert.InRange(
             store.MaxConcurrentChunkReads,
             2,
-            ZLinkRelocationTreeStore.MaxConcurrentComponentIo);
+            ZLinkRelocationTreeStore.MaxConcurrentComponentIo
+        );
         Assert.Equal(
-            envelope.Participants.Select(
-                static participant => participant.AuthorityKey),
-            restored.Participants.Select(
-                static participant => participant.AuthorityKey));
+            envelope.Participants.Select(static participant => participant.AuthorityKey),
+            restored.Participants.Select(static participant => participant.AuthorityKey)
+        );
         Assert.Equal(
             ZLinkRelocationEnvelopeCodec.ComputeEncodedSha256(envelope),
-            ZLinkRelocationEnvelopeCodec.ComputeEncodedSha256(restored));
+            ZLinkRelocationEnvelopeCodec.ComputeEncodedSha256(restored)
+        );
 
         store.ResetRenewConcurrency();
         await ZLinkRelocationTreeStore.RenewTreeAsync(
@@ -64,67 +66,67 @@ public sealed class RelocationTreeParallelIoTests
             stored.Root.Reference,
             stored.Root.ChecksumCrc32c,
             TimeSpan.FromHours(24),
-            CancellationToken.None);
+            CancellationToken.None
+        );
         Assert.InRange(
             store.MaxConcurrentChunkRenews,
             2,
-            ZLinkRelocationTreeStore.MaxConcurrentComponentIo);
+            ZLinkRelocationTreeStore.MaxConcurrentComponentIo
+        );
 
         var corruptReference = store.ChunkReferences[0];
         store.Corrupt(corruptReference);
-        await Assert.ThrowsAsync<ZLinkRelocationDataLostException>(
-            () => ZLinkRelocationTreeStore.GetAsync(
+        await Assert.ThrowsAsync<ZLinkRelocationDataLostException>(() =>
+            ZLinkRelocationTreeStore
+                .GetAsync(
                     store,
                     stored.Root.Reference,
                     stored.Root.ChecksumCrc32c,
-                    CancellationToken.None)
-                .AsTask());
+                    CancellationToken.None
+                )
+                .AsTask()
+        );
         store.UndoCorruption(corruptReference);
 
         var missingReference = store.ChunkReferences[1];
         store.Hide(missingReference);
-        await Assert.ThrowsAsync<ZLinkRelocationDataLostException>(
-            () => ZLinkRelocationTreeStore.GetAsync(
+        await Assert.ThrowsAsync<ZLinkRelocationDataLostException>(() =>
+            ZLinkRelocationTreeStore
+                .GetAsync(
                     store,
                     stored.Root.Reference,
                     stored.Root.ChecksumCrc32c,
-                    CancellationToken.None)
-                .AsTask());
+                    CancellationToken.None
+                )
+                .AsTask()
+        );
         store.Show(missingReference);
 
-        var failingStore = new ConcurrentRelocationStore
-        {
-            FailChunkPutOrdinal = 2
-        };
-        await Assert.ThrowsAsync<IOException>(
-            () => ZLinkRelocationTreeStore.PutAsync(
-                    failingStore,
-                    envelope,
-                    TimeSpan.FromHours(24),
-                    CancellationToken.None)
-                .AsTask());
+        var failingStore = new ConcurrentRelocationStore { FailChunkPutOrdinal = 2 };
+        await Assert.ThrowsAsync<IOException>(() =>
+            ZLinkRelocationTreeStore
+                .PutAsync(failingStore, envelope, TimeSpan.FromHours(24), CancellationToken.None)
+                .AsTask()
+        );
         Assert.Equal(0, failingStore.ManifestPutCount);
     }
 
     [Fact]
     public async Task SingleParticipantTree_KeepsLargeComponentChunking()
     {
-        var fourFullChunks = Enumerable.Repeat(
-                (ulong)ZLinkRelocationTreeStore.ChunkBytes,
-                4)
+        var fourFullChunks = Enumerable
+            .Repeat((ulong)ZLinkRelocationTreeStore.ChunkBytes, 4)
             .ToArray();
-        Assert.Equal(
-            3,
-            ZLinkRelocationTreeStore.CalculateComponentBatchCount(
-                fourFullChunks,
-                0));
+        Assert.Equal(3, ZLinkRelocationTreeStore.CalculateComponentBatchCount(fourFullChunks, 0));
         const int encodedFrameBytes = 23;
         Assert.True(
             3L * (ZLinkRelocationTreeStore.ChunkBytes + encodedFrameBytes)
-            <= ZLinkRelocationTreeStore.MaxComponentIoBytes);
+                <= ZLinkRelocationTreeStore.MaxComponentIoBytes
+        );
         Assert.True(
             4L * (ZLinkRelocationTreeStore.ChunkBytes + encodedFrameBytes)
-            > ZLinkRelocationTreeStore.MaxComponentIoBytes);
+                > ZLinkRelocationTreeStore.MaxComponentIoBytes
+        );
         var envelope = new ZLinkRelocationEnvelope(
             Guid.NewGuid(),
             1,
@@ -137,20 +139,21 @@ public sealed class RelocationTreeParallelIoTests
                     1,
                     new byte[] { 4, 5, 6 },
                     [],
-                    [])
-            ]);
+                    []
+                ),
+            ]
+        );
         var store = new ConcurrentRelocationStore();
 
         var stored = await ZLinkRelocationTreeStore.PutAsync(
             store,
             envelope,
             TimeSpan.FromHours(24),
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         Assert.Equal(1, stored.ChunkCount);
-        Assert.Equal(
-            new[] { "chunk", "manifest" },
-            store.CompletedPutKinds);
+        Assert.Equal(new[] { "chunk", "manifest" }, store.CompletedPutKinds);
     }
 
     [Fact]
@@ -158,73 +161,70 @@ public sealed class RelocationTreeParallelIoTests
     {
         var manySmallParticipants = new RepeatedLengthList(
             count: ZLinkRelocationTreeStore.MaxChunks,
-            value: 64 * 1024);
+            value: 64 * 1024
+        );
 
-        var accepted = ZLinkRelocationTreeStore
-            .ValidateParticipantComponentBounds(
-                manySmallParticipants);
+        var accepted = ZLinkRelocationTreeStore.ValidateParticipantComponentBounds(
+            manySmallParticipants
+        );
 
-        Assert.Equal(
-            ZLinkRelocationTreeStore.MaxChunks,
-            accepted.ChunkCount);
+        Assert.Equal(ZLinkRelocationTreeStore.MaxChunks, accepted.ChunkCount);
         Assert.Equal<ulong>(
             (ulong)ZLinkRelocationTreeStore.MaxChunks * 64 * 1024,
-            accepted.LogicalLength);
-        Assert.Throws<InvalidOperationException>(
-            () => ZLinkRelocationTreeStore
-                .ValidateParticipantComponentBounds(
-                    new RepeatedLengthList(
-                        count: ZLinkRelocationTreeStore.MaxChunks + 1,
-                        value: 1)));
-        Assert.Throws<InvalidOperationException>(
-            () => ZLinkRelocationTreeStore
-                .ValidateParticipantComponentBounds(
-                    new long[]
-                    {
-                        checked((long)ZLinkRelocationTreeStore
-                            .MaxLogicalBytes),
-                        1
-                    }));
-        Assert.Throws<InvalidOperationException>(
-            () => ZLinkRelocationTreeStore
-                .ValidateParticipantComponentBounds(
-                    new RepeatedLengthList(
-                        count: 2_000_000,
-                        value: 1)));
+            accepted.LogicalLength
+        );
+        Assert.Throws<InvalidOperationException>(() =>
+            ZLinkRelocationTreeStore.ValidateParticipantComponentBounds(
+                new RepeatedLengthList(count: ZLinkRelocationTreeStore.MaxChunks + 1, value: 1)
+            )
+        );
+        Assert.Throws<InvalidOperationException>(() =>
+            ZLinkRelocationTreeStore.ValidateParticipantComponentBounds(
+                new long[] { checked((long)ZLinkRelocationTreeStore.MaxLogicalBytes), 1 }
+            )
+        );
+        Assert.Throws<InvalidOperationException>(() =>
+            ZLinkRelocationTreeStore.ValidateParticipantComponentBounds(
+                new RepeatedLengthList(count: 2_000_000, value: 1)
+            )
+        );
     }
 
     [Theory]
     [InlineData(1)]
     [InlineData(4)]
-    public void VersionedEnvelopeDecodeKeepsOneOwnedPayloadCopy(
-        int participantCount)
+    public void VersionedEnvelopeDecodeKeepsOneOwnedPayloadCopy(int participantCount)
     {
-        var state = GC.AllocateUninitializedArray<byte>(
-            ZLinkRelocationTreeStore.ChunkBytes);
+        var state = GC.AllocateUninitializedArray<byte>(ZLinkRelocationTreeStore.ChunkBytes);
         Array.Fill(state, (byte)0x6d);
         var envelope = new ZLinkRelocationEnvelope(
             Guid.NewGuid(),
             1,
             SHA256.HashData("bounded-envelope-decode"u8),
-            Enumerable.Range(0, participantCount)
-                .Select(index =>
-                    new ZLinkRelocationParticipantEnvelope(
-                        new ZLinkAuthorityKey($"actor:decode:{index}"),
-                        ZLinkPlacementObjectKind.Actor,
-                        1,
-                        1,
-                        state,
-                        [],
-                        []))
-                .ToArray());
+            Enumerable
+                .Range(0, participantCount)
+                .Select(index => new ZLinkRelocationParticipantEnvelope(
+                    new ZLinkAuthorityKey($"actor:decode:{index}"),
+                    ZLinkPlacementObjectKind.Actor,
+                    1,
+                    1,
+                    state,
+                    [],
+                    []
+                ))
+                .ToArray()
+        );
         var path = Path.GetTempFileName();
         try
         {
-            using (var output = new FileStream(
-                       path,
-                       FileMode.Truncate,
-                       FileAccess.Write,
-                       FileShare.None))
+            using (
+                var output = new FileStream(
+                    path,
+                    FileMode.Truncate,
+                    FileAccess.Write,
+                    FileShare.None
+                )
+            )
                 ZLinkRelocationEnvelopeCodec.EncodeTo(output, envelope);
 
             using var input = new FileStream(
@@ -233,12 +233,12 @@ public sealed class RelocationTreeParallelIoTests
                 FileAccess.Read,
                 FileShare.Read,
                 1024 * 1024,
-                FileOptions.SequentialScan);
+                FileOptions.SequentialScan
+            );
             var before = GC.GetAllocatedBytesForCurrentThread();
             var restored = ZLinkRelocationEnvelopeCodec.Decode(input);
             var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-            var logicalPayloadBytes =
-                (long)participantCount * ZLinkRelocationTreeStore.ChunkBytes;
+            var logicalPayloadBytes = (long)participantCount * ZLinkRelocationTreeStore.ChunkBytes;
 
             Assert.Equal(participantCount, restored.Participants.Count);
             Assert.All(
@@ -246,11 +246,10 @@ public sealed class RelocationTreeParallelIoTests
                 participant =>
                     Assert.Equal(
                         ZLinkRelocationTreeStore.ChunkBytes,
-                        participant.ApplicationState.Length));
-            Assert.InRange(
-                allocated,
-                logicalPayloadBytes,
-                logicalPayloadBytes + 32L * 1024 * 1024);
+                        participant.ApplicationState.Length
+                    )
+            );
+            Assert.InRange(allocated, logicalPayloadBytes, logicalPayloadBytes + 32L * 1024 * 1024);
         }
         finally
         {
@@ -261,8 +260,7 @@ public sealed class RelocationTreeParallelIoTests
     [Fact]
     public void NonSeekableVersionedEnvelopeSharesOneOwnedPayloadBuffer()
     {
-        var state = GC.AllocateUninitializedArray<byte>(
-            ZLinkRelocationTreeStore.ChunkBytes);
+        var state = GC.AllocateUninitializedArray<byte>(ZLinkRelocationTreeStore.ChunkBytes);
         Array.Fill(state, (byte)0x4d);
         var encoded = ZLinkRelocationEnvelopeCodec.Encode(
             new ZLinkRelocationEnvelope(
@@ -277,8 +275,11 @@ public sealed class RelocationTreeParallelIoTests
                         1,
                         state,
                         [],
-                        [])
-                ]));
+                        []
+                    ),
+                ]
+            )
+        );
         using var input = new NonSeekableReadStream(encoded);
 
         var before = GC.GetAllocatedBytesForCurrentThread();
@@ -286,21 +287,20 @@ public sealed class RelocationTreeParallelIoTests
         var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
         Assert.Equal(state.Length, restored.Participants[0].ApplicationState.Length);
-        Assert.True(MemoryMarshal.TryGetArray(
-            restored.Participants[0].ApplicationState,
-            out var stateSegment));
+        Assert.True(
+            MemoryMarshal.TryGetArray(
+                restored.Participants[0].ApplicationState,
+                out var stateSegment
+            )
+        );
         Assert.NotSame(encoded, stateSegment.Array);
-        Assert.InRange(
-            allocated,
-            encoded.Length,
-            2L * encoded.Length + 16L * 1024 * 1024);
+        Assert.InRange(allocated, encoded.Length, 2L * encoded.Length + 16L * 1024 * 1024);
     }
 
     [Fact]
     public void VersionedSpanDecodeProjectsFromItsSingleOwnedCopy()
     {
-        var state = GC.AllocateUninitializedArray<byte>(
-            ZLinkRelocationTreeStore.ChunkBytes);
+        var state = GC.AllocateUninitializedArray<byte>(ZLinkRelocationTreeStore.ChunkBytes);
         var encoded = ZLinkRelocationEnvelopeCodec.Encode(
             new ZLinkRelocationEnvelope(
                 Guid.NewGuid(),
@@ -314,28 +314,30 @@ public sealed class RelocationTreeParallelIoTests
                         1,
                         state,
                         [],
-                        [])
-                ]));
+                        []
+                    ),
+                ]
+            )
+        );
 
         var before = GC.GetAllocatedBytesForCurrentThread();
         var restored = ZLinkRelocationEnvelopeCodec.Decode(encoded.AsSpan());
         var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
-        Assert.True(MemoryMarshal.TryGetArray(
-            restored.Participants[0].ApplicationState,
-            out var stateSegment));
+        Assert.True(
+            MemoryMarshal.TryGetArray(
+                restored.Participants[0].ApplicationState,
+                out var stateSegment
+            )
+        );
         Assert.NotSame(encoded, stateSegment.Array);
-        Assert.InRange(
-            allocated,
-            encoded.Length,
-            encoded.Length + 16L * 1024 * 1024);
+        Assert.InRange(allocated, encoded.Length, encoded.Length + 16L * 1024 * 1024);
     }
 
     [Fact]
     public void NonSeekableCanonicalEnvelopeUsesGeneratedOwnedBuffers()
     {
-        var encoded = CreateCanonicalEnvelopeWithState(
-            ZLinkRelocationTreeStore.ChunkBytes);
+        var encoded = CreateCanonicalEnvelopeWithState(ZLinkRelocationTreeStore.ChunkBytes);
         using var input = new NonSeekableReadStream(encoded);
 
         var before = GC.GetAllocatedBytesForCurrentThread();
@@ -344,16 +346,13 @@ public sealed class RelocationTreeParallelIoTests
 
         var state = restored.Participants[0].ApplicationState;
         Assert.Equal(ZLinkRelocationTreeStore.ChunkBytes, state.Length);
-        Assert.True(MemoryMarshal.TryGetArray(
-            restored.CanonicalLogicalStream,
-            out var logicalSegment));
+        Assert.True(
+            MemoryMarshal.TryGetArray(restored.CanonicalLogicalStream, out var logicalSegment)
+        );
         Assert.True(MemoryMarshal.TryGetArray(state, out var stateSegment));
         Assert.NotSame(logicalSegment.Array, stateSegment.Array);
         Assert.NotSame(encoded, logicalSegment.Array);
-        Assert.InRange(
-            allocated,
-            encoded.Length,
-            24L * encoded.Length + 16L * 1024 * 1024);
+        Assert.InRange(allocated, encoded.Length, 24L * encoded.Length + 16L * 1024 * 1024);
     }
 
     [Fact]
@@ -362,40 +361,37 @@ public sealed class RelocationTreeParallelIoTests
         var golden = ReadCanonicalRelocationGolden();
         var projected = ZLinkRelocationEnvelopeCodec.Decode(golden);
         var accepted = Assert.IsType<ZLinkCanonicalAcceptedRequest>(
-            projected.Participants
-                .SelectMany(static participant => participant.AcceptedJobs)
+            projected
+                .Participants.SelectMany(static participant => participant.AcceptedJobs)
                 .Select(static job => job.CanonicalRequest)
-                .First(static request => request is not null));
+                .First(static request => request is not null)
+        );
         var originalPayload = accepted.ApplicationPayload.Payload.ToArray();
         var payloadStart = golden.AsSpan().IndexOf(originalPayload);
         Assert.True(payloadStart > 0);
-        var packetBytes = Encoding.UTF8.GetByteCount(
-            accepted.ApplicationPayload.PacketName);
-        var contentBytes = Encoding.UTF8.GetByteCount(
-            accepted.ApplicationPayload.ContentType);
-        var bodyStart = payloadStart
-                        - sizeof(uint)
-                        - (1 + contentBytes)
-                        - (1 + packetBytes);
+        var packetBytes = Encoding.UTF8.GetByteCount(accepted.ApplicationPayload.PacketName);
+        var contentBytes = Encoding.UTF8.GetByteCount(accepted.ApplicationPayload.ContentType);
+        var bodyStart = payloadStart - sizeof(uint) - (1 + contentBytes) - (1 + packetBytes);
         var bodyLengthOffset = bodyStart - sizeof(uint);
         Assert.Equal(1, golden[bodyLengthOffset - 1]);
         var replacementBytes = ZLinkRelocationTreeStore.ChunkBytes;
         var expanded = GC.AllocateUninitializedArray<byte>(
-            checked(golden.Length - originalPayload.Length
-                    + replacementBytes));
+            checked(golden.Length - originalPayload.Length + replacementBytes)
+        );
         golden.AsSpan(0, payloadStart).CopyTo(expanded);
         expanded.AsSpan(payloadStart, replacementBytes).Fill(0x5e);
-        golden.AsSpan(payloadStart + originalPayload.Length).CopyTo(
-            expanded.AsSpan(payloadStart + replacementBytes));
+        golden
+            .AsSpan(payloadStart + originalPayload.Length)
+            .CopyTo(expanded.AsSpan(payloadStart + replacementBytes));
         BinaryPrimitives.WriteUInt32BigEndian(
             expanded.AsSpan(payloadStart - sizeof(uint)),
-            checked((uint)replacementBytes));
-        var oldBodyLength = BinaryPrimitives.ReadUInt32BigEndian(
-            golden.AsSpan(bodyLengthOffset));
+            checked((uint)replacementBytes)
+        );
+        var oldBodyLength = BinaryPrimitives.ReadUInt32BigEndian(golden.AsSpan(bodyLengthOffset));
         BinaryPrimitives.WriteUInt32BigEndian(
             expanded.AsSpan(bodyLengthOffset),
-            checked(oldBodyLength
-                    + (uint)(replacementBytes - originalPayload.Length)));
+            checked(oldBodyLength + (uint)(replacementBytes - originalPayload.Length))
+        );
         using var input = new NonSeekableReadStream(expanded);
 
         var before = GC.GetAllocatedBytesForCurrentThread();
@@ -403,46 +399,40 @@ public sealed class RelocationTreeParallelIoTests
         var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
         var restoredRequest = Assert.IsType<ZLinkCanonicalAcceptedRequest>(
-            restored.Participants
-                .SelectMany(static participant => participant.AcceptedJobs)
+            restored
+                .Participants.SelectMany(static participant => participant.AcceptedJobs)
                 .Select(static job => job.CanonicalRequest)
-                .First(static request => request is not null));
-        Assert.Equal(
-            replacementBytes,
-            restoredRequest.ApplicationPayload.Payload.Length);
-        Assert.True(MemoryMarshal.TryGetArray(
-            restored.CanonicalLogicalStream,
-            out var logicalSegment));
-        Assert.True(MemoryMarshal.TryGetArray(
-            restoredRequest.ApplicationPayload.Payload,
-            out var payloadSegment));
+                .First(static request => request is not null)
+        );
+        Assert.Equal(replacementBytes, restoredRequest.ApplicationPayload.Payload.Length);
+        Assert.True(
+            MemoryMarshal.TryGetArray(restored.CanonicalLogicalStream, out var logicalSegment)
+        );
+        Assert.True(
+            MemoryMarshal.TryGetArray(
+                restoredRequest.ApplicationPayload.Payload,
+                out var payloadSegment
+            )
+        );
         Assert.NotSame(logicalSegment.Array, payloadSegment.Array);
-        Assert.InRange(
-            allocated,
-            expanded.Length,
-            24L * expanded.Length + 16L * 1024 * 1024);
+        Assert.InRange(allocated, expanded.Length, 24L * expanded.Length + 16L * 1024 * 1024);
     }
-
 
     private static byte[] ReadCanonicalRelocationGolden()
     {
-        var frameworkRoot =
-            Common.FrameworkTestEnvironment.GetFrameworkRoot();
+        var frameworkRoot = Common.FrameworkTestEnvironment.GetFrameworkRoot();
         var path = Path.GetFullPath(
             "../../runtime/protocol/golden/relocation-envelope-v1.json",
-            frameworkRoot);
+            frameworkRoot
+        );
         using var document = JsonDocument.Parse(File.ReadAllText(path));
-        return Convert.FromHexString(
-            document.RootElement.GetProperty("logicalHex").GetString()!);
+        return Convert.FromHexString(document.RootElement.GetProperty("logicalHex").GetString()!);
     }
 
     private static byte[] CreateCanonicalEnvelopeWithState(int stateBytes)
     {
-        using var stream = new MemoryStream(
-            checked(stateBytes + 256));
-        stream.Write(Enumerable.Range(1, 16)
-            .Select(static value => (byte)value)
-            .ToArray());
+        using var stream = new MemoryStream(checked(stateBytes + 256));
+        stream.Write(Enumerable.Range(1, 16).Select(static value => (byte)value).ToArray());
         stream.WriteByte(1); // Actor.
         using (var objectBody = new MemoryStream())
         {
@@ -450,9 +440,7 @@ public sealed class RelocationTreeParallelIoTests
             objectBody.Write("actor"u8);
             WriteUInt64BigEndian(objectBody, 1);
             WriteUInt64BigEndian(objectBody, 1);
-            WriteUInt16BigEndian(
-                stream,
-                checked((ushort)objectBody.Length));
+            WriteUInt16BigEndian(stream, checked((ushort)objectBody.Length));
             objectBody.Position = 0;
             objectBody.CopyTo(stream);
         }
@@ -460,9 +448,7 @@ public sealed class RelocationTreeParallelIoTests
         WriteUInt32BigEndian(stream, 1); // State count.
         WriteUInt64BigEndian(stream, 1); // Participant id.
         stream.WriteByte(1); // Application state only.
-        WriteUInt64BigEndian(
-            stream,
-            checked((ulong)stateBytes + sizeof(ulong)));
+        WriteUInt64BigEndian(stream, checked((ulong)stateBytes + sizeof(ulong)));
         WriteUInt64BigEndian(stream, checked((ulong)stateBytes));
         stream.Write(new byte[stateBytes]);
         WriteUInt32BigEndian(stream, 0); // Saved-work count.
@@ -495,8 +481,7 @@ public sealed class RelocationTreeParallelIoTests
     private static ZLinkRelocationEnvelope CreateSpotWideEnvelope()
     {
         const int stateBytes = 64 * 1024;
-        var participants =
-            new List<ZLinkRelocationParticipantEnvelope>(101);
+        var participants = new List<ZLinkRelocationParticipantEnvelope>(101);
         var spotState = GC.AllocateUninitializedArray<byte>(stateBytes);
         Array.Fill(spotState, (byte)0x51);
         participants.Add(
@@ -507,39 +492,42 @@ public sealed class RelocationTreeParallelIoTests
                 1,
                 spotState,
                 [],
-                []));
+                []
+            )
+        );
         for (var index = 0; index < 100; index++)
         {
-            var actorState =
-                GC.AllocateUninitializedArray<byte>(stateBytes);
+            var actorState = GC.AllocateUninitializedArray<byte>(stateBytes);
             Array.Fill(actorState, checked((byte)index));
             participants.Add(
                 new ZLinkRelocationParticipantEnvelope(
-                    new ZLinkAuthorityKey(
-                        $"actor:mesh:player-{index:D3}"),
+                    new ZLinkAuthorityKey($"actor:mesh:player-{index:D3}"),
                     ZLinkPlacementObjectKind.Actor,
                     1,
                     1,
                     actorState,
                     [],
-                    []));
+                    []
+                )
+            );
         }
         return new ZLinkRelocationEnvelope(
             Guid.NewGuid(),
             1,
             SHA256.HashData("spot-wide-parallel-io"u8),
-            participants);
+            participants
+        );
     }
 
-    private sealed class ConcurrentRelocationStore
-        : IZLinkRelocationRepository
+    private sealed class ConcurrentRelocationStore : IZLinkRelocationRepository
     {
-        private readonly ConcurrentDictionary<string, byte[]> _payloads =
-            new(StringComparer.Ordinal);
-        private readonly ConcurrentDictionary<string, byte[]> _hidden =
-            new(StringComparer.Ordinal);
-        private readonly ConcurrentDictionary<string, byte> _corrupted =
-            new(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, byte[]> _payloads = new(
+            StringComparer.Ordinal
+        );
+        private readonly ConcurrentDictionary<string, byte[]> _hidden = new(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, byte> _corrupted = new(
+            StringComparer.Ordinal
+        );
         private readonly ConcurrentQueue<string> _completedPutKinds = new();
         private int _nextReference;
         private int _chunkPutOrdinal;
@@ -555,18 +543,13 @@ public sealed class RelocationTreeParallelIoTests
         private TaskCompletionSource _secondChunkRenewEntered = NewSignal();
 
         internal int FailChunkPutOrdinal { get; init; }
-        internal int MaxConcurrentChunkPuts =>
-            Volatile.Read(ref _maxConcurrentChunkPuts);
+        internal int MaxConcurrentChunkPuts => Volatile.Read(ref _maxConcurrentChunkPuts);
         internal long MaxChunkPayloadBytesInFlight =>
             Volatile.Read(ref _maxChunkPayloadBytesInFlight);
-        internal int MaxConcurrentChunkReads =>
-            Volatile.Read(ref _maxConcurrentChunkReads);
-        internal int MaxConcurrentChunkRenews =>
-            Volatile.Read(ref _maxConcurrentChunkRenews);
-        internal int ManifestPutCount =>
-            Volatile.Read(ref _manifestPutCount);
-        internal string[] CompletedPutKinds =>
-            _completedPutKinds.ToArray();
+        internal int MaxConcurrentChunkReads => Volatile.Read(ref _maxConcurrentChunkReads);
+        internal int MaxConcurrentChunkRenews => Volatile.Read(ref _maxConcurrentChunkRenews);
+        internal int ManifestPutCount => Volatile.Read(ref _manifestPutCount);
+        internal string[] CompletedPutKinds => _completedPutKinds.ToArray();
         internal string[] ChunkReferences =>
             _payloads
                 .Where(static item => IsKind(item.Value, "ZLTC"u8))
@@ -577,12 +560,11 @@ public sealed class RelocationTreeParallelIoTests
         public async ValueTask<ZLinkRelocationStored> PutRelocationAsync(
             ReadOnlyMemory<byte> payload,
             TimeSpan retention,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             var isChunk = IsKind(payload.Span, "ZLTC"u8);
-            var isManifest =
-                IsKind(payload.Span, "ZLTM"u8)
-                || IsKind(payload.Span, "ZLPM"u8);
+            var isManifest = IsKind(payload.Span, "ZLTM"u8) || IsKind(payload.Span, "ZLPM"u8);
             if (isManifest)
                 Interlocked.Increment(ref _manifestPutCount);
             if (isChunk)
@@ -590,9 +572,7 @@ public sealed class RelocationTreeParallelIoTests
                 var ordinal = Interlocked.Increment(ref _chunkPutOrdinal);
                 var active = Interlocked.Increment(ref _activeChunkPuts);
                 UpdateMaximum(ref _maxConcurrentChunkPuts, active);
-                var bytes = Interlocked.Add(
-                    ref _chunkPayloadBytesInFlight,
-                    payload.Length);
+                var bytes = Interlocked.Add(ref _chunkPayloadBytesInFlight, payload.Length);
                 UpdateMaximum(ref _maxChunkPayloadBytesInFlight, bytes);
                 try
                 {
@@ -602,50 +582,58 @@ public sealed class RelocationTreeParallelIoTests
                 }
                 finally
                 {
-                    Interlocked.Add(
-                        ref _chunkPayloadBytesInFlight,
-                        -payload.Length);
+                    Interlocked.Add(ref _chunkPayloadBytesInFlight, -payload.Length);
                     Interlocked.Decrement(ref _activeChunkPuts);
                 }
             }
 
-            var reference =
-                $"{Interlocked.Increment(ref _nextReference):D8}";
+            var reference = $"{Interlocked.Increment(ref _nextReference):D8}";
             var bytesCopy = payload.ToArray();
             _payloads[reference] = bytesCopy;
             _completedPutKinds.Enqueue(
-                isChunk ? "chunk" : isManifest ? "manifest" : "other");
+                isChunk ? "chunk"
+                : isManifest ? "manifest"
+                : "other"
+            );
             var now = DateTimeOffset.UtcNow;
             return new ZLinkRelocationStored(
                 reference,
                 ZLinkCrc32C.Compute(bytesCopy),
                 now + retention,
-                now);
+                now
+            );
         }
 
         public ValueTask<ZLinkRelocationStored> PutRelocationAtAsync(
             string reference,
             ReadOnlyMemory<byte> payload,
             TimeSpan retention,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             cancellationToken.ThrowIfCancellationRequested();
             var bytes = payload.ToArray();
-            if (_payloads.TryGetValue(reference, out var current)
-                && !current.AsSpan().SequenceEqual(bytes))
+            if (
+                _payloads.TryGetValue(reference, out var current)
+                && !current.AsSpan().SequenceEqual(bytes)
+            )
                 throw new InvalidDataException("Relocation reference collision.");
             _payloads[reference] = bytes;
             var now = DateTimeOffset.UtcNow;
-            return ValueTask.FromResult(new ZLinkRelocationStored(
-                reference,
-                ZLinkCrc32C.Compute(bytes),
-                now + retention,
-                now));
+            return ValueTask.FromResult(
+                new ZLinkRelocationStored(
+                    reference,
+                    ZLinkCrc32C.Compute(bytes),
+                    now + retention,
+                    now
+                )
+            );
         }
 
         public async ValueTask<ZLinkRelocationReadResult> GetRelocationAsync(
             string reference,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             if (!_payloads.TryGetValue(reference, out var payload))
                 return new ZLinkRelocationReadResult.Missing();
@@ -656,11 +644,8 @@ public sealed class RelocationTreeParallelIoTests
                 UpdateMaximum(ref _maxConcurrentChunkReads, active);
                 try
                 {
-                    var order = BinaryPrimitives.ReadUInt32BigEndian(
-                        payload.AsSpan(11, 4));
-                    await Task.Delay(
-                        order == 0 ? 20 : 5,
-                        cancellationToken);
+                    var order = BinaryPrimitives.ReadUInt32BigEndian(payload.AsSpan(11, 4));
+                    await Task.Delay(order == 0 ? 20 : 5, cancellationToken);
                 }
                 finally
                 {
@@ -673,10 +658,10 @@ public sealed class RelocationTreeParallelIoTests
         public async ValueTask<ZLinkRelocationRenewResult> RenewRelocationAsync(
             string reference,
             TimeSpan retention,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
-            if (_payloads.TryGetValue(reference, out var payload)
-                && IsKind(payload, "ZLTC"u8))
+            if (_payloads.TryGetValue(reference, out var payload) && IsKind(payload, "ZLTC"u8))
             {
                 var active = Interlocked.Increment(ref _activeChunkRenews);
                 UpdateMaximum(ref _maxConcurrentChunkRenews, active);
@@ -685,7 +670,8 @@ public sealed class RelocationTreeParallelIoTests
                     if (active == 1)
                         await _secondChunkRenewEntered.Task.WaitAsync(
                             TimeSpan.FromSeconds(10),
-                            cancellationToken);
+                            cancellationToken
+                        );
                     else
                         _secondChunkRenewEntered.TrySetResult();
                 }
@@ -695,21 +681,20 @@ public sealed class RelocationTreeParallelIoTests
                 }
             }
             var now = DateTimeOffset.UtcNow;
-            return
-                _payloads.ContainsKey(reference)
-                    ? new ZLinkRelocationRenewResult.Renewed(
-                        now + retention,
-                        now)
-                    : new ZLinkRelocationRenewResult.Missing();
+            return _payloads.ContainsKey(reference)
+                ? new ZLinkRelocationRenewResult.Renewed(now + retention, now)
+                : new ZLinkRelocationRenewResult.Missing();
         }
 
         public ValueTask<ZLinkRelocationDeleteResult> DeleteRelocationAsync(
             string reference,
-            CancellationToken cancellationToken = default) =>
+            CancellationToken cancellationToken = default
+        ) =>
             ValueTask.FromResult(
                 _payloads.TryRemove(reference, out _)
                     ? ZLinkRelocationDeleteResult.Deleted
-                    : ZLinkRelocationDeleteResult.Missing);
+                    : ZLinkRelocationDeleteResult.Missing
+            );
 
         internal void ResetReadConcurrency()
         {
@@ -749,11 +734,8 @@ public sealed class RelocationTreeParallelIoTests
                 _payloads[reference] = payload;
         }
 
-        private static bool IsKind(
-            ReadOnlySpan<byte> payload,
-            ReadOnlySpan<byte> magic) =>
-            payload.Length >= magic.Length
-            && payload[..magic.Length].SequenceEqual(magic);
+        private static bool IsKind(ReadOnlySpan<byte> payload, ReadOnlySpan<byte> magic) =>
+            payload.Length >= magic.Length && payload[..magic.Length].SequenceEqual(magic);
 
         private static TaskCompletionSource NewSignal() =>
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -763,10 +745,7 @@ public sealed class RelocationTreeParallelIoTests
             var observed = Volatile.Read(ref maximum);
             while (observed < value)
             {
-                var current = Interlocked.CompareExchange(
-                    ref maximum,
-                    value,
-                    observed);
+                var current = Interlocked.CompareExchange(ref maximum, value, observed);
                 if (current == observed)
                     return;
                 observed = current;
@@ -778,10 +757,7 @@ public sealed class RelocationTreeParallelIoTests
             var observed = Volatile.Read(ref maximum);
             while (observed < value)
             {
-                var current = Interlocked.CompareExchange(
-                    ref maximum,
-                    value,
-                    observed);
+                var current = Interlocked.CompareExchange(ref maximum, value, observed);
                 if (current == observed)
                     return;
                 observed = current;
@@ -794,8 +770,7 @@ public sealed class RelocationTreeParallelIoTests
     {
         public override bool CanSeek => false;
 
-        public override long Seek(long offset, SeekOrigin loc) =>
-            throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin loc) => throw new NotSupportedException();
 
         public override long Position
         {
@@ -804,22 +779,21 @@ public sealed class RelocationTreeParallelIoTests
         }
     }
 
-    private sealed class RepeatedLengthList(
-        int count,
-        long value) : IReadOnlyList<long>
+    private sealed class RepeatedLengthList(int count, long value) : IReadOnlyList<long>
     {
         public int Count { get; } = count;
         public long this[int index] =>
             index >= 0 && index < Count
                 ? value
                 : throw new ArgumentOutOfRangeException(nameof(index));
+
         public IEnumerator<long> GetEnumerator()
         {
             for (var index = 0; index < Count; index++)
                 yield return value;
         }
-        System.Collections.IEnumerator
-            System.Collections.IEnumerable.GetEnumerator() =>
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() =>
             GetEnumerator();
     }
 }

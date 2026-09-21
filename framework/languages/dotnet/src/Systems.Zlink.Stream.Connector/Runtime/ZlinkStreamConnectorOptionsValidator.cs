@@ -14,7 +14,8 @@ internal static class ZlinkStreamConnectorOptionsValidator
 {
     public static void Validate(ZlinkStreamConnectorOptions options)
     {
-        if (options.Endpoint is null) throw Validation("Endpoint is required.");
+        if (options.Endpoint is null)
+            throw Validation("Endpoint is required.");
 
         // Endpoint scheme and transport agreement, plus unsupported schemes.
         ZlinkStreamTransportFactory.ValidateTransport(options);
@@ -54,7 +55,8 @@ internal static class ZlinkStreamConnectorOptionsValidator
 
     private static void ValidateHeartbeat(ZlinkStreamHeartbeatOptions heartbeat)
     {
-        if (!heartbeat.Enabled) return;
+        if (!heartbeat.Enabled)
+            return;
         if (heartbeat.Interval <= TimeSpan.Zero)
             throw Validation("Heartbeat interval must be positive.");
         if (heartbeat.Timeout <= TimeSpan.Zero)
@@ -65,7 +67,8 @@ internal static class ZlinkStreamConnectorOptionsValidator
 
     private static void ValidateReconnect(ZlinkStreamReconnectOptions reconnect)
     {
-        if (!reconnect.Enabled) return;
+        if (!reconnect.Enabled)
+            return;
         if (reconnect.InitialDelay <= TimeSpan.Zero)
             throw Validation("Reconnect InitialDelay must be positive.");
         if (reconnect.MaxDelay <= TimeSpan.Zero)
@@ -83,10 +86,14 @@ internal static class ZlinkStreamConnectorOptionsValidator
 
         // A codec paired with compression turned off is two options disagreeing, which
         // is a ConfigurationError rather than an out-of-range value (spec §6.3).
-        if (options.Compression == ZlinkStreamCompression.None && options.CompressionCodec is not null)
+        if (
+            options.Compression == ZlinkStreamCompression.None
+            && options.CompressionCodec is not null
+        )
             throw ZlinkStreamConnector.Error(
                 ZlinkStreamErrorCode.ConfigurationError,
-                "CompressionCodec cannot be set when Compression is None.");
+                "CompressionCodec cannot be set when Compression is None."
+            );
     }
 
     private static ZlinkStreamException Validation(string message) =>

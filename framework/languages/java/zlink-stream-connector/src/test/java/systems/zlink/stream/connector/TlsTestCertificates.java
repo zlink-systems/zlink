@@ -5,8 +5,7 @@ import java.net.URISyntaxException;
 import java.net.URL;
 
 final class TlsTestCertificates {
-    private TlsTestCertificates() {
-    }
+    private TlsTestCertificates() {}
 
     static File certificate() {
         return resourceFile("tls-test-cert.pem");

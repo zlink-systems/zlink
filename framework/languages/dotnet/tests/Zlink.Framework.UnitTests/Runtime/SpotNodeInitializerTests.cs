@@ -18,25 +18,16 @@ public sealed class SpotNodeInitializerTests
         var repository = new ZLinkProviderLocationRepository(store);
         var expiredOwner = await repository.ClaimLiveOwnerAsync(
             "expired-owner",
-            TimeSpan.FromSeconds(1));
-        var liveOwner = await repository.ClaimLiveOwnerAsync(
-            "live-owner",
-            TimeSpan.FromMinutes(1));
-        await PublishDescriptorAsync(
-            repository,
-            expiredOwner,
-            RoutingId.From("aaa-expired"));
-        await PublishDescriptorAsync(
-            repository,
-            liveOwner,
-            RoutingId.From("zzz-live"));
+            TimeSpan.FromSeconds(1)
+        );
+        var liveOwner = await repository.ClaimLiveOwnerAsync("live-owner", TimeSpan.FromMinutes(1));
+        await PublishDescriptorAsync(repository, expiredOwner, RoutingId.From("aaa-expired"));
+        await PublishDescriptorAsync(repository, liveOwner, RoutingId.From("zzz-live"));
         time.Advance(TimeSpan.FromSeconds(2));
 
         var peerRoutingIds = await ResolveAsync(store, time);
 
-        Assert.Equal(
-            RoutingId.From("zzz-live"),
-            peerRoutingIds[PeerEndpoint]);
+        Assert.Equal(RoutingId.From("zzz-live"), peerRoutingIds[PeerEndpoint]);
     }
 
     [Fact]
@@ -45,19 +36,12 @@ public sealed class SpotNodeInitializerTests
         var time = new ManualTimeProvider();
         var store = new ZLinkInMemoryProviderLocationStore(time);
         var repository = new ZLinkProviderLocationRepository(store);
-        var liveOwner = await repository.ClaimLiveOwnerAsync(
-            "live-owner",
-            TimeSpan.FromMinutes(1));
-        await PublishDescriptorAsync(
-            repository,
-            liveOwner,
-            RoutingId.From("live-peer"));
+        var liveOwner = await repository.ClaimLiveOwnerAsync("live-owner", TimeSpan.FromMinutes(1));
+        await PublishDescriptorAsync(repository, liveOwner, RoutingId.From("live-peer"));
 
         var peerRoutingIds = await ResolveAsync(store, time);
 
-        Assert.Equal(
-            RoutingId.From("live-peer"),
-            peerRoutingIds[PeerEndpoint]);
+        Assert.Equal(RoutingId.From("live-peer"), peerRoutingIds[PeerEndpoint]);
     }
 
     [Fact]
@@ -66,29 +50,25 @@ public sealed class SpotNodeInitializerTests
         var time = new ManualTimeProvider();
         var inner = new ZLinkInMemoryProviderLocationStore(time);
         var repository = new ZLinkProviderLocationRepository(inner);
-        var owner = await repository.ClaimLiveOwnerAsync(
-            "corrupt-owner",
-            TimeSpan.FromMinutes(1));
-        await PublishDescriptorAsync(
-            repository,
-            owner,
-            RoutingId.From("corrupt-peer"));
+        var owner = await repository.ClaimLiveOwnerAsync("corrupt-owner", TimeSpan.FromMinutes(1));
+        await PublishDescriptorAsync(repository, owner, RoutingId.From("corrupt-peer"));
         var store = new MissingOwnerLeaseExpiryStore(
             inner,
-            ZLinkProviderLocationRepository.OwnerKey(owner.OwnerId));
+            ZLinkProviderLocationRepository.OwnerKey(owner.OwnerId)
+        );
 
-        var error = await Assert.ThrowsAsync<InvalidDataException>(
-            async () => await ResolveAsync(store, time));
+        var error = await Assert.ThrowsAsync<InvalidDataException>(async () =>
+            await ResolveAsync(store, time)
+        );
 
-        Assert.Equal(
-            "The Location Store owner lease record is invalid.",
-            error.Message);
+        Assert.Equal("The Location Store owner lease record is invalid.", error.Message);
     }
 
     private static async ValueTask PublishDescriptorAsync(
         IZLinkLocationRepository repository,
         ZLinkLocationOwnerToken owner,
-        RoutingId routingId)
+        RoutingId routingId
+    )
     {
         var result = await repository.UpdateMeshNodeAsync(
             InMemoryLocationStoreTests.MeshNode(
@@ -96,14 +76,17 @@ public sealed class SpotNodeInitializerTests
                 PeerEndpoint,
                 routingId.ToString(),
                 MeshName,
-                owner.LeaseGeneration),
-            ZLinkLocationWriteIntent.NewClaim);
+                owner.LeaseGeneration
+            ),
+            ZLinkLocationWriteIntent.NewClaim
+        );
         Assert.Equal(ZLinkLocationWriteStatus.Stored, result.Status);
     }
 
     private static async Task<IReadOnlyDictionary<string, RoutingId>> ResolveAsync(
         IZLinkLocationStore store,
-        TimeProvider time)
+        TimeProvider time
+    )
     {
         var repository = new ZLinkProviderLocationRepository(store);
         var options = new ZLinkLocationOptions { PollingInterval = TimeSpan.Zero };
@@ -116,7 +99,9 @@ public sealed class SpotNodeInitializerTests
                 leaseTracker,
                 new ZLinkObservedLocationGenerations(),
                 options: options,
-                timeProvider: time));
+                timeProvider: time
+            )
+        );
         var router = new ZLinkSpotRouterCapabilityRegistration();
         router.ManualConnections.Connect(PeerEndpoint);
         var node = new ZLinkSpotNodeRegistration
@@ -124,7 +109,7 @@ public sealed class SpotNodeInitializerTests
             SpotNodeName = MeshName,
             ObjectRole = ZLinkMeshNodeObjectRole.Client,
             ObjectRoleSelected = true,
-            Router = router
+            Router = router,
         };
         var registration = new ZLinkFrameworkRegistration();
         await ZLinkSpotNodeInitializer.ResolveManualPeerRoutingIdsAsync(
@@ -133,20 +118,22 @@ public sealed class SpotNodeInitializerTests
             RoutingId.From("local"),
             registration,
             lifecycle,
-            leaseTracker);
+            leaseTracker
+        );
         return router.PeerRoutingIds;
     }
 
     private sealed class MissingOwnerLeaseExpiryStore(
         IZLinkLocationStore inner,
-        ZLinkStoreKey ownerKey) : IZLinkLocationStore
+        ZLinkStoreKey ownerKey
+    ) : IZLinkLocationStore
     {
         public async ValueTask<ZLinkStoreReadResult> ReadAsync(
             ZLinkStoreKey key,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
-            var read = await inner.ReadAsync(key, cancellationToken)
-                .ConfigureAwait(false);
+            var read = await inner.ReadAsync(key, cancellationToken).ConfigureAwait(false);
             return key == ownerKey && read is ZLinkStoreReadResult.Found found
                 ? new ZLinkStoreReadResult.Found(found.Value with { ExpiresAt = null })
                 : read;
@@ -154,12 +141,12 @@ public sealed class SpotNodeInitializerTests
 
         public ValueTask<ZLinkStoreWriteResult> WriteAsync(
             ZLinkStoreWriteRequest request,
-            CancellationToken cancellationToken = default) =>
-            inner.WriteAsync(request, cancellationToken);
+            CancellationToken cancellationToken = default
+        ) => inner.WriteAsync(request, cancellationToken);
 
         public ValueTask<ZLinkStoreScanResult> ScanAsync(
             ZLinkStoreScanRequest request,
-            CancellationToken cancellationToken = default) =>
-            inner.ScanAsync(request, cancellationToken);
+            CancellationToken cancellationToken = default
+        ) => inner.ScanAsync(request, cancellationToken);
     }
 }

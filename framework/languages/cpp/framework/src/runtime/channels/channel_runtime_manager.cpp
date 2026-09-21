@@ -119,8 +119,8 @@ std::vector<std::string> channel_runtime_manager_t::route_channel_ids () const
     return ids;
 }
 
-std::vector<std::string> channel_runtime_manager_t::configured_route_channel_ids (
-  const zlink_builder_t &builder)
+std::vector<std::string>
+channel_runtime_manager_t::configured_route_channel_ids (const zlink_builder_t &builder)
 {
     std::vector<std::string> ids;
     ids.reserve (builder._state->route_channels.size ());

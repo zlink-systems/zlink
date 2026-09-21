@@ -1,31 +1,32 @@
 package systems.zlink.framework.runtime.locations;
-import java.time.Instant;
-import java.util.Map;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.CancellationException;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.atomic.AtomicBoolean;
-import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimed;
+
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.locations.ZLinkLocationOptions;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimed;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseGenerationExhausted;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
-import systems.zlink.framework.locations.ZLinkLocationOptions;
 
 import java.time.Duration;
+import java.time.Instant;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
-import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
-import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
-import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 
 public final class ZLinkLocationRuntime implements AutoCloseable {
     private final ZLinkRegisteredLocationStores stores;
@@ -36,8 +37,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     private final Duration ownerLeaseFencingMargin;
     private final ScheduledExecutorService heartbeatExecutor;
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
-    private final AtomicBoolean heartbeatInFlight =
-        new AtomicBoolean();
+    private final AtomicBoolean heartbeatInFlight = new AtomicBoolean();
     private ScheduledTask heartbeatTask;
     private CompletableFuture<Void> startupCompletion;
     private RoutingId nodeRid;
@@ -66,105 +66,123 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     }
 
     ZLinkLocationRuntime(
-        ZLinkLocationRepository store,
-        Duration ownerLeaseTtl,
-        Duration heartbeatInterval) {
+            ZLinkLocationRepository store, Duration ownerLeaseTtl, Duration heartbeatInterval) {
         this(
-            ZLinkRegisteredLocationStores.fromUnified(store),
-            UUID.randomUUID().toString().replace("-", ""),
-            ownerLeaseTtl,
-            heartbeatInterval,
-            defaultOwnerLeaseRenewTimeout(),
-            defaultOwnerLeaseFencingMargin());
+                ZLinkRegisteredLocationStores.fromUnified(store),
+                UUID.randomUUID().toString().replace("-", ""),
+                ownerLeaseTtl,
+                heartbeatInterval,
+                defaultOwnerLeaseRenewTimeout(),
+                defaultOwnerLeaseFencingMargin());
     }
 
     ZLinkLocationRuntime(
-        ZLinkLocationRepository store,
-        String ownerId,
-        Duration ownerLeaseTtl,
-        Duration heartbeatInterval) {
+            ZLinkLocationRepository store,
+            String ownerId,
+            Duration ownerLeaseTtl,
+            Duration heartbeatInterval) {
         this(
-            ZLinkRegisteredLocationStores.fromUnified(store), ownerId,
-            ownerLeaseTtl, heartbeatInterval,
-            defaultOwnerLeaseRenewTimeout(),
-            defaultOwnerLeaseFencingMargin());
+                ZLinkRegisteredLocationStores.fromUnified(store),
+                ownerId,
+                ownerLeaseTtl,
+                heartbeatInterval,
+                defaultOwnerLeaseRenewTimeout(),
+                defaultOwnerLeaseFencingMargin());
     }
 
     public ZLinkLocationRuntime(
-        ZLinkRegisteredLocationStores stores,
-        Duration ownerLeaseTtl,
-        Duration heartbeatInterval) {
+            ZLinkRegisteredLocationStores stores,
+            Duration ownerLeaseTtl,
+            Duration heartbeatInterval) {
         this(
-            stores, UUID.randomUUID().toString().replace("-", ""),
-            ownerLeaseTtl, heartbeatInterval,
-            defaultOwnerLeaseRenewTimeout(),
-            defaultOwnerLeaseFencingMargin());
+                stores,
+                UUID.randomUUID().toString().replace("-", ""),
+                ownerLeaseTtl,
+                heartbeatInterval,
+                defaultOwnerLeaseRenewTimeout(),
+                defaultOwnerLeaseFencingMargin());
     }
 
     public ZLinkLocationRuntime(
-        ZLinkRegisteredLocationStores stores,
-        Duration ownerLeaseTtl,
-        Duration heartbeatInterval,
-        Duration ownerLeaseRenewTimeout) {
+            ZLinkRegisteredLocationStores stores,
+            Duration ownerLeaseTtl,
+            Duration heartbeatInterval,
+            Duration ownerLeaseRenewTimeout) {
         this(
-            stores, UUID.randomUUID().toString().replace("-", ""),
-            ownerLeaseTtl, heartbeatInterval, ownerLeaseRenewTimeout,
-            defaultOwnerLeaseFencingMargin());
+                stores,
+                UUID.randomUUID().toString().replace("-", ""),
+                ownerLeaseTtl,
+                heartbeatInterval,
+                ownerLeaseRenewTimeout,
+                defaultOwnerLeaseFencingMargin());
     }
 
     public ZLinkLocationRuntime(
-        ZLinkRegisteredLocationStores stores,
-        Duration ownerLeaseTtl,
-        Duration heartbeatInterval,
-        Duration ownerLeaseRenewTimeout,
-        Duration ownerLeaseFencingMargin) {
+            ZLinkRegisteredLocationStores stores,
+            Duration ownerLeaseTtl,
+            Duration heartbeatInterval,
+            Duration ownerLeaseRenewTimeout,
+            Duration ownerLeaseFencingMargin) {
         this(
-            stores, UUID.randomUUID().toString().replace("-", ""),
-            ownerLeaseTtl, heartbeatInterval, ownerLeaseRenewTimeout,
-            ownerLeaseFencingMargin);
+                stores,
+                UUID.randomUUID().toString().replace("-", ""),
+                ownerLeaseTtl,
+                heartbeatInterval,
+                ownerLeaseRenewTimeout,
+                ownerLeaseFencingMargin);
     }
 
     ZLinkLocationRuntime(
-        ZLinkRegisteredLocationStores stores,
-        String ownerId,
-        Duration ownerLeaseTtl,
-        Duration heartbeatInterval) {
+            ZLinkRegisteredLocationStores stores,
+            String ownerId,
+            Duration ownerLeaseTtl,
+            Duration heartbeatInterval) {
         this(
-            stores, ownerId, ownerLeaseTtl, heartbeatInterval,
-            defaultOwnerLeaseRenewTimeout(),
-            defaultOwnerLeaseFencingMargin());
+                stores,
+                ownerId,
+                ownerLeaseTtl,
+                heartbeatInterval,
+                defaultOwnerLeaseRenewTimeout(),
+                defaultOwnerLeaseFencingMargin());
     }
 
     ZLinkLocationRuntime(
-        ZLinkRegisteredLocationStores stores,
-        String ownerId,
-        Duration ownerLeaseTtl,
-        Duration heartbeatInterval,
-        Duration ownerLeaseRenewTimeout) {
-        this(stores, ownerId, ownerLeaseTtl, heartbeatInterval,
-            ownerLeaseRenewTimeout, defaultOwnerLeaseFencingMargin());
+            ZLinkRegisteredLocationStores stores,
+            String ownerId,
+            Duration ownerLeaseTtl,
+            Duration heartbeatInterval,
+            Duration ownerLeaseRenewTimeout) {
+        this(
+                stores,
+                ownerId,
+                ownerLeaseTtl,
+                heartbeatInterval,
+                ownerLeaseRenewTimeout,
+                defaultOwnerLeaseFencingMargin());
     }
 
     ZLinkLocationRuntime(
-        ZLinkRegisteredLocationStores stores,
-        String ownerId,
-        Duration ownerLeaseTtl,
-        Duration heartbeatInterval,
-        Duration ownerLeaseRenewTimeout,
-        Duration ownerLeaseFencingMargin) {
+            ZLinkRegisteredLocationStores stores,
+            String ownerId,
+            Duration ownerLeaseTtl,
+            Duration heartbeatInterval,
+            Duration ownerLeaseRenewTimeout,
+            Duration ownerLeaseFencingMargin) {
         this.stores = Objects.requireNonNull(stores, "stores");
         this.ownerId = requireText(ownerId, "ownerId");
         this.ownerLeaseTtl = requirePositive(ownerLeaseTtl, "ownerLeaseTtl");
         this.heartbeatInterval = requirePositive(heartbeatInterval, "heartbeatInterval");
-        this.ownerLeaseRenewTimeout = requirePositive(
-            ownerLeaseRenewTimeout, "ownerLeaseRenewTimeout");
-        this.ownerLeaseFencingMargin = requireNonNegative(
-            ownerLeaseFencingMargin, "ownerLeaseFencingMargin");
-        this.heartbeatExecutor = Executors.newSingleThreadScheduledExecutor(task -> {
-            Thread thread = new Thread(task, "zlink-location-owner-lease");
-            thread.setDaemon(true);
-            return thread;
-        });
+        this.ownerLeaseRenewTimeout =
+                requirePositive(ownerLeaseRenewTimeout, "ownerLeaseRenewTimeout");
+        this.ownerLeaseFencingMargin =
+                requireNonNegative(ownerLeaseFencingMargin, "ownerLeaseFencingMargin");
+        this.heartbeatExecutor =
+                Executors.newSingleThreadScheduledExecutor(
+                        task -> {
+                            Thread thread = new Thread(task, "zlink-location-owner-lease");
+                            thread.setDaemon(true);
+                            return thread;
+                        });
     }
 
     public String ownerId() {
@@ -172,10 +190,11 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     }
 
     ZLinkLocationOwnerToken ownerTokenSnapshot() {
-        return inStateLane(() -> {
-            ensureOwnerAdmissionOpenCore();
-            return ownerToken;
-        });
+        return inStateLane(
+                () -> {
+                    ensureOwnerAdmissionOpenCore();
+                    return ownerToken;
+                });
     }
 
     public ZLinkLocationOwnerToken currentOwnerToken() {
@@ -187,15 +206,15 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     }
 
     /**
-     * Registers the runtime action that republishes owner-scoped records after
-     * a stale lease is replaced by a new generation.
+     * Registers the runtime action that republishes owner-scoped records after a stale lease is
+     * replaced by a new generation.
      */
-    public void setOwnerLeaseRecoveryListener(
-        Supplier<CompletionStage<Void>> listener) {
-        inStateLane(() -> {
-            ownerLeaseRecoveryListener = listener;
-            return null;
-        });
+    public void setOwnerLeaseRecoveryListener(Supplier<CompletionStage<Void>> listener) {
+        inStateLane(
+                () -> {
+                    ownerLeaseRecoveryListener = listener;
+                    return null;
+                });
     }
 
     ZLinkLocationRepository locationStore() {
@@ -211,10 +230,11 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     }
 
     public void ensureOwnerAdmissionOpen() {
-        inStateLane(() -> {
-            ensureOwnerAdmissionOpenCore();
-            return null;
-        });
+        inStateLane(
+                () -> {
+                    ensureOwnerAdmissionOpenCore();
+                    return null;
+                });
     }
 
     public String lastError() {
@@ -227,17 +247,21 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
 
     public CompletionStage<Void> start(RoutingId nodeRid) {
         Objects.requireNonNull(nodeRid, "nodeRid");
-        StartState state = inStateLane(() -> {
-            if (started) {
-                return new StartState(startupCompletion == null
-                    ? CompletableFuture.completedFuture(null)
-                    : startupCompletion, false);
-            }
-            started = true;
-            this.nodeRid = nodeRid;
-            startupCompletion = new CompletableFuture<>();
-            return new StartState(startupCompletion, true);
-        });
+        StartState state =
+                inStateLane(
+                        () -> {
+                            if (started) {
+                                return new StartState(
+                                        startupCompletion == null
+                                                ? CompletableFuture.completedFuture(null)
+                                                : startupCompletion,
+                                        false);
+                            }
+                            started = true;
+                            this.nodeRid = nodeRid;
+                            startupCompletion = new CompletableFuture<>();
+                            return new StartState(startupCompletion, true);
+                        });
         if (state.claim()) {
             attemptInitialOwnerLeaseClaim(state.completion());
         }
@@ -245,318 +269,360 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     }
 
     public CompletionStage<Void> stop() {
-        StopState state = inStateLane(() -> {
-            boolean shouldStop = started;
-            started = false;
-            ScheduledTask heartbeat = heartbeatTask;
-            heartbeatTask = null;
-            return new StopState(
-                shouldStop,
-                heartbeat,
-                ownerToken);
-        });
+        StopState state =
+                inStateLane(
+                        () -> {
+                            boolean shouldStop = started;
+                            started = false;
+                            ScheduledTask heartbeat = heartbeatTask;
+                            heartbeatTask = null;
+                            return new StopState(shouldStop, heartbeat, ownerToken);
+                        });
         cancel(state.heartbeat());
         if (!state.shouldStop()) {
             return CompletableFuture.completedFuture(null);
         }
 
         ZLinkLocationOwnerToken token = state.token();
-        CompletionStage<Long> cleanup = token == null
-            ? CompletableFuture.completedFuture(0L)
-            : stores.unifiedStore().removeAllByOwner(token);
-        return cleanup
-            .thenCompose(ignored -> token == null
-                ? CompletableFuture.completedFuture(null)
-                : stores.ownerLeaseStore().releaseOwnerLease(token)
-                    .thenApply(released -> null))
-            .thenRun(() -> {
-                CompletableFuture<Void> completion = inStateLane(() -> {
-                    ownerToken = null;
-                    ownerAdmissionDeadlineNanos = 0L;
-                    return startupCompletion;
-                });
-                if (completion != null && !completion.isDone()) {
-                    completion.completeExceptionally(
-                        new IllegalStateException(
-                            "Location runtime stopped before owner lease became ready."));
-                }
-            });
+        CompletionStage<Long> cleanup =
+                token == null
+                        ? CompletableFuture.completedFuture(0L)
+                        : stores.unifiedStore().removeAllByOwner(token);
+        return cleanup.thenCompose(
+                        ignored ->
+                                token == null
+                                        ? CompletableFuture.completedFuture(null)
+                                        : stores.ownerLeaseStore()
+                                                .releaseOwnerLease(token)
+                                                .thenApply(released -> null))
+                .thenRun(
+                        () -> {
+                            CompletableFuture<Void> completion =
+                                    inStateLane(
+                                            () -> {
+                                                ownerToken = null;
+                                                ownerAdmissionDeadlineNanos = 0L;
+                                                return startupCompletion;
+                                            });
+                            if (completion != null && !completion.isDone()) {
+                                completion.completeExceptionally(
+                                        new IllegalStateException(
+                                                "Location runtime stopped before owner lease became"
+                                                        + " ready."));
+                            }
+                        });
     }
 
     public CompletionStage<Boolean> renewOwnerLeaseOnce() {
-        RenewState state = inStateLane(() -> new RenewState(
-            nodeRid, ownerToken, isOwnerAdmissionOpenCore()));
+        RenewState state =
+                inStateLane(() -> new RenewState(nodeRid, ownerToken, isOwnerAdmissionOpenCore()));
         RoutingId currentNodeRid = state.nodeRid();
         if (currentNodeRid == null) {
             CompletableFuture<Boolean> failed = new CompletableFuture<>();
-            failed.completeExceptionally(new IllegalStateException("Location runtime must be started before renewing its owner lease."));
+            failed.completeExceptionally(
+                    new IllegalStateException(
+                            "Location runtime must be started before renewing its owner lease."));
             return failed;
         }
 
         ZLinkLocationOwnerToken token = state.token();
         if (token == null) {
             return claimOwnerLease()
-                .thenCompose(ignored -> republishAfterOwnerLeaseRecovery())
-                .thenApply(ignored -> true)
-                .handle((result, failure) -> {
-                    if (failure != null) {
-                        recordFailure(failureMessage(failure));
-                        return false;
-                    }
-                    return result;
-                });
+                    .thenCompose(ignored -> republishAfterOwnerLeaseRecovery())
+                    .thenApply(ignored -> true)
+                    .handle(
+                            (result, failure) -> {
+                                if (failure != null) {
+                                    recordFailure(failureMessage(failure));
+                                    return false;
+                                }
+                                return result;
+                            });
         }
         long operationStartedNanos = System.nanoTime();
-        return stores.ownerLeaseStore().renewOwnerLease(token, ownerLeaseTtl)
-            .thenCompose(result -> {
-                if (result instanceof systems.zlink.framework.runtime.internal.locations
-                    .ZLinkOwnerLeaseRenewed renewed) {
-                    inStateLane(() -> {
-                        recordSuccessfulRenewalCore(
-                            renewed.leaseExpiresAt(), renewed.storeNow(),
-                            operationStartedNanos);
-                        nextOwnerLeaseRenewalNanos =
-                            System.nanoTime() + heartbeatInterval.toNanos();
-                        return null;
-                    });
-                    return state.admissionOpen()
-                        ? CompletableFuture.completedFuture(true)
-                        : republishAfterOwnerLeaseRecovery()
-                            .thenApply(ignored -> true);
-                }
+        return stores.ownerLeaseStore()
+                .renewOwnerLease(token, ownerLeaseTtl)
+                .thenCompose(
+                        result -> {
+                            if (result
+                                    instanceof
+                                    systems.zlink.framework.runtime.internal.locations
+                                                    .ZLinkOwnerLeaseRenewed
+                                            renewed) {
+                                inStateLane(
+                                        () -> {
+                                            recordSuccessfulRenewalCore(
+                                                    renewed.leaseExpiresAt(),
+                                                    renewed.storeNow(),
+                                                    operationStartedNanos);
+                                            nextOwnerLeaseRenewalNanos =
+                                                    System.nanoTime() + heartbeatInterval.toNanos();
+                                            return null;
+                                        });
+                                return state.admissionOpen()
+                                        ? CompletableFuture.completedFuture(true)
+                                        : republishAfterOwnerLeaseRecovery()
+                                                .thenApply(ignored -> true);
+                            }
 
-                // A lease can expire while the store is unavailable. The old
-                // token cannot be renewed after recovery, so claim a fresh
-                // generation before reporting the runtime as healthy again.
-                recordFailure("owner lease renewal was stale");
-                inStateLane(() -> {
-                    ownerAdmissionDeadlineNanos = 0L;
-                    return null;
-                });
-                return claimOwnerLease().thenCompose(ignored -> {
-                    inStateLane(() -> {
-                        recoveryPreviousOwnerToken = token;
-                        return null;
-                    });
-                    return republishAfterOwnerLeaseRecovery().thenApply(
-                        ignoredValue -> true);
-                });
-            })
-            .handle((result, failure) -> {
-                if (failure != null) {
-                    recordFailure(failureMessage(failure));
-                    return false;
-                }
-                return result;
-            });
+                            // A lease can expire while the store is unavailable. The old
+                            // token cannot be renewed after recovery, so claim a fresh
+                            // generation before reporting the runtime as healthy again.
+                            recordFailure("owner lease renewal was stale");
+                            inStateLane(
+                                    () -> {
+                                        ownerAdmissionDeadlineNanos = 0L;
+                                        return null;
+                                    });
+                            return claimOwnerLease()
+                                    .thenCompose(
+                                            ignored -> {
+                                                inStateLane(
+                                                        () -> {
+                                                            recoveryPreviousOwnerToken = token;
+                                                            return null;
+                                                        });
+                                                return republishAfterOwnerLeaseRecovery()
+                                                        .thenApply(ignoredValue -> true);
+                                            });
+                        })
+                .handle(
+                        (result, failure) -> {
+                            if (failure != null) {
+                                recordFailure(failureMessage(failure));
+                                return false;
+                            }
+                            return result;
+                        });
     }
 
     private CompletionStage<Void> claimOwnerLease() {
         long operationStartedNanos = System.nanoTime();
-        long deadlineNanos = saturatingAdd(
-            operationStartedNanos, ownerLeaseRenewTimeout.toNanos());
+        long deadlineNanos = saturatingAdd(operationStartedNanos, ownerLeaseRenewTimeout.toNanos());
         return resolveOwnerLeaseClaim(
-                deadlineNanos,
-                stores.ownerLeaseStore().claimOwnerLease(ownerId, ownerLeaseTtl))
-            .thenAccept(claimed -> installOwnerLease(
-                claimed, operationStartedNanos));
+                        deadlineNanos,
+                        stores.ownerLeaseStore().claimOwnerLease(ownerId, ownerLeaseTtl))
+                .thenAccept(claimed -> installOwnerLease(claimed, operationStartedNanos));
     }
 
     private CompletionStage<ZLinkOwnerLeaseClaimed> resolveOwnerLeaseClaim(
-        long deadlineNanos,
-        CompletionStage<ZLinkOwnerLeaseClaimResult> claimOperation) {
-        return withinRenewDeadline(
-                claimOperation, deadlineNanos)
-            .<CompletionStage<ZLinkOwnerLeaseClaimResult>>handle((result, failure) -> {
-                if (failure == null) {
-                    return CompletableFuture.completedFuture(result);
-                }
-                return confirmClaimAfterFailure(failure, deadlineNanos);
-            })
-            .thenCompose(result -> result)
-            .thenCompose(result -> result instanceof systems.zlink.framework.runtime
-                .internal.locations.ZLinkOwnerLeaseClaimConflict
-                    ? confirmClaimAfterConflict(result, deadlineNanos)
-                    : CompletableFuture.completedFuture(result))
-            .thenCompose(result -> {
-                if (result instanceof ZLinkOwnerLeaseClaimed claimed) {
-                    return CompletableFuture.completedFuture(claimed);
-                }
-                return CompletableFuture.failedFuture(
-                    new OwnerLeaseClaimRejectedException(
-                        result instanceof ZLinkOwnerLeaseGenerationExhausted
-                            ? "owner lease generation is exhausted"
-                            : "owner lease is already claimed"));
-            });
+            long deadlineNanos, CompletionStage<ZLinkOwnerLeaseClaimResult> claimOperation) {
+        return withinRenewDeadline(claimOperation, deadlineNanos)
+                .<CompletionStage<ZLinkOwnerLeaseClaimResult>>handle(
+                        (result, failure) -> {
+                            if (failure == null) {
+                                return CompletableFuture.completedFuture(result);
+                            }
+                            return confirmClaimAfterFailure(failure, deadlineNanos);
+                        })
+                .thenCompose(result -> result)
+                .thenCompose(
+                        result ->
+                                result
+                                                instanceof
+                                                systems.zlink.framework.runtime.internal.locations
+                                                        .ZLinkOwnerLeaseClaimConflict
+                                        ? confirmClaimAfterConflict(result, deadlineNanos)
+                                        : CompletableFuture.completedFuture(result))
+                .thenCompose(
+                        result -> {
+                            if (result instanceof ZLinkOwnerLeaseClaimed claimed) {
+                                return CompletableFuture.completedFuture(claimed);
+                            }
+                            return CompletableFuture.failedFuture(
+                                    new OwnerLeaseClaimRejectedException(
+                                            result instanceof ZLinkOwnerLeaseGenerationExhausted
+                                                    ? "owner lease generation is exhausted"
+                                                    : "owner lease is already claimed"));
+                        });
     }
 
-    private void installOwnerLease(
-        ZLinkOwnerLeaseClaimed claimed,
-        long operationStartedNanos) {
-        inStateLane(() -> {
-            ownerToken = claimed.token();
-            recordSuccessfulRenewalCore(
-                claimed.leaseExpiresAt(), claimed.storeNow(),
-                operationStartedNanos);
-            nextOwnerLeaseRenewalNanos =
-                System.nanoTime() + heartbeatInterval.toNanos();
-            return null;
-        });
+    private void installOwnerLease(ZLinkOwnerLeaseClaimed claimed, long operationStartedNanos) {
+        inStateLane(
+                () -> {
+                    ownerToken = claimed.token();
+                    recordSuccessfulRenewalCore(
+                            claimed.leaseExpiresAt(), claimed.storeNow(), operationStartedNanos);
+                    nextOwnerLeaseRenewalNanos = System.nanoTime() + heartbeatInterval.toNanos();
+                    return null;
+                });
     }
 
     private CompletionStage<ZLinkOwnerLeaseClaimResult> confirmClaimAfterConflict(
-        ZLinkOwnerLeaseClaimResult conflict,
-        long deadlineNanos) {
+            ZLinkOwnerLeaseClaimResult conflict, long deadlineNanos) {
         return withinRenewDeadline(
-                () -> stores.ownerLeaseStore().readOwnerLease(ownerId),
-                deadlineNanos)
-            .handle((result, failure) -> failure == null
-                    && result instanceof systems.zlink.framework.runtime
-                        .internal.locations.ZLinkOwnerLeaseFound found
-                    && ownerId.equals(found.token().ownerId())
-                ? new ZLinkOwnerLeaseClaimed(
-                    found.token(), found.leaseExpiresAt(), found.storeNow())
-                : conflict);
+                        () -> stores.ownerLeaseStore().readOwnerLease(ownerId), deadlineNanos)
+                .handle(
+                        (result, failure) ->
+                                failure == null
+                                                && result
+                                                        instanceof
+                                                        systems.zlink.framework.runtime.internal
+                                                                        .locations
+                                                                        .ZLinkOwnerLeaseFound
+                                                                found
+                                                && ownerId.equals(found.token().ownerId())
+                                        ? new ZLinkOwnerLeaseClaimed(
+                                                found.token(),
+                                                found.leaseExpiresAt(),
+                                                found.storeNow())
+                                        : conflict);
     }
 
     private CompletionStage<ZLinkOwnerLeaseClaimResult> confirmClaimAfterFailure(
-        Throwable failure,
-        long deadlineNanos) {
+            Throwable failure, long deadlineNanos) {
         return withinRenewDeadline(
-                () -> stores.ownerLeaseStore().readOwnerLease(ownerId),
-                deadlineNanos)
-            .thenCompose(result -> result instanceof systems.zlink.framework.runtime
-                .internal.locations.ZLinkOwnerLeaseFound found
-                    && ownerId.equals(found.token().ownerId())
-                ? CompletableFuture.completedFuture(
-                    new ZLinkOwnerLeaseClaimed(
-                        found.token(), found.leaseExpiresAt(), found.storeNow()))
-                : CompletableFuture.failedFuture(failure));
+                        () -> stores.ownerLeaseStore().readOwnerLease(ownerId), deadlineNanos)
+                .thenCompose(
+                        result ->
+                                result
+                                                        instanceof
+                                                        systems.zlink.framework.runtime.internal
+                                                                        .locations
+                                                                        .ZLinkOwnerLeaseFound
+                                                                found
+                                                && ownerId.equals(found.token().ownerId())
+                                        ? CompletableFuture.completedFuture(
+                                                new ZLinkOwnerLeaseClaimed(
+                                                        found.token(),
+                                                        found.leaseExpiresAt(),
+                                                        found.storeNow()))
+                                        : CompletableFuture.failedFuture(failure));
     }
 
     private <T> CompletionStage<T> withinRenewDeadline(
-        CompletionStage<T> operation,
-        long deadlineNanos) {
+            CompletionStage<T> operation, long deadlineNanos) {
         long remainingNanos = deadlineNanos - System.nanoTime();
         if (remainingNanos <= 0L) {
-            return CompletableFuture.failedFuture(new TimeoutException(
-                "owner lease operation timed out"));
+            return CompletableFuture.failedFuture(
+                    new TimeoutException("owner lease operation timed out"));
         }
         CompletableFuture<T> completion = new CompletableFuture<>();
-        ScheduledFuture<?> timeout = heartbeatExecutor.schedule(
-            () -> completion.completeExceptionally(new TimeoutException(
-                "owner lease operation timed out")),
-            remainingNanos,
-            TimeUnit.NANOSECONDS);
-        operation.whenComplete((result, failure) -> {
-            if (failure == null && completion.complete(result)) {
-                timeout.cancel(false);
-            } else if (failure != null) {
-                completion.completeExceptionally(failure);
-                timeout.cancel(false);
-            }
-        });
+        ScheduledFuture<?> timeout =
+                heartbeatExecutor.schedule(
+                        () ->
+                                completion.completeExceptionally(
+                                        new TimeoutException("owner lease operation timed out")),
+                        remainingNanos,
+                        TimeUnit.NANOSECONDS);
+        operation.whenComplete(
+                (result, failure) -> {
+                    if (failure == null && completion.complete(result)) {
+                        timeout.cancel(false);
+                    } else if (failure != null) {
+                        completion.completeExceptionally(failure);
+                        timeout.cancel(false);
+                    }
+                });
         return completion;
     }
 
     private <T> CompletionStage<T> withinRenewDeadline(
-        Supplier<CompletionStage<T>> operation,
-        long deadlineNanos) {
+            Supplier<CompletionStage<T>> operation, long deadlineNanos) {
         if (deadlineNanos - System.nanoTime() <= 0L) {
-            return CompletableFuture.failedFuture(new TimeoutException(
-                "owner lease operation timed out"));
+            return CompletableFuture.failedFuture(
+                    new TimeoutException("owner lease operation timed out"));
         }
         return withinRenewDeadline(operation.get(), deadlineNanos);
     }
 
     private CompletionStage<Void> republishAfterOwnerLeaseRecovery() {
-        Supplier<CompletionStage<Void>> listener = inStateLane(
-            () -> ownerLeaseRecoveryListener);
+        Supplier<CompletionStage<Void>> listener = inStateLane(() -> ownerLeaseRecoveryListener);
         if (listener == null) {
             return CompletableFuture.completedFuture(null);
         }
-        return listener.get().whenComplete((ignored, failure) -> {
-            if (failure != null) {
-                inStateLane(() -> {
-                    ownerAdmissionDeadlineNanos = 0L;
-                    return null;
-                });
-            }
-        });
+        return listener.get()
+                .whenComplete(
+                        (ignored, failure) -> {
+                            if (failure != null) {
+                                inStateLane(
+                                        () -> {
+                                            ownerAdmissionDeadlineNanos = 0L;
+                                            return null;
+                                        });
+                            }
+                        });
     }
 
-    private void attemptInitialOwnerLeaseClaim(
-        CompletableFuture<Void> completion) {
+    private void attemptInitialOwnerLeaseClaim(CompletableFuture<Void> completion) {
         boolean shouldClaim = inStateLane(() -> started && !completion.isDone());
         if (!shouldClaim) {
             return;
         }
         long operationStartedNanos = System.nanoTime();
-        long deadlineNanos = saturatingAdd(
-            operationStartedNanos, ownerLeaseRenewTimeout.toNanos());
+        long deadlineNanos = saturatingAdd(operationStartedNanos, ownerLeaseRenewTimeout.toNanos());
         CompletionStage<ZLinkOwnerLeaseClaimResult> claimOperation =
-            stores.ownerLeaseStore().claimOwnerLease(ownerId, ownerLeaseTtl);
+                stores.ownerLeaseStore().claimOwnerLease(ownerId, ownerLeaseTtl);
         CompletableFuture<Void> cancellationCleanup = new CompletableFuture<>();
-        completion.whenComplete((ignored, failure) -> {
-            if (failure instanceof CancellationException) {
-                cancelStartupClaim(completion);
-                cancellationCleanup.whenComplete((cleanupResult, cleanupFailure) -> {
-                    if (cleanupFailure != null) {
-                        recordFailure(failureMessage(cleanupFailure));
+        completion.whenComplete(
+                (ignored, failure) -> {
+                    if (failure instanceof CancellationException) {
+                        cancelStartupClaim(completion);
+                        cancellationCleanup.whenComplete(
+                                (cleanupResult, cleanupFailure) -> {
+                                    if (cleanupFailure != null) {
+                                        recordFailure(failureMessage(cleanupFailure));
+                                    }
+                                });
                     }
                 });
-            }
-        });
         resolveOwnerLeaseClaim(deadlineNanos, claimOperation)
-            .whenComplete((claimed, failure) -> {
-            boolean cancelled = inStateLane(() -> {
-                boolean ownsStartup = startupCompletion == completion;
-                if (!ownsStartup || !started || completion.isCancelled()) {
-                    if (ownsStartup) {
-                        ownerToken = null;
-                        ownerAdmissionDeadlineNanos = 0L;
-                    }
-                    return true;
-                }
-                if (failure == null) {
-                    ownerToken = claimed.token();
-                    recordSuccessfulRenewalCore(
-                        claimed.leaseExpiresAt(), claimed.storeNow(),
-                        operationStartedNanos);
-                    nextOwnerLeaseRenewalNanos =
-                        System.nanoTime() + heartbeatInterval.toNanos();
-                }
-                return false;
-            });
-            if (cancelled) {
-                startStartupCancellationCleanup(
-                    cancellationCleanup, deadlineNanos);
-                return;
-            }
-            if (failure == null) {
-                if (!completeInitialClaim(completion)) {
-                    startStartupCancellationCleanup(
-                        cancellationCleanup, deadlineNanos);
-                }
-                return;
-            }
-            recordFailure(failureMessage(failure));
-            if (unwrap(failure) instanceof OwnerLeaseClaimRejectedException) {
-                inStateLane(() -> {
-                    started = false;
-                    return null;
-                });
-                if (!completion.completeExceptionally(unwrap(failure))) {
-                    startStartupCancellationCleanup(
-                        cancellationCleanup, deadlineNanos);
-                }
-                return;
-            }
-            if (!completeInitialClaim(completion)) {
-                startStartupCancellationCleanup(
-                    cancellationCleanup, deadlineNanos);
-            }
-        });
+                .whenComplete(
+                        (claimed, failure) -> {
+                            boolean cancelled =
+                                    inStateLane(
+                                            () -> {
+                                                boolean ownsStartup =
+                                                        startupCompletion == completion;
+                                                if (!ownsStartup
+                                                        || !started
+                                                        || completion.isCancelled()) {
+                                                    if (ownsStartup) {
+                                                        ownerToken = null;
+                                                        ownerAdmissionDeadlineNanos = 0L;
+                                                    }
+                                                    return true;
+                                                }
+                                                if (failure == null) {
+                                                    ownerToken = claimed.token();
+                                                    recordSuccessfulRenewalCore(
+                                                            claimed.leaseExpiresAt(),
+                                                            claimed.storeNow(),
+                                                            operationStartedNanos);
+                                                    nextOwnerLeaseRenewalNanos =
+                                                            System.nanoTime()
+                                                                    + heartbeatInterval.toNanos();
+                                                }
+                                                return false;
+                                            });
+                            if (cancelled) {
+                                startStartupCancellationCleanup(cancellationCleanup, deadlineNanos);
+                                return;
+                            }
+                            if (failure == null) {
+                                if (!completeInitialClaim(completion)) {
+                                    startStartupCancellationCleanup(
+                                            cancellationCleanup, deadlineNanos);
+                                }
+                                return;
+                            }
+                            recordFailure(failureMessage(failure));
+                            if (unwrap(failure) instanceof OwnerLeaseClaimRejectedException) {
+                                inStateLane(
+                                        () -> {
+                                            started = false;
+                                            return null;
+                                        });
+                                if (!completion.completeExceptionally(unwrap(failure))) {
+                                    startStartupCancellationCleanup(
+                                            cancellationCleanup, deadlineNanos);
+                                }
+                                return;
+                            }
+                            if (!completeInitialClaim(completion)) {
+                                startStartupCancellationCleanup(cancellationCleanup, deadlineNanos);
+                            }
+                        });
     }
 
     private boolean completeInitialClaim(CompletableFuture<Void> completion) {
@@ -569,77 +635,99 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     }
 
     private void startHeartbeat() {
-        ScheduledTask heartbeat = inStateLane(() -> {
-            if (!started || (heartbeatTask != null && !heartbeatTask.isCancelled())) {
-                return null;
-            }
-            heartbeatTask = new ScheduledTask();
-            return heartbeatTask;
-        });
+        ScheduledTask heartbeat =
+                inStateLane(
+                        () -> {
+                            if (!started
+                                    || (heartbeatTask != null && !heartbeatTask.isCancelled())) {
+                                return null;
+                            }
+                            heartbeatTask = new ScheduledTask();
+                            return heartbeatTask;
+                        });
         if (heartbeat == null) {
             return;
         }
-        ScheduledFuture<?> future = heartbeatExecutor.scheduleWithFixedDelay(
-            this::renewOwnerLeaseOnHeartbeat,
-            heartbeatInterval.toMillis(), heartbeatInterval.toMillis(),
-            TimeUnit.MILLISECONDS);
-        boolean cancel = inStateLane(() -> {
-            if (heartbeatTask == heartbeat && started) {
-                heartbeat.attach(future);
-                return false;
-            }
-            return true;
-        });
+        ScheduledFuture<?> future =
+                heartbeatExecutor.scheduleWithFixedDelay(
+                        this::renewOwnerLeaseOnHeartbeat,
+                        heartbeatInterval.toMillis(),
+                        heartbeatInterval.toMillis(),
+                        TimeUnit.MILLISECONDS);
+        boolean cancel =
+                inStateLane(
+                        () -> {
+                            if (heartbeatTask == heartbeat && started) {
+                                heartbeat.attach(future);
+                                return false;
+                            }
+                            return true;
+                        });
         if (cancel) {
             future.cancel(false);
         }
     }
 
-    private void cancelStartupClaim(
-        CompletableFuture<Void> completion) {
-        ScheduledTask heartbeat = inStateLane(() -> {
-            if (startupCompletion != completion) {
-                return null;
-            }
-            started = false;
-            ownerToken = null;
-            ownerAdmissionDeadlineNanos = 0L;
-            ScheduledTask current = heartbeatTask;
-            heartbeatTask = null;
-            return current;
-        });
+    private void cancelStartupClaim(CompletableFuture<Void> completion) {
+        ScheduledTask heartbeat =
+                inStateLane(
+                        () -> {
+                            if (startupCompletion != completion) {
+                                return null;
+                            }
+                            started = false;
+                            ownerToken = null;
+                            ownerAdmissionDeadlineNanos = 0L;
+                            ScheduledTask current = heartbeatTask;
+                            heartbeatTask = null;
+                            return current;
+                        });
         cancel(heartbeat);
     }
 
     private void startStartupCancellationCleanup(
-        CompletableFuture<Void> cleanupCompletion,
-        long deadlineNanos) {
-        CompletionStage<Void> cleanup = withinRenewDeadline(
-                () -> stores.ownerLeaseStore().readOwnerLease(ownerId),
-                deadlineNanos)
-            .thenCompose(result -> result instanceof systems.zlink.framework.runtime
-                    .internal.locations.ZLinkOwnerLeaseFound found
-                    && ownerId.equals(found.token().ownerId())
-                ? withinRenewDeadline(
-                    () -> stores.ownerLeaseStore().releaseOwnerLease(found.token()),
-                    deadlineNanos).thenApply(ignored -> null)
-                : CompletableFuture.completedFuture(null));
-        cleanup.whenComplete((ignored, failure) -> {
-            if (failure == null) {
-                cleanupCompletion.complete(null);
-            } else {
-                cleanupCompletion.completeExceptionally(unwrap(failure));
-            }
-        });
+            CompletableFuture<Void> cleanupCompletion, long deadlineNanos) {
+        CompletionStage<Void> cleanup =
+                withinRenewDeadline(
+                                () -> stores.ownerLeaseStore().readOwnerLease(ownerId),
+                                deadlineNanos)
+                        .thenCompose(
+                                result ->
+                                        result
+                                                                instanceof
+                                                                systems.zlink.framework.runtime
+                                                                                .internal.locations
+                                                                                .ZLinkOwnerLeaseFound
+                                                                        found
+                                                        && ownerId.equals(found.token().ownerId())
+                                                ? withinRenewDeadline(
+                                                                () ->
+                                                                        stores.ownerLeaseStore()
+                                                                                .releaseOwnerLease(
+                                                                                        found
+                                                                                                .token()),
+                                                                deadlineNanos)
+                                                        .thenApply(ignored -> null)
+                                                : CompletableFuture.completedFuture(null));
+        cleanup.whenComplete(
+                (ignored, failure) -> {
+                    if (failure == null) {
+                        cleanupCompletion.complete(null);
+                    } else {
+                        cleanupCompletion.completeExceptionally(unwrap(failure));
+                    }
+                });
     }
 
     @Override
     public void close() {
-        StopState state = inStateLane(() -> {
-            ScheduledTask heartbeat = heartbeatTask;
-            heartbeatTask = null;
-            return new StopState(false, heartbeat, null);
-        });
+        StopState state =
+                inStateLane(
+                        () -> {
+                            ScheduledTask heartbeat = heartbeatTask;
+                            heartbeatTask = null;
+                            return new StopState(false, heartbeat, null);
+                        });
         cancel(state.heartbeat());
         heartbeatExecutor.shutdownNow();
     }
@@ -652,39 +740,38 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         if (expected != 0L) {
             long lateNanos = Math.max(0L, System.nanoTime() - expected);
             ZLinkRuntimeMetrics.record(
-                "zlink.location.owner_lease.renew.lateness",
-                Duration.ofNanos(lateNanos),
-                Map.of());
+                    "zlink.location.owner_lease.renew.lateness",
+                    Duration.ofNanos(lateNanos),
+                    Map.of());
         }
         renewOwnerLeaseOnce().whenComplete((ignored, failure) -> heartbeatInFlight.set(false));
     }
 
     private void recordSuccessfulRenewalCore(
-        Instant leaseExpiresAt,
-        Instant storeNow,
-        long operationStartedNanos) {
-        Duration admissionLifetime = Duration.between(
-            storeNow, leaseExpiresAt).minus(ownerLeaseFencingMargin);
+            Instant leaseExpiresAt, Instant storeNow, long operationStartedNanos) {
+        Duration admissionLifetime =
+                Duration.between(storeNow, leaseExpiresAt).minus(ownerLeaseFencingMargin);
         if (admissionLifetime.isZero() || admissionLifetime.isNegative()) {
             throw new IllegalStateException(
-                "The owner lease does not leave a positive admission lifetime.");
+                    "The owner lease does not leave a positive admission lifetime.");
         }
-        ownerAdmissionDeadlineNanos = saturatingAdd(
-            operationStartedNanos, admissionLifetime.toNanos());
+        ownerAdmissionDeadlineNanos =
+                saturatingAdd(operationStartedNanos, admissionLifetime.toNanos());
         Instant previous = ownerLeaseRenewedAt;
-        ownerLeaseRenewedAt = previous == null || storeNow.isAfter(previous)
-            ? storeNow
-            : previous.plusNanos(1L);
+        ownerLeaseRenewedAt =
+                previous == null || storeNow.isAfter(previous) ? storeNow : previous.plusNanos(1L);
         lastError = null;
     }
 
     private void recordFailure(String message) {
-        inStateLane(() -> {
-            lastError = message == null || message.isBlank()
-                ? "owner lease operation failed"
-                : message;
-            return null;
-        });
+        inStateLane(
+                () -> {
+                    lastError =
+                            message == null || message.isBlank()
+                                    ? "owner lease operation failed"
+                                    : message;
+                    return null;
+                });
     }
 
     private static void cancel(ScheduledTask task) {
@@ -696,21 +783,16 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     private record StartState(CompletableFuture<Void> completion, boolean claim) {}
 
     private record StopState(
-        boolean shouldStop,
-        ScheduledTask heartbeat,
-        ZLinkLocationOwnerToken token) {}
+            boolean shouldStop, ScheduledTask heartbeat, ZLinkLocationOwnerToken token) {}
 
-    private static final class OwnerLeaseClaimRejectedException
-        extends IllegalStateException {
+    private static final class OwnerLeaseClaimRejectedException extends IllegalStateException {
         OwnerLeaseClaimRejectedException(String message) {
             super(message);
         }
     }
 
     private record RenewState(
-        RoutingId nodeRid,
-        ZLinkLocationOwnerToken token,
-        boolean admissionOpen) {}
+            RoutingId nodeRid, ZLinkLocationOwnerToken token, boolean admissionOpen) {}
 
     private static final class ScheduledTask {
         private ScheduledFuture<?> future;
@@ -733,16 +815,13 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     private static String failureMessage(Throwable failure) {
         Throwable current = unwrap(failure);
         String message = current.getMessage();
-        return message == null || message.isBlank()
-            ? current.getClass().getSimpleName()
-            : message;
+        return message == null || message.isBlank() ? current.getClass().getSimpleName() : message;
     }
 
     private static Throwable unwrap(Throwable failure) {
         Throwable current = failure;
-        while ((current instanceof CompletionException
-            || current instanceof ExecutionException)
-            && current.getCause() != null) {
+        while ((current instanceof CompletionException || current instanceof ExecutionException)
+                && current.getCause() != null) {
             current = current.getCause();
         }
         return current;
@@ -771,22 +850,19 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
 
     private boolean isOwnerAdmissionOpenCore() {
         return ownerToken != null
-            && ownerAdmissionDeadlineNanos != 0L
-            && System.nanoTime() - ownerAdmissionDeadlineNanos < 0L;
+                && ownerAdmissionDeadlineNanos != 0L
+                && System.nanoTime() - ownerAdmissionDeadlineNanos < 0L;
     }
 
     private void ensureOwnerAdmissionOpenCore() {
         if (!isOwnerAdmissionOpenCore()) {
-            throw new IllegalStateException(
-                "The owner lease admission deadline has expired.");
+            throw new IllegalStateException("The owner lease admission deadline has expired.");
         }
     }
 
     private static long saturatingAdd(long left, long right) {
         long result = left + right;
-        return ((left ^ result) & (right ^ result)) < 0L
-            ? Long.MAX_VALUE
-            : result;
+        return ((left ^ result) & (right ^ result)) < 0L ? Long.MAX_VALUE : result;
     }
 
     private static Duration defaultOwnerLeaseRenewTimeout() {

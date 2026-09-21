@@ -1,5 +1,4 @@
 package systems.zlink.framework.runtime.internal.service;
-import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -9,34 +8,36 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.HexFormat;
-import java.util.List;
+
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.HexFormat;
+import java.util.List;
+
 final class ZLinkServiceM6AWireCodecTest {
-    private final ZLinkServiceM6AWireCodec codec =
-        new ZLinkServiceM6AWireCodec();
+    private final ZLinkServiceM6AWireCodec codec = new ZLinkServiceM6AWireCodec();
 
     @Test
     void admissionRoundTripsAllM6ACommandsAndDescriptorFields() {
         var source = RoutingId.from("node-a");
         var descriptor = descriptor(source);
 
-        for (int command : List.of(
-            ServiceWireConstants.COMMAND_HELLO,
-            ServiceWireConstants.COMMAND_ADMIT,
-            ServiceWireConstants.COMMAND_UPDATE)) {
+        for (int command :
+                List.of(
+                        ServiceWireConstants.COMMAND_HELLO,
+                        ServiceWireConstants.COMMAND_ADMIT,
+                        ServiceWireConstants.COMMAND_UPDATE)) {
             assertEquals(
-                descriptor,
-                codec.decodeAdmission(
-                    codec.encodeAdmission(command, descriptor),
-                    command,
-                    source));
+                    descriptor,
+                    codec.decodeAdmission(
+                            codec.encodeAdmission(command, descriptor), command, source));
         }
         assertEquals(12, codec.decodeReject(codec.encodeReject(12)));
     }
@@ -44,37 +45,29 @@ final class ZLinkServiceM6AWireCodecTest {
     @Test
     void nodeChannelReplyAndApplicationPayloadRoundTrip() {
         assertEquals(
-            ServiceWireConstants.FLAG_METADATA,
-            codec.decodeHeader(codec.encodeNodeSendHeader(
-                ServiceWireConstants.FLAG_METADATA)).flags());
+                ServiceWireConstants.FLAG_METADATA,
+                codec.decodeHeader(codec.encodeNodeSendHeader(ServiceWireConstants.FLAG_METADATA))
+                        .flags());
+        assertEquals(41, codec.decodeNodeRequestHeader(codec.encodeNodeRequestHeader(41, 0)));
         assertEquals(
-            41,
-            codec.decodeNodeRequestHeader(
-                codec.encodeNodeRequestHeader(41, 0)));
+                "orders",
+                codec.decodeChannelSendHeader(codec.encodeChannelSendHeader("orders", 0)));
         assertEquals(
-            "orders",
-            codec.decodeChannelSendHeader(
-                codec.encodeChannelSendHeader("orders", 0)));
+                new ZLinkServiceM6AWireCodec.ChannelRequest(42, "orders"),
+                codec.decodeChannelRequestHeader(
+                        codec.encodeChannelRequestHeader(
+                                42, "orders", ServiceWireConstants.FLAG_METADATA)));
         assertEquals(
-            new ZLinkServiceM6AWireCodec.ChannelRequest(42, "orders"),
-            codec.decodeChannelRequestHeader(
-                codec.encodeChannelRequestHeader(
-                    42,
-                    "orders",
-                    ServiceWireConstants.FLAG_METADATA)));
+                new ZLinkServiceM6AWireCodec.Reply(43, 0, 0),
+                codec.decodeReplyHeader(codec.encodeReplyHeader(43, 0, 0)));
         assertEquals(
-            new ZLinkServiceM6AWireCodec.Reply(43, 0, 0),
-            codec.decodeReplyHeader(codec.encodeReplyHeader(43, 0, 0)));
-        assertEquals(
-            new ZLinkServiceM6AWireCodec.Reply(44, 102, 9),
-            codec.decodeReplyHeader(codec.encodeReplyHeader(44, 102, 9)));
+                new ZLinkServiceM6AWireCodec.Reply(44, 102, 9),
+                codec.decodeReplyHeader(codec.encodeReplyHeader(44, 102, 9)));
 
-        var payload = new ZLinkServiceM6AWireCodec.ApplicationPayload(
-            "OrderPlaced",
-            "application/zlink-framework-json-v1",
-            new byte[] {1, 2, 3});
-        var decoded = codec.decodeApplicationPayload(
-            codec.encodeApplicationPayload(payload));
+        var payload =
+                new ZLinkServiceM6AWireCodec.ApplicationPayload(
+                        "OrderPlaced", "application/zlink-framework-json-v1", new byte[] {1, 2, 3});
+        var decoded = codec.decodeApplicationPayload(codec.encodeApplicationPayload(payload));
         assertEquals(payload.packetName(), decoded.packetName());
         assertEquals(payload.contentType(), decoded.contentType());
         assertArrayEquals(payload.payload(), decoded.payload());
@@ -84,17 +77,15 @@ final class ZLinkServiceM6AWireCodecTest {
     void highBitCorrelationRoundTripsAsAnOpaqueU64() {
         long highBit = Long.MIN_VALUE;
         assertEquals(
-            highBit,
-            codec.decodeNodeRequestHeader(
-                codec.encodeNodeRequestHeader(highBit, 0)));
+                highBit, codec.decodeNodeRequestHeader(codec.encodeNodeRequestHeader(highBit, 0)));
         assertEquals(
-            highBit,
-            codec.decodeChannelRequestHeader(
-                codec.encodeChannelRequestHeader(highBit, "orders", 0))
-                .correlation());
+                highBit,
+                codec.decodeChannelRequestHeader(
+                                codec.encodeChannelRequestHeader(highBit, "orders", 0))
+                        .correlation());
         assertEquals(
-            new ZLinkServiceM6AWireCodec.Reply(highBit, 0, 0),
-            codec.decodeReplyHeader(codec.encodeReplyHeader(highBit, 0, 0)));
+                new ZLinkServiceM6AWireCodec.Reply(highBit, 0, 0),
+                codec.decodeReplyHeader(codec.encodeReplyHeader(highBit, 0, 0)));
     }
 
     //  GOLDEN — service-wire-v1.schema.json reply(20) byte layout.
@@ -107,12 +98,10 @@ final class ZLinkServiceM6AWireCodecTest {
     void goldenReplyHeaderPinsInlineSchemaTailByteLayout() {
         byte[] reply = codec.encodeReplyHeader(7, 0, 0);
         assertEquals(21, reply.length);
+        assertArrayEquals(hex("5a4d01140000000000000000070000000000000000"), reply);
         assertArrayEquals(
-            hex("5a4d01140000000000000000070000000000000000"),
-            reply);
-        assertArrayEquals(
-            hex("5a4d0114000000000000000008000000660000000e"),
-            codec.encodeReplyHeader(8, 102, 14));
+                hex("5a4d0114000000000000000008000000660000000e"),
+                codec.encodeReplyHeader(8, 102, 14));
     }
 
     //  GOLDEN - reply(20).tail is an inline `request-specific-tail`
@@ -125,24 +114,20 @@ final class ZLinkServiceM6AWireCodecTest {
     @Test
     void decodeReplyHeaderAcceptsFramesWithAndWithoutInlineTail() {
         byte[] noTail = codec.encodeReplyHeader(43, 0, 0);
-        ZLinkServiceM6AWireCodec.Reply decodedNoTail =
-            codec.decodeReplyHeader(noTail);
+        ZLinkServiceM6AWireCodec.Reply decodedNoTail = codec.decodeReplyHeader(noTail);
         assertEquals(43, decodedNoTail.correlation());
         assertEquals(0, decodedNoTail.terminalResult());
         assertEquals(0, decodedNoTail.failureCode());
 
         byte[] withTail = Arrays.copyOf(noTail, noTail.length + 8);
-        System.arraycopy(
-            hex("0102030405060708"), 0, withTail, noTail.length, 8);
-        ZLinkServiceM6AWireCodec.Reply decodedWithTail =
-            codec.decodeReplyHeader(withTail);
+        System.arraycopy(hex("0102030405060708"), 0, withTail, noTail.length, 8);
+        ZLinkServiceM6AWireCodec.Reply decodedWithTail = codec.decodeReplyHeader(withTail);
         assertEquals(43, decodedWithTail.correlation());
         assertEquals(0, decodedWithTail.terminalResult());
         assertEquals(0, decodedWithTail.failureCode());
 
         assertThrows(
-            ZLinkServiceWireException.class,
-            () -> codec.decodeReplyHeader(truncated(noTail)));
+                ZLinkServiceWireException.class, () -> codec.decodeReplyHeader(truncated(noTail)));
     }
 
     @Test
@@ -157,29 +142,38 @@ final class ZLinkServiceM6AWireCodecTest {
             byte[] header = hex("007fff80ff");
             var multipart = java.nio.ByteBuffer.allocate(4 + 4 + header.length + 4 + size);
             multipart.putInt(2).putInt(header.length).put(header).putInt(size).put(body);
-            byte[] packet = "ZLinkFrameworkMultipart".getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            byte[] content = "application/x-zlink-multipart".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            byte[] packet =
+                    "ZLinkFrameworkMultipart".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            byte[] content =
+                    "application/x-zlink-multipart"
+                            .getBytes(java.nio.charset.StandardCharsets.UTF_8);
             int length = 1 + packet.length + 1 + content.length + 4 + multipart.capacity();
             var frame = java.nio.ByteBuffer.allocate(5 + length);
-            frame.put((byte) 1).putInt(length)
-                .put((byte) packet.length).put(packet)
-                .put((byte) content.length).put(content)
-                .putInt(multipart.capacity()).put(multipart.array());
+            frame.put((byte) 1)
+                    .putInt(length)
+                    .put((byte) packet.length)
+                    .put(packet)
+                    .put((byte) content.length)
+                    .put(content)
+                    .putInt(multipart.capacity())
+                    .put(multipart.array());
             try (Message first = Message.from(header);
-                 Message second = Message.from(body)) {
+                    Message second = Message.from(body)) {
                 var encoded = codec.encodeFrameworkMultipart(List.of(first, second));
                 assertArrayEquals(multipart.array(), encoded.payload(), "payload size " + size);
-                assertArrayEquals(frame.array(), codec.encodeApplicationPayload(encoded),
-                    "complete frame size " + size);
-                assertArrayEquals(frame.array(),
-                    codec.encodeFrameworkMultipartFrame(List.of(first, second)),
-                    "direct frame size " + size);
+                assertArrayEquals(
+                        frame.array(),
+                        codec.encodeApplicationPayload(encoded),
+                        "complete frame size " + size);
+                assertArrayEquals(
+                        frame.array(),
+                        codec.encodeFrameworkMultipartFrame(List.of(first, second)),
+                        "direct frame size " + size);
                 try (Message nativeFrame =
-                         codec.encodeFrameworkMultipartMessage(
-                             List.of(first, second))) {
+                        codec.encodeFrameworkMultipartMessage(List.of(first, second))) {
                     assertTrue(nativeFrame.dataBuffer().isDirect());
-                    assertArrayEquals(frame.array(), nativeFrame.toByteArray(),
-                        "native frame size " + size);
+                    assertArrayEquals(
+                            frame.array(), nativeFrame.toByteArray(), "native frame size " + size);
                 }
                 assertArrayEquals(header, first.toByteArray());
                 assertArrayEquals(body, second.toByteArray());
@@ -190,8 +184,9 @@ final class ZLinkServiceM6AWireCodecTest {
     @Test
     void applicationPayloadByteArrayBoundariesRemainDefensive() {
         byte[] source = new byte[] {1, 2, 3};
-        var payload = new ZLinkServiceM6AWireCodec.ApplicationPayload(
-            "packet", "application/json", source);
+        var payload =
+                new ZLinkServiceM6AWireCodec.ApplicationPayload(
+                        "packet", "application/json", source);
         source[0] = 9;
         byte[] exposed = payload.payload();
         exposed[1] = 9;
@@ -241,18 +236,21 @@ final class ZLinkServiceM6AWireCodecTest {
 
     @Test
     void applicationPayloadNativeViewPreservesOuterFrameValidation() {
-        byte[] frame = codec.encodeApplicationPayload(
-            new ZLinkServiceM6AWireCodec.ApplicationPayload(
-                "packet", "application/json", new byte[] {1, 2, 3}));
+        byte[] frame =
+                codec.encodeApplicationPayload(
+                        new ZLinkServiceM6AWireCodec.ApplicationPayload(
+                                "packet", "application/json", new byte[] {1, 2, 3}));
         for (int size = 0; size < frame.length; size++) {
             var truncated = java.nio.ByteBuffer.wrap(Arrays.copyOf(frame, size));
-            assertThrows(ZLinkServiceWireException.class,
-                () -> codec.decodeApplicationPayload(truncated));
+            assertThrows(
+                    ZLinkServiceWireException.class,
+                    () -> codec.decodeApplicationPayload(truncated));
             assertEquals(0, truncated.position());
         }
         java.nio.ByteBuffer.wrap(frame).putInt(frame.length - 7, Integer.MAX_VALUE);
-        assertThrows(ZLinkServiceWireException.class,
-            () -> codec.decodeApplicationPayload(java.nio.ByteBuffer.wrap(frame)));
+        assertThrows(
+                ZLinkServiceWireException.class,
+                () -> codec.decodeApplicationPayload(java.nio.ByteBuffer.wrap(frame)));
     }
 
     @Test
@@ -261,9 +259,10 @@ final class ZLinkServiceM6AWireCodecTest {
         Arrays.fill(body, (byte) 0xa7);
         List<Message> decoded;
         try (Message header = Message.from(new byte[] {0, 127, -1});
-             Message payload = Message.from(body);
-             Message frame = Message.from(codec.encodeFrameworkMultipartFrame(
-                 List.of(header, payload)))) {
+                Message payload = Message.from(body);
+                Message frame =
+                        Message.from(
+                                codec.encodeFrameworkMultipartFrame(List.of(header, payload)))) {
             var view = frame.dataBuffer();
             int position = view.position();
             int limit = view.limit();
@@ -287,41 +286,38 @@ final class ZLinkServiceM6AWireCodecTest {
         }
         for (int size = 0; size < frame.length; size++) {
             var truncated = java.nio.ByteBuffer.wrap(Arrays.copyOf(frame, size));
-            assertThrows(ZLinkServiceWireException.class,
-                () -> codec.decodeFrameworkMultipartFrame(truncated));
+            assertThrows(
+                    ZLinkServiceWireException.class,
+                    () -> codec.decodeFrameworkMultipartFrame(truncated));
         }
         // The final part's length starts immediately before its three bytes.
         java.nio.ByteBuffer.wrap(frame).putInt(frame.length - 7, Integer.MAX_VALUE);
-        assertThrows(ZLinkServiceWireException.class,
-            () -> codec.decodeFrameworkMultipartFrame(java.nio.ByteBuffer.wrap(frame)));
+        assertThrows(
+                ZLinkServiceWireException.class,
+                () -> codec.decodeFrameworkMultipartFrame(java.nio.ByteBuffer.wrap(frame)));
     }
 
     @Test
     void frameworkMultipartMatchesCanonicalProfileFixture() {
         try (Message first = Message.from(new byte[] {1, 2});
-             Message second = Message.from(new byte[] {(byte) 0xaa, (byte) 0xbb,
-                 (byte) 0xcc})) {
+                Message second = Message.from(new byte[] {(byte) 0xaa, (byte) 0xbb, (byte) 0xcc})) {
             var payload = codec.encodeFrameworkMultipart(List.of(first, second));
             assertEquals(
-                ServiceWireConstants.FRAMEWORK_MULTIPART_PACKET_NAME,
-                payload.packetName());
+                    ServiceWireConstants.FRAMEWORK_MULTIPART_PACKET_NAME, payload.packetName());
             assertEquals(
-                ServiceWireConstants.FRAMEWORK_MULTIPART_CONTENT_TYPE,
-                payload.contentType());
-            assertArrayEquals(
-                hex("0000000200000002010200000003aabbcc"),
-                payload.payload());
+                    ServiceWireConstants.FRAMEWORK_MULTIPART_CONTENT_TYPE, payload.contentType());
+            assertArrayEquals(hex("0000000200000002010200000003aabbcc"), payload.payload());
 
-            List<Message> decoded = codec.decodeFrameworkMultipart(
-                codec.decodeApplicationPayload(
-                    codec.encodeApplicationPayload(payload)));
+            List<Message> decoded =
+                    codec.decodeFrameworkMultipart(
+                            codec.decodeApplicationPayload(
+                                    codec.encodeApplicationPayload(payload)));
             try {
                 assertEquals(2, decoded.size());
+                assertArrayEquals(new byte[] {1, 2}, decoded.get(0).toByteArray());
                 assertArrayEquals(
-                    new byte[] {1, 2}, decoded.get(0).toByteArray());
-                assertArrayEquals(
-                    new byte[] {(byte) 0xaa, (byte) 0xbb, (byte) 0xcc},
-                    decoded.get(1).toByteArray());
+                        new byte[] {(byte) 0xaa, (byte) 0xbb, (byte) 0xcc},
+                        decoded.get(1).toByteArray());
             } finally {
                 decoded.forEach(Message::close);
             }
@@ -330,32 +326,30 @@ final class ZLinkServiceM6AWireCodecTest {
 
     @Test
     void frameworkMultipartConsumesSharedGoldenFixture() throws Exception {
-        JsonNode fixture = new ObjectMapper().readTree(
-            Files.readString(sharedMultipartFixturePath()));
+        JsonNode fixture =
+                new ObjectMapper().readTree(Files.readString(sharedMultipartFixturePath()));
         JsonNode canonical = fixture.path("valid").get(0);
-        var payload = codec.decodeApplicationPayload(
-            HexFormat.of().parseHex(canonical.path("encodedHex").asText()));
+        var payload =
+                codec.decodeApplicationPayload(
+                        HexFormat.of().parseHex(canonical.path("encodedHex").asText()));
         List<Message> decoded = codec.decodeFrameworkMultipart(payload);
         try {
             JsonNode expectedParts = canonical.path("partsHex");
             assertEquals(expectedParts.size(), decoded.size());
             for (int index = 0; index < decoded.size(); index++) {
                 assertArrayEquals(
-                    HexFormat.of().parseHex(
-                        expectedParts.get(index).asText()),
-                    decoded.get(index).toByteArray());
+                        HexFormat.of().parseHex(expectedParts.get(index).asText()),
+                        decoded.get(index).toByteArray());
             }
         } finally {
             decoded.forEach(Message::close);
         }
 
         for (JsonNode invalid : fixture.path("invalid")) {
-            byte[] encoded = HexFormat.of().parseHex(
-                invalid.path("encodedHex").asText());
+            byte[] encoded = HexFormat.of().parseHex(invalid.path("encodedHex").asText());
             assertThrows(
-                ZLinkServiceWireException.class,
-                () -> codec.decodeFrameworkMultipart(
-                    codec.decodeApplicationPayload(encoded)));
+                    ZLinkServiceWireException.class,
+                    () -> codec.decodeFrameworkMultipart(codec.decodeApplicationPayload(encoded)));
         }
     }
 
@@ -364,114 +358,106 @@ final class ZLinkServiceM6AWireCodecTest {
         var profile = ServiceWireConstants.FRAMEWORK_MULTIPART_PACKET_NAME;
         var contentType = ServiceWireConstants.FRAMEWORK_MULTIPART_CONTENT_TYPE;
         assertThrows(
-            ZLinkServiceWireException.class,
-            () -> codec.decodeFrameworkMultipart(
-                new ZLinkServiceM6AWireCodec.ApplicationPayload(
-                    profile, contentType, new byte[] {0, 0, 0, 0})));
+                ZLinkServiceWireException.class,
+                () ->
+                        codec.decodeFrameworkMultipart(
+                                new ZLinkServiceM6AWireCodec.ApplicationPayload(
+                                        profile, contentType, new byte[] {0, 0, 0, 0})));
         assertThrows(
-            ZLinkServiceWireException.class,
-            () -> codec.decodeFrameworkMultipart(
-                new ZLinkServiceM6AWireCodec.ApplicationPayload(
-                    profile,
-                    contentType,
-                    hex("000000010000000301"))));
+                ZLinkServiceWireException.class,
+                () ->
+                        codec.decodeFrameworkMultipart(
+                                new ZLinkServiceM6AWireCodec.ApplicationPayload(
+                                        profile, contentType, hex("000000010000000301"))));
         assertThrows(
-            ZLinkServiceWireException.class,
-            () -> codec.decodeFrameworkMultipart(
-                new ZLinkServiceM6AWireCodec.ApplicationPayload(
-                    profile,
-                    contentType,
-                    hex("00000001000000000100"))));
+                ZLinkServiceWireException.class,
+                () ->
+                        codec.decodeFrameworkMultipart(
+                                new ZLinkServiceM6AWireCodec.ApplicationPayload(
+                                        profile, contentType, hex("00000001000000000100"))));
         assertThrows(
-            ZLinkServiceWireException.class,
-            () -> codec.decodeFrameworkMultipart(
-                new ZLinkServiceM6AWireCodec.ApplicationPayload(
-                    "event", contentType, new byte[] {1})));
+                ZLinkServiceWireException.class,
+                () ->
+                        codec.decodeFrameworkMultipart(
+                                new ZLinkServiceM6AWireCodec.ApplicationPayload(
+                                        "event", contentType, new byte[] {1})));
         assertThrows(
-            ZLinkServiceWireException.class,
-            () -> codec.decodeFrameworkMultipart(
-                new ZLinkServiceM6AWireCodec.ApplicationPayload(
-                    profile, "application/octet-stream", new byte[] {1})));
+                ZLinkServiceWireException.class,
+                () ->
+                        codec.decodeFrameworkMultipart(
+                                new ZLinkServiceM6AWireCodec.ApplicationPayload(
+                                        profile, "application/octet-stream", new byte[] {1})));
     }
 
     @Test
     void malformedAndNonCanonicalRecordsAreRejected() {
-        byte[] admission = codec.encodeAdmission(
-            ServiceWireConstants.COMMAND_HELLO,
-            descriptor(RoutingId.from("node-a")));
+        byte[] admission =
+                codec.encodeAdmission(
+                        ServiceWireConstants.COMMAND_HELLO, descriptor(RoutingId.from("node-a")));
         assertThrows(
-            ZLinkServiceWireException.class,
-            () -> codec.decodeAdmission(
-                truncated(admission),
-                ServiceWireConstants.COMMAND_HELLO,
-                RoutingId.from("node-a")));
+                ZLinkServiceWireException.class,
+                () ->
+                        codec.decodeAdmission(
+                                truncated(admission),
+                                ServiceWireConstants.COMMAND_HELLO,
+                                RoutingId.from("node-a")));
 
         byte[] badMagic = codec.encodeNodeSendHeader(0);
         badMagic[0] = 0;
+        assertThrows(ZLinkServiceWireException.class, () -> codec.decodeHeader(badMagic));
+        assertThrows(ZLinkServiceWireException.class, () -> codec.encodeNodeRequestHeader(0, 0));
         assertThrows(
-            ZLinkServiceWireException.class,
-            () -> codec.decodeHeader(badMagic));
+                ZLinkServiceWireException.class,
+                () -> codec.encodeChannelRequestHeader(0, "orders", 0));
         assertThrows(
-            ZLinkServiceWireException.class,
-            () -> codec.encodeNodeRequestHeader(0, 0));
+                ZLinkServiceWireException.class,
+                () ->
+                        codec.decodeChannelRequestHeader(
+                                withTrailingByte(
+                                        codec.encodeChannelRequestHeader(1, "orders", 0))));
+        assertThrows(ZLinkServiceWireException.class, () -> codec.encodeReplyHeader(1, 0, 9));
+        assertThrows(ZLinkServiceWireException.class, () -> codec.encodeReplyHeader(1, 101, 9));
         assertThrows(
-            ZLinkServiceWireException.class,
-            () -> codec.encodeChannelRequestHeader(0, "orders", 0));
-        assertThrows(
-            ZLinkServiceWireException.class,
-            () -> codec.decodeChannelRequestHeader(
-                withTrailingByte(
-                    codec.encodeChannelRequestHeader(1, "orders", 0))));
-        assertThrows(
-            ZLinkServiceWireException.class,
-            () -> codec.encodeReplyHeader(1, 0, 9));
-        assertThrows(
-            ZLinkServiceWireException.class,
-            () -> codec.encodeReplyHeader(1, 101, 9));
-        assertThrows(
-            ZLinkServiceWireException.class,
-            () -> codec.decodeApplicationPayload(
-                withTrailingByte(codec.encodeApplicationPayload(
-                    new ZLinkServiceM6AWireCodec.ApplicationPayload(
-                        "event",
-                        "application/octet-stream",
-                        new byte[] {1})))));
+                ZLinkServiceWireException.class,
+                () ->
+                        codec.decodeApplicationPayload(
+                                withTrailingByte(
+                                        codec.encodeApplicationPayload(
+                                                new ZLinkServiceM6AWireCodec.ApplicationPayload(
+                                                        "event",
+                                                        "application/octet-stream",
+                                                        new byte[] {1})))));
         byte[] invalidRejectReason = codec.encodeReject(1);
         invalidRejectReason[invalidRejectReason.length - 1] = 0;
         assertThrows(
-            ZLinkServiceWireException.class,
-            () -> codec.decodeReject(invalidRejectReason));
+                ZLinkServiceWireException.class, () -> codec.decodeReject(invalidRejectReason));
     }
 
     private static ZLinkServiceNodeDescriptor descriptor(RoutingId source) {
-        return descriptor(
-            source, ZLinkServiceNodeDescriptor.State.SERVING);
+        return descriptor(source, ZLinkServiceNodeDescriptor.State.SERVING);
     }
 
     private static ZLinkServiceNodeDescriptor descriptor(
-        RoutingId source,
-        ZLinkServiceNodeDescriptor.State state) {
+            RoutingId source, ZLinkServiceNodeDescriptor.State state) {
         return new ZLinkServiceNodeDescriptor(
-            "mesh",
-            source,
-            7,
-            11,
-            "tcp://127.0.0.1:3001",
-            List.of(
-                new ZLinkServiceNodeDescriptor.Channel("chat", 50),
-                new ZLinkServiceNodeDescriptor.Channel("orders", 100)),
-            state,
-            "service-a",
-            3,
-            List.of(
-                ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY,
-                "typed-json-v1"),
-            ZLinkServiceNodeDescriptor.ObjectRole.SERVER,
-            80,
-            1000,
-            100,
-            4,
-            2);
+                "mesh",
+                source,
+                7,
+                11,
+                "tcp://127.0.0.1:3001",
+                List.of(
+                        new ZLinkServiceNodeDescriptor.Channel("chat", 50),
+                        new ZLinkServiceNodeDescriptor.Channel("orders", 100)),
+                state,
+                "service-a",
+                3,
+                List.of(ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY, "typed-json-v1"),
+                ZLinkServiceNodeDescriptor.ObjectRole.SERVER,
+                80,
+                1000,
+                100,
+                4,
+                2);
     }
 
     //  GOLDEN — service-wire-v1.schema.json `runtime-state` (u8) is
@@ -485,40 +471,41 @@ final class ZLinkServiceM6AWireCodecTest {
     //  descriptor extension's TLV 1 payload byte.
     @Test
     void goldenRuntimeStatePinsTheSchemaWireValues() {
-        record Case(ZLinkServiceNodeDescriptor.State state, int wire) {
-        }
-        for (Case expected : List.of(
-            new Case(ZLinkServiceNodeDescriptor.State.PREPARING, 0),
-            new Case(ZLinkServiceNodeDescriptor.State.SERVING, 1),
-            new Case(ZLinkServiceNodeDescriptor.State.RETIRING, 2),
-            new Case(ZLinkServiceNodeDescriptor.State.DRAINING, 2),
-            new Case(ZLinkServiceNodeDescriptor.State.STOPPED, 3),
-            new Case(ZLinkServiceNodeDescriptor.State.ERROR, 4))) {
+        record Case(ZLinkServiceNodeDescriptor.State state, int wire) {}
+        for (Case expected :
+                List.of(
+                        new Case(ZLinkServiceNodeDescriptor.State.PREPARING, 0),
+                        new Case(ZLinkServiceNodeDescriptor.State.SERVING, 1),
+                        new Case(ZLinkServiceNodeDescriptor.State.RETIRING, 2),
+                        new Case(ZLinkServiceNodeDescriptor.State.DRAINING, 2),
+                        new Case(ZLinkServiceNodeDescriptor.State.STOPPED, 3),
+                        new Case(ZLinkServiceNodeDescriptor.State.ERROR, 4))) {
             var source = RoutingId.from("node-a");
-            byte[] frame = codec.encodeAdmission(
-                ServiceWireConstants.COMMAND_HELLO,
-                descriptor(source, expected.state()));
+            byte[] frame =
+                    codec.encodeAdmission(
+                            ServiceWireConstants.COMMAND_HELLO,
+                            descriptor(source, expected.state()));
             //  TLV 1 is the first descriptor-extension field: u8 id, u32
             //  length, then the one-byte runtime state.
             int stateIndex = indexOfExtensionTlv(frame, 1);
             assertEquals(
-                expected.wire(),
-                Byte.toUnsignedInt(frame[stateIndex]),
-                "runtime state wire value for " + expected.state());
+                    expected.wire(),
+                    Byte.toUnsignedInt(frame[stateIndex]),
+                    "runtime state wire value for " + expected.state());
         }
 
         //  `retiring` is not a wire value: it never decodes back.
         var source = RoutingId.from("node-a");
         assertEquals(
-            ZLinkServiceNodeDescriptor.State.DRAINING,
-            codec.decodeAdmission(
-                codec.encodeAdmission(
-                    ServiceWireConstants.COMMAND_HELLO,
-                    descriptor(
-                        source,
-                        ZLinkServiceNodeDescriptor.State.RETIRING)),
-                ServiceWireConstants.COMMAND_HELLO,
-                source).state());
+                ZLinkServiceNodeDescriptor.State.DRAINING,
+                codec.decodeAdmission(
+                                codec.encodeAdmission(
+                                        ServiceWireConstants.COMMAND_HELLO,
+                                        descriptor(
+                                                source, ZLinkServiceNodeDescriptor.State.RETIRING)),
+                                ServiceWireConstants.COMMAND_HELLO,
+                                source)
+                        .state());
     }
 
     //  spec 13 §7.1: the lifecycle generation is an OPAQUE CSPRNG equality
@@ -530,37 +517,39 @@ final class ZLinkServiceM6AWireCodecTest {
     @Test
     void admissionAcceptsAnOpaqueLifecycleGenerationWithBit63Set() {
         var source = RoutingId.from("node-a");
-        for (long generation : new long[] {
-            1L,
-            Long.MAX_VALUE,
-            Long.MIN_VALUE,          // 0x8000000000000000
-            -1L,                     // 0xffffffffffffffff
-            0x9e3779b97f4a7c15L}) {
-            var descriptor = new ZLinkServiceNodeDescriptor(
-                "mesh",
-                source,
-                generation,
-                11,
-                "tcp://127.0.0.1:3001",
-                List.of(new ZLinkServiceNodeDescriptor.Channel("chat", 50)),
-                ZLinkServiceNodeDescriptor.State.SERVING,
-                ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
-                3,
-                List.of(ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY),
-                ZLinkServiceNodeDescriptor.ObjectRole.SERVER,
-                80,
-                1000,
-                100,
-                4,
-                2);
+        for (long generation :
+                new long[] {
+                    1L,
+                    Long.MAX_VALUE,
+                    Long.MIN_VALUE, // 0x8000000000000000
+                    -1L, // 0xffffffffffffffff
+                    0x9e3779b97f4a7c15L
+                }) {
+            var descriptor =
+                    new ZLinkServiceNodeDescriptor(
+                            "mesh",
+                            source,
+                            generation,
+                            11,
+                            "tcp://127.0.0.1:3001",
+                            List.of(new ZLinkServiceNodeDescriptor.Channel("chat", 50)),
+                            ZLinkServiceNodeDescriptor.State.SERVING,
+                            ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
+                            3,
+                            List.of(ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY),
+                            ZLinkServiceNodeDescriptor.ObjectRole.SERVER,
+                            80,
+                            1000,
+                            100,
+                            4,
+                            2);
             assertEquals(
-                descriptor,
-                codec.decodeAdmission(
-                    codec.encodeAdmission(
-                        ServiceWireConstants.COMMAND_HELLO, descriptor),
-                    ServiceWireConstants.COMMAND_HELLO,
-                    source),
-                "lifecycle generation " + Long.toUnsignedString(generation));
+                    descriptor,
+                    codec.decodeAdmission(
+                            codec.encodeAdmission(ServiceWireConstants.COMMAND_HELLO, descriptor),
+                            ServiceWireConstants.COMMAND_HELLO,
+                            source),
+                    "lifecycle generation " + Long.toUnsignedString(generation));
         }
     }
 
@@ -570,9 +559,7 @@ final class ZLinkServiceM6AWireCodecTest {
     //  that fences an expected security identity.
     @Test
     void plaintextSecurityIdentityIsTheSharedCrossLanguagePlaceholder() {
-        assertEquals(
-            "default",
-            ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
+        assertEquals("default", ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
     }
 
     /** Offset of the value byte of the first descriptor-extension TLV `id`. */
@@ -584,10 +571,10 @@ final class ZLinkServiceM6AWireCodecTest {
         //  tail.
         for (int index = 10; index + 5 < frame.length; index++) {
             if (Byte.toUnsignedInt(frame[index]) == id
-                && frame[index + 1] == 0
-                && frame[index + 2] == 0
-                && frame[index + 3] == 0
-                && frame[index + 4] == 1) {
+                    && frame[index + 1] == 0
+                    && frame[index + 2] == 0
+                    && frame[index + 3] == 0
+                    && frame[index + 4] == 1) {
                 return index + 5;
             }
         }
@@ -610,10 +597,8 @@ final class ZLinkServiceM6AWireCodecTest {
         assertFalse(ServiceWireConstants.validTerminalFailure(102, 23));
         assertFalse(ServiceWireConstants.validTerminalFailure(102, 99));
         //  The codec enforces the same rule on encode and decode.
-        assertThrows(RuntimeException.class,
-            () -> codec.encodeReplyHeader(1, 104, 3));
-        assertThrows(RuntimeException.class,
-            () -> codec.encodeReplyHeader(1, 102, 18));
+        assertThrows(RuntimeException.class, () -> codec.encodeReplyHeader(1, 104, 3));
+        assertThrows(RuntimeException.class, () -> codec.encodeReplyHeader(1, 102, 18));
     }
 
     @Test
@@ -624,12 +609,13 @@ final class ZLinkServiceM6AWireCodecTest {
         //  ZLinkFrameworkException(PROTOCOL_ERROR): a reply that can't be
         //  processed is a ProtocolError (spec 32-framework-error-model:91-92).
         //  This pins the inheritance that conversion relies on.
-        assertTrue(IllegalArgumentException.class.isAssignableFrom(
-            ZLinkServiceWireException.class));
+        assertTrue(
+                IllegalArgumentException.class.isAssignableFrom(ZLinkServiceWireException.class));
         byte[] reply = codec.encodeReplyHeader(43, 0, 0);
-        ZLinkServiceWireException failure = assertThrows(
-            ZLinkServiceWireException.class,
-            () -> codec.decodeReplyHeader(truncated(reply)));
+        ZLinkServiceWireException failure =
+                assertThrows(
+                        ZLinkServiceWireException.class,
+                        () -> codec.decodeReplyHeader(truncated(reply)));
         assertTrue(failure instanceof IllegalArgumentException);
     }
 
@@ -644,24 +630,20 @@ final class ZLinkServiceM6AWireCodecTest {
     private static byte[] hex(String value) {
         byte[] result = new byte[value.length() / 2];
         for (int index = 0; index < result.length; index++) {
-            result[index] = (byte) Integer.parseInt(
-                value.substring(index * 2, index * 2 + 2), 16);
+            result[index] = (byte) Integer.parseInt(value.substring(index * 2, index * 2 + 2), 16);
         }
         return result;
     }
 
     private static Path sharedMultipartFixturePath() {
-        Path current = Path.of(System.getProperty("user.dir"))
-            .toAbsolutePath();
+        Path current = Path.of(System.getProperty("user.dir")).toAbsolutePath();
         while (current != null) {
-            Path candidate = current.resolve(
-                "runtime/protocol/golden/framework-multipart-v1.json");
+            Path candidate = current.resolve("runtime/protocol/golden/framework-multipart-v1.json");
             if (Files.isRegularFile(candidate)) {
                 return candidate;
             }
             current = current.getParent();
         }
-        throw new IllegalStateException(
-            "shared framework multipart fixture was not found");
+        throw new IllegalStateException("shared framework multipart fixture was not found");
     }
 }

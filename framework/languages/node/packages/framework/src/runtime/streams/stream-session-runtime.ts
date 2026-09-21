@@ -1,14 +1,10 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException  } from '../framework-errors-internal';
-import type {
-  ZLinkMessageSerializer,
-  RoutingId,
-  ZLinkSession
-} from '../../contracts';
-import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
 import {
-  ZLinkFrameworkErrorKind,
-  ZLinkFrameworkException
-} from '../../contracts';
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
+import type { ZLinkMessageSerializer, RoutingId, ZLinkSession } from '../../contracts';
+import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
+import { ZLinkFrameworkErrorKind, ZLinkFrameworkException } from '../../contracts';
 import { ZLinkSocketNativeEventType } from '../diagnostics/internal-event-contracts';
 import {
   ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome,
@@ -130,10 +126,10 @@ export interface ZLinkStreamSessionRuntimeOptions {
   readonly socket: ZLinkBackendStreamSocket;
   readonly nativeSessionService?: StreamSessionService;
   readonly meshCompletions?: ZLinkMeshCompletionTable;
-  readonly nativeSessionRouteForMesh?: (
-    meshName: string
-  ) => ZLinkNativeSessionRoute | undefined;
-  readonly sessionFactory: (context: DefaultZLinkSessionContext) => ZLinkSession | Promise<ZLinkSession>;
+  readonly nativeSessionRouteForMesh?: (meshName: string) => ZLinkNativeSessionRoute | undefined;
+  readonly sessionFactory: (
+    context: DefaultZLinkSessionContext
+  ) => ZLinkSession | Promise<ZLinkSession>;
   readonly bindingRuntime: ZLinkStreamSessionContextFactory;
   readonly providerResolver?: ZLinkProviderResolver;
   readonly onError?: (error: unknown) => void;
@@ -172,7 +168,10 @@ export class ZLinkStreamSessionRuntime {
   constructor(
     private readonly options: ZLinkStreamSessionRuntimeOptions & ZLinkStreamLivenessOptions,
     routingId: unknown,
-    private readonly removeSession: (sessionId: string, session: ZLinkStreamSessionRuntime) => void = () => {}
+    private readonly removeSession: (
+      sessionId: string,
+      session: ZLinkStreamSessionRuntime
+    ) => void = () => {}
   ) {
     this.livenessClock = options.livenessClock ?? systemLivenessClock;
     this.stream = new ZLinkManagedStream(
@@ -198,12 +197,12 @@ export class ZLinkStreamSessionRuntime {
     const sessionOrPromise = options.sessionFactory(this.context);
     this.sessionReady = isPromiseLike(sessionOrPromise)
       ? sessionOrPromise.then(
-        (session) => this.completeSessionCreation(session),
-        (error) => {
-          this.context.completeConfiguration();
-          throw error;
-        }
-      )
+          (session) => this.completeSessionCreation(session),
+          (error) => {
+            this.context.completeConfiguration();
+            throw error;
+          }
+        )
       : Promise.resolve(this.completeSessionCreation(sessionOrPromise));
   }
 
@@ -252,17 +251,19 @@ export class ZLinkStreamSessionRuntime {
     };
     if (decodedHeader.kind === ZLinkStreamMessageKind.Control) {
       if (
-        messageToBytes(payload).length === 0
-        && (decodedHeader.name === ZLINK_STREAM_HEARTBEAT_PONG
-          || decodedHeader.name === ZLINK_STREAM_HEARTBEAT_PING)
+        messageToBytes(payload).length === 0 &&
+        (decodedHeader.name === ZLINK_STREAM_HEARTBEAT_PONG ||
+          decodedHeader.name === ZLINK_STREAM_HEARTBEAT_PING)
       ) {
-        void this.handleControl(decodedHeader, payload).catch(error => {
-          this.options.onError?.(error);
-        }).finally(() => {
-          applicationJobPermit?.releaseAfterInternalProcessing();
-          payload.close();
-          releaseTerminal();
-        });
+        void this.handleControl(decodedHeader, payload)
+          .catch((error) => {
+            this.options.onError?.(error);
+          })
+          .finally(() => {
+            applicationJobPermit?.releaseAfterInternalProcessing();
+            payload.close();
+            releaseTerminal();
+          });
         return;
       }
       this.enqueueControl(
@@ -285,8 +286,8 @@ export class ZLinkStreamSessionRuntime {
       return;
     }
     if (
-      decodedHeader.kind === ZLinkStreamMessageKind.Response
-      || decodedHeader.kind === ZLinkStreamMessageKind.Error
+      decodedHeader.kind === ZLinkStreamMessageKind.Response ||
+      decodedHeader.kind === ZLinkStreamMessageKind.Error
     ) {
       this.enqueueInfrastructure(
         async () => {
@@ -352,13 +353,13 @@ export class ZLinkStreamSessionRuntime {
         if (forcedClose) return;
         this.livenessClock.setTimer(() => {
           if (
-            this.disposed
-            || this.disconnected
-            || !this.context.isExactRetiredActorBinding(actor, retiredSession)
+            this.disposed ||
+            this.disconnected ||
+            !this.context.isExactRetiredActorBinding(actor, retiredSession)
           ) {
             return;
           }
-          void this.close().catch(error => this.options.onError?.(error));
+          void this.close().catch((error) => this.options.onError?.(error));
         }, ZLINK_STREAM_ACTOR_BINDING_REPLACEMENT_CLOSE_DELAY_MS);
       };
       const completeCallback = (): void => {
@@ -380,16 +381,15 @@ export class ZLinkStreamSessionRuntime {
       };
       callbackDeadlineTimer = this.livenessClock.setTimer(() => {
         if (
-          this.disposed
-          || this.disconnected
-          || !this.context.isExactRetiredActorBinding(actor, retiredSession)
+          this.disposed ||
+          this.disconnected ||
+          !this.context.isExactRetiredActorBinding(actor, retiredSession)
         ) {
           return;
         }
         forcedClose = true;
-        void this.close().catch(error => this.options.onError?.(error));
-      }, this.options.replacementCallbackTimeoutMs
-        ?? ZLINK_STREAM_ACTOR_BINDING_REPLACEMENT_CALLBACK_TIMEOUT_MS);
+        void this.close().catch((error) => this.options.onError?.(error));
+      }, this.options.replacementCallbackTimeoutMs ?? ZLINK_STREAM_ACTOR_BINDING_REPLACEMENT_CALLBACK_TIMEOUT_MS);
 
       const callback = session.onActorBindingReplaced;
       if (callback === undefined) {
@@ -400,10 +400,7 @@ export class ZLinkStreamSessionRuntime {
         // Start the callback on this lifecycle turn, but do not retain the
         // serial lane while application code awaits an unrelated operation.
         const result = callback.call(session, this.context, actor.actorId);
-        void Promise.resolve(result).then(
-          () => completeCallback(),
-          reportCallbackFailure
-        );
+        void Promise.resolve(result).then(() => completeCallback(), reportCallbackFailure);
       } catch (error) {
         reportCallbackFailure(error);
       }
@@ -483,73 +480,94 @@ export class ZLinkStreamSessionRuntime {
       this.context.enterDispatch(decodedHeader);
       enteredDispatch = true;
       const session = await this.requireSession();
-      const streamKind = decodedHeader.kind === ZLinkStreamMessageKind.Request
-        ? ZLinkDispatchMessageKind.Request
-        : ZLinkDispatchMessageKind.Send;
+      const streamKind =
+        decodedHeader.kind === ZLinkStreamMessageKind.Request
+          ? ZLinkDispatchMessageKind.Request
+          : ZLinkDispatchMessageKind.Send;
       const streamCorr = decodedHeader.correlationId;
       const inboundHeader = decodedHeader;
-      await runWithFlow(createInboundFlow(
-        inboundHeader.flowId,
-        inboundHeader.flowOrigin,
-        this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
-      ), async () => {
-        flowIfEnabled(this.options.dispatchErrors?.flow, ZLinkMessageFlowOutcome.Received)?.trace({
-          outcome: ZLinkMessageFlowOutcome.Received,
-          surface: ZLinkDispatchErrorSurface.StreamSession,
-          messageKind: streamKind,
-          packetName: inboundHeader.name,
-          correlationId: streamCorr,
-          sourceRid: this.context.routingId === undefined ? undefined : String(this.context.routingId)
-        });
-        flowIfEnabled(this.options.dispatchErrors?.flow, ZLinkMessageFlowOutcome.Admitted)?.trace({
-          outcome: ZLinkMessageFlowOutcome.Admitted,
-          surface: ZLinkDispatchErrorSurface.StreamSession,
-          messageKind: streamKind,
-          packetName: inboundHeader.name,
-          correlationId: streamCorr,
-          sourceRid: this.context.routingId === undefined ? undefined : String(this.context.routingId)
-        });
-        releaseApplicationJobPermitBeforeHandler();
-        flowIfEnabled(this.options.dispatchErrors?.flow, ZLinkMessageFlowOutcome.Dispatched)?.trace({
-          outcome: ZLinkMessageFlowOutcome.Dispatched,
-          surface: ZLinkDispatchErrorSurface.StreamSession,
-          messageKind: streamKind,
-          packetName: inboundHeader.name,
-          correlationId: streamCorr,
-          sourceRid: this.context.routingId === undefined ? undefined : String(this.context.routingId)
-        });
-        await session.onDispatch?.(
-          createSessionDispatchContext(inboundHeader),
-          wrapFrameworkPayloadMessage(
-            dispatchPayload,
-            this.options.messageSerializers,
-            streamCodecContentType(inboundHeader.codec),
-            inboundHeader.name
-          )
-        );
-        if (streamKind === ZLinkDispatchMessageKind.Send) {
-          flowIfEnabled(this.options.dispatchErrors?.flow, ZLinkMessageFlowOutcome.Completed)?.trace({
-            outcome: ZLinkMessageFlowOutcome.Completed,
+      await runWithFlow(
+        createInboundFlow(
+          inboundHeader.flowId,
+          inboundHeader.flowOrigin,
+          this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
+        ),
+        async () => {
+          flowIfEnabled(this.options.dispatchErrors?.flow, ZLinkMessageFlowOutcome.Received)?.trace(
+            {
+              outcome: ZLinkMessageFlowOutcome.Received,
+              surface: ZLinkDispatchErrorSurface.StreamSession,
+              messageKind: streamKind,
+              packetName: inboundHeader.name,
+              correlationId: streamCorr,
+              sourceRid:
+                this.context.routingId === undefined ? undefined : String(this.context.routingId)
+            }
+          );
+          flowIfEnabled(this.options.dispatchErrors?.flow, ZLinkMessageFlowOutcome.Admitted)?.trace(
+            {
+              outcome: ZLinkMessageFlowOutcome.Admitted,
+              surface: ZLinkDispatchErrorSurface.StreamSession,
+              messageKind: streamKind,
+              packetName: inboundHeader.name,
+              correlationId: streamCorr,
+              sourceRid:
+                this.context.routingId === undefined ? undefined : String(this.context.routingId)
+            }
+          );
+          releaseApplicationJobPermitBeforeHandler();
+          flowIfEnabled(
+            this.options.dispatchErrors?.flow,
+            ZLinkMessageFlowOutcome.Dispatched
+          )?.trace({
+            outcome: ZLinkMessageFlowOutcome.Dispatched,
             surface: ZLinkDispatchErrorSurface.StreamSession,
             messageKind: streamKind,
             packetName: inboundHeader.name,
             correlationId: streamCorr,
-            sourceRid: this.context.routingId === undefined ? undefined : String(this.context.routingId)
+            sourceRid:
+              this.context.routingId === undefined ? undefined : String(this.context.routingId)
           });
+          await session.onDispatch?.(
+            createSessionDispatchContext(inboundHeader),
+            wrapFrameworkPayloadMessage(
+              dispatchPayload,
+              this.options.messageSerializers,
+              streamCodecContentType(inboundHeader.codec),
+              inboundHeader.name
+            )
+          );
+          if (streamKind === ZLinkDispatchMessageKind.Send) {
+            flowIfEnabled(
+              this.options.dispatchErrors?.flow,
+              ZLinkMessageFlowOutcome.Completed
+            )?.trace({
+              outcome: ZLinkMessageFlowOutcome.Completed,
+              surface: ZLinkDispatchErrorSurface.StreamSession,
+              messageKind: streamKind,
+              packetName: inboundHeader.name,
+              correlationId: streamCorr,
+              sourceRid:
+                this.context.routingId === undefined ? undefined : String(this.context.routingId)
+            });
+          }
         }
-      });
+      );
     } catch (error) {
       this.options.dispatchErrors?.report({
         surface: ZLinkDispatchErrorSurface.StreamSession,
-        messageKind: decodedHeader.kind === ZLinkStreamMessageKind.Request
-          ? ZLinkDispatchMessageKind.Request
-          : ZLinkDispatchMessageKind.Send,
+        messageKind:
+          decodedHeader.kind === ZLinkStreamMessageKind.Request
+            ? ZLinkDispatchMessageKind.Request
+            : ZLinkDispatchMessageKind.Send,
         reason: ZLinkDispatchErrorReason.HandlerException,
-        action: decodedHeader.requestSeq === undefined
-          ? ZLinkDispatchErrorAction.Drop
-          : ZLinkDispatchErrorAction.ReplyError,
+        action:
+          decodedHeader.requestSeq === undefined
+            ? ZLinkDispatchErrorAction.Drop
+            : ZLinkDispatchErrorAction.ReplyError,
         packetName: decodedHeader.name,
-        sourceRid: this.context.routingId === undefined ? undefined : String(this.context.routingId),
+        sourceRid:
+          this.context.routingId === undefined ? undefined : String(this.context.routingId),
         correlationId: decodedHeader.correlationId,
         flowId: decodedHeader.flowId,
         flowOrigin: decodedHeader.flowOrigin,
@@ -602,7 +620,9 @@ export class ZLinkStreamSessionRuntime {
     this.livenessTimer = this.livenessClock.setTimer(() => {
       this.livenessTimer = undefined;
       this.serial.executeInfrastructure(
-        async () => this.runLivenessCheck(), {}, error => this.options.onError?.(error)
+        async () => this.runLivenessCheck(),
+        {},
+        (error) => this.options.onError?.(error)
       );
     }, ZLINK_STREAM_HEARTBEAT_INTERVAL_MS);
   }
@@ -621,8 +641,8 @@ export class ZLinkStreamSessionRuntime {
       return;
     }
     if (
-      this.awaitingPongSince !== undefined
-      && now - this.awaitingPongSince >= ZLINK_STREAM_HEARTBEAT_TIMEOUT_MS
+      this.awaitingPongSince !== undefined &&
+      now - this.awaitingPongSince >= ZLINK_STREAM_HEARTBEAT_TIMEOUT_MS
     ) {
       await this.closeForLiveness(
         ZLinkStreamCloseReasonCode.HeartbeatTimeout,
@@ -675,11 +695,12 @@ export class ZLinkStreamSessionRuntime {
       new Map(),
       false,
       {
-        code: error instanceof ZLinkFrameworkException
-          ? ZLinkFrameworkErrorKind[error.kind]
-          : error instanceof Error
-            ? error.constructor.name
-            : 'RemoteError',
+        code:
+          error instanceof ZLinkFrameworkException
+            ? ZLinkFrameworkErrorKind[error.kind]
+            : error instanceof Error
+              ? error.constructor.name
+              : 'RemoteError',
         message: error instanceof Error ? error.message : String(error)
       }
     );
@@ -706,17 +727,17 @@ export class ZLinkStreamSessionRuntime {
     packetName: string,
     correlationId: string | undefined
   ): void {
-    const reply = kind === ZLinkStreamMessageKind.Response
-      || kind === ZLinkStreamMessageKind.Error;
+    const reply = kind === ZLinkStreamMessageKind.Response || kind === ZLinkStreamMessageKind.Error;
     const outcome = reply ? ZLinkMessageFlowOutcome.Replied : ZLinkMessageFlowOutcome.Sent;
     flowIfEnabled(this.options.dispatchErrors?.flow, outcome)?.trace({
       outcome,
       surface: ZLinkDispatchErrorSurface.StreamSession,
-      messageKind: kind === ZLinkStreamMessageKind.Response
-        ? ZLinkDispatchMessageKind.Response
-        : kind === ZLinkStreamMessageKind.Error
-          ? ZLinkDispatchMessageKind.Error
-          : ZLinkDispatchMessageKind.Send,
+      messageKind:
+        kind === ZLinkStreamMessageKind.Response
+          ? ZLinkDispatchMessageKind.Response
+          : kind === ZLinkStreamMessageKind.Error
+            ? ZLinkDispatchMessageKind.Error
+            : ZLinkDispatchMessageKind.Send,
       packetName: packetName.length === 0 ? undefined : packetName,
       correlationId,
       sourceRid: this.context.routingId === undefined ? undefined : String(this.context.routingId)
@@ -748,15 +769,17 @@ export class ZLinkStreamSessionRuntime {
     if (this.disconnected || this.disconnectQueued) return;
     this.disconnectQueued = true;
     this.stopLivenessChecks();
-    void this.serial.executeFinal(async () => {
-      this.disconnectQueued = false;
-      if (this.disconnected) return;
-      this.stream.markTransportClosed();
-      this.disconnected = true;
-      await this.complete(error, true);
-    }).catch(() => {
-      this.disconnectQueued = false;
-    });
+    void this.serial
+      .executeFinal(async () => {
+        this.disconnectQueued = false;
+        if (this.disconnected) return;
+        this.stream.markTransportClosed();
+        this.disconnected = true;
+        await this.complete(error, true);
+      })
+      .catch(() => {
+        this.disconnectQueued = false;
+      });
   }
 
   private async cleanup(): Promise<void> {
@@ -808,16 +831,22 @@ export class ZLinkStreamSessionRuntime {
       onRejected?.(error);
       return;
     }
-    if (!this.serial.executeApplication(async () => {
-      try {
-        await work();
-      } finally {
-        claim?.close();
-      }
-    }, {}, () => {
-      claim?.close();
-      onRejected?.();
-    })) {
+    if (
+      !this.serial.executeApplication(
+        async () => {
+          try {
+            await work();
+          } finally {
+            claim?.close();
+          }
+        },
+        {},
+        () => {
+          claim?.close();
+          onRejected?.();
+        }
+      )
+    ) {
       claim?.close();
       // The serial lane only refuses new work after dispose() closed it.
       onShutdownRejected?.();
@@ -854,21 +883,29 @@ export class ZLinkStreamSessionRuntime {
 
 function streamShutdownDropMessageKind(kind: ZLinkStreamMessageKind): ZLinkDispatchMessageKind {
   switch (kind) {
-    case ZLinkStreamMessageKind.Request: return ZLinkDispatchMessageKind.Request;
-    case ZLinkStreamMessageKind.Response: return ZLinkDispatchMessageKind.Response;
-    case ZLinkStreamMessageKind.Error: return ZLinkDispatchMessageKind.Error;
-    case ZLinkStreamMessageKind.Control: return ZLinkDispatchMessageKind.Control;
-    default: return ZLinkDispatchMessageKind.Send;
+    case ZLinkStreamMessageKind.Request:
+      return ZLinkDispatchMessageKind.Request;
+    case ZLinkStreamMessageKind.Response:
+      return ZLinkDispatchMessageKind.Response;
+    case ZLinkStreamMessageKind.Error:
+      return ZLinkDispatchMessageKind.Error;
+    case ZLinkStreamMessageKind.Control:
+      return ZLinkDispatchMessageKind.Control;
+    default:
+      return ZLinkDispatchMessageKind.Send;
   }
 }
 
 export class ZLinkStreamSessionNodeRuntime {
   private readonly sessions = new Map<string, ZLinkStreamSessionRuntime>();
   private readonly availablePackets: ZLinkBackendStreamPacket[] = [];
-  private readonly pendingConnectionMetadata: Array<{
-    readonly localAddr?: string;
-    readonly remoteAddr?: string;
-  } | undefined> = [];
+  private readonly pendingConnectionMetadata: Array<
+    | {
+        readonly localAddr?: string;
+        readonly remoteAddr?: string;
+      }
+    | undefined
+  > = [];
   private pendingConnectionMetadataHead = 0;
   private pendingConnectionMetadataCount = 0;
   private readonly unaddressedMonitorSessions: Array<string | undefined> = [];
@@ -899,21 +936,21 @@ export class ZLinkStreamSessionNodeRuntime {
       return;
     }
     const monitor = this.options.monitor;
-    monitor?.onEvent(event => this.onMonitorEvent(event));
-    const running = this.runReceiveLoop(this.receiveAbortController.signal)
-      .catch((error) => {
-        if (!this.stopped) {
-          this.options.onError?.(error);
-        }
-      });
+    monitor?.onEvent((event) => this.onMonitorEvent(event));
+    const running = this.runReceiveLoop(this.receiveAbortController.signal).catch((error) => {
+      if (!this.stopped) {
+        this.options.onError?.(error);
+      }
+    });
     this.receiveLoop = running;
     if (monitor !== undefined) {
-      this.monitorLoop = this.runMonitorLoop(monitor, this.receiveAbortController.signal)
-        .catch((error) => {
+      this.monitorLoop = this.runMonitorLoop(monitor, this.receiveAbortController.signal).catch(
+        (error) => {
           if (!this.stopped) {
             this.options.onError?.(error);
           }
-        });
+        }
+      );
     }
   }
 
@@ -1046,8 +1083,8 @@ export class ZLinkStreamSessionNodeRuntime {
 
       this.receiveWorkSinceYield += 1;
       if (
-        this.receiveWorkSinceYield >= ZLINK_STREAM_RECEIVE_FRAME_BATCH_LIMIT
-        && !this.isReceiveStopped(signal)
+        this.receiveWorkSinceYield >= ZLINK_STREAM_RECEIVE_FRAME_BATCH_LIMIT &&
+        !this.isReceiveStopped(signal)
       ) {
         this.receiveWorkSinceYield = 0;
         await new Promise<void>((resolve) => setImmediate(resolve));
@@ -1055,10 +1092,7 @@ export class ZLinkStreamSessionNodeRuntime {
     }
   }
 
-  private acceptPacket(
-    packet: ZLinkBackendStreamPacket,
-    permit: ApplicationJobPermitPort
-  ): void {
+  private acceptPacket(packet: ZLinkBackendStreamPacket, permit: ApplicationJobPermitPort): void {
     const routingId = packet.routingId;
     const header = packet.header;
     const body = packet.body;
@@ -1080,16 +1114,17 @@ export class ZLinkStreamSessionNodeRuntime {
         this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
       );
       payload = ownedMessage(body.data());
-      const terminalCompletion = decodedHeader.kind === ZLinkStreamMessageKind.Response
-        || decodedHeader.kind === ZLinkStreamMessageKind.Error;
+      const terminalCompletion =
+        decodedHeader.kind === ZLinkStreamMessageKind.Response ||
+        decodedHeader.kind === ZLinkStreamMessageKind.Error;
       const applicationPermit = terminalCompletion ? undefined : permit;
       if (terminalCompletion) {
         permit.releaseAfterInternalProcessing();
         releasePermitOnFailure = false;
       } else {
         if (
-          decodedHeader.kind === ZLinkStreamMessageKind.Send
-          || decodedHeader.kind === ZLinkStreamMessageKind.Request
+          decodedHeader.kind === ZLinkStreamMessageKind.Send ||
+          decodedHeader.kind === ZLinkStreamMessageKind.Request
         ) {
           permit.markApplicationQueued();
         }
@@ -1184,7 +1219,10 @@ export class ZLinkStreamSessionNodeRuntime {
           this.pendingConnectionMetadataCount += 1;
           return;
         }
-        this.getOrCreateSession(event.routingId)?.enqueueConnected(event.localAddr, event.remoteAddr);
+        this.getOrCreateSession(event.routingId)?.enqueueConnected(
+          event.localAddr,
+          event.remoteAddr
+        );
         return;
       case ZLinkSocketNativeEventType.Disconnected:
         {
@@ -1197,10 +1235,7 @@ export class ZLinkStreamSessionNodeRuntime {
             session.enqueueDisconnected(error);
             return;
           }
-          if (
-            event.routingId === undefined
-            && !streamMonitorHasEndpoint(event)
-          ) {
+          if (event.routingId === undefined && !streamMonitorHasEndpoint(event)) {
             this.enqueueEndpointlessDisconnect(error);
           }
         }
@@ -1212,37 +1247,47 @@ export class ZLinkStreamSessionNodeRuntime {
 
   private applyPendingConnectionMetadata(session: ZLinkStreamSessionRuntime): void {
     if (
-      session.stream.localAddr !== undefined
-      || session.stream.remoteAddr !== undefined
-      || this.pendingConnectionMetadataCount === 0
+      session.stream.localAddr !== undefined ||
+      session.stream.remoteAddr !== undefined ||
+      this.pendingConnectionMetadataCount === 0
     ) {
       return;
     }
     const metadata = this.takePendingConnectionMetadata();
     if (metadata === undefined) return;
-    this.removePendingConnectionMetadata(streamMonitorEndpointKey(metadata.localAddr, metadata.remoteAddr));
+    this.removePendingConnectionMetadata(
+      streamMonitorEndpointKey(metadata.localAddr, metadata.remoteAddr)
+    );
     session.enqueueConnected(metadata.localAddr, metadata.remoteAddr);
     this.enqueueUnaddressedMonitorSession(session.stream.sessionId);
   }
 
   private hasPendingConnectionMetadata(endpointKey: string): boolean {
-    for (let index = this.pendingConnectionMetadataHead; index < this.pendingConnectionMetadata.length; index += 1) {
+    for (
+      let index = this.pendingConnectionMetadataHead;
+      index < this.pendingConnectionMetadata.length;
+      index += 1
+    ) {
       const metadata = this.pendingConnectionMetadata[index];
-      if (metadata !== undefined
-        && streamMonitorEndpointKey(metadata.localAddr, metadata.remoteAddr) === endpointKey) {
+      if (
+        metadata !== undefined &&
+        streamMonitorEndpointKey(metadata.localAddr, metadata.remoteAddr) === endpointKey
+      ) {
         return true;
       }
     }
     return false;
   }
 
-  private takePendingConnectionMetadata(): {
-    readonly localAddr?: string;
-    readonly remoteAddr?: string;
-  } | undefined {
+  private takePendingConnectionMetadata():
+    | {
+        readonly localAddr?: string;
+        readonly remoteAddr?: string;
+      }
+    | undefined {
     while (
-      this.pendingConnectionMetadataHead < this.pendingConnectionMetadata.length
-      && this.pendingConnectionMetadata[this.pendingConnectionMetadataHead] === undefined
+      this.pendingConnectionMetadataHead < this.pendingConnectionMetadata.length &&
+      this.pendingConnectionMetadata[this.pendingConnectionMetadataHead] === undefined
     ) {
       this.pendingConnectionMetadataHead += 1;
     }
@@ -1259,8 +1304,10 @@ export class ZLinkStreamSessionNodeRuntime {
     if (this.pendingConnectionMetadataCount === 0) {
       this.pendingConnectionMetadata.length = 0;
       this.pendingConnectionMetadataHead = 0;
-    } else if (this.pendingConnectionMetadataHead >= 1024
-      && this.pendingConnectionMetadataHead * 2 >= this.pendingConnectionMetadata.length) {
+    } else if (
+      this.pendingConnectionMetadataHead >= 1024 &&
+      this.pendingConnectionMetadataHead * 2 >= this.pendingConnectionMetadata.length
+    ) {
       this.pendingConnectionMetadata.splice(0, this.pendingConnectionMetadataHead);
       this.pendingConnectionMetadataHead = 0;
     }
@@ -1273,8 +1320,8 @@ export class ZLinkStreamSessionNodeRuntime {
 
   private takeUnaddressedMonitorSession(): string | undefined {
     while (
-      this.unaddressedMonitorSessionHead < this.unaddressedMonitorSessions.length
-      && this.unaddressedMonitorSessions[this.unaddressedMonitorSessionHead] === undefined
+      this.unaddressedMonitorSessionHead < this.unaddressedMonitorSessions.length &&
+      this.unaddressedMonitorSessions[this.unaddressedMonitorSessionHead] === undefined
     ) {
       this.unaddressedMonitorSessionHead += 1;
     }
@@ -1286,8 +1333,10 @@ export class ZLinkStreamSessionNodeRuntime {
     if (this.unaddressedMonitorSessionCount === 0) {
       this.unaddressedMonitorSessions.length = 0;
       this.unaddressedMonitorSessionHead = 0;
-    } else if (this.unaddressedMonitorSessionHead >= 1024
-      && this.unaddressedMonitorSessionHead * 2 >= this.unaddressedMonitorSessions.length) {
+    } else if (
+      this.unaddressedMonitorSessionHead >= 1024 &&
+      this.unaddressedMonitorSessionHead * 2 >= this.unaddressedMonitorSessions.length
+    ) {
       this.unaddressedMonitorSessions.splice(0, this.unaddressedMonitorSessionHead);
       this.unaddressedMonitorSessionHead = 0;
     }
@@ -1296,9 +1345,11 @@ export class ZLinkStreamSessionNodeRuntime {
 
   private firstUnaddressedSession(): ZLinkStreamSessionRuntime | undefined {
     for (const session of this.sessions.values()) {
-      if (!session.isDisconnected
-        && session.stream.localAddr === undefined
-        && session.stream.remoteAddr === undefined) {
+      if (
+        !session.isDisconnected &&
+        session.stream.localAddr === undefined &&
+        session.stream.remoteAddr === undefined
+      ) {
         return session;
       }
     }
@@ -1314,7 +1365,11 @@ export class ZLinkStreamSessionNodeRuntime {
   }
 
   private removePendingConnectionMetadata(endpointKey: string): void {
-    for (let index = this.pendingConnectionMetadataHead; index < this.pendingConnectionMetadata.length; index += 1) {
+    for (
+      let index = this.pendingConnectionMetadataHead;
+      index < this.pendingConnectionMetadata.length;
+      index += 1
+    ) {
       const metadata = this.pendingConnectionMetadata[index];
       if (metadata === undefined) continue;
       if (streamMonitorEndpointKey(metadata.localAddr, metadata.remoteAddr) === endpointKey) {
@@ -1325,7 +1380,9 @@ export class ZLinkStreamSessionNodeRuntime {
     this.compactPendingConnectionMetadata();
   }
 
-  private resolveMonitorSession(event: ZLinkBackendSocketMonitorEvent): ZLinkStreamSessionRuntime | undefined {
+  private resolveMonitorSession(
+    event: ZLinkBackendSocketMonitorEvent
+  ): ZLinkStreamSessionRuntime | undefined {
     if (event.routingId !== undefined) {
       const session = this.getActiveSession(streamSessionIdFromRoutingId(event.routingId));
       if (session !== undefined) {
@@ -1336,9 +1393,11 @@ export class ZLinkStreamSessionNodeRuntime {
       let match: ZLinkStreamSessionRuntime | undefined;
       let matchCount = 0;
       for (const session of this.sessions.values()) {
-        if (session.isDisconnected
-          || session.stream.localAddr !== event.localAddr
-          || session.stream.remoteAddr !== event.remoteAddr) {
+        if (
+          session.isDisconnected ||
+          session.stream.localAddr !== event.localAddr ||
+          session.stream.remoteAddr !== event.remoteAddr
+        ) {
           continue;
         }
         match = session;
@@ -1382,11 +1441,11 @@ export class ZLinkStreamSessionNodeRuntime {
     this.wakeReceiveLoop();
     setImmediate(() => {
       if (
-        pending.cancelled
-        || this.stopped
-        || this.pendingEndpointlessDisconnect !== pending
-        || this.activityVersion !== pending.activityVersion
-        || this.sessions.get(pending.session.stream.sessionId) !== pending.session
+        pending.cancelled ||
+        this.stopped ||
+        this.pendingEndpointlessDisconnect !== pending ||
+        this.activityVersion !== pending.activityVersion ||
+        this.sessions.get(pending.session.stream.sessionId) !== pending.session
       ) {
         return;
       }
@@ -1425,15 +1484,11 @@ export class ZLinkStreamSessionNodeRuntime {
       void rejected.closeForDrain().catch((error) => this.options.onError?.(error));
       return undefined;
     }
-    const created = new ZLinkStreamSessionRuntime(
-      this.options,
-      routingId,
-      (sessionId, session) => {
-        if (this.sessions.get(sessionId) === session) {
-          this.sessions.delete(sessionId);
-        }
+    const created = new ZLinkStreamSessionRuntime(this.options, routingId, (sessionId, session) => {
+      if (this.sessions.get(sessionId) === session) {
+        this.sessions.delete(sessionId);
       }
-    );
+    });
     this.sessions.set(sessionId, created);
     return created;
   }
@@ -1444,7 +1499,10 @@ function monitorIdleDelayMs(misses: number): number {
   return Math.min(scaled, ZLINK_STREAM_MONITOR_IDLE_MAX_DELAY_MS);
 }
 
-function streamMonitorEndpointKey(localAddr: string | undefined, remoteAddr: string | undefined): string {
+function streamMonitorEndpointKey(
+  localAddr: string | undefined,
+  remoteAddr: string | undefined
+): string {
   return `${localAddr ?? ''}\n${remoteAddr ?? ''}`;
 }
 

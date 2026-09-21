@@ -28,36 +28,36 @@ module systems.zlink.framework {
     // Companion artifacts use these implementation contracts. They are not
     // exported to application modules.
     exports systems.zlink.framework.runtime.internal.backend to
-        zlink.framework.spring.boot.starter,
-        zlink.framework.testkit;
+            zlink.framework.spring.boot.starter,
+            zlink.framework.testkit;
     exports systems.zlink.framework.runtime.internal.diagnostics to
-        zlink.framework.kotlin;
+            zlink.framework.kotlin;
     exports systems.zlink.framework.runtime.internal.handlers to
-        zlink.framework.spring.boot.starter,
-        zlink.framework.kotlin;
+            zlink.framework.spring.boot.starter,
+            zlink.framework.kotlin;
     exports systems.zlink.framework.runtime.internal.host to
-        zlink.framework.spring.boot.starter;
+            zlink.framework.spring.boot.starter;
     exports systems.zlink.framework.runtime.internal.metrics to
-        zlink.framework.spring.boot.starter;
+            zlink.framework.spring.boot.starter;
     exports systems.zlink.framework.runtime.internal.monitoring to
-        zlink.framework.spring.boot.starter;
+            zlink.framework.spring.boot.starter;
     exports systems.zlink.framework.runtime.binding to
-        zlink.framework.spring.boot.starter;
+            zlink.framework.spring.boot.starter;
     exports systems.zlink.framework.runtime.actors to
-        zlink.framework.testkit;
+            zlink.framework.testkit;
     exports systems.zlink.framework.runtime.configuration to
-        zlink.framework.spring.boot.starter;
+            zlink.framework.spring.boot.starter;
     exports systems.zlink.framework.runtime.handlers to
-        zlink.framework.spring.boot.starter;
+            zlink.framework.spring.boot.starter;
     exports systems.zlink.framework.runtime.locations to
-        zlink.framework.spring.boot.starter;
+            zlink.framework.spring.boot.starter;
     exports systems.zlink.framework.runtime.mesh to
-        zlink.framework.spring.boot.starter;
+            zlink.framework.spring.boot.starter;
     exports systems.zlink.framework.runtime.spots to
-        zlink.framework.spring.boot.starter;
+            zlink.framework.spring.boot.starter;
     exports systems.zlink.framework.runtime.streams to
-        zlink.framework.spring.boot.starter,
-        zlink.framework.testkit;
+            zlink.framework.spring.boot.starter,
+            zlink.framework.testkit;
 
     uses systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
     uses systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;

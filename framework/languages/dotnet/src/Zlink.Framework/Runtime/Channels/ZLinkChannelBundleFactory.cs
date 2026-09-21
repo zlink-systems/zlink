@@ -2,13 +2,13 @@ using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 
 namespace Zlink.Framework.Runtime.Channels;
 
-internal sealed class ZLinkChannelBundleFactory(
-    ZLinkFrameworkRegistration registration)
+internal sealed class ZLinkChannelBundleFactory(ZLinkFrameworkRegistration registration)
 {
     public async ValueTask<ZLinkChannelRuntimeBundle> CreateClientServerClientBundleAsync(
         ZLinkFrameworkComponentState state,
         string channelName,
-        ZLinkChannelRegistration channel)
+        ZLinkChannelRegistration channel
+    )
     {
         IDealerSocket? dealer = null;
         ZLinkChannelRuntimeBundle? bundle = null;
@@ -22,25 +22,32 @@ internal sealed class ZLinkChannelBundleFactory(
                 dealer.Connect,
                 dealer.Disconnect,
                 socketRole: "client",
-                receiveFlowRegistration:
-                    state.ApplicationJobQueue.RegisterReceiveFlowSocket(dealer));
+                receiveFlowRegistration: state.ApplicationJobQueue.RegisterReceiveFlowSocket(dealer)
+            );
 
-            bundle.OwnManualConnectionAttachment(channel.Client.ManualConnections.Attach(
-                bundle.ConnectManual,
-                bundle.DisconnectManual));
+            bundle.OwnManualConnectionAttachment(
+                channel.Client.ManualConnections.Attach(
+                    bundle.ConnectManual,
+                    bundle.DisconnectManual
+                )
+            );
             return bundle;
         }
         catch (Exception initializationFailure)
         {
-            await ThrowAfterCleanupAsync(initializationFailure, bundle, dealer).ConfigureAwait(false);
-            throw new InvalidOperationException("Unreachable after startup cleanup failure propagation.");
+            await ThrowAfterCleanupAsync(initializationFailure, bundle, dealer)
+                .ConfigureAwait(false);
+            throw new InvalidOperationException(
+                "Unreachable after startup cleanup failure propagation."
+            );
         }
     }
 
     public async ValueTask<ZLinkChannelRuntimeBundle> CreateClientServerServerBundleAsync(
         ZLinkFrameworkComponentState state,
         string channelName,
-        ZLinkChannelRegistration channel)
+        ZLinkChannelRegistration channel
+    )
     {
         IRouterSocket? router = null;
         ZLinkChannelRuntimeBundle? bundle = null;
@@ -53,13 +60,15 @@ internal sealed class ZLinkChannelBundleFactory(
             ApplySocketConfig(router.Options, channel.Server!.SocketConfig);
             router.Options.Mandatory = true;
             router.Options.Handover = true;
-            receiveFlowRegistration =
-                state.ApplicationJobQueue.RegisterReceiveFlowSocket(router);
-            router.Bind(ZLinkNetworkEndpointResolver.Bind(
-                explicitEndpoint: null,
-                channel.Server.ListenPort,
-                channel.Server.BindHost,
-                registration.NetworkOptions));
+            receiveFlowRegistration = state.ApplicationJobQueue.RegisterReceiveFlowSocket(router);
+            router.Bind(
+                ZLinkNetworkEndpointResolver.Bind(
+                    explicitEndpoint: null,
+                    channel.Server.ListenPort,
+                    channel.Server.BindHost,
+                    registration.NetworkOptions
+                )
+            );
             var actualEndpoint = router.Options.LastEndpoint;
             var identity = new ZLinkClientServerServerIdentity(
                 channelName,
@@ -68,33 +77,41 @@ internal sealed class ZLinkChannelBundleFactory(
                 ZLinkTransportSecurityIdentity.Plaintext,
                 channel.Server.SocketConfig.Weight,
                 ZLinkClientServerControlProtocol.NormalizeMaximumMessageBytes(
-                    channel.Server.SocketConfig.MaxMessageSize),
+                    channel.Server.SocketConfig.MaxMessageSize
+                ),
                 ZLinkNetworkEndpointResolver.Advertise(
                     actualEndpoint,
                     channel.Server.AdvertiseHost,
                     channel.Server.BindHost,
-                    registration.NetworkOptions));
+                    registration.NetworkOptions
+                )
+            );
             bundle = new ZLinkChannelRuntimeBundle(
                 router,
                 localRid: serverRid,
                 socketRole: "server",
                 clientServerServer: identity,
-                receiveFlowRegistration: receiveFlowRegistration);
+                receiveFlowRegistration: receiveFlowRegistration
+            );
             receiveFlowRegistration = null;
             return bundle;
         }
         catch (Exception initializationFailure)
         {
             receiveFlowRegistration?.Dispose();
-            await ThrowAfterCleanupAsync(initializationFailure, bundle, router).ConfigureAwait(false);
-            throw new InvalidOperationException("Unreachable after startup cleanup failure propagation.");
+            await ThrowAfterCleanupAsync(initializationFailure, bundle, router)
+                .ConfigureAwait(false);
+            throw new InvalidOperationException(
+                "Unreachable after startup cleanup failure propagation."
+            );
         }
     }
 
     public async ValueTask<ZLinkChannelRuntimeBundle> CreateSubscriberBundleAsync(
         ZLinkFrameworkComponentState state,
         string channelName,
-        ZLinkChannelRegistration channel)
+        ZLinkChannelRegistration channel
+    )
     {
         ISubSocket? subscriber = null;
         ZLinkChannelRuntimeBundle? bundle = null;
@@ -111,34 +128,40 @@ internal sealed class ZLinkChannelBundleFactory(
                 // destination and therefore is not written to the native socket.
             }
 
-            ZLinkFanoutSubscriptionPolicy.Apply(
-                subscriber,
-                channel.Subscriber.Topics);
+            ZLinkFanoutSubscriptionPolicy.Apply(subscriber, channel.Subscriber.Topics);
             bundle = new ZLinkChannelRuntimeBundle(
                 subscriber,
                 subscriber.Connect,
                 subscriber.Disconnect,
                 localRid: localRid,
-                socketRole: "sub");
+                socketRole: "sub"
+            );
 
             if (channel.Subscriber.AcquisitionMode == ZLinkPeerAcquisitionMode.Manual)
-                bundle.OwnManualConnectionAttachment(channel.Subscriber.ManualConnections.Attach(
-                    bundle.ConnectManual,
-                    bundle.DisconnectManual));
+                bundle.OwnManualConnectionAttachment(
+                    channel.Subscriber.ManualConnections.Attach(
+                        bundle.ConnectManual,
+                        bundle.DisconnectManual
+                    )
+                );
 
             return bundle;
         }
         catch (Exception initializationFailure)
         {
-            await ThrowAfterCleanupAsync(initializationFailure, bundle, subscriber).ConfigureAwait(false);
-            throw new InvalidOperationException("Unreachable after startup cleanup failure propagation.");
+            await ThrowAfterCleanupAsync(initializationFailure, bundle, subscriber)
+                .ConfigureAwait(false);
+            throw new InvalidOperationException(
+                "Unreachable after startup cleanup failure propagation."
+            );
         }
     }
 
     public async ValueTask<ZLinkChannelRuntimeBundle> CreatePublisherBundleAsync(
         ZLinkFrameworkComponentState state,
         string channelName,
-        ZLinkChannelRegistration channel)
+        ZLinkChannelRegistration channel
+    )
     {
         IPubSocket? publisher = null;
         ZLinkChannelRuntimeBundle? bundle = null;
@@ -146,9 +169,11 @@ internal sealed class ZLinkChannelBundleFactory(
         {
             publisher = state.Context.CreatePublisherSocket();
             ApplyPublisherSocketConfig(publisher.Options, channel);
-            var publisherRegistration = channel.Publisher
+            var publisherRegistration =
+                channel.Publisher
                 ?? throw new InvalidOperationException(
-                    "Publisher registration is required to create its socket.");
+                    "Publisher registration is required to create its socket."
+                );
             var localRid = ResolvePublisherRid(channelName, publisherRegistration);
             publisher.Bind(ResolvePublisherBindEndpoint(publisherRegistration));
             var publisherIdentity = new ZLinkFanoutPublisherIdentity(
@@ -159,50 +184,57 @@ internal sealed class ZLinkChannelBundleFactory(
                     publisher.Options.LastEndpoint,
                     publisherRegistration.AdvertiseHost,
                     publisherRegistration.BindHost,
-                    registration.NetworkOptions));
+                    registration.NetworkOptions
+                )
+            );
             bundle = new ZLinkChannelRuntimeBundle(
                 socket: publisher,
                 localRid: localRid,
                 socketRole: "pub",
-                fanoutPublisher: publisherIdentity);
+                fanoutPublisher: publisherIdentity
+            );
 
             return bundle;
         }
         catch (Exception initializationFailure)
         {
-            await ThrowAfterCleanupAsync(initializationFailure, bundle, publisher).ConfigureAwait(false);
-            throw new InvalidOperationException("Unreachable after startup cleanup failure propagation.");
+            await ThrowAfterCleanupAsync(initializationFailure, bundle, publisher)
+                .ConfigureAwait(false);
+            throw new InvalidOperationException(
+                "Unreachable after startup cleanup failure propagation."
+            );
         }
     }
 
     private static RoutingId ResolvePublisherRid(
         string channelName,
-        ZLinkChannelPublisherCapabilityRegistration publisher)
+        ZLinkChannelPublisherCapabilityRegistration publisher
+    )
     {
         if (publisher.FixedRoutingId.Size > 0)
             return publisher.FixedRoutingId;
-        return ZLinkFanoutRoutingIdPolicy.Create(
-            publisher.RoutingIdPrefix ?? channelName);
+        return ZLinkFanoutRoutingIdPolicy.Create(publisher.RoutingIdPrefix ?? channelName);
     }
 
     private string ResolvePublisherBindEndpoint(
-        ZLinkChannelPublisherCapabilityRegistration publisher) =>
+        ZLinkChannelPublisherCapabilityRegistration publisher
+    ) =>
         ZLinkNetworkEndpointResolver.Bind(
             publisher.BindEndpoint,
             publisher.ListenPort,
             publisher.BindHost,
-            registration.NetworkOptions);
+            registration.NetworkOptions
+        );
 
-    internal static void ApplySocketConfig(
-        CommonSocketOptions socket,
-        IZLinkSocketConfig config)
+    internal static void ApplySocketConfig(CommonSocketOptions socket, IZLinkSocketConfig config)
     {
         ZLinkBackendSocketOptionsMapper.Apply(socket, config);
     }
 
     internal static void ApplyPublisherSocketConfig(
         PubSocketOptions socket,
-        ZLinkChannelRegistration channel)
+        ZLinkChannelRegistration channel
+    )
     {
         ApplySocketConfig(socket, channel.Publisher!.SocketConfig);
         socket.NoDrop = channel.PublisherNoDrop.GetValueOrDefault();
@@ -215,8 +247,7 @@ internal sealed class ZLinkChannelBundleFactory(
         do
         {
             System.Security.Cryptography.RandomNumberGenerator.Fill(bytes);
-            value = System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(
-                bytes);
+            value = System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(bytes);
         } while (value is 0 or > long.MaxValue);
         return value;
     }
@@ -224,7 +255,8 @@ internal sealed class ZLinkChannelBundleFactory(
     private static async ValueTask ThrowAfterCleanupAsync(
         Exception initializationFailure,
         IAsyncDisposable? composite,
-        IAsyncDisposable? standalone)
+        IAsyncDisposable? standalone
+    )
     {
         var failures = new ZLinkFailureCollector(initializationFailure);
         if (composite is not null)
@@ -233,5 +265,4 @@ internal sealed class ZLinkChannelBundleFactory(
             await failures.CaptureAsync(standalone.DisposeAsync).ConfigureAwait(false);
         failures.ThrowIfAny();
     }
-
 }

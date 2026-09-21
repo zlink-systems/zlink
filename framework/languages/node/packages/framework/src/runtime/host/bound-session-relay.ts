@@ -1,8 +1,6 @@
 import type { ActorRef } from '../../contracts';
 import type { ZLinkBackendActorSessionNode } from '../backend';
-import {
-  type ZLinkActorRoutedJoinTransport
-} from '../actors';
+import { type ZLinkActorRoutedJoinTransport } from '../actors';
 import type { DefaultZLinkActorManager } from '../actors';
 import type { DefaultZLinkSpotManager, ZLinkSpotNodeRuntimeManager } from '../spots';
 import type { ZLinkDetachedTaskRunner } from '../spots/spot-actor-join-dispatch';
@@ -23,8 +21,9 @@ export interface ZLinkBoundSessionRelayOptions {
   readonly requestTimeoutMs?: number;
   readonly sessionRelocationSealTimeoutMs: number;
   readonly routeTransport: ZLinkActorRoutedJoinTransport;
-  readonly streamBindingRuntime: () =>
-    ZLinkBoundSessionResponsePort & ZLinkRemoteBoundSessionPort & ZLinkStreamActorLookupPort;
+  readonly streamBindingRuntime: () => ZLinkBoundSessionResponsePort &
+    ZLinkRemoteBoundSessionPort &
+    ZLinkStreamActorLookupPort;
   readonly meshRouters: MeshRouterResolver;
   readonly actorManager: () => DefaultZLinkActorManager | undefined;
   readonly spotManager: () => DefaultZLinkSpotManager | undefined;
@@ -76,10 +75,9 @@ export class ZLinkBoundSessionRelay {
       actorPacketTargetForState: (actorId, routerChannelIdHint) =>
         this.actorPackets.actorPacketTargetForState(actorId, routerChannelIdHint),
       reportOwnershipRefreshError: (actorId, error) =>
-        options.errorSink().reportRuntimeTaskException(
-          `bound session ownership refresh for '${actorId}'`,
-          error
-        )
+        options
+          .errorSink()
+          .reportRuntimeTaskException(`bound session ownership refresh for '${actorId}'`, error)
     });
     this.actorJoins = new ZLinkRemoteActorJoinReceiver({
       actorManager: options.actorManager,

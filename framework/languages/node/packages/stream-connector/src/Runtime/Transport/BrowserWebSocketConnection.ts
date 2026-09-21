@@ -30,7 +30,7 @@ interface BrowserWebSocket {
 }
 
 interface BrowserWebSocketConstructor {
-  new(url: string): BrowserWebSocket;
+  new (url: string): BrowserWebSocket;
 }
 
 export class BrowserStreamTransportFactory implements ZlinkStreamTransportFactory {
@@ -39,7 +39,8 @@ export class BrowserStreamTransportFactory implements ZlinkStreamTransportFactor
     signal?: AbortSignal
   ): Promise<ZlinkStreamConnection> {
     throwIfAborted(signal);
-    const WebSocketConstructor = (globalThis as { WebSocket?: BrowserWebSocketConstructor }).WebSocket;
+    const WebSocketConstructor = (globalThis as { WebSocket?: BrowserWebSocketConstructor })
+      .WebSocket;
     if (WebSocketConstructor === undefined) {
       throw connectorError(
         ZlinkStreamErrorCode.ConfigurationError,
@@ -114,9 +115,14 @@ export class BrowserWebSocketConnection implements ZlinkStreamConnection {
       const message = toUint8Array(event.data);
       this.messages.push(message);
     } catch (cause) {
-      this.error = cause instanceof Error
-        ? cause
-        : connectorError(ZlinkStreamErrorCode.FrameDecodeFailed, 'WebSocket message decode failed.', cause);
+      this.error =
+        cause instanceof Error
+          ? cause
+          : connectorError(
+              ZlinkStreamErrorCode.FrameDecodeFailed,
+              'WebSocket message decode failed.',
+              cause
+            );
       this.closed = true;
       this.socket.close();
     }
@@ -125,21 +131,30 @@ export class BrowserWebSocketConnection implements ZlinkStreamConnection {
 
   private readonly onClose = (): void => {
     if (!this.closed) {
-      this.error = connectorError(ZlinkStreamErrorCode.Disconnected, 'Remote stream closed the WebSocket connection.');
+      this.error = connectorError(
+        ZlinkStreamErrorCode.Disconnected,
+        'Remote stream closed the WebSocket connection.'
+      );
     }
     this.closed = true;
     this.wakeReader();
   };
 
   private readonly onError = (): void => {
-    this.error = connectorError(ZlinkStreamErrorCode.Disconnected, 'Remote stream closed after a WebSocket error.');
+    this.error = connectorError(
+      ZlinkStreamErrorCode.Disconnected,
+      'Remote stream closed after a WebSocket error.'
+    );
     this.closed = true;
     this.wakeReader();
   };
 
   private waitForMessage(signal: AbortSignal | undefined): Promise<void> {
     if (this.readWaiter !== undefined) {
-      throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Only one pending stream read is supported.');
+      throw connectorError(
+        ZlinkStreamErrorCode.ValidationFailed,
+        'Only one pending stream read is supported.'
+      );
     }
     return new Promise((resolve, reject) => {
       const onAbort = () => {
@@ -193,7 +208,8 @@ function waitForClose(socket: BrowserWebSocket, signal: AbortSignal | undefined)
   if (socket.readyState === 3) return Promise.resolve();
   return new Promise((resolve, reject) => {
     const onClose = () => finish();
-    const onAbort = () => finish(connectorError(ZlinkStreamErrorCode.Disconnected, 'Close canceled.'));
+    const onAbort = () =>
+      finish(connectorError(ZlinkStreamErrorCode.Disconnected, 'Close canceled.'));
     const finish = (error?: Error) => {
       socket.removeEventListener('close', onClose);
       signal?.removeEventListener('abort', onAbort);
@@ -212,13 +228,17 @@ async function waitForOpen(
 ): Promise<void> {
   throwIfAborted(signal);
   await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => finish(
-      connectorError(ZlinkStreamErrorCode.ConnectTimeout, 'Connect timed out.')
-    ), connectTimeoutMs);
+    const timeout = setTimeout(
+      () => finish(connectorError(ZlinkStreamErrorCode.ConnectTimeout, 'Connect timed out.')),
+      connectTimeoutMs
+    );
     const onOpen = () => finish();
-    const onClose = () => finish(connectorError(ZlinkStreamErrorCode.ConnectTimeout, 'Connect closed before opening.'));
-    const onError = () => finish(connectorError(ZlinkStreamErrorCode.ConnectTimeout, 'Connect failed.'));
-    const onAbort = () => finish(connectorError(ZlinkStreamErrorCode.Disconnected, 'Connect canceled.'));
+    const onClose = () =>
+      finish(connectorError(ZlinkStreamErrorCode.ConnectTimeout, 'Connect closed before opening.'));
+    const onError = () =>
+      finish(connectorError(ZlinkStreamErrorCode.ConnectTimeout, 'Connect failed.'));
+    const onAbort = () =>
+      finish(connectorError(ZlinkStreamErrorCode.Disconnected, 'Connect canceled.'));
     const finish = (error?: Error) => {
       clearTimeout(timeout);
       socket.removeEventListener('open', onOpen);
@@ -246,5 +266,8 @@ function toUint8Array(data: unknown): Uint8Array {
   if (ArrayBuffer.isView(data)) {
     return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
   }
-  throw connectorError(ZlinkStreamErrorCode.FrameDecodeFailed, 'WebSocket text messages are not supported.');
+  throw connectorError(
+    ZlinkStreamErrorCode.FrameDecodeFailed,
+    'WebSocket text messages are not supported.'
+  );
 }

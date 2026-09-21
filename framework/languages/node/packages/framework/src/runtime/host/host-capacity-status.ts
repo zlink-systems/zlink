@@ -33,9 +33,7 @@ export class HostCapacityStatusProjection {
   }
 }
 
-function projectApplicationJobQueue(
-  queue: ApplicationJobQueue
-): ZLinkApplicationJobQueueStatus {
+function projectApplicationJobQueue(queue: ApplicationJobQueue): ZLinkApplicationJobQueueStatus {
   const snapshot = queue.snapshot();
   return Object.freeze({
     configuredProfile: snapshot.configuredProfile as ZLinkApplicationJobQueueProfile,
@@ -83,8 +81,7 @@ function projectCoreHwm(
     totalInstanceAccountedBytes: snapshot?.totalInstanceAccountedBytes ?? 0n,
     blockedRatioPpm: BigInt(Math.trunc(snapshot?.blockedRatioPpm ?? 0)),
     activeDirectionalQueueCount: snapshot?.activeDirectionalQueueCount ?? 0n,
-    activeCompletionDirectionalQueueCount:
-      snapshot?.activeCompletionDirectionalQueueCount ?? 0n,
+    activeCompletionDirectionalQueueCount: snapshot?.activeCompletionDirectionalQueueCount ?? 0n,
     activeSendQueueCount: snapshot?.activeSendQueueCount ?? 0n,
     activeReceiveQueueCount: snapshot?.activeReceiveQueueCount ?? 0n,
     outstandingApplicationLeaseCount: snapshot?.outstandingApplicationLeaseCount ?? 0n,
@@ -95,9 +92,13 @@ function projectCoreHwm(
 
 function projectCoreProfile(value: AutoHwmProfileValue | undefined): ZLinkCoreHwmProfile {
   switch (value ?? AutoHwmProfile.Balanced) {
-    case AutoHwmProfile.Compact: return ZLinkCoreHwmProfile.Compact;
-    case AutoHwmProfile.LowLatency: return ZLinkCoreHwmProfile.LowLatency;
-    case AutoHwmProfile.Throughput: return ZLinkCoreHwmProfile.Throughput;
-    default: return ZLinkCoreHwmProfile.Balanced;
+    case AutoHwmProfile.Compact:
+      return ZLinkCoreHwmProfile.Compact;
+    case AutoHwmProfile.LowLatency:
+      return ZLinkCoreHwmProfile.LowLatency;
+    case AutoHwmProfile.Throughput:
+      return ZLinkCoreHwmProfile.Throughput;
+    default:
+      return ZLinkCoreHwmProfile.Balanced;
   }
 }

@@ -10,8 +10,8 @@ internal sealed class ZlinkStreamConnectorLifecycle(
     ZlinkStreamConnectorCallbacks callbacks,
     Func<CancellationToken, ValueTask<IZlinkStreamConnection>> connectTransport,
     Action<long> onConnectionEstablished,
-    Action onConnectionEnded)
-    : IDisposable
+    Action onConnectionEnded
+) : IDisposable
 {
     /// <summary>
     ///     Lower bound of the reconnect jitter window: the loop waits between this share of
@@ -63,7 +63,8 @@ internal sealed class ZlinkStreamConnectorLifecycle(
     {
         get
         {
-            lock (_gate) return _lastCloseReason;
+            lock (_gate)
+                return _lastCloseReason;
         }
     }
 
@@ -80,7 +81,8 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         Func<CancellationToken, Task> runReceiveLoop,
         Func<CancellationToken, ValueTask> sendHeartbeatPing,
         Action throwIfDisposed,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         Task? waitTask;
         long observedConnectionGeneration;
@@ -90,13 +92,17 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         {
             throwIfDisposed();
             if (_state == ZlinkStreamConnectionState.Closed)
-                throw new ObjectDisposedException(nameof(ZlinkStreamConnector), "Connector is closed.");
+                throw new ObjectDisposedException(
+                    nameof(ZlinkStreamConnector),
+                    "Connector is closed."
+                );
 
             _runReceiveLoop = runReceiveLoop;
             _sendHeartbeatPing = sendHeartbeatPing;
             observedConnectionGeneration = _connectionGeneration;
 
-            if (_state == ZlinkStreamConnectionState.Connected) return;
+            if (_state == ZlinkStreamConnectionState.Connected)
+                return;
 
             if (_activeConnectTask is not null)
             {
@@ -105,7 +111,9 @@ internal sealed class ZlinkStreamConnectorLifecycle(
             else
             {
                 change = SetStateLocked(ZlinkStreamConnectionState.Connecting, null);
-                activeConnectStart = CreateActiveConnectTask(() => ConnectOnceAsync(cancellationToken));
+                activeConnectStart = CreateActiveConnectTask(() =>
+                    ConnectOnceAsync(cancellationToken)
+                );
                 waitTask = activeConnectStart.Value.Task;
                 _activeConnectTask = waitTask;
                 _startActiveConnect = activeConnectStart.Value.Start;
@@ -126,9 +134,14 @@ internal sealed class ZlinkStreamConnectorLifecycle(
 
         lock (_gate)
         {
-            if (_state == ZlinkStreamConnectionState.Closed
-                && _connectionGeneration == observedConnectionGeneration)
-                throw new ObjectDisposedException(nameof(ZlinkStreamConnector), "Connector is closed.");
+            if (
+                _state == ZlinkStreamConnectionState.Closed
+                && _connectionGeneration == observedConnectionGeneration
+            )
+                throw new ObjectDisposedException(
+                    nameof(ZlinkStreamConnector),
+                    "Connector is closed."
+                );
         }
     }
 
@@ -149,23 +162,28 @@ internal sealed class ZlinkStreamConnectorLifecycle(
                 _startActiveConnect = null;
                 // Closing an established connection is itself a close reason, and the
                 // read surface must show it after the fact (stream-connector spec §6.2).
-                if (snapshot.Connection is not null) _lastCloseReason = ZlinkStreamCloseReason.ClientClose;
+                if (snapshot.Connection is not null)
+                    _lastCloseReason = ZlinkStreamCloseReason.ClientClose;
                 var change = SetStateLocked(ZlinkStreamConnectionState.Closed, null);
 
-                startClose = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                startClose = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously
+                );
                 _closeTask = RunFullCloseAsync(
                     startClose.Task,
                     snapshot,
                     activeConnectTask,
                     startActiveConnect,
-                    change);
+                    change
+                );
             }
 
             closeTask = _closeTask;
         }
 
         startClose?.TrySetResult();
-        if (!isReentrant) await closeTask.WaitAsync(cancellationToken).ConfigureAwait(false);
+        if (!isReentrant)
+            await closeTask.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private async Task RunFullCloseAsync(
@@ -173,7 +191,8 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         LifecycleSnapshot snapshot,
         Task? activeConnectTask,
         Action? startActiveConnect,
-        ZlinkStreamConnectionStateChanged? change)
+        ZlinkStreamConnectionStateChanged? change
+    )
     {
         await started.ConfigureAwait(false);
         using var work = EnterWorker(ZlinkStreamLifecycleWorkKind.CloseCompletion);
@@ -183,14 +202,17 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         Exception? closeException = null;
         try
         {
-            await CloseConnectionAsync(snapshot.Connection, CancellationToken.None).ConfigureAwait(false);
+            await CloseConnectionAsync(snapshot.Connection, CancellationToken.None)
+                .ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             closeException = ex;
         }
 
-        pending.FailAll(new ZlinkStreamError(ZlinkStreamErrorCode.Disconnected, "Connector closed."));
+        pending.FailAll(
+            new ZlinkStreamError(ZlinkStreamErrorCode.Disconnected, "Connector closed.")
+        );
         // Spec §10.1.1: closing the connector ends the connection a wait was observing,
         // and the wait ends with it.
         onConnectionEnded();
@@ -203,7 +225,8 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         if (snapshot.Connection is not null)
             StartDisconnectNotification(ZlinkStreamCloseReason.ClientClose);
 
-        if (closeException is not null) ExceptionDispatchInfo.Capture(closeException).Throw();
+        if (closeException is not null)
+            ExceptionDispatchInfo.Capture(closeException).Throw();
     }
 
     /// <summary>
@@ -240,7 +263,8 @@ internal sealed class ZlinkStreamConnectorLifecycle(
 
     public async ValueTask HandleTransportErrorAsync(
         ZlinkStreamError error,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         await callbacks.PublishErrorAsync(error, cancellationToken).ConfigureAwait(false);
         await HandleDisconnectAsync(error, cancellationToken).ConfigureAwait(false);
@@ -249,11 +273,13 @@ internal sealed class ZlinkStreamConnectorLifecycle(
     public ValueTask HandleServerCloseAsync(
         ZlinkStreamCloseReason closeReason,
         string? diagnostic,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         var error = new ZlinkStreamError(
             ZlinkStreamErrorCode.Disconnected,
-            diagnostic ?? $"Server closed the stream session ({closeReason}).");
+            diagnostic ?? $"Server closed the stream session ({closeReason})."
+        );
         return HandleDisconnectAsync(error, cancellationToken, closeReason);
     }
 
@@ -267,8 +293,10 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             await TransitionToDisconnectedAsync(
-                new ZlinkStreamError(ZlinkStreamErrorCode.Disconnected, "Connect canceled."),
-                CancellationToken.None).ConfigureAwait(false);
+                    new ZlinkStreamError(ZlinkStreamErrorCode.Disconnected, "Connect canceled."),
+                    CancellationToken.None
+                )
+                .ConfigureAwait(false);
             throw;
         }
         catch (Exception ex) when (ex is not ZlinkStreamException)
@@ -287,11 +315,13 @@ internal sealed class ZlinkStreamConnectorLifecycle(
     private async Task ReconnectLoopAsync()
     {
         var reconnect = options.Reconnect;
-        if (!reconnect.Enabled) return;
+        if (!reconnect.Enabled)
+            return;
 
-        var baseDelay = reconnect.InitialDelay <= reconnect.MaxDelay
-            ? reconnect.InitialDelay
-            : reconnect.MaxDelay;
+        var baseDelay =
+            reconnect.InitialDelay <= reconnect.MaxDelay
+                ? reconnect.InitialDelay
+                : reconnect.MaxDelay;
         var attempt = 0;
         ZlinkStreamError? lastError = null;
 
@@ -302,12 +332,14 @@ internal sealed class ZlinkStreamConnectorLifecycle(
                 // Clients that all dropped together must not all come back at the same
                 // instant, so the wait is a random point in the lower half of the base
                 // delay's range (stream-connector spec §6).
-                await Task.Delay(ApplyReconnectJitter(baseDelay), _closeCts.Token).ConfigureAwait(false);
+                await Task.Delay(ApplyReconnectJitter(baseDelay), _closeCts.Token)
+                    .ConfigureAwait(false);
                 attempt++;
 
                 try
                 {
-                    var connection = await OpenConnectionAsync(_closeCts.Token).ConfigureAwait(false);
+                    var connection = await OpenConnectionAsync(_closeCts.Token)
+                        .ConfigureAwait(false);
                     await AttachConnectionAsync(connection, _closeCts.Token).ConfigureAwait(false);
                     return;
                 }
@@ -316,7 +348,8 @@ internal sealed class ZlinkStreamConnectorLifecycle(
                     lastError = ex is ZlinkStreamException streamException
                         ? streamException.Error
                         : MapConnectException(ex, _closeCts.Token);
-                    await callbacks.PublishErrorAsync(lastError, CancellationToken.None)
+                    await callbacks
+                        .PublishErrorAsync(lastError, CancellationToken.None)
                         .ConfigureAwait(false);
 
                     if (reconnect.MaxAttempts is { } maxAttempts && attempt >= maxAttempts)
@@ -324,7 +357,8 @@ internal sealed class ZlinkStreamConnectorLifecycle(
                         // The attempts are spent: the state settles at Disconnected and
                         // the registered disconnect handlers run (spec §6). A configuration
                         // with unlimited attempts never reaches this point.
-                        await TransitionToDisconnectedAsync(lastError, CancellationToken.None).ConfigureAwait(false);
+                        await TransitionToDisconnectedAsync(lastError, CancellationToken.None)
+                            .ConfigureAwait(false);
                         StartDisconnectNotification(LastCloseReason ?? MapCloseReason(lastError));
                         throw new ZlinkStreamException(lastError);
                     }
@@ -333,9 +367,7 @@ internal sealed class ZlinkStreamConnectorLifecycle(
                 }
             }
         }
-        catch (OperationCanceledException) when (_closeCts.IsCancellationRequested)
-        {
-        }
+        catch (OperationCanceledException) when (_closeCts.IsCancellationRequested) { }
         catch (ObjectDisposedException) when (_closeCts.IsCancellationRequested)
         {
             // Close won the race after the transport connected but before the
@@ -344,36 +376,54 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         }
     }
 
-    private async ValueTask<IZlinkStreamConnection> OpenConnectionAsync(CancellationToken cancellationToken)
+    private async ValueTask<IZlinkStreamConnection> OpenConnectionAsync(
+        CancellationToken cancellationToken
+    )
     {
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _closeCts.Token);
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            _closeCts.Token
+        );
         timeoutCts.CancelAfter(options.ConnectTimeout);
 
         try
         {
             return await connectTransport(timeoutCts.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested &&
-                                                    !_closeCts.IsCancellationRequested)
+        catch (OperationCanceledException ex)
+            when (!cancellationToken.IsCancellationRequested && !_closeCts.IsCancellationRequested)
         {
-            throw ZlinkStreamConnector.Error(ZlinkStreamErrorCode.ConnectTimeout, "Connect timed out.", ex);
+            throw ZlinkStreamConnector.Error(
+                ZlinkStreamErrorCode.ConnectTimeout,
+                "Connect timed out.",
+                ex
+            );
         }
         catch (AuthenticationException ex)
         {
-            throw ZlinkStreamConnector.Error(ZlinkStreamErrorCode.TlsValidationFailed, "TLS validation failed.", ex);
+            throw ZlinkStreamConnector.Error(
+                ZlinkStreamErrorCode.TlsValidationFailed,
+                "TLS validation failed.",
+                ex
+            );
         }
     }
 
-    private async ValueTask AttachConnectionAsync(IZlinkStreamConnection connection,
-        CancellationToken cancellationToken)
+    private async ValueTask AttachConnectionAsync(
+        IZlinkStreamConnection connection,
+        CancellationToken cancellationToken
+    )
     {
         // _runReceiveLoop is assigned under the gate, so it is read under the gate too.
         Func<CancellationToken, Task> runReceiveLoop;
         lock (_gate)
         {
-            runReceiveLoop = _runReceiveLoop
-                             ?? throw ZlinkStreamConnector.Error(ZlinkStreamErrorCode.ConfigurationError,
-                                 "Receive loop is not configured.");
+            runReceiveLoop =
+                _runReceiveLoop
+                ?? throw ZlinkStreamConnector.Error(
+                    ZlinkStreamErrorCode.ConfigurationError,
+                    "Receive loop is not configured."
+                );
         }
 
         var sessionCts = CancellationTokenSource.CreateLinkedTokenSource(_closeCts.Token);
@@ -415,10 +465,16 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         long establishedGeneration;
         lock (_gate)
         {
-            if (!ReferenceEquals(_connection, connection) || !ReferenceEquals(_sessionCts, sessionCts))
+            if (
+                !ReferenceEquals(_connection, connection)
+                || !ReferenceEquals(_sessionCts, sessionCts)
+            )
             {
                 if (_state == ZlinkStreamConnectionState.Closed)
-                    throw new ObjectDisposedException(nameof(ZlinkStreamConnector), "Connector is closed.");
+                    throw new ObjectDisposedException(
+                        nameof(ZlinkStreamConnector),
+                        "Connector is closed."
+                    );
 
                 return;
             }
@@ -437,26 +493,33 @@ internal sealed class ZlinkStreamConnectorLifecycle(
 
         lock (_gate)
         {
-            if (!ReferenceEquals(_connection, connection) || !ReferenceEquals(_sessionCts, sessionCts))
+            if (
+                !ReferenceEquals(_connection, connection)
+                || !ReferenceEquals(_sessionCts, sessionCts)
+            )
             {
                 if (_state == ZlinkStreamConnectionState.Closed)
-                    throw new ObjectDisposedException(nameof(ZlinkStreamConnector), "Connector is closed.");
+                    throw new ObjectDisposedException(
+                        nameof(ZlinkStreamConnector),
+                        "Connector is closed."
+                    );
 
                 return;
             }
 
-            _receiveTask = taskRunner.Run(
-                _ => new ValueTask(RunReceiveLoopGuardedAsync(runReceiveLoop, sessionCts.Token)));
+            _receiveTask = taskRunner.Run(_ => new ValueTask(
+                RunReceiveLoopGuardedAsync(runReceiveLoop, sessionCts.Token)
+            ));
             _heartbeatTask = options.Heartbeat.Enabled
-                ? taskRunner.Run(
-                    _ => new ValueTask(RunHeartbeatLoopAsync(sessionCts.Token)))
+                ? taskRunner.Run(_ => new ValueTask(RunHeartbeatLoopAsync(sessionCts.Token)))
                 : null;
         }
     }
 
     private async Task RunReceiveLoopGuardedAsync(
         Func<CancellationToken, Task> runReceiveLoop,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         using var work = EnterWorker(ZlinkStreamLifecycleWorkKind.Receive);
         try
@@ -469,19 +532,29 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         }
         catch (Exception ex)
         {
-            if (cancellationToken.IsCancellationRequested) return;
+            if (cancellationToken.IsCancellationRequested)
+                return;
 
             var error = ex is ZlinkStreamException streamException
                 ? streamException.Error
-                : new ZlinkStreamError(ZlinkStreamErrorCode.FrameDecodeFailed, "Receive loop failed.", ex);
+                : new ZlinkStreamError(
+                    ZlinkStreamErrorCode.FrameDecodeFailed,
+                    "Receive loop failed.",
+                    ex
+                );
             await HandleTransportErrorAsync(error, CancellationToken.None).ConfigureAwait(false);
             return;
         }
 
         if (!cancellationToken.IsCancellationRequested)
             await HandleDisconnectAsync(
-                new ZlinkStreamError(ZlinkStreamErrorCode.Disconnected, "Connector disconnected."),
-                CancellationToken.None).ConfigureAwait(false);
+                    new ZlinkStreamError(
+                        ZlinkStreamErrorCode.Disconnected,
+                        "Connector disconnected."
+                    ),
+                    CancellationToken.None
+                )
+                .ConfigureAwait(false);
     }
 
     private async Task RunHeartbeatLoopAsync(CancellationToken cancellationToken)
@@ -494,24 +567,28 @@ internal sealed class ZlinkStreamConnectorLifecycle(
             sendHeartbeatPing = _sendHeartbeatPing;
         }
 
-        await _heartbeat.RunAsync(
-                sendHeartbeatPing,
-                HandleTransportErrorAsync,
-                cancellationToken)
+        await _heartbeat
+            .RunAsync(sendHeartbeatPing, HandleTransportErrorAsync, cancellationToken)
             .ConfigureAwait(false);
     }
 
     private async ValueTask HandleDisconnectAsync(
         ZlinkStreamError error,
         CancellationToken cancellationToken,
-        ZlinkStreamCloseReason? explicitCloseReason = null)
+        ZlinkStreamCloseReason? explicitCloseReason = null
+    )
     {
         LifecycleSnapshot snapshot;
         ZlinkStreamConnectionStateChanged? change;
         ActiveConnectStart? reconnectStart = null;
         lock (_gate)
         {
-            if (_state is ZlinkStreamConnectionState.Closed or ZlinkStreamConnectionState.Disconnected) return;
+            if (
+                _state
+                is ZlinkStreamConnectionState.Closed
+                    or ZlinkStreamConnectionState.Disconnected
+            )
+                return;
 
             snapshot = DetachLocked();
             _lastCloseReason = explicitCloseReason ?? MapCloseReason(error);
@@ -534,7 +611,8 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         Capture(() => snapshot.SessionCts?.Cancel());
         try
         {
-            await CloseConnectionAsync(snapshot.Connection, CancellationToken.None).ConfigureAwait(false);
+            await CloseConnectionAsync(snapshot.Connection, CancellationToken.None)
+                .ConfigureAwait(false);
         }
         catch (Exception exception)
         {
@@ -542,7 +620,8 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         }
 
         Capture(() => snapshot.SessionCts?.Dispose());
-        await CaptureAsync(() => NotifyStateChangedAsync(change, CancellationToken.None)).ConfigureAwait(false);
+        await CaptureAsync(() => NotifyStateChangedAsync(change, CancellationToken.None))
+            .ConfigureAwait(false);
         Capture(() => pending.FailAll(GetPendingDisconnectError(error)));
         // Spec §10.1.1: a wait is released when the connection it observed ends, here,
         // and not when the reconnect that may follow establishes the next one.
@@ -552,9 +631,12 @@ internal sealed class ZlinkStreamConnectorLifecycle(
 
         if (closeFailure is not null && terminalFailures is not null)
             throw new AggregateException([closeFailure, .. terminalFailures]);
-        if (closeFailure is not null) ExceptionDispatchInfo.Capture(closeFailure).Throw();
-        if (terminalFailures is { Count: 1 }) ExceptionDispatchInfo.Capture(terminalFailures[0]).Throw();
-        if (terminalFailures is { Count: > 1 }) throw new AggregateException(terminalFailures);
+        if (closeFailure is not null)
+            ExceptionDispatchInfo.Capture(closeFailure).Throw();
+        if (terminalFailures is { Count: 1 })
+            ExceptionDispatchInfo.Capture(terminalFailures[0]).Throw();
+        if (terminalFailures is { Count: > 1 })
+            throw new AggregateException(terminalFailures);
         return;
 
         async ValueTask CaptureAsync(Func<ValueTask> operation)
@@ -582,12 +664,16 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         }
     }
 
-    private async ValueTask TransitionToDisconnectedAsync(ZlinkStreamError error, CancellationToken cancellationToken)
+    private async ValueTask TransitionToDisconnectedAsync(
+        ZlinkStreamError error,
+        CancellationToken cancellationToken
+    )
     {
         ZlinkStreamConnectionStateChanged? change;
         lock (_gate)
         {
-            if (_state == ZlinkStreamConnectionState.Closed) return;
+            if (_state == ZlinkStreamConnectionState.Closed)
+                return;
 
             // A first connect that never reached Connected still leaves a reason behind,
             // so callers can tell how the attempt ended (stream-connector spec §6.2).
@@ -604,8 +690,10 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         if (error.Code == ZlinkStreamErrorCode.FrameDecodeFailed)
             return ZlinkStreamCloseReason.ProtocolError;
 
-        if (error.Message.Contains("heartbeat", StringComparison.OrdinalIgnoreCase)
-            && error.Message.Contains("timeout", StringComparison.OrdinalIgnoreCase))
+        if (
+            error.Message.Contains("heartbeat", StringComparison.OrdinalIgnoreCase)
+            && error.Message.Contains("timeout", StringComparison.OrdinalIgnoreCase)
+        )
             return ZlinkStreamCloseReason.HeartbeatTimeout;
 
         return ZlinkStreamCloseReason.TransportError;
@@ -613,7 +701,12 @@ internal sealed class ZlinkStreamConnectorLifecycle(
 
     private LifecycleSnapshot DetachLocked()
     {
-        var snapshot = new LifecycleSnapshot(_connection, _sessionCts, _receiveTask, _heartbeatTask);
+        var snapshot = new LifecycleSnapshot(
+            _connection,
+            _sessionCts,
+            _receiveTask,
+            _heartbeatTask
+        );
         _connection = null;
         _sessionCts = null;
         _receiveTask = null;
@@ -623,9 +716,11 @@ internal sealed class ZlinkStreamConnectorLifecycle(
 
     private ZlinkStreamConnectionStateChanged? SetStateLocked(
         ZlinkStreamConnectionState next,
-        ZlinkStreamError? error)
+        ZlinkStreamError? error
+    )
     {
-        if (_state == next) return null;
+        if (_state == next)
+            return null;
 
         var previous = _state;
         _state = next;
@@ -634,9 +729,11 @@ internal sealed class ZlinkStreamConnectorLifecycle(
 
     private ValueTask NotifyStateChangedAsync(
         ZlinkStreamConnectionStateChanged? change,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        if (change is null) return ValueTask.CompletedTask;
+        if (change is null)
+            return ValueTask.CompletedTask;
 
         var notification = callbacks.NotifyConnectionStateChangedAsync(change, cancellationToken);
         if (notification.IsCompleted)
@@ -654,25 +751,24 @@ internal sealed class ZlinkStreamConnectorLifecycle(
 
     private static async ValueTask CloseConnectionAsync(
         IZlinkStreamConnection? connection,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        if (connection is not null) await connection.CloseAsync(cancellationToken).ConfigureAwait(false);
+        if (connection is not null)
+            await connection.CloseAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private static async ValueTask WaitBackgroundTaskAsync(Task? task)
     {
-        if (task is null) return;
+        if (task is null)
+            return;
 
         try
         {
             await task.ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
-        {
-        }
-        catch (ZlinkStreamException)
-        {
-        }
+        catch (OperationCanceledException) { }
+        catch (ZlinkStreamException) { }
     }
 
     private ActiveConnectStart CreateActiveConnectTask(Func<Task> run)
@@ -686,7 +782,8 @@ internal sealed class ZlinkStreamConnectorLifecycle(
     private async Task RunActiveConnectTaskAsync(
         Task started,
         Func<Task> run,
-        Func<Task?> currentTask)
+        Func<Task?> currentTask
+    )
     {
         await started.ConfigureAwait(false);
         using var work = EnterWorker(ZlinkStreamLifecycleWorkKind.ActiveConnect);
@@ -702,16 +799,21 @@ internal sealed class ZlinkStreamConnectorLifecycle(
 
     private void ClearActiveConnectTask(Task? task)
     {
-        if (task is null) return;
+        if (task is null)
+            return;
 
         ActiveConnectStart? reconnectStart = null;
         lock (_gate)
         {
-            if (!ReferenceEquals(_activeConnectTask, task)) return;
+            if (!ReferenceEquals(_activeConnectTask, task))
+                return;
 
             _activeConnectTask = null;
             _startActiveConnect = null;
-            if (_state == ZlinkStreamConnectionState.Reconnecting && !_closeCts.IsCancellationRequested)
+            if (
+                _state == ZlinkStreamConnectionState.Reconnecting
+                && !_closeCts.IsCancellationRequested
+            )
             {
                 reconnectStart = CreateActiveConnectTask(ReconnectLoopAsync);
                 _activeConnectTask = reconnectStart.Value.Task;
@@ -729,19 +831,29 @@ internal sealed class ZlinkStreamConnectorLifecycle(
             static completed => _ = completed.Exception,
             CancellationToken.None,
             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
+            TaskScheduler.Default
+        );
     }
 
-    private static ZlinkStreamError MapConnectException(Exception ex, CancellationToken cancellationToken)
+    private static ZlinkStreamError MapConnectException(
+        Exception ex,
+        CancellationToken cancellationToken
+    )
     {
         return ex switch
         {
             OperationCanceledException canceled when !cancellationToken.IsCancellationRequested =>
-                new ZlinkStreamError(ZlinkStreamErrorCode.ConnectTimeout, "Connect timed out.", canceled),
-            AuthenticationException authentication =>
-                new ZlinkStreamError(ZlinkStreamErrorCode.TlsValidationFailed, "TLS validation failed.",
-                    authentication),
-            _ => new ZlinkStreamError(ZlinkStreamErrorCode.Disconnected, "Connect failed.", ex)
+                new ZlinkStreamError(
+                    ZlinkStreamErrorCode.ConnectTimeout,
+                    "Connect timed out.",
+                    canceled
+                ),
+            AuthenticationException authentication => new ZlinkStreamError(
+                ZlinkStreamErrorCode.TlsValidationFailed,
+                "TLS validation failed.",
+                authentication
+            ),
+            _ => new ZlinkStreamError(ZlinkStreamErrorCode.Disconnected, "Connect failed.", ex),
         };
     }
 
@@ -752,10 +864,14 @@ internal sealed class ZlinkStreamConnectorLifecycle(
     ///     The base delay is the deterministic part of the schedule. What the loop actually
     ///     waits is <see cref="ApplyReconnectJitter" /> of this value.
     /// </remarks>
-    private static TimeSpan NextReconnectDelay(TimeSpan current, ZlinkStreamReconnectOptions options)
+    private static TimeSpan NextReconnectDelay(
+        TimeSpan current,
+        ZlinkStreamReconnectOptions options
+    )
     {
         var nextMilliseconds = current.TotalMilliseconds * options.BackoffFactor;
-        if (nextMilliseconds >= options.MaxDelay.TotalMilliseconds) return options.MaxDelay;
+        if (nextMilliseconds >= options.MaxDelay.TotalMilliseconds)
+            return options.MaxDelay;
 
         return TimeSpan.FromMilliseconds(nextMilliseconds);
     }
@@ -775,7 +891,8 @@ internal sealed class ZlinkStreamConnectorLifecycle(
     /// <param name="sample">A value in [0, 1).</param>
     internal static TimeSpan ScaleReconnectDelay(TimeSpan baseDelay, double sample)
     {
-        if (baseDelay <= TimeSpan.Zero) return TimeSpan.Zero;
+        if (baseDelay <= TimeSpan.Zero)
+            return TimeSpan.Zero;
 
         var factor = ReconnectJitterFloor + ((1.0 - ReconnectJitterFloor) * sample);
         return TimeSpan.FromTicks((long)(baseDelay.Ticks * factor));
@@ -785,14 +902,19 @@ internal sealed class ZlinkStreamConnectorLifecycle(
     {
         return cause.Code == ZlinkStreamErrorCode.Disconnected
             ? cause
-            : new ZlinkStreamError(ZlinkStreamErrorCode.Disconnected, "Connector disconnected.", cause.Exception);
+            : new ZlinkStreamError(
+                ZlinkStreamErrorCode.Disconnected,
+                "Connector disconnected.",
+                cause.Exception
+            );
     }
 
     private readonly record struct LifecycleSnapshot(
         IZlinkStreamConnection? Connection,
         CancellationTokenSource? SessionCts,
         Task? ReceiveTask,
-        Task? HeartbeatTask);
+        Task? HeartbeatTask
+    );
 
     private readonly record struct ActiveConnectStart(Task Task, Action Start);
 }

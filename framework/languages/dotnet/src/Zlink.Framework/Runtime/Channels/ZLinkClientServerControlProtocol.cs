@@ -24,7 +24,8 @@ internal static class ZLinkClientServerControlProtocol
     internal sealed record Hello(
         string ChannelName,
         string SecurityIdentity,
-        uint NormalizedEffectiveMaxMessageBytes);
+        uint NormalizedEffectiveMaxMessageBytes
+    );
 
     internal sealed record Admission(
         string ChannelName,
@@ -35,7 +36,8 @@ internal static class ZLinkClientServerControlProtocol
         ZLinkFrameworkRuntimeState State,
         string SecurityIdentity,
         uint NormalizedEffectiveMaxMessageBytes,
-        string AdvertisedEndpoint);
+        string AdvertisedEndpoint
+    );
 
     internal static Message EncodeHello(Hello hello)
     {
@@ -47,11 +49,11 @@ internal static class ZLinkClientServerControlProtocol
         return EncodeAdmission(HelloCommand, ClientRole, role);
     }
 
-    internal static Message EncodeAdmission(Admission admission)
-        => EncodeServerAdmission(AdmitCommand, admission);
+    internal static Message EncodeAdmission(Admission admission) =>
+        EncodeServerAdmission(AdmitCommand, admission);
 
-    internal static Message EncodeUpdate(Admission admission)
-        => EncodeServerAdmission(UpdateCommand, admission);
+    internal static Message EncodeUpdate(Admission admission) =>
+        EncodeServerAdmission(UpdateCommand, admission);
 
     internal static Message EncodeLivenessProbe(ulong probeId) =>
         EncodeLiveness(LivenessProbeCommand, probeId);
@@ -59,13 +61,13 @@ internal static class ZLinkClientServerControlProtocol
     internal static Message EncodeLivenessAck(ulong probeId) =>
         EncodeLiveness(LivenessAckCommand, probeId);
 
-    private static Message EncodeServerAdmission(
-        byte command,
-        Admission admission)
+    private static Message EncodeServerAdmission(byte command, Admission admission)
     {
-        if (admission.LifecycleGeneration == 0
+        if (
+            admission.LifecycleGeneration == 0
             || admission.DescriptorRevision == 0
-            || admission.Weight is < 0 or > ZLinkSocketConfig.MaximumPeerWeight)
+            || admission.Weight is < 0 or > ZLinkSocketConfig.MaximumPeerWeight
+        )
             throw new ArgumentOutOfRangeException(nameof(admission));
         var role = new Writer();
         role.Text8(admission.ChannelName);
@@ -96,10 +98,7 @@ internal static class ZLinkClientServerControlProtocol
         if (parts.Count == 0)
             return false;
         var span = parts[0].AsReadOnlyMemory().Span;
-        return span.Length >= 3
-            && span[0] == Magic0
-            && span[1] == Magic1
-            && span[2] == WireMajor;
+        return span.Length >= 3 && span[0] == Magic0 && span[1] == Magic1 && span[2] == WireMajor;
     }
 
     // C++ retains "default" as the wire spelling for an unauthenticated
@@ -108,31 +107,27 @@ internal static class ZLinkClientServerControlProtocol
     // exact-match only.
     internal static bool SecurityIdentityMatches(string expected, string actual) =>
         string.Equals(expected, actual, StringComparison.Ordinal)
-        || (string.Equals(expected, "plaintext", StringComparison.Ordinal)
-            && string.Equals(actual, "default", StringComparison.Ordinal));
+        || (
+            string.Equals(expected, "plaintext", StringComparison.Ordinal)
+            && string.Equals(actual, "default", StringComparison.Ordinal)
+        );
 
     private static string ToWireSecurityIdentity(string identity) =>
-        string.Equals(identity, "plaintext", StringComparison.Ordinal)
-            ? "default"
-            : identity;
+        string.Equals(identity, "plaintext", StringComparison.Ordinal) ? "default" : identity;
 
-    internal static bool TryDecodeHello(
-        IReadOnlyList<Message> parts,
-        out Hello? hello)
+    internal static bool TryDecodeHello(IReadOnlyList<Message> parts, out Hello? hello)
     {
         hello = null;
-        if (!TryOpenAdmission(
-                parts,
-                HelloCommand,
-                ClientRole,
-                out var reader)
+        if (
+            !TryOpenAdmission(parts, HelloCommand, ClientRole, out var reader)
             || !reader.TryText8(out var channelName)
             || !reader.TryU8(out var direction)
             || direction != ClientToServerDirection
             || !reader.TryText8(out var securityIdentity)
             || !reader.TryU32(out var maximum)
             || maximum == 0
-            || reader.Remaining != 0)
+            || reader.Remaining != 0
+        )
             return false;
         hello = new Hello(channelName, securityIdentity, maximum);
         return true;
@@ -140,35 +135,27 @@ internal static class ZLinkClientServerControlProtocol
 
     internal static bool TryDecodeAdmission(
         IReadOnlyList<Message> parts,
-        out Admission? admission)
-        => TryDecodeServerAdmission(parts, AdmitCommand, out admission);
+        out Admission? admission
+    ) => TryDecodeServerAdmission(parts, AdmitCommand, out admission);
 
-    internal static bool TryDecodeUpdate(
-        IReadOnlyList<Message> parts,
-        out Admission? admission)
-        => TryDecodeServerAdmission(parts, UpdateCommand, out admission);
+    internal static bool TryDecodeUpdate(IReadOnlyList<Message> parts, out Admission? admission) =>
+        TryDecodeServerAdmission(parts, UpdateCommand, out admission);
 
-    internal static bool TryDecodeLivenessProbe(
-        IReadOnlyList<Message> parts,
-        out ulong probeId) =>
+    internal static bool TryDecodeLivenessProbe(IReadOnlyList<Message> parts, out ulong probeId) =>
         TryDecodeLiveness(parts, LivenessProbeCommand, out probeId);
 
-    internal static bool TryDecodeLivenessAck(
-        IReadOnlyList<Message> parts,
-        out ulong probeId) =>
+    internal static bool TryDecodeLivenessAck(IReadOnlyList<Message> parts, out ulong probeId) =>
         TryDecodeLiveness(parts, LivenessAckCommand, out probeId);
 
     private static bool TryDecodeServerAdmission(
         IReadOnlyList<Message> parts,
         byte command,
-        out Admission? admission)
+        out Admission? admission
+    )
     {
         admission = null;
-        if (!TryOpenAdmission(
-                parts,
-                command,
-                ServerRole,
-                out var reader)
+        if (
+            !TryOpenAdmission(parts, command, ServerRole, out var reader)
             || !reader.TryText8(out var channelName)
             || !reader.TryU8(out var direction)
             || direction != ClientToServerDirection
@@ -185,7 +172,8 @@ internal static class ZLinkClientServerControlProtocol
             || !reader.TryU32(out var maximum)
             || maximum == 0
             || !reader.TryText16(out var endpoint)
-            || reader.Remaining != 0)
+            || reader.Remaining != 0
+        )
             return false;
         admission = new Admission(
             channelName,
@@ -200,7 +188,8 @@ internal static class ZLinkClientServerControlProtocol
             // potentially another language or an older build); normalize it
             // once here so downstream Ordinal comparisons against the
             // client's own expectation cannot fail on notation alone.
-            ZLinkEndpointNotation.Normalize(endpoint));
+            ZLinkEndpointNotation.Normalize(endpoint)
+        );
         return true;
     }
 
@@ -217,7 +206,8 @@ internal static class ZLinkClientServerControlProtocol
     private static bool TryDecodeLiveness(
         IReadOnlyList<Message> parts,
         byte command,
-        out ulong probeId)
+        out ulong probeId
+    )
     {
         probeId = 0;
         if (parts.Count != 1)
@@ -229,18 +219,17 @@ internal static class ZLinkClientServerControlProtocol
         return probeId is > 0 and <= long.MaxValue;
     }
 
-    internal static bool TryDecodeReject(
-        IReadOnlyList<Message> parts,
-        out uint reason)
+    internal static bool TryDecodeReject(IReadOnlyList<Message> parts, out uint reason)
     {
         reason = 0;
         if (parts.Count != 1)
             return false;
         var span = parts[0].AsReadOnlyMemory().Span;
-        if (span.Length != 9
+        if (
+            span.Length != 9
             || !HasPrefix(span, RejectCommand)
-            || (reason = BinaryPrimitives.ReadUInt32BigEndian(span[5..]))
-            is < 1 or > 12)
+            || (reason = BinaryPrimitives.ReadUInt32BigEndian(span[5..])) is < 1 or > 12
+        )
         {
             reason = 0;
             return false;
@@ -255,10 +244,7 @@ internal static class ZLinkClientServerControlProtocol
         return checked((uint)Math.Min(configured, uint.MaxValue));
     }
 
-    private static Message EncodeAdmission(
-        byte command,
-        byte role,
-        Writer roleBody)
+    private static Message EncodeAdmission(byte command, byte role, Writer roleBody)
     {
         if (roleBody.Count > ushort.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(roleBody));
@@ -266,13 +252,9 @@ internal static class ZLinkClientServerControlProtocol
         var bytes = new byte[checked(10 + admissionLength)];
         WritePrefix(bytes, command);
         bytes[5] = ClientServerTopology;
-        BinaryPrimitives.WriteUInt32BigEndian(
-            bytes.AsSpan(6),
-            checked((uint)admissionLength));
+        BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(6), checked((uint)admissionLength));
         bytes[10] = role;
-        BinaryPrimitives.WriteUInt16BigEndian(
-            bytes.AsSpan(11),
-            checked((ushort)roleBody.Count));
+        BinaryPrimitives.WriteUInt16BigEndian(bytes.AsSpan(11), checked((ushort)roleBody.Count));
         roleBody.CopyTo(bytes.AsSpan(13));
         if (bytes.Length > MaximumControlBytes)
             throw new ArgumentOutOfRangeException(nameof(roleBody));
@@ -283,21 +265,26 @@ internal static class ZLinkClientServerControlProtocol
         IReadOnlyList<Message> parts,
         byte command,
         byte role,
-        out Reader reader)
+        out Reader reader
+    )
     {
         reader = default;
         if (parts.Count != 1)
             return false;
         var span = parts[0].AsReadOnlyMemory().Span;
-        if (span.Length is < 13 or > MaximumControlBytes
+        if (
+            span.Length is < 13 or > MaximumControlBytes
             || !HasPrefix(span, command)
-            || span[5] != ClientServerTopology)
+            || span[5] != ClientServerTopology
+        )
             return false;
         var admissionLength = BinaryPrimitives.ReadUInt32BigEndian(span[6..]);
         var roleLength = BinaryPrimitives.ReadUInt16BigEndian(span[11..]);
-        if (admissionLength != span.Length - 10
+        if (
+            admissionLength != span.Length - 10
             || span[10] != role
-            || roleLength != span.Length - 13)
+            || roleLength != span.Length - 13
+        )
             return false;
         reader = new Reader(span[13..]);
         return true;
@@ -325,16 +312,13 @@ internal static class ZLinkClientServerControlProtocol
         {
             ZLinkFrameworkRuntimeState.Preparing => 0,
             ZLinkFrameworkRuntimeState.Serving => 1,
-            ZLinkFrameworkRuntimeState.Relocating
-                or ZLinkFrameworkRuntimeState.Draining => 2,
+            ZLinkFrameworkRuntimeState.Relocating or ZLinkFrameworkRuntimeState.Draining => 2,
             ZLinkFrameworkRuntimeState.Stopped => 3,
             ZLinkFrameworkRuntimeState.Error => 4,
-            _ => throw new ArgumentOutOfRangeException(nameof(state))
+            _ => throw new ArgumentOutOfRangeException(nameof(state)),
         };
 
-    private static bool TryRuntimeStateFromWire(
-        byte value,
-        out ZLinkFrameworkRuntimeState state)
+    private static bool TryRuntimeStateFromWire(byte value, out ZLinkFrameworkRuntimeState state)
     {
         state = value switch
         {
@@ -343,7 +327,7 @@ internal static class ZLinkClientServerControlProtocol
             2 => ZLinkFrameworkRuntimeState.Draining,
             3 => ZLinkFrameworkRuntimeState.Stopped,
             4 => ZLinkFrameworkRuntimeState.Error,
-            _ => default
+            _ => default,
         };
         return value <= 4;
     }
@@ -387,29 +371,26 @@ internal static class ZLinkClientServerControlProtocol
             _bytes.AddRange(value);
         }
 
-        internal void Text8(string value) =>
-            Bytes8(ValidatedUtf8(value, byte.MaxValue));
+        internal void Text8(string value) => Bytes8(ValidatedUtf8(value, byte.MaxValue));
 
         internal void Text16(string value)
         {
             var bytes = ValidatedUtf8(value, 4096);
             Span<byte> length = stackalloc byte[sizeof(ushort)];
-            BinaryPrimitives.WriteUInt16BigEndian(
-                length,
-                checked((ushort)bytes.Length));
+            BinaryPrimitives.WriteUInt16BigEndian(length, checked((ushort)bytes.Length));
             _bytes.AddRange(length);
             _bytes.AddRange(bytes);
         }
 
-        internal void CopyTo(Span<byte> destination) =>
-            _bytes.CopyTo(destination);
+        internal void CopyTo(Span<byte> destination) => _bytes.CopyTo(destination);
 
         private static byte[] ValidatedUtf8(string value, int maximum)
         {
             if (string.IsNullOrEmpty(value) || value.Contains('\0'))
                 throw new ArgumentException(
                     "Control text must be non-empty and contain no NUL.",
-                    nameof(value));
+                    nameof(value)
+                );
             var bytes = Encoding.UTF8.GetBytes(value);
             if (bytes.Length > maximum)
                 throw new ArgumentOutOfRangeException(nameof(value));
@@ -462,9 +443,7 @@ internal static class ZLinkClientServerControlProtocol
         internal bool TryBytes8(out ReadOnlySpan<byte> value)
         {
             value = default;
-            if (!TryU8(out var length)
-                || length == 0
-                || Remaining < length)
+            if (!TryU8(out var length) || length == 0 || Remaining < length)
                 return false;
             value = _bytes.Slice(_offset, length);
             _offset += length;
@@ -474,13 +453,9 @@ internal static class ZLinkClientServerControlProtocol
         internal bool TryText8(out string value) =>
             TryText(byte.MaxValue, oneByteLength: true, out value);
 
-        internal bool TryText16(out string value) =>
-            TryText(4096, oneByteLength: false, out value);
+        internal bool TryText16(out string value) => TryText(4096, oneByteLength: false, out value);
 
-        private bool TryText(
-            int maximum,
-            bool oneByteLength,
-            out string value)
+        private bool TryText(int maximum, bool oneByteLength, out string value)
         {
             value = string.Empty;
             int length;
@@ -494,13 +469,10 @@ internal static class ZLinkClientServerControlProtocol
             {
                 if (Remaining < sizeof(ushort))
                     return false;
-                length = BinaryPrimitives.ReadUInt16BigEndian(
-                    _bytes[_offset..]);
+                length = BinaryPrimitives.ReadUInt16BigEndian(_bytes[_offset..]);
                 _offset += sizeof(ushort);
             }
-            if (length is 0
-                || length > maximum
-                || Remaining < length)
+            if (length is 0 || length > maximum || Remaining < length)
                 return false;
             var text = _bytes.Slice(_offset, length);
             _offset += length;
@@ -510,7 +482,8 @@ internal static class ZLinkClientServerControlProtocol
             {
                 value = new UTF8Encoding(
                     encoderShouldEmitUTF8Identifier: false,
-                    throwOnInvalidBytes: true).GetString(text);
+                    throwOnInvalidBytes: true
+                ).GetString(text);
                 return true;
             }
             catch (DecoderFallbackException)

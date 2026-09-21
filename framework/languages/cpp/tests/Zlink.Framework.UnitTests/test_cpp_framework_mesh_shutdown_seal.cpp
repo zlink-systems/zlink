@@ -14,13 +14,14 @@ using namespace std::chrono_literals;
 
 namespace
 {
-mesh::raw_mesh_node_options_t options (
-  char rid, std::string endpoint = "tcp://127.0.0.1:0",
-  std::shared_ptr<const std::atomic_bool> seal = {})
+mesh::raw_mesh_node_options_t options (char rid,
+                                       std::string endpoint = "tcp://127.0.0.1:0",
+                                       std::shared_ptr<const std::atomic_bool> seal = {})
 {
     mesh::raw_mesh_node_options_t result;
-    result.descriptor = {"shutdown-seal", {static_cast<std::uint8_t> (rid)}, 1, 1,
-                         std::move (endpoint), {{"alpha", 100}}};
+    result.descriptor = {
+      "shutdown-seal", {static_cast<std::uint8_t> (rid)}, 1, 1, std::move (endpoint),
+      {{"alpha", 100}}};
     result.shutdown_admission_seal = std::move (seal);
     return result;
 }
@@ -32,8 +33,7 @@ void pump (mesh::raw_mesh_node_owner_t &node)
     assert (node.pump_one (now).result ().value () != mesh::raw_mesh_pump_result_t::protocol_error);
 }
 
-template <typename Predicate, typename Progress>
-void until (Predicate predicate, Progress progress)
+template <typename Predicate, typename Progress> void until (Predicate predicate, Progress progress)
 {
     const auto deadline = std::chrono::steady_clock::now () + 2s;
     while (!predicate () && std::chrono::steady_clock::now () < deadline) {
@@ -47,9 +47,15 @@ void connect (mesh::raw_mesh_node_owner_t &source, mesh::raw_mesh_node_owner_t &
 {
     const auto remote = target.topology ().local_descriptor ();
     assert (source.connect_peer (target.endpoint (), remote));
-    until ([&] { return source.topology ().peers ().size () == 1
-                         && target.topology ().peers ().size () == 1; },
-           [&] { pump (source); pump (target); });
+    until (
+      [&] {
+          return source.topology ().peers ().size () == 1
+                 && target.topology ().peers ().size () == 1;
+      },
+      [&] {
+          pump (source);
+          pump (target);
+      });
     // Consume both crossed Admit responses before testing a later transition.
     for (int i = 0; i < 20; ++i) {
         pump (source);
@@ -64,24 +70,24 @@ void verify_monitor_wakes_ingress_without_application_permit ()
     mesh::raw_mesh_node_owner_t target (options ('h'));
     source.start ();
     target.start ();
-    auto waiting = std::async (std::launch::async, [&] {
-        return target.wait_for_activity (-1ms, false);
-    });
+    auto waiting =
+      std::async (std::launch::async, [&] { return target.wait_for_activity (-1ms, false); });
     assert (waiting.wait_for (20ms) == std::future_status::timeout);
     assert (source.connect_peer (target.endpoint (), target.topology ().local_descriptor ()));
     assert (waiting.wait_for (500ms) == std::future_status::ready);
     assert (waiting.get ());
     assert (target.drain_monitor_events (mesh::service_liveness_registry_t::clock_t::now ())
-              .result ().value () > 0);
+              .result ()
+              .value ()
+            > 0);
 }
 
 void verify_close_wakes_unbounded_ingress_wait ()
 {
     mesh::raw_mesh_node_owner_t node (options ('i'));
     node.start ();
-    auto waiting = std::async (std::launch::async, [&] {
-        return node.wait_for_activity (-1ms, false);
-    });
+    auto waiting =
+      std::async (std::launch::async, [&] { return node.wait_for_activity (-1ms, false); });
     assert (waiting.wait_for (20ms) == std::future_status::timeout);
     node.close ();
     assert (waiting.wait_for (500ms) == std::future_status::ready);
@@ -100,15 +106,18 @@ void verify_restart (bool sealed, bool draining)
     seal->store (sealed, std::memory_order_release);
     if (draining) {
         source.publish_draining ().result ().value ();
-        until ([&] { return target->topology ().peer ({'a'})->descriptor.state
-                              == mesh::service_node_state_t::draining; },
-               [&] { pump (*target); });
+        until (
+          [&] {
+              return target->topology ().peer ({'a'})->descriptor.state
+                     == mesh::service_node_state_t::draining;
+          },
+          [&] { pump (*target); });
     }
     target->close ();
     target.reset ();
     until ([&] { return source.topology ().peers ().empty (); }, [&] { pump (source); });
-    const auto expected_state = draining ? mesh::service_node_state_t::draining
-                                         : mesh::service_node_state_t::serving;
+    const auto expected_state =
+      draining ? mesh::service_node_state_t::draining : mesh::service_node_state_t::serving;
     assert (source.topology ().local_descriptor ().state == expected_state);
 
     // A sealed restarted peer stays silent. Re-admission requires both
@@ -117,29 +126,43 @@ void verify_restart (bool sealed, bool draining)
       options ('b', endpoint, std::make_shared<std::atomic_bool> (sealed)));
     target->start ();
     std::size_t ready_events = 0;
-    until ([&] { return ready_events != 0; }, [&] {
-        ready_events += source.drain_monitor_events (
-          mesh::service_liveness_registry_t::clock_t::now ()).result ().value ();
-    });
+    until ([&] { return ready_events != 0; },
+           [&] {
+               ready_events +=
+                 source.drain_monitor_events (mesh::service_liveness_registry_t::clock_t::now ())
+                   .result ()
+                   .value ();
+           });
     std::size_t remote_ready = 0;
-    until ([&] { return remote_ready != 0; }, [&] {
-        remote_ready += target->drain_monitor_events (
-          mesh::service_liveness_registry_t::clock_t::now ()).result ().value ();
-    });
+    until ([&] { return remote_ready != 0; },
+           [&] {
+               remote_ready +=
+                 target->drain_monitor_events (mesh::service_liveness_registry_t::clock_t::now ())
+                   .result ()
+                   .value ();
+           });
     if (sealed) {
         const auto deadline = std::chrono::steady_clock::now () + 200ms;
         while (std::chrono::steady_clock::now () < deadline) {
             pump (source);
             assert (target->pump_one (mesh::service_liveness_registry_t::clock_t::now ())
-                      .result ().value () == mesh::raw_mesh_pump_result_t::no_data);
+                      .result ()
+                      .value ()
+                    == mesh::raw_mesh_pump_result_t::no_data);
             assert (source.topology ().peers ().empty ());
             assert (source.topology ().local_descriptor ().state == expected_state);
             std::this_thread::sleep_for (1ms);
         }
     } else {
-        until ([&] { return source.topology ().peers ().size () == 1
-                             && target->topology ().peers ().size () == 1; },
-               [&] { pump (source); pump (*target); });
+        until (
+          [&] {
+              return source.topology ().peers ().size () == 1
+                     && target->topology ().peers ().size () == 1;
+          },
+          [&] {
+              pump (source);
+              pump (*target);
+          });
         assert (target->topology ().peer ({'a'})->descriptor.state == expected_state);
         assert (source.topology ().local_descriptor ().state == expected_state);
     }
@@ -167,15 +190,16 @@ void verify_inbound_hello (bool sealed)
     } else {
         assert (source.connect_peer (target.endpoint (), target.topology ().local_descriptor ()));
         bool hello_received = false;
-        until ([&] { return hello_received; }, [&] {
-            const auto now = mesh::service_liveness_registry_t::clock_t::now ();
-            source.drain_monitor_events (now).result ().value ();
-            target.drain_monitor_events (now).result ().value ();
-            const auto result = target.pump_one (now).result ().value ();
-            assert (result == mesh::raw_mesh_pump_result_t::no_data
-                    || result == mesh::raw_mesh_pump_result_t::infrastructure);
-            hello_received = result == mesh::raw_mesh_pump_result_t::infrastructure;
-        });
+        until ([&] { return hello_received; },
+               [&] {
+                   const auto now = mesh::service_liveness_registry_t::clock_t::now ();
+                   source.drain_monitor_events (now).result ().value ();
+                   target.drain_monitor_events (now).result ().value ();
+                   const auto result = target.pump_one (now).result ().value ();
+                   assert (result == mesh::raw_mesh_pump_result_t::no_data
+                           || result == mesh::raw_mesh_pump_result_t::infrastructure);
+                   hello_received = result == mesh::raw_mesh_pump_result_t::infrastructure;
+               });
         // Source sends Hello on READY but has no other control traffic.
         // Observe its receive pump after target consumed that Hello: neither
         // Admit nor Reject may be returned by the sealed target.
@@ -183,7 +207,9 @@ void verify_inbound_hello (bool sealed)
         while (std::chrono::steady_clock::now () < deadline) {
             pump (target);
             assert (source.pump_one (mesh::service_liveness_registry_t::clock_t::now ())
-                      .result ().value () == mesh::raw_mesh_pump_result_t::no_data);
+                      .result ()
+                      .value ()
+                    == mesh::raw_mesh_pump_result_t::no_data);
             assert (target.topology ().peers ().empty ());
             assert (source.topology ().peers ().empty ());
             assert (target_changes == 0);
@@ -204,16 +230,22 @@ void verify_admitted_peer_update_after_seal ()
     const auto admitted = source.topology ().peer ({'j'});
     seal->store (true, std::memory_order_release);
     source.publish_draining ().result ().value ();
-    until ([&] { return target.topology ().peer ({'i'})->descriptor
-                         == source.topology ().local_descriptor (); },
-           [&] { pump (target); });
+    until (
+      [&] {
+          return target.topology ().peer ({'i'})->descriptor
+                 == source.topology ().local_descriptor ();
+      },
+      [&] { pump (target); });
     assert (target.topology ().peer ({'i'})->descriptor.state
             == mesh::service_node_state_t::draining);
 
     target.publish_draining ().result ().value ();
-    until ([&] { return source.topology ().peer ({'j'})->descriptor
-                         == target.topology ().local_descriptor (); },
-           [&] { pump (source); });
+    until (
+      [&] {
+          return source.topology ().peer ({'j'})->descriptor
+                 == target.topology ().local_descriptor ();
+      },
+      [&] { pump (source); });
     const auto updated = source.topology ().peer ({'j'});
     assert (updated->descriptor.state == mesh::service_node_state_t::draining);
     assert (updated->descriptor.descriptor_revision > admitted->descriptor.descriptor_revision);
@@ -268,8 +300,9 @@ void verify_crossed_admission_diagnostics ()
     assert (target_changes == 1);
     const auto log = trace.str ();
     for (const auto *rid : {"65", "66"}) {
-        const auto phase = log.find ("handshake phase=bilateral-ready", log.find (
-          "handshake phase=local-admission-awaiting-remote-admit"));
+        const auto phase =
+          log.find ("handshake phase=bilateral-ready",
+                    log.find ("handshake phase=local-admission-awaiting-remote-admit"));
         assert (phase != std::string::npos);
         std::istringstream lines (log);
         std::string line;
@@ -283,8 +316,7 @@ void verify_crossed_admission_diagnostics ()
         assert (found);
     }
     const auto before = source.topology ().peer ({'f'});
-    assert (source.topology ().admit (before->descriptor, before->connection_id,
-                                     before->direction)
+    assert (source.topology ().admit (before->descriptor, before->connection_id, before->direction)
             == mesh::peer_admission_result_t::duplicate_connection);
     assert (source.topology ().peer ({'f'})->admission_epoch == before->admission_epoch);
 }

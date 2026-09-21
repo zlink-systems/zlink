@@ -3,9 +3,7 @@ package systems.zlink.framework.locations;
 import java.util.Objects;
 
 public record ZLinkLocationObjectFilter(
-    ZLinkPlacementObjectKind objectKind,
-    String stableType,
-    String meshName) {
+        ZLinkPlacementObjectKind objectKind, String stableType, String meshName) {
     public ZLinkLocationObjectFilter {
         Objects.requireNonNull(objectKind, "objectKind");
         if (stableType != null && stableType.isBlank())

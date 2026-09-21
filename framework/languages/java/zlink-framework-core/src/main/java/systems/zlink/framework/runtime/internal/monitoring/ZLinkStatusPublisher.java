@@ -1,5 +1,8 @@
 package systems.zlink.framework.runtime.internal.monitoring;
 
+import systems.zlink.framework.monitoring.ZLinkObservationLoss;
+import systems.zlink.framework.monitoring.ZLinkObservedStatus;
+
 import java.util.ArrayDeque;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -17,21 +20,17 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
-import systems.zlink.framework.monitoring.ZLinkObservedStatus;
-import systems.zlink.framework.monitoring.ZLinkObservationLoss;
 
 /**
  * Delivers changed snapshots through bounded, per-subscriber queues.
  *
- * <p>The publisher has one dispatcher for all subscribers. A runtime calls
- * {@link #signal()} after a state change; no subscriber owns a polling thread.
- * Each subscriber retains one latest intermediate snapshot per source. A
- * separate bounded FIFO keeps preserved milestones and terminal snapshots, so
- * a busy source cannot replace another source's latest state and a slow
- * subscriber cannot grow terminal retention without a limit.</p>
+ * <p>The publisher has one dispatcher for all subscribers. A runtime calls {@link #signal()} after
+ * a state change; no subscriber owns a polling thread. Each subscriber retains one latest
+ * intermediate snapshot per source. A separate bounded FIFO keeps preserved milestones and terminal
+ * snapshots, so a busy source cannot replace another source's latest state and a slow subscriber
+ * cannot grow terminal retention without a limit.
  */
-public final class ZLinkStatusPublisher<T>
-    implements Flow.Publisher<ZLinkObservedStatus<T>> {
+public final class ZLinkStatusPublisher<T> implements Flow.Publisher<ZLinkObservedStatus<T>> {
     private static final Object SINGLE_SOURCE = new Object();
     private final Supplier<T> snapshot;
     private final Function<T, Object> fingerprint;
@@ -41,7 +40,7 @@ public final class ZLinkStatusPublisher<T>
     private final Predicate<T> preserve;
     private final Executor dispatcher;
     private final CopyOnWriteArrayList<SnapshotSubscription> subscriptions =
-        new CopyOnWriteArrayList<>();
+            new CopyOnWriteArrayList<>();
     private final AtomicBoolean workPending = new AtomicBoolean();
     private final AtomicBoolean observationPending = new AtomicBoolean();
     private final AtomicBoolean drainScheduled = new AtomicBoolean();
@@ -50,13 +49,13 @@ public final class ZLinkStatusPublisher<T>
     private int activeSubscriptions;
 
     private ZLinkStatusPublisher(
-        Supplier<T> snapshot,
-        Function<T, Object> fingerprint,
-        Function<T, Object> sourceKey,
-        int capacity,
-        Predicate<T> terminal,
-        Predicate<T> preserve,
-        Executor dispatcher) {
+            Supplier<T> snapshot,
+            Function<T, Object> fingerprint,
+            Function<T, Object> sourceKey,
+            int capacity,
+            Predicate<T> terminal,
+            Predicate<T> preserve,
+            Executor dispatcher) {
         if (capacity <= 0) {
             throw new IllegalArgumentException("capacity must be positive");
         }
@@ -70,100 +69,92 @@ public final class ZLinkStatusPublisher<T>
     }
 
     public static <T> ZLinkStatusPublisher<T> create(
-        Supplier<T> snapshot,
-        Function<T, Object> fingerprint,
-        int capacity) {
+            Supplier<T> snapshot, Function<T, Object> fingerprint, int capacity) {
         return create(
-            snapshot,
-            fingerprint,
-            ignored -> SINGLE_SOURCE,
-            capacity,
-            ignored -> false,
-            ignored -> false,
-            ForkJoinPool.commonPool());
+                snapshot,
+                fingerprint,
+                ignored -> SINGLE_SOURCE,
+                capacity,
+                ignored -> false,
+                ignored -> false,
+                ForkJoinPool.commonPool());
     }
 
     public static <T> ZLinkStatusPublisher<T> create(
-        Supplier<T> snapshot,
-        Function<T, Object> fingerprint,
-        int capacity,
-        Predicate<T> terminal) {
+            Supplier<T> snapshot,
+            Function<T, Object> fingerprint,
+            int capacity,
+            Predicate<T> terminal) {
         return create(
-            snapshot,
-            fingerprint,
-            ignored -> SINGLE_SOURCE,
-            capacity,
-            terminal,
-            ignored -> false,
-            ForkJoinPool.commonPool());
+                snapshot,
+                fingerprint,
+                ignored -> SINGLE_SOURCE,
+                capacity,
+                terminal,
+                ignored -> false,
+                ForkJoinPool.commonPool());
     }
 
     public static <T> ZLinkStatusPublisher<T> create(
-        Supplier<T> snapshot,
-        Function<T, Object> fingerprint,
-        int capacity,
-        Predicate<T> terminal,
-        Predicate<T> preserve) {
+            Supplier<T> snapshot,
+            Function<T, Object> fingerprint,
+            int capacity,
+            Predicate<T> terminal,
+            Predicate<T> preserve) {
         return create(
-            snapshot,
-            fingerprint,
-            ignored -> SINGLE_SOURCE,
-            capacity,
-            terminal,
-            preserve,
-            ForkJoinPool.commonPool());
+                snapshot,
+                fingerprint,
+                ignored -> SINGLE_SOURCE,
+                capacity,
+                terminal,
+                preserve,
+                ForkJoinPool.commonPool());
     }
 
     public static <T> ZLinkStatusPublisher<T> create(
-        Supplier<T> snapshot,
-        Function<T, Object> fingerprint,
-        Function<T, Object> sourceKey,
-        int capacity,
-        Predicate<T> terminal,
-        Predicate<T> preserve) {
+            Supplier<T> snapshot,
+            Function<T, Object> fingerprint,
+            Function<T, Object> sourceKey,
+            int capacity,
+            Predicate<T> terminal,
+            Predicate<T> preserve) {
         return create(
-            snapshot,
-            fingerprint,
-            sourceKey,
-            capacity,
-            terminal,
-            preserve,
-            ForkJoinPool.commonPool());
+                snapshot,
+                fingerprint,
+                sourceKey,
+                capacity,
+                terminal,
+                preserve,
+                ForkJoinPool.commonPool());
     }
 
     public static <T> ZLinkStatusPublisher<T> create(
-        Supplier<T> snapshot,
-        Function<T, Object> fingerprint,
-        Function<T, Object> sourceKey,
-        int capacity,
-        Predicate<T> terminal,
-        Predicate<T> preserve,
-        Executor dispatcher) {
+            Supplier<T> snapshot,
+            Function<T, Object> fingerprint,
+            Function<T, Object> sourceKey,
+            int capacity,
+            Predicate<T> terminal,
+            Predicate<T> preserve,
+            Executor dispatcher) {
         return new ZLinkStatusPublisher<>(
-            snapshot,
-            fingerprint,
-            sourceKey,
-            capacity,
-            terminal,
-            preserve,
-            dispatcher);
+                snapshot, fingerprint, sourceKey, capacity, terminal, preserve, dispatcher);
     }
 
     public static <T> ZLinkStatusPublisher<T> create(
-        Supplier<T> snapshot,
-        Function<T, Object> fingerprint,
-        int capacity,
-        Predicate<T> terminal,
-        Predicate<T> preserve,
-        Executor dispatcher) {
+            Supplier<T> snapshot,
+            Function<T, Object> fingerprint,
+            int capacity,
+            Predicate<T> terminal,
+            Predicate<T> preserve,
+            Executor dispatcher) {
         return create(
-            snapshot,
-            fingerprint,
-            ignored -> SINGLE_SOURCE,
-            capacity,
-            terminal,
-            preserve,
-            dispatcher);
+                snapshot,
+                fingerprint,
+                ignored -> SINGLE_SOURCE,
+                capacity,
+                terminal,
+                preserve,
+                dispatcher);
     }
 
     /** Signals that the source may have a new snapshot. */
@@ -173,17 +164,14 @@ public final class ZLinkStatusPublisher<T>
     }
 
     /**
-     * Registers the owner callback that keeps this publisher reachable while a
-     * subscription is live. It is called with {@code true} when the first
-     * subscription is accepted and with {@code false} once the last one is
-     * cancelled or failed.
+     * Registers the owner callback that keeps this publisher reachable while a subscription is
+     * live. It is called with {@code true} when the first subscription is accepted and with {@code
+     * false} once the last one is cancelled or failed.
      *
-     * <p>A signal source may only hold a publisher weakly, because a publisher
-     * that is never subscribed has to stay collectable. A subscriber that drops
-     * its {@link Flow.Subscription} is the natural call shape, so the
-     * subscription itself cannot be the only strong reference either. This
-     * callback closes that gap without turning an unsubscribed publisher into a
-     * leak.</p>
+     * <p>A signal source may only hold a publisher weakly, because a publisher that is never
+     * subscribed has to stay collectable. A subscriber that drops its {@link Flow.Subscription} is
+     * the natural call shape, so the subscription itself cannot be the only strong reference
+     * either. This callback closes that gap without turning an unsubscribed publisher into a leak.
      */
     public void onActiveSubscriptions(Consumer<Boolean> listener) {
         Objects.requireNonNull(listener, "listener");
@@ -191,7 +179,7 @@ public final class ZLinkStatusPublisher<T>
         synchronized (retentionGate) {
             if (retention != null) {
                 throw new IllegalStateException(
-                    "an active subscription listener is already registered");
+                        "an active subscription listener is already registered");
             }
             retention = listener;
             active = activeSubscriptions > 0;
@@ -200,8 +188,7 @@ public final class ZLinkStatusPublisher<T>
     }
 
     @Override
-    public void subscribe(
-        Flow.Subscriber<? super ZLinkObservedStatus<T>> subscriber) {
+    public void subscribe(Flow.Subscriber<? super ZLinkObservedStatus<T>> subscriber) {
         Objects.requireNonNull(subscriber, "subscriber");
         SnapshotSubscription subscription = new SnapshotSubscription(subscriber);
         subscriber.onSubscribe(subscription);
@@ -210,8 +197,7 @@ public final class ZLinkStatusPublisher<T>
         }
         subscriptions.add(subscription);
         retainForSubscription();
-        if (subscription.cancelled.get()
-            && subscriptions.remove(subscription)) {
+        if (subscription.cancelled.get() && subscriptions.remove(subscription)) {
             releaseForSubscription();
             return;
         }
@@ -269,8 +255,7 @@ public final class ZLinkStatusPublisher<T>
             subscriptions.forEach(subscription -> subscription.fail(failure));
         } finally {
             drainScheduled.set(false);
-            if (workPending.get()
-                && drainScheduled.compareAndSet(false, true)) {
+            if (workPending.get() && drainScheduled.compareAndSet(false, true)) {
                 dispatcher.execute(this::drain);
             }
         }
@@ -283,17 +268,14 @@ public final class ZLinkStatusPublisher<T>
         private final AtomicBoolean deliveryWorkPending = new AtomicBoolean();
         private final AtomicBoolean deliveryScheduled = new AtomicBoolean();
         private final Object monitor = new Object();
-        private final LinkedHashMap<Object, Pending<T>> latestBySource =
-            new LinkedHashMap<>();
+        private final LinkedHashMap<Object, Pending<T>> latestBySource = new LinkedHashMap<>();
         private final ArrayDeque<Pending<T>> retained = new ArrayDeque<>();
-        private final Map<Object, Object> previousFingerprints =
-            new HashMap<>();
+        private final Map<Object, Object> previousFingerprints = new HashMap<>();
         private final Set<Object> pendingTerminals = new HashSet<>();
         private long coalescedCount;
         private long discardedTerminalCount;
 
-        SnapshotSubscription(
-            Flow.Subscriber<? super ZLinkObservedStatus<T>> subscriber) {
+        SnapshotSubscription(Flow.Subscriber<? super ZLinkObservedStatus<T>> subscriber) {
             this.subscriber = subscriber;
         }
 
@@ -301,46 +283,39 @@ public final class ZLinkStatusPublisher<T>
         public void request(long count) {
             if (count <= 0) {
                 cancel();
-                subscriber.onError(new IllegalArgumentException(
-                    "subscription demand must be positive"));
+                subscriber.onError(
+                        new IllegalArgumentException("subscription demand must be positive"));
                 return;
             }
-            demand.getAndUpdate(current -> {
-                long next = current + count;
-                return next < 0 ? Long.MAX_VALUE : next;
-            });
+            demand.getAndUpdate(
+                    current -> {
+                        long next = current + count;
+                        return next < 0 ? Long.MAX_VALUE : next;
+                    });
             scheduleDelivery();
         }
 
         @Override
         public void cancel() {
-            if (cancelled.compareAndSet(false, true)
-                && subscriptions.remove(this)) {
+            if (cancelled.compareAndSet(false, true) && subscriptions.remove(this)) {
                 releaseForSubscription();
             }
         }
 
         private void observe(T value, Object currentFingerprint) {
-            Object currentSourceKey = Objects.requireNonNull(
-                sourceKey.apply(value),
-                "sourceKey returned null");
+            Object currentSourceKey =
+                    Objects.requireNonNull(sourceKey.apply(value), "sourceKey returned null");
             synchronized (monitor) {
                 if (cancelled.get()
-                    || pendingTerminals.contains(currentSourceKey)
-                    || (previousFingerprints.containsKey(currentSourceKey)
-                        && Objects.equals(
-                            previousFingerprints.get(currentSourceKey),
-                            currentFingerprint))) {
+                        || pendingTerminals.contains(currentSourceKey)
+                        || (previousFingerprints.containsKey(currentSourceKey)
+                                && Objects.equals(
+                                        previousFingerprints.get(currentSourceKey),
+                                        currentFingerprint))) {
                     return;
                 }
-                previousFingerprints.put(
-                    currentSourceKey,
-                    currentFingerprint);
-                enqueue(
-                    currentSourceKey,
-                    value,
-                    terminal.test(value),
-                    preserve.test(value));
+                previousFingerprints.put(currentSourceKey, currentFingerprint);
+                enqueue(currentSourceKey, value, terminal.test(value), preserve.test(value));
             }
         }
 
@@ -363,8 +338,7 @@ public final class ZLinkStatusPublisher<T>
                 }
             } finally {
                 deliveryScheduled.set(false);
-                if (deliveryWorkPending.get()
-                    && deliveryScheduled.compareAndSet(false, true)) {
+                if (deliveryWorkPending.get() && deliveryScheduled.compareAndSet(false, true)) {
                     dispatcher.execute(this::drainDelivery);
                 }
             }
@@ -384,11 +358,11 @@ public final class ZLinkStatusPublisher<T>
                     if (next == null) {
                         return;
                     }
-                    observedStatus = new ZLinkObservedStatus<>(
-                        next.value(),
-                        new ZLinkObservationLoss(
-                            coalescedCount,
-                            discardedTerminalCount));
+                    observedStatus =
+                            new ZLinkObservedStatus<>(
+                                    next.value(),
+                                    new ZLinkObservationLoss(
+                                            coalescedCount, discardedTerminalCount));
                 }
                 if (demand.get() != Long.MAX_VALUE) {
                     demand.decrementAndGet();
@@ -417,10 +391,7 @@ public final class ZLinkStatusPublisher<T>
         }
 
         private void enqueue(
-            Object currentSourceKey,
-            T value,
-            boolean isTerminal,
-            boolean isPreserved) {
+                Object currentSourceKey, T value, boolean isTerminal, boolean isPreserved) {
             if (latestBySource.remove(currentSourceKey) != null) {
                 coalescedCount = saturatingIncrement(coalescedCount);
             }
@@ -428,25 +399,19 @@ public final class ZLinkStatusPublisher<T>
             if (isTerminal || isPreserved) {
                 if (retained.size() >= capacity) {
                     Pending<T> discarded = retained.removeFirst();
-                    discardedTerminalCount = saturatingIncrement(
-                        discardedTerminalCount);
+                    discardedTerminalCount = saturatingIncrement(discardedTerminalCount);
                     if (discarded.terminal()) {
                         releaseSource(discarded.sourceKey());
                     }
                 }
-                retained.addLast(new Pending<>(
-                    currentSourceKey,
-                    value,
-                    isTerminal));
+                retained.addLast(new Pending<>(currentSourceKey, value, isTerminal));
                 if (isTerminal) {
                     pendingTerminals.add(currentSourceKey);
                 }
                 return;
             }
 
-            latestBySource.put(
-                currentSourceKey,
-                new Pending<>(currentSourceKey, value, false));
+            latestBySource.put(currentSourceKey, new Pending<>(currentSourceKey, value, false));
         }
 
         private void releaseSource(Object releasedSourceKey) {
@@ -456,8 +421,7 @@ public final class ZLinkStatusPublisher<T>
         }
     }
 
-    private record Pending<T>(Object sourceKey, T value, boolean terminal) {
-    }
+    private record Pending<T>(Object sourceKey, T value, boolean terminal) {}
 
     private static long saturatingIncrement(long value) {
         return value == Long.MAX_VALUE ? value : value + 1;

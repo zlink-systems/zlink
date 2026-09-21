@@ -6,11 +6,9 @@ import java.util.concurrent.CompletionStage;
 public interface ZLinkActor {
     ZLinkActorContext context();
 
-    default void configure() {
-    }
+    default void configure() {}
 
-    default CompletionStage<Void> onJoinCompleted(
-        ZLinkActorJoinCompletion completion) {
+    default CompletionStage<Void> onJoinCompleted(ZLinkActorJoinCompletion completion) {
         return CompletableFuture.completedFuture(null);
     }
 }

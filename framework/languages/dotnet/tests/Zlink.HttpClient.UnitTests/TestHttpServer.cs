@@ -96,8 +96,12 @@ internal sealed class TestHttpServer : IDisposable
 /// <summary>Helpers for writing <see cref="HttpListener" /> responses in tests.</summary>
 internal static class TestHttpServerExtensions
 {
-    public static async Task WriteAsync(this HttpListenerResponse response, int status, string body,
-        string contentType = "application/json")
+    public static async Task WriteAsync(
+        this HttpListenerResponse response,
+        int status,
+        string body,
+        string contentType = "application/json"
+    )
     {
         response.StatusCode = status;
         response.ContentType = contentType;
@@ -123,7 +127,8 @@ internal static class TestHttpServerExtensions
         this HttpListenerResponse response,
         int status,
         byte[] body,
-        string contentType)
+        string contentType
+    )
     {
         response.StatusCode = status;
         response.ContentType = contentType;

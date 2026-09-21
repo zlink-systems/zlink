@@ -7,8 +7,10 @@ export class MeshRouterResolver {
   constructor(private readonly registration: ZLinkFrameworkRegistration) {}
 
   canUseRouterChannel(routerChannelId: string): boolean {
-    return this.registration.routeChannels.has(routerChannelId)
-      || this.registration.spotNodes.get(routerChannelId)?.router !== undefined;
+    return (
+      this.registration.routeChannels.has(routerChannelId) ||
+      this.registration.spotNodes.get(routerChannelId)?.router !== undefined
+    );
   }
 
   classifyManualNodeTarget(meshName: string, targetNodeRid: RoutingId): boolean | undefined {
@@ -38,9 +40,10 @@ export class MeshRouterResolver {
     return candidates.length === 1 ? candidates[0] : undefined;
   }
 
-  remoteBoundSessionTargetForSource(sourceNodeRid: RoutingId): ZLinkRemoteBoundSessionTarget | undefined {
-    const routerChannelId = this.defaultSpotRouterChannelId()
-      ?? this.defaultRouterChannelId();
+  remoteBoundSessionTargetForSource(
+    sourceNodeRid: RoutingId
+  ): ZLinkRemoteBoundSessionTarget | undefined {
+    const routerChannelId = this.defaultSpotRouterChannelId() ?? this.defaultRouterChannelId();
     if (routerChannelId === undefined) {
       return undefined;
     }
@@ -54,12 +57,14 @@ export class MeshRouterResolver {
 
   primaryMeshName(): string | undefined {
     const names = [...this.registration.spotNodes.entries()]
-      .filter(([, node]) =>
-        node.entrySpotType !== undefined
-        || (node.spotFactories?.length ?? 0) > 0
-        || (node.actorFactories instanceof Map
-          ? node.actorFactories.size > 0
-          : Object.keys(node.actorFactories ?? {}).length > 0))
+      .filter(
+        ([, node]) =>
+          node.entrySpotType !== undefined ||
+          (node.spotFactories?.length ?? 0) > 0 ||
+          (node.actorFactories instanceof Map
+            ? node.actorFactories.size > 0
+            : Object.keys(node.actorFactories ?? {}).length > 0)
+      )
       .map(([name]) => name);
     if (names.length === 1) return names[0];
     if (names.length > 1) return undefined;
@@ -69,18 +74,19 @@ export class MeshRouterResolver {
 
   actorMeshName(actorType: string): string | undefined {
     const matches = [...this.registration.spotNodes.entries()]
-      .filter(([, node]) => node.actorFactories instanceof Map
-        ? node.actorFactories.has(actorType)
-        : node.actorFactories !== undefined && Object.hasOwn(node.actorFactories, actorType))
+      .filter(([, node]) =>
+        node.actorFactories instanceof Map
+          ? node.actorFactories.has(actorType)
+          : node.actorFactories !== undefined && Object.hasOwn(node.actorFactories, actorType)
+      )
       .map(([name]) => name);
     return matches.length === 1 ? matches[0] : undefined;
   }
 
   spotLocationMeshNames(): readonly string[] {
-    return [...new Set([
-      ...this.registration.spotNodes.keys(),
-      ...this.registration.routeChannels.keys()
-    ])];
+    return [
+      ...new Set([...this.registration.spotNodes.keys(), ...this.registration.routeChannels.keys()])
+    ];
   }
 
   spotRouterChannelIdByMesh(): (meshName: string) => string {
@@ -89,8 +95,8 @@ export class MeshRouterResolver {
     for (const [spotMeshName, spotNode] of this.registration.spotNodes.entries()) {
       const conventionalRouteChannelId = `${spotMeshName}.route`;
       if (
-        this.registration.routeChannels.has(conventionalRouteChannelId)
-        || this.registration.routeChannelOptions.has(conventionalRouteChannelId)
+        this.registration.routeChannels.has(conventionalRouteChannelId) ||
+        this.registration.routeChannelOptions.has(conventionalRouteChannelId)
       ) {
         mapped.set(spotMeshName, conventionalRouteChannelId);
         continue;
@@ -100,9 +106,10 @@ export class MeshRouterResolver {
         continue;
       }
       const candidates = routeChannels
-        .filter((routeChannel) =>
-          routeChannel.routingId !== undefined &&
-          routingIdsEqual(routeChannel.routingId, spotNodeRid)
+        .filter(
+          (routeChannel) =>
+            routeChannel.routingId !== undefined &&
+            routingIdsEqual(routeChannel.routingId, spotNodeRid)
         )
         .map((routeChannel) => routeChannel.routerChannelId);
       if (candidates.length === 1) {

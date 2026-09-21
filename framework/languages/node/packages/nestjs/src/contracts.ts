@@ -114,7 +114,10 @@ export type ZLinkNestModuleRoleRoot = string;
 
 export type ZLinkNestTypeResolver<T> = Type<T> | (() => Type<T>);
 
-export interface ZLinkNestSpotActorSendHandlerOptions<TSpot extends ZLinkSpot, TActor extends ZLinkActor> {
+export interface ZLinkNestSpotActorSendHandlerOptions<
+  TSpot extends ZLinkSpot,
+  TActor extends ZLinkActor
+> {
   readonly spot: ZLinkNestTypeResolver<TSpot>;
   readonly actor: ZLinkNestTypeResolver<TActor>;
   readonly packetName: string;
@@ -143,21 +146,30 @@ export interface ZLinkNestEntrySpotSubscriptionHandlerOptions<TEntrySpot extends
   readonly topic: string;
 }
 
-export interface ZLinkNestSpotActorRequestHandlerOptions<TSpot extends ZLinkSpot, TActor extends ZLinkActor> {
+export interface ZLinkNestSpotActorRequestHandlerOptions<
+  TSpot extends ZLinkSpot,
+  TActor extends ZLinkActor
+> {
   readonly spot: ZLinkNestTypeResolver<TSpot>;
   readonly actor: ZLinkNestTypeResolver<TActor>;
   readonly packetName: string;
   readonly methodName?: string;
 }
 
-export interface ZLinkNestEntrySpotActorRequestHandlerOptions<TEntrySpot extends ZLinkEntrySpot, TActor extends ZLinkActor> {
+export interface ZLinkNestEntrySpotActorRequestHandlerOptions<
+  TEntrySpot extends ZLinkEntrySpot,
+  TActor extends ZLinkActor
+> {
   readonly entrySpot: ZLinkNestTypeResolver<TEntrySpot>;
   readonly actor: ZLinkNestTypeResolver<TActor>;
   readonly packetName: string;
   readonly methodName?: string;
 }
 
-export interface ZLinkNestEntrySpotActorSendHandlerOptions<TEntrySpot extends ZLinkEntrySpot, TActor extends ZLinkActor> {
+export interface ZLinkNestEntrySpotActorSendHandlerOptions<
+  TEntrySpot extends ZLinkEntrySpot,
+  TActor extends ZLinkActor
+> {
   readonly entrySpot: ZLinkNestTypeResolver<TEntrySpot>;
   readonly actor: ZLinkNestTypeResolver<TActor>;
   readonly packetName: string;
@@ -184,10 +196,13 @@ export interface ZLinkNestModuleRegistrationOptions extends Omit<
 > {
   readonly [ZLINK_MODULE_OPTIONS_BRAND]: true;
   readonly implicitHandlerAutoRegistration?: boolean;
-  readonly clientServerChannels?: Readonly<Record<string, InternalZLinkNestClientServerChannelOptions>>;
+  readonly clientServerChannels?: Readonly<
+    Record<string, InternalZLinkNestClientServerChannelOptions>
+  >;
   readonly fanoutChannels?: Readonly<Record<string, InternalZLinkNestFanoutChannelOptions>>;
-  readonly spotNodes?: readonly (string | ZLinkSpotNodeRegistrationOptions)[] |
-    Readonly<Record<string, ZLinkSpotNodeOptions>>;
+  readonly spotNodes?:
+    | readonly (string | ZLinkSpotNodeRegistrationOptions)[]
+    | Readonly<Record<string, ZLinkSpotNodeOptions>>;
   readonly streams?: Readonly<Record<string, ZLinkStreamNodeOptions>>;
 }
 
@@ -265,7 +280,9 @@ export interface ZLinkNestStreamNodeBuilder extends ZLinkNestFrameworkOptionsBui
   setAdvertiseHost(advertiseHost: string): this;
   enableActorDispatch(): this;
   setTlsServer(certificatePath: string, keyPath: string, requireClientCertificate?: boolean): this;
-  registerSession<TSession extends ZLinkSession>(sessionType: Type<TSession> | Type<ZLinkSessionFactory<TSession>>): this;
+  registerSession<TSession extends ZLinkSession>(
+    sessionType: Type<TSession> | Type<ZLinkSessionFactory<TSession>>
+  ): this;
 }
 
 export interface ZLinkNestMeshNodeBuilder extends ZLinkNestFrameworkOptionsBuilder {

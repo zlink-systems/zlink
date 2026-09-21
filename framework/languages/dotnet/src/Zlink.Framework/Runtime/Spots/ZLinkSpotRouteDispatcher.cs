@@ -9,31 +9,38 @@ internal sealed class ZLinkSpotRouteDispatcher(
     Func<ZLinkSpotHandlerInvoker> handlerInvoker,
     ZLinkCodecRegistryBuilder codecs,
     ZLinkDispatchErrorReporter dispatchErrors,
-    Func<ZLinkBackendRouteReceived, ZLinkEnvelopeHeader, CancellationToken, ValueTask<bool>>? internalPackets = null)
+    Func<
+        ZLinkBackendRouteReceived,
+        ZLinkEnvelopeHeader,
+        CancellationToken,
+        ValueTask<bool>
+    >? internalPackets = null
+)
 {
     public async ValueTask DispatchAsync(
         ZLinkBackendRouteReceived received,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        using var applicationAdmission =
-            received.ApplicationJobAdmission is { } admission
-                ? ZLinkApplicationJobQueueInvocation.Enter(admission)
-                : null;
+        using var applicationAdmission = received.ApplicationJobAdmission is { } admission
+            ? ZLinkApplicationJobQueueInvocation.Enter(admission)
+            : null;
         using (received)
         {
-        if (received.Parts.Count == 0)
-        {
-            HandleProtocolError(received, ZLinkEnvelopeCodec.MissingHeader());
-            return;
-        }
+            if (received.Parts.Count == 0)
+            {
+                HandleProtocolError(received, ZLinkEnvelopeCodec.MissingHeader());
+                return;
+            }
 
             ZLinkEnvelopeHeader header;
             try
             {
-            header = ZLinkEnvelopeCodec.DecodeHeader(
-                received.Parts,
-                dispatchErrors.Flow.CaptureEnabled);
-            ZLinkEnvelopeCodec.ValidateDispatchHeader(header);
+                header = ZLinkEnvelopeCodec.DecodeHeader(
+                    received.Parts,
+                    dispatchErrors.Flow.CaptureEnabled
+                );
+                ZLinkEnvelopeCodec.ValidateDispatchHeader(header);
             }
             catch (ZLinkEnvelopeProtocolException protocolError)
             {
@@ -44,16 +51,20 @@ internal sealed class ZLinkSpotRouteDispatcher(
                 header.FlowId,
                 header.FlowOrigin,
                 dispatchErrors.Flow.CaptureEnabled,
-                ZLinkFlowOrigin.Inbound);
-            var kind = header.Kind == ZLinkMessageKind.Request
-                ? ZLinkDispatchMessageKind.Request
-                : ZLinkDispatchMessageKind.Send;
+                ZLinkFlowOrigin.Inbound
+            );
+            var kind =
+                header.Kind == ZLinkMessageKind.Request
+                    ? ZLinkDispatchMessageKind.Request
+                    : ZLinkDispatchMessageKind.Send;
             var scope = CreateScope(header, kind);
 
             scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Received);
 
-            if (internalPackets is not null
-                && await internalPackets(received, header, cancellationToken).ConfigureAwait(false))
+            if (
+                internalPackets is not null
+                && await internalPackets(received, header, cancellationToken).ConfigureAwait(false)
+            )
                 return;
 
             if (!packets.TryResolve(header, out var descriptor) || descriptor is null)
@@ -66,17 +77,17 @@ internal sealed class ZLinkSpotRouteDispatcher(
                     // own NotFound.
                     var error = new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.NotFound,
-                        $"No SPOT route request handler is registered for '{channelName}:{header.MessageName}'.")
+                        $"No SPOT route request handler is registered for '{channelName}:{header.MessageName}'."
+                    )
                     {
-                        Origin = ZLinkErrorOrigin.Framework
+                        Origin = ZLinkErrorOrigin.Framework,
                     };
                     scope.HandlerMissing(
                         dispatchErrors,
                         ZLinkDispatchErrorAction.ReplyError,
-                        error);
-                    await ReplyErrorAsync(
-                            received, header, error,
-                            cancellationToken)
+                        error
+                    );
+                    await ReplyErrorAsync(received, header, error, cancellationToken)
                         .ConfigureAwait(false);
                 }
                 else
@@ -90,7 +101,8 @@ internal sealed class ZLinkSpotRouteDispatcher(
             object? message;
             if (descriptor.IsRequest)
             {
-                if (!scope.TryDecode(
+                if (
+                    !scope.TryDecode(
                         received.Parts,
                         descriptor.MessageType,
                         header.ContentType,
@@ -99,25 +111,28 @@ internal sealed class ZLinkSpotRouteDispatcher(
                         ZLinkDispatchErrorAction.ReplyError,
                         "SPOT route request",
                         out message,
-                        out var decodeError))
+                        out var decodeError
+                    )
+                )
                 {
-                    await ReplyErrorAsync(
-                            received, header, decodeError!,
-                            cancellationToken)
+                    await ReplyErrorAsync(received, header, decodeError!, cancellationToken)
                         .ConfigureAwait(false);
                     return;
                 }
             }
             else
             {
-                if (!scope.TryDecode(
+                if (
+                    !scope.TryDecode(
                         received.Parts,
                         descriptor.MessageType,
                         header.ContentType,
                         codecs,
                         dispatchErrors,
                         ZLinkDispatchErrorAction.Drop,
-                        out message))
+                        out message
+                    )
+                )
                     return;
             }
 
@@ -133,10 +148,7 @@ internal sealed class ZLinkSpotRouteDispatcher(
                 }
                 catch (Exception ex)
                 {
-                    scope.HandlerException(
-                        dispatchErrors,
-                        ZLinkDispatchErrorAction.Drop,
-                        ex);
+                    scope.HandlerException(dispatchErrors, ZLinkDispatchErrorAction.Drop, ex);
                 }
 
                 return;
@@ -154,7 +166,8 @@ internal sealed class ZLinkSpotRouteDispatcher(
                     header.CorrelationId,
                     reply,
                     descriptor.ReplyType,
-                    codecs);
+                    codecs
+                );
 
                 scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Replied);
             }
@@ -164,22 +177,19 @@ internal sealed class ZLinkSpotRouteDispatcher(
                     channelName,
                     descriptor.MessageName,
                     header.CorrelationId,
-                    ex);
-                scope.HandlerException(
-                    dispatchErrors,
-                    ZLinkDispatchErrorAction.ReplyError,
-                    ex);
+                    ex
+                );
+                scope.HandlerException(dispatchErrors, ZLinkDispatchErrorAction.ReplyError, ex);
             }
 
-            await SubmitReplyAsync(
-                    received, replyParts, cancellationToken)
-                .ConfigureAwait(false);
+            await SubmitReplyAsync(received, replyParts, cancellationToken).ConfigureAwait(false);
         }
     }
 
     private ZLinkDispatchFlowScope CreateScope(
         ZLinkEnvelopeHeader header,
-        ZLinkDispatchMessageKind kind)
+        ZLinkDispatchMessageKind kind
+    )
     {
         return new ZLinkDispatchFlowScope(
             ZLinkDispatchErrorSurface.SpotRoute,
@@ -189,46 +199,54 @@ internal sealed class ZLinkSpotRouteDispatcher(
             channelName,
             header.ContentType,
             header.CorrelationId,
-            spotId: spotId);
+            spotId: spotId
+        );
     }
 
     private ValueTask SubmitReplyAsync(
         ZLinkBackendRouteReceived received,
         IReadOnlyList<Message> replyParts,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        return ZLinkSpotReplySubmitter.SubmitDirectAsync(
-            received, replyParts, cancellationToken);
+        return ZLinkSpotReplySubmitter.SubmitDirectAsync(received, replyParts, cancellationToken);
     }
 
     private ValueTask ReplyErrorAsync(
         ZLinkBackendRouteReceived received,
         ZLinkEnvelopeHeader header,
         Exception exception,
-        CancellationToken cancellationToken)
-    {
-        var replyParts = ZLinkSpotReplyEnvelope.EncodeErrorParts(
-            channelName, header.MessageName, header.CorrelationId, exception);
-        return SubmitReplyAsync(
-            received, replyParts, cancellationToken);
-    }
-
-    private void ReplyError(
-        ZLinkBackendRouteReceived received,
-        ZLinkEnvelopeHeader header,
-        Exception exception)
+        CancellationToken cancellationToken
+    )
     {
         var replyParts = ZLinkSpotReplyEnvelope.EncodeErrorParts(
             channelName,
             header.MessageName,
             header.CorrelationId,
-            exception);
+            exception
+        );
+        return SubmitReplyAsync(received, replyParts, cancellationToken);
+    }
+
+    private void ReplyError(
+        ZLinkBackendRouteReceived received,
+        ZLinkEnvelopeHeader header,
+        Exception exception
+    )
+    {
+        var replyParts = ZLinkSpotReplyEnvelope.EncodeErrorParts(
+            channelName,
+            header.MessageName,
+            header.CorrelationId,
+            exception
+        );
         ZLinkSpotReplySubmitter.SubmitAndDispose(received, replyParts);
     }
 
     private void HandleProtocolError(
         ZLinkBackendRouteReceived received,
-        ZLinkEnvelopeProtocolException protocolError)
+        ZLinkEnvelopeProtocolException protocolError
+    )
     {
         var header = protocolError.Header;
         var isRequest = received.RequestSeq.HasValue;
@@ -243,28 +261,30 @@ internal sealed class ZLinkSpotRouteDispatcher(
                 validFlow.FlowOrigin,
                 dispatchErrors.Flow.CaptureEnabled,
                 ZLinkFlowOrigin.Inbound,
-                createIfAbsent: false);
-            dispatchErrors.Report(new ZLinkDispatchFailure(
-                ZLinkDispatchErrorSurface.SpotRoute,
-                isRequest
-                    ? ZLinkDispatchMessageKind.Request
-                    : ZLinkDispatchMessageKind.Send,
-                ZLinkDispatchErrorReason.InvalidFrame,
-                canReply
-                    ? ZLinkDispatchErrorAction.ReplyError
-                    : ZLinkDispatchErrorAction.Drop,
-                header.MessageName,
-                channelName,
-                SpotId: spotId,
-                CorrelationId: header.CorrelationId,
-                Exception: protocolError));
+                createIfAbsent: false
+            );
+            dispatchErrors.Report(
+                new ZLinkDispatchFailure(
+                    ZLinkDispatchErrorSurface.SpotRoute,
+                    isRequest ? ZLinkDispatchMessageKind.Request : ZLinkDispatchMessageKind.Send,
+                    ZLinkDispatchErrorReason.InvalidFrame,
+                    canReply ? ZLinkDispatchErrorAction.ReplyError : ZLinkDispatchErrorAction.Drop,
+                    header.MessageName,
+                    channelName,
+                    SpotId: spotId,
+                    CorrelationId: header.CorrelationId,
+                    Exception: protocolError
+                )
+            );
         }
-        if (!canReply) return;
+        if (!canReply)
+            return;
 
         var replyParts = ZLinkSpotReplyEnvelope.EncodeProtocolErrorParts(
             channelName,
             header,
-            protocolError.Message);
+            protocolError.Message
+        );
         ZLinkSpotReplySubmitter.SubmitAndDispose(received, replyParts);
     }
 }

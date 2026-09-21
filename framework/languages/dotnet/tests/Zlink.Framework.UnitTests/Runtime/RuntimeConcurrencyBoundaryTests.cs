@@ -5,25 +5,39 @@ public sealed class RuntimeConcurrencyBoundaryTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task RunnerCompletion_PreservesContextWithoutSupervisorLaneOwnership(bool longRunning)
+    public async Task RunnerCompletion_PreservesContextWithoutSupervisorLaneOwnership(
+        bool longRunning
+    )
     {
-        var runner = new ZLinkRuntimeTaskRunner(new ZLinkRuntimeErrorSink(), CancellationToken.None);
+        var runner = new ZLinkRuntimeTaskRunner(
+            new ZLinkRuntimeErrorSink(),
+            CancellationToken.None
+        );
         var ambient = new AsyncLocal<string?> { Value = "caller" };
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var observed = new TaskCompletionSource<(string?, bool, bool)>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var observed = new TaskCompletionSource<(string?, bool, bool)>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         async ValueTask Callback(CancellationToken token)
         {
             entered.TrySetResult();
             await release.Task.ConfigureAwait(false);
-            observed.TrySetResult((ambient.Value, runner.IsCurrentExecution, ZLinkStateLane.Current is null));
+            observed.TrySetResult(
+                (ambient.Value, runner.IsCurrentExecution, ZLinkStateLane.Current is null)
+            );
         }
-        var execution = longRunning ? runner.RunLongRunning("context", Callback) : runner.Run("context", Callback);
+        var execution = longRunning
+            ? runner.RunLongRunning("context", Callback)
+            : runner.Run("context", Callback);
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var stop = runner.StopAsync().AsTask();
         Assert.False(stop.IsCompleted);
         release.TrySetResult();
-        Assert.Equal(("caller", true, true), await observed.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(
+            ("caller", true, true),
+            await observed.Task.WaitAsync(TimeSpan.FromSeconds(5))
+        );
         await execution.WaitAsync(TimeSpan.FromSeconds(5));
         await stop.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.False(runner.IsCurrentExecution);
@@ -35,18 +49,10 @@ public sealed class RuntimeConcurrencyBoundaryTests
     {
         var owner = new object();
         var reporter = new ZLinkRuntimeErrorSink();
-        var root = new ZLinkRuntimeTaskRunner(
-            reporter,
-            CancellationToken.None,
-            owner);
-        var sibling = new ZLinkRuntimeTaskRunner(
-            reporter,
-            CancellationToken.None,
-            owner);
+        var root = new ZLinkRuntimeTaskRunner(reporter, CancellationToken.None, owner);
+        var sibling = new ZLinkRuntimeTaskRunner(reporter, CancellationToken.None, owner);
 
-        await root.Run(
-            "stop-sibling",
-            async _ => await sibling.StopAsync())
+        await root.Run("stop-sibling", async _ => await sibling.StopAsync())
             .WaitAsync(TimeSpan.FromSeconds(5));
 
         await root.StopAsync();
@@ -55,29 +61,41 @@ public sealed class RuntimeConcurrencyBoundaryTests
     [Fact]
     public async Task BoundSessionDeferredScope_DrainsOperationAddedWhileAnotherOperationIsRunning()
     {
-        var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseFirst = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var order = new List<string>();
         await using var scope = ZLinkBoundSessionDispatchScope.Enter("actor-1");
 
-        Assert.True(ZLinkBoundSessionDispatchScope.TryDefer(
-            "actor-1",
-            async _ =>
-            {
-                firstStarted.TrySetResult();
-                await releaseFirst.Task;
-                lock (order) order.Add("first");
-            }));
+        Assert.True(
+            ZLinkBoundSessionDispatchScope.TryDefer(
+                "actor-1",
+                async _ =>
+                {
+                    firstStarted.TrySetResult();
+                    await releaseFirst.Task;
+                    lock (order)
+                        order.Add("first");
+                }
+            )
+        );
 
         var drain = scope.DrainAsync(CancellationToken.None).AsTask();
         await firstStarted.Task;
-        var added = await Task.Run(() => ZLinkBoundSessionDispatchScope.TryDefer(
-            "actor-1",
-            _ =>
-            {
-                lock (order) order.Add("second");
-                return ValueTask.CompletedTask;
-            }));
+        var added = await Task.Run(() =>
+            ZLinkBoundSessionDispatchScope.TryDefer(
+                "actor-1",
+                _ =>
+                {
+                    lock (order)
+                        order.Add("second");
+                    return ValueTask.CompletedTask;
+                }
+            )
+        );
         Assert.True(added);
 
         releaseFirst.TrySetResult();
@@ -89,11 +107,10 @@ public sealed class RuntimeConcurrencyBoundaryTests
     public async Task RuntimeTaskRunner_RejectsStoppingItselfInsteadOfDeadlocking()
     {
         using var shutdown = new CancellationTokenSource();
-        var runner = new ZLinkRuntimeTaskRunner(
-            new ZLinkRuntimeErrorSink(),
-            shutdown.Token);
+        var runner = new ZLinkRuntimeTaskRunner(new ZLinkRuntimeErrorSink(), shutdown.Token);
         var observed = new TaskCompletionSource<Exception>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
 
         runner.RunDetached(
             "self-stop",
@@ -107,7 +124,8 @@ public sealed class RuntimeConcurrencyBoundaryTests
                 {
                     observed.TrySetResult(exception);
                 }
-            });
+            }
+        );
 
         var exception = await observed.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.IsType<InvalidOperationException>(exception);
@@ -120,14 +138,8 @@ public sealed class RuntimeConcurrencyBoundaryTests
     {
         using var shutdown = new CancellationTokenSource();
         var owner = new object();
-        var root = new ZLinkRuntimeTaskRunner(
-            new ZLinkRuntimeErrorSink(),
-            shutdown.Token,
-            owner);
-        var nested = new ZLinkRuntimeTaskRunner(
-            new ZLinkRuntimeErrorSink(),
-            shutdown.Token,
-            owner);
+        var root = new ZLinkRuntimeTaskRunner(new ZLinkRuntimeErrorSink(), shutdown.Token, owner);
+        var nested = new ZLinkRuntimeTaskRunner(new ZLinkRuntimeErrorSink(), shutdown.Token, owner);
         var observed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         nested.RunDetached(
@@ -138,7 +150,8 @@ public sealed class RuntimeConcurrencyBoundaryTests
                 Assert.True(ZLinkRuntimeTaskRunner.IsCurrentExecutionFor(owner));
                 observed.TrySetResult();
                 return ValueTask.CompletedTask;
-            });
+            }
+        );
 
         await observed.Task.WaitAsync(TimeSpan.FromSeconds(5));
         shutdown.Cancel();
@@ -151,8 +164,12 @@ public sealed class RuntimeConcurrencyBoundaryTests
     {
         using var shutdown = new CancellationTokenSource();
         var runner = new ZLinkRuntimeTaskRunner(new ZLinkRuntimeErrorSink(), shutdown.Token);
-        var parentStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var scheduleChild = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var parentStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var scheduleChild = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var childRan = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         runner.RunDetached(
@@ -161,14 +178,18 @@ public sealed class RuntimeConcurrencyBoundaryTests
             {
                 parentStarted.TrySetResult();
                 await scheduleChild.Task;
-                Assert.True(runner.TryRunDetached(
-                    "child",
-                    _ =>
-                    {
-                        childRan.TrySetResult();
-                        return ValueTask.CompletedTask;
-                    }));
-            });
+                Assert.True(
+                    runner.TryRunDetached(
+                        "child",
+                        _ =>
+                        {
+                            childRan.TrySetResult();
+                            return ValueTask.CompletedTask;
+                        }
+                    )
+                );
+            }
+        );
 
         await parentStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var stop = runner.StopAsync().AsTask();
@@ -187,14 +208,18 @@ public sealed class RuntimeConcurrencyBoundaryTests
             new ZLinkRuntimeErrorSink(),
             shutdown.Token,
             scope,
-            ownsSupervisor: true);
-        var child = new ZLinkRuntimeTaskRunner(
-            new ZLinkRuntimeErrorSink(),
-            shutdown.Token,
-            scope);
-        var childStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var releaseChild = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var cleanupRan = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            ownsSupervisor: true
+        );
+        var child = new ZLinkRuntimeTaskRunner(new ZLinkRuntimeErrorSink(), shutdown.Token, scope);
+        var childStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseChild = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var cleanupRan = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
 
         child.RunDetached(
             "child",
@@ -202,14 +227,18 @@ public sealed class RuntimeConcurrencyBoundaryTests
             {
                 childStarted.TrySetResult();
                 await releaseChild.Task;
-                Assert.True(root.TryRunDetached(
-                    "root-cleanup",
-                    _ =>
-                    {
-                        cleanupRan.TrySetResult();
-                        return ValueTask.CompletedTask;
-                    }));
-            });
+                Assert.True(
+                    root.TryRunDetached(
+                        "root-cleanup",
+                        _ =>
+                        {
+                            cleanupRan.TrySetResult();
+                            return ValueTask.CompletedTask;
+                        }
+                    )
+                );
+            }
+        );
 
         await childStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var stop = root.StopAsync().AsTask();
@@ -225,30 +254,37 @@ public sealed class RuntimeConcurrencyBoundaryTests
         var attempts = 0;
         var order = new List<string>();
         await using var scope = ZLinkBoundSessionDispatchScope.Enter("actor-1");
-        Assert.True(ZLinkBoundSessionDispatchScope.TryDefer(
-            "actor-1",
-            _ =>
-            {
-                attempts++;
-                if (attempts == 1) throw new InvalidOperationException("transient");
-                order.Add("first");
-                return ValueTask.CompletedTask;
-            }));
-        Assert.True(ZLinkBoundSessionDispatchScope.TryDefer(
-            "actor-1",
-            _ =>
-            {
-                order.Add("second");
-                return ValueTask.CompletedTask;
-            }));
+        Assert.True(
+            ZLinkBoundSessionDispatchScope.TryDefer(
+                "actor-1",
+                _ =>
+                {
+                    attempts++;
+                    if (attempts == 1)
+                        throw new InvalidOperationException("transient");
+                    order.Add("first");
+                    return ValueTask.CompletedTask;
+                }
+            )
+        );
+        Assert.True(
+            ZLinkBoundSessionDispatchScope.TryDefer(
+                "actor-1",
+                _ =>
+                {
+                    order.Add("second");
+                    return ValueTask.CompletedTask;
+                }
+            )
+        );
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            scope.DrainAsync(CancellationToken.None).AsTask());
+            scope.DrainAsync(CancellationToken.None).AsTask()
+        );
         Assert.Empty(order);
 
         await scope.DrainAsync(CancellationToken.None);
         Assert.Equal(2, attempts);
         Assert.Equal(["first", "second"], order);
     }
-
 }

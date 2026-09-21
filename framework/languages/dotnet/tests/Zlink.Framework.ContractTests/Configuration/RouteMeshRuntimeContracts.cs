@@ -34,7 +34,8 @@ public sealed class RouteMeshRuntimeContracts
                 .GetMethods()
                 .Select(static method => method.Name)
                 .Order(StringComparer.Ordinal)
-                .ToArray());
+                .ToArray()
+        );
     }
 
     [Fact]
@@ -45,8 +46,9 @@ public sealed class RouteMeshRuntimeContracts
             typeof(ZLinkRouteMeshStatus),
             typeof(ZLinkPeerStatus),
             typeof(ZLinkPlacementStatus),
-            typeof(ZLinkChannelStatus)
-        }.SelectMany(static type => type.GetProperties())
+            typeof(ZLinkChannelStatus),
+        }
+            .SelectMany(static type => type.GetProperties())
             .Select(static property => property.Name)
             .ToHashSet(StringComparer.Ordinal);
 
@@ -61,24 +63,23 @@ public sealed class RouteMeshRuntimeContracts
     {
         private static readonly RoutingId PeerRid = RoutingId.From("orders-b");
 
-        public ZLinkRouteMeshStatus GetStatus(string meshName) =>
-            Create(meshName, sequence: 1);
+        public ZLinkRouteMeshStatus GetStatus(string meshName) => Create(meshName, sequence: 1);
 
         public async IAsyncEnumerable<ZLinkObservedStatus<ZLinkRouteMeshStatus>> ObserveAsync(
             string meshName,
             [System.Runtime.CompilerServices.EnumeratorCancellation]
-            CancellationToken cancellationToken = default)
+                CancellationToken cancellationToken = default
+        )
         {
             cancellationToken.ThrowIfCancellationRequested();
             await Task.Yield();
             yield return new ZLinkObservedStatus<ZLinkRouteMeshStatus>(
                 Create(meshName, sequence: 2),
-                default);
+                default
+            );
         }
 
-        private static ZLinkRouteMeshStatus Create(
-            string meshName,
-            ulong sequence) =>
+        private static ZLinkRouteMeshStatus Create(string meshName, ulong sequence) =>
             new(
                 meshName,
                 ZLinkTopologyState.Ready,
@@ -88,6 +89,7 @@ public sealed class RouteMeshRuntimeContracts
                 [new ZLinkPeerStatus(PeerRid, ZLinkPeerState.Ready, null)],
                 new ZLinkPlacementStatus(true, 4, 3, null),
                 sequence,
-                DateTimeOffset.UtcNow);
+                DateTimeOffset.UtcNow
+            );
     }
 }

@@ -1,17 +1,13 @@
-import type {
-  ActorRef,
-  RoutingId,
-  ZLinkActor,
-  ZLinkMessageSerializer
-} from '../../contracts';
+import type { ActorRef, RoutingId, ZLinkActor, ZLinkMessageSerializer } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkBackendMeshNode, ZLinkMeshCompletionTable } from '../backend';
 import type { ZLinkLocationLifecycle } from '../locations';
 import { throwIfAborted } from '../abort';
+import type { ZLinkSpotRouteResolver } from '../spots/spot-routing-internal';
 import type {
-  ZLinkSpotRouteResolver
-} from '../spots/spot-routing-internal';
-import type { ZLinkActorJoinCoordinator, ZLinkActorJoinRuntimeResult } from './actor-runtime-contracts';
+  ZLinkActorJoinCoordinator,
+  ZLinkActorJoinRuntimeResult
+} from './actor-runtime-contracts';
 import type { ZLinkActorSourceTransfer } from './actor-source-transfer';
 import { ZLinkActorRuntimeState, toFrameworkRoutingId } from './actor-runtime-state';
 import { lookupNativeActorRef } from './actor-native-lookup';
@@ -28,7 +24,11 @@ export interface ZLinkActorNativeJoinCoordinatorOptions {
   readonly completionTableProvider: () => ZLinkMeshCompletionTable | undefined;
   readonly spotRouteResolver?: ZLinkSpotRouteResolver;
   readonly locationLifecycle?: ZLinkLocationLifecycle;
-  readonly remoteActorBinder?: (actorRef: ActorRef, signal?: AbortSignal, force?: boolean) => Promise<void>;
+  readonly remoteActorBinder?: (
+    actorRef: ActorRef,
+    signal?: AbortSignal,
+    force?: boolean
+  ) => Promise<void>;
   readonly postCommitErrorReporter?: (error: unknown) => void;
   readonly sourceTransfer?: ZLinkActorSourceTransfer;
   readonly actorJoinRelocation?: ZLinkActorJoinRelocation;
@@ -47,22 +47,24 @@ export class ZLinkActorNativeJoinCoordinator implements ZLinkActorJoinCoordinato
   }
 
   constructor(private readonly options: ZLinkActorNativeJoinCoordinatorOptions) {
-    const postCommitLocation = options.locationLifecycle === undefined
-      ? undefined
-      : new ZLinkPostCommitActorLocation({
-          lifecycle: options.locationLifecycle,
-          reportError: options.postCommitErrorReporter,
-          signal: options.shutdownSignal
-        });
-    this.localJoin = new ZLinkLocalNativeActorJoin({
-      postCommitLocation,
-      postCommitBinder: options.remoteActorBinder === undefined
+    const postCommitLocation =
+      options.locationLifecycle === undefined
         ? undefined
-        : new ZLinkPostCommitActorBinder({
-            bind: (actorRef, force) => options.remoteActorBinder!(actorRef, undefined, force),
+        : new ZLinkPostCommitActorLocation({
+            lifecycle: options.locationLifecycle,
             reportError: options.postCommitErrorReporter,
             signal: options.shutdownSignal
-          }),
+          });
+    this.localJoin = new ZLinkLocalNativeActorJoin({
+      postCommitLocation,
+      postCommitBinder:
+        options.remoteActorBinder === undefined
+          ? undefined
+          : new ZLinkPostCommitActorBinder({
+              bind: (actorRef, force) => options.remoteActorBinder!(actorRef, undefined, force),
+              reportError: options.postCommitErrorReporter,
+              signal: options.shutdownSignal
+            }),
       completionTableProvider: options.completionTableProvider,
       actorJoinRelocation: options.actorJoinRelocation,
       messageSerializers: options.messageSerializers
@@ -104,7 +106,10 @@ export class ZLinkActorNativeJoinCoordinator implements ZLinkActorJoinCoordinato
   ): Promise<ZLinkActorJoinRuntimeResult<Message>> {
     throwIfAborted(signal);
     const node = this.node();
-    const actorRef = state.nativeActorRef ?? lookupNativeActorRef(node, actor.context.actorId) ?? node.createActor(actor.context.actorId);
+    const actorRef =
+      state.nativeActorRef ??
+      lookupNativeActorRef(node, actor.context.actorId) ??
+      node.createActor(actor.context.actorId);
     state.setNativeActorRef(actorRef as never);
     let target: Awaited<ReturnType<ZLinkSpotRouteResolver['resolve']>> | undefined;
     target = await this.options.spotRouteResolver?.resolve(spotId, signal);
@@ -121,13 +126,7 @@ export class ZLinkActorNativeJoinCoordinator implements ZLinkActorJoinCoordinato
       signal,
       completionOperationId
     );
-    return this.withDeferredJoinFinalizer(
-      actor,
-      state,
-      target,
-      result,
-      completionOperationId
-    );
+    return this.withDeferredJoinFinalizer(actor, state, target, result, completionOperationId);
   }
 
   async joinEntrySpot(
@@ -141,21 +140,26 @@ export class ZLinkActorNativeJoinCoordinator implements ZLinkActorJoinCoordinato
   ): Promise<ZLinkActorJoinRuntimeResult<Message>> {
     throwIfAborted(signal);
     const node = this.node();
-    const actorRef = state.nativeActorRef ?? lookupNativeActorRef(node, actor.context.actorId) ?? node.createActor(actor.context.actorId);
+    const actorRef =
+      state.nativeActorRef ??
+      lookupNativeActorRef(node, actor.context.actorId) ??
+      node.createActor(actor.context.actorId);
     state.setNativeActorRef(actorRef as never);
     const meshName = state.meshName ?? actor.context.meshName;
     const entrySpotId = this.options.entrySpotIdProvider?.(meshName);
     let resolvedTarget: Awaited<ReturnType<ZLinkSpotRouteResolver['resolve']>> | undefined;
-    resolvedTarget = entrySpotId === undefined
-      ? undefined
-      : await this.options.spotRouteResolver?.resolve(entrySpotId, signal);
+    resolvedTarget =
+      entrySpotId === undefined
+        ? undefined
+        : await this.options.spotRouteResolver?.resolve(entrySpotId, signal);
     // The caller may carry the Entry node from the previous membership.
     // Entry placement can change while the Actor is in a User Spot, so the
     // current authority route is the source of truth whenever it is available.
-    const selectedNodeRid = resolvedTarget?.targetNodeRid
-      ?? nodeRid
-      ?? state.entryNodeRid
-      ?? toFrameworkRoutingId(node.status().routingId);
+    const selectedNodeRid =
+      resolvedTarget?.targetNodeRid ??
+      nodeRid ??
+      state.entryNodeRid ??
+      toFrameworkRoutingId(node.status().routingId);
     const target = resolvedTarget;
     const result = await this.localJoin.joinEntrySpot(
       node,
@@ -169,13 +173,7 @@ export class ZLinkActorNativeJoinCoordinator implements ZLinkActorJoinCoordinato
       signal,
       completionOperationId
     );
-    return this.withDeferredJoinFinalizer(
-      actor,
-      state,
-      target,
-      result,
-      completionOperationId
-    );
+    return this.withDeferredJoinFinalizer(actor, state, target, result, completionOperationId);
   }
 
   private withDeferredJoinFinalizer(
@@ -205,9 +203,7 @@ export class ZLinkActorNativeJoinCoordinator implements ZLinkActorJoinCoordinato
   }
 
   private node(): ZLinkBackendMeshNode {
-    return typeof this.options.node === 'function'
-      ? this.options.node()
-      : this.options.node;
+    return typeof this.options.node === 'function' ? this.options.node() : this.options.node;
   }
 }
 
@@ -216,11 +212,11 @@ function installResolvedSpotRoute(
   target: Awaited<ReturnType<ZLinkSpotRouteResolver['resolve']>> | undefined
 ): void {
   if (
-    target?.targetSpotGeneration === undefined
-    || target.targetNodeGeneration === undefined
-    || target.authorityOwnerGeneration === undefined
-    || target.ownerLeaseGeneration === undefined
-    || target.authorityStoreVersion === undefined
+    target?.targetSpotGeneration === undefined ||
+    target.targetNodeGeneration === undefined ||
+    target.authorityOwnerGeneration === undefined ||
+    target.ownerLeaseGeneration === undefined ||
+    target.authorityStoreVersion === undefined
   ) {
     return;
   }

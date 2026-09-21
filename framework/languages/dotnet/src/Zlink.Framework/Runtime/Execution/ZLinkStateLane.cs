@@ -37,8 +37,9 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
     private const int DrainBatchLimit = 100;
 
     private readonly ConcurrentQueue<Func<ValueTask>> _mailbox = new();
-    private readonly TaskCompletionSource _completed =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _completed = new(
+        TaskCreationOptions.RunContinuationsAsynchronously
+    );
 
     private int _scheduled;
     private int _closed;
@@ -99,7 +100,8 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
         }
 
         var completion = new TaskCompletionSource<T>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         _mailbox.Enqueue(() =>
         {
             try
@@ -121,7 +123,11 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
     internal ValueTask RunAsync(Action work)
     {
         ArgumentNullException.ThrowIfNull(work);
-        var operation = RunAsync(() => { work(); return true; });
+        var operation = RunAsync(() =>
+        {
+            work();
+            return true;
+        });
         if (operation.IsCompletedSuccessfully)
         {
             operation.GetAwaiter().GetResult();
@@ -155,8 +161,9 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
         if (IsOnLane)
             throw new InvalidOperationException(
                 "This code already runs on the state lane it is trying to enter. Call the "
-                + "component's private state method directly instead of re-entering its public "
-                + "surface.");
+                    + "component's private state method directly instead of re-entering its public "
+                    + "surface."
+            );
     }
 
     private void ScheduleDrain(bool inline = false)
@@ -169,7 +176,10 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
             _ = DrainAsync();
         else
             ThreadPool.UnsafeQueueUserWorkItem(
-                static state => _ = state.DrainAsync(), this, preferLocal: true);
+                static state => _ = state.DrainAsync(),
+                this,
+                preferLocal: true
+            );
     }
 
     private async Task DrainAsync()
@@ -208,8 +218,7 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
         Interlocked.Exchange(ref _scheduled, 0);
         if (!_mailbox.IsEmpty)
             ScheduleDrain();
-        else if (Volatile.Read(ref _closed) != 0
-                 && Volatile.Read(ref _scheduled) == 0)
+        else if (Volatile.Read(ref _closed) != 0 && Volatile.Read(ref _scheduled) == 0)
             _completed.TrySetResult();
     }
 

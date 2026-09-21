@@ -1,8 +1,7 @@
 package systems.zlink.framework.runtime.streams;
 
 public final class ZLinkStreamPayloadCompression {
-    private ZLinkStreamPayloadCompression() {
-    }
+    private ZLinkStreamPayloadCompression() {}
 
     public static byte[] lz4Pickle(byte[] source) {
         return ZLinkStreamLz4Pickler.pickle(source);

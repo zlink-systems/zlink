@@ -1,192 +1,232 @@
 package systems.zlink.framework.runtime.channels;
 
-import java.util.List;
-import java.util.concurrent.CompletionException;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.diagnostics.ZLinkDispatchErrorReporter;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchFailure;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
-import systems.zlink.framework.runtime.diagnostics.ZLinkDispatchErrorReporter;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+
+import java.util.List;
+import java.util.concurrent.CompletionException;
 
 final class ZLinkChannelDispatchReporter {
     private final ZLinkDispatchErrorReporter reporter;
+
     ZLinkChannelDispatchReporter(ZLinkDispatchErrorReporter reporter) {
         this.reporter = reporter;
     }
 
     void replyError(
-        ZLinkBackendRouterSocket router,
-        ZLinkBackendReceived received,
-        ZLinkDispatchErrorSurface surface,
-        ZLinkDispatchMessageKind kind,
-        ZLinkDispatchErrorReason reason,
-        String packetName,
-        String channelName,
-        String sourceRid,
-        Throwable error) {
+            ZLinkBackendRouterSocket router,
+            ZLinkBackendReceived received,
+            ZLinkDispatchErrorSurface surface,
+            ZLinkDispatchMessageKind kind,
+            ZLinkDispatchErrorReason reason,
+            String packetName,
+            String channelName,
+            String sourceRid,
+            Throwable error) {
         replyError(
-            router, received, surface, kind, reason, packetName,
-            channelName, sourceRid, null, error);
+                router,
+                received,
+                surface,
+                kind,
+                reason,
+                packetName,
+                channelName,
+                sourceRid,
+                null,
+                error);
     }
 
     void replyError(
-        ZLinkBackendRouterSocket router,
-        ZLinkBackendReceived received,
-        ZLinkDispatchErrorSurface surface,
-        ZLinkDispatchMessageKind kind,
-        ZLinkDispatchErrorReason reason,
-        String packetName,
-        String channelName,
-        String sourceRid,
-        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header requestHeader,
-        Throwable error) {
+            ZLinkBackendRouterSocket router,
+            ZLinkBackendReceived received,
+            ZLinkDispatchErrorSurface surface,
+            ZLinkDispatchMessageKind kind,
+            ZLinkDispatchErrorReason reason,
+            String packetName,
+            String channelName,
+            String sourceRid,
+            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header requestHeader,
+            Throwable error) {
         if (received.hasDirectReplyPath()) {
             replyError(
-                received, surface, kind, reason, packetName, channelName,
-                sourceRid, requestHeader, error);
+                    received,
+                    surface,
+                    kind,
+                    reason,
+                    packetName,
+                    channelName,
+                    sourceRid,
+                    requestHeader,
+                    error);
             return;
         }
         replyError(
-            router,
-            received.routingId().orElseThrow(),
-            received.requestSeq().orElseThrow(),
-            surface, kind, reason, packetName, channelName, sourceRid,
-            requestHeader, error);
+                router,
+                received.routingId().orElseThrow(),
+                received.requestSeq().orElseThrow(),
+                surface,
+                kind,
+                reason,
+                packetName,
+                channelName,
+                sourceRid,
+                requestHeader,
+                error);
     }
 
     void replyError(
-        ZLinkBackendReceived received,
-        ZLinkDispatchErrorSurface surface,
-        ZLinkDispatchMessageKind kind,
-        ZLinkDispatchErrorReason reason,
-        String packetName,
-        String channelName,
-        String sourceRid,
-        Throwable error) {
+            ZLinkBackendReceived received,
+            ZLinkDispatchErrorSurface surface,
+            ZLinkDispatchMessageKind kind,
+            ZLinkDispatchErrorReason reason,
+            String packetName,
+            String channelName,
+            String sourceRid,
+            Throwable error) {
         replyError(
-            received, surface, kind, reason, packetName, channelName,
-            sourceRid, null, error);
+                received, surface, kind, reason, packetName, channelName, sourceRid, null, error);
     }
 
     void replyError(
-        ZLinkBackendReceived received,
-        ZLinkDispatchErrorSurface surface,
-        ZLinkDispatchMessageKind kind,
-        ZLinkDispatchErrorReason reason,
-        String packetName,
-        String channelName,
-        String sourceRid,
-        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header requestHeader,
-        Throwable error) {
+            ZLinkBackendReceived received,
+            ZLinkDispatchErrorSurface surface,
+            ZLinkDispatchMessageKind kind,
+            ZLinkDispatchErrorReason reason,
+            String packetName,
+            String channelName,
+            String sourceRid,
+            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header requestHeader,
+            Throwable error) {
         Throwable cause = unwrap(error);
-        List<Message> reply = ZLinkFrameworkErrorReply.create(
-            requestHeader,
-            frameworkErrorKind(error),
-            errorText(reason, packetName, cause),
-            java.util.Map.of());
+        List<Message> reply =
+                ZLinkFrameworkErrorReply.create(
+                        requestHeader,
+                        frameworkErrorKind(error),
+                        errorText(reason, packetName, cause),
+                        java.util.Map.of());
         replyRawAndClose(received, reply);
         report(
-            surface, kind, reason, ZLinkDispatchErrorAction.REPLY_ERROR,
-            packetName, channelName, sourceRid, cause);
+                surface,
+                kind,
+                reason,
+                ZLinkDispatchErrorAction.REPLY_ERROR,
+                packetName,
+                channelName,
+                sourceRid,
+                cause);
     }
 
     void replyError(
-        ZLinkBackendRouterSocket router,
-        RoutingId routingId,
-        long requestSeq,
-        ZLinkDispatchErrorSurface surface,
-        ZLinkDispatchMessageKind kind,
-        ZLinkDispatchErrorReason reason,
-        String packetName,
-        String channelName,
-        String sourceRid,
-        Throwable error) {
+            ZLinkBackendRouterSocket router,
+            RoutingId routingId,
+            long requestSeq,
+            ZLinkDispatchErrorSurface surface,
+            ZLinkDispatchMessageKind kind,
+            ZLinkDispatchErrorReason reason,
+            String packetName,
+            String channelName,
+            String sourceRid,
+            Throwable error) {
         replyError(
-            router, routingId, requestSeq, surface, kind, reason,
-            packetName, channelName, sourceRid, null, error);
+                router,
+                routingId,
+                requestSeq,
+                surface,
+                kind,
+                reason,
+                packetName,
+                channelName,
+                sourceRid,
+                null,
+                error);
     }
 
     void replyError(
-        ZLinkBackendRouterSocket router,
-        RoutingId routingId,
-        long requestSeq,
-        ZLinkDispatchErrorSurface surface,
-        ZLinkDispatchMessageKind kind,
-        ZLinkDispatchErrorReason reason,
-        String packetName,
-        String channelName,
-        String sourceRid,
-        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header requestHeader,
-        Throwable error) {
+            ZLinkBackendRouterSocket router,
+            RoutingId routingId,
+            long requestSeq,
+            ZLinkDispatchErrorSurface surface,
+            ZLinkDispatchMessageKind kind,
+            ZLinkDispatchErrorReason reason,
+            String packetName,
+            String channelName,
+            String sourceRid,
+            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header requestHeader,
+            Throwable error) {
         Throwable cause = unwrap(error);
-        List<Message> reply = ZLinkFrameworkErrorReply.create(
-            requestHeader,
-            frameworkErrorKind(error),
-            errorText(reason, packetName, cause),
-            java.util.Map.of());
+        List<Message> reply =
+                ZLinkFrameworkErrorReply.create(
+                        requestHeader,
+                        frameworkErrorKind(error),
+                        errorText(reason, packetName, cause),
+                        java.util.Map.of());
         replyRawAndClose(router, routingId, requestSeq, reply);
         report(
-            surface,
-            kind,
-            reason,
-            ZLinkDispatchErrorAction.REPLY_ERROR,
-            packetName,
-            channelName,
-            sourceRid,
-            cause);
+                surface,
+                kind,
+                reason,
+                ZLinkDispatchErrorAction.REPLY_ERROR,
+                packetName,
+                channelName,
+                sourceRid,
+                cause);
     }
 
     void report(
-        ZLinkDispatchErrorSurface surface,
-        ZLinkDispatchMessageKind kind,
-        ZLinkDispatchErrorReason reason,
-        ZLinkDispatchErrorAction action,
-        String packetName,
-        String channelName,
-        String sourceRid,
-        Throwable error) {
+            ZLinkDispatchErrorSurface surface,
+            ZLinkDispatchMessageKind kind,
+            ZLinkDispatchErrorReason reason,
+            ZLinkDispatchErrorAction action,
+            String packetName,
+            String channelName,
+            String sourceRid,
+            Throwable error) {
         report(surface, kind, reason, action, packetName, channelName, null, sourceRid, error);
     }
 
     void report(
-        ZLinkDispatchErrorSurface surface,
-        ZLinkDispatchMessageKind kind,
-        ZLinkDispatchErrorReason reason,
-        ZLinkDispatchErrorAction action,
-        String packetName,
-        String channelName,
-        String topic,
-        String sourceRid,
-        Throwable error) {
+            ZLinkDispatchErrorSurface surface,
+            ZLinkDispatchMessageKind kind,
+            ZLinkDispatchErrorReason reason,
+            ZLinkDispatchErrorAction action,
+            String packetName,
+            String channelName,
+            String topic,
+            String sourceRid,
+            Throwable error) {
         Throwable cause = unwrap(error);
-        reporter.report(new ZLinkDispatchFailure(
-            surface,
-            kind,
-            reason,
-            action,
-            packetName == null || packetName.isBlank() ? null : packetName,
-            channelName,
-            topic,
-            null,
-            null,
-            sourceRid,
-            null,
-            errorType(cause),
-            errorMessage(cause)));
+        reporter.report(
+                new ZLinkDispatchFailure(
+                        surface,
+                        kind,
+                        reason,
+                        action,
+                        packetName == null || packetName.isBlank() ? null : packetName,
+                        channelName,
+                        topic,
+                        null,
+                        null,
+                        sourceRid,
+                        null,
+                        errorType(cause),
+                        errorMessage(cause)));
     }
 
     static ZLinkDispatchErrorReason reasonFrom(Throwable error) {
         return unwrap(error) instanceof PayloadDecodeDispatchException
-            ? ZLinkDispatchErrorReason.PAYLOAD_DECODE_FAILED
-            : ZLinkDispatchErrorReason.HANDLER_EXCEPTION;
+                ? ZLinkDispatchErrorReason.PAYLOAD_DECODE_FAILED
+                : ZLinkDispatchErrorReason.HANDLER_EXCEPTION;
     }
 
     static ZLinkFrameworkErrorKind frameworkErrorKind(Throwable error) {
@@ -198,30 +238,26 @@ final class ZLinkChannelDispatchReporter {
             //  Spec 32-framework-error-model:40 — an unprocessable payload is a
             //  ProtocolError even when it arrives without a nested framework kind.
             return decode.getCause() instanceof ZLinkFrameworkException frameworkError
-                ? frameworkError.kind()
-                : ZLinkFrameworkErrorKind.PROTOCOL_ERROR;
+                    ? frameworkError.kind()
+                    : ZLinkFrameworkErrorKind.PROTOCOL_ERROR;
         }
         return ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
     }
 
     static void replyAndClose(
-        ZLinkBackendRouterSocket router,
-        ZLinkBackendReceived received,
-        Message reply) {
+            ZLinkBackendRouterSocket router, ZLinkBackendReceived received, Message reply) {
         if (received.hasDirectReplyPath()) {
             replyAndClose(received, reply);
         } else {
             replyAndClose(
-                router,
-                received.routingId().orElseThrow(),
-                received.requestSeq().orElseThrow(),
-                reply);
+                    router,
+                    received.routingId().orElseThrow(),
+                    received.requestSeq().orElseThrow(),
+                    reply);
         }
     }
 
-    static void replyAndClose(
-        ZLinkBackendReceived received,
-        Message reply) {
+    static void replyAndClose(ZLinkBackendReceived received, Message reply) {
         try {
             received.reply(List.of(reply));
         } finally {
@@ -230,10 +266,7 @@ final class ZLinkChannelDispatchReporter {
     }
 
     static void replyAndClose(
-        ZLinkBackendRouterSocket router,
-        RoutingId routingId,
-        long requestSeq,
-        Message reply) {
+            ZLinkBackendRouterSocket router, RoutingId routingId, long requestSeq, Message reply) {
         try {
             router.reply(routingId, requestSeq, List.of(reply));
         } finally {
@@ -242,39 +275,39 @@ final class ZLinkChannelDispatchReporter {
     }
 
     /**
-     * Writes a successful request reply. An envelope request gets a kind-2
-     * envelope reply echoing the request identifiers (shared cross-language
-     * wire); a legacy raw request keeps the raw single-part reply.
+     * Writes a successful request reply. An envelope request gets a kind-2 envelope reply echoing
+     * the request identifiers (shared cross-language wire); a legacy raw request keeps the raw
+     * single-part reply.
      */
     static void replyPayloadAndClose(
-        ZLinkBackendRouterSocket router,
-        ZLinkBackendReceived received,
-        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header requestHeader,
-        Message reply) {
+            ZLinkBackendRouterSocket router,
+            ZLinkBackendReceived received,
+            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header requestHeader,
+            Message reply) {
         if (received.hasDirectReplyPath()) {
             replyPayloadAndClose(received, requestHeader, reply);
         } else {
             replyPayloadAndClose(
-                router,
-                received.routingId().orElseThrow(),
-                received.requestSeq().orElseThrow(),
-                requestHeader,
-                reply);
+                    router,
+                    received.routingId().orElseThrow(),
+                    received.requestSeq().orElseThrow(),
+                    requestHeader,
+                    reply);
         }
     }
 
     static void replyPayloadAndClose(
-        ZLinkBackendReceived received,
-        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header requestHeader,
-        Message reply) {
+            ZLinkBackendReceived received,
+            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header requestHeader,
+            Message reply) {
         if (requestHeader == null) {
             replyAndClose(received, reply);
             return;
         }
-        Message replyHeader = systems.zlink.framework.runtime.messaging
-            .ZLinkChannelEnvelope.encodeHeader(
-                systems.zlink.framework.runtime.messaging
-                    .ZLinkChannelEnvelope.reply(requestHeader));
+        Message replyHeader =
+                systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.encodeHeader(
+                        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.reply(
+                                requestHeader));
         try {
             received.reply(List.of(replyHeader, reply));
         } finally {
@@ -284,19 +317,19 @@ final class ZLinkChannelDispatchReporter {
     }
 
     static void replyPayloadAndClose(
-        ZLinkBackendRouterSocket router,
-        RoutingId routingId,
-        long requestSeq,
-        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header requestHeader,
-        Message reply) {
+            ZLinkBackendRouterSocket router,
+            RoutingId routingId,
+            long requestSeq,
+            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header requestHeader,
+            Message reply) {
         if (requestHeader == null) {
             replyAndClose(router, routingId, requestSeq, reply);
             return;
         }
-        Message replyHeader = systems.zlink.framework.runtime.messaging
-            .ZLinkChannelEnvelope.encodeHeader(
-                systems.zlink.framework.runtime.messaging
-                    .ZLinkChannelEnvelope.reply(requestHeader));
+        Message replyHeader =
+                systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.encodeHeader(
+                        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.reply(
+                                requestHeader));
         try {
             router.reply(routingId, requestSeq, List.of(replyHeader, reply));
         } finally {
@@ -305,9 +338,7 @@ final class ZLinkChannelDispatchReporter {
         }
     }
 
-    static void replyRawAndClose(
-        ZLinkBackendReceived received,
-        List<Message> reply) {
+    static void replyRawAndClose(ZLinkBackendReceived received, List<Message> reply) {
         try {
             received.reply(reply);
         } finally {
@@ -316,10 +347,10 @@ final class ZLinkChannelDispatchReporter {
     }
 
     static void replyRawAndClose(
-        ZLinkBackendRouterSocket router,
-        RoutingId routingId,
-        long requestSeq,
-        List<Message> reply) {
+            ZLinkBackendRouterSocket router,
+            RoutingId routingId,
+            long requestSeq,
+            List<Message> reply) {
         try {
             router.reply(routingId, requestSeq, reply);
         } finally {
@@ -329,8 +360,8 @@ final class ZLinkChannelDispatchReporter {
 
     private static Throwable unwrap(Throwable error) {
         return error instanceof CompletionException && error.getCause() != null
-            ? error.getCause()
-            : error;
+                ? error.getCause()
+                : error;
     }
 
     private static String errorType(Throwable error) {
@@ -342,9 +373,7 @@ final class ZLinkChannelDispatchReporter {
     }
 
     private static String errorText(
-        ZLinkDispatchErrorReason reason,
-        String packetName,
-        Throwable error) {
+            ZLinkDispatchErrorReason reason, String packetName, Throwable error) {
         if (error != null && error.getMessage() != null) {
             return error.getMessage();
         }

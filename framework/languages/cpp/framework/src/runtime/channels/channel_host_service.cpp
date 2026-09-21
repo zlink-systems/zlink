@@ -81,13 +81,12 @@ class channel_host_service_t::server_loop_t
         for (const auto &endpoint : _endpoints) {
             _router->bind (endpoint);
         }
-        const auto hardware_workers = static_cast<std::size_t> (
-          std::max (1u, std::thread::hardware_concurrency ()));
-        const auto max_handler_workers = std::max<std::size_t> (
-          1, std::min<std::size_t> (hardware_workers, 8));
+        const auto hardware_workers =
+          static_cast<std::size_t> (std::max (1u, std::thread::hardware_concurrency ()));
+        const auto max_handler_workers =
+          std::max<std::size_t> (1, std::min<std::size_t> (hardware_workers, 8));
         _handler_executor = std::make_unique<offload_executor_t> (
-          0, max_handler_workers,
-          std::chrono::milliseconds (100), "zlink-channel-server");
+          0, max_handler_workers, std::chrono::milliseconds (100), "zlink-channel-server");
         _poller.add (*_router, zlink::poll_event_flag_t::pollin, 1);
         _poller.add (_monitor, zlink::poll_event_flag_t::pollin, 2);
     }
@@ -102,8 +101,7 @@ class channel_host_service_t::server_loop_t
             zlink::poll_event_t readiness;
             std::size_t ready_count = 0;
             try {
-                ready_count = _poller.wait (
-                  &readiness, 1, std::chrono::milliseconds (50));
+                ready_count = _poller.wait (&readiness, 1, std::chrono::milliseconds (50));
             }
             catch (...) {
                 break;
@@ -115,8 +113,7 @@ class channel_host_service_t::server_loop_t
                 continue;
             }
             const short revents = static_cast<short> (readiness.revents);
-            const short pollin =
-              static_cast<short> (zlink::poll_event_flag_t::pollin);
+            const short pollin = static_cast<short> (zlink::poll_event_flag_t::pollin);
             if (readiness.slot == 2) {
                 if ((revents & pollin) != 0) {
                     drain_monitor_events ();
@@ -193,44 +190,37 @@ class channel_host_service_t::server_loop_t
                          application_job_queue_t::permit_t permit)
     {
         auto application_job =
-          std::make_shared<application_job_queue_t::permit_t> (
-            std::move (permit));
+          std::make_shared<application_job_queue_t::permit_t> (std::move (permit));
         application_job->mark_queued ();
         auto routing_id = received->routing_id ();
         const auto reply_token = received->reply_token ();
-        auto request_parts =
-          zlink::framework::runtime::messaging::message_parts_t (
-            detail::backend::copy_binding_messages (received->parts ()));
-        auto shared_parts = std::make_shared<
-          zlink::framework::runtime::messaging::message_parts_t> (
+        auto request_parts = zlink::framework::runtime::messaging::message_parts_t (
+          detail::backend::copy_binding_messages (received->parts ()));
+        auto shared_parts =
+          std::make_shared<zlink::framework::runtime::messaging::message_parts_t> (
             std::move (request_parts));
         const auto rejection_routing_id = routing_id;
         received->close ();
-        auto work = [this, routing_id = std::move (routing_id), reply_token,
-                     shared_parts,
+        auto work = [this, routing_id = std::move (routing_id), reply_token, shared_parts,
                      application_job] () mutable {
             try {
-            detail::channel_packet_dispatcher_t dispatcher (_runtime);
-            auto scope = detail::service_scope_t::create (
-              *_services, detail::service_scope_kind_t::handler_invocation);
-            auto reply = dispatcher.dispatch_server_message (
-              _channel_name, *shared_parts, scope.provider (), *_serializers,
-              *_handlers, [application_job] {
-                  application_job->release_for_handler_entry ();
-              });
-            if (!reply || reply.value ().size () == 0 || !routing_id || !reply_token) {
-                return;
-            }
-            std::lock_guard<std::mutex> reply_lock (_replies_mutex);
-            _replies.push_back (completed_reply_t{
-              std::move (routing_id), std::move (reply_token),
-              std::move (reply.value ())});
+                detail::channel_packet_dispatcher_t dispatcher (_runtime);
+                auto scope = detail::service_scope_t::create (
+                  *_services, detail::service_scope_kind_t::handler_invocation);
+                auto reply = dispatcher.dispatch_server_message (
+                  _channel_name, *shared_parts, scope.provider (), *_serializers, *_handlers,
+                  [application_job] { application_job->release_for_handler_entry (); });
+                if (!reply || reply.value ().size () == 0 || !routing_id || !reply_token) {
+                    return;
+                }
+                std::lock_guard<std::mutex> reply_lock (_replies_mutex);
+                _replies.push_back (completed_reply_t{
+                  std::move (routing_id), std::move (reply_token), std::move (reply.value ())});
             }
             catch (...) {
             }
         };
-        if (!_handler_executor
-            || !_handler_executor->try_submit_internal (std::move (work))) {
+        if (!_handler_executor || !_handler_executor->try_submit_internal (std::move (work))) {
             (void) rejection_routing_id;
         }
     }
@@ -299,21 +289,15 @@ class channel_host_service_t::server_loop_t
     void apply_runtime_options ()
     {
         const auto peer_weight = _runtime.server_peer_weight_override (_channel_name);
-        if (!peer_weight
-            || (_applied_peer_weight && *_applied_peer_weight == *peer_weight)) {
+        if (!peer_weight || (_applied_peer_weight && *_applied_peer_weight == *peer_weight)) {
             return;
         }
         _router->options ().peer_weight (
-          zlink::peer_weight_t::value (
-            static_cast<std::uint32_t> (
-              std::min (*peer_weight, 100))));
+          zlink::peer_weight_t::value (static_cast<std::uint32_t> (std::min (*peer_weight, 100))));
         _applied_peer_weight = *peer_weight;
     }
 
-    bool is_drained () const noexcept
-    {
-        return _applied_peer_weight && *_applied_peer_weight == 0;
-    }
+    bool is_drained () const noexcept { return _applied_peer_weight && *_applied_peer_weight == 0; }
 
     void drain_monitor_events ()
     {
@@ -323,9 +307,7 @@ class channel_host_service_t::server_loop_t
         for (;;) {
             zlink::poll_event_t readiness;
             try {
-                if (_poller.wait (
-                      &readiness, 1, std::chrono::milliseconds::zero ())
-                      != 1
+                if (_poller.wait (&readiness, 1, std::chrono::milliseconds::zero ()) != 1
                     || readiness.slot != 2
                     || (static_cast<short> (readiness.revents)
                         & static_cast<short> (zlink::poll_event_flag_t::pollin))
@@ -357,9 +339,9 @@ class channel_host_service_t::server_loop_t
                     _pending_handshake_remotes.erase (event->remote_addr);
                 } else if (*kind == detail::socket_event_kind_t::disconnected
                            && _pending_handshake_remotes.erase (event->remote_addr) != 0) {
-                    _runtime.publish_socket_event (
-                      _channel_name, detail::socket_event_kind_t::handshake_failed, event->local_addr,
-                      event->remote_addr);
+                    _runtime.publish_socket_event (_channel_name,
+                                                   detail::socket_event_kind_t::handshake_failed,
+                                                   event->local_addr, event->remote_addr);
                 }
             }
             _runtime.publish_socket_event (_channel_name, *kind, event->local_addr,
@@ -415,16 +397,14 @@ class channel_host_service_t::subscriber_loop_t
         _subscriber (std::make_unique<zlink::sub_socket_t> (*_context))
     {
         detail::apply_common_channel_socket_options (*_subscriber, _capability);
-        fanout::apply_fanout_subscriptions (
-          *_subscriber, _capability.subscription_topics);
+        fanout::apply_fanout_subscriptions (*_subscriber, _capability.subscription_topics);
         apply_runtime_connections ();
-        const auto hardware_workers = static_cast<std::size_t> (
-          std::max (1u, std::thread::hardware_concurrency ()));
-        const auto max_handler_workers = std::max<std::size_t> (
-          1, std::min<std::size_t> (hardware_workers, 8));
+        const auto hardware_workers =
+          static_cast<std::size_t> (std::max (1u, std::thread::hardware_concurrency ()));
+        const auto max_handler_workers =
+          std::max<std::size_t> (1, std::min<std::size_t> (hardware_workers, 8));
         _handler_executor = std::make_unique<offload_executor_t> (
-          0, max_handler_workers,
-          std::chrono::milliseconds (100), "zlink-channel-subscriber");
+          0, max_handler_workers, std::chrono::milliseconds (100), "zlink-channel-subscriber");
         _poller.add (*_subscriber, zlink::poll_event_flag_t::pollin, 1);
     }
 
@@ -437,26 +417,22 @@ class channel_host_service_t::subscriber_loop_t
             zlink::poll_event_t readiness;
             std::size_t ready_count = 0;
             try {
-                ready_count = _poller.wait (
-                  &readiness, 1, std::chrono::milliseconds (50));
+                ready_count = _poller.wait (&readiness, 1, std::chrono::milliseconds (50));
             }
             catch (...) {
                 break;
             }
-            if (_stop->load (std::memory_order_acquire)
-                || ready_count != 1
-                || readiness.slot != 1
+            if (_stop->load (std::memory_order_acquire) || ready_count != 1 || readiness.slot != 1
                 || (static_cast<short> (readiness.revents)
                     & static_cast<short> (zlink::poll_event_flag_t::pollin))
-                     == 0
-                ) {
+                     == 0) {
                 continue;
             }
             auto permit = _application_jobs->wait_for_supply_blocking ();
             if (!permit)
                 break;
-            const int rc = _subscriber->subscribe (
-              _received_message, zlink::recv_flags_t::dontwait);
+            const int rc =
+              _subscriber->subscribe (_received_message, zlink::recv_flags_t::dontwait);
             if (rc == static_cast<int> (zlink::recv_result_t::no_data)) {
                 continue;
             }
@@ -464,8 +440,7 @@ class channel_host_service_t::subscriber_loop_t
                 continue;
             }
             dispatch_async (
-              std::make_shared<zlink::topic_message_t> (
-                std::move (_received_message)),
+              std::make_shared<zlink::topic_message_t> (std::move (_received_message)),
               std::move (*permit));
         }
     }
@@ -497,32 +472,27 @@ class channel_host_service_t::subscriber_loop_t
                          application_job_queue_t::permit_t permit)
     {
         auto application_job =
-          std::make_shared<application_job_queue_t::permit_t> (
-            std::move (permit));
+          std::make_shared<application_job_queue_t::permit_t> (std::move (permit));
         application_job->mark_queued ();
         auto parts = zlink::framework::runtime::messaging::message_parts_t (
           detail::backend::copy_binding_messages (message->parts ()));
-        auto shared_parts = std::make_shared<
-          zlink::framework::runtime::messaging::message_parts_t> (std::move (parts));
+        auto shared_parts =
+          std::make_shared<zlink::framework::runtime::messaging::message_parts_t> (
+            std::move (parts));
         auto work = [this, message = std::move (message), shared_parts,
                      application_job] () mutable {
             try {
-            detail::channel_packet_dispatcher_t dispatcher (_runtime);
-            auto scope = detail::service_scope_t::create (
-              *_services, detail::service_scope_kind_t::handler_invocation);
-            (void) dispatcher.dispatch_server_message (_channel_name, *shared_parts,
-                                                       scope.provider (),
-                                                       *_serializers, *_handlers,
-                                                       [application_job] {
-                                                           application_job
-                                                             ->release_for_handler_entry ();
-                                                       });
+                detail::channel_packet_dispatcher_t dispatcher (_runtime);
+                auto scope = detail::service_scope_t::create (
+                  *_services, detail::service_scope_kind_t::handler_invocation);
+                (void) dispatcher.dispatch_server_message (
+                  _channel_name, *shared_parts, scope.provider (), *_serializers, *_handlers,
+                  [application_job] { application_job->release_for_handler_entry (); });
             }
             catch (...) {
             }
         };
-        if (!_handler_executor
-            || !_handler_executor->try_submit_internal (std::move (work))) {
+        if (!_handler_executor || !_handler_executor->try_submit_internal (std::move (work))) {
         }
     }
 
@@ -569,11 +539,12 @@ class channel_host_service_t::subscriber_loop_t
     std::unique_ptr<offload_executor_t> _handler_executor;
 };
 
-channel_host_service_t::channel_host_service_t (message_bus_t bus,
-                                                std::vector<channel_snapshot_t> channels,
-                                                handler_registry_t &handlers,
-                                                serializer_registry_t &serializers,
-                                                std::shared_ptr<application_job_queue_t> application_jobs) :
+channel_host_service_t::channel_host_service_t (
+  message_bus_t bus,
+  std::vector<channel_snapshot_t> channels,
+  handler_registry_t &handlers,
+  serializer_registry_t &serializers,
+  std::shared_ptr<application_job_queue_t> application_jobs) :
     _bus (std::move (bus)),
     _channels (std::move (channels)),
     _handlers (&handlers),
@@ -582,12 +553,9 @@ channel_host_service_t::channel_host_service_t (message_bus_t bus,
     _application_jobs (
       application_jobs
         ? std::move (application_jobs)
-        : std::make_shared<application_job_queue_t> (
-            application_job_queue_configuration_t{
-              application_job_queue_profile_t::balanced,
-              std::nullopt, 1,
-              static_cast<std::uint32_t> (
-                std::numeric_limits<std::int32_t>::max ())}))
+        : std::make_shared<application_job_queue_t> (application_job_queue_configuration_t{
+            application_job_queue_profile_t::balanced, std::nullopt, 1,
+            static_cast<std::uint32_t> (std::numeric_limits<std::int32_t>::max ())}))
 {
 }
 
@@ -601,22 +569,20 @@ task_t<void> channel_host_service_t::start (service_provider_t &services)
       detail::channel_runtime_t::from (_bus).auto_connect_active ();
     _stop.store (false, std::memory_order_release);
     for (const auto &channel : _channels) {
-        if (!channel.server.enabled
-            || shared_client_server_runtime_active
+        if (!channel.server.enabled || shared_client_server_runtime_active
             || channel.server.bind_endpoints.empty ()) {
             continue;
         }
         auto loop = std::make_unique<server_loop_t> (
           _bus, channel.name, channel.server.bind_endpoints, channel.server.routing_id,
-          channel.server, services, *_serializers, *_handlers, _stop,
-          _core_context, _application_jobs);
+          channel.server, services, *_serializers, *_handlers, _stop, _core_context,
+          _application_jobs);
         auto *raw = loop.get ();
         _loops.push_back (std::move (loop));
         _threads.emplace_back ([raw] { raw->run (); });
     }
     for (const auto &channel : _channels) {
-        if (!channel.subscriber.enabled
-            || channel.subscriber.discovery
+        if (!channel.subscriber.enabled || channel.subscriber.discovery
             || (!channel.subscriber.discovery && channel.subscriber.connect_endpoints.empty ())) {
             continue;
         }

@@ -7,8 +7,9 @@ public sealed class LocationContractTests
     {
         var assembly = typeof(ZLinkLocationAutoConnectType).Assembly;
 
-        Assert.Null(assembly.GetType(
-            "Zlink.Framework.Contracts.Locations.ZLinkLocation" + "CanonicalNames"));
+        Assert.Null(
+            assembly.GetType("Zlink.Framework.Contracts.Locations.ZLinkLocation" + "CanonicalNames")
+        );
     }
 
     [Fact]
@@ -16,8 +17,7 @@ public sealed class LocationContractTests
     {
         var assembly = typeof(ZLinkLocationAutoConnectType).Assembly;
 
-        Assert.Null(assembly.GetType(
-            "Zlink.Framework.Contracts.Locations.ZLinkLocation" + "Kind"));
+        Assert.Null(assembly.GetType("Zlink.Framework.Contracts.Locations.ZLinkLocation" + "Kind"));
     }
 
     [Fact]
@@ -30,11 +30,18 @@ public sealed class LocationContractTests
         Assert.Equal(ZLinkLocationWriteStatus.Stored, stored.Status);
         Assert.Equal(5UL, stored.Generation);
         Assert.Equal(updatedAt, stored.UpdatedAt);
-        Assert.Equal(ZLinkLocationWriteStatus.IgnoredStale, ZLinkLocationWriteResult.IgnoredStale.Status);
-        Assert.Equal(ZLinkLocationWriteStatus.RejectedConflict, ZLinkLocationWriteResult.RejectedConflict.Status);
+        Assert.Equal(
+            ZLinkLocationWriteStatus.IgnoredStale,
+            ZLinkLocationWriteResult.IgnoredStale.Status
+        );
+        Assert.Equal(
+            ZLinkLocationWriteStatus.RejectedConflict,
+            ZLinkLocationWriteResult.RejectedConflict.Status
+        );
         Assert.DoesNotContain(
             Enum.GetNames<ZLinkLocationWriteStatus>(),
-            static name => name == "Store" + "Unavailable");
+            static name => name == "Store" + "Unavailable"
+        );
     }
 
     [Fact]
@@ -49,7 +56,9 @@ public sealed class LocationContractTests
     [Fact]
     public void Location_Readiness_Contract_Uses_Boolean_Peer_Check()
     {
-        var method = typeof(IZLinkLocationReadiness).GetMethod(nameof(IZLinkLocationReadiness.IsPeerReadyAsync));
+        var method = typeof(IZLinkLocationReadiness).GetMethod(
+            nameof(IZLinkLocationReadiness.IsPeerReadyAsync)
+        );
 
         Assert.NotNull(method);
         Assert.Equal(typeof(ValueTask<bool>), method.ReturnType);

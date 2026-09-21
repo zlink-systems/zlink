@@ -37,10 +37,7 @@ export interface ZLinkRelocationStore {
     retentionMs: number,
     signal?: AbortSignal
   ): Promise<ZLinkBlobPutResult>;
-  read(
-    reference: ZLinkBlobReference,
-    signal?: AbortSignal
-  ): Promise<ZLinkBlobReadResult>;
+  read(reference: ZLinkBlobReference, signal?: AbortSignal): Promise<ZLinkBlobReadResult>;
   renew(
     reference: ZLinkBlobReference,
     retentionMs: number,

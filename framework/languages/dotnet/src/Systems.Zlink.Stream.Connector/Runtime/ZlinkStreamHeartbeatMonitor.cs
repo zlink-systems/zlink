@@ -22,9 +22,11 @@ internal sealed class ZlinkStreamHeartbeatMonitor(ZlinkStreamHeartbeatOptions op
     public async Task RunAsync(
         Func<CancellationToken, ValueTask>? sendHeartbeatPing,
         Func<ZlinkStreamError, CancellationToken, ValueTask> handleTransportErrorAsync,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        if (!options.Enabled || sendHeartbeatPing is null) return;
+        if (!options.Enabled || sendHeartbeatPing is null)
+            return;
 
         try
         {
@@ -36,8 +38,13 @@ internal sealed class ZlinkStreamHeartbeatMonitor(ZlinkStreamHeartbeatOptions op
                 if (Elapsed(now, Interlocked.Read(ref _lastInboundTicks)) >= options.Timeout)
                 {
                     await handleTransportErrorAsync(
-                        new ZlinkStreamError(ZlinkStreamErrorCode.Disconnected, "Heartbeat timed out."),
-                        CancellationToken.None).ConfigureAwait(false);
+                            new ZlinkStreamError(
+                                ZlinkStreamErrorCode.Disconnected,
+                                "Heartbeat timed out."
+                            ),
+                            CancellationToken.None
+                        )
+                        .ConfigureAwait(false);
                     return;
                 }
 
@@ -48,14 +55,16 @@ internal sealed class ZlinkStreamHeartbeatMonitor(ZlinkStreamHeartbeatOptions op
                 }
             }
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
         catch (Exception ex)
         {
             var error = ex is ZlinkStreamException streamException
                 ? streamException.Error
-                : new ZlinkStreamError(ZlinkStreamErrorCode.SendFailed, "Heartbeat send failed.", ex);
+                : new ZlinkStreamError(
+                    ZlinkStreamErrorCode.SendFailed,
+                    "Heartbeat send failed.",
+                    ex
+                );
             await handleTransportErrorAsync(error, CancellationToken.None).ConfigureAwait(false);
         }
     }

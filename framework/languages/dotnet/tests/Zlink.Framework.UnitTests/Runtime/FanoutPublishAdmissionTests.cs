@@ -20,16 +20,15 @@ public sealed class FanoutPublishAdmissionTests
         {
             using Message pending = Message.From(LargePayload);
             entered.Set();
-            pair.Publisher.Publish(pair.Topic)
-                .Message(pending)
-                .Flags(SendFlags.None)
-                .Submit();
+            pair.Publisher.Publish(pair.Topic).Message(pending).Flags(SendFlags.None).Submit();
         });
 
         Assert.True(entered.Wait(TimeSpan.FromSeconds(2)));
         await Task.Delay(50);
-        Assert.False(publish.IsCompleted,
-            $"publish completed before capacity was released: {publish.Status}; {publish.Exception}");
+        Assert.False(
+            publish.IsCompleted,
+            $"publish completed before capacity was released: {publish.Status}; {publish.Exception}"
+        );
 
         using (var received = new TopicMessage())
             Assert.True(pair.Subscriber.Subscribe(received));
@@ -46,14 +45,12 @@ public sealed class FanoutPublishAdmissionTests
 
         var started = System.Diagnostics.Stopwatch.StartNew();
         var bindingFailure = Assert.Throws<ZlinkSubmitException>(() =>
-            pair.Publisher.Publish(pair.Topic)
-                .Message(pending)
-                .Flags(SendFlags.None)
-                .Submit());
+            pair.Publisher.Publish(pair.Topic).Message(pending).Flags(SendFlags.None).Submit()
+        );
         started.Stop();
         var mapped = Assert.IsType<ZLinkFrameworkException>(
-            ZLinkRequestFailureMapper.CreateSubmitException(
-                bindingFailure, "Fanout publish"));
+            ZLinkRequestFailureMapper.CreateSubmitException(bindingFailure, "Fanout publish")
+        );
 
         Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, mapped.Kind);
         Assert.True(started.Elapsed >= TimeSpan.FromMilliseconds(50));
@@ -75,7 +72,8 @@ public sealed class FanoutPublishAdmissionTests
             Publisher.Options.SendHighWaterMark = RecordHwm;
             ZLinkBackendSocketOptionsMapper.Apply(
                 Publisher.Options,
-                new ZLinkSocketConfig { SendTimeout = sendTimeout });
+                new ZLinkSocketConfig { SendTimeout = sendTimeout }
+            );
             Publisher.Options.ReceiveTimeout = TimeSpan.FromSeconds(5);
             Subscriber.Options.ReceiveHighWaterMark = RecordHwm;
             Subscriber.Options.ReceiveTimeout = TimeSpan.FromSeconds(5);
@@ -99,8 +97,7 @@ public sealed class FanoutPublishAdmissionTests
                     return;
             }
 
-            throw new Xunit.Sdk.XunitException(
-                "Publisher queue did not reach its configured HWM.");
+            throw new Xunit.Sdk.XunitException("Publisher queue did not reach its configured HWM.");
         }
 
         public void Dispose()

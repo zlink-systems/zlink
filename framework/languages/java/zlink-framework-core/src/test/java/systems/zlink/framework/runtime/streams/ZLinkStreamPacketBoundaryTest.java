@@ -4,13 +4,15 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
-import java.nio.charset.StandardCharsets;
-import java.util.Optional;
-import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamReceived;
+
+import java.nio.charset.StandardCharsets;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkStreamPacketBoundaryTest {
     @Test
@@ -19,20 +21,22 @@ final class ZLinkStreamPacketBoundaryTest {
         Message header = Message.from("header".getBytes(StandardCharsets.UTF_8));
         Message body = Message.from("body".getBytes(StandardCharsets.UTF_8));
         AtomicInteger closes = new AtomicInteger();
-        ZLinkBackendStreamReceived packet = new ZLinkBackendStreamReceived(
-            Optional.of(routingId), header, body, () -> {
-                header.close();
-                body.close();
-                closes.incrementAndGet();
-            });
+        ZLinkBackendStreamReceived packet =
+                new ZLinkBackendStreamReceived(
+                        Optional.of(routingId),
+                        header,
+                        body,
+                        () -> {
+                            header.close();
+                            body.close();
+                            closes.incrementAndGet();
+                        });
 
         assertEquals(Optional.of(routingId), packet.routingId());
         assertSame(header, packet.header());
         assertSame(body, packet.body());
-        assertArrayEquals("header".getBytes(StandardCharsets.UTF_8),
-            packet.header().toByteArray());
-        assertArrayEquals("body".getBytes(StandardCharsets.UTF_8),
-            packet.body().toByteArray());
+        assertArrayEquals("header".getBytes(StandardCharsets.UTF_8), packet.header().toByteArray());
+        assertArrayEquals("body".getBytes(StandardCharsets.UTF_8), packet.body().toByteArray());
 
         packet.close();
         packet.close();

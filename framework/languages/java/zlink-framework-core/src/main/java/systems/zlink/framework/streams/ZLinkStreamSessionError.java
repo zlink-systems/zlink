@@ -7,7 +7,11 @@ public enum ZLinkStreamSessionError {
 
     private final int value;
 
-    ZLinkStreamSessionError(int value) { this.value = value; }
+    ZLinkStreamSessionError(int value) {
+        this.value = value;
+    }
 
-    public int value() { return value; }
+    public int value() {
+        return value;
+    }
 }

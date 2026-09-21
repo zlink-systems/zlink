@@ -14,7 +14,9 @@ namespace Zlink.HttpClient.UnitTests;
 /// </summary>
 internal sealed class RawCaptureServer : IDisposable
 {
-    private readonly TaskCompletionSource<string> _captured = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource<string> _captured = new(
+        TaskCreationOptions.RunContinuationsAsynchronously
+    );
     private readonly TcpListener _listener;
 
     public RawCaptureServer(string responseBody = "{}")
@@ -51,7 +53,10 @@ internal sealed class RawCaptureServer : IDisposable
             await using var stream = connection.GetStream();
 
             var headerText = await ReadHeadersAsync(stream).ConfigureAwait(false);
-            var chunked = headerText.Contains("transfer-encoding: chunked", StringComparison.OrdinalIgnoreCase);
+            var chunked = headerText.Contains(
+                "transfer-encoding: chunked",
+                StringComparison.OrdinalIgnoreCase
+            );
             var contentLength = ParseContentLength(headerText);
 
             var body = chunked
@@ -60,7 +65,8 @@ internal sealed class RawCaptureServer : IDisposable
 
             var payload = Encoding.UTF8.GetBytes(responseBody);
             var response = Encoding.UTF8.GetBytes(
-                $"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {payload.Length}\r\nConnection: close\r\n\r\n");
+                $"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {payload.Length}\r\nConnection: close\r\n\r\n"
+            );
             await stream.WriteAsync(response).ConfigureAwait(false);
             await stream.WriteAsync(payload).ConfigureAwait(false);
             await stream.FlushAsync().ConfigureAwait(false);
@@ -80,12 +86,17 @@ internal sealed class RawCaptureServer : IDisposable
         while (true)
         {
             var read = await stream.ReadAsync(one).ConfigureAwait(false);
-            if (read == 0) break;
+            if (read == 0)
+                break;
 
             buffer.Add(one[0]);
-            if (buffer.Count >= 4
-                && buffer[^4] == (byte)'\r' && buffer[^3] == (byte)'\n'
-                && buffer[^2] == (byte)'\r' && buffer[^1] == (byte)'\n')
+            if (
+                buffer.Count >= 4
+                && buffer[^4] == (byte)'\r'
+                && buffer[^3] == (byte)'\n'
+                && buffer[^2] == (byte)'\r'
+                && buffer[^1] == (byte)'\n'
+            )
                 break;
         }
 
@@ -108,7 +119,8 @@ internal sealed class RawCaptureServer : IDisposable
         while (offset < length)
         {
             var read = await stream.ReadAsync(buffer.AsMemory(offset)).ConfigureAwait(false);
-            if (read == 0) break;
+            if (read == 0)
+                break;
 
             offset += read;
         }
@@ -144,11 +156,14 @@ internal sealed class RawCaptureServer : IDisposable
         while (true)
         {
             var read = await stream.ReadAsync(one).ConfigureAwait(false);
-            if (read == 0) break;
+            if (read == 0)
+                break;
 
-            if (one[0] == (byte)'\n') break;
+            if (one[0] == (byte)'\n')
+                break;
 
-            if (one[0] != (byte)'\r') buffer.Add(one[0]);
+            if (one[0] != (byte)'\r')
+                buffer.Add(one[0]);
         }
 
         return Encoding.ASCII.GetString(buffer.ToArray());

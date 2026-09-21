@@ -14,25 +14,21 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
     public void Location_provider_implements_only_the_opaque_store_contract()
     {
         var locationInterfaces = typeof(ZLinkRedisLocationStore).GetInterfaces();
-        var relocationInterfaces =
-            typeof(ZLinkRedisRelocationStore).GetInterfaces();
+        var relocationInterfaces = typeof(ZLinkRedisRelocationStore).GetInterfaces();
 
         Assert.Contains(typeof(IZLinkLocationStore), locationInterfaces);
-        Assert.DoesNotContain(
-            locationInterfaces,
-            type => type.Name == "IZLinkLocationRepository");
+        Assert.DoesNotContain(locationInterfaces, type => type.Name == "IZLinkLocationRepository");
         Assert.Contains(typeof(IZLinkRelocationStore), relocationInterfaces);
         Assert.DoesNotContain(
             relocationInterfaces,
-            type => type.Name == "IZLinkRelocationRepository");
+            type => type.Name == "IZLinkRelocationRepository"
+        );
 
-        var dependencies = typeof(ZLinkRedisLocationStore).Assembly
-            .GetReferencedAssemblies()
+        var dependencies = typeof(ZLinkRedisLocationStore)
+            .Assembly.GetReferencedAssemblies()
             .Select(static dependency => dependency.Name)
             .ToArray();
-        Assert.Contains(
-            "Zlink.Framework.Provider.Abstractions",
-            dependencies);
+        Assert.Contains("Zlink.Framework.Provider.Abstractions", dependencies);
         Assert.DoesNotContain("Zlink.Framework", dependencies);
 
         var exactOptionMembers = new[]
@@ -44,26 +40,30 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
             "set_ConfigurationOptions",
             "set_ConnectionString",
             "set_KeyPrefix",
-            "set_OperationTimeout"
+            "set_OperationTimeout",
         };
         Assert.Equal(
             exactOptionMembers,
             typeof(ZLinkRedisLocationOptions)
                 .GetMethods(
                     System.Reflection.BindingFlags.Public
-                    | System.Reflection.BindingFlags.Instance
-                    | System.Reflection.BindingFlags.DeclaredOnly)
+                        | System.Reflection.BindingFlags.Instance
+                        | System.Reflection.BindingFlags.DeclaredOnly
+                )
                 .Select(static method => method.Name)
-                .Order(StringComparer.Ordinal));
+                .Order(StringComparer.Ordinal)
+        );
         Assert.Equal(
             exactOptionMembers,
             typeof(ZLinkRedisRelocationOptions)
                 .GetMethods(
                     System.Reflection.BindingFlags.Public
-                    | System.Reflection.BindingFlags.Instance
-                    | System.Reflection.BindingFlags.DeclaredOnly)
+                        | System.Reflection.BindingFlags.Instance
+                        | System.Reflection.BindingFlags.DeclaredOnly
+                )
                 .Select(static method => method.Name)
-                .Order(StringComparer.Ordinal));
+                .Order(StringComparer.Ordinal)
+        );
     }
 
     [SkippableFact]
@@ -74,22 +74,33 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
         var key = new ZLinkStoreKey("authority:actor:player-1");
 
         var first = Assert.IsType<ZLinkStoreWriteResult.Applied>(
-            await store.WriteAsync(new ZLinkStoreWriteRequest(
-                [new ZLinkStoreCondition.Missing(key)],
-                [new ZLinkStoreMutation.Put(key, new byte[] { 1, 2, 3 }, null)])));
+            await store.WriteAsync(
+                new ZLinkStoreWriteRequest(
+                    [new ZLinkStoreCondition.Missing(key)],
+                    [new ZLinkStoreMutation.Put(key, new byte[] { 1, 2, 3 }, null)]
+                )
+            )
+        );
         var version = Assert.Single(first.PutVersions).Value;
 
         Assert.IsType<ZLinkStoreWriteResult.Conflict>(
-            await store.WriteAsync(new ZLinkStoreWriteRequest(
-                [new ZLinkStoreCondition.Missing(key)],
-                [new ZLinkStoreMutation.Delete(key)])));
+            await store.WriteAsync(
+                new ZLinkStoreWriteRequest(
+                    [new ZLinkStoreCondition.Missing(key)],
+                    [new ZLinkStoreMutation.Delete(key)]
+                )
+            )
+        );
 
         Assert.IsType<ZLinkStoreWriteResult.Applied>(
-            await store.WriteAsync(new ZLinkStoreWriteRequest(
-                [new ZLinkStoreCondition.Version(key, version)],
-                [new ZLinkStoreMutation.Put(key, new byte[] { 4 }, null)])));
-        var found = Assert.IsType<ZLinkStoreReadResult.Found>(
-            await store.ReadAsync(key));
+            await store.WriteAsync(
+                new ZLinkStoreWriteRequest(
+                    [new ZLinkStoreCondition.Version(key, version)],
+                    [new ZLinkStoreMutation.Put(key, new byte[] { 4 }, null)]
+                )
+            )
+        );
+        var found = Assert.IsType<ZLinkStoreReadResult.Found>(await store.ReadAsync(key));
         Assert.Equal(new byte[] { 4 }, found.Value.Bytes.ToArray());
     }
 
@@ -102,23 +113,22 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
         var retention = TimeSpan.FromMinutes(1);
 
         Assert.IsType<ZLinkBlobPutResult.Stored>(
-            await store.PutAsync(reference, new byte[] { 1, 2 }, retention));
+            await store.PutAsync(reference, new byte[] { 1, 2 }, retention)
+        );
         Assert.IsType<ZLinkBlobPutResult.AlreadyStored>(
-            await store.PutAsync(reference, new byte[] { 1, 2 }, retention));
+            await store.PutAsync(reference, new byte[] { 1, 2 }, retention)
+        );
         Assert.IsType<ZLinkBlobPutResult.Conflict>(
-            await store.PutAsync(reference, new byte[] { 9 }, retention));
+            await store.PutAsync(reference, new byte[] { 9 }, retention)
+        );
 
-        var found = Assert.IsType<ZLinkBlobReadResult.Found>(
-            await store.ReadAsync(reference));
+        var found = Assert.IsType<ZLinkBlobReadResult.Found>(await store.ReadAsync(reference));
         Assert.Equal(new byte[] { 1, 2 }, found.Bytes.ToArray());
-        Assert.IsType<ZLinkBlobRenewResult.Renewed>(
-            await store.RenewAsync(reference, retention));
+        Assert.IsType<ZLinkBlobRenewResult.Renewed>(await store.RenewAsync(reference, retention));
 
         await store.DeleteAsync(reference);
-        Assert.IsType<ZLinkBlobReadResult.Missing>(
-            await store.ReadAsync(reference));
-        Assert.IsType<ZLinkBlobRenewResult.Missing>(
-            await store.RenewAsync(reference, retention));
+        Assert.IsType<ZLinkBlobReadResult.Missing>(await store.ReadAsync(reference));
+        Assert.IsType<ZLinkBlobRenewResult.Missing>(await store.RenewAsync(reference, retention));
     }
 
     [SkippableFact]
@@ -126,67 +136,67 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
     {
         Skip.IfNot(fixture.RedisAvailable, fixture.SkipReason);
         await using var store = fixture.CreateStore();
-        foreach (var (key, value) in new[]
-                 {
-                     ("actor:1", (byte)1),
-                     ("actor:2", (byte)2),
-                     ("actor:3", (byte)3),
-                     ("other:1", (byte)9)
-                 })
+        foreach (
+            var (key, value) in new[]
+            {
+                ("actor:1", (byte)1),
+                ("actor:2", (byte)2),
+                ("actor:3", (byte)3),
+                ("other:1", (byte)9),
+            }
+        )
         {
             Assert.IsType<ZLinkStoreWriteResult.Applied>(
-                await store.WriteAsync(new ZLinkStoreWriteRequest(
-                    [new ZLinkStoreCondition.Missing(new ZLinkStoreKey(key))],
-                    [new ZLinkStoreMutation.Put(
-                        new ZLinkStoreKey(key),
-                        new[] { value },
-                        null)])));
+                await store.WriteAsync(
+                    new ZLinkStoreWriteRequest(
+                        [new ZLinkStoreCondition.Missing(new ZLinkStoreKey(key))],
+                        [new ZLinkStoreMutation.Put(new ZLinkStoreKey(key), new[] { value }, null)]
+                    )
+                )
+            );
         }
 
         var first = Assert.IsType<ZLinkStoreScanResult.Page>(
-            await store.ScanAsync(new ZLinkStoreScanRequest(
-                "actor:",
-                null,
-                2)));
+            await store.ScanAsync(new ZLinkStoreScanRequest("actor:", null, 2))
+        );
         Assert.Equal(2, first.Value.Items.Count);
         Assert.NotNull(first.Value.NextCursor);
 
         var thirdKey = new ZLinkStoreKey("actor:3");
-        var third = Assert.IsType<ZLinkStoreReadResult.Found>(
-            await store.ReadAsync(thirdKey));
+        var third = Assert.IsType<ZLinkStoreReadResult.Found>(await store.ReadAsync(thirdKey));
         var fourthKey = new ZLinkStoreKey("actor:4");
         Assert.IsType<ZLinkStoreWriteResult.Applied>(
-            await store.WriteAsync(new ZLinkStoreWriteRequest(
-                [
-                    new ZLinkStoreCondition.Version(
-                        thirdKey,
-                        third.Value.Version),
-                    new ZLinkStoreCondition.Missing(fourthKey)
-                ],
-                [
-                    new ZLinkStoreMutation.Delete(thirdKey),
-                    new ZLinkStoreMutation.Put(
-                        fourthKey,
-                        new byte[] { 4 },
-                        null)
-                ])));
+            await store.WriteAsync(
+                new ZLinkStoreWriteRequest(
+                    [
+                        new ZLinkStoreCondition.Version(thirdKey, third.Value.Version),
+                        new ZLinkStoreCondition.Missing(fourthKey),
+                    ],
+                    [
+                        new ZLinkStoreMutation.Delete(thirdKey),
+                        new ZLinkStoreMutation.Put(fourthKey, new byte[] { 4 }, null),
+                    ]
+                )
+            )
+        );
 
         var second = Assert.IsType<ZLinkStoreScanResult.Page>(
-            await store.ScanAsync(new ZLinkStoreScanRequest(
-                "actor:",
-                first.Value.NextCursor,
-                2)));
+            await store.ScanAsync(new ZLinkStoreScanRequest("actor:", first.Value.NextCursor, 2))
+        );
         var item = Assert.Single(second.Value.Items);
         Assert.Equal("actor:3", item.Key.Value);
         Assert.Equal(new byte[] { 3 }, item.Value.Bytes.ToArray());
         Assert.Null(second.Value.NextCursor);
 
         Assert.IsType<ZLinkStoreScanResult.Expired>(
-            await store.ScanAsync(new ZLinkStoreScanRequest(
-                "actor:",
-                new ZLinkStoreScanCursor(
-                    $"{Guid.NewGuid():N}:0"),
-                2)));
+            await store.ScanAsync(
+                new ZLinkStoreScanRequest(
+                    "actor:",
+                    new ZLinkStoreScanCursor($"{Guid.NewGuid():N}:0"),
+                    2
+                )
+            )
+        );
     }
 
     [SkippableFact]
@@ -198,36 +208,32 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
         {
             var key = new ZLinkStoreKey($"metadata:{index}");
             Assert.IsType<ZLinkStoreWriteResult.Applied>(
-                await store.WriteAsync(new ZLinkStoreWriteRequest(
-                    [],
-                    [
-                        new ZLinkStoreMutation.Put(
-                            key,
-                            new byte[512 * 1024],
-                            null)
-                    ])));
+                await store.WriteAsync(
+                    new ZLinkStoreWriteRequest(
+                        [],
+                        [new ZLinkStoreMutation.Put(key, new byte[512 * 1024], null)]
+                    )
+                )
+            );
         }
 
         var first = Assert.IsType<ZLinkStoreScanResult.Page>(
-            await store.ScanAsync(new ZLinkStoreScanRequest(
-                "metadata:",
-                null,
-                1)));
-        var cursor = Assert.IsType<ZLinkStoreScanCursor>(
-            first.Value.NextCursor);
+            await store.ScanAsync(new ZLinkStoreScanRequest("metadata:", null, 1))
+        );
+        var cursor = Assert.IsType<ZLinkStoreScanCursor>(first.Value.NextCursor);
         var scanId = cursor.Value[..cursor.Value.IndexOf(':')];
-        var scanKey =
-            $"{keyPrefix}:{{zlink-location-v3}}:opaque:scan:{scanId}";
+        var scanKey = $"{keyPrefix}:{{zlink-location-v3}}:opaque:scan:{scanId}";
 
-        await using var connection =
-            await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+        await using var connection = await ConnectionMultiplexer.ConnectAsync(
+            fixture.ConnectionString
+        );
         var metadata = await connection.GetDatabase().HashGetAllAsync(scanKey);
 
         Assert.Equal(3, metadata.Length);
         Assert.True(
-            metadata.Sum(static item =>
-                item.Name.ToString().Length + item.Value.ToString().Length)
-            < 4096);
+            metadata.Sum(static item => item.Name.ToString().Length + item.Value.ToString().Length)
+                < 4096
+        );
     }
 
     [SkippableFact]
@@ -237,128 +243,111 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
         await using var store = fixture.CreateStore(out var keyPrefix);
         var firstKey = new ZLinkStoreKey("mvcc:a");
         var hotKey = new ZLinkStoreKey("mvcc:b");
-        foreach (var (key, value) in new[]
-                 {
-                     (firstKey, (byte)1),
-                     (hotKey, (byte)2)
-                 })
+        foreach (var (key, value) in new[] { (firstKey, (byte)1), (hotKey, (byte)2) })
         {
             Assert.IsType<ZLinkStoreWriteResult.Applied>(
-                await store.WriteAsync(new ZLinkStoreWriteRequest(
-                    [],
-                    [new ZLinkStoreMutation.Put(key, new[] { value }, null)])));
+                await store.WriteAsync(
+                    new ZLinkStoreWriteRequest(
+                        [],
+                        [new ZLinkStoreMutation.Put(key, new[] { value }, null)]
+                    )
+                )
+            );
         }
 
         var firstPage = Assert.IsType<ZLinkStoreScanResult.Page>(
-            await store.ScanAsync(new ZLinkStoreScanRequest(
-                "mvcc:",
-                null,
-                1)));
+            await store.ScanAsync(new ZLinkStoreScanRequest("mvcc:", null, 1))
+        );
         Assert.Equal(firstKey, Assert.Single(firstPage.Value.Items).Key);
         Assert.NotNull(firstPage.Value.NextCursor);
 
-        var current = Assert.IsType<ZLinkStoreReadResult.Found>(
-            await store.ReadAsync(hotKey));
-        await using var connection =
-            await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+        var current = Assert.IsType<ZLinkStoreReadResult.Found>(await store.ReadAsync(hotKey));
+        await using var connection = await ConnectionMultiplexer.ConnectAsync(
+            fixture.ConnectionString
+        );
         var database = connection.GetDatabase();
-        var cleanupKey =
-            $"{keyPrefix}:{{zlink-location-v3}}:opaque:cleanup";
+        var cleanupKey = $"{keyPrefix}:{{zlink-location-v3}}:opaque:cleanup";
 
         Assert.IsType<ZLinkStoreWriteResult.Applied>(
-            await store.WriteAsync(new ZLinkStoreWriteRequest(
-                [new ZLinkStoreCondition.Version(
-                    hotKey,
-                    current.Value.Version)],
-                [new ZLinkStoreMutation.Put(hotKey, new byte[] { 3 }, null)])));
-        var fixedCleanupDue = await database.SortedSetScoreAsync(
-            cleanupKey,
-            hotKey.Value);
+            await store.WriteAsync(
+                new ZLinkStoreWriteRequest(
+                    [new ZLinkStoreCondition.Version(hotKey, current.Value.Version)],
+                    [new ZLinkStoreMutation.Put(hotKey, new byte[] { 3 }, null)]
+                )
+            )
+        );
+        var fixedCleanupDue = await database.SortedSetScoreAsync(cleanupKey, hotKey.Value);
         Assert.NotNull(fixedCleanupDue);
 
-        current = Assert.IsType<ZLinkStoreReadResult.Found>(
-            await store.ReadAsync(hotKey));
+        current = Assert.IsType<ZLinkStoreReadResult.Found>(await store.ReadAsync(hotKey));
         Assert.IsType<ZLinkStoreWriteResult.Applied>(
-            await store.WriteAsync(new ZLinkStoreWriteRequest(
-                [new ZLinkStoreCondition.Version(
-                    hotKey,
-                    current.Value.Version)],
-                [new ZLinkStoreMutation.Put(hotKey, new byte[] { 4 }, null)])));
-        Assert.Equal(
-            fixedCleanupDue,
-            await database.SortedSetScoreAsync(cleanupKey, hotKey.Value));
+            await store.WriteAsync(
+                new ZLinkStoreWriteRequest(
+                    [new ZLinkStoreCondition.Version(hotKey, current.Value.Version)],
+                    [new ZLinkStoreMutation.Put(hotKey, new byte[] { 4 }, null)]
+                )
+            )
+        );
+        Assert.Equal(fixedCleanupDue, await database.SortedSetScoreAsync(cleanupKey, hotKey.Value));
 
         for (var index = 0; index < 125; index++)
         {
-            current = Assert.IsType<ZLinkStoreReadResult.Found>(
-                await store.ReadAsync(hotKey));
+            current = Assert.IsType<ZLinkStoreReadResult.Found>(await store.ReadAsync(hotKey));
             Assert.IsType<ZLinkStoreWriteResult.Applied>(
-                await store.WriteAsync(new ZLinkStoreWriteRequest(
-                    [new ZLinkStoreCondition.Version(
-                        hotKey,
-                        current.Value.Version)],
-                    [new ZLinkStoreMutation.Put(
-                        hotKey,
-                        new[] { (byte)(index & 0xff) },
-                        null)])));
+                await store.WriteAsync(
+                    new ZLinkStoreWriteRequest(
+                        [new ZLinkStoreCondition.Version(hotKey, current.Value.Version)],
+                        [new ZLinkStoreMutation.Put(hotKey, new[] { (byte)(index & 0xff) }, null)]
+                    )
+                )
+            );
         }
 
-        current = Assert.IsType<ZLinkStoreReadResult.Found>(
-            await store.ReadAsync(hotKey));
-        await Assert.ThrowsAsync<IOException>(
-            () => store.WriteAsync(new ZLinkStoreWriteRequest(
-                [new ZLinkStoreCondition.Version(
-                    hotKey,
-                    current.Value.Version)],
-                [new ZLinkStoreMutation.Put(
-                    hotKey,
-                    new byte[] { 0xff },
-                    null)])).AsTask());
+        current = Assert.IsType<ZLinkStoreReadResult.Found>(await store.ReadAsync(hotKey));
+        await Assert.ThrowsAsync<IOException>(() =>
+            store
+                .WriteAsync(
+                    new ZLinkStoreWriteRequest(
+                        [new ZLinkStoreCondition.Version(hotKey, current.Value.Version)],
+                        [new ZLinkStoreMutation.Put(hotKey, new byte[] { 0xff }, null)]
+                    )
+                )
+                .AsTask()
+        );
 
         var finalPage = Assert.IsType<ZLinkStoreScanResult.Page>(
-            await store.ScanAsync(new ZLinkStoreScanRequest(
-                "mvcc:",
-                firstPage.Value.NextCursor,
-                1)));
+            await store.ScanAsync(new ZLinkStoreScanRequest("mvcc:", firstPage.Value.NextCursor, 1))
+        );
         var snapshotItem = Assert.Single(finalPage.Value.Items);
         Assert.Equal(hotKey, snapshotItem.Key);
         Assert.Equal(new byte[] { 2 }, snapshotItem.Value.Bytes.ToArray());
         Assert.Null(finalPage.Value.NextCursor);
 
-        var snapshotBoundaryKey =
-            $"{keyPrefix}:{{zlink-location-v3}}:opaque:snapshot-boundary";
-        Assert.Equal(
-            0,
-            await database.SortedSetLengthAsync(snapshotBoundaryKey));
+        var snapshotBoundaryKey = $"{keyPrefix}:{{zlink-location-v3}}:opaque:snapshot-boundary";
+        Assert.Equal(0, await database.SortedSetLengthAsync(snapshotBoundaryKey));
         var cleanupDue = Assert.IsType<double>(
-            await database.SortedSetScoreAsync(cleanupKey, hotKey.Value));
+            await database.SortedSetScoreAsync(cleanupKey, hotKey.Value)
+        );
         var cleanupDelay = Math.Max(
             0,
-            (long)Math.Ceiling(
-                cleanupDue - DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
-            + 100);
+            (long)Math.Ceiling(cleanupDue - DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()) + 100
+        );
         await Task.Delay(TimeSpan.FromMilliseconds(cleanupDelay));
-        current = Assert.IsType<ZLinkStoreReadResult.Found>(
-            await store.ReadAsync(hotKey));
+        current = Assert.IsType<ZLinkStoreReadResult.Found>(await store.ReadAsync(hotKey));
         Assert.IsType<ZLinkStoreWriteResult.Applied>(
-            await store.WriteAsync(new ZLinkStoreWriteRequest(
-                [new ZLinkStoreCondition.Version(
-                    hotKey,
-                    current.Value.Version)],
-                [new ZLinkStoreMutation.Put(
-                    hotKey,
-                    new byte[] { 5 },
-                    null)])));
+            await store.WriteAsync(
+                new ZLinkStoreWriteRequest(
+                    [new ZLinkStoreCondition.Version(hotKey, current.Value.Version)],
+                    [new ZLinkStoreMutation.Put(hotKey, new byte[] { 5 }, null)]
+                )
+            )
+        );
 
-        var digest = Convert.ToHexString(
-                SHA256.HashData(Encoding.UTF8.GetBytes(hotKey.Value)))
+        var digest = Convert
+            .ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(hotKey.Value)))
             .ToLowerInvariant();
-        var recordKey =
-            $"{keyPrefix}:{{zlink-location-v3}}:opaque:{digest}";
-        Assert.InRange(
-            await database.SortedSetLengthAsync(recordKey),
-            1,
-            2);
+        var recordKey = $"{keyPrefix}:{{zlink-location-v3}}:opaque:{digest}";
+        Assert.InRange(await database.SortedSetLengthAsync(recordKey), 1, 2);
     }
 
     [SkippableFact]
@@ -369,25 +358,29 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
         var key = new ZLinkStoreKey("hot:capacity");
 
         var current = Assert.IsType<ZLinkStoreWriteResult.Applied>(
-            await store.WriteAsync(new ZLinkStoreWriteRequest(
-                [new ZLinkStoreCondition.Missing(key)],
-                [new ZLinkStoreMutation.Put(key, new byte[] { 0 }, null)])));
+            await store.WriteAsync(
+                new ZLinkStoreWriteRequest(
+                    [new ZLinkStoreCondition.Missing(key)],
+                    [new ZLinkStoreMutation.Put(key, new byte[] { 0 }, null)]
+                )
+            )
+        );
         var version = current.PutVersions[key];
 
         for (var index = 1; index <= 256; index++)
         {
             current = Assert.IsType<ZLinkStoreWriteResult.Applied>(
-                await store.WriteAsync(new ZLinkStoreWriteRequest(
-                    [new ZLinkStoreCondition.Version(key, version)],
-                    [new ZLinkStoreMutation.Put(
-                        key,
-                        new[] { (byte)index },
-                        null)])));
+                await store.WriteAsync(
+                    new ZLinkStoreWriteRequest(
+                        [new ZLinkStoreCondition.Version(key, version)],
+                        [new ZLinkStoreMutation.Put(key, new[] { (byte)index }, null)]
+                    )
+                )
+            );
             version = current.PutVersions[key];
         }
 
-        var found = Assert.IsType<ZLinkStoreReadResult.Found>(
-            await store.ReadAsync(key));
+        var found = Assert.IsType<ZLinkStoreReadResult.Found>(await store.ReadAsync(key));
         Assert.Equal(new byte[] { 0 }, found.Value.Bytes.ToArray());
     }
 
@@ -399,23 +392,27 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
         var guard = new ZLinkStoreKey("batch:guard");
         var target = new ZLinkStoreKey("batch:target");
         var initial = Assert.IsType<ZLinkStoreWriteResult.Applied>(
-            await store.WriteAsync(new ZLinkStoreWriteRequest(
-                [new ZLinkStoreCondition.Missing(guard)],
-                [new ZLinkStoreMutation.Put(guard, new byte[] { 1 }, null)])));
+            await store.WriteAsync(
+                new ZLinkStoreWriteRequest(
+                    [new ZLinkStoreCondition.Missing(guard)],
+                    [new ZLinkStoreMutation.Put(guard, new byte[] { 1 }, null)]
+                )
+            )
+        );
 
         var conflict = Assert.IsType<ZLinkStoreWriteResult.Conflict>(
-            await store.WriteAsync(new ZLinkStoreWriteRequest(
-                [new ZLinkStoreCondition.Missing(guard)],
-                [new ZLinkStoreMutation.Put(target, new byte[] { 2 }, null)])));
+            await store.WriteAsync(
+                new ZLinkStoreWriteRequest(
+                    [new ZLinkStoreCondition.Missing(guard)],
+                    [new ZLinkStoreMutation.Put(target, new byte[] { 2 }, null)]
+                )
+            )
+        );
 
         Assert.True(conflict.StoreNow >= initial.StoreNow);
-        Assert.IsType<ZLinkStoreReadResult.Missing>(
-            await store.ReadAsync(target));
-        var unchanged = Assert.IsType<ZLinkStoreReadResult.Found>(
-            await store.ReadAsync(guard));
-        Assert.Equal(
-            initial.PutVersions[guard],
-            unchanged.Value.Version);
+        Assert.IsType<ZLinkStoreReadResult.Missing>(await store.ReadAsync(target));
+        var unchanged = Assert.IsType<ZLinkStoreReadResult.Found>(await store.ReadAsync(guard));
+        Assert.Equal(initial.PutVersions[guard], unchanged.Value.Version);
     }
 
     [SkippableFact]
@@ -426,31 +423,35 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
         var expiring = new ZLinkStoreKey("retention:short");
         var durable = new ZLinkStoreKey("retention:durable");
         var applied = Assert.IsType<ZLinkStoreWriteResult.Applied>(
-            await store.WriteAsync(new ZLinkStoreWriteRequest(
-                [],
-                [
-                    new ZLinkStoreMutation.Put(
-                        expiring,
-                        new byte[] { 1 },
-                        TimeSpan.FromMilliseconds(150)),
-                    new ZLinkStoreMutation.Put(
-                        durable,
-                        new byte[] { 2 },
-                        null)
-                ])));
+            await store.WriteAsync(
+                new ZLinkStoreWriteRequest(
+                    [],
+                    [
+                        new ZLinkStoreMutation.Put(
+                            expiring,
+                            new byte[] { 1 },
+                            TimeSpan.FromMilliseconds(150)
+                        ),
+                        new ZLinkStoreMutation.Put(durable, new byte[] { 2 }, null),
+                    ]
+                )
+            )
+        );
         var beforeExpiry = Assert.IsType<ZLinkStoreReadResult.Found>(
-            await store.ReadAsync(expiring));
+            await store.ReadAsync(expiring)
+        );
 
         Assert.NotNull(beforeExpiry.Value.ExpiresAt);
         Assert.True(beforeExpiry.Value.ExpiresAt > applied.StoreNow);
-        Assert.Null(Assert.IsType<ZLinkStoreReadResult.Found>(
-            await store.ReadAsync(durable)).Value.ExpiresAt);
+        Assert.Null(
+            Assert
+                .IsType<ZLinkStoreReadResult.Found>(await store.ReadAsync(durable))
+                .Value.ExpiresAt
+        );
 
         await Task.Delay(250);
-        Assert.IsType<ZLinkStoreReadResult.Missing>(
-            await store.ReadAsync(expiring));
-        Assert.IsType<ZLinkStoreReadResult.Found>(
-            await store.ReadAsync(durable));
+        Assert.IsType<ZLinkStoreReadResult.Missing>(await store.ReadAsync(expiring));
+        Assert.IsType<ZLinkStoreReadResult.Found>(await store.ReadAsync(durable));
     }
 
     [SkippableFact]
@@ -458,19 +459,26 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
     {
         Skip.IfNot(fixture.RedisAvailable, fixture.SkipReason);
         await using var store = fixture.CreateStore();
-        var mutations = Enumerable.Range(0, 2048)
-            .Select(index => (ZLinkStoreMutation)new ZLinkStoreMutation.Put(
-                new ZLinkStoreKey($"bound:{index:D4}"),
-                new byte[] { (byte)(index & 0xff) },
-                null))
+        var mutations = Enumerable
+            .Range(0, 2048)
+            .Select(index =>
+                (ZLinkStoreMutation)
+                    new ZLinkStoreMutation.Put(
+                        new ZLinkStoreKey($"bound:{index:D4}"),
+                        new byte[] { (byte)(index & 0xff) },
+                        null
+                    )
+            )
             .ToArray();
 
         var result = Assert.IsType<ZLinkStoreWriteResult.Applied>(
-            await store.WriteAsync(new ZLinkStoreWriteRequest([], mutations)));
+            await store.WriteAsync(new ZLinkStoreWriteRequest([], mutations))
+        );
 
         Assert.Equal(2048, result.PutVersions.Count);
         var page = Assert.IsType<ZLinkStoreScanResult.Page>(
-            await store.ScanAsync(new ZLinkStoreScanRequest("bound:", null, 1000)));
+            await store.ScanAsync(new ZLinkStoreScanRequest("bound:", null, 1000))
+        );
         Assert.Equal(1000, page.Value.Items.Count);
         Assert.NotNull(page.Value.NextCursor);
     }
@@ -482,37 +490,55 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
             new ZLinkRedisLocationOptions
             {
                 ConnectionString = "unused:6379",
-                KeyPrefix = "zlink:bounds"
+                KeyPrefix = "zlink:bounds",
             },
-            _ => throw new InvalidOperationException(
-                "Validation must finish before Redis I/O."));
+            _ => throw new InvalidOperationException("Validation must finish before Redis I/O.")
+        );
 
-        await Assert.ThrowsAsync<ArgumentException>(
-            () => store.ReadAsync(new ZLinkStoreKey(string.Empty)).AsTask());
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            store.ReadAsync(new ZLinkStoreKey(string.Empty)).AsTask()
+        );
         // Bound raised from 1 MiB to 2 MiB (checklist C-2b): the collapsed
         // authority row embeds its base64 payload inline, so a maximum-size
         // (1 MiB, spec §6) payload plus JSON/base64 overhead must still fit
         // in one opaque record value.
-        await Assert.ThrowsAsync<ArgumentException>(
-            () => store.WriteAsync(new ZLinkStoreWriteRequest(
-                [],
-                [
-                    new ZLinkStoreMutation.Put(
-                        new ZLinkStoreKey("too-large"),
-                        new byte[(2 * 1024 * 1024) + 1],
-                        null)
-                ])).AsTask());
-        await Assert.ThrowsAsync<ArgumentException>(
-            () => store.WriteAsync(new ZLinkStoreWriteRequest(
-                [],
-                Enumerable.Range(0, 2049)
-                    .Select(index => (ZLinkStoreMutation)
-                        new ZLinkStoreMutation.Delete(
-                            new ZLinkStoreKey($"too-many:{index}")))
-                    .ToArray())).AsTask());
-        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
-            () => store.ScanAsync(new ZLinkStoreScanRequest("", null, 1001))
-                .AsTask());
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            store
+                .WriteAsync(
+                    new ZLinkStoreWriteRequest(
+                        [],
+                        [
+                            new ZLinkStoreMutation.Put(
+                                new ZLinkStoreKey("too-large"),
+                                new byte[(2 * 1024 * 1024) + 1],
+                                null
+                            ),
+                        ]
+                    )
+                )
+                .AsTask()
+        );
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            store
+                .WriteAsync(
+                    new ZLinkStoreWriteRequest(
+                        [],
+                        Enumerable
+                            .Range(0, 2049)
+                            .Select(index =>
+                                (ZLinkStoreMutation)
+                                    new ZLinkStoreMutation.Delete(
+                                        new ZLinkStoreKey($"too-many:{index}")
+                                    )
+                            )
+                            .ToArray()
+                    )
+                )
+                .AsTask()
+        );
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            store.ScanAsync(new ZLinkStoreScanRequest("", null, 1001)).AsTask()
+        );
     }
 
     /// <summary>
@@ -532,22 +558,28 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
         Skip.IfNot(fixture.RedisAvailable, fixture.SkipReason);
         await using var store = fixture.CreateStore(out var keyPrefix);
         var key = new ZLinkStoreKey("wire-format:probe");
-        var recordKey =
-            $"{keyPrefix}:{{zlink-location-v3}}:opaque:{Sha256Hex(key.Value)}";
+        var recordKey = $"{keyPrefix}:{{zlink-location-v3}}:opaque:{Sha256Hex(key.Value)}";
 
         Assert.IsType<ZLinkStoreWriteResult.Applied>(
-            await store.WriteAsync(new ZLinkStoreWriteRequest(
-                [new ZLinkStoreCondition.Missing(key)],
-                [new ZLinkStoreMutation.Put(
-                    key,
-                    Encoding.UTF8.GetBytes("wire-format-value"),
-                    null)])));
+            await store.WriteAsync(
+                new ZLinkStoreWriteRequest(
+                    [new ZLinkStoreCondition.Missing(key)],
+                    [
+                        new ZLinkStoreMutation.Put(
+                            key,
+                            Encoding.UTF8.GetBytes("wire-format-value"),
+                            null
+                        ),
+                    ]
+                )
+            )
+        );
 
-        await using var connection =
-            await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+        await using var connection = await ConnectionMultiplexer.ConnectAsync(
+            fixture.ConnectionString
+        );
         var database = connection.GetDatabase();
-        var putEntries = await database.SortedSetRangeByScoreWithScoresAsync(
-            recordKey);
+        var putEntries = await database.SortedSetRangeByScoreWithScoresAsync(recordKey);
         var putMember = (byte[])Assert.Single(putEntries).Element!;
         Assert.Equal(0x01, putMember[0]);
         var (putOriginalKey, putRawBytes, putVersion, putExpiresAt, putTombstone) =
@@ -558,17 +590,17 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
         Assert.Equal(0UL, putExpiresAt);
         Assert.False(putTombstone);
 
-        var current = Assert.IsType<ZLinkStoreReadResult.Found>(
-            await store.ReadAsync(key));
+        var current = Assert.IsType<ZLinkStoreReadResult.Found>(await store.ReadAsync(key));
         Assert.IsType<ZLinkStoreWriteResult.Applied>(
-            await store.WriteAsync(new ZLinkStoreWriteRequest(
-                [new ZLinkStoreCondition.Version(
-                    key,
-                    current.Value.Version)],
-                [new ZLinkStoreMutation.Delete(key)])));
+            await store.WriteAsync(
+                new ZLinkStoreWriteRequest(
+                    [new ZLinkStoreCondition.Version(key, current.Value.Version)],
+                    [new ZLinkStoreMutation.Delete(key)]
+                )
+            )
+        );
 
-        var deleteEntries = await database.SortedSetRangeByScoreWithScoresAsync(
-            recordKey);
+        var deleteEntries = await database.SortedSetRangeByScoreWithScoresAsync(recordKey);
         var deleteMember = deleteEntries
             .OrderByDescending(static entry => entry.Score)
             .First()
@@ -614,10 +646,14 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
         await using var store = fixture.CreateStore(out var keyPrefix);
         var repository = new ZLinkProviderLocationRepository(store);
 
-        var owner = Assert.IsType<ZLinkOwnerLeaseClaimResult.Claimed>(
-            await repository.ClaimOwnerLeaseAsync(
-                "authority-envelope-owner",
-                TimeSpan.FromMinutes(2))).Token;
+        var owner = Assert
+            .IsType<ZLinkOwnerLeaseClaimResult.Claimed>(
+                await repository.ClaimOwnerLeaseAsync(
+                    "authority-envelope-owner",
+                    TimeSpan.FromMinutes(2)
+                )
+            )
+            .Token;
         var descriptor = new ZLinkMeshNodeDescriptor(
             "main",
             RoutingId.From("authority-envelope-node"),
@@ -628,7 +664,8 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
             string.Empty,
             owner.OwnerId,
             owner.LeaseGeneration,
-            default)
+            default
+        )
         {
             ObjectRole = ZLinkMeshNodeObjectRole.Server,
             ObjectCapabilities =
@@ -638,18 +675,19 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
                     "player",
                     ZLinkObjectMaintenancePolicyKind.Disabled,
                     false,
-                    0)
+                    0
+                ),
             ],
-            State = ZLinkFrameworkRuntimeState.Serving
+            State = ZLinkFrameworkRuntimeState.Serving,
         };
         Assert.Equal(
             ZLinkLocationWriteStatus.Stored,
-            (await repository.UpdateMeshNodeAsync(
-                descriptor,
-                ZLinkLocationWriteIntent.NewClaim)).Status);
+            (
+                await repository.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim)
+            ).Status
+        );
 
-        var authorityKey = ZLinkAuthorityKeyCodec.EncodeActor(
-            "authority-envelope-actor");
+        var authorityKey = ZLinkAuthorityKeyCodec.EncodeActor("authority-envelope-actor");
         var intent = "create:authority-envelope-actor"u8.ToArray();
         var request = new ZLinkObjectReservationRequest(
             ZLinkPlacementObjectKind.Actor,
@@ -662,49 +700,50 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
             descriptor.LifecycleGeneration,
             owner,
             intent,
-            new ZLinkCapacityVector(1, 0, null));
+            new ZLinkCapacityVector(1, 0, null)
+        );
         var reserved = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
-            await repository.ReserveAsync(request));
+            await repository.ReserveAsync(request)
+        );
         var readyPayload = new byte[] { 0xDE, 0xAD, 0xBE, 0xEF };
         Assert.IsType<ZLinkObjectCommitResult.Committed>(
-            await repository.CommitAsync(
-                reserved.Reservation,
-                readyPayload));
+            await repository.CommitAsync(reserved.Reservation, readyPayload)
+        );
 
         // Single-row proof: enumerate the Redis keyspace under this test's
         // isolated prefix and confirm exactly one opaque record key exists
         // for this authority row's identity -- not a meta+payload(+
         // generation) triple.
-        await using var connection =
-            await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+        await using var connection = await ConnectionMultiplexer.ConnectAsync(
+            fixture.ConnectionString
+        );
         var database = connection.GetDatabase();
         var server = connection.GetServer(connection.GetEndPoints()[0]);
         var recordKeys = server
             .Keys(pattern: $"{keyPrefix}:{{zlink-location-v3}}:opaque:*")
-            .Where(key => !key.ToString().Contains(":opaque:index", StringComparison.Ordinal)
-                          && !key.ToString().Contains(":opaque:map", StringComparison.Ordinal)
-                          && !key.ToString().Contains(":opaque:cleanup", StringComparison.Ordinal)
-                          && !key.ToString().Contains(":opaque:sequence", StringComparison.Ordinal)
-                          && !key.ToString().Contains(":opaque:snapshot", StringComparison.Ordinal)
-                          && !key.ToString().Contains(":opaque:scan", StringComparison.Ordinal))
+            .Where(key =>
+                !key.ToString().Contains(":opaque:index", StringComparison.Ordinal)
+                && !key.ToString().Contains(":opaque:map", StringComparison.Ordinal)
+                && !key.ToString().Contains(":opaque:cleanup", StringComparison.Ordinal)
+                && !key.ToString().Contains(":opaque:sequence", StringComparison.Ordinal)
+                && !key.ToString().Contains(":opaque:snapshot", StringComparison.Ordinal)
+                && !key.ToString().Contains(":opaque:scan", StringComparison.Ordinal)
+            )
             .ToArray();
 
         JsonElement? authorityJson = null;
         var matchingKeyCount = 0;
         foreach (var recordKey in recordKeys)
         {
-            var members = await database.SortedSetRangeByScoreWithScoresAsync(
-                recordKey);
+            var members = await database.SortedSetRangeByScoreWithScoresAsync(recordKey);
             var latest = members.OrderByDescending(static m => m.Score).First();
             var bytes = (byte[])latest.Element!;
-            if (bytes[0] != 0x01) continue;
+            if (bytes[0] != 0x01)
+                continue;
             var offset = 1;
             _ = ReadArrayHead(bytes, ref offset);
-            var originalKey = System.Text.Encoding.UTF8.GetString(
-                ReadStr(bytes, ref offset));
-            if (!originalKey.Contains(
-                    "authority-envelope-actor",
-                    StringComparison.Ordinal))
+            var originalKey = System.Text.Encoding.UTF8.GetString(ReadStr(bytes, ref offset));
+            if (!originalKey.Contains("authority-envelope-actor", StringComparison.Ordinal))
                 continue;
             matchingKeyCount++;
             var rawBytes = ReadStr(bytes, ref offset);
@@ -720,42 +759,32 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
         Assert.NotNull(authorityJson);
         var json = authorityJson!.Value;
         Assert.Equal(1, json.GetProperty("recordVersion").GetInt32());
-        Assert.Equal(
-            Convert.ToBase64String(readyPayload),
-            json.GetProperty("payload").GetString());
+        Assert.Equal(Convert.ToBase64String(readyPayload), json.GetProperty("payload").GetString());
         Assert.Matches("^[0-9]+$", json.GetProperty("objectGeneration").GetString()!);
-        Assert.Matches(
-            "^[0-9]+$",
-            json.GetProperty("authorityOwnerGeneration").GetString()!);
+        Assert.Matches("^[0-9]+$", json.GetProperty("authorityOwnerGeneration").GetString()!);
         Assert.Equal(owner.OwnerId, json.GetProperty("ownerId").GetString());
         Assert.Equal(
             owner.LeaseGeneration.ToString(),
-            json.GetProperty("ownerLeaseGeneration").GetString());
+            json.GetProperty("ownerLeaseGeneration").GetString()
+        );
         var allocation = json.GetProperty("allocation");
         Assert.Equal("active", allocation.GetProperty("state").GetString());
         Assert.Equal("actor", allocation.GetProperty("objectKind").GetString());
         Assert.Equal("player", allocation.GetProperty("stableType").GetString());
         Assert.Equal(
             "main",
-            allocation.GetProperty("descriptor").GetProperty("meshName")
-                .GetString());
+            allocation.GetProperty("descriptor").GetProperty("meshName").GetString()
+        );
         Assert.Equal(
             RoutingId.From("authority-envelope-node").ToHex(),
-            allocation.GetProperty("descriptor").GetProperty("routingIdHex")
-                .GetString());
-        Assert.Equal(
-            "1",
-            allocation.GetProperty("descriptorLifecycleGeneration")
-                .GetString());
+            allocation.GetProperty("descriptor").GetProperty("routingIdHex").GetString()
+        );
+        Assert.Equal("1", allocation.GetProperty("descriptorLifecycleGeneration").GetString());
         var capacity = allocation.GetProperty("capacity");
         Assert.Equal(1, capacity.GetProperty("actors").GetInt32());
         Assert.Equal(0, capacity.GetProperty("spots").GetInt32());
-        Assert.Equal(
-            JsonValueKind.Null,
-            capacity.GetProperty("spotType").ValueKind);
-        Assert.Equal(
-            JsonValueKind.Null,
-            json.GetProperty("pendingCreation").ValueKind);
+        Assert.Equal(JsonValueKind.Null, capacity.GetProperty("spotType").ValueKind);
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("pendingCreation").ValueKind);
     }
 
     /// <summary>
@@ -778,10 +807,14 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
         await using var store = fixture.CreateStore();
         var repository = new ZLinkProviderLocationRepository(store);
 
-        var owner = Assert.IsType<ZLinkOwnerLeaseClaimResult.Claimed>(
-            await repository.ClaimOwnerLeaseAsync(
-                "mesh-descriptor-golden-owner",
-                TimeSpan.FromMinutes(2))).Token;
+        var owner = Assert
+            .IsType<ZLinkOwnerLeaseClaimResult.Claimed>(
+                await repository.ClaimOwnerLeaseAsync(
+                    "mesh-descriptor-golden-owner",
+                    TimeSpan.FromMinutes(2)
+                )
+            )
+            .Token;
         var rid = RoutingId.From("mesh-descriptor-golden-node");
         var descriptor = new ZLinkMeshNodeDescriptor(
             "golden-mesh",
@@ -789,14 +822,12 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
             1,
             3,
             "tcp://127.0.0.1:7401",
-            new Dictionary<string, int>(StringComparer.Ordinal)
-            {
-                ["billing"] = 100
-            },
+            new Dictionary<string, int>(StringComparer.Ordinal) { ["billing"] = 100 },
             "golden-node-identity",
             owner.OwnerId,
             owner.LeaseGeneration,
-            DateTimeOffset.FromUnixTimeMilliseconds(1700000000000))
+            DateTimeOffset.FromUnixTimeMilliseconds(1700000000000)
+        )
         {
             ApplicationVersion = 2,
             ObjectCapabilities =
@@ -806,13 +837,15 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
                     "chat",
                     ZLinkObjectMaintenancePolicyKind.Disabled,
                     false,
-                    0),
+                    0
+                ),
                 new ZLinkObjectCapability(
                     ZLinkPlacementObjectKind.UserSpot,
                     "game",
                     ZLinkObjectMaintenancePolicyKind.Snapshot,
                     true,
-                    500)
+                    500
+                ),
             ],
             ObjectRole = ZLinkMeshNodeObjectRole.Server,
             EntrySpotId = "entry-1",
@@ -820,27 +853,20 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
             Capacity = new ZLinkPlacementCapacity(
                 new ZLinkPopulationCapacity(3, 1, 0),
                 new ZLinkPopulationCapacity(2, 0, 100),
-                [
-                    new ZLinkSpotTypeCapacity(
-                        ZLinkPlacementObjectKind.UserSpot,
-                        "game",
-                        2,
-                        0,
-                        100)
-                ]),
+                [new ZLinkSpotTypeCapacity(ZLinkPlacementObjectKind.UserSpot, "game", 2, 0, 100)]
+            ),
             ActivationConcurrency = new ZLinkActivationConcurrency(0, 128),
-            State = ZLinkFrameworkRuntimeState.Serving
+            State = ZLinkFrameworkRuntimeState.Serving,
         };
         Assert.Equal(
             ZLinkLocationWriteStatus.Stored,
-            (await repository.UpdateMeshNodeAsync(
-                descriptor,
-                ZLinkLocationWriteIntent.NewClaim)).Status);
+            (
+                await repository.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim)
+            ).Status
+        );
 
-        var rowKey = ZLinkProviderLocationRepository.MeshKey(
-            descriptor.MeshName, rid);
-        var read = Assert.IsType<ZLinkStoreReadResult.Found>(
-            await store.ReadAsync(rowKey));
+        var rowKey = ZLinkProviderLocationRepository.MeshKey(descriptor.MeshName, rid);
+        var read = Assert.IsType<ZLinkStoreReadResult.Found>(await store.ReadAsync(rowKey));
         using var parsed = JsonDocument.Parse(read.Value.Bytes);
         var json = parsed.RootElement;
 
@@ -848,7 +874,8 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
         Assert.Equal(owner.OwnerId, json.GetProperty("ownerId").GetString());
         Assert.Equal(
             owner.LeaseGeneration.ToString(CultureInfo.InvariantCulture),
-            json.GetProperty("leaseGeneration").GetString());
+            json.GetProperty("leaseGeneration").GetString()
+        );
         Assert.Equal("3", json.GetProperty("descriptorRevision").GetString());
 
         var payload = json.GetProperty("descriptor");
@@ -856,13 +883,9 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
         Assert.Equal(rid.ToHex(), payload.GetProperty("routingIdHex").GetString());
         Assert.Equal("1", payload.GetProperty("lifecycleGeneration").GetString());
         Assert.Equal("3", payload.GetProperty("descriptorRevision").GetString());
-        Assert.Equal(
-            "tcp://127.0.0.1:7401",
-            payload.GetProperty("endpoint").GetString());
+        Assert.Equal("tcp://127.0.0.1:7401", payload.GetProperty("endpoint").GetString());
         Assert.Equal("entry-1", payload.GetProperty("entrySpotId").GetString());
-        Assert.Equal(
-            100,
-            payload.GetProperty("channelWeights").GetProperty("billing").GetInt32());
+        Assert.Equal(100, payload.GetProperty("channelWeights").GetProperty("billing").GetInt32());
         Assert.Equal("2", payload.GetProperty("applicationVersion").GetString());
         var capabilities = payload.GetProperty("objectCapabilities");
         Assert.Equal(2, capabilities.GetArrayLength());
@@ -890,20 +913,15 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
         var activation = payload.GetProperty("activationConcurrency");
         Assert.Equal(0, activation.GetProperty("active").GetInt32());
         Assert.Equal(128, activation.GetProperty("limit").GetInt32());
-        Assert.Equal(
-            JsonValueKind.Null,
-            payload.GetProperty("maintenanceWave").ValueKind);
+        Assert.Equal(JsonValueKind.Null, payload.GetProperty("maintenanceWave").ValueKind);
         Assert.Equal("serving", payload.GetProperty("state").GetString());
-        Assert.Equal(
-            "golden-node-identity",
-            payload.GetProperty("securityIdentity").GetString());
+        Assert.Equal("golden-node-identity", payload.GetProperty("securityIdentity").GetString());
         Assert.Equal(owner.OwnerId, payload.GetProperty("ownerId").GetString());
         Assert.Equal(
             owner.LeaseGeneration.ToString(CultureInfo.InvariantCulture),
-            payload.GetProperty("leaseGeneration").GetString());
-        Assert.Equal(
-            "1700000000000",
-            payload.GetProperty("updatedAtEpochMs").GetString());
+            payload.GetProperty("leaseGeneration").GetString()
+        );
+        Assert.Equal("1700000000000", payload.GetProperty("updatedAtEpochMs").GetString());
         // No provider-internal generation counter leaks into the payload
         // (21-location-runtime.md#2.4).
         Assert.False(json.TryGetProperty("generation", out _));
@@ -923,10 +941,14 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
         await using var store = fixture.CreateStore();
         var repository = new ZLinkProviderLocationRepository(store);
 
-        var owner = Assert.IsType<ZLinkOwnerLeaseClaimResult.Claimed>(
-            await repository.ClaimOwnerLeaseAsync(
-                "client-server-descriptor-golden-owner",
-                TimeSpan.FromMinutes(2))).Token;
+        var owner = Assert
+            .IsType<ZLinkOwnerLeaseClaimResult.Claimed>(
+                await repository.ClaimOwnerLeaseAsync(
+                    "client-server-descriptor-golden-owner",
+                    TimeSpan.FromMinutes(2)
+                )
+            )
+            .Token;
         var rid = RoutingId.From("client-server-descriptor-golden-server");
         var descriptor = new ZLinkClientServerServerDescriptor(
             "golden-channel",
@@ -939,17 +961,20 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
             "golden-server-identity",
             owner.OwnerId,
             owner.LeaseGeneration,
-            DateTimeOffset.FromUnixTimeMilliseconds(1700000001000));
+            DateTimeOffset.FromUnixTimeMilliseconds(1700000001000)
+        );
         Assert.Equal(
             ZLinkLocationWriteStatus.Stored,
-            (await repository.UpdateClientServerAsync(
-                descriptor,
-                ZLinkLocationWriteIntent.NewClaim)).Status);
+            (
+                await repository.UpdateClientServerAsync(
+                    descriptor,
+                    ZLinkLocationWriteIntent.NewClaim
+                )
+            ).Status
+        );
 
-        var rowKey = ZLinkProviderLocationRepository.ClientServerKey(
-            descriptor.ChannelName, rid);
-        var read = Assert.IsType<ZLinkStoreReadResult.Found>(
-            await store.ReadAsync(rowKey));
+        var rowKey = ZLinkProviderLocationRepository.ClientServerKey(descriptor.ChannelName, rid);
+        var read = Assert.IsType<ZLinkStoreReadResult.Found>(await store.ReadAsync(rowKey));
         using var parsed = JsonDocument.Parse(read.Value.Bytes);
         var json = parsed.RootElement;
 
@@ -957,33 +982,25 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
         Assert.Equal(owner.OwnerId, json.GetProperty("ownerId").GetString());
         Assert.Equal(
             owner.LeaseGeneration.ToString(CultureInfo.InvariantCulture),
-            json.GetProperty("leaseGeneration").GetString());
+            json.GetProperty("leaseGeneration").GetString()
+        );
         Assert.Equal("4", json.GetProperty("descriptorRevision").GetString());
 
         var payload = json.GetProperty("descriptor");
-        Assert.Equal(
-            "golden-channel",
-            payload.GetProperty("channelName").GetString());
-        Assert.Equal(
-            rid.ToHex(),
-            payload.GetProperty("serverRoutingIdHex").GetString());
+        Assert.Equal("golden-channel", payload.GetProperty("channelName").GetString());
+        Assert.Equal(rid.ToHex(), payload.GetProperty("serverRoutingIdHex").GetString());
         Assert.Equal("1", payload.GetProperty("lifecycleGeneration").GetString());
         Assert.Equal("4", payload.GetProperty("descriptorRevision").GetString());
-        Assert.Equal(
-            "tcp://127.0.0.1:7402",
-            payload.GetProperty("endpoint").GetString());
+        Assert.Equal("tcp://127.0.0.1:7402", payload.GetProperty("endpoint").GetString());
         Assert.Equal(100, payload.GetProperty("weight").GetInt32());
         Assert.Equal("serving", payload.GetProperty("state").GetString());
-        Assert.Equal(
-            "golden-server-identity",
-            payload.GetProperty("securityIdentity").GetString());
+        Assert.Equal("golden-server-identity", payload.GetProperty("securityIdentity").GetString());
         Assert.Equal(owner.OwnerId, payload.GetProperty("ownerId").GetString());
         Assert.Equal(
             owner.LeaseGeneration.ToString(CultureInfo.InvariantCulture),
-            payload.GetProperty("leaseGeneration").GetString());
-        Assert.Equal(
-            "1700000001000",
-            payload.GetProperty("updatedAtEpochMs").GetString());
+            payload.GetProperty("leaseGeneration").GetString()
+        );
+        Assert.Equal("1700000001000", payload.GetProperty("updatedAtEpochMs").GetString());
         Assert.False(json.TryGetProperty("generation", out _));
         Assert.False(payload.TryGetProperty("generation", out _));
     }
@@ -1001,10 +1018,14 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
         await using var store = fixture.CreateStore();
         var repository = new ZLinkProviderLocationRepository(store);
 
-        var owner = Assert.IsType<ZLinkOwnerLeaseClaimResult.Claimed>(
-            await repository.ClaimOwnerLeaseAsync(
-                "fanout-descriptor-golden-owner",
-                TimeSpan.FromMinutes(2))).Token;
+        var owner = Assert
+            .IsType<ZLinkOwnerLeaseClaimResult.Claimed>(
+                await repository.ClaimOwnerLeaseAsync(
+                    "fanout-descriptor-golden-owner",
+                    TimeSpan.FromMinutes(2)
+                )
+            )
+            .Token;
         var rid = RoutingId.From("fanout-descriptor-golden-publisher");
         var descriptor = new ZLinkFanoutPublisherDescriptor(
             "golden-channel",
@@ -1016,17 +1037,20 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
             "golden-publisher-identity",
             owner.OwnerId,
             owner.LeaseGeneration,
-            DateTimeOffset.FromUnixTimeMilliseconds(1700000002000));
+            DateTimeOffset.FromUnixTimeMilliseconds(1700000002000)
+        );
         Assert.Equal(
             ZLinkLocationWriteStatus.Stored,
-            (await repository.UpdateFanoutPublisherAsync(
-                descriptor,
-                ZLinkLocationWriteIntent.NewClaim)).Status);
+            (
+                await repository.UpdateFanoutPublisherAsync(
+                    descriptor,
+                    ZLinkLocationWriteIntent.NewClaim
+                )
+            ).Status
+        );
 
-        var rowKey = ZLinkProviderLocationRepository.FanoutKey(
-            descriptor.ChannelName, rid);
-        var read = Assert.IsType<ZLinkStoreReadResult.Found>(
-            await store.ReadAsync(rowKey));
+        var rowKey = ZLinkProviderLocationRepository.FanoutKey(descriptor.ChannelName, rid);
+        var read = Assert.IsType<ZLinkStoreReadResult.Found>(await store.ReadAsync(rowKey));
         using var parsed = JsonDocument.Parse(read.Value.Bytes);
         var json = parsed.RootElement;
 
@@ -1034,44 +1058,42 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
         Assert.Equal(owner.OwnerId, json.GetProperty("ownerId").GetString());
         Assert.Equal(
             owner.LeaseGeneration.ToString(CultureInfo.InvariantCulture),
-            json.GetProperty("leaseGeneration").GetString());
+            json.GetProperty("leaseGeneration").GetString()
+        );
         Assert.Equal("1", json.GetProperty("descriptorRevision").GetString());
 
         var payload = json.GetProperty("descriptor");
-        Assert.Equal(
-            "golden-channel",
-            payload.GetProperty("channelName").GetString());
-        Assert.Equal(
-            rid.ToHex(),
-            payload.GetProperty("publisherRoutingIdHex").GetString());
+        Assert.Equal("golden-channel", payload.GetProperty("channelName").GetString());
+        Assert.Equal(rid.ToHex(), payload.GetProperty("publisherRoutingIdHex").GetString());
         Assert.Equal("1", payload.GetProperty("lifecycleGeneration").GetString());
         Assert.Equal("1", payload.GetProperty("descriptorRevision").GetString());
-        Assert.Equal(
-            "tcp://127.0.0.1:7403",
-            payload.GetProperty("endpoint").GetString());
+        Assert.Equal("tcp://127.0.0.1:7403", payload.GetProperty("endpoint").GetString());
         Assert.False(payload.TryGetProperty("weight", out _));
         Assert.Equal("serving", payload.GetProperty("state").GetString());
         Assert.Equal(
             "golden-publisher-identity",
-            payload.GetProperty("securityIdentity").GetString());
+            payload.GetProperty("securityIdentity").GetString()
+        );
         Assert.Equal(owner.OwnerId, payload.GetProperty("ownerId").GetString());
         Assert.Equal(
             owner.LeaseGeneration.ToString(CultureInfo.InvariantCulture),
-            payload.GetProperty("leaseGeneration").GetString());
-        Assert.Equal(
-            "1700000002000",
-            payload.GetProperty("updatedAtEpochMs").GetString());
+            payload.GetProperty("leaseGeneration").GetString()
+        );
+        Assert.Equal("1700000002000", payload.GetProperty("updatedAtEpochMs").GetString());
         Assert.False(json.TryGetProperty("generation", out _));
         Assert.False(payload.TryGetProperty("generation", out _));
     }
 
     private static string Sha256Hex(string value) =>
-        Convert.ToHexString(
-                SHA256.HashData(Encoding.UTF8.GetBytes(value)))
-            .ToLowerInvariant();
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 
-    private static (string OriginalKey, byte[] RawBytes, string Version, ulong ExpiresAt, bool Tombstone)
-        DecodeOpaqueMember(byte[] bytes, int offset)
+    private static (
+        string OriginalKey,
+        byte[] RawBytes,
+        string Version,
+        ulong ExpiresAt,
+        bool Tombstone
+    ) DecodeOpaqueMember(byte[] bytes, int offset)
     {
         var count = ReadArrayHead(bytes, ref offset);
         if (count != 5)
@@ -1089,7 +1111,8 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
     private static int ReadArrayHead(byte[] bytes, ref int offset)
     {
         var tag = NextByte(bytes, ref offset);
-        if ((tag & 0xf0) == 0x90) return tag & 0x0f;
+        if ((tag & 0xf0) == 0x90)
+            return tag & 0x0f;
         throw new InvalidDataException($"invalid msgpack array tag: {tag}");
     }
 
@@ -1097,8 +1120,10 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
     {
         var tag = NextByte(bytes, ref offset);
         int length;
-        if ((tag & 0xe0) == 0xa0) length = tag & 0x1f;
-        else if (tag == 0xd9) length = NextByte(bytes, ref offset);
+        if ((tag & 0xe0) == 0xa0)
+            length = tag & 0x1f;
+        else if (tag == 0xd9)
+            length = NextByte(bytes, ref offset);
         else if (tag == 0xda)
             length = (NextByte(bytes, ref offset) << 8) | NextByte(bytes, ref offset);
         else
@@ -1111,20 +1136,24 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
     private static ulong ReadUint(byte[] bytes, ref int offset)
     {
         var tag = NextByte(bytes, ref offset);
-        if ((tag & 0x80) == 0) return tag;
-        if (tag == 0xcc) return NextByte(bytes, ref offset);
+        if ((tag & 0x80) == 0)
+            return tag;
+        if (tag == 0xcc)
+            return NextByte(bytes, ref offset);
         if (tag == 0xcd)
             return (ulong)((NextByte(bytes, ref offset) << 8) | NextByte(bytes, ref offset));
         if (tag == 0xce)
         {
             ulong v = 0;
-            for (var i = 0; i < 4; i++) v = (v << 8) | NextByte(bytes, ref offset);
+            for (var i = 0; i < 4; i++)
+                v = (v << 8) | NextByte(bytes, ref offset);
             return v;
         }
         if (tag == 0xcf)
         {
             ulong v = 0;
-            for (var i = 0; i < 8; i++) v = (v << 8) | NextByte(bytes, ref offset);
+            for (var i = 0; i < 8; i++)
+                v = (v << 8) | NextByte(bytes, ref offset);
             return v;
         }
         throw new InvalidDataException($"invalid msgpack uint tag: {tag}");
@@ -1133,8 +1162,10 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
     private static bool ReadBool(byte[] bytes, ref int offset)
     {
         var tag = NextByte(bytes, ref offset);
-        if (tag == 0xc2) return false;
-        if (tag == 0xc3) return true;
+        if (tag == 0xc2)
+            return false;
+        if (tag == 0xc3)
+            return true;
         throw new InvalidDataException($"invalid msgpack bool tag: {tag}");
     }
 }

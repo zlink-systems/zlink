@@ -19,8 +19,7 @@ namespace zlink::framework::test
 class completion_poller_driver_t
 {
   public:
-    template <typename Socket>
-    explicit completion_poller_driver_t (Socket &socket)
+    template <typename Socket> explicit completion_poller_driver_t (Socket &socket)
     {
         _poller.add (socket, zlink::poll_event_flag_t::pollcompletion, 1);
         _driver = std::thread ([this] { drive (); });

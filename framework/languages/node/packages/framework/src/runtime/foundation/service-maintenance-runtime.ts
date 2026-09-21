@@ -5,8 +5,7 @@ const detachedStateLaneResource = new AsyncResource('zlink:service-maintenance-r
 
 export type ServiceMaintenanceKind = 'retire' | 'shutdown';
 export type ServiceMaintenanceState =
-  | 'serving' | 'preparing' | 'retiring' | 'draining'
-  | 'completed' | 'blocked' | 'forceStopped';
+  'serving' | 'preparing' | 'retiring' | 'draining' | 'completed' | 'blocked' | 'forceStopped';
 
 export interface ServiceRelocationUnit {
   readonly id: string;
@@ -104,7 +103,10 @@ export class ServiceMaintenanceRuntime {
     abortSignal?: AbortSignal
   ): Promise<ServiceMaintenanceSnapshot> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(new Error('Maintenance deadline exceeded.')), deadlineMs);
+    const timer = setTimeout(
+      () => controller.abort(new Error('Maintenance deadline exceeded.')),
+      deadlineMs
+    );
     const abort = () => controller.abort(abortSignal?.reason);
     if (abortSignal?.aborted === true) {
       abort();
@@ -113,7 +115,7 @@ export class ServiceMaintenanceRuntime {
     }
     try {
       this.transition('preparing');
-      if (!await this.options.preflight(kind, controller.signal)) {
+      if (!(await this.options.preflight(kind, controller.signal))) {
         return await this.transitionAsync('blocked');
       }
       if (kind === 'retire') {
@@ -141,10 +143,7 @@ export class ServiceMaintenanceRuntime {
     }
   }
 
-  private async runUnits(
-    signal: AbortSignal,
-    stopStartingSignal?: AbortSignal
-  ): Promise<void> {
+  private async runUnits(signal: AbortSignal, stopStartingSignal?: AbortSignal): Promise<void> {
     const pending = new Set<Promise<void>>();
     for (;;) {
       const queued = await this.lane.run(() => this.units.length > 0);
@@ -155,7 +154,7 @@ export class ServiceMaintenanceRuntime {
         stopStartingSignal.throwIfAborted();
       }
       let admitted = false;
-      for (let index = 0;;) {
+      for (let index = 0; ;) {
         if (stopStartingSignal?.aborted === true) break;
         const unit = await this.lane.run(() => this.units.at(index));
         if (unit === undefined) break;
@@ -173,14 +172,16 @@ export class ServiceMaintenanceRuntime {
         if (!claim.claimed || claim.publication === undefined) continue;
         admitted = true;
         let running!: Promise<void>;
-        running = startOutsideStateLane(() => unit.relocate(signal).finally(async () => {
-          const publication = await this.lane.run(() => {
-            this.activeOutbound--;
-            pending.delete(running);
-            return this.publishCore();
-          });
-          this.notify(publication);
-        }));
+        running = startOutsideStateLane(() =>
+          unit.relocate(signal).finally(async () => {
+            const publication = await this.lane.run(() => {
+              this.activeOutbound--;
+              pending.delete(running);
+              return this.publishCore();
+            });
+            this.notify(publication);
+          })
+        );
         pending.add(running);
         this.notify(claim.publication);
       }
@@ -197,7 +198,9 @@ export class ServiceMaintenanceRuntime {
     this.publish();
   }
 
-  private async transitionAsync(state: ServiceMaintenanceState): Promise<ServiceMaintenanceSnapshot> {
+  private async transitionAsync(
+    state: ServiceMaintenanceState
+  ): Promise<ServiceMaintenanceSnapshot> {
     const publication = await this.lane.run(() => {
       this.state = state;
       return this.publishCore();
@@ -236,7 +239,5 @@ export function classifyRelocationRecovery(
   inventoryMatches: boolean
 ): 'resume' | 'orphan' | 'relocationDataLost' {
   if (!publishedReference) return payloadPresent ? 'orphan' : 'resume';
-  return payloadPresent && checksumMatches && inventoryMatches
-    ? 'resume'
-    : 'relocationDataLost';
+  return payloadPresent && checksumMatches && inventoryMatches ? 'resume' : 'relocationDataLost';
 }

@@ -10,23 +10,25 @@ internal sealed class ZLinkFrameworkHostRuntimeCoordinator(
     ZLinkLocationRuntime? locationRuntime,
     ZLinkAutoConnectLifecycleCoordinator autoConnectLifecycle,
     ZLinkLocationLifecycle? locationLifecycle,
-    ZLinkFrameworkMaintenanceRuntime maintenance)
+    ZLinkFrameworkMaintenanceRuntime maintenance
+)
 {
     internal async Task StartAsync(CancellationToken cancellationToken)
     {
         try
         {
             if (locationRuntime is not null)
-                await locationRuntime.StartAsync(
-                        runtime.PrepareLocationNodeRoutingId(),
-                        cancellationToken)
+                await locationRuntime
+                    .StartAsync(runtime.PrepareLocationNodeRoutingId(), cancellationToken)
                     .ConfigureAwait(false);
 
             await runtime.StartAsync(cancellationToken).ConfigureAwait(false);
             routeMeshRuntime.Start();
-            var state = await runtime.EnsureStartedStateAsync(cancellationToken)
+            var state = await runtime
+                .EnsureStartedStateAsync(cancellationToken)
                 .ConfigureAwait(false);
-            await autoConnectLifecycle.FrameworkReadyAsync(state, cancellationToken)
+            await autoConnectLifecycle
+                .FrameworkReadyAsync(state, cancellationToken)
                 .ConfigureAwait(false);
             maintenance.MarkServing();
         }
@@ -42,9 +44,7 @@ internal sealed class ZLinkFrameworkHostRuntimeCoordinator(
                 throw new AggregateException(startFailure, cleanupFailure);
             }
 
-            System.Runtime.ExceptionServices.ExceptionDispatchInfo
-                .Capture(startFailure)
-                .Throw();
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(startFailure).Throw();
         }
     }
 
@@ -52,13 +52,14 @@ internal sealed class ZLinkFrameworkHostRuntimeCoordinator(
     {
         try
         {
-            await maintenance.ShutdownAsync(cancellationToken: cancellationToken)
+            await maintenance
+                .ShutdownAsync(cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
-            when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            await maintenance.ShutdownAsync(cancellationToken: CancellationToken.None)
+            await maintenance
+                .ShutdownAsync(cancellationToken: CancellationToken.None)
                 .ConfigureAwait(false);
         }
         await CloseResourcesAsync().ConfigureAwait(false);
@@ -67,30 +68,33 @@ internal sealed class ZLinkFrameworkHostRuntimeCoordinator(
     private async Task CloseResourcesAsync()
     {
         List<Exception>? failures = null;
-        await CaptureAsync(
-            () => autoConnectLifecycle.StopAsync(CancellationToken.None).AsTask())
+        await CaptureAsync(() => autoConnectLifecycle.StopAsync(CancellationToken.None).AsTask())
             .ConfigureAwait(false);
         await CaptureAsync(() =>
-        {
-            routeMeshRuntime.Stop();
-            return Task.CompletedTask;
-        }).ConfigureAwait(false);
-        await CaptureAsync(
-            () => runtime.StopAsync(CancellationToken.None).AsTask())
+            {
+                routeMeshRuntime.Stop();
+                return Task.CompletedTask;
+            })
             .ConfigureAwait(false);
-        await CaptureAsync(
-            () => locationRuntime?.RemoveOwnedRowsBeforeRoutingIdReleaseAsync(
-                    CancellationToken.None).AsTask()
-                ?? Task.CompletedTask)
+        await CaptureAsync(() => runtime.StopAsync(CancellationToken.None).AsTask())
             .ConfigureAwait(false);
-        await CaptureAsync(
-            () => locationRuntime?.StopAsync(CancellationToken.None).AsTask()
-                ?? Task.CompletedTask)
+        await CaptureAsync(() =>
+                locationRuntime
+                    ?.RemoveOwnedRowsBeforeRoutingIdReleaseAsync(CancellationToken.None)
+                    .AsTask()
+                ?? Task.CompletedTask
+            )
+            .ConfigureAwait(false);
+        await CaptureAsync(() =>
+                locationRuntime?.StopAsync(CancellationToken.None).AsTask() ?? Task.CompletedTask
+            )
             .ConfigureAwait(false);
         locationLifecycle?.ResetGeneration();
 
-        if (failures is { Count: 1 }) throw failures[0];
-        if (failures is { Count: > 1 }) throw new AggregateException(failures);
+        if (failures is { Count: 1 })
+            throw failures[0];
+        if (failures is { Count: > 1 })
+            throw new AggregateException(failures);
         return;
 
         async Task CaptureAsync(Func<Task> close)

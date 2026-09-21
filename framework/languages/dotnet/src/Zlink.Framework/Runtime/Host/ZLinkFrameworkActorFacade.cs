@@ -10,7 +10,8 @@ internal sealed class ZLinkFrameworkActorFacade(
     ZLinkSpotRuntimeManager spots,
     ZLinkActorSessionManager actorSessionManager,
     Func<ZLinkFrameworkComponentState> getState,
-    Func<IZLinkBackendSpotNode?> getActorSpotNode)
+    Func<IZLinkBackendSpotNode?> getActorSpotNode
+)
 {
     private long _nextEntrySpotSelection;
 
@@ -20,27 +21,25 @@ internal sealed class ZLinkFrameworkActorFacade(
         actorSessionManager,
         getState,
         getActorSpotNode,
-        runtime.Flow);
+        runtime.Flow
+    );
 
     private readonly ZLinkActorRemoteJoiner _remoteJoiner = new(
         runtime,
         registration,
         services,
         spots,
-        actorSessionManager);
+        actorSessionManager
+    );
 
     public async ValueTask<ZLinkActorJoinResult> JoinActorAsync(
         string spotId,
         IZLinkActor actor,
         ZLinkMessage request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
-        return await JoinActorAsync(
-                spotId,
-                actor,
-                request,
-                operationId: null,
-                cancellationToken)
+        return await JoinActorAsync(spotId, actor, request, operationId: null, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -50,80 +49,88 @@ internal sealed class ZLinkFrameworkActorFacade(
         ZLinkMessage request,
         ZLinkActorJoinOperationId? operationId,
         CancellationToken cancellationToken,
-        DateTimeOffset? absoluteDeadline = null)
+        DateTimeOffset? absoluteDeadline = null
+    )
     {
-        var effectiveDeadline = absoluteDeadline
-                                ?? DateTimeOffset.UtcNow
-                                   + registration.DefaultRequestTimeout;
+        var effectiveDeadline =
+            absoluteDeadline ?? DateTimeOffset.UtcNow + registration.DefaultRequestTimeout;
         var deadline = Stopwatch.GetElapsedTime(0) + (effectiveDeadline - DateTimeOffset.UtcNow);
         var state = getState();
         var actorState = actorSessionManager.GetOrCreateState(actor.Context.ActorId);
         var node = getActorSpotNode();
         var localActivation = spots.GetActivationBySpotId(state, spotId);
 
-        if (localActivation is null
+        if (
+            localActivation is null
             && node is not null
-            && actorState.NativeActorRef is { } actorRef)
-            return await _remoteJoiner.JoinAsync(
-                state,
-                spotId,
-                actor,
-                actorRef,
-                node,
-                request,
-                operationId,
-                cancellationToken,
-                effectiveDeadline).ConfigureAwait(false);
-
-        var sourceActivation = actorState.Activation;
-        if (localActivation is not null
-            && ReferenceEquals(sourceActivation, localActivation))
-            return new ZLinkActorJoinResult.Accepted(
-                ToActorRef(actorState),
-                ZLinkMessage.Empty);
-
-        if (absoluteDeadline is null)
-            return await JoinLocalActorAsync(cancellationToken).ConfigureAwait(false);
-        return await ZLinkActorRemoteJoiner.ExecuteWithDeadlineAsync(
-                JoinLocalActorAsync,
-                ZLinkActorRemoteJoiner.RemainingTimeout(deadline),
-                cancellationToken)
-            .ConfigureAwait(false);
-
-        async ValueTask<ZLinkActorJoinResult> JoinLocalActorAsync(CancellationToken cancellationToken)
-        {
-            ZLinkSpotActorJoinResult joinResult;
-            if (localActivation is not null
-                && sourceActivation is not null
-                && !ReferenceEquals(sourceActivation, localActivation))
-            {
-                joinResult = await localActivation.AdmitActorJoinFromCallerTurnAsync(
-                        actor,
-                        request,
-                        cancellationToken)
-                    .ConfigureAwait(false);
-                if (joinResult.Accepted)
-                    await localActivation.CommitActorJoinFromCallerTurnAsync(
-                            actor,
-                            cancellationToken,
-                            effectiveDeadline)
-                        .ConfigureAwait(false);
-            }
-            else if (localActivation is not null)
-                joinResult = await localActivation.JoinActorAsync(
-                        actor,
-                        request,
-                        cancellationToken,
-                        effectiveDeadline)
-                    .ConfigureAwait(false);
-            else
-                joinResult = await spots.JoinActorAsync(
+            && actorState.NativeActorRef is { } actorRef
+        )
+            return await _remoteJoiner
+                .JoinAsync(
                     state,
                     spotId,
                     actor,
+                    actorRef,
+                    node,
                     request,
+                    operationId,
                     cancellationToken,
-                    effectiveDeadline).ConfigureAwait(false);
+                    effectiveDeadline
+                )
+                .ConfigureAwait(false);
+
+        var sourceActivation = actorState.Activation;
+        if (localActivation is not null && ReferenceEquals(sourceActivation, localActivation))
+            return new ZLinkActorJoinResult.Accepted(ToActorRef(actorState), ZLinkMessage.Empty);
+
+        if (absoluteDeadline is null)
+            return await JoinLocalActorAsync(cancellationToken).ConfigureAwait(false);
+        return await ZLinkActorRemoteJoiner
+            .ExecuteWithDeadlineAsync(
+                JoinLocalActorAsync,
+                ZLinkActorRemoteJoiner.RemainingTimeout(deadline),
+                cancellationToken
+            )
+            .ConfigureAwait(false);
+
+        async ValueTask<ZLinkActorJoinResult> JoinLocalActorAsync(
+            CancellationToken cancellationToken
+        )
+        {
+            ZLinkSpotActorJoinResult joinResult;
+            if (
+                localActivation is not null
+                && sourceActivation is not null
+                && !ReferenceEquals(sourceActivation, localActivation)
+            )
+            {
+                joinResult = await localActivation
+                    .AdmitActorJoinFromCallerTurnAsync(actor, request, cancellationToken)
+                    .ConfigureAwait(false);
+                if (joinResult.Accepted)
+                    await localActivation
+                        .CommitActorJoinFromCallerTurnAsync(
+                            actor,
+                            cancellationToken,
+                            effectiveDeadline
+                        )
+                        .ConfigureAwait(false);
+            }
+            else if (localActivation is not null)
+                joinResult = await localActivation
+                    .JoinActorAsync(actor, request, cancellationToken, effectiveDeadline)
+                    .ConfigureAwait(false);
+            else
+                joinResult = await spots
+                    .JoinActorAsync(
+                        state,
+                        spotId,
+                        actor,
+                        request,
+                        cancellationToken,
+                        effectiveDeadline
+                    )
+                    .ConfigureAwait(false);
             var reply = joinResult.Reply ?? ZLinkMessage.Empty;
             return joinResult.Accepted
                 ? new ZLinkActorJoinResult.Accepted(ToActorRef(actorState), reply)
@@ -136,81 +143,98 @@ internal sealed class ZLinkFrameworkActorFacade(
         ZLinkMessage request,
         ZLinkActorJoinOperationId? operationId,
         CancellationToken cancellationToken,
-        DateTimeOffset? absoluteDeadline = null)
+        DateTimeOffset? absoluteDeadline = null
+    )
     {
         var actorState = actorSessionManager.GetOrCreateState(actor.Context.ActorId);
         if (actorState.LiveActivation is null)
-            return new ZLinkActorJoinResult.Accepted(
-                ToActorRef(actorState),
-                ZLinkMessage.Empty);
+            return new ZLinkActorJoinResult.Accepted(ToActorRef(actorState), ZLinkMessage.Empty);
 
         var actorType = actorState.ActorType ?? actor.GetType().Name;
-        var meshName = actorState.Context?.MeshName
-                       ?? ZLinkActorDrainCoordinator.ResolveMeshName(registration, actorType)
-                       ?? throw new ZLinkFrameworkException(
-                           ZLinkFrameworkErrorKind.NotFound,
-                           $"Actor '{actor.Context.ActorId}' does not have an owner Mesh.");
-        _ = registration.Locations.ResolveStore()
+        var meshName =
+            actorState.Context?.MeshName
+            ?? ZLinkActorDrainCoordinator.ResolveMeshName(registration, actorType)
+            ?? throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.NotFound,
+                $"Actor '{actor.Context.ActorId}' does not have an owner Mesh."
+            );
+        _ =
+            registration.Locations.ResolveStore()
             ?? throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
-                "Actor Entry Spot Join requires a Location Store.");
-        var resolver = services.GetService(typeof(IZLinkMeshNodeLocationResolver))
-                           as IZLinkMeshNodeLocationResolver
-                       ?? services.GetService(typeof(ZLinkStoreLocationResolvers))
-                           as ZLinkStoreLocationResolvers
-                       ?? throw new ZLinkConfigurationException(
-                           "Actor Entry Spot Join requires the live MeshNode resolver.");
-        var effectiveDeadline = absoluteDeadline
-                                ?? DateTimeOffset.UtcNow + registration.DefaultRequestTimeout;
+                "Actor Entry Spot Join requires a Location Store."
+            );
+        var resolver =
+            services.GetService(typeof(IZLinkMeshNodeLocationResolver))
+                as IZLinkMeshNodeLocationResolver
+            ?? services.GetService(typeof(ZLinkStoreLocationResolvers))
+                as ZLinkStoreLocationResolvers
+            ?? throw new ZLinkConfigurationException(
+                "Actor Entry Spot Join requires the live MeshNode resolver."
+            );
+        var effectiveDeadline =
+            absoluteDeadline ?? DateTimeOffset.UtcNow + registration.DefaultRequestTimeout;
         var deadline = Stopwatch.GetElapsedTime(0) + (effectiveDeadline - DateTimeOffset.UtcNow);
-        var descriptors = await ZLinkActorRemoteJoiner.ExecuteWithDeadlineAsync(
+        var descriptors = await ZLinkActorRemoteJoiner
+            .ExecuteWithDeadlineAsync(
                 token => resolver.ListLiveMeshNodesAsync(meshName, token),
                 ZLinkActorRemoteJoiner.RemainingTimeout(deadline),
-                cancellationToken)
+                cancellationToken
+            )
             .ConfigureAwait(false);
         var eligible = descriptors
-            .Where(candidate => ZLinkActorManagerService.IsEligibleCandidate(
-                candidate,
-                actorType))
+            .Where(candidate => ZLinkActorManagerService.IsEligibleCandidate(candidate, actorType))
             .OrderBy(static candidate => candidate.Rid, ZLinkRoutingIdOrder.Instance)
             .ToArray();
-        var target = ZLinkWeightedSelector.Select(
-                         eligible,
-                         static candidate => candidate.PlacementWeight,
-                         ref _nextEntrySpotSelection)
-                     ?? throw new ZLinkFrameworkException(
-                         ZLinkFrameworkErrorKind.Unavailable,
-                         $"No Ready Entry Spot target is available for '{actorType}'.",
-                         ZLinkRetryAdvice.RetryAfterBackoff);
+        var target =
+            ZLinkWeightedSelector.Select(
+                eligible,
+                static candidate => candidate.PlacementWeight,
+                ref _nextEntrySpotSelection
+            )
+            ?? throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                $"No Ready Entry Spot target is available for '{actorType}'.",
+                ZLinkRetryAdvice.RetryAfterBackoff
+            );
 
-        var sourceNodeRid = actorState.NativeActorRef?.NodeRid
-                            ?? throw new ZLinkFrameworkException(
-                                ZLinkFrameworkErrorKind.NotFound,
-                                $"Actor '{actor.Context.ActorId}' does not have a current node identity.");
+        var sourceNodeRid =
+            actorState.NativeActorRef?.NodeRid
+            ?? throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.NotFound,
+                $"Actor '{actor.Context.ActorId}' does not have a current node identity."
+            );
         if (target.Rid == sourceNodeRid)
         {
             if (absoluteDeadline is null)
-                return await _entrySpotJoin.JoinAsync(target.Rid, actor, request, cancellationToken)
+                return await _entrySpotJoin
+                    .JoinAsync(target.Rid, actor, request, cancellationToken)
                     .ConfigureAwait(false);
-            return await ZLinkActorRemoteJoiner.ExecuteWithDeadlineAsync(
+            return await ZLinkActorRemoteJoiner
+                .ExecuteWithDeadlineAsync(
                     token => _entrySpotJoin.JoinAsync(target.Rid, actor, request, token),
                     ZLinkActorRemoteJoiner.RemainingTimeout(deadline),
-                    cancellationToken)
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
         }
 
-        var actorRef = actorState.NativeActorRef
-                       ?? throw new ZLinkFrameworkException(
-                           ZLinkFrameworkErrorKind.NotFound,
-                           $"Actor '{actor.Context.ActorId}' does not have a current native reference.");
-        return await _remoteJoiner.JoinEntrySpotAsync(
+        var actorRef =
+            actorState.NativeActorRef
+            ?? throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.NotFound,
+                $"Actor '{actor.Context.ActorId}' does not have a current native reference."
+            );
+        return await _remoteJoiner
+            .JoinEntrySpotAsync(
                 target,
                 actor,
                 actorRef,
                 request,
                 operationId,
                 cancellationToken,
-                effectiveDeadline)
+                effectiveDeadline
+            )
             .ConfigureAwait(false);
     }
 
@@ -218,32 +242,37 @@ internal sealed class ZLinkFrameworkActorFacade(
         RoutingId spotNodeRid,
         IZLinkActor actor,
         ZLinkMessage request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
-        return await _entrySpotJoin.JoinAsync(spotNodeRid, actor, request, cancellationToken)
+        return await _entrySpotJoin
+            .JoinAsync(spotNodeRid, actor, request, cancellationToken)
             .ConfigureAwait(false);
     }
 
     private static ActorRef ToActorRef(ZLinkActorRuntimeState actorState)
     {
-        var actorRef = actorState.NativeActorRef
-                       ?? throw new ZLinkFrameworkException(
-                           ZLinkFrameworkErrorKind.NotFound,
-                           $"Actor '{actorState.ActorId}' does not have a native Actor ref.");
-        var meshName = actorState.Activation?.MeshName
-                       ?? actorState.Context?.MeshName
-                       ?? throw new ZLinkFrameworkException(
-                           ZLinkFrameworkErrorKind.NotFound,
-                           $"Actor '{actorState.ActorId}' does not have an owner Mesh.");
+        var actorRef =
+            actorState.NativeActorRef
+            ?? throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.NotFound,
+                $"Actor '{actorState.ActorId}' does not have a native Actor ref."
+            );
+        var meshName =
+            actorState.Activation?.MeshName
+            ?? actorState.Context?.MeshName
+            ?? throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.NotFound,
+                $"Actor '{actorState.ActorId}' does not have an owner Mesh."
+            );
         return actorRef.ToNative(meshName);
     }
 
-    private static ZLinkActorJoinResult.Rejected RejectedWithTrace(
-        ZLinkMessage reply,
-        string site)
+    private static ZLinkActorJoinResult.Rejected RejectedWithTrace(ZLinkMessage reply, string site)
     {
         Zlink.Framework.Runtime.Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"actor_join_rejected site={site}");
+            $"actor_join_rejected site={site}"
+        );
         return new ZLinkActorJoinResult.Rejected(reply);
     }
 }

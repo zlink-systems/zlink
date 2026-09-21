@@ -32,8 +32,10 @@ public sealed class EnvelopeHeaderCacheHotPathTests
             using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
         }
         var encodedBytes = GC.GetAllocatedBytesForCurrentThread() - start;
-        Assert.True(encodedBytes <= directBytes + iterations * 16L,
-            $"Warm encoding allocated {encodedBytes} bytes; owned Message allocated {directBytes} bytes.");
+        Assert.True(
+            encodedBytes <= directBytes + iterations * 16L,
+            $"Warm encoding allocated {encodedBytes} bytes; owned Message allocated {directBytes} bytes."
+        );
     }
 
     [Fact]
@@ -43,18 +45,26 @@ public sealed class EnvelopeHeaderCacheHotPathTests
         using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
         var decoded = ZLinkEnvelopeCodec.DecodeHeader(encoded);
         using var body = Message.From(new byte[] { 48 });
-        using var multipart = ZLinkApplicationPayloadEnvelopeCodec
-            .EncodeFrameworkMultipartMessage([encoded, body]);
-        Assert.True(ZLinkApplicationPayloadEnvelopeCodec
-            .TryDecodeFrameworkMultipartView(multipart, out var view));
+        using var multipart = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage([
+            encoded,
+            body,
+        ]);
+        Assert.True(
+            ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(
+                multipart,
+                out var view
+            )
+        );
         var lane = (ZLinkStateLane)Field("CacheLane");
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        Assert.True(lane.TryPost(async () =>
-        {
-            entered.SetResult();
-            await release.Task;
-        }));
+        Assert.True(
+            lane.TryPost(async () =>
+            {
+                entered.SetResult();
+                await release.Task;
+            })
+        );
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(3));
         Task? lookup = null;
         try
@@ -83,7 +93,10 @@ public sealed class EnvelopeHeaderCacheHotPathTests
         for (var index = 0; index < 4097; index++)
         {
             using var encoded = ZLinkEnvelopeCodec.EncodeHeader(Header($"cache-replace-{index}"));
-            Assert.Equal($"cache-replace-{index}", ZLinkEnvelopeCodec.DecodeHeader(encoded).MessageName);
+            Assert.Equal(
+                $"cache-replace-{index}",
+                ZLinkEnvelopeCodec.DecodeHeader(encoded).MessageName
+            );
         }
 
         Assert.True(((IDictionary)Field("SimpleHeaderCache")).Count <= 4096);
@@ -100,7 +113,7 @@ public sealed class EnvelopeHeaderCacheHotPathTests
         {
             Kind = ZLinkMessageKind.Request,
             FormatMarker = 242,
-            CorrelationId = "warm"
+            CorrelationId = "warm",
         };
         using var warm = ZLinkEnvelopeCodec.EncodeHeader(header);
         var count = ((IDictionary)Field("SimpleHeaderCache")).Count;
@@ -111,11 +124,14 @@ public sealed class EnvelopeHeaderCacheHotPathTests
             {
                 CorrelationId = $"correlation-{index}",
                 Deadline = DateTimeOffset.UnixEpoch.AddTicks(index),
-                Metadata = new() { ["record"] = index.ToString() }
+                Metadata = new() { ["record"] = index.ToString() },
             };
             using var encoded = ZLinkEnvelopeCodec.EncodeHeader(current);
             Assert.Equal(ZLinkEnvelopeCodec.EncodeProtocolJsonBytes(current), encoded.ToArray());
-            Assert.Equal(current.CorrelationId, ZLinkEnvelopeCodec.DecodeHeader(encoded).CorrelationId);
+            Assert.Equal(
+                current.CorrelationId,
+                ZLinkEnvelopeCodec.DecodeHeader(encoded).CorrelationId
+            );
         }
 
         Assert.Equal(count, ((IDictionary)Field("SimpleHeaderCache")).Count);
@@ -125,8 +141,9 @@ public sealed class EnvelopeHeaderCacheHotPathTests
     [Fact]
     public void PlannedHeaderPreservesJsonEscapingIncludingInvalidSurrogates()
     {
-        var text = new string(Enumerable.Range(0, 128).Select(static value => (char)value).ToArray())
-                   + "한글<&\u2028\u2029😀\ud800x\udc00";
+        var text =
+            new string(Enumerable.Range(0, 128).Select(static value => (char)value).ToArray())
+            + "한글<&\u2028\u2029😀\ud800x\udc00";
         var header = Header("escaping-plan") with
         {
             Kind = ZLinkMessageKind.Error,
@@ -136,7 +153,7 @@ public sealed class EnvelopeHeaderCacheHotPathTests
             Source = text,
             ErrorCode = "failure",
             ErrorMessage = text,
-            Metadata = new() { [text] = text, ["nullable"] = null! }
+            Metadata = new() { [text] = text, ["nullable"] = null! },
         };
 
         using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
@@ -157,8 +174,15 @@ public sealed class EnvelopeHeaderCacheHotPathTests
         {
             FormatMarker = 242,
             CorrelationId = "deadline",
-            Deadline = new DateTimeOffset(2026, 9, 10, 12, 34, 56,
-                TimeSpan.FromHours(offsetHours)).AddTicks(ticks)
+            Deadline = new DateTimeOffset(
+                2026,
+                9,
+                10,
+                12,
+                34,
+                56,
+                TimeSpan.FromHours(offsetHours)
+            ).AddTicks(ticks),
         };
         using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
 
@@ -191,19 +215,31 @@ public sealed class EnvelopeHeaderCacheHotPathTests
         }
         var largeBytes = GC.GetAllocatedBytesForCurrentThread() - start;
 
-        Assert.True(largeBytes <= smallBytes + iterations * 16L,
-            $"Dynamic values added {largeBytes - smallBytes} managed bytes across {iterations} headers.");
+        Assert.True(
+            largeBytes <= smallBytes + iterations * 16L,
+            $"Dynamic values added {largeBytes - smallBytes} managed bytes across {iterations} headers."
+        );
     }
 
     [Theory]
-    [InlineData("""{"source":"first","unknown":{"nested":[true,null,12]},"KINd":3,"f\u006FrmatMarker":"242","CHANNELNAME":"cache","messageName":"flexible","contentType":"application/json","correlationId":"flexible-1","SoUrCe":"last"}""")]
-    [InlineData("""{"formatMarker":242,"kind":3,"correlationId":"flexible-2","metadata":{"same":"first","same":"last","nullable":null}}""")]
-    [InlineData("""{"formatMarker":"24\u0032","kind":3,"correlationId":"flexible-3","deadline":"2026-09-10T12:34:56Z","metadata":{"first":"discarded"},"METADATA":{}}""")]
-    [InlineData("""{"formatMarker":242,"kind":3,"correlationId":"flexible-4","channelName":null,"messageName":null,"contentType":null,"metadata":null}""")]
+    [InlineData(
+        """{"source":"first","unknown":{"nested":[true,null,12]},"KINd":3,"f\u006FrmatMarker":"242","CHANNELNAME":"cache","messageName":"flexible","contentType":"application/json","correlationId":"flexible-1","SoUrCe":"last"}"""
+    )]
+    [InlineData(
+        """{"formatMarker":242,"kind":3,"correlationId":"flexible-2","metadata":{"same":"first","same":"last","nullable":null}}"""
+    )]
+    [InlineData(
+        """{"formatMarker":"24\u0032","kind":3,"correlationId":"flexible-3","deadline":"2026-09-10T12:34:56Z","metadata":{"first":"discarded"},"METADATA":{}}"""
+    )]
+    [InlineData(
+        """{"formatMarker":242,"kind":3,"correlationId":"flexible-4","channelName":null,"messageName":null,"contentType":null,"metadata":null}"""
+    )]
     public void StreamingHeaderDecodePreservesAcceptedWebJsonSemantics(string wire)
     {
-        var expected = JsonSerializer.Deserialize<ZLinkEnvelopeHeader>(wire,
-            ZLinkJsonSerializerOptions.Default)!;
+        var expected = JsonSerializer.Deserialize<ZLinkEnvelopeHeader>(
+            wire,
+            ZLinkJsonSerializerOptions.Default
+        )!;
         using var encoded = Message.From(wire);
         var actual = ZLinkEnvelopeCodec.DecodeHeader(encoded);
 
@@ -224,26 +260,48 @@ public sealed class EnvelopeHeaderCacheHotPathTests
     public void StreamingHeaderDecodePreservesProtocolErrorBoundary(string wire)
     {
         using var encoded = Message.From(wire);
-        Assert.Throws<ZLinkEnvelopeProtocolException>(() => ZLinkEnvelopeCodec.DecodeHeader(encoded));
+        Assert.Throws<ZLinkEnvelopeProtocolException>(() =>
+            ZLinkEnvelopeCodec.DecodeHeader(encoded)
+        );
     }
 
     [Fact]
     public void StreamingHeaderDecodeRejectsInvalidUtf8AsProtocolError()
     {
-        byte[] wire = [.. "{\"formatMarker\":242,\"kind\":3,\"source\":\""u8.ToArray(),
-            0xFF, .. "\"}"u8.ToArray()];
-        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<ZLinkEnvelopeHeader>(wire,
-            ZLinkJsonSerializerOptions.Default));
+        byte[] wire =
+        [
+            .. "{\"formatMarker\":242,\"kind\":3,\"source\":\""u8.ToArray(),
+            0xFF,
+            .. "\"}"u8.ToArray(),
+        ];
+        Assert.Throws<JsonException>(() =>
+            JsonSerializer.Deserialize<ZLinkEnvelopeHeader>(
+                wire,
+                ZLinkJsonSerializerOptions.Default
+            )
+        );
         using var encoded = Message.From(wire);
 
-        Assert.Throws<ZLinkEnvelopeProtocolException>(() => ZLinkEnvelopeCodec.DecodeHeader(encoded));
+        Assert.Throws<ZLinkEnvelopeProtocolException>(() =>
+            ZLinkEnvelopeCodec.DecodeHeader(encoded)
+        );
     }
 
     private static ZLinkEnvelopeHeader Header(string messageName) =>
-        new(ZLinkMessageKind.Command, "cache", messageName, "application/json",
-            null, null, null, null, null);
+        new(
+            ZLinkMessageKind.Command,
+            "cache",
+            messageName,
+            "application/json",
+            null,
+            null,
+            null,
+            null,
+            null
+        );
 
     private static object Field(string name) =>
-        typeof(ZLinkEnvelopeCodec).GetField(name, BindingFlags.Static | BindingFlags.NonPublic)!
+        typeof(ZLinkEnvelopeCodec)
+            .GetField(name, BindingFlags.Static | BindingFlags.NonPublic)!
             .GetValue(null)!;
 }

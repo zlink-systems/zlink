@@ -4,5 +4,5 @@ public enum ZLinkStreamSessionError
 {
     Internal = 0,
     TransportError = 1,
-    HandshakeFailed = 2
+    HandshakeFailed = 2,
 }

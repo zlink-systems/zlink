@@ -2,9 +2,7 @@ package systems.zlink.framework.spots;
 
 import systems.zlink.framework.messaging.ZLinkMessage;
 
-public record ZLinkSpotCreateResponse(
-    boolean accepted,
-    ZLinkMessage reply) {
+public record ZLinkSpotCreateResponse(boolean accepted, ZLinkMessage reply) {
     public static ZLinkSpotCreateResponse accept() {
         return from(ZLinkSpotAcceptRejectResult.accept());
     }

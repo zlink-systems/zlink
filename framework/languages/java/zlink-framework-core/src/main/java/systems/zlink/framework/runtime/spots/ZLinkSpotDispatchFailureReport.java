@@ -21,10 +21,10 @@ final class DispatchFailureReport {
     Throwable error;
 
     private DispatchFailureReport(
-        ZLinkDispatchErrorSurface surface,
-        ZLinkDispatchMessageKind messageKind,
-        ZLinkDispatchErrorReason reason,
-        ZLinkDispatchErrorAction action) {
+            ZLinkDispatchErrorSurface surface,
+            ZLinkDispatchMessageKind messageKind,
+            ZLinkDispatchErrorReason reason,
+            ZLinkDispatchErrorAction action) {
         this.surface = surface;
         this.messageKind = messageKind;
         this.reason = reason;
@@ -32,10 +32,10 @@ final class DispatchFailureReport {
     }
 
     static DispatchFailureReport of(
-        ZLinkDispatchErrorSurface surface,
-        ZLinkDispatchMessageKind messageKind,
-        ZLinkDispatchErrorReason reason,
-        ZLinkDispatchErrorAction action) {
+            ZLinkDispatchErrorSurface surface,
+            ZLinkDispatchMessageKind messageKind,
+            ZLinkDispatchErrorReason reason,
+            ZLinkDispatchErrorAction action) {
         return new DispatchFailureReport(surface, messageKind, reason, action);
     }
 

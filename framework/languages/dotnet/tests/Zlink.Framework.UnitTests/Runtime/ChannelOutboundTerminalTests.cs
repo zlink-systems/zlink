@@ -33,7 +33,8 @@ public sealed class ChannelOutboundTerminalTests
                 tracer,
                 ZLinkDispatchErrorSurface.Channel,
                 "TerminalPinPacket",
-                "term-channel");
+                "term-channel"
+            );
             terminal.SetCorrelation("corr-terminal");
             terminal.Succeeded();
             terminal.Dispose();
@@ -56,7 +57,8 @@ public sealed class ChannelOutboundTerminalTests
     [InlineData(ZLinkFrameworkErrorKind.NotFound, "failed")]
     public void ChannelRequestTerminalClassifiesFailuresAndPassesAtErrorsLevel(
         ZLinkFrameworkErrorKind kind,
-        string expectedOutcome)
+        string expectedOutcome
+    )
     {
         var activities = CaptureActivities(out var listener);
         using (listener)
@@ -70,7 +72,8 @@ public sealed class ChannelOutboundTerminalTests
                 tracer,
                 ZLinkDispatchErrorSurface.Channel,
                 "TerminalClassifyPacket",
-                "term-channel");
+                "term-channel"
+            );
             succeeded.Succeeded();
             succeeded.Dispose();
 
@@ -78,7 +81,8 @@ public sealed class ChannelOutboundTerminalTests
                 tracer,
                 ZLinkDispatchErrorSurface.Channel,
                 "TerminalClassifyPacket",
-                "term-channel");
+                "term-channel"
+            );
             failed.Failed(new ZLinkFrameworkException(kind, "terminal failure"));
             failed.Dispose();
         }
@@ -102,7 +106,8 @@ public sealed class ChannelOutboundTerminalTests
                 ZLinkDispatchErrorSurface.RouteMeshChannel,
                 "TerminalRouteMeshPacket",
                 meshName: "mesh-a",
-                targetRid: "node-b");
+                targetRid: "node-b"
+            );
             terminal.Failed(new OperationCanceledException());
             terminal.Dispose();
         }
@@ -126,7 +131,8 @@ public sealed class ChannelOutboundTerminalTests
             await using var client = CreateTerminalClient(port);
             var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
             var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
-            client.GetRequiredService<ZLinkFrameworkRegistration>()
+            client
+                .GetRequiredService<ZLinkFrameworkRegistration>()
                 .DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
 
             await serverRuntime.StartAsync(CancellationToken.None);
@@ -135,17 +141,22 @@ public sealed class ChannelOutboundTerminalTests
             {
                 await WaitUntilAsync(
                     () => clientRuntime.GetClientServerClientRuntime("term-work").ReadyCount == 1,
-                    TimeSpan.FromSeconds(10));
+                    TimeSpan.FromSeconds(10)
+                );
 
-                await client.GetRequiredService<IZLinkRouteClient>()
+                await client
+                    .GetRequiredService<IZLinkRouteClient>()
                     .SendToChannel("term-work", new TerminalEchoSend("one-way"))
                     .Async();
                 Assert.Equal(
                     "one-way",
-                    await server.GetRequiredService<TerminalProbe>().Received.Task
-                        .WaitAsync(TimeSpan.FromSeconds(5)));
+                    await server
+                        .GetRequiredService<TerminalProbe>()
+                        .Received.Task.WaitAsync(TimeSpan.FromSeconds(5))
+                );
 
-                var reply = await client.GetRequiredService<IZLinkRouteClient>()
+                var reply = await client
+                    .GetRequiredService<IZLinkRouteClient>()
                     .RequestToChannel("term-work", new TerminalEchoRequest("ready"))
                     .Timeout(TimeSpan.FromSeconds(5))
                     .Async<TerminalEchoReply>();
@@ -159,8 +170,10 @@ public sealed class ChannelOutboundTerminalTests
         }
 
         //  One-way send: one `sent`, no correlation, ClientServer target recorded.
-        var sendSent = Assert.Single(FlowActivities(activities, nameof(TerminalEchoSend))
-            .Where(activity => Equals(activity.GetTagItem("phase"), "sent")));
+        var sendSent = Assert.Single(
+            FlowActivities(activities, nameof(TerminalEchoSend))
+                .Where(activity => Equals(activity.GetTagItem("phase"), "sent"))
+        );
         Assert.Equal("channel", sendSent.GetTagItem("surface"));
         Assert.Equal("send", sendSent.GetTagItem("message_kind"));
         Assert.Equal("client_server", sendSent.GetTagItem("channel_route_kind"));
@@ -171,10 +184,12 @@ public sealed class ChannelOutboundTerminalTests
         //  Request: one `sent` and exactly one `reply_received` terminal, both
         //  carrying the same correlation id (spec 26 §2.2 exactly-once).
         var requestFlows = FlowActivities(activities, nameof(TerminalEchoRequest)).ToArray();
-        var requestSent = Assert.Single(requestFlows
-            .Where(activity => Equals(activity.GetTagItem("phase"), "sent")));
-        var terminal = Assert.Single(requestFlows
-            .Where(activity => Equals(activity.GetTagItem("phase"), "reply_received")));
+        var requestSent = Assert.Single(
+            requestFlows.Where(activity => Equals(activity.GetTagItem("phase"), "sent"))
+        );
+        var terminal = Assert.Single(
+            requestFlows.Where(activity => Equals(activity.GetTagItem("phase"), "reply_received"))
+        );
         Assert.Equal("request", requestSent.GetTagItem("message_kind"));
         Assert.Equal("client_server", requestSent.GetTagItem("channel_route_kind"));
         Assert.NotNull(requestSent.GetTagItem("server_rid"));
@@ -185,7 +200,8 @@ public sealed class ChannelOutboundTerminalTests
         Assert.Equal("term-work", terminal.GetTagItem("channel_name"));
         Assert.Equal(
             requestSent.GetTagItem("correlation_id"),
-            terminal.GetTagItem("correlation_id"));
+            terminal.GetTagItem("correlation_id")
+        );
     }
 
     [Fact]
@@ -204,10 +220,7 @@ public sealed class ChannelOutboundTerminalTests
                 await using var dealer = context.CreateDealerSocket();
                 using var completionPoller = Systems.Zlink.Zlink.CreatePoller();
                 var completionEvents = new PollEvent[1];
-                completionPoller.Add(
-                    dealer,
-                    PollEventFlags.PollCompletion,
-                    1);
+                completionPoller.Add(dealer, PollEventFlags.PollCompletion, 1);
                 dealer.SetRoutingId(RoutingId.From("mal-client"));
                 dealer.Connect($"tcp://127.0.0.1:{port}");
 
@@ -221,20 +234,23 @@ public sealed class ChannelOutboundTerminalTests
                         new ZLinkClientServerControlProtocol.Hello(
                             "mal-work",
                             "plaintext",
-                            1024 * 1024));
+                            1024 * 1024
+                        )
+                    );
                     try
                     {
-                        var admission = dealer.Request()
+                        var admission = dealer
+                            .Request()
                             .Message(hello)
                             .Timeout(TimeSpan.FromSeconds(5))
-                            .Async(CancellationToken.None).Reply;
-                        completionPoller.Wait(
-                            completionEvents,
-                            TimeSpan.FromSeconds(5));
+                            .Async(CancellationToken.None)
+                            .Reply;
+                        completionPoller.Wait(completionEvents, TimeSpan.FromSeconds(5));
                         ZLinkMessageParts.DisposeAll(await admission);
                         break;
                     }
-                    catch (ZlinkSubmitException) when (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)
+                    catch (ZlinkSubmitException)
+                        when (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)
                     {
                         await Task.Delay(20);
                     }
@@ -242,13 +258,16 @@ public sealed class ChannelOutboundTerminalTests
 
                 //  A malformed envelope keeps producing the protocol error path,
                 //  and now additionally records zlink.dispatch_error(invalid_frame).
-                await dealer.Send()
+                await dealer
+                    .Send()
                     .Message(Message.From("{"))
-                    .Async(CancellationToken.None).Admitted;
+                    .Async(CancellationToken.None)
+                    .Admitted;
 
                 await WaitUntilAsync(
                     () => DispatchErrors(activities, "mal-work").Any(),
-                    TimeSpan.FromSeconds(5));
+                    TimeSpan.FromSeconds(5)
+                );
             }
             finally
             {
@@ -287,9 +306,7 @@ public sealed class ChannelOutboundTerminalTests
         Assert.Equal("unavailable", validReply.ErrorCode);
     }
 
-    private static ZLinkEnvelopeHeader RejectRelocationReply(
-        string flowId,
-        bool validateFlow)
+    private static ZLinkEnvelopeHeader RejectRelocationReply(string flowId, bool validateFlow)
     {
         var parts = EncodeRoutedRequestParts(flowId);
         var replies = new List<Message[]>();
@@ -300,16 +317,18 @@ public sealed class ChannelOutboundTerminalTests
             requestSeq: 1UL,
             reply: replyParts =>
             {
-                replies.Add(replyParts
-                    .Select(static part => Message.From(part.AsReadOnlySpan()))
-                    .ToArray());
+                replies.Add(
+                    replyParts.Select(static part => Message.From(part.AsReadOnlySpan())).ToArray()
+                );
                 return SubmitResult.Ok;
-            });
+            }
+        );
 
         ZLinkSpotActivationDispatcher.RejectApplicationRouteForRelocation(
             received,
             "reject-route",
-            validateFlow);
+            validateFlow
+        );
 
         var reply = Assert.Single(replies);
         try
@@ -333,17 +352,19 @@ public sealed class ChannelOutboundTerminalTests
             null,
             null,
             null,
-            null)
+            null
+        )
         {
             FlowId = ValidFlowId,
-            FlowOrigin = ZLinkFlowOrigin.Application
+            FlowOrigin = ZLinkFlowOrigin.Application,
         };
         var encoded = ZLinkEnvelopeCodec.EncodeParts(header, null, null, null);
         try
         {
             //  Encoding validates the flow pair, so a malformed id is produced by
             //  mutating the already-encoded bytes (same length keeps JSON valid).
-            var json = Encoding.UTF8.GetString(encoded[0].AsReadOnlySpan())
+            var json = Encoding
+                .UTF8.GetString(encoded[0].AsReadOnlySpan())
                 .Replace(ValidFlowId, flowId, StringComparison.Ordinal);
             return [Message.From(json)];
         }
@@ -355,17 +376,21 @@ public sealed class ChannelOutboundTerminalTests
 
     private static IEnumerable<Activity> FlowActivities(
         IEnumerable<Activity> activities,
-        string packetName) =>
+        string packetName
+    ) =>
         activities.Where(activity =>
             activity.OperationName == "zlink.message_flow"
-            && Equals(activity.GetTagItem("packet_name")?.ToString(), packetName));
+            && Equals(activity.GetTagItem("packet_name")?.ToString(), packetName)
+        );
 
     private static IEnumerable<Activity> DispatchErrors(
         IEnumerable<Activity> activities,
-        string channelName) =>
+        string channelName
+    ) =>
         activities.Where(activity =>
             activity.OperationName == "zlink.dispatch_error"
-            && Equals(activity.GetTagItem("channel_name")?.ToString(), channelName));
+            && Equals(activity.GetTagItem("channel_name")?.ToString(), channelName)
+        );
 
     private static ConcurrentBag<Activity> CaptureActivities(out ActivityListener listener)
     {
@@ -375,21 +400,20 @@ public sealed class ChannelOutboundTerminalTests
             ShouldListenTo = source => source.Name == ZLinkTelemetry.ActivitySourceName,
             Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
                 ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = activities.Add
+            ActivityStopped = activities.Add,
         };
         ActivitySource.AddActivityListener(listener);
         return activities;
     }
 
-    private static ServiceProvider CreateTerminalServer(
-        int port,
-        string channelName = "term-work")
+    private static ServiceProvider CreateTerminalServer(int port, string channelName = "term-work")
     {
         var services = new ServiceCollection();
         services.AddSingleton<TerminalProbe>();
         services.AddZLinkFramework(options =>
         {
-            options.AddClientServerChannel(channelName)
+            options
+                .AddClientServerChannel(channelName)
                 .Server()
                 .Listen(port)
                 .AddSendHandler<TerminalEchoSendHandler, TerminalEchoSend>()
@@ -403,9 +427,7 @@ public sealed class ChannelOutboundTerminalTests
         var services = new ServiceCollection();
         services.AddZLinkFramework(options =>
         {
-            options.AddClientServerChannel("term-work")
-                .Client()
-                .Connect($"tcp://127.0.0.1:{port}");
+            options.AddClientServerChannel("term-work").Client().Connect($"tcp://127.0.0.1:{port}");
         });
         return services.BuildServiceProvider();
     }
@@ -446,7 +468,8 @@ public sealed class ChannelOutboundTerminalTests
         public ValueTask HandleAsync(
             TerminalEchoSend message,
             IZLinkMessageContext context,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             cancellationToken.ThrowIfCancellationRequested();
             probe.Received.TrySetResult(message.Value);
@@ -460,7 +483,8 @@ public sealed class ChannelOutboundTerminalTests
         public ValueTask<TerminalEchoReply> HandleAsync(
             TerminalEchoRequest request,
             IZLinkMessageContext context,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             cancellationToken.ThrowIfCancellationRequested();
             return ValueTask.FromResult(new TerminalEchoReply(request.Value));

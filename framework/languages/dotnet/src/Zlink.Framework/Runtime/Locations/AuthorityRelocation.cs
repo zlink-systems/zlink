@@ -10,7 +10,7 @@ internal readonly record struct ZLinkAuthorityKey(string Value);
 internal enum ZLinkPlacementAllocationState
 {
     Reserved = 1,
-    Active = 2
+    Active = 2,
 }
 
 // Field names/types per 21-location-runtime.md#2.4's authority table:
@@ -23,12 +23,10 @@ internal sealed record ZLinkPlacementAllocation(
     string StableType,
     ZLinkMeshNodeDescriptorKey Descriptor,
     [property: JsonPropertyName("descriptorLifecycleGeneration")]
-    [property: JsonConverter(
-        typeof(ZLinkJsonSerializerOptions
-            .FrameworkUnsigned64JsonConverter))]
-    ulong DescriptorLifecycleGeneration,
-    [property: JsonPropertyName("capacity")]
-    ZLinkCapacityVector Capacity);
+    [property: JsonConverter(typeof(ZLinkJsonSerializerOptions.FrameworkUnsigned64JsonConverter))]
+        ulong DescriptorLifecycleGeneration,
+    [property: JsonPropertyName("capacity")] ZLinkCapacityVector Capacity
+);
 
 // requestSha256 is lowercase hex on the wire (21-location-runtime.md#2.4's
 // pendingCreation table), not System.Text.Json's byte[]/ReadOnlyMemory<byte>
@@ -37,16 +35,17 @@ internal sealed record ZLinkReservedObjectCreation(
     string ReservationId,
     string RequestContentReference,
     [property: JsonConverter(typeof(ZLinkHexBytesJsonConverter))]
-    ReadOnlyMemory<byte> RequestSha256,
-    int RequestEncodedSize);
+        ReadOnlyMemory<byte> RequestSha256,
+    int RequestEncodedSize
+);
 
-internal sealed class ZLinkHexBytesJsonConverter
-    : JsonConverter<ReadOnlyMemory<byte>>
+internal sealed class ZLinkHexBytesJsonConverter : JsonConverter<ReadOnlyMemory<byte>>
 {
     public override ReadOnlyMemory<byte> Read(
         ref Utf8JsonReader reader,
         Type typeToConvert,
-        JsonSerializerOptions options) =>
+        JsonSerializerOptions options
+    ) =>
         reader.GetString() is { } hex && hex.Length > 0
             ? Convert.FromHexString(hex)
             : ReadOnlyMemory<byte>.Empty;
@@ -54,9 +53,8 @@ internal sealed class ZLinkHexBytesJsonConverter
     public override void Write(
         Utf8JsonWriter writer,
         ReadOnlyMemory<byte> value,
-        JsonSerializerOptions options) =>
-        writer.WriteStringValue(
-            Convert.ToHexString(value.Span).ToLowerInvariant());
+        JsonSerializerOptions options
+    ) => writer.WriteStringValue(Convert.ToHexString(value.Span).ToLowerInvariant());
 }
 
 internal sealed record ZLinkAuthoritySnapshot(
@@ -68,22 +66,19 @@ internal sealed record ZLinkAuthoritySnapshot(
     long OwnerLeaseGeneration,
     ZLinkPlacementAllocation Allocation,
     ZLinkReservedObjectCreation? ReservedCreation,
-    DateTimeOffset StoreNow);
+    DateTimeOffset StoreNow
+);
 
 internal abstract record ZLinkAuthorityReadResult
 {
-    private protected ZLinkAuthorityReadResult()
-    {
-    }
+    private protected ZLinkAuthorityReadResult() { }
 
     public sealed record Missing(DateTimeOffset StoreNow) : ZLinkAuthorityReadResult;
 
     public sealed record Found(ZLinkAuthoritySnapshot Snapshot) : ZLinkAuthorityReadResult;
 }
 
-internal sealed record ZLinkAuthorityEntry(
-    ZLinkAuthorityKey Key,
-    ZLinkAuthoritySnapshot Snapshot);
+internal sealed record ZLinkAuthorityEntry(ZLinkAuthorityKey Key, ZLinkAuthoritySnapshot Snapshot);
 
 internal readonly record struct ZLinkAuthorityScanCursor
 {
@@ -94,7 +89,8 @@ internal readonly record struct ZLinkAuthorityScanCursor
         if (size is < 1 or > 4096)
             throw new ArgumentOutOfRangeException(
                 nameof(encoded),
-                "Authority scan cursors must be 1 to 4096 UTF-8 bytes.");
+                "Authority scan cursors must be 1 to 4096 UTF-8 bytes."
+            );
         Encoded = encoded;
     }
 
@@ -103,13 +99,12 @@ internal readonly record struct ZLinkAuthorityScanCursor
 
 internal sealed record ZLinkAuthorityPage(
     IReadOnlyList<ZLinkAuthorityEntry> Items,
-    ZLinkAuthorityScanCursor? NextCursor);
+    ZLinkAuthorityScanCursor? NextCursor
+);
 
 internal abstract record ZLinkAuthorityScanResult
 {
-    private protected ZLinkAuthorityScanResult()
-    {
-    }
+    private protected ZLinkAuthorityScanResult() { }
 
     public sealed record Page(ZLinkAuthorityPage Value) : ZLinkAuthorityScanResult;
 
@@ -118,17 +113,15 @@ internal abstract record ZLinkAuthorityScanResult
 
 internal abstract record ZLinkAuthorityMutation
 {
-    private protected ZLinkAuthorityMutation()
-    {
-    }
+    private protected ZLinkAuthorityMutation() { }
 
     public sealed record Put(
         ReadOnlyMemory<byte> Payload,
         ZLinkAuthorityGenerationTransition GenerationTransition,
         ZLinkLocationOwnerToken? TargetOwner,
         ZLinkPlacementAllocation? TargetAllocation,
-        ulong TargetAuthorityOwnerGeneration = 0)
-        : ZLinkAuthorityMutation;
+        ulong TargetAuthorityOwnerGeneration = 0
+    ) : ZLinkAuthorityMutation;
 
     /// <summary>
     /// Replaces only the opaque payload after matching the exact store version
@@ -136,8 +129,8 @@ internal abstract record ZLinkAuthorityMutation
     /// </summary>
     public sealed record Restore(
         ReadOnlyMemory<byte> Payload,
-        ZLinkLocationOwnerToken ExpectedOwner)
-        : ZLinkAuthorityMutation;
+        ZLinkLocationOwnerToken ExpectedOwner
+    ) : ZLinkAuthorityMutation;
 
     public sealed record Delete : ZLinkAuthorityMutation;
 }
@@ -145,14 +138,12 @@ internal abstract record ZLinkAuthorityMutation
 internal enum ZLinkAuthorityGenerationTransition
 {
     Preserve = 1,
-    NewOwner = 2
+    NewOwner = 2,
 }
 
 internal abstract record ZLinkAuthorityCompareExchangeResult
 {
-    private protected ZLinkAuthorityCompareExchangeResult()
-    {
-    }
+    private protected ZLinkAuthorityCompareExchangeResult() { }
 
     public sealed record Stored(ZLinkAuthoritySnapshot Snapshot)
         : ZLinkAuthorityCompareExchangeResult;
@@ -177,7 +168,8 @@ internal sealed record ZLinkObjectReservationRequest(
     ulong TargetNodeLifecycleGeneration,
     ZLinkLocationOwnerToken TargetOwner,
     ReadOnlyMemory<byte> CreatingPayload,
-    ZLinkCapacityVector Capacity);
+    ZLinkCapacityVector Capacity
+);
 
 internal sealed record ZLinkObjectReservation(
     ZLinkAuthorityKey Key,
@@ -187,30 +179,32 @@ internal sealed record ZLinkObjectReservation(
     string ReservationVersion,
     ZLinkMeshNodeDescriptorKey TargetDescriptor,
     ulong TargetNodeLifecycleGeneration,
-    ZLinkLocationOwnerToken TargetOwner);
+    ZLinkLocationOwnerToken TargetOwner
+);
 
 internal readonly record struct ZLinkCreationOperationId(
     RoutingId SourceNodeRid,
     ulong SourceNodeGeneration,
     ulong OperationIdHigh,
-    ulong OperationIdLow);
+    ulong OperationIdLow
+);
 
 internal sealed record ZLinkCreationTerminalPublication(
     ZLinkCreationOperationId Operation,
     ReadOnlyMemory<byte> TerminalEnvelope,
-    DateTimeOffset ExpiresAt);
+    DateTimeOffset ExpiresAt
+);
 
 internal sealed record ZLinkCreationTerminalRecord(
     ZLinkCreationOperationId Operation,
     ReadOnlyMemory<byte> TerminalEnvelope,
     DateTimeOffset ExpiresAt,
-    DateTimeOffset StoreNow);
+    DateTimeOffset StoreNow
+);
 
 internal abstract record ZLinkCreationTerminalReadResult
 {
-    private protected ZLinkCreationTerminalReadResult()
-    {
-    }
+    private protected ZLinkCreationTerminalReadResult() { }
 
     public sealed record Missing(DateTimeOffset StoreNow) : ZLinkCreationTerminalReadResult;
 
@@ -220,21 +214,15 @@ internal abstract record ZLinkCreationTerminalReadResult
 
 internal abstract record ZLinkObjectReserveResult
 {
-    private protected ZLinkObjectReserveResult()
-    {
-    }
+    private protected ZLinkObjectReserveResult() { }
 
-    public sealed record Reserved(ZLinkObjectReservation Reservation)
-        : ZLinkObjectReserveResult;
+    public sealed record Reserved(ZLinkObjectReservation Reservation) : ZLinkObjectReserveResult;
 
-    public sealed record Conflict(ZLinkAuthorityReadResult Current)
-        : ZLinkObjectReserveResult;
+    public sealed record Conflict(ZLinkAuthorityReadResult Current) : ZLinkObjectReserveResult;
 
-    public sealed record AlreadyExists(ZLinkAuthoritySnapshot Current)
-        : ZLinkObjectReserveResult;
+    public sealed record AlreadyExists(ZLinkAuthoritySnapshot Current) : ZLinkObjectReserveResult;
 
-    public sealed record TypeMismatch(ZLinkAuthoritySnapshot Current)
-        : ZLinkObjectReserveResult;
+    public sealed record TypeMismatch(ZLinkAuthoritySnapshot Current) : ZLinkObjectReserveResult;
 
     public sealed record PlacementCapacityExhausted : ZLinkObjectReserveResult;
 
@@ -243,12 +231,9 @@ internal abstract record ZLinkObjectReserveResult
 
 internal abstract record ZLinkObjectCommitResult
 {
-    private protected ZLinkObjectCommitResult()
-    {
-    }
+    private protected ZLinkObjectCommitResult() { }
 
-    public sealed record Committed(ZLinkAuthoritySnapshot Snapshot)
-        : ZLinkObjectCommitResult;
+    public sealed record Committed(ZLinkAuthoritySnapshot Snapshot) : ZLinkObjectCommitResult;
 
     public sealed record AlreadyCommitted(ZLinkAuthoritySnapshot Snapshot)
         : ZLinkObjectCommitResult;
@@ -260,14 +245,12 @@ internal abstract record ZLinkObjectCommitResult
 
 internal abstract record ZLinkObjectCreationCompletion
 {
-    private protected ZLinkObjectCreationCompletion()
-    {
-    }
+    private protected ZLinkObjectCreationCompletion() { }
 
     public sealed record Created(
         ReadOnlyMemory<byte> ReadyPayload,
-        ZLinkCreationTerminalPublication Terminal)
-        : ZLinkObjectCreationCompletion;
+        ZLinkCreationTerminalPublication Terminal
+    ) : ZLinkObjectCreationCompletion;
 
     public sealed record Rejected(ZLinkCreationTerminalPublication Terminal)
         : ZLinkObjectCreationCompletion;
@@ -278,14 +261,12 @@ internal abstract record ZLinkObjectCreationCompletion
 
 internal abstract record ZLinkObjectCreationCompleteResult
 {
-    private protected ZLinkObjectCreationCompleteResult()
-    {
-    }
+    private protected ZLinkObjectCreationCompleteResult() { }
 
     public sealed record Created(
         ZLinkAuthoritySnapshot Snapshot,
-        ZLinkCreationTerminalRecord Terminal)
-        : ZLinkObjectCreationCompleteResult;
+        ZLinkCreationTerminalRecord Terminal
+    ) : ZLinkObjectCreationCompleteResult;
 
     public sealed record Rejected(ZLinkCreationTerminalRecord Terminal)
         : ZLinkObjectCreationCompleteResult;
@@ -303,9 +284,7 @@ internal abstract record ZLinkObjectCreationCompleteResult
 
 internal abstract record ZLinkObjectAbortResult
 {
-    private protected ZLinkObjectAbortResult()
-    {
-    }
+    private protected ZLinkObjectAbortResult() { }
 
     public sealed record Aborted : ZLinkObjectAbortResult;
 
@@ -321,7 +300,8 @@ internal sealed record ZLinkAggregateParticipant(
     string ExpectedStoreVersion,
     ZLinkAuthorityGenerationTransition OwnerTransition,
     ReadOnlyMemory<byte> AuthorityPayload,
-    ReadOnlyMemory<byte> MembershipMutation);
+    ReadOnlyMemory<byte> MembershipMutation
+);
 
 internal sealed record ZLinkAggregatePrepareRequest(
     Guid AggregateId,
@@ -332,34 +312,31 @@ internal sealed record ZLinkAggregatePrepareRequest(
     ulong TargetDescriptorLifecycleGeneration,
     ZLinkCapacityVector Capacity,
     ZLinkLocationOwnerToken TargetOwner,
-    bool AllowPreparingTarget = false);
+    bool AllowPreparingTarget = false
+);
 
-internal readonly record struct ZLinkAggregateFence(
-    Guid AggregateId,
-    ulong AggregateGeneration);
+internal readonly record struct ZLinkAggregateFence(Guid AggregateId, ulong AggregateGeneration);
 
 internal abstract record ZLinkAggregatePrepareResult
 {
-    private protected ZLinkAggregatePrepareResult()
+    private protected ZLinkAggregatePrepareResult() { }
+
+    public sealed record Prepared(ZLinkAggregateFence Fence) : ZLinkAggregatePrepareResult
     {
+        internal IReadOnlyDictionary<
+            ZLinkAuthorityKey,
+            ulong
+        > TargetAuthorityOwnerGenerations { get; init; } =
+            new Dictionary<ZLinkAuthorityKey, ulong>();
     }
 
-    public sealed record Prepared(ZLinkAggregateFence Fence)
-        : ZLinkAggregatePrepareResult
+    public sealed record AlreadyPrepared(ZLinkAggregateFence Fence) : ZLinkAggregatePrepareResult
     {
-        internal IReadOnlyDictionary<ZLinkAuthorityKey, ulong>
-            TargetAuthorityOwnerGenerations
-        { get; init; } =
-                new Dictionary<ZLinkAuthorityKey, ulong>();
-    }
-
-    public sealed record AlreadyPrepared(ZLinkAggregateFence Fence)
-        : ZLinkAggregatePrepareResult
-    {
-        internal IReadOnlyDictionary<ZLinkAuthorityKey, ulong>
-            TargetAuthorityOwnerGenerations
-        { get; init; } =
-                new Dictionary<ZLinkAuthorityKey, ulong>();
+        internal IReadOnlyDictionary<
+            ZLinkAuthorityKey,
+            ulong
+        > TargetAuthorityOwnerGenerations { get; init; } =
+            new Dictionary<ZLinkAuthorityKey, ulong>();
     }
 
     public sealed record Conflict : ZLinkAggregatePrepareResult;
@@ -374,27 +351,26 @@ internal enum ZLinkAggregateCommitResult
     Committed = 1,
     AlreadyCommitted = 2,
     Stale = 3,
-    GenerationExhausted = 4
+    GenerationExhausted = 4,
 }
 
 internal enum ZLinkAggregateAbortResult
 {
     Aborted = 1,
     AlreadyAborted = 2,
-    Stale = 3
+    Stale = 3,
 }
 
 internal sealed record ZLinkRelocationStored(
     string Reference,
     uint ChecksumCrc32c,
     DateTimeOffset ExpiresAt,
-    DateTimeOffset StoreNow);
+    DateTimeOffset StoreNow
+);
 
 internal abstract record ZLinkRelocationReadResult
 {
-    private protected ZLinkRelocationReadResult()
-    {
-    }
+    private protected ZLinkRelocationReadResult() { }
 
     public sealed record Found(ReadOnlyMemory<byte> Payload) : ZLinkRelocationReadResult;
 
@@ -404,14 +380,12 @@ internal abstract record ZLinkRelocationReadResult
 internal enum ZLinkRelocationDeleteResult
 {
     Deleted = 0,
-    Missing = 1
+    Missing = 1,
 }
 
 internal abstract record ZLinkRelocationRenewResult
 {
-    private protected ZLinkRelocationRenewResult()
-    {
-    }
+    private protected ZLinkRelocationRenewResult() { }
 
     public sealed record Renewed(DateTimeOffset ExpiresAt, DateTimeOffset StoreNow)
         : ZLinkRelocationRenewResult;

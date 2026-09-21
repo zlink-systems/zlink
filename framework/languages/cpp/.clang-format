@@ -1,0 +1,3 @@
+BasedOnStyle: InheritParentConfig
+# The framework is C++20 (coroutines, concepts); the repository default stays C++17 for Core.
+Standard: c++20

@@ -1,9 +1,6 @@
 import type { ZLinkLocationOptionOverrides } from '../../contracts/Locations/Options';
 import type { ZLinkDomainLocationStore as ZLinkLocationStore } from '../locations/domain-store-contract';
-import type {
-  ZLinkLocationEventSink,
-  ZLinkLocationRuntimeStores
-} from '../locations';
+import type { ZLinkLocationEventSink, ZLinkLocationRuntimeStores } from '../locations';
 import {
   ZLinkLocationRuntime,
   ZLinkOwnerLeaseTracker,

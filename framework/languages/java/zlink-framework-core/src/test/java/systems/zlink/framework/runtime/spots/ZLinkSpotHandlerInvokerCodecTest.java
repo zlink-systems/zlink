@@ -3,12 +3,8 @@ package systems.zlink.framework.runtime.spots;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-import java.nio.charset.StandardCharsets;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageSerializer;
@@ -17,41 +13,44 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
 import systems.zlink.framework.spots.ZLinkSpotPacketHandler;
 
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+
 final class ZLinkSpotHandlerInvokerCodecTest {
     @Test
     void knownWireContentTypeSelectsItsSerializerInsteadOfTheHandlerTypeSelector() {
         ZLinkCodecRegistration codecs = new ZLinkCodecRegistration();
         codecs.addSerializer(
-            "application/x-declared",
-            new MarkerSerializer("DECLARED"),
-            Probe.class::equals);
-        codecs.addSerializer(
-            "application/x-wire",
-            new MarkerSerializer("WIRE"),
-            ignored -> false);
+                "application/x-declared", new MarkerSerializer("DECLARED"), Probe.class::equals);
+        codecs.addSerializer("application/x-wire", new MarkerSerializer("WIRE"), ignored -> false);
         codecs.freeze();
         CapturingHandler handler = new CapturingHandler();
-        ZLinkSpotHandlerInvoker invoker = new ZLinkSpotHandlerInvoker(
-            codecs.serializerWithFallback(new FailingJsonSerializer()), List.of());
-        SpotPacketHandlerRegistration registration = new SpotPacketHandlerRegistration(
-            CapturingHandler.class,
-            null,
-            Object.class,
-            Probe.class,
-            Void.class,
-            "Probe",
-            false);
+        ZLinkSpotHandlerInvoker invoker =
+                new ZLinkSpotHandlerInvoker(
+                        codecs.serializerWithFallback(new FailingJsonSerializer()), List.of());
+        SpotPacketHandlerRegistration registration =
+                new SpotPacketHandlerRegistration(
+                        CapturingHandler.class,
+                        null,
+                        Object.class,
+                        Probe.class,
+                        Void.class,
+                        "Probe",
+                        false);
 
         try (Message payload = Message.from(new byte[] {1})) {
             invoker.invokePacket(
-                    registration,
-                    new Object(),
-                    payload,
-                    "application/x-wire",
-                    Map.of(),
-                    ignored -> handler)
-                .toCompletableFuture()
-                .join();
+                            registration,
+                            new Object(),
+                            payload,
+                            "application/x-wire",
+                            Map.of(),
+                            ignored -> handler)
+                    .toCompletableFuture()
+                    .join();
         }
 
         assertEquals("WIRE", handler.received.marker());
@@ -62,37 +61,39 @@ final class ZLinkSpotHandlerInvokerCodecTest {
         ZLinkCodecRegistration codecs = new ZLinkCodecRegistration();
         codecs.freeze();
         CapturingHandler handler = new CapturingHandler();
-        ZLinkSpotHandlerInvoker invoker = new ZLinkSpotHandlerInvoker(
-            codecs.serializerWithFallback(new FailingJsonSerializer()), List.of());
-        SpotPacketHandlerRegistration registration = new SpotPacketHandlerRegistration(
-            CapturingHandler.class,
-            null,
-            Object.class,
-            Probe.class,
-            Void.class,
-            "Probe",
-            false);
+        ZLinkSpotHandlerInvoker invoker =
+                new ZLinkSpotHandlerInvoker(
+                        codecs.serializerWithFallback(new FailingJsonSerializer()), List.of());
+        SpotPacketHandlerRegistration registration =
+                new SpotPacketHandlerRegistration(
+                        CapturingHandler.class,
+                        null,
+                        Object.class,
+                        Probe.class,
+                        Void.class,
+                        "Probe",
+                        false);
 
         try (Message payload = Message.from(new byte[] {1})) {
-            ZLinkFrameworkException failure = assertThrows(
-                ZLinkFrameworkException.class,
-                () -> invoker.invokePacket(
-                    registration,
-                    new Object(),
-                    payload,
-                    "application/x-unknown",
-                    Map.of(),
-                    ignored -> handler));
+            ZLinkFrameworkException failure =
+                    assertThrows(
+                            ZLinkFrameworkException.class,
+                            () ->
+                                    invoker.invokePacket(
+                                            registration,
+                                            new Object(),
+                                            payload,
+                                            "application/x-unknown",
+                                            Map.of(),
+                                            ignored -> handler));
             assertEquals(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, failure.kind());
         }
         assertEquals(null, handler.received);
     }
 
-    private record Probe(String marker) {
-    }
+    private record Probe(String marker) {}
 
-    private static final class CapturingHandler
-        implements ZLinkSpotPacketHandler<Object, Probe> {
+    private static final class CapturingHandler implements ZLinkSpotPacketHandler<Object, Probe> {
         private Probe received;
 
         @Override

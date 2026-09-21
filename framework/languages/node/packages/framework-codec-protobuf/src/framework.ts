@@ -56,9 +56,7 @@ export function createProtobufMessageSerializer(): ZLinkMessageSerializer {
     },
     deserialize<T>(payload: ZLinkEncodedPayload): T {
       const bytes = payload.data();
-      return decodeDynamicValue(
-        Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
-      ) as T;
+      return decodeDynamicValue(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)) as T;
     }
   };
 }
@@ -69,7 +67,10 @@ export function createZlinkProtobufEnvelopeCodec(
   const streamCodec = createZlinkStreamProtobufEnvelopeCodec(options);
   return {
     register(codecs: ZLinkCodecRegistrar): void {
-      codecs.addSerializer(ZLINK_PROTOBUF_CONTENT_TYPE, createProtobufEnvelopeMessageSerializer(options));
+      codecs.addSerializer(
+        ZLINK_PROTOBUF_CONTENT_TYPE,
+        createProtobufEnvelopeMessageSerializer(options)
+      );
       codecs.addStreamCodec(ZLINK_PROTOBUF_CONTENT_TYPE, this);
     },
     encode: streamCodec.encode,

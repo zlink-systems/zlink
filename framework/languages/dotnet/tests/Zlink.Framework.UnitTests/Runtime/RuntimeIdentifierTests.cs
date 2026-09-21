@@ -16,14 +16,18 @@ public sealed class RuntimeIdentifierTests
             typeof(ZLinkSpotId),
             typeof(ZLinkSpotNodeName),
             typeof(ZLinkStreamNodeName),
-            typeof(ZLinkTimerName)
+            typeof(ZLinkTimerName),
         };
 
         Assert.Equal(identifierTypes.Length, identifierTypes.Distinct().Count());
-        Assert.All(identifierTypes, type =>
-            Assert.DoesNotContain(
-                type.GetMethods(BindingFlags.Public | BindingFlags.Static),
-                static method => method.Name is "op_Implicit" or "op_Explicit"));
+        Assert.All(
+            identifierTypes,
+            type =>
+                Assert.DoesNotContain(
+                    type.GetMethods(BindingFlags.Public | BindingFlags.Static),
+                    static method => method.Name is "op_Implicit" or "op_Explicit"
+                )
+        );
     }
 
     [Fact]

@@ -1,8 +1,5 @@
 import type { Message } from '../../contracts/Common/Message';
-import {
-  ZLinkSubmitStatus,
-  type ZLinkSubmitResult
-} from '../messaging/submission-result';
+import { ZLinkSubmitStatus, type ZLinkSubmitResult } from '../messaging/submission-result';
 import { ZLinkStreamMessageKind } from './protocol';
 import type { ZLinkStreamFrameMessageFactory } from './stream-frame-factory';
 
@@ -40,7 +37,14 @@ export class DefaultZLinkBoundSessionResponseTarget implements ZLinkBoundSession
     message: unknown,
     metadata: ReadonlyMap<string, string>
   ): Promise<boolean> {
-    return this.send(ZLinkStreamMessageKind.Response, packetName, requestSeq, message, metadata, 'response');
+    return this.send(
+      ZLinkStreamMessageKind.Response,
+      packetName,
+      requestSeq,
+      message,
+      metadata,
+      'response'
+    );
   }
 
   sendError(
@@ -49,7 +53,14 @@ export class DefaultZLinkBoundSessionResponseTarget implements ZLinkBoundSession
     error: unknown,
     metadata: ReadonlyMap<string, string>
   ): Promise<boolean> {
-    return this.send(ZLinkStreamMessageKind.Error, packetName, requestSeq, boundSessionErrorPayload(error), metadata, 'error response');
+    return this.send(
+      ZLinkStreamMessageKind.Error,
+      packetName,
+      requestSeq,
+      boundSessionErrorPayload(error),
+      metadata,
+      'error response'
+    );
   }
 
   private async send(
@@ -60,7 +71,14 @@ export class DefaultZLinkBoundSessionResponseTarget implements ZLinkBoundSession
     metadata: ReadonlyMap<string, string>,
     operationName: string
   ): Promise<boolean> {
-    const frame = this.frameMessages.createJsonFrameMessage(kind, packetName, metadata, false, requestSeq, payload);
+    const frame = this.frameMessages.createJsonFrameMessage(
+      kind,
+      packetName,
+      metadata,
+      false,
+      requestSeq,
+      payload
+    );
     try {
       const result = await this.context.stream.submitRaw(frame);
       if (result.status !== ZLinkSubmitStatus.Submitted) {
@@ -73,7 +91,10 @@ export class DefaultZLinkBoundSessionResponseTarget implements ZLinkBoundSession
   }
 }
 
-export function boundSessionErrorPayload(error: unknown): { readonly code: string; readonly message: string } {
+export function boundSessionErrorPayload(error: unknown): {
+  readonly code: string;
+  readonly message: string;
+} {
   return {
     code: error instanceof Error ? error.constructor.name : 'RemoteError',
     message: errorMessage(error)

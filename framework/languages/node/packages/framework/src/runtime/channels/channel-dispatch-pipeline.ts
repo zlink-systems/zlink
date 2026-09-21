@@ -1,4 +1,8 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException, internalFrameworkErrorKind  } from '../framework-errors-internal';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException,
+  internalFrameworkErrorKind
+} from '../framework-errors-internal';
 import type {
   ZLinkMessageContext,
   ZLinkHandlerFilter,
@@ -83,13 +87,16 @@ export class ZLinkChannelDispatchPipeline {
     this.unhandled = options.unhandled ?? DEFAULT_UNHANDLED_DISPATCH;
   }
 
-  async dispatchOneWay<TContext extends ZLinkMessageContext>(dispatch: ZLinkOneWayDispatch<TContext>): Promise<void> {
+  async dispatchOneWay<TContext extends ZLinkMessageContext>(
+    dispatch: ZLinkOneWayDispatch<TContext>
+  ): Promise<void> {
     this.trace(ZLinkMessageFlowOutcome.Received, dispatch.fields);
     this.trace(ZLinkMessageFlowOutcome.Admitted, dispatch.fields);
     if (dispatch.handler === undefined) {
-      const action = dispatch.fields.messageKind === ZLinkDispatchMessageKind.Publish
-        ? this.unhandled.publish
-        : this.unhandled.send;
+      const action =
+        dispatch.fields.messageKind === ZLinkDispatchMessageKind.Publish
+          ? this.unhandled.publish
+          : this.unhandled.send;
       this.report(
         dispatch.fields,
         ZLinkDispatchErrorReason.HandlerMissing,
@@ -105,28 +112,27 @@ export class ZLinkChannelDispatchPipeline {
         dispatch.fields.flowOrigin,
         this.options.dispatchErrors.flow.flowCreationEnabled()
       );
-      const invocation = await runWithFlow(flow, () => this.invoke(
+      const invocation = await runWithFlow(flow, () =>
+        this.invoke(
           dispatch.envelope,
           dispatch.codecs,
           dispatch.handler!,
           dispatch.context,
           dispatch.fields,
           dispatch.signal
-        ));
+        )
+      );
       if (invocation.handlerInvoked) {
         this.trace(ZLinkMessageFlowOutcome.Completed, dispatch.fields);
       }
     } catch (error) {
-      this.report(
-        dispatch.fields,
-        this.failureReason(error),
-        ZLinkDispatchErrorAction.Drop,
-        error
-      );
+      this.report(dispatch.fields, this.failureReason(error), ZLinkDispatchErrorAction.Drop, error);
     }
   }
 
-  async dispatchRequest<TContext extends ZLinkMessageContext>(dispatch: ZLinkRequestDispatch<TContext>): Promise<void> {
+  async dispatchRequest<TContext extends ZLinkMessageContext>(
+    dispatch: ZLinkRequestDispatch<TContext>
+  ): Promise<void> {
     this.trace(ZLinkMessageFlowOutcome.Received, dispatch.fields);
     this.trace(ZLinkMessageFlowOutcome.Admitted, dispatch.fields);
     if (dispatch.handler === undefined) {
@@ -157,14 +163,16 @@ export class ZLinkChannelDispatchPipeline {
         dispatch.fields.flowOrigin,
         this.options.dispatchErrors.flow.flowCreationEnabled()
       );
-      const invocation = await runWithFlow(flow, () => this.invoke(
+      const invocation = await runWithFlow(flow, () =>
+        this.invoke(
           dispatch.envelope,
           dispatch.codecs,
           dispatch.handler!,
           dispatch.context,
           dispatch.fields,
           dispatch.signal
-        ));
+        )
+      );
       if (!invocation.handlerInvoked) {
         throw createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.RequestRejected,
@@ -211,11 +219,7 @@ export class ZLinkChannelDispatchPipeline {
   }
 
   dropMissingReplyPath(fields: ZLinkChannelDispatchFields): void {
-    this.report(
-      fields,
-      ZLinkDispatchErrorReason.ReplyPathMissing,
-      ZLinkDispatchErrorAction.Drop
-    );
+    this.report(fields, ZLinkDispatchErrorReason.ReplyPathMissing, ZLinkDispatchErrorAction.Drop);
   }
 
   /**
@@ -234,14 +238,11 @@ export class ZLinkChannelDispatchPipeline {
     readonly writeProtocolError?: (error: ZLinkFrameworkException) => Promise<void>;
   }): Promise<void> {
     const { info } = input;
-    const isRequest = info.kind === ZLinkChannelMessageKind.Request
-      || (info.kind === undefined && input.transportRequest);
+    const isRequest =
+      info.kind === ZLinkChannelMessageKind.Request ||
+      (info.kind === undefined && input.transportRequest);
     let replied = false;
-    if (
-      isRequest
-      && input.writeProtocolError !== undefined
-      && info.correlationId !== undefined
-    ) {
+    if (isRequest && input.writeProtocolError !== undefined && info.correlationId !== undefined) {
       const protocolError = new ZLinkFrameworkException(
         ZLinkFrameworkErrorKind.ProtocolError,
         `Channel '${this.options.channelName}' received a malformed envelope.`
@@ -306,9 +307,8 @@ export class ZLinkChannelDispatchPipeline {
   ): ZLinkHandlerFilterContext {
     const dispatchKind = this.dispatchKind(context, fields);
     return {
-      meshName: dispatchKind === ZLinkHandlerDispatchKind.ClassicFanout
-        ? undefined
-        : context.meshName,
+      meshName:
+        dispatchKind === ZLinkHandlerDispatchKind.ClassicFanout ? undefined : context.meshName,
       channelName: context.channelName,
       packetName: context.packetName,
       contentType: context.contentType,
@@ -326,8 +326,8 @@ export class ZLinkChannelDispatchPipeline {
       return ZLinkHandlerDispatchKind.ClassicFanout;
     }
     const nodeDirect =
-      this.options.surface === ZLinkDispatchErrorSurface.RouteMeshChannel
-      && context.channelName === undefined;
+      this.options.surface === ZLinkDispatchErrorSurface.RouteMeshChannel &&
+      context.channelName === undefined;
     if (fields.messageKind === ZLinkDispatchMessageKind.Request) {
       return nodeDirect
         ? ZLinkHandlerDispatchKind.NodeDirectRequest
@@ -346,12 +346,8 @@ export class ZLinkChannelDispatchPipeline {
   ): void {
     const classicFanout = fields.messageKind === ZLinkDispatchMessageKind.Publish;
     this.options.dispatchErrors.report({
-      surface: classicFanout
-        ? ZLinkDispatchErrorSurface.ClassicFanout
-        : this.options.surface,
-      messageKind: classicFanout
-        ? ZLinkDispatchMessageKind.Send
-        : fields.messageKind,
+      surface: classicFanout ? ZLinkDispatchErrorSurface.ClassicFanout : this.options.surface,
+      messageKind: classicFanout ? ZLinkDispatchMessageKind.Send : fields.messageKind,
       reason,
       action,
       packetName: fields.packetName,
@@ -385,8 +381,8 @@ export class ZLinkChannelDispatchPipeline {
   }
 
   private failureReason(error: unknown): ZLinkDispatchErrorReason {
-    return error instanceof ZLinkFrameworkException
-      && internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.PayloadDecodeFailed
+    return error instanceof ZLinkFrameworkException &&
+      internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.PayloadDecodeFailed
       ? ZLinkDispatchErrorReason.PayloadDecodeFailed
       : ZLinkDispatchErrorReason.HandlerException;
   }
@@ -396,7 +392,9 @@ export class ZLinkChannelDispatchPipeline {
     fields: ZLinkChannelDispatchFields
   ): void {
     if (action === ZLinkUnhandledDispatchAction.Throw) {
-      throw new Error(`No ${fields.messageKind} handler is registered for '${this.options.channelName}:${fields.packetName}'.`);
+      throw new Error(
+        `No ${fields.messageKind} handler is registered for '${this.options.channelName}:${fields.packetName}'.`
+      );
     }
   }
 }

@@ -1,10 +1,11 @@
 package systems.zlink.framework.runtime.channels;
 
+import systems.zlink.framework.configuration.ZLinkEndpointConnections;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendConnectableSocket;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import systems.zlink.framework.configuration.ZLinkEndpointConnections;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendConnectableSocket;
 
 final class RuntimeEndpointConnections implements ZLinkEndpointConnections {
     private final Runnable enable;

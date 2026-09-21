@@ -1,31 +1,31 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 package systems.zlink.httpclient;
-import java.util.Objects;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.json.JsonMapper;
+
+import systems.zlink.httpclient.internal.HttpClientErrors;
+import systems.zlink.httpclient.internal.HttpClientText;
+import systems.zlink.httpclient.internal.HttpRequestSpec;
+
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
-import systems.zlink.httpclient.internal.HttpClientErrors;
-import systems.zlink.httpclient.internal.HttpClientText;
-import systems.zlink.httpclient.internal.HttpRequestSpec;
 
 /**
- * Fluent builder for a single request. Mirrors the C++ {@code request_builder_t}. Submission returns
- * a {@link CompletionStage}; no thread is parked while the request is in flight.
+ * Fluent builder for a single request. Mirrors the C++ {@code request_builder_t}. Submission
+ * returns a {@link CompletionStage}; no thread is parked while the request is in flight.
  */
 public final class ZLinkHttpRequestBuilder {
 
-    private static final ObjectMapper MAPPER = JsonMapper.builder()
-        .findAndAddModules()
-        .build();
+    private static final ObjectMapper MAPPER = JsonMapper.builder().findAndAddModules().build();
 
     private final RequestClientLease clientLease;
     private final ZLinkHttpMethod method;
@@ -47,7 +47,8 @@ public final class ZLinkHttpRequestBuilder {
 
     // One-shot constructor: the client is built lazily at the terminal operation and closed
     // afterwards, so any pre-submit validation failure cannot leak an eagerly-built client.
-    ZLinkHttpRequestBuilder(ZLinkHttpClientBuilder clientFactory, ZLinkHttpMethod method, String path) {
+    ZLinkHttpRequestBuilder(
+            ZLinkHttpClientBuilder clientFactory, ZLinkHttpMethod method, String path) {
         this.clientLease = RequestClientLease.oneShot(clientFactory);
         this.method = method;
         this.path = path;
@@ -125,11 +126,14 @@ public final class ZLinkHttpRequestBuilder {
         return this;
     }
 
-    public ZLinkHttpRequestBuilder multipartFile(String name, String filename, String content, String contentType) {
+    public ZLinkHttpRequestBuilder multipartFile(
+            String name, String filename, String content, String contentType) {
         HttpClientText.requireNonBlank(name, "HTTP request multipart field name is required");
         HttpClientText.requireNonBlank(filename, "HTTP request multipart filename is required");
-        HttpClientText.requireNonBlank(contentType, "HTTP request multipart content type is required");
-        multipart.add(ZLinkHttpRequestBodyEncoder.multipartFile(name, filename, content, contentType));
+        HttpClientText.requireNonBlank(
+                contentType, "HTTP request multipart content type is required");
+        multipart.add(
+                ZLinkHttpRequestBodyEncoder.multipartFile(name, filename, content, contentType));
         return this;
     }
 
@@ -139,8 +143,8 @@ public final class ZLinkHttpRequestBuilder {
     }
 
     /**
-     * Streams the response body to {@code sink} chunk by chunk instead of buffering it; the returned
-     * response carries status and headers with an empty body (no decompression of chunks).
+     * Streams the response body to {@code sink} chunk by chunk instead of buffering it; the
+     * returned response carries status and headers with an empty body (no decompression of chunks).
      */
     public CompletionStage<RawHttpResponse> download(Consumer<byte[]> sink) {
         if (sink == null) {
@@ -153,9 +157,13 @@ public final class ZLinkHttpRequestBuilder {
         var spec = makeRequest(sink);
         ZLinkHttpClient resolved = clientLease.acquire();
         try {
-            return resolved.runtime().executeAsync(spec)
-                .thenApply(result -> new RawHttpResponse(result.status(), result.headers(), result.body()))
-                .whenComplete((result, error) -> clientLease.release());
+            return resolved.runtime()
+                    .executeAsync(spec)
+                    .thenApply(
+                            result ->
+                                    new RawHttpResponse(
+                                            result.status(), result.headers(), result.body()))
+                    .whenComplete((result, error) -> clientLease.release());
         } catch (RuntimeException error) {
             clientLease.release();
             throw error;
@@ -174,44 +182,43 @@ public final class ZLinkHttpRequestBuilder {
 
     public <T> void submit(Class<T> type, ZLinkHttpCallback<T> callback) {
         Objects.requireNonNull(callback, "callback");
-        submit(type).whenComplete((response, error) ->
-            callback.complete(error, error == null ? response : null));
+        submit(type)
+                .whenComplete(
+                        (response, error) ->
+                                callback.complete(error, error == null ? response : null));
     }
 
     private static <T> CompletionStage<HttpResponse<T>> decode(
-        CompletionStage<RawHttpResponse> operation,
-        Class<T> type) {
-        return operation.thenApply(raw -> {
-            if (raw.status() >= 400) {
-                throw HttpClientErrors.internalFailure("HTTP request failed with status " + raw.status());
-            }
-            if (raw.body().isEmpty()) {
-                return new HttpResponse<>(raw.status(), raw.headers(), null, raw.body());
-            }
-            try {
-                T body = MAPPER.readValue(raw.body(), type);
-                return new HttpResponse<>(raw.status(), raw.headers(), body, raw.body());
-            } catch (Exception cause) {
-                throw HttpClientErrors.protocol("HTTP response body decode failed", cause);
-            }
-        });
+            CompletionStage<RawHttpResponse> operation, Class<T> type) {
+        return operation.thenApply(
+                raw -> {
+                    if (raw.status() >= 400) {
+                        throw HttpClientErrors.internalFailure(
+                                "HTTP request failed with status " + raw.status());
+                    }
+                    if (raw.body().isEmpty()) {
+                        return new HttpResponse<>(raw.status(), raw.headers(), null, raw.body());
+                    }
+                    try {
+                        T body = MAPPER.readValue(raw.body(), type);
+                        return new HttpResponse<>(raw.status(), raw.headers(), body, raw.body());
+                    } catch (Exception cause) {
+                        throw HttpClientErrors.protocol("HTTP response body decode failed", cause);
+                    }
+                });
     }
 
     private HttpRequestSpec makeRequest(Consumer<byte[]> sink) {
-        ZLinkHttpRequestBodyEncoder.BodyAndHeaders resolved = ZLinkHttpRequestBodyEncoder.resolve(
-            body,
-            bodyProvider,
-            headers,
-            form,
-            multipart);
+        ZLinkHttpRequestBodyEncoder.BodyAndHeaders resolved =
+                ZLinkHttpRequestBodyEncoder.resolve(body, bodyProvider, headers, form, multipart);
         return new HttpRequestSpec(
-            method,
-            ZLinkHttpTargetBuilder.resolve(path, query),
-            resolved.body(),
-            bodyProvider,
-            resolved.headers(),
-            timeout,
-            sink);
+                method,
+                ZLinkHttpTargetBuilder.resolve(path, query),
+                resolved.body(),
+                bodyProvider,
+                resolved.headers(),
+                timeout,
+                sink);
     }
 
     private static final class RequestClientLease {
@@ -221,9 +228,7 @@ public final class ZLinkHttpRequestBuilder {
         private boolean acquired;
 
         private RequestClientLease(
-            ZLinkHttpClient client,
-            ZLinkHttpClientBuilder factory,
-            boolean owned) {
+                ZLinkHttpClient client, ZLinkHttpClientBuilder factory, boolean owned) {
             this.client = client;
             this.factory = factory;
             this.owned = owned;
@@ -239,7 +244,8 @@ public final class ZLinkHttpRequestBuilder {
 
         synchronized ZLinkHttpClient acquire() {
             if (owned && acquired) {
-                throw HttpClientErrors.protocol("A one-shot HTTP request can only be submitted once");
+                throw HttpClientErrors.protocol(
+                        "A one-shot HTTP request can only be submitted once");
             }
             acquired = true;
             if (client == null) {

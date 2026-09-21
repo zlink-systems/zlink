@@ -1,8 +1,5 @@
 import type { ZLinkBackendActorRef } from '../backend/contracts';
-import {
-  decodeActorMessageFollowContext,
-  type ZLinkRemoteBoundSessionTarget
-} from '../actors';
+import { decodeActorMessageFollowContext, type ZLinkRemoteBoundSessionTarget } from '../actors';
 import type { RoutingId, ZLinkActor } from '../../contracts';
 import type { ZLinkActorHandoffPacket } from '../actors/actor-handoff';
 import type { Message } from '../../contracts/Common/Message';
@@ -75,10 +72,7 @@ export function isRemoteActorJoinPayload(
   readonly actorType: string;
   readonly request: string;
 } {
-  return (
-    hasRemoteActorJoinIdentity(value) &&
-    typeof value.request === 'string'
-  );
+  return hasRemoteActorJoinIdentity(value) && typeof value.request === 'string';
 }
 
 export function decodeRemoteActorJoinPayload(
@@ -91,9 +85,8 @@ export function decodeRemoteActorJoinPayload(
   raw: boolean,
   envelope?: ReturnType<typeof decodeChannelEnvelope>
 ): ZLinkDecodedRemoteActorJoinRequest {
-  const phase = payload.phase === 'admission' || payload.phase === 'commit'
-    ? payload.phase
-    : undefined;
+  const phase =
+    payload.phase === 'admission' || payload.phase === 'commit' ? payload.phase : undefined;
   const transferProtocol = phase !== undefined;
   return {
     envelope,
@@ -106,37 +99,39 @@ export function decodeRemoteActorJoinPayload(
       payload.actorId,
       payload.actorGeneration
     ),
-    expectedMembershipEpoch: typeof payload.expectedMembershipEpoch === 'string'
-      ? BigInt(payload.expectedMembershipEpoch)
-      : 0n,
-    actorEntryNodeRid: typeof payload.actorEntryNodeRid === 'string'
-      ? decodeWireRoutingId(payload.actorEntryNodeRid, payload.actorEntryNodeRidHex)
-      : undefined,
-    actorCreateRequest: typeof payload.actorCreateRequest === 'string'
-      ? RuntimeMessage.from(Buffer.from(payload.actorCreateRequest, 'base64'))
-      : undefined,
+    expectedMembershipEpoch:
+      typeof payload.expectedMembershipEpoch === 'string'
+        ? BigInt(payload.expectedMembershipEpoch)
+        : 0n,
+    actorEntryNodeRid:
+      typeof payload.actorEntryNodeRid === 'string'
+        ? decodeWireRoutingId(payload.actorEntryNodeRid, payload.actorEntryNodeRidHex)
+        : undefined,
+    actorCreateRequest:
+      typeof payload.actorCreateRequest === 'string'
+        ? RuntimeMessage.from(Buffer.from(payload.actorCreateRequest, 'base64'))
+        : undefined,
     phase,
     transferId: typeof payload.transferId === 'string' ? payload.transferId : undefined,
-    transferAdapterKey: typeof payload.transferAdapterKey === 'string'
-      ? payload.transferAdapterKey
-      : undefined,
-    transferState: typeof payload.transferState === 'string'
-      ? RuntimeMessage.from(Buffer.from(payload.transferState, 'base64'))
-      : undefined,
+    transferAdapterKey:
+      typeof payload.transferAdapterKey === 'string' ? payload.transferAdapterKey : undefined,
+    transferState:
+      typeof payload.transferState === 'string'
+        ? RuntimeMessage.from(Buffer.from(payload.transferState, 'base64'))
+        : undefined,
     handoffBacklog: decodeHandoffBacklog(payload.handoffBacklog),
     remoteBoundSessionTarget: decodeRemoteBoundSessionTarget(
-      transferProtocol ? payload.boundSessionRouterChannelId : payload.boundSessionRouterChannelId ?? payload.routerChannelId,
+      transferProtocol
+        ? payload.boundSessionRouterChannelId
+        : (payload.boundSessionRouterChannelId ?? payload.routerChannelId),
       transferProtocol
         ? payload.boundSessionTargetNodeRid
-        : payload.boundSessionTargetNodeRid ?? (
-            received.routingId === null
-              ? payload.actorNodeRid
-              : String(received.routingId)
-          ),
+        : (payload.boundSessionTargetNodeRid ??
+            (received.routingId === null ? payload.actorNodeRid : String(received.routingId))),
       payload.boundSessionTargetNodeRidHex,
       transferProtocol
         ? payload.boundSessionSpotId
-        : payload.boundSessionSpotId ?? payload.sourceSpotId,
+        : (payload.boundSessionSpotId ?? payload.sourceSpotId),
       payload.boundSessionNodeRid,
       payload.boundSessionNodeRidHex,
       payload.boundSessionRid,
@@ -148,9 +143,10 @@ export function decodeRemoteActorJoinPayload(
       payload.boundSessionServiceWireRelocation
     ),
     request,
-    requestContentType: typeof payload.requestContentType === 'string'
-      ? payload.requestContentType
-      : 'application/json'
+    requestContentType:
+      typeof payload.requestContentType === 'string'
+        ? payload.requestContentType
+        : 'application/json'
   };
 }
 
@@ -158,7 +154,8 @@ export function decodeHandoffBacklog(value: unknown): readonly ZLinkActorHandoff
   if (!Array.isArray(value)) return [];
   return value.map((entry, expectedIndex) => {
     if (
-      typeof entry !== 'object' || entry === null ||
+      typeof entry !== 'object' ||
+      entry === null ||
       (entry as { index?: unknown }).index !== expectedIndex ||
       typeof (entry as { header?: unknown }).header !== 'string' ||
       typeof (entry as { payload?: unknown }).payload !== 'string' ||
@@ -167,18 +164,19 @@ export function decodeHandoffBacklog(value: unknown): readonly ZLinkActorHandoff
       throw new Error('Remote actor handoff backlog is not a contiguous packet sequence.');
     }
     const packet = entry as ZLinkActorHandoffPacket;
-    const messageFollowContext = decodeActorMessageFollowContext(
-      packet.messageFollowContext
-    );
+    const messageFollowContext = decodeActorMessageFollowContext(packet.messageFollowContext);
     const source = packet.source;
-    if (messageFollowContext === undefined
-      || (packet.returnResponse && (
-        source === undefined || source.ownerId.length === 0
-        || BigInt(source.ownerLeaseGeneration) <= 0n || source.nodeRid.length === 0
-        || BigInt(source.nodeGeneration) <= 0n
-        || source.replyRouteId !== messageFollowContext.replyRouteId
-      ))
-      || (!packet.returnResponse && source !== undefined)) {
+    if (
+      messageFollowContext === undefined ||
+      (packet.returnResponse &&
+        (source === undefined ||
+          source.ownerId.length === 0 ||
+          BigInt(source.ownerLeaseGeneration) <= 0n ||
+          source.nodeRid.length === 0 ||
+          BigInt(source.nodeGeneration) <= 0n ||
+          source.replyRouteId !== messageFollowContext.replyRouteId)) ||
+      (!packet.returnResponse && source !== undefined)
+    ) {
       throw new Error('Remote actor handoff request source fence is invalid.');
     }
     return { ...packet, messageFollowContext };
@@ -228,21 +226,22 @@ export function decodeRemoteBoundSessionTarget(
     routerChannelId,
     targetNodeRid: decodeWireRoutingId(targetNodeRid, targetNodeRidHex),
     spotId: requireSpotId(String(spotId)),
-    sessionNodeRid: typeof sessionNodeRid === 'string'
-      ? decodeWireRoutingId(sessionNodeRid, sessionNodeRidHex)
-      : undefined,
-    sessionRid: typeof sessionRid === 'string'
-      ? decodeWireRoutingId(sessionRid, sessionRidHex)
-      : undefined,
-    bindingGeneration: typeof bindingGeneration === 'string'
-      ? BigInt(bindingGeneration)
-      : undefined,
-    previousAuthorityOwnerGeneration: typeof previousAuthorityOwnerGeneration === 'string'
-      ? BigInt(previousAuthorityOwnerGeneration)
-      : undefined,
-    previousOwnerLeaseGeneration: typeof previousOwnerLeaseGeneration === 'string'
-      ? BigInt(previousOwnerLeaseGeneration)
-      : undefined,
+    sessionNodeRid:
+      typeof sessionNodeRid === 'string'
+        ? decodeWireRoutingId(sessionNodeRid, sessionNodeRidHex)
+        : undefined,
+    sessionRid:
+      typeof sessionRid === 'string' ? decodeWireRoutingId(sessionRid, sessionRidHex) : undefined,
+    bindingGeneration:
+      typeof bindingGeneration === 'string' ? BigInt(bindingGeneration) : undefined,
+    previousAuthorityOwnerGeneration:
+      typeof previousAuthorityOwnerGeneration === 'string'
+        ? BigInt(previousAuthorityOwnerGeneration)
+        : undefined,
+    previousOwnerLeaseGeneration:
+      typeof previousOwnerLeaseGeneration === 'string'
+        ? BigInt(previousOwnerLeaseGeneration)
+        : undefined,
     relocationSealId: typeof relocationSealId === 'string' ? relocationSealId : undefined,
     serviceWireRelocation: decodeBoundSessionServiceWireRelocation(serviceWireRelocation)
   };
@@ -264,12 +263,14 @@ function decodeBoundSessionServiceWireRelocation(
   };
   const nonNegative = (key: string): bigint => {
     const candidate = BigInt(text(key));
-    if (candidate < 0n) throw new TypeError(`Remote bound Session service-wire '${key}' is invalid.`);
+    if (candidate < 0n)
+      throw new TypeError(`Remote bound Session service-wire '${key}' is invalid.`);
     return candidate;
   };
   const positive = (key: string): bigint => {
     const candidate = nonNegative(key);
-    if (candidate === 0n) throw new TypeError(`Remote bound Session service-wire '${key}' is invalid.`);
+    if (candidate === 0n)
+      throw new TypeError(`Remote bound Session service-wire '${key}' is invalid.`);
     return candidate;
   };
   const relocation = {

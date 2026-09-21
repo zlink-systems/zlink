@@ -33,9 +33,8 @@ struct fanout_test_runtime_t
               return fanout_record_t{payload.to_string ()};
           },
           "application/x-zlink-fanout-admission");
-        builder.channel ("events")
-          .enable_publisher (false)
-          .connect ("inproc://fanout-admission-test");
+        builder.channel ("events").enable_publisher (false).connect (
+          "inproc://fanout-admission-test");
         runtime.bind_serializers (serializers);
     }
 
@@ -43,7 +42,8 @@ struct fanout_test_runtime_t
     {
         return builder.publisher ()
           .publish ("events", "fanout.admission", fanout_record_t{"payload"})
-          .async ().result ();
+          .async ()
+          .result ();
     }
 
     zlink::framework::serializer_registry_t serializers;
@@ -60,8 +60,9 @@ TEST (cpp_framework_fanout_admission,
     std::promise<void> capacity;
     auto capacity_ready = capacity.get_future ().share ();
     test.runtime.bind_fanout_transport (
-      "events", [&] (std::string, std::string, std::string, zlink::message_t,
-                      std::chrono::milliseconds) -> zlink::framework::task_t<void> {
+      "events",
+      [&] (std::string, std::string, std::string, zlink::message_t,
+           std::chrono::milliseconds) -> zlink::framework::task_t<void> {
           entered.set_value ();
           capacity_ready.wait ();
           co_return;
@@ -69,31 +70,27 @@ TEST (cpp_framework_fanout_admission,
 
     auto pending = std::async (std::launch::async, [&] { return test.publish (); });
     entered.get_future ().wait ();
-    EXPECT_EQ (pending.wait_for (std::chrono::milliseconds (0)),
-               std::future_status::timeout);
+    EXPECT_EQ (pending.wait_for (std::chrono::milliseconds (0)), std::future_status::timeout);
     capacity.set_value ();
 
-    ASSERT_EQ (pending.wait_for (std::chrono::seconds (5)),
-               std::future_status::ready);
+    ASSERT_EQ (pending.wait_for (std::chrono::seconds (5)), std::future_status::ready);
     EXPECT_TRUE (pending.get ());
 }
 
-TEST (cpp_framework_fanout_admission,
-      publish_queue_send_timeout_maps_to_deadline_exceeded)
+TEST (cpp_framework_fanout_admission, publish_queue_send_timeout_maps_to_deadline_exceeded)
 {
     fanout_test_runtime_t test;
     test.runtime.bind_fanout_transport (
-      "events", [] (std::string, std::string, std::string, zlink::message_t,
-                     std::chrono::milliseconds) -> zlink::framework::task_t<void> {
-          throw zlink::submit_error_t (
-            zlink::submit_result_t::backpressured, ETIMEDOUT);
+      "events",
+      [] (std::string, std::string, std::string, zlink::message_t,
+          std::chrono::milliseconds) -> zlink::framework::task_t<void> {
+          throw zlink::submit_error_t (zlink::submit_result_t::backpressured, ETIMEDOUT);
       });
 
     const auto result = test.publish ();
 
     ASSERT_FALSE (result);
-    EXPECT_EQ (result.error_kind (),
-               zlink::framework::framework_error_kind_t::deadline_exceeded);
+    EXPECT_EQ (result.error_kind (), zlink::framework::framework_error_kind_t::deadline_exceeded);
 }
 
 } // namespace

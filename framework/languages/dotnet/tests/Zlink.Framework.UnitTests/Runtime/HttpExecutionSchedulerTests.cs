@@ -11,33 +11,45 @@ public sealed class HttpExecutionSchedulerTests
         await using var queue = new ZLinkSerialExecutionQueue(
             new ZLinkRuntimeTaskRunner(errorSink, CancellationToken.None),
             errorSink,
-            CancellationToken.None);
+            CancellationToken.None
+        );
         var callbackPosted = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var callbackRan = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var releaseOwner = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
 
-        var owner = queue.RunAsync(
-            async _ =>
-            {
-                // 04-async-execution-policy.ko.md: HTTP callback capture는 yield가
-                // 허용된 application callback turn에서만 성립한다.
-                using var scope = ZLinkApplicationExecutionContext.Push(
-                    new ZLinkApplicationExecutionScope(
-                        "http-scheduler-spot",
-                        ZLinkUserSpotExecutionMode.SpotWide,
-                        ActorId: null,
-                        YieldAllowed: true));
-                var scheduler = new ZLinkSpotHttpExecutionScheduler();
-                var turn = scheduler.Capture()
-                           ?? throw new InvalidOperationException("HTTP execution turn was not captured.");
-                turn.Post(() => callbackRan.TrySetResult());
-                callbackPosted.TrySetResult();
-                await releaseOwner.Task.ConfigureAwait(false);
-            },
-            CancellationToken.None).AsTask();
+        var owner = queue
+            .RunAsync(
+                async _ =>
+                {
+                    // 04-async-execution-policy.ko.md: HTTP callback capture는 yield가
+                    // 허용된 application callback turn에서만 성립한다.
+                    using var scope = ZLinkApplicationExecutionContext.Push(
+                        new ZLinkApplicationExecutionScope(
+                            "http-scheduler-spot",
+                            ZLinkUserSpotExecutionMode.SpotWide,
+                            ActorId: null,
+                            YieldAllowed: true
+                        )
+                    );
+                    var scheduler = new ZLinkSpotHttpExecutionScheduler();
+                    var turn =
+                        scheduler.Capture()
+                        ?? throw new InvalidOperationException(
+                            "HTTP execution turn was not captured."
+                        );
+                    turn.Post(() => callbackRan.TrySetResult());
+                    callbackPosted.TrySetResult();
+                    await releaseOwner.Task.ConfigureAwait(false);
+                },
+                CancellationToken.None
+            )
+            .AsTask();
 
         await callbackPosted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.False(callbackRan.Task.IsCompleted);

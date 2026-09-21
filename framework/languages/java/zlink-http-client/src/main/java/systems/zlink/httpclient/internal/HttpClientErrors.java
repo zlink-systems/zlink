@@ -1,18 +1,18 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 package systems.zlink.httpclient.internal;
 
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
+
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.http.HttpTimeoutException;
 import java.util.concurrent.TimeoutException;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
 
 /** Owns the HTTP client contract's mapping from failure situations to framework error kinds. */
 public final class HttpClientErrors {
 
-    private HttpClientErrors() {
-    }
+    private HttpClientErrors() {}
 
     public static ZLinkFrameworkException protocol(String message) {
         return new ZLinkFrameworkException(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, message);
@@ -23,7 +23,8 @@ public final class HttpClientErrors {
     }
 
     public static ZLinkFrameworkException unavailable(Throwable cause) {
-        return new ZLinkFrameworkException(ZLinkFrameworkErrorKind.UNAVAILABLE, cause.getMessage(), cause);
+        return new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.UNAVAILABLE, cause.getMessage(), cause);
     }
 
     public static ZLinkFrameworkException rejected(String message) {
@@ -31,7 +32,8 @@ public final class HttpClientErrors {
     }
 
     public static ZLinkFrameworkException deadlineExceeded(Throwable cause) {
-        return new ZLinkFrameworkException(ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, cause.getMessage(), cause);
+        return new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, cause.getMessage(), cause);
     }
 
     public static ZLinkFrameworkException internalFailure(String message) {
@@ -39,7 +41,8 @@ public final class HttpClientErrors {
     }
 
     public static ZLinkFrameworkException internalFailure(Throwable cause) {
-        return new ZLinkFrameworkException(ZLinkFrameworkErrorKind.INTERNAL_FAILURE, cause.getMessage(), cause);
+        return new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.INTERNAL_FAILURE, cause.getMessage(), cause);
     }
 
     public static ZLinkFrameworkException fromExecutionFailure(Throwable cause) {

@@ -1,11 +1,12 @@
 package systems.zlink.framework.configuration;
 
-import java.time.Duration;
-import java.util.concurrent.Executor;
 import systems.zlink.framework.ZLinkHandlerFilter;
-import systems.zlink.framework.locations.ZLinkLocationOptions;
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 import systems.zlink.framework.locationprovider.ZLinkRelocationStore;
+import systems.zlink.framework.locations.ZLinkLocationOptions;
+
+import java.time.Duration;
+import java.util.concurrent.Executor;
 
 public interface ZLinkFrameworkOptions {
     Duration defaultRequestTimeout();

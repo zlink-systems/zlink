@@ -28,7 +28,8 @@ internal sealed class ZlinkStreamTaskRunner(CancellationToken shutdownToken)
             this,
             CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
+            TaskScheduler.Default
+        );
     }
 
     public async ValueTask StopAndDrainAsync()
@@ -52,12 +53,15 @@ internal sealed class ZlinkStreamTaskRunner(CancellationToken shutdownToken)
     }
 
     private Task Start(Func<CancellationToken, ValueTask> callback) =>
-        Task.Factory.StartNew(
-            static state => RunCoreAsync((TaskState)state!),
-            new TaskState(callback, shutdownToken),
-            CancellationToken.None,
-            TaskCreationOptions.DenyChildAttach,
-            TaskScheduler.Default).Unwrap();
+        Task
+            .Factory.StartNew(
+                static state => RunCoreAsync((TaskState)state!),
+                new TaskState(callback, shutdownToken),
+                CancellationToken.None,
+                TaskCreationOptions.DenyChildAttach,
+                TaskScheduler.Default
+            )
+            .Unwrap();
 
     private static async Task RunCoreAsync(TaskState state)
     {
@@ -65,15 +69,12 @@ internal sealed class ZlinkStreamTaskRunner(CancellationToken shutdownToken)
         {
             await state.Callback(state.ShutdownToken).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (state.ShutdownToken.IsCancellationRequested)
-        {
-        }
-        catch
-        {
-        }
+        catch (OperationCanceledException) when (state.ShutdownToken.IsCancellationRequested) { }
+        catch { }
     }
 
     private sealed record TaskState(
         Func<CancellationToken, ValueTask> Callback,
-        CancellationToken ShutdownToken);
+        CancellationToken ShutdownToken
+    );
 }

@@ -7,10 +7,7 @@ import type {
   ZLinkBackendTopicMessage
 } from '../runtime-values';
 import type { CoreHwmBudgetSnapshot } from '@zlink-systems/zlink';
-import {
-  type ZLinkBackendRecvFlags,
-  type ZLinkBackendSendFlags
-} from '../runtime-values';
+import { type ZLinkBackendRecvFlags, type ZLinkBackendSendFlags } from '../runtime-values';
 export * from '../runtime-values';
 type MessageLike = ZLinkBackendMessageLike;
 type Received = ZLinkBackendReceived;
@@ -27,9 +24,7 @@ import type {
   ServiceSpot,
   StreamSessionService
 } from '../../foundation/service-runtime-contracts';
-import type {
-  RoutingId
-} from '../../../contracts';
+import type { RoutingId } from '../../../contracts';
 import type { ZLinkCoreHwmOptions } from '../../../contracts/Configuration';
 import type { ZLinkSubmitResult } from '../../messaging/submission-result';
 import type { Message } from '../../../contracts/Common/Message';
@@ -69,19 +64,25 @@ export interface ZLinkBackendMeshNode {
   setBind(endpoint: string): void;
   setAdvertiseHost(host: string): void;
   start(): void;
-  setMailboxRecordDroppedHandler?(handler: (record: {
-    readonly kind: 'spot_multicast' | 'actor_control' | 'actor_binding';
-    readonly owner: string;
-  }) => void): void;
-  setProtocolErrorHandler?(handler: (record: {
-    readonly sourceNodeRid: string;
-    readonly request: boolean;
-    readonly replied: boolean;
-    readonly command?: number;
-  }) => void): void;
-  setMessageFollowHandler?(handler: (
-    record: import('../../foundation/service-stateful-wire-codec').ServiceMessageFollowRecord
-  ) => void): void;
+  setMailboxRecordDroppedHandler?(
+    handler: (record: {
+      readonly kind: 'spot_multicast' | 'actor_control' | 'actor_binding';
+      readonly owner: string;
+    }) => void
+  ): void;
+  setProtocolErrorHandler?(
+    handler: (record: {
+      readonly sourceNodeRid: string;
+      readonly request: boolean;
+      readonly replied: boolean;
+      readonly command?: number;
+    }) => void
+  ): void;
+  setMessageFollowHandler?(
+    handler: (
+      record: import('../../foundation/service-stateful-wire-codec').ServiceMessageFollowRecord
+    ) => void
+  ): void;
   sendMessageFollowNotification?(
     targetNodeRid: string,
     record: Omit<
@@ -168,12 +169,14 @@ export interface ZLinkBackendMeshNode {
   }): Promise<bigint>;
   removePeerConnection(intentId: bigint): void;
   disconnectPeer(peerRid: unknown, lifecycleGeneration: bigint): void;
-  replaceDiscoveredNotRequiredPeers?(peers: readonly {
-    readonly nodeRoutingId: string;
-    readonly lifecycleGeneration: bigint;
-    readonly descriptorRevision: bigint;
-    readonly endpoint: string;
-  }[]): void;
+  replaceDiscoveredNotRequiredPeers?(
+    peers: readonly {
+      readonly nodeRoutingId: string;
+      readonly lifecycleGeneration: bigint;
+      readonly descriptorRevision: bigint;
+      readonly endpoint: string;
+    }[]
+  ): void;
   onPeerDisconnected?(handler: (endpoint: string) => void): void;
   expectPeer?(peer: {
     readonly nodeRoutingId: string;
@@ -235,10 +238,12 @@ export interface ZLinkBackendMeshNode {
   createSpot(): ServiceSpot;
   entrySpot(): ServiceSpot;
   getOrCreateSpot(routingId: unknown): { readonly spot: ServiceSpot; readonly created: boolean };
-  instanceSpotApplicationTarget?(spotId: string): {
-    readonly stableType: string;
-    readonly objectGeneration: bigint;
-  } | undefined;
+  instanceSpotApplicationTarget?(spotId: string):
+    | {
+        readonly stableType: string;
+        readonly objectGeneration: bigint;
+      }
+    | undefined;
   waitForInstanceApplicationQuiescence?(spotId: string, signal?: AbortSignal): Promise<void>;
   restoreUserSpotAuthority?(
     spotId: string,
@@ -253,10 +258,7 @@ export interface ZLinkBackendMeshNode {
     generation: bigint,
     authorityOwnerGeneration: bigint
   ): ServiceSpot;
-  createActor(
-    actorId: string,
-    parts?: MessageLike | readonly MessageLike[]
-  ): ZLinkBackendActorRef;
+  createActor(actorId: string, parts?: MessageLike | readonly MessageLike[]): ZLinkBackendActorRef;
   restoreActorAuthority?(
     actorId: string,
     stableType: string,
@@ -281,9 +283,7 @@ export interface ZLinkBackendMeshNode {
   };
   lookupRemoteActor(targetNodeRid: unknown, actorId: string, timeoutMs?: number): MeshOperationId;
   destroyActor(actor: ZLinkBackendActorRef, timeoutMs?: number): MeshOperationId;
-  rememberSpotRoute?(
-    route: ServiceDirectSpotRouteFence
-  ): void;
+  rememberSpotRoute?(route: ServiceDirectSpotRouteFence): void;
   forgetSpotRoute?(
     spot: ServiceDirectSpotRouteFence['spot'],
     authorityOwnerGeneration: bigint,
@@ -384,7 +384,11 @@ export interface ZLinkBackendMeshNode {
     domains: number,
     batch: ReadyBatch,
     flags?: number
-  ): { readonly ok: boolean; readonly hasResidue: boolean; readonly records: readonly ReadyRecord[] };
+  ): {
+    readonly ok: boolean;
+    readonly hasResidue: boolean;
+    readonly records: readonly ReadyRecord[];
+  };
   createStreamSessionService(stream: unknown): StreamSessionService;
 }
 
@@ -507,10 +511,7 @@ export interface ZLinkBackendDealerSocket extends ZLinkBackendConnectableSocket 
   sendTimeoutMs: number;
   maxMessageSize: number;
   send(message: Message | readonly Message[]): Promise<void>;
-  request(
-    message: Message | readonly Message[],
-    timeoutMs?: number
-  ): Promise<readonly Message[]>;
+  request(message: Message | readonly Message[], timeoutMs?: number): Promise<readonly Message[]>;
   recv(flags?: ZLinkBackendRecvFlags): Received | undefined;
 }
 
@@ -542,10 +543,7 @@ export interface ZLinkBackendRouterSocket extends ZLinkBackendConnectableSocket 
   maxMessageSize: number;
   setRoutingId(routingId: RoutingId): void;
   recv(flags?: ZLinkBackendRecvFlags): Received | undefined;
-  send(
-    routingId: RoutingId,
-    message: Message | readonly Message[]
-  ): Promise<void>;
+  send(routingId: RoutingId, message: Message | readonly Message[]): Promise<void>;
   request(
     routingId: RoutingId,
     message: Message | readonly Message[],
@@ -600,8 +598,16 @@ export interface ZLinkBackendStreamSocket extends ZLinkBackendSocket {
   maxMessageSize: number;
   setTlsServer(cert: string, key: string, requireClientCert?: boolean): void;
   recvPacket(packet: ZLinkBackendStreamPacket, flags?: ZLinkBackendRecvFlags): boolean;
-  send(routingId: RoutingId, payload: Message | readonly Message[], flags: ZLinkBackendSendFlags): boolean;
-  submit(routingId: RoutingId, payload: Message | readonly Message[], timeoutMs?: number): Promise<void>;
+  send(
+    routingId: RoutingId,
+    payload: Message | readonly Message[],
+    flags: ZLinkBackendSendFlags
+  ): boolean;
+  submit(
+    routingId: RoutingId,
+    payload: Message | readonly Message[],
+    timeoutMs?: number
+  ): Promise<void>;
   disconnectPeer(routingId: RoutingId): void;
   bindActor(
     sessionRid: RoutingId,
@@ -635,8 +641,16 @@ export interface ZLinkBackendSpotRouteBridge extends ZLinkBackendObject {
     router: ZLinkBackendRouterSocket,
     options?: { readonly capabilities?: number }
   ): void;
-  send(channelName: string, targetNodeRid: RoutingId, targetSpotId: RoutingId): ZLinkBackendSendOperation;
-  request(channelName: string, targetNodeRid: RoutingId, targetSpotId: RoutingId): ZLinkBackendRequestOperation;
+  send(
+    channelName: string,
+    targetNodeRid: RoutingId,
+    targetSpotId: RoutingId
+  ): ZLinkBackendSendOperation;
+  request(
+    channelName: string,
+    targetNodeRid: RoutingId,
+    targetSpotId: RoutingId
+  ): ZLinkBackendRequestOperation;
   handleRouterReceived(
     channelName: string,
     sourceNodeRid: RoutingId,
@@ -658,7 +672,10 @@ export interface ZLinkBackendSpotNode extends ZLinkBackendObject {
   disconnectPeerRid(targetNodeRid: RoutingId): void;
   disconnectPeer(endpoint: string): void;
   createSpot(): ZLinkBackendSpot;
-  getOrCreateSpot(spotId: RoutingId): { readonly spot: ZLinkBackendSpot; readonly created: boolean };
+  getOrCreateSpot(spotId: RoutingId): {
+    readonly spot: ZLinkBackendSpot;
+    readonly created: boolean;
+  };
   status(): ZLinkBackendMeshNodeStatus;
   peers(): readonly ZLinkBackendMeshPeerEntry[];
   subjects(): readonly unknown[];
@@ -706,7 +723,11 @@ export interface ZLinkBackendSpot extends ZLinkBackendObject {
     timeoutMs?: number
   ): Promise<readonly Message[]>;
   sendToChannel(channelName: string, payload: Message | readonly Message[]): Promise<void>;
-  publish(topic: string, payload: Message | readonly Message[], flags: ZLinkBackendSendFlags): boolean;
+  publish(
+    topic: string,
+    payload: Message | readonly Message[],
+    flags: ZLinkBackendSendFlags
+  ): boolean;
   sendToSpot(
     targetRid: RoutingId,
     spotId: RoutingId,

@@ -14,7 +14,8 @@ public sealed class ServiceWireSessionRelocationCodecTests
             "sessionRelocationSeal",
             seal,
             ZLinkServiceWireCodec.EncodeSessionRelocationSeal,
-            ZLinkServiceWireCodec.TryDecodeSessionRelocationSeal);
+            ZLinkServiceWireCodec.TryDecodeSessionRelocationSeal
+        );
 
         AssertGoldenRoundTrip(
             "sessionRelocationSealed",
@@ -22,27 +23,33 @@ public sealed class ServiceWireSessionRelocationCodecTests
                 seal.RelocationId,
                 seal.Coordinator,
                 seal.Actor,
-                seal.Session),
+                seal.Session
+            ),
             ZLinkServiceWireCodec.EncodeSessionRelocationSealed,
-            ZLinkServiceWireCodec.TryDecodeSessionRelocationSealed);
+            ZLinkServiceWireCodec.TryDecodeSessionRelocationSealed
+        );
 
         AssertGoldenRoundTrip(
             "sessionRelocationRouteCommit",
             Route(
                 2,
                 ZLinkServiceWireCodec.SessionRelocationRouteUpdateRecord.Commit(
-                    11, 12, RoutingId.From("target"), 4)),
+                    11,
+                    12,
+                    RoutingId.From("target"),
+                    4
+                )
+            ),
             ZLinkServiceWireCodec.EncodeSessionRelocationRoute,
-            ZLinkServiceWireCodec.TryDecodeSessionRelocationRoute);
+            ZLinkServiceWireCodec.TryDecodeSessionRelocationRoute
+        );
 
         AssertGoldenRoundTrip(
             "sessionRelocationRouteAbort",
-            Route(
-                1,
-                ZLinkServiceWireCodec.SessionRelocationRouteUpdateRecord.Abort(
-                    11)),
+            Route(1, ZLinkServiceWireCodec.SessionRelocationRouteUpdateRecord.Abort(11)),
             ZLinkServiceWireCodec.EncodeSessionRelocationRoute,
-            ZLinkServiceWireCodec.TryDecodeSessionRelocationRoute);
+            ZLinkServiceWireCodec.TryDecodeSessionRelocationRoute
+        );
     }
 
     [Fact]
@@ -50,8 +57,8 @@ public sealed class ServiceWireSessionRelocationCodecTests
     {
         Assert.Equal(
             new[] { "RelocationId", "Coordinator", "Actor", "Session" },
-            PublicPropertyNames<
-                ZLinkServiceWireCodec.SessionRelocationSealedRecord>());
+            PublicPropertyNames<ZLinkServiceWireCodec.SessionRelocationSealedRecord>()
+        );
         Assert.Equal(
             new[]
             {
@@ -60,10 +67,10 @@ public sealed class ServiceWireSessionRelocationCodecTests
                 "TargetAuthorityOwnerGeneration",
                 "TargetNodeRid",
                 "TargetNodeGeneration",
-                "CurrentAuthorityOwnerGeneration"
+                "CurrentAuthorityOwnerGeneration",
             },
-            PublicPropertyNames<
-                ZLinkServiceWireCodec.SessionRelocationRouteUpdateRecord>());
+            PublicPropertyNames<ZLinkServiceWireCodec.SessionRelocationRouteUpdateRecord>()
+        );
 
         var nestedTypeNames = typeof(ZLinkServiceWireCodec)
             .GetNestedTypes(BindingFlags.NonPublic)
@@ -85,32 +92,35 @@ public sealed class ServiceWireSessionRelocationCodecTests
     {
         var seal = Seal();
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            ZLinkServiceWireCodec.EncodeSessionRelocationSeal(
-                seal with { SenderRole = 3 }));
+            ZLinkServiceWireCodec.EncodeSessionRelocationSeal(seal with { SenderRole = 3 })
+        );
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            ZLinkServiceWireCodec.EncodeSessionRelocationSeal(
-                seal with { SenderRole = 2 }));
+            ZLinkServiceWireCodec.EncodeSessionRelocationSeal(seal with { SenderRole = 2 })
+        );
 
         var commit = Route(
             2,
             ZLinkServiceWireCodec.SessionRelocationRouteUpdateRecord.Commit(
-                11, 12, RoutingId.From("target"), 4));
+                11,
+                12,
+                RoutingId.From("target"),
+                4
+            )
+        );
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            ZLinkServiceWireCodec.EncodeSessionRelocationRoute(
-                commit with { SenderRole = 3 }));
+            ZLinkServiceWireCodec.EncodeSessionRelocationRoute(commit with { SenderRole = 3 })
+        );
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            ZLinkServiceWireCodec.EncodeSessionRelocationRoute(
-                commit with { SenderRole = 1 }));
+            ZLinkServiceWireCodec.EncodeSessionRelocationRoute(commit with { SenderRole = 1 })
+        );
 
-        var abort = Route(
-            1,
-            ZLinkServiceWireCodec.SessionRelocationRouteUpdateRecord.Abort(11));
+        var abort = Route(1, ZLinkServiceWireCodec.SessionRelocationRouteUpdateRecord.Abort(11));
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            ZLinkServiceWireCodec.EncodeSessionRelocationRoute(
-                abort with { SenderRole = 3 }));
+            ZLinkServiceWireCodec.EncodeSessionRelocationRoute(abort with { SenderRole = 3 })
+        );
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            ZLinkServiceWireCodec.EncodeSessionRelocationRoute(
-                abort with { SenderRole = 2 }));
+            ZLinkServiceWireCodec.EncodeSessionRelocationRoute(abort with { SenderRole = 2 })
+        );
     }
 
     [Fact]
@@ -119,18 +129,28 @@ public sealed class ServiceWireSessionRelocationCodecTests
         var encoded = ReadGolden("sessionRelocationRouteCommit");
         encoded[3] = 45;
 
-        Assert.False(ZLinkServiceWireCodec.TryDecodeSessionRelocationRoute(
-            encoded, out _, out var error));
+        Assert.False(
+            ZLinkServiceWireCodec.TryDecodeSessionRelocationRoute(encoded, out _, out var error)
+        );
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.UnknownCommand, error);
-        Assert.DoesNotContain("SessionRelocationRouted",
-            Enum.GetNames<ServiceWireConstants.Command>());
+        Assert.DoesNotContain(
+            "SessionRelocationRouted",
+            Enum.GetNames<ServiceWireConstants.Command>()
+        );
     }
 
-    private delegate bool TryDecode<T>(ReadOnlySpan<byte> bytes, out T value,
-        out ZLinkServiceWireCodec.DecodeError error);
+    private delegate bool TryDecode<T>(
+        ReadOnlySpan<byte> bytes,
+        out T value,
+        out ZLinkServiceWireCodec.DecodeError error
+    );
 
-    private static void AssertGoldenRoundTrip<T>(string name, T value,
-        Func<T, byte[]> encode, TryDecode<T> decode)
+    private static void AssertGoldenRoundTrip<T>(
+        string name,
+        T value,
+        Func<T, byte[]> encode,
+        TryDecode<T> decode
+    )
     {
         var encoded = encode(value);
         Assert.Equal(ReadGolden(name), encoded);
@@ -140,27 +160,25 @@ public sealed class ServiceWireSessionRelocationCodecTests
         Assert.Equal(encoded, encode(decoded));
 
         Assert.False(decode(encoded[..^1], out _, out var truncated));
-        Assert.Equal(ZLinkServiceWireCodec.DecodeError.TruncatedField,
-            truncated);
+        Assert.Equal(ZLinkServiceWireCodec.DecodeError.TruncatedField, truncated);
         Assert.False(decode([.. encoded, 0], out _, out var trailing));
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.TrailingByte, trailing);
 
         var forbiddenFlag = encoded.ToArray();
         forbiddenFlag[4] = 1;
         Assert.False(decode(forbiddenFlag, out _, out var flagError));
-        Assert.Equal(ZLinkServiceWireCodec.DecodeError.ForbiddenFlag,
-            flagError);
+        Assert.Equal(ZLinkServiceWireCodec.DecodeError.ForbiddenFlag, flagError);
     }
 
     private static string[] PublicPropertyNames<T>() =>
-        typeof(T).GetProperties(BindingFlags.Instance | BindingFlags.Public)
+        typeof(T)
+            .GetProperties(BindingFlags.Instance | BindingFlags.Public)
             .Select(static property => property.Name)
             .ToArray();
 
     private static ZLinkServiceWireCodec.SessionRelocationSealRecord Seal()
     {
-        var actor = new ZLinkServiceWireCodec.SessionActorIdentityRecord(
-            "actor-1", 5);
+        var actor = new ZLinkServiceWireCodec.SessionActorIdentityRecord("actor-1", 5);
         return new ZLinkServiceWireCodec.SessionRelocationSealRecord(
             new ZLinkServiceWireCodec.RelocationWireId(7, 9),
             new ZLinkServiceWireCodec.RelocationCoordinatorFence(
@@ -168,26 +186,31 @@ public sealed class ServiceWireSessionRelocationCodecTests
                 3,
                 RoutingId.From("source"),
                 2,
-                "store-v17"),
+                "store-v17"
+            ),
             1,
             new ZLinkServiceWireCodec.SessionActorRouteFenceRecord(
                 actor,
                 RoutingId.From("source"),
                 2,
                 11,
-                13),
+                13
+            ),
             new ZLinkServiceWireCodec.SessionOwnerFenceRecord(
                 RoutingId.From("source"),
                 2,
                 "session-owner",
                 8,
                 RoutingId.From("session"),
-                6));
+                6
+            )
+        );
     }
 
     private static ZLinkServiceWireCodec.SessionRelocationRouteRecord Route(
         byte senderRole,
-        ZLinkServiceWireCodec.SessionRelocationRouteUpdateRecord route)
+        ZLinkServiceWireCodec.SessionRelocationRouteUpdateRecord route
+    )
     {
         var seal = Seal();
         return new ZLinkServiceWireCodec.SessionRelocationRouteRecord(
@@ -196,7 +219,8 @@ public sealed class ServiceWireSessionRelocationCodecTests
             senderRole,
             seal.Actor.Actor,
             seal.Session,
-            route);
+            route
+        );
     }
 
     private static byte[] ReadGolden(string name)
@@ -204,9 +228,11 @@ public sealed class ServiceWireSessionRelocationCodecTests
         var frameworkRoot = Common.FrameworkTestEnvironment.GetFrameworkRoot();
         var fixturePath = Path.GetFullPath(
             "../../runtime/protocol/golden/session-relocation-barrier-v1.json",
-            frameworkRoot);
+            frameworkRoot
+        );
         using var document = JsonDocument.Parse(File.ReadAllText(fixturePath));
-        var fixture = document.RootElement.GetProperty("canonical")
+        var fixture = document
+            .RootElement.GetProperty("canonical")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == name);
         return Convert.FromHexString(fixture.GetProperty("hex").GetString()!);

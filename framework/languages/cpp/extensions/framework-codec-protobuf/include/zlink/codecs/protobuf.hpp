@@ -18,8 +18,8 @@ namespace zlink::framework_codecs
 
 namespace detail
 {
-inline zlink::framework::encoded_payload_t serialize_protobuf (
-  const google::protobuf::MessageLite &value)
+inline zlink::framework::encoded_payload_t
+serialize_protobuf (const google::protobuf::MessageLite &value)
 {
     const auto size = value.ByteSizeLong ();
     if (size > static_cast<std::size_t> (std::numeric_limits<int>::max ()))
@@ -85,9 +85,7 @@ class protobuf_codec_extension_t
         static_assert (std::is_base_of_v<google::protobuf::MessageLite, TMessage>,
                        "protobuf codec requires a protobuf message type");
         codecs.template add_serializer<TMessage> (
-          [] (const TMessage &value) {
-              return detail::serialize_protobuf (value);
-          },
+          [] (const TMessage &value) { return detail::serialize_protobuf (value); },
           [] (const zlink::framework::encoded_payload_t &payload) {
               TMessage value;
               detail::parse_protobuf (value, payload);
@@ -116,7 +114,6 @@ class protobuf_codec_extension_t
           },
           content_type);
     }
-
 };
 
 inline protobuf_codec_extension_t protobuf ()
@@ -140,9 +137,7 @@ struct extension_serializer_traits_t<
     static serializer_t<T> make_serializer ()
     {
         return serializer_t<T> (
-          [] (const T &value) {
-              return framework_codecs::detail::serialize_protobuf (value);
-          },
+          [] (const T &value) { return framework_codecs::detail::serialize_protobuf (value); },
           [] (const encoded_payload_t &payload) {
               T value;
               framework_codecs::detail::parse_protobuf (value, payload);
@@ -158,7 +153,8 @@ namespace zlink::stream_connector::codecs
 {
 
 template <typename T>
-requires std::is_base_of_v<google::protobuf::MessageLite, T> struct codec_traits<T>
+    requires std::is_base_of_v<google::protobuf::MessageLite, T>
+struct codec_traits<T>
 {
     static constexpr codec_t codec = codec_t::protobuf;
 

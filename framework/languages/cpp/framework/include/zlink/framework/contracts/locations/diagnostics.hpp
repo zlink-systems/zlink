@@ -60,8 +60,7 @@ struct location_topology_filter_t
 struct location_topology_entry_t
 {
     std::string mesh_name;
-    zlink::routing_id_t node_rid =
-      zlink::routing_id_t::from (std::uint32_t{0});
+    zlink::routing_id_t node_rid = zlink::routing_id_t::from (std::uint32_t{0});
     std::string endpoint;
     bool draining = false;
     location_topology_state_t state = location_topology_state_t::discovered;
@@ -102,8 +101,7 @@ struct location_object_entry_t
     std::string global_id;
     std::uint64_t object_generation = 0;
     std::string mesh_name;
-    zlink::routing_id_t node_rid =
-      zlink::routing_id_t::from (std::uint32_t{0});
+    zlink::routing_id_t node_rid = zlink::routing_id_t::from (std::uint32_t{0});
     location_object_state_t state = location_object_state_t::creating;
     std::string stable_type;
 };

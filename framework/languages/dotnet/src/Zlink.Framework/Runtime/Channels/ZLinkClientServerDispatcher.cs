@@ -5,7 +5,8 @@ internal sealed class ZLinkClientServerDispatcher(
     ZLinkChannelRequestDispatchPipeline requestPipeline,
     ZLinkCodecRegistryBuilder codecs,
     Func<bool> flowCaptureEnabled,
-    ZLinkDispatchErrorReporter? dispatchErrors = null)
+    ZLinkDispatchErrorReporter? dispatchErrors = null
+)
 {
     public async ValueTask DispatchAsync(
         string channelName,
@@ -13,19 +14,19 @@ internal sealed class ZLinkClientServerDispatcher(
         Received received,
         ZLinkChannelReplyGate replyGate,
         uint maximumMessageBytes,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ZLinkEnvelopeHeader header;
         try
         {
-            header = ZLinkEnvelopeCodec.DecodeHeader(
-                received.Parts,
-                flowCaptureEnabled());
+            header = ZLinkEnvelopeCodec.DecodeHeader(received.Parts, flowCaptureEnabled());
             if (!StringComparer.Ordinal.Equals(header.ChannelName, channelName))
                 throw new ZLinkEnvelopeProtocolException(
                     header,
                     $"ClientServer channel '{channelName}' received an envelope for "
-                    + $"'{header.ChannelName}'.");
+                        + $"'{header.ChannelName}'."
+                );
         }
         catch (ZLinkEnvelopeProtocolException protocolError)
         {
@@ -36,7 +37,8 @@ internal sealed class ZLinkClientServerDispatcher(
                 replyGate,
                 protocolError.Header,
                 protocolError.Message,
-                maximumMessageBytes);
+                maximumMessageBytes
+            );
             return;
         }
 
@@ -47,19 +49,18 @@ internal sealed class ZLinkClientServerDispatcher(
             header.FlowId,
             header.FlowOrigin,
             flowCaptureEnabled(),
-            ZLinkFlowOrigin.Inbound);
+            ZLinkFlowOrigin.Inbound
+        );
         switch (header.Kind)
         {
             case ZLinkMessageKind.Command:
-                await commandPipeline.DispatchAsync(
-                        channelName,
-                        received.Parts,
-                        header,
-                        cancellationToken)
+                await commandPipeline
+                    .DispatchAsync(channelName, received.Parts, header, cancellationToken)
                     .ConfigureAwait(false);
                 break;
             case ZLinkMessageKind.Request:
-                await requestPipeline.DispatchAsync(
+                await requestPipeline
+                    .DispatchAsync(
                         channelName,
                         received.Parts,
                         header,
@@ -74,7 +75,8 @@ internal sealed class ZLinkClientServerDispatcher(
                                 replyHeader,
                                 reply,
                                 replyType,
-                                s.maximumMessageBytes);
+                                s.maximumMessageBytes
+                            );
                             return ValueTask.CompletedTask;
                         },
                         static (s, errorHeader) =>
@@ -87,10 +89,12 @@ internal sealed class ZLinkClientServerDispatcher(
                                 errorHeader,
                                 null,
                                 null,
-                                s.maximumMessageBytes);
+                                s.maximumMessageBytes
+                            );
                             return ValueTask.CompletedTask;
                         },
-                        cancellationToken)
+                        cancellationToken
+                    )
                     .ConfigureAwait(false);
                 break;
             default:
@@ -101,7 +105,8 @@ internal sealed class ZLinkClientServerDispatcher(
                     replyGate,
                     header,
                     $"ClientServer server cannot accept '{header.Kind}' envelopes.",
-                    maximumMessageBytes);
+                    maximumMessageBytes
+                );
                 break;
         }
     }
@@ -113,7 +118,8 @@ internal sealed class ZLinkClientServerDispatcher(
         ZLinkChannelReplyGate replyGate,
         ZLinkEnvelopeHeader request,
         string message,
-        uint maximumMessageBytes)
+        uint maximumMessageBytes
+    )
     {
         var canReply = ZLinkEnvelopeCodec.CanCorrelateReply(request);
         //  Spec 26 §3.1 closed vocabulary: a malformed channel envelope records
@@ -129,19 +135,21 @@ internal sealed class ZLinkClientServerDispatcher(
                 validFlow.FlowOrigin,
                 dispatchErrors.Flow.CaptureEnabled,
                 ZLinkFlowOrigin.Inbound,
-                createIfAbsent: false);
-            dispatchErrors.Report(new ZLinkDispatchFailure(
-                ZLinkDispatchErrorSurface.Channel,
-                received.ReplyToken is not null
-                    ? ZLinkDispatchMessageKind.Request
-                    : ZLinkDispatchMessageKind.Send,
-                ZLinkDispatchErrorReason.InvalidFrame,
-                canReply
-                    ? ZLinkDispatchErrorAction.ReplyError
-                    : ZLinkDispatchErrorAction.Drop,
-                request.MessageName,
-                channelName,
-                CorrelationId: request.CorrelationId));
+                createIfAbsent: false
+            );
+            dispatchErrors.Report(
+                new ZLinkDispatchFailure(
+                    ZLinkDispatchErrorSurface.Channel,
+                    received.ReplyToken is not null
+                        ? ZLinkDispatchMessageKind.Request
+                        : ZLinkDispatchMessageKind.Send,
+                    ZLinkDispatchErrorReason.InvalidFrame,
+                    canReply ? ZLinkDispatchErrorAction.ReplyError : ZLinkDispatchErrorAction.Drop,
+                    request.MessageName,
+                    channelName,
+                    CorrelationId: request.CorrelationId
+                )
+            );
         }
         if (!canReply)
             return;
@@ -150,13 +158,11 @@ internal sealed class ZLinkClientServerDispatcher(
             router,
             received,
             request,
-            ZLinkChannelReplyWriter.CreateProtocolErrorHeader(
-                channelName,
-                request,
-                message),
+            ZLinkChannelReplyWriter.CreateProtocolErrorHeader(channelName, request, message),
             null,
             null,
-            maximumMessageBytes);
+            maximumMessageBytes
+        );
     }
 
     internal void RejectMessageTooLarge(
@@ -164,15 +170,16 @@ internal sealed class ZLinkClientServerDispatcher(
         IRouterSocket router,
         Received received,
         ZLinkChannelReplyGate replyGate,
-        uint maximumMessageBytes)
+        uint maximumMessageBytes
+    )
     {
         try
         {
-            var request = ZLinkEnvelopeCodec.DecodeHeader(
-                received.Parts,
-                flowCaptureEnabled());
-            if (request.Kind != ZLinkMessageKind.Request
-                || !StringComparer.Ordinal.Equals(request.ChannelName, channelName))
+            var request = ZLinkEnvelopeCodec.DecodeHeader(received.Parts, flowCaptureEnabled());
+            if (
+                request.Kind != ZLinkMessageKind.Request
+                || !StringComparer.Ordinal.Equals(request.ChannelName, channelName)
+            )
                 return;
             Reply(
                 replyGate,
@@ -182,15 +189,14 @@ internal sealed class ZLinkClientServerDispatcher(
                 ZLinkChannelReplyWriter.CreateErrorHeader(
                     channelName,
                     request,
-                    ZLinkClientServerMessageBound.CreateExceededException(
-                        maximumMessageBytes)),
+                    ZLinkClientServerMessageBound.CreateExceededException(maximumMessageBytes)
+                ),
                 null,
                 null,
-                maximumMessageBytes);
+                maximumMessageBytes
+            );
         }
-        catch (ZLinkEnvelopeProtocolException)
-        {
-        }
+        catch (ZLinkEnvelopeProtocolException) { }
     }
 
     private void Reply(
@@ -201,35 +207,29 @@ internal sealed class ZLinkClientServerDispatcher(
         ZLinkEnvelopeHeader replyHeader,
         object? body,
         Type? bodyType,
-        uint maximumMessageBytes)
+        uint maximumMessageBytes
+    )
     {
         replyGate.TryInvoke(() =>
         {
             if (received.ReplyToken is null)
                 return;
 
-            var reply = ZLinkEnvelopeCodec.EncodeParts(
-                replyHeader,
-                body,
-                bodyType,
-                codecs);
-            if (!ZLinkClientServerMessageBound.Fits(
-                    reply,
-                    maximumMessageBytes))
+            var reply = ZLinkEnvelopeCodec.EncodeParts(replyHeader, body, bodyType, codecs);
+            if (!ZLinkClientServerMessageBound.Fits(reply, maximumMessageBytes))
             {
                 ZLinkMessageParts.DisposeAll(reply);
                 reply = ZLinkEnvelopeCodec.EncodeParts(
                     ZLinkChannelReplyWriter.CreateErrorHeader(
                         requestHeader.ChannelName,
                         requestHeader,
-                        ZLinkClientServerMessageBound.CreateExceededException(
-                            maximumMessageBytes)),
+                        ZLinkClientServerMessageBound.CreateExceededException(maximumMessageBytes)
+                    ),
                     null,
                     null,
-                    codecs);
-                if (!ZLinkClientServerMessageBound.Fits(
-                        reply,
-                        maximumMessageBytes))
+                    codecs
+                );
+                if (!ZLinkClientServerMessageBound.Fits(reply, maximumMessageBytes))
                 {
                     ZLinkMessageParts.DisposeAll(reply);
                     return;

@@ -14,8 +14,7 @@ class stream_connector_error : public std::runtime_error
 {
   public:
     stream_connector_error (zlink::stream_connector::error_code_t code, std::string message) :
-        std::runtime_error (message),
-        _code (code)
+        std::runtime_error (message), _code (code)
     {
     }
 
@@ -31,7 +30,8 @@ template <typename T> T value_or_throw (zlink::stream_connector::result_t<T> res
         return std::move (result.value ());
     }
     const auto &error = result.error ();
-    throw stream_connector_error (error ? error->code : zlink::stream_connector::error_code_t::disconnected,
+    throw stream_connector_error (error ? error->code
+                                        : zlink::stream_connector::error_code_t::disconnected,
                                   error ? error->message : "stream connector operation failed");
 }
 
@@ -41,7 +41,8 @@ inline void value_or_throw (zlink::stream_connector::result_t<void> result)
         return;
     }
     const auto &error = result.error ();
-    throw stream_connector_error (error ? error->code : zlink::stream_connector::error_code_t::disconnected,
+    throw stream_connector_error (error ? error->code
+                                        : zlink::stream_connector::error_code_t::disconnected,
                                   error ? error->message : "stream connector operation failed");
 }
 

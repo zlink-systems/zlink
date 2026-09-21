@@ -35,9 +35,7 @@ export interface ServiceInstanceSpotState extends ServiceSpotStateBase {
 }
 
 export type ServiceSpotState =
-  | ServiceEntrySpotState
-  | ServiceUserSpotState
-  | ServiceInstanceSpotState;
+  ServiceEntrySpotState | ServiceUserSpotState | ServiceInstanceSpotState;
 
 export interface ServiceActorState {
   readonly ref: ServiceActorRef;
@@ -69,7 +67,11 @@ export interface ServiceObjectReservation {
 
 export type ServiceReservationResult =
   | { readonly kind: 'reserved'; readonly reservation: ServiceObjectReservation }
-  | { readonly kind: 'existing'; readonly spot?: ServiceSpotState; readonly actor?: ServiceActorState }
+  | {
+      readonly kind: 'existing';
+      readonly spot?: ServiceSpotState;
+      readonly actor?: ServiceActorState;
+    }
   | { readonly kind: 'typeMismatch' }
   | { readonly kind: 'attemptStale' };
 
@@ -82,7 +84,10 @@ export interface ServiceMembershipTransition {
 }
 
 export class ServiceStaleGenerationError extends Error {
-  constructor(readonly objectKind: 'actor' | 'spot' | 'binding', readonly key: string) {
+  constructor(
+    readonly objectKind: 'actor' | 'spot' | 'binding',
+    readonly key: string
+  ) {
     super(`${objectKind} '${key}' generation is stale.`);
     this.name = 'ServiceStaleGenerationError';
   }
@@ -95,7 +100,10 @@ export class ServiceStaleGenerationError extends Error {
  */
 export class ServiceStatefulRegistry {
   private readonly spots = new Map<string, ServiceSpotState>();
-  private readonly spotTypes = new Map<string, { readonly kind: ServiceSpotKind; readonly stableType: string }>();
+  private readonly spotTypes = new Map<
+    string,
+    { readonly kind: ServiceSpotKind; readonly stableType: string }
+  >();
   private readonly actors = new Map<string, ServiceActorState>();
   private readonly actorTypes = new Map<string, string>();
   private readonly bindings = new Map<string, ServiceSessionBinding>();
@@ -158,12 +166,7 @@ export class ServiceStatefulRegistry {
     }
     const generation = (this.spotGenerations.get(spotId) ?? 0n) + 1n;
     this.spotGenerations.set(spotId, generation);
-    const created = createSpotState(
-      { spotId, generation },
-      kind,
-      stableType,
-      generation
-    );
+    const created = createSpotState({ spotId, generation }, kind, stableType, generation);
     this.spotTypes.set(spotId, Object.freeze({ kind, stableType }));
     this.spots.set(spotId, created);
     return created;
@@ -192,10 +195,12 @@ export class ServiceStatefulRegistry {
     requirePositive(ref.generation, 'spot.generation');
     requireText(stableType, 'stableType');
     requirePositive(authorityOwnerGeneration, 'authorityOwnerGeneration');
-    if (kind === 'entry'
-      && (ref.spotId !== this.nodeRid
-        || ref.generation !== this.nodeGeneration
-        || stableType !== 'entry')) {
+    if (
+      kind === 'entry' &&
+      (ref.spotId !== this.nodeRid ||
+        ref.generation !== this.nodeGeneration ||
+        stableType !== 'entry')
+    ) {
       throw new TypeError('Entry Spot identity is fixed by the owning node lifecycle.');
     }
     const current = this.spots.get(ref.spotId);
@@ -206,12 +211,7 @@ export class ServiceStatefulRegistry {
     if (assigned !== undefined && (assigned.kind !== kind || assigned.stableType !== stableType)) {
       throw new TypeError(`Spot '${ref.spotId}' is assigned to another kind or type.`);
     }
-    const restored = createSpotState(
-      ref,
-      kind,
-      stableType,
-      authorityOwnerGeneration
-    );
+    const restored = createSpotState(ref, kind, stableType, authorityOwnerGeneration);
     this.spotGenerations.set(
       ref.spotId,
       max(this.spotGenerations.get(ref.spotId) ?? 0n, ref.generation)
@@ -227,7 +227,11 @@ export class ServiceStatefulRegistry {
 
   private requireSpotCore(ref: ServiceSpotRef): ServiceSpotState {
     const current = this.spots.get(ref.spotId);
-    if (current === undefined || current.ref.generation !== ref.generation || current.state !== 'ready') {
+    if (
+      current === undefined ||
+      current.ref.generation !== ref.generation ||
+      current.state !== 'ready'
+    ) {
       throw new ServiceStaleGenerationError('spot', ref.spotId);
     }
     return current;
@@ -237,10 +241,7 @@ export class ServiceStatefulRegistry {
     const current = this.requireSpotCore(ref);
     if (current.kind === 'entry') return false;
     for (const actor of this.actors.values()) {
-      if (
-        actor.spot.spotId === ref.spotId
-        && actor.spot.generation === ref.generation
-      ) {
+      if (actor.spot.spotId === ref.spotId && actor.spot.generation === ref.generation) {
         return false;
       }
     }
@@ -338,9 +339,9 @@ export class ServiceStatefulRegistry {
   private requireActorCore(ref: ServiceActorRef): ServiceActorState {
     const current = this.actors.get(ref.actorId);
     if (
-      current === undefined
-      || current.ref.generation !== ref.generation
-      || current.ref.nodeRid !== ref.nodeRid
+      current === undefined ||
+      current.ref.generation !== ref.generation ||
+      current.ref.nodeRid !== ref.nodeRid
     ) {
       throw new ServiceStaleGenerationError('actor', ref.actorId);
     }
@@ -351,7 +352,10 @@ export class ServiceStatefulRegistry {
     return this.joinActorCore(actor, target);
   }
 
-  private joinActorCore(actor: ServiceActorRef, target: ServiceSpotRef): ServiceMembershipTransition {
+  private joinActorCore(
+    actor: ServiceActorRef,
+    target: ServiceSpotRef
+  ): ServiceMembershipTransition {
     const current = this.requireActorCore(actor);
     this.requireSpotCore(target);
     const next: ServiceActorState = Object.freeze({
@@ -416,12 +420,12 @@ export class ServiceStatefulRegistry {
     requirePositive(binding.bindingGeneration, 'bindingGeneration');
     const current = this.bindings.get(actorKey(binding.actor));
     if (
-      current !== undefined
-      && current.sessionOwnerNodeRid === binding.sessionOwnerNodeRid
-      && current.sessionOwnerNodeGeneration === binding.sessionOwnerNodeGeneration
-      && current.sessionOwnerId === binding.sessionOwnerId
-      && current.sessionOwnerLeaseGeneration === binding.sessionOwnerLeaseGeneration
-      && current.bindingGeneration >= binding.bindingGeneration
+      current !== undefined &&
+      current.sessionOwnerNodeRid === binding.sessionOwnerNodeRid &&
+      current.sessionOwnerNodeGeneration === binding.sessionOwnerNodeGeneration &&
+      current.sessionOwnerId === binding.sessionOwnerId &&
+      current.sessionOwnerLeaseGeneration === binding.sessionOwnerLeaseGeneration &&
+      current.bindingGeneration >= binding.bindingGeneration
     ) {
       throw new ServiceStaleGenerationError('binding', binding.actor.actorId);
     }
@@ -448,10 +452,10 @@ export class ServiceStatefulRegistry {
     const binding = this.bindings.get(key);
     if (binding === undefined) return false;
     if (
-      binding.bindingGeneration !== expectedBindingGeneration
-      || expectedSessionRid !== undefined && binding.sessionRid !== expectedSessionRid
-      || expectedSessionOwnerNodeRid !== undefined
-        && binding.sessionOwnerNodeRid !== expectedSessionOwnerNodeRid
+      binding.bindingGeneration !== expectedBindingGeneration ||
+      (expectedSessionRid !== undefined && binding.sessionRid !== expectedSessionRid) ||
+      (expectedSessionOwnerNodeRid !== undefined &&
+        binding.sessionOwnerNodeRid !== expectedSessionOwnerNodeRid)
     ) {
       throw new ServiceStaleGenerationError('binding', actor.actorId);
     }
@@ -459,7 +463,10 @@ export class ServiceStatefulRegistry {
     return true;
   }
 
-  validateBoundSession(actor: ServiceActorRef, expectedBindingGeneration: bigint): ServiceSessionBinding {
+  validateBoundSession(
+    actor: ServiceActorRef,
+    expectedBindingGeneration: bigint
+  ): ServiceSessionBinding {
     const binding = this.bindingCore(actor);
     if (binding === undefined || binding.bindingGeneration !== expectedBindingGeneration) {
       throw new ServiceStaleGenerationError('binding', actor.actorId);
@@ -501,8 +508,8 @@ export class ServiceStatefulRegistry {
       }
       const assigned = this.spotTypes.get(key);
       if (
-        assigned !== undefined
-        && (assigned.kind !== expectedKind || assigned.stableType !== stableType)
+        assigned !== undefined &&
+        (assigned.kind !== expectedKind || assigned.stableType !== stableType)
       ) {
         return { kind: 'typeMismatch' };
       }
@@ -514,9 +521,10 @@ export class ServiceStatefulRegistry {
       if (attempt < active.attempt) return { kind: 'attemptStale' };
       if (attempt === active.attempt) return { kind: 'reserved', reservation: active };
     }
-    const generation = objectKind === 'actor'
-      ? (this.actorGenerations.get(key) ?? 0n) + 1n
-      : (this.spotGenerations.get(key) ?? 0n) + 1n;
+    const generation =
+      objectKind === 'actor'
+        ? (this.actorGenerations.get(key) ?? 0n) + 1n
+        : (this.spotGenerations.get(key) ?? 0n) + 1n;
     const reservation = Object.freeze({
       id: this.nextReservationId++,
       objectKind,
@@ -544,11 +552,7 @@ export class ServiceStatefulRegistry {
     }
     const spotKind: ServiceSpotKind =
       reservation.objectKind === 'instanceSpot' ? 'instance' : 'user';
-    return this.createSpotCore(
-      reservation.key,
-      spotKind,
-      reservation.stableType
-    );
+    return this.createSpotCore(reservation.key, spotKind, reservation.stableType);
   }
 
   abortReservation(reservation: ServiceObjectReservation): boolean {
@@ -562,7 +566,7 @@ export class ServiceStatefulRegistry {
     requireText(owner, 'owner');
     const previous = this.turns.get(owner) ?? Promise.resolve();
     let release!: () => void;
-    const barrier = new Promise<void>(resolve => {
+    const barrier = new Promise<void>((resolve) => {
       release = resolve;
     });
     const tail = previous.then(() => barrier);
@@ -580,11 +584,14 @@ export class ServiceStatefulRegistry {
     const key = actorKey(actor.ref);
     const binding = this.bindings.get(key);
     if (binding === undefined) return;
-    this.bindings.set(key, Object.freeze({
-      ...binding,
-      actor: actor.ref,
-      membershipEpoch: actor.membershipEpoch
-    }));
+    this.bindings.set(
+      key,
+      Object.freeze({
+        ...binding,
+        actor: actor.ref,
+        membershipEpoch: actor.membershipEpoch
+      })
+    );
   }
 }
 
@@ -619,7 +626,10 @@ export class ServiceTerminalOperationRegistry<T> {
     this.operations = operations;
   }
 
-  register(timeoutMs: number, timeoutOwner: 'registry' | 'sender' = 'registry'): PendingOperation<T> {
+  register(
+    timeoutMs: number,
+    timeoutOwner: 'registry' | 'sender' = 'registry'
+  ): PendingOperation<T> {
     return this.operations.register(timeoutMs, timeoutOwner);
   }
 

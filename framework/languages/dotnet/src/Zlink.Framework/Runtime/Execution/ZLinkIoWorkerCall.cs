@@ -8,7 +8,8 @@ namespace Zlink.Framework.Runtime.Execution;
 internal sealed class ZLinkIoWorkerCall<TResult>(
     CancellationToken runtimeStopToken,
     Func<CancellationToken, ValueTask<TResult>> work,
-    IZLinkRuntimeFailureReporter errorSink) : IZLinkWorkerCall<TResult>
+    IZLinkRuntimeFailureReporter errorSink
+) : IZLinkWorkerCall<TResult>
 {
     private readonly ZLinkSerialTurn? _turn = ZLinkSerialTurn.Current;
     private int _terminated;
@@ -33,7 +34,8 @@ internal sealed class ZLinkIoWorkerCall<TResult>(
         ZLinkUnawaitedSubmit.Observe(
             ObserveAsync(cancellationToken),
             "I/O worker submit",
-            errorSink);
+            errorSink
+        );
     }
 
     public ValueTask<TResult> Yield(CancellationToken cancellationToken = default)
@@ -43,7 +45,8 @@ internal sealed class ZLinkIoWorkerCall<TResult>(
         if (!ReferenceEquals(turn, _turn))
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
-                "I/O worker Yield must execute in the callback turn that created the call.");
+                "I/O worker Yield must execute in the callback turn that created the call."
+            );
         return turn.YieldFrameworkCallAsync(ExecuteAsync, cancellationToken);
     }
 
@@ -51,7 +54,8 @@ internal sealed class ZLinkIoWorkerCall<TResult>(
     {
         using var stopSource = CancellationTokenSource.CreateLinkedTokenSource(
             runtimeStopToken,
-            cancellationToken);
+            cancellationToken
+        );
         try
         {
             var operation = work(stopSource.Token).AsTask();
@@ -66,7 +70,8 @@ internal sealed class ZLinkIoWorkerCall<TResult>(
                 ZLinkFrameworkErrorKind.DeadlineExceeded,
                 "I/O worker call timed out.",
                 ZLinkRetryAdvice.DoNotRetry,
-                ex);
+                ex
+            );
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -75,7 +80,8 @@ internal sealed class ZLinkIoWorkerCall<TResult>(
         catch (OperationCanceledException) when (runtimeStopToken.IsCancellationRequested)
         {
             throw new OperationCanceledException(
-                "I/O worker call was canceled because the framework runtime stopped.");
+                "I/O worker call was canceled because the framework runtime stopped."
+            );
         }
         catch (Exception ex) when (ex is not ZLinkFrameworkException)
         {
@@ -83,7 +89,8 @@ internal sealed class ZLinkIoWorkerCall<TResult>(
                 ZLinkFrameworkErrorKind.InternalFailure,
                 "I/O worker call failed.",
                 ZLinkRetryAdvice.DoNotRetry,
-                ex);
+                ex
+            );
         }
     }
 
@@ -96,6 +103,7 @@ internal sealed class ZLinkIoWorkerCall<TResult>(
     {
         if (Interlocked.Exchange(ref _terminated, 1) != 0)
             throw new InvalidOperationException(
-                "I/O worker call already has a terminator. Call Async or Yield once.");
+                "I/O worker call already has a terminator. Call Async or Yield once."
+            );
     }
 }

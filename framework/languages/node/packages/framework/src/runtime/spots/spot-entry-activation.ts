@@ -26,9 +26,7 @@ import type {
 import type { Message } from '../../contracts/Common/Message';
 import { throwIfAborted } from '../abort';
 import { routingIdsEqual } from '../routing-id';
-import {
-  ZLinkSpotActorHandlerRegistryRuntime
-} from '../actors';
+import { ZLinkSpotActorHandlerRegistryRuntime } from '../actors';
 import type {
   ZLinkBackendActorRecvInfo,
   ZLinkBackendReceived,
@@ -52,18 +50,12 @@ import {
   applyEntrySpotHandlerRegistrations,
   DefaultZLinkSpotHandlerRegistry
 } from './spot-handler-registry';
-import {
-  DefaultZLinkSpotOutbound,
-  type ZLinkSpotRoutedTransport
-} from './spot-outbound';
+import { DefaultZLinkSpotOutbound, type ZLinkSpotRoutedTransport } from './spot-outbound';
 import { createProviderInstance } from './spot-provider';
 import { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import { ZLinkSpotSerialExecutor } from './spot-serial-executor';
 import { invokeSpotClosing } from './spot-closing';
-import {
-  addEntrySpotTimerRegistrations,
-  ZLinkSpotTimerRegistry
-} from './spot-timer';
+import { addEntrySpotTimerRegistrations, ZLinkSpotTimerRegistry } from './spot-timer';
 import { createEntrySpotContext } from './spot-context';
 import { ZLinkRoutedSpotPacketDispatch } from './spot-routed-spot-packet-dispatch';
 import type { RequestResult } from '../backend/runtime-values';
@@ -166,14 +158,11 @@ export class ZLinkEntrySpotActivation {
       providerResolver: options.providerResolver,
       runtimeEventPublisher: options.runtimeEventPublisher,
       workerRuntime: this.workerRuntime,
-      destroyActor: options.entryActorRuntime === undefined
-        ? undefined
-        : (nodeRid, actor, signal) => options.entryActorRuntime!.destroyActor(
-          options.nativeNode,
-          nodeRid,
-          actor,
-          signal
-        )
+      destroyActor:
+        options.entryActorRuntime === undefined
+          ? undefined
+          : (nodeRid, actor, signal) =>
+              options.entryActorRuntime!.destroyActor(options.nativeNode, nodeRid, actor, signal)
     });
     this.entrySpot = undefined as unknown as ZLinkEntrySpot;
     applyEntrySpotHandlerRegistrations(this.handlers, options.entrySpotType, {
@@ -183,14 +172,15 @@ export class ZLinkEntrySpotActivation {
       subscriptionHandlers: options.subscriptionHandlers
     });
     this.packetDispatch = new ZLinkRoutedSpotPacketDispatch({
-      resolveActivation: (spotId) => spotId === this.spotId
-        ? {
-            spotId: this.spotId,
-            spot: this.entrySpot as unknown as ZLinkSpot,
-            serial: this.serial,
-            handlers: this.handlers
-          }
-        : undefined,
+      resolveActivation: (spotId) =>
+        spotId === this.spotId
+          ? {
+              spotId: this.spotId,
+              spot: this.entrySpot as unknown as ZLinkSpot,
+              serial: this.serial,
+              handlers: this.handlers
+            }
+          : undefined,
       providerResolver: options.providerResolver,
       dispatchErrors: options.dispatchErrors
     });
@@ -210,8 +200,12 @@ export class ZLinkEntrySpotActivation {
       onRemoteBoundSessionTarget: (targetActorId, target) =>
         this.options.boundSessionRuntime?.rememberRemoteBoundSessionTarget(targetActorId, target),
       onDisconnectActor: (actor) => this.notifyDisconnectActor(actor),
-      actorResponseSender: this.options.boundSessionRuntime?.sendActorResponse.bind(this.options.boundSessionRuntime),
-      actorErrorSender: this.options.boundSessionRuntime?.sendActorError.bind(this.options.boundSessionRuntime),
+      actorResponseSender: this.options.boundSessionRuntime?.sendActorResponse.bind(
+        this.options.boundSessionRuntime
+      ),
+      actorErrorSender: this.options.boundSessionRuntime?.sendActorError.bind(
+        this.options.boundSessionRuntime
+      ),
       providerResolver: this.options.providerResolver,
       messageSerializers: this.options.messageSerializers,
       dispatchErrors: this.options.dispatchErrors
@@ -271,7 +265,11 @@ export class ZLinkEntrySpotActivation {
   }
 
   async create(): Promise<void> {
-    const entrySpot = await createProviderInstance(this.options.entrySpotType, this.options.providerResolver, this.context);
+    const entrySpot = await createProviderInstance(
+      this.options.entrySpotType,
+      this.options.providerResolver,
+      this.context
+    );
     this.entrySpot = entrySpot;
     Object.defineProperty(this.entrySpot, 'context', {
       configurable: true,
@@ -285,9 +283,9 @@ export class ZLinkEntrySpotActivation {
       this.serial,
       { timerHandlers: this.options.timerHandlers },
       {
-          providerResolver: this.options.providerResolver,
-          spotNodeName: this.options.spotNodeName,
-          spotId: this.context.spotId,
+        providerResolver: this.options.providerResolver,
+        spotNodeName: this.options.spotNodeName,
+        spotId: this.context.spotId,
         runtimeEventPublisher: this.options.runtimeEventPublisher
       }
     );
@@ -316,11 +314,15 @@ export class ZLinkEntrySpotActivation {
       }
     };
     if (this.initialized) {
-      await cleanup(() => this.serial.execute(() => invokeSpotClosing(
-        this.entrySpot.onClosing?.bind(this.entrySpot),
-        ZLinkSpotCloseReason.HostShutdown,
-        deadline
-      )));
+      await cleanup(() =>
+        this.serial.execute(() =>
+          invokeSpotClosing(
+            this.entrySpot.onClosing?.bind(this.entrySpot),
+            ZLinkSpotCloseReason.HostShutdown,
+            deadline
+          )
+        )
+      );
     }
     await cleanup(() => this.actorDispatch?.dispose());
     await cleanup(() => this.timers.dispose());
@@ -340,9 +342,9 @@ export class ZLinkEntrySpotActivation {
     signal?: AbortSignal
   ): Promise<ZLinkActorCreateResponse> {
     throwIfAborted(signal);
-    return this.serial.execute(async () =>
-      await this.entrySpot.onCreateActor?.(actor, createRequest)
-        ?? { accepted: true });
+    return this.serial.execute(
+      async () => (await this.entrySpot.onCreateActor?.(actor, createRequest)) ?? { accepted: true }
+    );
   }
 
   notifyJoinActor(actor: ZLinkActor, signal?: AbortSignal): Promise<void> {
@@ -387,10 +389,13 @@ export class ZLinkEntrySpotActivation {
         resolveActor: (actorId) => this.options.entryActorRuntime?.resolveActor(actorId),
         getTarget: () => this.entrySpot,
         defaultAccept: true,
-        transfer: this.options.actorTransferRuntime === undefined ? { kind: 'disabled' } : {
-          kind: 'enabled',
-          runtime: this.options.actorTransferRuntime
-        },
+        transfer:
+          this.options.actorTransferRuntime === undefined
+            ? { kind: 'disabled' }
+            : {
+                kind: 'enabled',
+                runtime: this.options.actorTransferRuntime
+              },
         commitNativeActor: (actor) => this.commitEntryActorTransaction(actor),
         commitTransferredActor: async (actor, backlog) => {
           await this.commitEntryActorTransaction(actor);
@@ -403,8 +408,12 @@ export class ZLinkEntrySpotActivation {
           if (routingIdsEqual(sourceNodeRid, this.options.nativeNode.routingId)) {
             return;
           }
-          const target = declaredTarget
-            ?? this.options.boundSessionRuntime?.resolveRemoteBoundSessionTarget(sourceNodeRid, sourceSessionRid);
+          const target =
+            declaredTarget ??
+            this.options.boundSessionRuntime?.resolveRemoteBoundSessionTarget(
+              sourceNodeRid,
+              sourceSessionRid
+            );
           if (target !== undefined) {
             this.options.boundSessionRuntime?.rememberRemoteBoundSessionTarget(actor.actorId, {
               ...target,
@@ -428,8 +437,8 @@ export class ZLinkEntrySpotActivation {
   }
 
   private async commitEntryActorTransaction(actor: ZLinkActor): Promise<void> {
-    const notifyJoined = () => this.serial.execute(() =>
-      notifyEntryActorJoined(this.entrySpot, actor));
+    const notifyJoined = () =>
+      this.serial.execute(() => notifyEntryActorJoined(this.entrySpot, actor));
     const runtime = this.options.entryActorRuntime;
     if (runtime === undefined) {
       await notifyJoined();
@@ -445,8 +454,7 @@ export class ZLinkEntrySpotActivation {
     _membershipEpoch?: bigint
   ): Promise<void> {
     throwIfAborted(signal);
-    return this.serial.execute(() =>
-      this.entrySpot.onLeaveActor(actor));
+    return this.serial.execute(() => this.entrySpot.onLeaveActor(actor));
   }
 
   notifyDisconnectActor(actor: ZLinkActor, signal?: AbortSignal): Promise<void> {
@@ -471,7 +479,12 @@ export class ZLinkEntrySpotActivation {
       fallbackActorRef,
       undefined,
       messageFollowOrigin,
-      (replayedParts, replayReturnResponse, replayRemoteBoundSessionTarget, replayFallbackActorRef) =>
+      (
+        replayedParts,
+        replayReturnResponse,
+        replayRemoteBoundSessionTarget,
+        replayFallbackActorRef
+      ) =>
         this.spotSerialExecutor.executeActor(actorId, () =>
           this.dispatchActorPacketInsideMailbox({
             actorId,
@@ -479,11 +492,13 @@ export class ZLinkEntrySpotActivation {
             returnResponse: replayReturnResponse,
             remoteBoundSessionTarget: replayRemoteBoundSessionTarget,
             fallbackActorRef: replayFallbackActorRef
-          }))
+          })
+        )
     );
     if (handoff !== undefined) return await handoff;
     return this.spotSerialExecutor.executeActor(actorId, () =>
-      this.dispatchActorPacketInsideMailbox(delivery));
+      this.dispatchActorPacketInsideMailbox(delivery)
+    );
   }
 
   private async replayActorBacklog(
@@ -500,8 +515,10 @@ export class ZLinkEntrySpotActivation {
             returnResponse,
             remoteBoundSessionTarget,
             fallbackActorRef
-          })),
-      (index) => this.options.runtimeEventPublisher?.publish({
+          })
+        ),
+      (index) =>
+        this.options.runtimeEventPublisher?.publish({
           sourceName: 'zlink.framework.actor-handoff',
           timestamp: new Date(),
           marker: 'backlog_enqueued',
@@ -527,12 +544,12 @@ export class ZLinkEntrySpotActivation {
 }
 
 function notifyEntryActorJoined(entrySpot: ZLinkEntrySpot, actor: ZLinkActor): Promise<void> {
-  const callback = (entrySpot as unknown as {
-    readonly onJoinedActor?: (joinedActor: ZLinkActor) => Promise<void>;
-  }).onJoinedActor;
-  return callback === undefined
-    ? Promise.resolve()
-    : callback.call(entrySpot, actor);
+  const callback = (
+    entrySpot as unknown as {
+      readonly onJoinedActor?: (joinedActor: ZLinkActor) => Promise<void>;
+    }
+  ).onJoinedActor;
+  return callback === undefined ? Promise.resolve() : callback.call(entrySpot, actor);
 }
 
 function toContextGeneration(generation: bigint): number {
@@ -545,7 +562,9 @@ function toContextGeneration(generation: bigint): number {
 }
 
 function entrySpotGeneration(spot: ZLinkBackendSpot): bigint {
-  return spot.lifecycleGeneration
-    ?? (spot as Partial<ZLinkBackendSpot>).status?.().lifecycleGeneration
-    ?? 0n;
+  return (
+    spot.lifecycleGeneration ??
+    (spot as Partial<ZLinkBackendSpot>).status?.().lifecycleGeneration ??
+    0n
+  );
 }

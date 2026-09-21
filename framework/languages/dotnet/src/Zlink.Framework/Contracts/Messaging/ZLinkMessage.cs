@@ -22,9 +22,11 @@ public sealed partial class ZLinkMessage
     {
         if (_declaredType is not null)
         {
-            if (_value is T typed) return typed;
+            if (_value is T typed)
+                return typed;
 
-            if (_value is null) return default!;
+            if (_value is null)
+                return default!;
         }
 
         var decoded = Decode(typeof(T));

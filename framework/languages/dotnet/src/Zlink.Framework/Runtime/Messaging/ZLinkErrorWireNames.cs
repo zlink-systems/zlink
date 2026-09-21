@@ -8,40 +8,67 @@ namespace Zlink.Framework.Runtime.Messaging;
 /// </summary>
 internal static class ZLinkErrorWireNames
 {
-    public static string Name(ZLinkFrameworkErrorKind kind) => kind switch
-    {
-        ZLinkFrameworkErrorKind.NotFound => "not_found",
-        ZLinkFrameworkErrorKind.AlreadyExists => "already_exists",
-        ZLinkFrameworkErrorKind.TypeMismatch => "type_mismatch",
-        ZLinkFrameworkErrorKind.NotConfigured => "not_configured",
-        ZLinkFrameworkErrorKind.Rejected => "rejected",
-        ZLinkFrameworkErrorKind.Unavailable => "unavailable",
-        ZLinkFrameworkErrorKind.DeadlineExceeded => "deadline_exceeded",
-        ZLinkFrameworkErrorKind.ShuttingDown => "shutting_down",
-        ZLinkFrameworkErrorKind.ProtocolError => "protocol_error",
-        ZLinkFrameworkErrorKind.InvalidOperation => "invalid_operation",
-        ZLinkFrameworkErrorKind.DataLost => "data_lost",
-        ZLinkFrameworkErrorKind.InternalFailure => "internal_failure",
-        _ => "internal_failure"
-    };
+    public static string Name(ZLinkFrameworkErrorKind kind) =>
+        kind switch
+        {
+            ZLinkFrameworkErrorKind.NotFound => "not_found",
+            ZLinkFrameworkErrorKind.AlreadyExists => "already_exists",
+            ZLinkFrameworkErrorKind.TypeMismatch => "type_mismatch",
+            ZLinkFrameworkErrorKind.NotConfigured => "not_configured",
+            ZLinkFrameworkErrorKind.Rejected => "rejected",
+            ZLinkFrameworkErrorKind.Unavailable => "unavailable",
+            ZLinkFrameworkErrorKind.DeadlineExceeded => "deadline_exceeded",
+            ZLinkFrameworkErrorKind.ShuttingDown => "shutting_down",
+            ZLinkFrameworkErrorKind.ProtocolError => "protocol_error",
+            ZLinkFrameworkErrorKind.InvalidOperation => "invalid_operation",
+            ZLinkFrameworkErrorKind.DataLost => "data_lost",
+            ZLinkFrameworkErrorKind.InternalFailure => "internal_failure",
+            _ => "internal_failure",
+        };
 
     public static bool TryParse(string? name, out ZLinkFrameworkErrorKind kind)
     {
         switch (name)
         {
-            case "not_found": kind = ZLinkFrameworkErrorKind.NotFound; return true;
-            case "already_exists": kind = ZLinkFrameworkErrorKind.AlreadyExists; return true;
-            case "type_mismatch": kind = ZLinkFrameworkErrorKind.TypeMismatch; return true;
-            case "not_configured": kind = ZLinkFrameworkErrorKind.NotConfigured; return true;
-            case "rejected": kind = ZLinkFrameworkErrorKind.Rejected; return true;
-            case "unavailable": kind = ZLinkFrameworkErrorKind.Unavailable; return true;
-            case "deadline_exceeded": kind = ZLinkFrameworkErrorKind.DeadlineExceeded; return true;
-            case "shutting_down": kind = ZLinkFrameworkErrorKind.ShuttingDown; return true;
-            case "protocol_error": kind = ZLinkFrameworkErrorKind.ProtocolError; return true;
-            case "invalid_operation": kind = ZLinkFrameworkErrorKind.InvalidOperation; return true;
-            case "data_lost": kind = ZLinkFrameworkErrorKind.DataLost; return true;
-            case "internal_failure": kind = ZLinkFrameworkErrorKind.InternalFailure; return true;
-            default: kind = default; return false;
+            case "not_found":
+                kind = ZLinkFrameworkErrorKind.NotFound;
+                return true;
+            case "already_exists":
+                kind = ZLinkFrameworkErrorKind.AlreadyExists;
+                return true;
+            case "type_mismatch":
+                kind = ZLinkFrameworkErrorKind.TypeMismatch;
+                return true;
+            case "not_configured":
+                kind = ZLinkFrameworkErrorKind.NotConfigured;
+                return true;
+            case "rejected":
+                kind = ZLinkFrameworkErrorKind.Rejected;
+                return true;
+            case "unavailable":
+                kind = ZLinkFrameworkErrorKind.Unavailable;
+                return true;
+            case "deadline_exceeded":
+                kind = ZLinkFrameworkErrorKind.DeadlineExceeded;
+                return true;
+            case "shutting_down":
+                kind = ZLinkFrameworkErrorKind.ShuttingDown;
+                return true;
+            case "protocol_error":
+                kind = ZLinkFrameworkErrorKind.ProtocolError;
+                return true;
+            case "invalid_operation":
+                kind = ZLinkFrameworkErrorKind.InvalidOperation;
+                return true;
+            case "data_lost":
+                kind = ZLinkFrameworkErrorKind.DataLost;
+                return true;
+            case "internal_failure":
+                kind = ZLinkFrameworkErrorKind.InternalFailure;
+                return true;
+            default:
+                kind = default;
+                return false;
         }
     }
 }
@@ -63,18 +90,19 @@ internal static class ZLinkErrorOriginWire
     /// (or the caller forces a framework surface), otherwise no metadata.</summary>
     public static Dictionary<string, string>? ErrorReplyMetadata(
         Exception exception,
-        bool forceFrameworkOrigin = false)
+        bool forceFrameworkOrigin = false
+    )
     {
-        if (!forceFrameworkOrigin
-            && exception is not ZLinkFrameworkException { Origin: ZLinkErrorOrigin.Framework })
+        if (
+            !forceFrameworkOrigin
+            && exception is not ZLinkFrameworkException { Origin: ZLinkErrorOrigin.Framework }
+        )
             return null;
         return FrameworkOriginMetadata();
     }
 
-    public static Dictionary<string, string> FrameworkOriginMetadata() => new(1)
-    {
-        [FrameworkOriginMetadataKey] = FrameworkOriginMetadataValue
-    };
+    public static Dictionary<string, string> FrameworkOriginMetadata() =>
+        new(1) { [FrameworkOriginMetadataKey] = FrameworkOriginMetadataValue };
 
     public static bool HasFrameworkOrigin(IReadOnlyDictionary<string, string>? metadata) =>
         metadata is not null
@@ -85,8 +113,6 @@ internal static class ZLinkErrorOriginWire
     /// envelope: framework when the marker is present, otherwise the remote
     /// application handler produced it (stale-route contract).</summary>
     public static ZLinkErrorOrigin RemoteReplyOrigin(
-        IReadOnlyDictionary<string, string>? metadata) =>
-        HasFrameworkOrigin(metadata)
-            ? ZLinkErrorOrigin.Framework
-            : ZLinkErrorOrigin.Application;
+        IReadOnlyDictionary<string, string>? metadata
+    ) => HasFrameworkOrigin(metadata) ? ZLinkErrorOrigin.Framework : ZLinkErrorOrigin.Application;
 }

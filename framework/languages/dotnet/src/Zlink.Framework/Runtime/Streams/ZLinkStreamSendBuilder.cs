@@ -3,7 +3,8 @@ namespace Zlink.Framework.Runtime.Streams;
 internal sealed class ZLinkStreamSendBuilder<TMessage>(
     TMessage message,
     ZLinkCodecRegistryBuilder codecs,
-    IZlinkStreamCompressionCodec? compressionCodec)
+    IZlinkStreamCompressionCodec? compressionCodec
+)
 {
     private static readonly IZlinkStreamPacketNameResolver MessageNameResolver =
         ZLinkStreamProtocolDefaults.PacketNameResolver;
@@ -25,18 +26,33 @@ internal sealed class ZLinkStreamSendBuilder<TMessage>(
     }
 
     public ZlinkStreamHeader Write(
-        Func<ZlinkStreamCodec, ZlinkStreamHeaderFlags, string, ZlinkStreamMetadata, ZlinkStreamHeader> createHeader,
+        Func<
+            ZlinkStreamCodec,
+            ZlinkStreamHeaderFlags,
+            string,
+            ZlinkStreamMetadata,
+            ZlinkStreamHeader
+        > createHeader,
         Func<Message, bool> write,
-        string errorMessage)
+        string errorMessage
+    )
     {
         using var frame = Build(createHeader, out var header);
-        if (!write(frame)) throw new InvalidOperationException(errorMessage);
+        if (!write(frame))
+            throw new InvalidOperationException(errorMessage);
         return header;
     }
 
     public Message Build(
-        Func<ZlinkStreamCodec, ZlinkStreamHeaderFlags, string, ZlinkStreamMetadata, ZlinkStreamHeader> createHeader,
-        out ZlinkStreamHeader header)
+        Func<
+            ZlinkStreamCodec,
+            ZlinkStreamHeaderFlags,
+            string,
+            ZlinkStreamMetadata,
+            ZlinkStreamHeader
+        > createHeader,
+        out ZlinkStreamHeader header
+    )
     {
         if (Interlocked.Exchange(ref _executed, 1) != 0)
             throw new InvalidOperationException("Stream send builders can be executed only once.");
@@ -53,7 +69,8 @@ internal sealed class ZLinkStreamSendBuilder<TMessage>(
         header = createHeader(encoded.Codec, flags, _messageName, _metadata);
         var frame = ZLinkStreamFrameCodec.Encode(
             ZLinkStreamProtocolDefaults.EncodeHeader(header).Span,
-            payload.Span);
+            payload.Span
+        );
         return Message.From(frame);
     }
 }

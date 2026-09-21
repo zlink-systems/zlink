@@ -1,19 +1,19 @@
 package systems.zlink.framework.runtime.internal.backend;
-import java.util.Objects;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
+
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
 public final class ZLinkBackendActorReceived implements AutoCloseable {
     /**
-     * Re-routes one arrival that reached the owner Spot after its relocation
-     * cut finished. The mesh node owns the relocation forward table, so the
-     * Spot runtime hands the surviving header/payload copies back through this
-     * hook instead of dropping the turn
-     * (spec server/03-spot-actor/08-routing.ko.md:222,240).
+     * Re-routes one arrival that reached the owner Spot after its relocation cut finished. The mesh
+     * node owns the relocation forward table, so the Spot runtime hands the surviving
+     * header/payload copies back through this hook instead of dropping the turn (spec
+     * server/03-spot-actor/08-routing.ko.md:222,240).
      */
     @FunctionalInterface
     public interface RelocationRedirect {
@@ -38,215 +38,293 @@ public final class ZLinkBackendActorReceived implements AutoCloseable {
     private final AtomicBoolean closed = new AtomicBoolean();
 
     public ZLinkBackendActorReceived(
-        ZLinkBackendActorRef actor,
-        RoutingId sourceNodeRid,
-        RoutingId sourceSessionRid,
-        Optional<Long> requestSeq,
-        long requestId,
-        int flags,
-        Message message,
-        boolean hasMore,
-        byte[] acceptedJournalRecord,
-        String contentType) {
+            ZLinkBackendActorRef actor,
+            RoutingId sourceNodeRid,
+            RoutingId sourceSessionRid,
+            Optional<Long> requestSeq,
+            long requestId,
+            int flags,
+            Message message,
+            boolean hasMore,
+            byte[] acceptedJournalRecord,
+            String contentType) {
         this(
-            actor, sourceNodeRid, sourceSessionRid, requestSeq, requestId,
-            flags, message, hasMore,
-            () -> acceptedJournalRecord == null ? new byte[0] : acceptedJournalRecord,
-            acceptedJournalRecord != null && acceptedJournalRecord.length > 0,
-            contentType,
-            () -> { });
-        this.acceptedJournalRecord = acceptedJournalRecord == null
-            ? new byte[0]
-            : acceptedJournalRecord;
+                actor,
+                sourceNodeRid,
+                sourceSessionRid,
+                requestSeq,
+                requestId,
+                flags,
+                message,
+                hasMore,
+                () -> acceptedJournalRecord == null ? new byte[0] : acceptedJournalRecord,
+                acceptedJournalRecord != null && acceptedJournalRecord.length > 0,
+                contentType,
+                () -> {});
+        this.acceptedJournalRecord =
+                acceptedJournalRecord == null ? new byte[0] : acceptedJournalRecord;
     }
 
     private ZLinkBackendActorReceived(
-        ZLinkBackendActorRef actor,
-        RoutingId sourceNodeRid,
-        RoutingId sourceSessionRid,
-        Optional<Long> requestSeq,
-        long requestId,
-        int flags,
-        Message message,
-        boolean hasMore,
-        Supplier<byte[]> acceptedJournalRecordSupplier,
-        boolean acceptedJournalRecordAvailable,
-        String contentType,
-        Runnable terminalRelease) {
+            ZLinkBackendActorRef actor,
+            RoutingId sourceNodeRid,
+            RoutingId sourceSessionRid,
+            Optional<Long> requestSeq,
+            long requestId,
+            int flags,
+            Message message,
+            boolean hasMore,
+            Supplier<byte[]> acceptedJournalRecordSupplier,
+            boolean acceptedJournalRecordAvailable,
+            String contentType,
+            Runnable terminalRelease) {
         this(
-            actor, sourceNodeRid, sourceSessionRid, requestSeq, requestId,
-            flags, message, hasMore, acceptedJournalRecordSupplier,
-            acceptedJournalRecordAvailable, contentType, terminalRelease,
-            null);
+                actor,
+                sourceNodeRid,
+                sourceSessionRid,
+                requestSeq,
+                requestId,
+                flags,
+                message,
+                hasMore,
+                acceptedJournalRecordSupplier,
+                acceptedJournalRecordAvailable,
+                contentType,
+                terminalRelease,
+                null);
     }
 
     private ZLinkBackendActorReceived(
-        ZLinkBackendActorRef actor,
-        RoutingId sourceNodeRid,
-        RoutingId sourceSessionRid,
-        Optional<Long> requestSeq,
-        long requestId,
-        int flags,
-        Message message,
-        boolean hasMore,
-        Supplier<byte[]> acceptedJournalRecordSupplier,
-        boolean acceptedJournalRecordAvailable,
-        String contentType,
-        Runnable terminalRelease,
-        RelocationRedirect relocationRedirect) {
+            ZLinkBackendActorRef actor,
+            RoutingId sourceNodeRid,
+            RoutingId sourceSessionRid,
+            Optional<Long> requestSeq,
+            long requestId,
+            int flags,
+            Message message,
+            boolean hasMore,
+            Supplier<byte[]> acceptedJournalRecordSupplier,
+            boolean acceptedJournalRecordAvailable,
+            String contentType,
+            Runnable terminalRelease,
+            RelocationRedirect relocationRedirect) {
         this.actor = Objects.requireNonNull(actor, "actor");
-        this.sourceNodeRid = Objects.requireNonNull(
-            sourceNodeRid, "sourceNodeRid");
+        this.sourceNodeRid = Objects.requireNonNull(sourceNodeRid, "sourceNodeRid");
         this.sourceSessionRid = sourceSessionRid;
         this.requestSeq = requestSeq == null ? Optional.empty() : requestSeq;
         this.requestId = requestId;
         this.flags = flags;
         this.message = Objects.requireNonNull(message, "message");
         this.hasMore = hasMore;
-        this.acceptedJournalRecordSupplier = Objects.requireNonNull(
-            acceptedJournalRecordSupplier, "acceptedJournalRecordSupplier");
+        this.acceptedJournalRecordSupplier =
+                Objects.requireNonNull(
+                        acceptedJournalRecordSupplier, "acceptedJournalRecordSupplier");
         this.acceptedJournalRecordAvailable = acceptedJournalRecordAvailable;
         this.contentType = contentType;
-        this.terminalRelease = Objects.requireNonNull(
-            terminalRelease, "terminal release");
+        this.terminalRelease = Objects.requireNonNull(terminalRelease, "terminal release");
         this.relocationRedirect = relocationRedirect;
     }
 
     public static ZLinkBackendActorReceived lazyJournal(
-        ZLinkBackendActorRef actor,
-        RoutingId sourceNodeRid,
-        RoutingId sourceSessionRid,
-        Optional<Long> requestSeq,
-        long requestId,
-        int flags,
-        Message message,
-        boolean hasMore,
-        Supplier<byte[]> acceptedJournalRecord,
-        String contentType) {
+            ZLinkBackendActorRef actor,
+            RoutingId sourceNodeRid,
+            RoutingId sourceSessionRid,
+            Optional<Long> requestSeq,
+            long requestId,
+            int flags,
+            Message message,
+            boolean hasMore,
+            Supplier<byte[]> acceptedJournalRecord,
+            String contentType) {
         return new ZLinkBackendActorReceived(
-            actor, sourceNodeRid, sourceSessionRid, requestSeq, requestId,
-            flags, message, hasMore, acceptedJournalRecord, true, contentType,
-            () -> { });
+                actor,
+                sourceNodeRid,
+                sourceSessionRid,
+                requestSeq,
+                requestId,
+                flags,
+                message,
+                hasMore,
+                acceptedJournalRecord,
+                true,
+                contentType,
+                () -> {});
     }
 
     public static ZLinkBackendActorReceived lazyJournal(
-        ZLinkBackendActorRef actor,
-        RoutingId sourceNodeRid,
-        RoutingId sourceSessionRid,
-        Optional<Long> requestSeq,
-        long requestId,
-        int flags,
-        Message message,
-        boolean hasMore,
-        Supplier<byte[]> acceptedJournalRecord,
-        String contentType,
-        Runnable terminalRelease) {
+            ZLinkBackendActorRef actor,
+            RoutingId sourceNodeRid,
+            RoutingId sourceSessionRid,
+            Optional<Long> requestSeq,
+            long requestId,
+            int flags,
+            Message message,
+            boolean hasMore,
+            Supplier<byte[]> acceptedJournalRecord,
+            String contentType,
+            Runnable terminalRelease) {
         return new ZLinkBackendActorReceived(
-            actor, sourceNodeRid, sourceSessionRid, requestSeq, requestId,
-            flags, message, hasMore, acceptedJournalRecord, true, contentType,
-            terminalRelease);
+                actor,
+                sourceNodeRid,
+                sourceSessionRid,
+                requestSeq,
+                requestId,
+                flags,
+                message,
+                hasMore,
+                acceptedJournalRecord,
+                true,
+                contentType,
+                terminalRelease);
     }
 
     public static ZLinkBackendActorReceived lazyJournal(
-        ZLinkBackendActorRef actor,
-        RoutingId sourceNodeRid,
-        RoutingId sourceSessionRid,
-        Optional<Long> requestSeq,
-        long requestId,
-        int flags,
-        Message message,
-        boolean hasMore,
-        Supplier<byte[]> acceptedJournalRecord,
-        String contentType,
-        Runnable terminalRelease,
-        RelocationRedirect relocationRedirect) {
+            ZLinkBackendActorRef actor,
+            RoutingId sourceNodeRid,
+            RoutingId sourceSessionRid,
+            Optional<Long> requestSeq,
+            long requestId,
+            int flags,
+            Message message,
+            boolean hasMore,
+            Supplier<byte[]> acceptedJournalRecord,
+            String contentType,
+            Runnable terminalRelease,
+            RelocationRedirect relocationRedirect) {
         return new ZLinkBackendActorReceived(
-            actor, sourceNodeRid, sourceSessionRid, requestSeq, requestId,
-            flags, message, hasMore, acceptedJournalRecord, true, contentType,
-            terminalRelease, relocationRedirect);
+                actor,
+                sourceNodeRid,
+                sourceSessionRid,
+                requestSeq,
+                requestId,
+                flags,
+                message,
+                hasMore,
+                acceptedJournalRecord,
+                true,
+                contentType,
+                terminalRelease,
+                relocationRedirect);
     }
 
     public ZLinkBackendActorReceived(
-        ZLinkBackendActorRef actor,
-        RoutingId sourceNodeRid,
-        RoutingId sourceSessionRid,
-        Optional<Long> requestSeq,
-        long requestId,
-        int flags,
-        Message message,
-        boolean hasMore,
-        byte[] acceptedJournalRecord,
-        String contentType,
-        Runnable terminalRelease) {
+            ZLinkBackendActorRef actor,
+            RoutingId sourceNodeRid,
+            RoutingId sourceSessionRid,
+            Optional<Long> requestSeq,
+            long requestId,
+            int flags,
+            Message message,
+            boolean hasMore,
+            byte[] acceptedJournalRecord,
+            String contentType,
+            Runnable terminalRelease) {
         this(
-            actor, sourceNodeRid, sourceSessionRid, requestSeq, requestId,
-            flags, message, hasMore,
-            () -> acceptedJournalRecord == null ? new byte[0] : acceptedJournalRecord,
-            acceptedJournalRecord != null && acceptedJournalRecord.length > 0,
-            contentType, terminalRelease);
-        this.acceptedJournalRecord = acceptedJournalRecord == null
-            ? new byte[0]
-            : acceptedJournalRecord;
+                actor,
+                sourceNodeRid,
+                sourceSessionRid,
+                requestSeq,
+                requestId,
+                flags,
+                message,
+                hasMore,
+                () -> acceptedJournalRecord == null ? new byte[0] : acceptedJournalRecord,
+                acceptedJournalRecord != null && acceptedJournalRecord.length > 0,
+                contentType,
+                terminalRelease);
+        this.acceptedJournalRecord =
+                acceptedJournalRecord == null ? new byte[0] : acceptedJournalRecord;
     }
 
-    public ZLinkBackendActorRef actor() { return actor; }
-    public RoutingId sourceNodeRid() { return sourceNodeRid; }
-    public RoutingId sourceSessionRid() { return sourceSessionRid; }
-    public Optional<Long> requestSeq() { return requestSeq; }
-    public long requestId() { return requestId; }
-    public int flags() { return flags; }
-    public Message message() { return message; }
-    public boolean hasMore() { return hasMore; }
+    public ZLinkBackendActorRef actor() {
+        return actor;
+    }
+
+    public RoutingId sourceNodeRid() {
+        return sourceNodeRid;
+    }
+
+    public RoutingId sourceSessionRid() {
+        return sourceSessionRid;
+    }
+
+    public Optional<Long> requestSeq() {
+        return requestSeq;
+    }
+
+    public long requestId() {
+        return requestId;
+    }
+
+    public int flags() {
+        return flags;
+    }
+
+    public Message message() {
+        return message;
+    }
+
+    public boolean hasMore() {
+        return hasMore;
+    }
+
     public boolean hasAcceptedJournalRecord() {
         return acceptedJournalRecordAvailable;
     }
-    public String contentType() { return contentType; }
+
+    public String contentType() {
+        return contentType;
+    }
+
     /** Post-cut re-route hook installed by the mesh ingress, or {@code null}. */
-    public RelocationRedirect relocationRedirect() { return relocationRedirect; }
+    public RelocationRedirect relocationRedirect() {
+        return relocationRedirect;
+    }
+
     /** Backward-compatible constructor without an inbound content type. */
     public ZLinkBackendActorReceived(
-        ZLinkBackendActorRef actor,
-        RoutingId sourceNodeRid,
-        RoutingId sourceSessionRid,
-        Optional<Long> requestSeq,
-        long requestId,
-        int flags,
-        Message message,
-        boolean hasMore,
-        byte[] acceptedJournalRecord) {
+            ZLinkBackendActorRef actor,
+            RoutingId sourceNodeRid,
+            RoutingId sourceSessionRid,
+            Optional<Long> requestSeq,
+            long requestId,
+            int flags,
+            Message message,
+            boolean hasMore,
+            byte[] acceptedJournalRecord) {
         this(
-            actor,
-            sourceNodeRid,
-            sourceSessionRid,
-            requestSeq,
-            requestId,
-            flags,
-            message,
-            hasMore,
-            acceptedJournalRecord,
-            null);
+                actor,
+                sourceNodeRid,
+                sourceSessionRid,
+                requestSeq,
+                requestId,
+                flags,
+                message,
+                hasMore,
+                acceptedJournalRecord,
+                null);
     }
 
     public ZLinkBackendActorReceived(
-        ZLinkBackendActorRef actor,
-        RoutingId sourceNodeRid,
-        RoutingId sourceSessionRid,
-        Optional<Long> requestSeq,
-        long requestId,
-        int flags,
-        Message message,
-        boolean hasMore) {
+            ZLinkBackendActorRef actor,
+            RoutingId sourceNodeRid,
+            RoutingId sourceSessionRid,
+            Optional<Long> requestSeq,
+            long requestId,
+            int flags,
+            Message message,
+            boolean hasMore) {
         this(
-            actor,
-            sourceNodeRid,
-            sourceSessionRid,
-            requestSeq,
-            requestId,
-            flags,
-            message,
-            hasMore,
-            new byte[0],
-            null);
+                actor,
+                sourceNodeRid,
+                sourceSessionRid,
+                requestSeq,
+                requestId,
+                flags,
+                message,
+                hasMore,
+                new byte[0],
+                null);
     }
 
     public byte[] acceptedJournalRecord() {
@@ -256,9 +334,10 @@ public final class ZLinkBackendActorReceived implements AutoCloseable {
         }
         synchronized (this) {
             if (acceptedJournalRecord == null) {
-                acceptedJournalRecord = Objects.requireNonNull(
-                    acceptedJournalRecordSupplier.get(),
-                    "accepted journal supplier returned null");
+                acceptedJournalRecord =
+                        Objects.requireNonNull(
+                                acceptedJournalRecordSupplier.get(),
+                                "accepted journal supplier returned null");
             }
             return acceptedJournalRecord;
         }

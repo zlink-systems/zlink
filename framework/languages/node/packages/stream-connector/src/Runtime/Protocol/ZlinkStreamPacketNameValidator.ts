@@ -6,9 +6,15 @@ export function validateName(name: string, allowReserved = false): void {
     throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Message name must not be empty.');
   }
   if (!allowReserved && name.startsWith('$zlink.')) {
-    throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Message name uses a reserved zlink prefix.');
+    throw connectorError(
+      ZlinkStreamErrorCode.ValidationFailed,
+      'Message name uses a reserved zlink prefix.'
+    );
   }
   if (utf8Encode(name).length > 255) {
-    throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Message name must not exceed 255 UTF-8 bytes.');
+    throw connectorError(
+      ZlinkStreamErrorCode.ValidationFailed,
+      'Message name must not exceed 255 UTF-8 bytes.'
+    );
   }
 }

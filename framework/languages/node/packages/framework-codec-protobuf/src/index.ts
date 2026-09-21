@@ -44,7 +44,10 @@ export function createZlinkStreamProtobufEnvelopeCodec(
   options: ProtobufEnvelopeCodecOptions
 ): ZlinkStreamProtobufEnvelopeCodec {
   return {
-    encode(payload: unknown, context?: ProtobufEncodeContext | Function): ZlinkStreamEncodedPayload {
+    encode(
+      payload: unknown,
+      context?: ProtobufEncodeContext | Function
+    ): ZlinkStreamEncodedPayload {
       return options.encode(payload, context);
     },
     decode<TPayload = unknown>(payload: ZlinkStreamEncodedPayload): TPayload {
@@ -53,7 +56,11 @@ export function createZlinkStreamProtobufEnvelopeCodec(
   };
 }
 
-export function toProto<T>(value: T, type: ProtobufType<T>, messageType?: Function): ZlinkStreamEncodedPayload {
+export function toProto<T>(
+  value: T,
+  type: ProtobufType<T>,
+  messageType?: Function
+): ZlinkStreamEncodedPayload {
   return {
     codec: ZlinkStreamCodec.Protobuf,
     payload: type.encode(value).finish(),

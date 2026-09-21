@@ -7,7 +7,8 @@ internal static class ZLinkRawReplyCompletion
         IReadOnlyList<Message> reply,
         Action<IReadOnlyList<Message>> complete,
         Action<Exception> fail,
-        string operationName)
+        string operationName
+    )
     {
         if (result == RequestResult.Ok)
         {

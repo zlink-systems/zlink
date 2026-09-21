@@ -1,88 +1,78 @@
 package systems.zlink.framework.runtime.spots;
 
-import java.util.Objects;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
+import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+
 /**
  * Owns the production ingress boundary for canonical relocation controls.
  *
- * <p>The raw backend validates the complete service-wire record before this
- * owner receives it. Validation alone never makes a relocation transition
- * effective; the coordinator must also own its semantic state.</p>
+ * <p>The raw backend validates the complete service-wire record before this owner receives it.
+ * Validation alone never makes a relocation transition effective; the coordinator must also own its
+ * semantic state.
  */
 final class ZLinkCanonicalRelocationTransitionOwner {
     private final StateMachine stateMachine;
 
     ZLinkCanonicalRelocationTransitionOwner(StateMachine stateMachine) {
-        this.stateMachine = Objects.requireNonNull(
-            stateMachine, "stateMachine");
+        this.stateMachine = Objects.requireNonNull(stateMachine, "stateMachine");
     }
 
     void install(ZLinkInternalMeshNode node) {
-        Objects.requireNonNull(node, "node")
-            .setCanonicalRelocationControlHandler(this::handle);
+        Objects.requireNonNull(node, "node").setCanonicalRelocationControlHandler(this::handle);
     }
 
     CompletionStage<byte[]> handle(
-        RoutingId transportSource,
-        Long requestSequence,
-        byte[] encoded) {
+            RoutingId transportSource, Long requestSequence, byte[] encoded) {
         Objects.requireNonNull(transportSource, "transportSource");
         byte[] record = Objects.requireNonNull(encoded, "encoded").clone();
         int command = command(record);
         try {
             return Objects.requireNonNull(
-                stateMachine.apply(
-                    transportSource, requestSequence, command, record),
-                "canonical relocation state machine returned null");
+                    stateMachine.apply(transportSource, requestSequence, command, record),
+                    "canonical relocation state machine returned null");
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
         }
     }
 
-    CompletionStage<byte[]> handle(
-        RoutingId transportSource,
-        byte[] encoded) {
+    CompletionStage<byte[]> handle(RoutingId transportSource, byte[] encoded) {
         return handle(transportSource, null, encoded);
     }
 
     /**
-     * Rejects every transition until a production coordinator owns the
-     * corresponding decoded state.
+     * Rejects every transition until a production coordinator owns the corresponding decoded state.
      */
     static StateMachine unavailable() {
         return (source, requestSequence, command, encoded) ->
-            CompletableFuture.failedFuture(
-            new IllegalStateException(
-                "canonical relocation command "
-                    + command
-                    + " has no production state owner"));
+                CompletableFuture.failedFuture(
+                        new IllegalStateException(
+                                "canonical relocation command "
+                                        + command
+                                        + " has no production state owner"));
     }
 
     private static int command(byte[] record) {
         if (record.length < 5
-            || Byte.toUnsignedInt(record[0]) != ServiceWireConstants.MAGIC_0
-            || Byte.toUnsignedInt(record[1]) != ServiceWireConstants.MAGIC_1
-            || Byte.toUnsignedInt(record[2])
-                != ServiceWireConstants.WIRE_MAJOR) {
-            throw new IllegalArgumentException(
-                "canonical relocation prefix is invalid");
+                || Byte.toUnsignedInt(record[0]) != ServiceWireConstants.MAGIC_0
+                || Byte.toUnsignedInt(record[1]) != ServiceWireConstants.MAGIC_1
+                || Byte.toUnsignedInt(record[2]) != ServiceWireConstants.WIRE_MAJOR) {
+            throw new IllegalArgumentException("canonical relocation prefix is invalid");
         }
         int command = Byte.toUnsignedInt(record[3]);
         boolean known =
-            command == ServiceWireConstants.COMMAND_RELOCATION_READY
-                || command == ServiceWireConstants.COMMAND_RELOCATION_FAILED
-                || command == ServiceWireConstants.COMMAND_RELOCATION_DATA
-                || command == ServiceWireConstants.COMMAND_RELOCATION_PREPARE
-                || command == ServiceWireConstants.COMMAND_RELOCATION_CUTOVER
-                || command == ServiceWireConstants.COMMAND_RELOCATION_STATE;
+                command == ServiceWireConstants.COMMAND_RELOCATION_READY
+                        || command == ServiceWireConstants.COMMAND_RELOCATION_FAILED
+                        || command == ServiceWireConstants.COMMAND_RELOCATION_DATA
+                        || command == ServiceWireConstants.COMMAND_RELOCATION_PREPARE
+                        || command == ServiceWireConstants.COMMAND_RELOCATION_CUTOVER
+                        || command == ServiceWireConstants.COMMAND_RELOCATION_STATE;
         if (!known) {
-            throw new IllegalArgumentException(
-                "canonical relocation command is invalid");
+            throw new IllegalArgumentException("canonical relocation command is invalid");
         }
         return command;
     }
@@ -90,9 +80,6 @@ final class ZLinkCanonicalRelocationTransitionOwner {
     @FunctionalInterface
     interface StateMachine {
         CompletionStage<byte[]> apply(
-            RoutingId transportSource,
-            Long requestSequence,
-            int command,
-            byte[] encoded);
+                RoutingId transportSource, Long requestSequence, int command, byte[] encoded);
     }
 }

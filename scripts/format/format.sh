@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Formats (or checks) the sources the guides excerpt: framework/languages/<lang>/{quickstart,tutorial,samples}.
+# Formats (or checks) the framework/languages/<lang> source trees used by the guides and runtimes.
 # One formatter per language, one pinned version each; the rule the output has to satisfy is in
 # doc/principal/dev/source-formatting.ko.md. Build scripts (csproj, kts, CMake) are not formatted.
 #
@@ -14,7 +14,7 @@
 #   cpp     clang-format, major version pinned below; runs from PATH (WSL/Linux: clang-format-18)
 set -euo pipefail
 
-GJF_VERSION=1.27.0
+GJF_VERSION=1.36.1
 KTFMT_VERSION=0.54
 CLANG_FORMAT_MAJOR=18
 
@@ -34,16 +34,46 @@ done
 
 die() { echo "format: $*" >&2; exit 1; }
 
-#  Every language's files live under these two directories only.
-#  Build output never contains sources worth formatting and can be large.
+# Every language uses this source selection, so generated and build output exclusions stay in one place.
+source_roots() { # <lang>
+    local lang=$1 root="$Z/framework/languages/$1"
+    case "$lang" in
+        cpp) SOURCE_ROOTS=(
+            "$root/quickstart" "$root/tutorial" "$root/samples"
+            "$root/framework" "$root/http-client" "$root/connector"
+            "$root/extensions" "$root/cross-language" "$root/tests"
+        ) ;;
+        dotnet) SOURCE_ROOTS=(
+            "$root/quickstart" "$root/tutorial" "$root/samples"
+            "$root/src" "$root/tests" "$root/contract"
+            "$root/cross-language" "$root/testapps"
+        ) ;;
+        java) SOURCE_ROOTS=("$root/quickstart" "$root/tutorial" "$root/samples" "$root"/zlink-*) ;;
+        node) SOURCE_ROOTS=(
+            "$root/quickstart" "$root/tutorial" "$root/samples"
+            "$root/packages" "$root/test" "$root/cross-language"
+        ) ;;
+        *) die "unknown source language: $lang" ;;
+    esac
+}
+
+source_excludes() {
+    SOURCE_EXCLUDES=(
+        \( -type d \( -name generated -o -name obj -o -name bin -o -name 'build*' \
+            -o -name dist -o -name node_modules -o -name .gradle \) \
+            -o -type f \( -name '*.g.cs' -o -name '*.generated.*' -o -name '*_generated.*' \
+            -o -name '*.pb.*' -o -name '*_pb.*' -o -name '*.msgpack.*' -o -name '*_msgpack.*' \) \) \
+        -prune -o
+    )
+}
+
 sources() { # <lang> <suffix>...
     local lang=$1; shift
-    local root="$Z/framework/languages/$lang"
     local names=() sep=()
     for s in "$@"; do names+=("${sep[@]}" -name "$s"); sep=(-o); done
-    find "$root/quickstart" "$root/tutorial" "$root/samples" \
-        \( -name node_modules -o -name dist -o -name build -o -name bin -o -name obj -o -name .gradle \) -prune \
-        -o -type f \( "${names[@]}" \) -print
+    source_roots "$lang"
+    source_excludes
+    find "${SOURCE_ROOTS[@]}" "${SOURCE_EXCLUDES[@]}" -type f \( "${names[@]}" \) -print
 }
 
 fetch_jar() { # <name> <url> -> path
@@ -58,7 +88,10 @@ fetch_jar() { # <name> <url> -> path
 
 format_dotnet() {
     local mode=format; ((CHECK)) && mode=check
-    (cd "$Z/framework/languages/dotnet" && dotnet tool restore >/dev/null && dotnet csharpier "$mode" quickstart tutorial samples)
+    local files=()
+    mapfile -t files < <(sources dotnet '*.cs')
+    ((${#files[@]})) || return 0
+    (cd "$Z/framework/languages/dotnet" && dotnet tool restore >/dev/null && dotnet csharpier "$mode" "${files[@]}")
 }
 
 format_node() {
@@ -71,7 +104,10 @@ format_node() {
         prettier=(npx --yes "prettier@$version")
     fi
     local mode=--write; ((CHECK)) && mode=--check
-    (cd "$dir" && "${prettier[@]}" "$mode" 'quickstart/**/*.ts' 'tutorial/**/*.ts' 'samples/**/*.ts')
+    local files=()
+    mapfile -t files < <(sources node '*.ts')
+    ((${#files[@]})) || return 0
+    (cd "$dir" && "${prettier[@]}" "$mode" "${files[@]}")
 }
 
 format_java() {
@@ -84,7 +120,7 @@ format_java() {
     if ((CHECK)); then gjf_mode=(--dry-run --set-exit-if-changed); ktfmt_mode=(--dry-run --set-exit-if-changed); fi
     #  Called from an `||` list, so `set -e` is off in here: both runs report explicitly.
     local rc=0
-    sources java '*.java' | xargs java -jar "$gjf" --aosp "${gjf_mode[@]}" || rc=1
+    sources java '*.java' | xargs java -jar "$gjf" --aosp --skip-reflowing-long-strings "${gjf_mode[@]}" || rc=1
     sources java '*.kt' | xargs java -jar "$ktfmt" --kotlinlang-style "${ktfmt_mode[@]}" || rc=1
     return $rc
 }

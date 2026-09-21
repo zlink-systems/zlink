@@ -7,9 +7,7 @@ public interface IZLinkInstanceSpot
 {
     IZLinkInstanceSpotContext Context { get; }
 
-    void Configure()
-    {
-    }
+    void Configure() { }
 
     ValueTask OnInitializeAsync(CancellationToken cancellationToken)
     {
@@ -18,7 +16,8 @@ public interface IZLinkInstanceSpot
 
     ValueTask OnClosingAsync(
         ZLinkSpotClosingContext context,
-        CancellationToken cleanupCancellationToken)
+        CancellationToken cleanupCancellationToken
+    )
     {
         return ValueTask.CompletedTask;
     }
@@ -32,6 +31,5 @@ public interface IZLinkInstanceSpotContext : IZLinkSpotCommonContext
 {
     IZLinkInstanceSpotHandlerRegistry Handlers { get; }
 
-    ValueTask<bool> CloseAsync(
-        CancellationToken cancellationToken = default);
+    ValueTask<bool> CloseAsync(CancellationToken cancellationToken = default);
 }

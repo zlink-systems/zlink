@@ -1,27 +1,28 @@
 package systems.zlink.framework.runtime.channels;
 
+import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.Executor;
-import systems.zlink.framework.errors.ZLinkConfigurationException;
-import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
-import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 
 final class ZLinkChannelDispatchRegistry {
     private final Executor executor;
     private final Map<String, Map<String, ChannelRequestHandlerRegistration>> requestHandlers =
-        new HashMap<>();
+            new HashMap<>();
     private final Map<String, Map<String, ChannelSendHandlerRegistration>> sendHandlers =
-        new HashMap<>();
+            new HashMap<>();
     private final Map<String, Map<String, ChannelPublishHandlerRegistration>> publishHandlers =
-        new HashMap<>();
+            new HashMap<>();
     private final Map<String, Map<String, ChannelRouteRequestHandlerRegistration>>
-        routeRequestHandlers = new HashMap<>();
+            routeRequestHandlers = new HashMap<>();
     private final Map<String, Map<String, ChannelRouteSendHandlerRegistration>> routeSendHandlers =
-        new HashMap<>();
+            new HashMap<>();
     private final Map<String, ZLinkChannelRuntime.RouteInternalRequestHandler> internalRequests =
-        new HashMap<>();
+            new HashMap<>();
     private final Map<String, ZLinkSerialExecutionQueue> sendQueues = new HashMap<>();
     private final Map<String, ZLinkSerialExecutionQueue> requestQueues = new HashMap<>();
     private final Map<String, ZLinkSerialExecutionQueue> publishQueues = new HashMap<>();
@@ -33,43 +34,46 @@ final class ZLinkChannelDispatchRegistry {
     }
 
     void registerClientServer(
-        String channelName,
-        Map<String, ChannelSendHandlerRegistration> sends,
-        Map<String, ChannelRequestHandlerRegistration> requests) {
+            String channelName,
+            Map<String, ChannelSendHandlerRegistration> sends,
+            Map<String, ChannelRequestHandlerRegistration> requests) {
         sendHandlers.put(channelName, sends);
         requestHandlers.put(channelName, requests);
-        sendQueues.put(channelName, new ZLinkSerialExecutionQueue(
-            executor, ZLinkExecutionLanePolicy.generic()));
-        requestQueues.put(channelName, new ZLinkSerialExecutionQueue(
-            executor, ZLinkExecutionLanePolicy.generic()));
+        sendQueues.put(
+                channelName,
+                new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.generic()));
+        requestQueues.put(
+                channelName,
+                new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.generic()));
     }
 
     void registerFanout(
-        String channelName,
-        Map<String, ChannelPublishHandlerRegistration> publishes) {
+            String channelName, Map<String, ChannelPublishHandlerRegistration> publishes) {
         publishHandlers.put(channelName, publishes);
-        publishQueues.put(channelName, new ZLinkSerialExecutionQueue(
-            executor, ZLinkExecutionLanePolicy.generic()));
+        publishQueues.put(
+                channelName,
+                new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.generic()));
     }
 
     void registerRoute(
-        String channelName,
-        Map<String, ChannelRouteSendHandlerRegistration> sends,
-        Map<String, ChannelRouteRequestHandlerRegistration> requests) {
+            String channelName,
+            Map<String, ChannelRouteSendHandlerRegistration> sends,
+            Map<String, ChannelRouteRequestHandlerRegistration> requests) {
         routeSendHandlers.put(channelName, sends);
         routeRequestHandlers.put(channelName, requests);
-        routeSendQueues.put(channelName, new ZLinkSerialExecutionQueue(
-            executor, ZLinkExecutionLanePolicy.generic()));
-        routeRequestQueues.put(channelName, new ZLinkSerialExecutionQueue(
-            executor, ZLinkExecutionLanePolicy.generic()));
+        routeSendQueues.put(
+                channelName,
+                new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.generic()));
+        routeRequestQueues.put(
+                channelName,
+                new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.generic()));
     }
 
     void registerInternalRequest(
-        String packetName,
-        ZLinkChannelRuntime.RouteInternalRequestHandler handler) {
+            String packetName, ZLinkChannelRuntime.RouteInternalRequestHandler handler) {
         if (internalRequests.putIfAbsent(packetName, handler) != null) {
             throw new ZLinkConfigurationException(
-                "duplicate internal route packet handler: " + packetName);
+                    "duplicate internal route packet handler: " + packetName);
         }
     }
 
@@ -86,14 +90,11 @@ final class ZLinkChannelDispatchRegistry {
     }
 
     ChannelRouteRequestHandlerRegistration routeRequestHandler(
-        String channelName,
-        String packetName) {
+            String channelName, String packetName) {
         return routeRequestHandlers.getOrDefault(channelName, Map.of()).get(packetName);
     }
 
-    ChannelRouteSendHandlerRegistration routeSendHandler(
-        String channelName,
-        String packetName) {
+    ChannelRouteSendHandlerRegistration routeSendHandler(String channelName, String packetName) {
         return routeSendHandlers.getOrDefault(channelName, Map.of()).get(packetName);
     }
 

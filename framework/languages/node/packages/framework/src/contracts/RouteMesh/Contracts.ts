@@ -33,13 +33,7 @@ export type ZLinkMessageSurface =
   | 'classic_fanout'
   | 'actor_transfer';
 
-export type ZLinkMessageKind =
-  | 'send'
-  | 'request'
-  | 'response'
-  | 'error'
-  | 'publish'
-  | 'control';
+export type ZLinkMessageKind = 'send' | 'request' | 'response' | 'error' | 'publish' | 'control';
 
 export type ZLinkRequestFailureReason = 'timeout' | 'cancelled' | 'shutdown';
 

@@ -1,8 +1,6 @@
 package systems.zlink.stream.connector;
 
-/**
- * Identifies where a stream flow was first created.
- */
+/** Identifies where a stream flow was first created. */
 public enum ZLinkFlowOrigin {
     INBOUND(1),
     TIMER(2),

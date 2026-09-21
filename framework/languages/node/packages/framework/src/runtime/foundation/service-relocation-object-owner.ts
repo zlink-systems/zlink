@@ -1,4 +1,7 @@
-import type { ZLinkAuthorityKey, ZLinkAuthoritySnapshot } from '../locations/internal-location-contracts';
+import type {
+  ZLinkAuthorityKey,
+  ZLinkAuthoritySnapshot
+} from '../locations/internal-location-contracts';
 import type {
   ServiceRelocationRestoreOwner,
   ServiceRelocationStaging
@@ -80,7 +83,7 @@ export class ServiceRelocationObjectCaptureOwner {
     memberships: readonly ServiceRelocationMembership[],
     signal?: AbortSignal
   ): Promise<ServiceCapturedObjectRelocation> {
-    if (spot.objectKind !== 'user_spot' || actors.some(actor => actor.objectKind !== 'actor')) {
+    if (spot.objectKind !== 'user_spot' || actors.some((actor) => actor.objectKind !== 'actor')) {
       throw new TypeError('User Spot relocation requires one Spot and only Actor participants.');
     }
     if (actors.length !== memberships.length) {
@@ -105,13 +108,7 @@ export class ServiceRelocationObjectCaptureOwner {
     if (actor.objectKind !== 'actor' || membership.actorKey !== actor.authorityKey) {
       throw new TypeError('Standalone Actor relocation has an invalid membership identity.');
     }
-    return await this.capture(
-      aggregateId,
-      aggregateGeneration,
-      [actor],
-      [membership],
-      signal
-    );
+    return await this.capture(aggregateId, aggregateGeneration, [actor], [membership], signal);
   }
 
   async captureInstanceSpotAggregate(
@@ -122,8 +119,10 @@ export class ServiceRelocationObjectCaptureOwner {
     memberships: readonly ServiceRelocationMembership[],
     signal?: AbortSignal
   ): Promise<ServiceCapturedObjectRelocation> {
-    if (spot.objectKind !== 'instance_spot'
-      || actors.some(actor => actor.objectKind !== 'actor')) {
+    if (
+      spot.objectKind !== 'instance_spot' ||
+      actors.some((actor) => actor.objectKind !== 'actor')
+    ) {
       throw new TypeError(
         'Instance Spot relocation requires one Spot and only Actor participants.'
       );
@@ -170,20 +169,23 @@ export class ServiceRelocationObjectCaptureOwner {
           authorityOwnerGeneration: unit.authorityOwnerGeneration,
           applicationState: Buffer.from(await unit.captureApplicationState(signal)),
           boundSessionState: Buffer.from(work.boundSessionState),
-          queuedMessages: work.queuedMessages.map(message => ({
+          queuedMessages: work.queuedMessages.map((message) => ({
             sequence: message.sequence,
             payload: Buffer.from(message.payload)
           })),
-          timers: work.timers.map(timer => ({ ...timer }))
+          timers: work.timers.map((timer) => ({ ...timer }))
         }),
         signal
       );
-      return new ServiceCapturedObjectRelocation({
-        aggregateId,
-        aggregateGeneration,
-        participants,
-        memberships
-      }, units);
+      return new ServiceCapturedObjectRelocation(
+        {
+          aggregateId,
+          aggregateGeneration,
+          participants,
+          memberships
+        },
+        units
+      );
     } catch (error) {
       for (const { unit } of captured.reverse()) await unit.abortSeal();
       throw error;
@@ -195,13 +197,8 @@ export interface ServiceRelocationHiddenObject {
   readonly authorityKey: string;
 }
 
-export interface ServiceRelocationTargetObjectPort<
-  THidden extends ServiceRelocationHiddenObject
-> {
-  createHidden(
-    participant: ServiceRelocationParticipant,
-    signal?: AbortSignal
-  ): Promise<THidden>;
+export interface ServiceRelocationTargetObjectPort<THidden extends ServiceRelocationHiddenObject> {
+  createHidden(participant: ServiceRelocationParticipant, signal?: AbortSignal): Promise<THidden>;
   restoreApplicationState(
     hidden: THidden,
     payload: Uint8Array,
@@ -212,26 +209,14 @@ export interface ServiceRelocationTargetObjectPort<
     memberships: readonly ServiceRelocationMembership[],
     signal?: AbortSignal
   ): Promise<void>;
-  publish(
-    hidden: THidden,
-    authority: ZLinkAuthoritySnapshot,
-    signal?: AbortSignal
-  ): Promise<void>;
-  restoreBoundSession(
-    hidden: THidden,
-    payload: Uint8Array,
-    signal?: AbortSignal
-  ): Promise<void>;
+  publish(hidden: THidden, authority: ZLinkAuthoritySnapshot, signal?: AbortSignal): Promise<void>;
+  restoreBoundSession(hidden: THidden, payload: Uint8Array, signal?: AbortSignal): Promise<void>;
   replayQueuedMessage(
     hidden: THidden,
     message: ServiceRelocationQueuedMessage,
     signal?: AbortSignal
   ): Promise<void>;
-  restoreTimer(
-    hidden: THidden,
-    timer: ServiceRelocationTimer,
-    signal?: AbortSignal
-  ): Promise<void>;
+  restoreTimer(hidden: THidden, timer: ServiceRelocationTimer, signal?: AbortSignal): Promise<void>;
   normalize(
     hidden: THidden,
     authority: ZLinkAuthoritySnapshot,
@@ -285,16 +270,18 @@ export class ServiceRelocationObjectRestoreOwner<
       await mapConcurrentOrdered(
         participants,
         this.maxConcurrentCallbacks,
-        participant => this.target.restoreApplicationState(
-          hidden.get(participant.key)!,
-          participant.applicationState,
-          signal
-        ),
+        (participant) =>
+          this.target.restoreApplicationState(
+            hidden.get(participant.key)!,
+            participant.applicationState,
+            signal
+          ),
         signal
       );
       await this.target.restoreMemberships(hidden, envelope.memberships, signal);
-      const spot = envelope.participants.find(({ objectKind }) =>
-        objectKind === 'user_spot' || objectKind === 'instance_spot');
+      const spot = envelope.participants.find(
+        ({ objectKind }) => objectKind === 'user_spot' || objectKind === 'instance_spot'
+      );
       const primary = spot ?? envelope.participants[0]!;
       return {
         id: `${envelope.aggregateId}:${envelope.aggregateGeneration}`,
@@ -324,11 +311,7 @@ export class ServiceRelocationObjectRestoreOwner<
   ): Promise<void> {
     for (const participant of staging.envelope.participants) {
       const hidden = staging.hidden.get(participant.key)!;
-      await this.target.restoreBoundSession(
-        hidden,
-        participant.boundSessionState,
-        signal
-      );
+      await this.target.restoreBoundSession(hidden, participant.boundSessionState, signal);
       for (const message of participant.queuedMessages) {
         await this.target.replayQueuedMessage(hidden, message, signal);
       }
@@ -379,8 +362,9 @@ export class ServiceRelocationObjectRestoreOwner<
 }
 
 function validateRelocationShape(envelope: ServiceRelocationEnvelope): void {
-  const spots = envelope.participants.filter(({ objectKind }) =>
-    objectKind === 'user_spot' || objectKind === 'instance_spot');
+  const spots = envelope.participants.filter(
+    ({ objectKind }) => objectKind === 'user_spot' || objectKind === 'instance_spot'
+  );
   const actors = envelope.participants.filter(({ objectKind }) => objectKind === 'actor');
   if (spots.length === 0 && (actors.length !== 1 || envelope.participants.length !== 1)) {
     throw new TypeError('Standalone relocation must contain exactly one Actor.');
@@ -420,9 +404,7 @@ async function mapConcurrentOrdered<TInput, TResult>(
       }
     }
   };
-  await Promise.all(
-    Array.from({ length: Math.min(concurrency, values.length) }, () => worker())
-  );
+  await Promise.all(Array.from({ length: Math.min(concurrency, values.length) }, () => worker()));
   if (failure !== undefined) throw failure;
   return results;
 }

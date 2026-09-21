@@ -108,11 +108,11 @@ export function readZLinkMessageDeclaredType(message: ZLinkMessage): Type | unde
  */
 export function materializeZLinkMessageValue<T>(value: T, type?: Type<T>): T {
   if (
-    type === undefined
-    || (type as unknown) === Object
-    || value === null
-    || typeof value !== 'object'
-    || Array.isArray(value)
+    type === undefined ||
+    (type as unknown) === Object ||
+    value === null ||
+    typeof value !== 'object' ||
+    Array.isArray(value)
   ) {
     return value;
   }

@@ -21,8 +21,7 @@ namespace zlink::framework
 struct mesh_node_descriptor_t
 {
     std::string mesh_name;
-    zlink::routing_id_t rid =
-      zlink::routing_id_t::from (std::uint32_t{0});
+    zlink::routing_id_t rid = zlink::routing_id_t::from (std::uint32_t{0});
     std::uint64_t lifecycle_generation = 0;
     std::uint64_t descriptor_revision = 0;
     std::string endpoint;
@@ -35,8 +34,7 @@ struct mesh_node_descriptor_t
     placement_capacity_t capacity{};
     activation_concurrency_t activation_concurrency{};
     std::optional<std::string> maintenance_wave;
-    framework_runtime_state_t state =
-      framework_runtime_state_t::preparing;
+    framework_runtime_state_t state = framework_runtime_state_t::preparing;
     std::string security_identity;
     std::string owner_id;
     std::int64_t lease_generation = 0;
@@ -46,21 +44,18 @@ struct mesh_node_descriptor_t
 struct mesh_node_descriptor_key_t
 {
     std::string mesh_name;
-    zlink::routing_id_t rid =
-      zlink::routing_id_t::from (std::uint32_t{0});
+    zlink::routing_id_t rid = zlink::routing_id_t::from (std::uint32_t{0});
 };
 
 struct client_server_server_descriptor_t
 {
     std::string channel_name;
-    zlink::routing_id_t server_rid =
-      zlink::routing_id_t::from (std::uint32_t{0});
+    zlink::routing_id_t server_rid = zlink::routing_id_t::from (std::uint32_t{0});
     std::uint64_t lifecycle_generation = 0;
     std::uint64_t descriptor_revision = 0;
     std::string endpoint;
     int weight = 100;
-    framework_runtime_state_t state =
-      framework_runtime_state_t::preparing;
+    framework_runtime_state_t state = framework_runtime_state_t::preparing;
     std::string security_identity;
     std::string owner_id;
     std::int64_t lease_generation = 0;
@@ -70,20 +65,17 @@ struct client_server_server_descriptor_t
 struct client_server_server_descriptor_key_t
 {
     std::string channel_name;
-    zlink::routing_id_t server_rid =
-      zlink::routing_id_t::from (std::uint32_t{0});
+    zlink::routing_id_t server_rid = zlink::routing_id_t::from (std::uint32_t{0});
 };
 
 struct fanout_publisher_descriptor_t
 {
     std::string channel_name;
-    zlink::routing_id_t publisher_rid =
-      zlink::routing_id_t::from (std::uint32_t{0});
+    zlink::routing_id_t publisher_rid = zlink::routing_id_t::from (std::uint32_t{0});
     std::uint64_t lifecycle_generation = 0;
     std::uint64_t descriptor_revision = 0;
     std::string endpoint;
-    framework_runtime_state_t state =
-      framework_runtime_state_t::preparing;
+    framework_runtime_state_t state = framework_runtime_state_t::preparing;
     std::string security_identity;
     std::string owner_id;
     std::int64_t lease_generation = 0;
@@ -93,8 +85,7 @@ struct fanout_publisher_descriptor_t
 struct fanout_publisher_descriptor_key_t
 {
     std::string channel_name;
-    zlink::routing_id_t publisher_rid =
-      zlink::routing_id_t::from (std::uint32_t{0});
+    zlink::routing_id_t publisher_rid = zlink::routing_id_t::from (std::uint32_t{0});
 };
 
 } // namespace zlink::framework

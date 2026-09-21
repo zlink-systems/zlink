@@ -1,10 +1,11 @@
 package systems.zlink.framework.runtime.internal.handlers;
-import java.util.concurrent.atomic.AtomicBoolean;
 
-import java.util.Objects;
-import java.util.function.Predicate;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+
+import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Predicate;
 
 /** Internal handler state that coroutine adapters must restore on every resume. */
 public final class ZLinkSuspendInvocationContext {
@@ -14,10 +15,9 @@ public final class ZLinkSuspendInvocationContext {
     private static final ThreadLocal<Object> DEFERRED_ACTOR_JOIN = new ThreadLocal<>();
     private static final ThreadLocal<Object> SERIAL_EXECUTION_TURN = new ThreadLocal<>();
     private static final ThreadLocal<ApplicationExecution> APPLICATION_EXECUTION =
-        new ThreadLocal<>();
+            new ThreadLocal<>();
 
-    private ZLinkSuspendInvocationContext() {
-    }
+    private ZLinkSuspendInvocationContext() {}
 
     public static Object currentEntrySpotDispatch() {
         return ENTRY_SPOT_DISPATCH.get();
@@ -103,8 +103,9 @@ public final class ZLinkSuspendInvocationContext {
         ApplicationExecution execution = APPLICATION_EXECUTION.get();
         if (execution == null || !execution.yieldAllowed()) {
             throw invalid(
-                operation + " yield is only valid in a SpotWide User Spot "
-                    + "or Instance Spot application callback");
+                    operation
+                            + " yield is only valid in a SpotWide User Spot "
+                            + "or Instance Spot application callback");
         }
     }
 
@@ -116,19 +117,20 @@ public final class ZLinkSuspendInvocationContext {
         ApplicationExecution execution = APPLICATION_EXECUTION.get();
         if (execution != null && execution.relocationReadyDeferred()) {
             throw invalid(
-                operation + " cannot start after relocationReady().defer() "
-                    + "in the same Spot turn");
+                    operation
+                            + " cannot start after relocationReady().defer() "
+                            + "in the same Spot turn");
         }
     }
 
     public static void rejectSameSpotWait(String targetSpotId) {
         ApplicationExecution execution = APPLICATION_EXECUTION.get();
         if (execution != null
-            && execution.sharedSpotGate()
-            && execution.spotId().equals(targetSpotId)) {
+                && execution.sharedSpotGate()
+                && execution.spotId().equals(targetSpotId)) {
             throw invalid(
-                "Awaiting a request to the current Spot would wait on the "
-                    + "same execution gate");
+                    "Awaiting a request to the current Spot would wait on the "
+                            + "same execution gate");
         }
     }
 
@@ -138,29 +140,26 @@ public final class ZLinkSuspendInvocationContext {
             return;
         }
         if (targetActorId.equals(execution.actorId())
-            || execution.memberActor().test(targetActorId)) {
+                || execution.memberActor().test(targetActorId)) {
             throw invalid(
-                "Awaiting a request to the current or another member Actor "
-                    + "would wait on the same User Spot gate");
+                    "Awaiting a request to the current or another member Actor "
+                            + "would wait on the same User Spot gate");
         }
     }
 
     public static void rejectCurrentActorJoinWait(String actorId) {
         ApplicationExecution execution = APPLICATION_EXECUTION.get();
         if (execution != null
-            && execution.sharedSpotGate()
-            && actorId != null
-            && actorId.equals(execution.actorId())) {
+                && execution.sharedSpotGate()
+                && actorId != null
+                && actorId.equals(execution.actorId())) {
             throw invalid(
-                "Awaiting the current Actor join would wait on the same "
-                    + "User Spot gate");
+                    "Awaiting the current Actor join would wait on the same " + "User Spot gate");
         }
     }
 
     private static ZLinkFrameworkException invalid(String message) {
-        return new ZLinkFrameworkException(
-            ZLinkFrameworkErrorKind.INVALID_OPERATION,
-            message);
+        return new ZLinkFrameworkException(ZLinkFrameworkErrorKind.INVALID_OPERATION, message);
     }
 
     private static <T> Scope enter(ThreadLocal<T> local, T value) {
@@ -192,39 +191,30 @@ public final class ZLinkSuspendInvocationContext {
         private final boolean yieldAllowed;
         private final boolean relocationReadyAllowed;
         private final Predicate<String> memberActor;
-        private final AtomicBoolean
-            relocationReadyDeferred =
-                new AtomicBoolean();
+        private final AtomicBoolean relocationReadyDeferred = new AtomicBoolean();
 
         public ApplicationExecution(
-            String spotId,
-            String actorId,
-            boolean sharedSpotGate,
-            boolean yieldAllowed,
-            Predicate<String> memberActor) {
-            this(
-                spotId,
-                actorId,
-                sharedSpotGate,
-                yieldAllowed,
-                false,
-                memberActor);
+                String spotId,
+                String actorId,
+                boolean sharedSpotGate,
+                boolean yieldAllowed,
+                Predicate<String> memberActor) {
+            this(spotId, actorId, sharedSpotGate, yieldAllowed, false, memberActor);
         }
 
         public ApplicationExecution(
-            String spotId,
-            String actorId,
-            boolean sharedSpotGate,
-            boolean yieldAllowed,
-            boolean relocationReadyAllowed,
-            Predicate<String> memberActor) {
+                String spotId,
+                String actorId,
+                boolean sharedSpotGate,
+                boolean yieldAllowed,
+                boolean relocationReadyAllowed,
+                Predicate<String> memberActor) {
             this.spotId = Objects.requireNonNull(spotId, "spotId");
             this.actorId = actorId;
             this.sharedSpotGate = sharedSpotGate;
             this.yieldAllowed = yieldAllowed;
             this.relocationReadyAllowed = relocationReadyAllowed;
-            this.memberActor =
-                memberActor == null ? ignored -> false : memberActor;
+            this.memberActor = memberActor == null ? ignored -> false : memberActor;
         }
 
         public String spotId() {

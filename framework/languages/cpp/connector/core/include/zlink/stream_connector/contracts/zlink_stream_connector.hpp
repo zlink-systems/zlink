@@ -83,9 +83,8 @@ class connector_t
     /// no-coroutine callback boundary. It changes the same value and does not
     /// stand in for the synchronous surface. The callback runs after the level
     /// is installed.
-    void set_diagnostics_level_async (
-      diagnostics_level_t level,
-      std::function<void (result_t<void>)> callback);
+    void set_diagnostics_level_async (diagnostics_level_t level,
+                                      std::function<void (result_t<void>)> callback);
 
     /// Returns the number of received packets waiting for manual callback dispatch.
     std::size_t pending_dispatch_count () const;
@@ -180,8 +179,8 @@ class connector_t
     template <typename TMessage>
     wait_for_sequence_call_t<TMessage> wait_for_sequence (std::string packet_name)
     {
-        return wait_for_sequence_call_t<TMessage> (
-          _state, std::move (packet_name), options ().wait_timeout);
+        return wait_for_sequence_call_t<TMessage> (_state, std::move (packet_name),
+                                                   options ().wait_timeout);
     }
 
     /// Registers a connection state callback (stream-connector §7).

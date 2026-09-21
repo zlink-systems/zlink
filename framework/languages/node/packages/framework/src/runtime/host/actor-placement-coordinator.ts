@@ -5,11 +5,7 @@ import {
 } from '../framework-errors-internal';
 import { createHash } from 'node:crypto';
 import { RequestResult } from '../backend/runtime-values';
-import type {
-  ActorRef,
-  RoutingId,
-  ZLinkActorCreateResult
-} from '../../contracts';
+import type { ActorRef, RoutingId, ZLinkActorCreateResult } from '../../contracts';
 import { ZLinkSpotKind } from '../../contracts';
 import type {
   ZLinkAuthoritySnapshot,
@@ -27,9 +23,7 @@ import type {
   ServiceActorCreateRecord,
   ServiceUserSpotReservationFence
 } from '../foundation/service-stateful-wire-codec';
-import type {
-  ServiceUserSpotOperationResult
-} from '../foundation/service-stateful-runtime';
+import type { ServiceUserSpotOperationResult } from '../foundation/service-stateful-runtime';
 import {
   decodeActorAuthorityIdentity,
   encodeActorAuthorityIdentity
@@ -124,18 +118,21 @@ export class ZLinkActorPlacementCoordinator {
           spotGeneration: target.nodeGeneration,
           spotKind: ZLinkSpotKind.Entry
         });
-        const reserved = await this.options.store.reserve({
-          key: { kind: 'actor', globalId: actorId },
-          intent: {
-            stableType,
-            requestContentReference: contentReference,
-            requestSha256,
-            requestEncodedSize: BigInt(requestPayload.byteLength)
+        const reserved = await this.options.store.reserve(
+          {
+            key: { kind: 'actor', globalId: actorId },
+            intent: {
+              stableType,
+              requestContentReference: contentReference,
+              requestSha256,
+              requestEncodedSize: BigInt(requestPayload.byteLength)
+            },
+            target: reservationTarget(target),
+            creatingPayload,
+            capacity: { actors: 1, spots: 0 }
           },
-          target: reservationTarget(target),
-          creatingPayload,
-          capacity: { actors: 1, spots: 0 }
-        }, deadline.signal);
+          deadline.signal
+        );
         const existing = existingActor(reserved, actorId, stableType);
         if (existing !== undefined) {
           if (createOnly) {
@@ -191,19 +188,14 @@ export class ZLinkActorPlacementCoordinator {
         } catch (error) {
           transportFailure = error;
         }
-        if (
-          remote === undefined || !isCompletedActorCreate(remote)
-        ) {
+        if (remote === undefined || !isCompletedActorCreate(remote)) {
           const retained = await this.options.store.readCreationTerminal(operation);
           if (retained.kind === 'found') {
             remote = remoteActorCreateResult(retained.terminalEnvelope, target);
           }
         }
         if (remote === undefined) throw transportFailure;
-        if (
-          remote.terminalResult !== RequestResult.Ok
-          || remote.failureCode !== 0
-        ) {
+        if (remote.terminalResult !== RequestResult.Ok || remote.failureCode !== 0) {
           //  Classify the (terminal, fine failure code) pair via the shared
           //  ownership-aware translator instead of collapsing every non-OK
           //  remote create to InternalFailure (spec 32-framework-error-model:
@@ -212,8 +204,8 @@ export class ZLinkActorPlacementCoordinator {
           throw wireReplyFailureException(
             remote.terminalResult,
             remote.failureCode,
-            `Remote Actor '${actorId}' creation failed with result ${remote.terminalResult}, `
-              + `failure code ${remote.failureCode}, and tail ${remote.tail?.kind ?? 'none'}.`
+            `Remote Actor '${actorId}' creation failed with result ${remote.terminalResult}, ` +
+              `failure code ${remote.failureCode}, and tail ${remote.tail?.kind ?? 'none'}.`
           );
         }
         if (remote.tail?.kind !== 'actorCreate') {
@@ -221,8 +213,8 @@ export class ZLinkActorPlacementCoordinator {
           //  protocol violation, not a create failure.
           throw createInternalFrameworkException(
             ZLinkFrameworkInternalErrorKind.RequestProtocolError,
-            `Remote Actor '${actorId}' create reply carried tail `
-              + `${remote.tail?.kind ?? 'none'} on an OK terminal.`
+            `Remote Actor '${actorId}' create reply carried tail ` +
+              `${remote.tail?.kind ?? 'none'} on an OK terminal.`
           );
         }
         if (remote.tail.createResult === 'rejected') {
@@ -231,8 +223,9 @@ export class ZLinkActorPlacementCoordinator {
             ...(remote.payload === undefined
               ? {}
               : {
-                  reply: this.options.decodeRemoteReply?.(remote.payload.payload)
-                    ?? Buffer.from(remote.payload.payload)
+                  reply:
+                    this.options.decodeRemoteReply?.(remote.payload.payload) ??
+                    Buffer.from(remote.payload.payload)
                 })
           };
         }
@@ -245,20 +238,24 @@ export class ZLinkActorPlacementCoordinator {
             'Remote Actor create terminal omitted ActorRef.'
           );
         }
-        const ref = withActorAuthorityFence({
-          actorId: actor.actorId,
-          objectGeneration: actor.generation,
-          meshName: target.meshName,
-          nodeRid: actor.nodeRid as RoutingId
-        }, reserved.creating);
+        const ref = withActorAuthorityFence(
+          {
+            actorId: actor.actorId,
+            objectGeneration: actor.generation,
+            meshName: target.meshName,
+            nodeRid: actor.nodeRid as RoutingId
+          },
+          reserved.creating
+        );
         return {
           status: remote.tail.createResult,
           actor: ref,
           ...(remote.payload === undefined
             ? {}
             : {
-                reply: this.options.decodeRemoteReply?.(remote.payload.payload)
-                  ?? Buffer.from(remote.payload.payload)
+                reply:
+                  this.options.decodeRemoteReply?.(remote.payload.payload) ??
+                  Buffer.from(remote.payload.payload)
               })
         };
       }
@@ -324,58 +321,70 @@ export class ZLinkActorPlacementCoordinator {
     try {
       local = await materialize(requestPayload, current, signal);
       if (local.result === 'failed') {
-        completion = await this.options.store.completeCreation({
-          key,
-          reservationId: record.reservation.reservationId,
-          expectedStoreVersion: current.storeVersion.value,
-          target: creationTarget(current),
-          completion: {
-            kind: 'failed',
-            terminal: terminalPublication(record, encodeActorTerminal({ result: 'failed' }))
-          }
-        }, signal);
+        completion = await this.options.store.completeCreation(
+          {
+            key,
+            reservationId: record.reservation.reservationId,
+            expectedStoreVersion: current.storeVersion.value,
+            target: creationTarget(current),
+            completion: {
+              kind: 'failed',
+              terminal: terminalPublication(record, encodeActorTerminal({ result: 'failed' }))
+            }
+          },
+          signal
+        );
       } else {
-        const terminal = encodeActorTerminal(local.result === 'created'
-          ? { result: 'created', actor: local.actor, reply: local.reply }
-          : { result: 'rejected', reply: local.reply });
-        completion = await this.options.store.completeCreation({
-          key,
-          reservationId: record.reservation.reservationId,
-          expectedStoreVersion: current.storeVersion.value,
-          target: creationTarget(current),
-          completion: local.result === 'created'
-            ? {
-                kind: 'created',
-                readyPayload: encodeActorAuthorityIdentity({
-                  actorType: record.stableType,
-                  actor: local.actor,
-                  meshName: current.allocation.descriptor.meshName,
-                  ownerNodeGeneration: current.allocation.descriptorLifecycleGeneration,
-                  owner: {
-                    ownerId: current.ownerId,
-                    leaseGeneration: current.ownerLeaseGeneration
-                  },
-                  spotId: local.entrySpotId,
-                  spotGeneration: local.entrySpotGeneration,
-                  spotKind: ZLinkSpotKind.Entry
-                }),
-                terminal: terminalPublication(record, terminal)
-              }
-            : {
-                kind: 'rejected',
-                terminal: terminalPublication(record, terminal)
-              }
-        }, signal);
+        const terminal = encodeActorTerminal(
+          local.result === 'created'
+            ? { result: 'created', actor: local.actor, reply: local.reply }
+            : { result: 'rejected', reply: local.reply }
+        );
+        completion = await this.options.store.completeCreation(
+          {
+            key,
+            reservationId: record.reservation.reservationId,
+            expectedStoreVersion: current.storeVersion.value,
+            target: creationTarget(current),
+            completion:
+              local.result === 'created'
+                ? {
+                    kind: 'created',
+                    readyPayload: encodeActorAuthorityIdentity({
+                      actorType: record.stableType,
+                      actor: local.actor,
+                      meshName: current.allocation.descriptor.meshName,
+                      ownerNodeGeneration: current.allocation.descriptorLifecycleGeneration,
+                      owner: {
+                        ownerId: current.ownerId,
+                        leaseGeneration: current.ownerLeaseGeneration
+                      },
+                      spotId: local.entrySpotId,
+                      spotGeneration: local.entrySpotGeneration,
+                      spotKind: ZLinkSpotKind.Entry
+                    }),
+                    terminal: terminalPublication(record, terminal)
+                  }
+                : {
+                    kind: 'rejected',
+                    terminal: terminalPublication(record, terminal)
+                  }
+          },
+          signal
+        );
       }
     } catch (error) {
       const cleanup = createDeadline(1_000);
       try {
-        await this.options.store.abort({
-          key,
-          reservationId: record.reservation.reservationId,
-          expectedStoreVersion: current.storeVersion.value,
-          target: creationTarget(current)
-        }, cleanup.signal);
+        await this.options.store.abort(
+          {
+            key,
+            reservationId: record.reservation.reservationId,
+            expectedStoreVersion: current.storeVersion.value,
+            target: creationTarget(current)
+          },
+          cleanup.signal
+        );
       } catch (cleanupError) {
         throw new AggregateError(
           [error, cleanupError],
@@ -430,16 +439,17 @@ function existingActor(
   actorId: string,
   stableType: string
 ): ActorRef | undefined {
-  const snapshot = reserved.kind === 'alreadyExists'
-    ? reserved.current
-    : reserved.kind === 'conflict' && reserved.current.kind === 'snapshot'
+  const snapshot =
+    reserved.kind === 'alreadyExists'
       ? reserved.current
-      : undefined;
+      : reserved.kind === 'conflict' && reserved.current.kind === 'snapshot'
+        ? reserved.current
+        : undefined;
   if (
-    snapshot === undefined
-    || snapshot.allocation.state !== 'active'
-    || snapshot.allocation.objectKind !== 'actor'
-    || snapshot.allocation.stableType !== stableType
+    snapshot === undefined ||
+    snapshot.allocation.state !== 'active' ||
+    snapshot.allocation.objectKind !== 'actor' ||
+    snapshot.allocation.stableType !== stableType
   ) {
     return undefined;
   }
@@ -449,10 +459,7 @@ function existingActor(
     : undefined;
 }
 
-function withActorAuthorityFence(
-  actor: ActorRef,
-  authority: ZLinkAuthoritySnapshot
-): ActorRef {
+function withActorAuthorityFence(actor: ActorRef, authority: ZLinkAuthoritySnapshot): ActorRef {
   Object.defineProperties(actor, {
     ownershipGeneration: {
       configurable: false,
@@ -522,22 +529,18 @@ function requireExactReservation(
 ): void {
   const pending = current.kind === 'snapshot' ? current.pendingCreation : undefined;
   if (
-    current.kind !== 'snapshot'
-    || current.allocation.objectKind !== 'actor'
-    || current.allocation.stableType !== record.stableType
-    || current.objectGeneration !== record.reservation.objectGeneration
-    || current.authorityOwnerGeneration !== record.reservation.authorityOwnerGeneration
-    || String(current.allocation.descriptor.rid) !== record.reservation.targetNodeRid
-    || current.allocation.descriptorLifecycleGeneration !== record.reservation.targetNodeGeneration
-    || current.ownerId !== record.reservation.targetOwnerId
-    || current.ownerLeaseGeneration !== record.reservation.targetOwnerLeaseGeneration
-    || (
-      current.allocation.state === 'reserved'
-      && (
-        current.storeVersion.value !== record.reservation.expectedStoreVersion
-        || pending?.reservationId !== record.reservation.reservationId
-      )
-    )
+    current.kind !== 'snapshot' ||
+    current.allocation.objectKind !== 'actor' ||
+    current.allocation.stableType !== record.stableType ||
+    current.objectGeneration !== record.reservation.objectGeneration ||
+    current.authorityOwnerGeneration !== record.reservation.authorityOwnerGeneration ||
+    String(current.allocation.descriptor.rid) !== record.reservation.targetNodeRid ||
+    current.allocation.descriptorLifecycleGeneration !== record.reservation.targetNodeGeneration ||
+    current.ownerId !== record.reservation.targetOwnerId ||
+    current.ownerLeaseGeneration !== record.reservation.targetOwnerLeaseGeneration ||
+    (current.allocation.state === 'reserved' &&
+      (current.storeVersion.value !== record.reservation.expectedStoreVersion ||
+        pending?.reservationId !== record.reservation.reservationId))
   ) {
     throw createInternalFrameworkException(
       ZLinkFrameworkInternalErrorKind.ActorCreateFailed,
@@ -581,9 +584,11 @@ function actorResult(
 }
 
 function isCompletedActorCreate(result: ServiceUserSpotOperationResult): boolean {
-  return result.terminalResult === RequestResult.Ok
-    && result.failureCode === 0
-    && result.tail?.kind === 'actorCreate';
+  return (
+    result.terminalResult === RequestResult.Ok &&
+    result.failureCode === 0 &&
+    result.tail?.kind === 'actorCreate'
+  );
 }
 
 type ActorTerminal =
@@ -593,37 +598,48 @@ type ActorTerminal =
 
 function encodeActorTerminal(terminal: ActorTerminal): Buffer {
   if (terminal.result === 'failed') {
-    return Buffer.from(encodeCreationOperationTerminalV1({
-      terminalResult: 'internalError',
-      failureCode: 'actorCreateFailed',
-      hasCreation: 'false',
-      hasApplicationPayload: 'false'
-    }, CREATION_TERMINAL_CODEC_CONTEXT));
-  }
-  return Buffer.from(encodeCreationOperationTerminalV1({
-    terminalResult: 'ok',
-    failureCode: 'none',
-    hasCreation: 'true',
-    creation: terminal.result === 'rejected'
-      ? { createResult: 'rejected' }
-      : {
-          createResult: 'created',
-          actor: {
-            actorId: terminal.actor.actorId,
-            objectGeneration: terminal.actor.objectGeneration
-          }
+    return Buffer.from(
+      encodeCreationOperationTerminalV1(
+        {
+          terminalResult: 'internalError',
+          failureCode: 'actorCreateFailed',
+          hasCreation: 'false',
+          hasApplicationPayload: 'false'
         },
-    hasApplicationPayload: terminal.reply === undefined ? 'false' : 'true',
-    ...(terminal.reply === undefined
-      ? {}
-      : {
-          applicationPayload: {
-            packetName: 'ZLinkFrameworkActorCreateReply',
-            contentType: 'application/octet-stream',
-            payload: Buffer.from(terminal.reply)
-          }
-        })
-  }, CREATION_TERMINAL_CODEC_CONTEXT));
+        CREATION_TERMINAL_CODEC_CONTEXT
+      )
+    );
+  }
+  return Buffer.from(
+    encodeCreationOperationTerminalV1(
+      {
+        terminalResult: 'ok',
+        failureCode: 'none',
+        hasCreation: 'true',
+        creation:
+          terminal.result === 'rejected'
+            ? { createResult: 'rejected' }
+            : {
+                createResult: 'created',
+                actor: {
+                  actorId: terminal.actor.actorId,
+                  objectGeneration: terminal.actor.objectGeneration
+                }
+              },
+        hasApplicationPayload: terminal.reply === undefined ? 'false' : 'true',
+        ...(terminal.reply === undefined
+          ? {}
+          : {
+              applicationPayload: {
+                packetName: 'ZLinkFrameworkActorCreateReply',
+                contentType: 'application/octet-stream',
+                payload: Buffer.from(terminal.reply)
+              }
+            })
+      },
+      CREATION_TERMINAL_CODEC_CONTEXT
+    )
+  );
 }
 
 function remoteActorCreateResult(

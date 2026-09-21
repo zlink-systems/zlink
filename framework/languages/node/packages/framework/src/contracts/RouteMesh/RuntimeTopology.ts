@@ -1,8 +1,5 @@
 import type { RoutingId } from '../Common';
-import type {
-  ZLinkApplicationJobQueueProfile,
-  ZLinkCoreHwmProfile
-} from '../Dispatch';
+import type { ZLinkApplicationJobQueueProfile, ZLinkCoreHwmProfile } from '../Dispatch';
 import type {
   ZLinkPeerState,
   ZLinkTopologyReason,

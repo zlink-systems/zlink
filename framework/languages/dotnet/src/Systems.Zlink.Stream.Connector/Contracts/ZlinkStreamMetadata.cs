@@ -28,10 +28,7 @@ public sealed class ZlinkStreamMetadata
         ValidateKey(key);
         ArgumentNullException.ThrowIfNull(value);
 
-        var copy = new Dictionary<string, string>(Values, StringComparer.Ordinal)
-        {
-            [key] = value
-        };
+        var copy = new Dictionary<string, string>(Values, StringComparer.Ordinal) { [key] = value };
         return new ZlinkStreamMetadata(copy);
     }
 
@@ -58,8 +55,11 @@ public sealed class ZlinkStreamMetadata
     private static void ValidateKey(string key)
     {
         if (string.IsNullOrEmpty(key))
-            throw new ZlinkStreamException(new ZlinkStreamError(
-                ZlinkStreamErrorCode.ValidationFailed,
-                "Metadata key must not be empty."));
+            throw new ZlinkStreamException(
+                new ZlinkStreamError(
+                    ZlinkStreamErrorCode.ValidationFailed,
+                    "Metadata key must not be empty."
+                )
+            );
     }
 }

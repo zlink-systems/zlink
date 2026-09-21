@@ -14,7 +14,10 @@ internal sealed class ZLinkPollingBackoff
     public Task NoDataAsync(CancellationToken cancellationToken)
     {
         var misses = Math.Min(++_misses, 6);
-        var delayMs = Math.Min(MinDelay.TotalMilliseconds * (1 << (misses - 1)), MaxDelay.TotalMilliseconds);
+        var delayMs = Math.Min(
+            MinDelay.TotalMilliseconds * (1 << (misses - 1)),
+            MaxDelay.TotalMilliseconds
+        );
         return Task.Delay(TimeSpan.FromMilliseconds(delayMs), cancellationToken);
     }
 }

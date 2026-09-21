@@ -12,9 +12,7 @@ import type {
 } from '../../contracts';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
 import type { ZLinkSubmitResult } from '../messaging/submission-result';
-import {
-  ZLinkMessage
-} from '../../contracts';
+import { ZLinkMessage } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
 import {
   buildAdvertisedEndpoint,
@@ -32,8 +30,7 @@ import type {
 } from '../backend/contracts';
 import type { ZLinkMeshCompletionTable } from '../backend/mesh-completion-table';
 import type { StreamSessionService } from '../foundation/service-runtime-contracts';
-import { registerServiceSessionBindingIngressPort } from
-  '../foundation/service-session-binding-ingress-port';
+import { registerServiceSessionBindingIngressPort } from '../foundation/service-session-binding-ingress-port';
 import {
   messageToBytes,
   ZLinkStreamCodec,
@@ -69,19 +66,10 @@ import {
   DefaultZLinkBoundSessionResponseTarget,
   type ZLinkBoundSessionResponseTarget
 } from './bound-session-response-target';
-import {
-  ZLinkBoundSessionService,
-  type ZLinkBoundSessionTransport
-} from './bound-session-service';
-import {
-  ZLinkSessionActorCoordinator
-} from './session-actor-coordinator';
-import {
-  ZLinkBoundActorRelaySender
-} from './bound-actor-relay-sender';
-import {
-  ZLinkManagedStream
-} from './managed-stream';
+import { ZLinkBoundSessionService, type ZLinkBoundSessionTransport } from './bound-session-service';
+import { ZLinkSessionActorCoordinator } from './session-actor-coordinator';
+import { ZLinkBoundActorRelaySender } from './bound-actor-relay-sender';
+import { ZLinkManagedStream } from './managed-stream';
 import { createStreamSessionInstance } from './session-provider';
 import { DEFAULT_STREAM_NODE_MAX_MESSAGE_SIZE } from '../../contracts/Configuration/InternalDefaults';
 import {
@@ -123,19 +111,28 @@ export interface ZLinkStreamBindingRuntimeOptions {
     actorId: string,
     signal?: AbortSignal
   ) => Promise<ZLinkActorSessionAuthorityFence | undefined>;
-  readonly nativeActorNodeProvider?: () => {
-    status(): { readonly routingId: unknown };
-  } | undefined;
+  readonly nativeActorNodeProvider?: () =>
+    | {
+        status(): { readonly routingId: unknown };
+      }
+    | undefined;
   readonly confirmRemoteActorSessionBinding?: (
     actor: ActorRef,
     sessionRid: ActorRef['nodeRid'],
     signal?: AbortSignal,
     options?: { readonly waitForAcknowledgement?: boolean }
   ) => Promise<void>;
-  readonly errorSink?: () => {
-    reportRuntimeTaskException(taskName: string, error: unknown): void;
-  } | undefined;
-  readonly relay?: (actor: ZLinkSessionActor, header: ZLinkStreamFrameHeader, payload: Message, signal?: AbortSignal) => Promise<boolean>;
+  readonly errorSink?: () =>
+    | {
+        reportRuntimeTaskException(taskName: string, error: unknown): void;
+      }
+    | undefined;
+  readonly relay?: (
+    actor: ZLinkSessionActor,
+    header: ZLinkStreamFrameHeader,
+    payload: Message,
+    signal?: AbortSignal
+  ) => Promise<boolean>;
   readonly notifyDisconnected?: (actor: ZLinkSessionActor, signal?: AbortSignal) => Promise<void>;
   readonly flowCreationEnabled?: () => boolean;
   readonly metrics?: import('../diagnostics').ZLinkRuntimeMetrics;
@@ -155,11 +152,17 @@ export interface ZLinkStreamMessageFactory {
   createBinaryMessage?(payload: Uint8Array): Message;
 }
 
-export interface ZLinkStreamSessionRuntimeOptions extends Omit<ZLinkStreamSessionRuntimeCoreOptions, 'bindingRuntime'> {
+export interface ZLinkStreamSessionRuntimeOptions extends Omit<
+  ZLinkStreamSessionRuntimeCoreOptions,
+  'bindingRuntime'
+> {
   readonly bindingRuntime?: ZLinkStreamBindingRuntime;
 }
 
-export interface ZLinkStreamSessionNodeRuntimeOptions extends Omit<ZLinkStreamSessionNodeRuntimeCoreOptions, 'bindingRuntime'> {
+export interface ZLinkStreamSessionNodeRuntimeOptions extends Omit<
+  ZLinkStreamSessionNodeRuntimeCoreOptions,
+  'bindingRuntime'
+> {
   readonly bindingRuntime?: ZLinkStreamBindingRuntime;
 }
 
@@ -195,8 +198,9 @@ export class ZLinkStreamRuntimeManager {
   private readonly applicationJobQueue: ApplicationJobQueue;
 
   constructor(private readonly options: ZLinkStreamRuntimeManagerOptions) {
-    this.applicationJobQueue = options.applicationJobQueue
-      ?? new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
+    this.applicationJobQueue =
+      options.applicationJobQueue ??
+      new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
   }
 
   start(): void {
@@ -237,22 +241,24 @@ export class ZLinkStreamRuntimeManager {
         );
       }
       const readablePoller = streamAdapter.createReadablePoller(socket);
-      const nativeSessionRoutes = new Map<string, {
-        readonly service: StreamSessionService;
-        readonly completions: ZLinkMeshCompletionTable;
-      }>();
+      const nativeSessionRoutes = new Map<
+        string,
+        {
+          readonly service: StreamSessionService;
+          readonly completions: ZLinkMeshCompletionTable;
+        }
+      >();
       if (actorDispatchEnabled) {
         for (const [meshName, mesh] of this.options.registration.spotNodes) {
           const isPrimaryMesh = meshName === applicationMeshName;
-          if (
-            !isPrimaryMesh
-            && mesh.objectRole !== 'client'
-            && mesh.objectRole !== 'server'
-          ) continue;
-          const meshNode = this.options.nativeMeshNodeForName?.(meshName)
-            ?? (isPrimaryMesh ? nativeMeshNode : undefined);
-          const completions = this.options.meshCompletionsForName?.(meshName)
-            ?? (isPrimaryMesh ? meshCompletions : undefined);
+          if (!isPrimaryMesh && mesh.objectRole !== 'client' && mesh.objectRole !== 'server')
+            continue;
+          const meshNode =
+            this.options.nativeMeshNodeForName?.(meshName) ??
+            (isPrimaryMesh ? nativeMeshNode : undefined);
+          const completions =
+            this.options.meshCompletionsForName?.(meshName) ??
+            (isPrimaryMesh ? meshCompletions : undefined);
           const createService = meshNode?.createStreamSessionService;
           if (typeof createService !== 'function' || completions === undefined) continue;
           const service = createService.call(meshNode, socket.nativeInstance as never);
@@ -260,8 +266,7 @@ export class ZLinkStreamRuntimeManager {
           registerServiceSessionBindingIngressPort(service, {
             retainOutbound: (claim, delivery) =>
               bindingOwner.admitRelocationOutbound(claim, delivery),
-            clearOutbound: (actorId, error) =>
-              bindingOwner.clearRelocation(actorId, error)
+            clearOutbound: (actorId, error) => bindingOwner.clearRelocation(actorId, error)
           });
           nativeSessionRoutes.set(meshName, {
             service,
@@ -269,14 +274,16 @@ export class ZLinkStreamRuntimeManager {
           });
         }
       }
-      const nativeSessionService = applicationMeshName === undefined
-        ? undefined
-        : nativeSessionRoutes.get(applicationMeshName)?.service;
+      const nativeSessionService =
+        applicationMeshName === undefined
+          ? undefined
+          : nativeSessionRoutes.get(applicationMeshName)?.service;
       const monitor = monitoringAdapter.openSocketMonitor(socket);
       const sessionType = streamNode.session!;
-      const sessionHandlerTypes = (
-        streamNode as unknown as Record<symbol, readonly Type[] | undefined>
-      )[Symbol.for('@zlink-systems/framework:session-handler-types')] ?? [];
+      const sessionHandlerTypes =
+        (streamNode as unknown as Record<symbol, readonly Type[] | undefined>)[
+          Symbol.for('@zlink-systems/framework:session-handler-types')
+        ] ?? [];
       const runtime = new ZLinkStreamSessionNodeRuntimeCore({
         nodeName,
         socket,
@@ -285,7 +292,7 @@ export class ZLinkStreamRuntimeManager {
         applicationJobQueue: this.applicationJobQueue,
         nativeSessionService,
         meshCompletions,
-        nativeSessionRouteForMesh: meshName => nativeSessionRoutes.get(meshName),
+        nativeSessionRouteForMesh: (meshName) => nativeSessionRoutes.get(meshName),
         monitor,
         bindingRuntime: this.options.bindingRuntime,
         acceptNewSession: () => this.options.acceptNewSession?.(applicationMeshName) !== false,
@@ -294,13 +301,14 @@ export class ZLinkStreamRuntimeManager {
         providerResolver: this.options.providerResolver,
         messageSerializers: this.options.registration.messageSerializers,
         replacementCallbackTimeoutMs: this.options.registration.sessionReplacementCallbackTimeoutMs,
-        sessionFactory: (context) => createStreamSessionInstance(
-          sessionType as Type<ZLinkSession> | Type<ZLinkSessionFactory>,
-          this.options.providerResolver,
-          context,
-          sessionHandlerTypes
-        )
-        });
+        sessionFactory: (context) =>
+          createStreamSessionInstance(
+            sessionType as Type<ZLinkSession> | Type<ZLinkSessionFactory>,
+            this.options.providerResolver,
+            context,
+            sessionHandlerTypes
+          )
+      });
       runtime.start();
       this.nodes.set(nodeName, {
         meshName: applicationMeshName,
@@ -309,7 +317,7 @@ export class ZLinkStreamRuntimeManager {
         socket,
         monitor,
         nativeSessionService,
-        nativeSessionServices: [...nativeSessionRoutes.values()].map(route => route.service)
+        nativeSessionServices: [...nativeSessionRoutes.values()].map((route) => route.service)
       });
     }
   }
@@ -319,8 +327,9 @@ export class ZLinkStreamRuntimeManager {
     this.nodes.clear();
     for (const node of nodes.reverse()) {
       await node.runtime.dispose();
-      const nativeServices = node.nativeSessionServices
-        ?? (node.nativeSessionService === undefined ? [] : [node.nativeSessionService]);
+      const nativeServices =
+        node.nativeSessionServices ??
+        (node.nativeSessionService === undefined ? [] : [node.nativeSessionService]);
       for (const service of nativeServices) {
         service.shutdown(1000);
         service.close();
@@ -331,17 +340,20 @@ export class ZLinkStreamRuntimeManager {
   }
 
   async notifyServerDrain(meshName: string): Promise<void> {
-    await Promise.all([...this.nodes.values()]
-      .filter((node) => node.meshName === meshName)
-      .map((node) => node.runtime.drainCloseSessions()));
+    await Promise.all(
+      [...this.nodes.values()]
+        .filter((node) => node.meshName === meshName)
+        .map((node) => node.runtime.drainCloseSessions())
+    );
   }
 
   async notifyUnscopedServerDrain(): Promise<void> {
-    await Promise.all([...this.nodes.values()]
-      .filter((node) => node.meshName === undefined)
-      .map((node) => node.runtime.drainCloseSessions()));
+    await Promise.all(
+      [...this.nodes.values()]
+        .filter((node) => node.meshName === undefined)
+        .map((node) => node.runtime.drainCloseSessions())
+    );
   }
-
 }
 
 export class ZLinkStreamSessionRuntime extends ZLinkStreamSessionRuntimeCore {
@@ -353,9 +365,11 @@ export class ZLinkStreamSessionRuntime extends ZLinkStreamSessionRuntimeCore {
     // Spec 27 §4: a default-constructed binding runtime must still honor the
     // process diagnostics level, so wire its Off gate to the runtime's
     // dispatch-error flow tracer.
-    const bindingRuntime = options.bindingRuntime ?? new ZLinkStreamBindingRuntime({
-      flowCreationEnabled: () => options.dispatchErrors?.flow.flowCreationEnabled() ?? true
-    });
+    const bindingRuntime =
+      options.bindingRuntime ??
+      new ZLinkStreamBindingRuntime({
+        flowCreationEnabled: () => options.dispatchErrors?.flow.flowCreationEnabled() ?? true
+      });
     super(
       {
         ...options,
@@ -364,7 +378,8 @@ export class ZLinkStreamSessionRuntime extends ZLinkStreamSessionRuntimeCore {
       routingId,
       removeSession === undefined
         ? undefined
-        : (sessionId, session) => removeSession(sessionId, session as unknown as ZLinkStreamSessionRuntime)
+        : (sessionId, session) =>
+            removeSession(sessionId, session as unknown as ZLinkStreamSessionRuntime)
     );
   }
 }
@@ -373,9 +388,11 @@ export class ZLinkStreamSessionNodeRuntime extends ZLinkStreamSessionNodeRuntime
   constructor(options: ZLinkStreamSessionNodeRuntimeOptions) {
     // Spec 27 §4: keep the default binding runtime's flow creation behind the
     // process diagnostics Off gate (see ZLinkStreamSessionRuntime above).
-    const bindingRuntime = options.bindingRuntime ?? new ZLinkStreamBindingRuntime({
-      flowCreationEnabled: () => options.dispatchErrors?.flow.flowCreationEnabled() ?? true
-    });
+    const bindingRuntime =
+      options.bindingRuntime ??
+      new ZLinkStreamBindingRuntime({
+        flowCreationEnabled: () => options.dispatchErrors?.flow.flowCreationEnabled() ?? true
+      });
     super({
       ...options,
       bindingRuntime
@@ -384,7 +401,10 @@ export class ZLinkStreamSessionNodeRuntime extends ZLinkStreamSessionNodeRuntime
 }
 
 export class ZLinkStreamBindingRuntime {
-  private readonly routes: ZLinkActorSessionBindingRegistry<DefaultZLinkSessionContext, DefaultZLinkSessionActor>;
+  private readonly routes: ZLinkActorSessionBindingRegistry<
+    DefaultZLinkSessionContext,
+    DefaultZLinkSessionActor
+  >;
   private readonly frameMessages: ZLinkStreamFrameMessageFactory;
   private readonly compressionCodec: ZLinkStreamCompressionCodec | undefined;
   private readonly boundSessions: ZLinkBoundSessionService;
@@ -396,14 +416,17 @@ export class ZLinkStreamBindingRuntime {
       ...options,
       actorBindTimeoutMs: options.actorBindTimeoutMs ?? DEFAULT_ACTOR_BIND_TIMEOUT_MS
     };
-    this.routes = new ZLinkActorSessionBindingRegistry<DefaultZLinkSessionContext, DefaultZLinkSessionActor>(
-      4096,
-      4096,
-      runtimeOptions.sessionRelocationSealTimeoutMs ?? 3_000
-    );
+    this.routes = new ZLinkActorSessionBindingRegistry<
+      DefaultZLinkSessionContext,
+      DefaultZLinkSessionActor
+    >(4096, 4096, runtimeOptions.sessionRelocationSealTimeoutMs ?? 3_000);
     this.compressionCodec = resolveStreamCompressionCodec(runtimeOptions.streamCompression);
     this.frameMessages = new ZLinkStreamFrameMessageFactory(runtimeOptions);
-    this.boundSessions = new ZLinkBoundSessionService(this.routes, this.frameMessages, runtimeOptions);
+    this.boundSessions = new ZLinkBoundSessionService(
+      this.routes,
+      this.frameMessages,
+      runtimeOptions
+    );
     const actorSessionLifecycle = new ZLinkActorSessionLifecycleCoordinator();
     this.sessionActors = new ZLinkSessionActorCoordinator(
       this.routes,
@@ -420,8 +443,7 @@ export class ZLinkStreamBindingRuntime {
     registerActorSessionBindingRuntimeOwner(this, {
       sealRelocation: (claim, expected, signal) =>
         this.routes.sealRelocation(claim, expected, signal),
-      relocationSnapshot: (actorId, sealId) =>
-        this.routes.relocationSnapshot(actorId, sealId),
+      relocationSnapshot: (actorId, sealId) => this.routes.relocationSnapshot(actorId, sealId),
       retainRelocationOutbound: (actorId, operation, sealId) =>
         this.routes.retainRelocationOutbound(actorId, operation, sealId),
       admitRelocationOutbound: (claim, operation) =>
@@ -431,7 +453,7 @@ export class ZLinkStreamBindingRuntime {
       applyRelocation: (...args) => this.routes.applyRelocation(...args),
       observeRelocationTerminal: (...args) => this.routes.observeRelocationTerminal(...args),
       clearRelocation: (actorId, error) => this.routes.clearRelocation(actorId, error),
-      committedRoute: async actorId => {
+      committedRoute: async (actorId) => {
         const route = await this.routes.route(actorId);
         return route === undefined
           ? undefined
@@ -527,10 +549,13 @@ export class ZLinkStreamBindingRuntime {
     );
   }
 
-  async authorityFence(actorId: string): Promise<{
-    readonly authorityOwnerGeneration: bigint;
-    readonly ownerLeaseGeneration: bigint;
-  } | undefined> {
+  async authorityFence(actorId: string): Promise<
+    | {
+        readonly authorityOwnerGeneration: bigint;
+        readonly ownerLeaseGeneration: bigint;
+      }
+    | undefined
+  > {
     return await this.sessionActors.authorityFence(actorId);
   }
 
@@ -546,7 +571,11 @@ export class ZLinkStreamBindingRuntime {
     return await this.routes.validateSeal(actorId, sealId);
   }
 
-  async unbind(actorId: string, context: DefaultZLinkSessionContext, bindingToken: string): Promise<void> {
+  async unbind(
+    actorId: string,
+    context: DefaultZLinkSessionContext,
+    bindingToken: string
+  ): Promise<void> {
     await this.routes.unbind(actorId, context, bindingToken);
   }
 
@@ -565,7 +594,13 @@ export class ZLinkStreamBindingRuntime {
     metadata: ReadonlyMap<string, string>,
     signal?: AbortSignal
   ): Promise<ZLinkSubmitResult> {
-    return await this.boundSessions.sendBoundSession(actorId, message, packetName, metadata, signal);
+    return await this.boundSessions.sendBoundSession(
+      actorId,
+      message,
+      packetName,
+      metadata,
+      signal
+    );
   }
 
   async submitLocalBoundSession(
@@ -575,7 +610,13 @@ export class ZLinkStreamBindingRuntime {
     metadata: ReadonlyMap<string, string>,
     signal?: AbortSignal
   ): Promise<ZLinkSubmitResult> {
-    return await this.boundSessions.submitLocalBoundSession(actorId, message, packetName, metadata, signal);
+    return await this.boundSessions.submitLocalBoundSession(
+      actorId,
+      message,
+      packetName,
+      metadata,
+      signal
+    );
   }
 
   async sendLocalBoundSession(
@@ -612,9 +653,14 @@ export class ZLinkStreamBindingRuntime {
     error: unknown,
     metadata: ReadonlyMap<string, string>
   ): Promise<boolean> {
-    return await this.boundSessions.sendLocalBoundSessionError(actorId, packetName, requestSeq, error, metadata);
+    return await this.boundSessions.sendLocalBoundSessionError(
+      actorId,
+      packetName,
+      requestSeq,
+      error,
+      metadata
+    );
   }
-
 
   async sendNativeBoundSession(
     node: ZLinkBackendActorSessionNode,
@@ -624,7 +670,14 @@ export class ZLinkStreamBindingRuntime {
     metadata: ReadonlyMap<string, string>,
     signal?: AbortSignal
   ): Promise<ZLinkSubmitResult> {
-    return await this.boundSessions.sendNativeBoundSession(node, actorRef, message, packetName, metadata, signal);
+    return await this.boundSessions.sendNativeBoundSession(
+      node,
+      actorRef,
+      message,
+      packetName,
+      metadata,
+      signal
+    );
   }
 
   async sendNativeBoundSessionResponse(
@@ -658,7 +711,15 @@ export class ZLinkStreamBindingRuntime {
     metadata: ReadonlyMap<string, string>,
     signal?: AbortSignal
   ): Promise<void> {
-    await this.boundSessions.sendNativeBoundSessionError(node, actorRef, packetName, requestSeq, error, metadata, signal);
+    await this.boundSessions.sendNativeBoundSessionError(
+      node,
+      actorRef,
+      packetName,
+      requestSeq,
+      error,
+      metadata,
+      signal
+    );
   }
 
   async disconnectNativeBoundSession(
@@ -695,7 +756,9 @@ export class ZLinkStreamBindingRuntime {
   }
 
   decompressPayload(payload: Message): Message {
-    return simpleMessage(decompressStreamPayload(messageToBytes(payload), this.compressionCodec)) as Message;
+    return simpleMessage(
+      decompressStreamPayload(messageToBytes(payload), this.compressionCodec)
+    ) as Message;
   }
 
   createJsonFrameMessage(
@@ -707,7 +770,15 @@ export class ZLinkStreamBindingRuntime {
     payload: unknown,
     correlationId?: string
   ): Message {
-    return this.frameMessages.createJsonFrameMessage(kind, packetName, metadata, compressed, requestSeq, payload, correlationId);
+    return this.frameMessages.createJsonFrameMessage(
+      kind,
+      packetName,
+      metadata,
+      compressed,
+      requestSeq,
+      payload,
+      correlationId
+    );
   }
 
   createJsonReplyFrameMessage(
@@ -717,7 +788,12 @@ export class ZLinkStreamBindingRuntime {
     compressed: boolean,
     payload: unknown
   ): Message {
-    return this.frameMessages.createJsonReplyFrameMessage(requestHeader, kind, metadata, compressed, payload);
+    return this.frameMessages.createJsonReplyFrameMessage(
+      requestHeader,
+      kind,
+      metadata,
+      compressed,
+      payload
+    );
   }
-
 }

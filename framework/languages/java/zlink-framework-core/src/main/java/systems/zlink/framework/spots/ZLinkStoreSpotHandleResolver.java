@@ -1,17 +1,18 @@
 package systems.zlink.framework.spots;
-import java.util.Objects;
-import java.util.concurrent.CompletableFuture;
-import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 
-import java.util.Optional;
-import java.util.concurrent.CompletionStage;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
-import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
+
+import java.util.Objects;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 public final class ZLinkStoreSpotHandleResolver
-    implements SpotHandleResolver, ActorSpotHandleResolver, SpotTransportAddressResolver {
+        implements SpotHandleResolver, ActorSpotHandleResolver, SpotTransportAddressResolver {
     private final ZLinkStoreLocationResolvers.AddressResolvers addresses;
 
     public ZLinkStoreSpotHandleResolver(ZLinkStoreLocationResolvers.AddressResolvers addresses) {
@@ -19,80 +20,104 @@ public final class ZLinkStoreSpotHandleResolver
     }
 
     public ZLinkStoreSpotHandleResolver(
-        ZLinkStoreLocationResolvers.AddressResolvers addresses,
-        ZLinkLocationRepository authorities) {
+            ZLinkStoreLocationResolvers.AddressResolvers addresses,
+            ZLinkLocationRepository authorities) {
         this.addresses = Objects.requireNonNull(addresses, "addresses");
     }
 
     @Override
-    public CompletionStage<Optional<SpotHandle>> resolveSpotHandle(
-        String meshName,
-        String spotId) {
+    public CompletionStage<Optional<SpotHandle>> resolveSpotHandle(String meshName, String spotId) {
         return flowAware(addresses.resolveSpot(meshName, spotId))
-            .thenApply(row -> row == null
-                ? Optional.empty()
-                : Optional.<SpotHandle>of(new FrameworkSpotHandle(
-                    row.meshName(), row.spotId(), row.nodeRid(),
-                    row.spotGeneration())));
+                .thenApply(
+                        row ->
+                                row == null
+                                        ? Optional.empty()
+                                        : Optional.<SpotHandle>of(
+                                                new FrameworkSpotHandle(
+                                                        row.meshName(),
+                                                        row.spotId(),
+                                                        row.nodeRid(),
+                                                        row.spotGeneration())));
     }
 
     @Override
     public CompletionStage<Optional<SpotHandle>> resolveSpotHandle(String spotId) {
         return flowAware(addresses.resolveSpot(spotId))
-            .thenApply(row -> row == null
-                ? Optional.empty()
-                : Optional.<SpotHandle>of(new FrameworkSpotHandle(
-                    row.meshName(), row.spotId(), row.nodeRid(),
-                    row.spotGeneration())));
+                .thenApply(
+                        row ->
+                                row == null
+                                        ? Optional.empty()
+                                        : Optional.<SpotHandle>of(
+                                                new FrameworkSpotHandle(
+                                                        row.meshName(),
+                                                        row.spotId(),
+                                                        row.nodeRid(),
+                                                        row.spotGeneration())));
     }
 
     @Override
     public CompletionStage<Optional<SpotHandle>> resolveActorSpotHandle(String actorId) {
-        return flowAware(addresses.resolveActor(actorId)).thenCompose(row -> {
-            if (row == null) {
-                return CompletableFuture.completedFuture(Optional.empty());
-            }
-            return flowAware(addresses.resolveSpot(row.spotId())).thenApply(spot -> spot == null
-                ? Optional.empty()
-                : Optional.of(new FrameworkSpotHandle(
-                    spot.meshName(), spot.spotId(), spot.nodeRid(), spot.spotGeneration())));
-        });
+        return flowAware(addresses.resolveActor(actorId))
+                .thenCompose(
+                        row -> {
+                            if (row == null) {
+                                return CompletableFuture.completedFuture(Optional.empty());
+                            }
+                            return flowAware(addresses.resolveSpot(row.spotId()))
+                                    .thenApply(
+                                            spot ->
+                                                    spot == null
+                                                            ? Optional.empty()
+                                                            : Optional.of(
+                                                                    new FrameworkSpotHandle(
+                                                                            spot.meshName(),
+                                                                            spot.spotId(),
+                                                                            spot.nodeRid(),
+                                                                            spot
+                                                                                    .spotGeneration())));
+                        });
     }
 
     @Override
     public CompletionStage<Optional<SpotTransportAddress>> resolve(SpotHandle handle) {
         return flowAware(addresses.resolveSpot(handle.meshName(), handle.spotId()))
-            .thenApply(row -> row == null
-                || row.spotGeneration()
-                    != ((FrameworkSpotHandle) handle).spotGeneration()
-                    ? Optional.empty()
-                    : Optional.of(new SpotTransportAddress(
-                        addresses.routerChannelId(row.meshName()),
-                        row.nodeRid(),
-                        row.spotId(),
-                        row.spotGeneration(),
-                        row.targetNodeGeneration(),
-                        row.authorityOwnerGeneration(),
-                        row.ownerLeaseGeneration(),
-                        row.spotKind())));
+                .thenApply(
+                        row ->
+                                row == null
+                                                || row.spotGeneration()
+                                                        != ((FrameworkSpotHandle) handle)
+                                                                .spotGeneration()
+                                        ? Optional.empty()
+                                        : Optional.of(
+                                                new SpotTransportAddress(
+                                                        addresses.routerChannelId(row.meshName()),
+                                                        row.nodeRid(),
+                                                        row.spotId(),
+                                                        row.spotGeneration(),
+                                                        row.targetNodeGeneration(),
+                                                        row.authorityOwnerGeneration(),
+                                                        row.ownerLeaseGeneration(),
+                                                        row.spotKind())));
     }
 
     @Override
     public CompletionStage<Optional<SpotTransportAddress>> resolve(String spotId) {
-        return resolveSpotHandle(spotId).thenCompose(handle -> handle
-            .map(this::resolve)
-            .orElseGet(() -> CompletableFuture.completedFuture(
-                Optional.empty())));
+        return resolveSpotHandle(spotId)
+                .thenCompose(
+                        handle ->
+                                handle.map(this::resolve)
+                                        .orElseGet(
+                                                () ->
+                                                        CompletableFuture.completedFuture(
+                                                                Optional.empty())));
     }
 
     @Override
     public void invalidate(String spotId) {
-        addresses.invalidateSpotRoute(
-            Objects.requireNonNull(spotId, "spotId"));
+        addresses.invalidateSpotRoute(Objects.requireNonNull(spotId, "spotId"));
     }
 
     private static <T> CompletionStage<T> flowAware(CompletionStage<T> source) {
         return ZLinkFlowContext.propagate(source);
     }
-
 }

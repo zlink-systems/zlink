@@ -22,7 +22,8 @@ internal sealed class ZLinkBoundedIngressAdmission
 
     internal ZLinkBoundedIngressAdmission(
         int recordCapacity = SourceIngressHoldRecordCapacity,
-        long byteCapacity = SourceIngressHoldByteCapacity)
+        long byteCapacity = SourceIngressHoldByteCapacity
+    )
     {
         if (recordCapacity <= 0)
             throw new ArgumentOutOfRangeException(nameof(recordCapacity));
@@ -38,9 +39,7 @@ internal sealed class ZLinkBoundedIngressAdmission
             return ValueTask.FromResult(false);
         return _lane.RunAsync(() =>
         {
-            if (_closed
-                || _records >= _recordCapacity
-                || encodedBytes > _byteCapacity - _bytes)
+            if (_closed || _records >= _recordCapacity || encodedBytes > _byteCapacity - _bytes)
                 return false;
             _records++;
             _bytes += encodedBytes;
@@ -57,49 +56,56 @@ internal sealed class ZLinkBoundedIngressAdmission
 
     private async ValueTask ReleaseAsyncCore(long encodedBytes)
     {
-        var completed = await _lane.RunAsync(() =>
-        {
-            if (_records == 0 || encodedBytes > _bytes)
-                throw new InvalidOperationException(
-                    "Ingress admission release does not match an acquired record.");
-            _records--;
-            _bytes -= encodedBytes;
-            TaskCompletionSource? completed = null;
-            if (_records == 0)
+        var completed = await _lane
+            .RunAsync(() =>
             {
-                completed = _emptyWaiter;
-                _emptyWaiter = null;
-            }
-            return completed;
-        }).ConfigureAwait(false);
+                if (_records == 0 || encodedBytes > _bytes)
+                    throw new InvalidOperationException(
+                        "Ingress admission release does not match an acquired record."
+                    );
+                _records--;
+                _bytes -= encodedBytes;
+                TaskCompletionSource? completed = null;
+                if (_records == 0)
+                {
+                    completed = _emptyWaiter;
+                    _emptyWaiter = null;
+                }
+                return completed;
+            })
+            .ConfigureAwait(false);
         completed?.TrySetResult();
     }
 
     internal async ValueTask ReleaseAllAsync()
     {
-        var completed = await _lane.RunAsync(() =>
-        {
-            _records = 0;
-            _bytes = 0;
-            var completed = _emptyWaiter;
-            _emptyWaiter = null;
-            return completed;
-        }).ConfigureAwait(false);
+        var completed = await _lane
+            .RunAsync(() =>
+            {
+                _records = 0;
+                _bytes = 0;
+                var completed = _emptyWaiter;
+                _emptyWaiter = null;
+                return completed;
+            })
+            .ConfigureAwait(false);
         completed?.TrySetResult();
     }
 
-    internal async ValueTask CloseAndWaitForEmptyAsync(
-        CancellationToken cancellationToken)
+    internal async ValueTask CloseAndWaitForEmptyAsync(CancellationToken cancellationToken)
     {
-        var wait = await _lane.RunAsync(() =>
-        {
-            _closed = true;
-            if (_records == 0)
-                return (Task?)null;
-            _emptyWaiter ??= new TaskCompletionSource(
-                TaskCreationOptions.RunContinuationsAsynchronously);
-            return _emptyWaiter.Task;
-        }).ConfigureAwait(false);
+        var wait = await _lane
+            .RunAsync(() =>
+            {
+                _closed = true;
+                if (_records == 0)
+                    return (Task?)null;
+                _emptyWaiter ??= new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously
+                );
+                return _emptyWaiter.Task;
+            })
+            .ConfigureAwait(false);
         if (wait is not null)
             await wait.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -113,26 +119,19 @@ internal sealed class ZLinkBoundedIngressAdmission
     internal ValueTask<int> GetRemainingRecordCapacityAsync() =>
         _lane.RunAsync(() => _recordCapacity - _records);
 
-    internal bool TryAcquire(long encodedBytes) =>
-        AwaitStateLane(TryAcquireAsync(encodedBytes));
+    internal bool TryAcquire(long encodedBytes) => AwaitStateLane(TryAcquireAsync(encodedBytes));
 
-    internal void Release(long encodedBytes) =>
-        AwaitStateLane(ReleaseAsync(encodedBytes));
+    internal void Release(long encodedBytes) => AwaitStateLane(ReleaseAsync(encodedBytes));
 
-    internal void ReleaseAll() =>
-        AwaitStateLane(ReleaseAllAsync());
+    internal void ReleaseAll() => AwaitStateLane(ReleaseAllAsync());
 
-    internal (int Records, long Bytes) Snapshot() =>
-        AwaitStateLane(SnapshotAsync());
+    internal (int Records, long Bytes) Snapshot() => AwaitStateLane(SnapshotAsync());
 
-    internal long RemainingByteCapacity =>
-        AwaitStateLane(GetRemainingByteCapacityAsync());
+    internal long RemainingByteCapacity => AwaitStateLane(GetRemainingByteCapacityAsync());
 
-    internal int RemainingRecordCapacity =>
-        AwaitStateLane(GetRemainingRecordCapacityAsync());
+    internal int RemainingRecordCapacity => AwaitStateLane(GetRemainingRecordCapacityAsync());
 
-    private static void AwaitStateLane(ValueTask operation) =>
-        operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();

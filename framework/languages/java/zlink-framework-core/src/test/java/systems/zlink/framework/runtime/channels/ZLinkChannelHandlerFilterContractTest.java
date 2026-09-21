@@ -1,25 +1,19 @@
 package systems.zlink.framework.runtime.channels;
-import org.junit.jupiter.api.Assertions;
-import systems.zlink.framework.ZLinkMessageContext;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.CompletionStage;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkHandlerDispatchKind;
 import systems.zlink.framework.ZLinkHandlerFilter;
 import systems.zlink.framework.ZLinkHandlerFilterContext;
 import systems.zlink.framework.ZLinkHandlerFilterNext;
-import systems.zlink.framework.ZLinkEncodedPayload;
+import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.channels.ZLinkFanoutHandler;
 import systems.zlink.framework.channels.ZLinkPublishMessageContext;
@@ -34,39 +28,46 @@ import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistra
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
+
 final class ZLinkChannelHandlerFilterContractTest {
     @Test
     void requestReplyUsesDeclaredReplyTypeInsteadOfRuntimeSubtype() {
         ZLinkCodecRegistration codecs = new ZLinkCodecRegistration();
         codecs.addSerializer(
-            "application/x-broad",
-            new ReplyMarkerSerializer("BROAD"),
-            type -> type == BaseReply.class || type == DerivedReply.class);
+                "application/x-broad",
+                new ReplyMarkerSerializer("BROAD"),
+                type -> type == BaseReply.class || type == DerivedReply.class);
         codecs.addSerializer(
-            "application/x-base",
-            new ReplyMarkerSerializer("BASE"),
-            BaseReply.class::equals);
-        ZLinkMessageSerializer serializer = codecs.serializerWithFallback(
-            new ZLinkStringMessageSerializer());
-        ZLinkChannelHandlerInvoker invoker = new ZLinkChannelHandlerInvoker(
-            serializer,
-            codecs,
-            type -> new DerivedReplyHandler(),
-            Runnable::run,
-            List.of(),
-            List.of());
+                "application/x-base", new ReplyMarkerSerializer("BASE"), BaseReply.class::equals);
+        ZLinkMessageSerializer serializer =
+                codecs.serializerWithFallback(new ZLinkStringMessageSerializer());
+        ZLinkChannelHandlerInvoker invoker =
+                new ZLinkChannelHandlerInvoker(
+                        serializer,
+                        codecs,
+                        type -> new DerivedReplyHandler(),
+                        Runnable::run,
+                        List.of(),
+                        List.of());
         Message request = text("request");
 
-        Message reply = invoker.invokeRequestHandler(
-                "channel-a",
-                new ChannelRequestHandlerRegistration(
-                    DerivedReplyHandler.class,
-                    String.class,
-                    BaseReply.class,
-                    "request"),
-                request)
-            .toCompletableFuture()
-            .join();
+        Message reply =
+                invoker.invokeRequestHandler(
+                                "channel-a",
+                                new ChannelRequestHandlerRegistration(
+                                        DerivedReplyHandler.class,
+                                        String.class,
+                                        BaseReply.class,
+                                        "request"),
+                                request)
+                        .toCompletableFuture()
+                        .join();
         try {
             assertEquals("BASE", reply.toUtf8String());
         } finally {
@@ -82,85 +83,98 @@ final class ZLinkChannelHandlerFilterContractTest {
         ZLinkChannelHandlerInvoker clientServer = invoker(probe, null);
         Message payload = text("request");
 
-        routeMesh.invokeSendHandler(
-                "channel-a",
-                new ChannelSendHandlerRegistration(
-                    SendHandler.class, String.class, "send"),
-                payload)
-            .toCompletableFuture().join();
-        routeMesh.invokeRequestHandler(
-                "channel-a",
-                new ChannelRequestHandlerRegistration(
-                    RequestHandler.class, String.class, String.class, "request"),
-                payload)
-            .toCompletableFuture().join().close();
-        routeMesh.invokeRouteSendHandler(
-                null,
-                new ChannelRouteSendHandlerRegistration(
-                    RouteSendHandler.class, String.class, "node-send"),
-                RoutingId.from("source"),
-                payload)
-            .toCompletableFuture().join();
-        routeMesh.invokeRouteRequestHandler(
-                null,
-                new ChannelRouteRequestHandlerRegistration(
-                    RouteRequestHandler.class,
-                    String.class,
-                    String.class,
-                    "node-request"),
-                RoutingId.from("source"),
-                payload)
-            .toCompletableFuture().join().close();
-        routeMesh.invokePublishHandler(
-                "fanout-a",
-                new ChannelPublishHandlerRegistration(
-                    PublishHandler.class, String.class, "publish"),
-                "topic-a",
-                payload)
-            .toCompletableFuture().join();
-        clientServer.invokeRequestHandler(
-                "channel-b",
-                new ChannelRequestHandlerRegistration(
-                    RequestHandler.class, String.class, String.class, "request"),
-                payload)
-            .toCompletableFuture().join().close();
+        routeMesh
+                .invokeSendHandler(
+                        "channel-a",
+                        new ChannelSendHandlerRegistration(SendHandler.class, String.class, "send"),
+                        payload)
+                .toCompletableFuture()
+                .join();
+        routeMesh
+                .invokeRequestHandler(
+                        "channel-a",
+                        new ChannelRequestHandlerRegistration(
+                                RequestHandler.class, String.class, String.class, "request"),
+                        payload)
+                .toCompletableFuture()
+                .join()
+                .close();
+        routeMesh
+                .invokeRouteSendHandler(
+                        null,
+                        new ChannelRouteSendHandlerRegistration(
+                                RouteSendHandler.class, String.class, "node-send"),
+                        RoutingId.from("source"),
+                        payload)
+                .toCompletableFuture()
+                .join();
+        routeMesh
+                .invokeRouteRequestHandler(
+                        null,
+                        new ChannelRouteRequestHandlerRegistration(
+                                RouteRequestHandler.class,
+                                String.class,
+                                String.class,
+                                "node-request"),
+                        RoutingId.from("source"),
+                        payload)
+                .toCompletableFuture()
+                .join()
+                .close();
+        routeMesh
+                .invokePublishHandler(
+                        "fanout-a",
+                        new ChannelPublishHandlerRegistration(
+                                PublishHandler.class, String.class, "publish"),
+                        "topic-a",
+                        payload)
+                .toCompletableFuture()
+                .join();
+        clientServer
+                .invokeRequestHandler(
+                        "channel-b",
+                        new ChannelRequestHandlerRegistration(
+                                RequestHandler.class, String.class, String.class, "request"),
+                        payload)
+                .toCompletableFuture()
+                .join()
+                .close();
         payload.close();
 
         assertEquals(
-            List.of(
-                ZLinkHandlerDispatchKind.CHANNEL_SEND,
-                ZLinkHandlerDispatchKind.CHANNEL_REQUEST,
-                ZLinkHandlerDispatchKind.NODE_DIRECT_SEND,
-                ZLinkHandlerDispatchKind.NODE_DIRECT_REQUEST,
-                ZLinkHandlerDispatchKind.CLASSIC_FANOUT,
-                ZLinkHandlerDispatchKind.CHANNEL_REQUEST),
-            probe.kinds);
-        assertEquals(
-            List.of("mesh-a", "mesh-a", "mesh-a", "mesh-a", "", ""),
-            probe.meshNames);
+                List.of(
+                        ZLinkHandlerDispatchKind.CHANNEL_SEND,
+                        ZLinkHandlerDispatchKind.CHANNEL_REQUEST,
+                        ZLinkHandlerDispatchKind.NODE_DIRECT_SEND,
+                        ZLinkHandlerDispatchKind.NODE_DIRECT_REQUEST,
+                        ZLinkHandlerDispatchKind.CLASSIC_FANOUT,
+                        ZLinkHandlerDispatchKind.CHANNEL_REQUEST),
+                probe.kinds);
+        assertEquals(List.of("mesh-a", "mesh-a", "mesh-a", "mesh-a", "", ""), probe.meshNames);
     }
 
     @Test
     void requestShortCircuitIsRejectedWithoutSerializingFilterValue() {
         Probe probe = new Probe();
         probe.stopRequests = true;
-        CompletionException failure = Assertions.assertThrows(
-            CompletionException.class,
-            () -> invoker(probe, null)
-                .invokeRequestHandler(
-                    "channel-a",
-                    new ChannelRequestHandlerRegistration(
-                        RequestHandler.class,
-                        String.class,
-                        String.class,
-                        "request"),
-                    text("request"))
-                .toCompletableFuture()
-                .join());
+        CompletionException failure =
+                Assertions.assertThrows(
+                        CompletionException.class,
+                        () ->
+                                invoker(probe, null)
+                                        .invokeRequestHandler(
+                                                "channel-a",
+                                                new ChannelRequestHandlerRegistration(
+                                                        RequestHandler.class,
+                                                        String.class,
+                                                        String.class,
+                                                        "request"),
+                                                text("request"))
+                                        .toCompletableFuture()
+                                        .join());
 
-        ZLinkFrameworkException rejected = assertInstanceOf(
-            ZLinkFrameworkException.class,
-            failure.getCause());
+        ZLinkFrameworkException rejected =
+                assertInstanceOf(ZLinkFrameworkException.class, failure.getCause());
         assertEquals(ZLinkFrameworkErrorKind.REJECTED, rejected.kind());
         assertEquals(0, probe.handlerCalls);
     }
@@ -169,21 +183,22 @@ final class ZLinkChannelHandlerFilterContractTest {
     void legacyRouteDispatcherUsesRouteNameAsMeshName() {
         Probe probe = new Probe();
         Message payload = text("request");
-        invoker(probe, null).invokeRouteRequestHandler(
-                "legacy-mesh",
-                new ChannelRouteRequestHandlerRegistration(
-                    RouteRequestHandler.class,
-                    String.class,
-                    String.class,
-                    "node-request"),
-                RoutingId.from("source"),
-                payload)
-            .toCompletableFuture().join().close();
+        invoker(probe, null)
+                .invokeRouteRequestHandler(
+                        "legacy-mesh",
+                        new ChannelRouteRequestHandlerRegistration(
+                                RouteRequestHandler.class,
+                                String.class,
+                                String.class,
+                                "node-request"),
+                        RoutingId.from("source"),
+                        payload)
+                .toCompletableFuture()
+                .join()
+                .close();
         payload.close();
 
-        assertEquals(
-            List.of(ZLinkHandlerDispatchKind.NODE_DIRECT_REQUEST),
-            probe.kinds);
+        assertEquals(List.of(ZLinkHandlerDispatchKind.NODE_DIRECT_REQUEST), probe.kinds);
         assertEquals(List.of("legacy-mesh"), probe.meshNames);
     }
 
@@ -193,15 +208,15 @@ final class ZLinkChannelHandlerFilterContractTest {
         ZLinkChannelHandlerInvoker invoker = invoker(probe, null);
         Message payload = text("event");
         ChannelPublishHandlerRegistration registration =
-            new ChannelPublishHandlerRegistration(
-                PublishHandler.class, String.class, "publish");
+                new ChannelPublishHandlerRegistration(
+                        PublishHandler.class, String.class, "publish");
 
-        invoker.invokePublishHandler(
-            "fanout-a", registration, "topic-a", payload)
-            .toCompletableFuture().join();
-        invoker.invokePublishHandler(
-            "fanout-a", registration, "topic-a", payload)
-            .toCompletableFuture().join();
+        invoker.invokePublishHandler("fanout-a", registration, "topic-a", payload)
+                .toCompletableFuture()
+                .join();
+        invoker.invokePublishHandler("fanout-a", registration, "topic-a", payload)
+                .toCompletableFuture()
+                .join();
         payload.close();
 
         assertEquals(2, probe.filterCreates);
@@ -209,36 +224,35 @@ final class ZLinkChannelHandlerFilterContractTest {
         assertEquals(2, probe.handlerCalls);
     }
 
-    private static ZLinkChannelHandlerInvoker invoker(
-        Probe probe,
-        String meshName) {
+    private static ZLinkChannelHandlerInvoker invoker(Probe probe, String meshName) {
         ZLinkCodecRegistration codecs = new ZLinkCodecRegistration();
-        ZLinkStringMessageSerializer serializer =
-            new ZLinkStringMessageSerializer();
+        ZLinkStringMessageSerializer serializer = new ZLinkStringMessageSerializer();
         codecs.addSerializer("text/plain", serializer);
-        ZLinkHandlerActivator activator = new ZLinkHandlerActivator() {
-            @Override
-            public Object create(Class<?> type) {
-                if (type == CapturingFilter.class) {
-                    probe.filterCreates++;
-                    return new CapturingFilter(probe);
-                }
-                if (type == SendHandler.class) return new SendHandler(probe);
-                if (type == RequestHandler.class) return new RequestHandler(probe);
-                if (type == RouteSendHandler.class) return new RouteSendHandler(probe);
-                if (type == RouteRequestHandler.class) return new RouteRequestHandler(probe);
-                if (type == PublishHandler.class) return new PublishHandler(probe);
-                throw new IllegalArgumentException("unexpected type: " + type);
-            }
-        };
+        ZLinkHandlerActivator activator =
+                new ZLinkHandlerActivator() {
+                    @Override
+                    public Object create(Class<?> type) {
+                        if (type == CapturingFilter.class) {
+                            probe.filterCreates++;
+                            return new CapturingFilter(probe);
+                        }
+                        if (type == SendHandler.class) return new SendHandler(probe);
+                        if (type == RequestHandler.class) return new RequestHandler(probe);
+                        if (type == RouteSendHandler.class) return new RouteSendHandler(probe);
+                        if (type == RouteRequestHandler.class)
+                            return new RouteRequestHandler(probe);
+                        if (type == PublishHandler.class) return new PublishHandler(probe);
+                        throw new IllegalArgumentException("unexpected type: " + type);
+                    }
+                };
         return new ZLinkChannelHandlerInvoker(
-            serializer,
-            codecs,
-            activator,
-            Runnable::run,
-            List.of(),
-            List.of(CapturingFilter.class),
-            meshName);
+                serializer,
+                codecs,
+                activator,
+                Runnable::run,
+                List.of(),
+                List.of(CapturingFilter.class),
+                meshName);
     }
 
     private static Message text(String value) {
@@ -254,8 +268,7 @@ final class ZLinkChannelHandlerFilterContractTest {
         private boolean stopRequests;
     }
 
-    private static final class CapturingFilter
-        implements ZLinkHandlerFilter, AutoCloseable {
+    private static final class CapturingFilter implements ZLinkHandlerFilter, AutoCloseable {
         private final Probe probe;
 
         private CapturingFilter(Probe probe) {
@@ -264,15 +277,13 @@ final class ZLinkChannelHandlerFilterContractTest {
 
         @Override
         public <T> CompletionStage<T> invoke(
-            ZLinkHandlerFilterContext context,
-            ZLinkHandlerFilterNext<T> next) {
+                ZLinkHandlerFilterContext context, ZLinkHandlerFilterNext<T> next) {
             probe.kinds.add(context.dispatchKind());
             probe.meshNames.add(context.meshName().orElse(""));
             if (probe.stopRequests
-                && (context.dispatchKind()
-                    == ZLinkHandlerDispatchKind.CHANNEL_REQUEST
-                    || context.dispatchKind()
-                    == ZLinkHandlerDispatchKind.NODE_DIRECT_REQUEST)) {
+                    && (context.dispatchKind() == ZLinkHandlerDispatchKind.CHANNEL_REQUEST
+                            || context.dispatchKind()
+                                    == ZLinkHandlerDispatchKind.NODE_DIRECT_REQUEST)) {
                 @SuppressWarnings("unchecked")
                 T ignoredReplacement = (T) "filter-reply";
                 return CompletableFuture.completedFuture(ignoredReplacement);
@@ -286,83 +297,63 @@ final class ZLinkChannelHandlerFilterContractTest {
         }
     }
 
-    private record SendHandler(Probe probe)
-        implements ZLinkSendHandler<String> {
+    private record SendHandler(Probe probe) implements ZLinkSendHandler<String> {
         @Override
-        public CompletionStage<Void> handle(
-            String message,
-            ZLinkMessageContext context) {
+        public CompletionStage<Void> handle(String message, ZLinkMessageContext context) {
             probe.handlerCalls++;
             return CompletableFuture.completedFuture(null);
         }
     }
 
-    private record RequestHandler(Probe probe)
-        implements ZLinkRequestHandler<String, String> {
+    private record RequestHandler(Probe probe) implements ZLinkRequestHandler<String, String> {
         @Override
-        public CompletionStage<String> handle(
-            String request,
-            ZLinkMessageContext context) {
+        public CompletionStage<String> handle(String request, ZLinkMessageContext context) {
             probe.handlerCalls++;
             return CompletableFuture.completedFuture(request);
         }
     }
 
-    private record RouteSendHandler(Probe probe)
-        implements ZLinkRouteSendHandler<String> {
+    private record RouteSendHandler(Probe probe) implements ZLinkRouteSendHandler<String> {
         @Override
-        public CompletionStage<Void> handle(
-            String message,
-            ZLinkRouteMessageContext context) {
+        public CompletionStage<Void> handle(String message, ZLinkRouteMessageContext context) {
             probe.handlerCalls++;
             return CompletableFuture.completedFuture(null);
         }
     }
 
     private record RouteRequestHandler(Probe probe)
-        implements ZLinkRouteRequestHandler<String, String> {
+            implements ZLinkRouteRequestHandler<String, String> {
         @Override
-        public CompletionStage<String> handle(
-            String request,
-            ZLinkRouteMessageContext context) {
+        public CompletionStage<String> handle(String request, ZLinkRouteMessageContext context) {
             probe.handlerCalls++;
             return CompletableFuture.completedFuture(request);
         }
     }
 
-    private record PublishHandler(Probe probe)
-        implements ZLinkFanoutHandler<String> {
+    private record PublishHandler(Probe probe) implements ZLinkFanoutHandler<String> {
         @Override
-        public CompletionStage<Void> handle(
-            String message,
-            ZLinkPublishMessageContext context) {
+        public CompletionStage<Void> handle(String message, ZLinkPublishMessageContext context) {
             probe.handlerCalls++;
             return CompletableFuture.completedFuture(null);
         }
     }
 
-    private static class BaseReply {
-    }
+    private static class BaseReply {}
 
-    private static final class DerivedReply extends BaseReply {
-    }
+    private static final class DerivedReply extends BaseReply {}
 
     private static final class DerivedReplyHandler
-        implements ZLinkRequestHandler<String, BaseReply> {
+            implements ZLinkRequestHandler<String, BaseReply> {
         @Override
-        public CompletionStage<BaseReply> handle(
-            String request,
-            ZLinkMessageContext context) {
+        public CompletionStage<BaseReply> handle(String request, ZLinkMessageContext context) {
             return CompletableFuture.completedFuture(new DerivedReply());
         }
     }
 
-    private record ReplyMarkerSerializer(String marker)
-        implements ZLinkMessageSerializer {
+    private record ReplyMarkerSerializer(String marker) implements ZLinkMessageSerializer {
         @Override
         public <T> ZLinkEncodedPayload serialize(T value) {
-            return ZLinkEncodedPayload.from(
-                marker.getBytes(StandardCharsets.UTF_8));
+            return ZLinkEncodedPayload.from(marker.getBytes(StandardCharsets.UTF_8));
         }
 
         @Override

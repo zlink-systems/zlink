@@ -22,13 +22,15 @@ internal static class ZlinkStreamSessionClosingCodec
     public static byte[] EncodeProtocolError(string? diagnostic = null) =>
         Encode(ZlinkStreamCloseReason.ProtocolError, diagnostic);
 
-    public static ZlinkStreamHeader CreateHeader() => new(
-        ZlinkStreamMessageKind.Control,
-        ZlinkStreamCodec.Raw,
-        ZlinkStreamHeaderFlags.None,
-        null,
-        ControlName,
-        ZlinkStreamMetadata.Empty);
+    public static ZlinkStreamHeader CreateHeader() =>
+        new(
+            ZlinkStreamMessageKind.Control,
+            ZlinkStreamCodec.Raw,
+            ZlinkStreamHeaderFlags.None,
+            null,
+            ControlName,
+            ZlinkStreamMetadata.Empty
+        );
 
     public static ZlinkStreamSessionClosing Decode(ReadOnlySpan<byte> payload)
     {
@@ -45,7 +47,7 @@ internal static class ZlinkStreamSessionClosingCodec
             4 => ZlinkStreamCloseReason.ServerDrain,
             5 => ZlinkStreamCloseReason.ProtocolError,
             6 => ZlinkStreamCloseReason.TransportError,
-            _ => throw Error("Session-closing reason is not supported.")
+            _ => throw Error("Session-closing reason is not supported."),
         };
         var diagnosticLength = BinaryPrimitives.ReadUInt16BigEndian(payload.Slice(2, 2));
         if (diagnosticLength > MaximumDiagnosticBytes)
@@ -55,9 +57,10 @@ internal static class ZlinkStreamSessionClosingCodec
 
         try
         {
-            var diagnostic = diagnosticLength == 0
-                ? null
-                : StrictUtf8.GetString(payload.Slice(4, diagnosticLength));
+            var diagnostic =
+                diagnosticLength == 0
+                    ? null
+                    : StrictUtf8.GetString(payload.Slice(4, diagnosticLength));
             return new ZlinkStreamSessionClosing(reason, diagnostic);
         }
         catch (DecoderFallbackException exception)
@@ -66,35 +69,34 @@ internal static class ZlinkStreamSessionClosingCodec
         }
     }
 
-    private static byte[] Encode(
-        ZlinkStreamCloseReason reason,
-        string? diagnostic)
+    private static byte[] Encode(ZlinkStreamCloseReason reason, string? diagnostic)
     {
         int diagnosticLength;
         try
         {
-            diagnosticLength = diagnostic is null
-                ? 0
-                : StrictUtf8.GetByteCount(diagnostic);
+            diagnosticLength = diagnostic is null ? 0 : StrictUtf8.GetByteCount(diagnostic);
         }
         catch (EncoderFallbackException exception)
         {
             throw ZlinkStreamConnector.Error(
                 ZlinkStreamErrorCode.ValidationFailed,
                 "Session-closing diagnostic is not valid UTF-8.",
-                exception);
+                exception
+            );
         }
         if (diagnosticLength > MaximumDiagnosticBytes)
             throw ZlinkStreamConnector.Error(
                 ZlinkStreamErrorCode.ValidationFailed,
-                "Session-closing diagnostic must not exceed 512 UTF-8 bytes.");
+                "Session-closing diagnostic must not exceed 512 UTF-8 bytes."
+            );
 
         var payload = new byte[4 + diagnosticLength];
         payload[0] = Version;
         payload[1] = checked((byte)((byte)reason + 1));
         BinaryPrimitives.WriteUInt16BigEndian(
             payload.AsSpan(2, 2),
-            checked((ushort)diagnosticLength));
+            checked((ushort)diagnosticLength)
+        );
         if (diagnosticLength > 0)
             StrictUtf8.GetBytes(diagnostic!, payload.AsSpan(4));
         return payload;
@@ -106,4 +108,5 @@ internal static class ZlinkStreamSessionClosingCodec
 
 internal readonly record struct ZlinkStreamSessionClosing(
     ZlinkStreamCloseReason Reason,
-    string? Diagnostic);
+    string? Diagnostic
+);

@@ -1,24 +1,22 @@
 package systems.zlink.framework.runtime.actors;
 
+import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
+
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
-import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 
 final class ZLinkRelayMetadataPolicy {
-    static final ZLinkRelayMetadataPolicy EMPTY =
-        new ZLinkRelayMetadataPolicy(Set.of(), Set.of());
+    static final ZLinkRelayMetadataPolicy EMPTY = new ZLinkRelayMetadataPolicy(Set.of(), Set.of());
 
     private final Set<String> sessionToActorKeys;
     private final Set<String> actorToSessionKeys;
 
-    ZLinkRelayMetadataPolicy(
-        Set<String> sessionToActorKeys,
-        Set<String> actorToSessionKeys) {
+    ZLinkRelayMetadataPolicy(Set<String> sessionToActorKeys, Set<String> actorToSessionKeys) {
         this.sessionToActorKeys =
-            sessionToActorKeys == null ? Set.of() : Set.copyOf(sessionToActorKeys);
+                sessionToActorKeys == null ? Set.of() : Set.copyOf(sessionToActorKeys);
         this.actorToSessionKeys =
-            actorToSessionKeys == null ? Set.of() : Set.copyOf(actorToSessionKeys);
+                actorToSessionKeys == null ? Set.of() : Set.copyOf(actorToSessionKeys);
     }
 
     ZLinkStreamHeader sessionToActor(ZLinkStreamHeader header) {
@@ -27,39 +25,38 @@ final class ZLinkRelayMetadataPolicy {
 
     ZLinkBoundSessionSendOptions actorToSession(ZLinkBoundSessionSendOptions options) {
         return new ZLinkBoundSessionSendOptions(
-            options.defaultPacketName(),
-            filter(options.metadata(), actorToSessionKeys),
-            options.packetName(),
-            options.codec());
+                options.defaultPacketName(),
+                filter(options.metadata(), actorToSessionKeys),
+                options.packetName(),
+                options.codec());
     }
 
     private static ZLinkStreamHeader copyWithMetadata(
-        ZLinkStreamHeader header,
-        Map<String, String> metadata) {
+            ZLinkStreamHeader header, Map<String, String> metadata) {
         return new ZLinkStreamHeader(
-            header.kind(),
-            header.codec(),
-            header.flags(),
-            header.requestSequence(),
-            header.name(),
-            metadata,
-            header.correlationId(),
-            header.flowId(),
-            header.flowOrigin());
+                header.kind(),
+                header.codec(),
+                header.flags(),
+                header.requestSequence(),
+                header.name(),
+                metadata,
+                header.correlationId(),
+                header.flowId(),
+                header.flowOrigin());
     }
 
     private static Map<String, String> filter(
-        Map<String, String> metadata,
-        Set<String> allowedKeys) {
+            Map<String, String> metadata, Set<String> allowedKeys) {
         if (metadata == null || metadata.isEmpty() || allowedKeys.isEmpty()) {
             return Map.of();
         }
         Map<String, String> filtered = new LinkedHashMap<>();
-        metadata.forEach((key, value) -> {
-            if (allowedKeys.contains(key)) {
-                filtered.put(key, value);
-            }
-        });
+        metadata.forEach(
+                (key, value) -> {
+                    if (allowedKeys.contains(key)) {
+                        filtered.put(key, value);
+                    }
+                });
         return Map.copyOf(filtered);
     }
 }

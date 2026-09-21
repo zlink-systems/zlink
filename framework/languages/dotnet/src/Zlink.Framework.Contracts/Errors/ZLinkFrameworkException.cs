@@ -6,7 +6,8 @@ public sealed class ZLinkFrameworkException : Exception
         ZLinkFrameworkErrorKind kind,
         string message,
         ZLinkRetryAdvice? retryAdvice = null,
-        Exception? innerException = null)
+        Exception? innerException = null
+    )
         : base(message, innerException)
     {
         Kind = kind;
@@ -29,16 +30,13 @@ public sealed class ZLinkFrameworkException : Exception
     /// </summary>
     internal ZLinkErrorOrigin Origin { get; init; }
 
-    private static ZLinkRetryAdvice DefaultRetryAdvice(
-        ZLinkFrameworkErrorKind kind) =>
+    private static ZLinkRetryAdvice DefaultRetryAdvice(ZLinkFrameworkErrorKind kind) =>
         kind switch
         {
-            ZLinkFrameworkErrorKind.Unavailable
-                or ZLinkFrameworkErrorKind.DeadlineExceeded =>
+            ZLinkFrameworkErrorKind.Unavailable or ZLinkFrameworkErrorKind.DeadlineExceeded =>
                 ZLinkRetryAdvice.RetryAfterBackoff,
-            ZLinkFrameworkErrorKind.ShuttingDown =>
-                ZLinkRetryAdvice.RetryAfterStateChange,
-            _ => ZLinkRetryAdvice.DoNotRetry
+            ZLinkFrameworkErrorKind.ShuttingDown => ZLinkRetryAdvice.RetryAfterStateChange,
+            _ => ZLinkRetryAdvice.DoNotRetry,
         };
 }
 
@@ -55,19 +53,19 @@ public enum ZLinkFrameworkErrorKind
     ProtocolError = 8,
     InvalidOperation = 9,
     DataLost = 10,
-    InternalFailure = 11
+    InternalFailure = 11,
 }
 
 internal enum ZLinkRetryAdvice
 {
     DoNotRetry = 0,
     RetryAfterBackoff = 1,
-    RetryAfterStateChange = 2
+    RetryAfterStateChange = 2,
 }
 
 internal enum ZLinkErrorOrigin
 {
     Unspecified = 0,
     Framework = 1,
-    Application = 2
+    Application = 2,
 }

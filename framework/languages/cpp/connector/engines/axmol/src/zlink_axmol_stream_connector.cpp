@@ -82,7 +82,9 @@ class stream_connector_t::runtime_t
     }
 };
 
-stream_connector_t::stream_connector_t () : _runtime (std::make_shared<runtime_t> ()) {}
+stream_connector_t::stream_connector_t () : _runtime (std::make_shared<runtime_t> ())
+{
+}
 stream_connector_t::~stream_connector_t ()
 {
     if (_runtime) {
@@ -96,7 +98,8 @@ void stream_connector_t::connect (std::string endpoint)
 {
     zlink::stream_connector::connector_options_t options;
     options.endpoint = std::move (endpoint);
-    _runtime->connector = zlink::stream_connector::connector_factory_t::create (std::move (options));
+    _runtime->connector =
+      zlink::stream_connector::connector_factory_t::create (std::move (options));
     _runtime->current_state = connection_state_t::connecting;
     _runtime->emit_state (_runtime->current_state);
     const auto connected = _runtime->connector.connect ();
@@ -145,17 +148,17 @@ void stream_connector_t::request_json (std::string packet_name,
     packet.codec = zlink::stream_connector::codec_t::json;
     packet.payload = zlink::message_t::from (std::move (json_payload));
     auto request = _runtime->connector.request (std::move (packet));
-    request.timeout (
-      std::chrono::milliseconds (static_cast<int> (timeout_seconds * 1000.0)));
-    request.submit<zlink::message_t> ([runtime = std::weak_ptr<runtime_t> (_runtime), reply_name = std::move (reply_name)] (
-                      zlink::stream_connector::result_t<zlink::message_t> result) mutable {
-        if (!result) {
-            return;
-        }
-        if (auto owner = runtime.lock ()) {
-            owner->emit_request (to_axmol_packet (std::move (reply_name), result.value ()));
-        }
-    });
+    request.timeout (std::chrono::milliseconds (static_cast<int> (timeout_seconds * 1000.0)));
+    request.submit<zlink::message_t> (
+      [runtime = std::weak_ptr<runtime_t> (_runtime), reply_name = std::move (reply_name)] (
+        zlink::stream_connector::result_t<zlink::message_t> result) mutable {
+          if (!result) {
+              return;
+          }
+          if (auto owner = runtime.lock ()) {
+              owner->emit_request (to_axmol_packet (std::move (reply_name), result.value ()));
+          }
+      });
 }
 
 void stream_connector_t::dispatch ()

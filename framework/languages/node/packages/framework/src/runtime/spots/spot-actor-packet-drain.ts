@@ -1,19 +1,9 @@
-import type {
-  ActorRef,
-  RoutingId,
-  ZLinkMessageSerializer
-} from '../../contracts';
-import {
-  ZLinkFrameworkException,
-  ZLinkFrameworkErrorKind
-} from '../../contracts';
+import type { ActorRef, RoutingId, ZLinkMessageSerializer } from '../../contracts';
+import { ZLinkFrameworkException, ZLinkFrameworkErrorKind } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import { RequestResult } from '../backend/runtime-values';
-import type {
-  ZLinkBackendActorRef,
-  ZLinkBackendActorRecvInfo
-} from '../backend/contracts';
+import type { ZLinkBackendActorRef, ZLinkBackendActorRecvInfo } from '../backend/contracts';
 import type { ZLinkActorPacketDelivery } from './spot-actor-packet-dispatch';
 import { REMOTE_BOUND_SESSION_BIND_PACKET } from './spot-remote-codec';
 import { ZLINK_RECV_DONT_WAIT } from './spot-native-flags';
@@ -59,7 +49,10 @@ interface ZLinkSpotActorPacketDrainOptions {
 const ZLINK_SPOT_ACTOR_RECV_INFO_NO_BIND = 1;
 
 export class ZLinkSpotActorPacketDrain {
-  private readonly continuations = new Map<string, { readonly owner: string; readonly parts: Message[] }>();
+  private readonly continuations = new Map<
+    string,
+    { readonly owner: string; readonly parts: Message[] }
+  >();
 
   constructor(private readonly options: ZLinkSpotActorPacketDrainOptions) {}
 
@@ -96,7 +89,9 @@ export class ZLinkSpotActorPacketDrain {
             if (isStreamHeaderMessage(part.message, this.flowEnabled())) {
               closeMessages(pending.parts);
               this.continuations.delete(currentPacketKey);
-              throw new Error(`Actor packet continuation '${pending.owner}' was replaced before completion.`);
+              throw new Error(
+                `Actor packet continuation '${pending.owner}' was replaced before completion.`
+              );
             }
             this.continuations.delete(currentPacketKey);
             parts.push(...pending.parts);
@@ -115,7 +110,14 @@ export class ZLinkSpotActorPacketDrain {
           break;
         }
       }
-      const noBindInfo = this.createNoBindReplyInfo(actorRef, sourceNodeRid, sourceSessionRid, requestId, flags, parts);
+      const noBindInfo = this.createNoBindReplyInfo(
+        actorRef,
+        sourceNodeRid,
+        sourceSessionRid,
+        requestId,
+        flags,
+        parts
+      );
       if (this.consumeRemoteBoundSessionBind(actorRef, sourceNodeRid, sourceSessionRid, parts)) {
         return;
       }
@@ -160,15 +162,15 @@ export class ZLinkSpotActorPacketDrain {
     parts: readonly Message[]
   ): ZLinkBackendActorRecvInfo | undefined {
     if (
-      actor === undefined
-      || sourceNodeRid === undefined
-      || sourceSessionRid === undefined
-      || requestId === undefined
-      || requestId === 0n
-      || flags === undefined
-      || (flags & ZLINK_SPOT_ACTOR_RECV_INFO_NO_BIND) === 0
-      || this.options.replyActorNoBind === undefined
-      || !this.isActorRequest(parts)
+      actor === undefined ||
+      sourceNodeRid === undefined ||
+      sourceSessionRid === undefined ||
+      requestId === undefined ||
+      requestId === 0n ||
+      flags === undefined ||
+      (flags & ZLINK_SPOT_ACTOR_RECV_INFO_NO_BIND) === 0 ||
+      this.options.replyActorNoBind === undefined ||
+      !this.isActorRequest(parts)
     ) {
       return undefined;
     }
@@ -208,7 +210,13 @@ export class ZLinkSpotActorPacketDrain {
     } catch (error) {
       this.options.replyActorNoBind?.(
         info,
-        [this.encodeActorReplyFrame(parts[0], ZLinkStreamMessageKind.Error, frameworkErrorPayload(error))],
+        [
+          this.encodeActorReplyFrame(
+            parts[0],
+            ZLinkStreamMessageKind.Error,
+            frameworkErrorPayload(error)
+          )
+        ],
         RequestResult.Ok
       );
     }
@@ -228,19 +236,22 @@ export class ZLinkSpotActorPacketDrain {
     );
     try {
       //  encodeStreamFrame returns a fresh, unaliased array; view it without re-copying.
-      const frame = encodeStreamFrame({
-        kind,
-        codec: streamCodecForContentType(encoded.contentType),
-        flags: ZLinkStreamHeaderFlags.None,
-        requestSeq: requestHeader.requestSeq,
-        name: '',
-        metadata: new Map(),
-        correlationId: requestHeader.correlationId,
-        // Spec 27 §7: preserve the request flow pair on the reply while
-        // tracing is on; the gated decode above already strips it at Off.
-        flowId: requestHeader.flowId,
-        flowOrigin: requestHeader.flowOrigin
-      }, encoded.message.data());
+      const frame = encodeStreamFrame(
+        {
+          kind,
+          codec: streamCodecForContentType(encoded.contentType),
+          flags: ZLinkStreamHeaderFlags.None,
+          requestSeq: requestHeader.requestSeq,
+          name: '',
+          metadata: new Map(),
+          correlationId: requestHeader.correlationId,
+          // Spec 27 §7: preserve the request flow pair on the reply while
+          // tracing is on; the gated decode above already strips it at Off.
+          flowId: requestHeader.flowId,
+          flowOrigin: requestHeader.flowOrigin
+        },
+        encoded.message.data()
+      );
       return RuntimeMessage.fromOwned(
         Buffer.from(frame.buffer, frame.byteOffset, frame.byteLength)
       ) as Message;
@@ -321,8 +332,9 @@ function frameworkErrorPayload(error: unknown): {
 } {
   return {
     message: error instanceof Error ? error.message : String(error),
-    kind: error instanceof ZLinkFrameworkException
-      ? error.kind
-      : ZLinkFrameworkErrorKind.InternalFailure
+    kind:
+      error instanceof ZLinkFrameworkException
+        ? error.kind
+        : ZLinkFrameworkErrorKind.InternalFailure
   };
 }

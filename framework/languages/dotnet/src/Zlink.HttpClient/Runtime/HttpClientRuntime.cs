@@ -26,7 +26,7 @@ internal sealed class HttpClientRuntime : IDisposable
         _httpClient = new SystemHttpClient(_transport.Handler, false)
         {
             // Per-attempt timeout is enforced with a CancellationToken in RetryPolicy, not here.
-            Timeout = Timeout.InfiniteTimeSpan
+            Timeout = Timeout.InfiniteTimeSpan,
         };
         _performer = new RequestPerformer(options, _cookieJar, _httpClient);
         _retryPolicy = new RetryPolicy(options);
@@ -44,7 +44,10 @@ internal sealed class HttpClientRuntime : IDisposable
     ///     Executes the request, applying the retry policy. The submission API is the caller's native
     ///     <c>Task</c>; no thread is parked while the request is in flight.
     /// </summary>
-    public ValueTask<RawHttpResponse> ExecuteAsync(HttpRequestSpec request, CancellationToken cancellationToken)
+    public ValueTask<RawHttpResponse> ExecuteAsync(
+        HttpRequestSpec request,
+        CancellationToken cancellationToken
+    )
     {
         return _retryPolicy.ExecuteAsync(request, _performer.PerformAsync, cancellationToken);
     }

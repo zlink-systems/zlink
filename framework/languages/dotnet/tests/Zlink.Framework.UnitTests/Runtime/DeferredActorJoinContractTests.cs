@@ -7,17 +7,24 @@ public sealed class DeferredActorJoinContractTests
     {
         var methods = typeof(IZLinkActorDeferredJoinCall).GetMethods();
 
-        Assert.Contains(methods, method => method.Name == "Defer"
-                                           && method.ReturnType == typeof(void));
+        Assert.Contains(
+            methods,
+            method => method.Name == "Defer" && method.ReturnType == typeof(void)
+        );
         Assert.DoesNotContain(methods, method => method.Name is "Async" or "Yield");
-        Assert.True(typeof(IZLinkActorDeferredJoinCall)
-            .IsAssignableFrom(typeof(IZLinkActorJoinSpotCall)));
-        Assert.True(typeof(IZLinkActorDeferredJoinCall)
-            .IsAssignableFrom(typeof(IZLinkActorJoinEntrySpotCall)));
+        Assert.True(
+            typeof(IZLinkActorDeferredJoinCall).IsAssignableFrom(typeof(IZLinkActorJoinSpotCall))
+        );
+        Assert.True(
+            typeof(IZLinkActorDeferredJoinCall).IsAssignableFrom(
+                typeof(IZLinkActorJoinEntrySpotCall)
+            )
+        );
         Assert.Contains(
             typeof(IZLinkActor).GetMethods(),
-            method => method.Name == "OnJoinCompletedAsync"
-                      && method.ReturnType == typeof(ValueTask));
+            method =>
+                method.Name == "OnJoinCompletedAsync" && method.ReturnType == typeof(ValueTask)
+        );
     }
 
     [Fact]

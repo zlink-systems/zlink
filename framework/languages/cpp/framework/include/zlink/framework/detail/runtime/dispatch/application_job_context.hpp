@@ -15,10 +15,7 @@ class application_job_context_t
   public:
     static const void *current () noexcept { return _current; }
 
-    static const void *exchange (const void *job) noexcept
-    {
-        return std::exchange (_current, job);
-    }
+    static const void *exchange (const void *job) noexcept { return std::exchange (_current, job); }
 
   private:
     inline static thread_local constinit const void *_current = nullptr;

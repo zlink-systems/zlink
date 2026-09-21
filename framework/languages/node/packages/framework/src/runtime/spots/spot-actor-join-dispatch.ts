@@ -18,21 +18,14 @@ import type {
 import type { Message } from '../../contracts/Common/Message';
 import type { RequestResult } from '../backend/runtime-values';
 type RuntimeMessage = Message;
-import type {
-  ZLinkRemoteBoundSessionTarget
-} from '../actors';
+import type { ZLinkRemoteBoundSessionTarget } from '../actors';
 import type { ZLinkDispatchErrorReporter } from '../channels';
 import { ZLinkSpotActorLifecycleDrain } from './spot-actor-lifecycle-drain';
-import {
-  ZLinkSpotActorPacketDrain,
-  type ZLinkActorDispatchPart
-} from './spot-actor-packet-drain';
+import { ZLinkSpotActorPacketDrain, type ZLinkActorDispatchPart } from './spot-actor-packet-drain';
 import { ZLINK_RECV_DONT_WAIT } from './spot-native-flags';
 import { ZLinkSpotNativeActorJoinAdmission } from './spot-native-actor-join-admission';
 import { ZLinkSpotRoutedFrameDispatch } from './spot-routed-frame-dispatch';
-import {
-  ZLinkSpotSubscriptionDispatch
-} from './spot-subscription-dispatch';
+import { ZLinkSpotSubscriptionDispatch } from './spot-subscription-dispatch';
 import type { ZLinkSpotHandlerRegistration } from './spot-handler-registry';
 import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import type { ZLinkApplicationWorkClaim } from '../admission';
@@ -62,12 +55,14 @@ interface ZLinkSpotActorAdmissionRuntime {
   readonly resolveActor: (actorId: string) => ZLinkActor | undefined;
   readonly getTarget: () => ZLinkActorJoinAdmissionTarget;
   readonly defaultAccept: boolean;
-  readonly transfer: {
-    readonly kind: 'disabled';
-  } | {
-    readonly kind: 'enabled';
-    readonly runtime: ZLinkSpotActorTransferRuntime;
-  };
+  readonly transfer:
+    | {
+        readonly kind: 'disabled';
+      }
+    | {
+        readonly kind: 'enabled';
+        readonly runtime: ZLinkSpotActorTransferRuntime;
+      };
   readonly commitNativeActor?: (actor: ZLinkActor) => Promise<void>;
   readonly commitActorDeparture?: (actorId: string) => void;
   readonly commitTransferredActor?: (
@@ -163,23 +158,34 @@ export class ZLinkSpotActorJoinDispatch {
       routedActorTransferProvider: transfer?.runtime.materializeRoutedActor.bind(transfer.runtime),
       commitTransferredActor: actors.commitTransferredActor,
       actorPacketHandler: options.packets?.handle,
-      bindRemoteSession: options.packets?.bindRemoteSession === undefined
-        ? undefined
-        : (actor, sourceNodeRid, sourceSessionRid, declaredTarget) =>
-            options.packets!.bindRemoteSession!(
-              {
-                actorId: actor.actorId,
-                generation: actor.objectGeneration,
-                nodeRid: actor.nodeRid
-              },
-              sourceNodeRid,
-              sourceSessionRid,
-              declaredTarget
-            ),
-      routedBoundSessionReceiver: options.boundSessionRuntime?.receiveRoutedBoundSession.bind(options.boundSessionRuntime),
-      routedBoundSessionResponseReceiver: options.boundSessionRuntime?.receiveRoutedBoundSessionResponse.bind(options.boundSessionRuntime),
-      routedBoundSessionErrorReceiver: options.boundSessionRuntime?.receiveRoutedBoundSessionError.bind(options.boundSessionRuntime),
-      actorPacketTargetProvider: options.boundSessionRuntime?.actorPacketTargetForState.bind(options.boundSessionRuntime),
+      bindRemoteSession:
+        options.packets?.bindRemoteSession === undefined
+          ? undefined
+          : (actor, sourceNodeRid, sourceSessionRid, declaredTarget) =>
+              options.packets!.bindRemoteSession!(
+                {
+                  actorId: actor.actorId,
+                  generation: actor.objectGeneration,
+                  nodeRid: actor.nodeRid
+                },
+                sourceNodeRid,
+                sourceSessionRid,
+                declaredTarget
+              ),
+      routedBoundSessionReceiver: options.boundSessionRuntime?.receiveRoutedBoundSession.bind(
+        options.boundSessionRuntime
+      ),
+      routedBoundSessionResponseReceiver:
+        options.boundSessionRuntime?.receiveRoutedBoundSessionResponse.bind(
+          options.boundSessionRuntime
+        ),
+      routedBoundSessionErrorReceiver:
+        options.boundSessionRuntime?.receiveRoutedBoundSessionError.bind(
+          options.boundSessionRuntime
+        ),
+      actorPacketTargetProvider: options.boundSessionRuntime?.actorPacketTargetForState.bind(
+        options.boundSessionRuntime
+      ),
       messageSerializers: options.messageSerializers,
       providerResolver: options.providerResolver,
       dispatchErrors: options.dispatchErrors,
@@ -229,27 +235,37 @@ export class ZLinkSpotActorJoinDispatch {
         return;
       }
       if (info.event === ZLinkBackendSpotDispatchEvent.ChannelReplyReadable) {
-        if (info.subjectKind === ZLINK_SPOT_DISPATCH_SUBJECT_CHANNEL_DEALER &&
-            info.subjectHandle !== undefined) {
+        if (
+          info.subjectKind === ZLINK_SPOT_DISPATCH_SUBJECT_CHANNEL_DEALER &&
+          info.subjectHandle !== undefined
+        ) {
           this.nativeSpot.drainChannelReply(info.subjectHandle);
           return;
         }
-        if (info.subjectKind === ZLINK_SPOT_DISPATCH_SUBJECT_SPOT ||
-            info.subjectKind === undefined) {
+        if (
+          info.subjectKind === ZLINK_SPOT_DISPATCH_SUBJECT_SPOT ||
+          info.subjectKind === undefined
+        ) {
           this.nativeSpot.drainReply();
         }
         return;
       }
       if (info.event === ZLinkBackendSpotDispatchEvent.RoutedReadable) {
         if (info.routed !== undefined && info.routed !== null) {
-          this.runDetached('spot routed frame dispatch', () => this.routedFrames.dispatchFromEvent(info.routed!));
+          this.runDetached('spot routed frame dispatch', () =>
+            this.routedFrames.dispatchFromEvent(info.routed!)
+          );
         }
         return;
       }
       if (info.event === ZLinkBackendSpotDispatchEvent.ActorReadable) {
-        this.runDetached('spot actor packet drain', () => this.actorPacketDrain.drain(info as unknown as {
-          recvActorPart(flags?: number): ZLinkActorDispatchPart | null;
-        }));
+        this.runDetached('spot actor packet drain', () =>
+          this.actorPacketDrain.drain(
+            info as unknown as {
+              recvActorPart(flags?: number): ZLinkActorDispatchPart | null;
+            }
+          )
+        );
         return;
       }
       if (info.event === ZLinkBackendSpotDispatchEvent.ActorLifecycleReadable) {
