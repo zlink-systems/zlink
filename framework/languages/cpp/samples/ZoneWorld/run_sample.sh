@@ -42,7 +42,6 @@ RUN_ID="$(basename "$RUN_DIR")-$$-${RANDOM}"
 LOG_DIR="$RUN_DIR/logs"
 mkdir -p "$LOG_DIR"
 PIDS=()
-ZLINK_CPP_SAMPLE_CLEANUP_WAIT_ATTEMPTS=30
 declare -A ROLE_PID
 REDIS_CONTAINER_NAME=""
 cleanup() {

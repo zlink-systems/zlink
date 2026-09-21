@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
-declare -ag ZLINK_CPP_SAMPLE_FORCED_TEARDOWN_ROLES=()
-declare -ag ZLINK_CPP_SAMPLE_TEARDOWN_FAILURES=()
+declare -ag zlink_cpp_sample_forced_teardown_roles=()
+declare -ag zlink_cpp_sample_teardown_failures=()
 
 zlink_cpp_sample_role_name_for_pid() {
   local pid="$1"
@@ -31,7 +31,7 @@ zlink_cpp_sample_stop_processes() {
   local -A roles=()
   local -A forced=()
   local pid status any_alive role
-  local wait_attempts="${ZLINK_CPP_SAMPLE_CLEANUP_WAIT_ATTEMPTS:-300}"
+  local wait_attempts=300
 
   for pid in "${pids[@]}"; do
     [[ "${pid}" =~ ^[0-9]+$ ]] || continue
@@ -61,7 +61,7 @@ zlink_cpp_sample_stop_processes() {
       role="${roles[${pid}]:-pid-${pid}}"
       if kill -KILL "${pid}" >/dev/null 2>&1; then
         forced["${pid}"]=1
-        ZLINK_CPP_SAMPLE_FORCED_TEARDOWN_ROLES+=(
+        zlink_cpp_sample_forced_teardown_roles+=(
           "Sample role ${role} (pid ${pid}) required SIGKILL during cleanup.")
       fi
     fi
@@ -75,7 +75,7 @@ zlink_cpp_sample_stop_processes() {
     fi
     if [[ "${status}" != "0" && "${status}" != "127" &&
           "${status}" != "130" && "${status}" != "143" ]]; then
-      ZLINK_CPP_SAMPLE_TEARDOWN_FAILURES+=(
+      zlink_cpp_sample_teardown_failures+=(
         "Sample process ${roles[${pid}]:-pid-${pid}} (pid ${pid}) exited during cleanup with status ${status}.")
     fi
   done
@@ -83,15 +83,15 @@ zlink_cpp_sample_stop_processes() {
 
 zlink_cpp_sample_assert_graceful_teardown() {
   local failure=""
-  if (( ${#ZLINK_CPP_SAMPLE_FORCED_TEARDOWN_ROLES[@]} == 0 &&
-        ${#ZLINK_CPP_SAMPLE_TEARDOWN_FAILURES[@]} == 0 )); then
+  if (( ${#zlink_cpp_sample_forced_teardown_roles[@]} == 0 &&
+        ${#zlink_cpp_sample_teardown_failures[@]} == 0 )); then
     return 0
   fi
-  for failure in "${ZLINK_CPP_SAMPLE_FORCED_TEARDOWN_ROLES[@]}" \
-                 "${ZLINK_CPP_SAMPLE_TEARDOWN_FAILURES[@]}"; do
+  for failure in "${zlink_cpp_sample_forced_teardown_roles[@]}" \
+                 "${zlink_cpp_sample_teardown_failures[@]}"; do
     printf '%s\n' "${failure}" >&2
   done
-  if (( ${#ZLINK_CPP_SAMPLE_FORCED_TEARDOWN_ROLES[@]} > 0 )); then
+  if (( ${#zlink_cpp_sample_forced_teardown_roles[@]} > 0 )); then
     exit 137
   fi
   exit 1
