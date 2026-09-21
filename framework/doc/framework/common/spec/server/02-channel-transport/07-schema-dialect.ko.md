@@ -343,9 +343,13 @@ record의 frame 수를 정하는 방식은 [06 §2](06-wire-protocol.ko.md#2-rec
 
 Source memory에서 target으로 직접 전달되는 relocation payload의 선언이다. `body`(`$ref`)가 logical
 stream 전체의 layout이고, `generatedObjectTree`는 그 안에서 runtime이 따로 다루는 부분
-tree(application state, saved work, timer)를 `$ref`로 가리킨다. `maximumBytes`는 logical 상한,
-`chunkSplit`·`replay`는 stream을 chunk로 나누어 보내고 다시 이을 때의 규칙 literal이며,
-`goldenFixture`가 bytes를 고정한다. Chunk command와 checksum 규약은
+tree(application state, saved work, timer)를 `$ref`로 가리킨다. `maximumBytes`는 logical 상한이고
+`goldenFixture`가 bytes를 고정한다. `chunkSplit`은 frozen record 내부를 포함한 모든 byte 경계에서
+chunk를 나눌 수 있음을 뜻한다. `replay`는 생성 decoder의 incremental 계약이며 schema의 object가
+값을 소유한다: chunk를 순서대로 공급받아 complete encoded stream 사본 없이(`wholeStreamInputAllocation`)
+decode하고, 성공은 final chunk에서만 반환하며(`completion`), final chunk에서 root가 미완성이면
+`incompleteFinalChunk`, root 뒤에 byte가 남으면 `bytesAfterRoot`의 실패 종류로 끝난다. 한 번에 받는
+one-shot decode는 같은 machine에 final chunk 하나를 준 것과 같다. Chunk command와 checksum 규약은
 [06 §9](06-wire-protocol.ko.md#9-maintenance-capture와-relocation-envelope)가 소유한다.
 
 ## 8. Semantic 선언

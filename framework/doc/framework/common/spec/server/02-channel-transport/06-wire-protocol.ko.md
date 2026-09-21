@@ -615,9 +615,10 @@ seal/route-update leg만 추가하므로, 수신자는 canonical `actorJoin`(28)
   object identity, `senderRole`과 0-base `chunkOrdinal`을 담는다. chunk bytes는 기존
   `relocation-data-chunk-v1` format을 재사용한다. Target의 즉시 assembly copy와 저장소 수명은
   [Relocation 흐름 §4.3](../05-location-relocation/04-relocation-flow.ko.md#43-target은-실행하지-않은-상태로-복원한다)을 따른다.
-- Target은 payload를 조립한 뒤 그 길이와 CRC-32C를 Prepare가 선언한 값과 비교한다. 불일치는
-  명시적 실패이며, target은 부분 조립 복원을 시도하지 않고 checksum 불일치에서 투명하게
-  재시도하지 않는다. 실패하면 target은 자신의 부분 chunk와 준비 자원을 정리한 뒤 대응하는
+- Target은 각 chunk를 순서대로 CRC-32C 누적과 생성 incremental decoder(07 §7.2 `replay`)에
+  공급하며 complete encoded stream을 별도 buffer로 조립하지 않는다. 마지막 chunk에서 누적 길이·
+  CRC-32C를 Prepare가 선언한 값과, decode 완료를 함께 확인한다. 어느 하나라도 어긋나면 명시적
+  실패이며, target은 부분 복원을 시도하지 않고 투명하게 재시도하지 않는다. 실패하면 target은 자신의 부분 chunk와 준비 자원을 정리한 뒤 대응하는
   Prepare에 command 53 `relocationFailed`를 reply로 보낸다. source memory에서 capture한
   payload를 복원하고 operation을 실패로 끝내는 조건은 이 명시적 실패 수신뿐이다 — 연결
   단절 같은 불확정 결과는 source 관점에서 비가역이다.
