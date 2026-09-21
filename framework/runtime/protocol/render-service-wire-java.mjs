@@ -483,11 +483,11 @@ function unionMethods(type, union, typeByName, flagBits) {
     const decoded = decodeFields(fields, "selected", "c", "flags", typeByName, flagBits, "      ");
     const wireArgs = union.discriminators.filter((d) => d.source.kind === "wire").map((d) => discriminatorValues.get(d.name));
     const args = [...wireArgs, ...fields.map((f) => fieldName(f.name))].join(", ");
-    const predicate = decoded.values.has("terminalResult") && decoded.values.has("failureCode") ? predicateChecks(type, decoded.values) : "";
+    const predicate = decoded.values.has("terminalResult") && decoded.values.has("failureCode") ? predicateChecks(type, decoded.values, caseOperations(entry.selected)) : "";
     const constraints = caseOperations(entry.selected).filter((item) => item.op === "constraint")
       .map((item) => structConstraints(type, [item])).join("");
     for (const item of caseOperations(entry.selected)) {
-      if (!["field", "constraint"].includes(item.op)) throw new Error(`${type.name}: unsupported case operation ${item.op}`);
+      if (!["field", "constraint", "runtime-predicate"].includes(item.op)) throw new Error(`${type.name}: unsupported case operation ${item.op}`);
     }
     decodeLines.push(`    ${index === 0 ? "if" : "else if"}(${test}) {\n${decoded.lines.join("\n")}\n      ${union.bodyLengthType ? `selected.end(${javaString(type.name)});` : ""}${constraints}${predicate}${limitAtDecode} return new ${entry.name}(${args});\n    }`);
   });
@@ -522,7 +522,7 @@ function unionMethods(type, union, typeByName, flagBits) {
     const constraints = caseOperations(entry.selected).filter((operation) => operation.op === "constraint")
       .map((operation) => structConstraints(type, [operation], "item")).join("");
     if (constraints) encodeLines.push(`      ${constraints}`);
-    if (encodedValues.has("terminalResult") && encodedValues.has("failureCode")) encodeLines.push(`      ${predicateChecks(type, encodedValues)}`);
+    if (encodedValues.has("terminalResult") && encodedValues.has("failureCode")) encodeLines.push(`      ${predicateChecks(type, encodedValues, caseOperations(entry.selected))}`);
     if (union.bodyLengthType) encodeLines.push(`      byte[] bytes=selected.result(); encode${refType(union.bodyLengthType)}(new ${refType(union.bodyLengthType)}(bytes.length),w,c,flags); w.bytes(bytes);`);
     if (limitAtEncode) encodeLines.push(`      ${limitAtEncode}`);
     encodeLines.push("      return;\n    }");
@@ -613,8 +613,8 @@ function flagValidation(command, flags, flagBits) {
   return `require((${flags}&~${allowed})==0&&(${flags}&${required})==${required},${javaString(command.name + " flags")});${rules}`;
 }
 
-function predicateChecks(owner, values) {
-  return owner.operations.filter((entry) => entry.op === "runtime-predicate").map((entry) => {
+function predicateChecks(owner, values, operations = owner.operations) {
+  return operations.filter((entry) => entry.op === "runtime-predicate").map((entry) => {
     if (entry.reference.asset !== "service-wire-constants" || entry.reference.name !== "valid-terminal-failure") throw new Error(`${owner.name}: unsupported runtime predicate`);
     return `require(ServiceWireConstants.validTerminalFailure(${values.get("terminalResult")}.wire,${values.get("failureCode")}.wire),${javaString(owner.name + " predicate")});`;
   }).join("");

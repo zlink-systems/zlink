@@ -569,8 +569,8 @@ function runtimePredicate(owner, operation, value) {
     throw new Error(`${owner.name}: unsupported runtime predicate ${JSON.stringify(operation.reference)}`);
   }
   const target = operation.targets[0].path.split(".").slice(1);
-  if (target.length === 1) {
-    const failure = findField(owner, target[0]);
+  if (target.length === 1 || primaryOperation(owner).op !== "conditional-union") {
+    const failure = findField(owner, target.at(-1));
     const terminal = findField(owner, "terminalResult");
     return `if (!::zlink::framework::runtime::protocol::valid_terminal_failure(\nstatic_cast<std::uint32_t>(${value}.${identifier(terminal.name)}),\nstatic_cast<::zlink::framework::runtime::protocol::framework_error_code>(${value}.${identifier(failure.name)}))) return error_code::predicate;`;
   }
@@ -762,20 +762,22 @@ function emitConditionalCodec(owner, operation) {
     `if (const auto error = ${internalEncode(entry.type)}(writer, value.${identifier(entry.name)}); error != error_code::ok) return error;`
   )).join("\n");
   const decodeCases = cases.map((entry) => {
-    const caseOwner = { name: `${owner.name}.${entry.name}`, operations: [{ op: "struct", fields: entry.fields, constraints: [] }] };
+    const caseOwner = { name: `${owner.name}.${entry.name}`, operations: [{ op: "struct", fields: entry.fields, constraints: [] }, ...entry.operations.filter((item) => item.op === "runtime-predicate")] };
     const syntax = entry.operations.map((caseOperation) => {
       if (caseOperation.op === "field") return emitFieldDecode(caseOperation, caseOwner, "selected", "body");
       if (caseOperation.op === "constraint") return aggregateConstraint(caseOperation, caseOwner, "selected");
+      if (caseOperation.op === "runtime-predicate") return trailingRuntimePredicates(caseOwner, "selected");
       throw new Error(`${caseOwner.name}: unsupported case operation ${caseOperation.op}`);
     }).join("\n");
     const exact = operation.bodyLengthType === null ? "" : "if (!body.empty()) return error_code::trailing;";
     return `if (${caseCondition(operation, entry, "out")}) {\nout.tag = ${n}_t::tag_t::${entry.tag};\nout.value.template emplace<${n}_t::${entry.name}>();\nauto& selected = std::get<${n}_t::${entry.name}>(out.value);\n${syntax}\n${exact}\n${trailingRuntimePredicates(owner, "out")}\n${encodedLimitCheck(owner, "reader.position() - encodedStart", "decode")}\nreturn error_code::ok;\n}`;
   }).join("\n");
   const encodeCases = cases.map((entry) => {
-    const caseOwner = { name: `${owner.name}.${entry.name}`, operations: [{ op: "struct", fields: entry.fields, constraints: [] }] };
+    const caseOwner = { name: `${owner.name}.${entry.name}`, operations: [{ op: "struct", fields: entry.fields, constraints: [] }, ...entry.operations.filter((item) => item.op === "runtime-predicate")] };
     const syntax = entry.operations.map((caseOperation) => {
       if (caseOperation.op === "field") return emitFieldEncode(caseOperation, caseOwner, "selected", "bodyWriter");
       if (caseOperation.op === "constraint") return aggregateConstraint(caseOperation, caseOwner, "selected");
+      if (caseOperation.op === "runtime-predicate") return trailingRuntimePredicates(caseOwner, "selected");
       throw new Error(`${caseOwner.name}: unsupported case operation ${caseOperation.op}`);
     }).join("\n");
     return `if (${caseCondition(operation, entry, "value")}) {\nif (value.tag != ${n}_t::tag_t::${entry.tag}) return error_code::union_case;\nconst auto* selectedPointer = std::get_if<${n}_t::${entry.name}>(&value.value);\nif (selectedPointer == nullptr) return error_code::union_case;\nconst auto& selected = *selectedPointer;\n${syntax}\n${trailingRuntimePredicates(owner, "value")}\nreturn error_code::ok;\n}`;

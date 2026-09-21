@@ -351,15 +351,16 @@ function runtimePredicateOperation(predicate, targets) {
   };
 }
 
-function ownerRuntimePredicates(name, runtimePredicates) {
-  return runtimePredicates
-    .map((predicate) => ({
-      ...predicate,
-      targets: predicate.targets.filter((target) => target === name
-        || target.startsWith(`${name}.`)),
-    }))
-    .filter((predicate) => predicate.targets.length > 0)
-    .map((predicate) => runtimePredicateOperation(predicate.reference, predicate.targets));
+function terminalFailureFields(fields) {
+  const names = new Set(fields.map((field) => field.name));
+  return names.has("terminalResult") && names.has("failureCode");
+}
+
+function ownerRuntimePredicates(name, runtimePredicates, fields = []) {
+  if (!terminalFailureFields(fields)) return [];
+  return runtimePredicates.map((predicate) => runtimePredicateOperation(predicate.reference, [
+    `${name}.failureCode`,
+  ]));
 }
 
 function vectorComparisonSources(constraint) {
@@ -519,7 +520,8 @@ function lowerUnionOtherwise(otherwise, model) {
 }
 
 function typeOperations(type, node, model, runtimePredicates) {
-  const predicates = ownerRuntimePredicates(type.name, runtimePredicates);
+  const predicates = ownerRuntimePredicates(type.name, runtimePredicates,
+    type.fields ?? type.body ?? []);
   if (type.kind === "integer") {
     return [{
       op: "integer",
@@ -655,6 +657,11 @@ function typeOperations(type, node, model, runtimePredicates) {
               )),
               owner: unionCaseOwner(type.name, signature),
             })),
+            ...ownerRuntimePredicates(
+              `${type.name}.${Object.values(entry.when).join(".")}`,
+              runtimePredicates,
+              entry.fields,
+            ),
           ],
         }];
       })),
@@ -788,7 +795,7 @@ function lowerCommand(command, model, runtimePredicates) {
   }] : []), ...fieldOperations(command.body, model), {
     op: "payload",
     ...node.payload,
-  }, ...ownerRuntimePredicates(command.name, runtimePredicates)];
+  }, ...ownerRuntimePredicates(command.name, runtimePredicates, command.body)];
   return node;
 }
 
@@ -1074,10 +1081,17 @@ function assertLoweringCoverage(schema, ir) {
         }),
       );
       const constraintOffset = sourceCase.fields.length;
-      const constraints = (caseOperations ?? []).slice(constraintOffset);
+      const trailingOperations = (caseOperations ?? []).slice(constraintOffset);
+      const constraints = trailingOperations.filter((operation) => operation.op === "constraint");
+      const predicates = trailingOperations.filter(
+        (operation) => operation.op === "runtime-predicate",
+      );
       if (!Array.isArray(caseOperations)
           || caseOperations.slice(0, constraintOffset).some((operation) => operation.op !== "field")
-          || JSON.stringify(constraints) !== JSON.stringify(expectedConstraints)) {
+          || JSON.stringify(constraints) !== JSON.stringify(expectedConstraints)
+          || (terminalFailureFields(sourceCase.fields) && predicates.length !== 1)
+          || (!terminalFailureFields(sourceCase.fields) && predicates.length !== 0)
+          || trailingOperations.length !== constraints.length + predicates.length) {
         errors.push(`type:${source.name}: case ${signature} constraints did not reach ordered operations`);
       }
     }

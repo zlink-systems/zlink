@@ -51,10 +51,10 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
                 () => ExerciseOperation(vector)));
         }
 
-        Assert.Equal(101, cases.Count);
+        Assert.Equal(102, cases.Count);
         var operationCases = index.RootElement.GetProperty("operationCases").EnumerateArray().ToArray();
         Assert.Equal(29, operationCases.Count(item => item.GetProperty("expect").GetString() == "accept"));
-        Assert.Equal(49, operationCases.Count(item => item.GetProperty("expect").GetString() == "reject"));
+        Assert.Equal(50, operationCases.Count(item => item.GetProperty("expect").GetString() == "reject"));
         Assert.Equal(25, operationCases.Select(item => item.GetProperty("operation").GetString()).Distinct().Count());
         foreach (var operation in operationCases.GroupBy(item => item.GetProperty("operation").GetString()!))
         {
@@ -219,6 +219,7 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
         "descriptor-extension" => ServiceWireCodec.DecodeDescriptorExtension(bytes, context),
         "aggregate-participant-vector" => ServiceWireCodec.DecodeAggregateParticipantVector(bytes, context),
         "application-payload-bytes" => ServiceWireCodec.DecodeApplicationPayloadBytes(bytes, context),
+        "creation-operation-terminal-v1" => ServiceWireCodec.DecodeCreationOperationTerminalV1(bytes, context),
         _ => throw new ConformanceHarnessException($"operation type decode {type}")
     };
 
@@ -238,6 +239,7 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
         "descriptor-extension" => ServiceWireCodec.EncodeDescriptorExtension((ServiceWireCodec.DescriptorExtension)value, context),
         "aggregate-participant-vector" => ServiceWireCodec.EncodeAggregateParticipantVector((ServiceWireCodec.AggregateParticipantVector)value, context),
         "application-payload-bytes" => ServiceWireCodec.EncodeApplicationPayloadBytes((ServiceWireCodec.ApplicationPayloadBytes)value, context),
+        "creation-operation-terminal-v1" => ServiceWireCodec.EncodeCreationOperationTerminalV1((ServiceWireCodec.CreationOperationTerminalV1)value, context),
         _ => throw new ConformanceHarnessException($"operation type encode {type}")
     };
 
@@ -264,6 +266,13 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
             bytes.AsSpan().Fill((byte)input.GetProperty("repeatByte").GetInt32());
             return new ServiceWireCodec.ApplicationPayloadBytes(bytes);
         }
+        if (type == "creation-operation-terminal-v1") return new ServiceWireCodec.CreationOperationTerminalV1(
+            Enum.Parse<ServiceWireCodec.RequestTerminalResult>(Pascal(input.GetProperty("terminalResult").GetString()!)),
+            Enum.Parse<ServiceWireCodec.FrameworkErrorCode>(Pascal(input.GetProperty("failureCode").GetString()!)),
+            Enum.Parse<ServiceWireCodec.Bool8>(Pascal(input.GetProperty("hasCreation").GetString()!)),
+            null,
+            Enum.Parse<ServiceWireCodec.Bool8>(Pascal(input.GetProperty("hasApplicationPayload").GetString()!)),
+            null);
         throw new ConformanceHarnessException($"operation input {name}");
     }
 
