@@ -197,8 +197,8 @@ zlink_sample_close_run_dir() {
   local label="$3"
 
   [[ -n "${run_dir}" && -d "${run_dir}" ]] || return 0
-  if (( ${#ZLINK_CPP_SAMPLE_FORCED_TEARDOWN_ROLES[@]} > 0 ||
-        ${#ZLINK_CPP_SAMPLE_TEARDOWN_FAILURES[@]} > 0 )); then
+  if (( ${#zlink_cpp_sample_forced_teardown_roles[@]} > 0 ||
+        ${#zlink_cpp_sample_teardown_failures[@]} > 0 )); then
     status=1
   fi
   if [[ "${status}" -ne 0 ]]; then
