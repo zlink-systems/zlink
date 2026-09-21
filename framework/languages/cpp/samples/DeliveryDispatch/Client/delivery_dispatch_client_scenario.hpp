@@ -70,7 +70,9 @@ class delivery_dispatch_client_scenario_t
             return true;
         }
         catch (const std::exception &error) {
-            std::cerr << "deliverydispatch scenario failed: " << error.what () << "\n";
+            const std::string line =
+              std::format ("deliverydispatch scenario failed: {}\n", error.what ());
+            std::cerr << line;
             return false;
         }
     }

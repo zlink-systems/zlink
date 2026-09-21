@@ -2,6 +2,7 @@
 
 #include "gamequest_client_scenario.hpp"
 
+#include <format>
 #include <iostream>
 #include <string>
 
@@ -30,10 +31,12 @@ int main (int argc, char **argv)
     const auto owner_loss_release_file = read_option (argc, argv, "--owner-loss-release-file");
     if (api_a_stream.empty () || api_b_stream.empty () || api_a_http.empty () || api_b_http.empty ()
         || owner_loss_release_file.empty ()) {
-        std::cerr << "usage: " << argv[0]
-                  << " --api-a-stream-endpoint <endpoint> --api-b-stream-endpoint <endpoint>"
-                     " --api-a-http-url <url> --api-b-http-url <url>"
-                     " --owner-loss-release-file <path>\n";
+        const std::string line = std::format (
+          "usage: {} --api-a-stream-endpoint <endpoint> --api-b-stream-endpoint <endpoint>"
+          " --api-a-http-url <url> --api-b-http-url <url>"
+          " --owner-loss-release-file <path>\n",
+          argv[0]);
+        std::cerr << line;
         return 2;
     }
     if (!zlink::samples::gamequest::gamequest_client_scenario_t{}.run (

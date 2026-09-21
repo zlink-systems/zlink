@@ -10,6 +10,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <exception>
+#include <format>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -91,8 +92,9 @@ class order_workflow_spot_t : public instance_spot_t
                                  &request,
                                  /*max_steps=*/1);
         });
-        std::cerr << "shoppingmall-order started order=" << state.order_id << " spot=" << _order_id
-                  << "\n";
+        const std::string started_line =
+          std::format ("shoppingmall-order started order={} spot={}\n", state.order_id, _order_id);
+        std::cerr << started_line;
         if (state.status != order_status_t::confirmed && state.status != order_status_t::failed) {
             schedule_continue (state.order_id);
         }
@@ -119,8 +121,11 @@ class order_workflow_spot_t : public instance_spot_t
     {
         auto state = _store.update (
           [&] (nlohmann::json &json) { return rebuild_projection (json, request.order_id); });
-        std::cerr << "shoppingmall order: projection rebuilt order=" << state.order_id
-                  << " status=" << state.status << "\n";
+        const std::string rebuilt_line =
+          std::format ("shoppingmall order: projection rebuilt order={} status={}\n",
+                       state.order_id,
+                       state.status);
+        std::cerr << rebuilt_line;
         co_await close_if_terminal (state);
         co_return rebuild_order_projection_res_t{state};
     }
@@ -277,8 +282,11 @@ class planned_relocation_workflow_spot_t final : public spot_t<actor_t>
             /* The target workflow fixture has been recreated by the planned
              * relocation with the same ObjectGeneration.  Replay decides the
              * next action, so InventoryReserved is not attempted again. */
-            std::cerr << "shoppingmall-order replayed order=" << order_id
-                      << " generation=" << _context.object_generation () << "\n";
+            const std::string replayed_line =
+              std::format ("shoppingmall-order replayed order={} generation={}\n",
+                           order_id,
+                           _context.object_generation ());
+            std::cerr << replayed_line;
             _store.update ([&] (nlohmann::json &state) {
                 return run_workflow (state,
                                      order_id,
@@ -513,7 +521,9 @@ class planned_relocation_service_t final : public hosted_service_t
                 }
             }
             catch (const std::exception &error) {
-                std::cerr << "shoppingmall planned relocation failed: " << error.what () << "\n";
+                const std::string line =
+                  std::format ("shoppingmall planned relocation failed: {}\n", error.what ());
+                std::cerr << line;
                 return;
             }
             std::this_thread::sleep_for (std::chrono::milliseconds (25));

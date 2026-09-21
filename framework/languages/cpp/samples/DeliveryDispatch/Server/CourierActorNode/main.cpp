@@ -9,6 +9,7 @@
 #include <zlink/locations/redis.hpp>
 
 #include <chrono>
+#include <format>
 #include <iostream>
 #include <stdexcept>
 #include <map>
@@ -87,7 +88,9 @@ class courier_entry_spot_t : public entry_spot_t<courier_actor_t>
                                                      message_context_t &,
                                                      const bind_courier_session_req_t &request)
     {
-        std::cerr << "deliverydispatch-courier bind-relayed courier=" << request.courier_id << "\n";
+        const std::string line =
+          std::format ("deliverydispatch-courier bind-relayed courier={}\n", request.courier_id);
+        std::cerr << line;
         return {request.courier_id};
     }
 
@@ -116,8 +119,10 @@ class courier_entry_spot_t : public entry_spot_t<courier_actor_t>
         // --8<-- [start:doc-dd-decision-send]
         const auto offered = actor.offered_attempts.find (decision.delivery_id);
         if (offered == actor.offered_attempts.end ()) {
-            std::cerr << "deliverydispatch courier-actor: decision for an unknown offer delivery="
-                      << decision.delivery_id << "\n";
+            const std::string line = std::format (
+              "deliverydispatch courier-actor: decision for an unknown offer delivery={}\n",
+              decision.delivery_id);
+            std::cerr << line;
             return;
         }
         const auto attempt = offered->second;

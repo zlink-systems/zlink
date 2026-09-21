@@ -11,6 +11,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <format>
 #include <iostream>
 #include <deque>
 #include <map>
@@ -437,15 +438,19 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
 
     task_t<void> on_actor_joined (support_user_actor_t &actor) override
     {
-        std::cerr << "supportchat conversation: actor_joined_begin actor=" << actor.actor_id
-                  << " role=" << actor.role << "\n";
+        const std::string actor_joined_begin_line =
+          std::format ("supportchat conversation: actor_joined_begin actor={} role={}\n",
+                       actor.actor_id,
+                       actor.role);
+        std::cerr << actor_joined_begin_line;
         if (_pending_actor_joins.erase (actor.actor_id) == 0) {
             throw framework_exception_t (framework_error_kind_t::protocol_error,
                                          "accepted support actor admission is missing");
         }
         (void) co_await join_actor (actor);
-        std::cerr << "supportchat conversation: actor_joined_complete actor=" << actor.actor_id
-                  << "\n";
+        const std::string actor_joined_complete_line = std::format (
+          "supportchat conversation: actor_joined_complete actor={}\n", actor.actor_id);
+        std::cerr << actor_joined_complete_line;
         co_return;
     }
 
@@ -599,15 +604,24 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
     {
         auto actor = _runtime.actor_for (participant_id);
         if (!actor) {
-            std::cerr << "supportchat conversation: missing actor packet=" << packet_name
-                      << " participant=" << participant_id << "\n";
+            const std::string missing_actor_line =
+              std::format ("supportchat conversation: missing actor packet={} participant={}\n",
+                           packet_name,
+                           participant_id);
+            std::cerr << missing_actor_line;
             co_return;
         }
-        std::cerr << "supportchat conversation: bound_push_begin packet=" << packet_name
-                  << " participant=" << participant_id << "\n";
+        const std::string bound_push_begin_line =
+          std::format ("supportchat conversation: bound_push_begin packet={} participant={}\n",
+                       packet_name,
+                       participant_id);
+        std::cerr << bound_push_begin_line;
         co_await (*actor)->context ().bound_session ().send (message).async ();
-        std::cerr << "supportchat conversation: bound push packet=" << packet_name
-                  << " participant=" << participant_id << "\n";
+        const std::string bound_push_line =
+          std::format ("supportchat conversation: bound push packet={} participant={}\n",
+                       packet_name,
+                       participant_id);
+        std::cerr << bound_push_line;
         co_return;
     }
 
@@ -695,9 +709,12 @@ class support_entry_spot_t : public entry_spot_t<support_user_actor_t>
 
     task_t<void> on_actor_joined (support_user_actor_t &actor) override
     {
-        std::cerr << "supportchat support: actor_joined_begin actor=" << actor.actor_id
-                  << " role=" << actor.role << " pending_profile="
-                  << (_pending_profiles.contains (actor.actor_id) ? "true" : "false") << "\n";
+        const std::string actor_joined_begin_line = std::format (
+          "supportchat support: actor_joined_begin actor={} role={} pending_profile={}\n",
+          actor.actor_id,
+          actor.role,
+          _pending_profiles.contains (actor.actor_id) ? "true" : "false");
+        std::cerr << actor_joined_begin_line;
         const auto pending = _pending_profiles.find (actor.actor_id);
         if (pending != _pending_profiles.end ()) {
             auto profile = std::move (pending->second);
@@ -707,8 +724,11 @@ class support_entry_spot_t : public entry_spot_t<support_user_actor_t>
             _actors[actor.actor_id] = &actor;
             _runtime.remember_live_actor (actor);
         }
-        std::cerr << "supportchat support: actor_joined_complete actor=" << actor.actor_id
-                  << " role=" << actor.role << "\n";
+        const std::string actor_joined_complete_line =
+          std::format ("supportchat support: actor_joined_complete actor={} role={}\n",
+                       actor.actor_id,
+                       actor.role);
+        std::cerr << actor_joined_complete_line;
         co_return;
     }
 
@@ -718,7 +738,9 @@ class support_entry_spot_t : public entry_spot_t<support_user_actor_t>
     {
         if (actor.role == role_t::agent) {
             (void) _runtime.set_agent_available (actor.actor_id, actor.display_name, false);
-            std::cerr << "supportchat support: agent-disconnected actor=" << actor.actor_id << "\n";
+            const std::string line =
+              std::format ("supportchat support: agent-disconnected actor={}\n", actor.actor_id);
+            std::cerr << line;
         }
         co_return;
     }
@@ -791,13 +813,15 @@ class support_entry_spot_t : public entry_spot_t<support_user_actor_t>
     {
         const auto found = _actors.find (actor_id);
         if (found == _actors.end ()) {
-            std::cerr << "supportchat support: missing actor packet=" << packet_name
-                      << " actor=" << actor_id << "\n";
+            const std::string missing_actor_line = std::format (
+              "supportchat support: missing actor packet={} actor={}\n", packet_name, actor_id);
+            std::cerr << missing_actor_line;
             return;
         }
         found->second->context ().bound_session ().send (message).async ();
-        std::cerr << "supportchat support: bound push packet=" << packet_name
-                  << " actor=" << actor_id << "\n";
+        const std::string bound_push_line = std::format (
+          "supportchat support: bound push packet={} actor={}\n", packet_name, actor_id);
+        std::cerr << bound_push_line;
     }
 
     supportchat_conversation_runtime_t &_runtime;

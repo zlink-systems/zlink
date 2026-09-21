@@ -11,6 +11,7 @@
 
 #include <chrono>
 #include <ctime>
+#include <format>
 #include <iostream>
 #include <sstream>
 #include <algorithm>
@@ -117,8 +118,9 @@ class quest_event_store_t
             reward_granted = true;
         }
 
-        std::cerr << "gamequest-mission processed player=" << event.player_id
-                  << " quest=" << rule->quest_id << "\n";
+        const std::string line = std::format (
+          "gamequest-mission processed player={} quest={}\n", event.player_id, rule->quest_id);
+        std::cerr << line;
         auto updated = replay_unlocked (event.player_id);
         _projections[event.player_id] = updated;
         return {std::move (updated),
@@ -310,11 +312,13 @@ class player_quest_spot_t : public instance_spot_t
         _player_id = spot_id.starts_with (prefix) ? spot_id.substr (prefix.size ()) : spot_id;
         const auto generation = _store.rehydrate_owner (_player_id);
         const auto projection = _store.projection (_player_id);
-        std::cerr << "gamequest-owner ready player=" << _player_id
-                  << " node=" << _topology.mission_name << "\n";
+        const std::string owner_ready_line = std::format (
+          "gamequest-owner ready player={} node={}\n", _player_id, _topology.mission_name);
+        std::cerr << owner_ready_line;
         if (!projection.empty ()) {
-            std::cerr << "gamequest-mission replayed player=" << _player_id
-                      << " generation=" << generation << "\n";
+            const std::string replayed_line = std::format (
+              "gamequest-mission replayed player={} generation={}\n", _player_id, generation);
+            std::cerr << replayed_line;
         }
         co_return;
     }
@@ -328,8 +332,10 @@ class player_quest_spot_t : public instance_spot_t
         // --8<-- [start:doc-gq-notify-actor]
         auto actor = co_await _directory.find (message.player_id);
         if (!actor) {
-            std::cerr << "gamequest mission kept projection while the player has no session"
-                      << " binding. player=" << message.player_id << "\n";
+            const std::string line = std::format ("gamequest mission kept projection while the "
+                                                  "player has no session binding. player={}\n",
+                                                  message.player_id);
+            std::cerr << line;
             co_return;
         }
         co_await _actors
@@ -338,8 +344,10 @@ class player_quest_spot_t : public instance_spot_t
                    message.player_id, result.projection, result.completed_quest_id})
           .async ();
         // --8<-- [end:doc-gq-notify-actor]
-        std::cerr << "gamequest mission notified player=" << message.player_id
-                  << " completed=" << result.completed_quest_id << "\n";
+        const std::string line = std::format ("gamequest mission notified player={} completed={}\n",
+                                              message.player_id,
+                                              result.completed_quest_id);
+        std::cerr << line;
         co_return;
     }
 
@@ -355,8 +363,11 @@ class player_quest_spot_t : public instance_spot_t
                                           static_cast<long long> (std::time (nullptr)) * 1000LL};
             auto result = _store.apply (decode_gameplay (snapshot));
             if (!result.reconciled_quest_id.empty ()) {
-                std::cerr << "gamequest-mission reconciled player=" << request.player_id
-                          << " quest=" << result.reconciled_quest_id << "\n";
+                const std::string line =
+                  std::format ("gamequest-mission reconciled player={} quest={}\n",
+                               request.player_id,
+                               result.reconciled_quest_id);
+                std::cerr << line;
             }
             return {std::move (result.projection)};
         }

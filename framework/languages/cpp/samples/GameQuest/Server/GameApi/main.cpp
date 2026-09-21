@@ -12,6 +12,7 @@
 #include <chrono>
 #include <ctime>
 #include <exception>
+#include <format>
 #include <iostream>
 #include <map>
 #include <mutex>
@@ -351,7 +352,9 @@ class gamequest_session_t final : public packet_stream_session_t
             }
             catch (const framework_exception_t &error) {
                 if (error.kind () == framework_error_kind_t::unavailable) {
-                    std::cerr << "gamequest-owner unavailable player=" << request.player_id << "\n";
+                    const std::string line =
+                      std::format ("gamequest-owner unavailable player={}\n", request.player_id);
+                    std::cerr << line;
                 }
                 throw;
             }
@@ -417,7 +420,9 @@ class gamequest_session_t final : public packet_stream_session_t
           .async ();
         // --8<-- [end:doc-gq-owner-send]
         _store.record_event (event);
-        std::cerr << "gamequest-api event-routed player=" << event.player_id << "\n";
+        const std::string line =
+          std::format ("gamequest-api event-routed player={}\n", event.player_id);
+        std::cerr << line;
         co_return;
     }
 
