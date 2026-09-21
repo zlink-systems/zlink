@@ -136,19 +136,24 @@ jobs:
       - name: Stage the README-extraction helper alongside the trees
         run: cp scripts/tutorial/extract_readme_step.py scripts/tutorial/run_readme_step.sh .artifacts/examples/
 
+      # upload-artifact stores no file modes, and the READMEs run `./run_sample.sh`
+      # and `./gradlew` directly — exactly what a reader's `git clone` gets, since
+      # git keeps the 755 the export set. A tar carries the modes across.
+      - name: Pack the trees as a tar (keeps the executable bits)
+        run: tar -C .artifacts -cf examples-trees.tar examples
+
       - name: Upload the four trees and the README-extraction helper
         uses: actions/upload-artifact@v4
         with:
           name: examples-trees
-          path: .artifacts/examples/
+          path: examples-trees.tar
           retention-days: 7
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
   # 아래 job은 어느 것도 저장소를 checkout하지 않는다. `export`가 만든 tree를 artifact로
-  # 받고, 그 tree의 README가 적은 명령만 그대로 실행한다. upload-artifact는 실행 비트를
-  # 싣지 않으므로 script는 전부 `bash <script>`로 부른다(gradlew·*.sh 실행 비트는 미러
-  # 커밋에서 git이 보존한다). 로컬 action
+  # 받고, 그 tree의 README가 적은 명령만 그대로 실행한다. artifact는 tar라 export가 준
+  # 실행 비트(gradlew·*.sh)가 그대로 온다 — 독자의 `git clone`과 같은 상태다. 로컬 action
   # (`uses: ./...`)도 checkout이 있어야 참조할 수 있으므로 쓰지 않고 전부 inline이다.
   #
   # #655를 신고한 네 언어 worker(framework-{cpp,dotnet,node,java}/655-standalone-zips)는
@@ -164,7 +169,9 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: examples-trees
-          path: examples
+
+      - name: Unpack the trees
+        run: tar -xf examples-trees.tar
 
       - name: Confirm this job never checked out the repository and ZLINK_* is unset
         shell: bash
@@ -259,7 +266,10 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: examples-trees
-          path: examples
+
+      - name: Unpack the trees
+        shell: pwsh
+        run: tar -xf examples-trees.tar
 
       - name: Confirm this job never checked out the repository and ZLINK_* is unset
         shell: pwsh
@@ -389,7 +399,9 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: examples-trees
-          path: examples
+
+      - name: Unpack the trees
+        run: tar -xf examples-trees.tar
 
       - name: Confirm this job never checked out the repository and ZLINK_* is unset
         run: |
@@ -471,7 +483,9 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: examples-trees
-          path: examples
+
+      - name: Unpack the trees
+        run: tar -xf examples-trees.tar
 
       - name: Confirm this job never checked out the repository and ZLINK_* is unset
         run: |
@@ -567,7 +581,10 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: examples-trees
-          path: examples
+
+      - name: Unpack the trees
+        shell: pwsh
+        run: tar -xf examples-trees.tar
 
       - name: Confirm this job never checked out the repository and ZLINK_* is unset
         shell: pwsh
@@ -689,7 +706,9 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: examples-trees
-          path: examples
+
+      - name: Unpack the trees
+        run: tar -xf examples-trees.tar
 
       - name: Confirm this job never checked out the repository and ZLINK_* is unset
         run: |
