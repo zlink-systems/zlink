@@ -113,9 +113,15 @@ public sealed partial class RegressionTests
             StringComparison.Ordinal);
         Assert.Contains("client2Drawn.Payload.State.Equals(client1Drawn.Payload.State)", scenario,
             StringComparison.Ordinal);
-        Assert.Contains("connector.Request(new MatchBingoReq", scenario, StringComparison.Ordinal);
+        Assert.Contains(
+            NormalizeWhitespace("connector.Request(new MatchBingoReq"),
+            NormalizeWhitespace(scenario),
+            StringComparison.Ordinal);
         Assert.Contains(".Async<MatchBingoRes>(cancellationToken)", scenario, StringComparison.Ordinal);
-        Assert.Contains("connector.Request(new ObserveBingoEventsReq", scenario, StringComparison.Ordinal);
+        Assert.Contains(
+            NormalizeWhitespace("connector.Request(new ObserveBingoEventsReq"),
+            NormalizeWhitespace(scenario),
+            StringComparison.Ordinal);
         Assert.Contains(".Async<ObserveBingoEventsRes>(cancellationToken)", scenario, StringComparison.Ordinal);
         Assert.Contains("WaitFor<BingoGameStartedNotify>()", scenario, StringComparison.Ordinal);
         Assert.DoesNotContain("State = new BingoRoomState()", ReadSource(Path.Combine(

@@ -7,6 +7,7 @@
 #include <zlink/framework.hpp>
 #include <zlink/locations/redis.hpp>
 
+#include <format>
 #include <iostream>
 #include <set>
 #include <string>
@@ -33,8 +34,9 @@ class courier_session_t final : public packet_stream_session_t
                             const session_message_context_t &dispatch,
                             const zlink::message_t &payload) override
     {
-        std::cerr << "deliverydispatch courier-session: dispatch packet=" << dispatch.packet_name
-                  << "\n";
+        const std::string line = std::format (
+          "deliverydispatch courier-session: dispatch packet={}\n", dispatch.packet_name);
+        std::cerr << line;
         auto &actors = stream.actors ();
         if (dispatch.packet_name == bind_courier_session_req_t::packet_name) {
             // --8<-- [start:doc-dd-session-bind]
@@ -61,7 +63,9 @@ class courier_session_t final : public packet_stream_session_t
                                              bind_courier_session_req_t{request.courier_id}))
                            .async ();
             stream.reply_packet (reply).async ();
-            std::cerr << "deliverydispatch-courier bound courier=" << request.courier_id << "\n";
+            const std::string line =
+              std::format ("deliverydispatch-courier bound courier={}\n", request.courier_id);
+            std::cerr << line;
             // --8<-- [end:doc-dd-session-bind]
             co_return;
         }

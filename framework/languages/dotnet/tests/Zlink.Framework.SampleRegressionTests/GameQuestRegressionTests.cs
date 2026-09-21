@@ -128,10 +128,22 @@ public sealed partial class RegressionTests
         Assert.DoesNotContain("byte[] Payload", messages, StringComparison.Ordinal);
         Assert.Contains("long Version", messages, StringComparison.Ordinal);
         Assert.Contains("LastSourceEventId", messages, StringComparison.Ordinal);
-        Assert.Contains("apiAStream.Request(new JoinSessionReq", clientScenario, StringComparison.Ordinal);
-        Assert.Contains("apiAStream.Request(new KillMonsterReq", clientScenario, StringComparison.Ordinal);
-        Assert.Contains("apiAStream.Send(new EnterAreaMsg", clientScenario, StringComparison.Ordinal);
-        Assert.Contains("apiBStream.Send(new CollectItemMsg", clientScenario, StringComparison.Ordinal);
+        Assert.Contains(
+            NormalizeWhitespace("apiAStream.Request(new JoinSessionReq"),
+            NormalizeWhitespace(clientScenario),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            NormalizeWhitespace("apiAStream.Request(new KillMonsterReq"),
+            NormalizeWhitespace(clientScenario),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            NormalizeWhitespace("apiAStream.Send(new EnterAreaMsg"),
+            NormalizeWhitespace(clientScenario),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            NormalizeWhitespace("apiBStream.Send(new CollectItemMsg"),
+            NormalizeWhitespace(clientScenario),
+            StringComparison.Ordinal);
         Assert.DoesNotContain("record EnterAreaReq", messages, StringComparison.Ordinal);
         Assert.DoesNotContain("record CollectItemReq", messages, StringComparison.Ordinal);
         Assert.DoesNotContain("UnlockFeatureReq", messages, StringComparison.Ordinal);
@@ -158,7 +170,10 @@ public sealed partial class RegressionTests
             StringComparison.Ordinal);
         Assert.Contains("await actor.RelayAsync(payload, cancellationToken)", session, StringComparison.Ordinal);
         Assert.Contains("BindOrGetAsync(actor, cancellationToken)", sessionHandlers, StringComparison.Ordinal);
-        Assert.Contains("actor.Context.BoundSession", playerSessionActor, StringComparison.Ordinal);
+        Assert.Contains(
+            NormalizeWhitespace("actor.Context.BoundSession"),
+            NormalizeWhitespace(playerSessionActor),
+            StringComparison.Ordinal);
         Assert.Contains("ZLinkSpotActorSendHandler(nameof(QuestProgressMsg))", playerSessionActor,
             StringComparison.Ordinal);
         Assert.Contains("new QuestProgressNotify(message.PlayerId, message.Progress)", playerSessionActor,
@@ -191,7 +206,10 @@ public sealed partial class RegressionTests
         Assert.Contains("new RedisJsonStore(topology.RedisEndpoint)", questStore, StringComparison.Ordinal);
         Assert.Contains("topology.RedisKeyPrefix", gameApiStore, StringComparison.Ordinal);
         Assert.Contains("topology.RedisKeyPrefix", questStore, StringComparison.Ordinal);
-        Assert.Contains("_database.LockTakeAsync", redisJsonStore, StringComparison.Ordinal);
+        Assert.Contains(
+            NormalizeWhitespace("_database.LockTakeAsync"),
+            NormalizeWhitespace(redisJsonStore),
+            StringComparison.Ordinal);
         Assert.DoesNotContain("_database.LockTakeAsync", gameApiStore, StringComparison.Ordinal);
         Assert.DoesNotContain("_database.LockTakeAsync", questStore, StringComparison.Ordinal);
         Assert.DoesNotContain("File.ReadAllText", gameApiStore, StringComparison.Ordinal);
@@ -205,7 +223,10 @@ public sealed partial class RegressionTests
             StringComparison.Ordinal);
         Assert.Contains("IGameplayEventOwnerDispatcher", actionService, StringComparison.Ordinal);
         Assert.Contains("IZLinkSpotClient", eventDispatcher, StringComparison.Ordinal);
-        Assert.Contains("SendToSpot(gameplayEvent.PlayerId", eventDispatcher, StringComparison.Ordinal);
+        Assert.Contains(
+            NormalizeWhitespace("SendToSpot(gameplayEvent.PlayerId"),
+            NormalizeWhitespace(eventDispatcher),
+            StringComparison.Ordinal);
         Assert.Contains(".InstanceSpot(SampleNames.PlayerQuestSpotType)", eventDispatcher,
             StringComparison.Ordinal);
         Assert.Contains(".InMesh(SampleNames.MeshName)", eventDispatcher, StringComparison.Ordinal);
@@ -231,7 +252,11 @@ public sealed partial class RegressionTests
             StringComparison.Ordinal);
         Assert.Contains("ReadQuestStreamAsync(\n            gameplayFact.PlayerId,\n            definition.QuestId", questProcessor,
             StringComparison.Ordinal);
-        Assert.Contains("Rehydrate(\n        QuestDefinition definition,\n        IReadOnlyList<QuestDomainEvent> stream)", questDomain,
+        Assert.Contains(
+            NormalizeWhitespace(
+                "Rehydrate(QuestDefinition definition, IReadOnlyList<QuestDomainEvent> stream)"
+            ),
+            NormalizeWhitespace(questDomain),
             StringComparison.Ordinal);
         Assert.Contains("public QuestProgressDecision? Decide(GameplayFact gameplayFact)", questDomain,
             StringComparison.Ordinal);

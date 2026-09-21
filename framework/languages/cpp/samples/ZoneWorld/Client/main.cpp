@@ -10,6 +10,7 @@
 #include <atomic>
 #include <chrono>
 #include <filesystem>
+#include <format>
 #include <functional>
 #include <iostream>
 #include <regex>
@@ -790,16 +791,19 @@ int main (int argc, char **argv)
 
         const auto &result = task.result ();
         if (!result) {
-            std::cerr << "zoneworld=failed stream-error-code="
-                      << static_cast<int> (result.error_code ().value_or (
-                           zlink::stream_connector::error_code_t::disconnected))
-                      << " message=" << result.error ()->message << '\n';
+            const std::string line =
+              std::format ("zoneworld=failed stream-error-code={} message={}\n",
+                           static_cast<int> (result.error_code ().value_or (
+                             zlink::stream_connector::error_code_t::disconnected)),
+                           result.error ()->message);
+            std::cerr << line;
             return 1;
         }
         return result.value () ? 0 : 1;
     }
     catch (const std::exception &error) {
-        std::cerr << "zoneworld=failed " << error.what () << '\n';
+        const std::string line = std::format ("zoneworld=failed {}\n", error.what ());
+        std::cerr << line;
         return 1;
     }
 }

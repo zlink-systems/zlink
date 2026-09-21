@@ -6,6 +6,7 @@
 #include <zlink/framework.hpp>
 
 #include <deque>
+#include <format>
 #include <iostream>
 #include <set>
 #include <span>
@@ -71,9 +72,13 @@ class player_actor_t final : public fw::actor_t
         if (completed_join_operations.contains (operation))
             co_return;
         if (std::holds_alternative<fw::actor_join_accepted_t> (completion)) {
-            std::cerr << "zoneworld-join-accepted player=" << player_id << " zone=" << zone_id
-                      << " pending-initial=" << (pending_initial_entry ? "true" : "false")
-                      << " bot=" << (is_bot ? "true" : "false") << '\n';
+            const std::string line =
+              std::format ("zoneworld-join-accepted player={} zone={} pending-initial={} bot={}\n",
+                           player_id,
+                           zone_id,
+                           pending_initial_entry ? "true" : "false",
+                           is_bot ? "true" : "false");
+            std::cerr << line;
             if (pending_initial_entry && !is_bot) {
                 co_await _context.bound_session ()
                   .send (join_world_res_t{player_id, zone_id, x, y, std::nullopt})
@@ -85,8 +90,10 @@ class player_actor_t final : public fw::actor_t
             initial_entry = false;
             pending_crash_probe = false;
         } else if (const auto *failed = std::get_if<fw::actor_join_failed_t> (&completion)) {
-            std::cerr << "zoneworld-join-failed player=" << player_id
-                      << " kind=" << static_cast<int> (failed->error_kind) << '\n';
+            const std::string line = std::format ("zoneworld-join-failed player={} kind={}\n",
+                                                  player_id,
+                                                  static_cast<int> (failed->error_kind));
+            std::cerr << line;
             const auto error = framework_error_name (failed->error_kind);
             if (pending_crash_probe && !is_bot) {
                 co_await _context.bound_session ()
@@ -100,7 +107,8 @@ class player_actor_t final : public fw::actor_t
             pending_join = false;
             pending_crash_probe = false;
         } else if (const auto *rejected = std::get_if<fw::actor_join_rejected_t> (&completion)) {
-            std::cerr << "zoneworld-join-rejected player=" << player_id << '\n';
+            const std::string line = std::format ("zoneworld-join-rejected player={}\n", player_id);
+            std::cerr << line;
             auto reason = std::string (reject_reason_t::zone_maintenance);
             if (rejected->reply) {
                 reason = rejected->reply->decode<enter_zone_res_t> ().error.value_or (reason);

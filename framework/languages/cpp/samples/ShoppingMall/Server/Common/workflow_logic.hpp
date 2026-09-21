@@ -4,6 +4,7 @@
 #include "store.hpp"
 
 #include <algorithm>
+#include <format>
 #include <iostream>
 #include <optional>
 #include <stdexcept>
@@ -188,8 +189,9 @@ class inventory_module_t
             /* This evidence is deliberately at the attempted external effect.  A
              * replay that correctly resumes after InventoryReservedEvent never
              * reaches this branch; a broken replay does. */
-            std::cerr << "shoppingmall-order external-effect-repeated order=" << command.order_id
-                      << "\n";
+            const std::string line = std::format (
+              "shoppingmall-order external-effect-repeated order={}\n", command.order_id);
+            std::cerr << line;
             const auto &saved = reservations[command.reservation_id];
             return {saved.value ("accepted", false), saved.value ("reason", std::string{})};
         }
@@ -247,8 +249,9 @@ class payment_module_t
     {
         auto &payments = state["payments"];
         if (payments.contains (command.payment_id)) {
-            std::cerr << "shoppingmall-order external-effect-repeated order=" << command.order_id
-                      << "\n";
+            const std::string line = std::format (
+              "shoppingmall-order external-effect-repeated order={}\n", command.order_id);
+            std::cerr << line;
             const auto &saved = payments[command.payment_id];
             return {saved.value ("accepted", false), saved.value ("reason", std::string{})};
         }

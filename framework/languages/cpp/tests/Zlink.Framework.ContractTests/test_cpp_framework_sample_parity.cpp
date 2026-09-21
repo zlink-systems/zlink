@@ -1404,6 +1404,7 @@ TEST (CppFrameworkSampleParity, TicTacToeClientGateChecksCommonContractFields)
 {
     const auto client =
       read_text_file (cpp_language_root () / "samples/TicTacToe/Client/tictactoe_client_scenario.hpp");
+    const auto normalized_client = collapse_whitespace (client);
 
     EXPECT_NE (client.find ("room.play_nodes.size () == room.play_endpoints.size ()"),
                std::string::npos);
@@ -1429,7 +1430,8 @@ TEST (CppFrameworkSampleParity, TicTacToeClientGateChecksCommonContractFields)
           "client2_second_move.state.next_turn == tictactoe_marks_t::x",
           "same_state (client1_saw_second_o_move.payload.state,\n"
           "              client2_second_move.state)"}) {
-        EXPECT_NE (client.find (required), std::string::npos) << required;
+        EXPECT_NE (normalized_client.find (collapse_whitespace (required)), std::string::npos)
+          << required;
     }
 }
 
@@ -1655,6 +1657,8 @@ TEST (CppFrameworkSampleParity, TicTacToeHostsUseManualEndpointScaleOutWithActor
     const auto client_main = read_text_file (tictactoe_root / "Client/main.cpp");
     const auto create_game_handler =
       read_text_file (tictactoe_root / "Server/Api/Handlers/create_game_http_handler.hpp");
+    const auto normalized_client = collapse_whitespace (client);
+    const auto normalized_create_game_handler = collapse_whitespace (create_game_handler);
     const auto play_factory =
       read_text_file (tictactoe_root / "Server/Play/play_server_host_factory.hpp");
     const auto game_spot = read_text_file (
@@ -1707,7 +1711,8 @@ TEST (CppFrameworkSampleParity, TicTacToeHostsUseManualEndpointScaleOutWithActor
     EXPECT_EQ (play_factory.find (".add_protobuf"), std::string::npos);
     EXPECT_EQ (client.find (".add_protobuf"), std::string::npos);
     EXPECT_NE (create_game_handler.find ("spot_manager_t"), std::string::npos);
-    EXPECT_NE (create_game_handler.find ("_spots.create (sample_names_t::match_spot)"),
+    EXPECT_NE (normalized_create_game_handler.find (
+                 collapse_whitespace ("_spots .create (sample_names_t::match_spot)")),
                std::string::npos);
     EXPECT_NE (create_game_handler.find (".in_mesh (sample_names_t::game_spot_node)"),
                std::string::npos);
@@ -1728,7 +1733,9 @@ TEST (CppFrameworkSampleParity, TicTacToeHostsUseManualEndpointScaleOutWithActor
     EXPECT_NE (client.find ("zlink::http_client::client_t::create (options.api_http_endpoint)"),
                std::string::npos);
     EXPECT_NE (client.find (".post (\"/games\")"), std::string::npos);
-    EXPECT_NE (client.find (".submit<create_game_http_res_t> ().value ().body"), std::string::npos);
+    EXPECT_NE (normalized_client.find (
+                 collapse_whitespace (".submit<create_game_http_res_t> () .value () .body")),
+               std::string::npos);
     EXPECT_EQ (client.find (".fetch<create_game_http_res_t> ()"), std::string::npos);
     EXPECT_EQ (client.find (".json ()"), std::string::npos);
     EXPECT_EQ (client.find ("create_room (options)"), std::string::npos);

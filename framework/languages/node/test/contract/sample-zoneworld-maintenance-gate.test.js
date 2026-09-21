@@ -21,9 +21,9 @@ test('ZoneWorld maintenance keeps route work observable without per-tick success
 
 test('ZoneWorld starts status observation only after maintenance apply succeeds', () => {
   const client = source('Client/special.ts');
-  const response = client.indexOf('const response = await ops.request(new SetMaintenanceReq');
+  const response = client.search(/const response = await ops\s*\.request\(new SetMaintenanceReq/);
   const accepted = client.indexOf('response.error === null', response);
-  const observed = client.indexOf('const observed = ops.waitFor<NodeStatusNotify>', accepted);
+  const observed = client.search(/const observed = ops\s*\.waitFor<NodeStatusNotify>/);
 
   assert.ok(response >= 0);
   assert.ok(accepted > response);

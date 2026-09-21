@@ -4,6 +4,7 @@
 #include "../../Configuration/evidence_store.hpp"
 #include <zlink/framework.hpp>
 
+#include <format>
 #include <iostream>
 #include <string>
 
@@ -50,8 +51,9 @@ class delivery_status_changed_handler_t
         // --8<-- [end:doc-dd-tracking-forward]
 
         if (request.status == delivery_status_t::delivered) {
-            std::cerr << "deliverydispatch-tracking status=Delivered delivery="
-                      << request.delivery_id << "\n";
+            const std::string line = std::format (
+              "deliverydispatch-tracking status=Delivered delivery={}\n", request.delivery_id);
+            std::cerr << line;
         }
         co_return delivery_status_changed_res_t{request.delivery_id, request.status};
     }

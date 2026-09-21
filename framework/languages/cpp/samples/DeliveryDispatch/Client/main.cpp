@@ -4,6 +4,7 @@
 
 using namespace zlink;
 
+#include <format>
 #include <iostream>
 #include <optional>
 #include <string>
@@ -49,9 +50,11 @@ int main (int argc, char **argv)
 {
     const auto options = read_client_options (argc, argv);
     if (!options) {
-        std::cerr << "usage: " << argv[0]
-                  << " --api-url <url> --stream-endpoint <endpoint>"
-                     " --courier-stream-endpoint <endpoint>\n";
+        const std::string line =
+          std::format ("usage: {} --api-url <url> --stream-endpoint <endpoint>"
+                       " --courier-stream-endpoint <endpoint>\n",
+                       argv[0]);
+        std::cerr << line;
         return 2;
     }
     if (!zlink::samples::deliverydispatch::delivery_dispatch_client_scenario_t{}.run (

@@ -89,11 +89,11 @@ Linux·WSL에는 별도 빌드 단계가 없다 — 아래 「실행」의 `run_
 하나를 실행한다. 이 디렉터리에서 그대로 호출한다.
 
 ```bash title="linux"
-./TicTacToe.Ts/run_sample.sh
+./Bingo.Ts/run_sample.sh
 ```
 
 ```powershell title="windows"
-./TicTacToe.Ts/run_sample.ps1
+./Bingo.Ts/run_sample.ps1
 ```
 
 일곱 개를 모두 확인하려면 호출도 일곱 번이다. 경로의 `Bingo.Ts` 자리에 `DeliveryDispatch.Ts`,
