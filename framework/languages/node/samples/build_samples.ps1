@@ -68,18 +68,16 @@ if ($selectedSamples -contains "ZoneWorld") {
         Write-Output "sample ZoneWorld shared browser build start"
         Push-Location $sharedBrowserRoot
         try {
-            & npm.cmd ci --ignore-scripts --no-audit --no-fund
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            & npm.cmd run build
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             $previousBrowserPath = $env:PLAYWRIGHT_BROWSERS_PATH
             try {
                 $env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $sharedBrowserRoot ".cache/ms-playwright"
-                & node.exe (Join-Path $sharedBrowserRoot "node_modules/playwright/cli.js") install chromium
+                & npm.cmd run prepare:browser
                 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             } finally {
                 $env:PLAYWRIGHT_BROWSERS_PATH = $previousBrowserPath
             }
+            & npm.cmd run build
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         } finally {
             Pop-Location
         }

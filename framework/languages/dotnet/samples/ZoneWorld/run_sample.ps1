@@ -658,6 +658,8 @@ try {
         $browserConfig = Join-Path $RunDir "playwright.live.config.mjs"
         Push-Location $browserRoot
         try {
+            & npm run prepare:browser
+            if ($LASTEXITCODE -ne 0) { throw "ZoneWorld browser dependency preparation failed with exit code $LASTEXITCODE." }
             & npm exec vite build -- --outDir $browserDist
             if ($LASTEXITCODE -ne 0) { throw "ZoneWorld browser build failed with exit code $LASTEXITCODE." }
         }
