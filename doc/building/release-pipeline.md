@@ -141,6 +141,7 @@ likewise outside the framework build, CI and releases; they are verified only by
 | `framework-node.yml` | Node framework gate, Chromium STREAM e2e, Node↔.NET cross-language smoke | 4 platforms (win-x64, linux-x64, linux-arm64, darwin-arm64) × Node 20/22 |
 | `pr-verify.yml` | Core ctest and binding smoke, Java framework unit and contract tests, Windows x64 static contracts | ubuntu-24.04; only the Windows static contract job runs on windows-2022 |
 | `build.yml` | Core build and verification (also the release workflow) | 4 platforms |
+| `framework-tutorial.yml` | verifies the tutorial and quickstart **with the published packages, after publish**: `framework-release.yml` and `release-dotnet.yml` call it with `workflow_call(language)` once the registry index (npm view / Maven Central pom / nuget flatcontainer / GitHub Release asset, up to 30 min) serves the version. PR and main pushes run it only when tutorial sources change, not on version-pin-only commits (`sync-version`) (#862) | ubuntu-24.04, four languages |
 | `examples-smoke.yml` | builds and runs the exported examples trees in jobs with no checkout, from the README commands alone (quickstart build, tutorial start and verify, one sample end to end); called by `examples-mirror.yml` before the push and rerun daily on the newest framework tag | ubuntu-24.04 for all four languages; windows-2022 for dotnet and java |
 | `docs.yml` | documentation site build and deploy | ubuntu |
 
