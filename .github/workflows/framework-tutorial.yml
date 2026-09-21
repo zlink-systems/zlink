@@ -601,11 +601,13 @@ jobs:
           key: conan-${{ runner.os }}-${{ hashFiles('framework/languages/cpp/tutorial/bootstrap.cmake') }}
           restore-keys: conan-${{ runner.os }}-
 
+      # The third-party list comes from this checkout's recipe, not the downloaded
+      # archive's, so a recipe change is verified before it ships (ZLINK_CONAN_RECIPE).
       - name: Build the C++ tutorial against the published archives
         id: bootstrap
         working-directory: framework/languages/cpp/tutorial
         run: |
-          cmake -P bootstrap.cmake
+          cmake -DZLINK_CONAN_RECIPE="${GITHUB_WORKSPACE}/framework/languages/cpp/packaging/conan/conanfile.py" -P bootstrap.cmake
           cmake --build build --parallel
 
       # Saved right after the bootstrap and even when a later step fails: the
@@ -614,7 +616,7 @@ jobs:
         working-directory: framework/languages/cpp/quickstart
         run: |
           set -euo pipefail
-          cmake -DZLINK_ROOT="$PWD/../tutorial/.zlink" -P bootstrap.cmake
+          cmake -DZLINK_ROOT="$PWD/../tutorial/.zlink" -DZLINK_CONAN_RECIPE="${GITHUB_WORKSPACE}/framework/languages/cpp/packaging/conan/conanfile.py" -P bootstrap.cmake
           cmake --build build --parallel
           ./build/quickstart_server > server.log 2>&1 &
           ./build/quickstart_client > client.log 2>&1 &

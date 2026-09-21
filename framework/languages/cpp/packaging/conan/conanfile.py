@@ -23,8 +23,10 @@ ZLINK_FRAMEWORK_CPP_THIRD_PARTY_REQUIREMENTS = (
     "openssl/[>=3.0 <4]",
     "lz4/1.9.4",
     "protobuf/5.27.0",
-    # The async option below owns its compatible libuv transitively.
-    "redis-plus-plus/1.3.13",
+    # The async option below owns its compatible libuv transitively. 1.3.15 is the
+    # first ConanCenter recipe whose async build finds libuv without a system
+    # libuv-dev (1.3.13 fails with "uv.h: No such file" on a clean machine).
+    "redis-plus-plus/1.3.15",
 )
 
 

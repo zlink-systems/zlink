@@ -31,6 +31,9 @@
 #                  then the copy bundled with Visual Studio 2022 on Windows)
 #     ZLINK_JOBS   parallel compile jobs (default: logical cores)
 #     ZLINK_ROOT   where .zlink/ goes (default: beside this file)
+#     ZLINK_CONAN_RECIPE  conanfile.py to read the third-party list from instead
+#                  of the one inside the downloaded framework archive. Only for
+#                  verifying an unreleased recipe (repository CI); readers never set it
 cmake_minimum_required(VERSION 3.24)
 
 set(ZLINK_FRAMEWORK_CPP_VERSION "0.21.0")
@@ -215,6 +218,9 @@ if(ZLINK_PACKAGE_MANAGER STREQUAL "conan")
   # The released recipe is the version owner. Read its requirement literals so
   # a bootstrap always follows the archive it downloaded, not this script.
   set(_zlink_recipe "${ZLINK_FRAMEWORK_SRC}/packaging/conan/conanfile.py")
+  if(ZLINK_CONAN_RECIPE)
+    set(_zlink_recipe "${ZLINK_CONAN_RECIPE}")
+  endif()
   if(NOT EXISTS "${_zlink_recipe}")
     zlink_fail("the framework archive has no packaging/conan/conanfile.py")
   endif()
