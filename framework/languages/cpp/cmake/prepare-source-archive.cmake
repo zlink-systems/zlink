@@ -9,8 +9,10 @@ if(EXISTS "${ZLINK_STAGE_DIR}")
 endif()
 find_program(GIT_EXECUTABLE git REQUIRED)
 find_program(NODE_EXECUTABLE node REQUIRED)
+# The codec generator is the one --check entry point for every generated service-wire
+# output (framework/runtime/protocol/README.ko.md); the assets tool alone takes explicit paths.
 execute_process(COMMAND "${NODE_EXECUTABLE}"
-  "${ZLINK_SOURCE_DIR}/framework/runtime/protocol/generate-service-wire-assets.mjs" --check
+  "${ZLINK_SOURCE_DIR}/framework/runtime/protocol/generate-service-wire-codecs.mjs" --check
   WORKING_DIRECTORY "${ZLINK_SOURCE_DIR}" COMMAND_ERROR_IS_FATAL ANY)
 file(MAKE_DIRECTORY "${ZLINK_STAGE_DIR}")
 execute_process(COMMAND "${GIT_EXECUTABLE}" archive HEAD:framework/languages/cpp
