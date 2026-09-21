@@ -60,20 +60,6 @@ scenario_selected() {
   [[ "$SCENARIO" == "all" || ",${SCENARIO}," == *",$1,"* ]]
 }
 
-# Run the crash replacement in a separate process and Redis scope so its stale descriptor
-# history cannot affect the normal replacement scenario.
-if [[ "$BROWSER_CHILD" == "0" && "$G4_CHILD" == "0" ]] && scenario_selected ZW-G4; then
-  bash "$0" --g4-child ZW-G4
-  G4_PROVEN=1
-  if [[ "$SCENARIO" == "ZW-G4" ]]; then exit 0; fi
-fi
-# ZW-B8 intentionally drops the internal session-route command. Keep that destructive
-# transport fault in its own topology so the canonical lane that follows starts clean.
-if [[ "$BROWSER_CHILD" == "0" && "$B8_CHILD" == "0" ]] && scenario_selected ZW-B8; then
-  bash "$0" --b8-child ZW-B8
-  B8_PROVEN=1
-  if [[ "$SCENARIO" == "ZW-B8" ]]; then exit 0; fi
-fi
 RUN_DIR="$(mktemp -d)"
 RUN_DIR="$(cd "${RUN_DIR}" && pwd)"
 RUN_ID="$(basename "$RUN_DIR")-$$-$RANDOM"
@@ -93,6 +79,33 @@ cleanup() {
   zlink_sample_copy_evidence "$RUN_DIR" "ZoneWorld"
 }
 trap zlink_sample_exit_trap EXIT
+
+run_child() {
+  local child_pid status=0
+  bash "$0" "$@" &
+  child_pid=$!
+  PIDS+=("$child_pid")
+  set +e
+  wait "$child_pid" || status=$?
+  set -e
+  remove_owned_pid "$child_pid"
+  return "$status"
+}
+
+# Run the crash replacement in a separate process and Redis scope so its stale descriptor
+# history cannot affect the normal replacement scenario.
+if [[ "$BROWSER_CHILD" == "0" && "$G4_CHILD" == "0" ]] && scenario_selected ZW-G4; then
+  run_child --g4-child ZW-G4
+  G4_PROVEN=1
+  if [[ "$SCENARIO" == "ZW-G4" ]]; then exit 0; fi
+fi
+# ZW-B8 intentionally drops the internal session-route command. Keep that destructive
+# transport fault in its own topology so the canonical lane that follows starts clean.
+if [[ "$BROWSER_CHILD" == "0" && "$B8_CHILD" == "0" ]] && scenario_selected ZW-B8; then
+  run_child --b8-child ZW-B8
+  B8_PROVEN=1
+  if [[ "$SCENARIO" == "ZW-B8" ]]; then exit 0; fi
+fi
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "Docker is required to run ZoneWorld (it provisions a dedicated Redis container)." >&2
@@ -433,7 +446,9 @@ EOF
   wait_for_port "$BROWSER_PREVIEW_PORT"
   (cd "$browser_client" && npm exec playwright test -- --config "$browser_config") &
   browser_pid=$!
+  PIDS+=("$browser_pid")
   browser_node_stopped=0
+  browser_status=0
 
   if wait_for_file_while_running "$browser_marker" "$browser_pid"; then
     stop_node zone-node-2
@@ -443,9 +458,9 @@ EOF
   fi
 
   set +e
-  wait "$browser_pid"
-  browser_status=$?
+  wait "$browser_pid" || browser_status=$?
   set -e
+  remove_owned_pid "$browser_pid"
   if [[ "$browser_node_stopped" -ne 1 ]]; then
     browser_status=1
   fi
@@ -453,6 +468,7 @@ EOF
     echo "!! shared browser client failed" >&2
     return "$browser_status"
   fi
+  remove_owned_pid "$preview_pid"
 }
 
 echo "==> ops"
