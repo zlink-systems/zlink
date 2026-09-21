@@ -752,6 +752,9 @@ jobs:
         run: |
           mkdir -p "${GITHUB_WORKSPACE}/.vcpkg-binary-cache"
           echo "VCPKG_BINARY_SOURCES=clear;files,${GITHUB_WORKSPACE}/.vcpkg-binary-cache,readwrite" >> "$GITHUB_ENV"
+          # What the restore actually delivered (#852: a 210 MB restore once yielded 0 vcpkg hits).
+          echo "restored: $(find "${GITHUB_WORKSPACE}/.vcpkg-binary-cache" -type f | wc -l) files, $(du -sh "${GITHUB_WORKSPACE}/.vcpkg-binary-cache" | cut -f1)"
+          find "${GITHUB_WORKSPACE}/.vcpkg-binary-cache" -type f | head -5
 
       - name: Tutorial install (README's own 내려받기와 설치/linux block)
         working-directory: examples/zlink-cpp-examples/tutorial
@@ -763,6 +766,12 @@ jobs:
 
       # Saved right after the bootstrap and even when a later step fails: the
       # ports built here are what the next run must not build again.
+      - name: What the bootstrap left in the binary cache
+        if: always()
+        run: |
+          echo "to save: $(find "${GITHUB_WORKSPACE}/.vcpkg-binary-cache" -type f | wc -l) files, $(du -sh "${GITHUB_WORKSPACE}/.vcpkg-binary-cache" | cut -f1)"
+          find "${GITHUB_WORKSPACE}/.vcpkg-binary-cache" -type f | head -5
+
       - name: Save the vcpkg binary cache
         if: always() && steps.vcpkg-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
