@@ -178,7 +178,7 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
         assertEquals(11, canonicalCount);
         assertEquals(12, malformedCount);
         JsonNode operationCases = fixtureIndex().path("operationCases");
-        assertEquals(79, operationCases.size());
+        assertEquals(93, operationCases.size());
         Map<String, Set<String>> boundaryPairs = new HashMap<>();
         for (JsonNode operationCase : operationCases) {
             String operation = operationCase.path("operation").asText();
@@ -189,16 +189,31 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
                                 ignored -> new HashSet<>())
                         .add(operationCase.path("expect").asText());
             }
+            if (operation.equals("logical-stream")) {
+                exerciseLogicalStream(operationCase, context(operationCase));
+                continue;
+            }
             for (String direction : directions(operationCase)) {
                 String message =
                         operation + ":" + operationCase.path("name").asText() + ":" + direction;
                 if (operationCase.path("expect").asText().equals("accept")) {
                     assertOperationCaseAccepted(operationCase, direction, message);
                 } else {
-                    assertThrows(
-                            Exception.class,
-                            () -> applyOperationCase(operationCase, direction),
-                            message);
+                    Exception failure =
+                            assertThrows(
+                                    Exception.class,
+                                    () -> applyOperationCase(operationCase, direction),
+                                    message);
+                    if (operationCase.has("expectedFailure")) {
+                        assertTrue(
+                                failure.getMessage()
+                                        .contains(
+                                                operationCase
+                                                        .path("expectedFailure")
+                                                        .path("javaMessage")
+                                                        .asText()),
+                                message + ": " + failure);
+                    }
                 }
             }
         }
@@ -239,10 +254,33 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
                 if (direction.equals("decode")) {
                     decodeType(type, bytes, context);
                 } else {
-                    Object value =
-                            operationCase.has("input")
-                                    ? inputValue(type, operationCase.path("input"))
-                                    : decodeType(type, bytes, CONTEXT);
+                    Object value;
+                    if (operationCase.has("input")) {
+                        value = inputValue(type, operationCase.path("input"));
+                    } else if (operationCase.has("encodeInputHex")) {
+                        Object seed =
+                                decodeType(
+                                        type,
+                                        HexFormat.of()
+                                                .parseHex(
+                                                        operationCase
+                                                                .path("encodeInputHex")
+                                                                .asText()),
+                                        CONTEXT);
+                        if (!operationCase
+                                .path("encodeMutation")
+                                .asText()
+                                .equals("duplicate-first-item")) {
+                            throw new IllegalStateException("unknown encode mutation");
+                        }
+                        ServiceWireCodec.SavedWorkVector vector =
+                                (ServiceWireCodec.SavedWorkVector) seed;
+                        value =
+                                new ServiceWireCodec.SavedWorkVector(
+                                        List.of(vector.items().get(0), vector.items().get(0)));
+                    } else {
+                        value = decodeType(type, bytes, CONTEXT);
+                    }
                     assertArrayEquals(bytes, encodeType(type, value, context));
                 }
             }
@@ -272,10 +310,13 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
                                                     .path("failureCode")
                                                     .asText())));
             case "relocation-envelope-v1" -> {
-                byte[] bytes = operationBytes(operationCase);
-                if (direction.equals("decode")) {
+                if (operationCase.path("operation").asText().equals("logical-stream")) {
+                    exerciseLogicalStream(operationCase, context);
+                } else if (direction.equals("decode")) {
+                    byte[] bytes = operationBytes(operationCase);
                     ServiceWireCodec.decodeLogicalRelocationEnvelopeV1(bytes, context);
                 } else {
+                    byte[] bytes = operationBytes(operationCase);
                     assertArrayEquals(
                             bytes,
                             ServiceWireCodec.encodeLogicalRelocationEnvelopeV1(
@@ -302,6 +343,88 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
         }
     }
 
+    private static void exerciseLogicalStream(
+            JsonNode operationCase, ServiceWireCodec.DecoderContext context) throws Exception {
+        ServiceWireCodec.LogicalRelocationEnvelopeV1Decoder decoder =
+                new ServiceWireCodec.LogicalRelocationEnvelopeV1Decoder(context);
+        if (operationCase.has("syntheticPriorInputByteCount")) {
+            decoder.setSyntheticPriorInputByteCountForTest(
+                    operationCase.path("syntheticPriorInputByteCount").asLong());
+        }
+        ServiceWireCodec.RelocationEnvelopeV1 complete = null;
+        long supplied = 0;
+        for (int index = 0; index < operationCase.path("chunksHex").size(); index++) {
+            byte[] chunk =
+                    HexFormat.of().parseHex(operationCase.path("chunksHex").path(index).asText());
+            ServiceWireCodec.LogicalDecodeStep<ServiceWireCodec.RelocationEnvelopeV1> step;
+            try {
+                step = decoder.push(chunk, index == operationCase.path("finalChunkIndex").asInt());
+            } catch (ServiceWireCodec.LogicalDecodeException failure) {
+                assertEquals("reject", operationCase.path("expect").asText());
+                assertEquals(operationCase.path("failureChunkIndex").asInt(), index);
+                assertEquals(
+                        operationCase.path("failureKind").asText(),
+                        operationCase.path("chunkOutcomes").path(index).asText());
+                assertEquals(
+                        operationCase.path("failureKind").asText().toUpperCase(),
+                        failure.kind().name());
+                assertEquals(operationCase.path("failureOffset").asLong(), failure.offset());
+                var failureKind = failure.kind();
+                var failureOffset = failure.offset();
+                Arrays.fill(chunk, (byte) 0);
+                assertEquals(failureKind, failure.kind());
+                assertEquals(failureOffset, failure.offset());
+                if (operationCase.path("assertChunkReleasedAfterFailure").asBoolean(false)) {
+                    assertThrows(
+                            IllegalStateException.class, () -> decoder.push(new byte[0], false));
+                    assertEquals(failureKind, failure.kind());
+                    assertEquals(failureOffset, failure.offset());
+                }
+                return;
+            }
+            assertTrue(
+                    operationCase.path("failureChunkIndex").asInt(-1) != index,
+                    "expected logical failure was not raised");
+            supplied += chunk.length;
+            Arrays.fill(chunk, (byte) 0);
+            assertTrue(
+                    step.bufferedInputByteCount()
+                            <= operationCase.path("maximumBufferedInputBytes").asInt());
+            JsonNode expectedBuffered =
+                    operationCase.path("expectedBufferedInputByteCounts").path(index);
+            if (expectedBuffered.isIntegralNumber()) {
+                assertEquals(expectedBuffered.asInt(), step.bufferedInputByteCount());
+            }
+            assertEquals(supplied, step.consumedByteCount());
+            assertTrue(
+                    step.continuationDepth()
+                            <= ServiceWireCodec.LogicalRelocationEnvelopeV1Decoder
+                                    .MAXIMUM_CONTINUATION_DEPTH);
+            assertEquals(
+                    operationCase.path("chunkOutcomes").path(index).asText(),
+                    step.progress() == ServiceWireCodec.LogicalDecodeProgress.NEED_MORE
+                            ? "need-more"
+                            : "complete");
+            if (step.progress() == ServiceWireCodec.LogicalDecodeProgress.COMPLETE) {
+                complete = step.value();
+            }
+        }
+        assertEquals("accept", operationCase.path("expect").asText());
+        assertTrue(complete != null);
+        assertThrows(IllegalStateException.class, () -> decoder.push(new byte[0], true));
+        assertArrayEquals(
+                operationBytesJoinedChunks(operationCase),
+                ServiceWireCodec.encodeLogicalRelocationEnvelopeV1(complete, context));
+    }
+
+    private static byte[] operationBytesJoinedChunks(JsonNode operationCase) {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        for (JsonNode chunk : operationCase.path("chunksHex")) {
+            bytes.writeBytes(HexFormat.of().parseHex(chunk.asText()));
+        }
+        return bytes.toByteArray();
+    }
+
     private static ServiceWireCodec.DecoderContext context(JsonNode operationCase) {
         JsonNode values = operationCase.path("context");
         boolean missing =
@@ -324,12 +447,6 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
             return HexFormat.of().parseHex(operationCase.path("hex").asText());
         }
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-        if (operationCase.has("chunksHex")) {
-            for (JsonNode chunk : operationCase.path("chunksHex")) {
-                bytes.writeBytes(HexFormat.of().parseHex(chunk.asText()));
-            }
-            return bytes.toByteArray();
-        }
         JsonNode recipe = operationCase.path("byteRecipe");
         for (JsonNode segment : recipe.path("segments")) {
             if (segment.has("hex")) {
@@ -367,6 +484,7 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
                     ServiceWireCodec.decodeDescriptorExtension(bytes, context);
             case "aggregate-participant-vector" ->
                     ServiceWireCodec.decodeAggregateParticipantVector(bytes, context);
+            case "saved-work-vector" -> ServiceWireCodec.decodeSavedWorkVector(bytes, context);
             case "application-payload-bytes" ->
                     ServiceWireCodec.decodeApplicationPayloadBytes(bytes, context);
             case "creation-operation-terminal-v1" ->
@@ -407,6 +525,9 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
             case "aggregate-participant-vector" ->
                     ServiceWireCodec.encodeAggregateParticipantVector(
                             (ServiceWireCodec.AggregateParticipantVector) value, context);
+            case "saved-work-vector" ->
+                    ServiceWireCodec.encodeSavedWorkVector(
+                            (ServiceWireCodec.SavedWorkVector) value, context);
             case "application-payload-bytes" ->
                     ServiceWireCodec.encodeApplicationPayloadBytes(
                             (ServiceWireCodec.ApplicationPayloadBytes) value, context);
