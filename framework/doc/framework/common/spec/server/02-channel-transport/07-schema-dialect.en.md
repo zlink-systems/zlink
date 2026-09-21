@@ -398,7 +398,12 @@ The validator compares each kind's object **literally** against the expected val
 The list is therefore not documentation but build-time checked data — when a rule changes, the
 validator's expectation and the schema change together, and a schema changed on one side alone does
 not pass. By contrast, only one tuple, `terminal-failure-integrity` (the allowed combinations of
-terminal result, failure code, and payload), is lowered into a runtime decoder check. For the other
+terminal result, failure code, and payload), is lowered into a runtime decoder check. Its `fields` is
+the only list of the wire owners that receive the check: every owner that declares both
+`terminalResult` and `failureCode` (a type's `fields` or `body`, a command's `body`, or one named
+conditional-union case; a `layout` and an `otherwise` fallback may not carry the pair) — the
+validator checks that the two sets are equal, and the lowering attaches the check only to the owners
+in this list. For the other
 kinds, the owning clause in [§9](#9-profiles-and-owning-clauses) states the rule, the runtime
 implements it from that clause, and the schema preserves it in a form a machine can compare.
 
