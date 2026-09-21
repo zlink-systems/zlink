@@ -2003,9 +2003,12 @@ test('Bingo TypeScript sample exposes spot actor contracts explicitly', () => {
     'Spots',
     'ZLinkSpot.ts'
   ));
+  // The formatter may break a type parameter list across lines; compare the
+  // framework contract with whitespace collapsed.
+  const collapsed = frameworkSpotContract.replace(/\s+/g, ' ').replace(/ ?([<>]) ?/g, '$1');
   const required = [
-    [frameworkSpotContract, 'interface ZLinkSpot<TActor extends ZLinkActor = ZLinkActor>'],
-    [frameworkSpotContract, 'interface ZLinkEntrySpot<TActor extends ZLinkActor = ZLinkActor>'],
+    [collapsed, 'interface ZLinkSpot<TActor extends ZLinkActor = ZLinkActor>'],
+    [collapsed, 'interface ZLinkEntrySpot<TActor extends ZLinkActor = ZLinkActor>'],
     [playModule, '.addActorFactory(SampleNames.playerActorType, PlayerActorFactory,'],
     [playModule, '.addRouteMesh(SampleNames.roomSpotNode'],
     [playModule, '.addEntrySpot(BingoEntrySpot)'],
