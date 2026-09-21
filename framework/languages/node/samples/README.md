@@ -1,8 +1,7 @@
 # ZLink Node.js Framework Samples
 
-Seven samples that use the public API of the Node.js/NestJS framework. Build and run them from
-this directory alone, without the repository (an unzipped `zlink-samples-node/`, or the
-repository's `framework/languages/node/samples/`).
+Seven samples that use the public API of the Node.js/NestJS framework. Clone the
+`zlink-node-examples` repository and build and run them from its `samples/` directory.
 
 ## Sample list
 
@@ -27,8 +26,8 @@ reachable from inside the repository; not needed to run the samples).
 
 - **Node.js 22 or newer.** `@zlink-systems/zlink` declares `"engines": { "node": ">=22" }`.
   Check with `node --version`. Starting at `@zlink-systems/framework` 0.18.1, it pins
-  `zlink@1.2.1`, which carries the Windows prebuild (#656) — a zip pinning an earlier
-  framework still gets `1.2.0` (see "Troubleshooting" below).
+  `zlink@1.2.1`, which carries the Windows prebuild (#656) — an earlier framework release
+  still gets `1.2.0` (see "Troubleshooting" below).
 - **Docker Desktop (or Docker Engine) running.** Nothing else. Each sample runner creates its own
   Redis container (`redis:7.2-alpine`) and removes it when it exits, so you never install or start
   Redis yourself.
@@ -39,10 +38,10 @@ reachable from inside the repository; not needed to run the samples).
 
 ## Download and install
 
-This directory is already the download — unzip `zlink-samples-node.zip` and it opens straight into
-`Bingo.Ts/`, `TicTacToe.Ts/`, … the seven of them. There is no repository to clone. Each sample
-resolves `@zlink-systems/*` from the npm registry at the version that sample pins. Samples are not
-an npm workspace, so install each one separately.
+Clone the `zlink-node-examples` repository and run these commands from its `samples/` directory.
+That directory contains `Bingo.Ts/`, `TicTacToe.Ts/`, … the seven samples. Each sample resolves
+`@zlink-systems/*` from the npm registry at the version that sample pins. Samples are not an npm
+workspace, so install each one separately.
 
 ```bash title="linux"
 cd TicTacToe.Ts
@@ -125,7 +124,7 @@ container it started.
 |---|---|
 | `docker: Cannot connect to the Docker daemon` | Docker Desktop (or `dockerd`) is not running. Start it and try again |
 | `Package mode requires @zlink-systems/... Run npm install in ...` | You skipped `npm install` in that sample's directory. Do "Download and install" above first |
-| `npm error gyp ERR! ... ZLINK_CORE_INSTALL_PREFIX must name an absolute installed Core ... package prefix` (Windows) | This zip pins a `@zlink-systems/framework` older than 0.18.1, so it still gets `zlink@1.2.0` — the win32-x64 prebuild (#656) ships from framework 0.18.1 (`zlink@1.2.1`) on. Get that version, or run it under WSL |
+| `npm error gyp ERR! ... ZLINK_CORE_INSTALL_PREFIX must name an absolute installed Core ... package prefix` (Windows) | An earlier framework release pins `@zlink-systems/framework` older than 0.18.1, so it still gets `zlink@1.2.0` — the win32-x64 prebuild (#656) ships from framework 0.18.1 (`zlink@1.2.1`) on. Get that version, or run it under WSL |
 | Same error (macOS) | `@zlink-systems/zlink@1.2.1` also has no `darwin-*` prebuild yet. Run it on Linux (x64) or Windows (0.18.1 on) |
 | `browserType.launch: Executable doesn't exist` in a Chromium sample | You skipped `npm run browser:install` in that sample's directory |
 | Port conflict (`EADDRINUSE`) | The runner picks a random loopback port each time, so this is rare unless you run the same sample twice at once. Retrying usually clears it |

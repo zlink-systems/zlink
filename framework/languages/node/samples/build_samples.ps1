@@ -12,7 +12,7 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $nodeRoot = Split-Path -Parent $scriptDir
 
 #  Positive, existence-checked marker for "this is the repository", not directory shape: a
-#  standalone samples package (zlink-samples-node.zip) keeps the same samples/<Sample> layout,
+#  examples mirror repository (zlink-node-examples) keeps the same samples/<Sample> layout,
 #  so shape alone cannot tell the two apart (#655). Only the repository's node workspace root
 #  carries this package.json with this name.
 $nodeWorkspaceManifestPath = Join-Path $nodeRoot "package.json"

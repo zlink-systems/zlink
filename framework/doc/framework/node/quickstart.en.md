@@ -9,27 +9,19 @@ The project lives at
 blocks below are read from those files when the site is built. Without a location store, two
 processes name each other's endpoint directly and exchange one request/reply.
 
-## 0. Downloading the tutorial
+## 0. Clone the examples repository
 
-This chapter builds the smallest project from scratch. **To run the finished tutorial instead**,
-one archive is all you need — there is no reason to clone the whole repository.
-
-!!! tip "Download the tutorial"
-
-    [:material-download: **zlink-tutorial-node.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-tutorial-node.zip){ .md-button .md-button--primary }
-
-
-The address does not depend on the platform: Windows and WSL fetch the same file. Unpacking it
-leaves the project under `zlink-tutorial-node/`, with the package versions of the release you
-downloaded.
-
-For the current main, take just that directory out of the repository.
+This chapter's project is `quickstart/` in the `zlink-node-examples` repository; `tutorial/`,
+the program read by the feature guides, and `samples/` live beside it.
 
 ```bash
-git clone --filter=blob:none --sparse https://github.com/zlink-systems/zlink.git
-cd zlink
-git sparse-checkout set framework/languages/node/tutorial
+git clone https://github.com/zlink-systems/zlink-node-examples.git
+cd zlink-node-examples/quickstart
 ```
+
+`main` is the latest release plus the fixes merged since, with package versions pinned to that
+release. An older release is the tag `vA.B.C` (`git checkout vA.B.C`). Send issues and PRs to
+`zlink-systems/zlink`.
 
 ## 1. Installation
 
@@ -92,7 +84,7 @@ A handler is registered in two places — Nest's `providers` and `addRequestHand
 ## 5. Run
 
 ```bash
-cd framework/languages/node/quickstart
+cd zlink-node-examples/quickstart
 npm install
 npm run build
 

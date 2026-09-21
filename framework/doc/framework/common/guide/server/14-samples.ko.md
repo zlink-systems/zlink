@@ -11,42 +11,35 @@
 **어디서 시작할지 모르겠다면 [Bingo](#3-bingo--온라인-게임-서버-구축)를 본다.** framework
 기능이 가장 많이 등장하고, 구성 자체가 일반적인 온라인 게임 서버 그대로다.
 
-## 0. 샘플 내려받기
+## 0. 샘플 예제 저장소
 
-샘플은 저장소 전체를 clone하지 않아도 된다. 언어별 압축 파일 하나에 샘플이 모두 들어 있다.
+샘플은 해당 언어의 examples repository를 clone하고 `samples/`에서 실행한다.
 
 === "C++"
 
-    [:material-download: **zlink-samples-cpp.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-cpp.zip){ .md-button .md-button--primary }
+    [:material-github: **zlink-cpp-examples**](https://github.com/zlink-systems/zlink-cpp-examples){ .md-button .md-button--primary }
 
 === "C#/.NET"
 
-    [:material-download: **zlink-samples-dotnet.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-dotnet.zip){ .md-button .md-button--primary }
+    [:material-github: **zlink-dotnet-examples**](https://github.com/zlink-systems/zlink-dotnet-examples){ .md-button .md-button--primary }
 
 === "Java"
 
-    [:material-download: **zlink-samples-java.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-java.zip){ .md-button .md-button--primary }
+    [:material-github: **zlink-java-examples**](https://github.com/zlink-systems/zlink-java-examples){ .md-button .md-button--primary }
 
 === "Kotlin"
 
-    [:material-download: **zlink-samples-java.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-java.zip){ .md-button .md-button--primary }
+    [:material-github: **zlink-java-examples**](https://github.com/zlink-systems/zlink-java-examples){ .md-button .md-button--primary }
 
-    Kotlin 샘플은 Java 샘플과 gradle project를 공유하므로 같은 파일이다.
+    Kotlin 샘플은 Java 샘플과 같은 Gradle project를 공유하므로 같은 repository를 사용한다.
 
 === "Node/TypeScript"
 
-    [:material-download: **zlink-samples-node.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-node.zip){ .md-button .md-button--primary }
+    [:material-github: **zlink-node-examples**](https://github.com/zlink-systems/zlink-node-examples){ .md-button .md-button--primary }
 
-주소는 플랫폼과 무관하다. Windows에서도 WSL에서도 같은 파일을 받는다. 샘플은 배포된 패키지만
-참조하므로 압축을 풀고 바로 빌드한다. 그 안의 버전은 받은 릴리즈에 맞춰져 있다.
-
-최신 main을 원하면 저장소에서 그 디렉터리만 가져온다.
-
-```bash
-git clone --filter=blob:none --sparse https://github.com/zlink-systems/zlink.git
-cd zlink
-git sparse-checkout set framework/languages/dotnet/samples
-```
+`main`은 최신 릴리스에 그 뒤의 수정을 더한 것이고, 패키지 버전은 그 릴리스에 맞춰져 있다.
+이전 릴리스는 tag `vA.B.C`로 받는다(`git checkout vA.B.C`). 이슈와 PR은 `zlink-systems/zlink`로
+보낸다.
 
 ## 1. 무엇을 만드는지로 고르기
 
@@ -284,7 +277,7 @@ join하고, owner가 다르면 relocation이 일어나지만 client 연결은 �
 === "C++"
 
     ```bash
-    # 압축을 푼 zlink-samples-cpp/ 에서. bootstrap.cmake가 공개 아카이브로 framework를
+    # clone한 zlink-cpp-examples/samples/ 에서. bootstrap.cmake가 공개 패키지로 framework를
     # 설치하고 일곱 샘플을 build/ 에 구성한다 (저장소 안이라면 framework/languages/cpp/samples/ 에서).
     cmake -P bootstrap.cmake
     cmake --build build --parallel

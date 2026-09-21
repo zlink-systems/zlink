@@ -6,7 +6,7 @@ processes and executable client scenarios. Their domain flows and
 verification rules follow the
 [common sample scenarios](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/sample/README.ko.md).
 
-This file only needs the .NET SDK and Docker -- no repository checkout. The
+This file runs from `samples/` in the `zlink-dotnet-examples` repository. The
 Korean canonical version is [README.ko.md](README.ko.md).
 
 ## Prerequisites
@@ -28,12 +28,10 @@ Korean canonical version is [README.ko.md](README.ko.md).
 
 Each sample references the published `Zlink.Framework`/`Zlink.Stream.Connector`
 NuGet packages (`nuget.config` in this directory points only at
-`nuget.org`); nothing here needs a repository checkout, and `dotnet restore`
-(run implicitly by `dotnet build`, below) fetches them the first time you
-build a sample. Extract `zlink-samples-dotnet.zip` anywhere and run the
-commands in this file from the extracted `zlink-samples-dotnet` directory
-(a repository checkout runs the same commands from
-`framework/languages/dotnet/samples`).
+`nuget.org`); clone the `zlink-dotnet-examples` repository and run the commands
+in this file from its `samples/` directory (a repository checkout runs the same
+commands from `framework/languages/dotnet/samples`). `dotnet restore` (run
+implicitly by `dotnet build`, below) fetches them the first time you build a sample.
 
 ## Build
 
@@ -57,7 +55,7 @@ runs one sample. The
 owns this rule in its "The Sample Run Script And Redis Isolation Standard"
 section; what follows is only the command for this language, run from this
 `samples` directory (`framework/languages/dotnet/samples` in a repository
-checkout, or the root of an extracted `zlink-samples-dotnet.zip`). The runner
+checkout, or `samples/` in the cloned examples repository). The runner
 starts its own Redis container in Docker itself -- do not start one by hand.
 This saves the run's own output to a file the next section checks.
 
@@ -127,7 +125,7 @@ processes and Redis container either way.
 - **`dotnet` reports no compatible SDK** -- install the .NET 8.0 SDK; a newer
   major SDK alone is not enough unless it still carries an `8.0.x` runtime.
 - A sample container or process left behind after a crashed run -- every
-  container this zip creates is named `zlink-<sample>-dotnet-redis-*`; remove
+  container a sample runner creates is named `zlink-<sample>-dotnet-redis-*`; remove
   it with `docker rm -f` if a run was interrupted (Ctrl-C, killed shell)
   before its own cleanup ran.
 

@@ -43,15 +43,15 @@ Kotlin tutorial이 같은 Gradle build 안 `../kotlin/`에 있다. 두 언어는
 
 ## 내려받기와 설치
 
-이 tutorial은 저장소를 checkout하지 않고 Maven Central의 `systems.zlink:zlink-framework-*`
-패키지만 참조한다. 이 디렉터리(`java/`)만 옮겨도 그대로 빌드된다 — `settings.gradle.kts`·
+이 tutorial은 `zlink-java-examples` 저장소의 `tutorial/java/`에서 실행하고 Maven Central의
+`systems.zlink:zlink-framework-*` 패키지만 참조한다. `settings.gradle.kts`·
 `gradle/libs.versions.toml`·wrapper는 `../`(tutorial 루트)의 것을 함께 쓰므로 Kotlin
-tutorial과 나란히 옮긴다. 별도로 내려받거나 설치할 것은 없다. Gradle wrapper(`./gradlew` /
+tutorial과 나란히 둔다. 별도로 내려받거나 설치할 것은 없다. Gradle wrapper(`./gradlew` /
 `gradlew.bat`)가 첫 실행에서 정확한 Gradle 버전을 내려받고, 그 다음 Gradle이 위 패키지들을
 Maven Central에서 내려받는다.
 
-아래 명령은 모두 이 zip을 푼 디렉터리(`zlink-tutorial-java/`, tutorial 루트 - 여기서
-`../`)에서 실행한다.
+아래 명령은 `zlink-java-examples` 저장소를 clone한 뒤 tutorial 루트를 현재 위치로 두고
+실행한다. `../` 아래에 이 README가 있는 `tutorial/java/`가 있다.
 
 ## 빌드
 

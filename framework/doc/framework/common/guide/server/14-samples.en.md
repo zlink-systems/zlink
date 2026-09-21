@@ -14,43 +14,35 @@ registration code and handlers.
 It's where the most framework features show up, and its architecture mirrors that of a
 typical online game server.
 
-## 0. Downloading the samples
+## 0. Clone the examples repository
 
-The samples do not need the whole repository. One archive per language holds all of them.
+Clone the examples repository for the language and run the samples from `samples/`.
 
 === "C++"
 
-    [:material-download: **zlink-samples-cpp.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-cpp.zip){ .md-button .md-button--primary }
+    [:material-github: **zlink-cpp-examples**](https://github.com/zlink-systems/zlink-cpp-examples){ .md-button .md-button--primary }
 
 === "C#/.NET"
 
-    [:material-download: **zlink-samples-dotnet.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-dotnet.zip){ .md-button .md-button--primary }
+    [:material-github: **zlink-dotnet-examples**](https://github.com/zlink-systems/zlink-dotnet-examples){ .md-button .md-button--primary }
 
 === "Java"
 
-    [:material-download: **zlink-samples-java.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-java.zip){ .md-button .md-button--primary }
+    [:material-github: **zlink-java-examples**](https://github.com/zlink-systems/zlink-java-examples){ .md-button .md-button--primary }
 
 === "Kotlin"
 
-    [:material-download: **zlink-samples-java.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-java.zip){ .md-button .md-button--primary }
+    [:material-github: **zlink-java-examples**](https://github.com/zlink-systems/zlink-java-examples){ .md-button .md-button--primary }
 
-    The Kotlin samples share a gradle project with the Java ones, so it is the same file.
+    The Kotlin samples share a Gradle project with the Java ones, so they use the same repository.
 
 === "Node/TypeScript"
 
-    [:material-download: **zlink-samples-node.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-node.zip){ .md-button .md-button--primary }
+    [:material-github: **zlink-node-examples**](https://github.com/zlink-systems/zlink-node-examples){ .md-button .md-button--primary }
 
-The address does not depend on the platform: Windows and WSL fetch the same file. The samples
-reference published packages only, so they build straight after unpacking, with the versions of
-the release you downloaded.
-
-For the current main, take just that directory out of the repository.
-
-```bash
-git clone --filter=blob:none --sparse https://github.com/zlink-systems/zlink.git
-cd zlink
-git sparse-checkout set framework/languages/dotnet/samples
-```
+`main` is the latest release plus the fixes merged since, with package versions pinned to that
+release. An older release is the tag `vA.B.C` (`git checkout vA.B.C`). Send issues and PRs to
+`zlink-systems/zlink`.
 
 ## 1. Choosing by What You're Building
 
@@ -312,8 +304,8 @@ its own Redis container and cleans it up when done, so all you need is `docker`.
 === "C++"
 
     ```bash
-    # Inside the unpacked zlink-samples-cpp/. bootstrap.cmake installs the framework from the
-    # published archives and configures the seven samples into build/ (inside the repository:
+    # Inside the cloned zlink-cpp-examples/samples/. bootstrap.cmake installs the framework from the
+    # published packages and configures the seven samples into build/ (inside the repository:
     # framework/languages/cpp/samples/).
     cmake -P bootstrap.cmake
     cmake --build build --parallel

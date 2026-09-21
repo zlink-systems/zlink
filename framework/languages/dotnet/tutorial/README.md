@@ -3,7 +3,7 @@
 A program that the feature-by-feature guide reads code out of. Follow the
 chapters one at a time and this program grows in that same order.
 
-This file only needs the .NET SDK and Docker -- no repository checkout. The
+This tutorial runs from `tutorial/` in the `zlink-dotnet-examples` repository. The
 Korean canonical version, including the full chapter-by-chapter walkthrough,
 the code-snippet marker table the docs generator reads, and the list of
 places this code corrects the guide text, is [README.ko.md](README.ko.md).
@@ -26,12 +26,11 @@ docker run --rm -d -p 6379:6379 --name zlink-tutorial-dotnet-redis redis:7.2-alp
 
 ## Download and install
 
-The tutorial references only the published `Zlink.Framework` NuGet package
-(no repository checkout needed at all). Extract `zlink-tutorial-dotnet.zip`
-anywhere and run this file's commands from that extracted
-`zlink-tutorial-dotnet` directory (a repository checkout runs the same
-commands from `framework/languages/dotnet/tutorial`). The first build's
-implicit `dotnet restore` fetches that package from nuget.org.
+The tutorial references only the published `Zlink.Framework` NuGet package. Clone the
+`zlink-dotnet-examples` repository and run this file's commands from its `tutorial/`
+directory (a repository checkout runs the same commands from
+`framework/languages/dotnet/tutorial`). The first build's implicit `dotnet restore` fetches
+that package from nuget.org.
 
 ## Build
 

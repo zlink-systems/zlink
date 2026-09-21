@@ -12,8 +12,8 @@ waits for readiness, executes the public client scenario, and on exit cleans up 
 and the Redis container it started. Sample code never starts another server role in the same
 process.
 
-This directory closes on itself: the procedure below uses only the Core, binding and framework
-archives published on GitHub Releases, vcpkg, and Docker for Redis.
+This directory is `samples/` in the `zlink-cpp-examples` repository. The procedure below uses
+the Core, binding and framework packages published on GitHub Releases, vcpkg, and Docker for Redis.
 
 ## Contents
 
@@ -27,8 +27,8 @@ archives published on GitHub Releases, vcpkg, and Docker for Redis.
 - [Configuration and contract layout](#configuration-and-contract-layout)
 
 The command blocks of `Build`, `Run` and `Verify` are marked `title="linux"` (bash) and
-`title="windows"` (PowerShell). Each block runs as is from the unpacked directory, and the
-release CI runs the same blocks verbatim.
+`title="windows"` (PowerShell). Each block runs as is from `samples/` after cloning the
+`zlink-cpp-examples` repository, and the release CI runs the same blocks verbatim.
 
 ## Prerequisites
 
@@ -49,9 +49,8 @@ older than that commit needs `git -C $VCPKG_ROOT pull`.
 
 ## Download and install
 
-Download
-[`zlink-samples-cpp.zip`](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-cpp.zip)
-and unpack it. Every command below runs inside the unpacked `zlink-samples-cpp/`.
+Clone the [`zlink-cpp-examples`](https://github.com/zlink-systems/zlink-cpp-examples) repository.
+Every command below runs inside its `samples/` directory.
 
 One script, `bootstrap.cmake`, does the install -- it is the first line of the [Build](#build)
 block. It downloads three GitHub Release assets -- this platform's Core prebuilt

@@ -7,14 +7,14 @@
 요청·단방향, node 직접 호출, ClientServer, Fanout), handler filter, runtime weight 변경, Spot,
 Actor, Location, STREAM, HTTP client를 담는다.
 
-이 디렉터리는 저장소 없이 닫힌다. 아래 절차는 GitHub Release에 공개된 Core·binding·framework
-아카이브와 vcpkg만 사용하며, zlink 저장소를 clone하지 않는다.
+이 디렉터리는 `zlink-cpp-examples` 저장소의 `tutorial/`이다. 아래 절차는 GitHub Release에
+공개된 Core·binding·framework 패키지와 vcpkg를 사용한다.
 
 | | 목적 |
 |---|---|
 | quickstart (저장소 `framework/languages/cpp/quickstart/`) | 설치부터 첫 응답까지. 기능을 더하지 않는다 |
 | **tutorial** (여기) | 기능을 차례로 쌓는다. 기능별 가이드가 이 코드를 읽는다 |
-| samples (`zlink-samples-cpp.zip`) | 완결된 업무 흐름을 보이는 application |
+| samples (`zlink-cpp-examples` 저장소의 `samples/`) | 완결된 업무 흐름을 보이는 application |
 
 ## 차례
 
@@ -30,8 +30,8 @@ Actor, Location, STREAM, HTTP client를 담는다.
 - [.NET tutorial과 달라진 지점](#net-tutorial과-달라진-지점)
 
 `빌드`·`실행`·`검증` 절의 명령 블록은 `title="linux"`(bash)와 `title="windows"`(PowerShell)로
-표시되어 있다. 각 블록은 압축을 푼 디렉터리에서 그대로 실행되며, 릴리스 CI가 같은 블록을
-그대로 돌린다.
+표시되어 있다. 각 블록은 `zlink-cpp-examples` 저장소를 clone한 뒤 `tutorial/`에서 그대로
+실행되며, 릴리스 CI가 같은 블록을 그대로 돌린다.
 
 ## 전제 조건
 
@@ -53,8 +53,8 @@ vcpkg는 `builtin-baseline`으로 세 번째 파티 버전을 고정한다. clon
 
 ## 내려받기와 설치
 
-[`zlink-tutorial-cpp.zip`](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-tutorial-cpp.zip)을
-받아 압축을 푼다. 아래 명령은 모두 압축을 푼 `zlink-tutorial-cpp/` 안에서 실행한다.
+[`zlink-cpp-examples`](https://github.com/zlink-systems/zlink-cpp-examples) 저장소를 clone한다.
+아래 명령은 모두 그 저장소의 `tutorial/` 안에서 실행한다.
 
 설치는 `bootstrap.cmake` 하나가 한다 — [빌드](#빌드) 블록의 첫 줄이다. 이 스크립트는 GitHub
 Release에서 세 아카이브 — 이 플랫폼의 Core prebuilt(`core/v1.2.0`), C++ binding

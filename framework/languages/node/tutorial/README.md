@@ -20,17 +20,16 @@ A program that the feature guides read through, chapter by chapter. This directo
   Nothing else needs to be installed.
 - **Windows installs without a native build starting from framework 0.18.1.**
   `@zlink-systems/zlink` 1.2.1 ships `prebuilds/linux-x64/` and `prebuilds/win32-x64/` together
-  (#656). `@zlink-systems/framework` pins that version exactly starting at 0.18.1 — a zip
-  pinning an earlier framework still gets `1.2.0` only, so `npm install` on Windows falls back
+  (#656). `@zlink-systems/framework` pins that version exactly starting at 0.18.1 — an older
+  framework release still gets `1.2.0` only, so `npm install` on Windows falls back
   to `node-gyp rebuild`, which requires `ZLINK_CORE_INSTALL_PREFIX` pointing at an installed
   Core, and fails. macOS (`darwin-*`) has no prebuild yet. This document's output was captured
   on Windows 11 under WSL2 Ubuntu-24.04, Node `v22.23.2`, npm `10.9.8`.
 
 ## Download and install
 
-This directory is already the download — unzip `zlink-tutorial-node.zip` and it opens straight
-into this tutorial. There is no repository to clone. Like quickstart, it references only npm
-registry packages.
+Clone the `zlink-node-examples` repository and run this tutorial from its `tutorial/` directory.
+Like quickstart, it references only npm registry packages.
 
 ```bash title="linux"
 npm install
@@ -171,7 +170,7 @@ responses for each step are under "Steps" and "Actual output" below.
 | `docker: Cannot connect to the Docker daemon` | Docker Desktop (or `dockerd`) is not running. Start it and try again |
 | `curl` returns `Connection refused` | The server (`npm run server`) is not up yet or has died. Check that terminal's log first |
 | `EADDRINUSE` (port conflict) | Another process already holds one of the ports in "Ports" below. Stop it, or clean up another running instance of this tutorial first |
-| `npm error gyp ERR! ... ZLINK_CORE_INSTALL_PREFIX must name an absolute installed Core ... package prefix` (Windows) | This zip pins a `@zlink-systems/framework` older than 0.18.1, so it still gets `zlink@1.2.0` — the win32-x64 prebuild (#656) ships from framework 0.18.1 (`zlink@1.2.1`) on. Get that version, or run it under WSL |
+| `npm error gyp ERR! ... ZLINK_CORE_INSTALL_PREFIX must name an absolute installed Core ... package prefix` (Windows) | An earlier framework release pins `@zlink-systems/framework` older than 0.18.1, so it still gets `zlink@1.2.0` — the win32-x64 prebuild (#656) ships from framework 0.18.1 (`zlink@1.2.1`) on. Get that version, or run it under WSL |
 | Same error (macOS) | `@zlink-systems/zlink@1.2.1` also has no `darwin-*` prebuild yet. Run it on Linux (x64) or Windows (0.18.1 on) |
 | `EBADENGINE` (Node version warning) | Node.js is older than 22. Upgrade per "Prerequisites" above |
 | `server listening` takes 20-45 seconds to appear | The project sits on a WSL 9p mount such as `/mnt/d`; module loading alone takes this long there. Moving it to a Linux filesystem (e.g. `~/`) cuts this down |
@@ -781,8 +780,8 @@ Same idea, different names and locations.
 
 ## Where the contract was checked
 
-Written against the **public contract and working code**, not the guide documentation (checked
-inside the repository — that source is not in this zip). The places read were
+Written against the **public contract and working code**, not the guide documentation (the source
+checked inside the repository is not included in the mirror repository). The places read were
 `framework/languages/node/packages/framework/src/contracts/`,
 `framework/languages/node/packages/nestjs/src/`,
 `framework/languages/node/e2e/`. Where the comparison disagreed with documentation:

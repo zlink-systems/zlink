@@ -9,27 +9,19 @@
 Gradle 빌드 안에 있다. location store 없이 process 둘이 서로의 endpoint를 직접 지정해
 request/reply 한 번을 주고받는다.
 
-## 0. tutorial 내려받기
+## 0. 예제 저장소 clone
 
-이 장은 최소 project를 처음부터 만든다. **완성된 tutorial을 바로 실행하려면** 압축 파일 하나만
-받으면 된다. 저장소 전체를 clone할 필요가 없다.
-
-!!! tip "tutorial 내려받기"
-
-    [:material-download: **zlink-tutorial-java.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-tutorial-java.zip){ .md-button .md-button--primary }
-
-
-주소는 플랫폼과 무관하다. Windows에서도 WSL에서도 같은 파일을 받는다. 압축을 풀면
-`zlink-tutorial-java/` 아래에 project가 그대로 나오고, 그 안의 패키지 버전은 받은 릴리즈에
-맞춰져 있다.
-
-최신 main을 원하면 저장소에서 그 디렉터리만 가져온다.
+이 장의 project는 `zlink-java-examples` 저장소의 `quickstart/`이며, 기능 가이드가 읽는
+program인 `tutorial/`과 `samples/`도 같은 저장소에 있다.
 
 ```bash
-git clone --filter=blob:none --sparse https://github.com/zlink-systems/zlink.git
-cd zlink
-git sparse-checkout set framework/languages/java/tutorial
+git clone https://github.com/zlink-systems/zlink-java-examples.git
+cd zlink-java-examples/quickstart
 ```
+
+`main`은 최신 릴리스에 그 뒤의 수정을 더한 것이고, 패키지 버전은 그 릴리스에 맞춰져 있다.
+이전 릴리스는 tag `vA.B.C`로 받는다(`git checkout vA.B.C`). 이슈와 PR은 `zlink-systems/zlink`로
+보낸다.
 
 ## 1. 설치
 
@@ -92,7 +84,7 @@ context refresh 직후 JVM이 종료된다.
 ## 5. 실행
 
 ```bash
-cd framework/languages/java/quickstart
+cd zlink-java-examples/quickstart
 ./gradlew :java:Server:installDist :java:Client:installDist
 
 # 터미널 두 개. server를 먼저 실행한다.
