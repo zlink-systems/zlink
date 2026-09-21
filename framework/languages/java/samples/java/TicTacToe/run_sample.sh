@@ -38,7 +38,7 @@ done
 
 # Optional monorepo dev-loop convenience: use a freshly built local Core
 # .so instead of the one bundled in the published binding jar, when this
-# checkout actually has the repository root six levels up (a standalone zip
+# checkout actually has the repository root six levels up (the examples mirror
 # does not, so this whole block is a no-op there -- ZLINK_LIBRARY_PATH stays
 # unset and the jar's own bundled native loads instead, same as the tutorial).
 repo_root="$(cd ../../../../../.. && pwd)"

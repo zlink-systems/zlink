@@ -1415,9 +1415,11 @@ C++·Java·`.NET`·Node 빌드가 동시에 돌고 있었다. 검증할 때는 �
   가리키는 죽은 링크였고, 그래서 독자가 볼 수 있던 것은 679줄짜리 구현 기준뿐이었다. 언어별
   생성판을 각 언어 nav에 넣었다. **사용자용 샘플 설명서는 릴리즈 뒤에 쓴다** — Bingo 하나를
   본보기로 삼고 나머지 여섯을 잇는다.
-- **tutorial과 samples를 저장소 clone 없이 받는다.** `scripts/tutorial/pack_tutorials.py`가 언어별
-  zip을 묶는다. Windows에서 묶은 zip이 WSL에서 `gradlew`를 못 돌리는 문제(CRLF·실행 권한)를
-  함께 바로잡았다. 릴리즈 워크플로에 job을 붙이는 것은 릴리즈 뒤다.
+- **tutorial과 samples를 저장소 clone 없이 받는다.** 처음에는 `pack_tutorials.py`가 언어별 zip을
+  묶었고, Windows에서 묶은 zip이 WSL에서 `gradlew`를 못 돌리는 문제(CRLF·실행 권한)를 함께
+  바로잡았다. 0.20.0(#831)부터는 zip 대신 언어별 읽기 전용 저장소 `zlink-<lang>-examples`에
+  quickstart·tutorial·samples를 미러하고(`scripts/tutorial/export_examples.py`,
+  `examples-mirror.yml`) 독자는 그 저장소를 clone한다.
 - **quickstart의 호출 형태를 맞췄다.** Java가 `thenApply`로, Node가 `.then()`으로 이어 붙여 값을
   돌려주는 API를 콜백처럼 쓰고 있었다. 네 언어가 같은 모양이 됐다.
 - **1차 메뉴만 한글로 낸다.** 번역표를 122개에서 7개로 줄였다. 영문 발음을 한글로 옮긴 것
