@@ -19,7 +19,7 @@ Korean canonical version is [README.ko.md](README.ko.md).
   separately, and no container is left behind after a run finishes.
 - **PowerShell** for the `.ps1` runners: Windows PowerShell 5.1 (built into
   Windows) or PowerShell 7 both work.
-- ZoneWorld's `-BrowserSmoke`/`--browser-smoke` flag additionally needs
+- ZoneWorld's `--browser-smoke` flag additionally needs
   Node.js and npm, and only works from a full repository checkout (see
   [ZoneWorld](ZoneWorld)); it is off by default and not required for the
   seven-sample check below.
