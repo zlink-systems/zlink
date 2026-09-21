@@ -6517,7 +6517,7 @@ export function encodeHelloCommand(value: HelloCommand, context: ServiceWireDeco
 const frames: Uint8Array[] = [writer.result()];
 
 return frames; }
-export function validateHelloCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateHelloCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type AdmitCommand = { readonly command: "admit"; readonly flags: number; readonly admission: ServiceAdmission; };
 export function decodeAdmitCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): AdmitCommand { if (!frames.length) fail("admit frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 2) fail("admit header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("admit flags"); const value: any = { command: "admit", flags };
@@ -6537,7 +6537,7 @@ export function encodeAdmitCommand(value: AdmitCommand, context: ServiceWireDeco
 const frames: Uint8Array[] = [writer.result()];
 
 return frames; }
-export function validateAdmitCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateAdmitCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type RejectCommand = { readonly command: "reject"; readonly flags: number; readonly reason: RejectReason; };
 export function decodeRejectCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): RejectCommand { if (!frames.length) fail("reject frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 3) fail("reject header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("reject flags"); const value: any = { command: "reject", flags };
@@ -6557,7 +6557,7 @@ export function encodeRejectCommand(value: RejectCommand, context: ServiceWireDe
 const frames: Uint8Array[] = [writer.result()];
 
 return frames; }
-export function validateRejectCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateRejectCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type UpdateCommand = { readonly command: "update"; readonly flags: number; readonly admission: ServiceAdmission; };
 export function decodeUpdateCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): UpdateCommand { if (!frames.length) fail("update frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 4) fail("update header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("update flags"); const value: any = { command: "update", flags };
@@ -6577,7 +6577,7 @@ export function encodeUpdateCommand(value: UpdateCommand, context: ServiceWireDe
 const frames: Uint8Array[] = [writer.result()];
 
 return frames; }
-export function validateUpdateCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateUpdateCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type LivenessProbeCommand = { readonly command: "livenessProbe"; readonly flags: number; readonly probeId: NonzeroU64; };
 export function decodeLivenessProbeCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): LivenessProbeCommand { if (!frames.length) fail("livenessProbe frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 5) fail("livenessProbe header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("livenessProbe flags"); const value: any = { command: "livenessProbe", flags };
@@ -6597,7 +6597,7 @@ export function encodeLivenessProbeCommand(value: LivenessProbeCommand, context:
 const frames: Uint8Array[] = [writer.result()];
 
 return frames; }
-export function validateLivenessProbeCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateLivenessProbeCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type LivenessAckCommand = { readonly command: "livenessAck"; readonly flags: number; readonly probeId: NonzeroU64; };
 export function decodeLivenessAckCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): LivenessAckCommand { if (!frames.length) fail("livenessAck frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 6) fail("livenessAck header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("livenessAck flags"); const value: any = { command: "livenessAck", flags };
@@ -6617,7 +6617,7 @@ export function encodeLivenessAckCommand(value: LivenessAckCommand, context: Ser
 const frames: Uint8Array[] = [writer.result()];
 
 return frames; }
-export function validateLivenessAckCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateLivenessAckCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type NodeSendCommand = { readonly command: "nodeSend"; readonly flags: number; readonly metadata?: MetadataFrame; readonly payload: ApplicationPayloadEnvelopeV1; };
 export function decodeNodeSendCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): NodeSendCommand { if (!frames.length) fail("nodeSend frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 16) fail("nodeSend header"); const flags = Number(reader.u(1)); if ((flags & ~1) !== 0 || (flags & 0) !== 0) fail("nodeSend flags"); const value: any = { command: "nodeSend", flags };
@@ -6634,7 +6634,7 @@ const frames: Uint8Array[] = [writer.result()];
   if ((value.flags & 1) !== 0) { if (value.metadata === undefined) fail("nodeSend metadata"); frames.push(encodeMetadataFrame(value.metadata, context)); } else if (value.metadata !== undefined) fail("nodeSend metadata forbidden");
   if (value.payload === undefined) fail("nodeSend payload"); frames.push(encodeApplicationPayloadEnvelopeV1(value.payload, context));
 return frames; }
-export function validateNodeSendCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateNodeSendCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type NodeRequestCommand = { readonly command: "nodeRequest"; readonly flags: number; readonly correlation: NonzeroU64; readonly metadata?: MetadataFrame; readonly payload: ApplicationPayloadEnvelopeV1; };
 export function decodeNodeRequestCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): NodeRequestCommand { if (!frames.length) fail("nodeRequest frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 17) fail("nodeRequest header"); const flags = Number(reader.u(1)); if ((flags & ~1) !== 0 || (flags & 0) !== 0) fail("nodeRequest flags"); const value: any = { command: "nodeRequest", flags };
@@ -6656,7 +6656,7 @@ const frames: Uint8Array[] = [writer.result()];
   if ((value.flags & 1) !== 0) { if (value.metadata === undefined) fail("nodeRequest metadata"); frames.push(encodeMetadataFrame(value.metadata, context)); } else if (value.metadata !== undefined) fail("nodeRequest metadata forbidden");
   if (value.payload === undefined) fail("nodeRequest payload"); frames.push(encodeApplicationPayloadEnvelopeV1(value.payload, context));
 return frames; }
-export function validateNodeRequestCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateNodeRequestCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type ChannelSendCommand = { readonly command: "channelSend"; readonly flags: number; readonly channelName: Text8; readonly metadata?: MetadataFrame; readonly payload: ApplicationPayloadEnvelopeV1; };
 export function decodeChannelSendCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ChannelSendCommand { if (!frames.length) fail("channelSend frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 18) fail("channelSend header"); const flags = Number(reader.u(1)); if ((flags & ~1) !== 0 || (flags & 0) !== 0) fail("channelSend flags"); const value: any = { command: "channelSend", flags };
@@ -6678,7 +6678,7 @@ const frames: Uint8Array[] = [writer.result()];
   if ((value.flags & 1) !== 0) { if (value.metadata === undefined) fail("channelSend metadata"); frames.push(encodeMetadataFrame(value.metadata, context)); } else if (value.metadata !== undefined) fail("channelSend metadata forbidden");
   if (value.payload === undefined) fail("channelSend payload"); frames.push(encodeApplicationPayloadEnvelopeV1(value.payload, context));
 return frames; }
-export function validateChannelSendCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateChannelSendCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type ChannelRequestCommand = { readonly command: "channelRequest"; readonly flags: number; readonly correlation: NonzeroU64; readonly channelName: Text8; readonly metadata?: MetadataFrame; readonly payload: ApplicationPayloadEnvelopeV1; };
 export function decodeChannelRequestCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ChannelRequestCommand { if (!frames.length) fail("channelRequest frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 19) fail("channelRequest header"); const flags = Number(reader.u(1)); if ((flags & ~1) !== 0 || (flags & 0) !== 0) fail("channelRequest flags"); const value: any = { command: "channelRequest", flags };
@@ -6707,7 +6707,7 @@ const frames: Uint8Array[] = [writer.result()];
   if ((value.flags & 1) !== 0) { if (value.metadata === undefined) fail("channelRequest metadata"); frames.push(encodeMetadataFrame(value.metadata, context)); } else if (value.metadata !== undefined) fail("channelRequest metadata forbidden");
   if (value.payload === undefined) fail("channelRequest payload"); frames.push(encodeApplicationPayloadEnvelopeV1(value.payload, context));
 return frames; }
-export function validateChannelRequestCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateChannelRequestCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type ReplyCommand = { readonly command: "reply"; readonly flags: number; readonly correlation: NonzeroU64; readonly terminalResult: RequestTerminalResult; readonly failureCode: FrameworkErrorCode; readonly tail: RequestSpecificTail; readonly payload?: ApplicationPayloadEnvelopeV1; };
 export function decodeReplyCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ReplyCommand { if (!frames.length) fail("reply frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 20) fail("reply header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("reply flags"); const value: any = { command: "reply", flags };
@@ -6748,7 +6748,7 @@ export function encodeReplyCommand(value: ReplyCommand, context: ServiceWireDeco
 const frames: Uint8Array[] = [writer.result()];
   if (value.payload !== undefined) frames.push(encodeApplicationPayloadEnvelopeV1(value.payload, context));
 return frames; }
-export function validateReplyCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { if (!(validTerminalFailure(enumWireRequestTerminalResult(value["terminalResult"]), enumWireFrameworkErrorCode(value["failureCode"])))) fail("reply runtime predicate"); }
+export function validateReplyCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; if (!(validTerminalFailure(enumWireRequestTerminalResult(value["terminalResult"]), enumWireFrameworkErrorCode(value["failureCode"])))) fail("reply runtime predicate"); }
 
 export type SpotSendCommand = { readonly command: "spotSend"; readonly flags: number; readonly operation: OperationId; readonly messageFollowHopCount: U8; readonly sourceSpotId: Text8; readonly targetSpot: SpotRouteFence; readonly metadata?: MetadataFrame; readonly payload: ApplicationPayloadEnvelopeV1; };
 export function decodeSpotSendCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): SpotSendCommand { if (!frames.length) fail("spotSend frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 21) fail("spotSend header"); const flags = Number(reader.u(1)); if ((flags & ~1) !== 0 || (flags & 0) !== 0) fail("spotSend flags"); const value: any = { command: "spotSend", flags };
@@ -6791,7 +6791,7 @@ const frames: Uint8Array[] = [writer.result()];
   if ((value.flags & 1) !== 0) { if (value.metadata === undefined) fail("spotSend metadata"); frames.push(encodeMetadataFrame(value.metadata, context)); } else if (value.metadata !== undefined) fail("spotSend metadata forbidden");
   if (value.payload === undefined) fail("spotSend payload"); frames.push(encodeApplicationPayloadEnvelopeV1(value.payload, context));
 return frames; }
-export function validateSpotSendCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateSpotSendCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type SpotRequestCommand = { readonly command: "spotRequest"; readonly flags: number; readonly correlation: NonzeroU64; readonly operation: OperationId; readonly messageFollowHopCount: U8; readonly sourceSpotId: Text8; readonly targetSpot: SpotRouteFence; readonly metadata?: MetadataFrame; readonly payload: ApplicationPayloadEnvelopeV1; };
 export function decodeSpotRequestCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): SpotRequestCommand { if (!frames.length) fail("spotRequest frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 22) fail("spotRequest header"); const flags = Number(reader.u(1)); if ((flags & ~1) !== 0 || (flags & 0) !== 0) fail("spotRequest flags"); const value: any = { command: "spotRequest", flags };
@@ -6841,7 +6841,7 @@ const frames: Uint8Array[] = [writer.result()];
   if ((value.flags & 1) !== 0) { if (value.metadata === undefined) fail("spotRequest metadata"); frames.push(encodeMetadataFrame(value.metadata, context)); } else if (value.metadata !== undefined) fail("spotRequest metadata forbidden");
   if (value.payload === undefined) fail("spotRequest payload"); frames.push(encodeApplicationPayloadEnvelopeV1(value.payload, context));
 return frames; }
-export function validateSpotRequestCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateSpotRequestCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type LogicalMulticastCommand = { readonly command: "logicalMulticast"; readonly flags: number; readonly channelName: Text8; readonly topic: Text8; readonly sourceSpotId: Text8; readonly metadata?: MetadataFrame; readonly payload: ApplicationPayloadEnvelopeV1; };
 export function decodeLogicalMulticastCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): LogicalMulticastCommand { if (!frames.length) fail("logicalMulticast frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 23) fail("logicalMulticast header"); const flags = Number(reader.u(1)); if ((flags & ~1) !== 0 || (flags & 0) !== 0) fail("logicalMulticast flags"); const value: any = { command: "logicalMulticast", flags };
@@ -6877,7 +6877,7 @@ const frames: Uint8Array[] = [writer.result()];
   if ((value.flags & 1) !== 0) { if (value.metadata === undefined) fail("logicalMulticast metadata"); frames.push(encodeMetadataFrame(value.metadata, context)); } else if (value.metadata !== undefined) fail("logicalMulticast metadata forbidden");
   if (value.payload === undefined) fail("logicalMulticast payload"); frames.push(encodeApplicationPayloadEnvelopeV1(value.payload, context));
 return frames; }
-export function validateLogicalMulticastCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateLogicalMulticastCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type ActorSendCommand = { readonly command: "actorSend"; readonly flags: number; readonly operation: OperationId; readonly messageFollowHopCount: U8; readonly sourceActor: OptionalActorRef; readonly targetActor: ActorRouteFence; readonly boundSessionTail?: OptionalBoundSessionTail; readonly metadata?: MetadataFrame; readonly payload: ApplicationPayloadEnvelopeV1; };
 export function decodeActorSendCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ActorSendCommand { if (!frames.length) fail("actorSend frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 24) fail("actorSend header"); const flags = Number(reader.u(1)); if ((flags & ~7) !== 0 || (flags & 0) !== 0) fail("actorSend flags");
@@ -6933,7 +6933,7 @@ const frames: Uint8Array[] = [writer.result()];
   if ((value.flags & 1) !== 0) { if (value.metadata === undefined) fail("actorSend metadata"); frames.push(encodeMetadataFrame(value.metadata, context)); } else if (value.metadata !== undefined) fail("actorSend metadata forbidden");
   if (value.payload === undefined) fail("actorSend payload"); frames.push(encodeApplicationPayloadEnvelopeV1(value.payload, context));
 return frames; }
-export function validateActorSendCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateActorSendCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type ActorRequestCommand = { readonly command: "actorRequest"; readonly flags: number; readonly correlation: NonzeroU64; readonly operation: OperationId; readonly messageFollowHopCount: U8; readonly sourceActor: OptionalActorRef; readonly targetActor: ActorRouteFence; readonly boundSessionTail?: OptionalBoundSessionTail; readonly metadata?: MetadataFrame; readonly payload: ApplicationPayloadEnvelopeV1; };
 export function decodeActorRequestCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ActorRequestCommand { if (!frames.length) fail("actorRequest frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 25) fail("actorRequest header"); const flags = Number(reader.u(1)); if ((flags & ~7) !== 0 || (flags & 0) !== 0) fail("actorRequest flags");
@@ -6996,7 +6996,7 @@ const frames: Uint8Array[] = [writer.result()];
   if ((value.flags & 1) !== 0) { if (value.metadata === undefined) fail("actorRequest metadata"); frames.push(encodeMetadataFrame(value.metadata, context)); } else if (value.metadata !== undefined) fail("actorRequest metadata forbidden");
   if (value.payload === undefined) fail("actorRequest payload"); frames.push(encodeApplicationPayloadEnvelopeV1(value.payload, context));
 return frames; }
-export function validateActorRequestCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateActorRequestCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type ActorLookupCommand = { readonly command: "actorLookup"; readonly flags: number; readonly correlation: NonzeroU64; readonly actorId: Text8; };
 export function decodeActorLookupCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ActorLookupCommand { if (!frames.length) fail("actorLookup frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 26) fail("actorLookup header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("actorLookup flags"); const value: any = { command: "actorLookup", flags };
@@ -7023,7 +7023,7 @@ export function encodeActorLookupCommand(value: ActorLookupCommand, context: Ser
 const frames: Uint8Array[] = [writer.result()];
 
 return frames; }
-export function validateActorLookupCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateActorLookupCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type ActorDestroyCommand = { readonly command: "actorDestroy"; readonly flags: number; readonly correlation: NonzeroU64; readonly actor: ActorRouteFence; };
 export function decodeActorDestroyCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ActorDestroyCommand { if (!frames.length) fail("actorDestroy frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 27) fail("actorDestroy header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("actorDestroy flags"); const value: any = { command: "actorDestroy", flags };
@@ -7050,7 +7050,7 @@ export function encodeActorDestroyCommand(value: ActorDestroyCommand, context: S
 const frames: Uint8Array[] = [writer.result()];
 
 return frames; }
-export function validateActorDestroyCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateActorDestroyCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type ActorJoinCommand = { readonly command: "actorJoin"; readonly flags: number; readonly correlation: NonzeroU64; readonly actor: ActorRouteFence; readonly entry: Bool8; readonly targetSpot: SpotRouteFence; readonly payload?: ApplicationPayloadEnvelopeV1; };
 export function decodeActorJoinCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ActorJoinCommand { if (!frames.length) fail("actorJoin frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 28) fail("actorJoin header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("actorJoin flags"); const value: any = { command: "actorJoin", flags };
@@ -7091,7 +7091,7 @@ export function encodeActorJoinCommand(value: ActorJoinCommand, context: Service
 const frames: Uint8Array[] = [writer.result()];
   if (value.payload !== undefined) frames.push(encodeApplicationPayloadEnvelopeV1(value.payload, context));
 return frames; }
-export function validateActorJoinCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateActorJoinCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type ActorLeftCommand = { readonly command: "actorLeft"; readonly flags: number; readonly actor: ActorRef; readonly previousMembership: SpotMembership; readonly currentAuthorityOwnerGeneration: NonzeroU64; };
 export function decodeActorLeftCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ActorLeftCommand { if (!frames.length) fail("actorLeft frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 29) fail("actorLeft header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("actorLeft flags"); const value: any = { command: "actorLeft", flags };
@@ -7125,7 +7125,7 @@ export function encodeActorLeftCommand(value: ActorLeftCommand, context: Service
 const frames: Uint8Array[] = [writer.result()];
 
 return frames; }
-export function validateActorLeftCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateActorLeftCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type RelocationReadyCommand = { readonly command: "relocationReady"; readonly flags: number; readonly relocation: RelocationId; readonly targetAttemptGeneration: NonzeroU64; readonly coordinator: RelocationCoordinatorFence; readonly target: RelocationTargetFence; readonly object: RelocationObjectIdentity; readonly senderRole: RelocationRole; };
 export function decodeRelocationReadyCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): RelocationReadyCommand { if (!frames.length) fail("relocationReady frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 30) fail("relocationReady header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("relocationReady flags"); const value: any = { command: "relocationReady", flags };
@@ -7180,7 +7180,7 @@ export function encodeRelocationReadyCommand(value: RelocationReadyCommand, cont
 const frames: Uint8Array[] = [writer.result()];
 
 return frames; }
-export function validateRelocationReadyCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateRelocationReadyCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type RelocationDataCommand = { readonly command: "relocationData"; readonly flags: number; readonly relocation: RelocationId; readonly targetAttemptGeneration: NonzeroU64; readonly coordinator: RelocationCoordinatorFence; readonly senderRole: RelocationRole; readonly object: RelocationObjectIdentity; readonly record: FrozenRecord; };
 export function decodeRelocationDataCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): RelocationDataCommand { if (!frames.length) fail("relocationData frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 31) fail("relocationData header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("relocationData flags"); const value: any = { command: "relocationData", flags };
@@ -7235,7 +7235,7 @@ export function encodeRelocationDataCommand(value: RelocationDataCommand, contex
 const frames: Uint8Array[] = [writer.result()];
 
 return frames; }
-export function validateRelocationDataCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateRelocationDataCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type ReplyRelayCommand = { readonly command: "replyRelay"; readonly flags: number; readonly operation: OperationId; readonly replyRouteId: NonzeroU64; readonly context: ReplyRelayContext; readonly terminalResult: RequestTerminalResult; readonly failureCode: FrameworkErrorCode; readonly payload?: ApplicationPayloadEnvelopeV1; };
 export function decodeReplyRelayCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ReplyRelayCommand { if (!frames.length) fail("replyRelay frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 33) fail("replyRelay header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("replyRelay flags"); const value: any = { command: "replyRelay", flags };
@@ -7283,7 +7283,7 @@ export function encodeReplyRelayCommand(value: ReplyRelayCommand, context: Servi
 const frames: Uint8Array[] = [writer.result()];
   if (value.payload !== undefined) frames.push(encodeApplicationPayloadEnvelopeV1(value.payload, context));
 return frames; }
-export function validateReplyRelayCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { if (!(validTerminalFailure(enumWireRequestTerminalResult(value["terminalResult"]), enumWireFrameworkErrorCode(value["failureCode"])))) fail("replyRelay runtime predicate"); }
+export function validateReplyRelayCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; if (!(validTerminalFailure(enumWireRequestTerminalResult(value["terminalResult"]), enumWireFrameworkErrorCode(value["failureCode"])))) fail("replyRelay runtime predicate"); }
 
 export type RelocationCutoverCommand = { readonly command: "relocationCutover"; readonly flags: number; readonly relocation: RelocationId; readonly targetAttemptGeneration: NonzeroU64; readonly coordinator: RelocationCoordinatorFence; readonly senderRole: RelocationRole; readonly object: RelocationObjectIdentity; readonly boundaryRecordCount: OrdinalOrZero; readonly boundaryChecksumCrc32c: U32; };
 export function decodeRelocationCutoverCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): RelocationCutoverCommand { if (!frames.length) fail("relocationCutover frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 34) fail("relocationCutover header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("relocationCutover flags"); const value: any = { command: "relocationCutover", flags };
@@ -7345,7 +7345,7 @@ export function encodeRelocationCutoverCommand(value: RelocationCutoverCommand, 
 const frames: Uint8Array[] = [writer.result()];
 
 return frames; }
-export function validateRelocationCutoverCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateRelocationCutoverCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type BoundSessionSendCommand = { readonly command: "boundSessionSend"; readonly flags: number; readonly actor: ActorRouteFence; readonly expectedBindingGeneration: NonzeroU64; readonly payload: ApplicationPayloadEnvelopeV1; };
 export function decodeBoundSessionSendCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): BoundSessionSendCommand { if (!frames.length) fail("boundSessionSend frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 36) fail("boundSessionSend header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("boundSessionSend flags"); const value: any = { command: "boundSessionSend", flags };
@@ -7372,7 +7372,7 @@ export function encodeBoundSessionSendCommand(value: BoundSessionSendCommand, co
 const frames: Uint8Array[] = [writer.result()];
   if (value.payload === undefined) fail("boundSessionSend payload"); frames.push(encodeApplicationPayloadEnvelopeV1(value.payload, context));
 return frames; }
-export function validateBoundSessionSendCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateBoundSessionSendCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type ActorJoinedCommand = { readonly command: "actorJoined"; readonly flags: number; readonly actor: ActorRef; readonly previousMembership: OptionalSpotMembership; readonly currentMembership: SpotMembership; readonly currentAuthorityOwnerGeneration: NonzeroU64; };
 export function decodeActorJoinedCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ActorJoinedCommand { if (!frames.length) fail("actorJoined frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 37) fail("actorJoined header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("actorJoined flags"); const value: any = { command: "actorJoined", flags };
@@ -7413,7 +7413,7 @@ export function encodeActorJoinedCommand(value: ActorJoinedCommand, context: Ser
 const frames: Uint8Array[] = [writer.result()];
 
 return frames; }
-export function validateActorJoinedCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateActorJoinedCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type BoundSessionBindCommand = { readonly command: "boundSessionBind"; readonly flags: number; readonly correlation: NonzeroU64; readonly actor: ActorRouteFence; readonly sessionRid: Rid; readonly binding: BoundSessionBindingTransition; };
 export function decodeBoundSessionBindCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): BoundSessionBindCommand { if (!frames.length) fail("boundSessionBind frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 38) fail("boundSessionBind header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("boundSessionBind flags"); const value: any = { command: "boundSessionBind", flags };
@@ -7454,7 +7454,7 @@ export function encodeBoundSessionBindCommand(value: BoundSessionBindCommand, co
 const frames: Uint8Array[] = [writer.result()];
 
 return frames; }
-export function validateBoundSessionBindCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateBoundSessionBindCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type InstanceSpotCommand = { readonly command: "instanceSpot"; readonly flags: number; readonly route: InstanceRouteV1; readonly sourceNodeGeneration: NonzeroU64; readonly sourceNodeRid: Rid; readonly sourceSpotId: OptionalText8; readonly operationKind: InstanceOperationKind; readonly operation: OperationIdOrZero; readonly replyRoute: InstanceReplyRoute; readonly metadata?: MetadataFrame; readonly payload: ApplicationPayloadEnvelopeV1; };
 export function decodeInstanceSpotCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): InstanceSpotCommand { if (!frames.length) fail("instanceSpot frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 39) fail("instanceSpot header"); const flags = Number(reader.u(1)); if ((flags & ~1) !== 0 || (flags & 0) !== 0) fail("instanceSpot flags"); const value: any = { command: "instanceSpot", flags };
@@ -7518,7 +7518,7 @@ const frames: Uint8Array[] = [writer.result()];
   if ((value.flags & 1) !== 0) { if (value.metadata === undefined) fail("instanceSpot metadata"); frames.push(encodeMetadataFrame(value.metadata, context)); } else if (value.metadata !== undefined) fail("instanceSpot metadata forbidden");
   if (value.payload === undefined) fail("instanceSpot payload"); frames.push(encodeApplicationPayloadEnvelopeV1(value.payload, context));
 return frames; }
-export function validateInstanceSpotCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateInstanceSpotCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type RelocationPrepareCommand = { readonly command: "relocationPrepare"; readonly flags: number; readonly relocation: RelocationId; readonly targetAttemptGeneration: NonzeroU64; readonly coordinator: RelocationCoordinatorFence; readonly target: RelocationTargetFence; readonly initiatorRole: RelocationRole; readonly object: RelocationObjectIdentity; readonly sourceNodeRid: Rid; readonly sourceNodeGeneration: NonzeroU64; readonly payloadTotalLength: RelocationLogicalLength; readonly payloadChunkCount: RelocationChunkCount; readonly payloadChecksumCrc32c: U32; readonly applicationVersion: ApplicationVersion; };
 export function decodeRelocationPrepareCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): RelocationPrepareCommand { if (!frames.length) fail("relocationPrepare frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 40) fail("relocationPrepare header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("relocationPrepare flags"); const value: any = { command: "relocationPrepare", flags };
@@ -7615,7 +7615,7 @@ export function encodeRelocationPrepareCommand(value: RelocationPrepareCommand, 
 const frames: Uint8Array[] = [writer.result()];
 
 return frames; }
-export function validateRelocationPrepareCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateRelocationPrepareCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type SessionRelocationSealCommand = { readonly command: "sessionRelocationSeal"; readonly flags: number; readonly relocation: RelocationId; readonly coordinator: RelocationCoordinatorFence; readonly senderRole: RelocationRole; readonly actor: ActorRouteFence; readonly sessionOwnerNodeRid: Rid; readonly sessionOwnerNodeGeneration: NonzeroU64; readonly sessionOwnerId: Text8; readonly sessionOwnerLeaseGeneration: NonzeroU64; readonly sessionRid: Rid; readonly bindingGeneration: NonzeroU64; };
 export function decodeSessionRelocationSealCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): SessionRelocationSealCommand { if (!frames.length) fail("sessionRelocationSeal frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 42) fail("sessionRelocationSeal header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("sessionRelocationSeal flags"); const value: any = { command: "sessionRelocationSeal", flags };
@@ -7698,7 +7698,7 @@ export function encodeSessionRelocationSealCommand(value: SessionRelocationSealC
 const frames: Uint8Array[] = [writer.result()];
 
 return frames; }
-export function validateSessionRelocationSealCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateSessionRelocationSealCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type SessionRelocationSealedCommand = { readonly command: "sessionRelocationSealed"; readonly flags: number; readonly relocation: RelocationId; readonly coordinator: RelocationCoordinatorFence; readonly actor: ActorRouteFence; readonly sessionOwnerNodeRid: Rid; readonly sessionOwnerNodeGeneration: NonzeroU64; readonly sessionOwnerId: Text8; readonly sessionOwnerLeaseGeneration: NonzeroU64; readonly sessionRid: Rid; readonly bindingGeneration: NonzeroU64; };
 export function decodeSessionRelocationSealedCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): SessionRelocationSealedCommand { if (!frames.length) fail("sessionRelocationSealed frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 43) fail("sessionRelocationSealed header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("sessionRelocationSealed flags"); const value: any = { command: "sessionRelocationSealed", flags };
@@ -7774,7 +7774,7 @@ export function encodeSessionRelocationSealedCommand(value: SessionRelocationSea
 const frames: Uint8Array[] = [writer.result()];
 
 return frames; }
-export function validateSessionRelocationSealedCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateSessionRelocationSealedCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type SessionRelocationRouteCommand = { readonly command: "sessionRelocationRoute"; readonly flags: number; readonly relocation: RelocationId; readonly coordinator: RelocationCoordinatorFence; readonly senderRole: RelocationRole; readonly actor: ActorRef; readonly sessionOwnerNodeRid: Rid; readonly sessionOwnerNodeGeneration: NonzeroU64; readonly sessionOwnerId: Text8; readonly sessionOwnerLeaseGeneration: NonzeroU64; readonly sessionRid: Rid; readonly bindingGeneration: NonzeroU64; readonly route: SessionRelocationRouteUpdate; };
 export function decodeSessionRelocationRouteCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): SessionRelocationRouteCommand { if (!frames.length) fail("sessionRelocationRoute frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 44) fail("sessionRelocationRoute header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("sessionRelocationRoute flags"); const value: any = { command: "sessionRelocationRoute", flags };
@@ -7864,7 +7864,7 @@ export function encodeSessionRelocationRouteCommand(value: SessionRelocationRout
 const frames: Uint8Array[] = [writer.result()];
 
 return frames; }
-export function validateSessionRelocationRouteCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateSessionRelocationRouteCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type ReplyRelayAckCommand = { readonly command: "replyRelayAck"; readonly flags: number; readonly relocation: RelocationId; readonly coordinator: RelocationCoordinatorFence; readonly operation: OperationId; readonly replyRouteId: NonzeroU64; readonly requestSource: RequestSourceFence; readonly status: ReplyRelayAckStatus; };
 export function decodeReplyRelayAckCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ReplyRelayAckCommand { if (!frames.length) fail("replyRelayAck frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 46) fail("replyRelayAck header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("replyRelayAck flags"); const value: any = { command: "replyRelayAck", flags };
@@ -7919,7 +7919,7 @@ export function encodeReplyRelayAckCommand(value: ReplyRelayAckCommand, context:
 const frames: Uint8Array[] = [writer.result()];
 
 return frames; }
-export function validateReplyRelayAckCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateReplyRelayAckCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type UserSpotCreateCommand = { readonly command: "userSpotCreate"; readonly flags: number; readonly correlation: NonzeroU64; readonly operation: OperationId; readonly sourceNodeRid: Rid; readonly sourceNodeGeneration: NonzeroU64; readonly spotId: Text8; readonly stableType: Text8; readonly reservation: ObjectReservationFence; readonly deadlineUnixMs: NonzeroU64; };
 export function decodeUserSpotCreateCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): UserSpotCreateCommand { if (!frames.length) fail("userSpotCreate frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 47) fail("userSpotCreate header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("userSpotCreate flags"); const value: any = { command: "userSpotCreate", flags };
@@ -7988,7 +7988,7 @@ export function encodeUserSpotCreateCommand(value: UserSpotCreateCommand, contex
 const frames: Uint8Array[] = [writer.result()];
 
 return frames; }
-export function validateUserSpotCreateCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateUserSpotCreateCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type UserSpotCloseCommand = { readonly command: "userSpotClose"; readonly flags: number; readonly correlation: NonzeroU64; readonly operation: OperationId; readonly sourceNodeRid: Rid; readonly sourceNodeGeneration: NonzeroU64; readonly target: UserSpotCloseFenceV1; readonly deadlineUnixMs: NonzeroU64; };
 export function decodeUserSpotCloseCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): UserSpotCloseCommand { if (!frames.length) fail("userSpotClose frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 48) fail("userSpotClose header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("userSpotClose flags"); const value: any = { command: "userSpotClose", flags };
@@ -8043,7 +8043,7 @@ export function encodeUserSpotCloseCommand(value: UserSpotCloseCommand, context:
 const frames: Uint8Array[] = [writer.result()];
 
 return frames; }
-export function validateUserSpotCloseCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateUserSpotCloseCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type ActorCreateCommand = { readonly command: "actorCreate"; readonly flags: number; readonly correlation: NonzeroU64; readonly operation: OperationId; readonly sourceNodeRid: Rid; readonly sourceNodeGeneration: NonzeroU64; readonly actorId: Text8; readonly stableType: Text8; readonly reservation: ObjectReservationFence; readonly deadlineUnixMs: NonzeroU64; };
 export function decodeActorCreateCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ActorCreateCommand { if (!frames.length) fail("actorCreate frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 49) fail("actorCreate header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("actorCreate flags"); const value: any = { command: "actorCreate", flags };
@@ -8112,7 +8112,7 @@ export function encodeActorCreateCommand(value: ActorCreateCommand, context: Ser
 const frames: Uint8Array[] = [writer.result()];
 
 return frames; }
-export function validateActorCreateCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateActorCreateCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type MessageFollowCommand = { readonly command: "messageFollow"; readonly flags: number; readonly route: MessageFollowRouteV1; };
 export function decodeMessageFollowCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): MessageFollowCommand { if (!frames.length) fail("messageFollow frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 50) fail("messageFollow header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("messageFollow flags"); const value: any = { command: "messageFollow", flags };
@@ -8132,7 +8132,7 @@ export function encodeMessageFollowCommand(value: MessageFollowCommand, context:
 const frames: Uint8Array[] = [writer.result()];
 
 return frames; }
-export function validateMessageFollowCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateMessageFollowCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type BoundSessionReplacedCommand = { readonly command: "boundSessionReplaced"; readonly flags: number; readonly actorAuthority: ActorRouteFence; readonly retiredSession: RetiredBoundSessionRouteFence; };
 export function decodeBoundSessionReplacedCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): BoundSessionReplacedCommand { if (!frames.length) fail("boundSessionReplaced frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 51) fail("boundSessionReplaced header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("boundSessionReplaced flags"); const value: any = { command: "boundSessionReplaced", flags };
@@ -8159,7 +8159,7 @@ export function encodeBoundSessionReplacedCommand(value: BoundSessionReplacedCom
 const frames: Uint8Array[] = [writer.result()];
 
 return frames; }
-export function validateBoundSessionReplacedCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateBoundSessionReplacedCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type RelocationStateCommand = { readonly command: "relocationState"; readonly flags: number; readonly relocation: RelocationId; readonly targetAttemptGeneration: NonzeroU64; readonly coordinator: RelocationCoordinatorFence; readonly senderRole: RelocationRole; readonly object: RelocationObjectIdentity; readonly chunkOrdinal: U32; readonly chunkData: DurableBlob; };
 export function decodeRelocationStateCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): RelocationStateCommand { if (!frames.length) fail("relocationState frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 52) fail("relocationState header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("relocationState flags"); const value: any = { command: "relocationState", flags };
@@ -8221,7 +8221,7 @@ export function encodeRelocationStateCommand(value: RelocationStateCommand, cont
 const frames: Uint8Array[] = [writer.result()];
 
 return frames; }
-export function validateRelocationStateCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateRelocationStateCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type RelocationFailedCommand = { readonly command: "relocationFailed"; readonly flags: number; readonly relocation: RelocationId; readonly targetAttemptGeneration: NonzeroU64; readonly coordinator: RelocationCoordinatorFence; readonly target: RelocationTargetFence; readonly object: RelocationObjectIdentity; readonly senderRole: RelocationRole; readonly failureCode: FrameworkErrorCode; };
 export function decodeRelocationFailedCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): RelocationFailedCommand { if (!frames.length) fail("relocationFailed frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 53) fail("relocationFailed header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("relocationFailed flags"); const value: any = { command: "relocationFailed", flags };
@@ -8283,7 +8283,7 @@ export function encodeRelocationFailedCommand(value: RelocationFailedCommand, co
 const frames: Uint8Array[] = [writer.result()];
 
 return frames; }
-export function validateRelocationFailedCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context; }
+export function validateRelocationFailedCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
 export type ServiceWireCommand = HelloCommand | AdmitCommand | RejectCommand | UpdateCommand | LivenessProbeCommand | LivenessAckCommand | NodeSendCommand | NodeRequestCommand | ChannelSendCommand | ChannelRequestCommand | ReplyCommand | SpotSendCommand | SpotRequestCommand | LogicalMulticastCommand | ActorSendCommand | ActorRequestCommand | ActorLookupCommand | ActorDestroyCommand | ActorJoinCommand | ActorLeftCommand | RelocationReadyCommand | RelocationDataCommand | ReplyRelayCommand | RelocationCutoverCommand | BoundSessionSendCommand | ActorJoinedCommand | BoundSessionBindCommand | InstanceSpotCommand | RelocationPrepareCommand | SessionRelocationSealCommand | SessionRelocationSealedCommand | SessionRelocationRouteCommand | ReplyRelayAckCommand | UserSpotCreateCommand | UserSpotCloseCommand | ActorCreateCommand | MessageFollowCommand | BoundSessionReplacedCommand | RelocationStateCommand | RelocationFailedCommand;
 
