@@ -511,7 +511,9 @@ jobs:
           profile=$(curl -sf http://127.0.0.1:5480/players/p1/profile)
           echo "${profile}" | grep -q '"playerId":"p1"' || fail "profile route: ${profile}"
           curl -sf -X POST http://127.0.0.1:5480/players/p1/logins > /dev/null
-          grep -q 'login recorded: p1' server.log || fail "one-way channel send"
+          # The send completes at admission (202); the handler runs afterwards, so the log line lands a moment later.
+          for _ in $(seq 1 40); do grep -q 'login recorded: p1' server.log && break; sleep 0.25; done
+          grep -q 'login recorded: p1' server.log || fail "one-way channel send did not arrive"
 
           status=$(curl -sf http://127.0.0.1:5480/ops/nodes/game-server-1/status)
           echo "${status}" | grep -q '"meshName":"game"' || fail "node direct route: ${status}"
