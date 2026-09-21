@@ -13,7 +13,7 @@ and the Redis container it started. Sample code never starts another server role
 process.
 
 This directory is `samples/` in the `zlink-cpp-examples` repository. The procedure below uses
-the Core, binding and framework packages published on GitHub Releases, vcpkg, and Docker for Redis.
+the Core, binding and framework packages published on GitHub Releases, Conan, and Docker for Redis.
 
 ## Contents
 
@@ -37,15 +37,14 @@ The command blocks of `Build`, `Run` and `Verify` are marked `title="linux"` (ba
 | C++20 compiler | Visual Studio 2022 17.4 or later with the **Desktop development with C++** workload (verified with MSVC 19.44) | GCC 13 or later (verified with 13.3) |
 | CMake | 3.24 or later (the 3.31 Visual Studio installs was used) | 3.24 or later (3.28 was used) |
 | Ninja | not needed | recommended; Makefiles are used when it is absent |
-| vcpkg | the copy Visual Studio installs is found automatically; for a separate clone set `VCPKG_ROOT` | `git clone https://github.com/microsoft/vcpkg` and `./bootstrap-vcpkg.sh`; set `VCPKG_ROOT` unless it lives at `$HOME/vcpkg` |
+| Conan 2 | `pipx install conan` (or `py -m pip install --user conan`) | `pipx install conan` (or `python3 -m pip install --user conan`) |
 | Docker Desktop | each runner starts one Redis container. Must be installed and running | same (WSL integration, or Docker Engine on Linux) |
 | `curl` | included since Windows 10 | distribution package |
 
-Nothing else is needed: no zlink repository, no Python, no Node.js. Even ZoneWorld's ZW-B8 fault
-proxy is C++ built with the sample. vcpkg builds the third-party libraries from source, so
-**the first install takes about 20 minutes**; later installs finish in minutes from vcpkg's
-binary cache. The third-party versions are pinned with a vcpkg `builtin-baseline`; a clone
-older than that commit needs `git -C $VCPKG_ROOT pull`.
+Nothing else is needed: no zlink repository or Node.js. Even ZoneWorld's ZW-B8 fault proxy is C++
+built with the sample. Conan is installed by pipx (or pip) and downloads ConanCenter binaries for
+the third-party libraries, so **the first install takes about 3 minutes** on a supported compiler;
+later installs reuse its local cache.
 
 ## Download and install
 
@@ -56,8 +55,9 @@ One script, `bootstrap.cmake`, does the install -- it is the first line of the [
 block. It downloads three GitHub Release assets -- this platform's Core prebuilt
 (`core/v1.2.0`), the C++ binding source (`cpp/v1.2.0`) and the framework source
 (`framework-cpp/v0.18.0`) -- builds the binding and the framework into `.zlink/install/`, and
-configures the seven samples as one project into `build/`. From the second run on it reuses
-what it downloaded and built.
+configures the seven samples as one project into `build/`. Conan is the default package manager;
+pass `-DZLINK_PACKAGE_MANAGER=vcpkg` for the vcpkg fallback. From the second run on it reuses what
+it downloaded and built.
 
 Parallelism defaults to the logical core count; lower it as `cmake -DZLINK_JOBS=4 -P
 bootstrap.cmake`. To start over, delete `.zlink/` and `build/`.
@@ -65,7 +65,6 @@ bootstrap.cmake`. To start over, delete `.zlink/` and `build/`.
 ## Build
 
 ```bash title="linux"
-export VCPKG_ROOT="${VCPKG_ROOT:-$HOME/vcpkg}"
 cmake -P bootstrap.cmake
 cmake --build build --parallel
 ```
@@ -149,8 +148,8 @@ only in the repository tree.
 
 | Symptom | Cause and fix |
 |---|---|
-| `bootstrap: vcpkg was not found. Set VCPKG_ROOT ...` | No vcpkg. On Windows enable the **vcpkg package manager** component in the Visual Studio Installer; on either platform point `VCPKG_ROOT` at a vcpkg clone |
-| `error: no version database entry for <port> at <version>`, or another baseline error | The vcpkg clone predates the baseline commit. `git -C $VCPKG_ROOT pull`, then rerun |
+| `bootstrap: could not find Conan` | Install Conan 2 with `pipx install conan` (or `python3 -m pip install --user conan`) and ensure its bin directory is on `PATH` |
+| `ERROR: Invalid setting ...` | The selected compiler is not a supported ConanCenter binary configuration. Use the listed compiler version, or pass `-DZLINK_PACKAGE_MANAGER=vcpkg` |
 | `bootstrap: download failed: https://github.com/...` | GitHub Releases is unreachable; check proxy and firewall, then rerun |
 | `CMake Error ... No CMAKE_CXX_COMPILER could be found` / `Visual Studio 17 2022 could not find any instance` | No compiler. Install the **Desktop development with C++** workload on Windows, `g++` on Linux |
 | `No configured build tree at .../build.` (Linux) / `Missing executable: ... Build C++ samples first or set ZLINK_CPP_BUILD_DIR.` (Windows) | Install or build was skipped. Run `cmake -P bootstrap.cmake`, and on Windows `cmake --build build --config Release` |

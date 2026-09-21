@@ -5,6 +5,9 @@ project(zlink_tutorial_cpp LANGUAGES CXX)
 # it is found under are passed on the command line; see README.md.
 find_package(zlink_framework CONFIG REQUIRED)
 find_package(zlink_http_client_cpp CONFIG REQUIRED)
+# Shared/contracts.hpp serializes with nlohmann::json in every process, the
+# connector-only client included; that process gets it from nowhere else.
+find_package(nlohmann_json CONFIG REQUIRED)
 
 add_executable(tutorial_server Server/main.cpp)
 target_link_libraries(tutorial_server PRIVATE zlink::framework zlink::framework_locations_redis)
@@ -17,7 +20,7 @@ target_compile_features(tutorial_client PRIVATE cxx_std_20)
 # This process is outside the mesh. It links the connector only, never the
 # framework.
 add_executable(tutorial_stream_client StreamClient/main.cpp)
-target_link_libraries(tutorial_stream_client PRIVATE zlink::stream_connector)
+target_link_libraries(tutorial_stream_client PRIVATE zlink::stream_connector nlohmann_json::nlohmann_json)
 target_compile_features(tutorial_stream_client PRIVATE cxx_std_20)
 
 add_executable(tutorial_http_client HttpClient/main.cpp)

@@ -10,6 +10,25 @@ from conan.tools.files import copy, get
 
 required_conan_version = ">=2.1"
 
+# This is the authoritative third-party name/version list for the framework.
+# bootstrap.cmake reads it from the released archive, so its CMakeDeps graph is
+# identical to the package graph without downloading zlink-cpp (the bootstrap
+# builds that first-party archive itself). vcpkg.json remains the explicit
+# vcpkg fallback manifest: its port feature names are vcpkg-specific.
+ZLINK_FRAMEWORK_CPP_THIRD_PARTY_REQUIREMENTS = (
+    # CMakeLists.txt:22 unconditionally needs the api component.
+    "opentelemetry-cpp/1.26.0",
+    "boost/1.85.0",
+    "nlohmann_json/3.11.3",
+    "openssl/[>=3.0 <4]",
+    "lz4/1.9.4",
+    "protobuf/5.27.0",
+    # The async option below owns its compatible libuv transitively. 1.3.15 is the
+    # first ConanCenter recipe whose async build finds libuv without a system
+    # libuv-dev (1.3.13 fails with "uv.h: No such file" on a clean machine).
+    "redis-plus-plus/1.3.15",
+)
+
 
 class ZlinkFrameworkConan(ConanFile):
     name = "zlink-framework"
@@ -20,7 +39,12 @@ class ZlinkFrameworkConan(ConanFile):
     description = "C++ framework, HTTP client and stream connector for zlink"
     settings = "os", "arch", "compiler", "build_type"
     options = {"fPIC": [True, False]}
-    default_options = {"fPIC": True, "boost/*:header_only": True}
+    default_options = {
+        "fPIC": True,
+        "boost/*:header_only": True,
+        # Mirrors vcpkg.json's redis-plus-plus async-std feature.
+        "redis-plus-plus/*:build_async": True,
+    }
 
     def config_options(self):
         if self.settings.os == "Windows":
@@ -30,19 +54,9 @@ class ZlinkFrameworkConan(ConanFile):
         cmake_layout(self)
 
     def requirements(self):
-        for dependency in (
-            "zlink-cpp/1.2.1",
-            # CMakeLists.txt:22가 COMPONENTS api로 무조건 요구한다. 빠져 있으면
-            # conan create가 find_package 단계에서 실패한다.
-            "opentelemetry-cpp/1.26.0",
-            "boost/1.85.0",
-            "nlohmann_json/3.11.3",
-            "openssl/[>=3.0 <4]",
-            "lz4/1.9.4",
-            "protobuf/5.27.0",
-            "redis-plus-plus/1.3.13",
-            "libuv/1.48.0",
-        ):
+        self.requires("zlink-cpp/1.2.1", transitive_headers=True,
+                      transitive_libs=True)
+        for dependency in ZLINK_FRAMEWORK_CPP_THIRD_PARTY_REQUIREMENTS:
             self.requires(dependency, transitive_headers=True, transitive_libs=True)
 
     def validate(self):
