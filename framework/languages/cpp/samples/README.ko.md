@@ -10,8 +10,8 @@ C++ 샘플 일곱 개는 framework의 공개 API로 여러 서버 역할을 구�
 확인한 뒤 공개 client 시나리오를 실행하며, 종료할 때 자신이 시작한 프로세스와 Redis
 container를 정리한다. 샘플 코드가 다른 서버 역할을 같은 프로세스에서 시작하지 않는다.
 
-이 디렉터리는 저장소 없이 닫힌다. 아래 절차는 GitHub Release에 공개된 Core·binding·framework
-아카이브와 vcpkg, 그리고 Redis를 띄울 Docker만 사용한다.
+이 디렉터리는 `zlink-cpp-examples` 저장소의 `samples/`이다. 아래 절차는 GitHub Release에
+공개된 Core·binding·framework 패키지와 vcpkg, 그리고 Redis를 띄울 Docker를 사용한다.
 
 ## 차례
 
@@ -25,8 +25,8 @@ container를 정리한다. 샘플 코드가 다른 서버 역할을 같은 프�
 - [설정과 계약 배치](#설정과-계약-배치)
 
 `빌드`·`실행`·`검증` 절의 명령 블록은 `title="linux"`(bash)와 `title="windows"`(PowerShell)로
-표시되어 있다. 각 블록은 압축을 푼 디렉터리에서 그대로 실행되며, 릴리스 CI가 같은 블록을
-그대로 돌린다.
+표시되어 있다. 각 블록은 `zlink-cpp-examples` 저장소를 clone한 뒤 `samples/`에서 그대로
+실행되며, 릴리스 CI가 같은 블록을 그대로 돌린다.
 
 ## 전제 조건
 
@@ -47,8 +47,8 @@ ZW-B8 장애 proxy까지 C++로 샘플과 함께 빌드된다. 세 번째 파티
 
 ## 내려받기와 설치
 
-[`zlink-samples-cpp.zip`](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-cpp.zip)을
-받아 압축을 푼다. 아래 명령은 모두 압축을 푼 `zlink-samples-cpp/` 안에서 실행한다.
+[`zlink-cpp-examples`](https://github.com/zlink-systems/zlink-cpp-examples) 저장소를 clone한다.
+아래 명령은 모두 그 저장소의 `samples/` 안에서 실행한다.
 
 설치는 `bootstrap.cmake` 하나가 한다 — [빌드](#빌드) 블록의 첫 줄이다. GitHub Release에서 세
 아카이브 — 이 플랫폼의 Core prebuilt(`core/v1.2.0`), C++ binding 소스(`cpp/v1.2.0`), framework

@@ -10,6 +10,7 @@
 | 채널 | 계정·namespace | 배포 방식 |
 | --- | --- | --- |
 | GitHub | 조직 `zlink-systems`, 저장소 `zlink-systems/zlink` | 언어별 태그와 GitHub Release 자산 |
+| GitHub (examples 미러) | `zlink-systems/zlink-{cpp,dotnet,java,node}-examples` — 읽기 전용, issue·wiki 비활성, PR을 받지 않는다 | `examples-mirror.yml`이 framework 태그마다 push([release-pipeline](release-pipeline.ko.md) §1) |
 | Maven Central | namespace `systems.zlink` 검증 완료 | Sonatype Central Portal bundle 업로드 |
 | nuget.org | 개인 계정 `zlink` | Trusted Publishing(OIDC), API key 없음 |
 | npm | 개인 계정 `zlink-systems`, scope `@zlink-systems`, 2FA | Trusted Publishing(OIDC)+provenance. binding은 `bindings-release.yml`, framework 8개는 `framework-release.yml`로 패키지별 등록(2026-09-09 완료) |
@@ -33,7 +34,7 @@ nuget.org Trusted Publishing 정책은 다음 값으로 고정돼 있다.
 
 ## GitHub Actions secrets
 
-공개 배포 workflow가 참조하는 repository secret은 다음 네 개뿐이다. 문서와 로그에는 값이 아니라
+공개 배포 workflow가 참조하는 repository secret은 다음 여덟 개뿐이다. 문서와 로그에는 값이 아니라
 이름만 기록한다.
 
 | Secret | 용도 |
@@ -42,8 +43,10 @@ nuget.org Trusted Publishing 정책은 다음 값으로 고정돼 있다.
 | `MAVEN_CENTRAL_PASSWORD` | Sonatype Central Portal token password |
 | `SIGNING_KEY` | armored GPG 개인키를 base64로 인코딩한 값 |
 | `SIGNING_PASSPHRASE` | GPG 개인키 passphrase |
+| `EXAMPLES_MIRROR_KEY_CPP` · `_DOTNET` · `_JAVA` · `_NODE` | 각 examples 미러 저장소에 등록한 write deploy key(ed25519)의 개인키. 미러 하나에만 push할 수 있고, deploy key는 저장소 하나에만 붙으므로 넷이다. 회전은 `ssh-keygen` → `gh repo deploy-key add --allow-write` → `gh secret set`으로 하며 개인키 파일은 등록 직후 지운다 |
 
-기존 signing key를 사용하며 새 key나 token을 생성하지 않는다.
+기존 signing key를 사용하며 새 key나 token을 생성하지 않는다. `GITHUB_TOKEN`은 다른 저장소에
+push할 수 없으므로 미러만 deploy key를 쓴다.
 
 ## 사용하지 않는 secret과 사내 remote
 

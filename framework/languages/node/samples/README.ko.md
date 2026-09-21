@@ -1,8 +1,7 @@
 # ZLink Node.js Framework Samples
 
-Node.js/NestJS framework의 공개 API를 사용하는 일곱 샘플이다. 저장소 없이 이 디렉터리(압축을
-푼 `zlink-samples-node/` 또는 저장소의 `framework/languages/node/samples/`) 하나만으로 빌드하고
-실행한다.
+Node.js/NestJS framework의 공개 API를 사용하는 일곱 샘플이다. `zlink-node-examples` 저장소를
+clone하고 `samples/`에서 빌드하고 실행한다.
 
 ## 샘플 목록
 
@@ -27,7 +26,7 @@ TicTacToe만 MeshNode peer endpoint를 수동으로 설정한다. 다른 샘플�
 
 - **Node.js 22 이상.** `@zlink-systems/zlink`가 `"engines": { "node": ">=22" }`를 선언한다.
   `node --version`으로 확인한다. `@zlink-systems/framework` 0.18.1부터는 Windows용
-  prebuild(#656)가 있는 `zlink@1.2.1`을 고정한다 — 그 전 버전을 고정한 zip은 아직
+  prebuild(#656)가 있는 `zlink@1.2.1`을 고정한다 — 그 전 framework release는 아직
   `1.2.0`만 받는다(아래 「문제 해결」).
 - **Docker Desktop(또는 Docker Engine)이 떠 있어야 한다.** 그 외에는 없다. 각 sample runner가
   Redis container(`redis:7.2-alpine`)를 직접 만들고 끝나면 제거하므로, Redis를 따로 설치하거나
@@ -39,8 +38,8 @@ TicTacToe만 MeshNode peer endpoint를 수동으로 설정한다. 다른 샘플�
 
 ## 내려받기와 설치
 
-이 디렉터리 자체가 이미 받은 것이다 — `zlink-samples-node.zip`을 풀면 그 안이 그대로
-`Bingo.Ts/`, `TicTacToe.Ts/`, … 일곱 개다. 저장소를 clone할 필요가 없다. 각 샘플은
+`zlink-node-examples` 저장소를 clone하면 `samples/` 안에
+`Bingo.Ts/`, `TicTacToe.Ts/`, … 일곱 개가 있다. 각 샘플은
 `@zlink-systems/*`를 그 샘플이 고정한 버전으로 npm registry에서 받는다. workspace가 아니므로
 샘플마다 따로 설치한다.
 
@@ -124,7 +123,7 @@ PASS TicTacToe.Ts
 |---|---|
 | `docker: Cannot connect to the Docker daemon` | Docker Desktop(또는 dockerd)이 꺼져 있다. 띄운 뒤 다시 실행한다 |
 | `Package mode requires @zlink-systems/... Run npm install in ...` | 그 샘플 디렉터리에서 `npm install`을 하지 않았다. 실행 전 위 「내려받기와 설치」를 먼저 한다 |
-| `npm error gyp ERR! ... ZLINK_CORE_INSTALL_PREFIX must name an absolute installed Core ... package prefix`(Windows) | 이 zip이 고정한 `@zlink-systems/framework`가 아직 0.18.1 미만이라 `zlink@1.2.0`만 받는다 — win32-x64 prebuild(#656)는 framework 0.18.1(`zlink@1.2.1`)부터다. 그 버전으로 다시 받거나 WSL에서 실행한다 |
+| `npm error gyp ERR! ... ZLINK_CORE_INSTALL_PREFIX must name an absolute installed Core ... package prefix`(Windows) | 이전 framework release가 고정한 `@zlink-systems/framework`가 아직 0.18.1 미만이라 `zlink@1.2.0`만 받는다 — win32-x64 prebuild(#656)는 framework 0.18.1(`zlink@1.2.1`)부터다. 그 버전으로 다시 받거나 WSL에서 실행한다 |
 | 위와 같은 오류(macOS) | `@zlink-systems/zlink@1.2.1`에도 아직 `darwin-*` prebuild가 없다. Linux(x64)나 Windows(0.18.1부터)에서 실행한다 |
 | Chromium을 쓰는 샘플에서 `browserType.launch: Executable doesn't exist` | 그 샘플 디렉터리에서 `npm run browser:install`을 하지 않았다 |
 | 포트 충돌(`EADDRINUSE`) | runner가 매번 무작위 loopback 포트를 고르므로 같은 샘플을 동시에 두 번 돌리지만 않으면 드물다. 재시도하면 대개 사라진다 |

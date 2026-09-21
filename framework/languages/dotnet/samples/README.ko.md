@@ -26,12 +26,10 @@
 ## 내려받기와 설치
 
 각 샘플은 공개된 `Zlink.Framework`/`Zlink.Stream.Connector` NuGet 패키지만
-참조한다(이 디렉터리의 `nuget.config`는 `nuget.org`만 가리킨다). 저장소 checkout이
-전혀 필요 없고, 처음 샘플을 빌드할 때 `dotnet build`가 암묵적으로 실행하는
-`dotnet restore`가 그 패키지를 내려받는다. `zlink-samples-dotnet.zip`을 아무
-디렉터리에나 풀고, 이 문서의 명령을 그 `zlink-samples-dotnet` 디렉터리에서
-실행한다(저장소 checkout이면 같은 명령을 `framework/languages/dotnet/samples`에서
-실행한다).
+참조한다(이 디렉터리의 `nuget.config`는 `nuget.org`만 가리킨다). `zlink-dotnet-examples`
+저장소를 clone하고 이 문서의 명령을 `samples/`에서 실행한다(저장소 checkout이면 같은
+명령을 `framework/languages/dotnet/samples`에서 실행한다). 처음 샘플을 빌드할 때
+`dotnet build`가 암묵적으로 실행하는 `dotnet restore`가 그 패키지를 내려받는다.
 
 ## 빌드
 
@@ -53,7 +51,7 @@ dotnet build TicTacToe\TicTacToe.sln
 [공용 sample 문서](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/sample/README.ko.md)의
 "The Sample Run Script And Redis Isolation Standard" 절이 이 규칙을 소유하며,
 아래는 이 언어의 명령만 적는다. 이 `samples` 디렉터리(저장소 checkout이면
-`framework/languages/dotnet/samples`, `zlink-samples-dotnet.zip`을 풀었으면 그
+`framework/languages/dotnet/samples`, examples repository를 clone했으면 `samples/`
 root)에서 실행한다. 러너가 자기 Redis 컨테이너를 Docker로 직접 띄우므로 따로
 손으로 띄우지 않는다. 실행 결과는 다음 절이 읽을 파일에 남긴다.
 
@@ -119,7 +117,7 @@ Redis 컨테이너를 정리한다.
 - **`dotnet`이 호환되는 SDK가 없다고 한다** — .NET 8.0 SDK를 설치한다. 더 최신
   major SDK만으로는 그것이 `8.0.x` 런타임을 함께 담고 있지 않으면 부족하다.
 - 실행이 중간에 끊겨(Ctrl-C, 셸 강제 종료) 자기 정리가 돌지 못한 컨테이너나
-  process가 남았다면 — 이 zip이 만드는 컨테이너는 모두
+  process가 남았다면 — sample runner가 만드는 컨테이너는 모두
   `zlink-<샘플>-dotnet-redis-*`로 이름 붙는다. `docker rm -f`로 지운다.
 
 ## 샘플

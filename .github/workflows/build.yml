@@ -985,22 +985,6 @@ jobs:
             release-provenance.txt
           draft: false
 
-  # `releases/latest/download/...` is repo-wide across every tag (#639); a
-  # Core release can become "latest" between framework releases, so it must
-  # carry the same eight tutorial/samples zips framework-release.yml attaches.
-  # release-assets.yml packs at this tag's own tree and only attaches to a
-  # release that already exists (the `release` job above, just created it).
-  release-assets:
-    name: Attach tutorial/samples zip assets to the Core release
-    needs:
-      - release
-    if: needs.release.result == 'success'
-    permissions:
-      contents: write
-    uses: ./.github/workflows/release-assets.yml
-    with:
-      tag: ${{ github.ref_name }}
-
   sync-recipes:
     name: Sync vcpkg/Conan recipes
     runs-on: ubuntu-24.04

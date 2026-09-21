@@ -322,18 +322,24 @@ FRAMEWORK_SCALAR_FIELDS = (
         "overlay port version",
         rf'("version"\s*:\s*")(?P<version>{SEMVER})(")',
     ),
-    # The standalone tutorial/samples zips fetch the framework source archive of this
-    # version from the GitHub Release; it must equal the framework-cpp tag they ship with.
+    # The examples repositories (zlink-cpp-examples, #831) fetch the framework source archive
+    # of this version from the GitHub Release; it must equal the framework-cpp tag they mirror.
     FrameworkField(
         "framework/languages/cpp/tutorial/bootstrap.cmake",
         "cpp",
-        "ZLINK_FRAMEWORK_CPP_VERSION (framework source archive the zip builds)",
+        "ZLINK_FRAMEWORK_CPP_VERSION (framework source archive the tutorial builds)",
         rf'(set\(ZLINK_FRAMEWORK_CPP_VERSION ")(?P<version>{SEMVER})("\))',
     ),
     FrameworkField(
         "framework/languages/cpp/samples/bootstrap.cmake",
         "cpp",
-        "ZLINK_FRAMEWORK_CPP_VERSION (framework source archive the zip builds)",
+        "ZLINK_FRAMEWORK_CPP_VERSION (framework source archive the samples build)",
+        rf'(set\(ZLINK_FRAMEWORK_CPP_VERSION ")(?P<version>{SEMVER})("\))',
+    ),
+    FrameworkField(
+        "framework/languages/cpp/quickstart/bootstrap.cmake",
+        "cpp",
+        "ZLINK_FRAMEWORK_CPP_VERSION (framework source archive the quickstart builds)",
         rf'(set\(ZLINK_FRAMEWORK_CPP_VERSION ")(?P<version>{SEMVER})("\))',
     ),
 )

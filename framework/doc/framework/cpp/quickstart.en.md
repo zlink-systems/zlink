@@ -9,29 +9,19 @@ The project lives at
 below are read from those files when the site is built. Without a location store, two processes
 name each other's endpoint directly and exchange one request/reply.
 
-## 0. Downloading the tutorial
+## 0. Clone the examples repository
 
-This chapter builds the smallest project from scratch. **To run the finished tutorial instead**,
-one archive is all you need — there is no reason to clone the whole repository.
-
-!!! tip "Download the tutorial"
-
-    [:material-download: **zlink-tutorial-cpp.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-tutorial-cpp.zip){ .md-button .md-button--primary }
-
-
-The address does not depend on the platform: Windows and WSL fetch the same file. Unpacking it
-leaves the project under `zlink-tutorial-cpp/`, whose `bootstrap.cmake` replaces the three-archive
-install of section 1.3 below: one `cmake -P bootstrap.cmake` installs the framework and configures
-the project. Neither the repository nor Python is needed. The procedure and its troubleshooting
-are in the `README.md` inside.
-
-For the current main, take just that directory out of the repository.
+This chapter's project is `quickstart/` in the `zlink-cpp-examples` repository; `tutorial/`,
+the program read by the feature guides, and `samples/` live beside it.
 
 ```bash
-git clone --filter=blob:none --sparse https://github.com/zlink-systems/zlink.git
-cd zlink
-git sparse-checkout set framework/languages/cpp/tutorial
+git clone https://github.com/zlink-systems/zlink-cpp-examples.git
+cd zlink-cpp-examples/quickstart
 ```
+
+`main` is the latest release plus the fixes merged since, with package versions pinned to that
+release. An older release is the tag `vA.B.C` (`git checkout vA.B.C`). Send issues and PRs to
+`zlink-systems/zlink`.
 
 ## 1. Installation
 
@@ -41,8 +31,8 @@ git sparse-checkout set framework/languages/cpp/tutorial
 
 `zlink` is not in the official vcpkg registry or ConanCenter yet. This repository carries an
 overlay port and Conan recipes as well, so there are three installation paths. **The GitHub
-Release path is the one verified end to end**; the tutorial and samples archives' `bootstrap.cmake`
-automates it.
+Release path is the one verified end to end**; the `bootstrap.cmake` in `quickstart/`, `tutorial/`
+and `samples/` of `zlink-cpp-examples` automates it.
 
 | Path | Where it stands |
 |---|---|
@@ -152,10 +142,15 @@ An HTTP handler does not receive route parameters as arguments. It takes an
 
 ## 6. Run
 
+`bootstrap.cmake` replaces the installation in §1 and configures this project into `build/`. The
+first run takes about 20 minutes because vcpkg builds the third-party libraries; if `tutorial/`
+was bootstrapped first, reuse its result with
+`cmake -DZLINK_ROOT=../tutorial/.zlink -P bootstrap.cmake`.
+
 ```bash
-cd framework/languages/cpp/quickstart
-cmake -S . -B build -DCMAKE_PREFIX_PATH=<framework install prefix>
-cmake --build build
+cd zlink-cpp-examples/quickstart
+cmake -P bootstrap.cmake
+cmake --build build --parallel
 
 # Two terminals. Start the server first.
 ./build/quickstart_server
@@ -164,6 +159,8 @@ cmake --build build
 curl http://127.0.0.1:5083/hello/world
 ```
 
+If you installed the three stages of §1 yourself, configure with
+`cmake -S . -B build -DCMAKE_PREFIX_PATH=<framework install prefix>` instead of the bootstrap.
 The response is `"hello, world"` with status 200.
 
 ## 7. Visual Studio 2022

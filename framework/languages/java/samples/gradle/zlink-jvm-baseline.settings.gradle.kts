@@ -27,7 +27,7 @@ if (!gradle.extensions.extraProperties.has("zlink.jvmBaselineConfigured")) {
         }
 
         // `installDist`가 만드는 `bin/<app>(.bat)`는 기본으로 모든 runtime jar를 한 줄에
-        // 나열한다. 자연스러운 압축 해제 깊이(zip을 받아 그대로 푼 경로)에서 `%APP_HOME%`
+        // 나열한다. 자연스러운 clone 깊이(examples 저장소를 받아 그대로 둔 경로)에서 `%APP_HOME%`
         // 치환 후 그 줄이 Windows cmd.exe의 8191자 한도를 넘으면
         // "입력 파일이 너무 깁니다"로 죽는다 - 이 샘플들은 70개 안팎의 jar를 물고 있어
         // 여기 걸린다. jar를 하나씩 적는 대신 `lib` 디렉터리 wildcard를 쓰면 jar 수와

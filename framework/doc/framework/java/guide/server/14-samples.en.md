@@ -32,23 +32,20 @@ registration code and handlers.
 It's where the most framework features show up, and its architecture mirrors that of a
 typical online game server.
 
-## 0. Downloading the samples
+## 0. Clone the examples repository
 
-The samples do not need the whole repository. One archive per language holds all of them.
+Clone the repository below and run the samples from `samples/`.
 
-[:material-download: **zlink-samples-java.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-samples-java.zip){ .md-button .md-button--primary }
-
-The address does not depend on the platform: Windows and WSL fetch the same file. The samples
-reference published packages only, so they build straight after unpacking, with the versions of
-the release you downloaded.
-
-For the current main, take just that directory out of the repository.
+[:material-github: **zlink-java-examples**](https://github.com/zlink-systems/zlink-java-examples){ .md-button .md-button--primary }
 
 ```bash
-git clone --filter=blob:none --sparse https://github.com/zlink-systems/zlink.git
-cd zlink
-git sparse-checkout set framework/languages/dotnet/samples
+git clone https://github.com/zlink-systems/zlink-java-examples.git
+cd zlink-java-examples/samples
 ```
+
+`main` is the latest release plus the fixes merged since, with package versions pinned to that
+release. An older release is the tag `vA.B.C` (`git checkout vA.B.C`). Send issues and PRs to
+`zlink-systems/zlink`.
 
 ## 1. Choosing by What You're Building
 

@@ -420,7 +420,7 @@ zlink_sample_gradle_locked() {
 
 # Rebuilds the framework jars a monorepo dev-loop wants fresh, only when this
 # checkout actually has the framework source above the sample (`framework_root`
-# is `../../..` from a sample directory). A standalone zip has no such root --
+# is `../../..` from a sample directory). The examples mirror has no such root --
 # `zlink.samples.packageMode` already resolves these same jars from Maven
 # Central for the sample's own build (verified: the sample's own installDist
 # succeeds without this step when the framework root is absent), so skipping

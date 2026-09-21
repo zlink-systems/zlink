@@ -43,7 +43,7 @@ test('node samples define required runners and keep scenario contracts in common
     for (const requiredText of [
       '../../../doc/framework/common/sample/README.ko.md',
       'npm run browser:install',
-      // Zip-root-relative: this README also ships as the zlink-samples-node.zip
+      // Mirror-root-relative: this README also ships in zlink-node-examples
       // root README, where there is no repo-relative `samples/` prefix (#655).
       // One invocation runs one sample (#405, #585); the aggregate runner is gone.
       './Bingo.Ts/run_sample.sh',

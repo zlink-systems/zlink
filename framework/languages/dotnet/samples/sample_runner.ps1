@@ -2,9 +2,9 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 # Same repository-detection rule Directory.Build.props/Directory.Packages.props use for
-# ZLinkSampleRepositoryDetected: the samples package (zip) never carries ../src, so this is
+# ZLinkSampleRepositoryDetected: the examples mirror never carries ../src, so this is
 # false there. local_nuget.ps1 lives one level up in the repository (build-windows.ps1's
-# helper) and is not part of the packaged samples zip either (#655) -- source it only when
+# helper) and is not part of the mirrored samples either (#655) -- source it only when
 # the repository is actually present. Package mode falls back to a plain `dotnet build` in
 # Invoke-SampleDotnetBuild below, which is exactly what Directory.Build.props/nuget.config
 # already designed samples to do without a repository checkout.

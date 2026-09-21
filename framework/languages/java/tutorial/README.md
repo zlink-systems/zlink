@@ -20,11 +20,11 @@ subprojects of the same Gradle build, sharing `settings.gradle.kts`,
 
 ## Download and install
 
-No repository checkout. Build against the `systems.zlink:zlink-framework-*`
-packages from Maven Central. The directory this zip extracts to
-(`zlink-tutorial-java/`) is everything you need.
+Run from `tutorial/` in the `zlink-java-examples` repository. Build against the
+`systems.zlink:zlink-framework-*` packages from Maven Central.
 
-All commands below run from inside that directory.
+Clone the `zlink-java-examples` repository and run all commands below from its `tutorial/`
+directory.
 
 ## Build
 
