@@ -125,7 +125,10 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 - §7의 release 비교는 release 준비 단계에서 실행한다(변경 단위 의무는 `hotpath_gate` 하나 —
   [`10-hot-path.ko.md` §5](core/doc/spec/core/systems/10-hot-path.ko.md)).
 - 바인딩·framework 전체 범위는 `scripts/gate/{bindings-gate,framework-gate,cross-language-e2e}.sh <tag>`로
-  돌리고 결과는 `zlink-work/gates/<tag>/results.txt`에서 본다. gate는 한 번에 하나만, load average
+  돌리고 결과는 `zlink-work/gates/<tag>/results.txt`에서 본다. 새 worktree가 gate까지 돌 수 있게
+  되는 절차(머신 설치 한 번, 로컬 패키지 링크, `rebuild-dev → gate`)는
+  [`doc/principal/dev/worktree-setup.ko.md`](doc/principal/dev/worktree-setup.ko.md)가 소유한다.
+  gate는 한 번에 하나만, load average
   10 미만에서 시작한다(타이밍 assert가 부하에 민감하다). 부하로 깨진 테스트는 단독 재실행으로
   판정하고 허용치를 넓히지 않는다.
 - framework의 기본 빌드·솔루션·CI는 `cross-language` e2e만 포함한다. 7개 샘플(`samples/*`)은

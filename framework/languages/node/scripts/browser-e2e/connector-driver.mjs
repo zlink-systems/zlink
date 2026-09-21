@@ -26,7 +26,6 @@ async function cleanupResources(context, browser, server) {
 }
 
 async function createBrowserConnectorDriver(options = {}) {
-  process.env.PLAYWRIGHT_BROWSERS_PATH ??= path.join(workspaceRoot, '.cache/ms-playwright');
   const [{ chromium }, output] = await Promise.all([
     import('playwright'),
     build({

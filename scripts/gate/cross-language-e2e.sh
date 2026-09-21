@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Cross-language E2E (cpp all-stage, node smoke, java-cross) on the current packages, serialized behind the language locks.
-source "$(dirname "${BASH_SOURCE[0]}")/common.sh"; cd "$Z"; require_quiet || exit 2
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh" || exit $?
+cd "$Z" || exit
+require_quiet || exit 2
 step() { echo "[$(ts)] $1 exit=$2"; echo "$1 $2" >> "$LOGS/results.txt"; }
 : > "$LOGS/results.txt"
+( cd framework/languages/java && TMPDIR=/dev/shm/zlink-tmp-java flock -w7200 /tmp/zlink-jvm-gate.lock ./gradlew --no-daemon -p cross-language :Host:installDist ) > "$LOGS/java-cross-install.log" 2>&1; step java-cross-install $?
 ( cd framework/languages/cpp && cmake --build build/linux-ninja-c-e2e -j4 ) > "$LOGS/cpp-c-e2e-build.log" 2>&1; step cpp-c-e2e-build $?
 ( cd framework/languages/node && TMPDIR=/dev/shm/zlink-tmp-node flock -w7200 /tmp/zlink-node-gate.lock npm run build ) > "$LOGS/node-build.log" 2>&1; step node-build $?
 export ZLINK_CPP_BUILD_DIR="$Z/framework/languages/cpp/build/linux-ninja-c-e2e"

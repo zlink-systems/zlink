@@ -19,7 +19,6 @@ if (configDocument.e2e === null || typeof configDocument.e2e !== 'object' || Arr
   throw new Error("Browser E2E configuration section 'e2e' must be an object.");
 }
 const nodeRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-process.env.PLAYWRIGHT_BROWSERS_PATH ??= path.join(nodeRoot, '.cache/ms-playwright');
 const { chromium } = await import('playwright');
 
 const output = await build({

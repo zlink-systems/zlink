@@ -2,9 +2,15 @@
 # Shared helpers for the serialized framework gates. Source this file.
 Z="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TAG="${1:?usage: <script> <tag>}"
+source "$Z/scripts/gate/check-env.sh"
+check_env_args=()
+[[ "$(basename "$0")" == framework-gate.sh ]] && check_env_args+=(--format)
+check_env "${check_env_args[@]}" || return $?
+mkdir -p /dev/shm/zlink-tmp-{gate,node,java,dotnet}
 # Core runtime the gates run against. Default is the dev build; a release check sets
 # ZLINK_GATE_CORE_LIB to a release prefix lib dir (e.g. ~/.cache/zlink/core/0.17.3/linux-x64/lib).
 CORE_LIB="${ZLINK_GATE_CORE_LIB:-$Z/core/build-dev/lib}"
+# shellcheck disable=SC2034  # read by the gate scripts that source this file
 CORE_VER="${ZLINK_GATE_CORE_VERSION:-$(sed -n 's/^LIBZLINK_VERSION=//p' "$Z/VERSION")}"
 DOTNET_BINDING_VER="${ZLINK_GATE_DOTNET_BINDING_VERSION:-$(sed -n 's/^ZLINK_BINDING_VERSION=//p' "$Z/bindings/dotnet/VERSION")}"
 LOGS="$Z/zlink-work/gates/$TAG"; mkdir -p "$LOGS"

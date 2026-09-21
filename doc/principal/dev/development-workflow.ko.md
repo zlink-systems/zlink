@@ -85,27 +85,9 @@ Issue·PR·보드 없이 쓰고, 끝나면 [§4.3의 worktree 정리](#43-그-�
 
 ### 4.1 로컬 패키지 공유 캐시 (content-addressed)
 
-binding 로컬 패키지(nuget `Zlink.*`, npm `@zlink-systems/zlink`, maven `systems.zlink:zlink*`, C++ `install/zlink-cpp`)는
-입력이 같으면 결과가 같으므로 해시로 공유한다(vcpkg binary cache·Conan cache와 같은 원리). 규칙:
-
-- **키** = `sha256(bindings/ 트리 해시 ‖ 언어별 bindings/<language>/VERSION 값 map ‖ Core 버전 ‖ scripts/local-package/ 트리 해시 ‖ 플랫폼
-  `<os>-<arch>` ‖ 도구 버전 id)` 앞 16자리. 도구 버전 id는 `build-wsl.sh`가 사용하는 컴파일러·SDK·Node·JDK
-  버전을 한 줄로 합친 값이다(스크립트가 출력한다).
-- **깨끗한 트리에서만 공유**: `bindings/`·`scripts/local-package/`에 staged·unstaged·untracked 변경이 있으면
-  공유 캐시를 쓰지 않고 worktree 전용 디렉터리(`.artifacts/wsl-private/`)에 빌드한다. dirty 산출물은 절대
-  공유 키로 게시하지 않는다.
-- **위치와 게시**: `~/.cache/zlink/packages/<키>/`. 빌드는 `<키>.staging-<pid>/`에서 하고 검증(각 언어 패키지의
-  존재·digest 기록)까지 끝난 뒤 `rename`으로 원자 게시한다. 게시된 키는 불변이다. 동시 빌드는 `<키>.lock`
-  (`flock`)으로 단일 작성자를 보장한다. `.complete`에는 언어별 산출물 목록과 digest를 적는다.
-- **공유 범위는 binding 패키지뿐**: worktree의 `.artifacts/wsl/`은 worktree별 쓰기 디렉터리로 두고, 그 안의
-  binding 패키지 파일만 캐시로의 symlink다. framework가 만드는 패키지(`Zlink.HttpClient`, `@zlink-systems/http-client`
-  등)와 빌드 트리는 worktree별이다. Core release prefix `~/.cache/zlink/core/<ver>/<플랫폼>`은 지금처럼 공유한다.
-- **hit 경로도 검증한다**: 링크만 하는 경우에도 `sync-version.py --check`와 `build-wsl.sh --verify-versions`를
-  돌린다(miss 경로와 같은 검사). 소비 확인: .NET은 gate의 package digest별 `NUGET_PACKAGES` 방식을 그대로 써
-  같은 버전·다른 내용의 패키지가 섞이지 않게 한다. npm·Maven도 digest 기준으로 확인한다.
-- **정리**: `scripts/local-package/cache-prune.sh --keep 5`는 최근 5개를 남기되, 존재하는 worktree가 링크한
-  키와 baseline worktree의 키는 지우지 않는다. `work.sh done`은 링크만 지우고 캐시는 건드리지 않는다.
-- 문서 작업처럼 패키지가 필요 없는 Issue는 `work.sh start --no-packages`로 시작한다.
+binding 로컬 패키지는 worktree마다 빌드하지 않고 `~/.cache/zlink/packages/<키>/`로의 링크다. 키·게시·
+dirty 트리·공유 범위·정리 규칙은 [`worktree-setup.ko.md` §3](./worktree-setup.ko.md#3-worktree-만들기--로컬-패키지는-링크다)이
+소유한다. 문서 작업처럼 패키지가 필요 없는 Issue는 `work.sh start --no-packages`로 시작한다.
 
 ### 4.2 명령 하나로 — `scripts/dev/work.sh` / Windows `scripts/dev/work.ps1`
 
