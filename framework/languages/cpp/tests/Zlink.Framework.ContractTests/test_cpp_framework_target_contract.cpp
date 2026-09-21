@@ -759,7 +759,7 @@ int main ()
                   "E2E-CP-33", "RL-D4 has no raw camelCase errorMessage assertion");
 
     /* IMP-CP-06 — recovery re-registers local rows before applying disconnect diff. */
-    gate.require (location_auto_connect.find ("owner_lease_healthy") != std::string::npos,
+    gate.require (location_auto_connect.find ("owner_lease_usable") != std::string::npos,
                   "IMP-CP-06", "auto-connect recovery has no heartbeat defer boundary");
     gate.require (location_auto_connect.find ("republish_after_store_recovery")
                     != std::string::npos,
@@ -1274,13 +1274,11 @@ int main ()
     /* CPP-SESS-004 — replacement callback completion must schedule the close
      * with an asynchronous timer. Sleeping in the callback would hold the
      * session serial lane and prevent unrelated sessions from progressing. */
-    const auto replacement_begin = stream_host.find ("bool begin_actor_binding_replacement");
+    const auto replacement_begin = stream_host.find ("begin_actor_binding_replacement (");
     const auto replacement_end =
       replacement_begin == std::string::npos
         ? std::string::npos
-        : stream_host.find (
-            "std::shared_ptr<replacement_session_state_t>\n    register_replacement_session",
-            replacement_begin);
+        : stream_host.find ("register_replacement_session (", replacement_begin);
     const auto replacement_source =
       replacement_begin == std::string::npos || replacement_end == std::string::npos
         ? std::string{}

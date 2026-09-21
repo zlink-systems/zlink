@@ -1305,7 +1305,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_service_wire_codec_generated
     COMMAND test_cpp_framework_service_wire_codec_generated
-    LABELS "framework-unit;framework-contract;protocol"
+    LABELS "framework-unit;protocol"
     TIMEOUT 30)
 
   add_executable(test_cpp_framework_endpoint_notation
