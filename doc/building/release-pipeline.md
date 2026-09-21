@@ -23,6 +23,7 @@ Every release runs in GitHub Actions; nothing is published from a local machine.
 | Framework JVM | 13 `systems.zlink:zlink-framework-*` artifacts (incl. Kotlin) | Maven Central | `framework-release.yml` | `framework-java/v*` tag or `target=java` dispatch | `MAVEN_CENTRAL_*`, `SIGNING_*` |
 | Framework .NET | 9 packages (`Zlink.Framework*`, `Zlink.HttpClient`, `Zlink.Stream.Connector`, ...) | nuget.org | `release-dotnet.yml` (target `framework`) | `framework-dotnet/v*` tag or dispatch | nuget Trusted Publishing |
 | Documentation site | mkdocs static site | GitHub Pages | `docs.yml` | push to `main` (doc paths) | `GITHUB_TOKEN` |
+| Examples mirrors | the tree `scripts/tutorial/export_examples.py` exports from `framework/languages/<lang>/{quickstart,tutorial,samples}` | four read-only repositories `zlink-systems/zlink-<lang>-examples` (java includes Kotlin); `main` = latest release plus later fixes, tags `vA.B.C` | `examples-mirror.yml` | `framework/v*` or `framework-<lang>/v*` tag (tagged on the mirror too), a `main` push touching an examples path (commit only, and only for a language whose `VERSION` is already tagged), or a `ref` dispatch; `examples-smoke.yml` builds and runs the same tree without a checkout before the push | one write deploy key per mirror (`EXAMPLES_MIRROR_KEY_<LANG>`) |
 
 Python, Go, and Rust bindings have jobs in `bindings-release.yml` but are outside the public release
 scope. `core-conan-release.yml` is a legacy workflow for a private Conan remote and has no secrets.
@@ -140,6 +141,7 @@ likewise outside the framework build, CI and releases; they are verified only by
 | `framework-node.yml` | Node framework gate, Chromium STREAM e2e, Node↔.NET cross-language smoke | 4 platforms (win-x64, linux-x64, linux-arm64, darwin-arm64) × Node 20/22 |
 | `pr-verify.yml` | Core ctest and binding smoke, Java framework unit and contract tests, Windows x64 static contracts | ubuntu-24.04; only the Windows static contract job runs on windows-2022 |
 | `build.yml` | Core build and verification (also the release workflow) | 4 platforms |
+| `examples-smoke.yml` | builds and runs the exported examples trees in jobs with no checkout, from the README commands alone (quickstart build, tutorial start and verify, one sample end to end); called by `examples-mirror.yml` before the push and rerun daily on the newest framework tag | ubuntu-24.04 for all four languages; windows-2022 for dotnet and java |
 | `docs.yml` | documentation site build and deploy | ubuntu |
 
 `framework-dotnet.yml` and `framework-node.yml` are the only two that build and test on Windows.

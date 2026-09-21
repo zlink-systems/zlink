@@ -30,10 +30,10 @@ export function prepareSampleDependencies(sampleRoot) {
 
 function isRepositorySample(localPackages) {
   //  The positive, existence-checked marker for "this is the repository", not the
-  //  directory shape (a packed zip keeps the same samples/<Sample> shape as the
-  //  repository, so shape alone cannot tell them apart -- see #655). Outside the
-  //  repository nodeRoot is wherever the zip was unpacked and carries no
-  //  package.json at all, so the read must be guarded.
+  //  directory shape (the examples mirror keeps the same samples/<Sample> shape as
+  //  the repository, so shape alone cannot tell them apart -- see #655). Outside the
+  //  repository nodeRoot is the mirror's checkout root and carries no package.json
+  //  at all, so the read must be guarded.
   const workspaceManifestPath = path.join(nodeRoot, 'package.json');
   if (!fs.existsSync(workspaceManifestPath)) return false;
   const workspaceManifest = readJson(workspaceManifestPath);

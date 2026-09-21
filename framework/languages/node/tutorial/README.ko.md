@@ -21,16 +21,15 @@
 - **framework 0.18.1부터 Windows에서도 네이티브 빌드 없이 설치된다.** `@zlink-systems/zlink`
   1.2.1은 `prebuilds/linux-x64/`와 `prebuilds/win32-x64/`를 함께 싣는다(#656).
   `@zlink-systems/framework`가 그 버전을 정확히 고정하는 것은 0.18.1부터다 — 그 전 버전을
-  고정한 zip에서는 아직 1.2.0만 받아 Windows의 `npm install`이 `node-gyp rebuild`로
+  이전 framework release에서는 아직 1.2.0만 받아 Windows의 `npm install`이 `node-gyp rebuild`로
   넘어가고, 설치된 Core를 가리키는 `ZLINK_CORE_INSTALL_PREFIX`를 요구하며 실패한다.
   macOS(`darwin-*`)는 아직 prebuild가 없다. 이 문서의 출력은 Windows 11 위 WSL2
   Ubuntu-24.04, Node `v22.23.2`, npm `10.9.8`에서 받은 것이다.
 
 ## 내려받기와 설치
 
-이 디렉터리 자체가 이미 받은 것이다 — `zlink-tutorial-node.zip`을 풀면 그 안이 그대로 이
-tutorial이다. 저장소를 clone할 필요가 없다. quickstart와 같이 npm registry의 패키지만
-참조한다.
+`zlink-node-examples` 저장소를 clone하고 `tutorial/`에서 실행한다. 이 tutorial은
+quickstart와 같이 npm registry의 패키지만 참조한다.
 
 ```bash title="linux"
 npm install
@@ -169,7 +168,7 @@ if (-not $ready) { exit 1 }
 | `docker: Cannot connect to the Docker daemon` | Docker Desktop(또는 dockerd)이 꺼져 있다. 띄운 뒤 다시 실행한다 |
 | `curl`이 `Connection refused`를 돌려준다 | Server(`npm run server`)가 아직 뜨지 않았거나 죽었다. 그 터미널의 로그를 먼저 본다 |
 | `EADDRINUSE`(포트 충돌) | 아래 「포트」 표의 포트 중 하나를 다른 프로세스가 이미 쓰고 있다. 그 프로세스를 종료하거나 이 tutorial의 다른 실행 중인 인스턴스를 먼저 정리한다 |
-| `npm error gyp ERR! ... ZLINK_CORE_INSTALL_PREFIX must name an absolute installed Core ... package prefix`(Windows) | 이 zip이 고정한 `@zlink-systems/framework`가 아직 0.18.1 미만이라 `zlink@1.2.0`만 받는다 — win32-x64 prebuild(#656)는 framework 0.18.1(`zlink@1.2.1`)부터다. 그 버전으로 다시 받거나 WSL에서 실행한다 |
+| `npm error gyp ERR! ... ZLINK_CORE_INSTALL_PREFIX must name an absolute installed Core ... package prefix`(Windows) | 이전 framework release가 고정한 `@zlink-systems/framework`가 아직 0.18.1 미만이라 `zlink@1.2.0`만 받는다 — win32-x64 prebuild(#656)는 framework 0.18.1(`zlink@1.2.1`)부터다. 그 버전으로 다시 받거나 WSL에서 실행한다 |
 | 위와 같은 오류(macOS) | `@zlink-systems/zlink@1.2.1`에도 아직 `darwin-*` prebuild가 없다. Linux(x64)나 Windows(0.18.1부터)에서 실행한다 |
 | `EBADENGINE`(Node 버전 경고) | Node.js 22 미만이다. 위 「전제 조건」대로 22 이상으로 올린다 |
 | `server listening`이 뜨는 데 20~45초가 걸린다 | 프로젝트가 `/mnt/d` 같은 WSL의 9p mount 위에 있으면 모듈 적재만으로 이만큼 걸린다. Linux 파일 시스템(`~/` 등)으로 옮기면 줄어든다 |
@@ -771,8 +770,8 @@ weight가 0인 동안 1번은 `errno 0`으로, 2번은 `One-way send route is no
 
 ## 계약을 확인한 자리
 
-가이드 문서가 아니라 **공개 계약과 동작하는 코드**를 근거로 썼다(저장소 안에서 확인한 것이라
-이 zip에는 그 소스가 없다). 읽은 자리는
+가이드 문서가 아니라 **공개 계약과 동작하는 코드**를 근거로 썼다(저장소 안에서 확인한 소스는
+mirror repository에 포함되지 않는다). 읽은 자리는
 `framework/languages/node/packages/framework/src/contracts/`,
 `framework/languages/node/packages/nestjs/src/`,
 `framework/languages/node/e2e/`이다. 대조 결과 어긋나는 것은 아래와 같다.

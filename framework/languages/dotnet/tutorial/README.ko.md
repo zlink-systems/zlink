@@ -3,8 +3,8 @@
 기능별 가이드가 코드를 읽어 가는 프로그램이다. 장을 하나씩 따라가면 이 프로그램이 그
 순서대로 커진다.
 
-이 문서는 .NET SDK와 Docker만 있으면 되고 저장소 checkout이 필요 없다. 영어 대응
-문서는 [README.md](README.md)다.
+이 문서는 `zlink-dotnet-examples` 저장소의 `tutorial/`에서 실행한다. 영어 대응 문서는
+[README.md](README.md)다.
 
 ## 전제 조건
 
@@ -22,12 +22,10 @@ docker run --rm -d -p 6379:6379 --name zlink-tutorial-dotnet-redis redis:7.2-alp
 
 ## 내려받기와 설치
 
-tutorial은 공개된 `Zlink.Framework` NuGet 패키지만 참조한다(저장소 checkout이
-전혀 필요 없다). `zlink-tutorial-dotnet.zip`을 아무 디렉터리에나 풀고, 이 문서의
-명령을 그 `zlink-tutorial-dotnet` 디렉터리에서 실행한다(저장소 checkout이면 같은
-명령을 `framework/languages/dotnet/tutorial`에서 실행한다). 첫 빌드에서 `dotnet
-build`가 암묵적으로 실행하는 `dotnet restore`가 그 패키지를 nuget.org에서
-내려받는다.
+tutorial은 공개된 `Zlink.Framework` NuGet 패키지만 참조한다. `zlink-dotnet-examples`
+저장소를 clone하고 이 문서의 명령을 `tutorial/`에서 실행한다(저장소 checkout이면 같은
+명령을 `framework/languages/dotnet/tutorial`에서 실행한다). 첫 빌드에서 `dotnet build`가
+암묵적으로 실행하는 `dotnet restore`가 그 패키지를 nuget.org에서 내려받는다.
 
 ## 빌드
 

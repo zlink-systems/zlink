@@ -83,7 +83,8 @@ gate가 필요로 하는 빌드 산출물(Java cross-language `Host/installDist`
 - **저장소 안 Node 샘플은 repository 모드다.** `framework/languages/node`에서 `npm ci` 한 번이면
   되고, 샘플 디렉터리에서 `npm install`을 하면 registry 패키지와 workspace 패키지가 섞여
   7종이 전부 실패한다(`Nest can't resolve dependencies of the DiscoveryService`). 첫 줄
-  `sample_dependency_mode=repository`로 확인한다. 샘플별 `npm install`은 zip 배포본의 절차다.
+  `sample_dependency_mode=repository`로 확인한다. 샘플별 `npm install`은 examples 저장소 clone의
+  절차다.
 - **Java 샘플에 `ZLINK_LIBRARY_PATH`를 주지 않는다.** jar가 native를 동봉하며, 이 변수는 파일
   경로로 `System.load`되므로 디렉터리를 주면 `UnsatisfiedLinkError`가 난다.
 

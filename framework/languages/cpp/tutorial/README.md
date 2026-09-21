@@ -7,14 +7,14 @@ program grows in the same order. It is the `.NET Tutorial` ported to C++: the fo
 Channel messaging (RouteMesh request and one-way, node direct call, ClientServer, Fanout),
 handler filters, runtime weight changes, Spot, Actor, Location, STREAM and the HTTP client.
 
-This directory closes on itself. The procedure below uses only the Core, binding and framework
-archives published on GitHub Releases plus vcpkg; the zlink repository is never cloned.
+This directory is `tutorial/` in the `zlink-cpp-examples` repository. The procedure below uses
+the Core, binding and framework packages published on GitHub Releases plus vcpkg.
 
 | | Purpose |
 |---|---|
 | quickstart (repository `framework/languages/cpp/quickstart/`) | Install through the first reply. Adds no features |
 | **tutorial** (here) | Adds features one at a time. The feature guides read this code |
-| samples (`zlink-samples-cpp.zip`) | Applications with a complete business flow |
+| samples (`samples/` in the `zlink-cpp-examples` repository) | Applications with a complete business flow |
 
 ## Contents
 
@@ -30,8 +30,8 @@ archives published on GitHub Releases plus vcpkg; the zlink repository is never 
 - [Differences from the .NET tutorial](#differences-from-the-net-tutorial)
 
 The command blocks of `Build`, `Run` and `Verify` are marked `title="linux"` (bash) and
-`title="windows"` (PowerShell). Each block runs as is from the unpacked directory, and the
-release CI runs the same blocks verbatim.
+`title="windows"` (PowerShell). Each block runs as is from `tutorial/` after cloning the
+`zlink-cpp-examples` repository, and the release CI runs the same blocks verbatim.
 
 ## Prerequisites
 
@@ -53,9 +53,8 @@ commit needs `git -C $VCPKG_ROOT pull`.
 
 ## Download and install
 
-Download
-[`zlink-tutorial-cpp.zip`](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-tutorial-cpp.zip)
-and unpack it. Every command below runs inside the unpacked `zlink-tutorial-cpp/`.
+Clone the [`zlink-cpp-examples`](https://github.com/zlink-systems/zlink-cpp-examples) repository.
+Every command below runs inside its `tutorial/` directory.
 
 One script, `bootstrap.cmake`, does the install -- it is the first line of the [Build](#build)
 block. It downloads three GitHub Release assets -- this platform's Core prebuilt

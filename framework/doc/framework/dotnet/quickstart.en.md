@@ -9,27 +9,19 @@ The project lives at
 blocks below are read from those files when the site is built. Without a location store, two
 processes name each other's endpoint directly and exchange one request/reply.
 
-## 0. Downloading the tutorial
+## 0. Clone the examples repository
 
-This chapter builds the smallest project from scratch. **To run the finished tutorial instead**,
-one archive is all you need — there is no reason to clone the whole repository.
-
-!!! tip "Download the tutorial"
-
-    [:material-download: **zlink-tutorial-dotnet.zip**](https://github.com/zlink-systems/zlink/releases/latest/download/zlink-tutorial-dotnet.zip){ .md-button .md-button--primary }
-
-
-The address does not depend on the platform: Windows and WSL fetch the same file. Unpacking it
-leaves the project under `zlink-tutorial-dotnet/`, with the package versions of the release you
-downloaded.
-
-For the current main, take just that directory out of the repository.
+This chapter's project is `quickstart/` in the `zlink-dotnet-examples` repository; `tutorial/`,
+the program read by the feature guides, and `samples/` live beside it.
 
 ```bash
-git clone --filter=blob:none --sparse https://github.com/zlink-systems/zlink.git
-cd zlink
-git sparse-checkout set framework/languages/dotnet/tutorial
+git clone https://github.com/zlink-systems/zlink-dotnet-examples.git
+cd zlink-dotnet-examples/quickstart
 ```
+
+`main` is the latest release plus the fixes merged since, with package versions pinned to that
+release. An older release is the tag `vA.B.C` (`git checkout vA.B.C`). Send issues and PRs to
+`zlink-systems/zlink`.
 
 ## 1. Installation
 
@@ -101,7 +93,7 @@ collide on Kestrel's default port.
 ## 5. Run
 
 ```bash
-cd framework/languages/dotnet/quickstart
+cd zlink-dotnet-examples/quickstart
 dotnet build
 
 # Two terminals. Start the server first.

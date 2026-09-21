@@ -24,7 +24,7 @@ program(`java <file>.java ...`)으로 돌아 위 JDK 25만 있으면 된다.
 
 ## 내려받기와 설치
 
-저장소를 checkout하지 않는다. 이 zip을 푼 디렉터리(`zlink-samples-java/`)가 전부고, 배포된
+`zlink-java-examples` 저장소를 clone하고 `samples/`에서 실행한다. 배포된
 `zlink-framework-*` 패키지를 Maven Central에서 받아 빌드한다(버전은
 `gradle/zlink-sample-dependencies.settings.gradle.kts`의 `zlink.frameworkVersion` 기본값
 참고). 별도로 내려받거나 설치할 것은 없다 — Gradle wrapper가 Gradle을, Gradle이 위 패키지를
@@ -33,7 +33,7 @@ program(`java <file>.java ...`)으로 돌아 위 JDK 25만 있으면 된다.
 ## 빌드
 
 실행 script(아래 "실행")가 빌드까지 함께 하므로 따로 빌드할 필요는 없다. IDE 연동이나
-CI에서 실행 없이 빌드만 확인하려면, 이 zip을 푼 디렉터리(`zlink-samples-java/`) 안에서
+CI에서 실행 없이 빌드만 확인하려면, clone한 examples repository의 `samples/` 안에서
 다음을 쓴다.
 
 ```bash title="linux"
@@ -51,7 +51,7 @@ CI에서 실행 없이 빌드만 확인하려면, 이 zip을 푼 디렉터리(`z
 Sample 하나마다 `run_sample.sh`와 `run_sample.ps1`이 있고, 한 번 실행하면 sample 하나를
 끝까지 돌린다. Redis는 스크립트가 자기 몫의 컨테이너를 직접 띄우고 끝나면 지우므로 따로
 띄울 필요가 없다(위 "전제 조건"의 Docker만 있으면 된다). 아래 명령도 모두
-`zlink-samples-java/` 안에서 실행한다.
+clone한 examples repository의 `samples/` 안에서 실행한다.
 
 Linux·WSL:
 
@@ -112,7 +112,7 @@ sample은 실패다. 종료 코드 `0`과 "Redis 컨테이너/역할 process 정
 - **`UnsupportedClassVersionError`.** 실행 시점의 `JAVA_HOME`이 JDK 25보다 낮다. runner가
   스스로 JDK 25를 찾아 `JAVA_HOME`을 맞추지만(위 "전제 조건"), 그 탐색이 실패하면 JDK 25를
   설치하고 `JAVA_HOME`을 그 경로로 둔다.
-- **압축 해제 경로가 깊어도 `입력 파일이 너무 깁니다`는 나지 않는다.** `installDist`가 만든
+- **프로젝트 경로가 깊어도 `입력 파일이 너무 깁니다`는 나지 않는다.** `installDist`가 만든
   실행 script의 classpath가 jar를 하나씩 나열하지 않고 `lib` 디렉터리 wildcard를 쓰기
   때문이다(Windows cmd.exe의 8191자 한도와 무관하다).
 

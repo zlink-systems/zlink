@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # README의 내려받기와 설치·빌드·실행·검증 절에서 뽑은 명령을 돌린다. 명령은 README가
 # 정의한 그대로여야 하며, 문서에 해당 platform block이 없으면 즉시 실패한다.
-# .github/workflows/standalone-zips.yml이 checkout 없는 job에서 쓴다.
+# .github/workflows/examples-smoke.yml이 checkout 없는 job에서 쓴다.
 #
 # 사용: run_readme_step.sh <README 경로> <절 이름> <linux|windows>
 set -euo pipefail

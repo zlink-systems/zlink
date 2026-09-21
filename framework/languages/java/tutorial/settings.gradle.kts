@@ -27,13 +27,13 @@ dependencyResolutionManagement {
 rootProject.name = "zlink-tutorial"
 
 // `installDist`가 만드는 `bin/<app>(.bat)`는 기본으로 모든 runtime jar를 한 줄에 나열한다.
-// 자연스러운 압축 해제 깊이(zip을 받아 그대로 푼 경로, 예:
-// `zlink-tutorial-java\kotlin\Server\build\install\Server\bin\Server.bat`)에서 `%APP_HOME%`
+// 자연스러운 clone 깊이(examples 저장소를 받아 그대로 둔 경로, 예:
+// `zlink-java-examples\tutorial\kotlin\Server\build\install\Server\bin\Server.bat`)에서 `%APP_HOME%`
 // 치환 후 그 줄이 Windows cmd.exe의 8191자 한도를 넘으면 "입력 파일이 너무 깁니다"로 죽는다 -
 // Kotlin Server는 70개 안팎의 jar를 물어 여기 걸리고, Java Server(~55개)도 여유가 거의 없다.
 // jar를 하나씩 적는 대신 `lib` 디렉터리 wildcard를 쓰면 jar 수와 무관하게 한 줄로 끝난다.
 // (`framework/languages/java/samples/gradle/zlink-jvm-baseline.settings.gradle.kts`의 같은
-// 블록과 짝이다 - samples와 tutorial은 별도 zip으로 묶이므로 파일을 공유하지 못한다.)
+// 블록과 짝이다 - samples와 tutorial은 서로 독립으로 빌드되는 project라 파일을 공유하지 못한다.)
 gradle.beforeProject {
     plugins.withType<ApplicationPlugin> {
         tasks.withType<CreateStartScripts>().configureEach {

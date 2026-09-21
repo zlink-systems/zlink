@@ -34,15 +34,15 @@ JDK 25 above is the only runtime either one needs.
 
 ## Download and install
 
-No repository checkout. The directory this zip extracts to
-(`zlink-samples-java/`) is everything you need; it builds against the
-published `zlink-framework-*` packages from Maven Central (version: see
+Clone the `zlink-java-examples` repository and run from its `samples/`
+directory; it builds against the published `zlink-framework-*` packages from
+Maven Central (version: see
 `zlink.frameworkVersion`'s default in
 `gradle/zlink-sample-dependencies.settings.gradle.kts`). There is nothing
 separate to download or install: the Gradle wrapper fetches Gradle, and
 Gradle fetches the packages above.
 
-All commands below run from inside that directory.
+All commands below run from inside that `samples/` directory.
 
 ## Build
 
@@ -136,7 +136,7 @@ success.
   Prerequisites); if that search fails, install JDK 25 and point
   `JAVA_HOME` at it.
 - **No `입력 파일이 너무 깁니다` / "input line is too long" regardless of
-  extraction depth.** `installDist`'s launcher scripts use a `lib`
+  project path depth.** `installDist`'s launcher scripts use a `lib`
   directory wildcard for the classpath instead of listing every jar, so
   they never hit Windows cmd.exe's 8191-character line limit.
 

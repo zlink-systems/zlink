@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """README의 설치·빌드·실행·검증 절에서 플랫폼별 명령 블록을 그대로 뽑아 온다.
 
-#655 CI guard(.github/workflows/standalone-zips.yml)가 쓴다. 이 guard는 저장소를
-checkout하지 않고 배포된 zip만 받아 돌리므로, 무엇을 실행할지는 그 zip 안 README가
-정해야 한다 — workflow 파일에 손으로 옮겨 적은 명령은 README가 바뀌어도 따라가지
+#655 CI guard(.github/workflows/examples-smoke.yml)가 쓴다. 이 guard는 저장소를
+checkout하지 않고 내보낸 examples tree(#831, 미러 저장소에 push되는 것)만 받아 돌리므로,
+무엇을 실행할지는 그 tree 안 README가 정해야 한다 — workflow 파일에 손으로 옮겨 적은 명령은 README가 바뀌어도 따라가지
 않는다.
 
 ## README가 지킬 규칙 (제안, #655)
 
-각 zip 루트의 `README.ko.md`(정본)는 다음 절 이름을 그대로 쓴다:
+tutorial·samples 디렉터리의 `README.ko.md`(정본)는 다음 절 이름을 그대로 쓴다:
 전제 조건 / 내려받기와 설치 / 빌드 / 실행 / 검증 / 문제 해결
 
 `내려받기와 설치`·`빌드`·`실행`·`검증` 절 안에서 이 script가 뽑아야 하는 명령마다,

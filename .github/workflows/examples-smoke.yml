@@ -1,56 +1,49 @@
-name: Standalone zip smoke
+name: Examples smoke
 
-# #655 — 0.18.0의 8개 tutorial/samples zip이 배포된 그대로는 저장소 없이 빌드·실행되지
-# 않았다(C++·Node 0/7, .NET Windows 0/7, Java 실행 미완). 원인은 zip 안 script가 저장소
+# #655 — 0.18.0의 tutorial/samples 배포물이 배포된 그대로는 저장소 없이 빌드·실행되지
+# 않았다(C++·Node 0/7, .NET Windows 0/7, Java 실행 미완). 원인은 배포물 안 script가 저장소
 # 배치를 전제한 것이었고, 이를 잡아낼 CI가 없었다 — framework-tutorial.yml은 저장소를
-# checkout해 그 tree에서 빌드하므로 zip 전용 결함을 통과시킨다. 이 워크플로는 그 구멍을
-# 메운다: `scripts/tutorial/pack_tutorials.py`로 실제로 묶은 zip을 **checkout이 전혀 없는**
-# 새 job에서 내려받아, 압축을 풀고, 문서가 적은 명령만으로 tutorial을 빌드·기동하고 샘플
-# 하나를 끝까지 돌린다. `ZLINK_*` 환경변수는 어디에도 주지 않는다 — 저장소 모드로 새는지
-# 확인하는 것 자체가 목적이다.
+# checkout해 그 tree에서 빌드하므로 배포물 전용 결함을 통과시킨다. 이 워크플로는 그 구멍을
+# 메운다: `scripts/tutorial/export_examples.py`로 실제로 내보낸 언어별 examples tree(#831,
+# 미러 저장소 `zlink-<lang>-examples`에 push되는 것과 같은 tree)를 **checkout이 전혀 없는**
+# 새 job에서 artifact로 받아, 문서가 적은 명령만으로 quickstart를 빌드하고 tutorial을
+# 빌드·기동하고 샘플 하나를 끝까지 돌린다. `ZLINK_*` 환경변수는 어디에도 주지 않는다 —
+# 저장소 모드로 새는지 확인하는 것 자체가 목적이다.
 #
 # ## 트리거 규칙
 #
-# - `workflow_call` (기본 경로) — `release-assets.yml`이 태그에 8개 zip을 붙인 **직후**
-#   같은 실행에서 이 워크플로를 부른다. `inputs.tag`가 검증할 release tag다. 패키지
+# - `workflow_call` (기본 경로) — `examples-mirror.yml`이 미러 저장소에 push하기 **전에**
+#   같은 실행에서 이 워크플로를 부른다. `inputs.ref`가 검증할 framework 태그다. 패키지
 #   레지스트리(NuGet·npm·Maven·vcpkg 등)에 그 태그가 고정한 버전이 이미 게시돼 있다고
-#   전제한다 — release-assets.yml은 언제나 이미 존재하는 release에만 붙이므로 게시는
-#   그보다 먼저 끝나 있다.
+#   전제한다 — 태그는 패키지 게시 뒤에 만든다(doc/building/release-pipeline.ko.md).
 # - `workflow_dispatch` (`inputs.ref`, 기본값 `main`) — 수동 실행. **release가 아닌 ref는
 #   package pin이 아직 게시되지 않았을 수 있다** — 이 경우 레지스트리 조회 단계에서 실패하는
-#   것이 정상이며 zip 자체의 결함이 아니다.
-# - `schedule` (매일 UTC 02:30) — GitHub가 "latest"로 보는 release tag를 다시 조회해
-#   재검증한다(`releases/latest/download/...`가 실제로 가리키는 tree와 같다). Maven Central
-#   동기화 지연(release 직후 30분 이상) 같은 레지스트리 쪽 일시적 문제를 다음 날 다시 잡아낸다
-#   — 이 워크플로 자체에는 재시도 루프를 두지 않는다(AGENTS.md §3, 실패 지점 우회 금지).
-# - `release: published` — GitHub UI나 PAT로 사람이 직접 release를 게시한 경우의 예비
-#   경로. **이 저장소가 만드는 release는 대부분 `GITHUB_TOKEN`으로 게시되고, GitHub는
-#   `GITHUB_TOKEN`이 만든 이벤트로 다른 workflow를 트리거하지 않는다** — 즉 정상적인
-#   릴리스 파이프라인에서는 이 트리거가 사실상 발화하지 않는다. 실질적인 release 경로는
-#   위 `workflow_call`이다.
+#   것이 정상이며 tree 자체의 결함이 아니다.
+# - `schedule` (매일 UTC 02:30) — 가장 최근 framework 태그를 다시 검증한다(미러 `main`이
+#   가리키는 tree와 같다). Maven Central 동기화 지연(release 직후 30분 이상) 같은 레지스트리
+#   쪽 일시적 문제를 다음 날 다시 잡아낸다 — 이 워크플로 자체에는 재시도 루프를 두지 않는다
+#   (AGENTS.md §3, 실패 지점 우회 금지).
 
 on:
   workflow_call:
     inputs:
-      tag:
-        description: 'release-assets.yml이 zip을 붙인, 이미 존재하는 release tag'
+      ref:
+        description: 'examples-mirror.yml이 미러에 push하려는 framework 태그'
         required: true
         type: string
   workflow_dispatch:
     inputs:
       ref:
-        description: 'zip을 묶을 git ref (branch/tag/sha). release가 아니면 package pin이 아직 없을 수 있다'
+        description: 'tree를 내보낼 git ref (branch/tag/sha). release가 아니면 package pin이 아직 없을 수 있다'
         required: true
         default: main
         type: string
   schedule:
     - cron: '30 2 * * *'
-  release:
-    types: [published]
 
 concurrency:
   group: >-
-    ${{ github.workflow }}-${{ inputs.ref || inputs.tag || github.event.release.tag_name || github.ref }}
+    ${{ github.workflow }}-${{ inputs.ref || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -58,7 +51,7 @@ permissions:
 
 jobs:
   resolve:
-    name: Resolve the ref to pack
+    name: Resolve the ref to export
     runs-on: ubuntu-24.04
     outputs:
       ref: ${{ steps.pick.outputs.ref }}
@@ -68,44 +61,31 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
-          DISPATCH_REF: ${{ inputs.ref }}
-          CALL_TAG: ${{ inputs.tag }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_REF: ${{ inputs.ref }}
         run: |
           set -euo pipefail
           # In a called workflow github.event_name is the caller's event (push for a
-          # tag, release, …), never "workflow_call" — so the call input decides first.
-          if [ -n "${CALL_TAG}" ]; then
-            EVENT_NAME=workflow_call
+          # tag, …), never "workflow_call" — so a non-empty input decides first.
+          if [ -n "${INPUT_REF}" ]; then
+            ref="${INPUT_REF}"
+          elif [ "${EVENT_NAME}" = "schedule" ]; then
+            # The newest framework tag: what the mirrors' `main` holds. The tags API
+            # lists newest first.
+            ref="$(gh api "repos/${GITHUB_REPOSITORY}/tags?per_page=100" \
+              --jq '[.[] | select(.name | startswith("framework")) | .name][0]')"
+          else
+            echo "::error::unsupported trigger ${EVENT_NAME}"
+            exit 1
           fi
-          case "${EVENT_NAME}" in
-            workflow_dispatch)
-              ref="${DISPATCH_REF}"
-              ;;
-            workflow_call)
-              ref="${CALL_TAG}"
-              ;;
-            release)
-              ref="${RELEASE_TAG}"
-              ;;
-            schedule)
-              # releases/latest/download가 실제로 내려주는 tree. #655가 재현된 경로 그대로다.
-              ref="$(gh release view --repo "${GITHUB_REPOSITORY}" --json tagName -q .tagName)"
-              ;;
-            *)
-              echo "::error::unsupported trigger ${EVENT_NAME}"
-              exit 1
-              ;;
-          esac
           if [ -z "${ref}" ]; then
-            echo "::error::could not resolve a ref to pack for trigger ${EVENT_NAME}"
+            echo "::error::could not resolve a ref to export for trigger ${EVENT_NAME}"
             exit 1
           fi
           echo "resolved ref: ${ref} (trigger: ${EVENT_NAME})"
           echo "ref=${ref}" >> "$GITHUB_OUTPUT"
 
-  pack:
-    name: Pack the eight zips
+  export:
+    name: Export the four examples trees
     needs: resolve
     runs-on: ubuntu-24.04
     steps:
@@ -118,61 +98,57 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Pack tutorial and samples zips at this ref
-        run: python3 scripts/tutorial/pack_tutorials.py .artifacts/tutorials "${{ needs.resolve.outputs.ref }}"
+      - name: Export the examples trees at this ref
+        run: python3 scripts/tutorial/export_examples.py .artifacts/examples "${{ needs.resolve.outputs.ref }}"
 
-      - name: Verify eight zips exist and no repo-only file leaked in
+      - name: Verify four trees with three sections each and no repo-only file leaked in
         run: |
           python3 - <<'PY'
           import pathlib
           import sys
-          import zipfile
 
           sys.path.insert(0, "scripts/tutorial")
-          from pack_tutorials import EXCLUDED_ENTRIES  # same list pack() itself excludes by
+          from export_examples import EXCLUDED_ENTRIES, LANGUAGES, SECTIONS
 
-          zips = sorted(pathlib.Path(".artifacts/tutorials").glob("*.zip"))
-          if len(zips) != 8:
-              print(f"::error::expected 8 zips, found {len(zips)}: {[z.name for z in zips]}")
-              sys.exit(1)
-
+          out = pathlib.Path(".artifacts/examples")
           bad = []
-          for zpath in zips:
-              stem = zpath.stem  # zlink-<section>-<lang>
-              with zipfile.ZipFile(zpath) as zf:
-                  # zf entries are "zlink-<section>-<lang>/<relative path>"; drop the prefix
-                  # to compare against EXCLUDED_ENTRIES, which is prefix-relative.
-                  relative = {
-                      "/".join(pathlib.PurePosixPath(n).parts[1:])
-                      for n in zf.namelist()
-                  }
-                  for section, lang, entry in EXCLUDED_ENTRIES:
-                      if stem == f"zlink-{section}-{lang}" and entry in relative:
-                          bad.append(f"{zpath.name}: {entry} should have been excluded")
+          for lang in LANGUAGES:
+              root = out / f"zlink-{lang}-examples"
+              for name in ("README.md", "README.ko.md", ".gitignore", ".gitattributes"):
+                  if not (root / name).is_file():
+                      bad.append(f"{root.name}: missing {name}")
+              for section in SECTIONS:
+                  if not (root / section / "README.md").is_file():
+                      bad.append(f"{root.name}: missing {section}/README.md")
+              for section, entry_lang, entry in EXCLUDED_ENTRIES:
+                  if entry_lang == lang and (root / section / entry).exists():
+                      bad.append(f"{root.name}: {section}/{entry} should have been excluded")
 
           if bad:
               print("::error::" + "; ".join(bad))
               sys.exit(1)
-          print(f"verified {len(zips)} zips; no excluded repo-only file leaked in")
+          print(f"verified {len(LANGUAGES)} trees; no excluded repo-only file leaked in")
           PY
 
       # The consumer jobs below never checkout the repository, so the README
-      # extraction helper has to travel with the zips as its own artifact
+      # extraction helper has to travel with the trees as its own artifact
       # entries -- copy it next to them before uploading.
-      - name: Stage the README-extraction helper alongside the zips
-        run: cp scripts/tutorial/extract_readme_step.py scripts/tutorial/run_readme_step.sh .artifacts/tutorials/
+      - name: Stage the README-extraction helper alongside the trees
+        run: cp scripts/tutorial/extract_readme_step.py scripts/tutorial/run_readme_step.sh .artifacts/examples/
 
-      - name: Upload the eight zips and the README-extraction helper
+      - name: Upload the four trees and the README-extraction helper
         uses: actions/upload-artifact@v4
         with:
-          name: tutorial-zips
-          path: .artifacts/tutorials/*
+          name: examples-trees
+          path: .artifacts/examples/
           retention-days: 7
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
-  # 아래 job은 어느 것도 저장소를 checkout하지 않는다. `pack`이 만든 zip을 artifact로
-  # 받아 빈 디렉터리에 풀고, 그 zip의 README가 적은 명령만 그대로 실행한다. 로컬 action
+  # 아래 job은 어느 것도 저장소를 checkout하지 않는다. `export`가 만든 tree를 artifact로
+  # 받고, 그 tree의 README가 적은 명령만 그대로 실행한다. upload-artifact는 실행 비트를
+  # 싣지 않으므로 script는 전부 `bash <script>`로 부른다(gradlew·*.sh 실행 비트는 미러
+  # 커밋에서 git이 보존한다). 로컬 action
   # (`uses: ./...`)도 checkout이 있어야 참조할 수 있으므로 쓰지 않고 전부 inline이다.
   #
   # #655를 신고한 네 언어 worker(framework-{cpp,dotnet,node,java}/655-standalone-zips)는
@@ -180,15 +156,15 @@ jobs:
   # Redis(Memurai) 설치·실행이 아직 실제 Actions에서 검증되지 않은 하나뿐이다.
   # ---------------------------------------------------------------------------
 
-  zip-dotnet-linux:
-    name: dotnet / ubuntu-24.04 (zip only)
-    needs: pack
+  dotnet-linux:
+    name: dotnet / ubuntu-24.04 (no checkout)
+    needs: export
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: tutorial-zips
-          path: zips
+          name: examples-trees
+          path: examples
 
       - name: Confirm this job never checked out the repository and ZLINK_* is unset
         shell: bash
@@ -199,42 +175,42 @@ jobs:
             echo "::error::ZLINK_* leaked into the environment"; env | grep '^ZLINK_'; exit 1
           fi
 
-      - name: Unzip tutorial and Bingo sample
-        run: |
-          set -euo pipefail
-          unzip -q zips/zlink-tutorial-dotnet.zip
-          unzip -q zips/zlink-samples-dotnet.zip
-
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 8.0.x
 
+      # Quickstart: the page's own §5 command. Build only — the two processes
+      # need no Redis, but the tutorial run below already proves the runtime.
+      - name: Quickstart build (quickstart.ko.md §5)
+        working-directory: examples/zlink-dotnet-examples/quickstart
+        run: dotnet build
+
       - name: Tutorial install (README's own 내려받기와 설치/linux block)
-        working-directory: zlink-tutorial-dotnet
-        run: bash ../zips/run_readme_step.sh README.ko.md "내려받기와 설치" linux
+        working-directory: examples/zlink-dotnet-examples/tutorial
+        run: bash ../../run_readme_step.sh README.ko.md "내려받기와 설치" linux
 
       - name: Tutorial build (README's own 빌드/linux block)
-        working-directory: zlink-tutorial-dotnet
-        run: bash ../zips/run_readme_step.sh README.ko.md 빌드 linux
+        working-directory: examples/zlink-dotnet-examples/tutorial
+        run: bash ../../run_readme_step.sh README.ko.md 빌드 linux
 
       - name: Start Redis for the tutorial (README — docker run -p 6379:6379 redis)
         run: |
           set -euo pipefail
           redis_name="zlink-redis-$$"
           docker run -d --rm --name "${redis_name}" -p 6379:6379 redis:7
-          printf '%s\n' "${redis_name}" > zlink-tutorial-dotnet/redis.container
+          printf '%s\n' "${redis_name}" > examples/zlink-dotnet-examples/tutorial/redis.container
 
       - name: Tutorial run (README's own 실행/linux block)
-        working-directory: zlink-tutorial-dotnet
-        run: bash ../zips/run_readme_step.sh README.ko.md 실행 linux
+        working-directory: examples/zlink-dotnet-examples/tutorial
+        run: bash ../../run_readme_step.sh README.ko.md 실행 linux
 
       - name: Tutorial verify (README's own 검증/linux block)
-        working-directory: zlink-tutorial-dotnet
-        run: bash ../zips/run_readme_step.sh README.ko.md 검증 linux
+        working-directory: examples/zlink-dotnet-examples/tutorial
+        run: bash ../../run_readme_step.sh README.ko.md 검증 linux
 
       - name: Tutorial logs (on failure)
         if: failure()
-        working-directory: zlink-tutorial-dotnet
+        working-directory: examples/zlink-dotnet-examples/tutorial
         run: |
           for f in server.log server.err.log client.log client.err.log; do
             if [ -f "$f" ]; then echo "::group::$f"; tail -n 200 "$f"; echo "::endgroup::"; fi
@@ -242,7 +218,7 @@ jobs:
 
       - name: Stop tutorial processes and Redis
         if: always()
-        working-directory: zlink-tutorial-dotnet
+        working-directory: examples/zlink-dotnet-examples/tutorial
         run: |
           if [ -f .readme-step.pgids ]; then
             while read -r pgid; do
@@ -260,30 +236,30 @@ jobs:
           fi
 
       - name: Sample install (README's own 내려받기와 설치/linux block)
-        working-directory: zlink-samples-dotnet
-        run: bash ../zips/run_readme_step.sh README.ko.md "내려받기와 설치" linux
+        working-directory: examples/zlink-dotnet-examples/samples
+        run: bash ../../run_readme_step.sh README.ko.md "내려받기와 설치" linux
 
       - name: Sample build (README's own 빌드/linux block)
-        working-directory: zlink-samples-dotnet
-        run: bash ../zips/run_readme_step.sh README.ko.md 빌드 linux
+        working-directory: examples/zlink-dotnet-examples/samples
+        run: bash ../../run_readme_step.sh README.ko.md 빌드 linux
 
       - name: Sample run (README's own 실행/linux block)
-        working-directory: zlink-samples-dotnet
-        run: bash ../zips/run_readme_step.sh README.ko.md 실행 linux
+        working-directory: examples/zlink-dotnet-examples/samples
+        run: bash ../../run_readme_step.sh README.ko.md 실행 linux
 
       - name: Sample verify (README's own 검증/linux block)
-        working-directory: zlink-samples-dotnet
-        run: bash ../zips/run_readme_step.sh README.ko.md 검증 linux
+        working-directory: examples/zlink-dotnet-examples/samples
+        run: bash ../../run_readme_step.sh README.ko.md 검증 linux
 
-  zip-dotnet-windows:
-    name: dotnet / windows-2022 (zip only)
-    needs: pack
+  dotnet-windows:
+    name: dotnet / windows-2022 (no checkout)
+    needs: export
     runs-on: windows-2022
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: tutorial-zips
-          path: zips
+          name: examples-trees
+          path: examples
 
       - name: Confirm this job never checked out the repository and ZLINK_* is unset
         shell: pwsh
@@ -291,12 +267,6 @@ jobs:
           if (Test-Path -LiteralPath ".git") { throw ".git present -- this job checked out the repository" }
           $leaked = Get-ChildItem Env: | Where-Object { $_.Name -like 'ZLINK_*' }
           if ($leaked) { throw "ZLINK_* leaked into the environment: $($leaked.Name -join ', ')" }
-
-      - name: Unzip tutorial and Bingo sample
-        shell: pwsh
-        run: |
-          Expand-Archive -LiteralPath zips/zlink-tutorial-dotnet.zip -DestinationPath .
-          Expand-Archive -LiteralPath zips/zlink-samples-dotnet.zip -DestinationPath .
 
       - uses: actions/setup-dotnet@v5
         with:
@@ -308,14 +278,14 @@ jobs:
           python-version: '3.x'
 
       - name: Tutorial install (README's own 내려받기와 설치/windows block)
-        working-directory: zlink-tutorial-dotnet
+        working-directory: examples/zlink-dotnet-examples/tutorial
         shell: bash
-        run: bash ../zips/run_readme_step.sh README.ko.md "내려받기와 설치" windows
+        run: bash ../../run_readme_step.sh README.ko.md "내려받기와 설치" windows
 
       - name: Tutorial build (README's own 빌드/windows block)
-        working-directory: zlink-tutorial-dotnet
+        working-directory: examples/zlink-dotnet-examples/tutorial
         shell: bash
-        run: bash ../zips/run_readme_step.sh README.ko.md 빌드 windows
+        run: bash ../../run_readme_step.sh README.ko.md 빌드 windows
 
       # GitHub-hosted windows-2022 runners cannot run Linux Docker containers
       # (Docker there is Windows-container-only; switching to Linux containers
@@ -348,19 +318,19 @@ jobs:
 
       - name: Tutorial run (README's own 실행/windows block)
         if: steps.memurai.outcome == 'success'
-        working-directory: zlink-tutorial-dotnet
+        working-directory: examples/zlink-dotnet-examples/tutorial
         shell: pwsh
-        run: bash ../zips/run_readme_step.sh README.ko.md 실행 windows
+        run: bash ../../run_readme_step.sh README.ko.md 실행 windows
 
       - name: Tutorial verify (README's own 검증/windows block)
         if: steps.memurai.outcome == 'success'
-        working-directory: zlink-tutorial-dotnet
+        working-directory: examples/zlink-dotnet-examples/tutorial
         shell: bash
-        run: bash ../zips/run_readme_step.sh README.ko.md 검증 windows
+        run: bash ../../run_readme_step.sh README.ko.md 검증 windows
 
       - name: Tutorial logs (on failure)
         if: failure()
-        working-directory: zlink-tutorial-dotnet
+        working-directory: examples/zlink-dotnet-examples/tutorial
         shell: pwsh
         run: |
           foreach ($file in @('server.log', 'server.err.log', 'client.log', 'client.err.log')) {
@@ -369,7 +339,7 @@ jobs:
 
       - name: Stop tutorial processes
         if: always()
-        working-directory: zlink-tutorial-dotnet
+        working-directory: examples/zlink-dotnet-examples/tutorial
         shell: pwsh
         run: |
           foreach ($file in @('server.pid', 'client.pid')) {
@@ -383,43 +353,43 @@ jobs:
 
       - name: Sample install (README's own 내려받기와 설치/windows block)
         if: steps.memurai.outcome == 'success'
-        working-directory: zlink-samples-dotnet
+        working-directory: examples/zlink-dotnet-examples/samples
         shell: bash
-        run: bash ../zips/run_readme_step.sh README.ko.md "내려받기와 설치" windows
+        run: bash ../../run_readme_step.sh README.ko.md "내려받기와 설치" windows
 
       - name: Sample build (README's own 빌드/windows block)
         if: steps.memurai.outcome == 'success'
-        working-directory: zlink-samples-dotnet
+        working-directory: examples/zlink-dotnet-examples/samples
         shell: bash
-        run: bash ../zips/run_readme_step.sh README.ko.md 빌드 windows
+        run: bash ../../run_readme_step.sh README.ko.md 빌드 windows
 
       # Sample runners create their own Redis as a Linux Docker container; GitHub-hosted
       # windows-2022 runners run Windows containers only (see the Memurai note above), so the
       # Windows sample cells are verified locally, not here. Install and build still run.
       - name: Sample run (README's own 실행/windows block)
         if: false
-        working-directory: zlink-samples-dotnet
+        working-directory: examples/zlink-dotnet-examples/samples
         shell: bash
-        run: bash ../zips/run_readme_step.sh README.ko.md 실행 windows
+        run: bash ../../run_readme_step.sh README.ko.md 실행 windows
 
       # Sample runners create their own Redis as a Linux Docker container; GitHub-hosted
       # windows-2022 runners run Windows containers only (see the Memurai note above), so the
       # Windows sample cells are verified locally, not here. Install and build still run.
       - name: Sample verify (README's own 검증/windows block)
         if: false
-        working-directory: zlink-samples-dotnet
+        working-directory: examples/zlink-dotnet-examples/samples
         shell: bash
-        run: bash ../zips/run_readme_step.sh README.ko.md 검증 windows
+        run: bash ../../run_readme_step.sh README.ko.md 검증 windows
 
-  zip-node-linux:
-    name: node / ubuntu-24.04 (zip only)
-    needs: pack
+  node-linux:
+    name: node / ubuntu-24.04 (no checkout)
+    needs: export
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: tutorial-zips
-          path: zips
+          name: examples-trees
+          path: examples
 
       - name: Confirm this job never checked out the repository and ZLINK_* is unset
         run: |
@@ -429,35 +399,36 @@ jobs:
             echo "::error::ZLINK_* leaked into the environment"; env | grep '^ZLINK_'; exit 1
           fi
 
-      - name: Unzip tutorial and TicTacToe.Ts sample
-        run: |
-          set -euo pipefail
-          unzip -q zips/zlink-tutorial-node.zip
-          unzip -q zips/zlink-samples-node.zip
-
       - uses: actions/setup-node@v5
         with:
           node-version: '22'
 
+      - name: Quickstart build (quickstart.ko.md §5)
+        working-directory: examples/zlink-node-examples/quickstart
+        run: |
+          set -euo pipefail
+          npm install
+          npm run build
+
       - name: Tutorial install (README's own 내려받기와 설치/linux block)
-        working-directory: zlink-tutorial-node
-        run: bash ../zips/run_readme_step.sh README.ko.md "내려받기와 설치" linux
+        working-directory: examples/zlink-node-examples/tutorial
+        run: bash ../../run_readme_step.sh README.ko.md "내려받기와 설치" linux
 
       - name: Tutorial build (README's own 빌드/linux block)
-        working-directory: zlink-tutorial-node
-        run: bash ../zips/run_readme_step.sh README.ko.md 빌드 linux
+        working-directory: examples/zlink-node-examples/tutorial
+        run: bash ../../run_readme_step.sh README.ko.md 빌드 linux
 
       - name: Tutorial run (README's own 실행/linux block)
-        working-directory: zlink-tutorial-node
-        run: bash ../zips/run_readme_step.sh README.ko.md 실행 linux
+        working-directory: examples/zlink-node-examples/tutorial
+        run: bash ../../run_readme_step.sh README.ko.md 실행 linux
 
       - name: Tutorial verify (README's own 검증/linux block)
-        working-directory: zlink-tutorial-node
-        run: bash ../zips/run_readme_step.sh README.ko.md 검증 linux
+        working-directory: examples/zlink-node-examples/tutorial
+        run: bash ../../run_readme_step.sh README.ko.md 검증 linux
 
       - name: Tutorial logs (on failure)
         if: failure()
-        working-directory: zlink-tutorial-node
+        working-directory: examples/zlink-node-examples/tutorial
         run: |
           for f in server.log server.err.log client.log client.err.log; do
             if [ -f "$f" ]; then echo "::group::$f"; tail -n 200 "$f"; echo "::endgroup::"; fi
@@ -465,7 +436,7 @@ jobs:
 
       - name: Stop tutorial processes and Redis
         if: always()
-        working-directory: zlink-tutorial-node
+        working-directory: examples/zlink-node-examples/tutorial
         run: |
           if [ -f .readme-step.pgids ]; then
             while read -r pgid; do
@@ -477,30 +448,30 @@ jobs:
           fi
 
       - name: Sample install (README's own 내려받기와 설치/linux block)
-        working-directory: zlink-samples-node
-        run: bash ../zips/run_readme_step.sh README.ko.md "내려받기와 설치" linux
+        working-directory: examples/zlink-node-examples/samples
+        run: bash ../../run_readme_step.sh README.ko.md "내려받기와 설치" linux
 
       - name: Sample build (README's own 빌드/linux block)
-        working-directory: zlink-samples-node
-        run: bash ../zips/run_readme_step.sh README.ko.md 빌드 linux
+        working-directory: examples/zlink-node-examples/samples
+        run: bash ../../run_readme_step.sh README.ko.md 빌드 linux
 
       - name: Sample run (README's own 실행/linux block)
-        working-directory: zlink-samples-node
-        run: bash ../zips/run_readme_step.sh README.ko.md 실행 linux
+        working-directory: examples/zlink-node-examples/samples
+        run: bash ../../run_readme_step.sh README.ko.md 실행 linux
 
       - name: Sample verify (README's own 검증/linux block)
-        working-directory: zlink-samples-node
-        run: bash ../zips/run_readme_step.sh README.ko.md 검증 linux
+        working-directory: examples/zlink-node-examples/samples
+        run: bash ../../run_readme_step.sh README.ko.md 검증 linux
 
-  zip-java-linux:
-    name: java / ubuntu-24.04 (zip only)
-    needs: pack
+  java-linux:
+    name: java / ubuntu-24.04 (no checkout)
+    needs: export
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: tutorial-zips
-          path: zips
+          name: examples-trees
+          path: examples
 
       - name: Confirm this job never checked out the repository and ZLINK_* is unset
         run: |
@@ -510,12 +481,6 @@ jobs:
             echo "::error::ZLINK_* leaked into the environment"; env | grep '^ZLINK_'; exit 1
           fi
 
-      - name: Unzip tutorial and TicTacToe sample
-        run: |
-          set -euo pipefail
-          unzip -q zips/zlink-tutorial-java.zip
-          unzip -q zips/zlink-samples-java.zip
-
       # README: JDK 25 (class file major version 69). No foojay resolver is
       # configured yet, so Gradle needs a matching JDK already on the machine;
       # setup-java's JAVA_HOME satisfies Gradle's default auto-detection.
@@ -524,32 +489,36 @@ jobs:
           distribution: temurin
           java-version: '25'
 
+      - name: Quickstart build (quickstart.ko.md §5, Java and Kotlin)
+        working-directory: examples/zlink-java-examples/quickstart
+        run: bash ./gradlew :java:Server:installDist :java:Client:installDist :kotlin:Server:installDist :kotlin:Client:installDist
+
       - name: Tutorial install (README's own 내려받기와 설치/linux block)
-        working-directory: zlink-tutorial-java
-        run: bash ../zips/run_readme_step.sh README.ko.md "내려받기와 설치" linux
+        working-directory: examples/zlink-java-examples/tutorial
+        run: bash ../../run_readme_step.sh README.ko.md "내려받기와 설치" linux
 
       - name: Tutorial build (README's own 빌드/linux block)
-        working-directory: zlink-tutorial-java
-        run: bash ../zips/run_readme_step.sh README.ko.md 빌드 linux
+        working-directory: examples/zlink-java-examples/tutorial
+        run: bash ../../run_readme_step.sh README.ko.md 빌드 linux
 
       - name: Start Redis for the tutorial (README — docker run -p 6379:6379 redis)
         run: |
           set -euo pipefail
           redis_name="zlink-redis-$$"
           docker run -d --rm --name "${redis_name}" -p 6379:6379 redis:7
-          printf '%s\n' "${redis_name}" > zlink-tutorial-java/redis.container
+          printf '%s\n' "${redis_name}" > examples/zlink-java-examples/tutorial/redis.container
 
       - name: Tutorial run (README's own 실행/linux block)
-        working-directory: zlink-tutorial-java
-        run: bash ../zips/run_readme_step.sh README.ko.md 실행 linux
+        working-directory: examples/zlink-java-examples/tutorial
+        run: bash ../../run_readme_step.sh README.ko.md 실행 linux
 
       - name: Tutorial verify (README's own 검증/linux block)
-        working-directory: zlink-tutorial-java
-        run: bash ../zips/run_readme_step.sh README.ko.md 검증 linux
+        working-directory: examples/zlink-java-examples/tutorial
+        run: bash ../../run_readme_step.sh README.ko.md 검증 linux
 
       - name: Tutorial logs (on failure)
         if: failure()
-        working-directory: zlink-tutorial-java
+        working-directory: examples/zlink-java-examples/tutorial
         run: |
           for f in server.log server.err.log client.log client.err.log; do
             if [ -f "$f" ]; then echo "::group::$f"; tail -n 200 "$f"; echo "::endgroup::"; fi
@@ -557,7 +526,7 @@ jobs:
 
       - name: Stop tutorial processes and Redis
         if: always()
-        working-directory: zlink-tutorial-java
+        working-directory: examples/zlink-java-examples/tutorial
         run: |
           if [ -f .readme-step.pgids ]; then
             while read -r pgid; do
@@ -575,30 +544,30 @@ jobs:
           fi
 
       - name: Sample install (README's own 내려받기와 설치/linux block)
-        working-directory: zlink-samples-java
-        run: bash ../zips/run_readme_step.sh README.ko.md "내려받기와 설치" linux
+        working-directory: examples/zlink-java-examples/samples
+        run: bash ../../run_readme_step.sh README.ko.md "내려받기와 설치" linux
 
       - name: Sample build (README's own 빌드/linux block)
-        working-directory: zlink-samples-java
-        run: bash ../zips/run_readme_step.sh README.ko.md 빌드 linux
+        working-directory: examples/zlink-java-examples/samples
+        run: bash ../../run_readme_step.sh README.ko.md 빌드 linux
 
       - name: Sample run (README's own 실행/linux block)
-        working-directory: zlink-samples-java
-        run: bash ../zips/run_readme_step.sh README.ko.md 실행 linux
+        working-directory: examples/zlink-java-examples/samples
+        run: bash ../../run_readme_step.sh README.ko.md 실행 linux
 
       - name: Sample verify (README's own 검증/linux block)
-        working-directory: zlink-samples-java
-        run: bash ../zips/run_readme_step.sh README.ko.md 검증 linux
+        working-directory: examples/zlink-java-examples/samples
+        run: bash ../../run_readme_step.sh README.ko.md 검증 linux
 
-  zip-java-windows:
-    name: java / windows-2022 (zip only)
-    needs: pack
+  java-windows:
+    name: java / windows-2022 (no checkout)
+    needs: export
     runs-on: windows-2022
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: tutorial-zips
-          path: zips
+          name: examples-trees
+          path: examples
 
       - name: Confirm this job never checked out the repository and ZLINK_* is unset
         shell: pwsh
@@ -606,12 +575,6 @@ jobs:
           if (Test-Path -LiteralPath ".git") { throw ".git present -- this job checked out the repository" }
           $leaked = Get-ChildItem Env: | Where-Object { $_.Name -like 'ZLINK_*' }
           if ($leaked) { throw "ZLINK_* leaked into the environment: $($leaked.Name -join ', ')" }
-
-      - name: Unzip tutorial and TicTacToe sample
-        shell: pwsh
-        run: |
-          Expand-Archive -LiteralPath zips/zlink-tutorial-java.zip -DestinationPath .
-          Expand-Archive -LiteralPath zips/zlink-samples-java.zip -DestinationPath .
 
       - uses: actions/setup-java@v4
         with:
@@ -624,14 +587,14 @@ jobs:
           python-version: '3.x'
 
       - name: Tutorial install (README's own 내려받기와 설치/windows block)
-        working-directory: zlink-tutorial-java
+        working-directory: examples/zlink-java-examples/tutorial
         shell: bash
-        run: bash ../zips/run_readme_step.sh README.ko.md "내려받기와 설치" windows
+        run: bash ../../run_readme_step.sh README.ko.md "내려받기와 설치" windows
 
       - name: Tutorial build (README's own 빌드/windows block)
-        working-directory: zlink-tutorial-java
+        working-directory: examples/zlink-java-examples/tutorial
         shell: bash
-        run: bash ../zips/run_readme_step.sh README.ko.md 빌드 windows
+        run: bash ../../run_readme_step.sh README.ko.md 빌드 windows
 
       # See the dotnet/windows-2022 job for why Docker Redis is unavailable
       # here and why Memurai substitutes for it. Same caveat: unverified.
@@ -655,19 +618,19 @@ jobs:
 
       - name: Tutorial run (README's own 실행/windows block)
         if: steps.memurai.outcome == 'success'
-        working-directory: zlink-tutorial-java
+        working-directory: examples/zlink-java-examples/tutorial
         shell: bash
-        run: bash ../zips/run_readme_step.sh README.ko.md 실행 windows
+        run: bash ../../run_readme_step.sh README.ko.md 실행 windows
 
       - name: Tutorial verify (README's own 검증/windows block)
         if: steps.memurai.outcome == 'success'
-        working-directory: zlink-tutorial-java
+        working-directory: examples/zlink-java-examples/tutorial
         shell: bash
-        run: bash ../zips/run_readme_step.sh README.ko.md 검증 windows
+        run: bash ../../run_readme_step.sh README.ko.md 검증 windows
 
       - name: Tutorial logs (on failure)
         if: failure()
-        working-directory: zlink-tutorial-java
+        working-directory: examples/zlink-java-examples/tutorial
         shell: pwsh
         run: |
           foreach ($file in @('server.log', 'server.err.log', 'client.log', 'client.err.log')) {
@@ -676,7 +639,7 @@ jobs:
 
       - name: Stop tutorial processes
         if: always()
-        working-directory: zlink-tutorial-java
+        working-directory: examples/zlink-java-examples/tutorial
         shell: pwsh
         run: |
           foreach ($file in @('server.pid', 'client.pid')) {
@@ -690,43 +653,43 @@ jobs:
 
       - name: Sample install (README's own 내려받기와 설치/windows block)
         if: steps.memurai.outcome == 'success'
-        working-directory: zlink-samples-java
+        working-directory: examples/zlink-java-examples/samples
         shell: bash
-        run: bash ../zips/run_readme_step.sh README.ko.md "내려받기와 설치" windows
+        run: bash ../../run_readme_step.sh README.ko.md "내려받기와 설치" windows
 
       - name: Sample build (README's own 빌드/windows block)
         if: steps.memurai.outcome == 'success'
-        working-directory: zlink-samples-java
+        working-directory: examples/zlink-java-examples/samples
         shell: bash
-        run: bash ../zips/run_readme_step.sh README.ko.md 빌드 windows
+        run: bash ../../run_readme_step.sh README.ko.md 빌드 windows
 
       # Sample runners create their own Redis as a Linux Docker container; GitHub-hosted
       # windows-2022 runners run Windows containers only (see the Memurai note above), so the
       # Windows sample cells are verified locally, not here. Install and build still run.
       - name: Sample run (README's own 실행/windows block)
         if: false
-        working-directory: zlink-samples-java
+        working-directory: examples/zlink-java-examples/samples
         shell: bash
-        run: bash ../zips/run_readme_step.sh README.ko.md 실행 windows
+        run: bash ../../run_readme_step.sh README.ko.md 실행 windows
 
       # Sample runners create their own Redis as a Linux Docker container; GitHub-hosted
       # windows-2022 runners run Windows containers only (see the Memurai note above), so the
       # Windows sample cells are verified locally, not here. Install and build still run.
       - name: Sample verify (README's own 검증/windows block)
         if: false
-        working-directory: zlink-samples-java
+        working-directory: examples/zlink-java-examples/samples
         shell: bash
-        run: bash ../zips/run_readme_step.sh README.ko.md 검증 windows
+        run: bash ../../run_readme_step.sh README.ko.md 검증 windows
 
-  zip-cpp-linux:
-    name: cpp / ubuntu-24.04 (zip only)
-    needs: pack
+  cpp-linux:
+    name: cpp / ubuntu-24.04 (no checkout)
+    needs: export
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: tutorial-zips
-          path: zips
+          name: examples-trees
+          path: examples
 
       - name: Confirm this job never checked out the repository and ZLINK_* is unset
         run: |
@@ -748,31 +711,25 @@ jobs:
           test -f "${vcpkg_root}/scripts/buildsystems/vcpkg.cmake"
           echo "VCPKG_ROOT=${vcpkg_root}" >> "$GITHUB_ENV"
 
-      - name: Unzip tutorial and TicTacToe sample
-        run: |
-          set -euo pipefail
-          unzip -q zips/zlink-tutorial-cpp.zip
-          unzip -q zips/zlink-samples-cpp.zip
-
       - name: Tutorial install (README's own 내려받기와 설치/linux block)
-        working-directory: zlink-tutorial-cpp
-        run: bash ../zips/run_readme_step.sh README.ko.md "내려받기와 설치" linux
+        working-directory: examples/zlink-cpp-examples/tutorial
+        run: bash ../../run_readme_step.sh README.ko.md "내려받기와 설치" linux
 
       - name: Tutorial build (README's own 빌드/linux block)
-        working-directory: zlink-tutorial-cpp
-        run: bash ../zips/run_readme_step.sh README.ko.md 빌드 linux
+        working-directory: examples/zlink-cpp-examples/tutorial
+        run: bash ../../run_readme_step.sh README.ko.md 빌드 linux
 
       - name: Tutorial run (README's own 실행/linux block)
-        working-directory: zlink-tutorial-cpp
-        run: bash ../zips/run_readme_step.sh README.ko.md 실행 linux
+        working-directory: examples/zlink-cpp-examples/tutorial
+        run: bash ../../run_readme_step.sh README.ko.md 실행 linux
 
       - name: Tutorial verify (README's own 검증/linux block)
-        working-directory: zlink-tutorial-cpp
-        run: bash ../zips/run_readme_step.sh README.ko.md 검증 linux
+        working-directory: examples/zlink-cpp-examples/tutorial
+        run: bash ../../run_readme_step.sh README.ko.md 검증 linux
 
       - name: Tutorial logs (on failure)
         if: failure()
-        working-directory: zlink-tutorial-cpp
+        working-directory: examples/zlink-cpp-examples/tutorial
         run: |
           for f in server.log server.err.log client.log client.err.log; do
             if [ -f "$f" ]; then echo "::group::$f"; tail -n 200 "$f"; echo "::endgroup::"; fi
@@ -780,7 +737,7 @@ jobs:
 
       - name: Stop tutorial processes and Redis
         if: always()
-        working-directory: zlink-tutorial-cpp
+        working-directory: examples/zlink-cpp-examples/tutorial
         run: |
           if [ -f .readme-step.pgids ]; then
             while read -r pgid; do
@@ -795,18 +752,58 @@ jobs:
           # ephemeral, so remove that fixed name here.
           docker rm -f zlink-tutorial-redis 2>/dev/null || true
 
+      # The quickstart README's own build block bootstraps into its own .zlink/;
+      # here the tutorial's tree is reused through the documented ZLINK_ROOT
+      # option (README «Prerequisites») so the framework is not built a second
+      # time. Run and verify are the README's blocks verbatim.
+      - name: Quickstart build (README's ZLINK_ROOT reuse of the tutorial's .zlink)
+        working-directory: examples/zlink-cpp-examples/quickstart
+        run: |
+          set -euo pipefail
+          cmake -DZLINK_ROOT="$PWD/../tutorial/.zlink" -P bootstrap.cmake
+          cmake --build build --parallel
+
+      - name: Quickstart run (README's own 실행/linux block)
+        working-directory: examples/zlink-cpp-examples/quickstart
+        run: bash ../../run_readme_step.sh README.ko.md 실행 linux
+
+      - name: Quickstart verify (README's own 검증/linux block)
+        working-directory: examples/zlink-cpp-examples/quickstart
+        run: bash ../../run_readme_step.sh README.ko.md 검증 linux
+
+      - name: Quickstart logs (on failure)
+        if: failure()
+        working-directory: examples/zlink-cpp-examples/quickstart
+        run: |
+          for f in server.log client.log; do
+            if [ -f "$f" ]; then echo "::group::$f"; tail -n 200 "$f"; echo "::endgroup::"; fi
+          done
+
+      - name: Stop quickstart processes
+        if: always()
+        working-directory: examples/zlink-cpp-examples/quickstart
+        run: |
+          if [ -f .readme-step.pgids ]; then
+            while read -r pgid; do
+              case "${pgid}" in
+                ''|*[!0-9]*) continue ;;
+              esac
+              kill -TERM -- "-${pgid}" 2>/dev/null || true
+            done < .readme-step.pgids
+          fi
+
       - name: Sample install (README's own 내려받기와 설치/linux block)
-        working-directory: zlink-samples-cpp
-        run: bash ../zips/run_readme_step.sh README.ko.md "내려받기와 설치" linux
+        working-directory: examples/zlink-cpp-examples/samples
+        run: bash ../../run_readme_step.sh README.ko.md "내려받기와 설치" linux
 
       - name: Sample build (README's own 빌드/linux block)
-        working-directory: zlink-samples-cpp
-        run: bash ../zips/run_readme_step.sh README.ko.md 빌드 linux
+        working-directory: examples/zlink-cpp-examples/samples
+        run: bash ../../run_readme_step.sh README.ko.md 빌드 linux
 
       - name: Sample run (README's own 실행/linux block)
-        working-directory: zlink-samples-cpp
-        run: bash ../zips/run_readme_step.sh README.ko.md 실행 linux
+        working-directory: examples/zlink-cpp-examples/samples
+        run: bash ../../run_readme_step.sh README.ko.md 실행 linux
 
       - name: Sample verify (README's own 검증/linux block)
-        working-directory: zlink-samples-cpp
-        run: bash ../zips/run_readme_step.sh README.ko.md 검증 linux
+        working-directory: examples/zlink-cpp-examples/samples
+        run: bash ../../run_readme_step.sh README.ko.md 검증 linux

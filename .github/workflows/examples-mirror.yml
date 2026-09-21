@@ -1,0 +1,230 @@
+name: Mirror examples repositories
+
+# Owns one rule (#831): each language's public, read-only examples
+# repository (zlink-systems/zlink-<lang>-examples) holds the
+# quickstart/tutorial/samples tree of the *released* framework version —
+# `main` is that release plus every fix merged on top of it, and `vA.B.C`
+# tags mark the releases. Readers `git clone` that repository instead of
+# downloading release zips; the monorepo stays the only place the code is
+# edited (the guides read it with `--8<--`, sync-version.py moves its pins,
+# framework-tutorial.yml builds it against the runtime in the same PR).
+#
+# Two triggers, one rule:
+# - a framework release tag mirrors that tree and tags it `vA.B.C`;
+# - a push to `main` that touches an examples path mirrors the tree as a plain
+#   commit — but only for a language whose `framework/languages/<lang>/VERSION`
+#   is already tagged. Between the version-bump PR and the tag, main's pins
+#   name unpublished packages, so that language is skipped (the tag run
+#   mirrors it). The trees reference published packages only, so anything
+#   else on main builds for a reader today.
+#
+# The tree is built by scripts/tutorial/export_examples.py at the tag and
+# verified first by examples-smoke.yml in jobs that never checkout the
+# repository: nothing reaches a public mirror that does not build from its
+# own README. A failed smoke leaves the mirror at the previous release —
+# re-run this workflow (workflow_dispatch with the tag) after the fix ships.
+#
+# Push credentials are one write-only deploy key per mirror repository
+# (EXAMPLES_MIRROR_KEY_<LANG> secrets, doc/building/release-accounts.ko.md).
+# GITHUB_TOKEN cannot push to another repository.
+on:
+  push:
+    tags:
+      - 'framework/v*'
+      - 'framework-cpp/v*'
+      - 'framework-dotnet/v*'
+      - 'framework-java/v*'
+      - 'framework-node/v*'
+    branches: [main]
+    paths:
+      - 'framework/languages/*/quickstart/**'
+      - 'framework/languages/*/tutorial/**'
+      - 'framework/languages/*/samples/**'
+      - 'scripts/tutorial/export_examples.py'
+      - '.gitignore'
+      - '.gitattributes'
+      - '.github/workflows/examples-mirror.yml'
+      - '.github/workflows/examples-smoke.yml'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'What to mirror: a framework tag (framework/vA.B.C or framework-<lang>/vA.B.C, also tagged on the mirror) or main'
+        required: true
+        default: main
+        type: string
+
+# One mirror run at a time: two runs interleaving pushes to the same
+# mirror would race on `main`.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    name: Resolve ref to languages
+    runs-on: ubuntu-24.04
+    outputs:
+      ref: ${{ steps.pick.outputs.ref }}
+      # Empty on a main push; the mirror gets a `v<version>` tag only for a tag run.
+      version: ${{ steps.pick.outputs.version }}
+      languages: ${{ steps.pick.outputs.languages }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-tags: true
+          fetch-depth: 0
+
+      - id: pick
+        env:
+          DISPATCH_REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          ref="${DISPATCH_REF:-${GITHUB_REF_NAME}}"
+          version=""
+          case "${ref}" in
+            framework/v*) languages='["cpp","dotnet","java","node"]' ;;
+            framework-cpp/v*) languages='["cpp"]' ;;
+            framework-dotnet/v*) languages='["dotnet"]' ;;
+            framework-java/v*) languages='["java"]' ;;
+            framework-node/v*) languages='["node"]' ;;
+            main)
+              # A language is mirrored from main only when the version its
+              # VERSION file names is already released (tagged).
+              languages="["
+              for lang in cpp dotnet java node; do
+                declared="$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' "framework/languages/${lang}/VERSION")"
+                if git rev-parse -q --verify "refs/tags/framework-${lang}/v${declared}" >/dev/null \
+                   || git rev-parse -q --verify "refs/tags/framework/v${declared}" >/dev/null; then
+                  languages="${languages}\"${lang}\","
+                else
+                  echo "::notice::${lang}: VERSION ${declared} is not tagged yet; skipped until the release tag mirrors it"
+                fi
+              done
+              languages="${languages%,}]"
+              ;;
+            *) echo "::error::not a framework tag or main: ${ref}"; exit 1 ;;
+          esac
+          if [ "${ref}" != main ]; then
+            version="${ref##*/v}"
+            if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::tag ${ref} does not end in /vA.B.C"; exit 1
+            fi
+          fi
+          echo "ref=${ref}, version=${version:-none}, languages=${languages}"
+          echo "ref=${ref}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "languages=${languages}" >> "$GITHUB_OUTPUT"
+
+  # Same trees, built and run from their READMEs in jobs without a checkout.
+  # Every language runs (the export always produces all four trees; the
+  # smoke is the guard for the trees as a whole, not per tag).
+  smoke:
+    name: Smoke the exported trees
+    needs: resolve
+    if: needs.resolve.outputs.languages != '[]'
+    uses: ./.github/workflows/examples-smoke.yml
+    with:
+      ref: ${{ needs.resolve.outputs.ref }}
+
+  push:
+    name: Push zlink-${{ matrix.lang }}-examples
+    needs: [resolve, smoke]
+    if: needs.resolve.outputs.languages != '[]'
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        lang: ${{ fromJSON(needs.resolve.outputs.languages) }}
+    env:
+      MIRROR: zlink-systems/zlink-${{ matrix.lang }}-examples
+      TREE: .artifacts/examples/zlink-${{ matrix.lang }}-examples
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.resolve.outputs.ref }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Export the tree at the ref
+        run: python3 scripts/tutorial/export_examples.py .artifacts/examples HEAD
+
+      # One secret per mirror, named after the language; the shell picks it so
+      # the matrix stays a plain list (a matrix `include` with an unmatched
+      # `lang` would add that language to the run instead of annotating it).
+      - name: Load the mirror's deploy key
+        env:
+          EXAMPLES_MIRROR_KEY_CPP: ${{ secrets.EXAMPLES_MIRROR_KEY_CPP }}
+          EXAMPLES_MIRROR_KEY_DOTNET: ${{ secrets.EXAMPLES_MIRROR_KEY_DOTNET }}
+          EXAMPLES_MIRROR_KEY_JAVA: ${{ secrets.EXAMPLES_MIRROR_KEY_JAVA }}
+          EXAMPLES_MIRROR_KEY_NODE: ${{ secrets.EXAMPLES_MIRROR_KEY_NODE }}
+        run: |
+          set -euo pipefail
+          name="EXAMPLES_MIRROR_KEY_${{ matrix.lang }}"
+          name="${name^^}"
+          DEPLOY_KEY="${!name:-}"
+          if [ -z "${DEPLOY_KEY}" ]; then
+            echo "::error::secret ${name} is empty"; exit 1
+          fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "${DEPLOY_KEY}" > ~/.ssh/mirror
+          chmod 600 ~/.ssh/mirror
+          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
+          echo "GIT_SSH_COMMAND=ssh -i ~/.ssh/mirror -o IdentitiesOnly=yes" >> "$GITHUB_ENV"
+
+      - name: Clone the mirror
+        run: git clone "git@github.com:${MIRROR}.git" mirror
+
+      # Replace the working tree wholesale: files the release dropped
+      # disappear, files it added appear, and `main` always equals one
+      # export. `--ignored` guards the copied .gitignore — a file the export
+      # wrote that the mirror would ignore is a rule mismatch, not something
+      # to force-add.
+      - name: Replace the mirror's tree with the export
+        working-directory: mirror
+        run: |
+          set -euo pipefail
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -a "../${TREE}/." .
+          git add -A
+          ignored="$(git status --porcelain --ignored | grep '^!!' || true)"
+          if [ -n "${ignored}" ]; then
+            echo "::error::exported files the mirror's .gitignore would drop:"; echo "${ignored}"; exit 1
+          fi
+
+      - name: Commit, and tag on a release
+        working-directory: mirror
+        env:
+          REF: ${{ needs.resolve.outputs.ref }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          source="$(git -C .. rev-parse --short=12 HEAD)"
+          if git diff --cached --quiet && git rev-parse -q --verify HEAD >/dev/null; then
+            echo "tree unchanged since $(git rev-parse --short HEAD)"
+          else
+            git commit -q -m "${REF} — zlink@${source}" \
+              -m "Exported from https://github.com/${GITHUB_REPOSITORY}/tree/${source}/framework/languages/${{ matrix.lang }}"
+          fi
+          if [ -n "${VERSION}" ]; then
+            git tag -f "v${VERSION}"
+          fi
+          git log --oneline -1
+
+      - name: Push main, and the tag on a release
+        working-directory: mirror
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          git push origin HEAD:main
+          if [ -n "${VERSION}" ]; then
+            git push -f origin "refs/tags/v${VERSION}"
+          fi

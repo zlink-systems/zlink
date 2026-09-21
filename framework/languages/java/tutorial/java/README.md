@@ -49,17 +49,17 @@ extra native setup is needed on Windows either.
 
 ## Download and install
 
-This tutorial never checks out the repository; it only references
-`systems.zlink:zlink-framework-*` packages from Maven Central. This
-directory (`java/`) builds standalone as long as it travels with `../`
+This tutorial runs from `tutorial/java/` in the `zlink-java-examples` repository and only
+references `systems.zlink:zlink-framework-*` packages from Maven Central. This directory
+builds standalone as long as it travels with `../`
 (the tutorial root)'s `settings.gradle.kts`, `gradle/libs.versions.toml`,
-and wrapper — which is why it ships next to the Kotlin tutorial in the same
-zip. There is nothing separate to download or install: the Gradle wrapper
+and wrapper — which is why it sits next to the Kotlin tutorial in the same
+repository. There is nothing separate to download or install: the Gradle wrapper
 (`./gradlew` / `gradlew.bat`) fetches the right Gradle version on first run,
 and Gradle then fetches the packages above from Maven Central.
 
-All commands below run from the directory this zip extracts to
-(`zlink-tutorial-java/`, the tutorial root — `../` from here).
+Clone the `zlink-java-examples` repository and run all commands below from its tutorial root;
+`../` from here is the `tutorial/java/` project.
 
 ## Build
 

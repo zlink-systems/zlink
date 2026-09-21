@@ -7,7 +7,7 @@ release CI job runs verbatim: prerequisites, download and install, build,
 run, verify, and troubleshooting.
 
 Kotlin has no directory of its own in this repository; it lives next to the
-Java sources, in the same `zlink-tutorial-java` zip, under `kotlin/`.
+Java sources in the `zlink-java-examples` repository, under `tutorial/kotlin/`.
 
 ## Prerequisites
 
@@ -44,15 +44,15 @@ libraries, so no extra native setup is needed on Windows either.
 
 ## Download and install
 
-This tutorial never checks out the repository; it only references
-`systems.zlink:zlink-framework-*` packages from Maven Central. `kotlin/`
+This tutorial runs from `tutorial/kotlin/` in the `zlink-java-examples` repository and only
+references `systems.zlink:zlink-framework-*` packages from Maven Central. `kotlin/`
 builds standalone as long as it travels with `../` (the tutorial root)'s
 `settings.gradle.kts`, `gradle/libs.versions.toml`, and wrapper. There is
 nothing separate to download or install: the Gradle wrapper fetches Gradle,
 and Gradle fetches the packages above from Maven Central.
 
-All commands below run from the directory this zip extracts to
-(`zlink-tutorial-java/`, the tutorial root — `../` from here).
+Clone the `zlink-java-examples` repository and run all commands below from its tutorial root;
+`../` from here is the `tutorial/kotlin/` project.
 
 ## Build
 
