@@ -194,9 +194,8 @@ or change the Location Store. A message arriving directly at the target during R
 enters the temporary queue and isn't delivered to an application handler.
 
 **The target immediately feeds each arriving chunk to the assembly and releases the input message
-buffer.** Assembly is the in-progress state of feeding the running CRC-32C and the incremental
-decoder as [06 §9](../02-channel-transport/06-wire-protocol.en.md#9-maintenance-capture-and-relocation-envelope)
-defines it; no buffer holds the complete encoded stream.
+buffer.** The definition of assembly is owned by
+[06 §9](../02-channel-transport/06-wire-protocol.en.md#9-maintenance-capture-and-relocation-envelope).
 Dequeue accounting for Core receive HWM follows the [Core socket contract](../../../../../../../core/doc/spec/core/socket/README.en.md#8-implementation-and-contract-test-verification-requirements);
 Framework payload storage lifetime follows [Payload ownership §8](../01-execution/05-payload-ownership-and-codec.en.md#retained-record-children). After assembling every chunk, the Restore request compares the result against the whole
 checksum it carries, and only on a match runs the factory to restore application state,

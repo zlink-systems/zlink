@@ -172,10 +172,9 @@ chunk가 도착하기 전에 relocation 대상의 temporary queue를 등록한�
 target은 Restore를 시작하거나 Location Store를 변경하지 않는다. Restore 중 target에 직접
 도착한 message는 temporary queue에 넣고 application handler에는 전달하지 않는다.
 
-**Target은 도착한 각 chunk를 즉시 조립에 공급하고 입력 message buffer를 정리한다.** 조립은
-[06 §9](../02-channel-transport/06-wire-protocol.ko.md#9-maintenance-capture와-relocation-envelope)가
-정한 대로 누적 CRC-32C와 incremental decoder에 공급하는 진행 상태이며 complete encoded stream을
-담는 buffer를 두지 않는다.
+**Target은 도착한 각 chunk를 즉시 조립에 공급하고 입력 message buffer를 정리한다.** 조립의
+정의는 [06 §9](../02-channel-transport/06-wire-protocol.ko.md#9-maintenance-capture와-relocation-envelope)가
+소유한다.
 Core receive HWM의 dequeue 계상은 [Core socket 계약](../../../../../../../core/doc/spec/core/socket/README.ko.md#8-구현-및-contract-test-검증-요구)을,
 Framework payload 저장소의 수명은 [Payload 소유권 §8](../01-execution/05-payload-ownership-and-codec.ko.md#retained-record-children)을 따른다. 모든 chunk를 조립한 뒤
 Restore 요청이 실은 전체 checksum과 대조하고, 일치할 때만 factory를 실행해 application
