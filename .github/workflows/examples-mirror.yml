@@ -53,10 +53,14 @@ on:
         default: main
         type: string
 
-# One mirror run at a time: two runs interleaving pushes to the same
-# mirror would race on `main`.
+# One run per ref. A single group for the whole workflow kept only one
+# *pending* run — GitHub cancels the older pending run in a group when a
+# newer one queues — so the four framework-<lang>/v0.20.0 tags pushed back
+# to back lost three of their runs. Per-language tags push to different
+# mirrors, so they never race; `framework/v*` and `main` runs touch the same
+# mirrors but arrive far apart.
 concurrency:
-  group: ${{ github.workflow }}
+  group: ${{ github.workflow }}-${{ inputs.ref || github.ref }}
   cancel-in-progress: false
 
 permissions:
