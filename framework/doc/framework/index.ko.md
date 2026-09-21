@@ -433,7 +433,7 @@ sticky LB · WebSocket 서버 · pub/sub 경유 · 분산 락 · service discove
 있고, 처음부터 끝까지 그 안에서 읽힌다. 장 머리의 전환 줄로 같은 장을 다른 언어에서 볼
 수 있다.
 
-| 언어 | 서버 가이드 | 바로 시작하기 | client 쪽 가이드 | 내려받기 |
+| 언어 | 서버 가이드 | 바로 시작하기 | client 쪽 가이드 | 예제 저장소 |
 | --- | --- | --- | --- | --- |
 | C++ | [서버](cpp/guide/server/README.ko.md) | [퀵스타트](cpp/quickstart.ko.md) | [Stream Connector](cpp/guide/stream-connector/README.ko.md) · [HTTP Client](cpp/guide/http-client/README.ko.md) | [examples](https://github.com/zlink-systems/zlink-cpp-examples) |
 | `.NET` | [서버](dotnet/guide/server/README.ko.md) | [퀵스타트](dotnet/quickstart.ko.md) | [Stream Connector](dotnet/guide/stream-connector/README.ko.md) · [HTTP Client](dotnet/guide/http-client/README.ko.md) | [examples](https://github.com/zlink-systems/zlink-dotnet-examples) |

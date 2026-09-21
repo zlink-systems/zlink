@@ -449,7 +449,7 @@ The guide is **fully self-contained per language.** Inside the guide for the lan
 pick, there's only that language's code, and you read it start to finish within it. The
 switch line at the top of each chapter lets you view the same chapter in another language.
 
-| Language | Server guide | Get started right away | Client-side guide | Download |
+| Language | Server guide | Get started right away | Client-side guide | Examples repository |
 | --- | --- | --- | --- | --- |
 | C++ | [Server](cpp/guide/server/README.en.md) | [Quickstart](cpp/quickstart.en.md) | [Stream Connector](cpp/guide/stream-connector/README.en.md) · [HTTP Client](cpp/guide/http-client/README.en.md) | [examples](https://github.com/zlink-systems/zlink-cpp-examples) |
 | `.NET` | [Server](dotnet/guide/server/README.en.md) | [Quickstart](dotnet/quickstart.en.md) | [Stream Connector](dotnet/guide/stream-connector/README.en.md) · [HTTP Client](dotnet/guide/http-client/README.en.md) | [examples](https://github.com/zlink-systems/zlink-dotnet-examples) |
