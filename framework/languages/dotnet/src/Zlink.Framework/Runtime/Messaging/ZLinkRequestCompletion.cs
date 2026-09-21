@@ -11,8 +11,9 @@ internal sealed class ZLinkRequestCompletion<TResult> : IDisposable
     private readonly Action<TResult>? _discardResult;
     private readonly Action? _onCanceled;
     private readonly CancellationTokenRegistration _stopCancellationRegistration;
-    private readonly TaskCompletionSource<TResult> _completion =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource<TResult> _completion = new(
+        TaskCreationOptions.RunContinuationsAsynchronously
+    );
     private readonly CancellationTokenSource? _timeoutSource;
     private readonly CancellationTokenRegistration _timeoutRegistration;
 
@@ -20,7 +21,8 @@ internal sealed class ZLinkRequestCompletion<TResult> : IDisposable
         CancellationToken callerCancellation,
         CancellationToken stopCancellation = default,
         Action<TResult>? discardResult = null,
-        Action? onCanceled = null)
+        Action? onCanceled = null
+    )
     {
         _discardResult = discardResult;
         _onCanceled = onCanceled;
@@ -32,15 +34,9 @@ internal sealed class ZLinkRequestCompletion<TResult> : IDisposable
         CancellationToken callerCancellation,
         TimeSpan timeout,
         string timeoutMessage,
-        Action<TResult>? discardResult = null)
-        : this(
-            callerCancellation,
-            default,
-            timeout,
-            timeoutMessage,
-            discardResult)
-    {
-    }
+        Action<TResult>? discardResult = null
+    )
+        : this(callerCancellation, default, timeout, timeoutMessage, discardResult) { }
 
     internal ZLinkRequestCompletion(
         CancellationToken callerCancellation,
@@ -49,7 +45,8 @@ internal sealed class ZLinkRequestCompletion<TResult> : IDisposable
         string timeoutMessage,
         Action<TResult>? discardResult = null,
         Action? onCanceled = null,
-        Func<string, Exception>? timeoutExceptionFactory = null)
+        Func<string, Exception>? timeoutExceptionFactory = null
+    )
         : this(callerCancellation, stopCancellation, discardResult, onCanceled)
     {
         _timeoutSource = new CancellationTokenSource();
@@ -59,9 +56,11 @@ internal sealed class ZLinkRequestCompletion<TResult> : IDisposable
                 var timeoutState = (TimeoutState<TResult>)state!;
                 timeoutState.Completion.TrySetException(
                     timeoutState.ExceptionFactory?.Invoke(timeoutState.Message)
-                    ?? new TimeoutException(timeoutState.Message));
+                        ?? new TimeoutException(timeoutState.Message)
+                );
             },
-            new TimeoutState<TResult>(_completion, timeoutMessage, timeoutExceptionFactory));
+            new TimeoutState<TResult>(_completion, timeoutMessage, timeoutExceptionFactory)
+        );
         _timeoutSource.CancelAfter(timeout);
     }
 
@@ -69,12 +68,14 @@ internal sealed class ZLinkRequestCompletion<TResult> : IDisposable
 
     internal void Complete(TResult result)
     {
-        if (!_completion.TrySetResult(result)) _discardResult?.Invoke(result);
+        if (!_completion.TrySetResult(result))
+            _discardResult?.Invoke(result);
     }
 
     internal void Cancel(CancellationToken cancellationToken)
     {
-        if (_completion.TrySetCanceled(cancellationToken)) _onCanceled?.Invoke();
+        if (_completion.TrySetCanceled(cancellationToken))
+            _onCanceled?.Invoke();
     }
 
     internal void Fail(Exception exception)
@@ -98,7 +99,8 @@ internal sealed class ZLinkRequestCompletion<TResult> : IDisposable
                 var cancellation = (CancellationState<TResult>)state!;
                 cancellation.Completion.Cancel(cancellation.Token);
             },
-            new CancellationState<TResult>(this, cancellationToken));
+            new CancellationState<TResult>(this, cancellationToken)
+        );
     }
 
     private CancellationTokenRegistration RegisterShutdown(CancellationToken cancellationToken)
@@ -109,17 +111,22 @@ internal sealed class ZLinkRequestCompletion<TResult> : IDisposable
                 var completion = (ZLinkRequestCompletion<TResult>)state!;
                 completion.Fail(
                     ZLinkRequestFailureMapper.CreateShutdownRequestException(
-                        "ZLink request was interrupted by runtime shutdown."));
+                        "ZLink request was interrupted by runtime shutdown."
+                    )
+                );
             },
-            this);
+            this
+        );
     }
 
     private sealed record CancellationState<T>(
         ZLinkRequestCompletion<T> Completion,
-        CancellationToken Token);
+        CancellationToken Token
+    );
 
     private sealed record TimeoutState<T>(
         TaskCompletionSource<T> Completion,
         string Message,
-        Func<string, Exception>? ExceptionFactory);
+        Func<string, Exception>? ExceptionFactory
+    );
 }

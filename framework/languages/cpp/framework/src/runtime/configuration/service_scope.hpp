@@ -26,9 +26,9 @@ class service_scope_access_t
 class service_scope_t
 {
   public:
-    static service_scope_t create (service_provider_t &provider,
-                                   service_scope_kind_t kind =
-                                     service_scope_kind_t::handler_invocation);
+    static service_scope_t
+    create (service_provider_t &provider,
+            service_scope_kind_t kind = service_scope_kind_t::handler_invocation);
 
     explicit service_scope_t (service_provider_t provider);
     ~service_scope_t ();

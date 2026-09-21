@@ -12,10 +12,7 @@ import {
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
 import type { Message } from '../../contracts/Common/Message';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
-import type {
-  ZLinkBackendActorJoinRequest,
-  ZLinkBackendSpot
-} from '../backend/contracts';
+import type { ZLinkBackendActorJoinRequest, ZLinkBackendSpot } from '../backend/contracts';
 import type { ZLinkDispatchErrorReporter } from '../channels';
 import {
   encodeFrameworkPayloadMessage,
@@ -57,16 +54,20 @@ export class ZLinkSpotNativeActorJoinAdmission {
       if (actor !== undefined) {
         const target = this.options.getTarget();
         const joinRequest = request.message;
-        const joinPayload = wrapFrameworkPayloadMessage(joinRequest, this.options.messageSerializers);
+        const joinPayload = wrapFrameworkPayloadMessage(
+          joinRequest,
+          this.options.messageSerializers
+        );
         const response: ZLinkSpotActorJoinResult = await this.options.serial.execute(async () =>
           this.options.defaultAccept || target.onActorJoin === undefined
             ? { accepted: this.options.defaultAccept }
             : target.onActorJoin(actorId, joinPayload)
         );
         accepted = response.accepted;
-        reply = response.reply === undefined
-          ? undefined
-          : encodeFrameworkPayloadMessage(response.reply, this.options.messageSerializers);
+        reply =
+          response.reply === undefined
+            ? undefined
+            : encodeFrameworkPayloadMessage(response.reply, this.options.messageSerializers);
         if (accepted) {
           acceptedActor = actor;
         }
@@ -104,11 +105,13 @@ export class ZLinkSpotNativeActorJoinAdmission {
     }
   }
 
-  private decodeNativeActorJoinRequest(message: Message): {
-    readonly actorType: string;
-    readonly actorCreateRequest?: Message;
-    readonly request: Message;
-  } | undefined {
+  private decodeNativeActorJoinRequest(message: Message):
+    | {
+        readonly actorType: string;
+        readonly actorCreateRequest?: Message;
+        readonly request: Message;
+      }
+    | undefined {
     try {
       const payload = JSON.parse(message.data().toString()) as {
         readonly packetName?: unknown;
@@ -128,9 +131,10 @@ export class ZLinkSpotNativeActorJoinAdmission {
       }
       return {
         actorType: payload.actorType,
-        actorCreateRequest: typeof payload.actorCreateRequest === 'string'
-          ? RuntimeMessage.from(Buffer.from(payload.actorCreateRequest, 'base64'))
-          : undefined,
+        actorCreateRequest:
+          typeof payload.actorCreateRequest === 'string'
+            ? RuntimeMessage.from(Buffer.from(payload.actorCreateRequest, 'base64'))
+            : undefined,
         request: RuntimeMessage.from(Buffer.from(payload.request, 'base64'))
       };
     } catch {

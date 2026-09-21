@@ -17,9 +17,7 @@ export interface ZLinkActorRelocationAdapter<TActor extends ZLinkActor> {
   restore(actor: TActor, payload: Uint8Array, signal: AbortSignal): Promise<void>;
 }
 
-export interface ZLinkSpotRelocationAdapter<
-  TSpot extends ZLinkSpot | ZLinkInstanceSpot
-> {
+export interface ZLinkSpotRelocationAdapter<TSpot extends ZLinkSpot | ZLinkInstanceSpot> {
   capture(spot: TSpot, signal: AbortSignal): Promise<Uint8Array>;
   restore(spot: TSpot, payload: Uint8Array, signal: AbortSignal): Promise<void>;
 }

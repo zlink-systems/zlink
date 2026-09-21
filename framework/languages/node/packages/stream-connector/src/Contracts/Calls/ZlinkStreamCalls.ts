@@ -28,7 +28,9 @@ export interface ZlinkStreamRequestCall {
 }
 
 export interface ZlinkStreamWaitCall<TPayload = ZlinkStreamEncodedPayload> {
-  where(predicate: (message: ZlinkStreamMessage<TPayload>) => boolean): ZlinkStreamWaitCall<TPayload>;
+  where(
+    predicate: (message: ZlinkStreamMessage<TPayload>) => boolean
+  ): ZlinkStreamWaitCall<TPayload>;
   timeout(timeoutMs: number): ZlinkStreamWaitCall<TPayload>;
   submit(signal?: AbortSignal): Promise<ZlinkStreamMessage<TPayload>>;
 }
@@ -45,7 +47,9 @@ export interface ZlinkStreamExpectNoneCall<TPayload = ZlinkStreamEncodedPayload>
  * and never the value handed to `expect(...)`.
  */
 export interface ZlinkStreamSequenceCall<TPayload = ZlinkStreamEncodedPayload> {
-  expect(predicate: (message: ZlinkStreamMessage<TPayload>) => boolean): ZlinkStreamSequenceCall<TPayload>;
+  expect(
+    predicate: (message: ZlinkStreamMessage<TPayload>) => boolean
+  ): ZlinkStreamSequenceCall<TPayload>;
   timeout(timeoutMs: number): ZlinkStreamSequenceCall<TPayload>;
   run(signal?: AbortSignal): Promise<readonly ZlinkStreamMessage<TPayload>[]>;
 }

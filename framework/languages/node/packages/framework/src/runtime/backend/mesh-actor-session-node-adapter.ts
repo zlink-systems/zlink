@@ -1,13 +1,7 @@
 import { SubmitResult } from './runtime-values';
 import { ZLinkSubmitStatus } from '../messaging/submission-result';
-import type {
-  ZLinkBackendActorSessionNode,
-  ZLinkBackendMeshNode
-} from './contracts';
-import {
-  closeMeshCompletion,
-  type ZLinkMeshCompletionTable
-} from './mesh-completion-table';
+import type { ZLinkBackendActorSessionNode, ZLinkBackendMeshNode } from './contracts';
+import { closeMeshCompletion, type ZLinkMeshCompletionTable } from './mesh-completion-table';
 import { routingIdsEqual } from '../routing-id';
 
 export function meshActorSessionNodeAdapter(
@@ -51,18 +45,14 @@ export function meshActorSessionNodeAdapter(
         throw new Error('MeshNode completion runtime is not started.');
       }
       const completion = await completions.submit(
-        () => node.closeActorBoundSession(
-          actor,
-          expectedBindingGeneration,
-          timeoutMs
-        ),
+        () => node.closeActorBoundSession(actor, expectedBindingGeneration, timeoutMs),
         signal
       );
       try {
         if (completion.terminalResult !== 0 || completion.failureErrno !== 0) {
           throw new Error(
             `Actor '${actor.actorId}' bound-session close failed with result ` +
-            `'${completion.terminalResult}' and errno '${completion.failureErrno}'.`
+              `'${completion.terminalResult}' and errno '${completion.failureErrno}'.`
           );
         }
       } finally {

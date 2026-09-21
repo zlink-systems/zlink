@@ -27,12 +27,12 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
         IMeshNode node,
         ZLinkMeshCompletionTable completions,
         bool ownsNode,
-        ZLinkMeshDispatchPump? ownedCompletionPump = null)
+        ZLinkMeshDispatchPump? ownedCompletionPump = null
+    )
     {
         _socket = socket;
         _node = node;
-        _completions = completions
-            ?? throw new ArgumentNullException(nameof(completions));
+        _completions = completions ?? throw new ArgumentNullException(nameof(completions));
         _ownsNode = ownsNode;
         _ownedCompletionPump = ownedCompletionPump;
     }
@@ -55,17 +55,19 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
 
     private IStreamSessionService Session()
     {
-        return AwaitStateLane(_lane.RunAsync(() =>
-        {
-            if (_session is null)
+        return AwaitStateLane(
+            _lane.RunAsync(() =>
             {
-                _session = _node.CreateStreamSessionService(_socket);
-                _session.Start();
-                _sessionStarted = true;
-            }
+                if (_session is null)
+                {
+                    _session = _node.CreateStreamSessionService(_socket);
+                    _session.Start();
+                    _sessionStarted = true;
+                }
 
-            return _session;
-        }));
+                return _session;
+            })
+        );
     }
 
     public void Bind(string endpoint)
@@ -81,7 +83,8 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
 
     public bool RecvPacket(
         out ZLinkBackendStreamReceive? received,
-        RecvFlags flags = RecvFlags.None)
+        RecvFlags flags = RecvFlags.None
+    )
     {
         var packet = StreamPacket.Create();
         try
@@ -110,10 +113,7 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
                 throw;
             }
             packet.Dispose();
-            received = new ZLinkBackendStreamReceive(
-                routingId,
-                header,
-                body);
+            received = new ZLinkBackendStreamReceive(routingId, header, body);
             return true;
         }
         catch
@@ -126,9 +126,11 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
     public Task SendAsync(
         RoutingId routingId,
         Message payload,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
-        return _socket.Send(routingId)
+        return _socket
+            .Send(routingId)
             .Message(payload)
             .Async(cancellationToken)
             .EnsureAcceptedAsync();
@@ -152,24 +154,23 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
         RoutingId sessionRid,
         ZLinkBackendActorRef actor,
         TimeSpan timeout,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         // Core marks a session live from its connected observer event, which is
         // asynchronous to packet delivery — a bind triggered by the session's
         // first packet can outrun it and see NotConnected. Retry within the
         // bind timeout; the liveness event is milliseconds behind the packet.
-        var deadline = Stopwatch.GetElapsedTime(0)
-                       + (timeout > TimeSpan.Zero ? timeout : TimeSpan.FromSeconds(5));
+        var deadline =
+            Stopwatch.GetElapsedTime(0)
+            + (timeout > TimeSpan.Zero ? timeout : TimeSpan.FromSeconds(5));
         while (true)
         {
             var submit = await SubmitAndAwaitOperationAsync(
-                    id => Session().BindActor(
-                        sessionRid,
-                        ToNativeActor(actor),
-                        id,
-                        timeout),
-                    cancellationToken)
+                    id => Session().BindActor(sessionRid, ToNativeActor(actor), id, timeout),
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
             if (submit != SubmitResult.NotConnected || Stopwatch.GetElapsedTime(0) >= deadline)
             {
@@ -186,7 +187,8 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
     {
         if (_node is not ZLinkManagedMeshNode managed)
             throw new InvalidOperationException(
-                "Actor binding requires the Framework managed MeshNode.");
+                "Actor binding requires the Framework managed MeshNode."
+            );
         return actor.ToNative(managed.MeshName);
     }
 
@@ -194,7 +196,8 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
         RoutingId sessionRid,
         string actorId,
         TimeSpan timeout,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         var session = Session();
@@ -206,7 +209,8 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
                     sessionRid,
                     binding,
                     timeout,
-                    cancellationToken);
+                    cancellationToken
+                );
             }
 
         return ValueTask.CompletedTask;
@@ -220,49 +224,62 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
         RoutingId sessionRid,
         StreamSessionBinding binding,
         TimeSpan timeout,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var submit = await SubmitAndAwaitOperationAsync(
-                id => session.UnbindActor(
-                    sessionRid,
-                    binding.Actor,
-                    binding.BindingGeneration,
-                    id,
-                    timeout),
-                cancellationToken)
+                id =>
+                    session.UnbindActor(
+                        sessionRid,
+                        binding.Actor,
+                        binding.BindingGeneration,
+                        id,
+                        timeout
+                    ),
+                cancellationToken
+            )
             .ConfigureAwait(false);
         ThrowIfSubmitFailed(submit);
     }
 
     private async ValueTask<SubmitResult> SubmitAndAwaitOperationAsync(
         Func<MeshOperationId, SubmitResult> submitOperation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var correlationId = _node.AllocateOperationId();
         var completion = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var submit = _completions.RegisterBeforeSubmit(
             correlationId,
             (record, parts) =>
             {
                 ZLinkMessageParts.DisposeAll(parts);
                 var result = ZLinkMeshCompletionTable.MapResult(
-                    record.TerminalResult, record.FailureErrno);
+                    record.TerminalResult,
+                    record.FailureErrno
+                );
                 if (result == RequestResult.Ok)
                     completion.TrySetResult();
                 else
                     completion.TrySetException(
-                        new ZlinkRequestException(
-                            (ZlinkRequestException.ErrorCode)(int)result));
+                        new ZlinkRequestException((ZlinkRequestException.ErrorCode)(int)result)
+                    );
             },
-            submitOperation);
+            submitOperation
+        );
         if (submit != SubmitResult.Ok)
             return submit;
-        await using (_completions.RegisterCancellation(
-                         correlationId,
-                         cancellationToken,
-                         () => completion.TrySetCanceled(cancellationToken))
-                     .ConfigureAwait(false))
+        await using (
+            _completions
+                .RegisterCancellation(
+                    correlationId,
+                    cancellationToken,
+                    () => completion.TrySetCanceled(cancellationToken)
+                )
+                .ConfigureAwait(false)
+        )
             await completion.Task.ConfigureAwait(false);
         return SubmitResult.Ok;
     }
@@ -277,26 +294,32 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
         RoutingId sessionRid,
         string actorId,
         IReadOnlyList<Message> parts,
-        SendFlags flags)
+        SendFlags flags
+    )
     {
         var session = Session();
         foreach (var binding in session.Bindings(sessionRid))
             if (string.Equals(binding.Actor.ActorId, actorId, StringComparison.Ordinal))
-                return AwaitStateLane(_lane.RunAsync(
-                    () => session.SendToActor(sessionRid, binding.Actor, parts, flags)
-                        == SubmitResult.Ok));
+                return AwaitStateLane(
+                    _lane.RunAsync(() =>
+                        session.SendToActor(sessionRid, binding.Actor, parts, flags)
+                        == SubmitResult.Ok
+                    )
+                );
 
         return false;
     }
 
     public async ValueTask DisposeAsync()
     {
-        var session = await _lane.RunAsync(() =>
-        {
-            var started = _sessionStarted ? _session : null;
-            _session = null;
-            return started;
-        }).ConfigureAwait(false);
+        var session = await _lane
+            .RunAsync(() =>
+            {
+                var started = _sessionStarted ? _session : null;
+                _session = null;
+                return started;
+            })
+            .ConfigureAwait(false);
 
         if (session is not null)
             await session.DisposeAsync().ConfigureAwait(false);
@@ -316,6 +339,5 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();
 
-    private static void AwaitStateLane(ValueTask operation) =>
-        operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 }

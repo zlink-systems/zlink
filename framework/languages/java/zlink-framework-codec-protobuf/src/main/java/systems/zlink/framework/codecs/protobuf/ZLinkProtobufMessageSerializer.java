@@ -3,17 +3,17 @@ package systems.zlink.framework.codecs.protobuf;
 import com.google.protobuf.InvalidProtocolBufferException;
 import com.google.protobuf.MessageLite;
 import com.google.protobuf.Parser;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
-import systems.zlink.contracts.messaging.Message;
+
 import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageSerializer;
+
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 
 final class ZLinkProtobufMessageSerializer implements ZLinkMessageSerializer {
     static final ZLinkProtobufMessageSerializer INSTANCE = new ZLinkProtobufMessageSerializer();
 
-    private ZLinkProtobufMessageSerializer() {
-    }
+    private ZLinkProtobufMessageSerializer() {}
 
     static boolean canSerialize(Class<?> type) {
         return type != null && MessageLite.class.isAssignableFrom(type);
@@ -25,7 +25,8 @@ final class ZLinkProtobufMessageSerializer implements ZLinkMessageSerializer {
             return ZLinkEncodedPayload.from(protobuf.toByteArray());
         }
         throw new IllegalArgumentException(
-            "Protobuf codec cannot serialize value of type " + ZLinkProtobufPayloads.valueTypeName(value));
+                "Protobuf codec cannot serialize value of type "
+                        + ZLinkProtobufPayloads.valueTypeName(value));
     }
 
     @Override
@@ -34,14 +35,14 @@ final class ZLinkProtobufMessageSerializer implements ZLinkMessageSerializer {
             return parseProtobuf(payload, type);
         }
         throw new IllegalArgumentException(
-            "Protobuf codec cannot deserialize payload as " + type.getName());
+                "Protobuf codec cannot deserialize payload as " + type.getName());
     }
 
     @Override
     public void prepare(Class<?> type) {
         if (type != null && !canSerialize(type)) {
             throw new IllegalArgumentException(
-                "Protobuf codec cannot prepare payload type " + type.getName());
+                    "Protobuf codec cannot prepare payload type " + type.getName());
         }
     }
 
@@ -51,8 +52,7 @@ final class ZLinkProtobufMessageSerializer implements ZLinkMessageSerializer {
             return type.cast(parser.parseFrom(payload.bytes()));
         } catch (InvalidProtocolBufferException ex) {
             throw new IllegalArgumentException(
-                "failed to deserialize Protobuf message as " + type.getName(),
-                ex);
+                    "failed to deserialize Protobuf message as " + type.getName(), ex);
         }
     }
 
@@ -64,20 +64,16 @@ final class ZLinkProtobufMessageSerializer implements ZLinkMessageSerializer {
                 return typedParser;
             }
             throw new IllegalArgumentException(
-                "Protobuf type parser() did not return Parser: " + type.getName());
+                    "Protobuf type parser() did not return Parser: " + type.getName());
         } catch (NoSuchMethodException ex) {
             throw new IllegalArgumentException(
-                "Protobuf type does not expose parser(): " + type.getName(),
-                ex);
+                    "Protobuf type does not expose parser(): " + type.getName(), ex);
         } catch (IllegalAccessException ex) {
             throw new IllegalArgumentException(
-                "Protobuf parser() is not accessible: " + type.getName(),
-                ex);
+                    "Protobuf parser() is not accessible: " + type.getName(), ex);
         } catch (InvocationTargetException ex) {
             throw new IllegalArgumentException(
-                "Protobuf parser() failed for " + type.getName(),
-                ex.getCause());
+                    "Protobuf parser() failed for " + type.getName(), ex.getCause());
         }
     }
-
 }

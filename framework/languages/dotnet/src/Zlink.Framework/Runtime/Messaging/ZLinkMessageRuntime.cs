@@ -25,7 +25,8 @@ public sealed partial class ZLinkMessage
         string? contentType,
         ZlinkStreamCodec? streamCodec,
         IZLinkMessageCodecResolver? codecs,
-        bool resolveSerializerByDeclaredType = false)
+        bool resolveSerializerByDeclaredType = false
+    )
     {
         _payload = payload;
         ContentType = contentType;
@@ -41,12 +42,14 @@ public sealed partial class ZLinkMessage
             var resolution = ResolvePayloadSerializer(_declaredType, codecs);
             return new EncodedZLinkMessage(
                 resolution.ContentType,
-                EncodeValue(_value, _declaredType, resolution.Serializer));
+                EncodeValue(_value, _declaredType, resolution.Serializer)
+            );
         }
 
         return new EncodedZLinkMessage(
             ContentType ?? DefaultContentType,
-            ZLinkEncodedPayload.FromOwned(_payload));
+            ZLinkEncodedPayload.FromOwned(_payload)
+        );
     }
 
     internal ZLinkMessage Snapshot(IZLinkMessageCodecRegistry codecs)
@@ -56,13 +59,15 @@ public sealed partial class ZLinkMessage
             encoded.Payload.Bytes.ToArray(),
             encoded.ContentType,
             null,
-            codecs.Snapshot());
+            codecs.Snapshot()
+        );
     }
 
     internal static ZLinkMessage FromEncoded(
         string contentType,
         ReadOnlyMemory<byte> payload,
-        IZLinkMessageCodecRegistry codecs)
+        IZLinkMessageCodecRegistry codecs
+    )
     {
         return new ZLinkMessage(payload, contentType, null, codecs.Snapshot());
     }
@@ -70,18 +75,19 @@ public sealed partial class ZLinkMessage
     internal static ZLinkMessage FromCanonicalActorJoinReply(
         string contentType,
         ReadOnlyMemory<byte> payload,
-        IZLinkMessageCodecRegistry codecs)
+        IZLinkMessageCodecRegistry codecs
+    )
     {
         return new ZLinkMessage(
             payload,
             contentType,
             null,
             codecs.Snapshot(),
-            resolveSerializerByDeclaredType: true);
+            resolveSerializerByDeclaredType: true
+        );
     }
 
-    internal Message ToRawMessage(IZLinkMessageCodecRegistry codecs) =>
-        ToRawMessage(codecs, out _);
+    internal Message ToRawMessage(IZLinkMessageCodecRegistry codecs) => ToRawMessage(codecs, out _);
 
     internal Message ToRawMessage(IZLinkMessageCodecRegistry codecs, out string contentType)
     {
@@ -89,7 +95,11 @@ public sealed partial class ZLinkMessage
         {
             var resolution = ResolvePayloadSerializer(_declaredType, codecs);
             contentType = resolution.ContentType;
-            return ZLinkEnvelopeCodec.EncodeSerializedPart(_value, _declaredType, resolution.Serializer);
+            return ZLinkEnvelopeCodec.EncodeSerializedPart(
+                _value,
+                _declaredType,
+                resolution.Serializer
+            );
         }
         contentType = ContentType ?? DefaultContentType;
         return Message.From(_payload.Span);
@@ -98,21 +108,22 @@ public sealed partial class ZLinkMessage
     internal static ZLinkMessage FromStreamPayload(
         ZlinkStreamCodec codec,
         ReadOnlyMemory<byte> payload,
-        IZLinkMessageCodecRegistry codecs)
+        IZLinkMessageCodecRegistry codecs
+    )
     {
         var snapshot = codecs.Snapshot();
-        var contentType = snapshot.TryResolveStreamContentType(codec, out var resolved)
-            ? resolved
-            : codec == ZlinkStreamCodec.Json
-                ? DefaultContentType
-                : null;
+        var contentType =
+            snapshot.TryResolveStreamContentType(codec, out var resolved) ? resolved
+            : codec == ZlinkStreamCodec.Json ? DefaultContentType
+            : null;
         return new ZLinkMessage(payload, contentType, codec, snapshot);
     }
 
     internal static ZLinkMessage FromEnvelopePayload(
         string contentType,
         Message payload,
-        IZLinkMessageCodecRegistry codecs)
+        IZLinkMessageCodecRegistry codecs
+    )
     {
         return new ZLinkMessage(
             // AsReadOnlyMemory is the binding boundary snapshot for native
@@ -120,7 +131,8 @@ public sealed partial class ZLinkMessage
             payload.AsReadOnlyMemory(),
             contentType,
             null,
-            codecs.Snapshot());
+            codecs.Snapshot()
+        );
     }
 
     private object? Decode(Type targetType)
@@ -141,9 +153,7 @@ public sealed partial class ZLinkMessage
         {
             var state = Volatile.Read(ref _decodeState);
             if (state == 2)
-                return CoerceDecodedValue(
-                    Volatile.Read(ref _decodedValue),
-                    targetType);
+                return CoerceDecodedValue(Volatile.Read(ref _decodedValue), targetType);
 
             if (state == 3)
             {
@@ -151,8 +161,7 @@ public sealed partial class ZLinkMessage
                 return null;
             }
 
-            if (state == 0
-                && Interlocked.CompareExchange(ref _decodeState, 1, 0) == 0)
+            if (state == 0 && Interlocked.CompareExchange(ref _decodeState, 1, 0) == 0)
             {
                 try
                 {
@@ -168,9 +177,7 @@ public sealed partial class ZLinkMessage
                 }
                 catch (Exception exception)
                 {
-                    Volatile.Write(
-                        ref _decodeFailure,
-                        ExceptionDispatchInfo.Capture(exception));
+                    Volatile.Write(ref _decodeFailure, ExceptionDispatchInfo.Capture(exception));
                     Volatile.Write(ref _decodeState, 3);
                     throw;
                 }
@@ -184,21 +191,18 @@ public sealed partial class ZLinkMessage
 
     private object? DecodeTypedCore(Type targetType)
     {
-        if (StreamCodec == ZlinkStreamCodec.Raw
-            && targetType == typeof(string))
+        if (StreamCodec == ZlinkStreamCodec.Raw && targetType == typeof(string))
             return Encoding.UTF8.GetString(_payload.Span);
 
         if (_payload.Length == 0)
-            return targetType.IsValueType
-                ? Activator.CreateInstance(targetType)
-                : null;
+            return targetType.IsValueType ? Activator.CreateInstance(targetType) : null;
 
-        if (ContentType is not null
+        if (
+            ContentType is not null
             && _codecs is not null
-            && _codecs.TryGetSerializer(ContentType, out var serializer))
-            return serializer.Deserialize(
-                ZLinkEncodedPayload.FromOwned(_payload),
-                targetType);
+            && _codecs.TryGetSerializer(ContentType, out var serializer)
+        )
+            return serializer.Deserialize(ZLinkEncodedPayload.FromOwned(_payload), targetType);
 
         // Canonical Actor Join recovery retains the frozen outer multipart
         // profile while the saved sole reply part remains the serializer's
@@ -206,34 +210,26 @@ public sealed partial class ZLinkMessage
         // so select the same registered serializer that normal typed encode
         // would use instead of interpreting protobuf/messagepack bytes as
         // framework JSON.
-        if (_resolveSerializerByDeclaredType
+        if (
+            _resolveSerializerByDeclaredType
             && _codecs is not null
-            && _codecs.TryResolveSerializer(
-                targetType,
-                out _,
-                out serializer))
-            return serializer.Deserialize(
-                ZLinkEncodedPayload.FromOwned(_payload),
-                targetType);
+            && _codecs.TryResolveSerializer(targetType, out _, out serializer)
+        )
+            return serializer.Deserialize(ZLinkEncodedPayload.FromOwned(_payload), targetType);
 
-        if (StreamCodec is { } codec
-            && codec != ZlinkStreamCodec.Json)
+        if (StreamCodec is { } codec && codec != ZlinkStreamCodec.Json)
             throw new InvalidOperationException(
-                $"Stream payload uses codec '{codec}', but no matching codec extension is registered.");
+                $"Stream payload uses codec '{codec}', but no matching codec extension is registered."
+            );
 
-        return ZLinkFrameworkJsonPayloadCodec.Deserialize(
-            _payload.Span,
-            targetType);
+        return ZLinkFrameworkJsonPayloadCodec.Deserialize(_payload.Span, targetType);
     }
 
-    private static object? CoerceDecodedValue(
-        object? decoded,
-        Type targetType)
+    private static object? CoerceDecodedValue(object? decoded, Type targetType)
     {
         if (decoded is null)
         {
-            if (!targetType.IsValueType
-                || Nullable.GetUnderlyingType(targetType) is not null)
+            if (!targetType.IsValueType || Nullable.GetUnderlyingType(targetType) is not null)
                 return null;
         }
         else if (targetType.IsInstanceOfType(decoded))
@@ -242,13 +238,15 @@ public sealed partial class ZLinkMessage
         }
 
         throw new InvalidCastException(
-            $"The retained message value cannot be decoded as '{targetType}'.");
+            $"The retained message value cannot be decoded as '{targetType}'."
+        );
     }
 
     private static ZLinkEncodedPayload EncodeValue(
         object? value,
         Type declaredType,
-        IZLinkMessageSerializer? serializer)
+        IZLinkMessageSerializer? serializer
+    )
     {
         if (value is null)
             return ZLinkEncodedPayload.FromOwned(ReadOnlyMemory<byte>.Empty);
@@ -257,12 +255,14 @@ public sealed partial class ZLinkMessage
             return serializer.Serialize(value, declaredType);
 
         return ZLinkEncodedPayload.FromOwned(
-            ZLinkFrameworkJsonPayloadCodec.Serialize(value, declaredType));
+            ZLinkFrameworkJsonPayloadCodec.Serialize(value, declaredType)
+        );
     }
 
-    private static (string ContentType, IZLinkMessageSerializer? Serializer) ResolvePayloadSerializer(
-        Type declaredType,
-        IZLinkMessageCodecRegistry codecs)
+    private static (
+        string ContentType,
+        IZLinkMessageSerializer? Serializer
+    ) ResolvePayloadSerializer(Type declaredType, IZLinkMessageCodecRegistry codecs)
     {
         if (codecs.TryResolveSerializer(declaredType, out var contentType, out var serializer))
             return (contentType, serializer);
@@ -274,4 +274,7 @@ public sealed partial class ZLinkMessage
     }
 }
 
-internal readonly record struct EncodedZLinkMessage(string ContentType, ZLinkEncodedPayload Payload);
+internal readonly record struct EncodedZLinkMessage(
+    string ContentType,
+    ZLinkEncodedPayload Payload
+);

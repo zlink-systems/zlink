@@ -18,9 +18,10 @@ public sealed class ApplicationJobQueueContractTests
                 ZLinkApplicationJobQueueProfile.Compact,
                 ZLinkApplicationJobQueueProfile.LowLatency,
                 ZLinkApplicationJobQueueProfile.Balanced,
-                ZLinkApplicationJobQueueProfile.Throughput
+                ZLinkApplicationJobQueueProfile.Throughput,
             },
-            Enum.GetValues<ZLinkApplicationJobQueueProfile>());
+            Enum.GetValues<ZLinkApplicationJobQueueProfile>()
+        );
 
         Assert.Equal(
             new[]
@@ -31,16 +32,18 @@ public sealed class ApplicationJobQueueContractTests
                 nameof(IZLinkInboundDispatchOptions.CoreHwmBudgetBytes),
                 nameof(IZLinkInboundDispatchOptions.CoreHwmMemoryLimitBytes),
                 nameof(IZLinkInboundDispatchOptions.CoreHwmProfile),
-                nameof(IZLinkInboundDispatchOptions.MaxQueuedApplicationJobs)
+                nameof(IZLinkInboundDispatchOptions.MaxQueuedApplicationJobs),
             },
             typeof(IZLinkInboundDispatchOptions)
                 .GetProperties()
                 .Select(static property => property.Name)
                 .Order(StringComparer.Ordinal)
-                .ToArray());
+                .ToArray()
+        );
 
-        var configure = typeof(IZLinkFrameworkOptions)
-            .GetMethod(nameof(IZLinkFrameworkOptions.ConfigureInboundDispatch));
+        var configure = typeof(IZLinkFrameworkOptions).GetMethod(
+            nameof(IZLinkFrameworkOptions.ConfigureInboundDispatch)
+        );
         Assert.NotNull(configure);
         Assert.Equal(typeof(IZLinkInboundDispatchOptions), configure.ReturnType);
         Assert.Null(typeof(IZLinkFrameworkOptions).GetMethod("ConfigureCoreHwm"));
@@ -64,23 +67,27 @@ public sealed class ApplicationJobQueueContractTests
                 nameof(ZLinkApplicationJobQueueStatus.PressureState),
                 nameof(ZLinkApplicationJobQueueStatus.QueuedApplicationJobs),
                 nameof(ZLinkApplicationJobQueueStatus.ReservedSupplyPermits),
-                nameof(ZLinkApplicationJobQueueStatus.ResumePermitCount)
+                nameof(ZLinkApplicationJobQueueStatus.ResumePermitCount),
             },
             typeof(ZLinkApplicationJobQueueStatus)
                 .GetProperties()
                 .Select(static property => property.Name)
                 .Order(StringComparer.Ordinal)
-                .ToArray());
+                .ToArray()
+        );
 
         Assert.Equal(
             typeof(ZLinkHostCapacityStatus),
             typeof(ZLinkFrameworkRuntimeStatus)
                 .GetProperty(nameof(ZLinkFrameworkRuntimeStatus.Capacity))!
-                .PropertyType);
-        Assert.NotNull(typeof(IZLinkFrameworkRuntime)
-            .GetMethod(nameof(IZLinkFrameworkRuntime.ResetCapacityMetrics)));
-        Assert.Null(typeof(IZLinkFrameworkRuntime)
-            .GetMethod("ResetCoreHwmBudgetMetrics"));
+                .PropertyType
+        );
+        Assert.NotNull(
+            typeof(IZLinkFrameworkRuntime).GetMethod(
+                nameof(IZLinkFrameworkRuntime.ResetCapacityMetrics)
+            )
+        );
+        Assert.Null(typeof(IZLinkFrameworkRuntime).GetMethod("ResetCoreHwmBudgetMetrics"));
     }
 }
 
@@ -89,8 +96,9 @@ public sealed class ApplicationJobQueueTests
     [Fact]
     public async Task BatchTransitions_PreserveFifoCancellationAndExactlyOncePermitReturn()
     {
-        using var queue = new ZLinkApplicationJobQueue(new(
-            ZLinkApplicationJobQueueProfile.Balanced, 4, 1, 4));
+        using var queue = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, 4, 1, 4)
+        );
         var leases = new ZLinkApplicationJobQueueLease?[4];
         Assert.Equal(4, queue.TryAcquireBatch(leases, 0, 4));
         queue.MarkQueuedBatch(leases, 3);
@@ -122,8 +130,9 @@ public sealed class ApplicationJobQueueTests
     [Fact]
     public async Task IngressBatch_ReservesAvailableBudgetAndDoesNotPassAnOlderWaiter()
     {
-        using var queue = new ZLinkApplicationJobQueue(new(
-            ZLinkApplicationJobQueueProfile.Balanced, 3, 1, 3));
+        using var queue = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, 3, 1, 3)
+        );
         var leases = new ZLinkApplicationJobQueueLease?[64];
         Assert.Equal(3, queue.TryAcquireBatch(leases, 0, leases.Length));
         Assert.Equal(3UL, queue.GetStatus().PermitsInUse);
@@ -150,36 +159,33 @@ public sealed class ApplicationJobQueueTests
         Assert.Equal(80U, defaults.ApplicationJobQueuePauseThresholdPercent);
         Assert.Equal(60U, defaults.ApplicationJobQueueResumeThresholdPercent);
         Assert.Throws<ZLinkConfigurationException>(() =>
-            defaults.ApplicationJobQueuePauseThresholdPercent = 0);
+            defaults.ApplicationJobQueuePauseThresholdPercent = 0
+        );
         Assert.Throws<ZLinkConfigurationException>(() =>
-            defaults.ApplicationJobQueueResumeThresholdPercent = 100);
+            defaults.ApplicationJobQueueResumeThresholdPercent = 100
+        );
 
         var resolved = ZLinkApplicationJobQueueCapacityResolver.Resolve(
             ZLinkApplicationJobQueueProfile.Balanced,
             configuredManualMax: 10,
             effectiveProcessorCount: 4,
             pauseThresholdPercent: 80,
-            resumeThresholdPercent: 60);
+            resumeThresholdPercent: 60
+        );
 
         Assert.Equal(8UL, resolved.PausePermitCount);
         Assert.Equal(6UL, resolved.ResumePermitCount);
-        Assert.Equal(
-            2UL,
-            ZLinkApplicationJobQueueCapacityResolver.ResolvePausePermitCount(
-                3,
-                50));
-        Assert.Equal(
-            0UL,
-            ZLinkApplicationJobQueueCapacityResolver.ResolveResumePermitCount(
-                3,
-                33));
+        Assert.Equal(2UL, ZLinkApplicationJobQueueCapacityResolver.ResolvePausePermitCount(3, 50));
+        Assert.Equal(0UL, ZLinkApplicationJobQueueCapacityResolver.ResolveResumePermitCount(3, 33));
         Assert.Throws<ZLinkConfigurationException>(() =>
             ZLinkApplicationJobQueueCapacityResolver.Resolve(
                 ZLinkApplicationJobQueueProfile.Balanced,
                 10,
                 4,
                 pauseThresholdPercent: 60,
-                resumeThresholdPercent: 60));
+                resumeThresholdPercent: 60
+            )
+        );
     }
 
     [Theory]
@@ -190,13 +196,16 @@ public sealed class ApplicationJobQueueTests
     public void Effective_processor_count_uses_the_minimum_known_positive_constraint(
         int runtimeProcessorCount,
         int? executorMaximum,
-        ulong expected)
+        ulong expected
+    )
     {
         Assert.Equal(
             expected,
             ZLinkApplicationJobQueueCapacityResolver.ResolveEffectiveProcessorCount(
                 runtimeProcessorCount,
-                executorMaximum));
+                executorMaximum
+            )
+        );
     }
 
     [Theory]
@@ -207,12 +216,14 @@ public sealed class ApplicationJobQueueTests
     public void Auto_profiles_resolve_from_the_fixed_effective_processor_count(
         ZLinkApplicationJobQueueProfile profile,
         ulong processorCount,
-        ulong expectedLimit)
+        ulong expectedLimit
+    )
     {
         var resolved = ZLinkApplicationJobQueueCapacityResolver.Resolve(
             profile,
             configuredManualMax: null,
-            processorCount);
+            processorCount
+        );
 
         Assert.Equal(processorCount, resolved.EffectiveProcessorCount);
         Assert.Equal(expectedLimit, resolved.EffectiveMaxQueuedApplicationJobs);
@@ -222,13 +233,16 @@ public sealed class ApplicationJobQueueTests
     [InlineData(0UL)]
     [InlineData(2147483648UL)]
     public void Manual_limit_outside_the_exact_range_is_rejected_before_startup(
-        ulong configuredManualMax)
+        ulong configuredManualMax
+    )
     {
         Assert.Throws<ZLinkConfigurationException>(() =>
             ZLinkApplicationJobQueueCapacityResolver.Resolve(
                 ZLinkApplicationJobQueueProfile.Balanced,
                 configuredManualMax,
-                8));
+                8
+            )
+        );
     }
 
     [Fact]
@@ -237,7 +251,8 @@ public sealed class ApplicationJobQueueTests
         var resolved = ZLinkApplicationJobQueueCapacityResolver.Resolve(
             ZLinkApplicationJobQueueProfile.Compact,
             int.MaxValue,
-            16);
+            16
+        );
 
         Assert.Equal((ulong)int.MaxValue, resolved.ConfiguredManualMax);
         Assert.Equal((ulong)int.MaxValue, resolved.EffectiveMaxQueuedApplicationJobs);
@@ -271,40 +286,30 @@ public sealed class ApplicationJobQueueTests
     {
         using var queue = CreateQueue(limit: 10);
         var applied = new List<ReceiveFlowState>();
-        using var registration = queue.RegisterReceiveFlowSocket(
-            new object(),
-            applied.Add);
+        using var registration = queue.RegisterReceiveFlowSocket(new object(), applied.Add);
         var leases = new List<ZLinkApplicationJobQueueLease>();
         for (var index = 0; index < 8; index++)
             leases.Add(await queue.AcquireAsync(CancellationToken.None));
 
-        Assert.Equal(
-            [ReceiveFlowState.Running, ReceiveFlowState.Paused],
-            applied);
-        Assert.Equal(
-            ZLinkApplicationJobQueuePressureState.Paused,
-            queue.GetStatus().PressureState);
+        Assert.Equal([ReceiveFlowState.Running, ReceiveFlowState.Paused], applied);
+        Assert.Equal(ZLinkApplicationJobQueuePressureState.Paused, queue.GetStatus().PressureState);
         leases[0].MarkQueued();
         Assert.Equal(7UL, queue.GetStatus().ReservedSupplyPermits);
         Assert.Equal(1UL, queue.GetStatus().QueuedApplicationJobs);
         Assert.Equal(2, applied.Count);
 
         leases[0].ReleaseForHandlerStart();
-        Assert.Equal(
-            ZLinkApplicationJobQueuePressureState.Paused,
-            queue.GetStatus().PressureState);
+        Assert.Equal(ZLinkApplicationJobQueuePressureState.Paused, queue.GetStatus().PressureState);
         Assert.Equal(2, applied.Count);
         leases[1].ReleaseForHandlerStart();
         Assert.Equal(
             ZLinkApplicationJobQueuePressureState.Running,
-            queue.GetStatus().PressureState);
+            queue.GetStatus().PressureState
+        );
         Assert.Equal(
-            [
-                ReceiveFlowState.Running,
-                ReceiveFlowState.Paused,
-                ReceiveFlowState.Running
-            ],
-            applied);
+            [ReceiveFlowState.Running, ReceiveFlowState.Paused, ReceiveFlowState.Running],
+            applied
+        );
 
         foreach (var lease in leases)
             lease.Dispose();
@@ -315,22 +320,16 @@ public sealed class ApplicationJobQueueTests
     {
         using var queue = CreateQueue(limit: 1);
         var applied = new List<ReceiveFlowState>();
-        using var registration = queue.RegisterReceiveFlowSocket(
-            new object(),
-            applied.Add);
+        using var registration = queue.RegisterReceiveFlowSocket(new object(), applied.Add);
         using var holder = await queue.AcquireAsync(CancellationToken.None);
         holder.MarkQueued();
         var waiting = queue.AcquireAsync(CancellationToken.None).AsTask();
 
         Assert.False(waiting.IsCompleted);
-        Assert.Equal(
-            [ReceiveFlowState.Running, ReceiveFlowState.Paused],
-            applied);
+        Assert.Equal([ReceiveFlowState.Running, ReceiveFlowState.Paused], applied);
         holder.ReleaseForHandlerStart();
         using var admitted = await waiting.WaitAsync(TimeSpan.FromSeconds(1));
-        Assert.Equal(
-            ZLinkApplicationJobQueuePressureState.Paused,
-            queue.GetStatus().PressureState);
+        Assert.Equal(ZLinkApplicationJobQueuePressureState.Paused, queue.GetStatus().PressureState);
         Assert.Equal(2, applied.Count);
 
         admitted.ReleaseForHandlerStart();
@@ -348,18 +347,18 @@ public sealed class ApplicationJobQueueTests
         using var first = queue.RegisterReceiveFlowSocket(identity, applied.Add);
         using var duplicate = queue.RegisterReceiveFlowSocket(
             identity,
-            _ => throw new InvalidOperationException(
-                "duplicate registration must reuse the existing socket entry"));
+            _ =>
+                throw new InvalidOperationException(
+                    "duplicate registration must reuse the existing socket entry"
+                )
+        );
 
         Assert.Equal([ReceiveFlowState.Paused], applied);
         first.Dispose();
         lease.ReleaseForHandlerStart();
-        Assert.Equal(
-            [ReceiveFlowState.Paused, ReceiveFlowState.Running],
-            applied);
+        Assert.Equal([ReceiveFlowState.Paused, ReceiveFlowState.Running], applied);
         duplicate.Dispose();
-        using var unregisteredLease =
-            await queue.AcquireAsync(CancellationToken.None);
+        using var unregisteredLease = await queue.AcquireAsync(CancellationToken.None);
         Assert.Equal(2, applied.Count);
     }
 
@@ -381,30 +380,31 @@ public sealed class ApplicationJobQueueTests
                     return;
                 pauseEntered.Set();
                 releasePause.Wait(TimeSpan.FromSeconds(2));
-            });
+            }
+        );
         using var first = await queue.AcquireAsync(CancellationToken.None);
         blockPause = true;
-        var secondTask = Task.Run(async () =>
-            await queue.AcquireAsync(CancellationToken.None));
+        var secondTask = Task.Run(async () => await queue.AcquireAsync(CancellationToken.None));
 
         Assert.True(pauseEntered.Wait(TimeSpan.FromSeconds(1)));
         var releaseTask = Task.Run(first.ReleaseForHandlerStart);
-        Assert.True(SpinWait.SpinUntil(
-            () => queue.GetStatus().PressureState
-                == ZLinkApplicationJobQueuePressureState.Running,
-            TimeSpan.FromSeconds(1)));
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                    queue.GetStatus().PressureState
+                    == ZLinkApplicationJobQueuePressureState.Running,
+                TimeSpan.FromSeconds(1)
+            )
+        );
         releasePause.Set();
 
         using var second = await secondTask.WaitAsync(TimeSpan.FromSeconds(1));
         await releaseTask.WaitAsync(TimeSpan.FromSeconds(1));
         lock (applied)
             Assert.Equal(
-                [
-                    ReceiveFlowState.Running,
-                    ReceiveFlowState.Paused,
-                    ReceiveFlowState.Running
-                ],
-                applied);
+                [ReceiveFlowState.Running, ReceiveFlowState.Paused, ReceiveFlowState.Running],
+                applied
+            );
     }
 
     [Fact]
@@ -419,9 +419,9 @@ public sealed class ApplicationJobQueueTests
                 if (state != ReceiveFlowState.Paused)
                     return;
                 closingRegistration!.Dispose();
-                throw new ZlinkConfigException(
-                    ZlinkConfigException.ErrorCode.InvalidState);
-            });
+                throw new ZlinkConfigException(ZlinkConfigException.ErrorCode.InvalidState);
+            }
+        );
 
         using var lease = await queue.AcquireAsync(CancellationToken.None);
         Assert.Equal(0UL, queue.GetPressureMetrics().FlowStateConfigFailures);
@@ -429,8 +429,9 @@ public sealed class ApplicationJobQueueTests
         Assert.Throws<ZlinkConfigException>(() =>
             queue.RegisterReceiveFlowSocket(
                 new object(),
-                _ => throw new ZlinkConfigException(
-                    ZlinkConfigException.ErrorCode.InternalError)));
+                _ => throw new ZlinkConfigException(ZlinkConfigException.ErrorCode.InternalError)
+            )
+        );
         Assert.Equal(1UL, queue.GetPressureMetrics().FlowStateConfigFailures);
         queue.ResetMetrics();
         Assert.Equal(0UL, queue.GetPressureMetrics().FlowStateConfigFailures);
@@ -441,25 +442,18 @@ public sealed class ApplicationJobQueueTests
     {
         var queue = CreateQueue(limit: 1);
         var applied = new List<ReceiveFlowState>();
-        using var registration = queue.RegisterReceiveFlowSocket(
-            new object(),
-            applied.Add);
+        using var registration = queue.RegisterReceiveFlowSocket(new object(), applied.Add);
         using var lease = await queue.AcquireAsync(CancellationToken.None);
-        Assert.Equal(
-            [ReceiveFlowState.Running, ReceiveFlowState.Paused],
-            applied);
+        Assert.Equal([ReceiveFlowState.Running, ReceiveFlowState.Paused], applied);
 
         queue.Dispose();
         lease.ReleaseForHandlerStart();
 
-        Assert.Equal(
-            [ReceiveFlowState.Running, ReceiveFlowState.Paused],
-            applied);
+        Assert.Equal([ReceiveFlowState.Running, ReceiveFlowState.Paused], applied);
         var afterDisposeApplyCount = 0;
         Assert.Throws<ObjectDisposedException>(() =>
-            queue.RegisterReceiveFlowSocket(
-                new object(),
-                _ => afterDisposeApplyCount++));
+            queue.RegisterReceiveFlowSocket(new object(), _ => afterDisposeApplyCount++)
+        );
         Assert.Equal(0, afterDisposeApplyCount);
     }
 
@@ -474,13 +468,12 @@ public sealed class ApplicationJobQueueTests
                 _ =>
                 {
                     queue.Dispose();
-                    throw new ZlinkConfigException(
-                        ZlinkConfigException.ErrorCode.InvalidState);
-                }));
+                    throw new ZlinkConfigException(ZlinkConfigException.ErrorCode.InvalidState);
+                }
+            )
+        );
 
-        Assert.Equal(
-            0UL,
-            queue.GetPressureMetrics().FlowStateConfigFailures);
+        Assert.Equal(0UL, queue.GetPressureMetrics().FlowStateConfigFailures);
     }
 
     [Fact]
@@ -497,16 +490,17 @@ public sealed class ApplicationJobQueueTests
                     return;
                 pauseEntered.Set();
                 releasePause.Wait();
-            });
-        var acquire = Task.Run(async () =>
-            await queue.AcquireAsync(CancellationToken.None));
+            }
+        );
+        var acquire = Task.Run(async () => await queue.AcquireAsync(CancellationToken.None));
         Assert.True(pauseEntered.Wait(TimeSpan.FromSeconds(1)));
 
         var dispose = Task.Run(queue.Dispose);
         await dispose.WaitAsync(TimeSpan.FromSeconds(1));
 
         var unregisterStarted = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var unregister = Task.Run(() =>
         {
             unregisterStarted.SetResult();
@@ -531,15 +525,12 @@ public sealed class ApplicationJobQueueTests
         time.Advance(TimeSpan.FromSeconds(5));
 
         Assert.Equal(TimeSpan.FromSeconds(5), queue.GetStatus().CurrentPauseDuration);
-        Assert.Equal(TimeSpan.FromSeconds(5),
-            queue.GetPressureMetrics().CumulativePauseDuration);
+        Assert.Equal(TimeSpan.FromSeconds(5), queue.GetPressureMetrics().CumulativePauseDuration);
         queue.ResetMetrics();
 
         var resetStatus = queue.GetStatus();
         var resetMetrics = queue.GetPressureMetrics();
-        Assert.Equal(
-            ZLinkApplicationJobQueuePressureState.Paused,
-            resetStatus.PressureState);
+        Assert.Equal(ZLinkApplicationJobQueuePressureState.Paused, resetStatus.PressureState);
         Assert.Equal(TimeSpan.FromSeconds(5), resetStatus.CurrentPauseDuration);
         Assert.Equal(0UL, resetMetrics.PausedTransitionCount);
         Assert.Equal(TimeSpan.Zero, resetMetrics.CumulativePauseDuration);
@@ -579,18 +570,13 @@ public sealed class ApplicationJobQueueTests
         using var queue = CreateQueue(limit: 1);
         using var lease = await queue.AcquireAsync(CancellationToken.None);
         lease.MarkQueued();
-        var entered = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        var finish = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Task? handlerTask = null;
-        ZLinkHandlerMethodInvoker invoker = (_, _, _, _, _, _) =>
-            handlerTask = RunHandler();
+        ZLinkHandlerMethodInvoker invoker = (_, _, _, _, _, _) => handlerTask = RunHandler();
 
         using var scope = ZLinkApplicationJobQueueInvocation.Enter(lease);
-        var invocation = ZLinkHandlerInvocationEngine.InvokeAsync(
-            new object(),
-            invoker);
+        var invocation = ZLinkHandlerInvocationEngine.InvokeAsync(new object(), invoker);
 
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(1));
         Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
@@ -616,14 +602,12 @@ public sealed class ApplicationJobQueueTests
         using var lease = await queue.AcquireAsync(CancellationToken.None);
         using var scope = ZLinkApplicationJobQueueInvocation.Enter(lease);
 
-        await ZLinkApplicationJobQueueInvocation
-            .EnsureQueuedPermitAsync(CancellationToken.None);
+        await ZLinkApplicationJobQueueInvocation.EnsureQueuedPermitAsync(CancellationToken.None);
         Assert.Equal(1UL, queue.GetStatus().QueuedApplicationJobs);
         ZLinkApplicationJobQueueInvocation.ReleaseForHandlerStart();
         Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
 
-        await ZLinkApplicationJobQueueInvocation
-            .EnsureQueuedPermitAsync(CancellationToken.None);
+        await ZLinkApplicationJobQueueInvocation.EnsureQueuedPermitAsync(CancellationToken.None);
         Assert.Equal(1UL, queue.GetStatus().QueuedApplicationJobs);
         Assert.Equal(1UL, queue.GetStatus().PermitsInUse);
         ZLinkApplicationJobQueueInvocation.ReleaseForHandlerStart();
@@ -639,9 +623,11 @@ public sealed class ApplicationJobQueueTests
         using var queue = CreateQueue(limit: 1);
         var payloadOwner = new CountingDisposable();
         var activationStarted = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var finishActivation = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         Task? detachedActivation = null;
 
         async Task ParentCallAsync()
@@ -650,9 +636,7 @@ public sealed class ApplicationJobQueueTests
             lease.MarkQueued();
             //  The record-carried bundle the runtime attaches to inbound
             //  records: binding envelope ownership + application job admission.
-            var admission = new ZLinkApplicationJobQueueRecordOwner(
-                payloadOwner,
-                lease);
+            var admission = new ZLinkApplicationJobQueueRecordOwner(payloadOwner, lease);
             detachedActivation = Task.Run(async () =>
             {
                 activationStarted.SetResult();
@@ -689,14 +673,10 @@ public sealed class ApplicationJobQueueTests
     [Fact]
     public void Only_terminal_record_kinds_bypass_dispatch_admission()
     {
-        Assert.False(ZLinkMeshDispatchPump.RequiresApplicationAdmission(
-            MeshRecordKind.Completion));
-        Assert.False(ZLinkMeshDispatchPump.RequiresApplicationAdmission(
-            MeshRecordKind.SendReady));
-        Assert.True(ZLinkMeshDispatchPump.RequiresApplicationAdmission(
-            MeshRecordKind.NodeSend));
-        Assert.True(ZLinkMeshDispatchPump.RequiresApplicationAdmission(
-            MeshRecordKind.SpotControl));
+        Assert.False(ZLinkMeshDispatchPump.RequiresApplicationAdmission(MeshRecordKind.Completion));
+        Assert.False(ZLinkMeshDispatchPump.RequiresApplicationAdmission(MeshRecordKind.SendReady));
+        Assert.True(ZLinkMeshDispatchPump.RequiresApplicationAdmission(MeshRecordKind.NodeSend));
+        Assert.True(ZLinkMeshDispatchPump.RequiresApplicationAdmission(MeshRecordKind.SpotControl));
     }
 
     [Fact]
@@ -751,13 +731,17 @@ public sealed class ApplicationJobQueueTests
 
     private static ZLinkApplicationJobQueue CreateQueue(
         ulong limit,
-        TimeProvider? timeProvider = null) =>
-        new(new ZLinkApplicationJobQueueCapacity(
-            ZLinkApplicationJobQueueProfile.Balanced,
-            ConfiguredManualMax: limit,
-            EffectiveProcessorCount: 8,
-            EffectiveMaxQueuedApplicationJobs: limit),
-            timeProvider: timeProvider);
+        TimeProvider? timeProvider = null
+    ) =>
+        new(
+            new ZLinkApplicationJobQueueCapacity(
+                ZLinkApplicationJobQueueProfile.Balanced,
+                ConfiguredManualMax: limit,
+                EffectiveProcessorCount: 8,
+                EffectiveMaxQueuedApplicationJobs: limit
+            ),
+            timeProvider: timeProvider
+        );
 
     private sealed class CountingDisposable : IDisposable
     {

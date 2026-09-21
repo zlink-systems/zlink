@@ -1,16 +1,16 @@
 package systems.zlink.stream.connector;
 
-import java.util.Arrays;
 import net.jpountz.lz4.LZ4Compressor;
 import net.jpountz.lz4.LZ4Factory;
+
+import java.util.Arrays;
 
 final class ZLinkStreamLz4Pickler {
     private static final int DEFAULT_MAX_DECOMPRESSED_PAYLOAD_SIZE = 64 * 1024;
     private static final int VERSION_MASK = 0x07;
     private static final LZ4Factory LZ4 = LZ4Factory.fastestInstance();
 
-    private ZLinkStreamLz4Pickler() {
-    }
+    private ZLinkStreamLz4Pickler() {}
 
     static byte[] pickle(byte[] source) {
         if (source.length == 0) {
@@ -18,13 +18,8 @@ final class ZLinkStreamLz4Pickler {
         }
         LZ4Compressor compressor = LZ4.fastCompressor();
         byte[] compressed = new byte[compressor.maxCompressedLength(source.length)];
-        int compressedLength = compressor.compress(
-            source,
-            0,
-            source.length,
-            compressed,
-            0,
-            compressed.length);
+        int compressedLength =
+                compressor.compress(source, 0, source.length, compressed, 0, compressed.length);
         if (compressedLength <= 0 || compressedLength >= source.length) {
             byte[] result = new byte[source.length + 1];
             result[0] = 0;
@@ -50,23 +45,28 @@ final class ZLinkStreamLz4Pickler {
         }
         PickleHeader header = decodeHeader(source);
         if (header.resultLength() > maxDecompressedSize) {
-            throw new IllegalArgumentException("LZ4 decoded stream payload exceeds maximum stream payload size");
+            throw new IllegalArgumentException(
+                    "LZ4 decoded stream payload exceeds maximum stream payload size");
         }
         if (!header.compressed()) {
             return Arrays.copyOfRange(source, header.dataOffset(), source.length);
         }
         int resultLength = Math.toIntExact(header.resultLength());
         byte[] output = new byte[resultLength];
-        int decodedLength = LZ4.safeDecompressor().decompress(
-            source,
-            header.dataOffset(),
-            source.length - header.dataOffset(),
-            output,
-            0);
+        int decodedLength =
+                LZ4.safeDecompressor()
+                        .decompress(
+                                source,
+                                header.dataOffset(),
+                                source.length - header.dataOffset(),
+                                output,
+                                0);
         if (decodedLength != resultLength) {
             throw new IllegalArgumentException(
-                "compressed stream payload decoded to " + decodedLength
-                    + " bytes, expected " + resultLength);
+                    "compressed stream payload decoded to "
+                            + decodedLength
+                            + " bytes, expected "
+                            + resultLength);
         }
         return output;
     }
@@ -119,6 +119,5 @@ final class ZLinkStreamLz4Pickler {
         return result;
     }
 
-    private record PickleHeader(int dataOffset, long resultLength, boolean compressed) {
-    }
+    private record PickleHeader(int dataOffset, long resultLength, boolean compressed) {}
 }

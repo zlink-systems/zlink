@@ -5,8 +5,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.function.Supplier;
 
 public final class ZLinkHandlerStages {
-    private ZLinkHandlerStages() {
-    }
+    private ZLinkHandlerStages() {}
 
     public static CompletionStage<Void> fromRunnable(Runnable operation) {
         try {
@@ -26,12 +25,12 @@ public final class ZLinkHandlerStages {
     }
 
     public static <T> CompletionStage<T> fromStageSupplier(
-        Supplier<? extends CompletionStage<T>> operation) {
+            Supplier<? extends CompletionStage<T>> operation) {
         try {
             CompletionStage<T> stage = operation.get();
             if (stage == null) {
                 return CompletableFuture.failedFuture(
-                    new NullPointerException("handler returned a null completion stage"));
+                        new NullPointerException("handler returned a null completion stage"));
             }
             return stage;
         } catch (RuntimeException ex) {

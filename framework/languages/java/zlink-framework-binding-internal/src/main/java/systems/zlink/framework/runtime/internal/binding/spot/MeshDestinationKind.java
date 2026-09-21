@@ -26,7 +26,6 @@ public enum MeshDestinationKind {
                 return kind;
             }
         }
-        throw new IllegalArgumentException(
-            "invalid MeshDestinationKind value: " + value);
+        throw new IllegalArgumentException("invalid MeshDestinationKind value: " + value);
     }
 }

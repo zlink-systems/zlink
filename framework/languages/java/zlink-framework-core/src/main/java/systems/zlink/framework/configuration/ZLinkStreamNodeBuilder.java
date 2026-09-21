@@ -18,9 +18,7 @@ public interface ZLinkStreamNodeBuilder {
     ZLinkStreamNodeBuilder setTlsServer(String certificatePath, String keyPath);
 
     ZLinkStreamNodeBuilder setTlsServer(
-        String certificatePath,
-        String keyPath,
-        boolean requireClientCertificate);
+            String certificatePath, String keyPath, boolean requireClientCertificate);
 
     ZLinkStreamNodeBuilder registerSession(Class<? extends ZLinkSession> sessionType);
 

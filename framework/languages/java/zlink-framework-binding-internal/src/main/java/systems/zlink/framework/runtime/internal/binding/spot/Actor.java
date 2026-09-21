@@ -5,6 +5,7 @@ package systems.zlink.framework.runtime.internal.binding.spot;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SendFlags;
+
 import java.time.Duration;
 import java.util.List;
 
@@ -14,13 +15,16 @@ public interface Actor extends AutoCloseable {
     ActorRef ref();
 
     /** Joins the given spot. */
-    OperationId joinSpot(RoutingId targetNodeRid, RoutingId targetSpotId,
-                         long targetSpotGeneration, List<Message> creationParts,
-                         Duration timeout);
+    OperationId joinSpot(
+            RoutingId targetNodeRid,
+            RoutingId targetSpotId,
+            long targetSpotGeneration,
+            List<Message> creationParts,
+            Duration timeout);
 
     /** Joins the entry spot of the given node. */
-    OperationId joinEntrySpot(RoutingId targetNodeRid, List<Message> creationParts,
-                              Duration timeout);
+    OperationId joinEntrySpot(
+            RoutingId targetNodeRid, List<Message> creationParts, Duration timeout);
 
     /** Leaves the currently joined spot. */
     OperationId leaveSpot(long expectedMembershipEpoch, Duration timeout);
@@ -29,8 +33,7 @@ public interface Actor extends AutoCloseable {
     void sendTo(ActorRef target, List<Message> parts, SendFlags flags);
 
     /** Sends a request to another actor. */
-    OperationId requestTo(ActorRef target, List<Message> parts, SendFlags flags,
-                          Duration timeout);
+    OperationId requestTo(ActorRef target, List<Message> parts, SendFlags flags, Duration timeout);
 
     /** Sends a message to this actor's bound STREAM session. */
     void sendBoundSession(List<Message> parts, SendFlags flags);

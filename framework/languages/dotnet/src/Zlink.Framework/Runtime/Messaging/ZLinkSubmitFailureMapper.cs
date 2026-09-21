@@ -7,7 +7,8 @@ internal static class ZLinkSubmitFailureMapper
 {
     public static ZLinkFrameworkException CreateChannelException(
         SubmitResult result,
-        string targetDescription)
+        string targetDescription
+    )
     {
         //  A select-one channel reports NotFound when applying eligibility and
         //  drain left no member to pick. The send path and its connection are
@@ -18,7 +19,8 @@ internal static class ZLinkSubmitFailureMapper
             return new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
                 $"{targetDescription} had no eligible member.",
-                ZLinkRetryAdvice.RetryAfterBackoff);
+                ZLinkRetryAdvice.RetryAfterBackoff
+            );
         return CreateException(result, targetDescription);
     }
 
@@ -28,12 +30,14 @@ internal static class ZLinkSubmitFailureMapper
         {
             SubmitResult.Ok => true,
             SubmitResult.Backpressured => false,
-            _ => throw CreateException(result, targetDescription)
+            _ => throw CreateException(result, targetDescription),
         };
     }
 
     public static ZLinkFrameworkException CreateException(
-        SubmitResult result, string targetDescription)
+        SubmitResult result,
+        string targetDescription
+    )
     {
         var kind = result switch
         {
@@ -41,7 +45,7 @@ internal static class ZLinkSubmitFailureMapper
             SubmitResult.NotConnected => ZLinkFrameworkErrorKind.Unavailable,
             SubmitResult.NotAdmitted => ZLinkFrameworkErrorKind.Rejected,
             SubmitResult.Terminated => ZLinkFrameworkErrorKind.ShuttingDown,
-            _ => ZLinkFrameworkErrorKind.InternalFailure
+            _ => ZLinkFrameworkErrorKind.InternalFailure,
         };
         return new ZLinkFrameworkException(
             kind,
@@ -49,7 +53,7 @@ internal static class ZLinkSubmitFailureMapper
             retryAdvice: result is SubmitResult.NotConnected
                 ? ZLinkRetryAdvice.RetryAfterBackoff
                 : ZLinkRetryAdvice.DoNotRetry,
-            innerException: new ZlinkSubmitException(
-                (ZlinkSubmitException.ErrorCode)(int)result));
+            innerException: new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)result)
+        );
     }
 }

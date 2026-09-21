@@ -9,7 +9,8 @@ internal static class ZLinkStreamPacketPayloadCodec
         Message payloadMessage,
         Type messageType,
         ZLinkCodecRegistryBuilder codecs,
-        IZlinkStreamCompressionCodec? compressionCodec)
+        IZlinkStreamCompressionCodec? compressionCodec
+    )
     {
         try
         {
@@ -26,9 +27,11 @@ internal static class ZLinkStreamPacketPayloadCodec
         Message payloadMessage,
         Type messageType,
         ZLinkCodecRegistryBuilder codecs,
-        IZlinkStreamCompressionCodec? compressionCodec)
+        IZlinkStreamCompressionCodec? compressionCodec
+    )
     {
-        if (messageType == typeof(Message)) return payloadMessage;
+        if (messageType == typeof(Message))
+            return payloadMessage;
 
         var payload = payloadMessage.AsReadOnlyMemory();
         if ((header.Flags & ZlinkStreamHeaderFlags.PayloadCompressed) != 0)
@@ -37,16 +40,20 @@ internal static class ZLinkStreamPacketPayloadCodec
         if (messageType == typeof(ZlinkStreamEncodedPayload))
             return new ZlinkStreamEncodedPayload(header.Codec, payload);
 
-        if (messageType == typeof(ReadOnlyMemory<byte>)) return payload;
+        if (messageType == typeof(ReadOnlyMemory<byte>))
+            return payload;
 
         if (header.Codec == ZlinkStreamCodec.Raw)
         {
-            if (messageType == typeof(string)) return Encoding.UTF8.GetString(payload.Span);
+            if (messageType == typeof(string))
+                return Encoding.UTF8.GetString(payload.Span);
 
-            if (messageType == typeof(byte[])) return payload.ToArray();
+            if (messageType == typeof(byte[]))
+                return payload.ToArray();
 
             throw new InvalidOperationException(
-                $"Raw actor packet '{header.Name}' cannot be decoded as '{messageType}'.");
+                $"Raw actor packet '{header.Name}' cannot be decoded as '{messageType}'."
+            );
         }
 
         if (header.Codec == ZlinkStreamCodec.Json)
@@ -55,23 +62,24 @@ internal static class ZLinkStreamPacketPayloadCodec
         if (codecs.TryResolveStreamContentType(header.Codec, out var contentType))
         {
             if (codecs.TryGetSerializer(contentType, out var serializer))
-                return serializer.Deserialize(
-                    ZLinkEncodedPayload.FromOwned(payload),
-                    messageType);
+                return serializer.Deserialize(ZLinkEncodedPayload.FromOwned(payload), messageType);
 
             throw new InvalidOperationException(
-                $"Actor packet '{header.Name}' uses codec '{header.Codec}', but no matching codec extension is registered.");
+                $"Actor packet '{header.Name}' uses codec '{header.Codec}', but no matching codec extension is registered."
+            );
         }
 
         throw new InvalidOperationException(
-            $"Actor packet '{header.Name}' uses codec '{header.Codec}'. Register a ZlinkStreamEncodedPayload handler and decode it explicitly.");
+            $"Actor packet '{header.Name}' uses codec '{header.Codec}'. Register a ZlinkStreamEncodedPayload handler and decode it explicitly."
+        );
     }
 
     public static ZLinkMessage DecodeMessage(
         ZlinkStreamHeader header,
         Message payloadMessage,
         ZLinkCodecRegistryBuilder codecs,
-        IZlinkStreamCompressionCodec? compressionCodec)
+        IZlinkStreamCompressionCodec? compressionCodec
+    )
     {
         var payload = payloadMessage.AsReadOnlyMemory();
         if ((header.Flags & ZlinkStreamHeaderFlags.PayloadCompressed) != 0)
@@ -83,26 +91,28 @@ internal static class ZLinkStreamPacketPayloadCodec
     public static ZlinkStreamEncodedPayload Encode(
         object? message,
         Type messageType,
-        ZLinkCodecRegistryBuilder codecs)
+        ZLinkCodecRegistryBuilder codecs
+    )
     {
-        if (message is not null
-            && codecs.TryResolveSerializer(messageType, out var contentType, out var serializer))
+        if (
+            message is not null
+            && codecs.TryResolveSerializer(messageType, out var contentType, out var serializer)
+        )
         {
             if (!codecs.TryResolveStreamCodec(contentType, out var codec))
                 throw new InvalidOperationException(
-                    $"Stream payload type '{messageType}' resolved to content type '{contentType}', but no stream codec maps to it.");
+                    $"Stream payload type '{messageType}' resolved to content type '{contentType}', but no stream codec maps to it."
+                );
 
             var encodedPayload = serializer.Serialize(message, messageType);
-            return new ZlinkStreamEncodedPayload(
-                codec,
-                encodedPayload.ToArray(),
-                messageType);
+            return new ZlinkStreamEncodedPayload(codec, encodedPayload.ToArray(), messageType);
         }
 
         return new ZlinkStreamEncodedPayload(
             ZlinkStreamCodec.Json,
             EncodeJson(message, messageType),
-            messageType);
+            messageType
+        );
     }
 
     public static byte[] EncodeJson(object? message, Type messageType)

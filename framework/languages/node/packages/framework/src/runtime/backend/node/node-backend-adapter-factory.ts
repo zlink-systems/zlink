@@ -1,8 +1,4 @@
-import type {
-  Context,
-  CoreHwmBudgetSnapshot,
-  TopicMessage
-} from '@zlink-systems/zlink';
+import type { Context, CoreHwmBudgetSnapshot, TopicMessage } from '@zlink-systems/zlink';
 import type { ZLinkCoreHwmOptions } from '../../../contracts/Configuration';
 import type {
   ZLinkBackendAdapterFactory,
@@ -81,7 +77,9 @@ class ZLinkNodeChannelBackendAdapter implements ZLinkChannelBackendAdapter {
   }
 
   createPublisherSocket(context: ZLinkBackendContext): ZLinkBackendPublisherSocket {
-    return wrapSocket(zlink.createPubSocket(asNodeContext(context))) as unknown as ZLinkBackendPublisherSocket;
+    return wrapSocket(
+      zlink.createPubSocket(asNodeContext(context))
+    ) as unknown as ZLinkBackendPublisherSocket;
   }
 
   createSubscriberSocket(context: ZLinkBackendContext): ZLinkBackendSubscriberSocket {
@@ -115,7 +113,9 @@ class ZLinkNodeStreamBackendAdapter implements ZLinkStreamBackendAdapter {
 class ZLinkNodeMonitoringBackendAdapter implements ZLinkMonitoringBackendAdapter {
   openSocketMonitor(socket: ZLinkBackendSocket): ZLinkBackendSocketMonitor {
     const nativeSocket = socket.nativeInstance as {
-      monitorOpen(): ReturnType<ZLinkBindingModule['createDealerSocket']>['monitorOpen'] extends (...args: never[]) => infer T
+      monitorOpen(): ReturnType<ZLinkBindingModule['createDealerSocket']>['monitorOpen'] extends (
+        ...args: never[]
+      ) => infer T
         ? T
         : never;
     };
@@ -133,8 +133,10 @@ class ZLinkNodeBackendContext implements ZLinkBackendContext {
   configureCoreHwm(options: ZLinkCoreHwmOptions | undefined): void {
     if (options === undefined) return;
     if (options.profile !== undefined) this.nativeInstance.options.coreHwmProfile = options.profile;
-    if (options.memoryLimitBytes !== undefined) this.nativeInstance.options.coreHwmMemoryLimitBytes = options.memoryLimitBytes;
-    if (options.budgetBytes !== undefined) this.nativeInstance.options.coreHwmBudgetBytes = options.budgetBytes;
+    if (options.memoryLimitBytes !== undefined)
+      this.nativeInstance.options.coreHwmMemoryLimitBytes = options.memoryLimitBytes;
+    if (options.budgetBytes !== undefined)
+      this.nativeInstance.options.coreHwmBudgetBytes = options.budgetBytes;
   }
 
   getCoreHwmBudgetSnapshot(): CoreHwmBudgetSnapshot {
@@ -170,18 +172,20 @@ function asNodeContext(context: ZLinkBackendContext): Context {
   return context.nativeInstance as Context;
 }
 
-function createNodeReadablePoller(
-  socket: { readonly nativeInstance: unknown }
-): ZLinkBackendReadablePoller {
+function createNodeReadablePoller(socket: {
+  readonly nativeInstance: unknown;
+}): ZLinkBackendReadablePoller {
   const eventLoopPoller = nodeEventLoopPollerOf(socket);
   let disposed = false;
   let readable = false;
-  let pending: {
-    readonly promise: Promise<boolean>;
-    readonly resolve: (readable: boolean) => void;
-    readonly signal?: AbortSignal;
-    readonly onAbort?: () => void;
-  } | undefined;
+  let pending:
+    | {
+        readonly promise: Promise<boolean>;
+        readonly resolve: (readable: boolean) => void;
+        readonly signal?: AbortSignal;
+        readonly onAbort?: () => void;
+      }
+    | undefined;
 
   const settlePending = (value: boolean): void => {
     const current = pending;
@@ -212,9 +216,7 @@ function createNodeReadablePoller(
       const promise = new Promise<boolean>((resolve) => {
         resolvePending = resolve;
       });
-      const onAbort = signal === undefined
-        ? undefined
-        : (): void => settlePending(false);
+      const onAbort = signal === undefined ? undefined : (): void => settlePending(false);
       pending = { promise, resolve: resolvePending, signal, onAbort };
       if (signal !== undefined && onAbort !== undefined) {
         signal.addEventListener('abort', onAbort, { once: true });

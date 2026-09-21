@@ -29,7 +29,6 @@ import {
   type ZLinkNestHandlerKind
 } from './handler-metadata';
 
-
 export function zlinkRequestHandler(
   groupName: string,
   packetName?: string,
@@ -144,9 +143,10 @@ export function zlinkSpotActorSendHandler<TSpot extends ZLinkSpot, TActor extend
   };
 }
 
-export function zlinkEntrySpotActorRequestHandler<TEntrySpot extends ZLinkEntrySpot, TActor extends ZLinkActor>(
-  options: ZLinkNestEntrySpotActorRequestHandlerOptions<TEntrySpot, TActor>
-): ClassDecorator {
+export function zlinkEntrySpotActorRequestHandler<
+  TEntrySpot extends ZLinkEntrySpot,
+  TActor extends ZLinkActor
+>(options: ZLinkNestEntrySpotActorRequestHandlerOptions<TEntrySpot, TActor>): ClassDecorator {
   return (target: Function) => {
     Injectable()(target as Type);
     appendNestSpotActorHandlerMetadata(target as Type, {
@@ -160,9 +160,10 @@ export function zlinkEntrySpotActorRequestHandler<TEntrySpot extends ZLinkEntryS
   };
 }
 
-export function zlinkEntrySpotActorSendHandler<TEntrySpot extends ZLinkEntrySpot, TActor extends ZLinkActor>(
-  options: ZLinkNestEntrySpotActorSendHandlerOptions<TEntrySpot, TActor>
-): ClassDecorator {
+export function zlinkEntrySpotActorSendHandler<
+  TEntrySpot extends ZLinkEntrySpot,
+  TActor extends ZLinkActor
+>(options: ZLinkNestEntrySpotActorSendHandlerOptions<TEntrySpot, TActor>): ClassDecorator {
   return (target: Function) => {
     Injectable()(target as Type);
     appendNestSpotActorHandlerMetadata(target as Type, {
@@ -227,11 +228,12 @@ function inferPacketName(handlerType: Type | undefined, handlerToken: InjectionT
       ? handlerType.name.slice(0, -'Handler'.length)
       : handlerType.name;
   }
-  const tokenName = typeof handlerToken === 'symbol'
-    ? handlerToken.description
-    : String(handlerToken);
+  const tokenName =
+    typeof handlerToken === 'symbol' ? handlerToken.description : String(handlerToken);
   if (tokenName === undefined || tokenName.trim() === '') {
-    throw new framework.ZLinkConfigurationException('ZLink handler packetName is required for anonymous provider tokens.');
+    throw new framework.ZLinkConfigurationException(
+      'ZLink handler packetName is required for anonymous provider tokens.'
+    );
   }
   return tokenName;
 }

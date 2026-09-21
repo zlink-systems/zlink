@@ -8,9 +8,8 @@ namespace zlink::framework::detail
 
 struct serializer_registry_test_access_t
 {
-    static void set_resolved_serializer_cache_capacity (
-      serializer_registry_t &registry,
-      std::size_t capacity) noexcept
+    static void set_resolved_serializer_cache_capacity (serializer_registry_t &registry,
+                                                        std::size_t capacity) noexcept
     {
         registry.set_resolved_serializer_cache_capacity_for_tests (capacity);
     }

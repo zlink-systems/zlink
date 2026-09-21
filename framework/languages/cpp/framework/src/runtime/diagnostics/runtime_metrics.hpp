@@ -77,9 +77,9 @@ class runtime_metrics_t
             return;
         }
         framework::detail::monitoring_runtime_t (_state).publish_metric (
-          framework::detail::metric_event_payload_t{
-            std::move (name), value, std::move (unit), instrument_kind, temporality,
-            std::move (tags)});
+          framework::detail::metric_event_payload_t{std::move (name), value, std::move (unit),
+                                                    instrument_kind, temporality,
+                                                    std::move (tags)});
     }
 
     std::shared_ptr<framework::detail::monitoring_runtime_state_t> _state;

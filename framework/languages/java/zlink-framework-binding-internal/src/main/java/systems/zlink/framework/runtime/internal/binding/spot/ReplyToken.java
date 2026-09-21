@@ -2,16 +2,17 @@
 
 package systems.zlink.framework.runtime.internal.binding.spot;
 
-import java.util.List;
-import java.util.Objects;
-import java.util.concurrent.atomic.AtomicReference;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SendFlags;
 
+import java.util.List;
+import java.util.Objects;
+import java.util.concurrent.atomic.AtomicReference;
+
 /**
- * An opaque handle that authorizes a single reply to a received request or
- * actor-join. Obtained from a {@link ReceiveRecord}; consumed by
- * {@link Dispatch#reply} or {@link Dispatch#actorJoinReply}.
+ * An opaque handle that authorizes a single reply to a received request or actor-join. Obtained
+ * from a {@link ReceiveRecord}; consumed by {@link Dispatch#reply} or {@link
+ * Dispatch#actorJoinReply}.
  */
 public final class ReplyToken {
     private final byte[] opaque;

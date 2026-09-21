@@ -32,7 +32,8 @@ public sealed class EndpointNotationTests
     {
         Assert.Equal(
             "tcp://[fe80::1%25eth0]:80",
-            ZLinkEndpointNotation.Normalize("tcp://[fe80::1%25eth0]:80"));
+            ZLinkEndpointNotation.Normalize("tcp://[fe80::1%25eth0]:80")
+        );
     }
 
     [Fact]
@@ -44,7 +45,8 @@ public sealed class EndpointNotationTests
         // drops it.
         Assert.Equal(
             "tcp://[fe80::1%25eth0]:80",
-            ZLinkEndpointNotation.Normalize("tcp://[fe80::1%eth0]:80"));
+            ZLinkEndpointNotation.Normalize("tcp://[fe80::1%eth0]:80")
+        );
     }
 
     [Fact]
@@ -52,8 +54,8 @@ public sealed class EndpointNotationTests
     {
         Assert.Equal(
             "tcp://user:pass@host.example.com:443/path?q=1#frag",
-            ZLinkEndpointNotation.Normalize(
-                "tcp://user:pass@Host.Example.com:0443/path/?q=1#frag"));
+            ZLinkEndpointNotation.Normalize("tcp://user:pass@Host.Example.com:0443/path/?q=1#frag")
+        );
     }
 
     [Fact]
@@ -90,7 +92,8 @@ public sealed class EndpointNotationTests
     [InlineData("INPROC://Some-Node-Identity", "inproc://Some-Node-Identity")]
     public void Normalize_OpaqueScheme_OnlyLowercasesSchemeAndKeepsRemainderByteIdentical(
         string input,
-        string expected)
+        string expected
+    )
     {
         Assert.Equal(expected, ZLinkEndpointNotation.Normalize(input));
     }

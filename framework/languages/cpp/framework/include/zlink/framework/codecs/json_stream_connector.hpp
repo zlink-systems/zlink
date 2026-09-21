@@ -60,13 +60,12 @@ template <typename T>
 [[nodiscard]] subscription_t
 on (connector_t &connector, std::string packet_name, std::function<void (const T &)> callback)
 {
-    return connector.on<packet_t> (
-      std::move (packet_name),
-      [callback = std::move (callback)] (const message_t<packet_t> &message) {
-          T value{};
-          decode_payload (message.payload.codec, message.payload.payload, value);
-          callback (std::move (value));
-      });
+    return connector.on<packet_t> (std::move (packet_name), [callback = std::move (callback)] (
+                                                              const message_t<packet_t> &message) {
+        T value{};
+        decode_payload (message.payload.codec, message.payload.payload, value);
+        callback (std::move (value));
+    });
 }
 
 template <typename T>

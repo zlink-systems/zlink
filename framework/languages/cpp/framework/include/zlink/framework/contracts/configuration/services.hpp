@@ -134,7 +134,8 @@ class service_collection_t
     }
 
     template <typename T, typename... TDependencies>
-    requires (sizeof...(TDependencies) > 0) service_collection_t &add_singleton ()
+        requires (sizeof...(TDependencies) > 0)
+    service_collection_t &add_singleton ()
     {
         return add_injected<T, TDependencies...> (service_lifetime_t::singleton);
     }
@@ -154,7 +155,8 @@ class service_collection_t
     }
 
     template <typename T, typename... TDependencies>
-    requires (sizeof...(TDependencies) > 0) service_collection_t &add_scoped ()
+        requires (sizeof...(TDependencies) > 0)
+    service_collection_t &add_scoped ()
     {
         return add_injected<T, TDependencies...> (service_lifetime_t::scoped);
     }
@@ -168,7 +170,8 @@ class service_collection_t
     }
 
     template <typename T, typename... TDependencies>
-    requires (sizeof...(TDependencies) > 0) service_collection_t &add_transient ()
+        requires (sizeof...(TDependencies) > 0)
+    service_collection_t &add_transient ()
     {
         return add_injected<T, TDependencies...> (service_lifetime_t::transient);
     }
@@ -230,8 +233,8 @@ class service_collection_t
 
     service_collection_t &
     add_descriptor (std::type_index type, service_lifetime_t lifetime, service_factory_t factory);
-    service_collection_t &
-    add_singleton_instance (std::type_index type, std::shared_ptr<void> instance);
+    service_collection_t &add_singleton_instance (std::type_index type,
+                                                  std::shared_ptr<void> instance);
 
     std::shared_ptr<detail::service_registry_t> _registry;
 };
@@ -244,15 +247,14 @@ inline constexpr std::size_t max_injected_constructor_arity = 12;
 template <typename T> struct any_but_t
 {
     template <typename U>
-    requires (!std::same_as<std::remove_cvref_t<U>, T>)
+        requires (!std::same_as<std::remove_cvref_t<U>, T>)
     operator U & () const;
 };
 
 template <typename T, std::size_t... I>
 consteval bool constructible_with_n (std::index_sequence<I...>)
 {
-    return std::is_constructible_v<
-      T, decltype ((static_cast<void> (I), any_but_t<T>{}))...>;
+    return std::is_constructible_v<T, decltype ((static_cast<void> (I), any_but_t<T>{}))...>;
 }
 
 template <typename T, std::size_t N = max_injected_constructor_arity>
@@ -261,9 +263,8 @@ consteval std::size_t injected_constructor_arity ()
     if constexpr (constructible_with_n<T> (std::make_index_sequence<N>{})) {
         return N;
     } else {
-        static_assert (N > 0,
-                       "handler must have an injectable constructor with no more than 12 "
-                       "dependencies");
+        static_assert (N > 0, "handler must have an injectable constructor with no more than 12 "
+                              "dependencies");
         return injected_constructor_arity<T, N - 1> ();
     }
 }
@@ -273,7 +274,7 @@ template <typename THandler> struct ctor_injector_t
     service_provider_t &provider;
 
     template <typename U>
-    requires (!std::same_as<std::remove_cvref_t<U>, THandler>)
+        requires (!std::same_as<std::remove_cvref_t<U>, THandler>)
     operator U & () const
     {
         using dependency_t = std::remove_cvref_t<U>;
@@ -286,33 +287,27 @@ template <typename THandler> struct ctor_injector_t
 };
 
 template <typename T, std::size_t... I>
-std::unique_ptr<T> make_injected_unique (service_provider_t &provider,
-                                         std::index_sequence<I...>)
+std::unique_ptr<T> make_injected_unique (service_provider_t &provider, std::index_sequence<I...>)
 {
-    return std::make_unique<T> (
-      (static_cast<void> (I), ctor_injector_t<T>{provider})...);
+    return std::make_unique<T> ((static_cast<void> (I), ctor_injector_t<T>{provider})...);
 }
 
 template <typename T, std::size_t... I>
-std::shared_ptr<T> make_injected_shared (service_provider_t &provider,
-                                         std::index_sequence<I...>)
+std::shared_ptr<T> make_injected_shared (service_provider_t &provider, std::index_sequence<I...>)
 {
-    return std::make_shared<T> (
-      (static_cast<void> (I), ctor_injector_t<T>{provider})...);
+    return std::make_shared<T> ((static_cast<void> (I), ctor_injector_t<T>{provider})...);
 }
 
-template <typename T>
-std::unique_ptr<T> make_injected_unique (service_provider_t &provider)
+template <typename T> std::unique_ptr<T> make_injected_unique (service_provider_t &provider)
 {
-    return make_injected_unique<T> (
-      provider, std::make_index_sequence<injected_constructor_arity<T> ()>{});
+    return make_injected_unique<T> (provider,
+                                    std::make_index_sequence<injected_constructor_arity<T> ()>{});
 }
 
-template <typename T>
-std::shared_ptr<T> make_injected_shared (service_provider_t &provider)
+template <typename T> std::shared_ptr<T> make_injected_shared (service_provider_t &provider)
 {
-    return make_injected_shared<T> (
-      provider, std::make_index_sequence<injected_constructor_arity<T> ()>{});
+    return make_injected_shared<T> (provider,
+                                    std::make_index_sequence<injected_constructor_arity<T> ()>{});
 }
 
 template <typename THandler> struct injected_handler_registrar_t
@@ -323,9 +318,7 @@ template <typename THandler> struct injected_handler_registrar_t
             return;
         }
         services.add_factory<THandler> (
-          [] (service_provider_t &provider) {
-              return make_injected_unique<THandler> (provider);
-          },
+          [] (service_provider_t &provider) { return make_injected_unique<THandler> (provider); },
           service_lifetime_t::transient);
     }
 };

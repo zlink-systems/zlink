@@ -1,6 +1,7 @@
 package systems.zlink.framework.locations.redis;
 
 import io.lettuce.core.RedisURI;
+
 import java.time.Duration;
 import java.util.Objects;
 
@@ -71,8 +72,7 @@ public final class ZLinkRedisLocationOptions {
     private static String requireKeyPrefix(String value) {
         String prefix = requireText(value, "keyPrefix");
         if (prefix.indexOf('{') >= 0 || prefix.indexOf('}') >= 0) {
-            throw new IllegalArgumentException(
-                "keyPrefix must not contain Redis hash-tag braces.");
+            throw new IllegalArgumentException("keyPrefix must not contain Redis hash-tag braces.");
         }
         return prefix;
     }

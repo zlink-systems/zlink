@@ -25,7 +25,9 @@ public sealed class StreamBackpressureTests(ITestOutputHelper output)
 
         Assert.True(stream.Write(ZLinkMessage.From(expected), flags));
         var received = await fixture.ReadSubmissionAsync(
-            saturation, JsonSerializer.SerializeToUtf8Bytes(expected).Length);
+            saturation,
+            JsonSerializer.SerializeToUtf8Bytes(expected).Length
+        );
         Assert.Equal(expected, JsonSerializer.Deserialize<byte[]>(received));
         await fixture.AssertMarkerAsync();
         output.WriteLine($"public Write({flags}) returned true; payload delivered once in order");
@@ -43,19 +45,23 @@ public sealed class StreamBackpressureTests(ITestOutputHelper output)
             fixture.Stream,
             new TestSessionHandlerRegistry(),
             static () => ValueTask.CompletedTask,
-            static _ => ValueTask.CompletedTask);
+            static _ => ValueTask.CompletedTask
+        );
         IZLinkSessionContext session = context;
         var expected = new List<BackpressurePayload>();
         Task? pending = null;
         for (var sequence = 0; sequence < 10000; sequence++)
         {
             if (reply)
-                _ = context.EnterDispatch(CreateRequestHeader() with
-                {
-                    RequestSeq = new ZlinkStreamRequestSeq(checked((uint)sequence + 1))
-                });
+                _ = context.EnterDispatch(
+                    CreateRequestHeader() with
+                    {
+                        RequestSeq = new ZlinkStreamRequestSeq(checked((uint)sequence + 1)),
+                    }
+                );
             var payload = new BackpressurePayload(
-                $"{(reply ? "typed-reply" : "typed-send")}-{sequence}:" + new string('x', 2048));
+                $"{(reply ? "typed-reply" : "typed-send")}-{sequence}:" + new string('x', 2048)
+            );
             expected.Add(payload);
             var submission = reply
                 ? session.Client.Reply(payload).Async(fixture.Token).AsTask()
@@ -70,30 +76,49 @@ public sealed class StreamBackpressureTests(ITestOutputHelper output)
             await submission;
         }
         Assert.NotNull(pending);
-        Assert.False(pending.IsCompleted,
-            $"Expected pending admission; status={pending.Status}; error={pending.Exception}");
-        output.WriteLine($"public typed {(reply ? "Reply" : "Send")} admission pending after {expected.Count} submissions");
+        Assert.False(
+            pending.IsCompleted,
+            $"Expected pending admission; status={pending.Status}; error={pending.Exception}"
+        );
+        output.WriteLine(
+            $"public typed {(reply ? "Reply" : "Send")} admission pending after {expected.Count} submissions"
+        );
         if (reply)
         {
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                session.Client.Reply(new BackpressurePayload("duplicate"))
-                    .Async(fixture.Token).AsTask());
+                session
+                    .Client.Reply(new BackpressurePayload("duplicate"))
+                    .Async(fixture.Token)
+                    .AsTask()
+            );
         }
 
         for (var index = 0; index < expected.Count; index++)
         {
             var received = DecodeFrame(await fixture.ReadFrameAsync());
-            Assert.Equal(reply ? ZlinkStreamMessageKind.Response : ZlinkStreamMessageKind.Send,
-                received.Header.Kind);
+            Assert.Equal(
+                reply ? ZlinkStreamMessageKind.Response : ZlinkStreamMessageKind.Send,
+                received.Header.Kind
+            );
             Assert.Equal(ZlinkStreamCodec.Json, received.Header.Codec);
-            Assert.Equal(expected[index], JsonSerializer.Deserialize<BackpressurePayload>(
-                received.Payload, new JsonSerializerOptions { PropertyNameCaseInsensitive = true }));
+            Assert.Equal(
+                expected[index],
+                JsonSerializer.Deserialize<BackpressurePayload>(
+                    received.Payload,
+                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true }
+                )
+            );
             if (reply)
-                Assert.Equal(new ZlinkStreamRequestSeq(checked((uint)index + 1)), received.Header.RequestSeq);
+                Assert.Equal(
+                    new ZlinkStreamRequestSeq(checked((uint)index + 1)),
+                    received.Header.RequestSeq
+                );
         }
         await pending.WaitAsync(fixture.Token);
         await fixture.AssertMarkerAsync();
-        output.WriteLine("typed JSON frames delivered once in order; admission completed without terminal refusal");
+        output.WriteLine(
+            "typed JSON frames delivered once in order; admission completed without terminal refusal"
+        );
     }
 
     [Fact]
@@ -102,8 +127,12 @@ public sealed class StreamBackpressureTests(ITestOutputHelper output)
         using var runtime = new RuntimeFixture();
         var actor = new ZLinkBackendActorRef(RoutingId.From("actor-node"), "actor", 1);
         var header = CreateRequestHeader();
-        var reply = ZLinkActorReply.FromError(new ZLinkFrameworkException(
-            ZLinkFrameworkErrorKind.Unavailable, "actor-terminal-payload" + new string('x', 2048)));
+        var reply = ZLinkActorReply.FromError(
+            new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                "actor-terminal-payload" + new string('x', 2048)
+            )
+        );
         var expected = reply.ToFrame(header);
         byte[]? captured = null;
         var attempts = 0;
@@ -126,11 +155,14 @@ public sealed class StreamBackpressureTests(ITestOutputHelper output)
                 attempts++;
                 captured = Assert.Single(parts).AsReadOnlySpan().ToArray();
                 return SubmitResult.Backpressured;
-            });
+            }
+        );
 
         Assert.Equal(expected, captured);
         Assert.Equal(1, attempts);
-        output.WriteLine("direct reply accepted Backpressured snapshot and invoked the callback once");
+        output.WriteLine(
+            "direct reply accepted Backpressured snapshot and invoked the callback once"
+        );
     }
 
     [Fact]
@@ -142,8 +174,10 @@ public sealed class StreamBackpressureTests(ITestOutputHelper output)
         var actor = node.CreateActor("backpressure-actor");
         await using var sessions = node.CreateStreamSessionService(fixture.Socket);
         sessions.Start();
-        Assert.Equal(SubmitResult.Ok, sessions.BindActor(
-            fixture.RoutingId, actor, out _, TimeSpan.FromSeconds(5)));
+        Assert.Equal(
+            SubmitResult.Ok,
+            sessions.BindActor(fixture.RoutingId, actor, out _, TimeSpan.FromSeconds(5))
+        );
         Assert.Equal(actor, Assert.Single(sessions.Bindings(fixture.RoutingId)).Actor);
         var saturation = await fixture.SaturateAsync();
         var expected = Enumerable.Repeat((byte)19, 2048).ToArray();
@@ -152,22 +186,29 @@ public sealed class StreamBackpressureTests(ITestOutputHelper output)
         Assert.Equal(SubmitResult.Ok, node.SendBoundSession(actor, [payload]));
         Assert.Equal(expected, await fixture.ReadSubmissionAsync(saturation, expected.Length));
         await fixture.AssertMarkerAsync();
-        output.WriteLine("managed bound session returned Ok; retained payload delivered once in order");
+        output.WriteLine(
+            "managed bound session returned Ok; retained payload delivered once in order"
+        );
     }
 
     private static ReceivedFrame DecodeFrame(byte[] frame)
     {
         Assert.True(ZLinkStreamFrameCodec.TryDecode(frame, out var header, out var payload));
-        return new ReceivedFrame(ZLinkStreamProtocolDefaults.DecodeHeader(header.ToArray()), payload.ToArray());
+        return new ReceivedFrame(
+            ZLinkStreamProtocolDefaults.DecodeHeader(header.ToArray()),
+            payload.ToArray()
+        );
     }
 
-    private static ZlinkStreamHeader CreateRequestHeader() => new(
-        ZlinkStreamMessageKind.Request,
-        ZlinkStreamCodec.Json,
-        ZlinkStreamHeaderFlags.HasRequestSeq,
-        new ZlinkStreamRequestSeq(17),
-        "backpressure-request",
-        ZlinkStreamMetadata.Empty);
+    private static ZlinkStreamHeader CreateRequestHeader() =>
+        new(
+            ZlinkStreamMessageKind.Request,
+            ZlinkStreamCodec.Json,
+            ZlinkStreamHeaderFlags.HasRequestSeq,
+            new ZlinkStreamRequestSeq(17),
+            "backpressure-request",
+            ZlinkStreamMetadata.Empty
+        );
 
     private sealed record BackpressurePayload(string Value);
 
@@ -185,7 +226,10 @@ public sealed class StreamBackpressureTests(ITestOutputHelper output)
                 registration,
                 new ZLinkHandlerRegistry([]),
                 new ZLinkHandlerDispatcher(
-                    _provider.GetRequiredService<IServiceScopeFactory>(), registration));
+                    _provider.GetRequiredService<IServiceScopeFactory>(),
+                    registration
+                )
+            );
         }
 
         public ZLinkFrameworkRuntime Runtime { get; }
@@ -195,13 +239,17 @@ public sealed class StreamBackpressureTests(ITestOutputHelper output)
 
     private sealed class TestSessionHandlerRegistry : IZLinkSessionHandlerRegistry
     {
-        public void AddHandler<THandler>() where THandler : class { }
-        public void AddHandler<THandler>(string packetName) where THandler : class { }
+        public void AddHandler<THandler>()
+            where THandler : class { }
+
+        public void AddHandler<THandler>(string packetName)
+            where THandler : class { }
 
         public ValueTask<bool> TryHandleAsync(
             ZLinkSessionDispatchContext dispatch,
             ZLinkMessage payload,
-            CancellationToken cancellationToken = default) => ValueTask.FromResult(false);
+            CancellationToken cancellationToken = default
+        ) => ValueTask.FromResult(false);
     }
 
     private sealed class SaturatedStream : IAsyncDisposable
@@ -229,7 +277,11 @@ public sealed class StreamBackpressureTests(ITestOutputHelper output)
             _completionPoller = Systems.Zlink.Zlink.CreatePoller();
             _completionPoller.Add(Socket, PollEventFlags.PollCompletion, 1);
             _backend = new ZLinkBackendStreamSocketWrapper(
-                Socket, null!, new ZLinkMeshCompletionTable(), ownsNode: false);
+                Socket,
+                null!,
+                new ZLinkMeshCompletionTable(),
+                ownsNode: false
+            );
         }
 
         public IContext Context { get; }
@@ -245,14 +297,22 @@ public sealed class StreamBackpressureTests(ITestOutputHelper output)
             {
                 fixture.Socket.Bind("tcp://127.0.0.1:*");
                 await fixture._peer.ConnectAsync(
-                    IPAddress.Loopback, new Uri(fixture.Socket.Options.LastEndpoint).Port, fixture.Token);
-                await fixture._peer.GetStream().WriteAsync(
-                    new byte[] { 0, 0, 0, 0, 0, 1, 42 }, fixture.Token);
+                    IPAddress.Loopback,
+                    new Uri(fixture.Socket.Options.LastEndpoint).Port,
+                    fixture.Token
+                );
+                await fixture
+                    ._peer.GetStream()
+                    .WriteAsync(new byte[] { 0, 0, 0, 0, 0, 1, 42 }, fixture.Token);
                 using var packet = StreamPacket.Create();
                 Assert.True(fixture.Socket.RecvPacket(packet));
                 fixture.RoutingId = packet.RoutingId!.Value;
                 fixture.Stream = new ZLinkManagedStream(
-                    fixture._backend, fixture.RoutingId, new ZLinkCodecRegistryBuilder(), "tcp");
+                    fixture._backend,
+                    fixture.RoutingId,
+                    new ZLinkCodecRegistryBuilder(),
+                    "tcp"
+                );
                 return fixture;
             }
             catch
@@ -279,16 +339,23 @@ public sealed class StreamBackpressureTests(ITestOutputHelper output)
                     Token.ThrowIfCancellationRequested();
                     if (!submission.Admitted.IsCompleted)
                     {
-                        _output.WriteLine($"snapshot={submission.Result}; admittedCompleted=false; sequence={sequence}");
+                        _output.WriteLine(
+                            $"snapshot={submission.Result}; admittedCompleted=false; sequence={sequence}"
+                        );
                         return new Saturation(sequence + 1, submission.Admitted);
                     }
                 }
                 await submission.Admitted.WaitAsync(Token);
             }
-            throw new Xunit.Sdk.XunitException("Did not reach native STREAM backpressure within 10000 messages.");
+            throw new Xunit.Sdk.XunitException(
+                "Did not reach native STREAM backpressure within 10000 messages."
+            );
         }
 
-        public async Task<byte[]> ReadSubmissionAsync(Saturation saturation, int? targetLength = null)
+        public async Task<byte[]> ReadSubmissionAsync(
+            Saturation saturation,
+            int? targetLength = null
+        )
         {
             // These sends were individually admitted before the next submit.
             for (var sequence = 0; sequence < saturation.Count - 1; sequence++)
@@ -315,7 +382,9 @@ public sealed class StreamBackpressureTests(ITestOutputHelper output)
             if (!fillerFirst)
                 AssertFiller(saturation.Count - 1, await ReadAsync(FillerSize));
             await saturation.Admitted.WaitAsync(Token);
-            _output.WriteLine($"drained={saturation.Count}; retained filler and target delivered once");
+            _output.WriteLine(
+                $"drained={saturation.Count}; retained filler and target delivered once"
+            );
             return target;
         }
 
@@ -345,8 +414,7 @@ public sealed class StreamBackpressureTests(ITestOutputHelper output)
             return bytes;
         }
 
-        private void PumpCompletions() =>
-            _completionPoller.Wait(_completionEvents, TimeSpan.Zero);
+        private void PumpCompletions() => _completionPoller.Wait(_completionEvents, TimeSpan.Zero);
 
         public async Task<byte[]> ReadFrameAsync()
         {
@@ -366,7 +434,8 @@ public sealed class StreamBackpressureTests(ITestOutputHelper output)
             using var noExtra = CancellationTokenSource.CreateLinkedTokenSource(Token);
             noExtra.CancelAfter(TimeSpan.FromMilliseconds(100));
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-                _peer.GetStream().ReadAsync(new byte[1], noExtra.Token).AsTask());
+                _peer.GetStream().ReadAsync(new byte[1], noExtra.Token).AsTask()
+            );
             Assert.False(Token.IsCancellationRequested);
         }
 
@@ -381,5 +450,6 @@ public sealed class StreamBackpressureTests(ITestOutputHelper output)
     }
 
     private sealed record Saturation(int Count, Task Admitted);
+
     private sealed record ReceivedFrame(ZlinkStreamHeader Header, byte[] Payload);
 }

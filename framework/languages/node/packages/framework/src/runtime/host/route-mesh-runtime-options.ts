@@ -6,9 +6,7 @@ import type {
 import type { ZLinkSpotNodeRuntimeManager } from '../spots';
 
 export class DefaultZLinkRouteMeshRuntimeOptions implements ZLinkRouteMeshRuntimeOptions {
-  constructor(
-    private readonly manager: () => ZLinkSpotNodeRuntimeManager | undefined
-  ) {}
+  constructor(private readonly manager: () => ZLinkSpotNodeRuntimeManager | undefined) {}
 
   mesh(meshName: string): ZLinkMeshPlacementRuntimeOptions {
     const manager = this.requireManager();

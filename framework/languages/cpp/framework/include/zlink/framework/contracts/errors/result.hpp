@@ -19,8 +19,7 @@ template <typename T> class result_t
   public:
     static result_t success (T value) { return result_t (std::move (value)); }
 
-    static result_t
-    failure (framework_error_kind_t kind, std::string message)
+    static result_t failure (framework_error_kind_t kind, std::string message)
     {
         return result_t (framework_exception_t (kind, std::move (message)));
     }
@@ -71,8 +70,7 @@ template <> class result_t<void>
   public:
     static result_t success () { return result_t (); }
 
-    static result_t
-    failure (framework_error_kind_t kind, std::string message)
+    static result_t failure (framework_error_kind_t kind, std::string message)
     {
         return result_t (framework_exception_t (kind, std::move (message)));
     }
@@ -119,11 +117,9 @@ struct result_access_t
     }
 };
 
-template <typename T>
-result_t<T> boundary_failure (boundary_error_t state, std::string message)
+template <typename T> result_t<T> boundary_failure (boundary_error_t state, std::string message)
 {
-    return result_access_t::failure<T> (
-      make_boundary_exception (state, std::move (message)));
+    return result_access_t::failure<T> (make_boundary_exception (state, std::move (message)));
 }
 
 /* Copies the source failure (kind, message and internal boundary state) into

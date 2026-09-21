@@ -9,18 +9,15 @@ internal static class ZlinkStreamFlowContext
         get
         {
             var lease = Ambient.Value;
-            return lease is { Active: true }
-                ? (lease.FlowId, lease.Origin)
-                : null;
+            return lease is { Active: true } ? (lease.FlowId, lease.Origin) : null;
         }
     }
 
     public static IDisposable Enter(string? flowId, ZlinkStreamFlowOrigin? origin)
     {
         var previous = Ambient.Value;
-        var current = flowId is not null && origin is not null
-            ? new FlowLease(flowId, origin.Value)
-            : null;
+        var current =
+            flowId is not null && origin is not null ? new FlowLease(flowId, origin.Value) : null;
         Ambient.Value = current;
         return new Scope(previous, current);
     }
@@ -43,9 +40,12 @@ internal static class ZlinkStreamFlowContext
 
         public void Dispose()
         {
-            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-            if (current is not null) current.Active = false;
-            if (ReferenceEquals(Ambient.Value, current)) Ambient.Value = previous;
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
+            if (current is not null)
+                current.Active = false;
+            if (ReferenceEquals(Ambient.Value, current))
+                Ambient.Value = previous;
         }
     }
 }

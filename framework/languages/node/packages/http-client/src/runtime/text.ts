@@ -18,7 +18,7 @@ export function requirePositiveTimeout(value: number): void {
   if (!(value > 0)) {
     throw new ZLinkFrameworkException(
       ZLinkFrameworkErrorKind.ProtocolError,
-      'HTTP client timeout must be greater than zero',
+      'HTTP client timeout must be greater than zero'
     );
   }
 }

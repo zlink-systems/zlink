@@ -21,16 +21,24 @@ public sealed class ErrorContracts
                 [nameof(ZLinkFrameworkErrorKind.ProtocolError)] = 8,
                 [nameof(ZLinkFrameworkErrorKind.InvalidOperation)] = 9,
                 [nameof(ZLinkFrameworkErrorKind.DataLost)] = 10,
-                [nameof(ZLinkFrameworkErrorKind.InternalFailure)] = 11
+                [nameof(ZLinkFrameworkErrorKind.InternalFailure)] = 11,
             },
             Enum.GetValues<ZLinkFrameworkErrorKind>()
-                .ToDictionary(static value => value.ToString(), static value => (int)value, StringComparer.Ordinal));
+                .ToDictionary(
+                    static value => value.ToString(),
+                    static value => (int)value,
+                    StringComparer.Ordinal
+                )
+        );
 
         Assert.Empty(typeof(ZLinkFrameworkException).GetConstructors());
-        Assert.Equal(typeof(ZLinkFrameworkErrorKind),
-            typeof(ZLinkFrameworkException).GetProperty(nameof(ZLinkFrameworkException.Kind))!.PropertyType);
-        Assert.Null(typeof(ZLinkFrameworkException).GetProperty(
-            "RetryAdvice"));
+        Assert.Equal(
+            typeof(ZLinkFrameworkErrorKind),
+            typeof(ZLinkFrameworkException)
+                .GetProperty(nameof(ZLinkFrameworkException.Kind))!
+                .PropertyType
+        );
+        Assert.Null(typeof(ZLinkFrameworkException).GetProperty("RetryAdvice"));
     }
 
     [Fact]
@@ -49,13 +57,14 @@ public sealed class ErrorContracts
             [ZLinkFrameworkErrorKind.ProtocolError] = ZLinkRetryAdvice.DoNotRetry,
             [ZLinkFrameworkErrorKind.InvalidOperation] = ZLinkRetryAdvice.DoNotRetry,
             [ZLinkFrameworkErrorKind.DataLost] = ZLinkRetryAdvice.DoNotRetry,
-            [ZLinkFrameworkErrorKind.InternalFailure] = ZLinkRetryAdvice.DoNotRetry
+            [ZLinkFrameworkErrorKind.InternalFailure] = ZLinkRetryAdvice.DoNotRetry,
         };
 
         var actual = Enum.GetValues<ZLinkFrameworkErrorKind>()
             .ToDictionary(
                 static kind => kind,
-                static kind => new ZLinkFrameworkException(kind, "kind").RetryAdvice);
+                static kind => new ZLinkFrameworkException(kind, "kind").RetryAdvice
+            );
 
         Assert.Equal(expected, actual);
     }

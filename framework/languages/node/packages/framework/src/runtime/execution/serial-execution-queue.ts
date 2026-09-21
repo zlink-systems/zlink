@@ -12,10 +12,11 @@ export interface ZLinkSerialSchedulerOptions {
   readonly lifecycleBurstLimit?: number;
 }
 
-export const ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS: Required<ZLinkSerialSchedulerOptions> = Object.freeze({
-  ownerTimeBudget: 10,
-  lifecycleBurstLimit: 8,
-});
+export const ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS: Required<ZLinkSerialSchedulerOptions> =
+  Object.freeze({
+    ownerTimeBudget: 10,
+    lifecycleBurstLimit: 8
+  });
 
 export interface ZLinkSerialWorkRecord<T> {
   readonly acceptedSequence: bigint;
@@ -102,10 +103,7 @@ export class ZLinkSerialExecutionQueue {
   /**
    * Enqueues a continuation for an already-admitted owner turn.
    */
-  submitContinuation<T>(
-    operation: () => Promise<T> | T,
-    context?: unknown
-  ): Promise<T> {
+  submitContinuation<T>(operation: () => Promise<T> | T, context?: unknown): Promise<T> {
     try {
       return this.admit(operation, { lane: 'application' }, context);
     } catch (error) {
@@ -125,12 +123,7 @@ export class ZLinkSerialExecutionQueue {
     context?: unknown,
     preparation?: ZLinkSerialWorkPreparation
   ): Promise<T> {
-    return this.admit(
-      operation,
-      { ...options, lane: 'application' },
-      context,
-      preparation
-    );
+    return this.admit(operation, { ...options, lane: 'application' }, context, preparation);
   }
 
   /**
@@ -160,14 +153,14 @@ export class ZLinkSerialExecutionQueue {
   }
 
   get hasPendingWork(): boolean {
-    return this.draining
-      || this.application.records.length > 0
-      || this.lifecycle.records.length > 0;
+    return (
+      this.draining || this.application.records.length > 0 || this.lifecycle.records.length > 0
+    );
   }
 
   whenIdle(): Promise<void> {
     if (!this.hasPendingWork) return Promise.resolve();
-    return new Promise(resolve => this.idleWaiters.push(resolve));
+    return new Promise((resolve) => this.idleWaiters.push(resolve));
   }
 
   /** Stops new submissions while allowing the accepted FIFO to finish. */
@@ -257,8 +250,10 @@ export class ZLinkSerialExecutionQueue {
         const record = selection.record;
         if (selection.lane === 'lifecycle') {
           const applicationHead = this.application.records[0]!;
-          if (this.application.records.length > 0
-              && !this.cancelPreparationForRearbitration(applicationHead)) {
+          if (
+            this.application.records.length > 0 &&
+            !this.cancelPreparationForRearbitration(applicationHead)
+          ) {
             waitingForPreparation = true;
             break;
           }
@@ -268,8 +263,7 @@ export class ZLinkSerialExecutionQueue {
           waitingForPreparation = true;
           break;
         }
-        if (record.preparationState === 'pending'
-            || record.preparationState === 'canceling') {
+        if (record.preparationState === 'pending' || record.preparationState === 'canceling') {
           waitingForPreparation = true;
           break;
         }
@@ -295,8 +289,10 @@ export class ZLinkSerialExecutionQueue {
     } finally {
       this.draining = false;
       this.claimStartedAt = undefined;
-      if (!waitingForPreparation
-          && (this.application.records.length > 0 || this.lifecycle.records.length > 0)) {
+      if (
+        !waitingForPreparation &&
+        (this.application.records.length > 0 || this.lifecycle.records.length > 0)
+      ) {
         this.scheduleDrain();
       } else {
         if (this.application.records.length === 0 && this.lifecycle.records.length === 0) {
@@ -306,10 +302,12 @@ export class ZLinkSerialExecutionQueue {
     }
   }
 
-  private selectNext(): {
-    readonly lane: ZLinkSerialWorkLane;
-    readonly record: SerialWorkRecord<unknown>;
-  } | undefined {
+  private selectNext():
+    | {
+        readonly lane: ZLinkSerialWorkLane;
+        readonly record: SerialWorkRecord<unknown>;
+      }
+    | undefined {
     const applicationReady = this.application.records.length > 0;
     const lifecycleReady = this.lifecycle.records.length > 0;
     if (!applicationReady && !lifecycleReady) return undefined;
@@ -329,9 +327,7 @@ export class ZLinkSerialExecutionQueue {
     readonly lane: ZLinkSerialWorkLane;
     readonly record: SerialWorkRecord<unknown>;
   }): ZLinkSerialWorkRecord<unknown> {
-    const record = selection.lane === 'lifecycle'
-      ? this.takeLifecycle()
-      : this.takeApplication();
+    const record = selection.lane === 'lifecycle' ? this.takeLifecycle() : this.takeApplication();
     if (record !== selection.record) {
       throw new Error('The selected serial work record changed before owner claim.');
     }
@@ -340,10 +336,7 @@ export class ZLinkSerialExecutionQueue {
 
   private takeLifecycle(): ZLinkSerialWorkRecord<unknown> {
     this.lifecycleStreak += 1;
-    if (
-      this.application.records.length > 0
-      && this.lifecycleStreak >= this.lifecycleBurstLimit
-    ) {
+    if (this.application.records.length > 0 && this.lifecycleStreak >= this.lifecycleBurstLimit) {
       this.lifecycleDebt = true;
     }
     return this.lifecycle.records.shift()!;
@@ -375,7 +368,7 @@ export class ZLinkSerialExecutionQueue {
           record.preparationController = undefined;
           this.scheduleDrain();
         },
-        error => {
+        (error) => {
           if (record.preparationState === 'canceling' || controller.signal.aborted) {
             preparation.cancel();
             record.preparationState = 'idle';
@@ -390,9 +383,7 @@ export class ZLinkSerialExecutionQueue {
   }
 
   /** Returns false while an outstanding readiness attempt is being canceled. */
-  private cancelPreparationForRearbitration(
-    record: SerialWorkRecord<unknown>
-  ): boolean {
+  private cancelPreparationForRearbitration(record: SerialWorkRecord<unknown>): boolean {
     if (record.preparation === undefined || record.preparationState === 'idle') return true;
     if (record.preparationState === 'ready') {
       record.preparation.cancel();
@@ -438,5 +429,5 @@ function validateNonNegative(value: number, field: string): void {
 }
 
 function macrotaskBoundary(): Promise<void> {
-  return new Promise(resolve => setImmediate(resolve));
+  return new Promise((resolve) => setImmediate(resolve));
 }

@@ -20,8 +20,10 @@ public sealed class SpotAutoRegistrationScannerTests
         var catalog = registration.ScannedHandlerCatalog;
 
         Assert.Same(catalog, registration.ScannedHandlerCatalog);
-        Assert.Contains(catalog.SpotHandlers, static handler =>
-            handler.HandlerType == typeof(AutoRoomSubscriptionHandler));
+        Assert.Contains(
+            catalog.SpotHandlers,
+            static handler => handler.HandlerType == typeof(AutoRoomSubscriptionHandler)
+        );
     }
 
     [Fact]
@@ -29,49 +31,72 @@ public sealed class SpotAutoRegistrationScannerTests
     {
         var handlers = ZLinkScannedSpotHandlerScanner
             .Scan(typeof(SpotAutoRegistrationScannerTests).Assembly)
-            .Where(static handler => handler.SpotType == typeof(AutoRoomSpot)
-                || handler.SpotType == typeof(AutoEntrySpot))
+            .Where(static handler =>
+                handler.SpotType == typeof(AutoRoomSpot)
+                || handler.SpotType == typeof(AutoEntrySpot)
+            )
             .ToArray();
 
-        Assert.Contains(handlers, static handler =>
-            handler.Kind == ZLinkScannedSpotHandlerKind.Packet
-            && handler.HandlerType == typeof(AutoRoomPacketHandler)
-            && handler.SpotType == typeof(AutoRoomSpot)
-            && handler.PacketName == "room.packet");
-        Assert.Contains(handlers, static handler =>
-            handler.Kind == ZLinkScannedSpotHandlerKind.Subscription
-            && handler.HandlerType == typeof(AutoRoomSubscriptionHandler)
-            && handler.SpotType == typeof(AutoRoomSpot)
-            && handler.Topic == "room.events");
-        Assert.Contains(handlers, static handler =>
-            handler.Kind == ZLinkScannedSpotHandlerKind.ActorSend
-            && handler.HandlerType == typeof(AutoRoomActorSendHandler)
-            && handler.SpotType == typeof(AutoRoomSpot)
-            && handler.ActorType == typeof(AutoActor)
-            && handler.PacketName is null);
-        Assert.Contains(handlers, static handler =>
-            handler.Kind == ZLinkScannedSpotHandlerKind.ActorRequest
-            && handler.HandlerType == typeof(AutoEntryActorRequestHandler)
-            && handler.SpotType == typeof(AutoEntrySpot)
-            && handler.ActorType == typeof(AutoActor)
-            && handler.PacketName is null);
-        Assert.Contains(handlers, static handler =>
-            handler.Kind == ZLinkScannedSpotHandlerKind.Timer
-            && handler.HandlerType == typeof(AutoRoomTimerHandler)
-            && handler.SpotType == typeof(AutoRoomSpot)
-            && handler.TimerName == "room.tick"
-            && handler.TimerPeriod == TimeSpan.FromMilliseconds(250));
-        Assert.Contains(handlers, static handler =>
-            handler.Kind == ZLinkScannedSpotHandlerKind.Packet
-            && handler.HandlerType == typeof(AutoRoomSpot)
-            && handler.Method?.Name == nameof(AutoRoomSpot.RequestAsync)
-            && handler.PacketName == "room.attribute.request");
-        Assert.Contains(handlers, static handler =>
-            handler.Kind == ZLinkScannedSpotHandlerKind.Subscription
-            && handler.HandlerType == typeof(AutoRoomSpot)
-            && handler.Method?.Name == nameof(AutoRoomSpot.OnEventAsync)
-            && handler.SpotNodeName == "room-node"
-            && handler.Topic == "room.attribute.events");
+        Assert.Contains(
+            handlers,
+            static handler =>
+                handler.Kind == ZLinkScannedSpotHandlerKind.Packet
+                && handler.HandlerType == typeof(AutoRoomPacketHandler)
+                && handler.SpotType == typeof(AutoRoomSpot)
+                && handler.PacketName == "room.packet"
+        );
+        Assert.Contains(
+            handlers,
+            static handler =>
+                handler.Kind == ZLinkScannedSpotHandlerKind.Subscription
+                && handler.HandlerType == typeof(AutoRoomSubscriptionHandler)
+                && handler.SpotType == typeof(AutoRoomSpot)
+                && handler.Topic == "room.events"
+        );
+        Assert.Contains(
+            handlers,
+            static handler =>
+                handler.Kind == ZLinkScannedSpotHandlerKind.ActorSend
+                && handler.HandlerType == typeof(AutoRoomActorSendHandler)
+                && handler.SpotType == typeof(AutoRoomSpot)
+                && handler.ActorType == typeof(AutoActor)
+                && handler.PacketName is null
+        );
+        Assert.Contains(
+            handlers,
+            static handler =>
+                handler.Kind == ZLinkScannedSpotHandlerKind.ActorRequest
+                && handler.HandlerType == typeof(AutoEntryActorRequestHandler)
+                && handler.SpotType == typeof(AutoEntrySpot)
+                && handler.ActorType == typeof(AutoActor)
+                && handler.PacketName is null
+        );
+        Assert.Contains(
+            handlers,
+            static handler =>
+                handler.Kind == ZLinkScannedSpotHandlerKind.Timer
+                && handler.HandlerType == typeof(AutoRoomTimerHandler)
+                && handler.SpotType == typeof(AutoRoomSpot)
+                && handler.TimerName == "room.tick"
+                && handler.TimerPeriod == TimeSpan.FromMilliseconds(250)
+        );
+        Assert.Contains(
+            handlers,
+            static handler =>
+                handler.Kind == ZLinkScannedSpotHandlerKind.Packet
+                && handler.HandlerType == typeof(AutoRoomSpot)
+                && handler.Method?.Name == nameof(AutoRoomSpot.RequestAsync)
+                && handler.PacketName == "room.attribute.request"
+        );
+        Assert.Contains(
+            handlers,
+            static handler =>
+                handler.Kind == ZLinkScannedSpotHandlerKind.Subscription
+                && handler.HandlerType == typeof(AutoRoomSpot)
+                && handler.Method?.Name == nameof(AutoRoomSpot.OnEventAsync)
+                && handler.SpotNodeName == "room-node"
+                && handler.Topic == "room.attribute.events"
+        );
     }
 
     private sealed class AutoRoomSpot : IZLinkSpot<AutoActor>
@@ -81,21 +106,20 @@ public sealed class SpotAutoRegistrationScannerTests
         public ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
             string actorId,
             ZLinkMessage request,
-            CancellationToken cancellationToken) =>
-            ValueTask.FromResult(ZLinkSpotActorJoinResult.Accept());
+            CancellationToken cancellationToken
+        ) => ValueTask.FromResult(ZLinkSpotActorJoinResult.Accept());
 
-        public ValueTask OnJoinedActorAsync(
-            AutoActor actor,
-            CancellationToken cancellationToken) => ValueTask.CompletedTask;
+        public ValueTask OnJoinedActorAsync(AutoActor actor, CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
 
-        public ValueTask OnLeaveActorAsync(
-            AutoActor actor,
-            CancellationToken cancellationToken) => ValueTask.CompletedTask;
+        public ValueTask OnLeaveActorAsync(AutoActor actor, CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
 
         [ZLinkSpotRequest(PacketName = "room.attribute.request")]
         public ValueTask<AutoActorReply> RequestAsync(
             AutoActorRequest request,
-            CancellationToken cancellationToken) => ValueTask.FromResult(new AutoActorReply());
+            CancellationToken cancellationToken
+        ) => ValueTask.FromResult(new AutoActorReply());
 
         [ZLinkSpotSubscription("room-node", "room-events", "room.attribute.events")]
         public ValueTask OnEventAsync(AutoRoomEvent message) => ValueTask.CompletedTask;
@@ -108,20 +132,19 @@ public sealed class SpotAutoRegistrationScannerTests
         public ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
             string actorId,
             ZLinkMessage request,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             _ = request;
             _ = cancellationToken;
             return ValueTask.FromResult(ZLinkSpotActorJoinResult.Accept());
         }
 
-        public ValueTask OnJoinedActorAsync(
-            AutoActor actor,
-            CancellationToken cancellationToken) => ValueTask.CompletedTask;
+        public ValueTask OnJoinedActorAsync(AutoActor actor, CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
 
-        public ValueTask OnLeaveActorAsync(
-            AutoActor actor,
-            CancellationToken cancellationToken) => ValueTask.CompletedTask;
+        public ValueTask OnLeaveActorAsync(AutoActor actor, CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
     }
 
     private sealed class AutoActor(string actorId) : IZLinkActor
@@ -142,22 +165,26 @@ public sealed class SpotAutoRegistrationScannerTests
     private sealed record AutoActorReply;
 
     [ZLinkSpotPacketHandler("room.packet")]
-    private sealed class AutoRoomPacketHandler : IZLinkSpotPacketHandler<AutoRoomSpot, AutoRoomPacket>
+    private sealed class AutoRoomPacketHandler
+        : IZLinkSpotPacketHandler<AutoRoomSpot, AutoRoomPacket>
     {
         public ValueTask HandleAsync(
             AutoRoomSpot spot,
             AutoRoomPacket message,
-            CancellationToken cancellationToken) => ValueTask.CompletedTask;
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
     }
 
     [ZLinkSpotSubscriptionHandler("room-events", "room.events")]
-    private sealed class AutoRoomSubscriptionHandler : IZLinkSpotSubscriptionHandler<AutoRoomSpot, AutoRoomEvent>
+    private sealed class AutoRoomSubscriptionHandler
+        : IZLinkSpotSubscriptionHandler<AutoRoomSpot, AutoRoomEvent>
     {
         public ValueTask HandleAsync(
             AutoRoomSpot spot,
             AutoRoomEvent message,
             ZLinkPublishMessageContext context,
-            CancellationToken cancellationToken) => ValueTask.CompletedTask;
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
     }
 
     private sealed class AutoRoomActorSendHandler
@@ -168,18 +195,25 @@ public sealed class SpotAutoRegistrationScannerTests
             AutoActor actor,
             IZLinkMessageContext context,
             AutoActorMessage message,
-            CancellationToken cancellationToken) => ValueTask.CompletedTask;
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
     }
 
     private sealed class AutoEntryActorRequestHandler
-        : IZLinkEntrySpotActorRequestHandler<AutoEntrySpot, AutoActor, AutoActorRequest, AutoActorReply>
+        : IZLinkEntrySpotActorRequestHandler<
+            AutoEntrySpot,
+            AutoActor,
+            AutoActorRequest,
+            AutoActorReply
+        >
     {
         public ValueTask<AutoActorReply> HandleAsync(
             AutoEntrySpot entrySpot,
             AutoActor actor,
             IZLinkMessageContext context,
             AutoActorRequest request,
-            CancellationToken cancellationToken) => ValueTask.FromResult(new AutoActorReply());
+            CancellationToken cancellationToken
+        ) => ValueTask.FromResult(new AutoActorReply());
     }
 
     [ZLinkSpotTimerHandler("room.tick", 250)]
@@ -188,6 +222,7 @@ public sealed class SpotAutoRegistrationScannerTests
         public ValueTask HandleAsync(
             AutoRoomSpot spot,
             ZLinkTimerTick tick,
-            CancellationToken cancellationToken) => ValueTask.CompletedTask;
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
     }
 }

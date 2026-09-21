@@ -6,8 +6,7 @@ internal sealed class ZLinkSerializerSelectionRegistry
 {
     internal const int MaximumCachedDeclaredTypes = 1_024;
 
-    private readonly Dictionary<string, Registration> _registrations =
-        new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Registration> _registrations = new(StringComparer.Ordinal);
     private readonly List<string> _registrationOrder = [];
     private readonly ConcurrentDictionary<Type, Resolution> _resolvedByDeclaredType = new();
     private readonly object _cacheGate = new();
@@ -18,16 +17,17 @@ internal sealed class ZLinkSerializerSelectionRegistry
         _registrations.ToDictionary(
             static entry => entry.Key,
             static entry => entry.Value.Serializer,
-            StringComparer.Ordinal);
+            StringComparer.Ordinal
+        );
 
-    internal (string ContentType, IZLinkMessageSerializer Serializer)? Fallback =>
-        _fallback;
+    internal (string ContentType, IZLinkMessageSerializer Serializer)? Fallback => _fallback;
 
     internal void Add(
         string contentType,
         IZLinkMessageSerializer serializer,
         Func<Type, bool> canSerialize,
-        bool isFallback)
+        bool isFallback
+    )
     {
         ThrowIfFrozen();
         ArgumentNullException.ThrowIfNull(serializer);
@@ -39,7 +39,8 @@ internal sealed class ZLinkSerializerSelectionRegistry
         _registrations[canonicalContentType] = new Registration(
             serializer,
             canSerialize,
-            isFallback);
+            isFallback
+        );
         _registrationOrder.Add(canonicalContentType);
 
         lock (_cacheGate)
@@ -47,12 +48,12 @@ internal sealed class ZLinkSerializerSelectionRegistry
         RefreshFallback();
     }
 
-    internal bool TryGetExact(
-        string contentType,
-        out IZLinkMessageSerializer serializer)
+    internal bool TryGetExact(string contentType, out IZLinkMessageSerializer serializer)
     {
-        if (!string.IsNullOrEmpty(contentType)
-            && _registrations.TryGetValue(contentType, out var registration))
+        if (
+            !string.IsNullOrEmpty(contentType)
+            && _registrations.TryGetValue(contentType, out var registration)
+        )
         {
             serializer = registration.Serializer;
             return true;
@@ -65,7 +66,8 @@ internal sealed class ZLinkSerializerSelectionRegistry
     internal bool TryResolve(
         Type declaredType,
         out string contentType,
-        out IZLinkMessageSerializer serializer)
+        out IZLinkMessageSerializer serializer
+    )
     {
         ArgumentNullException.ThrowIfNull(declaredType);
         if (_resolvedByDeclaredType.TryGetValue(declaredType, out var cached))
@@ -106,8 +108,10 @@ internal sealed class ZLinkSerializerSelectionRegistry
         ArgumentNullException.ThrowIfNull(contentType);
         var first = 0;
         var last = contentType.Length;
-        while (first < last && contentType[first] is ' ' or '\t') first++;
-        while (last > first && contentType[last - 1] is ' ' or '\t') last--;
+        while (first < last && contentType[first] is ' ' or '\t')
+            first++;
+        while (last > first && contentType[last - 1] is ' ' or '\t')
+            last--;
 
         var slash = -1;
         var normalized = new char[last - first];
@@ -126,9 +130,7 @@ internal sealed class ZLinkSerializerSelectionRegistry
 
             if (!IsTokenCharacter(value))
                 throw InvalidContentType();
-            normalized[target] = value is >= 'A' and <= 'Z'
-                ? (char)(value + ('a' - 'A'))
-                : value;
+            normalized[target] = value is >= 'A' and <= 'Z' ? (char)(value + ('a' - 'A')) : value;
         }
 
         if (slash < 0)
@@ -136,9 +138,7 @@ internal sealed class ZLinkSerializerSelectionRegistry
         return new string(normalized);
     }
 
-    internal static bool TryNormalizeResponseContentType(
-        string? contentType,
-        out string normalized)
+    internal static bool TryNormalizeResponseContentType(string? contentType, out string normalized)
     {
         if (contentType is null)
         {
@@ -150,7 +150,8 @@ internal sealed class ZLinkSerializerSelectionRegistry
         try
         {
             normalized = NormalizeRegisteredContentType(
-                separator < 0 ? contentType : contentType[..separator]);
+                separator < 0 ? contentType : contentType[..separator]
+            );
             return true;
         }
         catch (ArgumentException)
@@ -168,10 +169,7 @@ internal sealed class ZLinkSerializerSelectionRegistry
             var registration = _registrations[registeredContentType];
             if (registration.CanSerialize(declaredType))
             {
-                return new Resolution(
-                    true,
-                    registeredContentType,
-                    registration.Serializer);
+                return new Resolution(true, registeredContentType, registration.Serializer);
             }
         }
 
@@ -192,7 +190,8 @@ internal sealed class ZLinkSerializerSelectionRegistry
     private static bool Return(
         Resolution resolution,
         out string contentType,
-        out IZLinkMessageSerializer serializer)
+        out IZLinkMessageSerializer serializer
+    )
     {
         contentType = resolution.ContentType;
         serializer = resolution.Serializer!;
@@ -200,31 +199,49 @@ internal sealed class ZLinkSerializerSelectionRegistry
     }
 
     private static bool IsTokenCharacter(char value) =>
-        value is >= '0' and <= '9'
-        or >= 'A' and <= 'Z'
-        or >= 'a' and <= 'z'
-        or '!' or '#' or '$' or '%' or '&' or '\'' or '*' or '+' or '-'
-        or '.' or '^' or '_' or '`' or '|' or '~';
+        value
+            is >= '0'
+                and <= '9'
+                or >= 'A'
+                and <= 'Z'
+                or >= 'a'
+                and <= 'z'
+                or '!'
+                or '#'
+                or '$'
+                or '%'
+                or '&'
+                or '\''
+                or '*'
+                or '+'
+                or '-'
+                or '.'
+                or '^'
+                or '_'
+                or '`'
+                or '|'
+                or '~';
 
     private static ArgumentException InvalidContentType() =>
-        new(
-            "Codec content type must be a parameter-free ASCII type/subtype.",
-            "contentType");
+        new("Codec content type must be a parameter-free ASCII type/subtype.", "contentType");
 
     private void ThrowIfFrozen()
     {
         if (Volatile.Read(ref _frozen) != 0)
             throw new InvalidOperationException(
-                "The codec registry is immutable after runtime startup.");
+                "The codec registry is immutable after runtime startup."
+            );
     }
 
     private sealed record Registration(
         IZLinkMessageSerializer Serializer,
         Func<Type, bool> CanSerialize,
-        bool IsFallback);
+        bool IsFallback
+    );
 
     private readonly record struct Resolution(
         bool Found,
         string ContentType,
-        IZLinkMessageSerializer? Serializer);
+        IZLinkMessageSerializer? Serializer
+    );
 }

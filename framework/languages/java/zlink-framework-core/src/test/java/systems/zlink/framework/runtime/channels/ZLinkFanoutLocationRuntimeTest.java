@@ -1,11 +1,4 @@
 package systems.zlink.framework.runtime.channels;
-import java.util.concurrent.CompletionStage;
-import systems.zlink.contracts.messaging.Message;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
-import systems.zlink.framework.locations.ZLinkPageRequest;
-import systems.zlink.framework.runtime.internal.locations.ZLinkFanoutPublisherDescriptorKey;
-import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteIntent;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -14,34 +7,15 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.time.Duration;
-import java.time.Instant;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Future;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.Semaphore;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.framework.testing.ZLinkLocationStoreTestAdapter;
-import systems.zlink.framework.runtime.internal.locations.ZLinkFanoutPublisherDescriptor;
-import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
+import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkLocationPage;
-import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteResult;
-import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteStatus;
-import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
+import systems.zlink.framework.locations.ZLinkPageRequest;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendContext;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendDealerSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendPublisherSocket;
@@ -52,23 +26,47 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonito
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSubscriberSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage;
 import systems.zlink.framework.runtime.internal.backend.ZLinkChannelBackendAdapter;
-import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
+import systems.zlink.framework.runtime.internal.locations.ZLinkFanoutPublisherDescriptor;
+import systems.zlink.framework.runtime.internal.locations.ZLinkFanoutPublisherDescriptorKey;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteIntent;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteStatus;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
+import systems.zlink.framework.testing.ZLinkLocationStoreTestAdapter;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkFanoutLocationRuntimeTest {
     @Test
-    void automaticSubscriberUsesApplicationTopicsAndLivenessBeacon()
-        throws Exception {
+    void automaticSubscriberUsesApplicationTopicsAndLivenessBeacon() throws Exception {
         TestStore store = new TestStore();
         store.rows = List.of(descriptor());
-        try (Fixture fixture = new Fixture(
-                 store, false, Map.of("events", List.of("order")))) {
+        try (Fixture fixture = new Fixture(store, false, Map.of("events", List.of("order")))) {
             fixture.start();
 
             ControlledSubscriber subscriber = fixture.awaitSubscriber();
-            assertEquals(
-                List.of("order", "\u0001ZLF1"),
-                subscriber.subscriptions);
+            assertEquals(List.of("order", "\u0001ZLF1"), subscriber.subscriptions);
         }
     }
 
@@ -77,21 +75,22 @@ final class ZLinkFanoutLocationRuntimeTest {
         TestStore store = new TestStore();
         store.rows = List.of(descriptor());
         try (ExecutorService lifecycle = Executors.newFixedThreadPool(2);
-             Fixture fixture = new Fixture(store)) {
+                Fixture fixture = new Fixture(store)) {
             fixture.start();
             ControlledSubscriber subscriber = fixture.awaitSubscriber();
             subscriber.blockReceive();
             assertTrue(subscriber.subscribeEntered.await(1, TimeUnit.SECONDS));
 
-            Future<?> monitor = lifecycle.submit(() ->
-                subscriber.monitor.emit("DISCONNECTED"));
+            Future<?> monitor = lifecycle.submit(() -> subscriber.monitor.emit("DISCONNECTED"));
             monitor.get(1, TimeUnit.SECONDS);
             CountDownLatch stopReserved = new CountDownLatch(1);
-            Future<?> stop = lifecycle.submit(() -> {
-                CompletionStage<Void> settlement = fixture.runtime.stop();
-                stopReserved.countDown();
-                settlement.toCompletableFuture().join();
-            });
+            Future<?> stop =
+                    lifecycle.submit(
+                            () -> {
+                                CompletionStage<Void> settlement = fixture.runtime.stop();
+                                stopReserved.countDown();
+                                settlement.toCompletableFuture().join();
+                            });
 
             try {
                 assertTrue(stopReserved.await(1, TimeUnit.SECONDS));
@@ -106,15 +105,14 @@ final class ZLinkFanoutLocationRuntimeTest {
             assertEquals(1, subscriber.disconnectCalls.get());
             assertEquals(1, subscriber.monitor.closeCalls.get());
             assertEquals(1, subscriber.closeCalls.get());
-            assertEquals(List.of(
-                "subscribe-enter", "subscribe-exit", "disconnect", "close"),
-                subscriber.events);
+            assertEquals(
+                    List.of("subscribe-enter", "subscribe-exit", "disconnect", "close"),
+                    subscriber.events);
         }
     }
 
     @Test
-    void connectionSnapshotIsNotReceivableBeforeConnectCommit()
-        throws Exception {
+    void connectionSnapshotIsNotReceivableBeforeConnectCommit() throws Exception {
         TestStore store = new TestStore();
         store.rows = List.of(descriptor());
         try (Fixture fixture = new Fixture(store, true)) {
@@ -130,8 +128,7 @@ final class ZLinkFanoutLocationRuntimeTest {
                 subscriber.releaseConnect.countDown();
             }
 
-            awaitCondition(() -> !fixture.runtime
-                .publisherSnapshots("events").isEmpty());
+            awaitCondition(() -> !fixture.runtime.publisherSnapshots("events").isEmpty());
             subscriber.readinessObserved.get(1, TimeUnit.SECONDS);
             assertTrue(subscriber.readinessWaits > 0);
         }
@@ -188,43 +185,51 @@ final class ZLinkFanoutLocationRuntimeTest {
     }
 
     @Test
-    void blockingProviderAndSaturatedTicksDoNotDelayRequestTimeout()
-        throws Exception {
+    void blockingProviderAndSaturatedTicksDoNotDelayRequestTimeout() throws Exception {
         SaturatingStore store = new SaturatingStore();
         try (Fixture fixture = new Fixture(store)) {
             fixture.start();
             assertTrue(store.entered.await(1, TimeUnit.SECONDS));
 
-            ZLinkChannelCallRuntime calls = new ZLinkChannelCallRuntime(
-                null,
-                fixture.scheduler,
-                new ZLinkChannelReplyDecoder(
-                    new ZLinkJsonMessageSerializer()),
-                (channel, node, spot, generation,
-                 authorityOwnerGeneration, ownerLeaseGeneration, parts) ->
-                    CompletableFuture.completedFuture(null),
-                (channel, node, spot, generation,
-                 authorityOwnerGeneration, ownerLeaseGeneration, parts,
-                 timeout, operations, operationId) ->
-                    CompletableFuture.completedFuture(List.of()));
+            ZLinkChannelCallRuntime calls =
+                    new ZLinkChannelCallRuntime(
+                            null,
+                            fixture.scheduler,
+                            new ZLinkChannelReplyDecoder(new ZLinkJsonMessageSerializer()),
+                            (channel,
+                                    node,
+                                    spot,
+                                    generation,
+                                    authorityOwnerGeneration,
+                                    ownerLeaseGeneration,
+                                    parts) -> CompletableFuture.completedFuture(null),
+                            (channel,
+                                    node,
+                                    spot,
+                                    generation,
+                                    authorityOwnerGeneration,
+                                    ownerLeaseGeneration,
+                                    parts,
+                                    timeout,
+                                    operations,
+                                    operationId) -> CompletableFuture.completedFuture(List.of()));
             try {
                 long startedNanos = System.nanoTime();
-                CompletableFuture<Void> request = calls.submit(Duration.ofMillis(40),
-                    CompletableFuture<Void>::new, ignored -> { });
+                CompletableFuture<Void> request =
+                        calls.submit(
+                                Duration.ofMillis(40), CompletableFuture<Void>::new, ignored -> {});
 
-                ExecutionException failure = assertThrows(
-                    ExecutionException.class,
-                    () -> request.get(500, TimeUnit.MILLISECONDS));
-                ZLinkFrameworkException timeout = assertInstanceOf(
-                    ZLinkFrameworkException.class, failure.getCause());
-                assertEquals(
-                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, timeout.kind());
-                assertInstanceOf(
-                    TimeoutException.class, timeout.getCause());
+                ExecutionException failure =
+                        assertThrows(
+                                ExecutionException.class,
+                                () -> request.get(500, TimeUnit.MILLISECONDS));
+                ZLinkFrameworkException timeout =
+                        assertInstanceOf(ZLinkFrameworkException.class, failure.getCause());
+                assertEquals(ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, timeout.kind());
+                assertInstanceOf(TimeoutException.class, timeout.getCause());
                 assertTrue(
-                    TimeUnit.NANOSECONDS.toMillis(
-                        System.nanoTime() - startedNanos) < 250,
-                    "the request deadline must not wait for provider progress");
+                        TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos) < 250,
+                        "the request deadline must not wait for provider progress");
 
                 Thread.sleep(60);
                 assertEquals(1, store.listCalls.get());
@@ -237,20 +242,20 @@ final class ZLinkFanoutLocationRuntimeTest {
 
     private static ZLinkFanoutPublisherDescriptor descriptor() {
         return new ZLinkFanoutPublisherDescriptor(
-            "events",
-            RoutingId.from("publisher"),
-            7,
-            1,
-            "tcp://127.0.0.1:7001",
-            ZLinkFrameworkRuntimeState.SERVING,
-            "default",
-            "owner",
-            3,
-            Instant.now());
+                "events",
+                RoutingId.from("publisher"),
+                7,
+                1,
+                "tcp://127.0.0.1:7001",
+                ZLinkFrameworkRuntimeState.SERVING,
+                "default",
+                "owner",
+                3,
+                Instant.now());
     }
 
-    private static void awaitCondition(
-        java.util.function.BooleanSupplier condition) throws Exception {
+    private static void awaitCondition(java.util.function.BooleanSupplier condition)
+            throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
         while (!condition.getAsBoolean()) {
             if (System.nanoTime() >= deadline) {
@@ -261,58 +266,57 @@ final class ZLinkFanoutLocationRuntimeTest {
     }
 
     private static final class Fixture implements AutoCloseable {
-        private final List<ControlledSubscriber> subscribers =
-            new CopyOnWriteArrayList<>();
+        private final List<ControlledSubscriber> subscribers = new CopyOnWriteArrayList<>();
         private final LinkedBlockingQueue<ControlledSubscriber> created =
-            new LinkedBlockingQueue<>();
+                new LinkedBlockingQueue<>();
         private final ScheduledExecutorService scheduler =
-            Executors.newSingleThreadScheduledExecutor();
-        private final ExecutorService infrastructure =
-            Executors.newVirtualThreadPerTaskExecutor();
+                Executors.newSingleThreadScheduledExecutor();
+        private final ExecutorService infrastructure = Executors.newVirtualThreadPerTaskExecutor();
         private final ZLinkFanoutLocationRuntime runtime;
 
         private Fixture(ZLinkLocationRepository store) {
             this(store, false);
         }
 
-        private Fixture(
-            ZLinkLocationRepository store,
-            boolean blockConnect) {
+        private Fixture(ZLinkLocationRepository store, boolean blockConnect) {
             this(store, blockConnect, Map.of());
         }
 
         private Fixture(
-            ZLinkLocationRepository store,
-            boolean blockConnect,
-            Map<String, List<String>> applicationTopics) {
-            runtime = new ZLinkFanoutLocationRuntime(
-                store,
-                () -> new ZLinkLocationOwnerToken("owner", 3),
-                new Backend(subscribers, created, blockConnect),
-                socket -> ((ControlledSubscriber) socket).monitor,
-                new Context(),
-                new ZLinkChannelSocketRegistry(),
-                scheduler,
-                infrastructure,
-                Duration.ofMillis(1),
-                100,
-                (channel, message) ->
-                    message.parts().forEach(
-                        Message::close),
-                applicationTopics);
+                ZLinkLocationRepository store,
+                boolean blockConnect,
+                Map<String, List<String>> applicationTopics) {
+            runtime =
+                    new ZLinkFanoutLocationRuntime(
+                            store,
+                            () -> new ZLinkLocationOwnerToken("owner", 3),
+                            new Backend(subscribers, created, blockConnect),
+                            socket -> ((ControlledSubscriber) socket).monitor,
+                            new Context(),
+                            new ZLinkChannelSocketRegistry(),
+                            scheduler,
+                            infrastructure,
+                            Duration.ofMillis(1),
+                            100,
+                            (channel, message) -> message.parts().forEach(Message::close),
+                            applicationTopics);
         }
 
         private void start() {
-            runtime.start(List.of(new ZLinkChannelRuntime.AutoConnectSurface(
-                systems.zlink.framework.runtime.internal.locations
-                    .ZLinkAutoConnectType.FANOUT,
-                "events",
-                systems.zlink.framework.locations.ZLinkLocationRole.SUB,
-                RoutingId.from("subscriber"),
-                "",
-                100,
-                null,
-                List.of()))).toCompletableFuture().join();
+            runtime.start(
+                            List.of(
+                                    new ZLinkChannelRuntime.AutoConnectSurface(
+                                            systems.zlink.framework.runtime.internal.locations
+                                                    .ZLinkAutoConnectType.FANOUT,
+                                            "events",
+                                            systems.zlink.framework.locations.ZLinkLocationRole.SUB,
+                                            RoutingId.from("subscriber"),
+                                            "",
+                                            100,
+                                            null,
+                                            List.of())))
+                    .toCompletableFuture()
+                    .join();
         }
 
         private ControlledSubscriber awaitSubscriber() throws Exception {
@@ -326,113 +330,89 @@ final class ZLinkFanoutLocationRuntimeTest {
 
         @Override
         public void close() {
-            subscribers.forEach(subscriber -> {
-                subscriber.releaseConnect.countDown();
-                subscriber.releaseReceive.countDown();
-            });
+            subscribers.forEach(
+                    subscriber -> {
+                        subscriber.releaseConnect.countDown();
+                        subscriber.releaseReceive.countDown();
+                    });
             runtime.close();
             scheduler.shutdownNow();
             infrastructure.shutdownNow();
         }
     }
 
-    private static final class SaturatingStore
-        extends ZLinkLocationStoreTestAdapter {
+    private static final class SaturatingStore extends ZLinkLocationStoreTestAdapter {
         private final CountDownLatch entered = new CountDownLatch(1);
         private final CountDownLatch release = new CountDownLatch(1);
         private final AtomicInteger listCalls = new AtomicInteger();
 
         @Override
-        public CompletionStage<ZLinkLocationWriteResult>
-            updateFanoutPublisher(
-                ZLinkFanoutPublisherDescriptor descriptor,
-                ZLinkLocationWriteIntent intent) {
+        public CompletionStage<ZLinkLocationWriteResult> updateFanoutPublisher(
+                ZLinkFanoutPublisherDescriptor descriptor, ZLinkLocationWriteIntent intent) {
             return CompletableFuture.completedFuture(
-                ZLinkLocationWriteResult.stored(1, Instant.now()));
+                    ZLinkLocationWriteResult.stored(1, Instant.now()));
         }
 
         @Override
-        public CompletionStage<ZLinkLocationWriteStatus>
-            removeFanoutPublisher(
-                ZLinkFanoutPublisherDescriptorKey key,
-                ZLinkLocationOwnerToken owner) {
-            return CompletableFuture.completedFuture(
-                ZLinkLocationWriteStatus.STORED);
+        public CompletionStage<ZLinkLocationWriteStatus> removeFanoutPublisher(
+                ZLinkFanoutPublisherDescriptorKey key, ZLinkLocationOwnerToken owner) {
+            return CompletableFuture.completedFuture(ZLinkLocationWriteStatus.STORED);
         }
 
         @Override
-        public CompletionStage<
-            ZLinkLocationPage<ZLinkFanoutPublisherDescriptor>>
-            listFanoutPublishers(
-                String channelName,
-                ZLinkPageRequest page) {
+        public CompletionStage<ZLinkLocationPage<ZLinkFanoutPublisherDescriptor>>
+                listFanoutPublishers(String channelName, ZLinkPageRequest page) {
             listCalls.incrementAndGet();
             entered.countDown();
             try {
                 if (!release.await(1, TimeUnit.SECONDS)) {
-                    throw new AssertionError(
-                        "provider test release was not signalled");
+                    throw new AssertionError("provider test release was not signalled");
                 }
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
                 throw new AssertionError(interrupted);
             }
-            return CompletableFuture.completedFuture(
-                new ZLinkLocationPage<>(List.of(), null));
+            return CompletableFuture.completedFuture(new ZLinkLocationPage<>(List.of(), null));
         }
     }
 
-    private static final class TestStore
-        extends ZLinkLocationStoreTestAdapter {
+    private static final class TestStore extends ZLinkLocationStoreTestAdapter {
         private volatile List<ZLinkFanoutPublisherDescriptor> rows = List.of();
-        private volatile CompletableFuture<
-            ZLinkLocationPage<ZLinkFanoutPublisherDescriptor>> blockedRead;
-        private final CompletableFuture<Void> readStarted =
-            new CompletableFuture<>();
+        private volatile CompletableFuture<ZLinkLocationPage<ZLinkFanoutPublisherDescriptor>>
+                blockedRead;
+        private final CompletableFuture<Void> readStarted = new CompletableFuture<>();
 
         private void blockNextRead() {
             blockedRead = new CompletableFuture<>();
         }
 
-        private void completeBlockedRead(
-            List<ZLinkFanoutPublisherDescriptor> values) {
+        private void completeBlockedRead(List<ZLinkFanoutPublisherDescriptor> values) {
             blockedRead.complete(new ZLinkLocationPage<>(values, null));
         }
 
         @Override
-        public CompletionStage<ZLinkLocationWriteResult>
-            updateFanoutPublisher(
-                ZLinkFanoutPublisherDescriptor descriptor,
-                ZLinkLocationWriteIntent
-                    intent) {
+        public CompletionStage<ZLinkLocationWriteResult> updateFanoutPublisher(
+                ZLinkFanoutPublisherDescriptor descriptor, ZLinkLocationWriteIntent intent) {
             return CompletableFuture.completedFuture(
-                ZLinkLocationWriteResult.stored(1, Instant.now()));
+                    ZLinkLocationWriteResult.stored(1, Instant.now()));
         }
 
         @Override
-        public CompletionStage<ZLinkLocationWriteStatus>
-            removeFanoutPublisher(
-                ZLinkFanoutPublisherDescriptorKey key,
-                ZLinkLocationOwnerToken owner) {
-            return CompletableFuture.completedFuture(
-                ZLinkLocationWriteStatus.STORED);
+        public CompletionStage<ZLinkLocationWriteStatus> removeFanoutPublisher(
+                ZLinkFanoutPublisherDescriptorKey key, ZLinkLocationOwnerToken owner) {
+            return CompletableFuture.completedFuture(ZLinkLocationWriteStatus.STORED);
         }
 
         @Override
-        public CompletionStage<
-            ZLinkLocationPage<ZLinkFanoutPublisherDescriptor>>
-            listFanoutPublishers(
-                String channelName,
-                ZLinkPageRequest page) {
-            CompletableFuture<
-                ZLinkLocationPage<ZLinkFanoutPublisherDescriptor>> blocked =
-                blockedRead;
+        public CompletionStage<ZLinkLocationPage<ZLinkFanoutPublisherDescriptor>>
+                listFanoutPublishers(String channelName, ZLinkPageRequest page) {
+            CompletableFuture<ZLinkLocationPage<ZLinkFanoutPublisherDescriptor>> blocked =
+                    blockedRead;
             if (blocked != null) {
                 readStarted.complete(null);
                 return blocked;
             }
-            return CompletableFuture.completedFuture(
-                new ZLinkLocationPage<>(rows, null));
+            return CompletableFuture.completedFuture(new ZLinkLocationPage<>(rows, null));
         }
     }
 
@@ -442,19 +422,17 @@ final class ZLinkFanoutLocationRuntimeTest {
         private final boolean blockConnect;
 
         private Backend(
-            List<ControlledSubscriber> subscribers,
-            LinkedBlockingQueue<ControlledSubscriber> created,
-            boolean blockConnect) {
+                List<ControlledSubscriber> subscribers,
+                LinkedBlockingQueue<ControlledSubscriber> created,
+                boolean blockConnect) {
             this.subscribers = subscribers;
             this.created = created;
             this.blockConnect = blockConnect;
         }
 
         @Override
-        public ZLinkBackendSubscriberSocket createSubscriberSocket(
-            ZLinkBackendContext context) {
-            ControlledSubscriber subscriber = new ControlledSubscriber(
-                blockConnect);
+        public ZLinkBackendSubscriberSocket createSubscriberSocket(ZLinkBackendContext context) {
+            ControlledSubscriber subscriber = new ControlledSubscriber(blockConnect);
             subscribers.add(subscriber);
             created.add(subscriber);
             return subscriber;
@@ -466,26 +444,22 @@ final class ZLinkFanoutLocationRuntimeTest {
         }
 
         @Override
-        public ZLinkBackendDealerSocket createDealerSocket(
-            ZLinkBackendContext context) {
+        public ZLinkBackendDealerSocket createDealerSocket(ZLinkBackendContext context) {
             throw new UnsupportedOperationException();
         }
 
         @Override
-        public ZLinkBackendRouterSocket createRouterSocket(
-            ZLinkBackendContext context) {
+        public ZLinkBackendRouterSocket createRouterSocket(ZLinkBackendContext context) {
             throw new UnsupportedOperationException();
         }
 
         @Override
-        public ZLinkBackendPublisherSocket createPublisherSocket(
-            ZLinkBackendContext context) {
+        public ZLinkBackendPublisherSocket createPublisherSocket(ZLinkBackendContext context) {
             throw new UnsupportedOperationException();
         }
     }
 
-    private static final class ControlledSubscriber
-        implements ZLinkBackendSubscriberSocket {
+    private static final class ControlledSubscriber implements ZLinkBackendSubscriberSocket {
         private final Monitor monitor = new Monitor();
         private volatile boolean closed;
         private volatile int readinessWaits;
@@ -501,8 +475,7 @@ final class ZLinkFanoutLocationRuntimeTest {
         private final AtomicInteger closeCalls = new AtomicInteger();
         private final List<String> events = new CopyOnWriteArrayList<>();
         private final List<String> subscriptions = new CopyOnWriteArrayList<>();
-        private final CompletableFuture<Void> readinessObserved =
-            new CompletableFuture<>();
+        private final CompletableFuture<Void> readinessObserved = new CompletableFuture<>();
 
         private ControlledSubscriber(boolean blockConnect) {
             this.blockConnect = blockConnect;
@@ -514,8 +487,7 @@ final class ZLinkFanoutLocationRuntimeTest {
         }
 
         @Override
-        public void setChannelName(String channelName) {
-        }
+        public void setChannelName(String channelName) {}
 
         @Override
         public void setSubscription(String topic) {
@@ -523,8 +495,7 @@ final class ZLinkFanoutLocationRuntimeTest {
         }
 
         @Override
-        public ZLinkBackendTopicMessage subscribe(
-            ZLinkBackendRecvMode mode) {
+        public ZLinkBackendTopicMessage subscribe(ZLinkBackendRecvMode mode) {
             subscribeCalls++;
             if (blockReceive.get()) {
                 events.add("subscribe-enter");
@@ -599,16 +570,14 @@ final class ZLinkFanoutLocationRuntimeTest {
 
     private static final class Monitor implements ZLinkBackendSocketMonitor {
         private final LinkedBlockingQueue<ZLinkBackendSocketMonitorEvent> events =
-            new LinkedBlockingQueue<>();
+                new LinkedBlockingQueue<>();
         private final Semaphore readable = new Semaphore(0);
         private final AtomicInteger closeCalls = new AtomicInteger();
-        private final CompletableFuture<Void> handlerReady =
-            new CompletableFuture<>();
+        private final CompletableFuture<Void> handlerReady = new CompletableFuture<>();
         private volatile boolean closed;
 
         private void emit(String event) {
-            events.add(new ZLinkBackendSocketMonitorEvent(
-                event, Optional.empty(), "", ""));
+            events.add(new ZLinkBackendSocketMonitorEvent(event, Optional.empty(), "", ""));
             readable.release();
         }
 
@@ -616,8 +585,7 @@ final class ZLinkFanoutLocationRuntimeTest {
         public boolean waitForReadable(Duration timeout) {
             handlerReady.complete(null);
             try {
-                return readable.tryAcquire(timeout.toMillis(), TimeUnit.MILLISECONDS)
-                    && !closed;
+                return readable.tryAcquire(timeout.toMillis(), TimeUnit.MILLISECONDS) && !closed;
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
                 return false;
@@ -649,8 +617,7 @@ final class ZLinkFanoutLocationRuntimeTest {
 
     private static final class Context implements ZLinkBackendContext {
         @Override
-        public void shutdown() {
-        }
+        public void shutdown() {}
 
         @Override
         public String name() {
@@ -658,7 +625,6 @@ final class ZLinkFanoutLocationRuntimeTest {
         }
 
         @Override
-        public void close() {
-        }
+        public void close() {}
     }
 }

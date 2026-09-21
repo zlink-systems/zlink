@@ -5,19 +5,21 @@ internal sealed class ZLinkSpotNodeInitializer(
     ZLinkFrameworkRuntime runtime,
     ZLinkFrameworkRegistration registration,
     ZLinkLocationLifecycle? locationLifecycle,
-    ZLinkOwnerLeaseTracker? leaseTracker)
+    ZLinkOwnerLeaseTracker? leaseTracker
+)
 {
     public async ValueTask InitializeAsync(ZLinkFrameworkComponentState state)
     {
-        if (registration.SpotNodes.Count == 0) return;
+        if (registration.SpotNodes.Count == 0)
+            return;
 
         foreach (var spotNodeRegistration in registration.SpotNodes.Values)
         {
             var entrySpotId = CreateEntrySpotId(spotNodeRegistration);
             // Core requires the mesh membership name at construction; SpotMeshChannelName
             // is the meshName from AddRouteMesh(meshName) (falls back to the node name).
-            var meshName = spotNodeRegistration.SpotMeshChannelName
-                ?? spotNodeRegistration.SpotNodeName;
+            var meshName =
+                spotNodeRegistration.SpotMeshChannelName ?? spotNodeRegistration.SpotNodeName;
             var node = state.Context.CreateSpotNode(meshName);
             var nodeRoutingId = PrepareNodeRoutingId(spotNodeRegistration);
             node.SetRoutingId(nodeRoutingId);
@@ -28,19 +30,17 @@ internal sealed class ZLinkSpotNodeInitializer(
             // Spec 30 §14 step 1: once shutdown seals host admission, the
             // node starts no new peer admission. The host's drain gate is the
             // single seal owner; the node only consults it.
-            node.SetPeerAdmissionSealGate(
-                () => runtime.DrainAdmission.IsSealedForShutdown);
+            node.SetPeerAdmissionSealGate(() => runtime.DrainAdmission.IsSealedForShutdown);
             node.SetObjectRole(spotNodeRegistration.ObjectRole);
-            node.ApplyRoleConfig(
-                spotNodeRegistration.SpotPublisherConfig,
-                subscriber: null);
+            node.ApplyRoleConfig(spotNodeRegistration.SpotPublisherConfig, subscriber: null);
 
             var routerEndpoint = spotNodeRegistration.Router is { } routerRegistration
                 ? ZLinkNetworkEndpointResolver.Bind(
                     routerRegistration.BindEndpoint,
                     routerRegistration.ListenPort,
                     routerRegistration.BindHost,
-                    registration.NetworkOptions)
+                    registration.NetworkOptions
+                )
                 : null;
             var hasRouterBind = routerEndpoint is { Length: > 0 };
             if (spotNodeRegistration.Router is { } router)
@@ -49,8 +49,8 @@ internal sealed class ZLinkSpotNodeInitializer(
                 node.SetRouterReceiveHighWaterMark(router.SocketConfig.ReceiveHighWaterMark);
                 node.SetRouterReceiveTimeout(router.SocketConfig.ReceiveTimeout);
                 node.SetRouterSendTimeout(
-                    router.SocketConfig.SendTimeout
-                    ?? registration.DefaultSocketSendTimeout);
+                    router.SocketConfig.SendTimeout ?? registration.DefaultSocketSendTimeout
+                );
             }
             foreach (var membership in spotNodeRegistration.ChannelMemberships)
             {
@@ -66,9 +66,11 @@ internal sealed class ZLinkSpotNodeInitializer(
             {
                 if (RequiresDescriptorClaim(spotNodeRegistration))
                 {
-                    var lifecycle = locationLifecycle
+                    var lifecycle =
+                        locationLifecycle
                         ?? throw new ZLinkConfigurationException(
-                            $"MeshNode '{spotNodeRegistration.SpotNodeName}' requires a Location Store.");
+                            $"MeshNode '{spotNodeRegistration.SpotNodeName}' requires a Location Store."
+                        );
                     var descriptor = ZLinkMeshNodeDescriptorFactory.Create(
                         registration,
                         spotNodeRegistration,
@@ -77,22 +79,25 @@ internal sealed class ZLinkSpotNodeInitializer(
                         endpoint: string.Empty,
                         entrySpotId,
                         descriptorRevision: 1,
-                        ZLinkFrameworkRuntimeState.Preparing);
-                    var claim = await lifecycle.WriteMeshNodeDescriptorAsync(
-                            descriptor,
-                            ZLinkLocationWriteIntent.NewClaim)
+                        ZLinkFrameworkRuntimeState.Preparing
+                    );
+                    var claim = await lifecycle
+                        .WriteMeshNodeDescriptorAsync(descriptor, ZLinkLocationWriteIntent.NewClaim)
                         .ConfigureAwait(false);
                     if (claim.Status != ZLinkLocationWriteStatus.Stored)
                     {
                         if (claim.Status != ZLinkLocationWriteStatus.RejectedConflict)
                             throw new ZLinkConfigurationException(
                                 $"MeshNode '{spotNodeRegistration.SpotNodeName}' could not "
-                                + $"claim its descriptor: {claim.Status}.");
+                                    + $"claim its descriptor: {claim.Status}."
+                            );
                         var conflictKind = descriptor.EntrySpotId is not null
-                            ? await lifecycle.ClassifyMeshNodeClaimConflictAsync(
+                            ? await lifecycle
+                                .ClassifyMeshNodeClaimConflictAsync(
                                     meshName,
                                     nodeRoutingId,
-                                    descriptor.EntrySpotId)
+                                    descriptor.EntrySpotId
+                                )
                                 .ConfigureAwait(false)
                             : ZLinkFrameworkErrorKind.AlreadyExists;
                         throw CreateClaimFailure(
@@ -100,13 +105,15 @@ internal sealed class ZLinkSpotNodeInitializer(
                             nodeRoutingId,
                             entrySpotId,
                             claim.Status,
-                            conflictKind);
+                            conflictKind
+                        );
                     }
                     startupState = new ZLinkMeshNodeStartupState(
                         nodeRoutingId,
                         entrySpotId,
                         descriptor,
-                        claim.Generation);
+                        claim.Generation
+                    );
                 }
 
                 if (hasRouterBind)
@@ -122,10 +129,9 @@ internal sealed class ZLinkSpotNodeInitializer(
                     meshName,
                     locationLifecycle,
                     startupState,
-                    entrySpotId);
-                state.SpotNodes.Add(
-                    spotNodeRegistration.SpotNodeName,
-                    nodeRuntime);
+                    entrySpotId
+                );
+                state.SpotNodes.Add(spotNodeRegistration.SpotNodeName, nodeRuntime);
 
                 // Native ingress may begin as soon as Start binds the router.
                 // The runtime above has already installed operation targets and
@@ -137,13 +143,16 @@ internal sealed class ZLinkSpotNodeInitializer(
                 if (hasRouterBind)
                 {
                     var boundRouter = spotNodeRegistration.Router!;
-                    actualEndpoint = ZLinkNetworkEndpointResolver.Advertise(
-                        node.Status().LocalEndpoint ?? routerEndpoint!,
-                        boundRouter.AdvertiseHost,
-                        boundRouter.BindHost,
-                        registration.NetworkOptions)
+                    actualEndpoint =
+                        ZLinkNetworkEndpointResolver.Advertise(
+                            node.Status().LocalEndpoint ?? routerEndpoint!,
+                            boundRouter.AdvertiseHost,
+                            boundRouter.BindHost,
+                            registration.NetworkOptions
+                        )
                         ?? throw new ZLinkConfigurationException(
-                            $"MeshNode '{spotNodeRegistration.SpotNodeName}' did not expose an advertised endpoint.");
+                            $"MeshNode '{spotNodeRegistration.SpotNodeName}' did not expose an advertised endpoint."
+                        );
                     node.SetRouterAdvertisedEndpoint(actualEndpoint);
                 }
 
@@ -152,21 +161,23 @@ internal sealed class ZLinkSpotNodeInitializer(
                     var boundDescriptor = startupState.Descriptor with
                     {
                         Endpoint = actualEndpoint!,
-                        DescriptorRevision = 2
+                        DescriptorRevision = 2,
                     };
                     var renewed = await locationLifecycle!
                         .WriteMeshNodeDescriptorAsync(
                             boundDescriptor,
-                            ZLinkLocationWriteIntent.Renew)
+                            ZLinkLocationWriteIntent.Renew
+                        )
                         .ConfigureAwait(false);
                     if (renewed.Status != ZLinkLocationWriteStatus.Stored)
                         throw new ZLinkConfigurationException(
                             $"MeshNode '{spotNodeRegistration.SpotNodeName}' could not finalize "
-                            + $"its claimed descriptor: {renewed.Status}.");
+                                + $"its claimed descriptor: {renewed.Status}."
+                        );
                     startupState = startupState with
                     {
                         Descriptor = boundDescriptor,
-                        StoreGeneration = renewed.Generation
+                        StoreGeneration = renewed.Generation,
                     };
                     nodeRuntime.UpdateStartupState(startupState);
                 }
@@ -180,7 +191,8 @@ internal sealed class ZLinkSpotNodeInitializer(
                         nodeRoutingId,
                         registration,
                         locationLifecycle,
-                        leaseTracker)
+                        leaseTracker
+                    )
                     .ConfigureAwait(false);
                 ConnectManualPeers(spotNodeRegistration, nodeRuntime);
             }
@@ -190,15 +202,18 @@ internal sealed class ZLinkSpotNodeInitializer(
                 var failures = new ZLinkFailureCollector(initializationFailure);
                 if (startupState is not null && locationLifecycle is not null)
                 {
-                    await failures.CaptureAsync(
-                            async () =>
-                            {
-                                _ = await locationLifecycle.RemoveMeshNodeDescriptorAsync(
-                                        new ZLinkMeshNodeDescriptorKey(
-                                            startupState.Descriptor.MeshName,
-                                            startupState.RoutingId))
-                                    .ConfigureAwait(false);
-                            })
+                    await failures
+                        .CaptureAsync(async () =>
+                        {
+                            _ = await locationLifecycle
+                                .RemoveMeshNodeDescriptorAsync(
+                                    new ZLinkMeshNodeDescriptorKey(
+                                        startupState.Descriptor.MeshName,
+                                        startupState.RoutingId
+                                    )
+                                )
+                                .ConfigureAwait(false);
+                        })
                         .ConfigureAwait(false);
                 }
                 if (nodeRuntime is not null)
@@ -206,7 +221,9 @@ internal sealed class ZLinkSpotNodeInitializer(
                 else
                     await failures.CaptureAsync(node.DisposeAsync).ConfigureAwait(false);
                 failures.ThrowIfAny();
-                throw new InvalidOperationException("Unreachable after startup cleanup failure propagation.");
+                throw new InvalidOperationException(
+                    "Unreachable after startup cleanup failure propagation."
+                );
             }
         }
     }
@@ -216,42 +233,50 @@ internal sealed class ZLinkSpotNodeInitializer(
     //  left an object-role node invisible as a Spot target: peers saw it Ready, but no compatible
     //  User Spot target was ever found. A reclaim that collides with a live owner is already
     //  handled below as RejectedConflict, which is the same outcome an automatic RID produces.
-    private static bool RequiresDescriptorClaim(
-        ZLinkSpotNodeRegistration registration) =>
+    private static bool RequiresDescriptorClaim(ZLinkSpotNodeRegistration registration) =>
         registration.ObjectRoleSelected
-        || registration.Router?.AcquisitionMode
-           == ZLinkPeerAcquisitionMode.AutoConnect;
+        || registration.Router?.AcquisitionMode == ZLinkPeerAcquisitionMode.AutoConnect;
 
     private static Exception CreateClaimFailure(
         ZLinkSpotNodeRegistration registration,
         RoutingId routingId,
         string entrySpotId,
         ZLinkLocationWriteStatus status,
-        ZLinkFrameworkErrorKind conflictKind) =>
+        ZLinkFrameworkErrorKind conflictKind
+    ) =>
         new ZLinkFrameworkException(
             conflictKind,
             $"MeshNode '{registration.SpotNodeName}' could not claim RID "
-            + $"'{routingId}' with Entry Spot ID '{entrySpotId}': {status}.");
+                + $"'{routingId}' with Entry Spot ID '{entrySpotId}': {status}."
+        );
 
     private static void ConnectManualPeers(
         ZLinkSpotNodeRegistration registration,
-        ZLinkSpotNodeRuntime nodeRuntime)
+        ZLinkSpotNodeRuntime nodeRuntime
+    )
     {
         if (registration.Router is { AcquisitionMode: ZLinkPeerAcquisitionMode.Manual } router)
-            nodeRuntime.OwnManualConnectionAttachment(router.ManualConnections.Attach(
-            endpoint =>
-            {
-                _ = router.PeerRoutingIds.TryGetValue(endpoint, out var peerRid)
-                    ? nodeRuntime.ConnectPeerAsync(peerRid, endpoint, CancellationToken.None)
-                    : nodeRuntime.ConnectPeerAsync(endpoint, CancellationToken.None);
-            },
-            endpoint =>
-            {
-                if (router.PeerRoutingIds.TryGetValue(endpoint, out var peerRid))
-                    nodeRuntime.DisconnectPeerManual(endpoint, peerRid);
-                else
-                    nodeRuntime.DisconnectPeerManual(endpoint);
-            }));
+            nodeRuntime.OwnManualConnectionAttachment(
+                router.ManualConnections.Attach(
+                    endpoint =>
+                    {
+                        _ = router.PeerRoutingIds.TryGetValue(endpoint, out var peerRid)
+                            ? nodeRuntime.ConnectPeerAsync(
+                                peerRid,
+                                endpoint,
+                                CancellationToken.None
+                            )
+                            : nodeRuntime.ConnectPeerAsync(endpoint, CancellationToken.None);
+                    },
+                    endpoint =>
+                    {
+                        if (router.PeerRoutingIds.TryGetValue(endpoint, out var peerRid))
+                            nodeRuntime.DisconnectPeerManual(endpoint, peerRid);
+                        else
+                            nodeRuntime.DisconnectPeerManual(endpoint);
+                    }
+                )
+            );
     }
 
     internal static async ValueTask ResolveManualPeerRoutingIdsAsync(
@@ -260,46 +285,57 @@ internal sealed class ZLinkSpotNodeInitializer(
         RoutingId localRoutingId,
         ZLinkFrameworkRegistration registration,
         ZLinkLocationLifecycle? locationLifecycle,
-        ZLinkOwnerLeaseTracker? leaseTracker)
+        ZLinkOwnerLeaseTracker? leaseTracker
+    )
     {
-        if (locationLifecycle is null
+        if (
+            locationLifecycle is null
             || !nodeRegistration.ObjectRoleSelected
-            || nodeRegistration.Router is not
-            {
-                AcquisitionMode: ZLinkPeerAcquisitionMode.Manual
-            } router
-            || router.ManualConnections.Count == 0)
+            || nodeRegistration.Router
+                is not { AcquisitionMode: ZLinkPeerAcquisitionMode.Manual } router
+            || router.ManualConnections.Count == 0
+        )
             return;
 
-        var unresolved = router.ManualConnections.ListConnections()
+        var unresolved = router
+            .ManualConnections.ListConnections()
             .Where(endpoint => !router.PeerRoutingIds.ContainsKey(endpoint))
             .ToHashSet(StringComparer.Ordinal);
-        if (unresolved.Count == 0) return;
-        var leases = leaseTracker
+        if (unresolved.Count == 0)
+            return;
+        var leases =
+            leaseTracker
             ?? throw new InvalidOperationException(
-                "Manual object peer resolution requires owner lease tracking.");
+                "Manual object peer resolution requires owner lease tracking."
+            );
 
-        var timeout = nodeRegistration.DefaultRequestTimeout
-                      ?? registration.DefaultRequestTimeout;
+        var timeout = nodeRegistration.DefaultRequestTimeout ?? registration.DefaultRequestTimeout;
         using var deadline = new CancellationTokenSource(timeout);
         while (unresolved.Count != 0)
         {
-            var descriptors = await locationLifecycle.ListMeshNodesAsync(
-                    meshName,
-                    deadline.Token)
+            var descriptors = await locationLifecycle
+                .ListMeshNodesAsync(meshName, deadline.Token)
                 .ConfigureAwait(false);
-            foreach (var descriptor in descriptors.OrderBy(
-                         static candidate => candidate.Rid,
-                         ZLinkRoutingIdOrder.Instance))
+            foreach (
+                var descriptor in descriptors.OrderBy(
+                    static candidate => candidate.Rid,
+                    ZLinkRoutingIdOrder.Instance
+                )
+            )
             {
-                if (descriptor.Rid == localRoutingId
+                if (
+                    descriptor.Rid == localRoutingId
                     || !unresolved.Contains(descriptor.Endpoint)
-                    || !await leases.IsOwnerTokenLiveAsync(
+                    || !await leases
+                        .IsOwnerTokenLiveAsync(
                             new ZLinkLocationOwnerToken(
                                 descriptor.OwnerId,
-                                descriptor.LeaseGeneration),
-                            deadline.Token)
-                        .ConfigureAwait(false))
+                                descriptor.LeaseGeneration
+                            ),
+                            deadline.Token
+                        )
+                        .ConfigureAwait(false)
+                )
                     continue;
                 unresolved.Remove(descriptor.Endpoint);
                 router.PeerRoutingIds[descriptor.Endpoint] = descriptor.Rid;
@@ -310,17 +346,16 @@ internal sealed class ZLinkSpotNodeInitializer(
         }
     }
 
-    internal static RoutingId PrepareNodeRoutingId(
-        ZLinkSpotNodeRegistration registration)
+    internal static RoutingId PrepareNodeRoutingId(ZLinkSpotNodeRegistration registration)
     {
-        if (registration.RoutingId.Size > 0) return registration.RoutingId;
+        if (registration.RoutingId.Size > 0)
+            return registration.RoutingId;
 
         if (registration.PreparedRoutingId.Size > 0)
             return registration.PreparedRoutingId;
 
         var prefix = registration.RoutingIdPrefix ?? registration.SpotNodeName;
-        registration.PreparedRoutingId =
-            RoutingId.From($"{prefix}-{Guid.NewGuid():D}");
+        registration.PreparedRoutingId = RoutingId.From($"{prefix}-{Guid.NewGuid():D}");
         return registration.PreparedRoutingId;
     }
 
@@ -335,7 +370,8 @@ internal sealed class ZLinkSpotNodeInitializer(
         {
             throw new ZLinkConfigurationException(
                 $"MeshNode '{registration.SpotNodeName}' cannot produce a valid Entry Spot ID: "
-                + error.Message);
+                    + error.Message
+            );
         }
     }
 }

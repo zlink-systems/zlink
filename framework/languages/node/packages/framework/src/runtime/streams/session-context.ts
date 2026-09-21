@@ -36,10 +36,7 @@ import {
   DefaultZLinkSessionReplyCall,
   DefaultZLinkSessionSendCall
 } from './session-calls';
-import {
-  ZLinkSessionRequestTracker,
-  type ZLinkPendingSessionRequest
-} from './session-requests';
+import { ZLinkSessionRequestTracker, type ZLinkPendingSessionRequest } from './session-requests';
 import { ZLinkSessionLocalActorBindings } from './session-local-actors';
 import type { ServiceActorRef } from '../foundation/service-stateful-registry';
 import type { ServiceRetiredBoundSessionRouteFence } from '../foundation/service-stateful-wire-codec';
@@ -126,10 +123,13 @@ export class DefaultZLinkSessionContext implements ZLinkSessionContext {
     correlationId: string | undefined
   ) => void;
   private closingForActorReplacement = false;
-  private readonly retiredActorBindings = new Map<string, {
-    readonly actorGeneration: bigint;
-    readonly retiredSession: ServiceRetiredBoundSessionRouteFence;
-  }>();
+  private readonly retiredActorBindings = new Map<
+    string,
+    {
+      readonly actorGeneration: bigint;
+      readonly retiredSession: ServiceRetiredBoundSessionRouteFence;
+    }
+  >();
 
   constructor(
     private readonly runtime: ZLinkSessionContextRuntime,
@@ -173,11 +173,13 @@ export class DefaultZLinkSessionContext implements ZLinkSessionContext {
   }
 
   /** Wired by the owning session runtime; see ZLinkSessionCallContext.traceFrameWritten. */
-  setFrameWrittenObserver(observer: (
-    kind: ZLinkStreamMessageKind,
-    packetName: string,
-    correlationId: string | undefined
-  ) => void): void {
+  setFrameWrittenObserver(
+    observer: (
+      kind: ZLinkStreamMessageKind,
+      packetName: string,
+      correlationId: string | undefined
+    ) => void
+  ): void {
     this.frameWrittenObserver = observer;
   }
 
@@ -199,9 +201,9 @@ export class DefaultZLinkSessionContext implements ZLinkSessionContext {
   ): boolean {
     const previous = this.retiredActorBindings.get(actor.actorId);
     if (
-      previous !== undefined
-      && previous.actorGeneration === actor.generation
-      && sameRetiredSession(previous.retiredSession, retiredSession)
+      previous !== undefined &&
+      previous.actorGeneration === actor.generation &&
+      sameRetiredSession(previous.retiredSession, retiredSession)
     ) {
       return false;
     }
@@ -219,17 +221,19 @@ export class DefaultZLinkSessionContext implements ZLinkSessionContext {
   ): boolean {
     const expected = this.retiredActorBindings.get(actor.actorId);
     if (
-      expected === undefined
-      || expected.actorGeneration !== actor.generation
-      || !sameRetiredSession(expected.retiredSession, retiredSession)
+      expected === undefined ||
+      expected.actorGeneration !== actor.generation ||
+      !sameRetiredSession(expected.retiredSession, retiredSession)
     ) {
       return false;
     }
     const current = this.findBoundActor(actor.actorId);
     if (current === undefined) return true;
     const currentRef = current.ref as ActorRef & { readonly bindingGeneration?: bigint };
-    return BigInt(currentRef.objectGeneration) === actor.generation
-      && currentRef.bindingGeneration === retiredSession.retiredBindingGeneration;
+    return (
+      BigInt(currentRef.objectGeneration) === actor.generation &&
+      currentRef.bindingGeneration === retiredSession.retiredBindingGeneration
+    );
   }
 
   createTextMessage(payload: string): Message {
@@ -372,13 +376,14 @@ class DefaultZLinkSessionHandlerRegistry implements ZLinkSessionHandlerRegistry 
         `Session packet '${packetName}' is already registered.`
       );
     }
-    if (typeof (handlerType as { prototype?: { handle?: unknown } }).prototype?.handle !== 'function') {
+    if (
+      typeof (handlerType as { prototype?: { handle?: unknown } }).prototype?.handle !== 'function'
+    ) {
       throw new TypeError(`Session handler '${handlerType.name}' must implement handle(...).`);
     }
-    this.handlersByPacket.set(
-      packetName,
-      { handlerType: handlerType as Type<ZLinkSessionPacketHandler<ZLinkSessionContext>> }
-    );
+    this.handlersByPacket.set(packetName, {
+      handlerType: handlerType as Type<ZLinkSessionPacketHandler<ZLinkSessionContext>>
+    });
     return this;
   }
 
@@ -386,7 +391,10 @@ class DefaultZLinkSessionHandlerRegistry implements ZLinkSessionHandlerRegistry 
     this.registrationOpen = false;
   }
 
-  async tryHandle(dispatch: import('../../contracts').ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<boolean> {
+  async tryHandle(
+    dispatch: import('../../contracts').ZLinkSessionDispatchContext,
+    payload: ZLinkMessage
+  ): Promise<boolean> {
     const registration = this.handlersByPacket.get(dispatch.packetName);
     if (registration === undefined) {
       return false;
@@ -407,9 +415,11 @@ class DefaultZLinkSessionHandlerRegistry implements ZLinkSessionHandlerRegistry 
   private async createHandler(
     handlerType: Type<ZLinkSessionPacketHandler<ZLinkSessionContext>>
   ): Promise<ZLinkSessionPacketHandler<ZLinkSessionContext>> {
-    return this.providerResolver?.get?.(handlerType)
-      ?? await this.providerResolver?.create?.(handlerType)
-      ?? new handlerType();
+    return (
+      this.providerResolver?.get?.(handlerType) ??
+      (await this.providerResolver?.create?.(handlerType)) ??
+      new handlerType()
+    );
   }
 }
 
@@ -420,7 +430,8 @@ interface SessionHandlerRegistration {
 
 function sessionHandlerPacketName(handlerType: new (...args: never[]) => unknown): string {
   const declared = readZLinkDecoratorMetadata(handlerType)
-    .find((metadata) => metadata.kind === 'packet')?.packetName?.trim();
+    .find((metadata) => metadata.kind === 'packet')
+    ?.packetName?.trim();
   if (declared === undefined || declared.length === 0) {
     throw new ZLinkConfigurationException(
       `Session handler '${handlerType.name}' must declare a packet name with @ZLinkPacket(...).`
@@ -489,9 +500,9 @@ export class DefaultZLinkSessionActor implements ZLinkSessionActor {
     }
     if (BigInt(ref.objectGeneration) !== BigInt(this.currentRef.objectGeneration)) {
       throw new Error(
-        `Cannot change session actor '${this.actorId}' object generation `
-          + `from ${String(this.currentRef.objectGeneration)} `
-          + `to ${String(ref.objectGeneration)}.`
+        `Cannot change session actor '${this.actorId}' object generation ` +
+          `from ${String(this.currentRef.objectGeneration)} ` +
+          `to ${String(ref.objectGeneration)}.`
       );
     }
     this.currentRef = ref;
@@ -508,9 +519,7 @@ export class DefaultZLinkSessionActor implements ZLinkSessionActor {
     payloadOrSignal?: ZLinkMessage | AbortSignal,
     signal?: AbortSignal
   ): Promise<void> {
-    const dispatch = isSessionDispatchContext(dispatchOrPayload)
-      ? dispatchOrPayload
-      : undefined;
+    const dispatch = isSessionDispatchContext(dispatchOrPayload) ? dispatchOrPayload : undefined;
     let payload: ZLinkMessage;
     let relaySignal: AbortSignal | undefined;
     let header: ZLinkStreamFrameHeader | undefined;
@@ -537,7 +546,9 @@ export class DefaultZLinkSessionActor implements ZLinkSessionActor {
 
 const SESSION_DISPATCH_HEADERS = new WeakMap<ZLinkSessionDispatchContext, ZLinkStreamFrameHeader>();
 
-export function createSessionDispatchContext(header: ZLinkStreamFrameHeader): ZLinkSessionDispatchContext {
+export function createSessionDispatchContext(
+  header: ZLinkStreamFrameHeader
+): ZLinkSessionDispatchContext {
   const dispatch: ZLinkSessionDispatchContext = {
     packetName: header.name,
     metadata: header.metadata,
@@ -548,15 +559,20 @@ export function createSessionDispatchContext(header: ZLinkStreamFrameHeader): ZL
 }
 
 function isSessionDispatchContext(value: unknown): value is ZLinkSessionDispatchContext {
-  return value !== null && typeof value === 'object'
-    && typeof (value as ZLinkSessionDispatchContext).packetName === 'string'
-    && 'canReply' in value;
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    typeof (value as ZLinkSessionDispatchContext).packetName === 'string' &&
+    'canReply' in value
+  );
 }
 
 function sessionDispatchHeader(dispatch: ZLinkSessionDispatchContext): ZLinkStreamFrameHeader {
   const header = SESSION_DISPATCH_HEADERS.get(dispatch);
   if (header === undefined) {
-    throw new Error('Session actor relay dispatch must be the context supplied to the active session handler.');
+    throw new Error(
+      'Session actor relay dispatch must be the context supplied to the active session handler.'
+    );
   }
   return header;
 }
@@ -600,10 +616,12 @@ function sameRetiredSession(
   left: ServiceRetiredBoundSessionRouteFence,
   right: ServiceRetiredBoundSessionRouteFence
 ): boolean {
-  return left.sessionOwnerNodeRid === right.sessionOwnerNodeRid
-    && left.sessionOwnerNodeGeneration === right.sessionOwnerNodeGeneration
-    && left.sessionOwnerId === right.sessionOwnerId
-    && left.sessionOwnerLeaseGeneration === right.sessionOwnerLeaseGeneration
-    && left.sessionRid === right.sessionRid
-    && left.retiredBindingGeneration === right.retiredBindingGeneration;
+  return (
+    left.sessionOwnerNodeRid === right.sessionOwnerNodeRid &&
+    left.sessionOwnerNodeGeneration === right.sessionOwnerNodeGeneration &&
+    left.sessionOwnerId === right.sessionOwnerId &&
+    left.sessionOwnerLeaseGeneration === right.sessionOwnerLeaseGeneration &&
+    left.sessionRid === right.sessionRid &&
+    left.retiredBindingGeneration === right.retiredBindingGeneration
+  );
 }

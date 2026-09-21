@@ -8,8 +8,8 @@ using Zlink.Framework.Runtime;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Codecs;
-using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Identifiers;
+using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
@@ -46,7 +46,8 @@ public sealed class ActorHandoffTests
         Assert.Null(handoff.TryBeginSourceMembershipLeave("previous"));
         Assert.False(current.IsCompleted);
         var notification = Assert.IsType<TaskCompletionSource>(
-            handoff.TryBeginSourceMembershipLeave("current"));
+            handoff.TryBeginSourceMembershipLeave("current")
+        );
         Assert.Null(handoff.TryBeginSourceMembershipLeave("current"));
         Assert.False(current.IsCompleted);
         notification.SetResult();
@@ -58,9 +59,7 @@ public sealed class ActorHandoffTests
     [Fact]
     public void Import_NewerHandoffSupersedesImportingTargetState()
     {
-        var handoff = new ZLinkActorHandoffState(
-            "actor-superseded-target",
-            TimeProvider.System);
+        var handoff = new ZLinkActorHandoffState("actor-superseded-target", TimeProvider.System);
         var first = CommitRequest("handoff-first", []);
         var second = CommitRequest("handoff-second", []);
 
@@ -71,24 +70,21 @@ public sealed class ActorHandoffTests
         //  than reject the later Restore as already active.
         Assert.True(handoff.Import(second, out _));
 
-        var superseded = Assert.Throws<ZLinkFrameworkException>(
-            () => firstPreparation.GetAwaiter().GetResult());
+        var superseded = Assert.Throws<ZLinkFrameworkException>(() =>
+            firstPreparation.GetAwaiter().GetResult()
+        );
         Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, superseded.Kind);
     }
 
     [Fact]
     public void DeferredJoinCapture_PromotesQueuedFrameIntoCrossNodeJournal()
     {
-        var handoff = new ZLinkActorHandoffState(
-            "actor-1",
-            TimeProvider.System);
+        var handoff = new ZLinkActorHandoffState("actor-1", TimeProvider.System);
         handoff.BeginDeferredJoinCapture();
         using var body = Message.From("queued-after-defer");
         using var frame = Frame(body, ActorRef("node-a", 1), "session-1");
 
-        Assert.Equal(
-            ZLinkActorHandoffCaptureResult.Captured,
-            handoff.TryCapture(frame));
+        Assert.Equal(ZLinkActorHandoffCaptureResult.Captured, handoff.TryCapture(frame));
 
         handoff.BeginCapture();
         var journal = handoff.SnapshotFrames();
@@ -100,15 +96,11 @@ public sealed class ActorHandoffTests
     [Fact]
     public void DeferredJoinCapture_ReleasesQueuedFrameForLocalReplay()
     {
-        var handoff = new ZLinkActorHandoffState(
-            "actor-1",
-            TimeProvider.System);
+        var handoff = new ZLinkActorHandoffState("actor-1", TimeProvider.System);
         handoff.BeginDeferredJoinCapture();
         using var body = Message.From("queued-after-defer");
         using var frame = Frame(body, ActorRef("node-a", 1), "session-1");
-        Assert.Equal(
-            ZLinkActorHandoffCaptureResult.Captured,
-            handoff.TryCapture(frame));
+        Assert.Equal(ZLinkActorHandoffCaptureResult.Captured, handoff.TryCapture(frame));
 
         var replay = handoff.EndDeferredJoinCapture();
 
@@ -126,10 +118,19 @@ public sealed class ActorHandoffTests
         var sourceNode = RoutingId.From("session-node");
         var sourceSession = RoutingId.From("session-1");
         var source = new ZLinkServiceWireCodec.RequestSourceFence(
-            "session-owner", 11, sourceNode, 13);
+            "session-owner",
+            11,
+            sourceNode,
+            13
+        );
         var binding = new ZLinkActorBoundSessionHandoffFence(
-            "actor-1", 1, sourceSession,
-            "binding-token", 17, 19);
+            "actor-1",
+            1,
+            sourceSession,
+            "binding-token",
+            17,
+            19
+        );
         using var frame = new ZLinkSpotActorFrame(
             ActorRef("node-a", 1),
             ActorRef("node-a", 1),
@@ -138,24 +139,28 @@ public sealed class ActorHandoffTests
             requestId: 0,
             flags: 0,
             routeContext: new ZLinkBackendActorRouteContext(
-                new MeshOperationId(13, 19), 0, 23, 29, 31,
-                IsBoundSessionRoute: true),
+                new MeshOperationId(13, 19),
+                0,
+                23,
+                29,
+                31,
+                IsBoundSessionRoute: true
+            ),
             new ZlinkStreamHeader(
                 ZlinkStreamMessageKind.Send,
                 ZlinkStreamCodec.Raw,
                 ZlinkStreamHeaderFlags.None,
                 null,
                 "Packet",
-                ZlinkStreamMetadata.Empty),
+                ZlinkStreamMetadata.Empty
+            ),
             Message.From(body.AsReadOnlySpan()),
             sourceNodeGeneration: source.NodeGeneration,
             requestSource: source,
-            applicationMetadata:
-                ZLinkActorBoundSessionHandoffMetadata.Encode(binding));
+            applicationMetadata: ZLinkActorBoundSessionHandoffMetadata.Encode(binding)
+        );
 
-        Assert.Equal(
-            ZLinkActorHandoffCaptureResult.Captured,
-            state.Handoff.TryCapture(frame));
+        Assert.Equal(ZLinkActorHandoffCaptureResult.Captured, state.Handoff.TryCapture(frame));
         state.Handoff.BeginCapture();
         var captured = Assert.Single(state.Handoff.SnapshotFrames());
         Assert.Equal(binding, captured.BoundSessionSource);
@@ -174,10 +179,19 @@ public sealed class ActorHandoffTests
         var sourceNode = RoutingId.From("session-node");
         var sourceSession = RoutingId.From("session-1");
         var source = new ZLinkServiceWireCodec.RequestSourceFence(
-            "session-owner", 11, sourceNode, 13);
+            "session-owner",
+            11,
+            sourceNode,
+            13
+        );
         var binding = new ZLinkActorBoundSessionHandoffFence(
-            "actor-1", 1, sourceSession,
-            "binding-token", 17, 19);
+            "actor-1",
+            1,
+            sourceSession,
+            "binding-token",
+            17,
+            19
+        );
         using var frame = new ZLinkSpotActorFrame(
             ActorRef("node-b", 1),
             ActorRef("node-b", 1),
@@ -186,26 +200,30 @@ public sealed class ActorHandoffTests
             requestId: 23,
             flags: 1,
             routeContext: new ZLinkBackendActorRouteContext(
-                new MeshOperationId(13, 19), 0, 23, 29, 31,
+                new MeshOperationId(13, 19),
+                0,
+                23,
+                29,
+                31,
                 ReplyRequestId: 23,
                 ReplyFlags: 1,
-                IsBoundSessionRoute: true),
+                IsBoundSessionRoute: true
+            ),
             new ZlinkStreamHeader(
                 ZlinkStreamMessageKind.Request,
                 ZlinkStreamCodec.Raw,
                 ZlinkStreamHeaderFlags.HasRequestSeq,
                 new ZlinkStreamRequestSeq(23),
                 "Packet",
-                ZlinkStreamMetadata.Empty),
+                ZlinkStreamMetadata.Empty
+            ),
             Message.From("request"u8.ToArray()),
             sourceNodeGeneration: source.NodeGeneration,
             requestSource: source,
-            applicationMetadata:
-                ZLinkActorBoundSessionHandoffMetadata.Encode(binding));
+            applicationMetadata: ZLinkActorBoundSessionHandoffMetadata.Encode(binding)
+        );
 
-        Assert.Equal(
-            ZLinkActorHandoffCaptureResult.Captured,
-            state.Handoff.TryCapture(frame));
+        Assert.Equal(ZLinkActorHandoffCaptureResult.Captured, state.Handoff.TryCapture(frame));
 
         var replay = state.Handoff.SnapshotFinalReplay();
         var captured = Assert.Single(replay);
@@ -220,17 +238,13 @@ public sealed class ActorHandoffTests
     [Fact]
     public void TargetReplayCompletion_ClosesCaptureAtTheEmptyBoundary()
     {
-        var handoff = new ZLinkActorHandoffState(
-            "actor-1",
-            TimeProvider.System);
+        var handoff = new ZLinkActorHandoffState("actor-1", TimeProvider.System);
         Assert.True(handoff.Import(CommitRequest("handoff-1", []), out _));
         _ = handoff.PrepareImportedReplay([]);
 
         using var body = Message.From("queued-during-replay");
         using var frame = Frame(body, ActorRef("node-b", 1), "session-1");
-        Assert.Equal(
-            ZLinkActorHandoffCaptureResult.Captured,
-            handoff.TryCapture(frame));
+        Assert.Equal(ZLinkActorHandoffCaptureResult.Captured, handoff.TryCapture(frame));
 
         var replay = handoff.SnapshotFinalReplay();
         Assert.Single(replay);
@@ -240,13 +254,8 @@ public sealed class ActorHandoffTests
         Assert.True(handoff.TryCompleteTransferredActorReplay("handoff-1"));
 
         using var postCompletionBody = Message.From("after-replay");
-        using var postCompletion = Frame(
-            postCompletionBody,
-            ActorRef("node-b", 1),
-            "session-2");
-        Assert.Equal(
-            ZLinkActorHandoffCaptureResult.NotSealed,
-            handoff.TryCapture(postCompletion));
+        using var postCompletion = Frame(postCompletionBody, ActorRef("node-b", 1), "session-2");
+        Assert.Equal(ZLinkActorHandoffCaptureResult.NotSealed, handoff.TryCapture(postCompletion));
         Assert.Empty(handoff.SnapshotFinalReplay());
     }
 
@@ -271,25 +280,28 @@ public sealed class ActorHandoffTests
                 AuthorityOwnerGeneration: 41,
                 OwnerLeaseGeneration: 43,
                 ReplyRequestId: 29,
-                ReplyFlags: 1),
+                ReplyFlags: 1
+            ),
             new ZlinkStreamHeader(
                 ZlinkStreamMessageKind.Request,
                 ZlinkStreamCodec.Raw,
                 ZlinkStreamHeaderFlags.HasRequestSeq,
                 new ZlinkStreamRequestSeq(47),
                 "Packet",
-                ZlinkStreamMetadata.Empty),
+                ZlinkStreamMetadata.Empty
+            ),
             Message.From(new byte[] { 53 }),
             sourceNodeGeneration: 59,
             new ZLinkServiceWireCodec.RequestSourceFence(
                 "source-owner",
                 61,
                 sourceNodeRid,
-                NodeGeneration: 67));
+                NodeGeneration: 67
+            )
+        );
         ZLinkActorInboundPipeline.EnsureRelocationReplyRoute(invalid);
         Assert.Equal(29UL, invalid.RelocationReplyRouteId);
-        Assert.Throws<ZLinkActorHandoffRejectedException>(
-            () => state.Handoff.TryCapture(invalid));
+        Assert.Throws<ZLinkActorHandoffRejectedException>(() => state.Handoff.TryCapture(invalid));
         Assert.Empty(state.Handoff.SnapshotFrames());
 
         // The route is owned by the caller pending operation, not by a target
@@ -309,37 +321,35 @@ public sealed class ActorHandoffTests
                 AuthorityOwnerGeneration: 41,
                 OwnerLeaseGeneration: 43,
                 ReplyRequestId: 29,
-                ReplyFlags: 1),
+                ReplyFlags: 1
+            ),
             new ZlinkStreamHeader(
                 ZlinkStreamMessageKind.Request,
                 ZlinkStreamCodec.Raw,
                 ZlinkStreamHeaderFlags.HasRequestSeq,
                 new ZlinkStreamRequestSeq(47),
                 "Packet",
-                ZlinkStreamMetadata.Empty),
+                ZlinkStreamMetadata.Empty
+            ),
             Message.From(new byte[] { 71 }),
             sourceNodeGeneration: 59,
             new ZLinkServiceWireCodec.RequestSourceFence(
                 "source-owner",
                 61,
                 sourceNodeRid,
-                NodeGeneration: 59));
+                NodeGeneration: 59
+            )
+        );
         ZLinkActorInboundPipeline.EnsureRelocationReplyRoute(valid);
-        Assert.Equal(
-            ZLinkActorHandoffCaptureResult.Captured,
-            state.Handoff.TryCapture(valid));
+        Assert.Equal(ZLinkActorHandoffCaptureResult.Captured, state.Handoff.TryCapture(valid));
         Assert.Single(state.Handoff.SnapshotFrames());
     }
 
     [Fact]
     public void SourceIngressHold_DoesNotApplyFormerVolumeDefaults()
     {
-        Assert.Equal(
-            int.MaxValue,
-            ZLinkBoundedIngressAdmission.SourceIngressHoldRecordCapacity);
-        Assert.Equal(
-            long.MaxValue,
-            ZLinkBoundedIngressAdmission.SourceIngressHoldByteCapacity);
+        Assert.Equal(int.MaxValue, ZLinkBoundedIngressAdmission.SourceIngressHoldRecordCapacity);
+        Assert.Equal(long.MaxValue, ZLinkBoundedIngressAdmission.SourceIngressHoldByteCapacity);
 
         var admission = new ZLinkBoundedIngressAdmission();
         for (var record = 0; record < 1_025; record++)
@@ -353,11 +363,13 @@ public sealed class ActorHandoffTests
     {
         var admission = new ZLinkBoundedIngressAdmission(
             recordCapacity: 2,
-            byteCapacity: long.MaxValue);
+            byteCapacity: long.MaxValue
+        );
         var handoff = new ZLinkActorHandoffState(
             "actor-1",
             TimeProvider.System,
-            sourceIngressAdmission: admission);
+            sourceIngressAdmission: admission
+        );
         handoff.BeginCapture();
         using var body = Message.From("record");
         using var first = Frame(body, ActorRef("node-a", 1), "session-1");
@@ -376,52 +388,43 @@ public sealed class ActorHandoffTests
     [Fact]
     public void FinalJournalSeal_holds_later_ingress_in_the_commit_manifest()
     {
-        var handoff = new ZLinkActorHandoffState(
-            "actor-1",
-            TimeProvider.System);
+        var handoff = new ZLinkActorHandoffState("actor-1", TimeProvider.System);
         handoff.BeginCapture();
         using var body = Message.From("record");
         using var included = Frame(body, ActorRef("node-a", 1), "session-1");
         using var afterSeal = Frame(body, ActorRef("node-a", 1), "session-2");
-        Assert.Equal(
-            ZLinkActorHandoffCaptureResult.Captured,
-            handoff.TryCapture(included));
+        Assert.Equal(ZLinkActorHandoffCaptureResult.Captured, handoff.TryCapture(included));
 
         handoff.SealCapture();
-        Assert.Equal(
-            ZLinkActorHandoffCaptureResult.Captured,
-            handoff.TryCapture(afterSeal));
+        Assert.Equal(ZLinkActorHandoffCaptureResult.Captured, handoff.TryCapture(afterSeal));
         var boundary = handoff.FreezeCaptureCommitBoundary();
 
         Assert.Equal(2UL, boundary.AcceptedHighWater);
         Assert.Equal(2, boundary.Frames.Count);
-        Assert.Equal(new long[] { 0, 1 },
-            boundary.Frames.Select(static frame => frame.ArrivalIndex));
+        Assert.Equal(
+            new long[] { 0, 1 },
+            boundary.Frames.Select(static frame => frame.ArrivalIndex)
+        );
         _ = handoff.AbortCapture();
     }
 
     [Fact]
     public void FinalJournalHold_enforces_its_own_record_and_byte_bound()
     {
-        var hold = new ZLinkBoundedIngressAdmission(
-            recordCapacity: 1,
-            byteCapacity: long.MaxValue);
+        var hold = new ZLinkBoundedIngressAdmission(recordCapacity: 1, byteCapacity: long.MaxValue);
         var handoff = new ZLinkActorHandoffState(
             "actor-1",
             TimeProvider.System,
-            sourceHoldAdmission: hold);
+            sourceHoldAdmission: hold
+        );
         handoff.BeginCapture();
         handoff.SealCapture();
         using var body = Message.From("held");
         using var admitted = Frame(body, ActorRef("node-a", 1), "session-1");
         using var overflow = Frame(body, ActorRef("node-a", 1), "session-2");
 
-        Assert.Equal(
-            ZLinkActorHandoffCaptureResult.Captured,
-            handoff.TryCapture(admitted));
-        Assert.Equal(
-            ZLinkActorHandoffCaptureResult.Full,
-            handoff.TryCapture(overflow));
+        Assert.Equal(ZLinkActorHandoffCaptureResult.Captured, handoff.TryCapture(admitted));
+        Assert.Equal(ZLinkActorHandoffCaptureResult.Full, handoff.TryCapture(overflow));
         Assert.Equal(1, hold.Snapshot().Records);
         Assert.Single(handoff.FreezeCaptureCommitBoundary().Frames);
         _ = handoff.AbortCapture();
@@ -442,7 +445,8 @@ public sealed class ActorHandoffTests
         Assert.Equal(2UL, boundary.AcceptedHighWater);
         Assert.Equal(
             ["before-seal", "before-boundary", "after-boundary"],
-            state.Handoff.AbortCapture().Select(DecodeBody));
+            state.Handoff.AbortCapture().Select(DecodeBody)
+        );
     }
 
     [Fact]
@@ -457,19 +461,15 @@ public sealed class ActorHandoffTests
         var restored = state.Handoff.BeginAbortCaptureRestore();
 
         Assert.True(state.Handoff.BlocksLocalDispatch);
-        Assert.Equal(new[] { "before", "held" }, restored
-            .Select(DecodeBody));
+        Assert.Equal(new[] { "before", "held" }, restored.Select(DecodeBody));
 
-        state.Handoff.AcknowledgeAbortRestoreEnqueued(
-            restored[0].ArrivalIndex);
+        state.Handoff.AcknowledgeAbortRestoreEnqueued(restored[0].ArrivalIndex);
         var remaining = state.Handoff.BeginAbortCaptureRestore();
         Assert.Single(remaining);
         Assert.Equal("held", DecodeBody(remaining[0]));
-        Assert.Throws<InvalidOperationException>(() =>
-            state.Handoff.CompleteAbortCaptureRestore());
+        Assert.Throws<InvalidOperationException>(() => state.Handoff.CompleteAbortCaptureRestore());
         Assert.True(state.Handoff.BlocksLocalDispatch);
-        state.Handoff.AcknowledgeAbortRestoreEnqueued(
-            remaining[0].ArrivalIndex);
+        state.Handoff.AcknowledgeAbortRestoreEnqueued(remaining[0].ArrivalIndex);
         state.Handoff.CompleteAbortCaptureRestore();
 
         Assert.False(state.Handoff.BlocksLocalDispatch);
@@ -487,17 +487,16 @@ public sealed class ActorHandoffTests
         var boundary = state.Handoff.FreezeCaptureCommitBoundary();
         Capture(state, "after-boundary", "session-1");
 
-        Assert.Throws<ArgumentOutOfRangeException>(() => Cutover(
-            state,
-            boundary.Frames.Count - 1,
-            ActorRef("node-a", 1),
-            ActorRef("node-b", 2)));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            Cutover(state, boundary.Frames.Count - 1, ActorRef("node-a", 1), ActorRef("node-b", 2))
+        );
 
         var trailing = Cutover(
             state,
             boundary.Frames.Count,
             ActorRef("node-a", 1),
-            ActorRef("node-b", 2));
+            ActorRef("node-b", 2)
+        );
 
         Assert.Equal(["after-boundary"], trailing.Select(DecodeBody));
         _ = state.Handoff.AbortCapture();
@@ -506,23 +505,19 @@ public sealed class ActorHandoffTests
     [Fact]
     public async Task FinalJournalRuntimeCrash_releases_the_bounded_hold()
     {
-        var hold = new ZLinkBoundedIngressAdmission(
-            recordCapacity: 1,
-            byteCapacity: long.MaxValue);
+        var hold = new ZLinkBoundedIngressAdmission(recordCapacity: 1, byteCapacity: long.MaxValue);
         var handoff = new ZLinkActorHandoffState(
             "actor-1",
             TimeProvider.System,
-            sourceHoldAdmission: hold);
+            sourceHoldAdmission: hold
+        );
         handoff.BeginCapture();
         handoff.SealCapture();
         using var body = Message.From("held");
         using var frame = Frame(body, ActorRef("node-a", 1), "session-1");
-        Assert.Equal(
-            ZLinkActorHandoffCaptureResult.Captured,
-            handoff.TryCapture(frame));
+        Assert.Equal(ZLinkActorHandoffCaptureResult.Captured, handoff.TryCapture(frame));
         _ = handoff.FreezeCaptureCommitBoundary();
-        var completion = handoff.WaitForSourceCompletionAsync(
-            CancellationToken.None);
+        var completion = handoff.WaitForSourceCompletionAsync(CancellationToken.None);
 
         handoff.AbortRuntimeGeneration(new IOException("source crashed"));
 
@@ -533,20 +528,14 @@ public sealed class ActorHandoffTests
     [Fact]
     public void TargetArrivalBacklog_does_not_clone_live_capacity_policy()
     {
-        var handoff = new ZLinkActorHandoffState(
-            "actor-1",
-            TimeProvider.System);
+        var handoff = new ZLinkActorHandoffState("actor-1", TimeProvider.System);
         Assert.True(handoff.Import(CommitRequest("handoff-1", []), out _));
         using var body = Message.From("target-arrival");
         using var admitted = Frame(body, ActorRef("node-b", 1), "session-1");
         using var overflow = Frame(body, ActorRef("node-b", 1), "session-2");
 
-        Assert.Equal(
-            ZLinkActorHandoffCaptureResult.Captured,
-            handoff.TryCapture(admitted));
-        Assert.Equal(
-            ZLinkActorHandoffCaptureResult.Captured,
-            handoff.TryCapture(overflow));
+        Assert.Equal(ZLinkActorHandoffCaptureResult.Captured, handoff.TryCapture(admitted));
+        Assert.Equal(ZLinkActorHandoffCaptureResult.Captured, handoff.TryCapture(overflow));
         Assert.Equal(2, handoff.PrepareImportedReplay([]).Count);
         handoff.AcknowledgeReplayedFrame();
         handoff.AcknowledgeReplayedFrame();
@@ -556,9 +545,7 @@ public sealed class ActorHandoffTests
     [Fact]
     public async Task DeferredJoinDuringTargetReplay_WaitsAndStartsSourceCaptureAfterCompletion()
     {
-        var handoff = new ZLinkActorHandoffState(
-            "actor-1",
-            TimeProvider.System);
+        var handoff = new ZLinkActorHandoffState("actor-1", TimeProvider.System);
         Assert.True(handoff.Import(CommitRequest("handoff-1", []), out _));
         _ = handoff.PrepareImportedReplay([]);
 
@@ -571,14 +558,10 @@ public sealed class ActorHandoffTests
 
         using var body = Message.From("after-target-completion");
         using var frame = Frame(body, ActorRef("node-a", 1), "session-1");
-        Assert.Equal(
-            ZLinkActorHandoffCaptureResult.Captured,
-            handoff.TryCapture(frame));
+        Assert.Equal(ZLinkActorHandoffCaptureResult.Captured, handoff.TryCapture(frame));
 
         handoff.BeginCapture();
-        Assert.Equal(
-            ["after-target-completion"],
-            handoff.SnapshotFrames().Select(DecodeBody));
+        Assert.Equal(["after-target-completion"], handoff.SnapshotFrames().Select(DecodeBody));
 
         // A retry for the completed target remains idempotent while the next
         // source handoff is collecting its own accepted journal.
@@ -589,9 +572,7 @@ public sealed class ActorHandoffTests
     [Fact]
     public void DeferredJoinAfterCompletedTarget_StartsNewCaptureWithoutWaiting()
     {
-        var handoff = new ZLinkActorHandoffState(
-            "actor-1",
-            TimeProvider.System);
+        var handoff = new ZLinkActorHandoffState("actor-1", TimeProvider.System);
         Assert.True(handoff.Import(CommitRequest("handoff-completed", []), out _));
         _ = handoff.PrepareImportedReplay([]);
         handoff.Complete("handoff-completed");
@@ -601,47 +582,33 @@ public sealed class ActorHandoffTests
         Assert.Null(targetCompletion);
         using var body = Message.From("new-join-after-completed-target");
         using var frame = Frame(body, ActorRef("node-a", 1), "session-1");
-        Assert.Equal(
-            ZLinkActorHandoffCaptureResult.Captured,
-            handoff.TryCapture(frame));
+        Assert.Equal(ZLinkActorHandoffCaptureResult.Captured, handoff.TryCapture(frame));
 
         handoff.BeginCapture();
         Assert.Equal(
             ["new-join-after-completed-target"],
-            handoff.SnapshotFrames().Select(DecodeBody));
+            handoff.SnapshotFrames().Select(DecodeBody)
+        );
         _ = handoff.AbortCapture();
     }
 
     [Fact]
     public void TargetArrivalBacklog_RemainsSealedThroughJoinedNotification()
     {
-        var handoff = new ZLinkActorHandoffState(
-            "actor-1",
-            TimeProvider.System);
+        var handoff = new ZLinkActorHandoffState("actor-1", TimeProvider.System);
         Assert.True(handoff.Import(CommitRequest("handoff-1", []), out _));
         handoff.MarkAuthorityCommitted("handoff-1", 1, 1);
         Assert.True(handoff.TryBeginJoinedNotification("handoff-1"));
         using var body = Message.From("target-arrival");
-        using var notifying = Frame(
-            body,
-            ActorRef("node-b", 1),
-            "session-notifying");
-        using var prepared = Frame(
-            body,
-            ActorRef("node-b", 1),
-            "session-prepared");
+        using var notifying = Frame(body, ActorRef("node-b", 1), "session-notifying");
+        using var prepared = Frame(body, ActorRef("node-b", 1), "session-prepared");
 
-        Assert.Equal(
-            ZLinkActorHandoffCaptureResult.Captured,
-            handoff.TryCapture(notifying));
+        Assert.Equal(ZLinkActorHandoffCaptureResult.Captured, handoff.TryCapture(notifying));
         handoff.CompleteJoinedNotification(
             "handoff-1",
-            ZLinkRemoteActorJoinPackets.CreateJoinReply(
-                true,
-                ActorRef("node-b", 1)));
-        Assert.Equal(
-            ZLinkActorHandoffCaptureResult.Captured,
-            handoff.TryCapture(prepared));
+            ZLinkRemoteActorJoinPackets.CreateJoinReply(true, ActorRef("node-b", 1))
+        );
+        Assert.Equal(ZLinkActorHandoffCaptureResult.Captured, handoff.TryCapture(prepared));
 
         Assert.Equal(2, handoff.PrepareImportedReplay([]).Count);
     }
@@ -653,18 +620,18 @@ public sealed class ActorHandoffTests
         using var first = Frame(body, ActorRef("node-a", 1), "session-1");
         using var second = Frame(body, ActorRef("node-a", 1), "session-2");
         var frozen = ZLinkActorHandoffFrames.Capture(first, 0);
-        var oneRecordBytes = ZLinkActorHandoffFrames.CanonicalEncodedLength(
-            frozen,
-            first.Actor);
+        var oneRecordBytes = ZLinkActorHandoffFrames.CanonicalEncodedLength(frozen, first.Actor);
         Assert.True(oneRecordBytes > frozen.Body.LongLength);
         Assert.True(oneRecordBytes > frozen.Header.LongLength + frozen.Body.LongLength);
         var admission = new ZLinkBoundedIngressAdmission(
             recordCapacity: 2,
-            byteCapacity: oneRecordBytes);
+            byteCapacity: oneRecordBytes
+        );
         var handoff = new ZLinkActorHandoffState(
             "actor-1",
             TimeProvider.System,
-            sourceIngressAdmission: admission);
+            sourceIngressAdmission: admission
+        );
         handoff.BeginCapture();
 
         Assert.Equal(ZLinkActorHandoffCaptureResult.Captured, handoff.TryCapture(first));
@@ -679,7 +646,8 @@ public sealed class ActorHandoffTests
         var handoff = new ZLinkActorHandoffState(
             "actor-1",
             TimeProvider.System,
-            sourceIngressAdmission: admission);
+            sourceIngressAdmission: admission
+        );
         using var body = Message.From("release");
         using var frame = Frame(body, ActorRef("node-a", 1), "session-1");
         handoff.BeginCapture();
@@ -700,7 +668,8 @@ public sealed class ActorHandoffTests
             sourceAuthorityOwnerGeneration: 1,
             targetAuthorityOwnerGeneration: 2,
             sourceOwnerLeaseGeneration: 1,
-            targetOwnerLeaseGeneration: 2);
+            targetOwnerLeaseGeneration: 2
+        );
 
         Assert.Equal((0, 0L), admission.Snapshot());
         _ = handoff.AbortCapture();
@@ -723,7 +692,8 @@ public sealed class ActorHandoffTests
             sourceAuthorityOwnerGeneration: 1UL << 62,
             targetAuthorityOwnerGeneration: (1UL << 62) + 17,
             sourceOwnerLeaseGeneration: 3,
-            targetOwnerLeaseGeneration: 4);
+            targetOwnerLeaseGeneration: 4
+        );
 
         Assert.Empty(trailing);
     }
@@ -735,7 +705,8 @@ public sealed class ActorHandoffTests
     [InlineData(9223372036854775808UL, 1UL)]
     public void MessageFollowFence_RejectsNonIncreasingOrOutOfRangeGenerations(
         ulong sourceGeneration,
-        ulong targetGeneration)
+        ulong targetGeneration
+    )
     {
         var handoff = new ZLinkActorHandoffState("actor-1", TimeProvider.System);
         handoff.BeginCapture();
@@ -751,7 +722,9 @@ public sealed class ActorHandoffTests
                 sourceAuthorityOwnerGeneration: sourceGeneration,
                 targetAuthorityOwnerGeneration: targetGeneration,
                 sourceOwnerLeaseGeneration: 3,
-                targetOwnerLeaseGeneration: 4));
+                targetOwnerLeaseGeneration: 4
+            )
+        );
     }
 
     [Fact]
@@ -799,7 +772,11 @@ public sealed class ActorHandoffTests
 
         var frames = target.Handoff.PrepareImportedReplay([]);
         Assert.Equal(["S1", "S2", "S3", "S4"], frames.Select(DecodeBody));
-        Assert.All(frames, frame => Assert.Equal("bound-session", RoutingId.From(frame.SourceSessionRid).ToString()));
+        Assert.All(
+            frames,
+            frame =>
+                Assert.Equal("bound-session", RoutingId.From(frame.SourceSessionRid).ToString())
+        );
     }
 
     [Fact]
@@ -816,13 +793,15 @@ public sealed class ActorHandoffTests
 
         Assert.Equal(
             ZLinkActorFrameRoute.MessageFollow,
-            state.Handoff.ResolveFrameRoute(state.NativeActorRef, source, out var followed));
+            state.Handoff.ResolveFrameRoute(state.NativeActorRef, source, out var followed)
+        );
         Assert.Equal(target, followed);
 
         time.Advance(TimeSpan.FromMilliseconds(150));
         Assert.Equal(
             ZLinkActorFrameRoute.MessageFollowExpired,
-            state.Handoff.ResolveFrameRoute(state.NativeActorRef, source, out _));
+            state.Handoff.ResolveFrameRoute(state.NativeActorRef, source, out _)
+        );
     }
 
     [Fact]
@@ -845,10 +824,12 @@ public sealed class ActorHandoffTests
 
         Assert.Equal(
             ZLinkActorFrameRoute.Stale,
-            state.Handoff.ResolveFrameRoute(state.NativeActorRef, firstSource, out _));
+            state.Handoff.ResolveFrameRoute(state.NativeActorRef, firstSource, out _)
+        );
         Assert.Equal(
             ZLinkActorFrameRoute.MessageFollow,
-            state.Handoff.ResolveFrameRoute(state.NativeActorRef, nextSource, out var followed));
+            state.Handoff.ResolveFrameRoute(state.NativeActorRef, nextSource, out var followed)
+        );
         Assert.Equal(nextTarget, followed);
     }
 
@@ -864,20 +845,18 @@ public sealed class ActorHandoffTests
         state.Handoff.CompleteSourceMigration();
 
         var imported = HandoffFrame(3, arrivalIndex: 0);
-        Assert.True(
-            state.Handoff.Import(
-                CommitRequest("handoff-return", [imported]),
-                out _));
+        Assert.True(state.Handoff.Import(CommitRequest("handoff-return", [imported]), out _));
 
         state.PrepareForTransferredActivation();
 
         Assert.Equal(
             ZLinkActorFrameRoute.Current,
-            state.Handoff.ResolveFrameRoute(previousSource, previousSource, out _));
+            state.Handoff.ResolveFrameRoute(previousSource, previousSource, out _)
+        );
         Assert.Equal(
             [imported.RequestId],
-            state.Handoff.PrepareImportedReplay([])
-                .Select(static frame => frame.RequestId));
+            state.Handoff.PrepareImportedReplay([]).Select(static frame => frame.RequestId)
+        );
     }
 
     [Fact]
@@ -897,7 +876,8 @@ public sealed class ActorHandoffTests
             meshName: ZLinkMeshName.FromBoundary("mesh-a", "meshName"),
             targetNodeGeneration: 1,
             ownerLeaseGeneration: 1,
-            sessionOwnerNodeGeneration: 1);
+            sessionOwnerNodeGeneration: 1
+        );
         state.Handoff.BeginCapture();
         _ = Cutover(state, 0, source, target);
         state.Handoff.CommitMessageFollow(TimeSpan.FromSeconds(1));
@@ -947,12 +927,14 @@ public sealed class ActorHandoffTests
         state.RetireMigratedActorInstance(source);
 
         var creation = new TaskCompletionSource<IZLinkActor>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var operation = await state.GetOrStartActorCreationAsync(
             "warrior",
             failIfExists: true,
             () => creation.Task,
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         Assert.Null(state.NativeActorRef);
         Assert.Equal(source, state.RetiredLocalActorRef);
@@ -1002,7 +984,8 @@ public sealed class ActorHandoffTests
             targetNodeGeneration: 4,
             ownerLeaseGeneration: 8,
             sessionOwnerNodeGeneration: 3,
-            acceptedHighWater: 9);
+            acceptedHighWater: 9
+        );
         state.StageRelocationSessionRoute(
             "handoff-1",
             new ZLinkRemoteActorBoundSessionRoute(
@@ -1016,7 +999,9 @@ public sealed class ActorHandoffTests
                 TargetNodeGeneration: 4,
                 OwnerLeaseGeneration: 8,
                 SessionOwnerNodeGeneration: 3,
-                AcceptedHighWater: 9));
+                AcceptedHighWater: 9
+            )
+        );
 
         Assert.True(state.TryGetBoundSession(out var beforeAuthority));
         Assert.Equal((ulong)11, beforeAuthority.AuthorityOwnerGeneration);
@@ -1028,17 +1013,16 @@ public sealed class ActorHandoffTests
             targetAuthorityOwnerGeneration: 12,
             targetMeshName: ZLinkMeshName.FromBoundary("play", "targetMeshName"),
             targetNodeGeneration: 5,
-            targetOwnerLeaseGeneration: 9);
+            targetOwnerLeaseGeneration: 9
+        );
         state.RecordRelocatedSessionAccepted(sessionRid);
 
         Assert.True(state.TryGetBoundSession(out var beforeAck));
         Assert.Equal((ulong)11, beforeAck.AuthorityOwnerGeneration);
-        Assert.True(state.TryGetCommittedRelocationSessionRoute(
-            "handoff-1",
-            out var firstCommit));
-        Assert.True(state.TryGetCommittedRelocationSessionRoute(
-            "handoff-1",
-            out var retriedCommit));
+        Assert.True(state.TryGetCommittedRelocationSessionRoute("handoff-1", out var firstCommit));
+        Assert.True(
+            state.TryGetCommittedRelocationSessionRoute("handoff-1", out var retriedCommit)
+        );
         Assert.Equal(sessionNode, firstCommit.Route.NodeRid);
         Assert.Equal(firstCommit.Route.NodeRid, retriedCommit.Route.NodeRid);
 
@@ -1077,21 +1061,22 @@ public sealed class ActorHandoffTests
                 TargetNodeGeneration: 4,
                 OwnerLeaseGeneration: 8,
                 SessionOwnerNodeGeneration: 3,
-                AcceptedHighWater: 9));
+                AcceptedHighWater: 9
+            )
+        );
         state.MarkRelocationSessionAuthorityCommitted(
             "handoff-1",
             new ZLinkBackendActorRef(targetNode, "actor-1", 7),
             targetAuthorityOwnerGeneration: 12,
             targetMeshName: ZLinkMeshName.FromBoundary("play", "targetMeshName"),
             targetNodeGeneration: 5,
-            targetOwnerLeaseGeneration: 9);
+            targetOwnerLeaseGeneration: 9
+        );
 
         state.RecordRelocatedSessionAccepted(sessionRid, acceptedHighWater: 13);
         state.RecordRelocatedSessionAccepted(sessionRid, acceptedHighWater: 11);
 
-        Assert.True(state.TryGetCommittedRelocationSessionRoute(
-            "handoff-1",
-            out var committed));
+        Assert.True(state.TryGetCommittedRelocationSessionRoute("handoff-1", out var committed));
         Assert.Equal((ulong)13, committed.Route.AcceptedHighWater);
 
         state.CompleteRelocationSessionRoute("handoff-1");
@@ -1119,7 +1104,9 @@ public sealed class ActorHandoffTests
                 TargetNodeGeneration: 4,
                 OwnerLeaseGeneration: 8,
                 SessionOwnerNodeGeneration: 3,
-                AcceptedHighWater: 9));
+                AcceptedHighWater: 9
+            )
+        );
 
         Assert.False(state.TryGetBoundSessionForOutbound(out _));
         state.MarkRelocationSessionAuthorityCommitted(
@@ -1128,7 +1115,8 @@ public sealed class ActorHandoffTests
             targetAuthorityOwnerGeneration: 12,
             targetMeshName: ZLinkMeshName.FromBoundary("play", "targetMeshName"),
             targetNodeGeneration: 5,
-            targetOwnerLeaseGeneration: 9);
+            targetOwnerLeaseGeneration: 9
+        );
 
         Assert.False(state.TryGetBoundSession(out _));
         Assert.True(state.TryGetBoundSessionForOutbound(out var outbound));
@@ -1165,7 +1153,8 @@ public sealed class ActorHandoffTests
             targetNodeGeneration: 4,
             ownerLeaseGeneration: 8,
             sessionOwnerNodeGeneration: 3,
-            acceptedHighWater: 9);
+            acceptedHighWater: 9
+        );
         state.StageRelocationSessionRoute(
             "handoff-1",
             new ZLinkRemoteActorBoundSessionRoute(
@@ -1179,7 +1168,9 @@ public sealed class ActorHandoffTests
                 TargetNodeGeneration: 4,
                 OwnerLeaseGeneration: 8,
                 SessionOwnerNodeGeneration: 3,
-                AcceptedHighWater: 9));
+                AcceptedHighWater: 9
+            )
+        );
 
         state.MarkRelocationSessionAuthorityCommitted(
             "handoff-1",
@@ -1187,7 +1178,8 @@ public sealed class ActorHandoffTests
             targetAuthorityOwnerGeneration: 12,
             targetMeshName: ZLinkMeshName.FromBoundary("play", "targetMeshName"),
             targetNodeGeneration: 5,
-            targetOwnerLeaseGeneration: 9);
+            targetOwnerLeaseGeneration: 9
+        );
 
         Assert.True(state.TryGetBoundSessionForOutbound(out var outbound));
         Assert.Equal((ulong)12, outbound.AuthorityOwnerGeneration);
@@ -1215,34 +1207,40 @@ public sealed class ActorHandoffTests
                 TargetNodeGeneration: 4,
                 OwnerLeaseGeneration: 8,
                 SessionOwnerNodeGeneration: 3,
-                AcceptedHighWater: 9));
+                AcceptedHighWater: 9
+            )
+        );
         state.MarkRelocationSessionAuthorityCommitted(
             "handoff-1",
             new ZLinkBackendActorRef(targetNode, "actor-1", 7),
             targetAuthorityOwnerGeneration: 12,
             targetMeshName: ZLinkMeshName.FromBoundary("play", "targetMeshName"),
             targetNodeGeneration: 5,
-            targetOwnerLeaseGeneration: 9);
+            targetOwnerLeaseGeneration: 9
+        );
 
         using var disconnect = Message.From(
             ZLinkActorBoundSessionRelay.EncodeSessionDisconnected(
                 "binding-1",
                 bindingGeneration: 4,
-                sessionOwnerNodeGeneration: 3));
+                sessionOwnerNodeGeneration: 3
+            )
+        );
 
-        Assert.True(ZLinkActorBoundSessionRelay.TryValidateDisconnectedBinding(
-            state,
-            sessionNode,
-            sessionRid,
-            disconnect,
-            out var bindingToken));
+        Assert.True(
+            ZLinkActorBoundSessionRelay.TryValidateDisconnectedBinding(
+                state,
+                sessionNode,
+                sessionRid,
+                disconnect,
+                out var bindingToken
+            )
+        );
         Assert.Equal("binding-1", bindingToken);
 
         state.UnbindSession(bindingToken);
 
-        Assert.False(state.TryGetCommittedRelocationSessionRoute(
-            "handoff-1",
-            out _));
+        Assert.False(state.TryGetCommittedRelocationSessionRoute("handoff-1", out _));
         Assert.False(state.TryGetBoundSessionForInbound(out _));
     }
 
@@ -1274,13 +1272,16 @@ public sealed class ActorHandoffTests
                     ZlinkStreamHeaderFlags.None,
                     null,
                     "blocked",
-                    ZlinkStreamMetadata.Empty),
+                    ZlinkStreamMetadata.Empty
+                ),
                 _ =>
                 {
                     invoked = true;
                     return ValueTask.CompletedTask;
                 },
-                CancellationToken.None));
+                CancellationToken.None
+            )
+        );
 
         Assert.Equal(ZLinkFrameworkErrorKind.NotFound, exception.Kind);
         Assert.False(invoked);
@@ -1291,8 +1292,12 @@ public sealed class ActorHandoffTests
     public async Task DispatchOwnership_DoesNotEscapeIntoAChildTask()
     {
         var state = new ZLinkActorRuntimeState("actor-1");
-        var childStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var releaseChild = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var childStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseChild = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         Task? escapedChild = null;
 
         await state.ExecuteDispatchAsync(
@@ -1307,19 +1312,26 @@ public sealed class ActorHandoffTests
                 });
                 return ValueTask.CompletedTask;
             },
-            CancellationToken.None);
+            CancellationToken.None
+        );
         await childStarted.Task;
 
-        var secondEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var releaseSecond = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var secondDispatch = state.ExecuteDispatchAsync(
+        var secondEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseSecond = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var secondDispatch = state
+            .ExecuteDispatchAsync(
                 Header("second"),
                 async _ =>
                 {
                     secondEntered.TrySetResult();
                     await releaseSecond.Task;
                 },
-                CancellationToken.None)
+                CancellationToken.None
+            )
             .AsTask();
         await secondEntered.Task;
 
@@ -1348,7 +1360,8 @@ public sealed class ActorHandoffTests
             state,
             committed.Count,
             ActorRef("node-a", 1),
-            ActorRef("node-b", 2));
+            ActorRef("node-b", 2)
+        );
         Assert.Equal(["T1"], trailing.Select(DecodeBody));
         _ = state.Handoff.AbortCapture();
     }
@@ -1377,16 +1390,13 @@ public sealed class ActorHandoffTests
 
         Assert.Equal(
             ["T1"],
-            Cutover(
-                    state,
-                    committed.Count,
-                    sourceActor,
-                    ActorRef("node-b", 2))
-                .Select(DecodeBody));
+            Cutover(state, committed.Count, sourceActor, ActorRef("node-b", 2)).Select(DecodeBody)
+        );
         Assert.Equal(["B1", "T1"], state.Handoff.AbortCapture().Select(DecodeBody));
         Assert.Equal(
             ZLinkActorFrameRoute.Current,
-            state.Handoff.ResolveFrameRoute(sourceActor, sourceActor, out _));
+            state.Handoff.ResolveFrameRoute(sourceActor, sourceActor, out _)
+        );
     }
 
     [Fact]
@@ -1397,11 +1407,7 @@ public sealed class ActorHandoffTests
         Capture(source, "B1", "session-1");
         var initial = source.Handoff.SnapshotFrames();
         Capture(source, "T1", "session-1");
-        var trailing = Cutover(
-            source,
-            initial.Count,
-            ActorRef("node-a", 1),
-            ActorRef("node-b", 2));
+        var trailing = Cutover(source, initial.Count, ActorRef("node-a", 1), ActorRef("node-b", 2));
 
         var target = new ZLinkActorRuntimeState("actor-1");
         var commit = CommitRequest("handoff-1", initial);
@@ -1410,7 +1416,8 @@ public sealed class ActorHandoffTests
 
         var replay = target.Handoff.PrepareImportedReplay(trailing);
         Assert.Equal(["B1", "T1", "D1"], replay.Select(DecodeBody));
-        foreach (var _ in replay) target.Handoff.AcknowledgeReplayedFrame();
+        foreach (var _ in replay)
+            target.Handoff.AcknowledgeReplayedFrame();
         Assert.Empty(target.Handoff.PrepareImportedReplay(trailing));
         Assert.False(target.Handoff.Import(commit, out _));
     }
@@ -1426,12 +1433,11 @@ public sealed class ActorHandoffTests
 
         Assert.Equal(
             ["P1", "P2", "P3"],
-            state.Handoff.PrepareImportedReplay([]).Select(DecodeBody));
+            state.Handoff.PrepareImportedReplay([]).Select(DecodeBody)
+        );
         state.Handoff.AcknowledgeReplayedFrame();
 
-        Assert.Equal(
-            ["P2", "P3"],
-            state.Handoff.PrepareImportedReplay([]).Select(DecodeBody));
+        Assert.Equal(["P2", "P3"], state.Handoff.PrepareImportedReplay([]).Select(DecodeBody));
     }
 
     [Fact]
@@ -1451,9 +1457,7 @@ public sealed class ActorHandoffTests
         // not whatever frame currently happens to be at the head.
         state.Handoff.AcknowledgeReplayedFrame(replay[1].ArrivalIndex);
 
-        Assert.Equal(
-            ["P1", "P3"],
-            state.Handoff.PrepareImportedReplay([]).Select(DecodeBody));
+        Assert.Equal(["P1", "P3"], state.Handoff.PrepareImportedReplay([]).Select(DecodeBody));
     }
 
     [Fact]
@@ -1471,12 +1475,11 @@ public sealed class ActorHandoffTests
         Assert.Equal(["P1"], trailing.Select(DecodeBody));
         using var body = Message.From(System.Text.Encoding.UTF8.GetBytes("after-cutover"));
         using var frame = Frame(body, source, "session-1");
-        Assert.Equal(
-            ZLinkActorHandoffCaptureResult.NotSealed,
-            state.Handoff.TryCapture(frame));
+        Assert.Equal(ZLinkActorHandoffCaptureResult.NotSealed, state.Handoff.TryCapture(frame));
         Assert.Equal(
             ZLinkActorFrameRoute.MessageFollow,
-            state.Handoff.ResolveFrameRoute(state.NativeActorRef, source, out var followed));
+            state.Handoff.ResolveFrameRoute(state.NativeActorRef, source, out var followed)
+        );
         Assert.Equal(target, followed);
     }
 
@@ -1486,7 +1489,8 @@ public sealed class ActorHandoffTests
         var markers = new System.Collections.Concurrent.ConcurrentQueue<string>();
         var state = new ZLinkActorRuntimeState(
             "actor-private-42",
-            handoffDiagnostic: markers.Enqueue);
+            handoffDiagnostic: markers.Enqueue
+        );
         var source = ActorRef("node-a", 41);
         var target = ActorRef("node-b", 42);
         state.BindNativeActorRef(source);
@@ -1507,12 +1511,15 @@ public sealed class ActorHandoffTests
             await Task.Delay(5);
 
         Assert.Contains("message_follow_route_removed entries=0", markers);
-        Assert.All(markers, marker =>
-        {
-            Assert.DoesNotContain("actor=", marker);
-            Assert.DoesNotContain("generation=", marker);
-            Assert.DoesNotContain("actor-private-42", marker);
-        });
+        Assert.All(
+            markers,
+            marker =>
+            {
+                Assert.DoesNotContain("actor=", marker);
+                Assert.DoesNotContain("generation=", marker);
+                Assert.DoesNotContain("actor-private-42", marker);
+            }
+        );
     }
 
     [Fact]
@@ -1525,20 +1532,22 @@ public sealed class ActorHandoffTests
         state.Handoff.BeginCapture();
 
         var released = false;
-        state.Handoff.PendingShutdownToken =
-            new DisposeSpy(() => released = true);
+        state.Handoff.PendingShutdownToken = new DisposeSpy(() => released = true);
 
         _ = Cutover(state, 0, source, target);
         //  The retransmission window (60ms) outlives the follow duration
         //  (15ms), so SafeToShutdown must wait for the window, not just S4.
         state.Handoff.CommitMessageFollow(
-            TimeSpan.FromMilliseconds(15), TimeSpan.FromMilliseconds(60));
+            TimeSpan.FromMilliseconds(15),
+            TimeSpan.FromMilliseconds(60)
+        );
 
         Assert.False(released);
         await Task.Delay(30);
         Assert.False(
             released,
-            "the obligation must still hold once S4 elapses but the retransmission window has not");
+            "the obligation must still hold once S4 elapses but the retransmission window has not"
+        );
 
         for (var attempt = 0; attempt < 40 && !released; attempt++)
             await Task.Delay(10);
@@ -1554,8 +1563,7 @@ public sealed class ActorHandoffTests
         state.Handoff.SealCapture();
 
         var released = false;
-        state.Handoff.PendingShutdownToken =
-            new DisposeSpy(() => released = true);
+        state.Handoff.PendingShutdownToken = new DisposeSpy(() => released = true);
 
         state.Handoff.AbortCapture();
 
@@ -1566,19 +1574,21 @@ public sealed class ActorHandoffTests
     [Fact]
     public async Task RouteConvergenceMetric_RecordsAtFollowDuration_IndependentOfRetransmissionWindow()
     {
-        var measurements =
-            new List<(double Value, KeyValuePair<string, object?>[] Tags)>();
+        var measurements = new List<(double Value, KeyValuePair<string, object?>[] Tags)>();
         using var listener = new MeterListener
         {
             InstrumentPublished = (instrument, owner) =>
             {
-                if (instrument.Meter.Name == ZLinkMeters.Framework
-                    && instrument.Name == "zlink.relocation.route_convergence")
+                if (
+                    instrument.Meter.Name == ZLinkMeters.Framework
+                    && instrument.Name == "zlink.relocation.route_convergence"
+                )
                     owner.EnableMeasurementEvents(instrument);
-            }
+            },
         };
         listener.SetMeasurementEventCallback<double>(
-            (_, value, tags, _) => measurements.Add((value, tags.ToArray())));
+            (_, value, tags, _) => measurements.Add((value, tags.ToArray()))
+        );
         listener.Start();
 
         var state = new ZLinkActorRuntimeState("actor-1");
@@ -1587,13 +1597,14 @@ public sealed class ActorHandoffTests
         state.BindNativeActorRef(source);
         state.Handoff.BeginCapture();
         var released = false;
-        state.Handoff.PendingShutdownToken =
-            new DisposeSpy(() => released = true);
+        state.Handoff.PendingShutdownToken = new DisposeSpy(() => released = true);
         _ = Cutover(state, 0, source, target);
         //  The retransmission window (150ms) far outlives the follow
         //  duration (15ms). The metric must not wait for the window.
         state.Handoff.CommitMessageFollow(
-            TimeSpan.FromMilliseconds(15), TimeSpan.FromMilliseconds(150));
+            TimeSpan.FromMilliseconds(15),
+            TimeSpan.FromMilliseconds(150)
+        );
 
         for (var attempt = 0; attempt < 40 && measurements.Count == 0; attempt++)
             await Task.Delay(10);
@@ -1601,10 +1612,12 @@ public sealed class ActorHandoffTests
         var measurement = Assert.Single(measurements);
         Assert.Contains(
             measurement.Tags,
-            tag => tag.Key == "unit_kind" && Equals(tag.Value, "actor"));
+            tag => tag.Key == "unit_kind" && Equals(tag.Value, "actor")
+        );
         Assert.False(
             released,
-            "the SafeToShutdown obligation is still open while the retransmission window continues");
+            "the SafeToShutdown obligation is still open while the retransmission window continues"
+        );
     }
 
     private sealed class DisposeSpy(Action onDispose) : IDisposable
@@ -1618,9 +1631,7 @@ public sealed class ActorHandoffTests
         for (var iteration = 0; iteration < 100; iteration++)
         {
             var admission = new ZLinkBoundedIngressAdmission(1, 64 * 1024);
-            var state = new ZLinkActorRuntimeState(
-                "actor-1",
-                sourceIngressAdmission: admission);
+            var state = new ZLinkActorRuntimeState("actor-1", sourceIngressAdmission: admission);
             var source = ActorRef("node-a", 1);
             var target = ActorRef("node-b", 2);
             state.BindNativeActorRef(source);
@@ -1644,10 +1655,12 @@ public sealed class ActorHandoffTests
             var trailing = await cutover;
             Assert.Equal(
                 ZLinkActorFrameRoute.MessageFollow,
-                state.Handoff.ResolveFrameRoute(source, source, out _));
+                state.Handoff.ResolveFrameRoute(source, source, out _)
+            );
             Assert.Equal(
                 captured == ZLinkActorHandoffCaptureResult.Captured ? 1 : 0,
-                trailing.Count);
+                trailing.Count
+            );
             Assert.Equal((0, 0L), admission.Snapshot());
             _ = state.Handoff.AbortCapture();
             Assert.Equal((0, 0L), admission.Snapshot());
@@ -1689,8 +1702,7 @@ public sealed class ActorHandoffTests
 
             var captured = await capture;
             var completed = await completion;
-            var didCapture =
-                captured == ZLinkActorHandoffCaptureResult.Captured;
+            var didCapture = captured == ZLinkActorHandoffCaptureResult.Captured;
             Assert.True(didCapture ^ completed);
             if (didCapture)
             {
@@ -1711,7 +1723,8 @@ public sealed class ActorHandoffTests
             "request-session",
             ZlinkStreamMessageKind.Request,
             requestId: 42,
-            flags: 7);
+            flags: 7
+        );
 
         var frames = state.Handoff.SnapshotFrames();
         _ = state.Handoff.AbortCapture();
@@ -1768,9 +1781,7 @@ public sealed class ActorHandoffTests
 
         Assert.True(state.Handoff.IsAuthorityCommitted("handoff-order"));
         Assert.True(state.Handoff.TryBeginJoinedNotification("handoff-order"));
-        var reply = ZLinkRemoteActorJoinPackets.CreateJoinReply(
-            true,
-            ActorRef("node-b", 7));
+        var reply = ZLinkRemoteActorJoinPackets.CreateJoinReply(true, ActorRef("node-b", 7));
         state.Handoff.CompleteJoinedNotification("handoff-order", reply);
 
         Assert.Same(reply, await preparation);
@@ -1784,15 +1795,11 @@ public sealed class ActorHandoffTests
         Assert.True(state.Handoff.Import(commit, out var preparation));
 
         state.Handoff.MarkAuthorityCommitted("handoff-commit-boundary", 7, 7);
-        var reply = ZLinkRemoteActorJoinPackets.CreateJoinReply(
-            true,
-            ActorRef("node-b", 7));
+        var reply = ZLinkRemoteActorJoinPackets.CreateJoinReply(true, ActorRef("node-b", 7));
         Assert.False(preparation.IsCompleted);
         Assert.True(state.Handoff.IsAuthorityCommitted("handoff-commit-boundary"));
         Assert.True(state.Handoff.TryBeginJoinedNotification("handoff-commit-boundary"));
-        state.Handoff.CompleteJoinedNotification(
-            "handoff-commit-boundary",
-            reply);
+        state.Handoff.CompleteJoinedNotification("handoff-commit-boundary", reply);
 
         Assert.Same(reply, await preparation);
     }
@@ -1801,25 +1808,18 @@ public sealed class ActorHandoffTests
     public async Task TargetJoinedFailure_CompletesThePreparationBarrier_ExactlyOnce()
     {
         var state = new ZLinkActorRuntimeState("actor-1");
-        Assert.True(state.Handoff.Import(
-            CommitRequest("handoff-failed-notification", []),
-            out var preparation));
-        state.Handoff.MarkAuthorityCommitted(
-            "handoff-failed-notification",
-            7,
-            7);
-        Assert.True(state.Handoff.TryBeginJoinedNotification(
-            "handoff-failed-notification"));
-        var reply = ZLinkRemoteActorJoinPackets.CreateJoinReply(
-            true,
-            ActorRef("node-b", 7));
+        Assert.True(
+            state.Handoff.Import(
+                CommitRequest("handoff-failed-notification", []),
+                out var preparation
+            )
+        );
+        state.Handoff.MarkAuthorityCommitted("handoff-failed-notification", 7, 7);
+        Assert.True(state.Handoff.TryBeginJoinedNotification("handoff-failed-notification"));
+        var reply = ZLinkRemoteActorJoinPackets.CreateJoinReply(true, ActorRef("node-b", 7));
 
-        Assert.True(state.Handoff.FailJoinedNotification(
-            "handoff-failed-notification",
-            reply));
-        Assert.False(state.Handoff.FailJoinedNotification(
-            "handoff-failed-notification",
-            reply));
+        Assert.True(state.Handoff.FailJoinedNotification("handoff-failed-notification", reply));
+        Assert.False(state.Handoff.FailJoinedNotification("handoff-failed-notification", reply));
         Assert.Same(reply, await preparation);
     }
 
@@ -1830,7 +1830,8 @@ public sealed class ActorHandoffTests
         Assert.True(state.Handoff.Import(CommitRequest("handoff-generation", []), out _));
 
         var exception = Assert.Throws<ZLinkFrameworkException>(() =>
-            state.Handoff.MarkAuthorityCommitted("handoff-generation", 7, 8));
+            state.Handoff.MarkAuthorityCommitted("handoff-generation", 7, 8)
+        );
 
         Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, exception.Kind);
         Assert.False(state.Handoff.IsAuthorityCommitted("handoff-generation"));
@@ -1839,24 +1840,17 @@ public sealed class ActorHandoffTests
     [Fact]
     public void TargetReplay_PreservesAcceptedQueueArrivalOrder_AfterAuthorityCommit()
     {
-        var initial = new[]
-        {
-            HandoffFrame(2, arrivalIndex: 0),
-            HandoffFrame(1, arrivalIndex: 1)
-        };
+        var initial = new[] { HandoffFrame(2, arrivalIndex: 0), HandoffFrame(1, arrivalIndex: 1) };
         var state = new ZLinkActorRuntimeState("actor-1");
-        Assert.True(
-            state.Handoff.Import(
-                CommitRequest("handoff-queue", initial),
-                out _));
+        Assert.True(state.Handoff.Import(CommitRequest("handoff-queue", initial), out _));
         state.Handoff.MarkAuthorityCommitted("handoff-queue", 1, 1);
         Assert.True(state.Handoff.TryBeginJoinedNotification("handoff-queue"));
         state.Handoff.CompleteJoinedNotification(
             "handoff-queue",
-            ZLinkRemoteActorJoinPackets.CreateJoinReply(true, ActorRef("node-b", 1)));
+            ZLinkRemoteActorJoinPackets.CreateJoinReply(true, ActorRef("node-b", 1))
+        );
 
-        var replay = state.Handoff.PrepareImportedReplay(
-            [HandoffFrame(3, arrivalIndex: 2)]);
+        var replay = state.Handoff.PrepareImportedReplay([HandoffFrame(3, arrivalIndex: 2)]);
 
         Assert.Equal(new ulong[] { 2, 1, 3 }, replay.Select(static frame => frame.RequestId));
         Assert.Equal(new long[] { 0, 1, 2 }, replay.Select(static frame => frame.ArrivalIndex));
@@ -1893,8 +1887,14 @@ public sealed class ActorHandoffTests
             "application/json",
             [],
             "handoff-1",
-            (time.GetUtcNow() + TimeSpan.FromSeconds(5)).ToUnixTimeMilliseconds());
-        var reply = new ZLinkRemoteActorAdmissionReply(true, "application/json", [], request.DeadlineUnixTimeMilliseconds);
+            (time.GetUtcNow() + TimeSpan.FromSeconds(5)).ToUnixTimeMilliseconds()
+        );
+        var reply = new ZLinkRemoteActorAdmissionReply(
+            true,
+            "application/json",
+            [],
+            request.DeadlineUnixTimeMilliseconds
+        );
         const string targetSpotId = "spot-1";
 
         await admissions.RegisterAsync(request, targetSpotId, reply);
@@ -1903,38 +1903,45 @@ public sealed class ActorHandoffTests
         Assert.Same(reply, stored);
         var wrongActorCommit = JoinRequest("other-actor");
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            admissions.BeginCommitAsync(wrongActorCommit, targetSpotId).AsTask());
+            admissions.BeginCommitAsync(wrongActorCommit, targetSpotId).AsTask()
+        );
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            admissions.BeginCommitAsync(JoinRequest("actor-1") with { SourceNodeRid = [9] }, targetSpotId).AsTask());
+            admissions
+                .BeginCommitAsync(JoinRequest("actor-1") with { SourceNodeRid = [9] }, targetSpotId)
+                .AsTask()
+        );
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            admissions.BeginCommitAsync(JoinRequest("actor-1"), "spot-other").AsTask());
+            admissions.BeginCommitAsync(JoinRequest("actor-1"), "spot-other").AsTask()
+        );
 
         time.Advance(TimeSpan.FromSeconds(6));
         var timeout = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
-            admissions.BeginCommitAsync(JoinRequest("actor-1"), targetSpotId).AsTask());
+            admissions.BeginCommitAsync(JoinRequest("actor-1"), targetSpotId).AsTask()
+        );
         Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, timeout.Kind);
         Assert.Null(await admissions.TryGetReplyAsync(request, targetSpotId));
 
-        ZLinkRemoteActorJoinRequest JoinRequest(string actorId) => new(
-            ActorId: actorId,
-            ActorType: "warrior",
-            HandoffId: "handoff-1",
-            BoundSessionNodeRid: null,
-            BoundSessionRid: null,
-            RelocationContentType: "application/json",
-            RelocationReference: "root-1",
-            RelocationChecksumCrc32c: 7,
-            RelocationAggregateId:
-                Guid.Parse("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"),
-            RelocationAggregateGeneration: 1,
-            RelocationInventoryDigest: new byte[32],
-            RequestContentType: "application/json",
-            Request: [],
-            HandoffFrames: [],
-            SourceSpotId: request.SourceSpotId,
-            SourceNodeRid: request.SourceNodeRid,
-            ActorGeneration: 1,
-            ActorAuthorityOwnerGeneration: 1);
+        ZLinkRemoteActorJoinRequest JoinRequest(string actorId) =>
+            new(
+                ActorId: actorId,
+                ActorType: "warrior",
+                HandoffId: "handoff-1",
+                BoundSessionNodeRid: null,
+                BoundSessionRid: null,
+                RelocationContentType: "application/json",
+                RelocationReference: "root-1",
+                RelocationChecksumCrc32c: 7,
+                RelocationAggregateId: Guid.Parse("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"),
+                RelocationAggregateGeneration: 1,
+                RelocationInventoryDigest: new byte[32],
+                RequestContentType: "application/json",
+                Request: [],
+                HandoffFrames: [],
+                SourceSpotId: request.SourceSpotId,
+                SourceNodeRid: request.SourceNodeRid,
+                ActorGeneration: 1,
+                ActorAuthorityOwnerGeneration: 1
+            );
     }
 
     [Fact]
@@ -1953,12 +1960,21 @@ public sealed class ActorHandoffTests
             Interlocked.Increment(ref calls);
             entered.TrySetResult();
             await release.Task.WaitAsync(cancellationToken);
-            return new ZLinkRemoteActorAdmissionReply(true, "application/json", [], request.DeadlineUnixTimeMilliseconds);
+            return new ZLinkRemoteActorAdmissionReply(
+                true,
+                "application/json",
+                [],
+                request.DeadlineUnixTimeMilliseconds
+            );
         }
 
-        var first = admissions.AdmitAsync(request, targetSpot, Decide, CancellationToken.None).AsTask();
+        var first = admissions
+            .AdmitAsync(request, targetSpot, Decide, CancellationToken.None)
+            .AsTask();
         await entered.Task;
-        var second = admissions.AdmitAsync(request, targetSpot, Decide, CancellationToken.None).AsTask();
+        var second = admissions
+            .AdmitAsync(request, targetSpot, Decide, CancellationToken.None)
+            .AsTask();
         release.TrySetResult();
 
         var replies = await Task.WhenAll(first, second);
@@ -1986,41 +2002,36 @@ public sealed class ActorHandoffTests
                 targetNode,
                 TargetNodeGeneration: 23,
                 TargetAuthorityOwnerGeneration: 29,
-                TargetOwnerLeaseGeneration: 31));
+                TargetOwnerLeaseGeneration: 31
+            )
+        );
         var first = AdmissionRequest(time, "handoff-canonical-retry") with
         {
-            DeadlineUnixTimeMilliseconds =
-                (time.GetUtcNow() + TimeSpan.FromSeconds(30))
-                .ToUnixTimeMilliseconds(),
+            DeadlineUnixTimeMilliseconds = (
+                time.GetUtcNow() + TimeSpan.FromSeconds(30)
+            ).ToUnixTimeMilliseconds(),
             ActorGeneration = 7,
             ActorAuthorityOwnerGeneration = 13,
             PredictedPayloadBytes = 37,
             TargetSpotGeneration = 19,
             TargetSpotAuthorityOwnerGeneration = 41,
-            Canonical = canonical
+            Canonical = canonical,
         };
         var retryWhileAdmitting = first with
         {
-            DeadlineUnixTimeMilliseconds =
-                first.DeadlineUnixTimeMilliseconds + 5_000,
-            Canonical = new ZLinkCanonicalActorJoinAdmission(
-                canonical.Request)
+            DeadlineUnixTimeMilliseconds = first.DeadlineUnixTimeMilliseconds + 5_000,
+            Canonical = new ZLinkCanonicalActorJoinAdmission(canonical.Request),
         };
         var retryAfterTerminal = first with
         {
-            DeadlineUnixTimeMilliseconds =
-                first.DeadlineUnixTimeMilliseconds + 10_000,
-            Canonical = new ZLinkCanonicalActorJoinAdmission(
-                canonical.Request)
+            DeadlineUnixTimeMilliseconds = first.DeadlineUnixTimeMilliseconds + 10_000,
+            Canonical = new ZLinkCanonicalActorJoinAdmission(canonical.Request),
         };
-        var entered = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        var release = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var calls = 0;
 
-        async ValueTask<ZLinkRemoteActorAdmissionReply> Decide(
-            CancellationToken cancellationToken)
+        async ValueTask<ZLinkRemoteActorAdmissionReply> Decide(CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref calls);
             entered.TrySetResult();
@@ -2029,20 +2040,17 @@ public sealed class ActorHandoffTests
                 false,
                 "application/json",
                 "{\"reason\":\"ZoneMaintenance\"}"u8.ToArray(),
-                first.DeadlineUnixTimeMilliseconds);
+                first.DeadlineUnixTimeMilliseconds
+            );
         }
 
-        var initial = admissions.AdmitAsync(
-            first,
-            "spot-1",
-            Decide,
-            CancellationToken.None).AsTask();
+        var initial = admissions
+            .AdmitAsync(first, "spot-1", Decide, CancellationToken.None)
+            .AsTask();
         await entered.Task;
-        var concurrentRetry = admissions.AdmitAsync(
-            retryWhileAdmitting,
-            "spot-1",
-            Decide,
-            CancellationToken.None).AsTask();
+        var concurrentRetry = admissions
+            .AdmitAsync(retryWhileAdmitting, "spot-1", Decide, CancellationToken.None)
+            .AsTask();
         release.TrySetResult();
 
         var concurrentReplies = await Task.WhenAll(initial, concurrentRetry);
@@ -2050,14 +2058,13 @@ public sealed class ActorHandoffTests
             retryAfterTerminal,
             "spot-1",
             Decide,
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         Assert.Equal(1, calls);
         Assert.Same(concurrentReplies[0], concurrentReplies[1]);
         Assert.Same(concurrentReplies[0], memoized);
-        Assert.Equal(
-            first.DeadlineUnixTimeMilliseconds,
-            memoized.DeadlineUnixTimeMilliseconds);
+        Assert.Equal(first.DeadlineUnixTimeMilliseconds, memoized.DeadlineUnixTimeMilliseconds);
     }
 
     [Fact]
@@ -2070,7 +2077,8 @@ public sealed class ActorHandoffTests
         time.Advance(TimeSpan.FromSeconds(6));
 
         var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
-            admissions.AdmitAsync(
+            admissions
+                .AdmitAsync(
                     request,
                     "target-spot",
                     _ =>
@@ -2081,10 +2089,14 @@ public sealed class ActorHandoffTests
                                 true,
                                 "application/json",
                                 [],
-                                request.DeadlineUnixTimeMilliseconds));
+                                request.DeadlineUnixTimeMilliseconds
+                            )
+                        );
                     },
-                    CancellationToken.None)
-                .AsTask());
+                    CancellationToken.None
+                )
+                .AsTask()
+        );
 
         Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, error.Kind);
         Assert.Equal(0, callbackCount);
@@ -2102,7 +2114,7 @@ public sealed class ActorHandoffTests
             ActorAuthorityOwnerGeneration = 1,
             PredictedPayloadBytes = 80,
             TargetSpotGeneration = 5,
-            TargetSpotAuthorityOwnerGeneration = 3
+            TargetSpotAuthorityOwnerGeneration = 3,
         };
         var reservation = new ZLinkActorRelocationReservation(
             "reservation-1",
@@ -2111,20 +2123,25 @@ public sealed class ActorHandoffTests
             7,
             5,
             2,
-            3);
+            3
+        );
         const string target = "target-spot";
 
         _ = await admissions.AdmitAsync(
             request,
             target,
-            _ => ValueTask.FromResult(
-                ZLinkRemoteActorJoinPackets.CreateAdmissionReply(
-                    true,
-                    ZLinkMessage.Empty,
-                    new ZLinkCodecRegistryBuilder(),
-                    request.DeadlineUnixTimeMilliseconds,
-                    reservation)),
-            CancellationToken.None);
+            _ =>
+                ValueTask.FromResult(
+                    ZLinkRemoteActorJoinPackets.CreateAdmissionReply(
+                        true,
+                        ZLinkMessage.Empty,
+                        new ZLinkCodecRegistryBuilder(),
+                        request.DeadlineUnixTimeMilliseconds,
+                        reservation
+                    )
+                ),
+            CancellationToken.None
+        );
         var commit = CommitRequest(request.HandoffId, []) with
         {
             ReservationToken = reservation.Token,
@@ -2132,16 +2149,13 @@ public sealed class ActorHandoffTests
             TargetNodeRid = reservation.TargetNodeRid.ToBytes().ToArray(),
             TargetNodeGeneration = reservation.TargetNodeGeneration,
             TargetSpotGeneration = reservation.TargetSpotGeneration,
-            TargetAuthorityOwnerGeneration =
-                reservation.TargetAuthorityOwnerGeneration,
-            TargetSpotAuthorityOwnerGeneration =
-                reservation.TargetSpotAuthorityOwnerGeneration
+            TargetAuthorityOwnerGeneration = reservation.TargetAuthorityOwnerGeneration,
+            TargetSpotAuthorityOwnerGeneration = reservation.TargetSpotAuthorityOwnerGeneration,
         };
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            admissions.BeginCommitAsync(
-                commit with { ReservationToken = "other" },
-                target).AsTask());
+            admissions.BeginCommitAsync(commit with { ReservationToken = "other" }, target).AsTask()
+        );
         await admissions.BeginCommitAsync(commit, target);
 
         await admissions.CompleteAsync(request.HandoffId);
@@ -2154,25 +2168,36 @@ public sealed class ActorHandoffTests
         var time = new ManualTimeProvider();
         var admissions = new ZLinkActorHandoffAdmissions(time);
         const string target = "target-spot";
-        var requests = Enumerable.Range(0, 128)
-            .Select(index => AdmissionRequest(time, $"handoff-{index}") with
-            {
-                ActorId = $"actor-{index}"
-            })
+        var requests = Enumerable
+            .Range(0, 128)
+            .Select(index =>
+                AdmissionRequest(time, $"handoff-{index}") with
+                {
+                    ActorId = $"actor-{index}",
+                }
+            )
             .ToArray();
 
-        var replies = await Task.WhenAll(requests.Select(request =>
-            admissions.AdmitAsync(
-                    request,
-                    target,
-                    _ => ValueTask.FromResult(
-                        new ZLinkRemoteActorAdmissionReply(
-                            true,
-                            "application/json",
-                            [],
-                            request.DeadlineUnixTimeMilliseconds)),
-                    CancellationToken.None)
-                .AsTask()));
+        var replies = await Task.WhenAll(
+            requests.Select(request =>
+                admissions
+                    .AdmitAsync(
+                        request,
+                        target,
+                        _ =>
+                            ValueTask.FromResult(
+                                new ZLinkRemoteActorAdmissionReply(
+                                    true,
+                                    "application/json",
+                                    [],
+                                    request.DeadlineUnixTimeMilliseconds
+                                )
+                            ),
+                        CancellationToken.None
+                    )
+                    .AsTask()
+            )
+        );
 
         Assert.All(replies, static reply => Assert.True(reply.Accepted));
         Assert.False((await admissions.SnapshotDrainAsync()).IsSafe);
@@ -2189,28 +2214,36 @@ public sealed class ActorHandoffTests
         var request = AdmissionRequest(time, "handoff-drain");
         const string target = "target-spot";
         var decisionStarted = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var decision = new TaskCompletionSource<ZLinkRemoteActorAdmissionReply>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
 
-        var admission = admissions.AdmitAsync(
-            request,
-            target,
-            _ =>
-            {
-                decisionStarted.TrySetResult();
-                return new ValueTask<ZLinkRemoteActorAdmissionReply>(decision.Task);
-            },
-            CancellationToken.None).AsTask();
+        var admission = admissions
+            .AdmitAsync(
+                request,
+                target,
+                _ =>
+                {
+                    decisionStarted.TrySetResult();
+                    return new ValueTask<ZLinkRemoteActorAdmissionReply>(decision.Task);
+                },
+                CancellationToken.None
+            )
+            .AsTask();
         await decisionStarted.Task;
         var drainSafe = admissions.WaitUntilDrainSafeAsync(CancellationToken.None);
         Assert.False(drainSafe.IsCompleted);
 
-        decision.SetResult(new ZLinkRemoteActorAdmissionReply(
-            true,
-            "application/json",
-            [],
-            request.DeadlineUnixTimeMilliseconds));
+        decision.SetResult(
+            new ZLinkRemoteActorAdmissionReply(
+                true,
+                "application/json",
+                [],
+                request.DeadlineUnixTimeMilliseconds
+            )
+        );
         await admission;
         Assert.False(drainSafe.IsCompleted);
 
@@ -2228,23 +2261,31 @@ public sealed class ActorHandoffTests
         // in the admission reply (reservation token, target node, actor
         // generations); align the request, reply, and commit so this drain test
         // exercises a spec-valid admission->commit.
-        var request = AdmissionRequest(time, "handoff-accepted-before-drain")
-            with { ActorGeneration = 1, ActorAuthorityOwnerGeneration = 1 };
+        var request = AdmissionRequest(time, "handoff-accepted-before-drain") with
+        {
+            ActorGeneration = 1,
+            ActorAuthorityOwnerGeneration = 1,
+        };
         const string target = "target-spot";
 
         Assert.True(gate.TryEnterActorAdmission(out var admissionLease));
         var reply = await admissions.AdmitAsync(
             request,
             target,
-            _ => ValueTask.FromResult(new ZLinkRemoteActorAdmissionReply(
-                true,
-                "application/json",
-                [],
-                request.DeadlineUnixTimeMilliseconds,
-                "handoff-reservation-token",
-                0,
-                new byte[] { 9 })),
-            CancellationToken.None);
+            _ =>
+                ValueTask.FromResult(
+                    new ZLinkRemoteActorAdmissionReply(
+                        true,
+                        "application/json",
+                        [],
+                        request.DeadlineUnixTimeMilliseconds,
+                        "handoff-reservation-token",
+                        0,
+                        new byte[] { 9 }
+                    )
+                ),
+            CancellationToken.None
+        );
         admissionLease.Dispose();
         Assert.True(reply.Accepted);
 
@@ -2252,12 +2293,16 @@ public sealed class ActorHandoffTests
         Assert.False(gate.TryEnterActorAdmission(out var rejectedAdmission));
         rejectedAdmission.Dispose();
 
-        var commit = CommitRequest(request.HandoffId, [])
-            with { ReservationToken = "handoff-reservation-token", TargetNodeRid = new byte[] { 9 } };
+        var commit = CommitRequest(request.HandoffId, []) with
+        {
+            ReservationToken = "handoff-reservation-token",
+            TargetNodeRid = new byte[] { 9 },
+        };
         await admissions.BeginCommitAsync(commit, target);
         await admissions.CompleteAsync(request.HandoffId);
 
-        await admissions.WaitUntilDrainSafeAsync(CancellationToken.None)
+        await admissions
+            .WaitUntilDrainSafeAsync(CancellationToken.None)
             .WaitAsync(TimeSpan.FromSeconds(1));
     }
 
@@ -2278,30 +2323,39 @@ public sealed class ActorHandoffTests
         var terminalCompletion = admissions.WaitForTerminalCompletionAsync(
             request,
             targetSpot,
-            CancellationToken.None);
+            CancellationToken.None
+        );
         Assert.False(terminalCompletion.IsCompleted);
-        Assert.Null(await admissions.TryGetJoinOutcomeAsync(
-            request with { RelocationReference = "changed-root" },
-            targetSpot));
+        Assert.Null(
+            await admissions.TryGetJoinOutcomeAsync(
+                request with
+                {
+                    RelocationReference = "changed-root",
+                },
+                targetSpot
+            )
+        );
         var completion = new ZLinkRemoteActorHandoffCompletionRequest(
             request.ActorId,
             request.HandoffId,
             request.SourceSpotId,
             request.SourceNodeRid,
             targetSpot,
-            []);
+            []
+        );
         Assert.True(await admissions.TryBeginCompletionAsync(completion, targetSpot));
         await admissions.CancelCompletionAsync(completion, targetSpot);
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            admissions.TryBeginCompletionAsync(
-                completion with
-                {
-                    Frames =
-                    [
-                        new ZLinkActorHandoffFrame([], 0, [], [], 1, 0, [], [], 0)
-                    ]
-                },
-                targetSpot).AsTask());
+            admissions
+                .TryBeginCompletionAsync(
+                    completion with
+                    {
+                        Frames = [new ZLinkActorHandoffFrame([], 0, [], [], 1, 0, [], [], 0)],
+                    },
+                    targetSpot
+                )
+                .AsTask()
+        );
         Assert.True(await admissions.TryBeginCompletionAsync(completion, targetSpot));
         await admissions.RecordCompletionAsync(completion, targetSpot);
         await terminalCompletion.WaitAsync(TimeSpan.FromSeconds(1));
@@ -2309,9 +2363,16 @@ public sealed class ActorHandoffTests
         // A completion this target no longer honors is terminal for the
         // source's reconciliation (RequestRejected), never retried.
         var changedTarget = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
-            admissions.TryBeginCompletionAsync(
-                completion with { TargetSpotId = "spot-other" },
-                targetSpot).AsTask());
+            admissions
+                .TryBeginCompletionAsync(
+                    completion with
+                    {
+                        TargetSpotId = "spot-other",
+                    },
+                    targetSpot
+                )
+                .AsTask()
+        );
         Assert.Equal(ZLinkFrameworkErrorKind.Rejected, changedTarget.Kind);
     }
 
@@ -2326,19 +2387,14 @@ public sealed class ActorHandoffTests
             TargetNodeGeneration = 11,
             TargetSpotGeneration = 13,
             TargetAuthorityOwnerGeneration = 17,
-            TargetSpotAuthorityOwnerGeneration = 19
+            TargetSpotAuthorityOwnerGeneration = 19,
         };
         var enriched = raw with
         {
-            HandoffFrames =
-            [
-                new ZLinkActorHandoffFrame([], 0, [], [], 1, 0, [], [], 0)
-            ]
+            HandoffFrames = [new ZLinkActorHandoffFrame([], 0, [], [], 1, 0, [], [], 0)],
         };
         const string targetSpot = "spot-1";
-        var accepted = ZLinkRemoteActorJoinPackets.CreateJoinReply(
-            true,
-            ActorRef("node-b", 2));
+        var accepted = ZLinkRemoteActorJoinPackets.CreateJoinReply(true, ActorRef("node-b", 2));
 
         await admissions.RecordJoinOutcomeAsync(enriched, targetSpot, accepted);
         await admissions.AbortAsync(raw.HandoffId);
@@ -2346,15 +2402,33 @@ public sealed class ActorHandoffTests
         var recorded = await admissions.TryGetJoinOutcomeAsync(raw, targetSpot);
         Assert.NotNull(recorded);
         Assert.Same(accepted, recorded);
-        Assert.Null(await admissions.TryGetJoinOutcomeAsync(
-            raw with { RelocationChecksumCrc32c = raw.RelocationChecksumCrc32c + 1 },
-            targetSpot));
-        Assert.Null(await admissions.TryGetJoinOutcomeAsync(
-            raw with { ReservationToken = "reservation-2" },
-            targetSpot));
-        Assert.Null(await admissions.TryGetJoinOutcomeAsync(
-            raw with { TargetNodeGeneration = raw.TargetNodeGeneration + 1 },
-            targetSpot));
+        Assert.Null(
+            await admissions.TryGetJoinOutcomeAsync(
+                raw with
+                {
+                    RelocationChecksumCrc32c = raw.RelocationChecksumCrc32c + 1,
+                },
+                targetSpot
+            )
+        );
+        Assert.Null(
+            await admissions.TryGetJoinOutcomeAsync(
+                raw with
+                {
+                    ReservationToken = "reservation-2",
+                },
+                targetSpot
+            )
+        );
+        Assert.Null(
+            await admissions.TryGetJoinOutcomeAsync(
+                raw with
+                {
+                    TargetNodeGeneration = raw.TargetNodeGeneration + 1,
+                },
+                targetSpot
+            )
+        );
     }
 
     [Fact]
@@ -2374,12 +2448,13 @@ public sealed class ActorHandoffTests
             BoundSessionTargetNodeGeneration = 17,
             BoundSessionOwnerLeaseGeneration = 19,
             BoundSessionOwnerNodeGeneration = 23,
-            BoundSessionAcceptedHighWater = 29
+            BoundSessionAcceptedHighWater = 29,
         };
         await admissions.RecordJoinOutcomeAsync(
             request,
             targetSpot,
-            ZLinkRemoteActorJoinPackets.CreateJoinReply(true, ActorRef("node-b", 2)));
+            ZLinkRemoteActorJoinPackets.CreateJoinReply(true, ActorRef("node-b", 2))
+        );
         var completion = new ZLinkRemoteActorHandoffCompletionRequest(
             request.ActorId,
             request.HandoffId,
@@ -2397,14 +2472,22 @@ public sealed class ActorHandoffTests
             BoundSessionTargetNodeGeneration: request.BoundSessionTargetNodeGeneration,
             BoundSessionOwnerLeaseGeneration: request.BoundSessionOwnerLeaseGeneration,
             BoundSessionOwnerNodeGeneration: request.BoundSessionOwnerNodeGeneration,
-            BoundSessionAcceptedHighWater: request.BoundSessionAcceptedHighWater);
+            BoundSessionAcceptedHighWater: request.BoundSessionAcceptedHighWater
+        );
 
         Assert.True(await admissions.TryBeginCompletionAsync(completion, targetSpot));
         await admissions.CancelCompletionAsync(completion, targetSpot);
         var changedRoute = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
-            admissions.TryBeginCompletionAsync(
-                completion with { BoundSessionOwnerLeaseGeneration = 31 },
-                targetSpot).AsTask());
+            admissions
+                .TryBeginCompletionAsync(
+                    completion with
+                    {
+                        BoundSessionOwnerLeaseGeneration = 31,
+                    },
+                    targetSpot
+                )
+                .AsTask()
+        );
         Assert.Equal(ZLinkFrameworkErrorKind.Rejected, changedRoute.Kind);
     }
 
@@ -2420,7 +2503,11 @@ public sealed class ActorHandoffTests
             await admissions.RecordJoinOutcomeAsync(
                 request,
                 targetSpot,
-                ZLinkRemoteActorJoinPackets.CreateJoinReply(true, ActorRef("node-b", (ulong)index + 1)));
+                ZLinkRemoteActorJoinPackets.CreateJoinReply(
+                    true,
+                    ActorRef("node-b", (ulong)index + 1)
+                )
+            );
         }
 
         Assert.NotNull(await admissions.TryGetJoinOutcomeAsync(first, targetSpot));
@@ -2435,7 +2522,12 @@ public sealed class ActorHandoffTests
         var request = CommitRequest("handoff-expiring", []);
         var accepted = ZLinkRemoteActorJoinPackets.CreateJoinReply(true, ActorRef("node-b", 2));
         var rejected = ZLinkRemoteActorJoinPackets.CreateJoinReply(false, ActorRef("rejected", 0));
-        await admissions.RecordJoinOutcomeAsync(request, targetSpot, accepted, TimeSpan.FromSeconds(5));
+        await admissions.RecordJoinOutcomeAsync(
+            request,
+            targetSpot,
+            accepted,
+            TimeSpan.FromSeconds(5)
+        );
 
         time.Advance(TimeSpan.FromSeconds(5));
 
@@ -2449,11 +2541,13 @@ public sealed class ActorHandoffTests
             request.SourceSpotId,
             request.SourceNodeRid,
             targetSpot,
-            []);
+            []
+        );
         // A completion the target no longer honors is terminal for the
         // source's reconciliation (RequestRejected), never retried.
         var lateCompletion = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
-            admissions.TryBeginCompletionAsync(completion, targetSpot).AsTask());
+            admissions.TryBeginCompletionAsync(completion, targetSpot).AsTask()
+        );
         Assert.Equal(ZLinkFrameworkErrorKind.Rejected, lateCompletion.Kind);
     }
 
@@ -2466,7 +2560,12 @@ public sealed class ActorHandoffTests
         var accepted = ZLinkRemoteActorJoinPackets.CreateJoinReply(true, ActorRef("node-b", 2));
         var rejected = ZLinkRemoteActorJoinPackets.CreateJoinReply(false, ActorRef("rejected", 0));
 
-        await admissions.RecordJoinOutcomeAsync(request, targetSpot, accepted, TimeSpan.FromSeconds(5));
+        await admissions.RecordJoinOutcomeAsync(
+            request,
+            targetSpot,
+            accepted,
+            TimeSpan.FromSeconds(5)
+        );
         await admissions.RejectPreparedJoinOutcomeAsync(request, targetSpot, rejected);
 
         var outcome = await admissions.TryGetJoinOutcomeAsync(request, targetSpot);
@@ -2484,7 +2583,13 @@ public sealed class ActorHandoffTests
         await admissions.RegisterAsync(
             expired,
             targetSpot,
-            new ZLinkRemoteActorAdmissionReply(true, "application/json", [1], expired.DeadlineUnixTimeMilliseconds));
+            new ZLinkRemoteActorAdmissionReply(
+                true,
+                "application/json",
+                [1],
+                expired.DeadlineUnixTimeMilliseconds
+            )
+        );
         time.Advance(TimeSpan.FromSeconds(6));
         var replacement = AdmissionRequest(time, "handoff-1");
         var calls = 0;
@@ -2495,13 +2600,17 @@ public sealed class ActorHandoffTests
             _ =>
             {
                 calls++;
-                return ValueTask.FromResult(new ZLinkRemoteActorAdmissionReply(
-                    true,
-                    "application/json",
-                    [2],
-                    replacement.DeadlineUnixTimeMilliseconds));
+                return ValueTask.FromResult(
+                    new ZLinkRemoteActorAdmissionReply(
+                        true,
+                        "application/json",
+                        [2],
+                        replacement.DeadlineUnixTimeMilliseconds
+                    )
+                );
             },
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         Assert.Equal(1, calls);
         Assert.Equal([2], reply.Reply);
@@ -2516,14 +2625,13 @@ public sealed class ActorHandoffTests
         string sessionRid,
         ZlinkStreamMessageKind kind = ZlinkStreamMessageKind.Send,
         ulong requestId = 1,
-        uint flags = 0)
+        uint flags = 0
+    )
     {
         using var body = Message.From(System.Text.Encoding.UTF8.GetBytes(bodyText));
         using var frame = Frame(body, ActorRef("node-a", 1), sessionRid, kind, requestId, flags);
 
-        Assert.Equal(
-            ZLinkActorHandoffCaptureResult.Captured,
-            state.Handoff.TryCapture(frame));
+        Assert.Equal(ZLinkActorHandoffCaptureResult.Captured, state.Handoff.TryCapture(frame));
     }
 
     private static ZLinkSpotActorFrame Frame(
@@ -2532,7 +2640,8 @@ public sealed class ActorHandoffTests
         string sessionRid,
         ZlinkStreamMessageKind kind = ZlinkStreamMessageKind.Send,
         ulong requestId = 1,
-        uint flags = 0)
+        uint flags = 0
+    )
     {
         var sourceNodeRid = RoutingId.From("session-node");
         const ulong sourceNodeGeneration = 7;
@@ -2550,7 +2659,8 @@ public sealed class ActorHandoffTests
                 AuthorityOwnerGeneration: 17,
                 OwnerLeaseGeneration: 19,
                 ReplyRequestId: requestId,
-                ReplyFlags: flags),
+                ReplyFlags: flags
+            ),
             new ZlinkStreamHeader(
                 kind,
                 ZlinkStreamCodec.Raw,
@@ -2559,45 +2669,48 @@ public sealed class ActorHandoffTests
                     : ZlinkStreamHeaderFlags.None,
                 kind == ZlinkStreamMessageKind.Request ? new ZlinkStreamRequestSeq(42) : null,
                 "Packet",
-                ZlinkStreamMetadata.Empty),
+                ZlinkStreamMetadata.Empty
+            ),
             Message.From(body.AsReadOnlySpan()),
             sourceNodeGeneration,
             new ZLinkServiceWireCodec.RequestSourceFence(
                 "actor-handoff-source",
                 23,
                 sourceNodeRid,
-                sourceNodeGeneration));
+                sourceNodeGeneration
+            )
+        );
         if (kind == ZlinkStreamMessageKind.Request)
             frame.BindRelocationReplyRoute(requestId);
         return frame;
     }
 
-    private static string DecodeBody(ZLinkActorHandoffFrame frame)
-        => System.Text.Encoding.UTF8.GetString(frame.Body);
+    private static string DecodeBody(ZLinkActorHandoffFrame frame) =>
+        System.Text.Encoding.UTF8.GetString(frame.Body);
 
-    private static ZLinkActorHandoffFrame HandoffFrame(
-        ulong requestId,
-        long arrivalIndex)
-        => new([], 0, [], [], requestId, 0, [], [], arrivalIndex);
+    private static ZLinkActorHandoffFrame HandoffFrame(ulong requestId, long arrivalIndex) =>
+        new([], 0, [], [], requestId, 0, [], [], arrivalIndex);
 
-    private static ZlinkStreamHeader Header(string packetName)
-        => new(
+    private static ZlinkStreamHeader Header(string packetName) =>
+        new(
             ZlinkStreamMessageKind.Send,
             ZlinkStreamCodec.Raw,
             ZlinkStreamHeaderFlags.None,
             null,
             packetName,
-            ZlinkStreamMetadata.Empty);
+            ZlinkStreamMetadata.Empty
+        );
 
-    private static ZLinkBackendActorRef ActorRef(string nodeRid, ulong generation)
-        => new(RoutingId.From(nodeRid), "actor-1", generation);
+    private static ZLinkBackendActorRef ActorRef(string nodeRid, ulong generation) =>
+        new(RoutingId.From(nodeRid), "actor-1", generation);
 
     private static IReadOnlyList<ZLinkActorHandoffFrame> Cutover(
         ZLinkActorRuntimeState state,
         int committedFrameCount,
         ZLinkBackendActorRef source,
-        ZLinkBackendActorRef target)
-        => state.Handoff.CutoverCaptureToMessageFollow(
+        ZLinkBackendActorRef target
+    ) =>
+        state.Handoff.CutoverCaptureToMessageFollow(
             committedFrameCount,
             source,
             target,
@@ -2607,12 +2720,14 @@ public sealed class ActorHandoffTests
             sourceAuthorityOwnerGeneration: 1,
             targetAuthorityOwnerGeneration: 2,
             sourceOwnerLeaseGeneration: 1,
-            targetOwnerLeaseGeneration: 2);
+            targetOwnerLeaseGeneration: 2
+        );
 
     private static ZLinkRemoteActorJoinRequest CommitRequest(
         string handoffId,
-        IReadOnlyList<ZLinkActorHandoffFrame> frames)
-        => new(
+        IReadOnlyList<ZLinkActorHandoffFrame> frames
+    ) =>
+        new(
             "actor-1",
             "warrior",
             handoffId,
@@ -2630,12 +2745,14 @@ public sealed class ActorHandoffTests
             "source-spot",
             [2],
             1,
-            1);
+            1
+        );
 
     private static ZLinkRemoteActorAdmissionRequest AdmissionRequest(
         TimeProvider timeProvider,
-        string handoffId)
-        => new(
+        string handoffId
+    ) =>
+        new(
             "actor-1",
             "warrior",
             "source-spot",
@@ -2643,6 +2760,6 @@ public sealed class ActorHandoffTests
             "application/json",
             [],
             handoffId,
-            (timeProvider.GetUtcNow() + TimeSpan.FromSeconds(5)).ToUnixTimeMilliseconds());
-
+            (timeProvider.GetUtcNow() + TimeSpan.FromSeconds(5)).ToUnixTimeMilliseconds()
+        );
 }

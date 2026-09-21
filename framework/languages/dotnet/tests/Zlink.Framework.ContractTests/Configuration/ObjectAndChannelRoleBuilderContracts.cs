@@ -17,7 +17,8 @@ public sealed class ObjectAndChannelRoleBuilderContracts
     [ContractExample(
         typeof(IZLinkClientServerChannelRoleBuilder),
         typeof(IZLinkClientServerChannelClientBuilder),
-        typeof(IZLinkClientServerChannelServerBuilder))]
+        typeof(IZLinkClientServerChannelServerBuilder)
+    )]
     public void Client_server_channel_registers_a_connect_side_or_a_listening_handler_side()
     {
         // Two processes register the same channel name from opposite sides.
@@ -28,7 +29,8 @@ public sealed class ObjectAndChannelRoleBuilderContracts
         Assert.Same(client, client.Connect("tcp://inventory-2.play.svc:5100"));
         Assert.Equal(
             ["tcp://inventory-1.play.svc:5100", "tcp://inventory-2.play.svc:5100"],
-            gatewayChannel.ClientBuilder.Endpoints);
+            gatewayChannel.ClientBuilder.Endpoints
+        );
 
         // The inventory service registers the serving side: a bound endpoint,
         // its placement weight and the handlers that answer the channel.
@@ -41,10 +43,12 @@ public sealed class ObjectAndChannelRoleBuilderContracts
         Assert.Same(server, server.AddHandlerGroup("inventory-write"));
         Assert.Same(
             server,
-            server.AddSendHandler<ItemGrantedHandler, ItemGranted>("inventory.item-granted"));
+            server.AddSendHandler<ItemGrantedHandler, ItemGranted>("inventory.item-granted")
+        );
         Assert.Same(
             server,
-            server.AddRequestHandler<ConsumeItemHandler, ConsumeItem, ItemConsumed>());
+            server.AddRequestHandler<ConsumeItemHandler, ConsumeItem, ItemConsumed>()
+        );
 
         var registered = inventoryChannel.ServerBuilder;
         Assert.Equal(5100, registered.Port);
@@ -53,11 +57,9 @@ public sealed class ObjectAndChannelRoleBuilderContracts
         Assert.Equal(100, registered.Weight);
         Assert.Equal(["inventory-write"], registered.HandlerGroups);
         Assert.Equal(
-            [
-                "inventory.item-granted -> ItemGrantedHandler",
-                "(default) -> ConsumeItemHandler"
-            ],
-            registered.Handlers);
+            ["inventory.item-granted -> ItemGrantedHandler", "(default) -> ConsumeItemHandler"],
+            registered.Handlers
+        );
 
         // The role split is what keeps a connect-only registration from
         // carrying listen or handler configuration at all.
@@ -66,7 +68,8 @@ public sealed class ObjectAndChannelRoleBuilderContracts
             typeof(IZLinkClientServerChannelClientBuilder)
                 .GetMethods()
                 .Select(method => method.Name)
-                .ToArray());
+                .ToArray()
+        );
         Assert.Null(typeof(IZLinkClientServerChannelRoleBuilder).GetMethod("Listen"));
         Assert.Null(typeof(IZLinkClientServerChannelServerBuilder).GetMethod("Connect"));
     }
@@ -75,7 +78,8 @@ public sealed class ObjectAndChannelRoleBuilderContracts
     [ContractExample(
         typeof(IZLinkMeshObjectRoleBuilder),
         typeof(IZLinkMeshObjectClientBuilder),
-        typeof(IZLinkMeshObjectServerBuilder))]
+        typeof(IZLinkMeshObjectServerBuilder)
+    )]
     public void Mesh_object_role_builder_puts_every_factory_registration_on_the_server_side()
     {
         // A gateway node joins the play mesh to address Spots and Actors but
@@ -88,7 +92,8 @@ public sealed class ObjectAndChannelRoleBuilderContracts
         Assert.Empty(typeof(IZLinkMeshObjectClientBuilder).GetMembers());
         Assert.DoesNotContain(
             typeof(IZLinkMeshObjectServerBuilder),
-            typeof(IZLinkMeshNodeBuilder).GetInterfaces());
+            typeof(IZLinkMeshNodeBuilder).GetInterfaces()
+        );
 
         // A play node hosts objects, so every factory registration - and the
         // relocation policy that governs how each moves - lands on Server().
@@ -101,21 +106,27 @@ public sealed class ObjectAndChannelRoleBuilderContracts
             server,
             server.AddSpotFactory<BattleRoomSpot>(
                 "battle-room",
-                factory => factory
-                    .StableTypeLimit(2000)
-                    .ExecutionMode(ZLinkUserSpotExecutionMode.SpotWide)
-                    .RecreateOnRelocation()));
+                factory =>
+                    factory
+                        .StableTypeLimit(2000)
+                        .ExecutionMode(ZLinkUserSpotExecutionMode.SpotWide)
+                        .RecreateOnRelocation()
+            )
+        );
         Assert.Same(
             server,
             server.AddInstanceSpotFactory<LeaderboardSpot>(
                 "leaderboard",
-                factory => factory
-                    .StableTypeLimit(64)
-                    .DisableRelocation()));
+                factory => factory.StableTypeLimit(64).DisableRelocation()
+            )
+        );
         Assert.Same(
             server,
             server.AddActorFactory<PlayerActor, PlayerActorFactory>(
-                "player", factory => factory.PreserveStateWith<PlayerRelocationAdapter>()));
+                "player",
+                factory => factory.PreserveStateWith<PlayerRelocationAdapter>()
+            )
+        );
 
         var registered = playObjects.ServerBuilder;
         Assert.Equal(["LobbyEntrySpot"], registered.EntrySpots);
@@ -123,14 +134,10 @@ public sealed class ObjectAndChannelRoleBuilderContracts
         Assert.Equal(["leaderboard"], registered.InstanceSpotTypes);
         Assert.Equal(["player"], registered.ActorTypes);
         Assert.Equal(64, registered.InstanceSpotStableTypeLimit);
-        Assert.Equal(
-            ZLinkUserSpotExecutionMode.SpotWide,
-            registered.SpotExecutionMode);
+        Assert.Equal(ZLinkUserSpotExecutionMode.SpotWide, registered.SpotExecutionMode);
         Assert.Equal("Recreate", registered.SpotRelocation);
         Assert.Equal("Disabled", registered.InstanceSpotRelocation);
-        Assert.Equal(
-            nameof(PlayerRelocationAdapter),
-            registered.ActorRelocation);
+        Assert.Equal(nameof(PlayerRelocationAdapter), registered.ActorRelocation);
     }
 
     private sealed record ItemGranted(string ActorId, string ItemId);
@@ -144,7 +151,8 @@ public sealed class ObjectAndChannelRoleBuilderContracts
         public ValueTask HandleAsync(
             ItemGranted message,
             IZLinkMessageContext context,
-            CancellationToken cancellationToken) => ValueTask.CompletedTask;
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
     }
 
     private sealed class ConsumeItemHandler : IZLinkRequestHandler<ConsumeItem, ItemConsumed>
@@ -152,8 +160,8 @@ public sealed class ObjectAndChannelRoleBuilderContracts
         public ValueTask<ItemConsumed> HandleAsync(
             ConsumeItem request,
             IZLinkMessageContext context,
-            CancellationToken cancellationToken) =>
-            ValueTask.FromResult(new ItemConsumed(request.ActorId, 2));
+            CancellationToken cancellationToken
+        ) => ValueTask.FromResult(new ItemConsumed(request.ActorId, 2));
     }
 
     private sealed class ExampleClientServerChannelRoleBuilder(string channelName)
@@ -234,7 +242,8 @@ public sealed class ObjectAndChannelRoleBuilderContracts
         }
 
         public IZLinkClientServerChannelServerBuilder AddSendHandler<THandler, TMessage>(
-            string? packetName = null)
+            string? packetName = null
+        )
             where THandler : class, IZLinkSendHandler<TMessage>
         {
             Handlers.Add($"{packetName ?? "(default)"} -> {typeof(THandler).Name}");
@@ -242,7 +251,8 @@ public sealed class ObjectAndChannelRoleBuilderContracts
         }
 
         public IZLinkClientServerChannelServerBuilder AddRequestHandler<THandler, TRequest, TReply>(
-            string? packetName = null)
+            string? packetName = null
+        )
             where THandler : class, IZLinkRequestHandler<TRequest, TReply>
         {
             Handlers.Add($"{packetName ?? "(default)"} -> {typeof(THandler).Name}");
@@ -304,7 +314,8 @@ public sealed class ObjectAndChannelRoleBuilderContracts
 
         public IZLinkMeshObjectServerBuilder AddSpotFactory<TSpot>(
             string spotType,
-            Action<IZLinkUserSpotFactoryBuilder<TSpot>> configure)
+            Action<IZLinkUserSpotFactoryBuilder<TSpot>> configure
+        )
             where TSpot : class, IZLinkSpot
         {
             SpotTypes.Add(spotType);
@@ -318,7 +329,8 @@ public sealed class ObjectAndChannelRoleBuilderContracts
 
         public IZLinkMeshObjectServerBuilder AddInstanceSpotFactory<TSpot>(
             string instanceSpotType,
-            Action<IZLinkInstanceSpotFactoryBuilder<TSpot>> configure)
+            Action<IZLinkInstanceSpotFactoryBuilder<TSpot>> configure
+        )
             where TSpot : class, IZLinkInstanceSpot
         {
             InstanceSpotTypes.Add(instanceSpotType);
@@ -331,7 +343,8 @@ public sealed class ObjectAndChannelRoleBuilderContracts
 
         public IZLinkMeshObjectServerBuilder AddActorFactory<TActor, TFactory>(
             string actorType,
-            Action<IZLinkActorFactoryBuilder<TActor>> configure)
+            Action<IZLinkActorFactoryBuilder<TActor>> configure
+        )
             where TActor : class, IZLinkActor
             where TFactory : class, IZLinkActorFactory<TActor>
         {
@@ -343,17 +356,14 @@ public sealed class ObjectAndChannelRoleBuilderContracts
         }
     }
 
-    private sealed class RecordingActorFactoryBuilder<TActor>
-        : IZLinkActorFactoryBuilder<TActor>
+    private sealed class RecordingActorFactoryBuilder<TActor> : IZLinkActorFactoryBuilder<TActor>
         where TActor : class, IZLinkActor
     {
         public string? Relocation { get; private set; }
 
-        public IZLinkActorFactoryBuilder<TActor> DisableRelocation() =>
-            Select("Disabled");
+        public IZLinkActorFactoryBuilder<TActor> DisableRelocation() => Select("Disabled");
 
-        public IZLinkActorFactoryBuilder<TActor> RecreateOnRelocation() =>
-            Select("Recreate");
+        public IZLinkActorFactoryBuilder<TActor> RecreateOnRelocation() => Select("Recreate");
 
         public IZLinkActorFactoryBuilder<TActor> PreserveStateWith<TAdapter>()
             where TAdapter : class, IZLinkActorRelocationAdapter<TActor> =>
@@ -382,21 +392,19 @@ public sealed class ObjectAndChannelRoleBuilderContracts
             return this;
         }
 
-        public IZLinkUserSpotFactoryBuilder<TSpot> ExecutionMode(
-            ZLinkUserSpotExecutionMode mode)
+        public IZLinkUserSpotFactoryBuilder<TSpot> ExecutionMode(ZLinkUserSpotExecutionMode mode)
         {
             ExecutionModeValue = mode;
             return this;
         }
 
         public IZLinkUserSpotFactoryBuilder<TSpot> RelocationCoordinationMode(
-            ZLinkSpotRelocationCoordinationMode mode) => this;
+            ZLinkSpotRelocationCoordinationMode mode
+        ) => this;
 
-        public IZLinkUserSpotFactoryBuilder<TSpot> DisableRelocation() =>
-            Select("Disabled");
+        public IZLinkUserSpotFactoryBuilder<TSpot> DisableRelocation() => Select("Disabled");
 
-        public IZLinkUserSpotFactoryBuilder<TSpot> RecreateOnRelocation() =>
-            Select("Recreate");
+        public IZLinkUserSpotFactoryBuilder<TSpot> RecreateOnRelocation() => Select("Recreate");
 
         public IZLinkUserSpotFactoryBuilder<TSpot> PreserveStateWith<TAdapter>()
             where TAdapter : class, IZLinkSpotRelocationAdapter<TSpot> =>
@@ -423,11 +431,9 @@ public sealed class ObjectAndChannelRoleBuilderContracts
             return this;
         }
 
-        public IZLinkInstanceSpotFactoryBuilder<TSpot> DisableRelocation() =>
-            Select("Disabled");
+        public IZLinkInstanceSpotFactoryBuilder<TSpot> DisableRelocation() => Select("Disabled");
 
-        public IZLinkInstanceSpotFactoryBuilder<TSpot> RecreateOnRelocation() =>
-            Select("Recreate");
+        public IZLinkInstanceSpotFactoryBuilder<TSpot> RecreateOnRelocation() => Select("Recreate");
 
         public IZLinkInstanceSpotFactoryBuilder<TSpot> PreserveStateWith<TAdapter>()
             where TAdapter : class, IZLinkSpotRelocationAdapter<TSpot> =>
@@ -464,19 +470,21 @@ public sealed class ObjectAndChannelRoleBuilderContracts
     {
         public ValueTask<PlayerActor> CreateAsync(
             IZLinkActorContext context,
-            CancellationToken cancellationToken = default) =>
-            ValueTask.FromResult(new PlayerActor());
+            CancellationToken cancellationToken = default
+        ) => ValueTask.FromResult(new PlayerActor());
     }
 
     private sealed class PlayerRelocationAdapter : IZLinkActorRelocationAdapter<PlayerActor>
     {
         public ValueTask<byte[]> CaptureAsync(
             PlayerActor actor,
-            CancellationToken cancellationToken) => ValueTask.FromResult(Array.Empty<byte>());
+            CancellationToken cancellationToken
+        ) => ValueTask.FromResult(Array.Empty<byte>());
 
         public ValueTask RestoreAsync(
             PlayerActor actor,
             ReadOnlyMemory<byte> payload,
-            CancellationToken cancellationToken) => ValueTask.CompletedTask;
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
     }
 }

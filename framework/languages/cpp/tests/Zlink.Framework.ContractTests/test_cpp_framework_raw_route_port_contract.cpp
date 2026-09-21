@@ -21,44 +21,37 @@
 
 namespace backend = zlink::framework::detail::backend;
 
-static_assert (std::is_same_v<
-               decltype (std::declval<backend::raw_route_port_t &> ().send (
-                 std::declval<const backend::raw_bytes_t &> (),
-                 std::declval<const backend::raw_message_t &> ())),
-               zlink::framework::task_t<bool>>);
-static_assert (std::is_same_v<
-               decltype (std::declval<backend::raw_route_port_t &> ().send_result (
-                 std::declval<const backend::raw_bytes_t &> (),
-                 std::declval<const backend::raw_message_t &> ())),
-               zlink::framework::task_t<zlink::submit_result_t>>);
-static_assert (std::is_same_v<
-               decltype (std::declval<backend::raw_route_port_t &> ().try_receive ()),
-               std::optional<backend::raw_received_t>>);
-static_assert (std::is_same_v<
-               decltype (std::declval<backend::raw_route_port_t &> ().request (
-                 std::declval<const backend::raw_bytes_t &> (),
-                 std::declval<const backend::raw_message_t &> (),
-                 std::chrono::milliseconds (1))),
-               zlink::framework::task_t<backend::raw_request_completion_t>>);
-static_assert (std::is_same_v<
-               decltype (std::declval<backend::raw_route_port_t &> ().reply (
-                 std::declval<const backend::raw_received_t &> (),
-                 std::declval<const backend::raw_message_t &> ())),
-               bool>);
-static_assert (std::is_same_v<
-               decltype (std::declval<backend::raw_dealer_port_t &> ().send (
-                 std::declval<const backend::raw_message_t &> ())),
-               zlink::framework::task_t<bool>>);
-static_assert (std::is_same_v<
-               decltype (std::declval<backend::raw_dealer_port_t &> ().send (
-                 std::declval<const backend::raw_message_t &> (),
-                 std::chrono::milliseconds (1))),
-               zlink::framework::task_t<zlink::submit_result_t>>);
-static_assert (std::is_same_v<
-               decltype (std::declval<backend::raw_dealer_port_t &> ().request (
-                 std::declval<const backend::raw_message_t &> (),
-                 std::chrono::milliseconds (1))),
-               zlink::framework::task_t<backend::raw_request_completion_t>>);
+static_assert (std::is_same_v<decltype (std::declval<backend::raw_route_port_t &> ().send (
+                                std::declval<const backend::raw_bytes_t &> (),
+                                std::declval<const backend::raw_message_t &> ())),
+                              zlink::framework::task_t<bool>>);
+static_assert (std::is_same_v<decltype (std::declval<backend::raw_route_port_t &> ().send_result (
+                                std::declval<const backend::raw_bytes_t &> (),
+                                std::declval<const backend::raw_message_t &> ())),
+                              zlink::framework::task_t<zlink::submit_result_t>>);
+static_assert (
+  std::is_same_v<decltype (std::declval<backend::raw_route_port_t &> ().try_receive ()),
+                 std::optional<backend::raw_received_t>>);
+static_assert (std::is_same_v<decltype (std::declval<backend::raw_route_port_t &> ().request (
+                                std::declval<const backend::raw_bytes_t &> (),
+                                std::declval<const backend::raw_message_t &> (),
+                                std::chrono::milliseconds (1))),
+                              zlink::framework::task_t<backend::raw_request_completion_t>>);
+static_assert (std::is_same_v<decltype (std::declval<backend::raw_route_port_t &> ().reply (
+                                std::declval<const backend::raw_received_t &> (),
+                                std::declval<const backend::raw_message_t &> ())),
+                              bool>);
+static_assert (std::is_same_v<decltype (std::declval<backend::raw_dealer_port_t &> ().send (
+                                std::declval<const backend::raw_message_t &> ())),
+                              zlink::framework::task_t<bool>>);
+static_assert (
+  std::is_same_v<decltype (std::declval<backend::raw_dealer_port_t &> ().send (
+                   std::declval<const backend::raw_message_t &> (), std::chrono::milliseconds (1))),
+                 zlink::framework::task_t<zlink::submit_result_t>>);
+static_assert (
+  std::is_same_v<decltype (std::declval<backend::raw_dealer_port_t &> ().request (
+                   std::declval<const backend::raw_message_t &> (), std::chrono::milliseconds (1))),
+                 zlink::framework::task_t<backend::raw_request_completion_t>>);
 
 namespace
 {
@@ -86,8 +79,7 @@ bool wait_for_monitor_event (zlink::socket_monitor_t &monitor,
 
 backend::raw_message_t request_parts ()
 {
-    return backend::raw_message_t{
-      backend::raw_bytes_t{'r', 'e', 'q', 'u', 'e', 's', 't'}};
+    return backend::raw_message_t{backend::raw_bytes_t{'r', 'e', 'q', 'u', 'e', 's', 't'}};
 }
 
 void verify_binding_completion_bypasses_handler_executor ()
@@ -125,11 +117,10 @@ void verify_binding_completion_bypasses_handler_executor ()
     backend::raw_route_port_t source_port (source), target_port (target);
     auto pending = source_port.request (target_rid.to_bytes (), request_parts (), 2s);
     std::atomic_bool observed{false};
-    zlink::framework::detail::observe_task_completion (
-      pending, [&] (const auto &settled) {
-          assert (settled && settled.value ().result == backend::raw_request_result_t::ok);
-          observed.store (true, std::memory_order_release);
-      });
+    zlink::framework::detail::observe_task_completion (pending, [&] (const auto &settled) {
+        assert (settled && settled.value ().result == backend::raw_request_result_t::ok);
+        observed.store (true, std::memory_order_release);
+    });
     std::optional<backend::raw_received_t> received;
     const auto deadline = std::chrono::steady_clock::now () + 2s;
     while (!received && std::chrono::steady_clock::now () < deadline)
@@ -205,27 +196,20 @@ void verify_ok_send_submissions_keep_unfinished_depth_at_zero ()
     dealer.set_routing_id (dealer_rid);
     for (auto *socket : {&source, &target}) {
         socket->options ().linger (0ms);
-        socket->options ().send_hwm (
-          zlink::byte_count_t::bytes (16u * 1024u * 1024u));
-        socket->options ().recv_hwm (
-          zlink::byte_count_t::bytes (16u * 1024u * 1024u));
+        socket->options ().send_hwm (zlink::byte_count_t::bytes (16u * 1024u * 1024u));
+        socket->options ().recv_hwm (zlink::byte_count_t::bytes (16u * 1024u * 1024u));
     }
     dealer.options ().linger (0ms);
-    dealer.options ().send_hwm (
-      zlink::byte_count_t::bytes (16u * 1024u * 1024u));
-    dealer.options ().recv_hwm (
-      zlink::byte_count_t::bytes (16u * 1024u * 1024u));
+    dealer.options ().send_hwm (zlink::byte_count_t::bytes (16u * 1024u * 1024u));
+    dealer.options ().recv_hwm (zlink::byte_count_t::bytes (16u * 1024u * 1024u));
     target.bind ("inproc://framework-ok-send-depth");
     auto monitor = source.monitor_open (zlink::monitor_event::connection_ready);
-    auto dealer_monitor =
-      dealer.monitor_open (zlink::monitor_event::connection_ready);
+    auto dealer_monitor = dealer.monitor_open (zlink::monitor_event::connection_ready);
     source.options ().connect_routing_id (target_rid);
     source.connect ("inproc://framework-ok-send-depth");
     dealer.connect ("inproc://framework-ok-send-depth");
-    assert (wait_for_monitor_event (
-      monitor, zlink::monitor_event::connection_ready, 2s));
-    assert (wait_for_monitor_event (
-      dealer_monitor, zlink::monitor_event::connection_ready, 2s));
+    assert (wait_for_monitor_event (monitor, zlink::monitor_event::connection_ready, 2s));
+    assert (wait_for_monitor_event (dealer_monitor, zlink::monitor_event::connection_ready, 2s));
 
     backend::raw_route_port_t source_port (source);
     backend::raw_dealer_port_t dealer_port (dealer);
@@ -238,14 +222,12 @@ void verify_ok_send_submissions_keep_unfinished_depth_at_zero ()
     };
     constexpr std::size_t submission_count = 64;
     for (std::size_t index = 0; index < submission_count; ++index) {
-        auto routed_result = source_port.send_result (
-          target_rid.to_bytes (), request_parts ());
+        auto routed_result = source_port.send_result (target_rid.to_bytes (), request_parts ());
         record_depth (routed_result.await_ready ());
         assert (routed_result.await_ready ());
         assert (routed_result.result ().value () == zlink::submit_result_t::ok);
 
-        auto routed = source_port.send (
-          target_rid.to_bytes (), request_parts ());
+        auto routed = source_port.send (target_rid.to_bytes (), request_parts ());
         record_depth (routed.await_ready ());
         assert (routed.await_ready ());
         assert (routed.result ().value ());
@@ -287,12 +269,10 @@ void verify_backpressured_send_waits_for_admission ()
     target.bind ("inproc://framework-backpressured-send-wait");
     auto monitor = source.monitor_open (zlink::monitor_event::connection_ready);
     source.connect ("inproc://framework-backpressured-send-wait");
-    assert (wait_for_monitor_event (
-      monitor, zlink::monitor_event::connection_ready, 2s));
+    assert (wait_for_monitor_event (monitor, zlink::monitor_event::connection_ready, 2s));
 
     zlink::poller_t source_poller;
-    backend::raw_dealer_port_t source_port (
-      source, nullptr, &source_poller);
+    backend::raw_dealer_port_t source_port (source, nullptr, &source_poller);
     std::optional<zlink::framework::task_t<zlink::submit_result_t>> waiting;
     for (std::size_t index = 0; index < 256 && !waiting; ++index) {
         auto sent = source_port.send (request_parts (), 2s);
@@ -306,8 +286,7 @@ void verify_backpressured_send_waits_for_admission ()
 
     target.set_receive_flow_state (zlink::receive_flow_state_t::running);
     const auto deadline = std::chrono::steady_clock::now () + 2s;
-    while (!waiting->await_ready ()
-           && std::chrono::steady_clock::now () < deadline) {
+    while (!waiting->await_ready () && std::chrono::steady_clock::now () < deadline) {
         zlink::poll_event_t event;
         (void) source_poller.wait (&event, 1, 10ms);
     }
@@ -325,19 +304,16 @@ void verify_missing_rid_is_initial_not_connected_without_wait_token ()
     router.options ().mandatory (true);
     backend::raw_route_port_t port (router);
 
-    auto request = port.request (
-      zlink::routing_id_t::from ("missing-route").to_bytes (),
-      request_parts (), 1s);
+    auto request =
+      port.request (zlink::routing_id_t::from ("missing-route").to_bytes (), request_parts (), 1s);
     assert (request.await_ready ());
     const auto &settled = request.result ();
     assert (settled);
-    assert (settled.value ().result
-            == backend::raw_request_result_t::route_unavailable);
+    assert (settled.value ().result == backend::raw_request_result_t::route_unavailable);
     assert (settled.value ().failure);
     assert (settled.value ().failure->phase
             == backend::raw_request_failure_phase_t::initial_admission);
-    assert (settled.value ().failure->submit_result
-            == zlink::submit_result_t::not_connected);
+    assert (settled.value ().failure->submit_result == zlink::submit_result_t::not_connected);
     assert (!settled.value ().failure->request_result);
     assert (settled.value ().failure->internal_errno == EHOSTUNREACH);
     // A token-bearing rejection would remain pending until a WRITABLE record.
@@ -357,16 +333,14 @@ void verify_handover_request_completion_is_replayable ()
     for (auto *socket : {&target, &source}) {
         socket->options ().linger (0ms);
         socket->options ().mandatory (true);
-        socket->options ().rid_duplicate_policy (
-          zlink::rid_duplicate_policy_t::handover);
+        socket->options ().rid_duplicate_policy (zlink::rid_duplicate_policy_t::handover);
     }
     target.bind ("inproc://framework-handover-A");
     source.bind ("inproc://framework-handover-Z");
     auto ready = source.monitor_open (zlink::monitor_event::connection_ready);
     source.options ().connect_routing_id (target_rid);
     source.connect ("inproc://framework-handover-A");
-    assert (wait_for_monitor_event (
-      ready, zlink::monitor_event::connection_ready, 2s));
+    assert (wait_for_monitor_event (ready, zlink::monitor_event::connection_ready, 2s));
     backend::raw_route_port_t source_port (source), target_port (target);
     const auto deadline = std::chrono::steady_clock::now () + 2s;
     auto pending = source_port.request (target_rid.to_bytes (), request_parts (), 2s);
@@ -387,8 +361,7 @@ void verify_handover_request_completion_is_replayable ()
     const auto &completion = pending.result ().value ();
     assert (completion.result == backend::raw_request_result_t::route_unavailable);
     assert (completion.failure);
-    assert (completion.failure->phase
-            == backend::raw_request_failure_phase_t::completion_terminal);
+    assert (completion.failure->phase == backend::raw_request_failure_phase_t::completion_terminal);
     assert (!completion.failure->submit_result);
     assert (completion.failure->request_result == zlink::request_result_t::not_connected);
     // The binding completion owner normalizes typed NOT_CONNECTED to ENOTCONN.
@@ -416,28 +389,21 @@ void verify_disconnect_rid_ends_issued_wait_token_with_enoent ()
     client.set_routing_id (client_rid);
     server.set_receive_flow_state (zlink::receive_flow_state_t::paused);
     client.options ().connect_routing_id (server_rid);
-    auto server_monitor = server.monitor_open (
-      zlink::monitor_event::connection_ready);
-    auto client_monitor = client.monitor_open (
-      zlink::monitor_event::connection_ready);
-    const std::string endpoint =
-      "inproc://framework-raw-route-wait-token-terminal";
+    auto server_monitor = server.monitor_open (zlink::monitor_event::connection_ready);
+    auto client_monitor = client.monitor_open (zlink::monitor_event::connection_ready);
+    const std::string endpoint = "inproc://framework-raw-route-wait-token-terminal";
     server.bind (endpoint);
     client.connect (endpoint);
-    assert (wait_for_monitor_event (
-      server_monitor, zlink::monitor_event::connection_ready, 2s));
-    assert (wait_for_monitor_event (
-      client_monitor, zlink::monitor_event::connection_ready, 2s));
+    assert (wait_for_monitor_event (server_monitor, zlink::monitor_event::connection_ready, 2s));
+    assert (wait_for_monitor_event (client_monitor, zlink::monitor_event::connection_ready, 2s));
 
     backend::raw_route_port_t port (client);
-    auto request = port.request (
-      server_rid.to_bytes (), request_parts (), 2s);
+    auto request = port.request (server_rid.to_bytes (), request_parts (), 2s);
     assert (!request.await_ready ());
 
     client.disconnect_rid (server_rid);
     const auto deadline = std::chrono::steady_clock::now () + 2s;
-    while (!request.await_ready ()
-           && std::chrono::steady_clock::now () < deadline) {
+    while (!request.await_ready () && std::chrono::steady_clock::now () < deadline) {
         (void) port.poll (10ms);
     }
     assert (request.await_ready ());
@@ -447,8 +413,7 @@ void verify_disconnect_rid_ends_issued_wait_token_with_enoent ()
     assert (settled.value ().failure);
     assert (settled.value ().failure->phase
             == backend::raw_request_failure_phase_t::completion_terminal);
-    assert (settled.value ().failure->submit_result
-            == zlink::submit_result_t::not_found);
+    assert (settled.value ().failure->submit_result == zlink::submit_result_t::not_found);
     assert (!settled.value ().failure->request_result);
     assert (settled.value ().failure->internal_errno == ENOENT);
     port.close ();

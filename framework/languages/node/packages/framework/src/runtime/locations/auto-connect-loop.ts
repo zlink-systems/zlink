@@ -82,19 +82,23 @@ export class ZLinkAutoConnectLoop {
     if (this.changeStampStore?.getMeshNodeChangeStamp !== undefined && !lastTickFailed) {
       try {
         const stamp = await this.changeStampStore.getMeshNodeChangeStamp(this.meshName, signal);
-        const liveOwners = this.leaseTracker === undefined
-          ? 0
-          : await this.leaseTracker.getLiveOwnerSetVersion(signal);
-        if (this.lastStamp === stamp
-          && this.lastLiveOwnerSetVersion === liveOwners
-          && this.reconciler.localPublicationReady) {
+        const liveOwners =
+          this.leaseTracker === undefined
+            ? 0
+            : await this.leaseTracker.getLiveOwnerSetVersion(signal);
+        if (
+          this.lastStamp === stamp &&
+          this.lastLiveOwnerSetVersion === liveOwners &&
+          this.reconciler.localPublicationReady
+        ) {
           return;
         }
         const tickFailed = await this.runReconcile(signal);
-        if (!tickFailed) await this.lane.run(() => {
-          this.lastStamp = stamp;
-          this.lastLiveOwnerSetVersion = liveOwners;
-        });
+        if (!tickFailed)
+          await this.lane.run(() => {
+            this.lastStamp = stamp;
+            this.lastLiveOwnerSetVersion = liveOwners;
+          });
         return;
       } catch {
         // A failed stamp read degrades to a full reconcile tick.
@@ -127,5 +131,4 @@ export class ZLinkAutoConnectLoop {
         .finally(() => this.scheduleNext());
     }, this.options.pollingIntervalMs);
   }
-
 }

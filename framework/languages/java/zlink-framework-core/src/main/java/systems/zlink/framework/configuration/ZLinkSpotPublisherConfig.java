@@ -1,8 +1,9 @@
 package systems.zlink.framework.configuration;
 
+import org.jspecify.annotations.Nullable;
+
 import java.time.Duration;
 import java.util.Optional;
-import org.jspecify.annotations.Nullable;
 
 public interface ZLinkSpotPublisherConfig {
     int sendHighWaterMark();

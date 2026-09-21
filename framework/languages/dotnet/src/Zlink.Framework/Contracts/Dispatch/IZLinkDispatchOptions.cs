@@ -30,7 +30,7 @@ public enum ZLinkDiagnosticsLevel
     Off = 0,
     Errors = 1,
     Normal = 2,
-    Detailed = 3
+    Detailed = 3,
 }
 
 public interface IZLinkDiagnosticsRuntime
@@ -52,5 +52,5 @@ public enum ZLinkUnhandledDispatchAction
     ReplyError = 0,
     LogAndDrop = 1,
     Drop = 2,
-    Throw = 3
+    Throw = 3,
 }

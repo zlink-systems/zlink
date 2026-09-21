@@ -20,7 +20,10 @@ public sealed class TypedHandlerRegistryTests
     {
         var registry = new ZlinkStreamTypedHandlerRegistry();
         var firstSubscription = registry.Add("packet", static (_, _) => ValueTask.CompletedTask);
-        using var secondSubscription = registry.Add("packet", static (_, _) => ValueTask.CompletedTask);
+        using var secondSubscription = registry.Add(
+            "packet",
+            static (_, _) => ValueTask.CompletedTask
+        );
         var snapshotBeforeRemove = registry.Snapshot("packet");
 
         firstSubscription.Dispose();

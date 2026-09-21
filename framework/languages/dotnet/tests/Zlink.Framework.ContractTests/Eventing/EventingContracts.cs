@@ -10,26 +10,31 @@ public sealed class EventingContracts
     public void Monitoring_uses_typed_status_and_standard_diagnostics_only()
     {
         var frameworkAssembly = typeof(IZLinkFrameworkRuntime).Assembly;
-        foreach (var name in new[]
-                 {
-                     "IZLinkMonitoringOptions",
-                     "IZLinkRuntimeEvent",
-                     "IZLinkRuntimeEventHandler`1",
-                     "ZLinkSocketEvent",
-                     "ZLinkSocketEventKind",
-                     "ZLinkLocationRuntimeEvent",
-                     "ZLinkSpotEvent",
-                     "ZLinkSpotTimerDiagnostic"
-                 })
+        foreach (
+            var name in new[]
+            {
+                "IZLinkMonitoringOptions",
+                "IZLinkRuntimeEvent",
+                "IZLinkRuntimeEventHandler`1",
+                "ZLinkSocketEvent",
+                "ZLinkSocketEventKind",
+                "ZLinkLocationRuntimeEvent",
+                "ZLinkSpotEvent",
+                "ZLinkSpotTimerDiagnostic",
+            }
+        )
         {
-            var type = frameworkAssembly.GetType(
-                $"Zlink.Framework.Contracts.Eventing.{name}");
+            var type = frameworkAssembly.GetType($"Zlink.Framework.Contracts.Eventing.{name}");
             Assert.True(type is null || !type.IsVisible, $"{name} must not be public.");
         }
 
         Assert.Null(typeof(ServiceCollectionExtensions).GetMethod("AddZLinkMonitoring"));
         AssertEnumValues<ZLinkDiagnosticsLevel>(
-            ("Off", 0), ("Errors", 1), ("Normal", 2), ("Detailed", 3));
+            ("Off", 0),
+            ("Errors", 1),
+            ("Normal", 2),
+            ("Detailed", 3)
+        );
     }
 
     [Fact]
@@ -51,11 +56,15 @@ public sealed class EventingContracts
 
         var healthExtension = typeof(ServiceCollectionExtensions).GetMethod(
             nameof(ServiceCollectionExtensions.AddZLinkDrainHealthCheck),
-            [typeof(Microsoft.Extensions.DependencyInjection.IHealthChecksBuilder)]);
+            [typeof(Microsoft.Extensions.DependencyInjection.IHealthChecksBuilder)]
+        );
         Assert.NotNull(healthExtension);
 
-        Assert.Null(contract.Assembly.GetType(
-            "Zlink.Framework.Contracts.Dispatch.ZLinkRuntimeMessageFlowEvent"));
+        Assert.Null(
+            contract.Assembly.GetType(
+                "Zlink.Framework.Contracts.Dispatch.ZLinkRuntimeMessageFlowEvent"
+            )
+        );
     }
 
     private static void AssertEnumValues<TEnum>(params (string Name, int Value)[] expected)
@@ -64,5 +73,6 @@ public sealed class EventingContracts
             expected,
             Enum.GetValues<TEnum>()
                 .Select(static value => (value.ToString(), Convert.ToInt32(value)))
-                .ToArray());
+                .ToArray()
+        );
 }

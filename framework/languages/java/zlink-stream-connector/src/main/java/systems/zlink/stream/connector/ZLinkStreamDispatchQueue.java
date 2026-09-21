@@ -1,12 +1,12 @@
 package systems.zlink.stream.connector;
-import java.util.Objects;
 
 import java.util.ArrayDeque;
-import java.util.HashMap;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -26,7 +26,7 @@ final class ZLinkStreamDispatchQueue {
     private long version;
 
     ZLinkStreamDispatchQueue() {
-        this(ignored -> { });
+        this(ignored -> {});
     }
 
     ZLinkStreamDispatchQueue(Consumer<ZLinkStreamError> publishError) {
@@ -44,10 +44,12 @@ final class ZLinkStreamDispatchQueue {
     }
 
     void add(String packetName, Runnable item) {
-        addAsync(packetName, () -> {
-            item.run();
-            return CompletableFuture.completedFuture(null);
-        });
+        addAsync(
+                packetName,
+                () -> {
+                    item.run();
+                    return CompletableFuture.completedFuture(null);
+                });
     }
 
     void addAsync(Supplier<CompletionStage<Void>> item) {
@@ -64,16 +66,15 @@ final class ZLinkStreamDispatchQueue {
     /**
      * Records one received packet and routes it.
      *
-     * <p>Spec 32 10: {@code receivedCount(name)} counts what arrived. It is
-     * counted here, once, at arrival - before a waiter, an immediate
-     * dispatch or a queued dispatch can take the message - so the value does
-     * not depend on who consumes it or on the dispatch mode.
+     * <p>Spec 32 10: {@code receivedCount(name)} counts what arrived. It is counted here, once, at
+     * arrival - before a waiter, an immediate dispatch or a queued dispatch can take the message -
+     * so the value does not depend on who consumes it or on the dispatch mode.
      */
     void addMessage(
-        ZLinkStreamMessage<ZLinkStreamEncodedPayload> message,
-        Supplier<CompletionStage<Void>> dispatch,
-        BooleanSupplier dispatchable,
-        boolean runImmediately) {
+            ZLinkStreamMessage<ZLinkStreamEncodedPayload> message,
+            Supplier<CompletionStage<Void>> dispatch,
+            BooleanSupplier dispatchable,
+            boolean runImmediately) {
         if (message.packetName() != null) {
             synchronized (queue) {
                 receivedCounts.merge(message.packetName(), 1, Integer::sum);
@@ -84,9 +85,10 @@ final class ZLinkStreamDispatchQueue {
             List<Waiter> candidates;
             synchronized (queue) {
                 observedVersion = version;
-                candidates = waiters.stream()
-                    .filter(waiter -> waiter.name().equals(message.packetName()))
-                    .toList();
+                candidates =
+                        waiters.stream()
+                                .filter(waiter -> waiter.name().equals(message.packetName()))
+                                .toList();
             }
             Waiter matched = null;
             Throwable predicateFailure = null;
@@ -120,9 +122,11 @@ final class ZLinkStreamDispatchQueue {
                     immediate = dispatchable.getAsBoolean();
                 } catch (Throwable error) {
                     closeMessage(message);
-                    publishError.accept(new ZLinkStreamError(
-                        ZLinkStreamErrorCode.USER_CALLBACK_FAILED,
-                        "Stream dispatchability check failed.", error));
+                    publishError.accept(
+                            new ZLinkStreamError(
+                                    ZLinkStreamErrorCode.USER_CALLBACK_FAILED,
+                                    "Stream dispatchability check failed.",
+                                    error));
                     return;
                 }
             }
@@ -131,8 +135,9 @@ final class ZLinkStreamDispatchQueue {
                     continue;
                 }
                 if (!immediate) {
-                    queue.add(new QueuedDispatch(
-                        message.packetName(), message, dispatch, dispatchable));
+                    queue.add(
+                            new QueuedDispatch(
+                                    message.packetName(), message, dispatch, dispatchable));
                     version++;
                 }
             }
@@ -144,9 +149,11 @@ final class ZLinkStreamDispatchQueue {
                     // stage, so its normal terminal close callback was never
                     // installed. Release the outer message here.
                     closeMessage(message);
-                    publishError.accept(new ZLinkStreamError(
-                        ZLinkStreamErrorCode.USER_CALLBACK_FAILED,
-                        "Stream message handler failed.", error));
+                    publishError.accept(
+                            new ZLinkStreamError(
+                                    ZLinkStreamErrorCode.USER_CALLBACK_FAILED,
+                                    "Stream message handler failed.",
+                                    error));
                 }
             }
             return;
@@ -154,18 +161,21 @@ final class ZLinkStreamDispatchQueue {
     }
 
     void awaitMessage(
-        String name,
-        Predicate<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> predicate,
-        CompletableFuture<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> result) {
+            String name,
+            Predicate<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> predicate,
+            CompletableFuture<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> result) {
         while (true) {
             long observedVersion;
             List<QueuedDispatch> candidates;
             synchronized (queue) {
                 observedVersion = version;
-                candidates = queue.stream()
-                    .filter(item -> item.message() != null
-                        && name.equals(item.packetName()))
-                    .toList();
+                candidates =
+                        queue.stream()
+                                .filter(
+                                        item ->
+                                                item.message() != null
+                                                        && name.equals(item.packetName()))
+                                .toList();
             }
             QueuedDispatch matched = null;
             Throwable predicateFailure = null;
@@ -184,8 +194,7 @@ final class ZLinkStreamDispatchQueue {
                 predicateFailure = null;
             }
             if (matched != null) {
-                ZLinkStreamMessage<ZLinkStreamEncodedPayload> found =
-                    matched.message();
+                ZLinkStreamMessage<ZLinkStreamEncodedPayload> found = matched.message();
                 if (predicateFailure != null) {
                     closeMessage(found);
                     result.completeExceptionally(predicateFailure);
@@ -215,58 +224,50 @@ final class ZLinkStreamDispatchQueue {
             version++;
         }
         queued.stream()
-            .map(QueuedDispatch::message)
-            .filter(Objects::nonNull)
-            .forEach(ZLinkStreamDispatchQueue::closeMessage);
+                .map(QueuedDispatch::message)
+                .filter(Objects::nonNull)
+                .forEach(ZLinkStreamDispatchQueue::closeMessage);
         connectionEnded();
     }
 
     /**
-     * Restarts the received counters and drops what the previous connection
-     * left unconsumed.
+     * Restarts the received counters and drops what the previous connection left unconsumed.
      *
-     * <p>Spec 32 10 puts the reference point at the moment a connection is
-     * established, so a reconnect counts from 0 again, and it clears the
-     * messages of the previous connection with the count. Keeping them would
-     * leave the two describing different connections and let {@code waitFor}
-     * hand back a packet from before the drop.
+     * <p>Spec 32 10 puts the reference point at the moment a connection is established, so a
+     * reconnect counts from 0 again, and it clears the messages of the previous connection with the
+     * count. Keeping them would leave the two describing different connections and let {@code
+     * waitFor} hand back a packet from before the drop.
      *
-     * <p>Only received messages are dropped. Queued callbacks - a state
-     * change, an error, a disconnect - belong to the connector surface, not
-     * to the receive message queue, and are still owed to the application.
-     * Waiters are not touched either: the ones of the previous connection
-     * ended with it in {@link #connectionEnded()}, and one registered since
-     * then is waiting for this connection.
+     * <p>Only received messages are dropped. Queued callbacks - a state change, an error, a
+     * disconnect - belong to the connector surface, not to the receive message queue, and are still
+     * owed to the application. Waiters are not touched either: the ones of the previous connection
+     * ended with it in {@link #connectionEnded()}, and one registered since then is waiting for
+     * this connection.
      */
     void resetForNewConnection() {
         List<QueuedDispatch> abandoned;
         synchronized (queue) {
             receivedCounts.clear();
-            abandoned = queue.stream()
-                .filter(item -> item.message() != null)
-                .toList();
+            abandoned = queue.stream().filter(item -> item.message() != null).toList();
             if (!abandoned.isEmpty()) {
                 queue.removeIf(item -> item.message() != null);
                 version++;
             }
         }
         abandoned.stream()
-            .map(QueuedDispatch::message)
-            .forEach(ZLinkStreamDispatchQueue::closeMessage);
+                .map(QueuedDispatch::message)
+                .forEach(ZLinkStreamDispatchQueue::closeMessage);
     }
 
     /**
-     * Fails every registered waiter as {@code Disconnected} because the
-     * connection it was observing has ended - a transport loss, a server
-     * close, or {@code close()}.
+     * Fails every registered waiter as {@code Disconnected} because the connection it was observing
+     * has ended - a transport loss, a server close, or {@code close()}.
      *
-     * <p>Spec 32 10.1.1: the release belongs to the ending of the
-     * connection, not to the establishment of the next one. Released here, a
-     * wait does not hang until its own timeout when no next connection comes
-     * (reconnect off, attempts spent) and does not rebind to the next one
-     * when it does. The queue and the counts stay: they are rebaselined by
-     * the next {@link #resetForNewConnection()}, not by the ending (spec 32
-     * 10).
+     * <p>Spec 32 10.1.1: the release belongs to the ending of the connection, not to the
+     * establishment of the next one. Released here, a wait does not hang until its own timeout when
+     * no next connection comes (reconnect off, attempts spent) and does not rebind to the next one
+     * when it does. The queue and the counts stay: they are rebaselined by the next {@link
+     * #resetForNewConnection()}, not by the ending (spec 32 10).
      */
     void connectionEnded() {
         List<Waiter> pending;
@@ -278,9 +279,13 @@ final class ZLinkStreamDispatchQueue {
             waiters.clear();
             version++;
         }
-        pending.forEach(waiter -> waiter.result().completeExceptionally(
-            ZLinkStreamException.disconnected(
-                "the connection that the wait observed has ended")));
+        pending.forEach(
+                waiter ->
+                        waiter.result()
+                                .completeExceptionally(
+                                        ZLinkStreamException.disconnected(
+                                                "the connection that the wait observed has"
+                                                        + " ended")));
     }
 
     int receivedCount(String packetName) {
@@ -296,23 +301,20 @@ final class ZLinkStreamDispatchQueue {
     }
 
     /**
-     * Runs the dispatchable items one after another until the queue has none
-     * left, one fails, or one hands back a stage that has not finished.
+     * Runs the dispatchable items one after another until the queue has none left, one fails, or
+     * one hands back a stage that has not finished.
      *
-     * <p>Spec 32 7 makes {@code Manual} the default so the application pumps
-     * on the thread that may touch its objects, and it runs the registered
-     * handlers in the order they were queued. Both are properties of this
-     * loop: an item runs on the thread that reached it, and the next one is
+     * <p>Spec 32 7 makes {@code Manual} the default so the application pumps on the thread that may
+     * touch its objects, and it runs the registered handlers in the order they were queued. Both
+     * are properties of this loop: an item runs on the thread that reached it, and the next one is
      * only taken once the previous one has finished.
      *
-     * <p>An item that finished on the spot - the usual case, a handler that
-     * returns without waiting for anything - is followed by the next turn of
-     * this loop. Chaining it through a continuation instead left the
-     * continuation running on the same stack, so the depth grew with the
-     * queue and a {@code Manual} queue, which grows until the pump, ran the
-     * stack out. Only an item that has not finished hands the rest of the
-     * queue to its own completion, and that resumes on the thread that
-     * completed it - the same thread the recursive chain used.
+     * <p>An item that finished on the spot - the usual case, a handler that returns without waiting
+     * for anything - is followed by the next turn of this loop. Chaining it through a continuation
+     * instead left the continuation running on the same stack, so the depth grew with the queue and
+     * a {@code Manual} queue, which grows until the pump, ran the stack out. Only an item that has
+     * not finished hands the rest of the queue to its own completion, and that resumes on the
+     * thread that completed it - the same thread the recursive chain used.
      */
     private void drainInto(CompletableFuture<Void> drained) {
         while (true) {
@@ -338,22 +340,22 @@ final class ZLinkStreamDispatchQueue {
             if (item.isDone() && !item.isCompletedExceptionally()) {
                 continue;
             }
-            item.whenComplete((ignored, error) -> {
-                if (error != null) {
-                    drained.completeExceptionally(error);
-                } else {
-                    drainInto(drained);
-                }
-            });
+            item.whenComplete(
+                    (ignored, error) -> {
+                        if (error != null) {
+                            drained.completeExceptionally(error);
+                        } else {
+                            drainInto(drained);
+                        }
+                    });
             return;
         }
     }
 
     /**
-     * Takes the first queued item that is dispatchable right now, or
-     * {@code null} when the queue holds none. A queue that changed while it
-     * was being examined is examined again, so an item added or claimed in
-     * between is neither missed nor dispatched twice.
+     * Takes the first queued item that is dispatchable right now, or {@code null} when the queue
+     * holds none. A queue that changed while it was being examined is examined again, so an item
+     * added or claimed in between is neither missed nor dispatched twice.
      */
     private QueuedDispatch takeDispatchable() {
         while (true) {
@@ -400,7 +402,7 @@ final class ZLinkStreamDispatchQueue {
 
     private boolean claimWaiter(Waiter waiter) {
         synchronized (queue) {
-            for (Iterator<Waiter> iterator = waiters.iterator(); iterator.hasNext();) {
+            for (Iterator<Waiter> iterator = waiters.iterator(); iterator.hasNext(); ) {
                 if (iterator.next() == waiter) {
                     iterator.remove();
                     version++;
@@ -418,7 +420,7 @@ final class ZLinkStreamDispatchQueue {
     }
 
     private boolean removeQueuedLocked(QueuedDispatch candidate) {
-        for (Iterator<QueuedDispatch> iterator = queue.iterator(); iterator.hasNext();) {
+        for (Iterator<QueuedDispatch> iterator = queue.iterator(); iterator.hasNext(); ) {
             if (iterator.next() == candidate) {
                 iterator.remove();
                 //  Spec 32 10: consuming does not lower the count. A
@@ -431,8 +433,7 @@ final class ZLinkStreamDispatchQueue {
         return false;
     }
 
-    private static void closeMessage(
-        ZLinkStreamMessage<ZLinkStreamEncodedPayload> message) {
+    private static void closeMessage(ZLinkStreamMessage<ZLinkStreamEncodedPayload> message) {
         try {
             message.payload().payload().close();
         } catch (RuntimeException ignored) {
@@ -441,15 +442,13 @@ final class ZLinkStreamDispatchQueue {
     }
 
     private record QueuedDispatch(
-        String packetName,
-        ZLinkStreamMessage<ZLinkStreamEncodedPayload> message,
-        Supplier<CompletionStage<Void>> action,
-        BooleanSupplier dispatchable) {
-    }
+            String packetName,
+            ZLinkStreamMessage<ZLinkStreamEncodedPayload> message,
+            Supplier<CompletionStage<Void>> action,
+            BooleanSupplier dispatchable) {}
 
     private record Waiter(
-        String name,
-        Predicate<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> predicate,
-        CompletableFuture<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> result) {
-    }
+            String name,
+            Predicate<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> predicate,
+            CompletableFuture<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> result) {}
 }

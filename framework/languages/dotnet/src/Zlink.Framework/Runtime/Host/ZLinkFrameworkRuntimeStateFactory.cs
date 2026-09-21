@@ -6,29 +6,29 @@ internal sealed class ZLinkFrameworkComponentStateFactory(
     ZLinkFrameworkRegistration registration,
     ZLinkChannelRuntimeManager channels,
     ZLinkStreamRuntimeManager streams,
-    ZLinkSpotRuntimeManager spots)
+    ZLinkSpotRuntimeManager spots
+)
 {
     public async ValueTask<ZLinkFrameworkComponentState> CreateAsync()
     {
         var effectiveProcessorCount =
             ZLinkApplicationJobQueueCapacityResolver.ResolveEffectiveProcessorCount(
                 Environment.ProcessorCount,
-                registration.WorkerOptions.MaxThreads);
+                registration.WorkerOptions.MaxThreads
+            );
         ZLinkFrameworkRegistrationValidator.ValidateInboundDispatch(
             registration,
-            effectiveProcessorCount);
-        var applicationJobQueueCapacity =
-            ZLinkApplicationJobQueueCapacityResolver.Resolve(
-                registration.InboundDispatchOptions.ApplicationJobQueueProfile,
-                registration.InboundDispatchOptions.MaxQueuedApplicationJobs,
-                effectiveProcessorCount,
-                registration.InboundDispatchOptions
-                    .ApplicationJobQueuePauseThresholdPercent,
-                registration.InboundDispatchOptions
-                    .ApplicationJobQueueResumeThresholdPercent);
-        await ZLinkSpotStartupValidator.ValidateAsync(
-                frameworkRuntime.Services,
-                registration)
+            effectiveProcessorCount
+        );
+        var applicationJobQueueCapacity = ZLinkApplicationJobQueueCapacityResolver.Resolve(
+            registration.InboundDispatchOptions.ApplicationJobQueueProfile,
+            registration.InboundDispatchOptions.MaxQueuedApplicationJobs,
+            effectiveProcessorCount,
+            registration.InboundDispatchOptions.ApplicationJobQueuePauseThresholdPercent,
+            registration.InboundDispatchOptions.ApplicationJobQueueResumeThresholdPercent
+        );
+        await ZLinkSpotStartupValidator
+            .ValidateAsync(frameworkRuntime.Services, registration)
             .ConfigureAwait(false);
 
         IZLinkBackendRuntimeContext? context = null;
@@ -38,17 +38,18 @@ internal sealed class ZLinkFrameworkComponentStateFactory(
         {
             context = backendAdapterFactory.CreateRuntimeContext();
             context.ConfigureCoreHwm(
-                ToBindingProfile(
-                    registration.InboundDispatchOptions.CoreHwmProfile),
+                ToBindingProfile(registration.InboundDispatchOptions.CoreHwmProfile),
                 registration.InboundDispatchOptions.CoreHwmMemoryLimitBytes ?? 0,
-                registration.InboundDispatchOptions.CoreHwmBudgetBytes ?? 0);
+                registration.InboundDispatchOptions.CoreHwmBudgetBytes ?? 0
+            );
             state = new ZLinkFrameworkComponentState(
                 context,
                 registration,
                 frameworkRuntime.Services,
                 frameworkRuntime.PrepareErrorSink(),
                 frameworkRuntime.ExecutionOwner,
-                applicationJobQueueCapacity);
+                applicationJobQueueCapacity
+            );
             await channels.InitializeInboundChannelsAsync(state).ConfigureAwait(false);
             await channels.InitializePublisherChannelsAsync(state).ConfigureAwait(false);
             await spots.InitializeSpotNodesAsync(state).ConfigureAwait(false);
@@ -68,12 +69,13 @@ internal sealed class ZLinkFrameworkComponentStateFactory(
             else if (context is not null)
                 await failures.CaptureAsync(context.DisposeAsync).ConfigureAwait(false);
             failures.ThrowIfAny();
-            throw new InvalidOperationException("Unreachable after startup cleanup failure propagation.");
+            throw new InvalidOperationException(
+                "Unreachable after startup cleanup failure propagation."
+            );
         }
     }
 
-    private static AutoHwmProfile ToBindingProfile(
-        ZLinkCoreHwmProfile profile) =>
+    private static AutoHwmProfile ToBindingProfile(ZLinkCoreHwmProfile profile) =>
         profile switch
         {
             ZLinkCoreHwmProfile.Compact => AutoHwmProfile.Compact,
@@ -81,7 +83,7 @@ internal sealed class ZLinkFrameworkComponentStateFactory(
             ZLinkCoreHwmProfile.Balanced => AutoHwmProfile.Balanced,
             ZLinkCoreHwmProfile.Throughput => AutoHwmProfile.Throughput,
             _ => throw new ZLinkConfigurationException(
-                $"Unknown CoreHwmProfile value '{(int)profile}'.")
+                $"Unknown CoreHwmProfile value '{(int)profile}'."
+            ),
         };
-
 }

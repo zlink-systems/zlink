@@ -1,8 +1,5 @@
 import type { RoutingId } from '../../contracts';
-import {
-  decodeRoutingId,
-  encodeRoutingIdStorageHex
-} from '../routing-id';
+import { decodeRoutingId, encodeRoutingIdStorageHex } from '../routing-id';
 
 export type ServiceWireInvalid = (message: string) => never;
 
@@ -15,10 +12,10 @@ export function encodeCanonicalServiceWireText(
 ): Buffer {
   const bytes = Buffer.from(value, 'utf8');
   if (
-    bytes.byteLength < 1
-    || bytes.byteLength > maximumBytes
-    || value.includes('\0')
-    || bytes.toString('utf8') !== value
+    bytes.byteLength < 1 ||
+    bytes.byteLength > maximumBytes ||
+    value.includes('\0') ||
+    bytes.toString('utf8') !== value
   ) {
     invalid(`${field} must be 1..${maximumBytes} canonical UTF-8 bytes without NUL.`);
   }
@@ -33,10 +30,7 @@ export function decodeCanonicalServiceWireText(
 ): string {
   const encoded = Buffer.from(bytes);
   const value = encoded.toString('utf8');
-  if (
-    value.includes('\0')
-    || !Buffer.from(value, 'utf8').equals(encoded)
-  ) {
+  if (value.includes('\0') || !Buffer.from(value, 'utf8').equals(encoded)) {
     invalid(`${field} is not canonical UTF-8 without NUL.`);
   }
   return value;

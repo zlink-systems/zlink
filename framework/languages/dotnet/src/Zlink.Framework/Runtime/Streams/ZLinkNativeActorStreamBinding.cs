@@ -6,11 +6,14 @@ internal static class ZLinkNativeActorStreamBinding
         IZLinkStream stream,
         ZLinkBackendActorRef actorRef,
         TimeSpan timeout,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        if (stream is not ZLinkManagedStream managedStream) return;
+        if (stream is not ZLinkManagedStream managedStream)
+            return;
 
-        await managedStream.BindActorAsync(actorRef, timeout, cancellationToken)
+        await managedStream
+            .BindActorAsync(actorRef, timeout, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -18,11 +21,14 @@ internal static class ZLinkNativeActorStreamBinding
         IZLinkStream stream,
         string actorId,
         TimeSpan timeout,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        if (stream is not ZLinkManagedStream managedStream) return;
+        if (stream is not ZLinkManagedStream managedStream)
+            return;
 
-        await managedStream.UnbindActorAsync(actorId, timeout, cancellationToken)
+        await managedStream
+            .UnbindActorAsync(actorId, timeout, cancellationToken)
             .ConfigureAwait(false);
     }
 }

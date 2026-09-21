@@ -28,7 +28,8 @@ internal sealed class ZLinkFrameworkOptionsBuilder : IZLinkFrameworkOptions
         {
             ZLinkRequestTimeoutValidation.Validate(
                 value,
-                nameof(SessionReplacementCallbackTimeout));
+                nameof(SessionReplacementCallbackTimeout)
+            );
             _registration.SessionReplacementCallbackTimeout = value;
         }
     }
@@ -50,8 +51,7 @@ internal sealed class ZLinkFrameworkOptionsBuilder : IZLinkFrameworkOptions
         set
         {
             if (value < 0)
-                throw new ZLinkConfigurationException(
-                    "ApplicationVersion must not be negative.");
+                throw new ZLinkConfigurationException("ApplicationVersion must not be negative.");
             _registration.ApplicationVersion = value;
         }
     }
@@ -66,7 +66,8 @@ internal sealed class ZLinkFrameworkOptionsBuilder : IZLinkFrameworkOptions
                 var size = System.Text.Encoding.UTF8.GetByteCount(value);
                 if (size is < 1 or > 255 || value.Contains('\0'))
                     throw new ZLinkConfigurationException(
-                        "MaintenanceWave must be 1 to 255 UTF-8 bytes without NUL.");
+                        "MaintenanceWave must be 1 to 255 UTF-8 bytes without NUL."
+                    );
             }
             _registration.MaintenanceWave = value;
         }
@@ -111,8 +112,7 @@ internal sealed class ZLinkFrameworkOptionsBuilder : IZLinkFrameworkOptions
         return new ZLinkFanoutChannelBuilder(channel);
     }
 
-    public IZLinkClientServerChannelRoleBuilder AddClientServerChannel(
-        string channelName)
+    public IZLinkClientServerChannelRoleBuilder AddClientServerChannel(string channelName)
     {
         if (string.IsNullOrWhiteSpace(channelName))
             throw new ZLinkConfigurationException("Channel name must not be empty.");
@@ -122,14 +122,13 @@ internal sealed class ZLinkFrameworkOptionsBuilder : IZLinkFrameworkOptions
             channel = new ZLinkChannelRegistration
             {
                 ChannelName = channelName,
-                AutoConnectType = ZLinkLocationAutoConnectType.ClientServer
+                AutoConnectType = ZLinkLocationAutoConnectType.ClientServer,
             };
             _registration.Channels.Add(channelName, channel);
         }
         else if (channel.AutoConnectType != ZLinkLocationAutoConnectType.ClientServer)
         {
-            throw new ZLinkConfigurationException(
-                $"Duplicate channel name '{channelName}'.");
+            throw new ZLinkConfigurationException($"Duplicate channel name '{channelName}'.");
         }
 
         return new ZLinkClientServerChannelRoleBuilder(channel);
@@ -154,8 +153,7 @@ internal sealed class ZLinkFrameworkOptionsBuilder : IZLinkFrameworkOptions
         ArgumentNullException.ThrowIfNull(store);
 
         if (_registration.Locations.StoreInstance is not null)
-            throw new ZLinkConfigurationException(
-                "A Location Store is already registered.");
+            throw new ZLinkConfigurationException("A Location Store is already registered.");
         _registration.Locations.StoreInstance = store;
     }
 
@@ -164,8 +162,7 @@ internal sealed class ZLinkFrameworkOptionsBuilder : IZLinkFrameworkOptions
         ArgumentNullException.ThrowIfNull(store);
 
         if (_registration.Locations.RelocationStoreInstance is not null)
-            throw new ZLinkConfigurationException(
-                "A Relocation Store is already registered.");
+            throw new ZLinkConfigurationException("A Relocation Store is already registered.");
         _registration.Locations.RelocationStoreInstance = store;
     }
 
@@ -207,7 +204,8 @@ internal sealed class ZLinkFrameworkOptionsBuilder : IZLinkFrameworkOptions
             streamNodeName,
             () => new ZLinkStreamNodeRegistration { StreamNodeName = streamNodeName },
             "STREAM node name must not be empty.",
-            $"Duplicate stream node name '{streamNodeName}'.");
+            $"Duplicate stream node name '{streamNodeName}'."
+        );
 
         return new ZLinkStreamNodeBuilder(streamNode);
     }
@@ -217,12 +215,12 @@ internal sealed class ZLinkFrameworkOptionsBuilder : IZLinkFrameworkOptions
         if (string.IsNullOrWhiteSpace(meshName))
             throw new ZLinkConfigurationException("RouteMesh name must not be empty.");
         if (_registration.SpotNodes.ContainsKey(meshName))
-            throw new ZLinkConfigurationException(
-                $"Duplicate RouteMesh name '{meshName}'.");
+            throw new ZLinkConfigurationException($"Duplicate RouteMesh name '{meshName}'.");
 
         var meshNode = ZLinkRegistrationBuilderGuard.RegisterSpotNode(
             _registration.SpotNodes,
-            meshName);
+            meshName
+        );
         meshNode.SpotMeshChannelName = meshName;
 
         return new ZLinkMeshNodeBuilder(meshNode);
@@ -230,34 +228,38 @@ internal sealed class ZLinkFrameworkOptionsBuilder : IZLinkFrameworkOptions
 
     private ZLinkChannelRegistration AddChannelRegistration(
         string channelName,
-        ZLinkLocationAutoConnectType autoConnectType)
+        ZLinkLocationAutoConnectType autoConnectType
+    )
     {
         return ZLinkRegistrationBuilderGuard.AddUnique(
             _registration.Channels,
             channelName,
-            () => new ZLinkChannelRegistration
-            {
-                ChannelName = channelName,
-                AutoConnectType = autoConnectType
-            },
+            () =>
+                new ZLinkChannelRegistration
+                {
+                    ChannelName = channelName,
+                    AutoConnectType = autoConnectType,
+                },
             "Channel name must not be empty.",
-            $"Duplicate channel name '{channelName}'.");
+            $"Duplicate channel name '{channelName}'."
+        );
     }
-
 }
 
 internal static class ZLinkRegistrationBuilderGuard
 {
     public static ZLinkSpotNodeRegistration RegisterSpotNode(
         Dictionary<string, ZLinkSpotNodeRegistration> registrations,
-        string spotNodeName)
+        string spotNodeName
+    )
     {
         return AddUnique(
             registrations,
             spotNodeName,
             () => new ZLinkSpotNodeRegistration { SpotNodeName = spotNodeName },
             "SPOT node name must not be empty.",
-            $"Duplicate spot node name '{spotNodeName}'.");
+            $"Duplicate spot node name '{spotNodeName}'."
+        );
     }
 
     public static void AddUnique<TValue>(
@@ -265,7 +267,8 @@ internal static class ZLinkRegistrationBuilderGuard
         string name,
         TValue value,
         string emptyMessage,
-        string duplicateMessage)
+        string duplicateMessage
+    )
     {
         AddUnique(registrations, name, () => value, emptyMessage, duplicateMessage);
     }
@@ -275,12 +278,15 @@ internal static class ZLinkRegistrationBuilderGuard
         string name,
         Func<TValue> create,
         string emptyMessage,
-        string duplicateMessage)
+        string duplicateMessage
+    )
     {
-        if (string.IsNullOrWhiteSpace(name)) throw new ZLinkConfigurationException(emptyMessage);
+        if (string.IsNullOrWhiteSpace(name))
+            throw new ZLinkConfigurationException(emptyMessage);
 
         var value = create();
-        if (!registrations.TryAdd(name, value)) throw new ZLinkConfigurationException(duplicateMessage);
+        if (!registrations.TryAdd(name, value))
+            throw new ZLinkConfigurationException(duplicateMessage);
 
         return value;
     }

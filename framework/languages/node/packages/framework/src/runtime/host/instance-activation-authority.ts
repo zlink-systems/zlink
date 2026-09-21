@@ -1,4 +1,7 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException  } from '../framework-errors-internal';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
 import { createHash } from 'node:crypto';
 import type {
   ZLinkLocationOwnerToken,
@@ -9,10 +12,11 @@ import type {
   ZLinkAuthorityKey,
   ZLinkAuthoritySnapshot
 } from '../locations/internal-location-contracts';
-import type { ZLinkAuthorityStore, ZLinkObjectCreationStore } from '../locations/internal-store-contracts';
-import {
-  ZLinkFrameworkException
-} from '../../contracts';
+import type {
+  ZLinkAuthorityStore,
+  ZLinkObjectCreationStore
+} from '../locations/internal-store-contracts';
+import { ZLinkFrameworkException } from '../../contracts';
 import {
   decodeServiceInstanceAuthorityPayload,
   decodeServiceReadySpotAuthority,
@@ -32,13 +36,8 @@ import type {
 } from '../foundation/service-stateful-wire-codec';
 import { routingIdsEqual } from '../routing-id';
 import { encodeAuthorityKey } from '../locations/authority-key-codec';
-import {
-  crc32c
-} from '../foundation/service-relocation-runtime';
-import {
-  putNewRelocationBlob,
-  relocationBlobReference
-} from '../locations/relocation-blob';
+import { crc32c } from '../foundation/service-relocation-runtime';
+import { putNewRelocationBlob, relocationBlobReference } from '../locations/relocation-blob';
 
 import {
   encodeInstanceActivationRecoveryEnvelope,
@@ -70,17 +69,14 @@ export interface ZLinkInstanceActivationAuthorityOptions {
   ) => void;
 }
 
-export class ZLinkInstanceActivationAuthority
-implements ServiceAsyncInstanceActivationAuthority {
+export class ZLinkInstanceActivationAuthority implements ServiceAsyncInstanceActivationAuthority {
   private readonly pending = new Map<string, PendingReservation>();
 
   constructor(private readonly options: ZLinkInstanceActivationAuthorityOptions) {}
 
   async read(target: ServiceInstanceActivationTarget): Promise<ServiceInstanceAuthorityRead> {
     const current = await this.options.store.readAuthority(authorityKey(target.targetSpotId));
-    return current.kind === 'snapshot'
-      ? readyRead(current, target)
-      : { kind: 'missing' };
+    return current.kind === 'snapshot' ? readyRead(current, target) : { kind: 'missing' };
   }
 
   async reserve(
@@ -107,11 +103,11 @@ implements ServiceAsyncInstanceActivationAuthority {
     );
     const storedRead = await relocationStore.read(stored.reference);
     if (
-      stored.reference.value.length === 0
-      || stored.expiresAt.getTime() <= stored.storeNow.getTime()
-      || storedRead.kind !== 'found'
-      || crc32c(storedRead.bytes) !== crc32c(requestBytes)
-      || !Buffer.from(storedRead.bytes).equals(requestBytes)
+      stored.reference.value.length === 0 ||
+      stored.expiresAt.getTime() <= stored.storeNow.getTime() ||
+      storedRead.kind !== 'found' ||
+      crc32c(storedRead.bytes) !== crc32c(requestBytes) ||
+      !Buffer.from(storedRead.bytes).equals(requestBytes)
     ) {
       await this.deleteOrphan(stored.reference);
       throw new Error('Relocation Store returned an invalid creation request receipt.');
@@ -154,9 +150,10 @@ implements ServiceAsyncInstanceActivationAuthority {
           }
         });
         if (reserved.kind === 'conflict' || reserved.kind === 'alreadyExists') {
-          const existingState = reserved.current.kind === 'snapshot'
-            ? decodeServiceInstanceAuthorityPayload(reserved.current.payload)?.state
-            : undefined;
+          const existingState =
+            reserved.current.kind === 'snapshot'
+              ? decodeServiceInstanceAuthorityPayload(reserved.current.payload)?.state
+              : undefined;
           if (existingState === 'closing') {
             await this.awaitClosingRelease(target, activation.deadlineUnixMs);
             continue;
@@ -176,11 +173,11 @@ implements ServiceAsyncInstanceActivationAuthority {
       throw error;
     }
     if (
-      reserved.kind === 'conflict'
-      && reserved.current.kind === 'snapshot'
-      && reserved.current.allocation.objectKind === 'instance_spot'
-      && reserved.current.allocation.stableType === target.stableType
-      && reserved.current.allocation.state === 'reserved'
+      reserved.kind === 'conflict' &&
+      reserved.current.kind === 'snapshot' &&
+      reserved.current.allocation.objectKind === 'instance_spot' &&
+      reserved.current.allocation.stableType === target.stableType &&
+      reserved.current.allocation.state === 'reserved'
     ) {
       this.options.metrics?.recordInstanceSpotClaimConflict(
         this.options.meshName,
@@ -228,22 +225,22 @@ implements ServiceAsyncInstanceActivationAuthority {
     const current = await this.options.store.readAuthority(authorityKey(target.targetSpotId));
     const projection = current.kind === 'snapshot' ? current.pendingCreation : undefined;
     if (
-      current.kind !== 'snapshot'
-      || current.allocation.state !== 'reserved'
-      || current.allocation.objectKind !== 'instance_spot'
-      || current.allocation.stableType !== target.stableType
-      || current.storeVersion.value !== pending.storeVersion
-      || current.objectGeneration !== pending.objectGeneration
-      || current.authorityOwnerGeneration !== pending.authorityOwnerGeneration
-      || current.ownerId !== pending.ownerId
-      || current.ownerLeaseGeneration !== pending.ownerLeaseGeneration
-      || current.allocation.descriptor.meshName !== pending.meshName
-      || !routingIdsEqual(current.allocation.descriptor.rid, pending.nodeRid)
-      || current.allocation.descriptorLifecycleGeneration !== pending.nodeGeneration
-      || projection?.reservationId !== pending.reservationId
-      || projection.requestContentReference !== pending.requestReference
-      || projection.requestEncodedSize !== pending.requestEncodedSize
-      || !Buffer.from(projection.requestSha256).equals(Buffer.from(pending.requestSha256))
+      current.kind !== 'snapshot' ||
+      current.allocation.state !== 'reserved' ||
+      current.allocation.objectKind !== 'instance_spot' ||
+      current.allocation.stableType !== target.stableType ||
+      current.storeVersion.value !== pending.storeVersion ||
+      current.objectGeneration !== pending.objectGeneration ||
+      current.authorityOwnerGeneration !== pending.authorityOwnerGeneration ||
+      current.ownerId !== pending.ownerId ||
+      current.ownerLeaseGeneration !== pending.ownerLeaseGeneration ||
+      current.allocation.descriptor.meshName !== pending.meshName ||
+      !routingIdsEqual(current.allocation.descriptor.rid, pending.nodeRid) ||
+      current.allocation.descriptorLifecycleGeneration !== pending.nodeGeneration ||
+      projection?.reservationId !== pending.reservationId ||
+      projection.requestContentReference !== pending.requestReference ||
+      projection.requestEncodedSize !== pending.requestEncodedSize ||
+      !Buffer.from(projection.requestSha256).equals(Buffer.from(pending.requestSha256))
     ) {
       throw new Error('Pending Instance activation recovery fence is stale.');
     }
@@ -259,9 +256,7 @@ implements ServiceAsyncInstanceActivationAuthority {
         ownerId: current.ownerId,
         leaseGeneration: current.ownerLeaseGeneration
       },
-      requestReference: relocationBlobReference(
-        projection.requestContentReference
-      ),
+      requestReference: relocationBlobReference(projection.requestContentReference),
       requestSha256: Buffer.from(projection.requestSha256),
       requestEncodedSize: Number(projection.requestEncodedSize)
     });
@@ -274,13 +269,7 @@ implements ServiceAsyncInstanceActivationAuthority {
     spot: ServiceSpotState
   ): Promise<{ readonly kind: 'committed' | 'lost'; readonly route: ServiceInstanceRouteFence }> {
     const pending = this.requirePending(reservation);
-    requireCommitIdentity(
-      target,
-      reservation,
-      pending.creating,
-      spot,
-      this.options.meshName
-    );
+    requireCommitIdentity(target, reservation, pending.creating, spot, this.options.meshName);
     let result;
     try {
       result = await this.options.store.commit({
@@ -348,16 +337,16 @@ implements ServiceAsyncInstanceActivationAuthority {
     }
     const decoded = decodeServiceReadySpotAuthority(current.payload);
     if (
-      decoded?.kind !== 'instance_spot'
-      || decoded.spotId !== target.targetSpotId
-      || decoded.stableType !== target.stableType
-      || current.allocation.state !== 'active'
-      || current.objectGeneration !== route.objectGeneration
-      || current.authorityOwnerGeneration !== route.authorityOwnerGeneration
-      || current.ownerId !== route.ownerId
-      || current.ownerLeaseGeneration !== route.leaseGeneration
-      || current.allocation.descriptorLifecycleGeneration !== route.targetNodeGeneration
-      || !routingIdsEqual(current.allocation.descriptor.rid, route.targetNodeRid)
+      decoded?.kind !== 'instance_spot' ||
+      decoded.spotId !== target.targetSpotId ||
+      decoded.stableType !== target.stableType ||
+      current.allocation.state !== 'active' ||
+      current.objectGeneration !== route.objectGeneration ||
+      current.authorityOwnerGeneration !== route.authorityOwnerGeneration ||
+      current.ownerId !== route.ownerId ||
+      current.ownerLeaseGeneration !== route.leaseGeneration ||
+      current.allocation.descriptorLifecycleGeneration !== route.targetNodeGeneration ||
+      !routingIdsEqual(current.allocation.descriptor.rid, route.targetNodeRid)
     ) {
       throw new Error('Instance activation authority changed before inbox release.');
     }
@@ -398,30 +387,26 @@ implements ServiceAsyncInstanceActivationAuthority {
     const completedPayload = decodeServiceReadySpotAuthority(completed.payload);
     const completedRecovery = completedPayload?.activationRecovery;
     if (
-      completedPayload?.kind !== 'instance_spot'
-      || completedRecovery === undefined
-      || completedRecovery.replayCursor !== completedRecovery.inboxSequence
+      completedPayload?.kind !== 'instance_spot' ||
+      completedRecovery === undefined ||
+      completedRecovery.replayCursor !== completedRecovery.inboxSequence
     ) {
       throw new Error('Instance activation terminal completion was not durably recorded.');
     }
-    const stored = await this.options.store.compareExchangeAuthority(
-      key,
-      completed.storeVersion,
-      {
-        kind: 'put',
-        generationTransition: 'preserve',
-        payload: encodeServiceInstanceAuthorityPayload({
-          state: 'ready',
-          stableType: completedPayload.stableType,
-          spotId: completedPayload.spotId,
-          ownerId: completedPayload.ownerId,
-          ownerLeaseGeneration: completedPayload.ownerLeaseGeneration,
-          ownerMeshName: completedPayload.ownerMeshName,
-          ownerNodeRid: completedPayload.ownerNodeRid,
-          ownerNodeGeneration: completedPayload.ownerNodeGeneration
-        })
-      }
-    );
+    const stored = await this.options.store.compareExchangeAuthority(key, completed.storeVersion, {
+      kind: 'put',
+      generationTransition: 'preserve',
+      payload: encodeServiceInstanceAuthorityPayload({
+        state: 'ready',
+        stableType: completedPayload.stableType,
+        spotId: completedPayload.spotId,
+        ownerId: completedPayload.ownerId,
+        ownerLeaseGeneration: completedPayload.ownerLeaseGeneration,
+        ownerMeshName: completedPayload.ownerMeshName,
+        ownerNodeRid: completedPayload.ownerNodeRid,
+        ownerNodeGeneration: completedPayload.ownerNodeGeneration
+      })
+    });
     if (stored.kind !== 'stored') {
       throw new Error(`Instance activation inbox release failed: ${stored.kind}.`);
     }
@@ -480,8 +465,8 @@ implements ServiceAsyncInstanceActivationAuthority {
       const current = await this.options.store.readAuthority(key);
       if (current.kind === 'snapshot') {
         if (
-          current.allocation.objectKind !== 'instance_spot'
-          || current.allocation.stableType !== target.stableType
+          current.allocation.objectKind !== 'instance_spot' ||
+          current.allocation.stableType !== target.stableType
         ) {
           throw new Error('Concurrent Instance activation resolved to a different Spot type.');
         }
@@ -509,10 +494,10 @@ implements ServiceAsyncInstanceActivationAuthority {
       if (current.kind !== 'snapshot') return;
       const decoded = decodeServiceInstanceAuthorityPayload(current.payload);
       if (
-        current.allocation.objectKind !== 'instance_spot'
-        || current.allocation.stableType !== target.stableType
-        || decoded?.kind !== 'instance_spot'
-        || decoded.spotId !== target.targetSpotId
+        current.allocation.objectKind !== 'instance_spot' ||
+        current.allocation.stableType !== target.stableType ||
+        decoded?.kind !== 'instance_spot' ||
+        decoded.spotId !== target.targetSpotId
       ) {
         throw new Error('Instance authority changed to a different Spot while closing.');
       }
@@ -526,10 +511,7 @@ implements ServiceAsyncInstanceActivationAuthority {
 
   private requirePending(reservation: ServiceInstanceActivationReservation): PendingReservation {
     const pending = this.pending.get(reservation.token);
-    if (
-      pending === undefined
-      || pending.creating.objectGeneration !== reservation.attempt
-    ) {
+    if (pending === undefined || pending.creating.objectGeneration !== reservation.attempt) {
       throw new Error('Instance activation reservation is stale.');
     }
     return pending;
@@ -543,18 +525,18 @@ function readyRead(
   const decoded = decodeServiceReadySpotAuthority(snapshot.payload);
   const creating = decodeServiceInstanceAuthorityPayload(snapshot.payload);
   if (
-    creating?.state === 'coldActivating'
-    && snapshot.allocation.objectKind === 'instance_spot'
-    && snapshot.allocation.state === 'reserved'
-    && creating.stableType === target.stableType
-    && creating.spotId === target.targetSpotId
-    && creating.ownerId === snapshot.ownerId
-    && creating.ownerLeaseGeneration === snapshot.ownerLeaseGeneration
-    && creating.ownerMeshName === snapshot.allocation.descriptor.meshName
-    && creating.ownerNodeGeneration === snapshot.allocation.descriptorLifecycleGeneration
-    && routingIdsEqual(creating.ownerNodeRid, snapshot.allocation.descriptor.rid)
-    && routingIdsEqual(target.targetNodeRid, snapshot.allocation.descriptor.rid)
-    && target.targetNodeGeneration === snapshot.allocation.descriptorLifecycleGeneration
+    creating?.state === 'coldActivating' &&
+    snapshot.allocation.objectKind === 'instance_spot' &&
+    snapshot.allocation.state === 'reserved' &&
+    creating.stableType === target.stableType &&
+    creating.spotId === target.targetSpotId &&
+    creating.ownerId === snapshot.ownerId &&
+    creating.ownerLeaseGeneration === snapshot.ownerLeaseGeneration &&
+    creating.ownerMeshName === snapshot.allocation.descriptor.meshName &&
+    creating.ownerNodeGeneration === snapshot.allocation.descriptorLifecycleGeneration &&
+    routingIdsEqual(creating.ownerNodeRid, snapshot.allocation.descriptor.rid) &&
+    routingIdsEqual(target.targetNodeRid, snapshot.allocation.descriptor.rid) &&
+    target.targetNodeGeneration === snapshot.allocation.descriptorLifecycleGeneration
   ) {
     return {
       kind: 'creating',
@@ -563,18 +545,18 @@ function readyRead(
     };
   }
   if (
-    decoded?.kind !== 'instance_spot'
-    || decoded.stableType !== target.stableType
-    || decoded.spotId !== target.targetSpotId
-    || snapshot.allocation.objectKind !== 'instance_spot'
-    || snapshot.allocation.state !== 'active'
-    || decoded.ownerId !== snapshot.ownerId
-    || decoded.ownerLeaseGeneration !== snapshot.ownerLeaseGeneration
-    || decoded.ownerMeshName !== snapshot.allocation.descriptor.meshName
-    || decoded.ownerNodeGeneration !== snapshot.allocation.descriptorLifecycleGeneration
-    || !routingIdsEqual(decoded.ownerNodeRid, snapshot.allocation.descriptor.rid)
-    || !routingIdsEqual(target.targetNodeRid, snapshot.allocation.descriptor.rid)
-    || target.targetNodeGeneration !== snapshot.allocation.descriptorLifecycleGeneration
+    decoded?.kind !== 'instance_spot' ||
+    decoded.stableType !== target.stableType ||
+    decoded.spotId !== target.targetSpotId ||
+    snapshot.allocation.objectKind !== 'instance_spot' ||
+    snapshot.allocation.state !== 'active' ||
+    decoded.ownerId !== snapshot.ownerId ||
+    decoded.ownerLeaseGeneration !== snapshot.ownerLeaseGeneration ||
+    decoded.ownerMeshName !== snapshot.allocation.descriptor.meshName ||
+    decoded.ownerNodeGeneration !== snapshot.allocation.descriptorLifecycleGeneration ||
+    !routingIdsEqual(decoded.ownerNodeRid, snapshot.allocation.descriptor.rid) ||
+    !routingIdsEqual(target.targetNodeRid, snapshot.allocation.descriptor.rid) ||
+    target.targetNodeGeneration !== snapshot.allocation.descriptorLifecycleGeneration
   ) {
     return { kind: 'missing' };
   }
@@ -587,16 +569,16 @@ function readyExisting(
 ): Extract<ServiceInstanceAuthorityRead, { readonly kind: 'ready' }> {
   const decoded = decodeServiceReadySpotAuthority(snapshot.payload);
   if (
-    decoded?.kind !== 'instance_spot'
-    || decoded.stableType !== target.stableType
-    || decoded.spotId !== target.targetSpotId
-    || snapshot.allocation.objectKind !== 'instance_spot'
-    || snapshot.allocation.state !== 'active'
-    || decoded.ownerId !== snapshot.ownerId
-    || decoded.ownerLeaseGeneration !== snapshot.ownerLeaseGeneration
-    || decoded.ownerMeshName !== snapshot.allocation.descriptor.meshName
-    || decoded.ownerNodeGeneration !== snapshot.allocation.descriptorLifecycleGeneration
-    || !routingIdsEqual(decoded.ownerNodeRid, snapshot.allocation.descriptor.rid)
+    decoded?.kind !== 'instance_spot' ||
+    decoded.stableType !== target.stableType ||
+    decoded.spotId !== target.targetSpotId ||
+    snapshot.allocation.objectKind !== 'instance_spot' ||
+    snapshot.allocation.state !== 'active' ||
+    decoded.ownerId !== snapshot.ownerId ||
+    decoded.ownerLeaseGeneration !== snapshot.ownerLeaseGeneration ||
+    decoded.ownerMeshName !== snapshot.allocation.descriptor.meshName ||
+    decoded.ownerNodeGeneration !== snapshot.allocation.descriptorLifecycleGeneration ||
+    !routingIdsEqual(decoded.ownerNodeRid, snapshot.allocation.descriptor.rid)
   ) {
     throw new Error('Existing Instance authority is not a matching Ready allocation.');
   }
@@ -619,18 +601,18 @@ function requireCommitIdentity(
   meshName: string
 ): void {
   if (
-    creating.allocation.state !== 'reserved'
-    || creating.allocation.objectKind !== 'instance_spot'
-    || creating.allocation.stableType !== target.stableType
-    || creating.objectGeneration !== reservation.attempt
-    || !routingIdsEqual(creating.allocation.descriptor.rid, target.targetNodeRid)
-    || creating.allocation.descriptor.meshName !== meshName
-    || creating.allocation.descriptorLifecycleGeneration !== target.targetNodeGeneration
-    || spot.kind !== 'instance'
-    || spot.stableType !== target.stableType
-    || spot.ref.spotId !== target.targetSpotId
-    || spot.ref.generation !== reservation.attempt
-    || spot.authorityOwnerGeneration !== creating.authorityOwnerGeneration
+    creating.allocation.state !== 'reserved' ||
+    creating.allocation.objectKind !== 'instance_spot' ||
+    creating.allocation.stableType !== target.stableType ||
+    creating.objectGeneration !== reservation.attempt ||
+    !routingIdsEqual(creating.allocation.descriptor.rid, target.targetNodeRid) ||
+    creating.allocation.descriptor.meshName !== meshName ||
+    creating.allocation.descriptorLifecycleGeneration !== target.targetNodeGeneration ||
+    spot.kind !== 'instance' ||
+    spot.stableType !== target.stableType ||
+    spot.ref.spotId !== target.targetSpotId ||
+    spot.ref.generation !== reservation.attempt ||
+    spot.authorityOwnerGeneration !== creating.authorityOwnerGeneration
   ) {
     throw new Error('Instance activation Ready identity does not match its exact reservation.');
   }

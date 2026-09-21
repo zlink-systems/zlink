@@ -1,32 +1,32 @@
 package systems.zlink.stream.connector;
-import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import org.junit.jupiter.api.Test;
+
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.actors.ActorRefSnapshot;
+
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import org.junit.jupiter.api.Test;
-import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.messaging.Message;
-import systems.zlink.framework.actors.ActorRefSnapshot;
 
 final class ZLinkStreamJsonTest {
     @Test
     void frameworkActorReferencesRoundTripThroughDefaultJsonCodec() {
-        ActorRefSnapshot expected = new ActorRefSnapshot(
-            "courier-a",
-            7L,
-            "courier-mesh",
-            RoutingId.from(new byte[] {0, 65, 66}));
+        ActorRefSnapshot expected =
+                new ActorRefSnapshot(
+                        "courier-a", 7L, "courier-mesh", RoutingId.from(new byte[] {0, 65, 66}));
 
-        ActorRefSnapshot actual = ZLinkStreamJson.decode(
-            ZLinkStreamJson.encode("actor-ref", expected),
-            ActorRefSnapshot.class);
+        ActorRefSnapshot actual =
+                ZLinkStreamJson.decode(
+                        ZLinkStreamJson.encode("actor-ref", expected), ActorRefSnapshot.class);
 
         assertEquals(expected, actual);
     }
@@ -35,37 +35,36 @@ final class ZLinkStreamJsonTest {
     void javaTimeValuesRoundTripThroughDefaultJsonCodec() {
         Instant expected = Instant.parse("2026-08-03T05:00:00.123456Z");
 
-        TimestampedPayload actual = ZLinkStreamJson.decode(
-            ZLinkStreamJson.encode("timestamped", new TimestampedPayload(expected)),
-            TimestampedPayload.class);
+        TimestampedPayload actual =
+                ZLinkStreamJson.decode(
+                        ZLinkStreamJson.encode("timestamped", new TimestampedPayload(expected)),
+                        TimestampedPayload.class);
 
         assertEquals(expected, actual.occurredAt());
     }
 
     @Test
     void frameworkJsonProfileWritesInt64AsCanonicalDecimalString() {
-        ZLinkStreamEncodedPayload encoded = ZLinkStreamJson.encode(
-            "counter", new LongPayload(42L));
+        ZLinkStreamEncodedPayload encoded = ZLinkStreamJson.encode("counter", new LongPayload(42L));
 
         assertEquals(
-            "{\"value\":\"42\"}",
-            new String(encoded.payload().toByteArray(), StandardCharsets.UTF_8));
-        assertEquals(
-            42L,
-            ZLinkStreamJson.decode(encoded, LongPayload.class).value());
+                "{\"value\":\"42\"}",
+                new String(encoded.payload().toByteArray(), StandardCharsets.UTF_8));
+        assertEquals(42L, ZLinkStreamJson.decode(encoded, LongPayload.class).value());
     }
 
     @Test
     void frameworkJsonProfileRejectsNumericInt64() {
-        ZLinkStreamEncodedPayload numeric = new ZLinkStreamEncodedPayload(
-            "counter",
-            Message.from("{\"value\":42}".getBytes(StandardCharsets.UTF_8)),
-            Map.of(),
-            ZLinkStreamCodec.JSON);
+        ZLinkStreamEncodedPayload numeric =
+                new ZLinkStreamEncodedPayload(
+                        "counter",
+                        Message.from("{\"value\":42}".getBytes(StandardCharsets.UTF_8)),
+                        Map.of(),
+                        ZLinkStreamCodec.JSON);
 
         assertThrows(
-            IllegalArgumentException.class,
-            () -> ZLinkStreamJson.decode(numeric, LongPayload.class));
+                IllegalArgumentException.class,
+                () -> ZLinkStreamJson.decode(numeric, LongPayload.class));
     }
 
     @Test
@@ -80,27 +79,29 @@ final class ZLinkStreamJsonTest {
 
     @Test
     void typedOnUsesConnectorNameResolver() {
-        FakeConnector connector = new FakeConnector(new ZLinkStreamConnectorOptions(
-            URI.create("tcp://127.0.0.1:1"),
-            ZLinkStreamDispatchMode.MANUAL,
-            Duration.ofSeconds(1),
-            1,
-            Duration.ofSeconds(1),
-            64 * 1024,
-            true,
-            Duration.ofSeconds(1),
-            Duration.ofSeconds(5),
-            true,
-            Duration.ofMillis(250),
-            Duration.ofSeconds(5),
-            2.0,
-            false,
-            payloadType -> "resolved." + payloadType.getSimpleName()));
+        FakeConnector connector =
+                new FakeConnector(
+                        new ZLinkStreamConnectorOptions(
+                                URI.create("tcp://127.0.0.1:1"),
+                                ZLinkStreamDispatchMode.MANUAL,
+                                Duration.ofSeconds(1),
+                                1,
+                                Duration.ofSeconds(1),
+                                64 * 1024,
+                                true,
+                                Duration.ofSeconds(1),
+                                Duration.ofSeconds(5),
+                                true,
+                                Duration.ofMillis(250),
+                                Duration.ofSeconds(5),
+                                2.0,
+                                false,
+                                payloadType -> "resolved." + payloadType.getSimpleName()));
 
         ZLinkStreamJson.on(
-            connector,
-            AnnotatedPayload.class,
-            message -> CompletableFuture.completedFuture(null));
+                connector,
+                AnnotatedPayload.class,
+                message -> CompletableFuture.completedFuture(null));
 
         assertEquals("resolved.AnnotatedPayload", connector.handlerName);
     }
@@ -110,14 +111,21 @@ final class ZLinkStreamJsonTest {
         FakeConnector connector = new FakeConnector(optionsWithCodec());
 
         CompletionStage<ZLinkStreamMessage<AnnotatedPayload>> pending =
-            connector.waitFor("custom.packet")
-                .timeout(Duration.ofSeconds(1))
-                .submit(AnnotatedPayload.class);
+                connector
+                        .waitFor("custom.packet")
+                        .timeout(Duration.ofSeconds(1))
+                        .submit(AnnotatedPayload.class);
 
-        connector.handler.handleAsync(new ZLinkStreamMessage<>(
-            "custom.packet",
-            ZLinkStreamJson.encode("custom.packet", new AnnotatedPayload("match")),
-            Map.of())).toCompletableFuture().join();
+        connector
+                .handler
+                .handleAsync(
+                        new ZLinkStreamMessage<>(
+                                "custom.packet",
+                                ZLinkStreamJson.encode(
+                                        "custom.packet", new AnnotatedPayload("match")),
+                                Map.of()))
+                .toCompletableFuture()
+                .join();
 
         assertEquals("match", pending.toCompletableFuture().get().payload().value());
     }
@@ -127,13 +135,18 @@ final class ZLinkStreamJsonTest {
         FakeConnector connector = new FakeConnector(optionsWithCodec());
 
         CompletionStage<ZLinkStreamMessage<AnnotatedPayload>> pending =
-            connector.waitFor("custom.packet")
-                .submit(AnnotatedPayload.class);
+                connector.waitFor("custom.packet").submit(AnnotatedPayload.class);
 
-        connector.handler.handleAsync(new ZLinkStreamMessage<>(
-            "custom.packet",
-            ZLinkStreamJson.encode("custom.packet", new AnnotatedPayload("match")),
-            Map.of())).toCompletableFuture().join();
+        connector
+                .handler
+                .handleAsync(
+                        new ZLinkStreamMessage<>(
+                                "custom.packet",
+                                ZLinkStreamJson.encode(
+                                        "custom.packet", new AnnotatedPayload("match")),
+                                Map.of()))
+                .toCompletableFuture()
+                .join();
 
         assertEquals("match", pending.toCompletableFuture().get().payload().value());
     }
@@ -142,11 +155,14 @@ final class ZLinkStreamJsonTest {
     void encodedRequestCanDecodeTypedReplyWithConfiguredCodec() throws Exception {
         FakeConnector connector = new FakeConnector(optionsWithCodec());
 
-        AnnotatedPayload reply = connector
-            .request(ZLinkStreamJson.encode("custom.packet", new AnnotatedPayload("hello")))
-            .submit(AnnotatedPayload.class)
-            .toCompletableFuture()
-            .get();
+        AnnotatedPayload reply =
+                connector
+                        .request(
+                                ZLinkStreamJson.encode(
+                                        "custom.packet", new AnnotatedPayload("hello")))
+                        .submit(AnnotatedPayload.class)
+                        .toCompletableFuture()
+                        .get();
 
         assertEquals("custom.packet", connector.requested.packetName());
         assertEquals(ZLinkStreamCodec.JSON, connector.requested.codec());
@@ -158,12 +174,18 @@ final class ZLinkStreamJsonTest {
         FakeConnector connector = new FakeConnector(optionsWithCodec());
 
         CompletionStage<ZLinkStreamMessage<AnnotatedPayload>> pending =
-            connector.waitFor("custom.packet").submit(AnnotatedPayload.class);
+                connector.waitFor("custom.packet").submit(AnnotatedPayload.class);
 
-        connector.handler.handleAsync(new ZLinkStreamMessage<>(
-            "custom.packet",
-            ZLinkStreamJson.encode("custom.packet", new AnnotatedPayload("match")),
-            Map.of())).toCompletableFuture().join();
+        connector
+                .handler
+                .handleAsync(
+                        new ZLinkStreamMessage<>(
+                                "custom.packet",
+                                ZLinkStreamJson.encode(
+                                        "custom.packet", new AnnotatedPayload("match")),
+                                Map.of()))
+                .toCompletableFuture()
+                .join();
 
         assertEquals("match", pending.toCompletableFuture().get().payload().value());
     }
@@ -173,57 +195,69 @@ final class ZLinkStreamJsonTest {
         FakeConnector connector = new FakeConnector(optionsWithCodec());
 
         CompletionStage<ZLinkStreamMessage<AnnotatedPayload>> pending =
-            connector.waitFor("custom.packet")
-                .where(AnnotatedPayload.class, message -> message.payload().value().equals("match"))
-                .submit(AnnotatedPayload.class);
+                connector
+                        .waitFor("custom.packet")
+                        .where(
+                                AnnotatedPayload.class,
+                                message -> message.payload().value().equals("match"))
+                        .submit(AnnotatedPayload.class);
 
-        connector.handler.handleAsync(new ZLinkStreamMessage<>(
-            "custom.packet",
-            ZLinkStreamJson.encode("custom.packet", new AnnotatedPayload("skip")),
-            Map.of())).toCompletableFuture().join();
-        connector.handler.handleAsync(new ZLinkStreamMessage<>(
-            "custom.packet",
-            ZLinkStreamJson.encode("custom.packet", new AnnotatedPayload("match")),
-            Map.of())).toCompletableFuture().join();
+        connector
+                .handler
+                .handleAsync(
+                        new ZLinkStreamMessage<>(
+                                "custom.packet",
+                                ZLinkStreamJson.encode(
+                                        "custom.packet", new AnnotatedPayload("skip")),
+                                Map.of()))
+                .toCompletableFuture()
+                .join();
+        connector
+                .handler
+                .handleAsync(
+                        new ZLinkStreamMessage<>(
+                                "custom.packet",
+                                ZLinkStreamJson.encode(
+                                        "custom.packet", new AnnotatedPayload("match")),
+                                Map.of()))
+                .toCompletableFuture()
+                .join();
 
         assertEquals("match", pending.toCompletableFuture().get().payload().value());
     }
 
     private static ZLinkStreamConnectorOptions options() {
         return new ZLinkStreamConnectorOptions(
-            URI.create("tcp://127.0.0.1:1"),
-            ZLinkStreamDispatchMode.MANUAL,
-            Duration.ofSeconds(1),
-            1);
+                URI.create("tcp://127.0.0.1:1"),
+                ZLinkStreamDispatchMode.MANUAL,
+                Duration.ofSeconds(1),
+                1);
     }
 
     private static ZLinkStreamConnectorOptions optionsWithCodec() {
         return new ZLinkStreamConnectorOptions(
-            URI.create("tcp://127.0.0.1:1"),
-            ZLinkStreamDispatchMode.MANUAL,
-            Duration.ofSeconds(1),
-            1,
-            Duration.ofSeconds(1),
-            64 * 1024,
-            true,
-            Duration.ofSeconds(1),
-            Duration.ofSeconds(5),
-            true,
-            Duration.ofMillis(250),
-            Duration.ofSeconds(5),
-            2.0,
-            ZLinkStreamJson.codec());
+                URI.create("tcp://127.0.0.1:1"),
+                ZLinkStreamDispatchMode.MANUAL,
+                Duration.ofSeconds(1),
+                1,
+                Duration.ofSeconds(1),
+                64 * 1024,
+                true,
+                Duration.ofSeconds(1),
+                Duration.ofSeconds(5),
+                true,
+                Duration.ofMillis(250),
+                Duration.ofSeconds(5),
+                2.0,
+                ZLinkStreamJson.codec());
     }
 
     @ZLinkStreamPacketName("custom.packet")
-    private record AnnotatedPayload(String value) {
-    }
+    private record AnnotatedPayload(String value) {}
 
-    private record TimestampedPayload(Instant occurredAt) {
-    }
+    private record TimestampedPayload(Instant occurredAt) {}
 
-    private record LongPayload(long value) {
-    }
+    private record LongPayload(long value) {}
 
     private static final class FakeConnector implements ZLinkStreamConnector {
         private final ZLinkStreamConnectorOptions options;
@@ -313,26 +347,25 @@ final class ZLinkStreamJsonTest {
 
         @Override
         public AutoCloseable on(
-            String name,
-            ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload> handler) {
+                String name, ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload> handler) {
             handlerName = name;
             this.handler = handler;
-            return () -> { };
+            return () -> {};
         }
 
         @Override
         public AutoCloseable onErrorReceived(ZLinkStreamErrorHandler handler) {
-            return () -> { };
+            return () -> {};
         }
 
         @Override
         public AutoCloseable onDisconnected(ZLinkStreamDisconnectedHandler handler) {
-            return () -> { };
+            return () -> {};
         }
 
         @Override
         public AutoCloseable onConnectionStateChanged(ZLinkStreamConnectionStateHandler handler) {
-            return () -> { };
+            return () -> {};
         }
 
         private static ZLinkStreamLifecycleCall completedLifecycleCall() {
@@ -396,7 +429,7 @@ final class ZLinkStreamJsonTest {
         @Override
         public CompletionStage<ZLinkStreamEncodedPayload> submit() {
             return CompletableFuture.completedFuture(
-                ZLinkStreamJson.encode("custom.packet", new AnnotatedPayload("reply")));
+                    ZLinkStreamJson.encode("custom.packet", new AnnotatedPayload("reply")));
         }
 
         @Override

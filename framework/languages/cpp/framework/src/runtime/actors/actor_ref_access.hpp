@@ -20,8 +20,7 @@ class actor_ref_access_t final
                              std::uint64_t generation,
                              std::string mesh_name = {})
     {
-        actor_ref_t result (actor_id_t (std::move (actor_id)), generation,
-                            std::move (mesh_name),
+        actor_ref_t result (actor_id_t (std::move (actor_id)), generation, std::move (mesh_name),
                             std::move (node_rid));
         result._actor_type = std::move (actor_type);
         return result;
@@ -32,8 +31,7 @@ class actor_ref_access_t final
         return actor._actor_type;
     }
 
-    static actor_ref_t with_actor_type (const actor_ref_t &actor,
-                                        std::string actor_type)
+    static actor_ref_t with_actor_type (const actor_ref_t &actor, std::string actor_type)
     {
         actor_ref_t result = actor;
         result._actor_type = std::move (actor_type);

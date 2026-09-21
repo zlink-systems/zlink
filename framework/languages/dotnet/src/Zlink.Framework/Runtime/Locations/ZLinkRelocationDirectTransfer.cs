@@ -1,6 +1,6 @@
+using Zlink.Framework.Runtime.Execution;
+using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Service;
-using Zlink.Framework.Runtime.Execution;
-using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Locations;
 
@@ -20,8 +20,7 @@ internal sealed class ZLinkRelocationTransferPayload
     {
         _encoded = encoded;
         ChunkBytes = chunkBytes;
-        ChunkCount = (int)(((long)encoded.Length + chunkBytes - 1)
-                           / chunkBytes);
+        ChunkCount = (int)(((long)encoded.Length + chunkBytes - 1) / chunkBytes);
         ChecksumCrc32c = ZLinkCrc32C.Compute(encoded);
     }
 
@@ -43,37 +42,36 @@ internal sealed class ZLinkRelocationTransferPayload
     /// </summary>
     internal static ZLinkRelocationTransferPayload Create(
         ZLinkRelocationEnvelope envelope,
-        long effectiveChunkLimit)
+        long effectiveChunkLimit
+    )
     {
         ArgumentNullException.ThrowIfNull(envelope);
         if (effectiveChunkLimit <= 0)
             throw new ArgumentOutOfRangeException(nameof(effectiveChunkLimit));
         var encoded = EncodeEnvelope(envelope);
         if (encoded.LongLength == 0)
-            throw new InvalidOperationException(
-                "The relocation logical stream is empty.");
+            throw new InvalidOperationException("The relocation logical stream is empty.");
         var chunkBytes = Math.Min(
             effectiveChunkLimit,
-            ZLinkServiceWireCodec.RelocationChunkBytesBound);
+            ZLinkServiceWireCodec.RelocationChunkBytesBound
+        );
         var minimumChunkBytes =
-            (encoded.LongLength
-             + ZLinkServiceWireCodec.RelocationChunkCountBound - 1)
+            (encoded.LongLength + ZLinkServiceWireCodec.RelocationChunkCountBound - 1)
             / ZLinkServiceWireCodec.RelocationChunkCountBound;
         chunkBytes = Math.Max(chunkBytes, minimumChunkBytes);
         if (chunkBytes > ZLinkServiceWireCodec.RelocationChunkBytesBound)
             throw new InvalidOperationException(
-                "The relocation payload exceeds the wire chunk bounds.");
-        return new ZLinkRelocationTransferPayload(
-            encoded,
-            checked((int)chunkBytes));
+                "The relocation payload exceeds the wire chunk bounds."
+            );
+        return new ZLinkRelocationTransferPayload(encoded, checked((int)chunkBytes));
     }
 
-    internal static ZLinkRelocationEnvelope DecodeEnvelope(
-        ReadOnlyMemory<byte> encoded)
+    internal static ZLinkRelocationEnvelope DecodeEnvelope(ReadOnlyMemory<byte> encoded)
     {
         if (encoded.IsEmpty)
             throw new ZLinkRelocationDataLostException(
-                "The direct relocation envelope logical stream is empty.");
+                "The direct relocation envelope logical stream is empty."
+            );
         try
         {
             return ZLinkRelocationEnvelopeCodec.Decode(encoded.Span);
@@ -81,7 +79,8 @@ internal sealed class ZLinkRelocationTransferPayload
         catch (InvalidDataException)
         {
             throw new ZLinkRelocationDataLostException(
-                "The direct relocation envelope logical stream is invalid.");
+                "The direct relocation envelope logical stream is invalid."
+            );
         }
     }
 
@@ -90,8 +89,7 @@ internal sealed class ZLinkRelocationTransferPayload
         using var logical = new MemoryStream();
         ZLinkRelocationEnvelopeCodec.EncodeTo(logical, envelope);
         if (logical.Length == 0)
-            throw new InvalidOperationException(
-                "The relocation logical stream is empty.");
+            throw new InvalidOperationException("The relocation logical stream is empty.");
         return logical.ToArray();
     }
 
@@ -120,19 +118,20 @@ internal sealed class ZLinkRelocationChunkAssembler
     private readonly ZLinkStateLane _lane = new();
     private readonly List<int> _chunkLengths = [];
     private readonly TaskCompletionSource _completed = new(
-        TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCreationOptions.RunContinuationsAsynchronously
+    );
     private long _received;
 
-    internal ZLinkRelocationChunkAssembler(
-        ulong totalLength,
-        uint chunkCount,
-        uint checksumCrc32c)
+    internal ZLinkRelocationChunkAssembler(ulong totalLength, uint chunkCount, uint checksumCrc32c)
     {
-        if (totalLength is 0 or > int.MaxValue
+        if (
+            totalLength is 0 or > int.MaxValue
             || chunkCount is 0
-            || chunkCount > ZLinkServiceWireCodec.RelocationChunkCountBound)
+            || chunkCount > ZLinkServiceWireCodec.RelocationChunkCountBound
+        )
             throw new ZLinkRelocationDataLostException(
-                "The relocation payload manifest bounds are invalid.");
+                "The relocation payload manifest bounds are invalid."
+            );
         TotalLength = totalLength;
         ChunkCount = chunkCount;
         ChecksumCrc32c = checksumCrc32c;
@@ -148,16 +147,11 @@ internal sealed class ZLinkRelocationChunkAssembler
     internal Task Completed => _completed.Task;
 
     /// <summary>Poisons the assembly so a waiting prepare fails explicitly.</summary>
-    internal void Fail(Exception failure) => AwaitStateLane(
-        _lane.RunAsync(() => _completed.TrySetException(failure)));
+    internal void Fail(Exception failure) =>
+        AwaitStateLane(_lane.RunAsync(() => _completed.TrySetException(failure)));
 
-    internal bool MatchesManifest(
-        ulong totalLength,
-        uint chunkCount,
-        uint checksumCrc32c) =>
-        totalLength == TotalLength
-        && chunkCount == ChunkCount
-        && checksumCrc32c == ChecksumCrc32c;
+    internal bool MatchesManifest(ulong totalLength, uint chunkCount, uint checksumCrc32c) =>
+        totalLength == TotalLength && chunkCount == ChunkCount && checksumCrc32c == ChecksumCrc32c;
 
     /// <summary>
     /// Copies one chunk into the assembly buffer. Chunks must arrive in
@@ -168,32 +162,39 @@ internal sealed class ZLinkRelocationChunkAssembler
     internal void Append(uint ordinal, ReadOnlySpan<byte> data)
     {
         var copied = data.ToArray();
-        AwaitStateLane(_lane.RunAsync(() =>
-        {
-            if (ordinal < _chunkLengths.Count)
+        AwaitStateLane(
+            _lane.RunAsync(() =>
             {
-                if (copied.Length != _chunkLengths[checked((int)ordinal)])
+                if (ordinal < _chunkLengths.Count)
+                {
+                    if (copied.Length != _chunkLengths[checked((int)ordinal)])
+                        throw new ZLinkRelocationDataLostException(
+                            "A duplicate relocation chunk changed its length."
+                        );
+                    return;
+                }
+                if (
+                    ordinal != _chunkLengths.Count
+                    || ordinal >= ChunkCount
+                    || copied.Length == 0
+                    || (ulong)copied.Length > TotalLength - (ulong)_received
+                )
                     throw new ZLinkRelocationDataLostException(
-                        "A duplicate relocation chunk changed its length.");
-                return;
-            }
-            if (ordinal != _chunkLengths.Count
-                || ordinal >= ChunkCount
-                || copied.Length == 0
-                || (ulong)copied.Length > TotalLength - (ulong)_received)
-                throw new ZLinkRelocationDataLostException(
-                    "A relocation chunk violated its declared manifest.");
-            copied.CopyTo(_buffer.AsSpan(checked((int)_received)));
-            _received += copied.Length;
-            _chunkLengths.Add(copied.Length);
-            if (_chunkLengths.Count == ChunkCount)
-            {
-                if ((ulong)_received != TotalLength)
-                    throw new ZLinkRelocationDataLostException(
-                        "The assembled relocation payload length does not match its manifest.");
-                _completed.TrySetResult();
-            }
-        }));
+                        "A relocation chunk violated its declared manifest."
+                    );
+                copied.CopyTo(_buffer.AsSpan(checked((int)_received)));
+                _received += copied.Length;
+                _chunkLengths.Add(copied.Length);
+                if (_chunkLengths.Count == ChunkCount)
+                {
+                    if ((ulong)_received != TotalLength)
+                        throw new ZLinkRelocationDataLostException(
+                            "The assembled relocation payload length does not match its manifest."
+                        );
+                    _completed.TrySetResult();
+                }
+            })
+        );
     }
 
     /// <summary>
@@ -203,24 +204,26 @@ internal sealed class ZLinkRelocationChunkAssembler
     /// </summary>
     internal ZLinkRelocationEnvelope VerifyAndDecode()
     {
-        return AwaitStateLane(_lane.RunAsync(() =>
-        {
-            if (_chunkLengths.Count != ChunkCount
-                || (ulong)_received != TotalLength)
-                throw new ZLinkRelocationDataLostException(
-                    "The relocation payload assembly is incomplete.");
-            if (ZLinkCrc32C.Compute(_buffer) != ChecksumCrc32c)
-                throw new ZLinkRelocationDataLostException(
-                    "The relocation payload checksum does not match its manifest.");
-            return ZLinkRelocationTransferPayload.DecodeEnvelope(_buffer);
-        }));
+        return AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                if (_chunkLengths.Count != ChunkCount || (ulong)_received != TotalLength)
+                    throw new ZLinkRelocationDataLostException(
+                        "The relocation payload assembly is incomplete."
+                    );
+                if (ZLinkCrc32C.Compute(_buffer) != ChecksumCrc32c)
+                    throw new ZLinkRelocationDataLostException(
+                        "The relocation payload checksum does not match its manifest."
+                    );
+                return ZLinkRelocationTransferPayload.DecodeEnvelope(_buffer);
+            })
+        );
     }
 
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();
 
-    private static void AwaitStateLane(ValueTask operation) =>
-        operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 }
 
 /// <summary>
@@ -232,8 +235,7 @@ internal sealed class ZLinkRelocationChunkAssembler
 /// </summary>
 internal static class ZLinkRelocationBoundaryBatch
 {
-    internal static uint ComputeChecksum(
-        IEnumerable<ReadOnlyMemory<byte>> frozenRecords)
+    internal static uint ComputeChecksum(IEnumerable<ReadOnlyMemory<byte>> frozenRecords)
     {
         ArgumentNullException.ThrowIfNull(frozenRecords);
         var crc = uint.MaxValue;
@@ -263,17 +265,14 @@ internal sealed class ZLinkRelocationTransferBudget
 
     private readonly long _budget;
     private readonly ZLinkStateLane _lane = new();
-    private readonly Queue<(long Bytes, TaskCompletionSource Waiter)> _waiters
-        = new();
+    private readonly Queue<(long Bytes, TaskCompletionSource Waiter)> _waiters = new();
     private long _inFlight;
 
     internal ZLinkRelocationTransferBudget(long configuredBudget)
     {
         if (configuredBudget < 0)
             throw new ArgumentOutOfRangeException(nameof(configuredBudget));
-        _budget = configuredBudget == 0
-            ? 0
-            : Math.Min(configuredBudget, ConservativeBudgetBytes);
+        _budget = configuredBudget == 0 ? 0 : Math.Min(configuredBudget, ConservativeBudgetBytes);
     }
 
     internal long InFlightBytes
@@ -287,9 +286,7 @@ internal sealed class ZLinkRelocationTransferBudget
     /// Waits for headroom, then charges the chunk. Returns immediately when
     /// the budget is disabled or the gate is idle.
     /// </summary>
-    internal async ValueTask ChargeAsync(
-        long bytes,
-        CancellationToken cancellationToken)
+    internal async ValueTask ChargeAsync(long bytes, CancellationToken cancellationToken)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(bytes);
         if (_budget == 0)
@@ -302,8 +299,7 @@ internal sealed class ZLinkRelocationTransferBudget
         //  reservation is returned if the waiter had already been admitted.
         try
         {
-            await waiter.Task.WaitAsync(cancellationToken)
-                .ConfigureAwait(false);
+            await waiter.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -324,19 +320,16 @@ internal sealed class ZLinkRelocationTransferBudget
                 waiter.TrySetResult();
     }
 
-    internal void Release(long bytes) =>
-        AwaitStateLane(ReleaseAsync(bytes));
+    internal void Release(long bytes) => AwaitStateLane(ReleaseAsync(bytes));
 
     private TaskCompletionSource? Charge(long bytes)
     {
-        if (_waiters.Count == 0
-            && (_inFlight == 0 || _inFlight + bytes <= _budget))
+        if (_waiters.Count == 0 && (_inFlight == 0 || _inFlight + bytes <= _budget))
         {
             _inFlight += bytes;
             return null;
         }
-        var waiter = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+        var waiter = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _waiters.Enqueue((bytes, waiter));
         return waiter;
     }
@@ -360,6 +353,5 @@ internal sealed class ZLinkRelocationTransferBudget
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();
 
-    private static void AwaitStateLane(ValueTask operation) =>
-        operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 }

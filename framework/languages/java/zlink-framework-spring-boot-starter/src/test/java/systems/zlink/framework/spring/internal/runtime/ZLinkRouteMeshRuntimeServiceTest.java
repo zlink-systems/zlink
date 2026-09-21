@@ -1,24 +1,33 @@
 package systems.zlink.framework.spring.internal.runtime;
-import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.Flow;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.framework.channels.ZLinkMeshChannelRuntimeOptions;
 import systems.zlink.framework.channels.ZLinkMeshPlacementRuntimeOptions;
 import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions;
+import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.locations.ZLinkActivationConcurrency;
+import systems.zlink.framework.locations.ZLinkCapacityUsage;
+import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
+import systems.zlink.framework.locations.ZLinkObjectCapability;
+import systems.zlink.framework.locations.ZLinkObjectMaintenancePolicyKind;
+import systems.zlink.framework.locations.ZLinkPlacementCapacity;
+import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
+import systems.zlink.framework.locations.ZLinkSpotTypeCapacity;
+import systems.zlink.framework.monitoring.ZLinkMeshNodeSnapshot;
+import systems.zlink.framework.monitoring.ZLinkObservedStatus;
+import systems.zlink.framework.monitoring.ZLinkPeerState;
+import systems.zlink.framework.monitoring.ZLinkTopologyReason;
+import systems.zlink.framework.monitoring.ZLinkTopologyState;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.backend.ZLinkMeshDispatchRecord;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshMonitorEvent;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshMonitorStatus;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeMonitor;
@@ -28,24 +37,16 @@ import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerSource;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
 import systems.zlink.framework.runtime.internal.binding.spot.PeerChannels;
-import systems.zlink.contracts.sockets.RecvFlags;
-import systems.zlink.framework.errors.ZLinkConfigurationException;
-import systems.zlink.framework.locations.ZLinkCapacityUsage;
-import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
-import systems.zlink.framework.locations.ZLinkObjectCapability;
-import systems.zlink.framework.locations.ZLinkObjectMaintenancePolicyKind;
-import systems.zlink.framework.locations.ZLinkPlacementCapacity;
-import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
-import systems.zlink.framework.locations.ZLinkSpotTypeCapacity;
-import systems.zlink.framework.locations.ZLinkActivationConcurrency;
-import systems.zlink.framework.monitoring.ZLinkMeshNodeSnapshot;
-import systems.zlink.framework.monitoring.ZLinkObservedStatus;
-import systems.zlink.framework.monitoring.ZLinkPeerState;
-import systems.zlink.framework.monitoring.ZLinkTopologyReason;
-import systems.zlink.framework.monitoring.ZLinkTopologyState;
-import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
-import systems.zlink.framework.runtime.internal.backend.ZLinkMeshDispatchRecord;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkMeshNodeMonitoringProjection;
+
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Flow;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 final class ZLinkRouteMeshRuntimeServiceTest {
     @Test
@@ -94,8 +95,8 @@ final class ZLinkRouteMeshRuntimeServiceTest {
             assertFalse(snapshot.isReady());
             assertEquals(0, snapshot.channels().getFirst().readyTargetCount());
             assertEquals(
-                ZLinkTopologyReason.CAPACITY_EXCEEDED,
-                snapshot.placement().unavailableReason().orElseThrow());
+                    ZLinkTopologyReason.CAPACITY_EXCEEDED,
+                    snapshot.placement().unavailableReason().orElseThrow());
         }
     }
 
@@ -110,9 +111,7 @@ final class ZLinkRouteMeshRuntimeServiceTest {
             assertFalse(runtime.isReady("mesh"));
 
             node.peerState = MeshPeerState.CLOSED;
-            assertEquals(
-                ZLinkTopologyState.DEGRADED,
-                runtime.snapshot("mesh").state());
+            assertEquals(ZLinkTopologyState.DEGRADED, runtime.snapshot("mesh").state());
 
             node.peerState = MeshPeerState.NOT_REQUIRED;
             var notRequired = runtime.snapshot("mesh");
@@ -128,26 +127,27 @@ final class ZLinkRouteMeshRuntimeServiceTest {
         try (var runtime = runtime(node)) {
             CountDownLatch received = new CountDownLatch(1);
             AtomicReference<ZLinkMeshNodeSnapshot> status = new AtomicReference<>();
-            runtime.observe("mesh", 1).subscribe(new Flow.Subscriber<>() {
-                @Override
-                public void onSubscribe(Flow.Subscription subscription) {
-                    subscription.request(1);
-                }
+            runtime.observe("mesh", 1)
+                    .subscribe(
+                            new Flow.Subscriber<>() {
+                                @Override
+                                public void onSubscribe(Flow.Subscription subscription) {
+                                    subscription.request(1);
+                                }
 
-                @Override
-                public void onNext(ZLinkObservedStatus<ZLinkMeshNodeSnapshot> observed) {
-                    status.set(observed.status());
-                    received.countDown();
-                }
+                                @Override
+                                public void onNext(
+                                        ZLinkObservedStatus<ZLinkMeshNodeSnapshot> observed) {
+                                    status.set(observed.status());
+                                    received.countDown();
+                                }
 
-                @Override
-                public void onError(Throwable throwable) {
-                }
+                                @Override
+                                public void onError(Throwable throwable) {}
 
-                @Override
-                public void onComplete() {
-                }
-            });
+                                @Override
+                                public void onComplete() {}
+                            });
 
             assertTrue(received.await(2, TimeUnit.SECONDS));
             assertEquals(ZLinkTopologyState.READY, status.get().state());
@@ -159,7 +159,7 @@ final class ZLinkRouteMeshRuntimeServiceTest {
     void snapshotAndPlacementEventProjectCapacityAndActivationChanges() throws Exception {
         FakeNode node = new FakeNode();
         AtomicReference<ZLinkMeshNodeMonitoringProjection> placement =
-            new AtomicReference<>(placement(9, 2, 1));
+                new AtomicReference<>(placement(9, 2, 1));
         try (var runtime = runtime(node, placement)) {
             var snapshot = runtime.snapshot("mesh");
             assertEquals(2, snapshot.placement().activeActorCount());
@@ -168,31 +168,32 @@ final class ZLinkRouteMeshRuntimeServiceTest {
             CountDownLatch changed = new CountDownLatch(1);
             CountDownLatch initialized = new CountDownLatch(1);
             AtomicReference<ZLinkMeshNodeSnapshot> changedStatus = new AtomicReference<>();
-            runtime.observe("mesh", 8).subscribe(new Flow.Subscriber<>() {
-                @Override
-                public void onSubscribe(Flow.Subscription subscription) {
-                    subscription.request(Long.MAX_VALUE);
-                }
+            runtime.observe("mesh", 8)
+                    .subscribe(
+                            new Flow.Subscriber<>() {
+                                @Override
+                                public void onSubscribe(Flow.Subscription subscription) {
+                                    subscription.request(Long.MAX_VALUE);
+                                }
 
-                @Override
-                public void onNext(ZLinkObservedStatus<ZLinkMeshNodeSnapshot> observed) {
-                    ZLinkMeshNodeSnapshot item = observed.status();
-                    if (initialized.getCount() > 0) {
-                        initialized.countDown();
-                    } else if (item.placement().activeActorCount() == 4) {
-                        changedStatus.set(item);
-                        changed.countDown();
-                    }
-                }
+                                @Override
+                                public void onNext(
+                                        ZLinkObservedStatus<ZLinkMeshNodeSnapshot> observed) {
+                                    ZLinkMeshNodeSnapshot item = observed.status();
+                                    if (initialized.getCount() > 0) {
+                                        initialized.countDown();
+                                    } else if (item.placement().activeActorCount() == 4) {
+                                        changedStatus.set(item);
+                                        changed.countDown();
+                                    }
+                                }
 
-                @Override
-                public void onError(Throwable throwable) {
-                }
+                                @Override
+                                public void onError(Throwable throwable) {}
 
-                @Override
-                public void onComplete() {
-                }
-            });
+                                @Override
+                                public void onComplete() {}
+                            });
 
             assertTrue(initialized.await(2, TimeUnit.SECONDS));
             placement.set(placement(10, 4, 2));
@@ -207,20 +208,20 @@ final class ZLinkRouteMeshRuntimeServiceTest {
     void placementAvailabilityRequiresPositiveWeightAndRemainingCapacity() {
         FakeNode node = new FakeNode();
         AtomicReference<ZLinkMeshNodeMonitoringProjection> placement =
-            new AtomicReference<>(actorPlacement(0, 0, 10));
+                new AtomicReference<>(actorPlacement(0, 0, 10));
         try (var runtime = runtime(node, placement)) {
             var zeroWeight = runtime.snapshot("mesh").placement();
             assertFalse(zeroWeight.isAvailable());
             assertEquals(
-                ZLinkTopologyReason.CAPACITY_EXCEEDED,
-                zeroWeight.unavailableReason().orElseThrow());
+                    ZLinkTopologyReason.CAPACITY_EXCEEDED,
+                    zeroWeight.unavailableReason().orElseThrow());
 
             placement.set(actorPlacement(100, 10, 10));
             var exhausted = runtime.snapshot("mesh").placement();
             assertFalse(exhausted.isAvailable());
             assertEquals(
-                ZLinkTopologyReason.CAPACITY_EXCEEDED,
-                exhausted.unavailableReason().orElseThrow());
+                    ZLinkTopologyReason.CAPACITY_EXCEEDED,
+                    exhausted.unavailableReason().orElseThrow());
 
             placement.set(actorPlacement(100, 9, 10));
             var available = runtime.snapshot("mesh").placement();
@@ -249,14 +250,15 @@ final class ZLinkRouteMeshRuntimeServiceTest {
         FakeNode node = new FakeNode();
         node.channelWeight = 0;
         AtomicReference<ZLinkMeshNodeMonitoringProjection> placement =
-            new AtomicReference<>(actorPlacement(100, 0, 10));
-        try (var runtime = new ZLinkRouteMeshRuntimeService(
-            () -> Map.of("mesh", node),
-            () -> {
-                throw new ZLinkConfigurationException("not configured");
-            },
-            (meshName, rid) -> placement.get(),
-            meshName -> List.of("channel"))) {
+                new AtomicReference<>(actorPlacement(100, 0, 10));
+        try (var runtime =
+                new ZLinkRouteMeshRuntimeService(
+                        () -> Map.of("mesh", node),
+                        () -> {
+                            throw new ZLinkConfigurationException("not configured");
+                        },
+                        (meshName, rid) -> placement.get(),
+                        meshName -> List.of("channel"))) {
             var channel = runtime.snapshot("mesh").channels().getFirst();
 
             assertTrue(channel.isReady());
@@ -266,44 +268,44 @@ final class ZLinkRouteMeshRuntimeServiceTest {
 
     @Test
     void runtimeOptionsDelegatesToCoreRuntimeOptions() {
-        var meshChannelOptions = new ZLinkMeshChannelRuntimeOptions() {
-            @Override
-            public int weight() {
-                return 100;
-            }
+        var meshChannelOptions =
+                new ZLinkMeshChannelRuntimeOptions() {
+                    @Override
+                    public int weight() {
+                        return 100;
+                    }
 
-            @Override
-            public void weight(int value) {
-            }
-        };
-        var placementOptions = new ZLinkMeshPlacementRuntimeOptions() {
-            @Override
-            public int placementWeight() {
-                return 100;
-            }
+                    @Override
+                    public void weight(int value) {}
+                };
+        var placementOptions =
+                new ZLinkMeshPlacementRuntimeOptions() {
+                    @Override
+                    public int placementWeight() {
+                        return 100;
+                    }
 
-            @Override
-            public void setPlacementWeight(int value) {
-            }
-        };
-        ZLinkRouteMeshRuntimeOptions delegate = new ZLinkRouteMeshRuntimeOptions() {
-            @Override
-            public ZLinkMeshChannelRuntimeOptions channel(
-                String meshName,
-                String channelName) {
-                return meshChannelOptions;
-            }
+                    @Override
+                    public void setPlacementWeight(int value) {}
+                };
+        ZLinkRouteMeshRuntimeOptions delegate =
+                new ZLinkRouteMeshRuntimeOptions() {
+                    @Override
+                    public ZLinkMeshChannelRuntimeOptions channel(
+                            String meshName, String channelName) {
+                        return meshChannelOptions;
+                    }
 
-            @Override
-            public ZLinkMeshPlacementRuntimeOptions mesh(String meshName) {
-                return placementOptions;
-            }
+                    @Override
+                    public ZLinkMeshPlacementRuntimeOptions mesh(String meshName) {
+                        return placementOptions;
+                    }
 
-            @Override
-            public ZLinkMeshChannelRuntimeOptions channel(String channelName) {
-                return meshChannelOptions;
-            }
-        };
+                    @Override
+                    public ZLinkMeshChannelRuntimeOptions channel(String channelName) {
+                        return meshChannelOptions;
+                    }
+                };
         var options = new ZLinkRouteMeshRuntimeOptionsService(() -> delegate);
 
         assertSame(meshChannelOptions, options.channel("mesh", "channel"));
@@ -313,92 +315,87 @@ final class ZLinkRouteMeshRuntimeServiceTest {
 
     private static ZLinkRouteMeshRuntimeService runtime(FakeNode node) {
         return new ZLinkRouteMeshRuntimeService(
-            () -> Map.of("mesh", node),
-            () -> {
-                throw new ZLinkConfigurationException("not configured");
-            });
+                () -> Map.of("mesh", node),
+                () -> {
+                    throw new ZLinkConfigurationException("not configured");
+                });
     }
 
     private static ZLinkRouteMeshRuntimeService runtime(
-        FakeNode node,
-        AtomicReference<ZLinkMeshNodeMonitoringProjection> placement) {
+            FakeNode node, AtomicReference<ZLinkMeshNodeMonitoringProjection> placement) {
         return new ZLinkRouteMeshRuntimeService(
-            () -> Map.of("mesh", node),
-            () -> {
-                throw new ZLinkConfigurationException("not configured");
-            },
-            (meshName, rid) -> placement.get());
+                () -> Map.of("mesh", node),
+                () -> {
+                    throw new ZLinkConfigurationException("not configured");
+                },
+                (meshName, rid) -> placement.get());
     }
 
     private static ZLinkMeshNodeMonitoringProjection placement(
-        long revision,
-        int actorActive,
-        int activationActive) {
+            long revision, int actorActive, int activationActive) {
         return new ZLinkMeshNodeMonitoringProjection(
-            revision,
-            ZLinkMeshNodeObjectRole.SERVER,
-            100,
-            new ZLinkPlacementCapacity(
-                new ZLinkCapacityUsage(actorActive, 1, 0),
-                new ZLinkCapacityUsage(2, 3, 10),
-                List.of(new ZLinkSpotTypeCapacity(
-                    ZLinkPlacementObjectKind.INSTANCE_SPOT,
-                    "room",
-                    new ZLinkCapacityUsage(2, 1, 5)))),
-            new ZLinkActivationConcurrency(activationActive, 8),
-            List.of(),
-            0,
-            Optional.empty());
+                revision,
+                ZLinkMeshNodeObjectRole.SERVER,
+                100,
+                new ZLinkPlacementCapacity(
+                        new ZLinkCapacityUsage(actorActive, 1, 0),
+                        new ZLinkCapacityUsage(2, 3, 10),
+                        List.of(
+                                new ZLinkSpotTypeCapacity(
+                                        ZLinkPlacementObjectKind.INSTANCE_SPOT,
+                                        "room",
+                                        new ZLinkCapacityUsage(2, 1, 5)))),
+                new ZLinkActivationConcurrency(activationActive, 8),
+                List.of(),
+                0,
+                Optional.empty());
     }
 
     private static ZLinkMeshNodeMonitoringProjection actorPlacement(
-        int weight,
-        int active,
-        int limit) {
+            int weight, int active, int limit) {
         return new ZLinkMeshNodeMonitoringProjection(
-            1,
-            ZLinkMeshNodeObjectRole.SERVER,
-            weight,
-            new ZLinkPlacementCapacity(
-                new ZLinkCapacityUsage(active, 0, limit),
-                new ZLinkCapacityUsage(0, 0, 0),
-                List.of()),
-            new ZLinkActivationConcurrency(0, 8),
-            List.of(new ZLinkObjectCapability(
-                ZLinkPlacementObjectKind.ACTOR,
-                "player",
-                ZLinkObjectMaintenancePolicyKind.DISABLED,
-                false,
-                0)),
-            0,
-            Optional.empty());
+                1,
+                ZLinkMeshNodeObjectRole.SERVER,
+                weight,
+                new ZLinkPlacementCapacity(
+                        new ZLinkCapacityUsage(active, 0, limit),
+                        new ZLinkCapacityUsage(0, 0, 0),
+                        List.of()),
+                new ZLinkActivationConcurrency(0, 8),
+                List.of(
+                        new ZLinkObjectCapability(
+                                ZLinkPlacementObjectKind.ACTOR,
+                                "player",
+                                ZLinkObjectMaintenancePolicyKind.DISABLED,
+                                false,
+                                0)),
+                0,
+                Optional.empty());
     }
 
     private static ZLinkMeshNodeMonitoringProjection spotPlacement(
-        int weight,
-        int active,
-        int limit) {
+            int weight, int active, int limit) {
         ZLinkCapacityUsage usage = new ZLinkCapacityUsage(active, 0, limit);
         return new ZLinkMeshNodeMonitoringProjection(
-            1,
-            ZLinkMeshNodeObjectRole.SERVER,
-            weight,
-            new ZLinkPlacementCapacity(
-                new ZLinkCapacityUsage(0, 0, 0),
-                usage,
-                List.of(new ZLinkSpotTypeCapacity(
-                    ZLinkPlacementObjectKind.USER_SPOT,
-                    "room",
-                    usage))),
-            new ZLinkActivationConcurrency(0, 8),
-            List.of(new ZLinkObjectCapability(
-                ZLinkPlacementObjectKind.USER_SPOT,
-                "room",
-                ZLinkObjectMaintenancePolicyKind.DISABLED,
-                false,
-                limit)),
-            0,
-            Optional.empty());
+                1,
+                ZLinkMeshNodeObjectRole.SERVER,
+                weight,
+                new ZLinkPlacementCapacity(
+                        new ZLinkCapacityUsage(0, 0, 0),
+                        usage,
+                        List.of(
+                                new ZLinkSpotTypeCapacity(
+                                        ZLinkPlacementObjectKind.USER_SPOT, "room", usage))),
+                new ZLinkActivationConcurrency(0, 8),
+                List.of(
+                        new ZLinkObjectCapability(
+                                ZLinkPlacementObjectKind.USER_SPOT,
+                                "room",
+                                ZLinkObjectMaintenancePolicyKind.DISABLED,
+                                false,
+                                limit)),
+                0,
+                Optional.empty());
     }
 
     private static final class FakeNode implements ZLinkInternalMeshNode {
@@ -408,22 +405,23 @@ final class ZLinkRouteMeshRuntimeServiceTest {
         private volatile int peerChannelWeight = 3;
         private volatile int placementWeight = 100;
         private volatile MeshPeerState peerState = MeshPeerState.ADMITTED;
-        private final MeshNodeStatus status = new MeshNodeStatus(
-            MeshNodeState.READY,
-            local,
-            "mesh",
-            "inproc://mesh",
-            3,
-            5,
-            1,
-            1,
-            1,
-            0,
-            2,
-            1,
-            64,
-            0,
-            10);
+        private final MeshNodeStatus status =
+                new MeshNodeStatus(
+                        MeshNodeState.READY,
+                        local,
+                        "mesh",
+                        "inproc://mesh",
+                        3,
+                        5,
+                        1,
+                        1,
+                        1,
+                        0,
+                        2,
+                        1,
+                        64,
+                        0,
+                        10);
 
         @Override
         public String name() {
@@ -431,12 +429,10 @@ final class ZLinkRouteMeshRuntimeServiceTest {
         }
 
         @Override
-        public void setBind(String endpoint) {
-        }
+        public void setBind(String endpoint) {}
 
         @Override
-        public void addChannel(String channelName) {
-        }
+        public void addChannel(String channelName) {}
 
         @Override
         public void setChannelWeight(String channelName, int weight) {
@@ -464,12 +460,10 @@ final class ZLinkRouteMeshRuntimeServiceTest {
         }
 
         @Override
-        public void setRoutingId(RoutingId routingId) {
-        }
+        public void setRoutingId(RoutingId routingId) {}
 
         @Override
-        public void start() {
-        }
+        public void start() {}
 
         @Override
         public long connectPeer(String endpoint) {
@@ -488,17 +482,18 @@ final class ZLinkRouteMeshRuntimeServiceTest {
 
         @Override
         public List<MeshPeerEntry> peers() {
-            return List.of(new MeshPeerEntry(
-                RoutingId.from("peer"),
-                "inproc://peer",
-                1,
-                MeshPeerSource.MANUAL,
-                peerState,
-                4,
-                8,
-                1,
-                0,
-                10));
+            return List.of(
+                    new MeshPeerEntry(
+                            RoutingId.from("peer"),
+                            "inproc://peer",
+                            1,
+                            MeshPeerSource.MANUAL,
+                            peerState,
+                            4,
+                            8,
+                            1,
+                            0,
+                            10));
         }
 
         @Override
@@ -526,22 +521,18 @@ final class ZLinkRouteMeshRuntimeServiceTest {
 
                 @Override
                 public MeshMonitorStatus status() {
-                    return new MeshMonitorStatus(
-                        MeshNodeState.READY, 1, 0, 0, 0, 0, 0, 0, 0, 0);
+                    return new MeshMonitorStatus(MeshNodeState.READY, 1, 0, 0, 0, 0, 0, 0, 0, 0);
                 }
 
                 @Override
-                public void close() {
-                }
+                public void close() {}
             };
         }
 
         @Override
-        public void startDispatch(Consumer<ZLinkMeshDispatchRecord> receiver) {
-        }
+        public void startDispatch(Consumer<ZLinkMeshDispatchRecord> receiver) {}
 
         @Override
-        public void close() {
-        }
+        public void close() {}
     }
 }

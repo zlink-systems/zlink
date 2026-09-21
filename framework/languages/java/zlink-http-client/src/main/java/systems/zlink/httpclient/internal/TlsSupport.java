@@ -13,6 +13,7 @@ import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.util.Base64;
+
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
@@ -27,23 +28,24 @@ import javax.net.ssl.X509TrustManager;
  */
 public final class TlsSupport {
 
-    private TlsSupport() {
-    }
+    private TlsSupport() {}
 
     public static SSLContext create(HttpClientOptions options) {
         try {
-            TrustManager[] trustManagers = options.trustCertificateFile() != null
-                ? trustManagers(options.trustCertificateFile())
-                : null;
-            KeyManagerFactory keyManagerFactory = options.clientCertificate() != null
-                ? keyManagers(options.clientCertificate())
-                : null;
+            TrustManager[] trustManagers =
+                    options.trustCertificateFile() != null
+                            ? trustManagers(options.trustCertificateFile())
+                            : null;
+            KeyManagerFactory keyManagerFactory =
+                    options.clientCertificate() != null
+                            ? keyManagers(options.clientCertificate())
+                            : null;
 
             SSLContext context = SSLContext.getInstance("TLS");
             context.init(
-                keyManagerFactory != null ? keyManagerFactory.getKeyManagers() : null,
-                trustManagers,
-                null);
+                    keyManagerFactory != null ? keyManagerFactory.getKeyManagers() : null,
+                    trustManagers,
+                    null);
             return context;
         } catch (Exception cause) {
             throw HttpClientErrors.protocol("HTTP client TLS configuration failed", cause);
@@ -63,7 +65,8 @@ public final class TlsSupport {
     }
 
     private static X509TrustManager firstX509(KeyStore store) throws Exception {
-        TrustManagerFactory factory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+        TrustManagerFactory factory =
+                TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
         factory.init(store);
         for (TrustManager manager : factory.getTrustManagers()) {
             if (manager instanceof X509TrustManager x509) {
@@ -73,7 +76,9 @@ public final class TlsSupport {
         throw HttpClientErrors.protocol("No X509 trust manager available");
     }
 
-    /** Trusts a certificate if either the JVM default store or the custom certificate accepts it. */
+    /**
+     * Trusts a certificate if either the JVM default store or the custom certificate accepts it.
+     */
     private static final class CompositeTrustManager implements X509TrustManager {
         private final X509TrustManager primary;
         private final X509TrustManager secondary;
@@ -84,12 +89,14 @@ public final class TlsSupport {
         }
 
         @Override
-        public void checkClientTrusted(X509Certificate[] chain, String authType) throws CertificateException {
+        public void checkClientTrusted(X509Certificate[] chain, String authType)
+                throws CertificateException {
             primary.checkClientTrusted(chain, authType);
         }
 
         @Override
-        public void checkServerTrusted(X509Certificate[] chain, String authType) throws CertificateException {
+        public void checkServerTrusted(X509Certificate[] chain, String authType)
+                throws CertificateException {
             try {
                 primary.checkServerTrusted(chain, authType);
             } catch (CertificateException ignored) {
@@ -108,13 +115,16 @@ public final class TlsSupport {
         }
     }
 
-    private static KeyManagerFactory keyManagers(HttpClientOptions.ClientCertificate certificate) throws Exception {
-        X509Certificate cert = readCertificate(Files.readAllBytes(Path.of(certificate.certificatePath())));
+    private static KeyManagerFactory keyManagers(HttpClientOptions.ClientCertificate certificate)
+            throws Exception {
+        X509Certificate cert =
+                readCertificate(Files.readAllBytes(Path.of(certificate.certificatePath())));
         PrivateKey key = readPrivateKey(Files.readString(Path.of(certificate.keyPath())));
         KeyStore keyStore = KeyStore.getInstance(KeyStore.getDefaultType());
         keyStore.load(null, null);
         keyStore.setKeyEntry("zlink-client", key, new char[0], new X509Certificate[] {cert});
-        KeyManagerFactory factory = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+        KeyManagerFactory factory =
+                KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
         factory.init(keyStore, new char[0]);
         return factory;
     }
@@ -125,10 +135,10 @@ public final class TlsSupport {
     }
 
     private static PrivateKey readPrivateKey(String pem) throws Exception {
-        String base64 = pem
-            .replaceAll("-----BEGIN (RSA )?PRIVATE KEY-----", "")
-            .replaceAll("-----END (RSA )?PRIVATE KEY-----", "")
-            .replaceAll("\\s", "");
+        String base64 =
+                pem.replaceAll("-----BEGIN (RSA )?PRIVATE KEY-----", "")
+                        .replaceAll("-----END (RSA )?PRIVATE KEY-----", "")
+                        .replaceAll("\\s", "");
         byte[] der = Base64.getDecoder().decode(base64.getBytes(StandardCharsets.US_ASCII));
         PKCS8EncodedKeySpec spec = new PKCS8EncodedKeySpec(der);
         return KeyFactory.getInstance("RSA").generatePrivate(spec);

@@ -95,11 +95,13 @@ http_client_runtime_t::submit (http_request_t request) const
           });
     }
     catch (const std::exception &ex) {
-        completion.complete (zlink::framework::detail::boundary_failure<raw_http_response_t> (zlink::framework::detail::boundary_error_t::closed,
+        completion.complete (zlink::framework::detail::boundary_failure<raw_http_response_t> (
+          zlink::framework::detail::boundary_error_t::closed,
           std::string ("HTTP client coroutine execute scheduler rejected work: ") + ex.what ()));
     }
     catch (...) {
-        completion.complete (zlink::framework::detail::boundary_failure<raw_http_response_t> (zlink::framework::detail::boundary_error_t::closed,
+        completion.complete (zlink::framework::detail::boundary_failure<raw_http_response_t> (
+          zlink::framework::detail::boundary_error_t::closed,
           "HTTP client coroutine execute scheduler rejected work"));
     }
     return task;

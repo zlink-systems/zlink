@@ -8,7 +8,7 @@ internal enum ZLinkScannedSpotHandlerKind
     Subscription,
     ActorSend,
     ActorRequest,
-    Timer
+    Timer,
 }
 
 internal sealed record ZLinkScannedSpotHandler(
@@ -22,7 +22,8 @@ internal sealed record ZLinkScannedSpotHandler(
     string? TimerName = null,
     TimeSpan TimerPeriod = default,
     MethodInfo? Method = null,
-    string? SpotNodeName = null);
+    string? SpotNodeName = null
+);
 
 internal static class ZLinkScannedSpotHandlerScanner
 {
@@ -31,7 +32,8 @@ internal static class ZLinkScannedSpotHandlerScanner
         var handlers = new List<ZLinkScannedSpotHandler>();
         foreach (var type in assembly.GetTypes())
         {
-            if (type.IsAbstract || type.IsInterface) continue;
+            if (type.IsAbstract || type.IsInterface)
+                continue;
 
             handlers.AddRange(ScanType(type));
         }
@@ -49,7 +51,8 @@ internal static class ZLinkScannedSpotHandlerScanner
                     handlerType,
                     handlerType,
                     PacketName: request.PacketName,
-                    Method: method);
+                    Method: method
+                );
 
             if (method.GetCustomAttribute<ZLinkSpotSubscriptionAttribute>() is { } subscription)
                 yield return new ZLinkScannedSpotHandler(
@@ -59,28 +62,40 @@ internal static class ZLinkScannedSpotHandlerScanner
                     ChannelName: subscription.ChannelName,
                     Topic: subscription.Topic,
                     Method: method,
-                    SpotNodeName: subscription.SpotNodeName);
+                    SpotNodeName: subscription.SpotNodeName
+                );
         }
 
-        foreach (var (definition, arguments) in ZLinkHandlerContractInspector.EnumerateGenericInterfaces(handlerType))
-            if (definition == typeof(IZLinkSpotPacketHandler<,>)
-                || definition == typeof(IZLinkSpotRequestHandler<,,>))
+        foreach (
+            var (definition, arguments) in ZLinkHandlerContractInspector.EnumerateGenericInterfaces(
+                handlerType
+            )
+        )
+            if (
+                definition == typeof(IZLinkSpotPacketHandler<,>)
+                || definition == typeof(IZLinkSpotRequestHandler<,,>)
+            )
             {
                 yield return new ZLinkScannedSpotHandler(
                     ZLinkScannedSpotHandlerKind.Packet,
                     handlerType,
                     arguments[0],
-                    PacketName: ResolvePacketName(handlerType));
+                    PacketName: ResolvePacketName(handlerType)
+                );
             }
             else if (definition == typeof(IZLinkSpotSubscriptionHandler<,>))
             {
-                if (handlerType.GetCustomAttribute<ZLinkSpotSubscriptionHandlerAttribute>() is { } subscription)
+                if (
+                    handlerType.GetCustomAttribute<ZLinkSpotSubscriptionHandlerAttribute>() is
+                    { } subscription
+                )
                     yield return new ZLinkScannedSpotHandler(
                         ZLinkScannedSpotHandlerKind.Subscription,
                         handlerType,
                         arguments[0],
                         ChannelName: subscription.ChannelName,
-                        Topic: subscription.Topic);
+                        Topic: subscription.Topic
+                    );
             }
             else if (definition == typeof(IZLinkSpotTimerHandler<>))
             {
@@ -90,33 +105,43 @@ internal static class ZLinkScannedSpotHandlerScanner
                         handlerType,
                         arguments[0],
                         TimerName: timer.Name,
-                        TimerPeriod: TimeSpan.FromMilliseconds(timer.PeriodMilliseconds));
+                        TimerPeriod: TimeSpan.FromMilliseconds(timer.PeriodMilliseconds)
+                    );
             }
-            else if (definition == typeof(IZLinkEntrySpotActorSendHandler<,,>)
-                     || definition == typeof(IZLinkSpotActorSendHandler<,,>))
+            else if (
+                definition == typeof(IZLinkEntrySpotActorSendHandler<,,>)
+                || definition == typeof(IZLinkSpotActorSendHandler<,,>)
+            )
             {
                 yield return new ZLinkScannedSpotHandler(
                     ZLinkScannedSpotHandlerKind.ActorSend,
                     handlerType,
                     arguments[0],
                     arguments[1],
-                    handlerType.GetCustomAttribute<ZLinkSpotActorSendHandlerAttribute>()?.PacketName);
+                    handlerType.GetCustomAttribute<ZLinkSpotActorSendHandlerAttribute>()?.PacketName
+                );
             }
-            else if (definition == typeof(IZLinkEntrySpotActorRequestHandler<,,,>)
-                     || definition == typeof(IZLinkSpotActorRequestHandler<,,,>))
+            else if (
+                definition == typeof(IZLinkEntrySpotActorRequestHandler<,,,>)
+                || definition == typeof(IZLinkSpotActorRequestHandler<,,,>)
+            )
             {
                 yield return new ZLinkScannedSpotHandler(
                     ZLinkScannedSpotHandlerKind.ActorRequest,
                     handlerType,
                     arguments[0],
                     arguments[1],
-                    handlerType.GetCustomAttribute<ZLinkSpotActorRequestHandlerAttribute>()?.PacketName);
+                    handlerType
+                        .GetCustomAttribute<ZLinkSpotActorRequestHandlerAttribute>()
+                        ?.PacketName
+                );
             }
     }
 
     private static string? ResolvePacketName(Type handlerType)
     {
-        if (handlerType.GetCustomAttribute<ZLinkSpotPacketHandlerAttribute>() is { } packet) return packet.PacketName;
+        if (handlerType.GetCustomAttribute<ZLinkSpotPacketHandlerAttribute>() is { } packet)
+            return packet.PacketName;
 
         if (handlerType.GetCustomAttribute<ZLinkSpotRequestHandlerAttribute>() is { } request)
             return request.PacketName;

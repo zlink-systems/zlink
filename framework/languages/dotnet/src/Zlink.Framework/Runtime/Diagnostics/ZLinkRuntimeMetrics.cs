@@ -1,6 +1,6 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
-using System.Collections.Concurrent;
 
 namespace Zlink.Framework.Runtime.Diagnostics;
 
@@ -10,250 +10,307 @@ internal static class ZLinkRuntimeMetrics
 
     private static readonly UpDownCounter<long> StreamConnectionsActive =
         Meter.CreateUpDownCounter<long>("zlink.stream.connections.active", "{connection}");
-    private static readonly Counter<long> StreamConnectionsOpened =
-        Meter.CreateCounter<long>("zlink.stream.connections.opened", "{connection}");
-    private static readonly Counter<long> StreamConnectionsClosed =
-        Meter.CreateCounter<long>("zlink.stream.connections.closed", "{connection}");
-    private static readonly UpDownCounter<long> SpotCount =
-        Meter.CreateUpDownCounter<long>("zlink.spot.count", "{spot}");
-    private static readonly UpDownCounter<long> ActorCount =
-        Meter.CreateUpDownCounter<long>("zlink.actor.count", "{actor}");
+    private static readonly Counter<long> StreamConnectionsOpened = Meter.CreateCounter<long>(
+        "zlink.stream.connections.opened",
+        "{connection}"
+    );
+    private static readonly Counter<long> StreamConnectionsClosed = Meter.CreateCounter<long>(
+        "zlink.stream.connections.closed",
+        "{connection}"
+    );
+    private static readonly UpDownCounter<long> SpotCount = Meter.CreateUpDownCounter<long>(
+        "zlink.spot.count",
+        "{spot}"
+    );
+    private static readonly UpDownCounter<long> ActorCount = Meter.CreateUpDownCounter<long>(
+        "zlink.actor.count",
+        "{actor}"
+    );
 
     private static readonly ConcurrentDictionary<
         object,
-        Func<IReadOnlyList<ZLinkRuntimeMetricMeshSnapshot>>> MeshSnapshotProviders = new();
-    private static readonly ObservableGauge<long> MeshPeersConfigured =
-        Meter.CreateObservableGauge(
-            "zlink.mesh_node.peers.configured",
-            () => ObserveMeshPeerCount(static snapshot => snapshot.ConfiguredPeers),
-            "{peer}");
-    private static readonly ObservableGauge<long> MeshPeersConnected =
-        Meter.CreateObservableGauge(
-            "zlink.mesh_node.peers.connected",
-            () => ObserveMeshPeerCount(static snapshot => snapshot.ConnectedPeers),
-            "{peer}");
-    private static readonly ObservableGauge<long> MeshPeersReady =
-        Meter.CreateObservableGauge(
-            "zlink.mesh_node.peers.ready",
-            () => ObserveMeshPeerCount(static snapshot => snapshot.ReadyPeers),
-            "{peer}");
+        Func<IReadOnlyList<ZLinkRuntimeMetricMeshSnapshot>>
+    > MeshSnapshotProviders = new();
+    private static readonly ObservableGauge<long> MeshPeersConfigured = Meter.CreateObservableGauge(
+        "zlink.mesh_node.peers.configured",
+        () => ObserveMeshPeerCount(static snapshot => snapshot.ConfiguredPeers),
+        "{peer}"
+    );
+    private static readonly ObservableGauge<long> MeshPeersConnected = Meter.CreateObservableGauge(
+        "zlink.mesh_node.peers.connected",
+        () => ObserveMeshPeerCount(static snapshot => snapshot.ConnectedPeers),
+        "{peer}"
+    );
+    private static readonly ObservableGauge<long> MeshPeersReady = Meter.CreateObservableGauge(
+        "zlink.mesh_node.peers.ready",
+        () => ObserveMeshPeerCount(static snapshot => snapshot.ReadyPeers),
+        "{peer}"
+    );
     private static readonly ObservableGauge<long> MeshChannelsReadyMembers =
         Meter.CreateObservableGauge(
             "zlink.mesh_node.channels.ready_members",
             ObserveReadyMembers,
-            "{member}");
-    private static readonly Counter<long> MeshChannelSelectionFailures =
-        Meter.CreateCounter<long>(
-            "zlink.mesh_node.channel.selection_failures",
-            "{failure}");
+            "{member}"
+        );
+    private static readonly Counter<long> MeshChannelSelectionFailures = Meter.CreateCounter<long>(
+        "zlink.mesh_node.channel.selection_failures",
+        "{failure}"
+    );
     private static readonly UpDownCounter<long> MeshRequestsInflight =
-        Meter.CreateUpDownCounter<long>(
-            "zlink.mesh_node.requests.inflight",
-            "{request}");
-    private static readonly Histogram<double> MeshRequestDuration =
-        Meter.CreateHistogram<double>("zlink.mesh_node.request.duration", "s");
-    private static readonly Counter<long> MeshRequestTimeouts =
-        Meter.CreateCounter<long>("zlink.mesh_node.request.timeouts", "{request}");
-    private static readonly Counter<long> MeshMessagesDropped =
-        Meter.CreateCounter<long>("zlink.mesh_node.messages.dropped", "{message}");
+        Meter.CreateUpDownCounter<long>("zlink.mesh_node.requests.inflight", "{request}");
+    private static readonly Histogram<double> MeshRequestDuration = Meter.CreateHistogram<double>(
+        "zlink.mesh_node.request.duration",
+        "s"
+    );
+    private static readonly Counter<long> MeshRequestTimeouts = Meter.CreateCounter<long>(
+        "zlink.mesh_node.request.timeouts",
+        "{request}"
+    );
+    private static readonly Counter<long> MeshMessagesDropped = Meter.CreateCounter<long>(
+        "zlink.mesh_node.messages.dropped",
+        "{message}"
+    );
 
     private static readonly ObservableGauge<long> ObjectCapacityActive =
         Meter.CreateObservableGauge(
             "zlink.object.capacity.active",
             () => ObservePopulationCapacity(static capacity => capacity.Active),
-            "{object}");
+            "{object}"
+        );
     private static readonly ObservableGauge<long> ObjectCapacityReserved =
         Meter.CreateObservableGauge(
             "zlink.object.capacity.reserved",
             () => ObservePopulationCapacity(static capacity => capacity.Reserved),
-            "{object}");
-    private static readonly ObservableGauge<long> ObjectCapacityLimit =
-        Meter.CreateObservableGauge(
-            "zlink.object.capacity.limit",
-            () => ObservePopulationCapacity(static capacity => capacity.Limit),
-            "{object}");
+            "{object}"
+        );
+    private static readonly ObservableGauge<long> ObjectCapacityLimit = Meter.CreateObservableGauge(
+        "zlink.object.capacity.limit",
+        () => ObservePopulationCapacity(static capacity => capacity.Limit),
+        "{object}"
+    );
     private static readonly ObservableGauge<long> SpotTypeCapacityActive =
         Meter.CreateObservableGauge(
             "zlink.spot.type.capacity.active",
             () => ObserveSpotTypeCapacity(static capacity => capacity.Active),
-            "{spot}");
+            "{spot}"
+        );
     private static readonly ObservableGauge<long> SpotTypeCapacityReserved =
         Meter.CreateObservableGauge(
             "zlink.spot.type.capacity.reserved",
             () => ObserveSpotTypeCapacity(static capacity => capacity.Reserved),
-            "{spot}");
+            "{spot}"
+        );
     private static readonly ObservableGauge<long> SpotTypeCapacityLimit =
         Meter.CreateObservableGauge(
             "zlink.spot.type.capacity.limit",
             () => ObserveSpotTypeCapacity(static capacity => capacity.Limit),
-            "{spot}");
+            "{spot}"
+        );
     private static readonly ObservableGauge<long> ObjectActivationActive =
         Meter.CreateObservableGauge(
             "zlink.object.activation.active",
             () => ObserveActivation(static activation => activation.Active),
-            "{activation}");
+            "{activation}"
+        );
     private static readonly ObservableGauge<long> ObjectActivationLimit =
         Meter.CreateObservableGauge(
             "zlink.object.activation.limit",
             () => ObserveActivation(static activation => activation.Limit),
-            "{activation}");
-    private static readonly Counter<long> RelocationStarted =
-        Meter.CreateCounter<long>("zlink.relocation.started", "{relocation}");
-    private static readonly Counter<long> RelocationCompleted =
-        Meter.CreateCounter<long>("zlink.relocation.completed", "{relocation}");
-    private static readonly Histogram<double> RelocationDuration =
-        Meter.CreateHistogram<double>("zlink.relocation.duration", "s");
-    private static readonly Histogram<long> RelocationBytes =
-        Meter.CreateHistogram<long>("zlink.relocation.bytes", "By");
+            "{activation}"
+        );
+    private static readonly Counter<long> RelocationStarted = Meter.CreateCounter<long>(
+        "zlink.relocation.started",
+        "{relocation}"
+    );
+    private static readonly Counter<long> RelocationCompleted = Meter.CreateCounter<long>(
+        "zlink.relocation.completed",
+        "{relocation}"
+    );
+    private static readonly Histogram<double> RelocationDuration = Meter.CreateHistogram<double>(
+        "zlink.relocation.duration",
+        "s"
+    );
+    private static readonly Histogram<long> RelocationBytes = Meter.CreateHistogram<long>(
+        "zlink.relocation.bytes",
+        "By"
+    );
     private static readonly Histogram<double> RelocationInterruption =
-        Meter.CreateHistogram<double>(
-            "zlink.relocation.interruption",
-            "s");
+        Meter.CreateHistogram<double>("zlink.relocation.interruption", "s");
+
     //  Spec 25 §5 — target-local S2→S3: Location Store CAS confirmation to
     //  application dispatch open for one relocation unit.
     private static readonly Histogram<double> RelocationTargetResume =
-        Meter.CreateHistogram<double>(
-            "zlink.relocation.target_resume",
-            "s");
+        Meter.CreateHistogram<double>("zlink.relocation.target_resume", "s");
+
     //  Spec 25 §5 — source-local S1→S4: cutover submit terminal to the point
     //  where the unit's Message Follow route becomes removable.
     private static readonly Histogram<double> RelocationRouteConvergence =
-        Meter.CreateHistogram<double>(
-            "zlink.relocation.route_convergence",
-            "s");
+        Meter.CreateHistogram<double>("zlink.relocation.route_convergence", "s");
+
     //  Spec 25 §5 — counts cutover-wait expiries where the target proceeded
     //  to the Location Store CAS via the fallback path without completeness
     //  verification.
-    private static readonly Counter<long> RelocationCutoverTimeout =
-        Meter.CreateCounter<long>(
-            "zlink.relocation.cutover_timeout",
-            "{fallback}");
+    private static readonly Counter<long> RelocationCutoverTimeout = Meter.CreateCounter<long>(
+        "zlink.relocation.cutover_timeout",
+        "{fallback}"
+    );
 
-    private static readonly Counter<long> InstanceSpotActivations =
-        Meter.CreateCounter<long>("zlink.instance_spot.activations", "{activation}");
+    private static readonly Counter<long> InstanceSpotActivations = Meter.CreateCounter<long>(
+        "zlink.instance_spot.activations",
+        "{activation}"
+    );
     private static readonly Histogram<double> InstanceSpotActivationDuration =
         Meter.CreateHistogram<double>("zlink.instance_spot.activation.duration", "s");
     private static readonly ObservableGauge<long> InstanceSpotPendingMessages =
         Meter.CreateObservableGauge(
             "zlink.instance_spot.pending.messages",
             () => ObserveInstanceSpot(static instance => checked((long)instance.PendingMessages)),
-            "{message}");
+            "{message}"
+        );
     private static readonly ObservableGauge<long> InstanceSpotPendingBytes =
         Meter.CreateObservableGauge(
             "zlink.instance_spot.pending.bytes",
             () => ObserveInstanceSpot(static instance => checked((long)instance.PendingBytes)),
-            "By");
-    private static readonly Counter<long> InstanceSpotClaimConflicts =
-        Meter.CreateCounter<long>("zlink.instance_spot.claim.conflicts", "{claim}");
+            "By"
+        );
+    private static readonly Counter<long> InstanceSpotClaimConflicts = Meter.CreateCounter<long>(
+        "zlink.instance_spot.claim.conflicts",
+        "{claim}"
+    );
 
-    private static readonly Counter<long> LocationStoreErrors =
-        Meter.CreateCounter<long>("zlink.location.store.errors", "{error}");
+    private static readonly Counter<long> LocationStoreErrors = Meter.CreateCounter<long>(
+        "zlink.location.store.errors",
+        "{error}"
+    );
     private static readonly Counter<long> LocationOwnerLeaseRenewFailures =
         Meter.CreateCounter<long>("zlink.location.owner_lease.renew.failures", "{failure}");
     private static readonly Histogram<double> LocationOwnerLeaseRenewLateness =
         Meter.CreateHistogram<double>("zlink.location.owner_lease.renew.lateness", "s");
-    private static readonly Counter<long> ObserverOverflow =
-        Meter.CreateCounter<long>("zlink.observability.events.overflow", "{event}");
+    private static readonly Counter<long> ObserverOverflow = Meter.CreateCounter<long>(
+        "zlink.observability.events.overflow",
+        "{event}"
+    );
 
     private static readonly ConcurrentDictionary<object, Func<string>> HostStateProviders = new();
     private static readonly ConcurrentDictionary<
         object,
-        Func<ZLinkHostCapacityStatus?>> HostCapacityProviders = new();
+        Func<ZLinkHostCapacityStatus?>
+    > HostCapacityProviders = new();
     private static readonly ConcurrentDictionary<
         object,
-        Func<ZLinkApplicationJobQueuePressureMetrics>>
-        ApplicationJobQueuePressureProviders = new();
-    private static readonly ObservableGauge<long> HostState =
-        Meter.CreateObservableGauge("zlink.host.state", ObserveHostStates, "{runtime}");
+        Func<ZLinkApplicationJobQueuePressureMetrics>
+    > ApplicationJobQueuePressureProviders = new();
+    private static readonly ObservableGauge<long> HostState = Meter.CreateObservableGauge(
+        "zlink.host.state",
+        ObserveHostStates,
+        "{runtime}"
+    );
     private static readonly ObservableGauge<long> HostCoreHwmEffectiveBudget =
         Meter.CreateObservableGauge(
             "zlink.host.core_hwm.effective_budget",
-            () => ObserveHostCapacity(
-                static capacity => capacity.CoreHwm.EffectiveBudgetBytes),
-            "By");
-    private static readonly ObservableGauge<long> HostCoreHwmApplied =
-        Meter.CreateObservableGauge(
-            "zlink.host.core_hwm.applied",
-            () => ObserveHostCapacity(
-                static capacity => capacity.CoreHwm.TotalAppliedHwmBytes),
-            "By");
+            () => ObserveHostCapacity(static capacity => capacity.CoreHwm.EffectiveBudgetBytes),
+            "By"
+        );
+    private static readonly ObservableGauge<long> HostCoreHwmApplied = Meter.CreateObservableGauge(
+        "zlink.host.core_hwm.applied",
+        () => ObserveHostCapacity(static capacity => capacity.CoreHwm.TotalAppliedHwmBytes),
+        "By"
+    );
     private static readonly ObservableGauge<long> HostCoreHwmAccounted =
         Meter.CreateObservableGauge(
             "zlink.host.core_hwm.accounted",
             ObserveHostCoreHwmAccounted,
-            "By");
+            "By"
+        );
     private static readonly ObservableGauge<long> HostCoreHwmCompletionAccounted =
         Meter.CreateObservableGauge(
             "zlink.host.core_hwm.completion_accounted",
             ObserveHostCoreHwmCompletionAccounted,
-            "By");
+            "By"
+        );
     private static readonly ObservableGauge<long> HostCoreHwmBlockedRatio =
         Meter.CreateObservableGauge(
             "zlink.host.core_hwm.blocked_ratio",
-            () => ObserveHostCapacity(
-                static capacity => capacity.CoreHwm.BlockedRatioPpm),
-            "{ppm}");
+            () => ObserveHostCapacity(static capacity => capacity.CoreHwm.BlockedRatioPpm),
+            "{ppm}"
+        );
     private static readonly ObservableGauge<long> HostApplicationJobQueueLimit =
         Meter.CreateObservableGauge(
             "zlink.host.application_job_queue.limit",
-            () => ObserveHostCapacity(static capacity =>
-                capacity.ApplicationJobQueue.EffectiveMaxQueuedApplicationJobs),
-            "{job}");
+            () =>
+                ObserveHostCapacity(static capacity =>
+                    capacity.ApplicationJobQueue.EffectiveMaxQueuedApplicationJobs
+                ),
+            "{job}"
+        );
     private static readonly ObservableGauge<long> HostApplicationJobQueueJobs =
         Meter.CreateObservableGauge(
             "zlink.host.application_job_queue.jobs",
             ObserveHostApplicationJobQueueJobs,
-            "{job}");
+            "{job}"
+        );
     private static readonly ObservableGauge<long> HostApplicationJobQueueWaiters =
         Meter.CreateObservableGauge(
             "zlink.host.application_job_queue.capacity_waiters",
-            () => ObserveHostCapacity(static capacity =>
-                capacity.ApplicationJobQueue.CapacityWaiters),
-            "{waiter}");
+            () =>
+                ObserveHostCapacity(static capacity =>
+                    capacity.ApplicationJobQueue.CapacityWaiters
+                ),
+            "{waiter}"
+        );
     private static readonly ObservableCounter<long> HostApplicationJobQueueWaits =
         Meter.CreateObservableCounter(
             "zlink.host.application_job_queue.capacity_waits",
-            () => ObserveHostCapacity(static capacity =>
-                capacity.ApplicationJobQueue.CapacityWaitCount),
-            "{wait}");
-    private static readonly ObservableCounter<double>
-        HostApplicationJobQueueWaitDuration =
-            Meter.CreateObservableCounter(
-                "zlink.host.application_job_queue.capacity_wait_duration",
-                ObserveHostApplicationJobQueueWaitDuration,
-                "s");
-    private static readonly ObservableGauge<long>
-        HostApplicationJobQueuePressureState =
-            Meter.CreateObservableGauge(
-                "zlink.host.application_job_queue.pressure_state",
-                ObserveHostApplicationJobQueuePressureState,
-                "{state}");
-    private static readonly ObservableCounter<long>
-        HostApplicationJobQueuePressureTransitions =
-            Meter.CreateObservableCounter(
-                "zlink.host.application_job_queue.pressure_transitions",
-                ObserveHostApplicationJobQueuePressureTransitions,
-                "{transition}");
-    private static readonly ObservableGauge<double>
-        HostApplicationJobQueuePauseDuration =
-            Meter.CreateObservableGauge(
-                "zlink.host.application_job_queue.pause_duration",
-                ObserveHostApplicationJobQueuePauseDuration,
-                "s");
-    private static readonly ObservableCounter<long>
-        HostApplicationJobQueueFlowStateConfigFailures =
-            Meter.CreateObservableCounter(
-                "zlink.host.application_job_queue.flow_state_config_failures",
-                ObserveHostApplicationJobQueueFlowStateConfigFailures,
-                "{failure}");
+            () =>
+                ObserveHostCapacity(static capacity =>
+                    capacity.ApplicationJobQueue.CapacityWaitCount
+                ),
+            "{wait}"
+        );
+    private static readonly ObservableCounter<double> HostApplicationJobQueueWaitDuration =
+        Meter.CreateObservableCounter(
+            "zlink.host.application_job_queue.capacity_wait_duration",
+            ObserveHostApplicationJobQueueWaitDuration,
+            "s"
+        );
+    private static readonly ObservableGauge<long> HostApplicationJobQueuePressureState =
+        Meter.CreateObservableGauge(
+            "zlink.host.application_job_queue.pressure_state",
+            ObserveHostApplicationJobQueuePressureState,
+            "{state}"
+        );
+    private static readonly ObservableCounter<long> HostApplicationJobQueuePressureTransitions =
+        Meter.CreateObservableCounter(
+            "zlink.host.application_job_queue.pressure_transitions",
+            ObserveHostApplicationJobQueuePressureTransitions,
+            "{transition}"
+        );
+    private static readonly ObservableGauge<double> HostApplicationJobQueuePauseDuration =
+        Meter.CreateObservableGauge(
+            "zlink.host.application_job_queue.pause_duration",
+            ObserveHostApplicationJobQueuePauseDuration,
+            "s"
+        );
+    private static readonly ObservableCounter<long> HostApplicationJobQueueFlowStateConfigFailures =
+        Meter.CreateObservableCounter(
+            "zlink.host.application_job_queue.flow_state_config_failures",
+            ObserveHostApplicationJobQueueFlowStateConfigFailures,
+            "{failure}"
+        );
     private static readonly Histogram<double> HostRelocationDuration =
         Meter.CreateHistogram<double>("zlink.host.relocation.duration", "s");
-    private static readonly Counter<long> HostRelocationBlocked =
-        Meter.CreateCounter<long>("zlink.host.relocation.blocked", "{operation}");
-    private static readonly Histogram<double> HostShutdownDuration =
-        Meter.CreateHistogram<double>("zlink.host.shutdown.duration", "s");
-    private static readonly Counter<long> HostShutdownForced =
-        Meter.CreateCounter<long>("zlink.host.shutdown.forced", "{operation}");
+    private static readonly Counter<long> HostRelocationBlocked = Meter.CreateCounter<long>(
+        "zlink.host.relocation.blocked",
+        "{operation}"
+    );
+    private static readonly Histogram<double> HostShutdownDuration = Meter.CreateHistogram<double>(
+        "zlink.host.shutdown.duration",
+        "s"
+    );
+    private static readonly Counter<long> HostShutdownForced = Meter.CreateCounter<long>(
+        "zlink.host.shutdown.forced",
+        "{operation}"
+    );
 
     public static void RecordStreamOpened(string transport)
     {
@@ -270,23 +327,18 @@ internal static class ZLinkRuntimeMetrics
             "transport",
             transport,
             "close_reason",
-            NormalizeStreamCloseReason(closeReason));
+            NormalizeStreamCloseReason(closeReason)
+        );
     }
 
     public static void RecordSpotCreated(string meshName, string kind)
     {
-        SafeAdd(
-            SpotCount,
-            1,
-            new TagList { { "mesh_name", meshName }, { "spot_kind", kind } });
+        SafeAdd(SpotCount, 1, new TagList { { "mesh_name", meshName }, { "spot_kind", kind } });
     }
 
     public static void RecordSpotClosed(string meshName, string kind)
     {
-        SafeAdd(
-            SpotCount,
-            -1,
-            new TagList { { "mesh_name", meshName }, { "spot_kind", kind } });
+        SafeAdd(SpotCount, -1, new TagList { { "mesh_name", meshName }, { "spot_kind", kind } });
     }
 
     public static void RecordActorCreated(string meshName)
@@ -298,21 +350,24 @@ internal static class ZLinkRuntimeMetrics
     {
         SafeAdd(ActorCount, -1, "mesh_name", meshName);
     }
-    internal static bool RelocationInterruptionEnabled =>
-        RelocationInterruption.Enabled;
+
+    internal static bool RelocationInterruptionEnabled => RelocationInterruption.Enabled;
 
     internal static void RecordRelocationInterruption(
         TimeSpan duration,
         string unitKind,
-        string? executionMode)
+        string? executionMode
+    )
     {
-        if (!RelocationInterruption.Enabled) return;
+        if (!RelocationInterruption.Enabled)
+            return;
         if (executionMode is null)
             SafeRecord(
                 RelocationInterruption,
                 Math.Max(0, duration.TotalSeconds),
                 "unit_kind",
-                unitKind);
+                unitKind
+            );
         else
             SafeRecord(
                 RelocationInterruption,
@@ -320,31 +375,32 @@ internal static class ZLinkRuntimeMetrics
                 "unit_kind",
                 unitKind,
                 "execution_mode",
-                executionMode);
+                executionMode
+            );
     }
 
-    internal static void RecordRelocationTargetResume(
-        TimeSpan duration,
-        string unitKind)
+    internal static void RecordRelocationTargetResume(TimeSpan duration, string unitKind)
     {
-        if (!RelocationTargetResume.Enabled) return;
+        if (!RelocationTargetResume.Enabled)
+            return;
         SafeRecord(
             RelocationTargetResume,
             Math.Max(0, duration.TotalSeconds),
             "unit_kind",
-            unitKind);
+            unitKind
+        );
     }
 
-    internal static void RecordRelocationRouteConvergence(
-        TimeSpan duration,
-        string unitKind)
+    internal static void RecordRelocationRouteConvergence(TimeSpan duration, string unitKind)
     {
-        if (!RelocationRouteConvergence.Enabled) return;
+        if (!RelocationRouteConvergence.Enabled)
+            return;
         SafeRecord(
             RelocationRouteConvergence,
             Math.Max(0, duration.TotalSeconds),
             "unit_kind",
-            unitKind);
+            unitKind
+        );
     }
 
     internal static void RecordRelocationCutoverTimeout(string unitKind) =>
@@ -353,34 +409,37 @@ internal static class ZLinkRuntimeMetrics
     public static ZLinkRelocationMetricOperation CreateRelocation(
         string meshName,
         ZLinkRelocationMetricObjectKind objectKind,
-        ZLinkRelocationMetricPolicy policy)
+        ZLinkRelocationMetricPolicy policy
+    )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(meshName);
-        if (!RelocationStarted.Enabled
+        if (
+            !RelocationStarted.Enabled
             && !RelocationCompleted.Enabled
             && !RelocationDuration.Enabled
-            && !RelocationBytes.Enabled)
+            && !RelocationBytes.Enabled
+        )
             return ZLinkRelocationMetricOperation.Disabled;
 
         return new ZLinkRelocationMetricOperation(
             meshName,
             RelocationObjectKind(objectKind),
-            RelocationPolicy(policy));
+            RelocationPolicy(policy)
+        );
     }
 
     public static ZLinkRelocationMetricOperation StartRelocation(
         string meshName,
         ZLinkRelocationMetricObjectKind objectKind,
-        ZLinkRelocationMetricPolicy policy)
+        ZLinkRelocationMetricPolicy policy
+    )
     {
         var operation = CreateRelocation(meshName, objectKind, policy);
         operation.Start();
         return operation;
     }
 
-    public static ZLinkRequestMetricOperation StartRequest(
-        string meshName,
-        string surface)
+    public static ZLinkRequestMetricOperation StartRequest(string meshName, string surface)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(meshName);
         ArgumentException.ThrowIfNullOrWhiteSpace(surface);
@@ -392,14 +451,16 @@ internal static class ZLinkRuntimeMetrics
     public static void RecordChannelSelectionFailure(
         string meshName,
         string channelName,
-        string reason)
+        string reason
+    )
     {
-        if (!MeshChannelSelectionFailures.Enabled) return;
+        if (!MeshChannelSelectionFailures.Enabled)
+            return;
         var tags = new TagList
         {
             { "mesh_name", meshName },
             { "channel_name", channelName },
-            { "reason", reason }
+            { "reason", reason },
         };
         SafeAdd(MeshChannelSelectionFailures, 1, tags);
     }
@@ -408,9 +469,11 @@ internal static class ZLinkRuntimeMetrics
         string meshName,
         string surface,
         string messageKind,
-        string reason)
+        string reason
+    )
     {
-        if (!MeshMessagesDropped.Enabled) return;
+        if (!MeshMessagesDropped.Enabled)
+            return;
         try
         {
             MeshMessagesDropped.Add(
@@ -418,15 +481,15 @@ internal static class ZLinkRuntimeMetrics
                 new KeyValuePair<string, object?>("mesh_name", meshName),
                 new KeyValuePair<string, object?>("surface", surface),
                 new KeyValuePair<string, object?>("message_kind", messageKind),
-                new KeyValuePair<string, object?>("reason", reason));
+                new KeyValuePair<string, object?>("reason", reason)
+            );
         }
-        catch
-        {
-        }
+        catch { }
     }
 
     public static IDisposable RegisterMeshSnapshots(
-        Func<IReadOnlyList<ZLinkRuntimeMetricMeshSnapshot>> snapshot)
+        Func<IReadOnlyList<ZLinkRuntimeMetricMeshSnapshot>> snapshot
+    )
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         var owner = new object();
@@ -442,88 +505,92 @@ internal static class ZLinkRuntimeMetrics
         return new ProviderRegistration(() => HostStateProviders.TryRemove(owner, out _));
     }
 
-    public static IDisposable RegisterHostCapacity(
-        Func<ZLinkHostCapacityStatus?> snapshot)
+    public static IDisposable RegisterHostCapacity(Func<ZLinkHostCapacityStatus?> snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         var owner = new object();
         HostCapacityProviders[owner] = snapshot;
-        return new ProviderRegistration(
-            () => HostCapacityProviders.TryRemove(owner, out _));
+        return new ProviderRegistration(() => HostCapacityProviders.TryRemove(owner, out _));
     }
 
     internal static IDisposable RegisterApplicationJobQueuePressure(
-        Func<ZLinkApplicationJobQueuePressureMetrics> snapshot)
+        Func<ZLinkApplicationJobQueuePressureMetrics> snapshot
+    )
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         var owner = new object();
         ApplicationJobQueuePressureProviders[owner] = snapshot;
-        return new ProviderRegistration(
-            () => ApplicationJobQueuePressureProviders.TryRemove(
-                owner,
-                out _));
+        return new ProviderRegistration(() =>
+            ApplicationJobQueuePressureProviders.TryRemove(owner, out _)
+        );
     }
 
     public static void RecordLocationStoreError(string operation) =>
         SafeAdd(LocationStoreErrors, 1, "operation", operation);
 
-    public static void RecordOwnerLeaseRenewFailure(
-        string scopeKind,
-        string scopeName) =>
+    public static void RecordOwnerLeaseRenewFailure(string scopeKind, string scopeName) =>
         SafeAdd(
             LocationOwnerLeaseRenewFailures,
             1,
             "scope_kind",
             scopeKind,
             "scope_name",
-            scopeName);
+            scopeName
+        );
 
     public static void RecordOwnerLeaseRenewLateness(
         TimeSpan lateness,
         string scopeKind,
-        string scopeName)
+        string scopeName
+    )
     {
-        if (!LocationOwnerLeaseRenewLateness.Enabled) return;
+        if (!LocationOwnerLeaseRenewLateness.Enabled)
+            return;
         SafeRecord(
             LocationOwnerLeaseRenewLateness,
             Math.Max(0, lateness.TotalSeconds),
             "scope_kind",
             scopeKind,
             "scope_name",
-            scopeName);
+            scopeName
+        );
     }
 
     public static void RecordOwnerLeaseRenewAttempt(
         TimeProvider timeProvider,
         long scheduledTimestamp,
         string scopeKind,
-        string scopeName)
+        string scopeName
+    )
     {
-        if (scheduledTimestamp == 0 || !LocationOwnerLeaseRenewLateness.Enabled) return;
+        if (scheduledTimestamp == 0 || !LocationOwnerLeaseRenewLateness.Enabled)
+            return;
         var elapsedTicks = timeProvider.GetTimestamp() - scheduledTimestamp;
-        if (elapsedTicks <= 0) return;
+        if (elapsedTicks <= 0)
+            return;
         SafeRecord(
             LocationOwnerLeaseRenewLateness,
             elapsedTicks / (double)timeProvider.TimestampFrequency,
             "scope_kind",
             scopeKind,
             "scope_name",
-            scopeName);
+            scopeName
+        );
     }
 
     public static void RecordObserverOverflow(string eventName)
     {
-        if (!ObserverOverflow.Enabled) return;
+        if (!ObserverOverflow.Enabled)
+            return;
         SafeAdd(ObserverOverflow, 1, "source", eventName);
     }
 
     public static ZLinkInstanceSpotMetricOperation StartInstanceSpotActivation(
         string meshName,
-        string instanceSpotType)
+        string instanceSpotType
+    )
     {
-        var operation = new ZLinkInstanceSpotMetricOperation(
-            meshName,
-            instanceSpotType);
+        var operation = new ZLinkInstanceSpotMetricOperation(meshName, instanceSpotType);
         operation.Start();
         return operation;
     }
@@ -531,13 +598,14 @@ internal static class ZLinkRuntimeMetrics
     public static void RecordInstanceSpotClaimConflict(
         string meshName,
         string instanceSpotType,
-        string reason)
+        string reason
+    )
     {
         var tags = new TagList
         {
             { "mesh_name", meshName },
             { "instance_spot_type", instanceSpotType },
-            { "reason", reason }
+            { "reason", reason },
         };
         SafeAdd(InstanceSpotClaimConflicts, 1, tags);
     }
@@ -551,7 +619,8 @@ internal static class ZLinkRuntimeMetrics
     private static void CompleteHostOperation(
         ZLinkHostMetricOperation operation,
         string outcome,
-        string reason)
+        string reason
+    )
     {
         if (operation.StartedTimestamp != 0 && operation.Histogram.Enabled)
         {
@@ -563,32 +632,30 @@ internal static class ZLinkRuntimeMetrics
                     "mode",
                     operation.Mode,
                     "outcome",
-                    outcome);
+                    outcome
+                );
             else
                 SafeRecord(operation.Histogram, seconds, "outcome", outcome);
         }
-        if (operation.IsRelocation
-            && string.Equals(outcome, "blocked", StringComparison.Ordinal))
-            SafeAdd(
-                HostRelocationBlocked,
-                1,
-                "mode",
-                operation.Mode,
-                "reason",
-                reason);
-        else if (!operation.IsRelocation
-                 && string.Equals(outcome, "force_stopped", StringComparison.Ordinal))
+        if (operation.IsRelocation && string.Equals(outcome, "blocked", StringComparison.Ordinal))
+            SafeAdd(HostRelocationBlocked, 1, "mode", operation.Mode, "reason", reason);
+        else if (
+            !operation.IsRelocation
+            && string.Equals(outcome, "force_stopped", StringComparison.Ordinal)
+        )
             SafeAdd(HostShutdownForced, 1, "reason", reason);
     }
 
     private static IEnumerable<Measurement<long>> ObserveMeshPeerCount(
-        Func<ZLinkRuntimeMetricMeshSnapshot, long> select)
+        Func<ZLinkRuntimeMetricMeshSnapshot, long> select
+    )
     {
         foreach (var snapshot in MeshSnapshots())
             yield return new Measurement<long>(
                 Math.Max(0, select(snapshot)),
                 new KeyValuePair<string, object?>("mesh_name", snapshot.MeshName),
-                new KeyValuePair<string, object?>("source", snapshot.Source));
+                new KeyValuePair<string, object?>("source", snapshot.Source)
+            );
     }
 
     private static IEnumerable<Measurement<long>> ObserveReadyMembers()
@@ -598,26 +665,32 @@ internal static class ZLinkRuntimeMetrics
             yield return new Measurement<long>(
                 Math.Max(0, channel.ReadyMembers),
                 new KeyValuePair<string, object?>("mesh_name", snapshot.MeshName),
-                new KeyValuePair<string, object?>("channel_name", channel.ChannelName));
+                new KeyValuePair<string, object?>("channel_name", channel.ChannelName)
+            );
     }
 
     private static IEnumerable<Measurement<long>> ObservePopulationCapacity(
-        Func<ZLinkRuntimeMetricCapacity, long> select)
+        Func<ZLinkRuntimeMetricCapacity, long> select
+    )
     {
         foreach (var snapshot in MeshSnapshots())
-        foreach (var (scope, capacity) in new[]
-                 {
-                     ("actor", snapshot.ActorCapacity),
-                     ("spot", snapshot.SpotCapacity)
-                 })
+        foreach (
+            var (scope, capacity) in new[]
+            {
+                ("actor", snapshot.ActorCapacity),
+                ("spot", snapshot.SpotCapacity),
+            }
+        )
             yield return new Measurement<long>(
                 Math.Max(0, select(capacity)),
                 new KeyValuePair<string, object?>("mesh_name", snapshot.MeshName),
-                new KeyValuePair<string, object?>("capacity_scope", scope));
+                new KeyValuePair<string, object?>("capacity_scope", scope)
+            );
     }
 
     private static IEnumerable<Measurement<long>> ObserveSpotTypeCapacity(
-        Func<ZLinkRuntimeMetricSpotTypeCapacity, long> select)
+        Func<ZLinkRuntimeMetricSpotTypeCapacity, long> select
+    )
     {
         foreach (var snapshot in MeshSnapshots())
         foreach (var capacity in snapshot.SpotTypeCapacities)
@@ -625,29 +698,32 @@ internal static class ZLinkRuntimeMetrics
                 Math.Max(0, select(capacity)),
                 new KeyValuePair<string, object?>("mesh_name", snapshot.MeshName),
                 new KeyValuePair<string, object?>("spot_kind", capacity.SpotKind),
-                new KeyValuePair<string, object?>("stable_type", capacity.StableType));
+                new KeyValuePair<string, object?>("stable_type", capacity.StableType)
+            );
     }
 
     private static IEnumerable<Measurement<long>> ObserveActivation(
-        Func<ZLinkRuntimeMetricActivation, long> select)
+        Func<ZLinkRuntimeMetricActivation, long> select
+    )
     {
         foreach (var snapshot in MeshSnapshots())
             yield return new Measurement<long>(
                 Math.Max(0, select(snapshot.Activation)),
-                new KeyValuePair<string, object?>("mesh_name", snapshot.MeshName));
+                new KeyValuePair<string, object?>("mesh_name", snapshot.MeshName)
+            );
     }
 
     private static IEnumerable<Measurement<long>> ObserveInstanceSpot(
-        Func<ZLinkRuntimeMetricInstanceSpot, long> select)
+        Func<ZLinkRuntimeMetricInstanceSpot, long> select
+    )
     {
         foreach (var snapshot in MeshSnapshots())
         foreach (var instance in snapshot.InstanceSpots)
             yield return new Measurement<long>(
                 Math.Max(0, select(instance)),
                 new KeyValuePair<string, object?>("mesh_name", snapshot.MeshName),
-                new KeyValuePair<string, object?>(
-                    "instance_spot_type",
-                    instance.InstanceSpotType));
+                new KeyValuePair<string, object?>("instance_spot_type", instance.InstanceSpotType)
+            );
     }
 
     private static IEnumerable<ZLinkRuntimeMetricMeshSnapshot> MeshSnapshots()
@@ -683,12 +759,14 @@ internal static class ZLinkRuntimeMetrics
             }
             yield return new Measurement<long>(
                 1,
-                new KeyValuePair<string, object?>("state", state));
+                new KeyValuePair<string, object?>("state", state)
+            );
         }
     }
 
     private static IEnumerable<Measurement<long>> ObserveHostCapacity(
-        Func<ZLinkHostCapacityStatus, ulong> select)
+        Func<ZLinkHostCapacityStatus, ulong> select
+    )
     {
         foreach (var capacity in HostCapacitySnapshots())
             yield return new Measurement<long>(ToMetricValue(select(capacity)));
@@ -700,59 +778,63 @@ internal static class ZLinkRuntimeMetrics
         {
             yield return new Measurement<long>(
                 ToMetricValue(capacity.CoreHwm.CurrentAccountedBytes),
-                new KeyValuePair<string, object?>("state", "current"));
+                new KeyValuePair<string, object?>("state", "current")
+            );
             yield return new Measurement<long>(
                 ToMetricValue(capacity.CoreHwm.PeakAccountedBytes),
-                new KeyValuePair<string, object?>("state", "peak"));
+                new KeyValuePair<string, object?>("state", "peak")
+            );
         }
     }
 
-    private static IEnumerable<Measurement<long>>
-        ObserveHostCoreHwmCompletionAccounted()
+    private static IEnumerable<Measurement<long>> ObserveHostCoreHwmCompletionAccounted()
     {
         foreach (var capacity in HostCapacitySnapshots())
         {
             yield return new Measurement<long>(
                 ToMetricValue(capacity.CoreHwm.CompletionCurrentAccountedBytes),
-                new KeyValuePair<string, object?>("state", "current"));
+                new KeyValuePair<string, object?>("state", "current")
+            );
             yield return new Measurement<long>(
                 ToMetricValue(capacity.CoreHwm.CompletionPeakAccountedBytes),
-                new KeyValuePair<string, object?>("state", "peak"));
+                new KeyValuePair<string, object?>("state", "peak")
+            );
         }
     }
 
-    private static IEnumerable<Measurement<long>>
-        ObserveHostApplicationJobQueueJobs()
+    private static IEnumerable<Measurement<long>> ObserveHostApplicationJobQueueJobs()
     {
         foreach (var capacity in HostCapacitySnapshots())
         {
             var queue = capacity.ApplicationJobQueue;
             yield return new Measurement<long>(
                 ToMetricValue(queue.ReservedSupplyPermits),
-                new KeyValuePair<string, object?>("state", "reserved"));
+                new KeyValuePair<string, object?>("state", "reserved")
+            );
             yield return new Measurement<long>(
                 ToMetricValue(queue.QueuedApplicationJobs),
-                new KeyValuePair<string, object?>("state", "queued"));
+                new KeyValuePair<string, object?>("state", "queued")
+            );
             yield return new Measurement<long>(
                 ToMetricValue(queue.PermitsInUse),
-                new KeyValuePair<string, object?>("state", "in_use"));
+                new KeyValuePair<string, object?>("state", "in_use")
+            );
             yield return new Measurement<long>(
                 ToMetricValue(queue.PeakPermitsInUse),
-                new KeyValuePair<string, object?>("state", "peak"));
+                new KeyValuePair<string, object?>("state", "peak")
+            );
         }
     }
 
-    private static IEnumerable<Measurement<double>>
-        ObserveHostApplicationJobQueueWaitDuration()
+    private static IEnumerable<Measurement<double>> ObserveHostApplicationJobQueueWaitDuration()
     {
         foreach (var capacity in HostCapacitySnapshots())
-            yield return new Measurement<double>(Math.Max(
-                0d,
-                capacity.ApplicationJobQueue.CapacityWaitDuration.TotalSeconds));
+            yield return new Measurement<double>(
+                Math.Max(0d, capacity.ApplicationJobQueue.CapacityWaitDuration.TotalSeconds)
+            );
     }
 
-    private static IEnumerable<Measurement<long>>
-        ObserveHostApplicationJobQueuePressureState()
+    private static IEnumerable<Measurement<long>> ObserveHostApplicationJobQueuePressureState()
     {
         foreach (var pressure in ApplicationJobQueuePressureSnapshots())
             yield return new Measurement<long>(
@@ -761,47 +843,52 @@ internal static class ZLinkRuntimeMetrics
                     "state",
                     pressure.State == ZLinkApplicationJobQueuePressureState.Paused
                         ? "paused"
-                        : "running"));
+                        : "running"
+                )
+            );
     }
 
-    private static IEnumerable<Measurement<long>>
-        ObserveHostApplicationJobQueuePressureTransitions()
+    private static IEnumerable<
+        Measurement<long>
+    > ObserveHostApplicationJobQueuePressureTransitions()
     {
         foreach (var pressure in ApplicationJobQueuePressureSnapshots())
         {
             yield return new Measurement<long>(
                 ToMetricValue(pressure.RunningTransitionCount),
-                new KeyValuePair<string, object?>("state", "running"));
+                new KeyValuePair<string, object?>("state", "running")
+            );
             yield return new Measurement<long>(
                 ToMetricValue(pressure.PausedTransitionCount),
-                new KeyValuePair<string, object?>("state", "paused"));
+                new KeyValuePair<string, object?>("state", "paused")
+            );
         }
     }
 
-    private static IEnumerable<Measurement<double>>
-        ObserveHostApplicationJobQueuePauseDuration()
+    private static IEnumerable<Measurement<double>> ObserveHostApplicationJobQueuePauseDuration()
     {
         foreach (var pressure in ApplicationJobQueuePressureSnapshots())
         {
             yield return new Measurement<double>(
                 Math.Max(0d, pressure.CurrentPauseDuration.TotalSeconds),
-                new KeyValuePair<string, object?>("state", "current"));
+                new KeyValuePair<string, object?>("state", "current")
+            );
             yield return new Measurement<double>(
                 Math.Max(0d, pressure.CumulativePauseDuration.TotalSeconds),
-                new KeyValuePair<string, object?>("state", "cumulative"));
+                new KeyValuePair<string, object?>("state", "cumulative")
+            );
         }
     }
 
-    private static IEnumerable<Measurement<long>>
-        ObserveHostApplicationJobQueueFlowStateConfigFailures()
+    private static IEnumerable<
+        Measurement<long>
+    > ObserveHostApplicationJobQueueFlowStateConfigFailures()
     {
         foreach (var pressure in ApplicationJobQueuePressureSnapshots())
-            yield return new Measurement<long>(
-                ToMetricValue(pressure.FlowStateConfigFailures));
+            yield return new Measurement<long>(ToMetricValue(pressure.FlowStateConfigFailures));
     }
 
-    private static IEnumerable<ZLinkApplicationJobQueuePressureMetrics>
-        ApplicationJobQueuePressureSnapshots()
+    private static IEnumerable<ZLinkApplicationJobQueuePressureMetrics> ApplicationJobQueuePressureSnapshots()
     {
         foreach (var provider in ApplicationJobQueuePressureProviders.Values)
         {
@@ -854,12 +941,13 @@ internal static class ZLinkRuntimeMetrics
             "heartbeat_timeout" => "heartbeat_timeout",
             "server_shutdown" or "server_drain" => "server_shutdown",
             "protocol_error" => "protocol_error",
-            _ => "transport_error"
+            _ => "transport_error",
         };
 
     private static void RecordElapsed(Histogram<double> histogram, long startedTimestamp)
     {
-        if (startedTimestamp == 0 || !histogram.Enabled) return;
+        if (startedTimestamp == 0 || !histogram.Enabled)
+            return;
         SafeRecord(histogram, Stopwatch.GetElapsedTime(startedTimestamp).TotalSeconds);
     }
 
@@ -867,97 +955,88 @@ internal static class ZLinkRuntimeMetrics
         Histogram<double> histogram,
         long startedTimestamp,
         string tagName,
-        object? tagValue)
+        object? tagValue
+    )
     {
-        if (startedTimestamp == 0 || !histogram.Enabled) return;
+        if (startedTimestamp == 0 || !histogram.Enabled)
+            return;
         SafeRecord(
             histogram,
             Stopwatch.GetElapsedTime(startedTimestamp).TotalSeconds,
             tagName,
-            tagValue);
+            tagValue
+        );
     }
 
     private static void SafeAdd(Counter<long> counter, long value)
     {
-        if (!counter.Enabled) return;
+        if (!counter.Enabled)
+            return;
         try
         {
             counter.Add(value);
         }
-        catch
-        {
-        }
+        catch { }
     }
 
     private static void SafeAdd(Counter<long> counter, long value, in TagList tags)
     {
-        if (!counter.Enabled) return;
+        if (!counter.Enabled)
+            return;
         try
         {
             counter.Add(value, tags);
         }
-        catch
-        {
-        }
+        catch { }
     }
 
-    private static void SafeAdd(
-        Counter<long> counter,
-        long value,
-        string tagName,
-        object? tagValue)
+    private static void SafeAdd(Counter<long> counter, long value, string tagName, object? tagValue)
     {
-        if (!counter.Enabled) return;
+        if (!counter.Enabled)
+            return;
         try
         {
             counter.Add(value, new KeyValuePair<string, object?>(tagName, tagValue));
         }
-        catch
-        {
-        }
+        catch { }
     }
 
     private static void SafeAdd(UpDownCounter<long> counter, long value)
     {
-        if (!counter.Enabled) return;
+        if (!counter.Enabled)
+            return;
         try
         {
             counter.Add(value);
         }
-        catch
-        {
-        }
+        catch { }
     }
 
     private static void SafeAdd(
         UpDownCounter<long> counter,
         long value,
         string tagName,
-        object? tagValue)
+        object? tagValue
+    )
     {
-        if (!counter.Enabled) return;
+        if (!counter.Enabled)
+            return;
         try
         {
             counter.Add(value, new KeyValuePair<string, object?>(tagName, tagValue));
         }
-        catch
-        {
-        }
+        catch { }
     }
 
-    private static void SafeAdd(
-        UpDownCounter<long> counter,
-        long value,
-        in TagList tags)
+    private static void SafeAdd(UpDownCounter<long> counter, long value, in TagList tags)
     {
-        if (!counter.Enabled) return;
+        if (!counter.Enabled)
+            return;
         try
         {
             counter.Add(value, tags);
         }
-        catch
-        {
-        }
+        catch { }
     }
 
     private static void SafeAdd(
@@ -966,47 +1045,47 @@ internal static class ZLinkRuntimeMetrics
         string firstTagName,
         object? firstTagValue,
         string secondTagName,
-        object? secondTagValue)
+        object? secondTagValue
+    )
     {
-        if (!counter.Enabled) return;
+        if (!counter.Enabled)
+            return;
         try
         {
             counter.Add(
                 value,
                 new KeyValuePair<string, object?>(firstTagName, firstTagValue),
-                new KeyValuePair<string, object?>(secondTagName, secondTagValue));
+                new KeyValuePair<string, object?>(secondTagName, secondTagValue)
+            );
         }
-        catch
-        {
-        }
+        catch { }
     }
 
     private static void SafeRecord(Histogram<double> histogram, double value)
     {
-        if (!histogram.Enabled) return;
+        if (!histogram.Enabled)
+            return;
         try
         {
             histogram.Record(value);
         }
-        catch
-        {
-        }
+        catch { }
     }
 
     private static void SafeRecord(
         Histogram<double> histogram,
         double value,
         string tagName,
-        object? tagValue)
+        object? tagValue
+    )
     {
-        if (!histogram.Enabled) return;
+        if (!histogram.Enabled)
+            return;
         try
         {
             histogram.Record(value, new KeyValuePair<string, object?>(tagName, tagValue));
         }
-        catch
-        {
-        }
+        catch { }
     }
 
     private static void SafeRecord(
@@ -1015,48 +1094,48 @@ internal static class ZLinkRuntimeMetrics
         string firstTagName,
         object? firstTagValue,
         string secondTagName,
-        object? secondTagValue)
+        object? secondTagValue
+    )
     {
-        if (!histogram.Enabled) return;
+        if (!histogram.Enabled)
+            return;
         try
         {
             histogram.Record(
                 value,
                 new KeyValuePair<string, object?>(firstTagName, firstTagValue),
-                new KeyValuePair<string, object?>(secondTagName, secondTagValue));
+                new KeyValuePair<string, object?>(secondTagName, secondTagValue)
+            );
         }
-        catch
-        {
-        }
+        catch { }
     }
 
     private static void SafeRecord(Histogram<long> histogram, long value)
     {
-        if (!histogram.Enabled) return;
+        if (!histogram.Enabled)
+            return;
         try
         {
             histogram.Record(value);
         }
-        catch
-        {
-        }
+        catch { }
     }
 
     private static void SafeRecord(Histogram<long> histogram, long value, in TagList tags)
     {
-        if (!histogram.Enabled) return;
+        if (!histogram.Enabled)
+            return;
         try
         {
             histogram.Record(value, tags);
         }
-        catch
-        {
-        }
+        catch { }
     }
 
     private static void CompleteRelocation(
         ZLinkRelocationMetricOperation operation,
-        ZLinkRelocationMetricOutcome outcome)
+        ZLinkRelocationMetricOutcome outcome
+    )
     {
         var outcomeValue = RelocationOutcome(outcome);
         var terminalTags = operation.TerminalTags(outcomeValue);
@@ -1066,11 +1145,10 @@ internal static class ZLinkRuntimeMetrics
             {
                 RelocationDuration.Record(
                     Stopwatch.GetElapsedTime(operation.StartedTimestamp).TotalSeconds,
-                    terminalTags);
+                    terminalTags
+                );
             }
-            catch
-            {
-            }
+            catch { }
     }
 
     internal sealed class ZLinkRequestMetricOperation
@@ -1088,25 +1166,16 @@ internal static class ZLinkRuntimeMetrics
 
         internal void Start()
         {
-            var tags = new TagList
-            {
-                { "mesh_name", _meshName },
-                { "surface", _surface }
-            };
+            var tags = new TagList { { "mesh_name", _meshName }, { "surface", _surface } };
             SafeAdd(MeshRequestsInflight, 1, tags);
-            _startedTimestamp = MeshRequestDuration.Enabled
-                ? Stopwatch.GetTimestamp()
-                : 0;
+            _startedTimestamp = MeshRequestDuration.Enabled ? Stopwatch.GetTimestamp() : 0;
         }
 
         internal void Complete(string outcome)
         {
-            if (Interlocked.Exchange(ref _completed, 1) != 0) return;
-            var tags = new TagList
-            {
-                { "mesh_name", _meshName },
-                { "surface", _surface }
-            };
+            if (Interlocked.Exchange(ref _completed, 1) != 0)
+                return;
+            var tags = new TagList { { "mesh_name", _meshName }, { "surface", _surface } };
             SafeAdd(MeshRequestsInflight, -1, tags);
             if (_startedTimestamp != 0 && MeshRequestDuration.Enabled)
             {
@@ -1115,18 +1184,17 @@ internal static class ZLinkRuntimeMetrics
                 {
                     MeshRequestDuration.Record(
                         Stopwatch.GetElapsedTime(_startedTimestamp).TotalSeconds,
-                        tags);
+                        tags
+                    );
                 }
-                catch
-                {
-                }
+                catch { }
             }
             if (string.Equals(outcome, "timed_out", StringComparison.Ordinal))
-                SafeAdd(MeshRequestTimeouts, 1, new TagList
-                {
-                    { "mesh_name", _meshName },
-                    { "surface", _surface }
-                });
+                SafeAdd(
+                    MeshRequestTimeouts,
+                    1,
+                    new TagList { { "mesh_name", _meshName }, { "surface", _surface } }
+                );
         }
     }
 
@@ -1137,7 +1205,8 @@ internal static class ZLinkRuntimeMetrics
         internal ZLinkHostMetricOperation(
             Histogram<double> histogram,
             string mode,
-            bool isRelocation)
+            bool isRelocation
+        )
         {
             Histogram = histogram;
             Mode = mode;
@@ -1152,7 +1221,8 @@ internal static class ZLinkRuntimeMetrics
 
         internal void Complete(string outcome, string reason)
         {
-            if (Interlocked.Exchange(ref _completed, 1) != 0) return;
+            if (Interlocked.Exchange(ref _completed, 1) != 0)
+                return;
             CompleteHostOperation(this, outcome, reason);
         }
     }
@@ -1164,9 +1234,7 @@ internal static class ZLinkRuntimeMetrics
         private long _startedTimestamp;
         private int _completed;
 
-        internal ZLinkInstanceSpotMetricOperation(
-            string meshName,
-            string instanceSpotType)
+        internal ZLinkInstanceSpotMetricOperation(string meshName, string instanceSpotType)
         {
             _meshName = meshName;
             _instanceSpotType = instanceSpotType;
@@ -1181,12 +1249,13 @@ internal static class ZLinkRuntimeMetrics
 
         internal void Complete(string outcome)
         {
-            if (Interlocked.Exchange(ref _completed, 1) != 0) return;
+            if (Interlocked.Exchange(ref _completed, 1) != 0)
+                return;
             var tags = new TagList
             {
                 { "mesh_name", _meshName },
                 { "instance_spot_type", _instanceSpotType },
-                { "outcome", outcome }
+                { "outcome", outcome },
             };
             SafeAdd(InstanceSpotActivations, 1, tags);
             if (_startedTimestamp != 0 && InstanceSpotActivationDuration.Enabled)
@@ -1194,11 +1263,10 @@ internal static class ZLinkRuntimeMetrics
                 {
                     InstanceSpotActivationDuration.Record(
                         Stopwatch.GetElapsedTime(_startedTimestamp).TotalSeconds,
-                        tags);
+                        tags
+                    );
                 }
-                catch
-                {
-                }
+                catch { }
         }
     }
 
@@ -1208,7 +1276,7 @@ internal static class ZLinkRuntimeMetrics
             ZLinkRelocationMetricObjectKind.Actor => "actor",
             ZLinkRelocationMetricObjectKind.UserSpot => "user_spot",
             ZLinkRelocationMetricObjectKind.InstanceSpot => "instance_spot",
-            _ => throw new ArgumentOutOfRangeException(nameof(objectKind))
+            _ => throw new ArgumentOutOfRangeException(nameof(objectKind)),
         };
 
     private static string RelocationPolicy(ZLinkRelocationMetricPolicy policy) =>
@@ -1216,7 +1284,7 @@ internal static class ZLinkRuntimeMetrics
         {
             ZLinkRelocationMetricPolicy.Recreate => "recreate",
             ZLinkRelocationMetricPolicy.Snapshot => "snapshot",
-            _ => throw new ArgumentOutOfRangeException(nameof(policy))
+            _ => throw new ArgumentOutOfRangeException(nameof(policy)),
         };
 
     private static string RelocationOutcome(ZLinkRelocationMetricOutcome outcome) =>
@@ -1227,7 +1295,7 @@ internal static class ZLinkRuntimeMetrics
             ZLinkRelocationMetricOutcome.Recovered => "recovered",
             ZLinkRelocationMetricOutcome.Failed => "failed",
             ZLinkRelocationMetricOutcome.Shutdown => "shutdown",
-            _ => throw new ArgumentOutOfRangeException(nameof(outcome))
+            _ => throw new ArgumentOutOfRangeException(nameof(outcome)),
         };
 
     internal sealed class ZLinkRelocationMetricOperation
@@ -1249,10 +1317,7 @@ internal static class ZLinkRuntimeMetrics
             Policy = string.Empty;
         }
 
-        internal ZLinkRelocationMetricOperation(
-            string meshName,
-            string objectKind,
-            string policy)
+        internal ZLinkRelocationMetricOperation(string meshName, string objectKind, string policy)
         {
             MeshName = meshName;
             ObjectKind = objectKind;
@@ -1269,7 +1334,7 @@ internal static class ZLinkRuntimeMetrics
             {
                 { "mesh_name", MeshName },
                 { "object_kind", ObjectKind },
-                { "policy", Policy }
+                { "policy", Policy },
             };
 
         internal TagList TerminalTags(string outcome) =>
@@ -1278,7 +1343,7 @@ internal static class ZLinkRuntimeMetrics
                 { "mesh_name", MeshName },
                 { "object_kind", ObjectKind },
                 { "policy", Policy },
-                { "outcome", outcome }
+                { "outcome", outcome },
             };
 
         internal void Complete(ZLinkRelocationMetricOutcome outcome)
@@ -1304,12 +1369,12 @@ internal static class ZLinkRuntimeMetrics
 
         internal void Start()
         {
-            if (ReferenceEquals(this, Disabled)
-                || Interlocked.CompareExchange(ref _state, Starting, Created) != Created)
+            if (
+                ReferenceEquals(this, Disabled)
+                || Interlocked.CompareExchange(ref _state, Starting, Created) != Created
+            )
                 return;
-            _startedTimestamp = RelocationDuration.Enabled
-                ? Stopwatch.GetTimestamp()
-                : 0;
+            _startedTimestamp = RelocationDuration.Enabled ? Stopwatch.GetTimestamp() : 0;
             SafeAdd(RelocationStarted, 1, StartTags);
             Volatile.Write(ref _state, Started);
         }
@@ -1320,13 +1385,13 @@ internal enum ZLinkRelocationMetricObjectKind
 {
     Actor,
     UserSpot,
-    InstanceSpot
+    InstanceSpot,
 }
 
 internal enum ZLinkRelocationMetricPolicy
 {
     Recreate,
-    Snapshot
+    Snapshot,
 }
 
 internal enum ZLinkRelocationMetricOutcome
@@ -1335,7 +1400,7 @@ internal enum ZLinkRelocationMetricOutcome
     Aborted,
     Recovered,
     Failed,
-    Shutdown
+    Shutdown,
 }
 
 internal sealed record ZLinkRuntimeMetricMeshSnapshot(
@@ -1349,29 +1414,25 @@ internal sealed record ZLinkRuntimeMetricMeshSnapshot(
     ZLinkRuntimeMetricCapacity SpotCapacity,
     IReadOnlyList<ZLinkRuntimeMetricSpotTypeCapacity> SpotTypeCapacities,
     ZLinkRuntimeMetricActivation Activation,
-    IReadOnlyList<ZLinkRuntimeMetricInstanceSpot> InstanceSpots);
+    IReadOnlyList<ZLinkRuntimeMetricInstanceSpot> InstanceSpots
+);
 
-internal sealed record ZLinkRuntimeMetricChannel(
-    string ChannelName,
-    long ReadyMembers);
+internal sealed record ZLinkRuntimeMetricChannel(string ChannelName, long ReadyMembers);
 
-internal sealed record ZLinkRuntimeMetricCapacity(
-    long Active,
-    long Reserved,
-    long Limit);
+internal sealed record ZLinkRuntimeMetricCapacity(long Active, long Reserved, long Limit);
 
 internal sealed record ZLinkRuntimeMetricSpotTypeCapacity(
     string SpotKind,
     string StableType,
     long Active,
     long Reserved,
-    long Limit);
+    long Limit
+);
 
-internal sealed record ZLinkRuntimeMetricActivation(
-    long Active,
-    long Limit);
+internal sealed record ZLinkRuntimeMetricActivation(long Active, long Limit);
 
 internal sealed record ZLinkRuntimeMetricInstanceSpot(
     string InstanceSpotType,
     ulong PendingMessages,
-    ulong PendingBytes);
+    ulong PendingBytes
+);

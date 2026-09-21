@@ -1,8 +1,4 @@
-import type {
-  ActorRef,
-  ZLinkActor,
-  ZLinkActorMembership
-} from '../../contracts';
+import type { ActorRef, ZLinkActor, ZLinkActorMembership } from '../../contracts';
 import { ZLinkConfigurationException } from '../configuration';
 
 export const ZLINK_ACTOR_LIFECYCLE_SNAPSHOT = Symbol('zlink.actor.lifecycle-snapshot');
@@ -61,9 +57,10 @@ export function createActorMembership(
 
 function lifecycleSource(actor: ZLinkActor): ZLinkActorLifecycleSnapshotSource {
   const rawContext: unknown = actor.context;
-  const context = typeof rawContext === 'object' && rawContext !== null
-    ? (rawContext as ZLinkActorLifecycleSnapshotContext)
-    : undefined;
+  const context =
+    typeof rawContext === 'object' && rawContext !== null
+      ? (rawContext as ZLinkActorLifecycleSnapshotContext)
+      : undefined;
   // A caller can hand in a value that carries no Framework context at all, so the
   // failure path reports the configuration error instead of dereferencing it.
   const actorId = context?.actorId ?? '<unknown>';

@@ -15,26 +15,26 @@ namespace zlink::framework::runtime::mesh
 std::string service_mailbox_t::application_owner (host::owner_kind_t kind, std::string_view id)
 {
     switch (kind) {
-        case host::owner_kind_t::node: return "node";
-        case host::owner_kind_t::channel: return "channel:" + std::string (id);
-        case host::owner_kind_t::spot: return "spot:" + std::string (id);
-        case host::owner_kind_t::actor: return "actor:" + std::string (id);
+        case host::owner_kind_t::node:
+            return "node";
+        case host::owner_kind_t::channel:
+            return "channel:" + std::string (id);
+        case host::owner_kind_t::spot:
+            return "spot:" + std::string (id);
+        case host::owner_kind_t::actor:
+            return "actor:" + std::string (id);
     }
     throw std::invalid_argument ("unknown application owner kind");
 }
 
-service_mailbox_t::domain_t &
-service_mailbox_t::domain (service_mailbox_domain_t value)
+service_mailbox_t::domain_t &service_mailbox_t::domain (service_mailbox_domain_t value)
 {
-    return value == service_mailbox_domain_t::application ? _application
-                                                           : _infrastructure;
+    return value == service_mailbox_domain_t::application ? _application : _infrastructure;
 }
 
-const service_mailbox_t::domain_t &
-service_mailbox_t::domain (service_mailbox_domain_t value) const
+const service_mailbox_t::domain_t &service_mailbox_t::domain (service_mailbox_domain_t value) const
 {
-    return value == service_mailbox_domain_t::application ? _application
-                                                           : _infrastructure;
+    return value == service_mailbox_domain_t::application ? _application : _infrastructure;
 }
 
 bool service_mailbox_t::try_enqueue (service_mailbox_record_t &&record)
@@ -70,9 +70,7 @@ bool service_mailbox_t::try_enqueue (service_mailbox_record_t &&record)
 }
 
 std::optional<service_mailbox_claim_t> service_mailbox_t::try_claim (
-  service_mailbox_domain_t domain_value,
-  std::size_t message_budget,
-  std::size_t byte_budget)
+  service_mailbox_domain_t domain_value, std::size_t message_budget, std::size_t byte_budget)
 {
     if (message_budget == 0 || byte_budget == 0) {
         throw std::invalid_argument ("service mailbox claim budgets must be positive");
@@ -87,22 +85,19 @@ std::optional<service_mailbox_claim_t> service_mailbox_t::try_claim (
             || found->second.records.empty ()) {
             continue;
         }
-        return claim_owner_locked (
-          source, domain_value, owner, message_budget, byte_budget);
+        return claim_owner_locked (source, domain_value, owner, message_budget, byte_budget);
     }
     return std::nullopt;
 }
 
 std::optional<service_mailbox_claim_t>
-service_mailbox_t::try_claim_owner (
-  service_mailbox_domain_t domain_value,
-  const std::string &owner,
-  std::size_t message_budget,
-  std::size_t byte_budget)
+service_mailbox_t::try_claim_owner (service_mailbox_domain_t domain_value,
+                                    const std::string &owner,
+                                    std::size_t message_budget,
+                                    std::size_t byte_budget)
 {
     if (owner.empty () || message_budget == 0 || byte_budget == 0) {
-        throw std::invalid_argument (
-          "service mailbox owner claim arguments are invalid");
+        throw std::invalid_argument ("service mailbox owner claim arguments are invalid");
     }
     std::lock_guard lock (_mutex);
     auto &source = domain (domain_value);
@@ -112,21 +107,18 @@ service_mailbox_t::try_claim_owner (
         return std::nullopt;
     }
     if (found->second.phase != owner_phase_t::draining) {
-        source.ready.erase (
-          std::remove (source.ready.begin (), source.ready.end (), owner),
-          source.ready.end ());
+        source.ready.erase (std::remove (source.ready.begin (), source.ready.end (), owner),
+                            source.ready.end ());
     }
-    return claim_owner_locked (
-      source, domain_value, owner, message_budget, byte_budget);
+    return claim_owner_locked (source, domain_value, owner, message_budget, byte_budget);
 }
 
 std::optional<service_mailbox_claim_t>
-service_mailbox_t::claim_owner_locked (
-  domain_t &source,
-  service_mailbox_domain_t domain_value,
-  const std::string &owner,
-  std::size_t message_budget,
-  std::size_t byte_budget)
+service_mailbox_t::claim_owner_locked (domain_t &source,
+                                       service_mailbox_domain_t domain_value,
+                                       const std::string &owner,
+                                       std::size_t message_budget,
+                                       std::size_t byte_budget)
 {
     const auto found = source.owners.find (owner);
     if (found == source.owners.end () || found->second.active_messages != 0
@@ -140,15 +132,12 @@ service_mailbox_t::claim_owner_locked (
         _next_claim_serial = 1;
     }
     queue.claim_serial = _next_claim_serial++;
-    service_mailbox_claim_t claim{
-      owner, domain_value, queue.claim_serial, {}};
+    service_mailbox_claim_t claim{owner, domain_value, queue.claim_serial, {}};
     std::size_t claimed_bytes = 0;
-    while (!queue.records.empty ()
-           && claim.records.size () < message_budget) {
+    while (!queue.records.empty () && claim.records.size () < message_budget) {
         const auto next_bytes = retained_bytes (queue.records.front ());
         if (!claim.records.empty ()
-            && (claimed_bytes >= byte_budget
-                || next_bytes > byte_budget - claimed_bytes)) {
+            && (claimed_bytes >= byte_budget || next_bytes > byte_budget - claimed_bytes)) {
             break;
         }
         if (next_bytes > std::numeric_limits<std::size_t>::max () - claimed_bytes) {
@@ -172,8 +161,7 @@ service_mailbox_t::claim_owner_locked (
     return claim;
 }
 
-std::size_t
-service_mailbox_t::retained_bytes (const service_mailbox_record_t &record)
+std::size_t service_mailbox_t::retained_bytes (const service_mailbox_record_t &record)
 {
     std::size_t result = dispatch_limits::fixed_work_byte_cost;
     const auto add = [&] (const auto &parts) {
@@ -198,8 +186,7 @@ bool service_mailbox_t::release (const service_mailbox_claim_t &claim)
         || found->second.claim_serial != claim.serial)
         return false;
     auto &queue = found->second;
-    if (claim.claimed_messages > queue.active_messages
-        || claim.claimed_bytes > queue.active_bytes
+    if (claim.claimed_messages > queue.active_messages || claim.claimed_bytes > queue.active_bytes
         || claim.claimed_messages > target.active_messages
         || claim.claimed_bytes > target.active_bytes)
         return false;
@@ -224,7 +211,7 @@ bool service_mailbox_t::release (const service_mailbox_claim_t &claim)
 }
 
 void service_mailbox_t::bind_application_dispatch (application_prepare_t prepare,
-                                                  application_ready_t ready)
+                                                   application_ready_t ready)
 {
     std::lock_guard lock (_mutex);
     _application_prepare = std::move (prepare);
@@ -302,15 +289,13 @@ void service_mailbox_t::close ()
     _closed = true;
 }
 
-std::size_t service_mailbox_t::pending_messages (
-  service_mailbox_domain_t domain_value) const
+std::size_t service_mailbox_t::pending_messages (service_mailbox_domain_t domain_value) const
 {
     std::lock_guard lock (_mutex);
     return domain (domain_value).messages;
 }
 
-std::size_t
-service_mailbox_t::pending_bytes (service_mailbox_domain_t domain_value) const
+std::size_t service_mailbox_t::pending_bytes (service_mailbox_domain_t domain_value) const
 {
     std::lock_guard lock (_mutex);
     return domain (domain_value).bytes;

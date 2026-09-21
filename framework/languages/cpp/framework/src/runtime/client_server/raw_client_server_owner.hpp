@@ -42,8 +42,7 @@ namespace zlink::framework::runtime::client_server
  * response body or the error envelope's code/message pair. */
 struct client_server_request_completion_t
 {
-    foundation::operation_terminal_t terminal =
-      foundation::operation_terminal_t::transport_failed;
+    foundation::operation_terminal_t terminal = foundation::operation_terminal_t::transport_failed;
     std::optional<std::string> error_code;
     std::optional<std::string> error_message;
     std::string content_type;
@@ -71,36 +70,29 @@ struct raw_client_server_server_options_t
 class raw_client_server_server_t
 {
   public:
-    explicit raw_client_server_server_t (
-      raw_client_server_server_options_t options,
-      std::shared_ptr<zlink::context_t> context = {});
+    explicit raw_client_server_server_t (raw_client_server_server_options_t options,
+                                         std::shared_ptr<zlink::context_t> context = {});
     ~raw_client_server_server_t () noexcept;
 
     void start ();
     void close () noexcept;
     std::string endpoint () const;
     protocol::client_server_server_admission_t descriptor () const;
-    void update_descriptor (
-      protocol::client_server_server_admission_t descriptor);
+    void update_descriptor (protocol::client_server_server_admission_t descriptor);
     mesh::service_mailbox_t &mailbox () noexcept;
 
-    std::size_t drain_monitor_events (
-      mesh::service_liveness_registry_t::clock_t::time_point now);
-    task_t<client_server_pump_result_t> pump_one (
-      mesh::service_liveness_registry_t::clock_t::time_point now,
-      std::shared_ptr<application_job_queue_t::permit_t>
-        application_permit = {});
+    std::size_t drain_monitor_events (mesh::service_liveness_registry_t::clock_t::time_point now);
+    task_t<client_server_pump_result_t>
+    pump_one (mesh::service_liveness_registry_t::clock_t::time_point now,
+              std::shared_ptr<application_job_queue_t::permit_t> application_permit = {});
     std::size_t last_pump_bytes () const;
-    task_t<mesh::service_liveness_tick_t> tick_liveness (
-      mesh::service_liveness_registry_t::clock_t::time_point now);
+    task_t<mesh::service_liveness_tick_t>
+    tick_liveness (mesh::service_liveness_registry_t::clock_t::time_point now);
     std::optional<mesh::service_liveness_registry_t::clock_t::time_point>
     next_liveness_activity () const;
-    bool reply (
-      const mesh::service_mailbox_record_t &request,
-      const protocol::application_payload_t &payload);
-    bool reply (
-      const mesh::service_mailbox_record_t &request,
-      const framework_exception_t &error);
+    bool reply (const mesh::service_mailbox_record_t &request,
+                const protocol::application_payload_t &payload);
+    bool reply (const mesh::service_mailbox_record_t &request, const framework_exception_t &error);
 
   private:
     client_server_pump_result_t enqueue_application_record (
@@ -108,7 +100,6 @@ class raw_client_server_server_t
       std::shared_ptr<application_job_queue_t::permit_t> application_permit);
 
   public:
-
   private:
     struct byte_vector_less_t
     {
@@ -122,8 +113,7 @@ class raw_client_server_server_t
     std::mutex _socket_mutex;
     std::shared_ptr<zlink::context_t> _context;
     std::unique_ptr<zlink::router_socket_t> _router;
-    application_job_queue_t::receive_flow_registration_t
-      _receive_flow_registration;
+    application_job_queue_t::receive_flow_registration_t _receive_flow_registration;
     std::unique_ptr<zlink::poller_t> _monitor_poller;
     std::unique_ptr<zlink::socket_monitor_t> _monitor;
     std::shared_ptr<detail::backend::raw_route_port_t> _port;
@@ -131,9 +121,7 @@ class raw_client_server_server_t
     mesh::service_liveness_registry_t _liveness;
     // The route id is the stable identity available from the public monitor
     // surface; monitor event values are ready counts or disconnect reasons.
-    std::map<std::vector<std::uint8_t>, std::vector<std::uint8_t>,
-             byte_vector_less_t>
-      _connections;
+    std::map<std::vector<std::uint8_t>, std::vector<std::uint8_t>, byte_vector_less_t> _connections;
     bool _closed = false;
     bool _descriptor_update_pending = false;
     std::size_t _last_pump_bytes = 0;
@@ -152,46 +140,40 @@ struct raw_client_server_client_options_t
 class raw_client_server_client_t
 {
   public:
-    explicit raw_client_server_client_t (
-      raw_client_server_client_options_t options,
-      std::shared_ptr<zlink::context_t> context = {});
+    explicit raw_client_server_client_t (raw_client_server_client_options_t options,
+                                         std::shared_ptr<zlink::context_t> context = {});
     ~raw_client_server_client_t () noexcept;
 
     void start ();
     void close () noexcept;
     bool ready () const;
-    task_t<std::size_t> drain_monitor_events (
-      mesh::service_liveness_registry_t::clock_t::time_point now);
-    task_t<client_server_pump_result_t> pump_one (
-      mesh::service_liveness_registry_t::clock_t::time_point now);
+    task_t<std::size_t>
+    drain_monitor_events (mesh::service_liveness_registry_t::clock_t::time_point now);
+    task_t<client_server_pump_result_t>
+    pump_one (mesh::service_liveness_registry_t::clock_t::time_point now);
     std::size_t last_pump_bytes () const;
-    task_t<mesh::service_liveness_tick_t> tick_liveness (
-      mesh::service_liveness_registry_t::clock_t::time_point now);
+    task_t<mesh::service_liveness_tick_t>
+    tick_liveness (mesh::service_liveness_registry_t::clock_t::time_point now);
     std::optional<mesh::service_liveness_registry_t::clock_t::time_point>
     next_liveness_activity () const;
 
-    task_t<zlink::submit_result_t> send (
-      const protocol::application_payload_t &payload,
-      std::chrono::milliseconds timeout);
-    task_t<client_server_request_completion_t> request (
-      const protocol::application_payload_t &payload,
-      std::chrono::milliseconds timeout);
+    task_t<zlink::submit_result_t> send (const protocol::application_payload_t &payload,
+                                         std::chrono::milliseconds timeout);
+    task_t<client_server_request_completion_t>
+    request (const protocol::application_payload_t &payload, std::chrono::milliseconds timeout);
     std::size_t pending_request_count () const noexcept;
 
   private:
     struct control_reply_state_t;
 
-    void begin_admission_request (
-      const std::shared_ptr<detail::backend::raw_dealer_port_t> &port);
-    void begin_probe_request (
-      const std::shared_ptr<detail::backend::raw_dealer_port_t> &port,
-      std::uint64_t probe_id);
-    bool apply_pending_control_replies (
-      mesh::service_liveness_registry_t::clock_t::time_point now);
-    client_server_pump_result_t accept_server_admission (
-      const detail::backend::raw_bytes_t &frame,
-      protocol::command kind,
-      mesh::service_liveness_registry_t::clock_t::time_point now);
+    void begin_admission_request (const std::shared_ptr<detail::backend::raw_dealer_port_t> &port);
+    void begin_probe_request (const std::shared_ptr<detail::backend::raw_dealer_port_t> &port,
+                              std::uint64_t probe_id);
+    bool apply_pending_control_replies (mesh::service_liveness_registry_t::clock_t::time_point now);
+    client_server_pump_result_t
+    accept_server_admission (const detail::backend::raw_bytes_t &frame,
+                             protocol::command kind,
+                             mesh::service_liveness_registry_t::clock_t::time_point now);
 
     raw_client_server_client_options_t _options;
     runtime::offload_executor_t _lane_executor;
@@ -199,8 +181,7 @@ class raw_client_server_client_t
     std::mutex _socket_mutex;
     std::shared_ptr<zlink::context_t> _context;
     std::unique_ptr<zlink::dealer_socket_t> _dealer;
-    application_job_queue_t::receive_flow_registration_t
-      _receive_flow_registration;
+    application_job_queue_t::receive_flow_registration_t _receive_flow_registration;
     std::unique_ptr<zlink::poller_t> _monitor_poller;
     std::unique_ptr<zlink::socket_monitor_t> _monitor;
     std::shared_ptr<detail::backend::raw_dealer_port_t> _port;

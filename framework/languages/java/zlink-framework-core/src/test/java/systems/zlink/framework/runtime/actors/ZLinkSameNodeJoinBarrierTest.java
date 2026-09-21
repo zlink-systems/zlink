@@ -4,14 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.time.Duration;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.actors.ZLinkActor;
@@ -42,70 +36,74 @@ import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
 import systems.zlink.framework.spots.ZLinkSpotActorRequestHandler;
 import systems.zlink.framework.spots.ZLinkSpotContext;
 
+import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
+
 /**
- * Spec 05-spot-actor-membership §4: after a same-node {@code JoinSpot},
- * the target Actor processes pending messages only once the Join completion
- * callback has ended. The target Spot's {@code OnActorJoin} accepts first,
- * which already routes new arrivals to the target Spot; those arrivals must
- * wait behind the deferred-Join barrier that the source Spot's actor queue
- * still holds, not run on a fresh target queue ahead of the completion.
+ * Spec 05-spot-actor-membership §4: after a same-node {@code JoinSpot}, the target Actor processes
+ * pending messages only once the Join completion callback has ended. The target Spot's {@code
+ * OnActorJoin} accepts first, which already routes new arrivals to the target Spot; those arrivals
+ * must wait behind the deferred-Join barrier that the source Spot's actor queue still holds, not
+ * run on a fresh target queue ahead of the completion.
  */
 final class ZLinkSameNodeJoinBarrierTest {
     private static final String ACTOR_ID = "player-1";
     private static final String TARGET_SPOT_ID = "target-room";
     private static final CountDownLatch TARGET_JOINED = new CountDownLatch(1);
     private static final CountDownLatch RENEWAL_HELD = new CountDownLatch(1);
-    private static final CompletableFuture<Void> RENEWAL_RELEASE =
-        new CompletableFuture<>();
+    private static final CompletableFuture<Void> RENEWAL_RELEASE = new CompletableFuture<>();
     private static final AtomicBoolean HOLD_ARMED = new AtomicBoolean();
     private static final AtomicBoolean JOIN_COMPLETED = new AtomicBoolean();
 
     @Test
-    void arrivalDuringSameNodeJoinWaitsForCompletionCallback()
-        throws Exception {
+    void arrivalDuringSameNodeJoinWaitsForCompletionCallback() throws Exception {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         //  The Location Store write that the Join makes after OnJoinedActor is
         //  held, so the window between OnJoinedActor and the completion
         //  callback is open for as long as the test needs.
-        options.addLocationStore(new HoldingLocationStore(
-            new ZLinkInMemoryLocationStore()));
+        options.addLocationStore(new HoldingLocationStore(new ZLinkInMemoryLocationStore()));
         var node = options.addRouteMesh("game");
         node.listen("inproc://same-node-join-barrier-" + System.nanoTime())
-            .setRoutingId(RoutingId.from("same-node-join-barrier"));
+                .setRoutingId(RoutingId.from("same-node-join-barrier"));
         var objects = node.objects().server();
         objects.addEntrySpot(EntrySpot.class);
-        objects.addSpotFactory(
-            "target",
-            TargetSpot.class,
-            factory -> factory.disableRelocation());
+        objects.addSpotFactory("target", TargetSpot.class, factory -> factory.disableRelocation());
         objects.addActorFactory(
-            "player",
-            Player.class,
-            PlayerFactory.class,
-            factory -> factory.disableRelocation());
+                "player",
+                Player.class,
+                PlayerFactory.class,
+                factory -> factory.disableRelocation());
 
-        try (ZLinkFrameworkRuntime runtime = ZLinkFrameworkRuntimeTestAccess.start(
-            options,
-            new ZLinkJavaBackendAdapterFactory())) {
+        try (ZLinkFrameworkRuntime runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
             runtime.spotManager()
-                .getOrCreate(TARGET_SPOT_ID, "target")
-                .submit()
-                .toCompletableFuture()
-                .get(3, TimeUnit.SECONDS);
-            ZLinkActorCreateResult.Created created = assertInstanceOf(
-                ZLinkActorCreateResult.Created.class,
-                runtime.actorManager()
-                    .create(ACTOR_ID, "player")
+                    .getOrCreate(TARGET_SPOT_ID, "target")
                     .submit()
                     .toCompletableFuture()
-                    .get(3, TimeUnit.SECONDS));
+                    .get(3, TimeUnit.SECONDS);
+            ZLinkActorCreateResult.Created created =
+                    assertInstanceOf(
+                            ZLinkActorCreateResult.Created.class,
+                            runtime.actorManager()
+                                    .create(ACTOR_ID, "player")
+                                    .submit()
+                                    .toCompletableFuture()
+                                    .get(3, TimeUnit.SECONDS));
 
-            String scheduled = runtime.actorClient()
-                .requestToActor(created.actor().actorId(), new JoinRequest(TARGET_SPOT_ID))
-                .timeout(Duration.ofSeconds(3))
-                .submit(String.class)
-                .toCompletableFuture()
-                .get(3, TimeUnit.SECONDS);
+            String scheduled =
+                    runtime.actorClient()
+                            .requestToActor(
+                                    created.actor().actorId(), new JoinRequest(TARGET_SPOT_ID))
+                            .timeout(Duration.ofSeconds(3))
+                            .submit(String.class)
+                            .toCompletableFuture()
+                            .get(3, TimeUnit.SECONDS);
             assertEquals("scheduled", scheduled);
 
             //  The Join is now between OnJoinedActor (ran) and the completion
@@ -113,11 +111,12 @@ final class ZLinkSameNodeJoinBarrierTest {
             assertTrue(TARGET_JOINED.await(3, TimeUnit.SECONDS));
             assertTrue(RENEWAL_HELD.await(3, TimeUnit.SECONDS));
 
-            CompletableFuture<String> probe = runtime.actorClient()
-                .requestToActor(created.actor().actorId(), new ProbeRequest())
-                .timeout(Duration.ofSeconds(10))
-                .submit(String.class)
-                .toCompletableFuture();
+            CompletableFuture<String> probe =
+                    runtime.actorClient()
+                            .requestToActor(created.actor().actorId(), new ProbeRequest())
+                            .timeout(Duration.ofSeconds(10))
+                            .submit(String.class)
+                            .toCompletableFuture();
             //  Unfixed: the arrival runs at once on the target Spot and
             //  replies before the completion callback. Fixed: it cannot run
             //  while the Join is open, so no reply arrives until the hold is
@@ -131,10 +130,10 @@ final class ZLinkSameNodeJoinBarrierTest {
             RENEWAL_RELEASE.complete(null);
             String reply = early != null ? early : probe.get(5, TimeUnit.SECONDS);
             assertEquals(
-                TARGET_SPOT_ID + ":completed",
-                reply,
-                "an arrival during a same-node Join must dispatch only after "
-                    + "the Join completion callback ended");
+                    TARGET_SPOT_ID + ":completed",
+                    reply,
+                    "an arrival during a same-node Join must dispatch only after "
+                            + "the Join completion callback ended");
         }
     }
 
@@ -148,30 +147,29 @@ final class ZLinkSameNodeJoinBarrierTest {
 
         @Override
         public CompletionStage<ZLinkStoreReadResult> read(
-            ZLinkStoreKey key,
-            ZLinkStoreCancellation cancellation) {
+                ZLinkStoreKey key, ZLinkStoreCancellation cancellation) {
             return inner.read(key, cancellation);
         }
 
         @Override
         public CompletionStage<ZLinkStoreWriteResult> write(
-            ZLinkStoreWriteRequest request,
-            ZLinkStoreCancellation cancellation) {
-            boolean actorRow = request.mutations().stream().anyMatch(mutation ->
-                mutation instanceof ZLinkStorePut put
-                    && put.key().value().contains(ACTOR_ID));
+                ZLinkStoreWriteRequest request, ZLinkStoreCancellation cancellation) {
+            boolean actorRow =
+                    request.mutations().stream()
+                            .anyMatch(
+                                    mutation ->
+                                            mutation instanceof ZLinkStorePut put
+                                                    && put.key().value().contains(ACTOR_ID));
             if (!actorRow || !HOLD_ARMED.compareAndSet(true, false)) {
                 return inner.write(request, cancellation);
             }
             RENEWAL_HELD.countDown();
-            return RENEWAL_RELEASE.thenCompose(ignored ->
-                inner.write(request, cancellation));
+            return RENEWAL_RELEASE.thenCompose(ignored -> inner.write(request, cancellation));
         }
 
         @Override
         public CompletionStage<ZLinkStoreScanResult> scan(
-            ZLinkStoreScanRequest request,
-            ZLinkStoreCancellation cancellation) {
+                ZLinkStoreScanRequest request, ZLinkStoreCancellation cancellation) {
             return inner.scan(request, cancellation);
         }
     }
@@ -189,8 +187,7 @@ final class ZLinkSameNodeJoinBarrierTest {
         }
 
         @Override
-        public CompletionStage<Void> onJoinCompleted(
-            ZLinkActorJoinCompletion completion) {
+        public CompletionStage<Void> onJoinCompleted(ZLinkActorJoinCompletion completion) {
             assertInstanceOf(ZLinkActorJoinCompletion.Accepted.class, completion);
             JOIN_COMPLETED.set(true);
             return CompletableFuture.completedFuture(null);
@@ -251,10 +248,8 @@ final class ZLinkSameNodeJoinBarrierTest {
 
         @Override
         public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
-            String actorId,
-            ZLinkMessage request) {
-            return CompletableFuture.completedFuture(
-                ZLinkSpotActorJoinResult.accept());
+                String actorId, ZLinkMessage request) {
+            return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept());
         }
 
         @Override
@@ -272,36 +267,28 @@ final class ZLinkSameNodeJoinBarrierTest {
         }
     }
 
-    public record JoinRequest(String spotId) {
-    }
+    public record JoinRequest(String spotId) {}
 
-    public record ProbeRequest() {
-    }
+    public record ProbeRequest() {}
 
-    public static final class JoinHandler implements
-        ZLinkEntrySpotActorRequestHandler<EntrySpot, Player, JoinRequest, String> {
+    public static final class JoinHandler
+            implements ZLinkEntrySpotActorRequestHandler<EntrySpot, Player, JoinRequest, String> {
         @Override
         public CompletionStage<String> handle(
-            EntrySpot spot,
-            Player actor,
-            ZLinkMessageContext context,
-            JoinRequest request) {
+                EntrySpot spot, Player actor, ZLinkMessageContext context, JoinRequest request) {
             actor.context().joinSpot(request.spotId()).defer();
             return CompletableFuture.completedFuture("scheduled");
         }
     }
 
-    public static final class ProbeHandler implements
-        ZLinkSpotActorRequestHandler<TargetSpot, Player, ProbeRequest, String> {
+    public static final class ProbeHandler
+            implements ZLinkSpotActorRequestHandler<TargetSpot, Player, ProbeRequest, String> {
         @Override
         public CompletionStage<String> handle(
-            TargetSpot spot,
-            Player actor,
-            ZLinkMessageContext context,
-            ProbeRequest request) {
+                TargetSpot spot, Player actor, ZLinkMessageContext context, ProbeRequest request) {
             return CompletableFuture.completedFuture(
-                actor.context().spotId().orElse("none")
-                    + (JOIN_COMPLETED.get() ? ":completed" : ":incomplete"));
+                    actor.context().spotId().orElse("none")
+                            + (JOIN_COMPLETED.get() ? ":completed" : ":incomplete"));
         }
     }
 }

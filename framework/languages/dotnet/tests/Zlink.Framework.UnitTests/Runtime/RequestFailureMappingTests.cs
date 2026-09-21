@@ -7,7 +7,9 @@ public sealed class RequestFailureMappingTests
     {
         using var header = Message.From("{");
 
-        Assert.Throws<ZLinkEnvelopeProtocolException>(() => ZLinkEnvelopeCodec.DecodeHeader(header));
+        Assert.Throws<ZLinkEnvelopeProtocolException>(() =>
+            ZLinkEnvelopeCodec.DecodeHeader(header)
+        );
     }
 
     [Fact]
@@ -22,13 +24,16 @@ public sealed class RequestFailureMappingTests
             null,
             null,
             null,
-            null)
+            null
+        )
         {
-            FormatMarker = 0xF2
+            FormatMarker = 0xF2,
         };
         using var encoded = ZLinkEnvelopeCodec.EncodePart(invalid);
 
-        Assert.Throws<ZLinkEnvelopeProtocolException>(() => ZLinkEnvelopeCodec.DecodeHeader(encoded));
+        Assert.Throws<ZLinkEnvelopeProtocolException>(() =>
+            ZLinkEnvelopeCodec.DecodeHeader(encoded)
+        );
     }
 
     [Fact]
@@ -38,13 +43,15 @@ public sealed class RequestFailureMappingTests
             "spot",
             "Lookup",
             "correlation",
-            new ZLinkFrameworkException(ZLinkFrameworkErrorKind.Rejected, "draining"));
+            new ZLinkFrameworkException(ZLinkFrameworkErrorKind.Rejected, "draining")
+        );
         try
         {
             var reply = ZLinkEnvelopeCodec.DecodeHeader(parts);
             Assert.Equal("rejected", reply.ErrorCode);
             var error = Assert.IsType<ZLinkFrameworkException>(
-                ZLinkEnvelopeErrorMapper.CreateException(reply, "fallback"));
+                ZLinkEnvelopeErrorMapper.CreateException(reply, "fallback")
+            );
             Assert.Equal(ZLinkFrameworkErrorKind.Rejected, error.Kind);
         }
         finally
@@ -65,17 +72,18 @@ public sealed class RequestFailureMappingTests
             null,
             null,
             null,
-            null);
+            null
+        );
         var reply = ZLinkChannelReplyWriter.CreateErrorHeader(
             "route",
             request,
-            new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Rejected,
-                "draining"));
+            new ZLinkFrameworkException(ZLinkFrameworkErrorKind.Rejected, "draining")
+        );
 
         Assert.Equal("rejected", reply.ErrorCode);
         var error = Assert.IsType<ZLinkFrameworkException>(
-            ZLinkEnvelopeErrorMapper.CreateException(reply, "fallback"));
+            ZLinkEnvelopeErrorMapper.CreateException(reply, "fallback")
+        );
         Assert.Equal(ZLinkFrameworkErrorKind.Rejected, error.Kind);
         Assert.Equal("draining", error.Message);
     }
@@ -91,7 +99,8 @@ public sealed class RequestFailureMappingTests
             reply,
             _ => throw new InvalidOperationException("Completion should not succeed."),
             error => observed = error,
-            "test request");
+            "test request"
+        );
 
         var error = Assert.IsType<ZLinkFrameworkException>(observed);
         Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
@@ -108,7 +117,9 @@ public sealed class RequestFailureMappingTests
         var error = Assert.IsType<ZLinkFrameworkException>(
             ZLinkRequestFailureMapper.CreateChannelCompletionException(
                 RequestResult.NotFound,
-                "channel request"));
+                "channel request"
+            )
+        );
 
         Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
         Assert.IsType<ZlinkRequestException>(error.InnerException);
@@ -119,7 +130,8 @@ public sealed class RequestFailureMappingTests
     {
         var error = ZLinkSubmitFailureMapper.CreateChannelException(
             SubmitResult.NotFound,
-            "channel 'game.api'");
+            "channel 'game.api'"
+        );
 
         Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
         Assert.Equal(ZLinkRetryAdvice.RetryAfterBackoff, error.RetryAdvice);
@@ -130,7 +142,8 @@ public sealed class RequestFailureMappingTests
     {
         var error = ZLinkSubmitFailureMapper.CreateChannelException(
             SubmitResult.NotConnected,
-            "channel 'game.api'");
+            "channel 'game.api'"
+        );
 
         Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
         Assert.Equal(ZLinkRetryAdvice.RetryAfterBackoff, error.RetryAdvice);
@@ -142,7 +155,9 @@ public sealed class RequestFailureMappingTests
         var error = Assert.IsType<ZLinkFrameworkException>(
             ZLinkRequestFailureMapper.CreateCompletionException(
                 RequestResult.Backpressured,
-                "completion"));
+                "completion"
+            )
+        );
 
         Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, error.Kind);
         Assert.Equal(ZLinkRetryAdvice.DoNotRetry, error.RetryAdvice);
@@ -159,7 +174,8 @@ public sealed class RequestFailureMappingTests
             reply,
             _ => throw new InvalidOperationException("Completion should not succeed."),
             error => observed = error,
-            "raw request");
+            "raw request"
+        );
 
         var error = Assert.IsType<ZLinkFrameworkException>(observed);
         Assert.Equal(ZLinkFrameworkErrorKind.NotFound, error.Kind);
@@ -177,7 +193,8 @@ public sealed class RequestFailureMappingTests
             reply,
             _ => throw new InvalidOperationException("Completion should not succeed."),
             error => observed = error,
-            "raw request");
+            "raw request"
+        );
 
         var error = Assert.IsType<ZLinkFrameworkException>(observed);
         Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, error.Kind);
@@ -199,12 +216,12 @@ public sealed class RequestFailureMappingTests
     [InlineData(RequestResult.Busy, ZLinkFrameworkErrorKind.Unavailable)]
     public void Completion_Maps_Native_Result_To_Framework_Error(
         RequestResult result,
-        ZLinkFrameworkErrorKind expected)
+        ZLinkFrameworkErrorKind expected
+    )
     {
         var error = Assert.IsType<ZLinkFrameworkException>(
-            ZLinkRequestFailureMapper.CreateCompletionException(
-                result,
-                "request"));
+            ZLinkRequestFailureMapper.CreateCompletionException(result, "request")
+        );
 
         Assert.Equal(expected, error.Kind);
     }
@@ -236,13 +253,12 @@ public sealed class RequestFailureMappingTests
     public void Completion_FineFailureCode_Refines_Terminal(
         RequestResult result,
         int failureErrno,
-        ZLinkFrameworkErrorKind expected)
+        ZLinkFrameworkErrorKind expected
+    )
     {
         var error = Assert.IsType<ZLinkFrameworkException>(
-            ZLinkRequestFailureMapper.CreateCompletionException(
-                result,
-                failureErrno,
-                "request"));
+            ZLinkRequestFailureMapper.CreateCompletionException(result, failureErrno, "request")
+        );
 
         Assert.Equal(expected, error.Kind);
         Assert.IsType<ZlinkRequestException>(error.InnerException);
@@ -259,13 +275,12 @@ public sealed class RequestFailureMappingTests
     public void Completion_FineFailureCode_FallsThrough_To_Coarse_Terminal(
         RequestResult result,
         int failureErrno,
-        ZLinkFrameworkErrorKind expected)
+        ZLinkFrameworkErrorKind expected
+    )
     {
         var error = Assert.IsType<ZLinkFrameworkException>(
-            ZLinkRequestFailureMapper.CreateCompletionException(
-                result,
-                failureErrno,
-                "request"));
+            ZLinkRequestFailureMapper.CreateCompletionException(result, failureErrno, "request")
+        );
 
         Assert.Equal(expected, error.Kind);
     }
@@ -276,7 +291,8 @@ public sealed class RequestFailureMappingTests
     [InlineData(SubmitResult.NotFound, ZLinkFrameworkErrorKind.NotFound)]
     public void Submit_Maps_Native_Result_To_Framework_Error(
         SubmitResult result,
-        ZLinkFrameworkErrorKind expected)
+        ZLinkFrameworkErrorKind expected
+    )
     {
         var error = ZLinkSubmitFailureMapper.CreateException(result, "request");
 
@@ -285,20 +301,41 @@ public sealed class RequestFailureMappingTests
 
     [Theory]
     [InlineData(ZlinkSubmitException.ErrorCode.NotAdmitted, ZLinkFrameworkErrorKind.Rejected)]
-    [InlineData(ZlinkSubmitException.ErrorCode.InvalidState, ZLinkFrameworkErrorKind.InvalidOperation)]
-    [InlineData(ZlinkSubmitException.ErrorCode.InvalidArgument, ZLinkFrameworkErrorKind.InvalidOperation)]
-    [InlineData(ZlinkSubmitException.ErrorCode.InvalidHandle, ZLinkFrameworkErrorKind.InvalidOperation)]
-    [InlineData(ZlinkSubmitException.ErrorCode.ThreadViolation, ZLinkFrameworkErrorKind.InvalidOperation)]
-    [InlineData(ZlinkSubmitException.ErrorCode.NotSupported, ZLinkFrameworkErrorKind.InternalFailure)]
-    [InlineData(ZlinkSubmitException.ErrorCode.InternalError, ZLinkFrameworkErrorKind.InternalFailure)]
+    [InlineData(
+        ZlinkSubmitException.ErrorCode.InvalidState,
+        ZLinkFrameworkErrorKind.InvalidOperation
+    )]
+    [InlineData(
+        ZlinkSubmitException.ErrorCode.InvalidArgument,
+        ZLinkFrameworkErrorKind.InvalidOperation
+    )]
+    [InlineData(
+        ZlinkSubmitException.ErrorCode.InvalidHandle,
+        ZLinkFrameworkErrorKind.InvalidOperation
+    )]
+    [InlineData(
+        ZlinkSubmitException.ErrorCode.ThreadViolation,
+        ZLinkFrameworkErrorKind.InvalidOperation
+    )]
+    [InlineData(
+        ZlinkSubmitException.ErrorCode.NotSupported,
+        ZLinkFrameworkErrorKind.InternalFailure
+    )]
+    [InlineData(
+        ZlinkSubmitException.ErrorCode.InternalError,
+        ZLinkFrameworkErrorKind.InternalFailure
+    )]
     public void SubmitException_Maps_Native_ErrorCode_To_Framework_Error(
         ZlinkSubmitException.ErrorCode code,
-        ZLinkFrameworkErrorKind expected)
+        ZLinkFrameworkErrorKind expected
+    )
     {
         var error = Assert.IsType<ZLinkFrameworkException>(
             ZLinkRequestFailureMapper.CreateSubmitException(
                 new ZlinkSubmitException(code),
-                "request"));
+                "request"
+            )
+        );
 
         Assert.Equal(expected, error.Kind);
     }
@@ -308,11 +345,13 @@ public sealed class RequestFailureMappingTests
     [InlineData(false, SubmitResult.Terminated)]
     public void Native_Terminated_Submit_Is_Unavailable_Only_While_Source_Is_Serving(
         bool sourceAcceptsApplicationOperations,
-        SubmitResult expected)
+        SubmitResult expected
+    )
     {
         var result = ZLinkManagedMeshNode.NormalizeNativeSubmitFailure(
             ZlinkSubmitException.ErrorCode.Terminated,
-            sourceAcceptsApplicationOperations);
+            sourceAcceptsApplicationOperations
+        );
 
         Assert.Equal(expected, result);
     }
@@ -322,11 +361,13 @@ public sealed class RequestFailureMappingTests
     [InlineData(false, RequestResult.Terminated)]
     public void Native_Terminated_Request_Is_Unavailable_Only_While_Source_Is_Serving(
         bool sourceAcceptsApplicationOperations,
-        RequestResult expected)
+        RequestResult expected
+    )
     {
         var result = ZLinkManagedMeshNode.NormalizeNativeRequestFailure(
             ZlinkRequestException.ErrorCode.Terminated,
-            sourceAcceptsApplicationOperations);
+            sourceAcceptsApplicationOperations
+        );
 
         Assert.Equal(expected, result);
     }
@@ -352,7 +393,8 @@ public sealed class RequestFailureMappingTests
         using var completion = new ZLinkNativeReplyCompletion<RequestResult>(
             CancellationToken.None,
             TimeSpan.Zero,
-            "route request timed out");
+            "route request timed out"
+        );
 
         await Assert.ThrowsAsync<TimeoutException>(() => completion.Task);
 
@@ -377,18 +419,23 @@ public sealed class RequestFailureMappingTests
     [InlineData((int)RequestResult.Conflict, 18, ZLinkFrameworkErrorKind.Unavailable)]
     [InlineData((int)RequestResult.Conflict, 19, ZLinkFrameworkErrorKind.DeadlineExceeded)]
     public void Lifecycle_Failure_Classifies_Ok_Missing_Completion_As_Protocol_Error(
-        int terminalResult, int failureErrno, ZLinkFrameworkErrorKind expected)
+        int terminalResult,
+        int failureErrno,
+        ZLinkFrameworkErrorKind expected
+    )
     {
         Assert.Equal(
             expected,
-            ZLinkBackendSpotNodeWrapper.MapLifecycleFailure(
-                terminalResult, failureErrno));
+            ZLinkBackendSpotNodeWrapper.MapLifecycleFailure(terminalResult, failureErrno)
+        );
     }
 
     [Fact]
     public async Task SpotRouteNativeReply_NormalWinnerTransfersOwnershipAndDisposesDuplicateReply()
     {
-        using var completion = new ZLinkNativeReplyCompletion<RequestResult>(CancellationToken.None);
+        using var completion = new ZLinkNativeReplyCompletion<RequestResult>(
+            CancellationToken.None
+        );
         using var winner = Message.From("route-winner");
         using var duplicate = Message.From("route-duplicate");
 
@@ -411,30 +458,36 @@ public sealed class RequestFailureMappingTests
     //  TimedOut(101)+WorkerTimedOut(19) pair (see the 101+19 row below), which
     //  must be fixed across languages before decode-side enforcement lands.
     [Theory]
-    [InlineData(0u, 0u, true)]          // ok + none
-    [InlineData(102u, 9u, true)]        // notFound + handlerNotFound
-    [InlineData(105u, 17u, true)]       // internalError + requestFailed
-    [InlineData(105u, 19u, true)]       // internalError + workerTimedOut
-    [InlineData(106u, 18u, true)]       // rejected + workerQueueFull
-    [InlineData(104u, 16u, true)]       // protocolError + requestProtocolError
-    [InlineData(107u, 33u, true)]       // conflict + spotGenerationStale
-    [InlineData(108u, 0u, true)]        // busy boundary + none
-    [InlineData(113u, 0u, true)]        // backpressured boundary + none
-    [InlineData(104u, 3u, false)]       // protocolError + actorAlreadyExists
-    [InlineData(102u, 18u, false)]      // notFound + workerQueueFull
-    [InlineData(108u, 5u, false)]       // boundary busy + spotCreateFailed
-    [InlineData(0u, 9u, false)]         // ok + non-none
-    [InlineData(101u, 19u, false)]      // boundary timedOut + workerTimedOut
-    [InlineData(105u, 23u, false)]      // reserved failure code
-    [InlineData(105u, 26u, false)]      // reserved failure code
-    [InlineData(105u, 99u, false)]      // unknown failure code
+    [InlineData(0u, 0u, true)] // ok + none
+    [InlineData(102u, 9u, true)] // notFound + handlerNotFound
+    [InlineData(105u, 17u, true)] // internalError + requestFailed
+    [InlineData(105u, 19u, true)] // internalError + workerTimedOut
+    [InlineData(106u, 18u, true)] // rejected + workerQueueFull
+    [InlineData(104u, 16u, true)] // protocolError + requestProtocolError
+    [InlineData(107u, 33u, true)] // conflict + spotGenerationStale
+    [InlineData(108u, 0u, true)] // busy boundary + none
+    [InlineData(113u, 0u, true)] // backpressured boundary + none
+    [InlineData(104u, 3u, false)] // protocolError + actorAlreadyExists
+    [InlineData(102u, 18u, false)] // notFound + workerQueueFull
+    [InlineData(108u, 5u, false)] // boundary busy + spotCreateFailed
+    [InlineData(0u, 9u, false)] // ok + non-none
+    [InlineData(101u, 19u, false)] // boundary timedOut + workerTimedOut
+    [InlineData(105u, 23u, false)] // reserved failure code
+    [InlineData(105u, 26u, false)] // reserved failure code
+    [InlineData(105u, 99u, false)] // unknown failure code
     public void Schema_Terminal_Failure_Integrity_Predicate_Matches_The_Schema(
-        uint terminal, uint failureCode, bool valid)
+        uint terminal,
+        uint failureCode,
+        bool valid
+    )
     {
         Assert.Equal(
             valid,
-            Systems.Zlink.Framework.Runtime.Protocol.ServiceWireConstants
-                .ValidTerminalFailure(terminal, failureCode));
+            Systems.Zlink.Framework.Runtime.Protocol.ServiceWireConstants.ValidTerminalFailure(
+                terminal,
+                failureCode
+            )
+        );
     }
 
     //  Round-15: the canonical relocation completion boundary enforces the
@@ -444,26 +497,73 @@ public sealed class RequestFailureMappingTests
     [Fact]
     public void Canonical_Terminal_Completion_Enforces_The_Schema_Pairing()
     {
-        var payload = new Zlink.Framework.Runtime.Locations
-            .ZLinkCanonicalApplicationPayload("packet", "content", new byte[2]);
+        var payload = new Zlink.Framework.Runtime.Locations.ZLinkCanonicalApplicationPayload(
+            "packet",
+            "content",
+            new byte[2]
+        );
 
         //  Legal: success with payload.
-        _ = Zlink.Framework.Runtime.Locations.ZLinkRelocationEnvelopeCodec
-            .CreateCanonicalTerminalCompletion(
-                1, 2, "owner", 3, "node", 4, 5, 6, 0, 0, payload);
+        _ =
+            Zlink.Framework.Runtime.Locations.ZLinkRelocationEnvelopeCodec.CreateCanonicalTerminalCompletion(
+                1,
+                2,
+                "owner",
+                3,
+                "node",
+                4,
+                5,
+                6,
+                0,
+                0,
+                payload
+            );
         //  Legal: typed failure with its exact schema terminal, no payload.
-        _ = Zlink.Framework.Runtime.Locations.ZLinkRelocationEnvelopeCodec
-            .CreateCanonicalTerminalCompletion(
-                1, 2, "owner", 3, "node", 4, 5, 6, 105, 19, null);
+        _ =
+            Zlink.Framework.Runtime.Locations.ZLinkRelocationEnvelopeCodec.CreateCanonicalTerminalCompletion(
+                1,
+                2,
+                "owner",
+                3,
+                "node",
+                4,
+                5,
+                6,
+                105,
+                19,
+                null
+            );
         //  Illegal pair: boundary terminal with a failure code.
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            Zlink.Framework.Runtime.Locations.ZLinkRelocationEnvelopeCodec
-                .CreateCanonicalTerminalCompletion(
-                    1, 2, "owner", 3, "node", 4, 5, 6, 101, 19, null));
+            Zlink.Framework.Runtime.Locations.ZLinkRelocationEnvelopeCodec.CreateCanonicalTerminalCompletion(
+                1,
+                2,
+                "owner",
+                3,
+                "node",
+                4,
+                5,
+                6,
+                101,
+                19,
+                null
+            )
+        );
         //  Illegal shape: a failure terminal carrying a payload.
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            Zlink.Framework.Runtime.Locations.ZLinkRelocationEnvelopeCodec
-                .CreateCanonicalTerminalCompletion(
-                    1, 2, "owner", 3, "node", 4, 5, 6, 105, 19, payload));
+            Zlink.Framework.Runtime.Locations.ZLinkRelocationEnvelopeCodec.CreateCanonicalTerminalCompletion(
+                1,
+                2,
+                "owner",
+                3,
+                "node",
+                4,
+                5,
+                6,
+                105,
+                19,
+                payload
+            )
+        );
     }
 }

@@ -1,8 +1,8 @@
-using Xunit;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
+using Xunit;
 
 namespace Zlink.Framework.SampleRegressionTests;
 
@@ -19,28 +19,42 @@ public sealed partial class RegressionTests
         var roots = new[] { Path.Combine(ResolveDotnetRoot(), "samples") };
         var hostBuilderPattern = new Regex(
             @"(?:WebApplication|Host)\.Create(?:Application|Default)?Builder\(",
-            RegexOptions.CultureInvariant);
+            RegexOptions.CultureInvariant
+        );
         var builderCount = 0;
 
         foreach (var root in roots)
-            foreach (var sourcePath in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
-                         .Where(static path => !path.Contains(
-                             $"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"))
-                         .Where(static path => !path.Contains(
-                             $"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}")))
+        foreach (
+            var sourcePath in Directory
+                .EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
+                .Where(static path =>
+                    !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
+                )
+                .Where(static path =>
+                    !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}")
+                )
+        )
+        {
+            var source = ReadSource(sourcePath);
+            foreach (Match match in hostBuilderPattern.Matches(source))
             {
-                var source = ReadSource(sourcePath);
-                foreach (Match match in hostBuilderPattern.Matches(source))
-                {
-                    builderCount++;
-                    var boundary = Math.Min(source.Length, match.Index + 320);
-                    var initialization = source[match.Index..boundary];
-                    Assert.Contains(".Sources.Clear()", initialization, StringComparison.Ordinal);
-                    if (!initialization.StartsWith("Host.CreateDefaultBuilder", StringComparison.Ordinal))
-                        Assert.Contains("Configuration.AddInMemoryCollection()", initialization,
-                            StringComparison.Ordinal);
-                }
+                builderCount++;
+                var boundary = Math.Min(source.Length, match.Index + 320);
+                var initialization = source[match.Index..boundary];
+                Assert.Contains(".Sources.Clear()", initialization, StringComparison.Ordinal);
+                if (
+                    !initialization.StartsWith(
+                        "Host.CreateDefaultBuilder",
+                        StringComparison.Ordinal
+                    )
+                )
+                    Assert.Contains(
+                        "Configuration.AddInMemoryCollection()",
+                        initialization,
+                        StringComparison.Ordinal
+                    );
             }
+        }
 
         Assert.True(builderCount > 0);
     }
@@ -56,10 +70,9 @@ public sealed partial class RegressionTests
             var builder = WebApplication.CreateBuilder(["--PolicyProbe:Value=command-line"]);
             builder.Configuration.Sources.Clear();
             builder.Configuration.AddInMemoryCollection();
-            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["PolicyProbe:Value"] = "configuration-file"
-            });
+            builder.Configuration.AddInMemoryCollection(
+                new Dictionary<string, string?> { ["PolicyProbe:Value"] = "configuration-file" }
+            );
 
             var options = builder.Configuration.GetSection("PolicyProbe").Get<PolicyProbeOptions>();
 
@@ -83,14 +96,23 @@ public sealed partial class RegressionTests
     public void CanonicalSampleApplicationCodeDoesNotReadEnvironmentVariables(string sampleName)
     {
         var sampleRoot = ResolveSampleRoot(sampleName);
-        var sourceFiles = Directory.EnumerateFiles(sampleRoot, "*.cs", SearchOption.AllDirectories)
-            .Where(static path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"))
-            .Where(static path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}"));
+        var sourceFiles = Directory
+            .EnumerateFiles(sampleRoot, "*.cs", SearchOption.AllDirectories)
+            .Where(static path =>
+                !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
+            )
+            .Where(static path =>
+                !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}")
+            );
 
         foreach (var sourceFile in sourceFiles)
         {
             var source = ReadSource(sourceFile);
-            Assert.DoesNotContain("Environment.GetEnvironmentVariable", source, StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                "Environment.GetEnvironmentVariable",
+                source,
+                StringComparison.Ordinal
+            );
             Assert.DoesNotContain("DirectoryFromEnvironment", source, StringComparison.Ordinal);
         }
     }
@@ -106,8 +128,11 @@ public sealed partial class RegressionTests
     public void CanonicalSampleServersDoNotAcceptIndividualConfigurationOptions(string sampleName)
     {
         var serverRoot = Path.Combine(ResolveSampleRoot(sampleName), "Server");
-        var sourceFiles = Directory.EnumerateFiles(serverRoot, "*.cs", SearchOption.AllDirectories)
-            .Where(static path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"));
+        var sourceFiles = Directory
+            .EnumerateFiles(serverRoot, "*.cs", SearchOption.AllDirectories)
+            .Where(static path =>
+                !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
+            );
 
         foreach (var sourceFile in sourceFiles)
         {
@@ -133,8 +158,13 @@ public sealed partial class RegressionTests
     [InlineData("ZoneWorld")]
     public void CanonicalSampleConfigurationLoadersUseIConfigurationBinding(string sampleName)
     {
-        var configurationRoot = Path.Combine(ResolveSampleRoot(sampleName), "Server", "Configuration");
-        var loaders = Directory.EnumerateFiles(configurationRoot, "*.cs", SearchOption.AllDirectories)
+        var configurationRoot = Path.Combine(
+            ResolveSampleRoot(sampleName),
+            "Server",
+            "Configuration"
+        );
+        var loaders = Directory
+            .EnumerateFiles(configurationRoot, "*.cs", SearchOption.AllDirectories)
             .Select(ReadSource)
             .Where(static source => source.Contains("\"--config\"", StringComparison.Ordinal))
             .ToArray();
@@ -161,7 +191,8 @@ public sealed partial class RegressionTests
         Assert.Contains("Remove-SampleRedisContainer", helper, StringComparison.Ordinal);
         Assert.Matches(
             @"(?s)function Remove-SampleRedisContainer \{.*?if \(\$ContainerId -notmatch '\^\[0-9a-f\]\{12,64\}\$'\) \{ return \}.*?Invoke-SampleDockerCommand -Arguments @\(\""rm\"", \""-fv\"", \$ContainerId\)",
-            helper);
+            helper
+        );
     }
 
     [Fact]
@@ -169,8 +200,17 @@ public sealed partial class RegressionTests
     {
         var sample = ResolveSampleRoot("ZoneWorld");
         var runner = ReadSource(Path.Combine(sample, "run_sample.sh"));
-        var reportHandler = ReadSource(Path.Combine(sample, "Server", "Ops", "Infrastructure", "ZLink",
-            "Handlers", "OpsReportHandlers.cs"));
+        var reportHandler = ReadSource(
+            Path.Combine(
+                sample,
+                "Server",
+                "Ops",
+                "Infrastructure",
+                "ZLink",
+                "Handlers",
+                "OpsReportHandlers.cs"
+            )
+        );
 
         foreach (var id in new[] { "ZW-G1", "ZW-G2", "ZW-G3", "ZW-G4", "ZW-G5" })
             Assert.Contains(id, runner, StringComparison.Ordinal);
@@ -186,22 +226,32 @@ public sealed partial class RegressionTests
         Assert.Contains("if scenario_selected ZW-G3", runner, StringComparison.Ordinal);
         Assert.Contains("if scenario_selected ZW-G5", runner, StringComparison.Ordinal);
         Assert.Contains("config_name=\"$name-replacement\"", runner, StringComparison.Ordinal);
-        Assert.Contains("start \"$name\" \"$SERVER_BIN\" --config \"$CONFIG_DIR/$config_name.json\"", runner,
-            StringComparison.Ordinal);
+        Assert.Contains(
+            "start \"$name\" \"$SERVER_BIN\" --config \"$CONFIG_DIR/$config_name.json\"",
+            runner,
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain("stop_node zone-node-replacement", runner, StringComparison.Ordinal);
         Assert.Contains("run_client ZW-G2", runner, StringComparison.Ordinal);
         Assert.Contains("fixed_rid_scan_status", runner, StringComparison.Ordinal);
         Assert.True(
             runner.LastIndexOf("if scenario_selected ZW-G3", StringComparison.Ordinal)
-            > runner.IndexOf("runner_scenario ZW-F2", StringComparison.Ordinal));
+                > runner.IndexOf("runner_scenario ZW-F2", StringComparison.Ordinal)
+        );
         Assert.Contains("tee -a \"$LOG_DIR/client.log\"", runner, StringComparison.Ordinal);
         Assert.Contains("\"$G_RUNNER_LOG\" 2>/dev/null", runner, StringComparison.Ordinal);
         Assert.Contains("remove_owned_pid \"$pid\"", runner, StringComparison.Ordinal);
         Assert.Equal(2, Regex.Matches(runner, "remove_owned_pid \\\"\\$pid\\\"").Count);
-        Assert.Contains("if [[ \"$G4_PROVEN\" == \"1\" ]]; then g_pass ZW-G4; fi", runner,
-            StringComparison.Ordinal);
-        Assert.Contains("node status observed. node={NodeId}, rid={NodeRid}", reportHandler,
-            StringComparison.Ordinal);
+        Assert.Contains(
+            "if [[ \"$G4_PROVEN\" == \"1\" ]]; then g_pass ZW-G4; fi",
+            runner,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "node status observed. node={NodeId}, rid={NodeRid}",
+            reportHandler,
+            StringComparison.Ordinal
+        );
         // The handler narrows IZLinkMessageContext to ZLinkRouteMessageContext before
         // reading the source identity, so the read happens through that local.
         Assert.Contains("ZLinkRouteMessageContext", reportHandler, StringComparison.Ordinal);
@@ -226,7 +276,11 @@ public sealed partial class RegressionTests
         // Every restart selects the node's own replacement configuration, not just zone-node-2's:
         // ZW-B4 picks the node to stop from what the client observed, so either node can restart.
         Assert.Contains("config_name=\"$name-replacement\"", shell, StringComparison.Ordinal);
-        Assert.Contains("$ConfigName = \"$Name-replacement\"", powershell, StringComparison.Ordinal);
+        Assert.Contains(
+            "$ConfigName = \"$Name-replacement\"",
+            powershell,
+            StringComparison.Ordinal
+        );
         // One replacement configuration, not a separate crash variant: the stop kind does not
         // change what a restarted node may claim.
         Assert.DoesNotContain("crash-replacement", shell, StringComparison.Ordinal);
@@ -238,22 +292,42 @@ public sealed partial class RegressionTests
 
         // Negative control: the same check reports the pre-fix shape, where the replacement
         // configuration carried no empty-zone-set intent.
-        Assert.NotEmpty(ZoneWorldReplacementConfigsThatClaimZones(
-            shell.Replace("false true\n", "false false\n", StringComparison.Ordinal)));
-        Assert.NotEmpty(ZoneWorldReplacementConfigsThatClaimZones(
-            powershell.Replace("allowEmptyZoneSet = $true", string.Empty, StringComparison.Ordinal)));
+        Assert.NotEmpty(
+            ZoneWorldReplacementConfigsThatClaimZones(
+                shell.Replace("false true\n", "false false\n", StringComparison.Ordinal)
+            )
+        );
+        Assert.NotEmpty(
+            ZoneWorldReplacementConfigsThatClaimZones(
+                powershell.Replace(
+                    "allowEmptyZoneSet = $true",
+                    string.Empty,
+                    StringComparison.Ordinal
+                )
+            )
+        );
 
         // A replacement claims nothing at all. The empty-zone-set branch returns before the
         // cold-start claim loop, so a restarted node can never settle on one zone — a state
         // that is neither the two a cold start needs nor the none a replacement announces, and
         // one the bootstrap could not leave.
-        var bootstrap = ReadSource(Path.Combine(
-            sample, "Server", "ZoneNode", "Infrastructure", "ZLink", "Actors", "BotSpawner.cs"));
+        var bootstrap = ReadSource(
+            Path.Combine(
+                sample,
+                "Server",
+                "ZoneNode",
+                "Infrastructure",
+                "ZLink",
+                "Actors",
+                "BotSpawner.cs"
+            )
+        );
         Assert.Equal(1, Regex.Matches(bootstrap, @"settings\.AllowEmptyZoneSet").Count);
         Assert.True(
             bootstrap.IndexOf("if (settings.AllowEmptyZoneSet)", StringComparison.Ordinal)
-            < bootstrap.IndexOf("EnsureZoneAsync(zoneId", StringComparison.Ordinal),
-            "the replacement path must return before the cold-start claim loop");
+                < bootstrap.IndexOf("EnsureZoneAsync(zoneId", StringComparison.Ordinal),
+            "the replacement path must return before the cold-start claim loop"
+        );
 
         // ZW-E5 judges the restart from a connection opened before the stop: a node status
         // payload carries no incarnation token, so the replacement counts as ready only after
@@ -262,18 +336,25 @@ public sealed partial class RegressionTests
         var shellLaunch = shell.IndexOf("run_client ZW-E5 &", StringComparison.Ordinal);
         Assert.True(shellLaunch > 0, "the ZW-E5 client must run while the node is taken away");
         Assert.True(
-            shellLaunch
-            < shell.IndexOf("scenario ZW-E5 restore armed", StringComparison.Ordinal));
+            shellLaunch < shell.IndexOf("scenario ZW-E5 restore armed", StringComparison.Ordinal)
+        );
         Assert.True(
             shell.IndexOf("scenario ZW-E5 restore armed", StringComparison.Ordinal)
-            < shell.IndexOf("scenario ZW-E5 replacement waiting", StringComparison.Ordinal));
+                < shell.IndexOf("scenario ZW-E5 replacement waiting", StringComparison.Ordinal)
+        );
         var powershellLaunch = powershell.IndexOf(
-            "Start-ZoneWorldClient \"ZW-E5\"", StringComparison.Ordinal);
+            "Start-ZoneWorldClient \"ZW-E5\"",
+            StringComparison.Ordinal
+        );
         Assert.True(powershellLaunch > 0, "the ZW-E5 client must run while the node is taken away");
         Assert.True(
             powershellLaunch
-            < powershell.IndexOf(
-                "Stop-ZoneWorldNode \"zone-node-2\"", powershellLaunch, StringComparison.Ordinal));
+                < powershell.IndexOf(
+                    "Stop-ZoneWorldNode \"zone-node-2\"",
+                    powershellLaunch,
+                    StringComparison.Ordinal
+                )
+        );
     }
 
     /// <summary>
@@ -288,22 +369,30 @@ public sealed partial class RegressionTests
         for (var index = 0; index < lines.Length; index++)
         {
             var header = lines[index];
-            if (!header.Contains("-replacement\"", StringComparison.Ordinal)
-                && !header.Contains("-replacement ", StringComparison.Ordinal)) continue;
+            if (
+                !header.Contains("-replacement\"", StringComparison.Ordinal)
+                && !header.Contains("-replacement ", StringComparison.Ordinal)
+            )
+                continue;
             if (header.Contains("write_zone_node_config", StringComparison.Ordinal))
             {
-                if (!header.EndsWith(" true", StringComparison.Ordinal)) offenders.Add(header.Trim());
+                if (!header.EndsWith(" true", StringComparison.Ordinal))
+                    offenders.Add(header.Trim());
                 continue;
             }
-            if (!header.Contains("write(", StringComparison.Ordinal)
+            if (
+                !header.Contains("write(", StringComparison.Ordinal)
                 && !header.Contains("Write-ZoneWorldConfig", StringComparison.Ordinal)
-                && !header.Contains("write_zone_node_config", StringComparison.Ordinal)) continue;
+                && !header.Contains("write_zone_node_config", StringComparison.Ordinal)
+            )
+                continue;
 
             var body = new StringBuilder();
             for (var line = index + 1; line < lines.Length; line++)
             {
                 var text = lines[line].Trim();
-                if (text is "}" or "})") break;
+                if (text is "}" or "})")
+                    break;
                 body.Append(text);
             }
 
@@ -346,25 +435,46 @@ public sealed partial class RegressionTests
         Assert.Equal(
             new[] { "ZW-A1" },
             ZoneWorldBorrowedClientBatchScenarios(
-                shell.Replace("run_client ZW-G3-fresh", "run_client ZW-A1", StringComparison.Ordinal),
+                shell.Replace(
+                    "run_client ZW-G3-fresh",
+                    "run_client ZW-A1",
+                    StringComparison.Ordinal
+                ),
                 clientBatch,
-                runnerDriven));
+                runnerDriven
+            )
+        );
         Assert.Equal(
             new[] { "ZW-A1" },
             ZoneWorldBorrowedClientBatchScenarios(
                 powershell.Replace(
                     "Invoke-ZoneWorldClient \"ZW-G3-fresh\"",
                     "Invoke-ZoneWorldClient \"ZW-A1\"",
-                    StringComparison.Ordinal),
+                    StringComparison.Ordinal
+                ),
                 clientBatch,
-                runnerDriven));
+                runnerDriven
+            )
+        );
 
         // The verdict is unchanged: the fresh object still has to land on the RID the
         // replacement itself published.
-        Assert.Contains("scenario ZW-G3-fresh owner=$replacement_rid ", shell, StringComparison.Ordinal);
+        Assert.Contains(
+            "scenario ZW-G3-fresh owner=$replacement_rid ",
+            shell,
+            StringComparison.Ordinal
+        );
         Assert.Contains("scenario ZW-G4-fresh owner=$crash_rid ", shell, StringComparison.Ordinal);
-        Assert.Contains("scenario ZW-G3-fresh owner=$replacementRid ", powershell, StringComparison.Ordinal);
-        Assert.Contains("scenario ZW-G4-fresh owner=$crashRid ", powershell, StringComparison.Ordinal);
+        Assert.Contains(
+            "scenario ZW-G3-fresh owner=$replacementRid ",
+            powershell,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "scenario ZW-G4-fresh owner=$crashRid ",
+            powershell,
+            StringComparison.Ordinal
+        );
 
         // One probe body serves both scenarios, and it places into the mesh rather than
         // spawning into a zone.
@@ -382,10 +492,13 @@ public sealed partial class RegressionTests
     private static IReadOnlyList<string> ZoneWorldBorrowedClientBatchScenarios(
         string runner,
         IReadOnlyCollection<string> clientBatch,
-        IReadOnlyCollection<string> runnerDriven) =>
-        Regex.Matches(
+        IReadOnlyCollection<string> runnerDriven
+    ) =>
+        Regex
+            .Matches(
                 runner,
-                @"(?:run_client|Invoke-ZoneWorldClient|Start-ZoneWorldClient)\s+""?(ZW-[A-Za-z0-9-]+)""?")
+                @"(?:run_client|Invoke-ZoneWorldClient|Start-ZoneWorldClient)\s+""?(ZW-[A-Za-z0-9-]+)""?"
+            )
             .Select(match => match.Groups[1].Value)
             .Where(id => clientBatch.Contains(id) && !runnerDriven.Contains(id))
             .Distinct(StringComparer.Ordinal)
@@ -399,7 +512,8 @@ public sealed partial class RegressionTests
         Assert.True(start > 0, $"Scenarios.{table} must exist");
         var end = scenarios.IndexOf("};", start, StringComparison.Ordinal);
         Assert.True(end > start, $"Scenarios.{table} must be a dictionary initializer");
-        return Regex.Matches(scenarios[start..end], @"\[""(ZW-[A-Za-z0-9-]+)""\]")
+        return Regex
+            .Matches(scenarios[start..end], @"\[""(ZW-[A-Za-z0-9-]+)""\]")
             .Select(match => match.Groups[1].Value)
             .ToList();
     }
@@ -432,25 +546,39 @@ public sealed partial class RegressionTests
         Assert.Contains(".Connector.ExpectNone<", scenarios, StringComparison.Ordinal);
         Assert.True(
             scenarios.IndexOf("var droppedWait =", StringComparison.Ordinal)
-            < scenarios.IndexOf("scenario ZW-C2 armed", StringComparison.Ordinal));
+                < scenarios.IndexOf("scenario ZW-C2 armed", StringComparison.Ordinal)
+        );
         Assert.True(
             scenarios.IndexOf("var goneWait =", StringComparison.Ordinal)
-            < scenarios.IndexOf("scenario ZW-C3 armed", StringComparison.Ordinal));
+                < scenarios.IndexOf("scenario ZW-C3 armed", StringComparison.Ordinal)
+        );
         Assert.True(
             scenarios.IndexOf("var expiredWait =", StringComparison.Ordinal)
-            < scenarios.IndexOf("scenario ZW-B4 armed", StringComparison.Ordinal));
-
+                < scenarios.IndexOf("scenario ZW-B4 armed", StringComparison.Ordinal)
+        );
     }
 
     [Fact]
     public void ZoneWorldOpsReplaysNodeStateAcrossStreamSessionReplacement()
     {
         var sample = ResolveSampleRoot("ZoneWorld");
-        var registry = ReadSource(Path.Combine(sample, "Server", "Ops", "Infrastructure", "ZLink",
-            "Sessions", "OpsConsoleRegistry.cs"));
+        var registry = ReadSource(
+            Path.Combine(
+                sample,
+                "Server",
+                "Ops",
+                "Infrastructure",
+                "ZLink",
+                "Sessions",
+                "OpsConsoleRegistry.cs"
+            )
+        );
 
-        Assert.Contains("Dictionary<string, NodeStatusNotify> _latestNodes", registry,
-            StringComparison.Ordinal);
+        Assert.Contains(
+            "Dictionary<string, NodeStatusNotify> _latestNodes",
+            registry,
+            StringComparison.Ordinal
+        );
         Assert.Contains("lock (_nodeGate)", registry, StringComparison.Ordinal);
         Assert.Contains("ReplayNodesAsync", registry, StringComparison.Ordinal);
         Assert.Contains("public void Add(", registry, StringComparison.Ordinal);
@@ -458,14 +586,30 @@ public sealed partial class RegressionTests
         Assert.Contains("catch (Exception error)", registry, StringComparison.Ordinal);
         Assert.Contains("logger?.LogWarning", registry, StringComparison.Ordinal);
         Assert.Contains("Remove(console)", registry, StringComparison.Ordinal);
-        Assert.Contains("ICollection<KeyValuePair<string, IZLinkSessionContext>>", registry,
-            StringComparison.Ordinal);
-        Assert.Contains("await context.Client.Reply(new WatchNodesRes", ReadSource(
-            Path.Combine(sample, "Server", "Ops", "Infrastructure", "ZLink", "Handlers",
-                "OpsSessionHandlers.cs")), StringComparison.Ordinal);
+        Assert.Contains(
+            "ICollection<KeyValuePair<string, IZLinkSessionContext>>",
+            registry,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "await context.Client.Reply(new WatchNodesRes",
+            ReadSource(
+                Path.Combine(
+                    sample,
+                    "Server",
+                    "Ops",
+                    "Infrastructure",
+                    "ZLink",
+                    "Handlers",
+                    "OpsSessionHandlers.cs"
+                )
+            ),
+            StringComparison.Ordinal
+        );
         Assert.True(
             registry.IndexOf("consoles = _consoles.Values.ToArray()", StringComparison.Ordinal)
-            < registry.IndexOf("foreach (var console in consoles)", StringComparison.Ordinal));
+                < registry.IndexOf("foreach (var console in consoles)", StringComparison.Ordinal)
+        );
     }
 
     [Fact]
@@ -476,21 +620,36 @@ public sealed partial class RegressionTests
         Assert.Contains(
             "'$(ZLinkLocalPackageRoot)' != ''\">$(ZLinkLocalPackageRoot)/nuget",
             props,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain(
             "'$(ZLinkLocalPackageRoot)' != '' and Exists('$(ZLinkLocalPackageRoot)/nuget')",
             props,
-            StringComparison.Ordinal);
-        var windowsDefault = props.Split('\n').Single(static line =>
-            line.Contains(".artifacts/windows/nuget", StringComparison.Ordinal));
-        var nonWindowsDefault = props.Split('\n').Single(static line =>
-            line.Contains(".artifacts/wsl/nuget", StringComparison.Ordinal));
-        Assert.Contains("$([MSBuild]::IsOSPlatform('Windows'))", windowsDefault,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain("!$([MSBuild]::IsOSPlatform('Windows'))", windowsDefault,
-            StringComparison.Ordinal);
-        Assert.Contains("!$([MSBuild]::IsOSPlatform('Windows'))", nonWindowsDefault,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
+        var windowsDefault = props
+            .Split('\n')
+            .Single(static line =>
+                line.Contains(".artifacts/windows/nuget", StringComparison.Ordinal)
+            );
+        var nonWindowsDefault = props
+            .Split('\n')
+            .Single(static line => line.Contains(".artifacts/wsl/nuget", StringComparison.Ordinal));
+        Assert.Contains(
+            "$([MSBuild]::IsOSPlatform('Windows'))",
+            windowsDefault,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "!$([MSBuild]::IsOSPlatform('Windows'))",
+            windowsDefault,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "!$([MSBuild]::IsOSPlatform('Windows'))",
+            nonWindowsDefault,
+            StringComparison.Ordinal
+        );
     }
 
     [Fact]
@@ -502,13 +661,16 @@ public sealed partial class RegressionTests
             "KEEP_RUN_DIR",
             "BASE_PORT",
             "ZONEWORLD_BROWSER_SMOKE",
-            "BINGO_API_A_CHANNEL_ENDPOINT:-"
+            "BINGO_API_A_CHANNEL_ENDPOINT:-",
         };
 
-        foreach (var runner in Directory.EnumerateFiles(
-                     Path.Combine(ResolveDotnetRoot(), "samples"),
-                     "run_sample.sh",
-                     SearchOption.AllDirectories))
+        foreach (
+            var runner in Directory.EnumerateFiles(
+                Path.Combine(ResolveDotnetRoot(), "samples"),
+                "run_sample.sh",
+                SearchOption.AllDirectories
+            )
+        )
         {
             var source = ReadSource(runner);
             foreach (var marker in forbidden)
@@ -528,42 +690,35 @@ public sealed partial class RegressionTests
             "ShoppingMall",
             "DeliveryDispatch",
             "GameQuest",
-            "ZoneWorld"
+            "ZoneWorld",
         };
 
         foreach (var sample in samples)
         {
-            var shellRunner = ReadSource(Path.Combine(
-                sampleRoot,
-                sample,
-                "run_sample.sh"));
+            var shellRunner = ReadSource(Path.Combine(sampleRoot, sample, "run_sample.sh"));
             // The application port range and its scan used to be a `random.randint(22100,
             // 23999)`/`sock.bind` Python heredoc duplicated in every runner (#655's Python
             // removal); zlink_sample_pick_ports in redis-common.sh is now the one owner of
             // that range, so each runner only names how many ports it needs.
-            Assert.Single(
-                Regex.Matches(
-                    shellRunner,
-                    @"zlink_sample_pick_ports \d+").Cast<Match>());
+            Assert.Single(Regex.Matches(shellRunner, @"zlink_sample_pick_ports \d+").Cast<Match>());
             Assert.DoesNotContain("22100", shellRunner, StringComparison.Ordinal);
             Assert.DoesNotContain("23999", shellRunner, StringComparison.Ordinal);
-            Assert.Contains("redis-common.sh", shellRunner,
-                StringComparison.Ordinal);
-            Assert.Contains("zlink_redis_start_scoped_assign", shellRunner,
-                StringComparison.Ordinal);
-            Assert.Contains("zlink_redis_remove_by_id", shellRunner,
-                StringComparison.Ordinal);
-            Assert.DoesNotContain("docker rm -fv", shellRunner,
-                StringComparison.Ordinal);
+            Assert.Contains("redis-common.sh", shellRunner, StringComparison.Ordinal);
+            Assert.Contains(
+                "zlink_redis_start_scoped_assign",
+                shellRunner,
+                StringComparison.Ordinal
+            );
+            Assert.Contains("zlink_redis_remove_by_id", shellRunner, StringComparison.Ordinal);
+            Assert.DoesNotContain("docker rm -fv", shellRunner, StringComparison.Ordinal);
 
-            var powershellRunner = ReadSource(Path.Combine(
-                sampleRoot,
-                sample,
-                "run_sample.ps1"));
-            Assert.Contains("New-SamplePorts", powershellRunner,
-                StringComparison.Ordinal);
-            Assert.Contains("Start-SampleRedisContainer", powershellRunner,
-                StringComparison.Ordinal);
+            var powershellRunner = ReadSource(Path.Combine(sampleRoot, sample, "run_sample.ps1"));
+            Assert.Contains("New-SamplePorts", powershellRunner, StringComparison.Ordinal);
+            Assert.Contains(
+                "Start-SampleRedisContainer",
+                powershellRunner,
+                StringComparison.Ordinal
+            );
         }
 
         var redisCommon = ReadSource(Path.Combine(sampleRoot, "redis-common.sh"));
@@ -571,82 +726,104 @@ public sealed partial class RegressionTests
         Assert.Contains("min_port=22100", redisCommon, StringComparison.Ordinal);
         Assert.Contains("max_port=23999", redisCommon, StringComparison.Ordinal);
 
-        var powershellHelper = ReadSource(Path.Combine(
-            sampleRoot,
-            "sample_runner.ps1"));
-        Assert.Contains("$applicationMinimumPort = 22100", powershellHelper,
-            StringComparison.Ordinal);
-        Assert.Contains("$applicationMaximumPort = 23999", powershellHelper,
-            StringComparison.Ordinal);
-        Assert.Contains("$firstPort -lt $applicationMinimumPort", powershellHelper,
-            StringComparison.Ordinal);
-        Assert.Contains("$lastPort -gt $applicationMaximumPort", powershellHelper,
-            StringComparison.Ordinal);
-        Assert.Contains("[System.Net.IPAddress]::Loopback,", powershellHelper,
-            StringComparison.Ordinal);
-        Assert.Contains("$port)", powershellHelper,
-            StringComparison.Ordinal);
-        Assert.Contains("$listener.Server.ExclusiveAddressUse = $true",
+        var powershellHelper = ReadSource(Path.Combine(sampleRoot, "sample_runner.ps1"));
+        Assert.Contains(
+            "$applicationMinimumPort = 22100",
             powershellHelper,
-            StringComparison.Ordinal);
-        Assert.Contains("$listener.Start()", powershellHelper,
-            StringComparison.Ordinal);
-        Assert.Contains("Configured sample port $port is unavailable.",
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "$applicationMaximumPort = 23999",
             powershellHelper,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain("[System.Net.IPAddress]::Loopback, 0",
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "$firstPort -lt $applicationMinimumPort",
             powershellHelper,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "$lastPort -gt $applicationMaximumPort",
+            powershellHelper,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "[System.Net.IPAddress]::Loopback,",
+            powershellHelper,
+            StringComparison.Ordinal
+        );
+        Assert.Contains("$port)", powershellHelper, StringComparison.Ordinal);
+        Assert.Contains(
+            "$listener.Server.ExclusiveAddressUse = $true",
+            powershellHelper,
+            StringComparison.Ordinal
+        );
+        Assert.Contains("$listener.Start()", powershellHelper, StringComparison.Ordinal);
+        Assert.Contains(
+            "Configured sample port $port is unavailable.",
+            powershellHelper,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "[System.Net.IPAddress]::Loopback, 0",
+            powershellHelper,
+            StringComparison.Ordinal
+        );
 
-        var shellRedisHelper = ReadSource(Path.Combine(
-            sampleRoot,
-            "redis-common.sh"));
-        Assert.Contains("local redis_min_port=22000", shellRedisHelper,
-            StringComparison.Ordinal);
-        Assert.Contains("local redis_max_port=22099", shellRedisHelper,
-            StringComparison.Ordinal);
-        Assert.Contains("zlink_redis_port_is_available() {", shellRedisHelper,
-            StringComparison.Ordinal);
-        Assert.Contains("exec 3<>\"/dev/tcp/127.0.0.1/${port}\"",
+        var shellRedisHelper = ReadSource(Path.Combine(sampleRoot, "redis-common.sh"));
+        Assert.Contains("local redis_min_port=22000", shellRedisHelper, StringComparison.Ordinal);
+        Assert.Contains("local redis_max_port=22099", shellRedisHelper, StringComparison.Ordinal);
+        Assert.Contains(
+            "zlink_redis_port_is_available() {",
             shellRedisHelper,
-            StringComparison.Ordinal);
-        Assert.Contains("-p \"127.0.0.1:${port}:6379\"", shellRedisHelper,
-            StringComparison.Ordinal);
-        Assert.Contains("zlink_redis_remove_attempt", shellRedisHelper,
-            StringComparison.Ordinal);
-        Assert.Contains("zlink_redis_remove_by_id", shellRedisHelper,
-            StringComparison.Ordinal);
-        Assert.Contains("[[ \"${container_id}\" =~ ^[0-9a-f]{12,64}$ ]] || return 1",
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "exec 3<>\"/dev/tcp/127.0.0.1/${port}\"",
             shellRedisHelper,
-            StringComparison.Ordinal);
-        Assert.Contains("timeout -k 2s \"${docker_timeout_seconds}s\" docker rm -fv",
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "-p \"127.0.0.1:${port}:6379\"",
             shellRedisHelper,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain("127.0.0.1::6379", shellRedisHelper,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
+        Assert.Contains("zlink_redis_remove_attempt", shellRedisHelper, StringComparison.Ordinal);
+        Assert.Contains("zlink_redis_remove_by_id", shellRedisHelper, StringComparison.Ordinal);
+        Assert.Contains(
+            "[[ \"${container_id}\" =~ ^[0-9a-f]{12,64}$ ]] || return 1",
+            shellRedisHelper,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "timeout -k 2s \"${docker_timeout_seconds}s\" docker rm -fv",
+            shellRedisHelper,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain("127.0.0.1::6379", shellRedisHelper, StringComparison.Ordinal);
 
-        Assert.Contains("$redisMinimumPort = 22000", powershellHelper,
-            StringComparison.Ordinal);
-        Assert.Contains("$redisMaximumPort = 22099", powershellHelper,
-            StringComparison.Ordinal);
-        Assert.Contains("Test-SampleTcpPortAvailable -Port $port",
+        Assert.Contains("$redisMinimumPort = 22000", powershellHelper, StringComparison.Ordinal);
+        Assert.Contains("$redisMaximumPort = 22099", powershellHelper, StringComparison.Ordinal);
+        Assert.Contains(
+            "Test-SampleTcpPortAvailable -Port $port",
             powershellHelper,
-            StringComparison.Ordinal);
-        Assert.Contains("127.0.0.1:$($port):6379", powershellHelper,
-            StringComparison.Ordinal);
-        Assert.Contains("Remove-SampleRedisAttempt", powershellHelper,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
+        Assert.Contains("127.0.0.1:$($port):6379", powershellHelper, StringComparison.Ordinal);
+        Assert.Contains("Remove-SampleRedisAttempt", powershellHelper, StringComparison.Ordinal);
         Assert.Matches(
             @"(?s)function Remove-SampleRedisContainer \{.*?if \(\$ContainerId -notmatch '\^\[0-9a-f\]\{12,64\}\$'\) \{ return \}.*?Invoke-SampleDockerCommand -Arguments @\(\""rm\"", \""-fv\"", \$ContainerId\)",
-            powershellHelper);
+            powershellHelper
+        );
         Assert.Matches(
             @"(?s)Invoke-SampleDockerCommand -Arguments @\(\s*""create"".*?catch \{\s*Remove-SampleRedisAttempt -Name \$name -ContainerId \$containerId",
-            powershellHelper);
+            powershellHelper
+        );
         Assert.Matches(
             @"(?s)Invoke-SampleDockerCommand -Arguments @\(\s*""start"", \$containerId\).*?catch \{\s*Remove-SampleRedisAttempt -Name \$name -ContainerId \$containerId",
-            powershellHelper);
-        Assert.DoesNotContain("127.0.0.1::6379", powershellHelper,
-            StringComparison.Ordinal);
+            powershellHelper
+        );
+        Assert.DoesNotContain("127.0.0.1::6379", powershellHelper, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -659,31 +836,60 @@ public sealed partial class RegressionTests
         // DotnetSampleRunnersSeparateCheckedRedisAndApplicationPorts above. What is left here is
         // ZoneWorld-specific: its PowerShell runner must stand on its own on native Windows,
         // without shelling out to bash or the removed run_sample.sh.
-        var zoneWorldPowerShellRunner = ReadSource(Path.Combine(
-            ResolveDotnetRoot(), "samples", "ZoneWorld", "run_sample.ps1"));
+        var zoneWorldPowerShellRunner = ReadSource(
+            Path.Combine(ResolveDotnetRoot(), "samples", "ZoneWorld", "run_sample.ps1")
+        );
         Assert.Contains("sample_runner.ps1", zoneWorldPowerShellRunner, StringComparison.Ordinal);
-        Assert.Contains("Start-SampleDotnetAssembly", zoneWorldPowerShellRunner, StringComparison.Ordinal);
+        Assert.Contains(
+            "Start-SampleDotnetAssembly",
+            zoneWorldPowerShellRunner,
+            StringComparison.Ordinal
+        );
         Assert.Contains("Wait-ZoneWorldLog", zoneWorldPowerShellRunner, StringComparison.Ordinal);
         var peerAdmissionStart = zoneWorldPowerShellRunner.IndexOf(
-            "function Wait-ZoneWorldPeerAdmission", StringComparison.Ordinal);
+            "function Wait-ZoneWorldPeerAdmission",
+            StringComparison.Ordinal
+        );
         var nextFunctionStart = zoneWorldPowerShellRunner.IndexOf(
-            "function Wait-ZoneWorldEvidenceWhileRunning", peerAdmissionStart, StringComparison.Ordinal);
+            "function Wait-ZoneWorldEvidenceWhileRunning",
+            peerAdmissionStart,
+            StringComparison.Ordinal
+        );
         Assert.True(peerAdmissionStart >= 0 && nextFunctionStart > peerAdmissionStart);
         var peerAdmission = zoneWorldPowerShellRunner[peerAdmissionStart..nextFunctionStart];
-        Assert.Contains("$firstPath = Get-ZoneWorldErrorLogPath $FirstName", peerAdmission,
-            StringComparison.Ordinal);
-        Assert.Contains("$secondPath = Get-ZoneWorldErrorLogPath $SecondName", peerAdmission,
-            StringComparison.Ordinal);
+        Assert.Contains(
+            "$firstPath = Get-ZoneWorldErrorLogPath $FirstName",
+            peerAdmission,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "$secondPath = Get-ZoneWorldErrorLogPath $SecondName",
+            peerAdmission,
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain("Get-ZoneWorldLogPath", peerAdmission, StringComparison.Ordinal);
-        Assert.Contains("$firstPeerErrorLine = Get-ZoneWorldNextErrorLogLine \"zone-node-1\"",
-            zoneWorldPowerShellRunner, StringComparison.Ordinal);
+        Assert.Contains(
+            "$firstPeerErrorLine = Get-ZoneWorldNextErrorLogLine \"zone-node-1\"",
+            zoneWorldPowerShellRunner,
+            StringComparison.Ordinal
+        );
         Assert.Contains(
             "Wait-ZoneWorldPeerAdmission $Name $localRid $firstNodeErrorLine \"zone-node-1\" $peerRid $firstPeerErrorLine",
-            zoneWorldPowerShellRunner, StringComparison.Ordinal);
+            zoneWorldPowerShellRunner,
+            StringComparison.Ordinal
+        );
         Assert.Contains("$BrowserSmoke", zoneWorldPowerShellRunner, StringComparison.Ordinal);
-        Assert.Contains("Stop-SampleProcesses", zoneWorldPowerShellRunner, StringComparison.Ordinal);
+        Assert.Contains(
+            "Stop-SampleProcesses",
+            zoneWorldPowerShellRunner,
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain("run_sample.sh", zoneWorldPowerShellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("Get-Command bash", zoneWorldPowerShellRunner, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Get-Command bash",
+            zoneWorldPowerShellRunner,
+            StringComparison.Ordinal
+        );
     }
 
     [Fact]
@@ -705,16 +911,26 @@ public sealed partial class RegressionTests
 
         Assert.Contains(
             "\"Sample role ${roles[${pid}]:-pid-${pid}} (pid ${pid}) exited during cleanup with status 137 (SIGKILL).\")",
-            shellHelper, StringComparison.Ordinal);
-        Assert.Contains("zlink_sample_assert_graceful_teardown() {", shellHelper,
-            StringComparison.Ordinal);
+            shellHelper,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "zlink_sample_assert_graceful_teardown() {",
+            shellHelper,
+            StringComparison.Ordinal
+        );
         Assert.Contains("  exit 137\n}", shellHelper, StringComparison.Ordinal);
         Assert.Contains(
-            "zlink_sample_exit_trap() {\n  local status=$?\n  cleanup\n" +
-            "  zlink_sample_assert_graceful_teardown\n  exit \"${status}\"\n}",
-            shellHelper, StringComparison.Ordinal);
-        Assert.DoesNotContain("ZLINK_SAMPLE_TEARDOWN_STATUS_FILE", shellHelper,
-            StringComparison.Ordinal);
+            "zlink_sample_exit_trap() {\n  local status=$?\n  cleanup\n"
+                + "  zlink_sample_assert_graceful_teardown\n  exit \"${status}\"\n}",
+            shellHelper,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "ZLINK_SAMPLE_TEARDOWN_STATUS_FILE",
+            shellHelper,
+            StringComparison.Ordinal
+        );
 
         var shellRunners = Directory
             .EnumerateFiles(samplesRoot, "run_sample.sh", SearchOption.AllDirectories)
@@ -724,64 +940,112 @@ public sealed partial class RegressionTests
         foreach (var path in shellRunners)
         {
             var runner = ReadSource(path);
-            Assert.Contains("\ntrap zlink_sample_exit_trap EXIT\n", runner, StringComparison.Ordinal);
+            Assert.Contains(
+                "\ntrap zlink_sample_exit_trap EXIT\n",
+                runner,
+                StringComparison.Ordinal
+            );
             Assert.DoesNotContain("\ntrap cleanup EXIT\n", runner, StringComparison.Ordinal);
             // A sample that drops the trap to print its marker after teardown still has to take
             // the verdict, otherwise the forced kill is observed and nothing acts on it.
             if (runner.Contains("\ntrap - EXIT\n", StringComparison.Ordinal))
             {
                 Assert.True(
-                    runner.IndexOf("\ntrap - EXIT\n", StringComparison.Ordinal) <
-                    runner.IndexOf("\nzlink_sample_assert_graceful_teardown\n", StringComparison.Ordinal),
-                    $"{path} drops its EXIT trap without asserting graceful teardown.");
+                    runner.IndexOf("\ntrap - EXIT\n", StringComparison.Ordinal)
+                        < runner.IndexOf(
+                            "\nzlink_sample_assert_graceful_teardown\n",
+                            StringComparison.Ordinal
+                        ),
+                    $"{path} drops its EXIT trap without asserting graceful teardown."
+                );
             }
         }
 
-        Assert.Contains("$script:SampleProcessNames[$process.Id] = $Name", powershellHelper,
-            StringComparison.Ordinal);
-        Assert.Contains("$process.ExitCode -eq 137 -or $process.ExitCode -eq -9", powershellHelper,
-            StringComparison.Ordinal);
-        Assert.Contains("exited during cleanup with status -9 (SIGKILL).", powershellHelper,
-            StringComparison.Ordinal);
-        Assert.Contains("CreateNewProcessGroup = 0x00000200", powershellHelper,
-            StringComparison.Ordinal);
+        Assert.Contains(
+            "$script:SampleProcessNames[$process.Id] = $Name",
+            powershellHelper,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "$process.ExitCode -eq 137 -or $process.ExitCode -eq -9",
+            powershellHelper,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "exited during cleanup with status -9 (SIGKILL).",
+            powershellHelper,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "CreateNewProcessGroup = 0x00000200",
+            powershellHelper,
+            StringComparison.Ordinal
+        );
         Assert.Contains(
             "GenerateConsoleCtrlEvent(CtrlBreakEvent, unchecked((uint)processGroupId))",
             powershellHelper,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain("GenerateConsoleCtrlEvent(CtrlBreakEvent, 0)", powershellHelper,
-            StringComparison.Ordinal);
-        Assert.Contains("for ($i = 0; $i -lt 300; $i++)", powershellHelper,
-            StringComparison.Ordinal);
-        Assert.Contains("required forced termination (taskkill /F).", powershellHelper,
-            StringComparison.Ordinal);
-        Assert.Contains("throw ($teardownFailures -join [Environment]::NewLine)", powershellHelper,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "GenerateConsoleCtrlEvent(CtrlBreakEvent, 0)",
+            powershellHelper,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "for ($i = 0; $i -lt 300; $i++)",
+            powershellHelper,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "required forced termination (taskkill /F).",
+            powershellHelper,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "throw ($teardownFailures -join [Environment]::NewLine)",
+            powershellHelper,
+            StringComparison.Ordinal
+        );
 
-        var zoneWorldRunner = ReadSource(Path.Combine(
-            samplesRoot, "ZoneWorld", "run_sample.ps1"));
-        var cleanup = zoneWorldRunner[zoneWorldRunner.LastIndexOf("finally {", StringComparison.Ordinal)..];
-        var configurationCleanup = cleanup.IndexOf("try { Remove-SampleConfigurationFiles",
-            StringComparison.Ordinal);
-        var processCleanup = cleanup.IndexOf("try { Stop-SampleProcesses }",
-            StringComparison.Ordinal);
-        var redisCleanup = cleanup.IndexOf("try { Remove-SampleRedisContainer",
-            StringComparison.Ordinal);
+        var zoneWorldRunner = ReadSource(Path.Combine(samplesRoot, "ZoneWorld", "run_sample.ps1"));
+        var cleanup = zoneWorldRunner[
+            zoneWorldRunner.LastIndexOf("finally {", StringComparison.Ordinal)..
+        ];
+        var configurationCleanup = cleanup.IndexOf(
+            "try { Remove-SampleConfigurationFiles",
+            StringComparison.Ordinal
+        );
+        var processCleanup = cleanup.IndexOf(
+            "try { Stop-SampleProcesses }",
+            StringComparison.Ordinal
+        );
+        var redisCleanup = cleanup.IndexOf(
+            "try { Remove-SampleRedisContainer",
+            StringComparison.Ordinal
+        );
         Assert.True(configurationCleanup >= 0 && configurationCleanup < processCleanup);
         Assert.True(processCleanup < redisCleanup);
-        Assert.Contains("throw ($cleanupFailures -join [Environment]::NewLine)", cleanup,
-            StringComparison.Ordinal);
+        Assert.Contains(
+            "throw ($cleanupFailures -join [Environment]::NewLine)",
+            cleanup,
+            StringComparison.Ordinal
+        );
     }
 
     [Fact]
     public void ZoneWorldBrowserLoadsRunnerProvidedStaticConfiguration()
     {
-        var browserRoot = Path.GetFullPath(Path.Combine(
-            ResolveDotnetRoot(), "..", "shared_sample", "zoneworld", "client"));
-        var runtime = ReadSource(Path.Combine(browserRoot, "src", "shared", "config", "runtime.ts"));
+        var browserRoot = Path.GetFullPath(
+            Path.Combine(ResolveDotnetRoot(), "..", "shared_sample", "zoneworld", "client")
+        );
+        var runtime = ReadSource(
+            Path.Combine(browserRoot, "src", "shared", "config", "runtime.ts")
+        );
         var liveTest = ReadSource(Path.Combine(browserRoot, "tests", "live", "server.spec.ts"));
         var runner = ReadSource(Path.Combine(ResolveSampleRoot("ZoneWorld"), "run_sample.sh"));
-        var powershellRunner = ReadSource(Path.Combine(ResolveSampleRoot("ZoneWorld"), "run_sample.ps1"));
+        var powershellRunner = ReadSource(
+            Path.Combine(ResolveSampleRoot("ZoneWorld"), "run_sample.ps1")
+        );
 
         Assert.Contains("fetch('/config.json'", runtime, StringComparison.Ordinal);
         Assert.DoesNotContain("import.meta.env", runtime, StringComparison.Ordinal);
@@ -792,7 +1056,11 @@ public sealed partial class RegressionTests
         Assert.Contains("browserDist \"config.json\"", powershellRunner, StringComparison.Ordinal);
         Assert.Contains("gateway = $GatewayEndpoint", powershellRunner, StringComparison.Ordinal);
         Assert.Contains("ops = $OpsEndpoint", powershellRunner, StringComparison.Ordinal);
-        Assert.Contains("lifecycleMarker = $browserMarker", powershellRunner, StringComparison.Ordinal);
+        Assert.Contains(
+            "lifecycleMarker = $browserMarker",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
     }
 
     [Fact]
@@ -800,16 +1068,23 @@ public sealed partial class RegressionTests
     {
         var roots = new[] { Path.Combine(ResolveDotnetRoot(), "samples") };
         foreach (var root in roots)
-            foreach (var sourceFile in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
-                         .Where(static path => path.Contains(
-                             $"{Path.DirectorySeparatorChar}Client{Path.DirectorySeparatorChar}"))
-                         .Where(static path => !path.Contains(
-                             $"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")))
-            {
-                var source = ReadSource(sourceFile);
-                Assert.DoesNotContain("class ScenarioAssert", source, StringComparison.Ordinal);
-                Assert.DoesNotContain("static class ScenarioAssert", source, StringComparison.Ordinal);
-            }
+        foreach (
+            var sourceFile in Directory
+                .EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
+                .Where(static path =>
+                    path.Contains(
+                        $"{Path.DirectorySeparatorChar}Client{Path.DirectorySeparatorChar}"
+                    )
+                )
+                .Where(static path =>
+                    !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
+                )
+        )
+        {
+            var source = ReadSource(sourceFile);
+            Assert.DoesNotContain("class ScenarioAssert", source, StringComparison.Ordinal);
+            Assert.DoesNotContain("static class ScenarioAssert", source, StringComparison.Ordinal);
+        }
     }
 
     [Fact]
@@ -817,68 +1092,123 @@ public sealed partial class RegressionTests
     {
         var roots = new[] { Path.Combine(ResolveDotnetRoot(), "samples") };
         foreach (var root in roots)
-            foreach (var sourceFile in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
-                         .Where(static path => path.Contains(
-                             $"{Path.DirectorySeparatorChar}Client{Path.DirectorySeparatorChar}"))
-                         .Where(static path => !path.Contains(
-                             $"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")))
-            {
-                var source = ReadSource(sourceFile);
-                Assert.DoesNotContain(".AsTask().GetAwaiter().GetResult()", source, StringComparison.Ordinal);
-            }
+        foreach (
+            var sourceFile in Directory
+                .EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
+                .Where(static path =>
+                    path.Contains(
+                        $"{Path.DirectorySeparatorChar}Client{Path.DirectorySeparatorChar}"
+                    )
+                )
+                .Where(static path =>
+                    !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
+                )
+        )
+        {
+            var source = ReadSource(sourceFile);
+            Assert.DoesNotContain(
+                ".AsTask().GetAwaiter().GetResult()",
+                source,
+                StringComparison.Ordinal
+            );
+        }
     }
 
     [Fact]
     public void ZoneWorldBotTimerAppliesBackpressureToActorMovement()
     {
         var zoneWorld = ResolveSampleRoot("ZoneWorld");
-        var spot = ReadSource(Path.Combine(
-            zoneWorld,
-            "Server", "ZoneNode", "Infrastructure", "ZLink", "Spots", "ZoneSpot.cs"));
-        var handlers = ReadSource(Path.Combine(
-            zoneWorld,
-            "Server", "ZoneNode", "Infrastructure", "ZLink", "Spots", "Handlers",
-            "PlayerMoveHandlers.cs"));
+        var spot = ReadSource(
+            Path.Combine(
+                zoneWorld,
+                "Server",
+                "ZoneNode",
+                "Infrastructure",
+                "ZLink",
+                "Spots",
+                "ZoneSpot.cs"
+            )
+        );
+        var handlers = ReadSource(
+            Path.Combine(
+                zoneWorld,
+                "Server",
+                "ZoneNode",
+                "Infrastructure",
+                "ZLink",
+                "Spots",
+                "Handlers",
+                "PlayerMoveHandlers.cs"
+            )
+        );
 
-        Assert.Contains(
-            "SendToActor(playerId, new BotTickMsg())",
-            spot,
-            StringComparison.Ordinal);
+        Assert.Contains("SendToActor(playerId, new BotTickMsg())", spot, StringComparison.Ordinal);
         Assert.Contains(".Async(cancellationToken)", spot, StringComparison.Ordinal);
         Assert.DoesNotContain("FindAsync(playerId", spot, StringComparison.Ordinal);
-        Assert.Contains("IZLinkSpotActorSendHandler<ZoneSpot, PlayerActor, BotTickMsg>",
-            handlers, StringComparison.Ordinal);
+        Assert.Contains(
+            "IZLinkSpotActorSendHandler<ZoneSpot, PlayerActor, BotTickMsg>",
+            handlers,
+            StringComparison.Ordinal
+        );
     }
 
     [Fact]
     public void ZoneWorldBotEntryRecordsIdentityBeforeDeferredJoin()
     {
         var sampleRoot = ResolveSampleRoot("ZoneWorld");
-        var actor = ReadSource(Path.Combine(
-            sampleRoot,
-            "Server", "ZoneNode", "Infrastructure", "ZLink", "Actors", "PlayerActor.cs"));
-        var entry = ReadSource(Path.Combine(
-            sampleRoot,
-            "Server", "ZoneNode", "Infrastructure", "ZLink", "Spots", "ZoneEntrySpot.cs"));
+        var actor = ReadSource(
+            Path.Combine(
+                sampleRoot,
+                "Server",
+                "ZoneNode",
+                "Infrastructure",
+                "ZLink",
+                "Actors",
+                "PlayerActor.cs"
+            )
+        );
+        var entry = ReadSource(
+            Path.Combine(
+                sampleRoot,
+                "Server",
+                "ZoneNode",
+                "Infrastructure",
+                "ZLink",
+                "Spots",
+                "ZoneEntrySpot.cs"
+            )
+        );
 
         Assert.Contains("public void PrepareEntry(bool isBot)", actor, StringComparison.Ordinal);
         Assert.Contains("actor.PrepareEntry(message.IsBot);", entry, StringComparison.Ordinal);
         Assert.True(
             entry.IndexOf("actor.PrepareEntry(message.IsBot);", StringComparison.Ordinal)
-            < entry.IndexOf(".JoinSpot(", StringComparison.Ordinal),
-            "bot identity must be recorded before the deferred join is scheduled");
+                < entry.IndexOf(".JoinSpot(", StringComparison.Ordinal),
+            "bot identity must be recorded before the deferred join is scheduled"
+        );
     }
 
     [Fact]
     public void ZoneWorldPhysicalDisconnectUsesFrameworkLifecycleNotification()
     {
-        var session = ReadSource(Path.Combine(
-            ResolveSampleRoot("ZoneWorld"),
-            "Server", "Gateway", "Infrastructure", "ZLink", "Sessions", "PlayerSession.cs"));
+        var session = ReadSource(
+            Path.Combine(
+                ResolveSampleRoot("ZoneWorld"),
+                "Server",
+                "Gateway",
+                "Infrastructure",
+                "ZLink",
+                "Sessions",
+                "PlayerSession.cs"
+            )
+        );
 
         Assert.Contains("Physical disconnect is delivered", session, StringComparison.Ordinal);
         Assert.DoesNotContain("Context.Actors.Bound.ToArray()", session, StringComparison.Ordinal);
-        Assert.DoesNotContain("NotifyDisconnectedAsync(cancellationToken)", session,
-            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "NotifyDisconnectedAsync(cancellationToken)",
+            session,
+            StringComparison.Ordinal
+        );
     }
 }

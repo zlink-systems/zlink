@@ -209,6 +209,41 @@ jobs:
           path: dist/framework-node/*.tgz
           if-no-files-found: error
 
+  wait-tutorial-node:
+    if: needs.resolve.outputs.publish_registry == 'true' && needs.release-node.result == 'success'
+    name: Wait for the published Node framework package
+    runs-on: ubuntu-24.04
+    needs: [resolve, release-node]
+    steps:
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Wait for the npm index (external propagation, not a publish retry)
+        env:
+          VERSION: ${{ needs.resolve.outputs.node_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 60); do
+            if actual=$(npm view "@zlink-systems/framework@${VERSION}" version 2>/dev/null) && [ "${actual}" = "${VERSION}" ]; then
+              echo "@zlink-systems/framework@${VERSION} is available on npm"
+              exit 0
+            fi
+            echo "attempt ${attempt}: @zlink-systems/framework@${VERSION} is not indexed yet; waiting 30s"
+            [ "${attempt}" -lt 60 ] && sleep 30
+          done
+          echo "::error::@zlink-systems/framework@${VERSION} is not indexed on npm after 30 minutes" >&2
+          exit 1
+
+  tutorial-node:
+    if: needs.wait-tutorial-node.result == 'success'
+    name: Verify the published Node framework package with the tutorial
+    needs: wait-tutorial-node
+    uses: ./.github/workflows/framework-tutorial.yml
+    with:
+      language: node
+
   # Separate from release-node on purpose. That job carries the npm Trusted
   # Publishing credential (id-token: write); adding contents: write there would put
   # repository write access in the same context as the publishing credential for
@@ -329,6 +364,38 @@ jobs:
             dist/framework-java/*.zip
           if-no-files-found: error
 
+  wait-tutorial-java:
+    if: needs.resolve.outputs.publish_registry == 'true' && needs.release-java.result == 'success'
+    name: Wait for the published Java framework package
+    runs-on: ubuntu-24.04
+    needs: [resolve, release-java]
+    steps:
+      - name: Wait for the Maven Central index (external propagation, not a publish retry)
+        env:
+          VERSION: ${{ needs.resolve.outputs.java_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://repo1.maven.org/maven2/systems/zlink/zlink-framework-core/${VERSION}/zlink-framework-core-${VERSION}.pom"
+          for attempt in $(seq 1 60); do
+            if curl -sfL -o /dev/null "${url}"; then
+              echo "zlink-framework-core:${VERSION} is available on Maven Central"
+              exit 0
+            fi
+            echo "attempt ${attempt}: ${url} is not indexed yet; waiting 30s"
+            [ "${attempt}" -lt 60 ] && sleep 30
+          done
+          echo "::error::zlink-framework-core:${VERSION} is not indexed on Maven Central after 30 minutes" >&2
+          exit 1
+
+  tutorial-java:
+    if: needs.wait-tutorial-java.result == 'success'
+    name: Verify the published Java framework package with the tutorial
+    needs: wait-tutorial-java
+    uses: ./.github/workflows/framework-tutorial.yml
+    with:
+      language: java
+
   release-cpp:
     if: needs.resolve.outputs.target == 'cpp' || needs.resolve.outputs.target == 'all'
     name: Package C++ framework sources
@@ -376,6 +443,43 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: ZLink Framework v${{ needs.resolve.outputs.cpp_version }}
           files: dist/framework-cpp/*
+
+  wait-tutorial-cpp:
+    if: github.event_name == 'push' && needs.release-cpp.result == 'success'
+    name: Wait for the published C++ framework release asset
+    runs-on: ubuntu-24.04
+    needs: [resolve, release-cpp]
+    permissions:
+      contents: read
+    steps:
+      - name: Wait for the GitHub Release asset (external propagation, not a publish retry)
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.resolve.outputs.cpp_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          asset="zlink-framework-cpp-${VERSION}.tar.gz"
+          for attempt in $(seq 1 60); do
+            assets="$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name' 2>/dev/null || true)"
+            if printf '%s\n' "${assets}" | grep -Fxq "${asset}"; then
+              echo "${asset} is available on the GitHub Release"
+              exit 0
+            fi
+            echo "attempt ${attempt}: ${asset} is not attached yet; waiting 30s"
+            [ "${attempt}" -lt 60 ] && sleep 30
+          done
+          echo "::error::${asset} is not attached to ${GITHUB_REF_NAME} after 30 minutes" >&2
+          exit 1
+
+  tutorial-cpp:
+    if: needs.wait-tutorial-cpp.result == 'success'
+    name: Verify the published C++ framework package with the tutorial
+    needs: wait-tutorial-cpp
+    uses: ./.github/workflows/framework-tutorial.yml
+    with:
+      language: cpp
 
   sync-recipes:
     name: Sync vcpkg/Conan recipes (cpp framework)

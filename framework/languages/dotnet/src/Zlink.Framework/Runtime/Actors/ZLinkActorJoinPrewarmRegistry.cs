@@ -52,7 +52,7 @@ internal sealed class ZLinkActorJoinPrewarmRegistry
     internal enum IngressRoute
     {
         Parked,
-        NotFound
+        NotFound,
     }
 
     private sealed class Attempt(string handoffId, ObjectKey objectKey)
@@ -65,11 +65,11 @@ internal sealed class ZLinkActorJoinPrewarmRegistry
     private readonly record struct ParkedClaim(
         Attempt Attempt,
         ParkedMessage Message,
-        int ArrivalIndex);
+        int ArrivalIndex
+    );
 
     private readonly ZLinkStateLane _lane = new();
-    private readonly Dictionary<string, Attempt> _byHandoff =
-        new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Attempt> _byHandoff = new(StringComparer.Ordinal);
     private readonly Dictionary<ObjectKey, string> _byObject = [];
 
     /// <summary>
@@ -85,33 +85,38 @@ internal sealed class ZLinkActorJoinPrewarmRegistry
         string handoffId,
         string actorId,
         ulong actorGeneration,
-        Action<string>? onEvicted = null)
+        Action<string>? onEvicted = null
+    )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(handoffId);
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
-        var evicted = AwaitStateLane(_lane.RunAsync(() =>
-        {
-            if (_byHandoff.ContainsKey(handoffId))
-                return (Parked: (List<ParkedMessage>?)null, HandoffId: (string?)null);
-            var key = new ObjectKey(actorId, actorGeneration);
-            if (_byObject.TryGetValue(key, out var displacedId)
-                && !string.Equals(displacedId, handoffId, StringComparison.Ordinal)
-                && _byHandoff.Remove(displacedId, out var displaced))
+        var evicted = AwaitStateLane(
+            _lane.RunAsync(() =>
             {
-                _byObject.Remove(key);
-                var parked = displaced.Parked;
-                var evictedId = displacedId;
-                var replacement = new Attempt(handoffId, key);
-                _byHandoff[handoffId] = replacement;
-                _byObject[key] = handoffId;
-                return (Parked: parked, HandoffId: evictedId);
-            }
+                if (_byHandoff.ContainsKey(handoffId))
+                    return (Parked: (List<ParkedMessage>?)null, HandoffId: (string?)null);
+                var key = new ObjectKey(actorId, actorGeneration);
+                if (
+                    _byObject.TryGetValue(key, out var displacedId)
+                    && !string.Equals(displacedId, handoffId, StringComparison.Ordinal)
+                    && _byHandoff.Remove(displacedId, out var displaced)
+                )
+                {
+                    _byObject.Remove(key);
+                    var parked = displaced.Parked;
+                    var evictedId = displacedId;
+                    var replacement = new Attempt(handoffId, key);
+                    _byHandoff[handoffId] = replacement;
+                    _byObject[key] = handoffId;
+                    return (Parked: parked, HandoffId: evictedId);
+                }
 
-            var attempt = new Attempt(handoffId, key);
-            _byHandoff[handoffId] = attempt;
-            _byObject[key] = handoffId;
-            return (Parked: (List<ParkedMessage>?)null, HandoffId: (string?)null);
-        }));
+                var attempt = new Attempt(handoffId, key);
+                _byHandoff[handoffId] = attempt;
+                _byObject[key] = handoffId;
+                return (Parked: (List<ParkedMessage>?)null, HandoffId: (string?)null);
+            })
+        );
 
         if (evicted.Parked is not null)
             FailParked(evicted.Parked);
@@ -130,23 +135,28 @@ internal sealed class ZLinkActorJoinPrewarmRegistry
         string actorId,
         ulong actorGeneration,
         Func<ZLinkActorHandoffFrame> captureFrame,
-        Action onFailed)
+        Action onFailed
+    )
     {
         ArgumentNullException.ThrowIfNull(captureFrame);
         ArgumentNullException.ThrowIfNull(onFailed);
-        var claim = AwaitStateLane(_lane.RunAsync(() =>
-        {
-            if (!_byObject.TryGetValue(
-                    new ObjectKey(actorId, actorGeneration),
-                    out var handoffId)
-                || !_byHandoff.TryGetValue(handoffId, out var attempt))
-                return (ParkedClaim?)null;
+        var claim = AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                if (
+                    !_byObject.TryGetValue(
+                        new ObjectKey(actorId, actorGeneration),
+                        out var handoffId
+                    ) || !_byHandoff.TryGetValue(handoffId, out var attempt)
+                )
+                    return (ParkedClaim?)null;
 
-            var message = new ParkedMessage(onFailed);
-            var arrivalIndex = attempt.Parked.Count;
-            attempt.Parked.Add(message);
-            return new ParkedClaim(attempt, message, arrivalIndex);
-        }));
+                var message = new ParkedMessage(onFailed);
+                var arrivalIndex = attempt.Parked.Count;
+                attempt.Parked.Add(message);
+                return new ParkedClaim(attempt, message, arrivalIndex);
+            })
+        );
         if (claim is null)
             return IngressRoute.NotFound;
 
@@ -160,21 +170,29 @@ internal sealed class ZLinkActorJoinPrewarmRegistry
         }
         catch
         {
-            AwaitStateLane(_lane.RunAsync(() =>
-            {
-                if (_byHandoff.TryGetValue(claim.Value.Attempt.HandoffId, out var current)
-                    && ReferenceEquals(current, claim.Value.Attempt))
-                    current.Parked.Remove(claim.Value.Message);
-            }));
+            AwaitStateLane(
+                _lane.RunAsync(() =>
+                {
+                    if (
+                        _byHandoff.TryGetValue(claim.Value.Attempt.HandoffId, out var current)
+                        && ReferenceEquals(current, claim.Value.Attempt)
+                    )
+                        current.Parked.Remove(claim.Value.Message);
+                })
+            );
             throw;
         }
-        AwaitStateLane(_lane.RunAsync(() =>
-        {
-            if (_byHandoff.TryGetValue(claim.Value.Attempt.HandoffId, out var current)
-                && ReferenceEquals(current, claim.Value.Attempt)
-                && current.Parked.Contains(claim.Value.Message))
-                claim.Value.Message.SetFrame(captured);
-        }));
+        AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                if (
+                    _byHandoff.TryGetValue(claim.Value.Attempt.HandoffId, out var current)
+                    && ReferenceEquals(current, claim.Value.Attempt)
+                    && current.Parked.Contains(claim.Value.Message)
+                )
+                    claim.Value.Message.SetFrame(captured);
+            })
+        );
         return IngressRoute.Parked;
     }
 
@@ -193,25 +211,35 @@ internal sealed class ZLinkActorJoinPrewarmRegistry
     /// </exception>
     internal void CompleteMigration(
         string handoffId,
-        Action<IReadOnlyList<ZLinkActorHandoffFrame>> deliver)
+        Action<IReadOnlyList<ZLinkActorHandoffFrame>> deliver
+    )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(handoffId);
         ArgumentNullException.ThrowIfNull(deliver);
-        var frames = AwaitStateLane(_lane.RunAsync<IReadOnlyList<ZLinkActorHandoffFrame>>(() =>
-        {
-            if (!_byHandoff.Remove(handoffId, out var attempt))
-                throw new InvalidOperationException(
-                    "Actor Join prewarm attempt was evicted before PREPARE "
-                    + "installed its stage: " + handoffId);
-            if (_byObject.TryGetValue(attempt.ObjectKey, out var owner)
-                && string.Equals(owner, handoffId, StringComparison.Ordinal))
-                _byObject.Remove(attempt.ObjectKey);
-            return attempt.Parked.Count == 0
-                ? []
-                : [.. attempt.Parked
-                    .Where(static message => message.Frame is not null)
-                    .Select(static message => message.Frame!)];
-        }));
+        var frames = AwaitStateLane(
+            _lane.RunAsync<IReadOnlyList<ZLinkActorHandoffFrame>>(() =>
+            {
+                if (!_byHandoff.Remove(handoffId, out var attempt))
+                    throw new InvalidOperationException(
+                        "Actor Join prewarm attempt was evicted before PREPARE "
+                            + "installed its stage: "
+                            + handoffId
+                    );
+                if (
+                    _byObject.TryGetValue(attempt.ObjectKey, out var owner)
+                    && string.Equals(owner, handoffId, StringComparison.Ordinal)
+                )
+                    _byObject.Remove(attempt.ObjectKey);
+                return attempt.Parked.Count == 0
+                    ? []
+                    :
+                    [
+                        .. attempt
+                            .Parked.Where(static message => message.Frame is not null)
+                            .Select(static message => message.Frame!),
+                    ];
+            })
+        );
         if (frames.Count != 0)
             deliver(frames);
     }
@@ -225,17 +253,21 @@ internal sealed class ZLinkActorJoinPrewarmRegistry
     internal void Release(string handoffId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(handoffId);
-        var parked = AwaitStateLane(_lane.RunAsync(() =>
-        {
-            if (_byHandoff.Remove(handoffId, out var attempt))
+        var parked = AwaitStateLane(
+            _lane.RunAsync(() =>
             {
-                if (_byObject.TryGetValue(attempt.ObjectKey, out var owner)
-                    && string.Equals(owner, handoffId, StringComparison.Ordinal))
-                    _byObject.Remove(attempt.ObjectKey);
-                return attempt.Parked;
-            }
-            return null;
-        }));
+                if (_byHandoff.Remove(handoffId, out var attempt))
+                {
+                    if (
+                        _byObject.TryGetValue(attempt.ObjectKey, out var owner)
+                        && string.Equals(owner, handoffId, StringComparison.Ordinal)
+                    )
+                        _byObject.Remove(attempt.ObjectKey);
+                    return attempt.Parked;
+                }
+                return null;
+            })
+        );
 
         if (parked is not null)
             FailParked(parked);
@@ -243,10 +275,7 @@ internal sealed class ZLinkActorJoinPrewarmRegistry
 
     internal bool IsEmpty
     {
-        get
-        {
-            return AwaitStateLane(_lane.RunAsync(() => _byHandoff.Count == 0));
-        }
+        get { return AwaitStateLane(_lane.RunAsync(() => _byHandoff.Count == 0)); }
     }
 
     private static void FailParked(List<ParkedMessage> parked)
@@ -258,6 +287,5 @@ internal sealed class ZLinkActorJoinPrewarmRegistry
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();
 
-    private static void AwaitStateLane(ValueTask operation) =>
-        operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 }

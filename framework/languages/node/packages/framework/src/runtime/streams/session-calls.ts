@@ -5,9 +5,7 @@ import type {
   ZLinkSessionSendCall
 } from '../../contracts';
 import type { ZLinkSubmitResult } from '../messaging/submission-result';
-import {
-  requireOneWayCompletion
-} from '../messaging/submission-result';
+import { requireOneWayCompletion } from '../messaging/submission-result';
 import type { Message } from '../../contracts/Common/Message';
 import { throwIfAborted } from '../abort';
 import { ZLinkConfigurationException } from '../configuration';
@@ -160,11 +158,7 @@ export class DefaultZLinkSessionSendCall implements ZLinkSessionSendCall {
       this.message
     );
     try {
-      const result = await this.context.stream.submitRaw(
-        message,
-        signal,
-        this.selectedTimeoutMs
-      );
+      const result = await this.context.stream.submitRaw(message, signal, this.selectedTimeoutMs);
       requireOneWayCompletion(result, 'STREAM session send');
       this.context.traceFrameWritten?.(ZLinkStreamMessageKind.Send, packetName, undefined);
     } finally {

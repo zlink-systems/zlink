@@ -13,11 +13,21 @@ public sealed class BackendStreamSocketConcurrencyTests
     {
         var socket = DispatchProxy.Create<IStreamSocket, NoopStreamSocketProxy>();
         var proxy = (NoopStreamSocketProxy)(object)socket;
-        proxy.DisconnectFailure = new ZlinkConnectException(ZlinkConnectException.ErrorCode.NotFound);
+        proxy.DisconnectFailure = new ZlinkConnectException(
+            ZlinkConnectException.ErrorCode.NotFound
+        );
         await using var backend = new ZLinkBackendStreamSocketWrapper(
-            socket, null!, new ZLinkMeshCompletionTable(), ownsNode: false);
+            socket,
+            null!,
+            new ZLinkMeshCompletionTable(),
+            ownsNode: false
+        );
         var stream = new ZLinkManagedStream(
-            backend, RoutingId.From("absent-session"), new ZLinkCodecRegistryBuilder(), "test");
+            backend,
+            RoutingId.From("absent-session"),
+            new ZLinkCodecRegistryBuilder(),
+            "test"
+        );
 
         await stream.CloseAsync();
         await stream.CloseAsync();
@@ -29,18 +39,29 @@ public sealed class BackendStreamSocketConcurrencyTests
     [InlineData(ZlinkConnectException.ErrorCode.InvalidHandle)]
     [InlineData(ZlinkConnectException.ErrorCode.InvalidArgument)]
     [InlineData(ZlinkConnectException.ErrorCode.InternalError)]
-    public async Task ClosePhysicalSession_PropagatesOtherConnectErrors(ZlinkConnectException.ErrorCode error)
+    public async Task ClosePhysicalSession_PropagatesOtherConnectErrors(
+        ZlinkConnectException.ErrorCode error
+    )
     {
         var socket = DispatchProxy.Create<IStreamSocket, NoopStreamSocketProxy>();
         var failure = new ZlinkConnectException(error);
         ((NoopStreamSocketProxy)(object)socket).DisconnectFailure = failure;
         await using var backend = new ZLinkBackendStreamSocketWrapper(
-            socket, null!, new ZLinkMeshCompletionTable(), ownsNode: false);
+            socket,
+            null!,
+            new ZLinkMeshCompletionTable(),
+            ownsNode: false
+        );
         var stream = new ZLinkManagedStream(
-            backend, RoutingId.From("session"), new ZLinkCodecRegistryBuilder(), "test");
+            backend,
+            RoutingId.From("session"),
+            new ZLinkCodecRegistryBuilder(),
+            "test"
+        );
 
-        var actual = await Assert.ThrowsAsync<ZlinkConnectException>(
-            async () => await stream.CloseAsync());
+        var actual = await Assert.ThrowsAsync<ZlinkConnectException>(async () =>
+            await stream.CloseAsync()
+        );
 
         Assert.Same(failure, actual);
     }
@@ -48,7 +69,9 @@ public sealed class BackendStreamSocketConcurrencyTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task ClosePhysicalSession_PropagatesNotFoundFromOtherOperationTypes(bool configurationError)
+    public async Task ClosePhysicalSession_PropagatesNotFoundFromOtherOperationTypes(
+        bool configurationError
+    )
     {
         var socket = DispatchProxy.Create<IStreamSocket, NoopStreamSocketProxy>();
         Exception failure = configurationError
@@ -56,12 +79,22 @@ public sealed class BackendStreamSocketConcurrencyTests
             : new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotFound);
         ((NoopStreamSocketProxy)(object)socket).DisconnectFailure = failure;
         await using var backend = new ZLinkBackendStreamSocketWrapper(
-            socket, null!, new ZLinkMeshCompletionTable(), ownsNode: false);
+            socket,
+            null!,
+            new ZLinkMeshCompletionTable(),
+            ownsNode: false
+        );
         var stream = new ZLinkManagedStream(
-            backend, RoutingId.From("session"), new ZLinkCodecRegistryBuilder(), "test");
+            backend,
+            RoutingId.From("session"),
+            new ZLinkCodecRegistryBuilder(),
+            "test"
+        );
 
         var actual = await Assert.ThrowsAsync(
-            failure.GetType(), async () => await stream.CloseAsync());
+            failure.GetType(),
+            async () => await stream.CloseAsync()
+        );
 
         Assert.Same(failure, actual);
     }
@@ -85,32 +118,35 @@ public sealed class BackendStreamSocketConcurrencyTests
                 sessionRid,
                 new ActorRef("actor-1", 1, "actors", NodeRid),
                 0,
-                0),
+                0
+            ),
             new StreamSessionBinding(
                 sessionRid,
                 new ActorRef("actor-2", 1, "actors", NodeRid),
                 0,
-                0)
+                0
+            ),
         ];
 
         await using var backend = new ZLinkBackendStreamSocketWrapper(
             socket,
             node,
             new ZLinkMeshCompletionTable(),
-            ownsNode: false);
+            ownsNode: false
+        );
         using var firstHeader = Message.From("first-header");
         using var firstBody = Message.From("first-body");
         using var secondHeader = Message.From("second-header");
         using var secondBody = Message.From("second-body");
 
-        var first = Task.Run(() => backend.SendBoundActor(
-            sessionRid,
-            "actor-1",
-            [firstHeader, firstBody],
-            SendFlags.None));
+        var first = Task.Run(() =>
+            backend.SendBoundActor(sessionRid, "actor-1", [firstHeader, firstBody], SendFlags.None)
+        );
         await sessionProxy.FirstSubmitEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
-        var secondStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var second = Task.Run(() =>
         {
             secondStarted.TrySetResult();
@@ -118,7 +154,8 @@ public sealed class BackendStreamSocketConcurrencyTests
                 sessionRid,
                 "actor-2",
                 [secondHeader, secondBody],
-                SendFlags.None);
+                SendFlags.None
+            );
         });
         await secondStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
@@ -145,14 +182,16 @@ public sealed class BackendStreamSocketConcurrencyTests
             {
                 DisconnectCount++;
                 if (DisconnectFailure is not null)
-                    System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(DisconnectFailure).Throw();
+                    System
+                        .Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(DisconnectFailure)
+                        .Throw();
                 return null;
             }
             return targetMethod.Name switch
             {
                 "DisposeAsync" => ValueTask.CompletedTask,
                 "Dispose" => null,
-                _ => throw new NotSupportedException(targetMethod.Name)
+                _ => throw new NotSupportedException(targetMethod.Name),
             };
         }
     }
@@ -169,7 +208,7 @@ public sealed class BackendStreamSocketConcurrencyTests
                 "CreateStreamSessionService" => Session,
                 "DisposeAsync" => ValueTask.CompletedTask,
                 "Dispose" => null,
-                _ => throw new NotSupportedException(targetMethod.Name)
+                _ => throw new NotSupportedException(targetMethod.Name),
             };
         }
     }
@@ -238,8 +277,12 @@ public sealed class BackendStreamSocketConcurrencyTests
             while (true)
             {
                 var current = Volatile.Read(ref _maximumConcurrentSubmits);
-                if (current >= active) return;
-                if (Interlocked.CompareExchange(ref _maximumConcurrentSubmits, active, current) == current)
+                if (current >= active)
+                    return;
+                if (
+                    Interlocked.CompareExchange(ref _maximumConcurrentSubmits, active, current)
+                    == current
+                )
                     return;
             }
         }

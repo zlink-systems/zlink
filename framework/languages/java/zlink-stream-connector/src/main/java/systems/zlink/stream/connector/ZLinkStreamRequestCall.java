@@ -18,5 +18,4 @@ public interface ZLinkStreamRequestCall {
     CompletionStage<ZLinkStreamEncodedPayload> submit();
 
     <TReply> CompletionStage<TReply> submit(Class<TReply> replyType);
-
 }

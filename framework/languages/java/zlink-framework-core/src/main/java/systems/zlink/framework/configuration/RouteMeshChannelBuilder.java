@@ -1,8 +1,9 @@
 package systems.zlink.framework.runtime.internal.configuration;
-import java.time.Duration;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.configuration.ZLinkEndpointConnections;
+
+import java.time.Duration;
 
 public interface RouteMeshChannelBuilder {
     RouteMeshChannelBuilder enableServer(String endpoint);
@@ -19,23 +20,12 @@ public interface RouteMeshChannelBuilder {
 
     RouteMeshChannelBuilder addHandlerGroup(String groupName);
 
-    void addSendHandler(
-        Class<?> handlerType,
-        Class<?> messageType);
+    void addSendHandler(Class<?> handlerType, Class<?> messageType);
 
-    void addSendHandler(
-        Class<?> handlerType,
-        Class<?> messageType,
-        String packetName);
+    void addSendHandler(Class<?> handlerType, Class<?> messageType, String packetName);
+
+    void addRequestHandler(Class<?> handlerType, Class<?> requestType, Class<?> replyType);
 
     void addRequestHandler(
-        Class<?> handlerType,
-        Class<?> requestType,
-        Class<?> replyType);
-
-    void addRequestHandler(
-        Class<?> handlerType,
-        Class<?> requestType,
-        Class<?> replyType,
-        String packetName);
+            Class<?> handlerType, Class<?> requestType, Class<?> replyType, String packetName);
 }

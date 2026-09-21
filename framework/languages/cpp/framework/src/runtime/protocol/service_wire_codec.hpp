@@ -30,10 +30,10 @@ class service_wire_error_t : public std::runtime_error
 };
 
 // Internal operation completion payload; the service wire frames are preserved.
-std::vector<std::uint8_t> pack_infrastructure_reply (
-  const std::vector<std::vector<std::uint8_t>> &parts);
-std::vector<std::vector<std::uint8_t>> unpack_infrastructure_reply (
-  const std::vector<std::uint8_t> &packed);
+std::vector<std::uint8_t>
+pack_infrastructure_reply (const std::vector<std::vector<std::uint8_t>> &parts);
+std::vector<std::vector<std::uint8_t>>
+unpack_infrastructure_reply (const std::vector<std::uint8_t> &packed);
 
 struct liveness_record_t
 {
@@ -52,12 +52,16 @@ struct application_payload_t
     using multipart_t = std::vector<zlink::message_t>;
 
     application_payload_t () = default;
-    application_payload_t (std::string packet, std::string content,
+    application_payload_t (std::string packet,
+                           std::string content,
                            std::vector<std::uint8_t> bytes,
                            std::optional<std::string> flow = {},
                            std::optional<flow_origin_t> origin = {}) :
-        packet_name (std::move (packet)), content_type (std::move (content)),
-        flow_id (std::move (flow)), flow_origin (origin), _body (std::move (bytes))
+        packet_name (std::move (packet)),
+        content_type (std::move (content)),
+        flow_id (std::move (flow)),
+        flow_origin (origin),
+        _body (std::move (bytes))
     {
     }
 
@@ -82,8 +86,7 @@ struct application_payload_t
     std::optional<std::string> flow_id;
     std::optional<flow_origin_t> flow_origin;
 
-    friend bool operator== (const application_payload_t &,
-                            const application_payload_t &);
+    friend bool operator== (const application_payload_t &, const application_payload_t &);
 
   private:
     // The codec owns either incoming bytes or outgoing parts, never both.
@@ -91,8 +94,7 @@ struct application_payload_t
 };
 
 // Shared inverse of application_payload_t::from_parts; used by dispatch and diagnostics.
-application_payload_t::multipart_t
-decode_application_parts (const application_payload_t &payload);
+application_payload_t::multipart_t decode_application_parts (const application_payload_t &payload);
 
 struct spot_route_fence_t
 {
@@ -103,8 +105,7 @@ struct spot_route_fence_t
     std::uint64_t authority_owner_generation = 0;
     std::uint64_t owner_lease_generation = 0;
 
-    friend bool operator== (const spot_route_fence_t &,
-                            const spot_route_fence_t &) = default;
+    friend bool operator== (const spot_route_fence_t &, const spot_route_fence_t &) = default;
 };
 
 struct actor_route_fence_t
@@ -116,8 +117,7 @@ struct actor_route_fence_t
     std::uint64_t authority_owner_generation = 0;
     std::uint64_t owner_lease_generation = 0;
 
-    friend bool operator== (const actor_route_fence_t &,
-                            const actor_route_fence_t &) = default;
+    friend bool operator== (const actor_route_fence_t &, const actor_route_fence_t &) = default;
 };
 
 enum class bound_session_binding_state_t : std::uint8_t
@@ -128,8 +128,7 @@ enum class bound_session_binding_state_t : std::uint8_t
 
 struct bound_session_binding_transition_t
 {
-    bound_session_binding_state_t state =
-      bound_session_binding_state_t::active;
+    bound_session_binding_state_t state = bound_session_binding_state_t::active;
     std::uint64_t generation = 0;
 
     friend bool operator== (const bound_session_binding_transition_t &,
@@ -141,8 +140,7 @@ struct bound_session_send_t
     actor_route_fence_t actor;
     std::uint64_t expected_binding_generation = 0;
 
-    friend bool operator== (const bound_session_send_t &,
-                            const bound_session_send_t &) = default;
+    friend bool operator== (const bound_session_send_t &, const bound_session_send_t &) = default;
 };
 
 struct bound_session_bind_t
@@ -152,8 +150,7 @@ struct bound_session_bind_t
     std::vector<std::uint8_t> session_routing_id;
     bound_session_binding_transition_t binding;
 
-    friend bool operator== (const bound_session_bind_t &,
-                            const bound_session_bind_t &) = default;
+    friend bool operator== (const bound_session_bind_t &, const bound_session_bind_t &) = default;
 };
 
 struct retired_bound_session_route_fence_t
@@ -183,12 +180,10 @@ struct wire_operation_id_t
     std::uint64_t high = 0;
     std::uint64_t low = 0;
 
-    friend bool operator== (const wire_operation_id_t &,
-                            const wire_operation_id_t &) = default;
+    friend bool operator== (const wire_operation_id_t &, const wire_operation_id_t &) = default;
 };
 
-using message_follow_route_t =
-  std::variant<actor_route_fence_t, spot_route_fence_t>;
+using message_follow_route_t = std::variant<actor_route_fence_t, spot_route_fence_t>;
 
 struct message_follow_notice_t
 {
@@ -238,8 +233,7 @@ struct relocation_id_t
     std::uint64_t high = 0;
     std::uint64_t low = 0;
 
-    friend bool operator== (const relocation_id_t &,
-                            const relocation_id_t &) = default;
+    friend bool operator== (const relocation_id_t &, const relocation_id_t &) = default;
 };
 
 struct relocation_coordinator_fence_t
@@ -299,8 +293,7 @@ struct relocation_object_t
     friend bool operator== (const relocation_object_t &left,
                             const relocation_object_t &right) noexcept
     {
-        return left.kind == right.kind
-               && left.object_id == right.object_id
+        return left.kind == right.kind && left.object_id == right.object_id
                && left.object_generation == right.object_generation
                && left.expected_authority_owner_generation
                     == right.expected_authority_owner_generation
@@ -323,8 +316,7 @@ struct relocation_prepare_t
     std::uint32_t payload_chunk_count = 0;
     std::uint32_t payload_checksum_crc32c = 0;
     std::uint64_t application_version = 0;
-    friend bool operator== (const relocation_prepare_t &,
-                            const relocation_prepare_t &) = default;
+    friend bool operator== (const relocation_prepare_t &, const relocation_prepare_t &) = default;
 };
 
 struct relocation_ready_t
@@ -335,8 +327,7 @@ struct relocation_ready_t
     relocation_target_fence_t target;
     relocation_object_t object;
     relocation_role_t sender_role = relocation_role_t::target;
-    friend bool operator== (const relocation_ready_t &,
-                            const relocation_ready_t &) = default;
+    friend bool operator== (const relocation_ready_t &, const relocation_ready_t &) = default;
 };
 
 /* Explicit target-side pre-cutover failure for a relocation PREPARE. */
@@ -349,8 +340,7 @@ struct relocation_failed_t
     relocation_object_t object;
     relocation_role_t sender_role = relocation_role_t::target;
     std::uint32_t failure_code = 0;
-    friend bool operator== (const relocation_failed_t &,
-                            const relocation_failed_t &) = default;
+    friend bool operator== (const relocation_failed_t &, const relocation_failed_t &) = default;
 };
 
 struct relocation_cutover_t
@@ -362,8 +352,7 @@ struct relocation_cutover_t
     relocation_object_t object;
     std::uint64_t boundary_record_count = 0;
     std::uint32_t boundary_checksum_crc32c = 0;
-    friend bool operator== (const relocation_cutover_t &,
-                            const relocation_cutover_t &) = default;
+    friend bool operator== (const relocation_cutover_t &, const relocation_cutover_t &) = default;
 };
 
 enum class frozen_record_kind_t : std::uint8_t
@@ -422,8 +411,7 @@ struct frozen_record_t
     std::optional<frozen_target_identity_t> target;
     std::optional<application_payload_t> application;
     std::vector<std::uint8_t> canonical_bytes;
-    friend bool operator== (const frozen_record_t &,
-                            const frozen_record_t &) = default;
+    friend bool operator== (const frozen_record_t &, const frozen_record_t &) = default;
 };
 
 struct frozen_metadata_entry_t
@@ -469,8 +457,7 @@ struct frozen_application_record_t
     wire_operation_id_t operation;
     std::uint32_t operation_kind = 0;
     std::optional<std::uint64_t> reply_route_id;
-    std::variant<frozen_spot_application_body_t,
-                 frozen_actor_application_body_t> body;
+    std::variant<frozen_spot_application_body_t, frozen_actor_application_body_t> body;
 
     friend bool operator== (const frozen_application_record_t &,
                             const frozen_application_record_t &) = default;
@@ -484,8 +471,7 @@ struct relocation_data_t
     relocation_role_t sender_role = relocation_role_t::source;
     relocation_object_t object;
     frozen_record_t record;
-    friend bool operator== (const relocation_data_t &,
-                            const relocation_data_t &) = default;
+    friend bool operator== (const relocation_data_t &, const relocation_data_t &) = default;
 };
 
 struct relocation_state_t
@@ -497,13 +483,15 @@ struct relocation_state_t
     relocation_object_t object;
     std::uint32_t chunk_ordinal = 0;
     std::vector<std::uint8_t> chunk_data;
-    friend bool operator== (const relocation_state_t &,
-                            const relocation_state_t &) = default;
+    friend bool operator== (const relocation_state_t &, const relocation_state_t &) = default;
 };
 
-using relocation_control_t = std::variant<
-  relocation_prepare_t, relocation_ready_t, relocation_failed_t, relocation_data_t,
-  relocation_cutover_t, relocation_state_t>;
+using relocation_control_t = std::variant<relocation_prepare_t,
+                                          relocation_ready_t,
+                                          relocation_failed_t,
+                                          relocation_data_t,
+                                          relocation_cutover_t,
+                                          relocation_state_t>;
 
 struct reply_relay_t
 {
@@ -517,8 +505,7 @@ struct reply_relay_t
     std::uint32_t terminal_result = 0;
     framework_error_code failure_code = framework_error_code::none;
 
-    friend bool operator== (const reply_relay_t &,
-                            const reply_relay_t &) = default;
+    friend bool operator== (const reply_relay_t &, const reply_relay_t &) = default;
 };
 
 enum class reply_relay_ack_status_t : std::uint8_t
@@ -534,11 +521,9 @@ struct reply_relay_ack_t
     wire_operation_id_t operation;
     std::uint64_t reply_route_id = 0;
     request_source_fence_t request_source;
-    reply_relay_ack_status_t status =
-      reply_relay_ack_status_t::terminal_received;
+    reply_relay_ack_status_t status = reply_relay_ack_status_t::terminal_received;
 
-    friend bool operator== (const reply_relay_ack_t &,
-                            const reply_relay_ack_t &) = default;
+    friend bool operator== (const reply_relay_ack_t &, const reply_relay_ack_t &) = default;
 };
 
 struct actor_identity_t
@@ -546,8 +531,7 @@ struct actor_identity_t
     std::string actor_id;
     std::uint64_t object_generation = 0;
 
-    friend bool operator== (const actor_identity_t &,
-                            const actor_identity_t &) = default;
+    friend bool operator== (const actor_identity_t &, const actor_identity_t &) = default;
 };
 
 enum class session_relocation_route_action_t : std::uint8_t
@@ -558,8 +542,7 @@ enum class session_relocation_route_action_t : std::uint8_t
 
 struct session_relocation_route_update_t
 {
-    session_relocation_route_action_t action =
-      session_relocation_route_action_t::commit;
+    session_relocation_route_action_t action = session_relocation_route_action_t::commit;
     std::uint64_t previous_authority_owner_generation = 0;
     std::uint64_t target_authority_owner_generation = 0;
     std::vector<std::uint8_t> target_node_routing_id;
@@ -672,8 +655,7 @@ struct actor_create_header_t
     object_reservation_fence_t reservation;
     std::uint64_t deadline_unix_ms = 0;
 
-    friend bool operator== (const actor_create_header_t &,
-                            const actor_create_header_t &) = default;
+    friend bool operator== (const actor_create_header_t &, const actor_create_header_t &) = default;
 };
 
 struct instance_spot_activation_target_t
@@ -751,8 +733,7 @@ enum class user_spot_create_result_t : std::uint8_t
 struct user_spot_create_reply_t
 {
     reply_header_t header;
-    user_spot_create_result_t result =
-      user_spot_create_result_t::rejected;
+    user_spot_create_result_t result = user_spot_create_result_t::rejected;
     std::string spot_id;
     std::uint64_t object_generation = 0;
 };
@@ -824,8 +805,7 @@ struct actor_join_request_t
     bool entry = false;
     spot_route_fence_t target_spot;
 
-    friend bool operator== (const actor_join_request_t &,
-                            const actor_join_request_t &) = default;
+    friend bool operator== (const actor_join_request_t &, const actor_join_request_t &) = default;
 };
 
 struct client_server_client_admission_t
@@ -845,8 +825,7 @@ struct client_server_server_admission_t
     std::uint64_t lifecycle_generation = 0;
     std::uint64_t descriptor_revision = 0;
     std::uint32_t weight = 100;
-    mesh::service_node_state_t state =
-      mesh::service_node_state_t::preparing;
+    mesh::service_node_state_t state = mesh::service_node_state_t::preparing;
     std::string security_identity;
     std::uint32_t effective_max_message_bytes = 0;
     std::string advertised_endpoint;
@@ -856,32 +835,26 @@ struct client_server_server_admission_t
 };
 
 std::vector<std::uint8_t> encode_node_send_header ();
-std::vector<std::uint8_t>
-encode_node_request_header (std::uint64_t correlation);
-std::uint64_t
-decode_node_request_header (std::span<const std::uint8_t> bytes);
-std::vector<std::uint8_t>
-encode_channel_request_header (std::uint64_t correlation,
-                               const std::string &channel_name);
+std::vector<std::uint8_t> encode_node_request_header (std::uint64_t correlation);
+std::uint64_t decode_node_request_header (std::span<const std::uint8_t> bytes);
+std::vector<std::uint8_t> encode_channel_request_header (std::uint64_t correlation,
+                                                         const std::string &channel_name);
 struct channel_request_header_t
 {
     std::uint64_t correlation;
     std::string channel_name;
 };
-channel_request_header_t
-decode_channel_request_header (std::span<const std::uint8_t> bytes);
+channel_request_header_t decode_channel_request_header (std::span<const std::uint8_t> bytes);
+std::vector<std::uint8_t> encode_channel_send_header (const std::string &channel_name);
 std::vector<std::uint8_t>
-encode_channel_send_header (const std::string &channel_name);
-std::vector<std::uint8_t> encode_spot_message_header (
-  command kind,
-  const std::string &source_spot_id,
-  const spot_route_fence_t &target,
-  wire_operation_id_t operation,
-  std::optional<std::uint64_t> correlation = std::nullopt,
-  std::uint8_t message_follow_hop_count = 0);
-spot_message_header_t decode_spot_message_header (
-  std::span<const std::uint8_t> bytes,
-  command expected_kind);
+encode_spot_message_header (command kind,
+                            const std::string &source_spot_id,
+                            const spot_route_fence_t &target,
+                            wire_operation_id_t operation,
+                            std::optional<std::uint64_t> correlation = std::nullopt,
+                            std::uint8_t message_follow_hop_count = 0);
+spot_message_header_t decode_spot_message_header (std::span<const std::uint8_t> bytes,
+                                                  command expected_kind);
 std::vector<std::uint8_t> encode_actor_message_header (
   command kind,
   const std::optional<std::pair<std::string, std::uint64_t>> &source_actor,
@@ -889,177 +862,134 @@ std::vector<std::uint8_t> encode_actor_message_header (
   wire_operation_id_t operation,
   std::optional<std::uint64_t> correlation = std::nullopt,
   std::uint8_t message_follow_hop_count = 0,
-  std::optional<actor_message_header_t::bound_session_source_t>
-    bound_session_source = std::nullopt);
-actor_message_header_t decode_actor_message_header (
-  std::span<const std::uint8_t> bytes,
-  command expected_kind);
+  std::optional<actor_message_header_t::bound_session_source_t> bound_session_source =
+    std::nullopt);
+actor_message_header_t decode_actor_message_header (std::span<const std::uint8_t> bytes,
+                                                    command expected_kind);
+std::vector<std::uint8_t> encode_bound_session_send (const bound_session_send_t &record);
+bound_session_send_t decode_bound_session_send (std::span<const std::uint8_t> bytes);
+std::vector<std::uint8_t> encode_bound_session_bind (const bound_session_bind_t &record);
+bound_session_bind_t decode_bound_session_bind (std::span<const std::uint8_t> bytes);
+std::vector<std::uint8_t> encode_bound_session_replaced (const bound_session_replaced_t &record);
+bound_session_replaced_t decode_bound_session_replaced (std::span<const std::uint8_t> bytes);
+std::vector<std::uint8_t> encode_message_follow (const message_follow_notice_t &notice);
+message_follow_notice_t decode_message_follow (std::span<const std::uint8_t> bytes);
 std::vector<std::uint8_t>
-encode_bound_session_send (const bound_session_send_t &record);
-bound_session_send_t
-decode_bound_session_send (std::span<const std::uint8_t> bytes);
+encode_session_relocation_route (const session_relocation_route_t &record);
+session_relocation_route_t decode_session_relocation_route (std::span<const std::uint8_t> bytes);
+std::vector<std::uint8_t> encode_session_relocation_seal (const session_relocation_seal_t &record);
+session_relocation_seal_t decode_session_relocation_seal (std::span<const std::uint8_t> bytes);
 std::vector<std::uint8_t>
-encode_bound_session_bind (const bound_session_bind_t &record);
-bound_session_bind_t
-decode_bound_session_bind (std::span<const std::uint8_t> bytes);
-std::vector<std::uint8_t>
-encode_bound_session_replaced (const bound_session_replaced_t &record);
-bound_session_replaced_t
-decode_bound_session_replaced (std::span<const std::uint8_t> bytes);
-std::vector<std::uint8_t>
-encode_message_follow (const message_follow_notice_t &notice);
-message_follow_notice_t
-decode_message_follow (std::span<const std::uint8_t> bytes);
-std::vector<std::uint8_t> encode_session_relocation_route (
-  const session_relocation_route_t &record);
-session_relocation_route_t decode_session_relocation_route (
-  std::span<const std::uint8_t> bytes);
-std::vector<std::uint8_t> encode_session_relocation_seal (
-  const session_relocation_seal_t &record);
-session_relocation_seal_t decode_session_relocation_seal (
-  std::span<const std::uint8_t> bytes);
-std::vector<std::uint8_t> encode_session_relocation_sealed (
-  const session_relocation_sealed_t &record);
-session_relocation_sealed_t decode_session_relocation_sealed (
-  std::span<const std::uint8_t> bytes);
+encode_session_relocation_sealed (const session_relocation_sealed_t &record);
+session_relocation_sealed_t decode_session_relocation_sealed (std::span<const std::uint8_t> bytes);
 std::vector<std::uint8_t> encode_reply_relay (const reply_relay_t &record);
 reply_relay_t decode_reply_relay (std::span<const std::uint8_t> bytes);
-std::vector<std::uint8_t> encode_reply_relay_ack (
-  const reply_relay_ack_t &record);
-reply_relay_ack_t decode_reply_relay_ack (
-  std::span<const std::uint8_t> bytes);
-std::vector<std::uint8_t> encode_relocation_control (
-  const relocation_control_t &record);
-relocation_control_t decode_relocation_control (
-  std::span<const std::uint8_t> bytes);
+std::vector<std::uint8_t> encode_reply_relay_ack (const reply_relay_ack_t &record);
+reply_relay_ack_t decode_reply_relay_ack (std::span<const std::uint8_t> bytes);
+std::vector<std::uint8_t> encode_relocation_control (const relocation_control_t &record);
+relocation_control_t decode_relocation_control (std::span<const std::uint8_t> bytes);
 /* CRC-32C (Castagnoli): poly 0x1EDC6F41, init 0xFFFFFFFF, reflected
  * input/output, xorout 0xFFFFFFFF, check("123456789") = 0xE3069283.
  * Shared checksum for relocation payload manifests and cutover boundaries. */
-std::uint32_t relocation_checksum_crc32c (
-  std::span<const std::uint8_t> payload) noexcept;
-std::vector<std::uint8_t> encode_frozen_record (
-  const frozen_record_t &record);
-frozen_record_t encode_frozen_application_record (
-  const frozen_application_record_t &record);
+std::uint32_t relocation_checksum_crc32c (std::span<const std::uint8_t> payload) noexcept;
+std::vector<std::uint8_t> encode_frozen_record (const frozen_record_t &record);
+frozen_record_t encode_frozen_application_record (const frozen_application_record_t &record);
 // Builds the validated frozen summary without allocating canonical relocation
 // bytes. The relocation owner encodes those bytes only when a snapshot is
 // actually retained or transmitted.
-frozen_record_t summarize_frozen_application_record (
-  const frozen_application_record_t &record);
+frozen_record_t summarize_frozen_application_record (const frozen_application_record_t &record);
 /* capture_flow=false (flow-correlation §4): embedded application payload
  * flow pairs are skipped structurally instead of validated/materialized. */
-frozen_record_t decode_frozen_record (
-  std::span<const std::uint8_t> bytes, bool capture_flow = true);
+frozen_record_t decode_frozen_record (std::span<const std::uint8_t> bytes,
+                                      bool capture_flow = true);
 /* Frozen records are self-delimiting (28 §4.2): decodes exactly one record
  * from the front of `bytes`, reports the consumed byte count, and permits
  * trailing bytes. canonical_bytes retains exactly the consumed range. */
-frozen_record_t decode_frozen_record_prefix (
-  std::span<const std::uint8_t> bytes,
-  std::size_t &consumed,
-  bool capture_flow = true);
-std::vector<std::uint8_t> encode_user_spot_create_header (
-  const user_spot_create_header_t &record);
-user_spot_create_header_t decode_user_spot_create_header (
-  std::span<const std::uint8_t> bytes);
-std::vector<std::uint8_t> encode_actor_create_header (
-  const actor_create_header_t &record);
-actor_create_header_t decode_actor_create_header (
-  std::span<const std::uint8_t> bytes);
-std::vector<std::uint8_t> encode_instance_spot_activation_header (
-  const instance_spot_activation_header_t &record);
-instance_spot_activation_header_t decode_instance_spot_activation_header (
-  std::span<const std::uint8_t> bytes);
-std::vector<std::uint8_t> encode_instance_activation_recovery (
-  const instance_activation_recovery_t &record);
+frozen_record_t decode_frozen_record_prefix (std::span<const std::uint8_t> bytes,
+                                             std::size_t &consumed,
+                                             bool capture_flow = true);
+std::vector<std::uint8_t> encode_user_spot_create_header (const user_spot_create_header_t &record);
+user_spot_create_header_t decode_user_spot_create_header (std::span<const std::uint8_t> bytes);
+std::vector<std::uint8_t> encode_actor_create_header (const actor_create_header_t &record);
+actor_create_header_t decode_actor_create_header (std::span<const std::uint8_t> bytes);
+std::vector<std::uint8_t>
+encode_instance_spot_activation_header (const instance_spot_activation_header_t &record);
+instance_spot_activation_header_t
+decode_instance_spot_activation_header (std::span<const std::uint8_t> bytes);
+std::vector<std::uint8_t>
+encode_instance_activation_recovery (const instance_activation_recovery_t &record);
 /* capture_flow=false (flow-correlation §4): the recovered application
  * payload's flow pair is skipped structurally. */
-instance_activation_recovery_t decode_instance_activation_recovery (
-  std::span<const std::uint8_t> bytes, bool capture_flow = true);
-std::vector<std::uint8_t> encode_user_spot_close_header (
-  const user_spot_close_header_t &record);
-user_spot_close_header_t decode_user_spot_close_header (
-  std::span<const std::uint8_t> bytes);
+instance_activation_recovery_t
+decode_instance_activation_recovery (std::span<const std::uint8_t> bytes, bool capture_flow = true);
+std::vector<std::uint8_t> encode_user_spot_close_header (const user_spot_close_header_t &record);
+user_spot_close_header_t decode_user_spot_close_header (std::span<const std::uint8_t> bytes);
 service_wire_header_t decode_header (std::span<const std::uint8_t> bytes);
-std::string
-decode_channel_send_header (std::span<const std::uint8_t> bytes);
-std::vector<std::uint8_t>
-encode_application_payload (const application_payload_t &payload);
+std::string decode_channel_send_header (std::span<const std::uint8_t> bytes);
+std::vector<std::uint8_t> encode_application_payload (const application_payload_t &payload);
 /* capture_flow gates the observation-only flow pair (flow-correlation §4):
  * false skips it structurally — no semantic validation, no materialization —
  * so malformed observation fields cannot fail a frame at Off or at pure
  * frame-integrity guards. */
-application_payload_t
-decode_application_payload (std::span<const std::uint8_t> bytes,
-                            bool capture_flow = true);
-std::size_t
-application_payload_hwm_bytes (const application_payload_t &payload);
+application_payload_t decode_application_payload (std::span<const std::uint8_t> bytes,
+                                                  bool capture_flow = true);
+std::size_t application_payload_hwm_bytes (const application_payload_t &payload);
 // Validate an encoded application envelope and calculate its HWM charge
 // without allocating the application payload vector. Ingress uses this
 // before mailbox admission so a full queue does not pay the decode cost.
-std::size_t
-application_payload_hwm_bytes (std::span<const std::uint8_t> bytes);
+std::size_t application_payload_hwm_bytes (std::span<const std::uint8_t> bytes);
 std::vector<std::uint8_t>
-encode_route_mesh_admission (command kind,
-                             const mesh::service_node_descriptor_t &descriptor);
+encode_route_mesh_admission (command kind, const mesh::service_node_descriptor_t &descriptor);
 mesh::service_node_descriptor_t
 decode_route_mesh_admission (std::span<const std::uint8_t> bytes,
                              command expected_kind,
                              std::vector<std::uint8_t> source_routing_id);
-std::vector<std::uint8_t> encode_client_server_client_admission (
-  command kind,
-  const client_server_client_admission_t &admission);
-client_server_client_admission_t decode_client_server_client_admission (
-  std::span<const std::uint8_t> bytes,
-  command expected_kind);
-std::vector<std::uint8_t> encode_client_server_server_admission (
-  command kind,
-  const client_server_server_admission_t &admission);
-client_server_server_admission_t decode_client_server_server_admission (
-  std::span<const std::uint8_t> bytes,
-  command expected_kind);
+std::vector<std::uint8_t>
+encode_client_server_client_admission (command kind,
+                                       const client_server_client_admission_t &admission);
+client_server_client_admission_t
+decode_client_server_client_admission (std::span<const std::uint8_t> bytes, command expected_kind);
+std::vector<std::uint8_t>
+encode_client_server_server_admission (command kind,
+                                       const client_server_server_admission_t &admission);
+client_server_server_admission_t
+decode_client_server_server_admission (std::span<const std::uint8_t> bytes, command expected_kind);
 std::vector<std::uint8_t> encode_reject (std::uint32_t reason);
 std::uint32_t decode_reject (std::span<const std::uint8_t> bytes);
-std::vector<std::uint8_t>
-encode_reply_header (std::uint64_t correlation,
-                     std::uint32_t terminal_result,
-                     std::uint32_t failure_code);
+std::vector<std::uint8_t> encode_reply_header (std::uint64_t correlation,
+                                               std::uint32_t terminal_result,
+                                               std::uint32_t failure_code);
 reply_header_t decode_reply_header (std::span<const std::uint8_t> bytes);
-std::vector<std::uint8_t> encode_user_spot_create_reply (
-  std::uint64_t correlation,
-  std::uint32_t terminal_result,
-  std::uint32_t failure_code,
-  user_spot_create_result_t result,
-  const std::string &spot_id,
-  std::uint64_t object_generation);
-user_spot_create_reply_t decode_user_spot_create_reply (
-  std::span<const std::uint8_t> bytes);
-std::vector<std::uint8_t> encode_actor_create_reply (
-  std::uint64_t correlation,
-  std::uint32_t terminal_result,
-  std::uint32_t failure_code,
-  actor_create_result_t result,
-  const std::vector<std::uint8_t> &node_routing_id,
-  const std::string &actor_id,
-  std::uint64_t object_generation);
-actor_create_reply_t decode_actor_create_reply (
-  std::span<const std::uint8_t> bytes);
-std::vector<std::uint8_t> encode_user_spot_close_reply (
-  std::uint64_t correlation,
-  std::uint32_t terminal_result,
-  std::uint32_t failure_code,
-  bool closed);
-user_spot_close_reply_t decode_user_spot_close_reply (
-  std::span<const std::uint8_t> bytes);
-std::vector<std::uint8_t> encode_actor_join_reply (
-  std::uint64_t correlation,
-  std::uint32_t terminal_result,
-  std::uint32_t failure_code,
-  actor_join_result_t join_result,
-  const std::optional<actor_join_reply_spot_ref_t> &spot,
-  std::uint64_t membership_epoch,
-  std::uint32_t receive_chunk_limit_bytes);
-actor_join_reply_tail_t decode_actor_join_reply (
-  std::span<const std::uint8_t> bytes);
+std::vector<std::uint8_t> encode_user_spot_create_reply (std::uint64_t correlation,
+                                                         std::uint32_t terminal_result,
+                                                         std::uint32_t failure_code,
+                                                         user_spot_create_result_t result,
+                                                         const std::string &spot_id,
+                                                         std::uint64_t object_generation);
+user_spot_create_reply_t decode_user_spot_create_reply (std::span<const std::uint8_t> bytes);
+std::vector<std::uint8_t>
+encode_actor_create_reply (std::uint64_t correlation,
+                           std::uint32_t terminal_result,
+                           std::uint32_t failure_code,
+                           actor_create_result_t result,
+                           const std::vector<std::uint8_t> &node_routing_id,
+                           const std::string &actor_id,
+                           std::uint64_t object_generation);
+actor_create_reply_t decode_actor_create_reply (std::span<const std::uint8_t> bytes);
+std::vector<std::uint8_t> encode_user_spot_close_reply (std::uint64_t correlation,
+                                                        std::uint32_t terminal_result,
+                                                        std::uint32_t failure_code,
+                                                        bool closed);
+user_spot_close_reply_t decode_user_spot_close_reply (std::span<const std::uint8_t> bytes);
+std::vector<std::uint8_t>
+encode_actor_join_reply (std::uint64_t correlation,
+                         std::uint32_t terminal_result,
+                         std::uint32_t failure_code,
+                         actor_join_result_t join_result,
+                         const std::optional<actor_join_reply_spot_ref_t> &spot,
+                         std::uint64_t membership_epoch,
+                         std::uint32_t receive_chunk_limit_bytes);
+actor_join_reply_tail_t decode_actor_join_reply (std::span<const std::uint8_t> bytes);
 std::vector<std::uint8_t> encode_liveness (command kind, std::uint64_t probe_id);
 liveness_record_t decode_liveness (std::span<const std::uint8_t> bytes);
 

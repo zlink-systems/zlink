@@ -1,4 +1,7 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException  } from './framework-errors-internal';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from './framework-errors-internal';
 export class ZLinkRuntimeAdmissionGate {
   private readonly meshes = new Map<string, ZLinkMeshAdmissionState>();
 
@@ -100,8 +103,8 @@ export class ZLinkRuntimeAdmissionGate {
         }
         reject(signal?.reason);
       };
-        state.waiters.push(complete);
-        state.waiterCount += 1;
+      state.waiters.push(complete);
+      state.waiterCount += 1;
       signal?.addEventListener('abort', abort, { once: true });
     });
   }
@@ -113,9 +116,7 @@ export class ZLinkRuntimeAdmissionGate {
       return;
     }
     throw createInternalFrameworkException(
-      meshName === undefined
-        ? this.firstSealedReason()
-        : this.requireState(meshName).sealedReason,
+      meshName === undefined ? this.firstSealedReason() : this.requireState(meshName).sealedReason,
       `${operation} was rejected because framework admission is closed.`
     );
   }
@@ -126,9 +127,8 @@ export class ZLinkRuntimeAdmissionGate {
     } else if (this.accepts(meshName)) {
       return;
     }
-    const reason = meshName === undefined
-      ? this.firstSealedReason()
-      : this.requireState(meshName).sealedReason;
+    const reason =
+      meshName === undefined ? this.firstSealedReason() : this.requireState(meshName).sealedReason;
     throw createInternalFrameworkException(
       reason === ZLinkFrameworkInternalErrorKind.RuntimeShutdown
         ? ZLinkFrameworkInternalErrorKind.RuntimeShutdown

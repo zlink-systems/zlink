@@ -30,7 +30,9 @@ export class ZlinkStreamPendingRequests {
     const promise = new Promise<ZlinkStreamEncodedPayload>((resolve, reject) => {
       timeout = setTimeout(() => {
         this.active.delete(requestSeq);
-        reject(connectorError(ZlinkStreamErrorCode.RequestTimeout, `Request '${packetName}' timed out.`));
+        reject(
+          connectorError(ZlinkStreamErrorCode.RequestTimeout, `Request '${packetName}' timed out.`)
+        );
       }, timeoutMs);
       resolvePending = resolve;
       rejectPending = (error) => reject(connectorError(error.code, error.message, error.cause));

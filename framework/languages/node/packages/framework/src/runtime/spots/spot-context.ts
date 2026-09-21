@@ -21,10 +21,7 @@ import type { ZLinkRuntimeEventPublisher } from '../diagnostics';
 import type { ZLinkWorkerCall } from '../../contracts';
 import { ZLinkConfigurationException } from '../configuration';
 import { DefaultZLinkWorkerCall, ZLinkWorkerRuntime } from '../workers';
-import {
-  createTimerDiagnostics,
-  type ZLinkSpotTimerRegistry
-} from './spot-timer';
+import { createTimerDiagnostics, type ZLinkSpotTimerRegistry } from './spot-timer';
 import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 
 interface ZLinkEntrySpotContextOptions {
@@ -67,7 +64,9 @@ interface ZLinkSpotContextOptions {
   readonly ensureOperationAllowed?: () => void;
 }
 
-export function createEntrySpotContext(options: ZLinkEntrySpotContextOptions): ZLinkEntrySpotContext {
+export function createEntrySpotContext(
+  options: ZLinkEntrySpotContextOptions
+): ZLinkEntrySpotContext {
   return withImmutableSpotIdentity({
     meshName: options.spotNodeName,
     spotId: options.spotId,
@@ -109,11 +108,13 @@ export function createEntrySpotContext(options: ZLinkEntrySpotContextOptions): Z
     },
     runCpuWorker<T>(work: (signal: AbortSignal) => T): ZLinkWorkerCall<T> {
       return new DefaultZLinkWorkerCall(options.serial, (timeoutMs, signal) =>
-        options.workerRuntime.scheduleCpu(work, timeoutMs, signal));
+        options.workerRuntime.scheduleCpu(work, timeoutMs, signal)
+      );
     },
     runIoWorker<T>(work: (signal: AbortSignal) => Promise<T>): ZLinkWorkerCall<T> {
       return new DefaultZLinkWorkerCall(options.serial, (timeoutMs, signal) =>
-        options.workerRuntime.scheduleIo(work, timeoutMs, signal));
+        options.workerRuntime.scheduleIo(work, timeoutMs, signal)
+      );
     }
   });
 }
@@ -131,13 +132,15 @@ export function createSpotContext(options: ZLinkSpotContextOptions): ZLinkSpotCo
     },
     relocationReady: () => {
       options.ensureOperationAllowed?.();
-      return options.relocationReady?.() ?? {
-        defer() {
-          throw new ZLinkConfigurationException(
-            'Spot relocation readiness is not configured for application signaling.'
-          );
+      return (
+        options.relocationReady?.() ?? {
+          defer() {
+            throw new ZLinkConfigurationException(
+              'Spot relocation readiness is not configured for application signaling.'
+            );
+          }
         }
-      };
+      );
     },
     leaveActor: (actor: ZLinkActor, signal?: AbortSignal) => {
       options.ensureOperationAllowed?.();
@@ -157,7 +160,9 @@ export function createSpotContext(options: ZLinkSpotContextOptions): ZLinkSpotCo
       options.ensureOperationAllowed?.();
       const spot = options.getSpot();
       if (spot === undefined) {
-        throw new ZLinkConfigurationException('Spot timer cannot be registered before spot activation.');
+        throw new ZLinkConfigurationException(
+          'Spot timer cannot be registered before spot activation.'
+        );
       }
       return options.timers.add(
         name,
@@ -168,18 +173,27 @@ export function createSpotContext(options: ZLinkSpotContextOptions): ZLinkSpotCo
         spot,
         options.providerResolver,
         signal,
-        createTimerDiagnostics(String(options.spotId), options.spotId, false, name, handlerType, options.runtimeEventPublisher)
+        createTimerDiagnostics(
+          String(options.spotId),
+          options.spotId,
+          false,
+          name,
+          handlerType,
+          options.runtimeEventPublisher
+        )
       );
     },
     runCpuWorker: <T>(work: (signal: AbortSignal) => T): ZLinkWorkerCall<T> => {
       options.ensureOperationAllowed?.();
       return new DefaultZLinkWorkerCall(options.serial, (timeoutMs, signal) =>
-        options.workerRuntime.scheduleCpu(work, timeoutMs, signal));
+        options.workerRuntime.scheduleCpu(work, timeoutMs, signal)
+      );
     },
     runIoWorker: <T>(work: (signal: AbortSignal) => Promise<T>): ZLinkWorkerCall<T> => {
       options.ensureOperationAllowed?.();
       return new DefaultZLinkWorkerCall(options.serial, (timeoutMs, signal) =>
-        options.workerRuntime.scheduleIo(work, timeoutMs, signal));
+        options.workerRuntime.scheduleIo(work, timeoutMs, signal)
+      );
     }
   });
 }
@@ -206,7 +220,9 @@ export function createInstanceSpotContext(
     ) => {
       const spot = options.getSpot();
       if (spot === undefined) {
-        throw new ZLinkConfigurationException('Instance Spot timer cannot be registered before activation.');
+        throw new ZLinkConfigurationException(
+          'Instance Spot timer cannot be registered before activation.'
+        );
       }
       return options.timers.add(
         name,
@@ -229,10 +245,12 @@ export function createInstanceSpotContext(
     },
     runCpuWorker: <T>(work: (signal: AbortSignal) => T): ZLinkWorkerCall<T> =>
       new DefaultZLinkWorkerCall(options.serial, (timeoutMs, signal) =>
-        options.workerRuntime.scheduleCpu(work, timeoutMs, signal)),
+        options.workerRuntime.scheduleCpu(work, timeoutMs, signal)
+      ),
     runIoWorker: <T>(work: (signal: AbortSignal) => Promise<T>): ZLinkWorkerCall<T> =>
       new DefaultZLinkWorkerCall(options.serial, (timeoutMs, signal) =>
-        options.workerRuntime.scheduleIo(work, timeoutMs, signal))
+        options.workerRuntime.scheduleIo(work, timeoutMs, signal)
+      )
   };
   return withImmutableSpotIdentity(common);
 }
@@ -241,12 +259,14 @@ function contextNodeRid(nodeRid: RoutingId | undefined): RoutingId {
   return nodeRid ?? ('' as RoutingId);
 }
 
-function withImmutableSpotIdentity<T extends {
-  readonly meshName: string;
-  readonly spotId: SpotId;
-  readonly objectGeneration: number;
-  readonly nodeRid: RoutingId;
-}>(context: T): T {
+function withImmutableSpotIdentity<
+  T extends {
+    readonly meshName: string;
+    readonly spotId: SpotId;
+    readonly objectGeneration: number;
+    readonly nodeRid: RoutingId;
+  }
+>(context: T): T {
   for (const key of ['meshName', 'spotId', 'objectGeneration', 'nodeRid'] as const) {
     Object.defineProperty(context, key, {
       configurable: false,

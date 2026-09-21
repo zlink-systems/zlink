@@ -17,9 +17,7 @@ public sealed class EndpointConnectionsTests
         connections.Connect("tcp://127.0.0.1:7102");
         connections.Disconnect("tcp://127.0.0.1:7101");
 
-        Assert.Equal(
-            ["tcp://127.0.0.1:7101", "tcp://127.0.0.1:7102"],
-            connected);
+        Assert.Equal(["tcp://127.0.0.1:7101", "tcp://127.0.0.1:7102"], connected);
         Assert.Equal(["tcp://127.0.0.1:7101"], disconnected);
         Assert.Equal(["tcp://127.0.0.1:7102"], connections.ListConnections());
     }
@@ -37,9 +35,7 @@ public sealed class EndpointConnectionsTests
         connections.Connect("tcp://127.0.0.1:7202");
 
         Assert.Equal(["tcp://127.0.0.1:7201"], firstGeneration);
-        Assert.Equal(
-            ["tcp://127.0.0.1:7201", "tcp://127.0.0.1:7202"],
-            secondGeneration);
+        Assert.Equal(["tcp://127.0.0.1:7201", "tcp://127.0.0.1:7202"], secondGeneration);
     }
 
     [Fact]
@@ -107,8 +103,15 @@ public sealed class EndpointConnectionsTests
     {
         var connections = new ZLinkEndpointConnections();
         connections.Attach(
-            endpoint => { _ = connections.ListConnections(); },
-            endpoint => { _ = connections.Count; });
+            endpoint =>
+            {
+                _ = connections.ListConnections();
+            },
+            endpoint =>
+            {
+                _ = connections.Count;
+            }
+        );
 
         connections.Connect("tcp://127.0.0.1:7401");
         connections.Disconnect("tcp://127.0.0.1:7401");
@@ -120,12 +123,9 @@ public sealed class EndpointConnectionsTests
     public void Failed_Connect_Callback_Does_Not_Retain_Endpoint()
     {
         var connections = new ZLinkEndpointConnections();
-        connections.Attach(
-            _ => throw new InvalidOperationException("connect failed"),
-            _ => { });
+        connections.Attach(_ => throw new InvalidOperationException("connect failed"), _ => { });
 
-        Assert.Throws<InvalidOperationException>(
-            () => connections.Connect("tcp://127.0.0.1:7501"));
+        Assert.Throws<InvalidOperationException>(() => connections.Connect("tcp://127.0.0.1:7501"));
 
         Assert.Empty(connections.ListConnections());
     }
@@ -135,12 +135,11 @@ public sealed class EndpointConnectionsTests
     {
         var connections = new ZLinkEndpointConnections();
         connections.Connect("tcp://127.0.0.1:7601");
-        connections.Attach(
-            _ => { },
-            _ => throw new InvalidOperationException("disconnect failed"));
+        connections.Attach(_ => { }, _ => throw new InvalidOperationException("disconnect failed"));
 
-        Assert.Throws<InvalidOperationException>(
-            () => connections.Disconnect("tcp://127.0.0.1:7601"));
+        Assert.Throws<InvalidOperationException>(() =>
+            connections.Disconnect("tcp://127.0.0.1:7601")
+        );
 
         Assert.Equal(["tcp://127.0.0.1:7601"], connections.ListConnections());
     }

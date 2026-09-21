@@ -5,7 +5,7 @@ namespace Zlink.Framework.Runtime.Messaging;
 internal enum ZLinkMessageFollowObjectKind : byte
 {
     Actor = ZLinkServiceWireCodec.MessageFollowActorKind,
-    Spot = ZLinkServiceWireCodec.MessageFollowSpotKind
+    Spot = ZLinkServiceWireCodec.MessageFollowSpotKind,
 }
 
 // Every field that can distinguish a stale source or target is part of the
@@ -24,7 +24,8 @@ internal readonly record struct ZLinkMessageFollowFence(
     ulong SourceAuthorityOwnerGeneration,
     ulong TargetAuthorityOwnerGeneration,
     ulong SourceOwnerLeaseGeneration,
-    ulong TargetOwnerLeaseGeneration);
+    ulong TargetOwnerLeaseGeneration
+);
 
 internal sealed class ZLinkMessageFollowSuppressionRegistry
 {
@@ -53,8 +54,7 @@ internal sealed class ZLinkMessageFollowSuppressionRegistry
     internal ValueTask<bool> MarkSentAsync(ZLinkMessageFollowFence fence) =>
         _lane.RunAsync(() =>
         {
-            if (!_markers.TryGetValue(fence, out var state)
-                || state != MarkerState.InFlight)
+            if (!_markers.TryGetValue(fence, out var state) || state != MarkerState.InFlight)
                 return false;
             _markers[fence] = MarkerState.SentUntilExpiry;
             return true;
@@ -68,29 +68,24 @@ internal sealed class ZLinkMessageFollowSuppressionRegistry
         });
 
     internal ValueTask ExpireAsync(ZLinkMessageFollowFence fence) =>
-        _lane.RunAsync(() => { _markers.Remove(fence); });
-
-    internal ValueTask ExpireAllAsync() =>
         _lane.RunAsync(() =>
-            _markers.Clear());
+        {
+            _markers.Remove(fence);
+        });
 
-    internal bool TryBegin(ZLinkMessageFollowFence fence) =>
-        AwaitStateLane(TryBeginAsync(fence));
+    internal ValueTask ExpireAllAsync() => _lane.RunAsync(() => _markers.Clear());
 
-    internal bool MarkSent(ZLinkMessageFollowFence fence) =>
-        AwaitStateLane(MarkSentAsync(fence));
+    internal bool TryBegin(ZLinkMessageFollowFence fence) => AwaitStateLane(TryBeginAsync(fence));
 
-    internal void Abort(ZLinkMessageFollowFence fence) =>
-        AwaitStateLane(AbortAsync(fence));
+    internal bool MarkSent(ZLinkMessageFollowFence fence) => AwaitStateLane(MarkSentAsync(fence));
 
-    internal void Expire(ZLinkMessageFollowFence fence) =>
-        AwaitStateLane(ExpireAsync(fence));
+    internal void Abort(ZLinkMessageFollowFence fence) => AwaitStateLane(AbortAsync(fence));
 
-    internal void ExpireAll() =>
-        AwaitStateLane(ExpireAllAsync());
+    internal void Expire(ZLinkMessageFollowFence fence) => AwaitStateLane(ExpireAsync(fence));
 
-    private static void AwaitStateLane(ValueTask operation) =>
-        operation.GetAwaiter().GetResult();
+    internal void ExpireAll() => AwaitStateLane(ExpireAllAsync());
+
+    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();
@@ -98,6 +93,6 @@ internal sealed class ZLinkMessageFollowSuppressionRegistry
     private enum MarkerState : byte
     {
         InFlight,
-        SentUntilExpiry
+        SentUntilExpiry,
     }
 }

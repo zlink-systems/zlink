@@ -9,18 +9,13 @@ import systems.zlink.framework.configuration.ZLinkMeshPeerConnections
 fun ZLinkFrameworkOptions.routeMesh(
     meshName: String,
     configure: ZLinkMeshNodeBuilder.() -> Unit,
-): ZLinkMeshNodeBuilder =
-    addRouteMesh(meshName).also(configure)
+): ZLinkMeshNodeBuilder = addRouteMesh(meshName).also(configure)
 
 fun ZLinkMeshNodeBuilder.channelName(
     channelName: String,
     configure: ZLinkMeshChannelBuilder.() -> Unit = {},
-): ZLinkMeshChannelBuilder =
-    channelName(channelName).also(configure)
+): ZLinkMeshChannelBuilder = channelName(channelName).also(configure)
 
-fun ZLinkMeshPeerConnections.connect(
-    expectedRoutingId: RoutingId,
-    endpoint: String,
-) {
+fun ZLinkMeshPeerConnections.connect(expectedRoutingId: RoutingId, endpoint: String) {
     connect(expectedRoutingId, endpoint)
 }

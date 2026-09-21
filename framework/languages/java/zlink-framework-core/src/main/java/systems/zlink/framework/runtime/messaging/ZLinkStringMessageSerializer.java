@@ -1,9 +1,10 @@
 package systems.zlink.framework.runtime.messaging;
 
-import java.nio.charset.StandardCharsets;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageSerializer;
+
+import java.nio.charset.StandardCharsets;
 
 public final class ZLinkStringMessageSerializer implements ZLinkMessageSerializer {
     @Override

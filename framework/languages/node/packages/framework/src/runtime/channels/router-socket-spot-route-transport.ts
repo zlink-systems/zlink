@@ -39,12 +39,7 @@ export class ZLinkRouterSocketSpotRouteTransport {
   ): Promise<TReply> {
     const router = this.sockets.routeRouter(target.routerChannelId);
     void flags;
-    const operation = router.requestToSpot(
-      target.targetNodeRid,
-      target.spotId,
-      parts,
-      timeoutMs
-    );
+    const operation = router.requestToSpot(target.targetNodeRid, target.spotId, parts, timeoutMs);
     const replyParts = await awaitWithAbort(operation, signal, () => {
       void operation.then(closeMessages, () => undefined);
     });
@@ -73,5 +68,4 @@ export class ZLinkRouterSocketSpotRouteTransport {
       void operation.then(closeMessages, () => undefined);
     });
   }
-
 }

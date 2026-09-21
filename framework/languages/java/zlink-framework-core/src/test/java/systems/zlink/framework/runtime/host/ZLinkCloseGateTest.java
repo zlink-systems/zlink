@@ -3,10 +3,11 @@ package systems.zlink.framework.runtime.host;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import org.junit.jupiter.api.Test;
+
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.junit.jupiter.api.Test;
 
 final class ZLinkCloseGateTest {
     @Test
@@ -15,14 +16,18 @@ final class ZLinkCloseGateTest {
         CompletableFuture<Void> cleanup = new CompletableFuture<>();
         AtomicInteger cleanupCalls = new AtomicInteger();
 
-        var first = gate.close(() -> {
-            cleanupCalls.incrementAndGet();
-            return cleanup;
-        });
-        var second = gate.close(() -> {
-            cleanupCalls.incrementAndGet();
-            return CompletableFuture.completedFuture(null);
-        });
+        var first =
+                gate.close(
+                        () -> {
+                            cleanupCalls.incrementAndGet();
+                            return cleanup;
+                        });
+        var second =
+                gate.close(
+                        () -> {
+                            cleanupCalls.incrementAndGet();
+                            return CompletableFuture.completedFuture(null);
+                        });
 
         assertTrue(first == second);
         assertTrue(!second.toCompletableFuture().isDone());

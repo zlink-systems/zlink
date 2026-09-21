@@ -2,15 +2,9 @@ package systems.zlink.framework.runtime.binding;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import java.lang.reflect.Proxy;
-import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.CompletionStage;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
@@ -24,18 +18,29 @@ import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 
+import java.lang.reflect.Proxy;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
+
 final class ZLinkJavaSubmissionTest {
     private static final Duration TIMEOUT = Duration.ofSeconds(5);
     private static final RoutingId TARGET = RoutingId.from("submission-target");
 
-    enum Adapter { SOCKET, SERVICE }
+    enum Adapter {
+        SOCKET,
+        SERVICE
+    }
 
     @ParameterizedTest
     @EnumSource(Adapter.class)
     void okSendCompletesWithoutReadingAdmissionAndPreservesMultipart(Adapter adapter) {
         try (var binding = new BindingProbe();
-             Message first = Message.from(new byte[] {1, 2});
-             Message second = Message.from(new byte[] {3, 4})) {
+                Message first = Message.from(new byte[] {1, 2});
+                Message second = Message.from(new byte[] {3, 4})) {
             var completed = binding.send(adapter, List.of(first, second));
 
             assertTrue(completed.toCompletableFuture().isDone());
@@ -54,8 +59,8 @@ final class ZLinkJavaSubmissionTest {
     @EnumSource(Adapter.class)
     void cancellingAnOkSendFutureDoesNotAffectTheNextOkSend(Adapter adapter) {
         try (var binding = new BindingProbe();
-             Message firstPart = Message.from("first");
-             Message nextPart = Message.from("next")) {
+                Message firstPart = Message.from("first");
+                Message nextPart = Message.from("next")) {
             var first = binding.send(adapter, List.of(firstPart));
             var callerFuture = first.toCompletableFuture();
 
@@ -75,9 +80,9 @@ final class ZLinkJavaSubmissionTest {
     @EnumSource(Adapter.class)
     void callerFutureMutationsDoNotChangeLaterOkSends(Adapter adapter) {
         try (var binding = new BindingProbe();
-             Message firstPart = Message.from("first");
-             Message nextSocketPart = Message.from("next-socket");
-             Message nextServicePart = Message.from("next-service")) {
+                Message firstPart = Message.from("first");
+                Message nextSocketPart = Message.from("next-socket");
+                Message nextServicePart = Message.from("next-service")) {
             var first = binding.send(adapter, List.of(firstPart));
             var callerFuture = first.toCompletableFuture();
             var failure = new IllegalStateException("caller changed its future");
@@ -85,18 +90,20 @@ final class ZLinkJavaSubmissionTest {
                 assertFalse(callerFuture.complete(null));
                 assertFalse(callerFuture.completeExceptionally(failure));
                 callerFuture.obtrudeException(failure);
-                assertSame(failure,
-                    assertThrows(CompletionException.class, callerFuture::join).getCause());
+                assertSame(
+                        failure,
+                        assertThrows(CompletionException.class, callerFuture::join).getCause());
 
-                var nextSocket = binding.send(Adapter.SOCKET, List.of(nextSocketPart))
-                    .toCompletableFuture();
-                var nextService = binding.send(Adapter.SERVICE, List.of(nextServicePart))
-                    .toCompletableFuture();
+                var nextSocket =
+                        binding.send(Adapter.SOCKET, List.of(nextSocketPart)).toCompletableFuture();
+                var nextService =
+                        binding.send(Adapter.SERVICE, List.of(nextServicePart))
+                                .toCompletableFuture();
                 assertAll(
-                    () -> assertTrue(nextSocket.isDone()),
-                    () -> assertTrue(nextService.isDone()),
-                    () -> assertNull(nextSocket.join()),
-                    () -> assertNull(nextService.join()));
+                        () -> assertTrue(nextSocket.isDone()),
+                        () -> assertTrue(nextService.isDone()),
+                        () -> assertNull(nextSocket.join()),
+                        () -> assertNull(nextService.join()));
 
                 callerFuture.obtrudeValue(null);
                 assertNull(callerFuture.join());
@@ -114,7 +121,8 @@ final class ZLinkJavaSubmissionTest {
     @ParameterizedTest
     @EnumSource(Adapter.class)
     void backpressuredSendWaitsForTheBindingWithoutResubmitting(Adapter adapter) {
-        try (var binding = new BindingProbe(); Message part = Message.from("send")) {
+        try (var binding = new BindingProbe();
+                Message part = Message.from("send")) {
             binding.result = SubmitResult.BACKPRESSURED;
             var completed = binding.send(adapter, List.of(part)).toCompletableFuture();
 
@@ -131,13 +139,15 @@ final class ZLinkJavaSubmissionTest {
     @ParameterizedTest
     @EnumSource(Adapter.class)
     void backpressuredSendPropagatesAdmissionFailureWithoutRetry(Adapter adapter) {
-        try (var binding = new BindingProbe(); Message part = Message.from("send")) {
+        try (var binding = new BindingProbe();
+                Message part = Message.from("send")) {
             binding.result = SubmitResult.BACKPRESSURED;
             var completed = binding.send(adapter, List.of(part)).toCompletableFuture();
             var failure = new IllegalStateException("binding admission failed");
             binding.admission.completeExceptionally(failure);
 
-            assertSame(failure, assertThrows(CompletionException.class, completed::join).getCause());
+            assertSame(
+                    failure, assertThrows(CompletionException.class, completed::join).getCause());
             assertEquals(1, binding.admissionReads);
             assertEquals(1, binding.submissions);
         }
@@ -147,8 +157,8 @@ final class ZLinkJavaSubmissionTest {
     @EnumSource(Adapter.class)
     void pendingReplyDoesNotBlockTheNextRequestOrReorderItsReply(Adapter adapter) {
         try (var binding = new BindingProbe();
-             Message firstPart = Message.from("first");
-             Message nextPart = Message.from("next")) {
+                Message firstPart = Message.from("first");
+                Message nextPart = Message.from("next")) {
             var firstReply = binding.request(adapter, List.of(firstPart)).toCompletableFuture();
             var nextReply = binding.request(adapter, List.of(nextPart)).toCompletableFuture();
 
@@ -157,19 +167,22 @@ final class ZLinkJavaSubmissionTest {
             assertFalse(firstReply.isDone());
             assertFalse(nextReply.isDone());
             binding.replies.get(1).complete(List.of(Message.from("next-reply")));
-            assertArrayEquals("next-reply".getBytes(java.nio.charset.StandardCharsets.UTF_8),
-                nextReply.join());
+            assertArrayEquals(
+                    "next-reply".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                    nextReply.join());
             assertFalse(firstReply.isDone());
             binding.replies.get(0).complete(List.of(Message.from("first-reply")));
-            assertArrayEquals("first-reply".getBytes(java.nio.charset.StandardCharsets.UTF_8),
-                firstReply.join());
+            assertArrayEquals(
+                    "first-reply".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                    firstReply.join());
         }
     }
 
     @ParameterizedTest
     @EnumSource(Adapter.class)
     void requestAdmissionDoesNotCompleteItsReply(Adapter adapter) {
-        try (var binding = new BindingProbe(); Message part = Message.from("request")) {
+        try (var binding = new BindingProbe();
+                Message part = Message.from("request")) {
             binding.result = SubmitResult.BACKPRESSURED;
             var reply = binding.request(adapter, List.of(part)).toCompletableFuture();
             assertFalse(reply.isDone());
@@ -196,103 +209,140 @@ final class ZLinkJavaSubmissionTest {
         private final RouterSocket router;
 
         BindingProbe() {
-            router = (RouterSocket) Proxy.newProxyInstance(
-                RouterSocket.class.getClassLoader(), new Class<?>[] {RouterSocket.class},
-                (proxy, method, args) -> switch (method.getName()) {
-                    case "hashCode" -> System.identityHashCode(proxy);
-                    case "equals" -> proxy == args[0];
-                    case "setRoutingId", "close" -> null;
-                    case "send" -> sendOperation();
-                    case "request" -> requestOperation();
-                    default -> throw new AssertionError(method);
-                });
-            Context context = (Context) Proxy.newProxyInstance(
-                Context.class.getClassLoader(), new Class<?>[] {Context.class},
-                (proxy, method, args) -> {
-                    assertEquals("createRouterSocket", method.getName());
-                    return router;
-                });
+            router =
+                    (RouterSocket)
+                            Proxy.newProxyInstance(
+                                    RouterSocket.class.getClassLoader(),
+                                    new Class<?>[] {RouterSocket.class},
+                                    (proxy, method, args) ->
+                                            switch (method.getName()) {
+                                                case "hashCode" -> System.identityHashCode(proxy);
+                                                case "equals" -> proxy == args[0];
+                                                case "setRoutingId", "close" -> null;
+                                                case "send" -> sendOperation();
+                                                case "request" -> requestOperation();
+                                                default -> throw new AssertionError(method);
+                                            });
+            Context context =
+                    (Context)
+                            Proxy.newProxyInstance(
+                                    Context.class.getClassLoader(),
+                                    new Class<?>[] {Context.class},
+                                    (proxy, method, args) -> {
+                                        assertEquals("createRouterSocket", method.getName());
+                                        return router;
+                                    });
             port = new ZLinkJavaRawServicePort(context);
             assertSame(router, port.openRouter(RoutingId.from("submission-source")));
         }
 
         CompletionStage<Void> send(Adapter adapter, List<Message> messages) {
             return adapter == Adapter.SERVICE
-                ? port.sendMessages(router, TARGET, messages)
-                : ZLinkJavaSocketSupport.submit(sendOperation(), messages);
+                    ? port.sendMessages(router, TARGET, messages)
+                    : ZLinkJavaSocketSupport.submit(sendOperation(), messages);
         }
 
         CompletionStage<byte[]> request(Adapter adapter, List<Message> messages) {
             if (adapter == Adapter.SERVICE) {
-                return port.requestMessages(router, TARGET, messages, TIMEOUT,
-                    reply -> reply.getFirst().toByteArray());
+                return port.requestMessages(
+                        router, TARGET, messages, TIMEOUT, reply -> reply.getFirst().toByteArray());
             }
             return ZLinkJavaSocketSupport.submitRequest(requestOperation(), messages, TIMEOUT)
-                .thenApply(reply -> {
-                    try (reply) {
-                        return reply.parts().getFirst().toByteArray();
-                    }
-                });
+                    .thenApply(
+                            reply -> {
+                                try (reply) {
+                                    return reply.parts().getFirst().toByteArray();
+                                }
+                            });
         }
 
         private SendOperation sendOperation() {
-            var operation = new SendSubmitOperation() {
-                @Override public SendSubmitOperation message(Message part) {
-                    parts.add(part);
-                    return this;
-                }
-                @Override public SendSubmission submit() {
-                    consume();
-                    return new SendSubmission() {
-                        @Override public SubmitResult result() {
-                            resultReads++;
-                            return result;
+            var operation =
+                    new SendSubmitOperation() {
+                        @Override
+                        public SendSubmitOperation message(Message part) {
+                            parts.add(part);
+                            return this;
                         }
-                        @Override public CompletionStage<Void> admitted() {
-                            return readAdmission();
+
+                        @Override
+                        public SendSubmission submit() {
+                            consume();
+                            return new SendSubmission() {
+                                @Override
+                                public SubmitResult result() {
+                                    resultReads++;
+                                    return result;
+                                }
+
+                                @Override
+                                public CompletionStage<Void> admitted() {
+                                    return readAdmission();
+                                }
+                            };
+                        }
+
+                        @Override
+                        public void submit_sync() {
+                            fail("framework must use the asynchronous terminal");
                         }
                     };
-                }
-                @Override public void submit_sync() {
-                    fail("framework must use the asynchronous terminal");
-                }
-            };
             return operation::message;
         }
 
         private RequestOperation requestOperation() {
-            var operation = new RequestSubmitOperation() {
-                @Override public RequestSubmitOperation message(Message part) {
-                    parts.add(part);
-                    return this;
-                }
-                @Override public RequestSubmitOperation timeout(Duration timeout) {
-                    assertEquals(TIMEOUT, timeout);
-                    return this;
-                }
-                @Override public RequestSubmission submit() {
-                    consume();
-                    var reply = new CompletableFuture<List<Message>>();
-                    replies.add(reply);
-                    return new RequestSubmission() {
-                        @Override public SubmitResult result() { return result; }
-                        @Override public CompletionStage<Void> admitted() {
-                            return readAdmission();
+            var operation =
+                    new RequestSubmitOperation() {
+                        @Override
+                        public RequestSubmitOperation message(Message part) {
+                            parts.add(part);
+                            return this;
                         }
-                        @Override public CompletionStage<List<Message>> reply() { return reply; }
+
+                        @Override
+                        public RequestSubmitOperation timeout(Duration timeout) {
+                            assertEquals(TIMEOUT, timeout);
+                            return this;
+                        }
+
+                        @Override
+                        public RequestSubmission submit() {
+                            consume();
+                            var reply = new CompletableFuture<List<Message>>();
+                            replies.add(reply);
+                            return new RequestSubmission() {
+                                @Override
+                                public SubmitResult result() {
+                                    return result;
+                                }
+
+                                @Override
+                                public CompletionStage<Void> admitted() {
+                                    return readAdmission();
+                                }
+
+                                @Override
+                                public CompletionStage<List<Message>> reply() {
+                                    return reply;
+                                }
+                            };
+                        }
+
+                        @Override
+                        public List<Message> submit_sync() {
+                            throw new AssertionError(
+                                    "framework must use the asynchronous terminal");
+                        }
                     };
-                }
-                @Override public List<Message> submit_sync() {
-                    throw new AssertionError("framework must use the asynchronous terminal");
-                }
-            };
             return operation::message;
         }
 
         private CompletionStage<Void> readAdmission() {
             admissionReads++;
-            assertEquals(SubmitResult.BACKPRESSURED, result,
-                "OK must use its snapshot without reading admitted()");
+            assertEquals(
+                    SubmitResult.BACKPRESSURED,
+                    result,
+                    "OK must use its snapshot without reading admitted()");
             return admission;
         }
 
@@ -303,6 +353,9 @@ final class ZLinkJavaSubmissionTest {
             parts.clear();
         }
 
-        @Override public void close() { port.close(); }
+        @Override
+        public void close() {
+            port.close();
+        }
     }
 }

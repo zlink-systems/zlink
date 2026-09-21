@@ -1,17 +1,41 @@
 package systems.zlink.framework.spring.internal.runtime;
-import java.util.Objects;
+
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.sockets.RecvFlags;
+import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.locations.ZLinkActivationConcurrency;
+import systems.zlink.framework.locations.ZLinkCapacityUsage;
+import systems.zlink.framework.locations.ZLinkLocationRuntimeQuery;
+import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
+import systems.zlink.framework.locations.ZLinkPlacementCapacity;
+import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
+import systems.zlink.framework.monitoring.ZLinkMeshChannelSnapshot;
+import systems.zlink.framework.monitoring.ZLinkMeshNodeSnapshot;
+import systems.zlink.framework.monitoring.ZLinkMeshPeerSnapshot;
 import systems.zlink.framework.monitoring.ZLinkObservedStatus;
+import systems.zlink.framework.monitoring.ZLinkPeerState;
+import systems.zlink.framework.monitoring.ZLinkPlacementSnapshot;
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
+import systems.zlink.framework.monitoring.ZLinkTopologyReason;
+import systems.zlink.framework.monitoring.ZLinkTopologyState;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshMonitorEvent;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshMonitorEventKind;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeMonitor;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeState;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerSource;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
-
-import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
+import systems.zlink.framework.runtime.internal.binding.spot.PeerChannels;
+import systems.zlink.framework.runtime.internal.monitoring.ZLinkMeshNodeMonitoringProjection;
+import systems.zlink.framework.runtime.internal.monitoring.ZLinkStatusPublisher;
 
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
@@ -20,41 +44,16 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.Flow;
 import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
-import java.util.function.Supplier;
 import java.util.function.BiFunction;
 import java.util.function.Function;
-import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.framework.runtime.internal.binding.spot.MeshMonitorEvent;
-import systems.zlink.framework.runtime.internal.binding.spot.MeshMonitorEventKind;
-import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeState;
-import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
-import systems.zlink.framework.runtime.internal.binding.spot.PeerChannels;
-import systems.zlink.contracts.sockets.RecvFlags;
-import systems.zlink.framework.errors.ZLinkConfigurationException;
-import systems.zlink.framework.locations.ZLinkActivationConcurrency;
-import systems.zlink.framework.monitoring.ZLinkMeshChannelSnapshot;
-import systems.zlink.framework.monitoring.ZLinkMeshNodeSnapshot;
-import systems.zlink.framework.monitoring.ZLinkMeshPeerSnapshot;
-import systems.zlink.framework.monitoring.ZLinkPeerState;
-import systems.zlink.framework.monitoring.ZLinkPlacementSnapshot;
-import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
-import systems.zlink.framework.monitoring.ZLinkTopologyReason;
-import systems.zlink.framework.monitoring.ZLinkTopologyState;
-import systems.zlink.framework.locations.ZLinkLocationRuntimeQuery;
-import systems.zlink.framework.locations.ZLinkCapacityUsage;
-import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
-import systems.zlink.framework.locations.ZLinkPlacementCapacity;
-import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
-import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
-import systems.zlink.framework.runtime.internal.monitoring.ZLinkMeshNodeMonitoringProjection;
-import systems.zlink.framework.runtime.internal.monitoring.ZLinkStatusPublisher;
+import java.util.function.Supplier;
 
 final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoCloseable {
     private static final long MONITOR_IDLE_NANOS = 10_000_000L;
@@ -63,7 +62,7 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
     private final Supplier<Map<String, ZLinkInternalMeshNode>> nodes;
     private final Supplier<ZLinkLocationRuntimeQuery> locationRuntime;
     private final BiFunction<String, RoutingId, ZLinkMeshNodeMonitoringProjection>
-        placementProjection;
+            placementProjection;
     private final Function<String, List<String>> channelNames;
     private final Map<String, AtomicLong> sequences = new ConcurrentHashMap<>();
     private final Map<String, MonitorHub> monitorHubs = new ConcurrentHashMap<>();
@@ -72,49 +71,43 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
 
     public ZLinkRouteMeshRuntimeService(ZLinkFrameworkLifecycle lifecycle) {
         this(
-            lifecycle::monitoringMeshNodes,
-            lifecycle::monitoringLocationRuntimeQuery,
-            lifecycle::monitoringMeshNodeProjection,
-            lifecycle::monitoringMeshNodeChannelNames);
+                lifecycle::monitoringMeshNodes,
+                lifecycle::monitoringLocationRuntimeQuery,
+                lifecycle::monitoringMeshNodeProjection,
+                lifecycle::monitoringMeshNodeChannelNames);
     }
 
     ZLinkRouteMeshRuntimeService(
-        Supplier<Map<String, ZLinkInternalMeshNode>> nodes,
-        Supplier<ZLinkLocationRuntimeQuery> locationRuntime) {
+            Supplier<Map<String, ZLinkInternalMeshNode>> nodes,
+            Supplier<ZLinkLocationRuntimeQuery> locationRuntime) {
         this(
-            nodes,
-            locationRuntime,
-            (meshName, rid) -> defaultPlacement(nodes.get().get(meshName)),
-            meshName -> List.copyOf(
-                nodes.get().get(meshName).channelWeights().keySet()));
+                nodes,
+                locationRuntime,
+                (meshName, rid) -> defaultPlacement(nodes.get().get(meshName)),
+                meshName -> List.copyOf(nodes.get().get(meshName).channelWeights().keySet()));
     }
 
     ZLinkRouteMeshRuntimeService(
-        Supplier<Map<String, ZLinkInternalMeshNode>> nodes,
-        Supplier<ZLinkLocationRuntimeQuery> locationRuntime,
-        BiFunction<String, RoutingId, ZLinkMeshNodeMonitoringProjection> placementProjection) {
+            Supplier<Map<String, ZLinkInternalMeshNode>> nodes,
+            Supplier<ZLinkLocationRuntimeQuery> locationRuntime,
+            BiFunction<String, RoutingId, ZLinkMeshNodeMonitoringProjection> placementProjection) {
         this(
-            nodes,
-            locationRuntime,
-            placementProjection,
-            meshName -> List.copyOf(
-                nodes.get().get(meshName).channelWeights().keySet()));
+                nodes,
+                locationRuntime,
+                placementProjection,
+                meshName -> List.copyOf(nodes.get().get(meshName).channelWeights().keySet()));
     }
 
     ZLinkRouteMeshRuntimeService(
-        Supplier<Map<String, ZLinkInternalMeshNode>> nodes,
-        Supplier<ZLinkLocationRuntimeQuery> locationRuntime,
-        BiFunction<String, RoutingId, ZLinkMeshNodeMonitoringProjection> placementProjection,
-        Function<String, List<String>> channelNames) {
+            Supplier<Map<String, ZLinkInternalMeshNode>> nodes,
+            Supplier<ZLinkLocationRuntimeQuery> locationRuntime,
+            BiFunction<String, RoutingId, ZLinkMeshNodeMonitoringProjection> placementProjection,
+            Function<String, List<String>> channelNames) {
         this.nodes = Objects.requireNonNull(nodes, "nodes");
-        this.locationRuntime =
-            Objects.requireNonNull(locationRuntime, "locationRuntime");
-        this.placementProjection = Objects.requireNonNull(
-            placementProjection,
-            "placementProjection");
-        this.channelNames = Objects.requireNonNull(
-            channelNames,
-            "channelNames");
+        this.locationRuntime = Objects.requireNonNull(locationRuntime, "locationRuntime");
+        this.placementProjection =
+                Objects.requireNonNull(placementProjection, "placementProjection");
+        this.channelNames = Objects.requireNonNull(channelNames, "channelNames");
     }
 
     @Override
@@ -125,97 +118,116 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
         ZLinkTopologyState state = mapTopologyState(status.state());
         LocationStatusSnapshot location = locationSnapshot();
         boolean localPlacementReady =
-            state == ZLinkTopologyState.READY
-                && !"degraded".equals(location.state());
-        if (state == ZLinkTopologyState.READY
-            && "degraded".equals(location.state())) {
+                state == ZLinkTopologyState.READY && !"degraded".equals(location.state());
+        if (state == ZLinkTopologyState.READY && "degraded".equals(location.state())) {
             state = ZLinkTopologyState.DEGRADED;
         }
         if (state == ZLinkTopologyState.READY
-            && peers.stream().anyMatch(ZLinkRouteMeshRuntimeService::isRequiredPeerUnavailable)) {
+                && peers.stream()
+                        .anyMatch(ZLinkRouteMeshRuntimeService::isRequiredPeerUnavailable)) {
             state = ZLinkTopologyState.DEGRADED;
         }
         ZLinkMeshNodeMonitoringProjection placement =
-            placementProjection.apply(meshName, status.routingId());
-        List<ZLinkMeshChannelSnapshot> channels = channelNames.apply(meshName).stream()
-            .distinct()
-            .sorted()
-            .map(channelName -> {
-                long readyMembers = peers.stream()
-                    .filter(peer -> peer.state()
-                        == MeshPeerState.ADMITTED)
-                    .map(peer -> peerChannels(node, peer))
-                    .filter(peerChannels -> {
-                        int index = peerChannels.names().indexOf(channelName);
-                        return index >= 0 && peerChannels.weights().get(index) > 0;
-                    })
-                    .count();
-                return new ZLinkMeshChannelSnapshot(
-                    channelName, readyMembers > 0, Math.toIntExact(readyMembers));
-                })
-            .toList();
-        boolean hasAdmittedPeer = peers.stream().anyMatch(peer ->
-            peer.state()
-                == MeshPeerState.ADMITTED);
+                placementProjection.apply(meshName, status.routingId());
+        List<ZLinkMeshChannelSnapshot> channels =
+                channelNames.apply(meshName).stream()
+                        .distinct()
+                        .sorted()
+                        .map(
+                                channelName -> {
+                                    long readyMembers =
+                                            peers.stream()
+                                                    .filter(
+                                                            peer ->
+                                                                    peer.state()
+                                                                            == MeshPeerState
+                                                                                    .ADMITTED)
+                                                    .map(peer -> peerChannels(node, peer))
+                                                    .filter(
+                                                            peerChannels -> {
+                                                                int index =
+                                                                        peerChannels
+                                                                                .names()
+                                                                                .indexOf(
+                                                                                        channelName);
+                                                                return index >= 0
+                                                                        && peerChannels
+                                                                                        .weights()
+                                                                                        .get(index)
+                                                                                > 0;
+                                                            })
+                                                    .count();
+                                    return new ZLinkMeshChannelSnapshot(
+                                            channelName,
+                                            readyMembers > 0,
+                                            Math.toIntExact(readyMembers));
+                                })
+                        .toList();
+        boolean hasAdmittedPeer =
+                peers.stream().anyMatch(peer -> peer.state() == MeshPeerState.ADMITTED);
         if (state == ZLinkTopologyState.READY
-            && hasAdmittedPeer
-            && channels.stream().anyMatch(channel -> !channel.isReady())) {
+                && hasAdmittedPeer
+                && channels.stream().anyMatch(channel -> !channel.isReady())) {
             state = ZLinkTopologyState.DEGRADED;
         }
         boolean placementAvailable =
-            placement.objectRole() == ZLinkMeshNodeObjectRole.SERVER
-                && localPlacementReady
-                && placement.placementWeight() > 0
-                && hasActivationCapacity(placement)
-                && hasAvailableObjectCapacity(placement);
+                placement.objectRole() == ZLinkMeshNodeObjectRole.SERVER
+                        && localPlacementReady
+                        && placement.placementWeight() > 0
+                        && hasActivationCapacity(placement)
+                        && hasAvailableObjectCapacity(placement);
         return new ZLinkMeshNodeSnapshot(
-            meshName,
-            state,
-            state == ZLinkTopologyState.READY,
-            Math.toIntExact(peers.stream()
-                .filter(peer -> peer.state()
-                    == MeshPeerState.ADMITTED)
-                .count()),
-            channels,
-            peers.stream().map(peer -> mapPeer(node, peer)).toList(),
-            new ZLinkPlacementSnapshot(
-                placementAvailable,
-                Math.toIntExact(placement.objectCapacity().actors().active()),
-                Math.toIntExact(placement.objectCapacity().spots().active()),
-                placementAvailable
-                    ? Optional.empty()
-                    : Optional.of("degraded".equals(location.state())
-                        ? ZLinkTopologyReason.LOCATION_UNAVAILABLE
-                        : localPlacementReady
-                            ? ZLinkTopologyReason.CAPACITY_EXCEEDED
-                            : ZLinkTopologyReason.RUNTIME_NOT_READY)),
-            nextSequence(meshName),
-            Instant.now());
+                meshName,
+                state,
+                state == ZLinkTopologyState.READY,
+                Math.toIntExact(
+                        peers.stream()
+                                .filter(peer -> peer.state() == MeshPeerState.ADMITTED)
+                                .count()),
+                channels,
+                peers.stream().map(peer -> mapPeer(node, peer)).toList(),
+                new ZLinkPlacementSnapshot(
+                        placementAvailable,
+                        Math.toIntExact(placement.objectCapacity().actors().active()),
+                        Math.toIntExact(placement.objectCapacity().spots().active()),
+                        placementAvailable
+                                ? Optional.empty()
+                                : Optional.of(
+                                        "degraded".equals(location.state())
+                                                ? ZLinkTopologyReason.LOCATION_UNAVAILABLE
+                                                : localPlacementReady
+                                                        ? ZLinkTopologyReason.CAPACITY_EXCEEDED
+                                                        : ZLinkTopologyReason.RUNTIME_NOT_READY)),
+                nextSequence(meshName),
+                Instant.now());
     }
 
     @Override
-    public Flow.Publisher<ZLinkObservedStatus<
-        ZLinkMeshNodeSnapshot>> observe(String meshName, int capacity) {
+    public Flow.Publisher<ZLinkObservedStatus<ZLinkMeshNodeSnapshot>> observe(
+            String meshName, int capacity) {
         if (capacity <= 0) {
             throw new IllegalArgumentException("capacity must be positive");
         }
         requireNode(meshName);
         ZLinkStatusPublisher<ZLinkMeshNodeSnapshot> publisher =
-            ZLinkStatusPublisher.create(
-                () -> snapshot(meshName),
-                status -> List.of(
-                    status.state(),
-                    status.isReady(),
-                    status.readyPeerCount(),
-                    status.channels(),
-                    status.peers(),
-                    status.placement()),
-                capacity,
-                status -> status.state() == ZLinkTopologyState.STOPPED
-                    || status.state() == ZLinkTopologyState.FAILED,
-                status -> status.state() == ZLinkTopologyState.STOPPING);
-        MonitorHub hub = monitorHubs.computeIfAbsent(
-            meshName, ignored -> new MonitorHub(meshName, requireNode(meshName)));
+                ZLinkStatusPublisher.create(
+                        () -> snapshot(meshName),
+                        status ->
+                                List.of(
+                                        status.state(),
+                                        status.isReady(),
+                                        status.readyPeerCount(),
+                                        status.channels(),
+                                        status.peers(),
+                                        status.placement()),
+                        capacity,
+                        status ->
+                                status.state() == ZLinkTopologyState.STOPPED
+                                        || status.state() == ZLinkTopologyState.FAILED,
+                        status -> status.state() == ZLinkTopologyState.STOPPING);
+        MonitorHub hub =
+                monitorHubs.computeIfAbsent(
+                        meshName, ignored -> new MonitorHub(meshName, requireNode(meshName)));
         hub.registerSignal(publisher::signal);
         return publisher;
     }
@@ -237,22 +249,17 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
         }
         ZLinkInternalMeshNode node = nodes.get().get(meshName);
         if (node == null) {
-            throw new ZLinkConfigurationException(
-                "RouteMesh is not configured: " + meshName);
+            throw new ZLinkConfigurationException("RouteMesh is not configured: " + meshName);
         }
         return node;
     }
 
     private LocationStatusSnapshot locationSnapshot() {
         try {
-            var status = locationRuntime.get()
-                .getStatus()
-                .toCompletableFuture()
-                .join();
+            var status = locationRuntime.get().getStatus().toCompletableFuture().join();
             if (!status.storeHealthy() && locationHealthy) {
                 Instant failureAt = Instant.now();
-                if (status.lastRefreshAt() != null
-                    && !failureAt.isAfter(status.lastRefreshAt())) {
+                if (status.lastRefreshAt() != null && !failureAt.isAfter(status.lastRefreshAt())) {
                     failureAt = status.lastRefreshAt().plusNanos(1);
                 }
                 lastLocationFailure.set(failureAt);
@@ -261,28 +268,24 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
             Instant lastSuccessAt = status.lastRefreshAt();
             Instant failureAt = lastLocationFailure.get();
             if (status.storeHealthy()
-                && failureAt != null
-                && (lastSuccessAt == null || !lastSuccessAt.isAfter(failureAt))) {
+                    && failureAt != null
+                    && (lastSuccessAt == null || !lastSuccessAt.isAfter(failureAt))) {
                 lastSuccessAt = failureAt.plusNanos(1);
             }
             return new LocationStatusSnapshot(
-                status.storeHealthy() ? "ready" : "degraded",
-                Optional.ofNullable(lastSuccessAt),
-                Optional.ofNullable(failureAt));
+                    status.storeHealthy() ? "ready" : "degraded",
+                    Optional.ofNullable(lastSuccessAt),
+                    Optional.ofNullable(failureAt));
         } catch (RuntimeException ignored) {
-            return new LocationStatusSnapshot(
-                "not_configured", Optional.empty(), Optional.empty());
+            return new LocationStatusSnapshot("not_configured", Optional.empty(), Optional.empty());
         }
     }
 
     private long nextSequence(String meshName) {
-        return sequences.computeIfAbsent(meshName, ignored -> new AtomicLong())
-            .incrementAndGet();
+        return sequences.computeIfAbsent(meshName, ignored -> new AtomicLong()).incrementAndGet();
     }
 
-    private static ZLinkMeshPeerSnapshot mapPeer(
-        ZLinkInternalMeshNode node,
-        MeshPeerEntry peer) {
+    private static ZLinkMeshPeerSnapshot mapPeer(ZLinkInternalMeshNode node, MeshPeerEntry peer) {
         ZLinkPeerState state;
         Optional<ZLinkTopologyReason> unavailableReason;
         switch (peer.state()) {
@@ -315,24 +318,15 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
                 unavailableReason = Optional.empty();
             }
         }
-        return new ZLinkMeshPeerSnapshot(
-            peer.routingId(),
-            state,
-            unavailableReason);
+        return new ZLinkMeshPeerSnapshot(peer.routingId(), state, unavailableReason);
     }
 
-    private static PeerChannels peerChannels(
-        ZLinkInternalMeshNode node,
-        MeshPeerEntry peer) {
-        if (peer.state()
-                != MeshPeerState.ADMITTED
-            && peer.state()
-                != MeshPeerState.DRAINING) {
+    private static PeerChannels peerChannels(ZLinkInternalMeshNode node, MeshPeerEntry peer) {
+        if (peer.state() != MeshPeerState.ADMITTED && peer.state() != MeshPeerState.DRAINING) {
             return new PeerChannels(List.of(), List.of());
         }
         try {
-            return node.peerChannels(
-                peer.routingId(), peer.lifecycleGeneration());
+            return node.peerChannels(peer.routingId(), peer.lifecycleGeneration());
         } catch (RuntimeException ignored) {
             // The peer may have changed generation between peers() and this query.
             return new PeerChannels(List.of(), List.of());
@@ -340,12 +334,18 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
     }
 
     private static List<String> descriptorSources(List<MeshPeerEntry> peers) {
-        boolean manual = peers.stream().anyMatch(peer ->
-            peer.source() == MeshPeerSource.MANUAL
-                || peer.source() == MeshPeerSource.MIXED);
-        boolean redis = peers.stream().anyMatch(peer ->
-            peer.source() == MeshPeerSource.DISCOVERY
-                || peer.source() == MeshPeerSource.MIXED);
+        boolean manual =
+                peers.stream()
+                        .anyMatch(
+                                peer ->
+                                        peer.source() == MeshPeerSource.MANUAL
+                                                || peer.source() == MeshPeerSource.MIXED);
+        boolean redis =
+                peers.stream()
+                        .anyMatch(
+                                peer ->
+                                        peer.source() == MeshPeerSource.DISCOVERY
+                                                || peer.source() == MeshPeerSource.MIXED);
         if (manual && redis) {
             return List.of("manual_and_redis");
         }
@@ -366,41 +366,39 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
     }
 
     private static boolean isRequiredPeerUnavailable(MeshPeerEntry peer) {
-        return peer.state()
-            != MeshPeerState.ADMITTED
-            && peer.state()
-            != MeshPeerState.NOT_REQUIRED;
+        return peer.state() != MeshPeerState.ADMITTED && peer.state() != MeshPeerState.NOT_REQUIRED;
     }
 
-    private static boolean hasAvailableObjectCapacity(
-        ZLinkMeshNodeMonitoringProjection placement) {
-        boolean acceptsActors = placement.objectCapabilities().stream()
-            .anyMatch(capability ->
-                capability.objectKind() == ZLinkPlacementObjectKind.ACTOR);
-        boolean acceptsSpots = placement.objectCapabilities().stream()
-            .anyMatch(capability ->
-                capability.objectKind() != ZLinkPlacementObjectKind.ACTOR);
+    private static boolean hasAvailableObjectCapacity(ZLinkMeshNodeMonitoringProjection placement) {
+        boolean acceptsActors =
+                placement.objectCapabilities().stream()
+                        .anyMatch(
+                                capability ->
+                                        capability.objectKind() == ZLinkPlacementObjectKind.ACTOR);
+        boolean acceptsSpots =
+                placement.objectCapabilities().stream()
+                        .anyMatch(
+                                capability ->
+                                        capability.objectKind() != ZLinkPlacementObjectKind.ACTOR);
         boolean actorCapacityAvailable =
-            acceptsActors && hasRemainingCapacity(placement.objectCapacity().actors());
+                acceptsActors && hasRemainingCapacity(placement.objectCapacity().actors());
         boolean spotCapacityAvailable =
-            acceptsSpots
-                && hasRemainingCapacity(placement.objectCapacity().spots())
-                && (placement.objectCapacity().spotTypes().isEmpty()
-                    || placement.objectCapacity().spotTypes().stream()
-                        .anyMatch(type -> hasRemainingCapacity(type.usage())));
+                acceptsSpots
+                        && hasRemainingCapacity(placement.objectCapacity().spots())
+                        && (placement.objectCapacity().spotTypes().isEmpty()
+                                || placement.objectCapacity().spotTypes().stream()
+                                        .anyMatch(type -> hasRemainingCapacity(type.usage())));
         return actorCapacityAvailable || spotCapacityAvailable;
     }
 
     private static boolean hasRemainingCapacity(ZLinkCapacityUsage capacity) {
         return capacity.limit() == 0
-            || (long) capacity.active() + capacity.reserved() < capacity.limit();
+                || (long) capacity.active() + capacity.reserved() < capacity.limit();
     }
 
-    private static boolean hasActivationCapacity(
-        ZLinkMeshNodeMonitoringProjection placement) {
+    private static boolean hasActivationCapacity(ZLinkMeshNodeMonitoringProjection placement) {
         int limit = placement.activationConcurrency().limit();
-        return limit == 0
-            || placement.activationConcurrency().active() < limit;
+        return limit == 0 || placement.activationConcurrency().active() < limit;
     }
 
     private static ZLinkTopologyState mapTopologyState(MeshNodeState state) {
@@ -414,65 +412,71 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
     }
 
     private List<ZLinkMeshRuntimeEvent> mapEvents(
-        String meshName,
-        RoutingId sourceRid,
-        MeshMonitorEvent event) {
-        String identifier = switch (event.kind()) {
-            case STATE_CHANGED -> "zlink.runtime.mesh_node.state_changed";
-            case CHANNEL_CHANGED -> "zlink.runtime.mesh_node.channel_changed";
-            case CLAIM_REVOKED -> "zlink.runtime.mesh_node.claim_changed";
-            case PEER_CONNECTING, PEER_ADMITTED, PEER_DRAINING, PEER_CLOSED,
-                PEER_REJECTED, PROTOCOL_ERROR -> "zlink.runtime.mesh_node.peer_changed";
-            default -> null;
-        };
+            String meshName, RoutingId sourceRid, MeshMonitorEvent event) {
+        String identifier =
+                switch (event.kind()) {
+                    case STATE_CHANGED -> "zlink.runtime.mesh_node.state_changed";
+                    case CHANNEL_CHANGED -> "zlink.runtime.mesh_node.channel_changed";
+                    case CLAIM_REVOKED -> "zlink.runtime.mesh_node.claim_changed";
+                    case PEER_CONNECTING,
+                            PEER_ADMITTED,
+                            PEER_DRAINING,
+                            PEER_CLOSED,
+                            PEER_REJECTED,
+                            PROTOCOL_ERROR ->
+                            "zlink.runtime.mesh_node.peer_changed";
+                    default -> null;
+                };
         if (identifier == null) {
             return List.of();
         }
-        String reason = switch (event.kind()) {
-            case PEER_CONNECTING -> "connecting";
-            case PEER_ADMITTED -> "ready";
-            case PEER_DRAINING -> "draining";
-            case PEER_CLOSED -> "disconnected";
-            case PEER_REJECTED -> "HandshakeFailed";
-            case PROTOCOL_ERROR -> "rejected";
-            case BACKPRESSURED -> "backpressure";
-            default -> null;
-        };
-        ZLinkMeshRuntimeEvent mapped = new ZLinkMeshRuntimeEvent(
-            identifier,
-            nextSequence(meshName),
-            Instant.now(),
-            meshName,
-            sourceRid,
-            optionalRid(event.peerRid()),
-            optionalPositive(event.peerLifecycleGeneration()),
-            optionalText(event.channelName()),
-            event.kind() == MeshMonitorEventKind.CLAIM_REVOKED
-                ? Optional.of("application")
-                : Optional.empty(),
-            Optional.empty(),
-            Optional.ofNullable(reason),
-            event.kind() == MeshMonitorEventKind.STATE_CHANGED
-                ? Optional.of(mapNodeState(event.meshState()))
-                : Optional.empty());
+        String reason =
+                switch (event.kind()) {
+                    case PEER_CONNECTING -> "connecting";
+                    case PEER_ADMITTED -> "ready";
+                    case PEER_DRAINING -> "draining";
+                    case PEER_CLOSED -> "disconnected";
+                    case PEER_REJECTED -> "HandshakeFailed";
+                    case PROTOCOL_ERROR -> "rejected";
+                    case BACKPRESSURED -> "backpressure";
+                    default -> null;
+                };
+        ZLinkMeshRuntimeEvent mapped =
+                new ZLinkMeshRuntimeEvent(
+                        identifier,
+                        nextSequence(meshName),
+                        Instant.now(),
+                        meshName,
+                        sourceRid,
+                        optionalRid(event.peerRid()),
+                        optionalPositive(event.peerLifecycleGeneration()),
+                        optionalText(event.channelName()),
+                        event.kind() == MeshMonitorEventKind.CLAIM_REVOKED
+                                ? Optional.of("application")
+                                : Optional.empty(),
+                        Optional.empty(),
+                        Optional.ofNullable(reason),
+                        event.kind() == MeshMonitorEventKind.STATE_CHANGED
+                                ? Optional.of(mapNodeState(event.meshState()))
+                                : Optional.empty());
         if (event.kind() != MeshMonitorEventKind.STATE_CHANGED) {
             return List.of(mapped);
         }
         return List.of(
-            mapped,
-            new ZLinkMeshRuntimeEvent(
-                "zlink.runtime.mesh_node.drain_changed",
-                nextSequence(meshName),
-                mapped.timestamp(),
-                meshName,
-                sourceRid,
-                mapped.peerRid(),
-                mapped.lifecycleGeneration(),
-                mapped.channelName(),
-                mapped.claimDomain(),
-                mapped.messageKind(),
-                mapped.reason(),
-                mapped.state()));
+                mapped,
+                new ZLinkMeshRuntimeEvent(
+                        "zlink.runtime.mesh_node.drain_changed",
+                        nextSequence(meshName),
+                        mapped.timestamp(),
+                        meshName,
+                        sourceRid,
+                        mapped.peerRid(),
+                        mapped.lifecycleGeneration(),
+                        mapped.channelName(),
+                        mapped.claimDomain(),
+                        mapped.messageKind(),
+                        mapped.reason(),
+                        mapped.state()));
     }
 
     private static Optional<RoutingId> optionalRid(RoutingId value) {
@@ -488,10 +492,7 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
     }
 
     private record LocationStatusSnapshot(
-        String state,
-        Optional<Instant> lastSuccessAt,
-        Optional<Instant> lastFailureAt) {
-    }
+            String state, Optional<Instant> lastSuccessAt, Optional<Instant> lastFailureAt) {}
 
     private final class MonitorHub implements AutoCloseable {
         private final String meshName;
@@ -506,14 +507,11 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
         MonitorHub(String meshName, ZLinkInternalMeshNode node) {
             this.meshName = meshName;
             this.node = node;
-            this.initialPlacement = placementProjection.apply(
-                meshName,
-                node.status().routingId());
+            this.initialPlacement = placementProjection.apply(meshName, node.status().routingId());
         }
 
         void subscribe(Flow.Subscriber<? super ZLinkMeshRuntimeEvent> subscriber, int capacity) {
-            ObserverSubscription observer =
-                new ObserverSubscription(this, subscriber, capacity);
+            ObserverSubscription observer = new ObserverSubscription(this, subscriber, capacity);
             if (!inStateLane(() -> subscribeCore(observer))) {
                 subscriber.onSubscribe(observer);
                 observer.fail(new IllegalStateException("RouteMesh monitor is closed"));
@@ -522,11 +520,12 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
             subscriber.onSubscribe(observer);
             if (!isStopped()) {
                 var status = node.status();
-                observer.enqueue(event(
-                    "zlink.runtime.mesh_node.state_changed",
-                    meshName,
-                    status.routingId(),
-                    Optional.of(mapNodeState(status.state()))));
+                observer.enqueue(
+                        event(
+                                "zlink.runtime.mesh_node.state_changed",
+                                meshName,
+                                status.routingId(),
+                                Optional.of(mapNodeState(status.state()))));
             }
             startPumpIfNecessary();
         }
@@ -580,12 +579,14 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
                     if (now >= nextDescriptorPoll) {
                         var status = node.status();
                         ZLinkMeshNodeMonitoringProjection currentPlacement =
-                            placementProjection.apply(meshName, status.routingId());
+                                placementProjection.apply(meshName, status.routingId());
                         if (!samePlacementCapacity(previousPlacement, currentPlacement)) {
-                            publish(List.of(placementChangedEvent(
-                                meshName,
-                                status.routingId(),
-                                currentPlacement.descriptorRevision())));
+                            publish(
+                                    List.of(
+                                            placementChangedEvent(
+                                                    meshName,
+                                                    status.routingId(),
+                                                    currentPlacement.descriptorRevision())));
                         }
                         previousPlacement = currentPlacement;
                         nextDescriptorPoll = now + DESCRIPTOR_POLL_NANOS;
@@ -597,30 +598,32 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
                         String locationState = locationSnapshot().state();
                         List<ZLinkMeshRuntimeEvent> derived = new ArrayList<>(4);
                         if (status.state() != previousState) {
-                            derived.add(event(
-                                "zlink.runtime.mesh_node.state_changed",
-                                meshName,
-                                status.routingId(),
-                                Optional.of(mapNodeState(status.state()))));
+                            derived.add(
+                                    event(
+                                            "zlink.runtime.mesh_node.state_changed",
+                                            meshName,
+                                            status.routingId(),
+                                            Optional.of(mapNodeState(status.state()))));
                         }
                         if (!peers.equals(previousPeers)) {
-                            derived.add(peerChangedEvent(
-                                meshName,
-                                status.routingId(),
-                                changedPeer(previousPeers, peers)));
+                            derived.add(
+                                    peerChangedEvent(
+                                            meshName,
+                                            status.routingId(),
+                                            changedPeer(previousPeers, peers)));
                         }
                         if (!channels.equals(previousChannels)) {
-                            derived.add(event(
-                                "zlink.runtime.mesh_node.channel_changed",
-                                meshName,
-                                status.routingId(),
-                                Optional.empty()));
+                            derived.add(
+                                    event(
+                                            "zlink.runtime.mesh_node.channel_changed",
+                                            meshName,
+                                            status.routingId(),
+                                            Optional.empty()));
                         }
                         if (!locationState.equals(previousLocationState)) {
-                            derived.add(locationChangedEvent(
-                                meshName,
-                                status.routingId(),
-                                locationState));
+                            derived.add(
+                                    locationChangedEvent(
+                                            meshName, status.routingId(), locationState));
                         }
                         publish(derived);
                         previousState = status.state();
@@ -632,7 +635,7 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
                     }
                     RoutingId sourceRid = node.status().routingId();
                     List<ZLinkMeshRuntimeEvent> events =
-                        mapEvents(meshName, sourceRid, nativeEvent);
+                            mapEvents(meshName, sourceRid, nativeEvent);
                     publish(events);
                     previousState = node.status().state();
                     previousPeers = List.copyOf(node.peers());
@@ -714,9 +717,8 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
         }
 
         private void startPumpIfNecessary() {
-            Thread candidate = Thread.ofVirtual()
-                .name("zlink-mesh-monitor-" + meshName)
-                .unstarted(this::pump);
+            Thread candidate =
+                    Thread.ofVirtual().name("zlink-mesh-monitor-" + meshName).unstarted(this::pump);
             if (inStateLane(() -> installPumpCore(candidate))) {
                 candidate.start();
             }
@@ -739,8 +741,8 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
 
         private MonitorHubSnapshot snapshotCore() {
             return new MonitorHubSnapshot(
-                observers.toArray(ObserverSubscription[]::new),
-                signals.toArray(Runnable[]::new));
+                    observers.toArray(ObserverSubscription[]::new),
+                    signals.toArray(Runnable[]::new));
         }
 
         private MonitorHubCloseState closeCore() {
@@ -749,7 +751,7 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
             }
             stopped = true;
             ObserverSubscription[] currentObservers =
-                observers.toArray(ObserverSubscription[]::new);
+                    observers.toArray(ObserverSubscription[]::new);
             observers.clear();
             Runnable[] currentSignals = signals.toArray(Runnable[]::new);
             signals.clear();
@@ -771,21 +773,14 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
             }
         }
 
-        private record MonitorHubSnapshot(
-            ObserverSubscription[] observers,
-            Runnable[] signals) {
-        }
+        private record MonitorHubSnapshot(ObserverSubscription[] observers, Runnable[] signals) {}
 
         private record MonitorHubCloseState(
-            Thread pump,
-            ObserverSubscription[] observers,
-            Runnable[] signals) {
-        }
+                Thread pump, ObserverSubscription[] observers, Runnable[] signals) {}
     }
 
     private static MeshPeerEntry changedPeer(
-        List<MeshPeerEntry> previous,
-        List<MeshPeerEntry> current) {
+            List<MeshPeerEntry> previous, List<MeshPeerEntry> current) {
         for (MeshPeerEntry peer : current) {
             if (!previous.contains(peer)) {
                 return peer;
@@ -800,118 +795,109 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
     }
 
     private ZLinkMeshRuntimeEvent peerChangedEvent(
-        String meshName,
-        RoutingId sourceRid,
-        MeshPeerEntry peer) {
+            String meshName, RoutingId sourceRid, MeshPeerEntry peer) {
         return new ZLinkMeshRuntimeEvent(
-            "zlink.runtime.mesh_node.peer_changed",
-            nextSequence(meshName),
-            Instant.now(),
-            meshName,
-            sourceRid,
-            peer == null ? Optional.empty() : Optional.of(peer.routingId()),
-            peer == null ? Optional.empty() : Optional.of(peer.lifecycleGeneration()),
-            Optional.empty(),
-            Optional.empty(),
-            Optional.empty(),
-            peer == null ? Optional.empty() : Optional.of(peer.state().name().toLowerCase()),
-            Optional.empty());
+                "zlink.runtime.mesh_node.peer_changed",
+                nextSequence(meshName),
+                Instant.now(),
+                meshName,
+                sourceRid,
+                peer == null ? Optional.empty() : Optional.of(peer.routingId()),
+                peer == null ? Optional.empty() : Optional.of(peer.lifecycleGeneration()),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                peer == null ? Optional.empty() : Optional.of(peer.state().name().toLowerCase()),
+                Optional.empty());
     }
 
-    private static String channelSignature(
-        ZLinkInternalMeshNode node,
-        List<MeshPeerEntry> peers) {
+    private static String channelSignature(ZLinkInternalMeshNode node, List<MeshPeerEntry> peers) {
         StringBuilder signature = new StringBuilder(node.channelWeights().toString());
         for (MeshPeerEntry peer : peers) {
-            signature.append('|')
-                .append(peer.routingId().toHex())
-                .append(':')
-                .append(peer.lifecycleGeneration())
-                .append(':')
-                .append(peerChannels(node, peer));
+            signature
+                    .append('|')
+                    .append(peer.routingId().toHex())
+                    .append(':')
+                    .append(peer.lifecycleGeneration())
+                    .append(':')
+                    .append(peerChannels(node, peer));
         }
         return signature.toString();
     }
 
     private ZLinkMeshRuntimeEvent event(
-        String identifier,
-        String meshName,
-        RoutingId sourceRid,
-        Optional<LegacyMeshNodeState> state) {
+            String identifier,
+            String meshName,
+            RoutingId sourceRid,
+            Optional<LegacyMeshNodeState> state) {
         return new ZLinkMeshRuntimeEvent(
-            identifier,
-            nextSequence(meshName),
-            Instant.now(),
-            meshName,
-            sourceRid,
-            Optional.empty(),
-            Optional.empty(),
-            Optional.empty(),
-            Optional.empty(),
-            Optional.empty(),
-            Optional.empty(),
-            state);
+                identifier,
+                nextSequence(meshName),
+                Instant.now(),
+                meshName,
+                sourceRid,
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                state);
     }
 
     private ZLinkMeshRuntimeEvent locationChangedEvent(
-        String meshName,
-        RoutingId sourceRid,
-        String state) {
+            String meshName, RoutingId sourceRid, String state) {
         return new ZLinkMeshRuntimeEvent(
-            "zlink.runtime.location.store_changed",
-            nextSequence(meshName),
-            Instant.now(),
-            meshName,
-            sourceRid,
-            Optional.empty(),
-            Optional.empty(),
-            Optional.empty(),
-            Optional.empty(),
-            Optional.empty(),
-            Optional.of(state),
-            Optional.empty());
+                "zlink.runtime.location.store_changed",
+                nextSequence(meshName),
+                Instant.now(),
+                meshName,
+                sourceRid,
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.of(state),
+                Optional.empty());
     }
 
     private ZLinkMeshRuntimeEvent placementChangedEvent(
-        String meshName,
-        RoutingId sourceRid,
-        long descriptorRevision) {
+            String meshName, RoutingId sourceRid, long descriptorRevision) {
         return new ZLinkMeshRuntimeEvent(
-            "zlink.runtime.object.placement_changed",
-            nextSequence(meshName),
-            Instant.now(),
-            meshName,
-            sourceRid,
-            Optional.of(sourceRid),
-            Optional.empty(),
-            Optional.empty(),
-            Optional.empty(),
-            Optional.empty(),
-            Optional.of("updated"),
-            Optional.empty());
+                "zlink.runtime.object.placement_changed",
+                nextSequence(meshName),
+                Instant.now(),
+                meshName,
+                sourceRid,
+                Optional.of(sourceRid),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.of("updated"),
+                Optional.empty());
     }
 
     private static boolean samePlacementCapacity(
-        ZLinkMeshNodeMonitoringProjection left,
-        ZLinkMeshNodeMonitoringProjection right) {
+            ZLinkMeshNodeMonitoringProjection left, ZLinkMeshNodeMonitoringProjection right) {
         return left.objectCapacity().equals(right.objectCapacity())
-            && left.activationConcurrency().equals(right.activationConcurrency());
+                && left.activationConcurrency().equals(right.activationConcurrency());
     }
 
-    private static ZLinkMeshNodeMonitoringProjection defaultPlacement(
-        ZLinkInternalMeshNode node) {
+    private static ZLinkMeshNodeMonitoringProjection defaultPlacement(ZLinkInternalMeshNode node) {
         return new ZLinkMeshNodeMonitoringProjection(
-            node == null ? 0 : node.status().descriptorRevision(),
-            ZLinkMeshNodeObjectRole.NONE,
-            node == null ? 0 : node.placementWeight(),
-            new ZLinkPlacementCapacity(
-                new ZLinkCapacityUsage(0, 0, 0),
-                new ZLinkCapacityUsage(0, 0, 0),
-                List.of()),
-            new ZLinkActivationConcurrency(0, 128),
-            List.of(),
-            0,
-            Optional.empty());
+                node == null ? 0 : node.status().descriptorRevision(),
+                ZLinkMeshNodeObjectRole.NONE,
+                node == null ? 0 : node.placementWeight(),
+                new ZLinkPlacementCapacity(
+                        new ZLinkCapacityUsage(0, 0, 0),
+                        new ZLinkCapacityUsage(0, 0, 0),
+                        List.of()),
+                new ZLinkActivationConcurrency(0, 128),
+                List.of(),
+                0,
+                Optional.empty());
     }
 
     private static final class ObserverSubscription implements Flow.Subscription {
@@ -925,9 +911,9 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
         private boolean cancelled;
 
         ObserverSubscription(
-            MonitorHub hub,
-            Flow.Subscriber<? super ZLinkMeshRuntimeEvent> subscriber,
-            int capacity) {
+                MonitorHub hub,
+                Flow.Subscriber<? super ZLinkMeshRuntimeEvent> subscriber,
+                int capacity) {
             this.hub = hub;
             this.subscriber = subscriber;
             this.capacity = capacity;
@@ -939,10 +925,11 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
                 fail(new IllegalArgumentException("demand must be positive"));
                 return;
             }
-            demand.getAndUpdate(current -> {
-                long updated = current + count;
-                return updated < 0 ? Long.MAX_VALUE : updated;
-            });
+            demand.getAndUpdate(
+                    current -> {
+                        long updated = current + count;
+                        return updated < 0 ? Long.MAX_VALUE : updated;
+                    });
             scheduleDrain();
         }
 
@@ -979,8 +966,7 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
         }
 
         private void scheduleDrain() {
-            if (inStateLane(() -> !cancelled)
-                && draining.compareAndSet(0, 1)) {
+            if (inStateLane(() -> !cancelled) && draining.compareAndSet(0, 1)) {
                 ForkJoinPool.commonPool().execute(this::drain);
             }
         }
@@ -988,8 +974,7 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
         private void drain() {
             try {
                 while (true) {
-                    ZLinkMeshRuntimeEvent event = inStateLane(
-                        () -> takePendingCore(demand.get()));
+                    ZLinkMeshRuntimeEvent event = inStateLane(() -> takePendingCore(demand.get()));
                     if (event == null) {
                         return;
                     }
@@ -1002,9 +987,7 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
                 fail(failure);
             } finally {
                 draining.set(0);
-                if (inStateLane(() -> !pending.isEmpty()
-                    && demand.get() > 0
-                    && !cancelled)) {
+                if (inStateLane(() -> !pending.isEmpty() && demand.get() > 0 && !cancelled)) {
                     scheduleDrain();
                 }
             }
@@ -1063,15 +1046,16 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
 
         private void coalesceOrReplace(ZLinkMeshRuntimeEvent event) {
             if (pending.stream().anyMatch(ObserverSubscription::isTerminalDrain)
-                && !isTerminalDrain(event)) {
+                    && !isTerminalDrain(event)) {
                 return;
             }
             if (isTerminalDrain(event)) {
-                boolean removed = pending.stream()
-                    .filter(current -> !isTerminalDrain(current))
-                    .findFirst()
-                    .map(pending::remove)
-                    .orElse(false);
+                boolean removed =
+                        pending.stream()
+                                .filter(current -> !isTerminalDrain(current))
+                                .findFirst()
+                                .map(pending::remove)
+                                .orElse(false);
                 if (!removed) {
                     pending.pollFirst();
                 }
@@ -1083,7 +1067,7 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
 
         private static boolean isTerminalDrain(ZLinkMeshRuntimeEvent event) {
             if (!event.identifier().equals("zlink.runtime.mesh_node.drain_changed")
-                || event.state().isEmpty()) {
+                    || event.state().isEmpty()) {
                 return false;
             }
             return switch (event.state().get()) {
@@ -1091,7 +1075,6 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
                 default -> false;
             };
         }
-
     }
 
     private static final class StateLane {
@@ -1105,21 +1088,25 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
             Objects.requireNonNull(work, "work");
             if (CURRENT.get() == this) {
                 throw new IllegalStateException(
-                    "This code already runs on the state lane it is trying to enter. Call the "
-                        + "component's private state method directly instead of re-entering its "
-                        + "public surface.");
+                        "This code already runs on the state lane it is trying to enter. Call the"
+                                + " component's private state method directly instead of re-entering"
+                                + " its public surface.");
             }
             CompletableFuture<T> result = new CompletableFuture<>();
-            mailbox.add(() -> runWithCurrent(() -> {
-                try {
-                    T value = work.get();
-                    result.completeAsync(() -> value);
-                } catch (RuntimeException | Error error) {
-                    result.completeAsync(() -> {
-                        throw error;
-                    });
-                }
-            }));
+            mailbox.add(
+                    () ->
+                            runWithCurrent(
+                                    () -> {
+                                        try {
+                                            T value = work.get();
+                                            result.completeAsync(() -> value);
+                                        } catch (RuntimeException | Error error) {
+                                            result.completeAsync(
+                                                    () -> {
+                                                        throw error;
+                                                    });
+                                        }
+                                    }));
             scheduleDrain();
             return result;
         }
@@ -1161,19 +1148,18 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
 }
 
 record ZLinkMeshRuntimeEvent(
-    String identifier,
-    long sequence,
-    Instant timestamp,
-    String meshName,
-    RoutingId sourceRid,
-    Optional<RoutingId> peerRid,
-    Optional<Long> lifecycleGeneration,
-    Optional<String> channelName,
-    Optional<String> claimDomain,
-    Optional<String> messageKind,
-    Optional<String> reason,
-    Optional<LegacyMeshNodeState> state) {
-}
+        String identifier,
+        long sequence,
+        Instant timestamp,
+        String meshName,
+        RoutingId sourceRid,
+        Optional<RoutingId> peerRid,
+        Optional<Long> lifecycleGeneration,
+        Optional<String> channelName,
+        Optional<String> claimDomain,
+        Optional<String> messageKind,
+        Optional<String> reason,
+        Optional<LegacyMeshNodeState> state) {}
 
 enum LegacyMeshNodeState {
     STARTING,

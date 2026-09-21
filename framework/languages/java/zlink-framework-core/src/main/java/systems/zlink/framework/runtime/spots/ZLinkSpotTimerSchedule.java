@@ -1,10 +1,11 @@
 package systems.zlink.framework.runtime.spots;
 
-import java.time.Duration;
-import java.time.Instant;
 import systems.zlink.framework.spots.ZLinkTimerOptions;
 import systems.zlink.framework.spots.ZLinkTimerOverrunPolicy;
 import systems.zlink.framework.spots.ZLinkTimerTick;
+
+import java.time.Duration;
+import java.time.Instant;
 
 final class ZLinkSpotTimerSchedule {
     private final String name;
@@ -17,41 +18,33 @@ final class ZLinkSpotTimerSchedule {
     private long lastScheduledIndex;
 
     ZLinkSpotTimerSchedule(String name, Duration period, ZLinkTimerOptions options) {
-        this(
-            name,
-            period,
-            options,
-            Instant.now(),
-            0L,
-            0L);
+        this(name, period, options, Instant.now(), 0L, 0L);
     }
 
     ZLinkSpotTimerSchedule(State state) {
         this(
-            state.name(),
-            state.period(),
-            state.options(),
-            state.startedAt(),
-            state.deliveryIndex(),
-            state.lastScheduledIndex());
+                state.name(),
+                state.period(),
+                state.options(),
+                state.startedAt(),
+                state.deliveryIndex(),
+                state.lastScheduledIndex());
     }
 
     private ZLinkSpotTimerSchedule(
-        String name,
-        Duration period,
-        ZLinkTimerOptions options,
-        Instant startedAt,
-        long deliveryIndex,
-        long lastScheduledIndex) {
+            String name,
+            Duration period,
+            ZLinkTimerOptions options,
+            Instant startedAt,
+            long deliveryIndex,
+            long lastScheduledIndex) {
         this.name = name;
         this.period = period;
         this.options = options;
         this.startedAt = startedAt;
         long restoredElapsed;
         try {
-            restoredElapsed = Math.max(
-                0L,
-                Duration.between(startedAt, Instant.now()).toNanos());
+            restoredElapsed = Math.max(0L, Duration.between(startedAt, Instant.now()).toNanos());
         } catch (ArithmeticException error) {
             restoredElapsed = Long.MAX_VALUE;
         }
@@ -71,22 +64,24 @@ final class ZLinkSpotTimerSchedule {
 
     PendingTick nextTick(long startedElapsedNanos, Instant now) {
         long scheduledIndex = nextScheduledIndex(startedElapsedNanos);
-        long skipped = options.overrunPolicy() == ZLinkTimerOverrunPolicy.DELAY_NEXT_TICK
-            ? 0L
-            : scheduledIndex - lastScheduledIndex - 1L;
+        long skipped =
+                options.overrunPolicy() == ZLinkTimerOverrunPolicy.DELAY_NEXT_TICK
+                        ? 0L
+                        : scheduledIndex - lastScheduledIndex - 1L;
         long index = ++deliveryIndex;
         long scheduledElapsedNanos = saturatedMultiply(periodNanos, scheduledIndex);
-        ZLinkTimerTick tick = new ZLinkTimerTick(
-            name,
-            index,
-            scheduledIndex,
-            period,
-            startedAt.plusNanos(scheduledElapsedNanos),
-            now,
-            Duration.ofNanos(scheduledElapsedNanos),
-            Duration.ofNanos(startedElapsedNanos),
-            Duration.between(startedAt.plusNanos(scheduledElapsedNanos), now),
-            skipped);
+        ZLinkTimerTick tick =
+                new ZLinkTimerTick(
+                        name,
+                        index,
+                        scheduledIndex,
+                        period,
+                        startedAt.plusNanos(scheduledElapsedNanos),
+                        now,
+                        Duration.ofNanos(scheduledElapsedNanos),
+                        Duration.ofNanos(startedElapsedNanos),
+                        Duration.between(startedAt.plusNanos(scheduledElapsedNanos), now),
+                        skipped);
         return new PendingTick(scheduledIndex, tick);
     }
 
@@ -95,13 +90,7 @@ final class ZLinkSpotTimerSchedule {
     }
 
     State snapshot() {
-        return new State(
-            name,
-            period,
-            options,
-            startedAt,
-            deliveryIndex,
-            lastScheduledIndex);
+        return new State(name, period, options, startedAt, deliveryIndex, lastScheduledIndex);
     }
 
     long delayAfterDispatchNanos() {
@@ -139,15 +128,13 @@ final class ZLinkSpotTimerSchedule {
         return left * right;
     }
 
-    record PendingTick(long scheduledIndex, ZLinkTimerTick tick) {
-    }
+    record PendingTick(long scheduledIndex, ZLinkTimerTick tick) {}
 
     record State(
-        String name,
-        Duration period,
-        ZLinkTimerOptions options,
-        Instant startedAt,
-        long deliveryIndex,
-        long lastScheduledIndex) {
-    }
+            String name,
+            Duration period,
+            ZLinkTimerOptions options,
+            Instant startedAt,
+            long deliveryIndex,
+            long lastScheduledIndex) {}
 }

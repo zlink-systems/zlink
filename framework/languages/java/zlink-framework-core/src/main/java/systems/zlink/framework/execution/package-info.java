@@ -1,4 +1,2 @@
-/**
- * Shared serial execution primitives used by framework runtimes.
- */
+/** Shared serial execution primitives used by framework runtimes. */
 package systems.zlink.framework.execution;

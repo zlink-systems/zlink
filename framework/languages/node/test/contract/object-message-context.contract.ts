@@ -44,7 +44,9 @@ class ExactActorFactory implements ZLinkActorFactory<ExactActor> {
 
 class ExactSpot implements ZLinkSpot<ExactActor> {
   declare readonly context: ZLinkSpotContext<ExactActor, ExactSpot>;
-  async onActorJoin(): Promise<{ accepted: boolean }> { return { accepted: true }; }
+  async onActorJoin(): Promise<{ accepted: boolean }> {
+    return { accepted: true };
+  }
   async onJoinedActor(): Promise<void> {}
   async onLeaveActor(): Promise<void> {}
   async onDisconnectActor(): Promise<void> {}
@@ -60,8 +62,11 @@ class ExactEntrySpot implements ZLinkEntrySpot<ExactActor> {
   async onDisconnectActor(): Promise<void> {}
 }
 
-class ExactSpotActorSendHandler
-implements ZLinkSpotActorSendHandler<ExactSpot, ExactActor, string> {
+class ExactSpotActorSendHandler implements ZLinkSpotActorSendHandler<
+  ExactSpot,
+  ExactActor,
+  string
+> {
   async handle(
     _spot: ExactSpot,
     _actor: ExactActor,
@@ -70,8 +75,12 @@ implements ZLinkSpotActorSendHandler<ExactSpot, ExactActor, string> {
   ): Promise<void> {}
 }
 
-class ExactEntryActorRequestHandler
-implements ZLinkEntrySpotActorRequestHandler<ExactEntrySpot, ExactActor, string, number> {
+class ExactEntryActorRequestHandler implements ZLinkEntrySpotActorRequestHandler<
+  ExactEntrySpot,
+  ExactActor,
+  string,
+  number
+> {
   async handle(
     _spot: ExactEntrySpot,
     _actor: ExactActor,

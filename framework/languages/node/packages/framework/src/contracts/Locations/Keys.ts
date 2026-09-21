@@ -1,6 +1,11 @@
 import type { RoutingId, SpotId } from '../Common';
 import type { ZLinkSpotKind } from '../Spots';
-import type { ZLinkLocationAutoConnectType, ZLinkLocationKind, ZLinkLocationRole, ZLinkRouteKind } from './Values';
+import type {
+  ZLinkLocationAutoConnectType,
+  ZLinkLocationKind,
+  ZLinkLocationRole,
+  ZLinkRouteKind
+} from './Values';
 
 /**
  * Peer identity is the full five-component tuple. Missing optional components

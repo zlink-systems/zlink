@@ -7,7 +7,8 @@ namespace Zlink.Framework.Contracts.Configuration;
 
 public readonly record struct ZLinkMeshPeerConnection(
     string Endpoint,
-    RoutingId? ExpectedRoutingId);
+    RoutingId? ExpectedRoutingId
+);
 
 public interface IZLinkMeshPeerConnections
 {
@@ -41,9 +42,7 @@ public interface IZLinkMeshChannelRoleBuilder
     IZLinkMeshChannelServerBuilder Server();
 }
 
-public interface IZLinkMeshChannelClientBuilder
-{
-}
+public interface IZLinkMeshChannelClientBuilder { }
 
 public interface IZLinkMeshChannelServerBuilder
 {
@@ -58,7 +57,8 @@ public interface IZLinkMeshChannelServerBuilder
         where THandler : class;
 
     IZLinkMeshChannelServerBuilder AddRequestHandler<THandler, TRequest, TReply>(
-        string? packetName = null)
+        string? packetName = null
+    )
         where THandler : class, IZLinkRequestHandler<TRequest, TReply>;
 
     IZLinkMeshChannelServerBuilder AddRequestHandler<THandler>(string? packetName = null)
@@ -72,17 +72,20 @@ public interface IZLinkMeshObjectServerBuilder
 
     IZLinkMeshObjectServerBuilder AddSpotFactory<TSpot>(
         string spotType,
-        Action<IZLinkUserSpotFactoryBuilder<TSpot>> configure)
+        Action<IZLinkUserSpotFactoryBuilder<TSpot>> configure
+    )
         where TSpot : class, IZLinkSpot;
 
     IZLinkMeshObjectServerBuilder AddInstanceSpotFactory<TSpot>(
         string instanceSpotType,
-        Action<IZLinkInstanceSpotFactoryBuilder<TSpot>> configure)
+        Action<IZLinkInstanceSpotFactoryBuilder<TSpot>> configure
+    )
         where TSpot : class, IZLinkInstanceSpot;
 
     IZLinkMeshObjectServerBuilder AddActorFactory<TActor, TFactory>(
         string actorType,
-        Action<IZLinkActorFactoryBuilder<TActor>> configure)
+        Action<IZLinkActorFactoryBuilder<TActor>> configure
+    )
         where TActor : class, IZLinkActor
         where TFactory : class, IZLinkActorFactory<TActor>;
 }
@@ -103,11 +106,11 @@ public interface IZLinkUserSpotFactoryBuilder<TSpot>
 {
     IZLinkUserSpotFactoryBuilder<TSpot> StableTypeLimit(int limit);
 
-    IZLinkUserSpotFactoryBuilder<TSpot> ExecutionMode(
-        ZLinkUserSpotExecutionMode mode);
+    IZLinkUserSpotFactoryBuilder<TSpot> ExecutionMode(ZLinkUserSpotExecutionMode mode);
 
     IZLinkUserSpotFactoryBuilder<TSpot> RelocationCoordinationMode(
-        ZLinkSpotRelocationCoordinationMode mode);
+        ZLinkSpotRelocationCoordinationMode mode
+    );
 
     IZLinkUserSpotFactoryBuilder<TSpot> DisableRelocation();
 
@@ -137,20 +140,18 @@ public interface IZLinkMeshObjectRoleBuilder
     IZLinkMeshObjectServerBuilder Server();
 }
 
-public interface IZLinkMeshObjectClientBuilder
-{
-}
+public interface IZLinkMeshObjectClientBuilder { }
 
 public enum ZLinkUserSpotExecutionMode
 {
     SpotWide = 0,
-    PerActor = 1
+    PerActor = 1,
 }
 
 public enum ZLinkSpotRelocationCoordinationMode
 {
     FrameworkManaged = 0,
-    ApplicationSignaled = 1
+    ApplicationSignaled = 1,
 }
 
 public interface IZLinkMeshNodeBuilder
@@ -195,10 +196,11 @@ public interface IZLinkMeshNodeBuilder
     IZLinkMeshNodeBuilder AddRouteSendHandler<THandler>(string? packetName = null)
         where THandler : class;
 
-    IZLinkMeshNodeBuilder AddRouteRequestHandler<THandler, TRequest, TReply>(string? packetName = null)
+    IZLinkMeshNodeBuilder AddRouteRequestHandler<THandler, TRequest, TReply>(
+        string? packetName = null
+    )
         where THandler : class, IZLinkRouteRequestHandler<TRequest, TReply>;
 
     IZLinkMeshNodeBuilder AddRouteRequestHandler<THandler>(string? packetName = null)
         where THandler : class;
-
 }

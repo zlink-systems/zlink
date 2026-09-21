@@ -6,12 +6,12 @@ package systems.zlink.framework.kotlin
 import java.util.concurrent.CompletionStage
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import systems.zlink.framework.locations.ZLinkLocationObjectEntry
+import systems.zlink.framework.locations.ZLinkLocationObjectFilter
 import systems.zlink.framework.locations.ZLinkLocationPage
 import systems.zlink.framework.locations.ZLinkLocationRuntimeQuery
 import systems.zlink.framework.locations.ZLinkLocationTopologyEntry
 import systems.zlink.framework.locations.ZLinkLocationTopologyFilter
-import systems.zlink.framework.locations.ZLinkLocationObjectEntry
-import systems.zlink.framework.locations.ZLinkLocationObjectFilter
 import systems.zlink.framework.locations.ZLinkPageRequest
 
 @JvmSynthetic
@@ -40,13 +40,10 @@ fun ZLinkLocationRuntimeQuery.topology(
     locationPages(ZLinkPageRequest(pageSize, null)) { page -> listTopology(filter, page) }
 
 suspend fun ZLinkLocationRuntimeQuery.findActorLocation(
-    actorId: String,
-): ZLinkLocationObjectEntry? =
-    awaitFrameworkStage(findActorLocation(actorId)).orElse(null)
+    actorId: String
+): ZLinkLocationObjectEntry? = awaitFrameworkStage(findActorLocation(actorId)).orElse(null)
 
-suspend fun ZLinkLocationRuntimeQuery.findSpotLocation(
-    spotId: String,
-): ZLinkLocationObjectEntry? =
+suspend fun ZLinkLocationRuntimeQuery.findSpotLocation(spotId: String): ZLinkLocationObjectEntry? =
     awaitFrameworkStage(findSpotLocation(spotId)).orElse(null)
 
 suspend fun ZLinkLocationRuntimeQuery.listObjectLocations(

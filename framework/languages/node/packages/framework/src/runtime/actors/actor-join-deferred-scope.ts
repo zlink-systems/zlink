@@ -1,4 +1,7 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException  } from '../framework-errors-internal';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { ZLinkConfigurationException } from '../configuration';
 
@@ -110,9 +113,7 @@ export function deferActorJoin(intent: DeferredActorJoin): void {
   scope.register(intent);
 }
 
-export function runActorHandlerWithDeferredJoins<T>(
-  handler: () => Promise<T> | T
-): Promise<T>;
+export function runActorHandlerWithDeferredJoins<T>(handler: () => Promise<T> | T): Promise<T>;
 export function runActorHandlerWithDeferredJoins<T, TResult>(
   handler: () => Promise<T> | T,
   afterHandler: (result: T) => Promise<TResult> | TResult,

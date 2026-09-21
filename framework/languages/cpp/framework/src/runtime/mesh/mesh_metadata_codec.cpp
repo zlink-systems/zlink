@@ -32,8 +32,7 @@ bool valid_utf8 (std::string_view value)
             continue;
         }
         if (first >= 0xc2 && first <= 0xdf) {
-            if (index + 1 >= value.size () || bytes[index + 1] < 0x80
-                || bytes[index + 1] > 0xbf)
+            if (index + 1 >= value.size () || bytes[index + 1] < 0x80 || bytes[index + 1] > 0xbf)
                 return false;
             index += 2;
             continue;
@@ -43,10 +42,10 @@ bool valid_utf8 (std::string_view value)
                 return false;
             const auto second = bytes[index + 1];
             const auto third = bytes[index + 2];
-            const bool valid_second =
-              first == 0xe0 ? second >= 0xa0 && second <= 0xbf
-                            : (first == 0xed ? second >= 0x80 && second <= 0x9f
-                                           : second >= 0x80 && second <= 0xbf);
+            const bool valid_second = first == 0xe0
+                                        ? second >= 0xa0 && second <= 0xbf
+                                        : (first == 0xed ? second >= 0x80 && second <= 0x9f
+                                                         : second >= 0x80 && second <= 0xbf);
             if (!valid_second || third < 0x80 || third > 0xbf)
                 return false;
             index += 3;
@@ -56,10 +55,10 @@ bool valid_utf8 (std::string_view value)
             if (index + 3 >= value.size ())
                 return false;
             const auto second = bytes[index + 1];
-            const bool valid_second =
-              first == 0xf0 ? second >= 0x90 && second <= 0xbf
-                            : (first == 0xf4 ? second >= 0x80 && second <= 0x8f
-                                           : second >= 0x80 && second <= 0xbf);
+            const bool valid_second = first == 0xf0
+                                        ? second >= 0x90 && second <= 0xbf
+                                        : (first == 0xf4 ? second >= 0x80 && second <= 0x8f
+                                                         : second >= 0x80 && second <= 0xbf);
             if (!valid_second || bytes[index + 2] < 0x80 || bytes[index + 2] > 0xbf
                 || bytes[index + 3] < 0x80 || bytes[index + 3] > 0xbf)
                 return false;
@@ -73,8 +72,7 @@ bool valid_utf8 (std::string_view value)
 
 [[noreturn]] void invalid_metadata (std::string message)
 {
-    throw framework_exception_t (framework_error_kind_t::protocol_error,
-                                 std::move (message));
+    throw framework_exception_t (framework_error_kind_t::protocol_error, std::move (message));
 }
 
 } // namespace
@@ -89,10 +87,9 @@ mesh_metadata_codec_t::encode (const std::map<std::string, std::string> &metadat
 
     std::size_t size = 2;
     for (const auto &[key, value] : metadata) {
-        if (key.empty () || key.size () > std::numeric_limits<std::uint8_t>::max ()
-            || has_nul (key) || !valid_utf8 (key)) {
-            invalid_metadata (
-              "application metadata keys must contain 1..255 non-NUL UTF-8 bytes");
+        if (key.empty () || key.size () > std::numeric_limits<std::uint8_t>::max () || has_nul (key)
+            || !valid_utf8 (key)) {
+            invalid_metadata ("application metadata keys must contain 1..255 non-NUL UTF-8 bytes");
         }
         if (value.size () > std::numeric_limits<std::uint16_t>::max () || has_nul (value)
             || !valid_utf8 (value)) {

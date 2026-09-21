@@ -9,6 +9,7 @@ internal static partial class ZLinkServiceWireCodec
     internal const byte MessageFollowSpotKind = 2;
     internal const byte MessageFollowVersion = 1;
     internal const byte MessageFollowMaximumHopCount = 8;
+
     //  Frame guard, not a queue bound: the Message Follow queue has no stored
     //  size cap, but a single encoded record still must not be unbounded.
     internal const uint MessageFollowMaximumEncodedBytes = 16 * 1024 * 1024;
@@ -27,17 +28,19 @@ internal static partial class ZLinkServiceWireCodec
             RoutingId targetNodeRid,
             ulong targetNodeGeneration,
             ulong authorityOwnerGeneration,
-            ulong ownerLeaseGeneration)
+            ulong ownerLeaseGeneration
+        )
         {
-            if (objectKind is not (MessageFollowActorKind
-                or MessageFollowSpotKind)
+            if (
+                objectKind is not (MessageFollowActorKind or MessageFollowSpotKind)
                 || string.IsNullOrWhiteSpace(objectId)
                 || objectId.Contains('\0')
                 || objectGeneration == 0
                 || targetNodeRid.IsEmpty
                 || targetNodeGeneration == 0
                 || authorityOwnerGeneration == 0
-                || ownerLeaseGeneration == 0)
+                || ownerLeaseGeneration == 0
+            )
                 throw new ArgumentOutOfRangeException(nameof(objectId));
             ObjectKind = objectKind;
             ObjectId = objectId;
@@ -71,16 +74,16 @@ internal static partial class ZLinkServiceWireCodec
             uint queuedMessages,
             uint queuedBytes,
             MeshOperationId originalOperation,
-            ulong originalReplyRouteId)
+            ulong originalReplyRouteId
+        )
         {
-            if (source.ObjectKind != target.ObjectKind
-                || !string.Equals(
-                    source.ObjectId,
-                    target.ObjectId,
-                    StringComparison.Ordinal)
+            if (
+                source.ObjectKind != target.ObjectKind
+                || !string.Equals(source.ObjectId, target.ObjectId, StringComparison.Ordinal)
                 || source.ObjectGeneration != target.ObjectGeneration
                 || hopCount is 0 or > MessageFollowMaximumHopCount
-                || originalOperation == default)
+                || originalOperation == default
+            )
                 throw new ArgumentOutOfRangeException(nameof(source));
             Source = source;
             Target = target;
@@ -117,10 +120,10 @@ internal static partial class ZLinkServiceWireCodec
         var bytes = Prefix(
             ServiceWireConstants.Command.MessageFollow,
             ServiceWireConstants.Flag.None,
-            checked(sizeof(byte) + sizeof(uint) + body.Count));
+            checked(sizeof(byte) + sizeof(uint) + body.Count)
+        );
         bytes[5] = MessageFollowVersion;
-        BinaryPrimitives.WriteUInt32BigEndian(
-            bytes.AsSpan(6), checked((uint)body.Count));
+        BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(6), checked((uint)body.Count));
         body.CopyTo(bytes.AsSpan(10));
         return bytes;
     }
@@ -128,7 +131,8 @@ internal static partial class ZLinkServiceWireCodec
     internal static bool TryDecodeMessageFollow(
         ReadOnlySpan<byte> bytes,
         out MessageFollowRecord record,
-        out DecodeError error)
+        out DecodeError error
+    )
     {
         record = default;
         try
@@ -154,26 +158,26 @@ internal static partial class ZLinkServiceWireCodec
                 error = DecodeError.UnsupportedVersion;
                 return false;
             }
-            if (!reader.TryU32(out var bodyLength)
+            if (
+                !reader.TryU32(out var bodyLength)
                 || bodyLength > MessageFollowMaximumEncodedBytes
                 || bodyLength != (uint)reader.Remaining
                 || bodyLength > int.MaxValue
-                || !reader.TrySlice((int)bodyLength, out var encodedBody))
+                || !reader.TrySlice((int)bodyLength, out var encodedBody)
+            )
                 return DecodeMessageFollowFailure(ref reader, out error);
 
             var body = new WireReader(encodedBody);
-            if (!TryReadMessageFollowRoute(
-                    ref body,
-                    out var source)
-                || !TryReadMessageFollowRoute(
-                    ref body,
-                    out var target)
+            if (
+                !TryReadMessageFollowRoute(ref body, out var source)
+                || !TryReadMessageFollowRoute(ref body, out var target)
                 || !body.TryU8(out var hopCount)
                 || !body.TryU32(out var queuedMessages)
                 || !body.TryU32(out var queuedBytes)
                 || !TryReadOperationId(ref body, out var operation)
                 || !body.TryU64(out var replyRouteId)
-                || body.Remaining != 0)
+                || body.Remaining != 0
+            )
                 return DecodeMessageFollowFailure(ref body, out error);
 
             record = new MessageFollowRecord(
@@ -183,12 +187,12 @@ internal static partial class ZLinkServiceWireCodec
                 queuedMessages,
                 queuedBytes,
                 operation,
-                replyRouteId);
+                replyRouteId
+            );
             error = DecodeError.None;
             return true;
         }
-        catch (Exception exception)
-            when (exception is ArgumentException or FormatException)
+        catch (Exception exception) when (exception is ArgumentException or FormatException)
         {
             record = default;
             error = DecodeError.InvalidField;
@@ -196,9 +200,7 @@ internal static partial class ZLinkServiceWireCodec
         }
     }
 
-    private static void WriteMessageFollowRoute(
-        WireWriter writer,
-        MessageFollowRoute route)
+    private static void WriteMessageFollowRoute(WireWriter writer, MessageFollowRoute route)
     {
         var body = new WireWriter();
         body.Text8(route.ObjectId);
@@ -216,22 +218,27 @@ internal static partial class ZLinkServiceWireCodec
 
     private static bool TryReadMessageFollowRoute(
         ref WireReader reader,
-        out MessageFollowRoute route)
+        out MessageFollowRoute route
+    )
     {
         route = default;
-        if (!reader.TryU8(out var objectKind)
+        if (
+            !reader.TryU8(out var objectKind)
             || !reader.TryU16(out var bodyLength)
-            || !reader.TrySlice(bodyLength, out var encodedBody))
+            || !reader.TrySlice(bodyLength, out var encodedBody)
+        )
             return false;
 
         var body = new WireReader(encodedBody);
-        if (!body.TryText8(out var objectId)
+        if (
+            !body.TryText8(out var objectId)
             || !body.TryU64(out var objectGeneration)
             || !body.TryRid(out var targetNodeRid)
             || !body.TryU64(out var targetNodeGeneration)
             || !body.TryU64(out var authorityOwnerGeneration)
             || !body.TryU64(out var ownerLeaseGeneration)
-            || body.Remaining != 0)
+            || body.Remaining != 0
+        )
             return false;
 
         route = new MessageFollowRoute(
@@ -241,17 +248,14 @@ internal static partial class ZLinkServiceWireCodec
             targetNodeRid,
             targetNodeGeneration,
             authorityOwnerGeneration,
-            ownerLeaseGeneration);
+            ownerLeaseGeneration
+        );
         return true;
     }
 
-    private static bool DecodeMessageFollowFailure(
-        ref WireReader reader,
-        out DecodeError error)
+    private static bool DecodeMessageFollowFailure(ref WireReader reader, out DecodeError error)
     {
-        error = reader.Truncated
-            ? DecodeError.TruncatedField
-            : DecodeError.InvalidField;
+        error = reader.Truncated ? DecodeError.TruncatedField : DecodeError.InvalidField;
         return false;
     }
 }

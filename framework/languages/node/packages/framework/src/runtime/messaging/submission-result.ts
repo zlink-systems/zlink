@@ -1,4 +1,7 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException  } from '../framework-errors-internal';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
 export enum ZLinkSubmitStatus {
   Submitted = 'submitted',
   Backpressured = 'backpressured',
@@ -28,10 +31,7 @@ export function requireOneWayCompletion(
         true
       );
     case ZLinkSubmitStatus.TargetNotFound:
-      throw createInternalFrameworkException(
-        notFoundKind,
-        `${operation} target was not found.`
-      );
+      throw createInternalFrameworkException(notFoundKind, `${operation} target was not found.`);
     case ZLinkSubmitStatus.RouteNotConnected:
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.RouteNotConnected,
@@ -46,10 +46,7 @@ export function requireOneWayCompletion(
   }
 }
 
-export function requirePublishCompletion(
-  result: ZLinkSubmitResult,
-  operation: string
-): void {
+export function requirePublishCompletion(result: ZLinkSubmitResult, operation: string): void {
   requireOneWayCompletion(result, operation);
 }
 

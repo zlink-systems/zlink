@@ -16,14 +16,21 @@ export class ZlinkStreamFrameCodec {
     try {
       return decodeStreamWireFrame(frame);
     } catch (cause) {
-      throw connectorError(ZlinkStreamErrorCode.FrameDecodeFailed, 'Frame length does not match prefix.', cause);
+      throw connectorError(
+        ZlinkStreamErrorCode.FrameDecodeFailed,
+        'Frame length does not match prefix.',
+        cause
+      );
     }
   }
 }
 
 export function splitZlinkStreamFrames(chunk: Uint8Array): readonly Uint8Array[] {
   if (chunk.length === 0) {
-    throw connectorError(ZlinkStreamErrorCode.FrameDecodeFailed, 'Stream frame prefix is incomplete.');
+    throw connectorError(
+      ZlinkStreamErrorCode.FrameDecodeFailed,
+      'Stream frame prefix is incomplete.'
+    );
   }
 
   const frames: Uint8Array[] = [];
@@ -31,18 +38,23 @@ export function splitZlinkStreamFrames(chunk: Uint8Array): readonly Uint8Array[]
   while (offset < chunk.length) {
     const remaining = chunk.length - offset;
     if (remaining < 6) {
-      throw connectorError(ZlinkStreamErrorCode.FrameDecodeFailed, 'Stream frame prefix is incomplete.');
+      throw connectorError(
+        ZlinkStreamErrorCode.FrameDecodeFailed,
+        'Stream frame prefix is incomplete.'
+      );
     }
     const headerLength = (chunk[offset] << 8) | chunk[offset + 1];
-    const payloadLength = (
-      chunk[offset + 2] * 0x1000000
-      + (chunk[offset + 3] << 16)
-      + (chunk[offset + 4] << 8)
-      + chunk[offset + 5]
-    );
+    const payloadLength =
+      chunk[offset + 2] * 0x1000000 +
+      (chunk[offset + 3] << 16) +
+      (chunk[offset + 4] << 8) +
+      chunk[offset + 5];
     const frameLength = 6 + headerLength + payloadLength;
     if (frameLength > remaining) {
-      throw connectorError(ZlinkStreamErrorCode.FrameDecodeFailed, 'Frame length does not match prefix.');
+      throw connectorError(
+        ZlinkStreamErrorCode.FrameDecodeFailed,
+        'Frame length does not match prefix.'
+      );
     }
     frames.push(chunk.subarray(offset, offset + frameLength));
     offset += frameLength;
@@ -52,6 +64,9 @@ export function splitZlinkStreamFrames(chunk: Uint8Array): readonly Uint8Array[]
 
 function validatePayload(payloadLength: number, maxPayloadSize: number): void {
   if (payloadLength > maxPayloadSize) {
-    throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Payload exceeds MaxSendPayloadSize.');
+    throw connectorError(
+      ZlinkStreamErrorCode.ValidationFailed,
+      'Payload exceeds MaxSendPayloadSize.'
+    );
   }
 }

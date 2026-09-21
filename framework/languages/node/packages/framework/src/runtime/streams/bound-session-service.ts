@@ -1,10 +1,10 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException  } from '../framework-errors-internal';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
 import { ZLinkBufferMessage as ZLinkBindingMessage } from '../backend/runtime-message';
 import type { ActorRef } from '../../contracts';
-import {
-  ZLinkSubmitStatus,
-  type ZLinkSubmitResult
-} from '../messaging/submission-result';
+import { ZLinkSubmitStatus, type ZLinkSubmitResult } from '../messaging/submission-result';
 import type { Message } from '../../contracts/Common/Message';
 import { throwIfAborted } from '../abort';
 import type {
@@ -23,26 +23,24 @@ import {
   ZLinkActorSessionBindingRegistry,
   type ZLinkActorSessionRoute
 } from './actor-session-binding-registry';
-import type {
-  DefaultZLinkSessionActor,
-  DefaultZLinkSessionContext
-} from './session-context';
-import {
-  boundSessionErrorPayload
-} from './bound-session-response-target';
-import {
-  ZLinkStreamFrameMessageFactory
-} from './stream-frame-factory';
-import {
-  ZLinkManagedStream
-} from './managed-stream';
+import type { DefaultZLinkSessionActor, DefaultZLinkSessionContext } from './session-context';
+import { boundSessionErrorPayload } from './bound-session-response-target';
+import { ZLinkStreamFrameMessageFactory } from './stream-frame-factory';
+import { ZLinkManagedStream } from './managed-stream';
 
 const ZLINK_SEND_DONT_WAIT = 1;
 
-type ZLinkStreamActorSessionRoute = ZLinkActorSessionRoute<DefaultZLinkSessionContext, DefaultZLinkSessionActor>;
+type ZLinkStreamActorSessionRoute = ZLinkActorSessionRoute<
+  DefaultZLinkSessionContext,
+  DefaultZLinkSessionActor
+>;
 
 export interface ZLinkBoundSessionTransport {
-  send(actorId: string, message: unknown, options: ZLinkBoundSessionSendOptions): Promise<ZLinkSubmitResult>;
+  send(
+    actorId: string,
+    message: unknown,
+    options: ZLinkBoundSessionSendOptions
+  ): Promise<ZLinkSubmitResult>;
   disconnect(actorId: string, options: ZLinkBoundSessionDisconnectOptions): Promise<void>;
 }
 
@@ -66,7 +64,10 @@ export interface ZLinkBoundSessionServiceOptions {
 
 export class ZLinkBoundSessionService {
   constructor(
-    private readonly routes: ZLinkActorSessionBindingRegistry<DefaultZLinkSessionContext, DefaultZLinkSessionActor>,
+    private readonly routes: ZLinkActorSessionBindingRegistry<
+      DefaultZLinkSessionContext,
+      DefaultZLinkSessionActor
+    >,
     private readonly frameMessages: ZLinkStreamFrameMessageFactory,
     private readonly options: ZLinkBoundSessionServiceOptions
   ) {}
@@ -300,10 +301,7 @@ export class ZLinkBoundSessionService {
     }
   }
 
-  async relayRemoteBoundSessionBind(
-    stream: ZLinkManagedStream,
-    actorRef: ActorRef
-  ): Promise<void> {
+  async relayRemoteBoundSessionBind(stream: ZLinkManagedStream, actorRef: ActorRef): Promise<void> {
     const encodedBindHeader = encodeStreamHeader({
       kind: ZLinkStreamMessageKind.Send,
       codec: ZLinkStreamCodec.Raw,
@@ -312,14 +310,16 @@ export class ZLinkBoundSessionService {
       metadata: new Map()
     });
     //  encodeStreamHeader returns a fresh, unaliased array; view it without re-copying.
-    const header = ZLinkBindingMessage.fromOwned(Buffer.from(
-      encodedBindHeader.buffer,
-      encodedBindHeader.byteOffset,
-      encodedBindHeader.byteLength
-    ));
+    const header = ZLinkBindingMessage.fromOwned(
+      Buffer.from(
+        encodedBindHeader.buffer,
+        encodedBindHeader.byteOffset,
+        encodedBindHeader.byteLength
+      )
+    );
     const body = ZLinkBindingMessage.fromOwned(Buffer.alloc(0));
     try {
-      if (!await stream.sendBoundActor(actorRef.actorId, [header, body], 0)) {
+      if (!(await stream.sendBoundActor(actorRef.actorId, [header, body], 0))) {
         throw createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.ActorRouteNotFound,
           `Actor '${actorRef.actorId}' remote bound session bind relay failed.`
@@ -480,15 +480,15 @@ function boundSessionSendFence(
     readonly ownerLeaseGeneration?: bigint;
     readonly ownerNodeGeneration?: bigint;
   };
-  const ownerNodeGeneration = internal.ownerNodeGeneration
-    ?? node.actorNodeGeneration?.(backendActor);
+  const ownerNodeGeneration =
+    internal.ownerNodeGeneration ?? node.actorNodeGeneration?.(backendActor);
   if (
-    internal.ownershipGeneration === undefined
-    || internal.ownershipGeneration <= 0n
-    || internal.ownerLeaseGeneration === undefined
-    || internal.ownerLeaseGeneration <= 0n
-    || ownerNodeGeneration === undefined
-    || ownerNodeGeneration <= 0n
+    internal.ownershipGeneration === undefined ||
+    internal.ownershipGeneration <= 0n ||
+    internal.ownerLeaseGeneration === undefined ||
+    internal.ownerLeaseGeneration <= 0n ||
+    ownerNodeGeneration === undefined ||
+    ownerNodeGeneration <= 0n
   ) {
     return undefined;
   }

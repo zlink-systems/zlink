@@ -17,9 +17,10 @@ export function encodeAuthorityKey(
   } as ZLinkAuthorityKey;
 }
 
-export function decodeAuthorityKey(
-  key: ZLinkAuthorityKey
-): { readonly kind: ZLinkPlacementObjectKind; readonly globalId: string } {
+export function decodeAuthorityKey(key: ZLinkAuthorityKey): {
+  readonly kind: ZLinkPlacementObjectKind;
+  readonly globalId: string;
+} {
   if (Buffer.byteLength(key.value, 'utf8') > 776) {
     throw new TypeError('Authority key exceeds the encoded byte limit.');
   }
@@ -70,11 +71,13 @@ function percentEncode(bytes: Uint8Array): string {
 }
 
 function isUnreserved(byte: number): boolean {
-  return byte >= 0x41 && byte <= 0x5a
-    || byte >= 0x61 && byte <= 0x7a
-    || byte >= 0x30 && byte <= 0x39
-    || byte === 0x2d
-    || byte === 0x2e
-    || byte === 0x5f
-    || byte === 0x7e;
+  return (
+    (byte >= 0x41 && byte <= 0x5a) ||
+    (byte >= 0x61 && byte <= 0x7a) ||
+    (byte >= 0x30 && byte <= 0x39) ||
+    byte === 0x2d ||
+    byte === 0x2e ||
+    byte === 0x5f ||
+    byte === 0x7e
+  );
 }

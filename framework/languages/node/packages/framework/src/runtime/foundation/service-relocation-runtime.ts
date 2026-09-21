@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto';
-import type { ZLinkPlacementObjectKind, ZLinkAuthorityKey } from '../locations/internal-location-contracts';
+import type {
+  ZLinkPlacementObjectKind,
+  ZLinkAuthorityKey
+} from '../locations/internal-location-contracts';
 import { decodeAuthorityKey } from '../locations/authority-key-codec';
 import {
   decodeRelocationEnvelopeV1 as decodeGeneratedRelocationEnvelopeV1,
@@ -103,10 +106,7 @@ export interface ServiceRelocationPublication {
 }
 
 export interface ServiceRelocationAuthorityCodec {
-  publish(
-    currentPayload: Uint8Array,
-    publication: ServiceRelocationPublication
-  ): Uint8Array;
+  publish(currentPayload: Uint8Array, publication: ServiceRelocationPublication): Uint8Array;
   read(payload: Uint8Array): ServiceRelocationPublication | undefined;
   clear(currentPayload: Uint8Array, expectedReference: string): Uint8Array;
 }
@@ -153,12 +153,8 @@ export interface CanonicalRelocationSlot {
 }
 
 /** Deterministic Location authority wrapper for one immutable relocation root. */
-export class ServiceRelocationAuthorityPayloadCodec
-implements ServiceRelocationAuthorityCodec {
-  publish(
-    currentPayload: Uint8Array,
-    publication: ServiceRelocationPublication
-  ): Uint8Array {
+export class ServiceRelocationAuthorityPayloadCodec implements ServiceRelocationAuthorityCodec {
+  publish(currentPayload: Uint8Array, publication: ServiceRelocationPublication): Uint8Array {
     if (this.read(currentPayload) !== undefined) {
       throw new TypeError('Location authority already contains a relocation publication.');
     }
@@ -173,31 +169,27 @@ implements ServiceRelocationAuthorityCodec {
   }
 
   read(payload: Uint8Array): ServiceRelocationPublication | undefined {
-    return decodeCanonicalAuthorityPublication(payload)
-      ?? decodeAuthorityEnvelope(payload)?.publication;
+    return (
+      decodeCanonicalAuthorityPublication(payload) ?? decodeAuthorityEnvelope(payload)?.publication
+    );
   }
 
   clear(currentPayload: Uint8Array, expectedReference: string): Uint8Array {
     const canonical = decodeCanonicalAuthorityLayout(currentPayload);
-    const canonicalPublication = canonical === undefined
-      ? undefined
-      : decodeCanonicalRelocationSlot(canonical.slot);
+    const canonicalPublication =
+      canonical === undefined ? undefined : decodeCanonicalRelocationSlot(canonical.slot);
     if (canonical !== undefined && canonicalPublication?.reference !== undefined) {
-      if (canonicalPublication.reference !== requireText(
-        expectedReference,
-        'relocation reference'
-      )) {
+      if (
+        canonicalPublication.reference !== requireText(expectedReference, 'relocation reference')
+      ) {
         throw new TypeError('Location authority relocation reference changed.');
       }
       return replaceCanonicalRelocationSlot(canonical, Buffer.alloc(0));
     }
     const current = decodeAuthorityEnvelope(currentPayload);
     if (
-      current === undefined
-      || current.publication.reference !== requireText(
-        expectedReference,
-        'relocation reference'
-      )
+      current === undefined ||
+      current.publication.reference !== requireText(expectedReference, 'relocation reference')
     ) {
       throw new TypeError('Location authority relocation reference changed.');
     }
@@ -206,9 +198,7 @@ implements ServiceRelocationAuthorityCodec {
 }
 
 /** Returns the application authority payload hidden by relocation metadata. */
-export function serviceRelocationAuthorityApplicationPayload(
-  payload: Uint8Array
-): Buffer {
+export function serviceRelocationAuthorityApplicationPayload(payload: Uint8Array): Buffer {
   const canonical = decodeCanonicalAuthorityLayout(payload);
   if (canonical !== undefined && canonical.slot.byteLength !== 0) {
     if (decodeCanonicalRelocationSlot(canonical.slot) === undefined) {
@@ -222,14 +212,14 @@ export function serviceRelocationAuthorityApplicationPayload(
 /** Reads the canonical relocation identity even before its root pointer exists. */
 export function serviceRelocationAuthoritySlotIdentity(
   payload: Uint8Array
-): Pick<
-  ServiceRelocationPublication,
-  'aggregateId' | 'aggregateGeneration' | 'applicationVersion'
-> | undefined {
+):
+  | Pick<ServiceRelocationPublication, 'aggregateId' | 'aggregateGeneration' | 'applicationVersion'>
+  | undefined {
   const layout = decodeCanonicalAuthorityLayout(payload);
-  const slot = layout === undefined || layout.slot.byteLength === 0
-    ? undefined
-    : decodeCanonicalRelocationSlot(layout.slot);
+  const slot =
+    layout === undefined || layout.slot.byteLength === 0
+      ? undefined
+      : decodeCanonicalRelocationSlot(layout.slot);
   return slot === undefined
     ? undefined
     : {
@@ -330,9 +320,7 @@ function decodeCanonicalAuthorityPublication(
   };
 }
 
-function decodeCanonicalAuthorityLayout(
-  payload: Uint8Array
-): CanonicalAuthorityLayout | undefined {
+function decodeCanonicalAuthorityLayout(payload: Uint8Array): CanonicalAuthorityLayout | undefined {
   try {
     const bytes = Buffer.from(payload);
     if (bytes.byteLength < 20 || bytes.byteLength > 1024 * 1024) return undefined;
@@ -404,25 +392,28 @@ export function decodeCanonicalRelocationSlot(
     const phase = reader.u8();
     const applicationVersion = reader.i64();
     const sourceCleanupState = reader.u8();
-    if (!reader.done
-      || aggregateGeneration > 0x7fff_ffff_ffff_fffen
-      || (aggregateGeneration === 0n && phase !== 1)
-      || (rootAggregateGeneration !== undefined
-        && aggregateGeneration !== rootAggregateGeneration)
-      || targetAttemptGeneration > 0x7fff_ffff_ffff_ffffn
-      || sourceNodeGeneration === 0n
-      || sourceNodeGeneration > 0x7fff_ffff_ffff_ffffn
-      || sourceOwnerLeaseGeneration === 0n
-      || sourceOwnerLeaseGeneration > 0x7fff_ffff_ffff_ffffn
-      || targetNodeGeneration > 0x7fff_ffff_ffff_ffffn
-      || targetOwnerLeaseGeneration > 0x7fff_ffff_ffff_ffffn
-      || coordinatorLeaseGeneration === 0n
-      || coordinatorLeaseGeneration > 0x7fff_ffff_ffff_ffffn
-      || coordinatorNodeGeneration === 0n
-      || coordinatorNodeGeneration > 0x7fff_ffff_ffff_ffffn
-      || phase < 1 || phase > 9
-      || applicationVersion < 0n
-      || sourceCleanupState > 2) return undefined;
+    if (
+      !reader.done ||
+      aggregateGeneration > 0x7fff_ffff_ffff_fffen ||
+      (aggregateGeneration === 0n && phase !== 1) ||
+      (rootAggregateGeneration !== undefined && aggregateGeneration !== rootAggregateGeneration) ||
+      targetAttemptGeneration > 0x7fff_ffff_ffff_ffffn ||
+      sourceNodeGeneration === 0n ||
+      sourceNodeGeneration > 0x7fff_ffff_ffff_ffffn ||
+      sourceOwnerLeaseGeneration === 0n ||
+      sourceOwnerLeaseGeneration > 0x7fff_ffff_ffff_ffffn ||
+      targetNodeGeneration > 0x7fff_ffff_ffff_ffffn ||
+      targetOwnerLeaseGeneration > 0x7fff_ffff_ffff_ffffn ||
+      coordinatorLeaseGeneration === 0n ||
+      coordinatorLeaseGeneration > 0x7fff_ffff_ffff_ffffn ||
+      coordinatorNodeGeneration === 0n ||
+      coordinatorNodeGeneration > 0x7fff_ffff_ffff_ffffn ||
+      phase < 1 ||
+      phase > 9 ||
+      applicationVersion < 0n ||
+      sourceCleanupState > 2
+    )
+      return undefined;
     return {
       aggregateId,
       aggregateGeneration,
@@ -453,10 +444,7 @@ export function decodeCanonicalRelocationSlot(
 
 export function encodeCanonicalRelocationSlot(value: CanonicalRelocationSlot): Buffer {
   const id = relocationId(canonicalUuid(value.aggregateId, 'aggregate id'));
-  const aggregateGeneration = nonNegativeBigInt(
-    value.aggregateGeneration,
-    'aggregate generation'
-  );
+  const aggregateGeneration = nonNegativeBigInt(value.aggregateGeneration, 'aggregate generation');
   const targetAttemptGeneration = nonNegativeBigInt(
     value.targetAttemptGeneration,
     'target attempt generation'
@@ -497,23 +485,35 @@ export function encodeCanonicalRelocationSlot(value: CanonicalRelocationSlot): B
   if (!Number.isInteger(value.phase) || value.phase < 1 || value.phase > 9) {
     throw new TypeError('Canonical relocation phase is invalid.');
   }
-  if (!Number.isInteger(value.sourceCleanupState)
-    || value.sourceCleanupState < 0
-    || value.sourceCleanupState > 2) {
+  if (
+    !Number.isInteger(value.sourceCleanupState) ||
+    value.sourceCleanupState < 0 ||
+    value.sourceCleanupState > 2
+  ) {
     throw new TypeError('Canonical source cleanup state is invalid.');
   }
   return Buffer.concat([
-    canonicalU64(id.high), canonicalU64(id.low),
-    canonicalU64(aggregateGeneration), canonicalU64(targetAttemptGeneration),
-    canonicalText16(value.reference), canonicalU32(value.checksumCrc32c),
-    canonicalText8(value.sourceNodeRid), canonicalU64(sourceNodeGeneration),
-    canonicalText8(value.sourceOwnerId), canonicalU64(sourceOwnerLeaseGeneration),
-    canonicalOptionalText8(value.targetNodeRid), canonicalU64(targetNodeGeneration),
-    canonicalOptionalText8(value.targetOwnerId), canonicalU64(targetOwnerLeaseGeneration),
-    canonicalText8(value.coordinatorOwnerId), canonicalU64(coordinatorLeaseGeneration),
-    canonicalText8(value.coordinatorNodeRid), canonicalU64(coordinatorNodeGeneration),
+    canonicalU64(id.high),
+    canonicalU64(id.low),
+    canonicalU64(aggregateGeneration),
+    canonicalU64(targetAttemptGeneration),
+    canonicalText16(value.reference),
+    canonicalU32(value.checksumCrc32c),
+    canonicalText8(value.sourceNodeRid),
+    canonicalU64(sourceNodeGeneration),
+    canonicalText8(value.sourceOwnerId),
+    canonicalU64(sourceOwnerLeaseGeneration),
+    canonicalOptionalText8(value.targetNodeRid),
+    canonicalU64(targetNodeGeneration),
+    canonicalOptionalText8(value.targetOwnerId),
+    canonicalU64(targetOwnerLeaseGeneration),
+    canonicalText8(value.coordinatorOwnerId),
+    canonicalU64(coordinatorLeaseGeneration),
+    canonicalText8(value.coordinatorNodeRid),
+    canonicalU64(coordinatorNodeGeneration),
     canonicalOptionalText8(value.coordinatorExpectedStoreVersion),
-    Buffer.of(value.phase), canonicalI64(value.applicationVersion),
+    Buffer.of(value.phase),
+    canonicalI64(value.applicationVersion),
     Buffer.of(value.sourceCleanupState)
   ]);
 }
@@ -551,10 +551,8 @@ function encodeCanonicalRelocationPublicationSlot(
     coordinatorLeaseGeneration:
       publication.coordinatorLeaseGeneration ?? layout.ownerLeaseGeneration,
     coordinatorNodeRid: publication.coordinatorNodeRid ?? nodeRid,
-    coordinatorNodeGeneration:
-      publication.coordinatorNodeGeneration ?? layout.nodeGeneration,
-    coordinatorExpectedStoreVersion:
-      publication.coordinatorExpectedStoreVersion ?? '',
+    coordinatorNodeGeneration: publication.coordinatorNodeGeneration ?? layout.nodeGeneration,
+    coordinatorExpectedStoreVersion: publication.coordinatorExpectedStoreVersion ?? '',
     phase: publication.canonicalPhase ?? 8,
     applicationVersion,
     sourceCleanupState: publication.canonicalSourceCleanupState ?? 0
@@ -574,8 +572,11 @@ function replaceCanonicalRelocationSlot(
     layout.body.subarray(layout.slotEnd)
   ]);
   const envelope = Buffer.concat([
-    Buffer.from('ZLAU'), Buffer.of(1), canonicalU16(layout.flags),
-    canonicalU32(body.byteLength), body
+    Buffer.from('ZLAU'),
+    Buffer.of(1),
+    canonicalU16(layout.flags),
+    canonicalU32(body.byteLength),
+    body
   ]);
   const result = Buffer.concat([envelope, canonicalU32(crc32c(envelope))]);
   if (result.byteLength > 1024 * 1024) {
@@ -601,14 +602,12 @@ export function encodeServiceRelocationEnvelope(
   applicationVersion: bigint
 ): Buffer {
   const aggregate = relocationId(canonicalUuid(envelope.aggregateId, 'aggregate id'));
-  const encodedApplicationVersion = nonNegativeBigInt(
-    applicationVersion,
-    'application version'
-  );
+  const encodedApplicationVersion = nonNegativeBigInt(applicationVersion, 'application version');
   const participants = canonicalParticipants(envelope.participants);
-  const root = participants.find(value => value.rootSpotId !== undefined)
-    ?? participants.find(value => value.objectKind !== 'actor')
-    ?? participants[0]!;
+  const root =
+    participants.find((value) => value.rootSpotId !== undefined) ??
+    participants.find((value) => value.objectKind !== 'actor') ??
+    participants[0]!;
   const rootObjectKind = root.rootObjectKind ?? root.objectKind;
   if (rootObjectKind === 'actor' && participants.length !== 1) {
     throw new TypeError('Standalone Actor relocation requires one participant.');
@@ -624,23 +623,44 @@ export function encodeServiceRelocationEnvelope(
       payload: Buffer.from(participant.applicationState)
     };
   });
-  const saved = participants.flatMap((participant, index) => participant.queuedMessages.map(message => ({
-    participantId: BigInt(index + 1),
-    order: positiveBigInt(message.sequence, 'queue sequence'),
-    frozenRecord: Buffer.from(message.payload)
-  }))).sort(compareParticipantOrder);
-  if (saved.some((value, index) => index > 0
-    && compareParticipantOrder(saved[index - 1]!, value) === 0)) {
+  const saved = participants
+    .flatMap((participant, index) =>
+      participant.queuedMessages.map((message) => ({
+        participantId: BigInt(index + 1),
+        order: positiveBigInt(message.sequence, 'queue sequence'),
+        frozenRecord: Buffer.from(message.payload)
+      }))
+    )
+    .sort(compareParticipantOrder);
+  if (
+    saved.some(
+      (value, index) => index > 0 && compareParticipantOrder(saved[index - 1]!, value) === 0
+    )
+  ) {
     throw new TypeError('Relocation queue sequences must be unique per participant.');
   }
-  const timers = participants.flatMap((participant, index) => participant.timers.map(timer => ({
-    participantId: BigInt(index + 1), timer
-  }))).sort((a, b) => a.participantId === b.participantId
-    ? Buffer.compare(Buffer.from(a.timer.timerId), Buffer.from(b.timer.timerId))
-    : a.participantId < b.participantId ? -1 : 1);
-  if (timers.some((value, index) => index > 0
-    && timers[index - 1]!.participantId === value.participantId
-    && timers[index - 1]!.timer.timerId === value.timer.timerId)) {
+  const timers = participants
+    .flatMap((participant, index) =>
+      participant.timers.map((timer) => ({
+        participantId: BigInt(index + 1),
+        timer
+      }))
+    )
+    .sort((a, b) =>
+      a.participantId === b.participantId
+        ? Buffer.compare(Buffer.from(a.timer.timerId), Buffer.from(b.timer.timerId))
+        : a.participantId < b.participantId
+          ? -1
+          : 1
+    );
+  if (
+    timers.some(
+      (value, index) =>
+        index > 0 &&
+        timers[index - 1]!.participantId === value.participantId &&
+        timers[index - 1]!.timer.timerId === value.timer.timerId
+    )
+  ) {
     throw new TypeError('Relocation timer ids must be unique per participant.');
   }
   const nextOrder = new Map<bigint, bigint>();
@@ -648,43 +668,65 @@ export function encodeServiceRelocationEnvelope(
     const current = nextOrder.get(value.participantId) ?? 0n;
     if (value.order > current) nextOrder.set(value.participantId, value.order);
   }
-  const pending = timers.flatMap(({ participantId, timer }) => timer.pendingTicks.map(tick => {
-    const current = nextOrder.get(participantId) ?? 0n;
-    const order = tick.order === undefined
-      ? current + 1n
-      : positiveBigInt(tick.order, 'pending timer order');
-    if (order > current) nextOrder.set(participantId, order);
-    return { participantId, order, timerName: timer.timerId, tick };
-  })).sort(compareParticipantOrder);
-  return Buffer.from(encodeGeneratedRelocationEnvelopeV1({
-    relocationHigh: aggregate.high,
-    relocationLow: aggregate.low,
-    object: toGeneratedRelocationObject(root, rootObjectKind),
-    applicationVersion: encodedApplicationVersion,
-    applicationStates,
-    savedWork: saved,
-    timerRegistrations: timers.map(({ participantId, timer }) => ({
-      participantId,
-      name: timer.timerId,
-      handlerType: timer.handlerType,
-      periodMilliseconds: BigInt(positiveInteger(timer.intervalMs, 'timer interval')),
-      overrunPolicy: timerPolicy(timer.overrunPolicy),
-      maxCatchUpTicks: BigInt(positiveInteger(timer.maxCatchUpTicks, 'timer catch-up limit')),
-      stopOnUnhandledException: requireBoolean(timer.stopOnUnhandledException, 'timer stop-on-error flag'),
-      lastCompletedDeliveryIndex: nonNegativeBigInt(timer.deliveryIndex, 'timer delivery index'),
-      lastCompletedScheduledIndex: nonNegativeBigInt(timer.lastScheduledIndex, 'timer scheduled index'),
-      nextScheduledAtUnixMilliseconds: nonNegativeUnixMilliseconds(timer.dueAtUnixMs, 'timer due time')
-    })),
-    pendingTimerTicks: pending.map(value => ({
-      participantId: value.participantId,
-      order: value.order,
-      timerName: value.timerName,
-      deliveryIndex: nonNegativeBigInt(value.tick.deliveryIndex, 'pending timer delivery index'),
-      scheduledIndex: nonNegativeBigInt(value.tick.scheduledIndex, 'pending timer scheduled index'),
-      scheduledAtUnixMilliseconds: nonNegativeUnixMilliseconds(value.tick.scheduledAtUnixMs, 'pending timer scheduled time'),
-      skippedTicks: nonNegativeBigInt(value.tick.skippedTicks, 'pending timer skipped ticks')
-    }))
-  }));
+  const pending = timers
+    .flatMap(({ participantId, timer }) =>
+      timer.pendingTicks.map((tick) => {
+        const current = nextOrder.get(participantId) ?? 0n;
+        const order =
+          tick.order === undefined
+            ? current + 1n
+            : positiveBigInt(tick.order, 'pending timer order');
+        if (order > current) nextOrder.set(participantId, order);
+        return { participantId, order, timerName: timer.timerId, tick };
+      })
+    )
+    .sort(compareParticipantOrder);
+  return Buffer.from(
+    encodeGeneratedRelocationEnvelopeV1({
+      relocationHigh: aggregate.high,
+      relocationLow: aggregate.low,
+      object: toGeneratedRelocationObject(root, rootObjectKind),
+      applicationVersion: encodedApplicationVersion,
+      applicationStates,
+      savedWork: saved,
+      timerRegistrations: timers.map(({ participantId, timer }) => ({
+        participantId,
+        name: timer.timerId,
+        handlerType: timer.handlerType,
+        periodMilliseconds: BigInt(positiveInteger(timer.intervalMs, 'timer interval')),
+        overrunPolicy: timerPolicy(timer.overrunPolicy),
+        maxCatchUpTicks: BigInt(positiveInteger(timer.maxCatchUpTicks, 'timer catch-up limit')),
+        stopOnUnhandledException: requireBoolean(
+          timer.stopOnUnhandledException,
+          'timer stop-on-error flag'
+        ),
+        lastCompletedDeliveryIndex: nonNegativeBigInt(timer.deliveryIndex, 'timer delivery index'),
+        lastCompletedScheduledIndex: nonNegativeBigInt(
+          timer.lastScheduledIndex,
+          'timer scheduled index'
+        ),
+        nextScheduledAtUnixMilliseconds: nonNegativeUnixMilliseconds(
+          timer.dueAtUnixMs,
+          'timer due time'
+        )
+      })),
+      pendingTimerTicks: pending.map((value) => ({
+        participantId: value.participantId,
+        order: value.order,
+        timerName: value.timerName,
+        deliveryIndex: nonNegativeBigInt(value.tick.deliveryIndex, 'pending timer delivery index'),
+        scheduledIndex: nonNegativeBigInt(
+          value.tick.scheduledIndex,
+          'pending timer scheduled index'
+        ),
+        scheduledAtUnixMilliseconds: nonNegativeUnixMilliseconds(
+          value.tick.scheduledAtUnixMs,
+          'pending timer scheduled time'
+        ),
+        skippedTicks: nonNegativeBigInt(value.tick.skippedTicks, 'pending timer skipped ticks')
+      }))
+    })
+  );
 }
 
 export function decodeServiceRelocationEnvelope(
@@ -713,7 +755,7 @@ export function decodeServiceRelocationEnvelope(
     }
     return wireParticipant(state.participantId, state.hasState, Buffer.from(state.payload));
   });
-  const byId = new Map(participants.map(value => [value.participantId!, value]));
+  const byId = new Map(participants.map((value) => [value.participantId!, value]));
   for (const work of generated.savedWork) {
     byId.get(work.participantId)!.queuedMessages.push({
       sequence: work.order,
@@ -736,7 +778,9 @@ export function decodeServiceRelocationEnvelope(
     });
   }
   for (const tick of generated.pendingTimerTicks) {
-    const timer = byId.get(tick.participantId)!.timers.find(value => value.timerId === tick.timerName)!;
+    const timer = byId
+      .get(tick.participantId)!
+      .timers.find((value) => value.timerId === tick.timerName)!;
     (timer.pendingTicks as ServiceRelocationPendingTimerTick[]).push({
       order: tick.order,
       deliveryIndex: tick.deliveryIndex,
@@ -751,9 +795,9 @@ export function decodeServiceRelocationEnvelope(
     aggregateId,
     aggregateGeneration,
     applicationVersion: generated.applicationVersion,
-    participants: participants.map(value => value === rootParticipant
-      ? { ...value, ...rootProjection }
-      : value),
+    participants: participants.map((value) =>
+      value === rootParticipant ? { ...value, ...rootProjection } : value
+    ),
     memberships: []
   };
 }
@@ -769,8 +813,7 @@ function toGeneratedRelocationObject(
       objectKind: 'actor',
       actorId: objectId,
       objectGeneration,
-      expectedAuthorityOwnerGeneration:
-        root.rootOwnerGeneration ?? root.authorityOwnerGeneration
+      expectedAuthorityOwnerGeneration: root.rootOwnerGeneration ?? root.authorityOwnerGeneration
     };
   }
   if (objectKind === 'user_spot') {
@@ -778,8 +821,7 @@ function toGeneratedRelocationObject(
       objectKind: 'userSpot',
       spotId: objectId,
       objectGeneration,
-      expectedAuthorityOwnerGeneration:
-        root.rootOwnerGeneration ?? root.authorityOwnerGeneration
+      expectedAuthorityOwnerGeneration: root.rootOwnerGeneration ?? root.authorityOwnerGeneration
     };
   }
   return {
@@ -794,8 +836,7 @@ function fromGeneratedRelocationObject(
   object: GeneratedRelocationObjectIdentity
 ): Pick<
   ServiceRelocationParticipant,
-  'rootSpotId' | 'rootSpotGeneration' | 'rootOwnerGeneration'
-    | 'rootObjectKind' | 'rootStableType'
+  'rootSpotId' | 'rootSpotGeneration' | 'rootOwnerGeneration' | 'rootObjectKind' | 'rootStableType'
 > {
   if (object.objectKind === 'actor') {
     return {
@@ -821,10 +862,15 @@ function fromGeneratedRelocationObject(
   };
 }
 
-function canonicalParticipants(values: readonly ServiceRelocationParticipant[]): readonly ServiceRelocationParticipant[] {
-  if (values.length === 0) throw new TypeError('Relocation participant count is outside its bound.');
-  const participants = [...values].sort((a, b) => Buffer.compare(Buffer.from(a.key), Buffer.from(b.key)));
-  if (new Set(participants.map(value => value.key)).size !== participants.length) {
+function canonicalParticipants(
+  values: readonly ServiceRelocationParticipant[]
+): readonly ServiceRelocationParticipant[] {
+  if (values.length === 0)
+    throw new TypeError('Relocation participant count is outside its bound.');
+  const participants = [...values].sort((a, b) =>
+    Buffer.compare(Buffer.from(a.key), Buffer.from(b.key))
+  );
+  if (new Set(participants.map((value) => value.key)).size !== participants.length) {
     throw new TypeError('Relocation participants must have unique keys.');
   }
   return participants;
@@ -835,7 +881,9 @@ function authorityGlobalId(key: string): string {
     return decodeAuthorityKey({ value: key } as ZLinkAuthorityKey).globalId;
   } catch {
     const marker = key.indexOf(':');
-    return marker < 0 ? requireText(key, 'participant key') : requireText(key.slice(marker + 1), 'participant key');
+    return marker < 0
+      ? requireText(key, 'participant key')
+      : requireText(key.slice(marker + 1), 'participant key');
   }
 }
 
@@ -850,10 +898,18 @@ function uuid(high: bigint, low: bigint): string | undefined {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-function compareParticipantOrder<T extends { readonly participantId: bigint; readonly order: bigint }>(a: T, b: T): number {
+function compareParticipantOrder<
+  T extends { readonly participantId: bigint; readonly order: bigint }
+>(a: T, b: T): number {
   return a.participantId === b.participantId
-    ? a.order < b.order ? -1 : a.order > b.order ? 1 : 0
-    : a.participantId < b.participantId ? -1 : 1;
+    ? a.order < b.order
+      ? -1
+      : a.order > b.order
+        ? 1
+        : 0
+    : a.participantId < b.participantId
+      ? -1
+      : 1;
 }
 
 function timerPolicy(value: string): 1 | 2 | 3 {
@@ -877,11 +933,16 @@ function nonNegativeUnixMilliseconds(value: number, label: string): bigint {
 }
 
 function unixMilliseconds(value: bigint): number {
-  if (value > BigInt(Number.MAX_SAFE_INTEGER)) throw new TypeError('Unix milliseconds exceed Node safe integer range.');
+  if (value > BigInt(Number.MAX_SAFE_INTEGER))
+    throw new TypeError('Unix milliseconds exceed Node safe integer range.');
   return Number(value);
 }
 
-function wireParticipant(participantId: bigint, applicationStatePresent: boolean, applicationState: Buffer): ServiceRelocationParticipant & {
+function wireParticipant(
+  participantId: bigint,
+  applicationStatePresent: boolean,
+  applicationState: Buffer
+): ServiceRelocationParticipant & {
   queuedMessages: ServiceRelocationQueuedMessage[];
   timers: ServiceRelocationTimer[];
 } {
@@ -911,27 +972,34 @@ export function inventoryDigest(
   participants: readonly ServiceRelocationParticipant[],
   memberships: readonly ServiceRelocationMembership[] = []
 ): string {
-  const identities = participants.map(participant => ({
-    key: requireText(participant.key, 'participant key'),
-    objectKind: objectKind(participant.objectKind),
-    stableType: requireText(participant.stableType, 'participant stable type'),
-    objectGeneration: positiveBigInt(
-      participant.objectGeneration,
-      'object generation'
-    ).toString(),
-    authorityOwnerGeneration: positiveBigInt(
-      participant.authorityOwnerGeneration,
-      'authority owner generation'
-    ).toString()
-  })).sort((left, right) => left.key.localeCompare(right.key));
+  const identities = participants
+    .map((participant) => ({
+      key: requireText(participant.key, 'participant key'),
+      objectKind: objectKind(participant.objectKind),
+      stableType: requireText(participant.stableType, 'participant stable type'),
+      objectGeneration: positiveBigInt(
+        participant.objectGeneration,
+        'object generation'
+      ).toString(),
+      authorityOwnerGeneration: positiveBigInt(
+        participant.authorityOwnerGeneration,
+        'authority owner generation'
+      ).toString()
+    }))
+    .sort((left, right) => left.key.localeCompare(right.key));
   if (new Set(identities.map(({ key }) => key)).size !== identities.length) {
     throw new TypeError('Relocation participants must have unique keys.');
   }
   const canonicalMemberships = encodeMemberships(memberships, participants);
-  return createHash('sha256').update(JSON.stringify({
-    participants: identities,
-    memberships: canonicalMemberships
-  }), 'utf8').digest('hex');
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        participants: identities,
+        memberships: canonicalMemberships
+      }),
+      'utf8'
+    )
+    .digest('hex');
 }
 
 function encodeAuthorityEnvelope(
@@ -954,8 +1022,8 @@ function encodeAuthorityEnvelope(
     'target owner lease generation'
   );
   if (
-    aggregateGeneration > 0x7fff_ffff_ffff_ffffn
-    || targetOwnerLeaseGeneration > 0x7fff_ffff_ffff_ffffn
+    aggregateGeneration > 0x7fff_ffff_ffff_ffffn ||
+    targetOwnerLeaseGeneration > 0x7fff_ffff_ffff_ffffn
   ) {
     throw new TypeError('Relocation publication generations must fit signed 64-bit storage.');
   }
@@ -997,11 +1065,11 @@ function decodeAuthorityEnvelope(
     const targetOwnerLeaseGeneration = reader.i64();
     const base = reader.bytes32();
     if (
-      !reader.done
-      || aggregateGeneration === 0n
-      || aggregateGeneration > 0x7fff_ffff_ffff_ffffn
-      || inventoryDigestBytes.byteLength !== 32
-      || targetOwnerLeaseGeneration <= 0n
+      !reader.done ||
+      aggregateGeneration === 0n ||
+      aggregateGeneration > 0x7fff_ffff_ffff_ffffn ||
+      inventoryDigestBytes.byteLength !== 32 ||
+      targetOwnerLeaseGeneration <= 0n
     ) {
       return undefined;
     }
@@ -1027,25 +1095,24 @@ function encodeMemberships(
   participants: readonly ServiceRelocationParticipant[]
 ) {
   validateMemberships(memberships, participants);
-  return memberships.map(membership => ({
-    actorKey: requireText(membership.actorKey, 'membership actor key'),
-    spotKey: requireText(membership.spotKey, 'membership spot key'),
-    spotObjectGeneration: positiveBigInt(
-      membership.spotObjectGeneration,
-      'membership Spot generation'
-    ).toString(),
-    membershipEpoch: positiveBigInt(
-      membership.membershipEpoch,
-      'membership epoch'
-    ).toString()
-  })).sort((left, right) => left.actorKey.localeCompare(right.actorKey));
+  return memberships
+    .map((membership) => ({
+      actorKey: requireText(membership.actorKey, 'membership actor key'),
+      spotKey: requireText(membership.spotKey, 'membership spot key'),
+      spotObjectGeneration: positiveBigInt(
+        membership.spotObjectGeneration,
+        'membership Spot generation'
+      ).toString(),
+      membershipEpoch: positiveBigInt(membership.membershipEpoch, 'membership epoch').toString()
+    }))
+    .sort((left, right) => left.actorKey.localeCompare(right.actorKey));
 }
 
 function validateMemberships(
   memberships: readonly ServiceRelocationMembership[],
   participants: readonly ServiceRelocationParticipant[]
 ): void {
-  const byKey = new Map(participants.map(participant => [participant.key, participant]));
+  const byKey = new Map(participants.map((participant) => [participant.key, participant]));
   const actorKeys = new Set<string>();
   for (const membership of memberships) {
     const actorKey = requireText(membership.actorKey, 'membership actor key');
@@ -1059,21 +1126,16 @@ function validateMemberships(
     }
     const spot = byKey.get(requireText(membership.spotKey, 'membership spot key'));
     if (
-      spot !== undefined
-      && (
-        spot.objectKind !== 'user_spot'
-        || spot.objectGeneration !== positiveBigInt(
-          membership.spotObjectGeneration,
-          'membership Spot generation'
-        )
-      )
+      spot !== undefined &&
+      (spot.objectKind !== 'user_spot' ||
+        spot.objectGeneration !==
+          positiveBigInt(membership.spotObjectGeneration, 'membership Spot generation'))
     ) {
       throw new TypeError('Relocation membership Spot fence does not match its participant.');
     }
     positiveBigInt(membership.membershipEpoch, 'membership epoch');
   }
 }
-
 
 const CRC32C_TABLE = Uint32Array.from({ length: 256 }, (_, value) => {
   let crc = value;
@@ -1100,8 +1162,10 @@ function requireText(value: unknown, label: string): string {
 
 function canonicalUuid(value: unknown, label: string): string {
   const text = requireText(value, label);
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(text)
-    || /^0{8}-0{4}-0{4}-0{4}-0{12}$/u.test(text)) {
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(text) ||
+    /^0{8}-0{4}-0{4}-0{4}-0{12}$/u.test(text)
+  ) {
     throw new TypeError(`${label} must be a lowercase non-zero 128-bit identity.`);
   }
   return text;
@@ -1152,9 +1216,14 @@ function i64le(value: bigint): Buffer {
 function dotnetGuidBytes(value: string): Buffer {
   const canonical = Buffer.from(value.replaceAll('-', ''), 'hex');
   return Buffer.from([
-    canonical[3]!, canonical[2]!, canonical[1]!, canonical[0]!,
-    canonical[5]!, canonical[4]!,
-    canonical[7]!, canonical[6]!,
+    canonical[3]!,
+    canonical[2]!,
+    canonical[1]!,
+    canonical[0]!,
+    canonical[5]!,
+    canonical[4]!,
+    canonical[7]!,
+    canonical[6]!,
     ...canonical.subarray(8)
   ]);
 }
@@ -1163,13 +1232,20 @@ function canonicalUuidFromDotnetBytes(value: Uint8Array): string {
   const bytes = Buffer.from(value);
   if (bytes.byteLength !== 16) throw new TypeError('Relocation aggregate id is invalid.');
   const canonical = Buffer.from([
-    bytes[3]!, bytes[2]!, bytes[1]!, bytes[0]!,
-    bytes[5]!, bytes[4]!,
-    bytes[7]!, bytes[6]!,
+    bytes[3]!,
+    bytes[2]!,
+    bytes[1]!,
+    bytes[0]!,
+    bytes[5]!,
+    bytes[4]!,
+    bytes[7]!,
+    bytes[6]!,
     ...bytes.subarray(8)
   ]).toString('hex');
-  return `${canonical.slice(0, 8)}-${canonical.slice(8, 12)}-${canonical.slice(12, 16)}`
-    + `-${canonical.slice(16, 20)}-${canonical.slice(20)}`;
+  return (
+    `${canonical.slice(0, 8)}-${canonical.slice(8, 12)}-${canonical.slice(12, 16)}` +
+    `-${canonical.slice(16, 20)}-${canonical.slice(20)}`
+  );
 }
 
 class CanonicalReader {

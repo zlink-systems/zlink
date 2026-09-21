@@ -5,7 +5,8 @@ public interface IZLinkRequestHandler<in TRequest, TResponse>
     ValueTask<TResponse> HandleAsync(
         TRequest request,
         IZLinkMessageContext context,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 }
 
 public interface IZLinkSendHandler<in TMessage>
@@ -13,7 +14,8 @@ public interface IZLinkSendHandler<in TMessage>
     ValueTask HandleAsync(
         TMessage message,
         IZLinkMessageContext context,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 }
 
 public interface IZLinkFanoutHandler<in TEvent>
@@ -21,5 +23,6 @@ public interface IZLinkFanoutHandler<in TEvent>
     ValueTask HandleAsync(
         TEvent message,
         ZLinkPublishMessageContext context,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 }

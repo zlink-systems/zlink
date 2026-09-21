@@ -29,7 +29,7 @@ public sealed class ErrorReplyWireConvergenceTests
         (ZLinkFrameworkErrorKind.ProtocolError, "protocol_error"),
         (ZLinkFrameworkErrorKind.InvalidOperation, "invalid_operation"),
         (ZLinkFrameworkErrorKind.DataLost, "data_lost"),
-        (ZLinkFrameworkErrorKind.InternalFailure, "internal_failure")
+        (ZLinkFrameworkErrorKind.InternalFailure, "internal_failure"),
     ];
 
     [Fact]
@@ -71,13 +71,14 @@ public sealed class ErrorReplyWireConvergenceTests
             null,
             null,
             null,
-            null)
+            null
+        )
         {
             Metadata = new Dictionary<string, string>
             {
                 ["zlink.origin"] = "framework",
-                ["custom"] = "value"
-            }
+                ["custom"] = "value",
+            },
         };
 
         using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
@@ -100,7 +101,8 @@ public sealed class ErrorReplyWireConvergenceTests
             null,
             null,
             null,
-            null);
+            null
+        );
 
         using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
         using var json = JsonDocument.Parse(encoded.AsReadOnlyMemory());
@@ -111,13 +113,11 @@ public sealed class ErrorReplyWireConvergenceTests
     //  Fixed input mirroring the C++ envelope_codec_t::encode_header output for
     //  a framework-generated error reply (metadata always present, snake_case
     //  errorCode, numeric kind, formatMarker 0xF2).
-    private const string CppFrameworkErrorHeaderGolden =
-        """
+    private const string CppFrameworkErrorHeaderGolden = """
         {"formatMarker":242,"flowId":null,"flowOrigin":null,"kind":5,"channelName":"play","messageName":"Move","contentType":"application/json","correlationId":"corr-1","deadline":null,"topic":null,"errorCode":"not_found","errorMessage":"Spot route was not found","source":null,"metadata":{"zlink.origin":"framework"}}
         """;
 
-    private const string CppApplicationErrorHeaderGolden =
-        """
+    private const string CppApplicationErrorHeaderGolden = """
         {"formatMarker":242,"flowId":null,"flowOrigin":null,"kind":5,"channelName":"play","messageName":"Move","contentType":"application/json","correlationId":"corr-1","deadline":null,"topic":null,"errorCode":"not_found","errorMessage":"order was not found","source":null,"metadata":{}}
         """;
 
@@ -134,7 +134,8 @@ public sealed class ErrorReplyWireConvergenceTests
         Assert.Equal("framework", header.Metadata!["zlink.origin"]);
 
         var error = Assert.IsType<ZLinkFrameworkException>(
-            ZLinkEnvelopeErrorMapper.CreateException(header, "fallback"));
+            ZLinkEnvelopeErrorMapper.CreateException(header, "fallback")
+        );
         Assert.Equal(ZLinkFrameworkErrorKind.NotFound, error.Kind);
         Assert.Equal(ZLinkErrorOrigin.Framework, error.Origin);
         Assert.True(ZLinkSpotHandleRequestExecution.IsStaleRoute(error));
@@ -151,7 +152,8 @@ public sealed class ErrorReplyWireConvergenceTests
         Assert.Empty(header.Metadata!);
 
         var error = Assert.IsType<ZLinkFrameworkException>(
-            ZLinkEnvelopeErrorMapper.CreateException(header, "fallback"));
+            ZLinkEnvelopeErrorMapper.CreateException(header, "fallback")
+        );
         Assert.Equal(ZLinkFrameworkErrorKind.NotFound, error.Kind);
         Assert.Equal(ZLinkErrorOrigin.Application, error.Origin);
         Assert.False(ZLinkSpotHandleRequestExecution.IsStaleRoute(error));
@@ -166,10 +168,12 @@ public sealed class ErrorReplyWireConvergenceTests
             "corr-1",
             new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.NotFound,
-                "No SPOT route request handler is registered.")
+                "No SPOT route request handler is registered."
+            )
             {
-                Origin = ZLinkErrorOrigin.Framework
-            });
+                Origin = ZLinkErrorOrigin.Framework,
+            }
+        );
         try
         {
             using var json = JsonDocument.Parse(parts[0].AsReadOnlyMemory());
@@ -178,7 +182,8 @@ public sealed class ErrorReplyWireConvergenceTests
             Assert.Equal("not_found", root.GetProperty("errorCode").GetString());
             Assert.Equal(
                 "framework",
-                root.GetProperty("metadata").GetProperty("zlink.origin").GetString());
+                root.GetProperty("metadata").GetProperty("zlink.origin").GetString()
+            );
         }
         finally
         {
@@ -193,9 +198,8 @@ public sealed class ErrorReplyWireConvergenceTests
             "play",
             "Move",
             "corr-1",
-            new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.NotFound,
-                "order was not found"));
+            new ZLinkFrameworkException(ZLinkFrameworkErrorKind.NotFound, "order was not found")
+        );
         try
         {
             using var json = JsonDocument.Parse(parts[0].AsReadOnlyMemory());
@@ -203,7 +207,8 @@ public sealed class ErrorReplyWireConvergenceTests
 
             var header = ZLinkEnvelopeCodec.DecodeHeader(parts);
             var error = Assert.IsType<ZLinkFrameworkException>(
-                ZLinkEnvelopeErrorMapper.CreateException(header, "fallback"));
+                ZLinkEnvelopeErrorMapper.CreateException(header, "fallback")
+            );
             Assert.Equal(ZLinkFrameworkErrorKind.NotFound, error.Kind);
             Assert.Equal(ZLinkErrorOrigin.Application, error.Origin);
             Assert.False(ZLinkSpotHandleRequestExecution.IsStaleRoute(error));
@@ -222,16 +227,15 @@ public sealed class ErrorReplyWireConvergenceTests
             "$zlink.actor-join",
             "corr-1",
             new InvalidOperationException("join failed"),
-            forceFrameworkOrigin: true);
+            forceFrameworkOrigin: true
+        );
         try
         {
             using var json = JsonDocument.Parse(parts[0].AsReadOnlyMemory());
             Assert.Equal(
                 "framework",
-                json.RootElement
-                    .GetProperty("metadata")
-                    .GetProperty("zlink.origin")
-                    .GetString());
+                json.RootElement.GetProperty("metadata").GetProperty("zlink.origin").GetString()
+            );
         }
         finally
         {
@@ -251,17 +255,20 @@ public sealed class ErrorReplyWireConvergenceTests
             null,
             null,
             null,
-            null);
+            null
+        );
         var parts = ZLinkSpotReplyEnvelope.EncodeProtocolErrorParts(
             "play",
             request,
-            "malformed frame");
+            "malformed frame"
+        );
         try
         {
             var header = ZLinkEnvelopeCodec.DecodeHeader(parts);
             Assert.Equal("protocol_error", header.ErrorCode);
-            Assert.True(header.Metadata is not null
-                        && header.Metadata["zlink.origin"] == "framework");
+            Assert.True(
+                header.Metadata is not null && header.Metadata["zlink.origin"] == "framework"
+            );
         }
         finally
         {
@@ -271,10 +278,13 @@ public sealed class ErrorReplyWireConvergenceTests
         var channelHeader = ZLinkChannelReplyWriter.CreateProtocolErrorHeader(
             "play",
             request,
-            "malformed frame");
+            "malformed frame"
+        );
         Assert.Equal("protocol_error", channelHeader.ErrorCode);
-        Assert.True(channelHeader.Metadata is not null
-                    && channelHeader.Metadata["zlink.origin"] == "framework");
+        Assert.True(
+            channelHeader.Metadata is not null
+                && channelHeader.Metadata["zlink.origin"] == "framework"
+        );
     }
 
     [Fact]
@@ -289,23 +299,24 @@ public sealed class ErrorReplyWireConvergenceTests
             null,
             null,
             null,
-            null);
+            null
+        );
         var replyHeader = ZLinkChannelReplyWriter.CreateErrorHeader(
             "route",
             request,
-            new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Unavailable,
-                "route owner is gone")
+            new ZLinkFrameworkException(ZLinkFrameworkErrorKind.Unavailable, "route owner is gone")
             {
-                Origin = ZLinkErrorOrigin.Framework
-            });
+                Origin = ZLinkErrorOrigin.Framework,
+            }
+        );
 
         Assert.Equal("unavailable", replyHeader.ErrorCode);
 
         using var encoded = ZLinkEnvelopeCodec.EncodeHeader(replyHeader);
         var decoded = ZLinkEnvelopeCodec.DecodeHeader(encoded);
         var error = Assert.IsType<ZLinkFrameworkException>(
-            ZLinkEnvelopeErrorMapper.CreateException(decoded, "fallback"));
+            ZLinkEnvelopeErrorMapper.CreateException(decoded, "fallback")
+        );
 
         Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
         Assert.Equal(ZLinkErrorOrigin.Framework, error.Origin);
@@ -321,14 +332,16 @@ public sealed class ErrorReplyWireConvergenceTests
                 "play",
                 "Move",
                 "corr-1",
-                new ZLinkFrameworkException(kind, $"failed with {kind}"));
+                new ZLinkFrameworkException(kind, $"failed with {kind}")
+            );
             try
             {
                 var header = ZLinkEnvelopeCodec.DecodeHeader(parts);
                 Assert.Equal(name, header.ErrorCode);
 
                 var error = Assert.IsType<ZLinkFrameworkException>(
-                    ZLinkEnvelopeErrorMapper.CreateException(header, "fallback"));
+                    ZLinkEnvelopeErrorMapper.CreateException(header, "fallback")
+                );
                 Assert.Equal(kind, error.Kind);
                 Assert.Equal($"failed with {kind}", error.Message);
             }
@@ -353,11 +366,12 @@ public sealed class ErrorReplyWireConvergenceTests
     public void Stale_route_judgement_requires_a_non_application_origin(
         ZLinkFrameworkErrorKind kind,
         int origin,
-        bool expected)
+        bool expected
+    )
     {
         var error = new ZLinkFrameworkException(kind, "failed")
         {
-            Origin = (ZLinkErrorOrigin)origin
+            Origin = (ZLinkErrorOrigin)origin,
         };
 
         Assert.Equal(expected, ZLinkSpotHandleRequestExecution.IsStaleRoute(error));
@@ -368,7 +382,8 @@ public sealed class ErrorReplyWireConvergenceTests
     {
         var method = typeof(ZLinkActorClient).GetMethod(
             "IsStaleRoute",
-            BindingFlags.NonPublic | BindingFlags.Static);
+            BindingFlags.NonPublic | BindingFlags.Static
+        );
         Assert.NotNull(method);
         return (bool)method!.Invoke(null, [error])!;
     }
@@ -379,7 +394,8 @@ public sealed class ErrorReplyWireConvergenceTests
         foreach (var (kind, name) in WireNameTable)
         {
             var wire = ZLinkStreamWireError.FromException(
-                new ZLinkFrameworkException(kind, "failed"));
+                new ZLinkFrameworkException(kind, "failed")
+            );
             Assert.Equal(name, wire.Code);
         }
     }
@@ -390,11 +406,13 @@ public sealed class ErrorReplyWireConvergenceTests
         foreach (var (kind, name) in WireNameTable)
         {
             var parts = ActorErrorReplyParts(
-                $"{{\"code\":\"{name}\",\"message\":\"failed with {name}\"}}");
+                $"{{\"code\":\"{name}\",\"message\":\"failed with {name}\"}}"
+            );
             try
             {
-                var error = Assert.Throws<ZLinkFrameworkException>(
-                    () => ZLinkActorReplyDecoder.Decode<object>(parts));
+                var error = Assert.Throws<ZLinkFrameworkException>(() =>
+                    ZLinkActorReplyDecoder.Decode<object>(parts)
+                );
                 Assert.Equal(kind, error.Kind);
                 Assert.Equal($"failed with {name}", error.Message);
             }
@@ -413,11 +431,12 @@ public sealed class ErrorReplyWireConvergenceTests
             ZlinkStreamHeaderFlags.HasRequestSeq,
             new ZlinkStreamRequestSeq(1),
             string.Empty,
-            ZlinkStreamMetadata.Empty);
+            ZlinkStreamMetadata.Empty
+        );
         return
         [
             Message.From(ZLinkStreamProtocolDefaults.EncodeHeader(header).Span),
-            Message.From(payload)
+            Message.From(payload),
         ];
     }
 }

@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.contracts.errors.ConfigResult;
 import systems.zlink.contracts.errors.ZlinkConfigException;
 import systems.zlink.contracts.errors.ZlinkRequestException;
@@ -23,9 +24,9 @@ final class ZLinkActorSubmitFaultsTest {
     void alreadyBoundAcceptsConflictBusyAndNativeBusyErrno() {
         assertTrue(ZLinkActorSubmitFaults.alreadyBound(request(RequestResult.CONFLICT)));
         assertTrue(ZLinkActorSubmitFaults.alreadyBound(request(RequestResult.BUSY)));
-        assertTrue(ZLinkActorSubmitFaults.alreadyBound(new ZlinkRequestException(
-            RequestResult.INTERNAL_ERROR,
-            16)));
+        assertTrue(
+                ZLinkActorSubmitFaults.alreadyBound(
+                        new ZlinkRequestException(RequestResult.INTERNAL_ERROR, 16)));
         assertFalse(ZLinkActorSubmitFaults.alreadyBound(request(RequestResult.NOT_FOUND)));
     }
 

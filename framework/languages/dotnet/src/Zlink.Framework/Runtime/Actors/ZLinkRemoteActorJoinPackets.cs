@@ -11,13 +11,13 @@ internal static class ZLinkRemoteActorJoinPackets
     public const string CommitPacketName = "__zlink.actor.join_spot.commit";
     public const string HandoffCompletionPacketName = "__zlink.actor.join_spot.handoff_completion";
     public const string BoundSessionBindPacketName = "zlink.framework.actor.bound_session.bind";
-    public const string SessionDisconnectedPacketName = "zlink.framework.actor.session_disconnected";
+    public const string SessionDisconnectedPacketName =
+        "zlink.framework.actor.session_disconnected";
     public const string RecreateRelocationContentType =
         "application/vnd.zlink.actor-relocation.recreate";
     public const string SnapshotRelocationContentType =
         "application/vnd.zlink.actor-relocation.snapshot";
-    internal const long SnapshotApplicationStateReservationBytes =
-        64L * 1024 * 1024;
+    internal const long SnapshotApplicationStateReservationBytes = 64L * 1024 * 1024;
     private const long FrameworkMetadataUpperBound = 64L * 1024;
     private const long AcceptedJournalUpperBound = 16L * 1024 * 1024;
 
@@ -34,23 +34,27 @@ internal static class ZLinkRemoteActorJoinPackets
         string actorId,
         ulong actorGeneration,
         ulong sourceActorNodeGeneration,
-        ulong correlation)
+        ulong correlation
+    )
     {
         var source = sourceActorNodeRid.ToBytes();
         var actor = System.Text.Encoding.UTF8.GetBytes(actorId);
-        var material = new byte[checked(
-            source.Length + sizeof(ushort) + actor.Length + (sizeof(ulong) * 3))];
+        var material = new byte[
+            checked(source.Length + sizeof(ushort) + actor.Length + (sizeof(ulong) * 3))
+        ];
         var offset = 0;
         source.CopyTo(material);
         offset += source.Length;
-        BinaryPrimitives.WriteUInt16BigEndian(material.AsSpan(offset), checked((ushort)actor.Length));
+        BinaryPrimitives.WriteUInt16BigEndian(
+            material.AsSpan(offset),
+            checked((ushort)actor.Length)
+        );
         offset += sizeof(ushort);
         actor.CopyTo(material, offset);
         offset += actor.Length;
         BinaryPrimitives.WriteUInt64BigEndian(material.AsSpan(offset), actorGeneration);
         offset += sizeof(ulong);
-        BinaryPrimitives.WriteUInt64BigEndian(
-            material.AsSpan(offset), sourceActorNodeGeneration);
+        BinaryPrimitives.WriteUInt64BigEndian(material.AsSpan(offset), sourceActorNodeGeneration);
         offset += sizeof(ulong);
         BinaryPrimitives.WriteUInt64BigEndian(material.AsSpan(offset), correlation);
         var hash = SHA256.HashData(material);
@@ -63,11 +67,10 @@ internal static class ZLinkRemoteActorJoinPackets
     //  the source falls back to its own configured limit only.
     internal static long EffectiveDirectTransferChunkLimit(
         long configuredChunkLimit,
-        ulong advertisedReceiveChunkLimitBytes) =>
+        ulong advertisedReceiveChunkLimitBytes
+    ) =>
         advertisedReceiveChunkLimitBytes > 0
-            ? Math.Min(
-                configuredChunkLimit,
-                checked((long)advertisedReceiveChunkLimitBytes))
+            ? Math.Min(configuredChunkLimit, checked((long)advertisedReceiveChunkLimitBytes))
             : configuredChunkLimit;
 
     public static IReadOnlyList<Message> EncodeAdmissionRequest(
@@ -84,7 +87,8 @@ internal static class ZLinkRemoteActorJoinPackets
         ulong actorAuthorityOwnerGeneration,
         long predictedPayloadBytes,
         ulong targetSpotGeneration,
-        ulong targetSpotAuthorityOwnerGeneration)
+        ulong targetSpotAuthorityOwnerGeneration
+    )
     {
         var encodedRequest = request.Encode(codecs);
         var payload = new ZLinkRemoteActorAdmissionRequest(
@@ -100,13 +104,15 @@ internal static class ZLinkRemoteActorJoinPackets
             actorAuthorityOwnerGeneration,
             predictedPayloadBytes,
             targetSpotGeneration,
-            targetSpotAuthorityOwnerGeneration);
+            targetSpotAuthorityOwnerGeneration
+        );
 
         return ZLinkEnvelopeCodec.EncodeParts(
             header,
             payload,
             typeof(ZLinkRemoteActorAdmissionRequest),
-            null);
+            null
+        );
     }
 
     public static IReadOnlyList<Message> EncodeJoinRequest(
@@ -129,7 +135,8 @@ internal static class ZLinkRemoteActorJoinPackets
         ZLinkSessionRelocationContext sessionRelocationContext = default,
         ulong actorNodeGeneration = 0,
         ulong expectedOwnerLeaseGeneration = 0,
-        ulong targetAttemptGeneration = 0)
+        ulong targetAttemptGeneration = 0
+    )
     {
         var payload = CreateJoinRequest(
             actorId,
@@ -150,7 +157,8 @@ internal static class ZLinkRemoteActorJoinPackets
             sessionRelocationContext,
             actorNodeGeneration,
             expectedOwnerLeaseGeneration,
-            targetAttemptGeneration);
+            targetAttemptGeneration
+        );
         return EncodeJoinRequest(header, payload);
     }
 
@@ -173,7 +181,8 @@ internal static class ZLinkRemoteActorJoinPackets
         ZLinkSessionRelocationContext sessionRelocationContext = default,
         ulong actorNodeGeneration = 0,
         ulong expectedOwnerLeaseGeneration = 0,
-        ulong targetAttemptGeneration = 0)
+        ulong targetAttemptGeneration = 0
+    )
     {
         var encodedRequest = request.Encode(codecs);
         return new ZLinkRemoteActorJoinRequest(
@@ -198,8 +207,7 @@ internal static class ZLinkRemoteActorJoinPackets
             boundSessionIdentity?.BindingToken,
             boundSessionIdentity?.BindingGeneration ?? 0,
             boundSessionIdentity?.ObjectGeneration ?? actorGeneration,
-            boundSessionIdentity?.AuthorityOwnerGeneration
-                ?? actorAuthorityOwnerGeneration,
+            boundSessionIdentity?.AuthorityOwnerGeneration ?? actorAuthorityOwnerGeneration,
             boundSessionIdentity?.MeshName.Value,
             boundSessionIdentity?.TargetNodeGeneration ?? 0,
             boundSessionIdentity?.OwnerLeaseGeneration ?? 0,
@@ -223,22 +231,24 @@ internal static class ZLinkRemoteActorJoinPackets
             sessionRelocationContext.Coordinator.ExpectedAuthorityStoreVersion,
             actorNodeGeneration,
             expectedOwnerLeaseGeneration,
-            targetAttemptGeneration);
+            targetAttemptGeneration
+        );
     }
 
     internal static IReadOnlyList<Message> EncodeJoinRequest(
         ZLinkEnvelopeHeader header,
-        ZLinkRemoteActorJoinRequest payload)
+        ZLinkRemoteActorJoinRequest payload
+    )
     {
         return ZLinkEnvelopeCodec.EncodeParts(
             header,
             payload,
             typeof(ZLinkRemoteActorJoinRequest),
-            null);
+            null
+        );
     }
 
-    internal static long MeasureRelocationPayloadBytes(
-        ZLinkRemoteActorJoinRequest request)
+    internal static long MeasureRelocationPayloadBytes(ZLinkRemoteActorJoinRequest request)
     {
         try
         {
@@ -247,7 +257,8 @@ internal static class ZLinkRemoteActorJoinPackets
                 + request.Request.LongLength
                 + request.SourceNodeRid.LongLength
                 + request.RelocationReference.Length * 3L
-                + request.RelocationInventoryDigest.LongLength);
+                + request.RelocationInventoryDigest.LongLength
+            );
             if (request.BoundSessionNodeRid is { } sessionNode)
                 bytes = checked(bytes + sessionNode.LongLength);
             if (request.BoundSessionRid is { } session)
@@ -263,7 +274,8 @@ internal static class ZLinkRemoteActorJoinPackets
     internal static long MeasurePredictedRelocationPayloadBytes(
         ZLinkMessage request,
         ZLinkCodecRegistryBuilder codecs,
-        bool snapshot)
+        bool snapshot
+    )
     {
         var encoded = request.Encode(codecs);
         try
@@ -272,9 +284,8 @@ internal static class ZLinkRemoteActorJoinPackets
                 FrameworkMetadataUpperBound
                 + AcceptedJournalUpperBound
                 + encoded.Payload.Bytes.Length
-                + (snapshot
-                    ? SnapshotApplicationStateReservationBytes
-                    : 0));
+                + (snapshot ? SnapshotApplicationStateReservationBytes : 0)
+            );
         }
         catch (OverflowException)
         {
@@ -282,8 +293,7 @@ internal static class ZLinkRemoteActorJoinPackets
         }
     }
 
-    internal static long MeasureStandaloneMaintenancePayloadUpperBound(
-        bool snapshot)
+    internal static long MeasureStandaloneMaintenancePayloadUpperBound(bool snapshot)
     {
         // Standalone Actor maintenance has no logical-timer payload. The
         // accepted journal already accounts for the captured application data;
@@ -292,17 +302,15 @@ internal static class ZLinkRemoteActorJoinPackets
         return checked(
             FrameworkMetadataUpperBound
             + AcceptedJournalUpperBound
-            + (snapshot
-                ? SnapshotApplicationStateReservationBytes
-                : 0));
+            + (snapshot ? SnapshotApplicationStateReservationBytes : 0)
+        );
     }
 
     public static ZLinkRemoteActorJoinRequest DecodeJoinRequest(IReadOnlyList<Message> parts)
     {
-        return (ZLinkRemoteActorJoinRequest?)ZLinkEnvelopeCodec.DecodeBody(
-                   parts,
-                   typeof(ZLinkRemoteActorJoinRequest))
-               ?? throw new InvalidOperationException("Remote actor join request was empty.");
+        return (ZLinkRemoteActorJoinRequest?)
+                ZLinkEnvelopeCodec.DecodeBody(parts, typeof(ZLinkRemoteActorJoinRequest))
+            ?? throw new InvalidOperationException("Remote actor join request was empty.");
     }
 
     public static IReadOnlyList<Message> EncodeHandoffCompletionRequest(
@@ -316,7 +324,8 @@ internal static class ZLinkRemoteActorJoinPackets
         ZLinkRemoteActorAdmissionReply admissionReply,
         ZLinkActorBoundSession? boundSession,
         IReadOnlyList<ZLinkActorHandoffFrame> frames,
-        ZLinkSessionRelocationContext sessionRelocationContext = default)
+        ZLinkSessionRelocationContext sessionRelocationContext = default
+    )
     {
         return ZLinkEnvelopeCodec.EncodeParts(
             header,
@@ -350,56 +359,65 @@ internal static class ZLinkRemoteActorJoinPackets
                     ? null
                     : sessionRelocationContext.Coordinator.NodeRid.ToBytes().ToArray(),
                 sessionRelocationContext.Coordinator.NodeGeneration,
-                sessionRelocationContext.Coordinator
-                    .ExpectedAuthorityStoreVersion),
+                sessionRelocationContext.Coordinator.ExpectedAuthorityStoreVersion
+            ),
             typeof(ZLinkRemoteActorHandoffCompletionRequest),
-            null);
+            null
+        );
     }
 
     public static ZLinkRemoteActorHandoffCompletionRequest DecodeHandoffCompletionRequest(
-        IReadOnlyList<Message> parts)
+        IReadOnlyList<Message> parts
+    )
     {
-        return (ZLinkRemoteActorHandoffCompletionRequest?)ZLinkEnvelopeCodec.DecodeBody(
-                   parts,
-                   typeof(ZLinkRemoteActorHandoffCompletionRequest))
-               ?? throw new InvalidOperationException("Remote actor handoff completion request was empty.");
+        return (ZLinkRemoteActorHandoffCompletionRequest?)
+                ZLinkEnvelopeCodec.DecodeBody(
+                    parts,
+                    typeof(ZLinkRemoteActorHandoffCompletionRequest)
+                )
+            ?? throw new InvalidOperationException(
+                "Remote actor handoff completion request was empty."
+            );
     }
 
-    public static ZLinkRemoteActorAdmissionRequest DecodeAdmissionRequest(IReadOnlyList<Message> parts)
+    public static ZLinkRemoteActorAdmissionRequest DecodeAdmissionRequest(
+        IReadOnlyList<Message> parts
+    )
     {
-        return (ZLinkRemoteActorAdmissionRequest?)ZLinkEnvelopeCodec.DecodeBody(
-                   parts,
-                   typeof(ZLinkRemoteActorAdmissionRequest))
-               ?? throw new InvalidOperationException("Remote actor admission request was empty.");
+        return (ZLinkRemoteActorAdmissionRequest?)
+                ZLinkEnvelopeCodec.DecodeBody(parts, typeof(ZLinkRemoteActorAdmissionRequest))
+            ?? throw new InvalidOperationException("Remote actor admission request was empty.");
     }
 
     public static IReadOnlyList<Message> EncodeAdmissionAbortRequest(
         ZLinkEnvelopeHeader header,
         string actorId,
         string handoffId,
-        string reservationToken)
+        string reservationToken
+    )
     {
         return ZLinkEnvelopeCodec.EncodeParts(
             header,
-            new ZLinkRemoteActorAdmissionAbortRequest(
-                actorId,
-                handoffId,
-                reservationToken),
+            new ZLinkRemoteActorAdmissionAbortRequest(actorId, handoffId, reservationToken),
             typeof(ZLinkRemoteActorAdmissionAbortRequest),
-            null);
+            null
+        );
     }
 
     public static ZLinkRemoteActorAdmissionAbortRequest DecodeAdmissionAbortRequest(
-        IReadOnlyList<Message> parts)
+        IReadOnlyList<Message> parts
+    )
     {
-        return (ZLinkRemoteActorAdmissionAbortRequest?)ZLinkEnvelopeCodec.DecodeBody(
-                   parts,
-                   typeof(ZLinkRemoteActorAdmissionAbortRequest))
-               ?? throw new InvalidOperationException(
-                   "Remote actor admission abort request was empty.");
+        return (ZLinkRemoteActorAdmissionAbortRequest?)
+                ZLinkEnvelopeCodec.DecodeBody(parts, typeof(ZLinkRemoteActorAdmissionAbortRequest))
+            ?? throw new InvalidOperationException(
+                "Remote actor admission abort request was empty."
+            );
     }
 
-    public static ZLinkRemoteActorBoundSessionRoute DecodeBoundSessionRoute(ZLinkRemoteActorJoinRequest request)
+    public static ZLinkRemoteActorBoundSessionRoute DecodeBoundSessionRoute(
+        ZLinkRemoteActorJoinRequest request
+    )
     {
         return new ZLinkRemoteActorBoundSessionRoute(
             ToRoutingId(request.BoundSessionNodeRid),
@@ -414,54 +432,63 @@ internal static class ZLinkRemoteActorJoinPackets
             request.BoundSessionOwnerNodeGeneration,
             request.BoundSessionAcceptedHighWater,
             request.BoundSessionSessionOwnerId,
-            request.BoundSessionSessionOwnerLeaseGeneration);
+            request.BoundSessionSessionOwnerLeaseGeneration
+        );
     }
 
-    internal static ZLinkSessionRelocationContext
-        DecodeSessionRelocationContext(ZLinkRemoteActorJoinRequest request)
+    internal static ZLinkSessionRelocationContext DecodeSessionRelocationContext(
+        ZLinkRemoteActorJoinRequest request
+    )
     {
-        if (!request.RelocationAggregateId.Equals(Guid.Empty)
-            && !string.IsNullOrWhiteSpace(
-                request.RelocationCoordinatorOwnerId)
+        if (
+            !request.RelocationAggregateId.Equals(Guid.Empty)
+            && !string.IsNullOrWhiteSpace(request.RelocationCoordinatorOwnerId)
             && request.RelocationCoordinatorLeaseGeneration != 0
             && request.RelocationCoordinatorNodeRid is { Length: > 0 }
             && request.RelocationCoordinatorNodeGeneration != 0
             && !string.IsNullOrWhiteSpace(
-                request.RelocationCoordinatorExpectedAuthorityStoreVersion))
+                request.RelocationCoordinatorExpectedAuthorityStoreVersion
+            )
+        )
             return ZLinkSessionRelocationContext.Create(
                 request.RelocationAggregateId,
                 request.RelocationCoordinatorOwnerId,
                 request.RelocationCoordinatorLeaseGeneration,
                 RoutingId.From(request.RelocationCoordinatorNodeRid),
                 request.RelocationCoordinatorNodeGeneration,
-                request.RelocationCoordinatorExpectedAuthorityStoreVersion);
+                request.RelocationCoordinatorExpectedAuthorityStoreVersion
+            );
         return default;
     }
 
-    internal static ZLinkSessionRelocationContext
-        DecodeSessionRelocationContext(
-            ZLinkRemoteActorHandoffCompletionRequest request)
+    internal static ZLinkSessionRelocationContext DecodeSessionRelocationContext(
+        ZLinkRemoteActorHandoffCompletionRequest request
+    )
     {
-        if (Guid.TryParseExact(request.HandoffId, "N", out var relocationId)
-            && !string.IsNullOrWhiteSpace(
-                request.RelocationCoordinatorOwnerId)
+        if (
+            Guid.TryParseExact(request.HandoffId, "N", out var relocationId)
+            && !string.IsNullOrWhiteSpace(request.RelocationCoordinatorOwnerId)
             && request.RelocationCoordinatorLeaseGeneration != 0
             && request.RelocationCoordinatorNodeRid is { Length: > 0 }
             && request.RelocationCoordinatorNodeGeneration != 0
             && !string.IsNullOrWhiteSpace(
-                request.RelocationCoordinatorExpectedAuthorityStoreVersion))
+                request.RelocationCoordinatorExpectedAuthorityStoreVersion
+            )
+        )
             return ZLinkSessionRelocationContext.Create(
                 relocationId,
                 request.RelocationCoordinatorOwnerId,
                 request.RelocationCoordinatorLeaseGeneration,
                 RoutingId.From(request.RelocationCoordinatorNodeRid),
                 request.RelocationCoordinatorNodeGeneration,
-                request.RelocationCoordinatorExpectedAuthorityStoreVersion);
+                request.RelocationCoordinatorExpectedAuthorityStoreVersion
+            );
         return default;
     }
 
     public static ZLinkRemoteActorBoundSessionRoute DecodeBoundSessionRoute(
-        ZLinkRemoteActorHandoffCompletionRequest request) =>
+        ZLinkRemoteActorHandoffCompletionRequest request
+    ) =>
         new(
             ToRoutingId(request.BoundSessionNodeRid),
             ToRoutingId(request.BoundSessionRid),
@@ -475,49 +502,46 @@ internal static class ZLinkRemoteActorJoinPackets
             request.BoundSessionOwnerNodeGeneration,
             request.BoundSessionAcceptedHighWater,
             request.BoundSessionSessionOwnerId,
-            request.BoundSessionSessionOwnerLeaseGeneration);
+            request.BoundSessionSessionOwnerLeaseGeneration
+        );
 
     public static ZLinkMessage DecodeJoinRequestPayload(
         ZLinkRemoteActorJoinRequest request,
-        ZLinkCodecRegistryBuilder codecs)
+        ZLinkCodecRegistryBuilder codecs
+    )
     {
-        return DecodeJoinRequestPayload(
-            request.RequestContentType,
-            request.Request,
-            codecs);
+        return DecodeJoinRequestPayload(request.RequestContentType, request.Request, codecs);
     }
 
     public static ZLinkMessage DecodeAdmissionRequestPayload(
         ZLinkRemoteActorAdmissionRequest request,
-        ZLinkCodecRegistryBuilder codecs)
+        ZLinkCodecRegistryBuilder codecs
+    )
     {
-        return DecodeJoinRequestPayload(
-            request.RequestContentType,
-            request.Request,
-            codecs);
+        return DecodeJoinRequestPayload(request.RequestContentType, request.Request, codecs);
     }
 
     private static ZLinkMessage DecodeJoinRequestPayload(
         string requestContentType,
         byte[] requestPayload,
-        ZLinkCodecRegistryBuilder codecs)
+        ZLinkCodecRegistryBuilder codecs
+    )
     {
         using var payload = Message.From(requestPayload);
-        return ZLinkMessage.FromEnvelopePayload(
-            requestContentType,
-            payload,
-            codecs);
+        return ZLinkMessage.FromEnvelopePayload(requestContentType, payload, codecs);
     }
 
     public static ZLinkRemoteActorJoinReply CreateJoinReply(
         bool accepted,
-        ZLinkBackendActorRef actorRef)
+        ZLinkBackendActorRef actorRef
+    )
     {
         return new ZLinkRemoteActorJoinReply(
             accepted,
             actorRef.NodeRid.ToBytes().ToArray(),
             actorRef.ActorId,
-            actorRef.Generation);
+            actorRef.Generation
+        );
     }
 
     public static ZLinkRemoteActorAdmissionReply CreateAdmissionReply(
@@ -526,7 +550,8 @@ internal static class ZLinkRemoteActorJoinPackets
         ZLinkCodecRegistryBuilder codecs,
         long deadlineUnixTimeMilliseconds = 0,
         ZLinkActorRelocationReservation? reservation = null,
-        ulong receiveChunkLimitBytes = 0)
+        ulong receiveChunkLimitBytes = 0
+    )
     {
         var replyContentType = ZLinkEnvelopeCodec.DefaultContentType;
         Message? encodedReply = null;
@@ -551,7 +576,8 @@ internal static class ZLinkRemoteActorJoinPackets
                 reservation?.TargetSpotGeneration ?? 0,
                 reservation?.TargetAuthorityOwnerGeneration ?? 0,
                 reservation?.TargetSpotAuthorityOwnerGeneration ?? 0,
-                receiveChunkLimitBytes);
+                receiveChunkLimitBytes
+            );
         }
     }
 
@@ -559,49 +585,53 @@ internal static class ZLinkRemoteActorJoinPackets
         string channelName,
         string messageName,
         string? correlationId,
-        ZLinkRemoteActorJoinReply reply)
+        ZLinkRemoteActorJoinReply reply
+    )
     {
         return ZLinkSpotReplyEnvelope.EncodeResponseParts(
             channelName,
             messageName,
             correlationId,
             reply,
-            typeof(ZLinkRemoteActorJoinReply));
+            typeof(ZLinkRemoteActorJoinReply)
+        );
     }
 
     public static ZLinkRemoteActorJoinReply DecodeJoinReplyAndDispose(
         ZLinkBackendRouteReceived parts,
         string actorId,
-        string targetSpotId)
+        string targetSpotId
+    )
     {
         return ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<ZLinkRemoteActorJoinReply>(
             parts,
             "Remote actor join reply was empty.",
             $"Remote actor join failed for '{actorId}' to SPOT '{targetSpotId}'.",
-            null);
+            null
+        );
     }
 
     public static ZLinkRemoteActorAdmissionReply DecodeAdmissionReplyAndDispose(
         ZLinkBackendRouteReceived parts,
         string actorId,
-        string targetSpotId)
+        string targetSpotId
+    )
     {
         return ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<ZLinkRemoteActorAdmissionReply>(
             parts,
             "Remote actor admission reply was empty.",
             $"Remote actor admission failed for '{actorId}' to SPOT '{targetSpotId}'.",
-            null);
+            null
+        );
     }
 
     public static ZLinkMessage DecodeAdmissionReplyPayload(
         ZLinkRemoteActorAdmissionReply reply,
-        ZLinkCodecRegistryBuilder codecs)
+        ZLinkCodecRegistryBuilder codecs
+    )
     {
         using var payload = Message.From(reply.Reply);
-        return ZLinkMessage.FromEnvelopePayload(
-            reply.ReplyContentType,
-            payload,
-            codecs);
+        return ZLinkMessage.FromEnvelopePayload(reply.ReplyContentType, payload, codecs);
     }
 
     public static ZLinkBackendActorRef ToActorRef(ZLinkRemoteActorJoinReply reply)
@@ -609,7 +639,8 @@ internal static class ZLinkRemoteActorJoinPackets
         return new ZLinkBackendActorRef(
             RoutingId.From(reply.ActorNodeRid),
             reply.ActorId,
-            reply.ActorGeneration);
+            reply.ActorGeneration
+        );
     }
 
     private static RoutingId? ToRoutingId(byte[]? bytes)
@@ -631,7 +662,8 @@ internal readonly record struct ZLinkRemoteActorBoundSessionRoute(
     ulong SessionOwnerNodeGeneration,
     ulong AcceptedHighWater,
     string? SessionOwnerId = null,
-    ulong SessionOwnerLeaseGeneration = 0)
+    ulong SessionOwnerLeaseGeneration = 0
+)
 {
     internal bool HasRouteCoordinates => NodeRid is not null || SessionRid is not null;
 
@@ -663,7 +695,8 @@ internal sealed record ZLinkRemoteActorAdmissionRequest(
     ulong TargetSpotGeneration = 0,
     ulong TargetSpotAuthorityOwnerGeneration = 0,
     [property: System.Text.Json.Serialization.JsonIgnore]
-    ZLinkCanonicalActorJoinAdmission? Canonical = null);
+        ZLinkCanonicalActorJoinAdmission? Canonical = null
+);
 
 internal sealed record ZLinkRemoteActorAdmissionReply(
     bool Accepted,
@@ -689,60 +722,64 @@ internal sealed record ZLinkRemoteActorAdmissionReply(
     // content type (e.g. "application/json") used to decode the raw reply
     // bytes locally. Null preserves legacy router-channel/admission-JSON
     // behaviour, where the two meanings still coincide.
-    string? RecoveryReplyContentType = null);
+    string? RecoveryReplyContentType = null
+);
 
 internal sealed record ZLinkRemoteActorAdmissionAbortRequest(
     string ActorId,
     string HandoffId,
-    string ReservationToken);
+    string ReservationToken
+);
 
 internal sealed record ZLinkRemoteActorJoinRequest(
-string ActorId,
-string ActorType,
-string HandoffId,
-byte[]? BoundSessionNodeRid,
-byte[]? BoundSessionRid,
-string RelocationContentType,
-string RelocationReference,
-uint RelocationChecksumCrc32c,
-[property: System.Text.Json.Serialization.JsonConverter(
-    typeof(ZLinkCanonicalGuidJsonConverter))]
-Guid RelocationAggregateId,
-ulong RelocationAggregateGeneration,
-byte[] RelocationInventoryDigest,
-string RequestContentType,
-byte[] Request,
-IReadOnlyList<ZLinkActorHandoffFrame> HandoffFrames,
-string SourceSpotId,
-byte[] SourceNodeRid,
-ulong ActorGeneration,
-ulong ActorAuthorityOwnerGeneration,
-string? BoundSessionBindingToken = null,
-ulong BoundSessionBindingGeneration = 0,
-ulong BoundSessionObjectGeneration = 0,
-ulong BoundSessionAuthorityOwnerGeneration = 0,
-string? BoundSessionMeshName = null,
-ulong BoundSessionTargetNodeGeneration = 0,
+    string ActorId,
+    string ActorType,
+    string HandoffId,
+    byte[]? BoundSessionNodeRid,
+    byte[]? BoundSessionRid,
+    string RelocationContentType,
+    string RelocationReference,
+    uint RelocationChecksumCrc32c,
+    [property: System.Text.Json.Serialization.JsonConverter(
+        typeof(ZLinkCanonicalGuidJsonConverter)
+    )]
+        Guid RelocationAggregateId,
+    ulong RelocationAggregateGeneration,
+    byte[] RelocationInventoryDigest,
+    string RequestContentType,
+    byte[] Request,
+    IReadOnlyList<ZLinkActorHandoffFrame> HandoffFrames,
+    string SourceSpotId,
+    byte[] SourceNodeRid,
+    ulong ActorGeneration,
+    ulong ActorAuthorityOwnerGeneration,
+    string? BoundSessionBindingToken = null,
+    ulong BoundSessionBindingGeneration = 0,
+    ulong BoundSessionObjectGeneration = 0,
+    ulong BoundSessionAuthorityOwnerGeneration = 0,
+    string? BoundSessionMeshName = null,
+    ulong BoundSessionTargetNodeGeneration = 0,
     ulong BoundSessionOwnerLeaseGeneration = 0,
     ulong BoundSessionOwnerNodeGeneration = 0,
     ulong BoundSessionAcceptedHighWater = 0,
     string? BoundSessionSessionOwnerId = null,
     ulong BoundSessionSessionOwnerLeaseGeneration = 0,
     string ReservationToken = "",
-long ReservedPayloadBytes = 0,
-byte[]? TargetNodeRid = null,
-ulong TargetNodeGeneration = 0,
-ulong TargetSpotGeneration = 0,
-ulong TargetAuthorityOwnerGeneration = 0,
-ulong TargetSpotAuthorityOwnerGeneration = 0,
-string RelocationCoordinatorOwnerId = "",
-ulong RelocationCoordinatorLeaseGeneration = 0,
-byte[]? RelocationCoordinatorNodeRid = null,
-ulong RelocationCoordinatorNodeGeneration = 0,
-string RelocationCoordinatorExpectedAuthorityStoreVersion = "",
-ulong ActorNodeGeneration = 0,
-ulong ExpectedOwnerLeaseGeneration = 0,
-ulong TargetAttemptGeneration = 0);
+    long ReservedPayloadBytes = 0,
+    byte[]? TargetNodeRid = null,
+    ulong TargetNodeGeneration = 0,
+    ulong TargetSpotGeneration = 0,
+    ulong TargetAuthorityOwnerGeneration = 0,
+    ulong TargetSpotAuthorityOwnerGeneration = 0,
+    string RelocationCoordinatorOwnerId = "",
+    ulong RelocationCoordinatorLeaseGeneration = 0,
+    byte[]? RelocationCoordinatorNodeRid = null,
+    ulong RelocationCoordinatorNodeGeneration = 0,
+    string RelocationCoordinatorExpectedAuthorityStoreVersion = "",
+    ulong ActorNodeGeneration = 0,
+    ulong ExpectedOwnerLeaseGeneration = 0,
+    ulong TargetAttemptGeneration = 0
+);
 
 internal readonly record struct ZLinkActorRelocationReservation(
     string Token,
@@ -752,13 +789,15 @@ internal readonly record struct ZLinkActorRelocationReservation(
     ulong TargetSpotGeneration,
     ulong TargetAuthorityOwnerGeneration,
     ulong TargetSpotAuthorityOwnerGeneration,
-    ulong ReceiveChunkLimitBytes = 0);
+    ulong ReceiveChunkLimitBytes = 0
+);
 
 internal sealed record ZLinkRemoteActorJoinReply(
     bool Accepted,
     byte[] ActorNodeRid,
     string ActorId,
-    ulong ActorGeneration);
+    ulong ActorGeneration
+);
 
 internal sealed record ZLinkRemoteActorHandoffCompletionRequest(
     string ActorId,
@@ -788,4 +827,5 @@ internal sealed record ZLinkRemoteActorHandoffCompletionRequest(
     ulong RelocationCoordinatorLeaseGeneration = 0,
     byte[]? RelocationCoordinatorNodeRid = null,
     ulong RelocationCoordinatorNodeGeneration = 0,
-    string RelocationCoordinatorExpectedAuthorityStoreVersion = "");
+    string RelocationCoordinatorExpectedAuthorityStoreVersion = ""
+);

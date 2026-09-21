@@ -1,11 +1,12 @@
 package systems.zlink.framework.runtime.binding;
 
-import java.util.function.Supplier;
+import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshMonitorEvent;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshMonitorStatus;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeMonitor;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeStatus;
-import systems.zlink.contracts.sockets.RecvFlags;
+
+import java.util.function.Supplier;
 
 /** Pull monitor snapshot for the Framework-owned raw MeshNode. */
 final class ZLinkJavaRawMeshMonitor implements MeshNodeMonitor {
@@ -28,16 +29,16 @@ final class ZLinkJavaRawMeshMonitor implements MeshNodeMonitor {
     public MeshMonitorStatus status() {
         MeshNodeStatus node = status.get();
         return new MeshMonitorStatus(
-            node.state(),
-            node.admittedPeerCount(),
-            0,
-            0,
-            0,
-            0,
-            0,
-            node.pendingApplicationMessages(),
-            node.pendingInfrastructureMessages(),
-            node.pendingBytes());
+                node.state(),
+                node.admittedPeerCount(),
+                0,
+                0,
+                0,
+                0,
+                0,
+                node.pendingApplicationMessages(),
+                node.pendingInfrastructureMessages(),
+                node.pendingBytes());
     }
 
     @Override

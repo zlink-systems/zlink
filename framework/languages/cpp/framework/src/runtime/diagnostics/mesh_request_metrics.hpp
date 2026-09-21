@@ -19,7 +19,15 @@
 namespace zlink::framework::runtime
 {
 
-enum class mesh_request_surface_t { none, node, channel, spot, instance_spot, actor };
+enum class mesh_request_surface_t
+{
+    none,
+    node,
+    channel,
+    spot,
+    instance_spot,
+    actor
+};
 
 // Instruments and label storage belong to the MeshNode, not to each request.
 // The operation registry supplies its existing single terminal decision.
@@ -32,10 +40,11 @@ class mesh_request_metrics_t
         if (dynamic_cast<opentelemetry::metrics::NoopMeterProvider *> (provider.get ()))
             return;
         auto meter = provider->GetMeter ("zlink.framework");
-        _inflight = meter->CreateDoubleUpDownCounter (
-          "zlink.mesh_node.requests.inflight", "", "{request}");
+        _inflight =
+          meter->CreateDoubleUpDownCounter ("zlink.mesh_node.requests.inflight", "", "{request}");
         _duration = meter->CreateDoubleHistogram ("zlink.mesh_node.request.duration", "", "s");
-        _timeouts = meter->CreateDoubleCounter ("zlink.mesh_node.request.timeouts", "", "{request}");
+        _timeouts =
+          meter->CreateDoubleCounter ("zlink.mesh_node.request.timeouts", "", "{request}");
     }
 
     bool enabled () const noexcept { return _inflight != nullptr; }
@@ -45,7 +54,8 @@ class mesh_request_metrics_t
         _inflight->Add (1, {{"mesh_name", view (_mesh_name)}, {"surface", name (surface)}});
     }
 
-    void complete (mesh_request_surface_t surface, std::chrono::steady_clock::time_point started,
+    void complete (mesh_request_surface_t surface,
+                   std::chrono::steady_clock::time_point started,
                    opentelemetry::nostd::string_view outcome) const noexcept
     {
         _inflight->Add (-1, {{"mesh_name", view (_mesh_name)}, {"surface", name (surface)}});
@@ -66,12 +76,18 @@ class mesh_request_metrics_t
     static opentelemetry::nostd::string_view name (mesh_request_surface_t surface) noexcept
     {
         switch (surface) {
-            case mesh_request_surface_t::node: return "node";
-            case mesh_request_surface_t::channel: return "channel";
-            case mesh_request_surface_t::spot: return "spot";
-            case mesh_request_surface_t::instance_spot: return "instance_spot";
-            case mesh_request_surface_t::actor: return "actor";
-            case mesh_request_surface_t::none: return "";
+            case mesh_request_surface_t::node:
+                return "node";
+            case mesh_request_surface_t::channel:
+                return "channel";
+            case mesh_request_surface_t::spot:
+                return "spot";
+            case mesh_request_surface_t::instance_spot:
+                return "instance_spot";
+            case mesh_request_surface_t::actor:
+                return "actor";
+            case mesh_request_surface_t::none:
+                return "";
         }
         return "";
     }
@@ -91,7 +107,8 @@ class mesh_request_metric_t
     // Take by reference and copy only when armed. Taking by value would cost a
     // refcount pair on every request even with metrics collection disabled.
     mesh_request_metric_t (const std::shared_ptr<mesh_request_metrics_t> &metrics,
-                           mesh_request_surface_t surface) : _surface (surface)
+                           mesh_request_surface_t surface) :
+        _surface (surface)
     {
         if (metrics && metrics->enabled () && surface != mesh_request_surface_t::none)
             _metrics = metrics;

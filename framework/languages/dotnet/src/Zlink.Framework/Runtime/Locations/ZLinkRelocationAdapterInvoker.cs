@@ -9,13 +9,15 @@ internal interface IZLinkRelocationAdapterInvoker
     ValueTask<byte[]> CaptureAsync(
         IServiceProvider services,
         object instance,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 
     ValueTask RestoreAsync(
         IServiceProvider services,
         object instance,
         ReadOnlyMemory<byte> payload,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 }
 
 internal sealed class ZLinkSpotRelocationAdapterInvoker<TSpot>(Type adapterType)
@@ -25,29 +27,25 @@ internal sealed class ZLinkSpotRelocationAdapterInvoker<TSpot>(Type adapterType)
     public ValueTask<byte[]> CaptureAsync(
         IServiceProvider services,
         object instance,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        return Resolve(services).CaptureAsync(
-            (TSpot)instance,
-            cancellationToken);
+        return Resolve(services).CaptureAsync((TSpot)instance, cancellationToken);
     }
 
     public ValueTask RestoreAsync(
         IServiceProvider services,
         object instance,
         ReadOnlyMemory<byte> payload,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        return Resolve(services).RestoreAsync(
-            (TSpot)instance,
-            payload,
-            cancellationToken);
+        return Resolve(services).RestoreAsync((TSpot)instance, payload, cancellationToken);
     }
 
     private IZLinkSpotRelocationAdapter<TSpot> Resolve(IServiceProvider services)
     {
-        return (IZLinkSpotRelocationAdapter<TSpot>)
-            services.GetRequiredService(adapterType);
+        return (IZLinkSpotRelocationAdapter<TSpot>)services.GetRequiredService(adapterType);
     }
 }
 
@@ -58,28 +56,24 @@ internal sealed class ZLinkActorRelocationAdapterInvoker<TActor>(Type adapterTyp
     public ValueTask<byte[]> CaptureAsync(
         IServiceProvider services,
         object instance,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        return Resolve(services).CaptureAsync(
-            (TActor)instance,
-            cancellationToken);
+        return Resolve(services).CaptureAsync((TActor)instance, cancellationToken);
     }
 
     public ValueTask RestoreAsync(
         IServiceProvider services,
         object instance,
         ReadOnlyMemory<byte> payload,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        return Resolve(services).RestoreAsync(
-            (TActor)instance,
-            payload,
-            cancellationToken);
+        return Resolve(services).RestoreAsync((TActor)instance, payload, cancellationToken);
     }
 
     private IZLinkActorRelocationAdapter<TActor> Resolve(IServiceProvider services)
     {
-        return (IZLinkActorRelocationAdapter<TActor>)
-            services.GetRequiredService(adapterType);
+        return (IZLinkActorRelocationAdapter<TActor>)services.GetRequiredService(adapterType);
     }
 }

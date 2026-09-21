@@ -1,4 +1,8 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException, internalFrameworkErrorKind  } from '../framework-errors-internal';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException,
+  internalFrameworkErrorKind
+} from '../framework-errors-internal';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import type {
   ActorRef,
@@ -6,10 +10,7 @@ import type {
   ZLinkRouteMessageContext,
   ZLinkSessionActor
 } from '../../contracts';
-import {
-  ZLinkFrameworkException,
-  ZLinkSpotKind
-} from '../../contracts';
+import { ZLinkFrameworkException, ZLinkSpotKind } from '../../contracts';
 import { ZLinkConfigurationException } from '../../contracts/Configuration/ConfigurationException';
 import type { Message } from '../../contracts/Common/Message';
 import {
@@ -108,12 +109,15 @@ export class ZLinkActorPacketRelay {
         const node = options.spotNodeRuntime()?.primaryMeshNode;
         return node === undefined ? undefined : String(node.status().routingId);
       },
-      spotRouterChannelIdForMesh: spotRouterChannelIdByMesh?.call(options.meshRouters)
-        ?? ((meshName) => meshName)
+      spotRouterChannelIdForMesh:
+        spotRouterChannelIdByMesh?.call(options.meshRouters) ?? ((meshName) => meshName)
     });
   }
 
-  async notifyBoundActorDisconnected(actor: ZLinkSessionActor, signal?: AbortSignal): Promise<void> {
+  async notifyBoundActorDisconnected(
+    actor: ZLinkSessionActor,
+    signal?: AbortSignal
+  ): Promise<void> {
     const state = this.options.actorManager()?.getState(actor.actorId);
     const currentRemoteBoundSessionTarget =
       state?.spotId === undefined
@@ -124,9 +128,10 @@ export class ZLinkActorPacketRelay {
           );
     const currentRemoteActorPacketTarget =
       state?.spotId === undefined ? undefined : state.remoteActorPacketTarget;
-    const remoteTarget = currentRemoteBoundSessionTarget
-      ?? currentRemoteActorPacketTarget
-      ?? (state?.spotId === undefined ? undefined : this.targets.cachedTargetForActor(actor));
+    const remoteTarget =
+      currentRemoteBoundSessionTarget ??
+      currentRemoteActorPacketTarget ??
+      (state?.spotId === undefined ? undefined : this.targets.cachedTargetForActor(actor));
     if (remoteTarget !== undefined) {
       await this.notifyRemoteActorDisconnected(actor.actorId, remoteTarget, signal, actor.ref);
       return;
@@ -166,12 +171,13 @@ export class ZLinkActorPacketRelay {
 
   async notifyActorDisconnectedById(actorId: string, signal?: AbortSignal): Promise<void> {
     const state = this.options.actorManager()?.getState(actorId);
-    const remoteTarget = state === undefined
-      ? undefined
-      : preferredRemoteBoundSessionTarget(
-          state.remoteBoundSessionTarget,
-          state.boundSessionTransferTarget
-        ) ?? state.remoteActorPacketTarget;
+    const remoteTarget =
+      state === undefined
+        ? undefined
+        : (preferredRemoteBoundSessionTarget(
+            state.remoteBoundSessionTarget,
+            state.boundSessionTransferTarget
+          ) ?? state.remoteActorPacketTarget);
     if (remoteTarget !== undefined) {
       await this.notifyRemoteActorDisconnected(actorId, remoteTarget, signal);
       return;
@@ -238,8 +244,10 @@ export class ZLinkActorPacketRelay {
       );
       const messageFollowContext = relay.messageFollowContext;
       if (messageFollowContext !== undefined) {
-        if (messageFollowContext.deadlineUnixMs !== undefined
-            && Date.now() >= messageFollowContext.deadlineUnixMs) {
+        if (
+          messageFollowContext.deadlineUnixMs !== undefined &&
+          Date.now() >= messageFollowContext.deadlineUnixMs
+        ) {
           throw createInternalFrameworkException(
             ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
             `Actor request '${relay.actorId}' exceeded its Message Follow deadline.`
@@ -248,39 +256,45 @@ export class ZLinkActorPacketRelay {
         verifyActorMessageFollowPayload(messageFollowContext, [header, body]);
       }
       const relayNodeRid = relay.actorNodeRid ?? relay.bindingActorNodeRid;
-      const relayNodeRidHex = relay.actorNodeRid === undefined
-        ? relay.bindingActorNodeRidHex
-        : relay.actorNodeRidHex;
+      const relayNodeRidHex =
+        relay.actorNodeRid === undefined ? relay.bindingActorNodeRidHex : relay.actorNodeRidHex;
       const relayGeneration = relay.actorGeneration ?? relay.bindingActorGeneration;
-      const fallbackActorRef = relayNodeRid === undefined
-        || relayGeneration === undefined
-        ? undefined
-        : messageFollowContext === undefined
-          ? {
-              actorId: relay.actorId,
-              objectGeneration: BigInt(relayGeneration),
-              meshName: _routeContext.meshName,
-              nodeRid: decodeRoutingId(relayNodeRid, relayNodeRidHex),
-              ...(relay.bindingGeneration === undefined
-                ? {}
-                : { bindingGeneration: BigInt(relay.bindingGeneration) })
-            }
-          : attachActorMessageFollowContext({
-              actorId: relay.actorId,
-              objectGeneration: BigInt(relayGeneration),
-              meshName: _routeContext.meshName,
-              nodeRid: decodeRoutingId(relayNodeRid, relayNodeRidHex),
-              ...(relay.bindingGeneration === undefined
-                ? {}
-                : { bindingGeneration: BigInt(relay.bindingGeneration) })
-            }, messageFollowContext);
+      const fallbackActorRef =
+        relayNodeRid === undefined || relayGeneration === undefined
+          ? undefined
+          : messageFollowContext === undefined
+            ? {
+                actorId: relay.actorId,
+                objectGeneration: BigInt(relayGeneration),
+                meshName: _routeContext.meshName,
+                nodeRid: decodeRoutingId(relayNodeRid, relayNodeRidHex),
+                ...(relay.bindingGeneration === undefined
+                  ? {}
+                  : { bindingGeneration: BigInt(relay.bindingGeneration) })
+              }
+            : attachActorMessageFollowContext(
+                {
+                  actorId: relay.actorId,
+                  objectGeneration: BigInt(relayGeneration),
+                  meshName: _routeContext.meshName,
+                  nodeRid: decodeRoutingId(relayNodeRid, relayNodeRidHex),
+                  ...(relay.bindingGeneration === undefined
+                    ? {}
+                    : { bindingGeneration: BigInt(relay.bindingGeneration) })
+                },
+                messageFollowContext
+              );
       if (frameHeader.name === ZLINK_REMOTE_ACTOR_SESSION_BIND_PACKET) {
         if (frameHeader.kind !== ZLinkStreamMessageKind.Send) {
           throw new Error('Remote actor session binding requires a send frame.');
         }
-        const { sessionNodeRid, sessionRid } = decodeRemoteActorSessionBinding(messageToBytes(body));
+        const { sessionNodeRid, sessionRid } = decodeRemoteActorSessionBinding(
+          messageToBytes(body)
+        );
         if (!routingIdsEqual(sessionNodeRid, _routeContext.sourceNodeRid)) {
-          throw new Error('Remote actor session binding source did not match the declared session node.');
+          throw new Error(
+            'Remote actor session binding source did not match the declared session node.'
+          );
         }
         const state = this.options.actorManager()?.getState(relay.actorId);
         const actorRef = state?.nativeActorRef;
@@ -290,34 +304,45 @@ export class ZLinkActorPacketRelay {
         if (this.requireSpotNodeRuntime().primaryMeshNode === undefined) {
           throw new Error('MeshNode actor runtime is not started.');
         }
-        const target = relay.routerChannelId === undefined
-          ? this.options.meshRouters.remoteBoundSessionTargetForSource(sessionNodeRid)
-          : {
-              routerChannelId: relay.routerChannelId,
-              targetNodeRid: sessionNodeRid,
-              spotId: sessionNodeRid
-            };
+        const target =
+          relay.routerChannelId === undefined
+            ? this.options.meshRouters.remoteBoundSessionTargetForSource(sessionNodeRid)
+            : {
+                routerChannelId: relay.routerChannelId,
+                targetNodeRid: sessionNodeRid,
+                spotId: sessionNodeRid
+              };
         if (target === undefined) {
           throw new Error('Remote actor session binding did not declare a return router.');
         }
-        const bindingGeneration = (fallbackActorRef as (ActorRef & {
-          readonly bindingGeneration?: bigint;
-        }) | undefined)?.bindingGeneration;
-        const refreshedTarget = mergeRemoteBoundSessionTarget({
-          ...target,
-          sessionNodeRid,
-          sessionRid,
-          ...(bindingGeneration === undefined ? {} : { bindingGeneration })
-        }, preferredRemoteBoundSessionTarget(
-          state.remoteBoundSessionTarget,
-          state.boundSessionTransferTarget
-        ));
+        const bindingGeneration = (
+          fallbackActorRef as
+            | (ActorRef & {
+                readonly bindingGeneration?: bigint;
+              })
+            | undefined
+        )?.bindingGeneration;
+        const refreshedTarget = mergeRemoteBoundSessionTarget(
+          {
+            ...target,
+            sessionNodeRid,
+            sessionRid,
+            ...(bindingGeneration === undefined ? {} : { bindingGeneration })
+          },
+          preferredRemoteBoundSessionTarget(
+            state.remoteBoundSessionTarget,
+            state.boundSessionTransferTarget
+          )
+        );
         state.setRemoteBoundSessionTarget(refreshedTarget);
         return { ok: true, response: { acknowledged: true } };
       }
       if (frameHeader.name === ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET) {
         this.requireCurrentRemoteBinding(relay, _routeContext);
-        this.options.actorManager()?.getState(relay.actorId)?.setRemoteBoundSessionTarget(undefined);
+        this.options
+          .actorManager()
+          ?.getState(relay.actorId)
+          ?.setRemoteBoundSessionTarget(undefined);
         await this.notifyLocalActorDisconnectedById(relay.actorId);
         return {
           ok: true,
@@ -331,22 +356,23 @@ export class ZLinkActorPacketRelay {
       }
       const state = this.options.actorManager()?.getState(relay.actorId);
       if (frameHeader.kind === ZLinkStreamMessageKind.Send) {
-        const dispatch = state?.spotId === undefined
-          ? this.requireSpotNodeRuntime().dispatchEntryActorPacket(
-              relay.actorId,
-              [header, body],
-              false,
-              remoteBoundSessionTarget,
-              fallbackActorRef
-            )
-          : this.requireSpotManager().dispatchRoutedActorPacket(
-              state.spotId,
-              relay.actorId,
-              [header, body],
-              false,
-              remoteBoundSessionTarget,
-              fallbackActorRef
-            );
+        const dispatch =
+          state?.spotId === undefined
+            ? this.requireSpotNodeRuntime().dispatchEntryActorPacket(
+                relay.actorId,
+                [header, body],
+                false,
+                remoteBoundSessionTarget,
+                fallbackActorRef
+              )
+            : this.requireSpotManager().dispatchRoutedActorPacket(
+                state.spotId,
+                relay.actorId,
+                [header, body],
+                false,
+                remoteBoundSessionTarget,
+                fallbackActorRef
+              );
         // Spec 05 §1.3: a one-way Session Actor relay completes at relay
         // queue admission, not after the remote application turn. In
         // particular, a handler may register a deferred Join whose relocation
@@ -362,10 +388,9 @@ export class ZLinkActorPacketRelay {
             try {
               await dispatch;
             } catch (error) {
-              this.options.errorSink().reportRuntimeTaskException(
-                'remote actor packet relay',
-                error
-              );
+              this.options
+                .errorSink()
+                .reportRuntimeTaskException('remote actor packet relay', error);
             } finally {
               header.close();
               body.close();
@@ -380,67 +405,69 @@ export class ZLinkActorPacketRelay {
         };
       }
       if (
-        frameHeader.kind === ZLinkStreamMessageKind.Request
-        && frameHeader.requestSeq !== undefined
-        && relay.returnResponse !== true
+        frameHeader.kind === ZLinkStreamMessageKind.Request &&
+        frameHeader.requestSeq !== undefined &&
+        relay.returnResponse !== true
       ) {
-        const dispatch = state?.spotId === undefined
-          ? this.requireSpotNodeRuntime().dispatchEntryActorPacket(
-              relay.actorId,
-              [header, body],
-              false,
-              remoteBoundSessionTarget,
-              fallbackActorRef
-            )
-          : this.requireSpotManager().dispatchRoutedActorPacket(
-              state.spotId,
-              relay.actorId,
-              [header, body],
-              false,
-              remoteBoundSessionTarget,
-              fallbackActorRef
-            );
+        const dispatch =
+          state?.spotId === undefined
+            ? this.requireSpotNodeRuntime().dispatchEntryActorPacket(
+                relay.actorId,
+                [header, body],
+                false,
+                remoteBoundSessionTarget,
+                fallbackActorRef
+              )
+            : this.requireSpotManager().dispatchRoutedActorPacket(
+                state.spotId,
+                relay.actorId,
+                [header, body],
+                false,
+                remoteBoundSessionTarget,
+                fallbackActorRef
+              );
         closeFrameMessages = false;
         const deferredPacketName = frameHeader.name;
         const deferredRequestSeq = frameHeader.requestSeq;
         const deferredMetadata = frameHeader.metadata;
-        void dispatch.catch(async (error) => {
-          //  Spec 32 §5 — an accepted Request must end in exactly one
-          //  terminal completion. deferredResponse already told the source
-          //  the reply will arrive on the bound-session route, so a routed
-          //  dispatch REJECTED BEFORE DISPATCH (a closing/missing Spot
-          //  throws ZLinkConfigurationException from activation resolution)
-          //  must send its error there instead of only sinking it. Failures
-          //  past that boundary already produce their own terminal through
-          //  the inner actorErrorSender path — also sending here would emit
-          //  a duplicate terminal for the same requestSeq.
-          if (
-            error instanceof ZLinkConfigurationException
-            && this.options.actorErrorSender !== undefined
-          ) {
-            try {
-              await this.options.actorErrorSender(
-                relay.actorId,
-                deferredPacketName,
-                deferredRequestSeq,
-                error,
-                deferredMetadata,
-                remoteBoundSessionTarget,
-                fallbackActorRef
-              );
-              return;
-            } catch (sendFailure) {
-              this.options.errorSink().reportRuntimeTaskException(
-                'remote actor packet relay error reply',
-                sendFailure
-              );
+        void dispatch
+          .catch(async (error) => {
+            //  Spec 32 §5 — an accepted Request must end in exactly one
+            //  terminal completion. deferredResponse already told the source
+            //  the reply will arrive on the bound-session route, so a routed
+            //  dispatch REJECTED BEFORE DISPATCH (a closing/missing Spot
+            //  throws ZLinkConfigurationException from activation resolution)
+            //  must send its error there instead of only sinking it. Failures
+            //  past that boundary already produce their own terminal through
+            //  the inner actorErrorSender path — also sending here would emit
+            //  a duplicate terminal for the same requestSeq.
+            if (
+              error instanceof ZLinkConfigurationException &&
+              this.options.actorErrorSender !== undefined
+            ) {
+              try {
+                await this.options.actorErrorSender(
+                  relay.actorId,
+                  deferredPacketName,
+                  deferredRequestSeq,
+                  error,
+                  deferredMetadata,
+                  remoteBoundSessionTarget,
+                  fallbackActorRef
+                );
+                return;
+              } catch (sendFailure) {
+                this.options
+                  .errorSink()
+                  .reportRuntimeTaskException('remote actor packet relay error reply', sendFailure);
+              }
             }
-          }
-          this.options.errorSink().reportRuntimeTaskException('remote actor packet relay', error);
-        }).finally(() => {
-          header.close();
-          body.close();
-        });
+            this.options.errorSink().reportRuntimeTaskException('remote actor packet relay', error);
+          })
+          .finally(() => {
+            header.close();
+            body.close();
+          });
         return {
           ok: true,
           deferredResponse: true,
@@ -449,22 +476,23 @@ export class ZLinkActorPacketRelay {
           )
         };
       }
-      const response = state?.spotId === undefined
-        ? await this.requireSpotNodeRuntime().dispatchEntryActorPacket(
-            relay.actorId,
-            [header, body],
-            relay.returnResponse === true,
-            remoteBoundSessionTarget,
-            fallbackActorRef
-          )
-        : await this.requireSpotManager().dispatchRoutedActorPacket(
-            state.spotId,
-            relay.actorId,
-            [header, body],
-            relay.returnResponse === true,
-            remoteBoundSessionTarget,
-            fallbackActorRef
-          );
+      const response =
+        state?.spotId === undefined
+          ? await this.requireSpotNodeRuntime().dispatchEntryActorPacket(
+              relay.actorId,
+              [header, body],
+              relay.returnResponse === true,
+              remoteBoundSessionTarget,
+              fallbackActorRef
+            )
+          : await this.requireSpotManager().dispatchRoutedActorPacket(
+              state.spotId,
+              relay.actorId,
+              [header, body],
+              relay.returnResponse === true,
+              remoteBoundSessionTarget,
+              fallbackActorRef
+            );
       return {
         ok: true,
         response,
@@ -476,9 +504,10 @@ export class ZLinkActorPacketRelay {
       return {
         ok: false,
         error: error instanceof Error ? error.message : String(error),
-        errorKind: error instanceof ZLinkFrameworkException
-          ? internalFrameworkErrorKind(error)
-          : ZLinkFrameworkInternalErrorKind.RequestFailed
+        errorKind:
+          error instanceof ZLinkFrameworkException
+            ? internalFrameworkErrorKind(error)
+            : ZLinkFrameworkInternalErrorKind.RequestFailed
       };
     } finally {
       if (closeFrameMessages) {
@@ -510,15 +539,15 @@ export class ZLinkActorPacketRelay {
         return await this.relayLocalActorPacket(actor, frameHeader, payload, signal);
       } catch (error) {
         if (
-          !(error instanceof Error
-            && error.message.includes('no complete Ready authority fence'))
-          || performance.now() >= fenceRetryDeadlineMs
+          !(
+            error instanceof Error && error.message.includes('no complete Ready authority fence')
+          ) ||
+          performance.now() >= fenceRetryDeadlineMs
         ) {
           throw error;
         }
         this.targets.clear(actor.actorId);
-        this.options.actorManager()?.getState(actor.actorId)
-          ?.setRemoteActorPacketTarget(undefined);
+        this.options.actorManager()?.getState(actor.actorId)?.setRemoteActorPacketTarget(undefined);
         await new Promise<void>((resolve) => setTimeout(resolve, 25));
       }
     }
@@ -571,7 +600,10 @@ export class ZLinkActorPacketRelay {
       (parts) => JSON.parse(parts[0]?.getString('utf8') ?? '{}'),
       signal
     );
-    if (reply.ok === false || (reply.response?.acknowledged !== true && reply.acknowledged !== true)) {
+    if (
+      reply.ok === false ||
+      (reply.response?.acknowledged !== true && reply.acknowledged !== true)
+    ) {
       //  An {ok:false} (or unacknowledged) reply here is an immediate remote
       //  rejection — the transport wait itself throws on timeout — so spec 32
       //  reserves DeadlineExceeded for the deadline path and this reply
@@ -579,9 +611,10 @@ export class ZLinkActorPacketRelay {
       //  reply's errorKind when it carries a valid framework kind, else
       //  RequestFailed, matching how other acknowledged relay replies map
       //  {ok:false} (actorRelayError / remoteRelayErrorKind).
-      const remoteKind = Object.values(ZLinkFrameworkInternalErrorKind)
-        .includes(reply.errorKind as ZLinkFrameworkInternalErrorKind)
-        ? reply.errorKind as ZLinkFrameworkInternalErrorKind
+      const remoteKind = Object.values(ZLinkFrameworkInternalErrorKind).includes(
+        reply.errorKind as ZLinkFrameworkInternalErrorKind
+      )
+        ? (reply.errorKind as ZLinkFrameworkInternalErrorKind)
         : ZLinkFrameworkInternalErrorKind.RequestFailed;
       throw createInternalFrameworkException(
         remoteKind,
@@ -598,25 +631,25 @@ export class ZLinkActorPacketRelay {
     delayMs: number
   ): Promise<void> {
     try {
-      await this.options.routeTransport.sendToSpot(
-        target,
-        request,
-        { packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET }
-      );
+      await this.options.routeTransport.sendToSpot(target, request, {
+        packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET
+      });
     } catch (error) {
       if (performance.now() >= deadline) {
         //  Spec 32-framework-error-model: DeadlineExceeded(7). Retry
         //  exhaustion on the one-way bind send remains diagnostics-only but
         //  the caller waits for its bounded submission terminal so later
         //  application relay cannot overtake it.
-        this.options.errorSink().reportRuntimeTaskException(
-          'remote session binding send',
-          createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
-            'Remote actor session binding send retries exceeded their deadline.',
-            error
-          )
-        );
+        this.options
+          .errorSink()
+          .reportRuntimeTaskException(
+            'remote session binding send',
+            createInternalFrameworkException(
+              ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+              'Remote actor session binding send retries exceeded their deadline.',
+              error
+            )
+          );
         return;
       }
       await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
@@ -641,20 +674,20 @@ export class ZLinkActorPacketRelay {
     const localNodeRid = localNode === undefined ? undefined : String(localNode.status().routingId);
     const storedRoute = await streamRuntime.sessionRouteFence(actor.actorId);
     const aggregateOwner = actorSessionBindingRuntimeOwnerIfRegistered(streamRuntime);
-    const aggregateRoute = aggregateOwner === undefined
-      ? undefined
-      : await aggregateOwner.committedRoute(actor.actorId);
+    const aggregateRoute =
+      aggregateOwner === undefined ? undefined : await aggregateOwner.committedRoute(actor.actorId);
     const storedActorRef = aggregateRoute?.actor ?? storedRoute?.actor ?? actor.ref;
     const capturedTenureKey = this.targets.tenureKeyForActorRef(actor.actorId, storedActorRef);
     if (
-      localNodeRid !== undefined
-      && routingIdsEqual(storedActorRef.nodeRid, localNodeRid)
-      && this.options.actorManager()?.getState(actor.actorId)?.actor !== undefined
+      localNodeRid !== undefined &&
+      routingIdsEqual(storedActorRef.nodeRid, localNodeRid) &&
+      this.options.actorManager()?.getState(actor.actorId)?.actor !== undefined
     ) {
       return false;
     }
-    const remoteTarget = this.options.actorManager()?.getState(actor.actorId)?.remoteActorPacketTarget
-      ?? this.targets.cachedTargetForActor(actor);
+    const remoteTarget =
+      this.options.actorManager()?.getState(actor.actorId)?.remoteActorPacketTarget ??
+      this.targets.cachedTargetForActor(actor);
     if (remoteTarget === undefined) {
       return false;
     }
@@ -670,27 +703,27 @@ export class ZLinkActorPacketRelay {
     let request: Record<string, unknown>;
     try {
       const authority = aggregateRoute?.authorityFence;
-      const messageFollowContext = authority?.ownerId === undefined
-          || authority.ownerNodeGeneration === undefined
-        ? undefined
-        : createInitialActorMessageFollowContext(
-            {
-              meshName: storedActorRef.meshName,
-              actorRef: storedActorRef,
-              actorType: authority.actorType ?? '',
-              ownerNodeGeneration: authority.ownerNodeGeneration,
-              ownerId: authority.ownerId,
-              ownerLeaseGeneration: authority.ownerLeaseGeneration,
-              authorityOwnerGeneration: authority.authorityOwnerGeneration,
-              authorityStoreVersion: authority.authorityStoreVersion ?? ''
-            },
-            [header, payload],
-            returnResponse,
-            undefined,
-            isValidMessageFollowId(frameHeader.correlationId)
-              ? frameHeader.correlationId
-              : createMessageFollowId()
-          );
+      const messageFollowContext =
+        authority?.ownerId === undefined || authority.ownerNodeGeneration === undefined
+          ? undefined
+          : createInitialActorMessageFollowContext(
+              {
+                meshName: storedActorRef.meshName,
+                actorRef: storedActorRef,
+                actorType: authority.actorType ?? '',
+                ownerNodeGeneration: authority.ownerNodeGeneration,
+                ownerId: authority.ownerId,
+                ownerLeaseGeneration: authority.ownerLeaseGeneration,
+                authorityOwnerGeneration: authority.authorityOwnerGeneration,
+                authorityStoreVersion: authority.authorityStoreVersion ?? ''
+              },
+              [header, payload],
+              returnResponse,
+              undefined,
+              isValidMessageFollowId(frameHeader.correlationId)
+                ? frameHeader.correlationId
+                : createMessageFollowId()
+            );
       request = encodeRemoteActorPacketRelayPayload({
         actorId: actor.actorId,
         routerChannelId: remoteTarget.routerChannelId,
@@ -714,9 +747,9 @@ export class ZLinkActorPacketRelay {
       spotKind: remoteTarget.spotKind ?? ZLinkSpotKind.User
     };
     if (
-      (frameHeader.kind === ZLinkStreamMessageKind.Send || frameHeader.requestSeq === undefined)
-      && remoteAddress.spotKind === ZLinkSpotKind.Entry
-      && this.options.routeTransport.submit !== undefined
+      (frameHeader.kind === ZLinkStreamMessageKind.Send || frameHeader.requestSeq === undefined) &&
+      remoteAddress.spotKind === ZLinkSpotKind.Entry &&
+      this.options.routeTransport.submit !== undefined
     ) {
       const result = await this.options.routeTransport.submit(
         remoteAddress.routerChannelId,
@@ -758,18 +791,17 @@ export class ZLinkActorPacketRelay {
     );
     const actorPacketTarget = this.targets.decodeFromWire(reply.actorPacketTarget);
     const currentStoredRoute = await streamRuntime.sessionRouteFence(actor.actorId);
-    const currentAggregateRoute = aggregateOwner === undefined
-      ? undefined
-      : await aggregateOwner.committedRoute(actor.actorId);
+    const currentAggregateRoute =
+      aggregateOwner === undefined ? undefined : await aggregateOwner.committedRoute(actor.actorId);
     const currentActorRef = currentAggregateRoute?.actor ?? currentStoredRoute?.actor ?? actor.ref;
-    const currentTenure = this.targets.tenureKeyForActorRef(actor.actorId, currentActorRef)
-      === capturedTenureKey;
+    const currentTenure =
+      this.targets.tenureKeyForActorRef(actor.actorId, currentActorRef) === capturedTenureKey;
     if (
-      currentTenure
-      && this.targets.tenureKeyForActor(actor) === capturedTenureKey
-      &&
+      currentTenure &&
+      this.targets.tenureKeyForActor(actor) === capturedTenureKey &&
       actorPacketTarget !== undefined &&
-      (localNodeRid === undefined || !routingIdsEqual(actorPacketTarget.targetNodeRid, localNodeRid))
+      (localNodeRid === undefined ||
+        !routingIdsEqual(actorPacketTarget.targetNodeRid, localNodeRid))
     ) {
       this.targets.rememberActorTarget(actor, actorPacketTarget, capturedTenureKey);
     } else if (currentTenure && reply.ok !== false) {
@@ -788,7 +820,9 @@ export class ZLinkActorPacketRelay {
         streamMetadataMap(frameHeader.metadata)
       );
       if (!sent) {
-        throw new Error(`Actor '${actor.actorId}' local bound session error response route is not ready.`);
+        throw new Error(
+          `Actor '${actor.actorId}' local bound session error response route is not ready.`
+        );
       }
       return true;
     }
@@ -813,7 +847,7 @@ export class ZLinkActorPacketRelay {
     bindingActorRef?: ActorRef
   ): Promise<void> {
     const spotKind: ZLinkSpotKind | undefined =
-      'spotKind' in remoteTarget ? remoteTarget.spotKind as ZLinkSpotKind | undefined : undefined;
+      'spotKind' in remoteTarget ? (remoteTarget.spotKind as ZLinkSpotKind | undefined) : undefined;
     const header: ZLinkStreamFrameHeader = {
       kind: ZLinkStreamMessageKind.Send,
       codec: ZLinkStreamCodec.Raw,
@@ -860,19 +894,20 @@ export class ZLinkActorPacketRelay {
     routeContext: ZLinkRouteMessageContext
   ): void {
     const state = this.options.actorManager()?.getState(relay.actorId);
-    const current = state === undefined
-      ? undefined
-      : preferredRemoteBoundSessionTarget(
-          state.remoteBoundSessionTarget,
-          state.boundSessionTransferTarget
-        );
+    const current =
+      state === undefined
+        ? undefined
+        : preferredRemoteBoundSessionTarget(
+            state.remoteBoundSessionTarget,
+            state.boundSessionTransferTarget
+          );
     if (
-      current === undefined
-      || current.sessionNodeRid === undefined
-      || !routingIdsEqual(current.sessionNodeRid, routeContext.sourceNodeRid)
-      || current.bindingGeneration === undefined
-      || relay.bindingGeneration === undefined
-      || current.bindingGeneration !== BigInt(relay.bindingGeneration)
+      current === undefined ||
+      current.sessionNodeRid === undefined ||
+      !routingIdsEqual(current.sessionNodeRid, routeContext.sourceNodeRid) ||
+      current.bindingGeneration === undefined ||
+      relay.bindingGeneration === undefined ||
+      current.bindingGeneration !== BigInt(relay.bindingGeneration)
     ) {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.ActorSessionNotBound,
@@ -924,7 +959,8 @@ export class ZLinkActorPacketRelay {
     void signal;
     const state = this.options.actorManager()?.getState(actor.actorId);
     const spotId = state?.spotId as RoutingId | undefined;
-    const hasActiveSpot = spotId !== undefined && this.options.spotManager()?.hasActiveSpot(spotId) === true;
+    const hasActiveSpot =
+      spotId !== undefined && this.options.spotManager()?.hasActiveSpot(spotId) === true;
     if (!hasActiveSpot) {
       return false;
     }
@@ -938,15 +974,17 @@ export class ZLinkActorPacketRelay {
     ) {
       return false;
     }
-    const responseTarget = await this.options.streamBindingRuntime().captureBoundSessionResponseTarget(actor);
+    const responseTarget = await this.options
+      .streamBindingRuntime()
+      .captureBoundSessionResponseTarget(actor);
     const encodedHeader = encodeStreamHeader(frameHeader);
     //  encodeStreamHeader returns a fresh, unaliased array; view it without re-copying.
     const header = RuntimeMessage.fromOwned(
       Buffer.from(encodedHeader.buffer, encodedHeader.byteOffset, encodedHeader.byteLength)
     );
     const body = RuntimeMessage.fromOwned(Buffer.from(messageToBytes(payload)));
-    const returnResponse = frameHeader.kind === ZLinkStreamMessageKind.Request
-      && frameHeader.requestSeq !== undefined;
+    const returnResponse =
+      frameHeader.kind === ZLinkStreamMessageKind.Request && frameHeader.requestSeq !== undefined;
     try {
       this.options.detachedTaskRunner.runDetached('local actor packet relay', async () => {
         try {
@@ -968,7 +1006,9 @@ export class ZLinkActorPacketRelay {
             streamMetadataMap(frameHeader.metadata)
           );
           if (!sent) {
-            throw new Error(`Actor '${actor.actorId}' local bound session response route is not ready.`);
+            throw new Error(
+              `Actor '${actor.actorId}' local bound session response route is not ready.`
+            );
           }
         } catch (error) {
           if (!returnResponse) {
@@ -1007,14 +1047,9 @@ export class ZLinkActorPacketRelay {
     metadata: ReadonlyMap<string, string>
   ): Promise<boolean> {
     return target === undefined
-      ? await this.options.streamBindingRuntime().sendLocalBoundSessionResponse(
-        actorId,
-        packetName,
-        requestSeq,
-        response,
-        metadata,
-        false
-      )
+      ? await this.options
+          .streamBindingRuntime()
+          .sendLocalBoundSessionResponse(actorId, packetName, requestSeq, response, metadata, false)
       : await target.sendResponse(packetName, requestSeq, response, metadata);
   }
 
@@ -1027,13 +1062,9 @@ export class ZLinkActorPacketRelay {
     metadata: ReadonlyMap<string, string>
   ): Promise<boolean> {
     return target === undefined
-      ? await this.options.streamBindingRuntime().sendLocalBoundSessionError(
-        actorId,
-        packetName,
-        requestSeq,
-        error,
-        metadata
-      )
+      ? await this.options
+          .streamBindingRuntime()
+          .sendLocalBoundSessionError(actorId, packetName, requestSeq, error, metadata)
       : await target.sendError(packetName, requestSeq, error, metadata);
   }
 
@@ -1055,9 +1086,7 @@ export class ZLinkActorPacketRelay {
 }
 
 function isValidMessageFollowId(value: string | undefined): value is string {
-  return value !== undefined
-    && /^[0-9a-f]{32}$/.test(value)
-    && !/^0+$/.test(value);
+  return value !== undefined && /^[0-9a-f]{32}$/.test(value) && !/^0+$/.test(value);
 }
 
 /** Reuses the target when it already carries a spot kind instead of spreading a copy per call. */
@@ -1066,5 +1095,5 @@ function withDefaultSpotKind(
 ): ZLinkRemoteActorPacketTarget & { readonly spotKind: ZLinkSpotKind } {
   return target.spotKind === undefined
     ? { ...target, spotKind: ZLinkSpotKind.Entry }
-    : target as ZLinkRemoteActorPacketTarget & { readonly spotKind: ZLinkSpotKind };
+    : (target as ZLinkRemoteActorPacketTarget & { readonly spotKind: ZLinkSpotKind });
 }

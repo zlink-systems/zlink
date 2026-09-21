@@ -1,12 +1,6 @@
-import {
-  ZlinkStreamCodec
-} from './ZlinkStreamEnums';
-import type {
-  ZlinkStreamPayloadCodec
-} from './ZlinkStreamConnectorOptions';
-import type {
-  ZlinkStreamEncodedPayload
-} from './ZlinkStreamModels';
+import { ZlinkStreamCodec } from './ZlinkStreamEnums';
+import type { ZlinkStreamPayloadCodec } from './ZlinkStreamConnectorOptions';
+import type { ZlinkStreamEncodedPayload } from './ZlinkStreamModels';
 
 export const zlinkStreamJsonCodecName = 'json';
 

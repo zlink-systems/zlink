@@ -16,22 +16,26 @@ public sealed class FlowCorrelationTests
             CreateChannelCorrelation(),
             ZlinkStreamCorrelation.Next(),
             CreateChannelCorrelation(),
-            CreateChannelCorrelation()
-        }.Select(value => Convert.ToUInt64(value, 16)).ToArray();
+            CreateChannelCorrelation(),
+        }
+            .Select(value => Convert.ToUInt64(value, 16))
+            .ToArray();
 
         for (var index = 1; index < correlations.Length; index++)
         {
             Assert.True(
                 correlations[index] > correlations[index - 1],
-                $"Correlation sequence did not increase: {correlations[index - 1]:x} then {correlations[index]:x}.");
+                $"Correlation sequence did not increase: {correlations[index - 1]:x} then {correlations[index]:x}."
+            );
         }
     }
 
     private static string CreateChannelCorrelation() =>
-        Assert.IsType<string>(ZLinkClientCallCodec.CreateEnvelope(
-            ZLinkMessageKind.Request,
-            "orders",
-            "GetOrder").CorrelationId);
+        Assert.IsType<string>(
+            ZLinkClientCallCodec
+                .CreateEnvelope(ZLinkMessageKind.Request, "orders", "GetOrder")
+                .CorrelationId
+        );
 
     [Fact]
     public void UuidV7_generator_emits_the_frozen_canonical_format()
@@ -68,7 +72,8 @@ public sealed class FlowCorrelationTests
         Assert.Null(await detached);
         using var applicationScope = ZLinkFlowContext.EnterCurrentOrCreate(
             ZLinkFlowOrigin.Application,
-            captureEnabled: true);
+            captureEnabled: true
+        );
         var application = Assert.IsType<ZLinkFlowValue>(ZLinkFlowContext.Current);
         Assert.NotEqual(flowId, application.FlowId);
         Assert.Equal(ZLinkFlowOrigin.Application, application.Origin);
@@ -78,7 +83,8 @@ public sealed class FlowCorrelationTests
     public async Task Spot_timer_callback_starts_a_timer_root_and_restores_the_caller_context()
     {
         var observed = new TaskCompletionSource<ZLinkFlowValue>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         await using var registry = new ZLinkSpotTimerRegistry(static () => true);
 
         var timer = await registry.AddAsync(
@@ -94,7 +100,8 @@ public sealed class FlowCorrelationTests
                 return ValueTask.FromResult(true);
             },
             static (_, _, _, _, _) => ValueTask.CompletedTask,
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         var flow = await observed.Task.WaitAsync(TimeSpan.FromSeconds(2));
         await timer.CancelAsync();
@@ -111,7 +118,8 @@ public sealed class FlowCorrelationTests
         public ValueTask HandleAsync(
             FlowTimerSpot spot,
             ZLinkTimerTick tick,
-            CancellationToken cancellationToken) => ValueTask.CompletedTask;
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
     }
 
     private sealed class FlowActor(string actorId) : IZLinkActor
@@ -120,9 +128,6 @@ public sealed class FlowCorrelationTests
 
         public IZLinkActorContext Context { get; } = new TestActorContext(actorId);
 
-        public void Configure()
-        {
-        }
+        public void Configure() { }
     }
-
 }

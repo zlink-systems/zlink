@@ -1,23 +1,24 @@
 package systems.zlink.framework.runtime.internal.service;
-import java.util.Arrays;
+
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 import java.io.ByteArrayOutputStream;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
-import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 /**
  * Encodes the service prefix defined by service-wire-v1.schema.json.
  *
- * <p>The codec owns validation and copies every frame before it can enter a
- * mailbox. Raw binding buffers therefore never escape the transport turn.
+ * <p>The codec owns validation and copies every frame before it can enter a mailbox. Raw binding
+ * buffers therefore never escape the transport turn.
  */
 public final class ZLinkServiceWireCodec {
     private static final int KNOWN_FLAGS =
-        ServiceWireConstants.FLAG_METADATA
-            | ServiceWireConstants.FLAG_BOUND_SESSION
-            | ServiceWireConstants.FLAG_SOURCE_SPOT_ID
-            | ServiceWireConstants.FLAG_EXTENSION;
+            ServiceWireConstants.FLAG_METADATA
+                    | ServiceWireConstants.FLAG_BOUND_SESSION
+                    | ServiceWireConstants.FLAG_SOURCE_SPOT_ID
+                    | ServiceWireConstants.FLAG_EXTENSION;
     private static final int PREFIX_BYTES = 5;
 
     public List<byte[]> encode(ZLinkServiceWireFrame record) {
@@ -27,13 +28,14 @@ public final class ZLinkServiceWireCodec {
         validateConditionalFrames(record.flags(), body.size());
         validateLivenessBody(record.command(), body);
 
-        byte[] prefix = new byte[] {
-            (byte) ServiceWireConstants.MAGIC_0,
-            (byte) ServiceWireConstants.MAGIC_1,
-            (byte) ServiceWireConstants.WIRE_MAJOR,
-            (byte) record.command(),
-            (byte) record.flags()
-        };
+        byte[] prefix =
+                new byte[] {
+                    (byte) ServiceWireConstants.MAGIC_0,
+                    (byte) ServiceWireConstants.MAGIC_1,
+                    (byte) ServiceWireConstants.WIRE_MAJOR,
+                    (byte) record.command(),
+                    (byte) record.flags()
+                };
         ByteArrayOutputStream head = new ByteArrayOutputStream();
         head.writeBytes(prefix);
         body.forEach(head::writeBytes);
@@ -50,8 +52,8 @@ public final class ZLinkServiceWireCodec {
         }
         byte[] head = Objects.requireNonNull(multipart.getFirst(), "head");
         if (head.length < PREFIX_BYTES
-            || Byte.toUnsignedInt(head[0]) != ServiceWireConstants.MAGIC_0
-            || Byte.toUnsignedInt(head[1]) != ServiceWireConstants.MAGIC_1) {
+                || Byte.toUnsignedInt(head[0]) != ServiceWireConstants.MAGIC_0
+                || Byte.toUnsignedInt(head[1]) != ServiceWireConstants.MAGIC_1) {
             throw new ZLinkServiceWireException("invalid service record prefix");
         }
         int major = Byte.toUnsignedInt(head[2]);
@@ -63,9 +65,10 @@ public final class ZLinkServiceWireCodec {
         validateCommandAndFlags(command, flags);
         validateConditionalFrames(flags, head.length - PREFIX_BYTES);
 
-        List<byte[]> body = head.length == PREFIX_BYTES
-            ? List.of()
-            : List.of(Arrays.copyOfRange(head, PREFIX_BYTES, head.length));
+        List<byte[]> body =
+                head.length == PREFIX_BYTES
+                        ? List.of()
+                        : List.of(Arrays.copyOfRange(head, PREFIX_BYTES, head.length));
         validateLivenessBody(command, body);
         return new ZLinkServiceWireFrame(command, flags, body);
     }
@@ -78,7 +81,8 @@ public final class ZLinkServiceWireCodec {
             throw new ZLinkServiceWireException("service record contains an unknown flag");
         }
         if ((command == ServiceWireConstants.COMMAND_LIVENESS_PROBE
-            || command == ServiceWireConstants.COMMAND_LIVENESS_ACK) && flags != 0) {
+                        || command == ServiceWireConstants.COMMAND_LIVENESS_ACK)
+                && flags != 0) {
             throw new ZLinkServiceWireException("liveness records do not accept flags");
         }
     }
@@ -91,7 +95,7 @@ public final class ZLinkServiceWireCodec {
 
     private static void validateLivenessBody(int command, List<byte[]> body) {
         if (command != ServiceWireConstants.COMMAND_LIVENESS_PROBE
-            && command != ServiceWireConstants.COMMAND_LIVENESS_ACK) {
+                && command != ServiceWireConstants.COMMAND_LIVENESS_ACK) {
             return;
         }
         if (body.size() != 1 || body.getFirst().length != Long.BYTES) {
@@ -109,44 +113,45 @@ public final class ZLinkServiceWireCodec {
     private static boolean isKnownCommand(int command) {
         return switch (command) {
             case ServiceWireConstants.COMMAND_HELLO,
-                 ServiceWireConstants.COMMAND_ADMIT,
-                 ServiceWireConstants.COMMAND_REJECT,
-                 ServiceWireConstants.COMMAND_UPDATE,
-                 ServiceWireConstants.COMMAND_LIVENESS_PROBE,
-                 ServiceWireConstants.COMMAND_LIVENESS_ACK,
-                 ServiceWireConstants.COMMAND_NODE_SEND,
-                 ServiceWireConstants.COMMAND_NODE_REQUEST,
-                 ServiceWireConstants.COMMAND_CHANNEL_SEND,
-                 ServiceWireConstants.COMMAND_CHANNEL_REQUEST,
-                 ServiceWireConstants.COMMAND_REPLY,
-                 ServiceWireConstants.COMMAND_SPOT_SEND,
-                 ServiceWireConstants.COMMAND_SPOT_REQUEST,
-                 ServiceWireConstants.COMMAND_LOGICAL_MULTICAST,
-                 ServiceWireConstants.COMMAND_ACTOR_SEND,
-                 ServiceWireConstants.COMMAND_ACTOR_REQUEST,
-                 ServiceWireConstants.COMMAND_ACTOR_LOOKUP,
-                 ServiceWireConstants.COMMAND_ACTOR_DESTROY,
-                 ServiceWireConstants.COMMAND_ACTOR_JOIN,
-                 ServiceWireConstants.COMMAND_ACTOR_LEFT,
-                 ServiceWireConstants.COMMAND_RELOCATION_READY,
-                 ServiceWireConstants.COMMAND_RELOCATION_FAILED,
-                 ServiceWireConstants.COMMAND_RELOCATION_DATA,
-                 ServiceWireConstants.COMMAND_REPLY_RELAY,
-                 ServiceWireConstants.COMMAND_RELOCATION_CUTOVER,
-                 ServiceWireConstants.COMMAND_RELOCATION_STATE,
-                 ServiceWireConstants.COMMAND_BOUND_SESSION_SEND,
-                 ServiceWireConstants.COMMAND_ACTOR_JOINED,
-                 ServiceWireConstants.COMMAND_BOUND_SESSION_BIND,
-                 ServiceWireConstants.COMMAND_INSTANCE_SPOT,
-                 ServiceWireConstants.COMMAND_RELOCATION_PREPARE,
-                 ServiceWireConstants.COMMAND_SESSION_RELOCATION_SEAL,
-                 ServiceWireConstants.COMMAND_SESSION_RELOCATION_SEALED,
-                 ServiceWireConstants.COMMAND_SESSION_RELOCATION_ROUTE,
-                 ServiceWireConstants.COMMAND_REPLY_RELAY_ACK,
-                 ServiceWireConstants.COMMAND_USER_SPOT_CREATE,
-                 ServiceWireConstants.COMMAND_USER_SPOT_CLOSE,
-                 ServiceWireConstants.COMMAND_ACTOR_CREATE,
-                 ServiceWireConstants.COMMAND_MESSAGE_FOLLOW -> true;
+                    ServiceWireConstants.COMMAND_ADMIT,
+                    ServiceWireConstants.COMMAND_REJECT,
+                    ServiceWireConstants.COMMAND_UPDATE,
+                    ServiceWireConstants.COMMAND_LIVENESS_PROBE,
+                    ServiceWireConstants.COMMAND_LIVENESS_ACK,
+                    ServiceWireConstants.COMMAND_NODE_SEND,
+                    ServiceWireConstants.COMMAND_NODE_REQUEST,
+                    ServiceWireConstants.COMMAND_CHANNEL_SEND,
+                    ServiceWireConstants.COMMAND_CHANNEL_REQUEST,
+                    ServiceWireConstants.COMMAND_REPLY,
+                    ServiceWireConstants.COMMAND_SPOT_SEND,
+                    ServiceWireConstants.COMMAND_SPOT_REQUEST,
+                    ServiceWireConstants.COMMAND_LOGICAL_MULTICAST,
+                    ServiceWireConstants.COMMAND_ACTOR_SEND,
+                    ServiceWireConstants.COMMAND_ACTOR_REQUEST,
+                    ServiceWireConstants.COMMAND_ACTOR_LOOKUP,
+                    ServiceWireConstants.COMMAND_ACTOR_DESTROY,
+                    ServiceWireConstants.COMMAND_ACTOR_JOIN,
+                    ServiceWireConstants.COMMAND_ACTOR_LEFT,
+                    ServiceWireConstants.COMMAND_RELOCATION_READY,
+                    ServiceWireConstants.COMMAND_RELOCATION_FAILED,
+                    ServiceWireConstants.COMMAND_RELOCATION_DATA,
+                    ServiceWireConstants.COMMAND_REPLY_RELAY,
+                    ServiceWireConstants.COMMAND_RELOCATION_CUTOVER,
+                    ServiceWireConstants.COMMAND_RELOCATION_STATE,
+                    ServiceWireConstants.COMMAND_BOUND_SESSION_SEND,
+                    ServiceWireConstants.COMMAND_ACTOR_JOINED,
+                    ServiceWireConstants.COMMAND_BOUND_SESSION_BIND,
+                    ServiceWireConstants.COMMAND_INSTANCE_SPOT,
+                    ServiceWireConstants.COMMAND_RELOCATION_PREPARE,
+                    ServiceWireConstants.COMMAND_SESSION_RELOCATION_SEAL,
+                    ServiceWireConstants.COMMAND_SESSION_RELOCATION_SEALED,
+                    ServiceWireConstants.COMMAND_SESSION_RELOCATION_ROUTE,
+                    ServiceWireConstants.COMMAND_REPLY_RELAY_ACK,
+                    ServiceWireConstants.COMMAND_USER_SPOT_CREATE,
+                    ServiceWireConstants.COMMAND_USER_SPOT_CLOSE,
+                    ServiceWireConstants.COMMAND_ACTOR_CREATE,
+                    ServiceWireConstants.COMMAND_MESSAGE_FOLLOW ->
+                    true;
             default -> false;
         };
     }

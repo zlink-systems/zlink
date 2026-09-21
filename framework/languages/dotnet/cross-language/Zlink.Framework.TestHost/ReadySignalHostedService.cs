@@ -5,7 +5,8 @@ internal sealed class ReadySignalHostedService(
     IHostApplicationLifetime applicationLifetime,
     string? readyFilePath,
     string? stopFilePath,
-    string mode) : IHostedService
+    string mode
+) : IHostedService
 {
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -26,21 +27,25 @@ internal sealed class ReadySignalHostedService(
 
     private void WriteReadyMarker()
     {
-        var payload = JsonSerializer.Serialize(new
-        {
-            app = "Zlink.Framework.TestHost",
-            mode,
-            pid = Environment.ProcessId
-        });
+        var payload = JsonSerializer.Serialize(
+            new
+            {
+                app = "Zlink.Framework.TestHost",
+                mode,
+                pid = Environment.ProcessId,
+            }
+        );
 
         Console.WriteLine($"READY:{payload}");
 
-        if (!string.IsNullOrWhiteSpace(readyFilePath)) File.WriteAllText(readyFilePath, payload);
+        if (!string.IsNullOrWhiteSpace(readyFilePath))
+            File.WriteAllText(readyFilePath, payload);
     }
 
     private static async Task ListenForStopSignalAsync(
         IHostApplicationLifetime lifetime,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -57,7 +62,8 @@ internal sealed class ReadySignalHostedService(
     private static async Task WatchStopFileAsync(
         IHostApplicationLifetime lifetime,
         string stopFilePath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         while (!cancellationToken.IsCancellationRequested)
         {

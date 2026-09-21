@@ -45,7 +45,9 @@ export function isKnownZLinkLocationRole(role: ZLinkLocationRole): boolean {
   return roleCanonicalNames.has(role);
 }
 
-export function tryParseZLinkLocationAutoConnectType(value: string): ZLinkLocationAutoConnectType | undefined {
+export function tryParseZLinkLocationAutoConnectType(
+  value: string
+): ZLinkLocationAutoConnectType | undefined {
   return canonicalAutoConnectTypes.get(value);
 }
 

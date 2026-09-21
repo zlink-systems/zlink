@@ -17,7 +17,7 @@ public sealed class ScaffoldSmokeTests
         "public struct ",
         "public readonly struct ",
         "public delegate ",
-        "public static class "
+        "public static class ",
     ];
 
     private static readonly string[] InternalTypeDeclarationTokens =
@@ -32,7 +32,7 @@ public sealed class ScaffoldSmokeTests
         "internal struct ",
         "internal readonly struct ",
         "internal delegate ",
-        "internal static class "
+        "internal static class ",
     ];
 
     private static readonly HashSet<Type> AllowedBackendTypes =
@@ -40,7 +40,7 @@ public sealed class ScaffoldSmokeTests
         typeof(Message),
         typeof(RoutingId),
         typeof(SendFlags),
-        typeof(ActorRef)
+        typeof(ActorRef),
     ];
 
     [Fact]
@@ -68,9 +68,15 @@ public sealed class ScaffoldSmokeTests
         Assert.Null(typeof(IZLinkMeshNodeBuilder).GetMethod("AddActorFactory"));
         Assert.NotNull(typeof(IZLinkMeshObjectServerBuilder).GetMethod("AddActorFactory"));
         Assert.Contains(typeof(IZLinkActor), typeof(IZLinkActor).Assembly.GetExportedTypes());
-        Assert.Contains(typeof(IZLinkActorManager), typeof(IZLinkActor).Assembly.GetExportedTypes());
+        Assert.Contains(
+            typeof(IZLinkActorManager),
+            typeof(IZLinkActor).Assembly.GetExportedTypes()
+        );
         Assert.Contains(typeof(IZLinkSession), typeof(IZLinkActor).Assembly.GetExportedTypes());
-        Assert.Contains(typeof(IZLinkSessionContext), typeof(IZLinkActor).Assembly.GetExportedTypes());
+        Assert.Contains(
+            typeof(IZLinkSessionContext),
+            typeof(IZLinkActor).Assembly.GetExportedTypes()
+        );
     }
 
     [Fact]
@@ -79,8 +85,10 @@ public sealed class ScaffoldSmokeTests
         AssertMissingMethod(typeof(IZLinkActorContext), "Reply");
         Assert.DoesNotContain(
             typeof(IZLinkActor).Assembly.GetExportedTypes(),
-            static type => type.FullName == "Zlink.Framework.Contracts.Actors.IZLinkActorReplyCall"
-                           || type.FullName == "Zlink.Framework.Contracts.Actors.IZLinkActorStreamClient");
+            static type =>
+                type.FullName == "Zlink.Framework.Contracts.Actors.IZLinkActorReplyCall"
+                || type.FullName == "Zlink.Framework.Contracts.Actors.IZLinkActorStreamClient"
+        );
     }
 
     [Fact]
@@ -90,13 +98,21 @@ public sealed class ScaffoldSmokeTests
         var sourceRoot = Path.Combine(frameworkRoot, "src", "Zlink.Framework");
         var violations = Directory
             .EnumerateFiles(sourceRoot, "*.cs", SearchOption.AllDirectories)
-            .Where(static path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}",
-                                      StringComparison.Ordinal)
-                                  && !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}",
-                                      StringComparison.Ordinal))
+            .Where(static path =>
+                !path.Contains(
+                    $"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}",
+                    StringComparison.Ordinal
+                )
+                && !path.Contains(
+                    $"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}",
+                    StringComparison.Ordinal
+                )
+            )
             .Where(path => HasPublicTypeDeclaration(File.ReadAllText(path)))
-            .Where(path => !Path.GetRelativePath(sourceRoot, path)
-                .StartsWith($"Contracts{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Where(path =>
+                !Path.GetRelativePath(sourceRoot, path)
+                    .StartsWith($"Contracts{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+            )
             .Select(path => Path.GetRelativePath(sourceRoot, path))
             .Order(StringComparer.Ordinal)
             .ToArray();
@@ -122,13 +138,19 @@ public sealed class ScaffoldSmokeTests
     [Fact]
     public void FrameworkExportedTypes_UseContractsNamespace()
     {
-        var violations = typeof(IZLinkActor).Assembly
-            .GetExportedTypes()
+        var violations = typeof(IZLinkActor)
+            .Assembly.GetExportedTypes()
             .Where(static type => type != typeof(ActorRef))
-            .Where(static type => type.Namespace is null
-                                  || (!type.Namespace.Equals("Zlink.Framework.Contracts", StringComparison.Ordinal)
-                                      && !type.Namespace.StartsWith("Zlink.Framework.Contracts.",
-                                          StringComparison.Ordinal)))
+            .Where(static type =>
+                type.Namespace is null
+                || (
+                    !type.Namespace.Equals("Zlink.Framework.Contracts", StringComparison.Ordinal)
+                    && !type.Namespace.StartsWith(
+                        "Zlink.Framework.Contracts.",
+                        StringComparison.Ordinal
+                    )
+                )
+            )
             .Select(static type => type.FullName)
             .Order(StringComparer.Ordinal)
             .ToArray();
@@ -144,13 +166,18 @@ public sealed class ScaffoldSmokeTests
         {
             AssertPublicBoundary(type);
 
-            foreach (var member in type.GetMembers(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public))
+            foreach (
+                var member in type.GetMembers(
+                    BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public
+                )
+            )
                 switch (member)
                 {
                     case MethodInfo method:
                         AssertTypeAllowed(method.ReturnType);
 
-                        foreach (var parameter in method.GetParameters()) AssertTypeAllowed(parameter.ParameterType);
+                        foreach (var parameter in method.GetParameters())
+                            AssertTypeAllowed(parameter.ParameterType);
 
                         break;
                     case PropertyInfo property:
@@ -170,14 +197,17 @@ public sealed class ScaffoldSmokeTests
     {
         AssertTypeAllowed(type);
 
-        if (type.BaseType is not null) AssertTypeAllowed(type.BaseType);
+        if (type.BaseType is not null)
+            AssertTypeAllowed(type.BaseType);
 
-        foreach (var implementedInterface in type.GetInterfaces()) AssertTypeAllowed(implementedInterface);
+        foreach (var implementedInterface in type.GetInterfaces())
+            AssertTypeAllowed(implementedInterface);
     }
 
     private static void AssertTypeAllowed(Type? type)
     {
-        if (type is null) return;
+        if (type is null)
+            return;
 
         if (type.IsGenericType)
             foreach (var genericArgument in type.GetGenericArguments())
@@ -189,7 +219,8 @@ public sealed class ScaffoldSmokeTests
             return;
         }
 
-        if (type.Assembly != typeof(Systems.Zlink.Zlink).Assembly) return;
+        if (type.Assembly != typeof(Systems.Zlink.Zlink).Assembly)
+            return;
 
         Assert.Contains(type, AllowedBackendTypes);
     }
@@ -205,7 +236,10 @@ public sealed class ScaffoldSmokeTests
             .Split('\n')
             .Select(static line => line.TrimEnd('\r'))
             .Any(static line =>
-                PublicTypeDeclarationTokens.Any(token => line.StartsWith(token, StringComparison.Ordinal)));
+                PublicTypeDeclarationTokens.Any(token =>
+                    line.StartsWith(token, StringComparison.Ordinal)
+                )
+            );
     }
 
     private static bool HasInternalTypeDeclaration(string source)
@@ -214,6 +248,9 @@ public sealed class ScaffoldSmokeTests
             .Split('\n')
             .Select(static line => line.TrimEnd('\r'))
             .Any(static line =>
-                InternalTypeDeclarationTokens.Any(token => line.StartsWith(token, StringComparison.Ordinal)));
+                InternalTypeDeclarationTokens.Any(token =>
+                    line.StartsWith(token, StringComparison.Ordinal)
+                )
+            );
     }
 }

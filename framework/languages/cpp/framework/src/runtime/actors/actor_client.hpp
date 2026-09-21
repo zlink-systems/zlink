@@ -23,9 +23,7 @@ namespace zlink::framework::runtime
 class actor_location_observer_t;
 class live_location_reader_t;
 
-bool actor_request_requires_current_spot_gate (
-  std::string_view target_spot_id,
-  bool release_turn);
+bool actor_request_requires_current_spot_gate (std::string_view target_spot_id, bool release_turn);
 
 std::shared_ptr<actor_client_t>
 make_actor_client (live_location_reader_t &store,
@@ -43,11 +41,10 @@ task_t<void> send_to_actor_ref (actor_client_t &client,
                                 std::string packet_name,
                                 message_t message);
 
-task_t<message_t> request_to_actor_ref (
-  actor_client_t &client,
-  actor_ref_t actor,
-  std::string packet_name,
-  message_t message,
-  std::chrono::milliseconds timeout);
+task_t<message_t> request_to_actor_ref (actor_client_t &client,
+                                        actor_ref_t actor,
+                                        std::string packet_name,
+                                        message_t message,
+                                        std::chrono::milliseconds timeout);
 
 } // namespace zlink::framework::runtime

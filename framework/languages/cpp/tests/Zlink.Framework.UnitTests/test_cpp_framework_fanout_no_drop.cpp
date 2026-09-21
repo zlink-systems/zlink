@@ -36,8 +36,7 @@ const std::string large_record (65'536, 'r');
 // One record (topic frame + payload frame) fills the pipe exactly, so the next
 // publish is refused at its first frame and enters the send-timeout wait
 // instead of Core's multipart-abort path.
-const std::uint64_t record_hwm =
-  large_filler.size () + std::string ("fanout.no-drop").size ();
+const std::uint64_t record_hwm = large_filler.size () + std::string ("fanout.no-drop").size ();
 
 std::string unique_endpoint ()
 {
@@ -57,20 +56,16 @@ class binding_fanout_pair_t
         slow = std::make_unique<zlink::sub_socket_t> (context);
 
         if (no_drop) {
-            zlink::framework::detail::apply_fanout_publisher_socket_options (
-              *publisher, true);
+            zlink::framework::detail::apply_fanout_publisher_socket_options (*publisher, true);
         }
         publisher->options ().linger (0ms);
-        publisher->options ().send_hwm (
-          zlink::byte_count_t::bytes (record_hwm));
+        publisher->options ().send_hwm (zlink::byte_count_t::bytes (record_hwm));
         publisher->options ().verbose (true);
         publisher->options ().recv_timeout (5s);
         fast->options ().linger (0ms);
-        fast->options ().recv_hwm (
-          zlink::byte_count_t::bytes (record_hwm));
+        fast->options ().recv_hwm (zlink::byte_count_t::bytes (record_hwm));
         slow->options ().linger (0ms);
-        slow->options ().recv_hwm (
-          zlink::byte_count_t::bytes (record_hwm));
+        slow->options ().recv_hwm (zlink::byte_count_t::bytes (record_hwm));
         fast->options ().recv_timeout (5s);
         slow->options ().recv_timeout (5s);
 
@@ -107,20 +102,16 @@ class binding_fanout_pair_t
     std::string receive (zlink::sub_socket_t &subscriber)
     {
         zlink::topic_message_t message;
-        EXPECT_EQ (subscriber.subscribe (message),
-                   static_cast<int> (zlink::recv_result_t::ok));
+        EXPECT_EQ (subscriber.subscribe (message), static_cast<int> (zlink::recv_result_t::ok));
         EXPECT_EQ (message.topic (), topic);
         EXPECT_EQ (message.parts ().size (), 1u);
-        return message.parts ().empty () ? std::string ()
-                                         : message.parts ()[0].to_string ();
+        return message.parts ().empty () ? std::string () : message.parts ()[0].to_string ();
     }
 
-    bool try_receive (zlink::sub_socket_t &subscriber,
-                      std::string *payload = nullptr)
+    bool try_receive (zlink::sub_socket_t &subscriber, std::string *payload = nullptr)
     {
         zlink::topic_message_t message;
-        const auto result = subscriber.subscribe (
-          message, zlink::recv_flags_t::dontwait);
+        const auto result = subscriber.subscribe (message, zlink::recv_flags_t::dontwait);
         if (result == static_cast<int> (zlink::recv_result_t::no_data)) {
             return false;
         }
@@ -167,8 +158,7 @@ struct framework_options_fixture_t
     {
         serializers.add<fanout_record_t> (
           [] (const fanout_record_t &value) {
-              return zlink::framework::encoded_payload_t::from_string (
-                value.payload);
+              return zlink::framework::encoded_payload_t::from_string (value.payload);
           },
           [] (const zlink::framework::encoded_payload_t &payload) {
               return fanout_record_t{payload.to_string ()};
@@ -183,8 +173,7 @@ struct framework_options_fixture_t
     zlink::framework::zlink_framework_options_t options;
 };
 
-TEST (cpp_framework_fanout_no_drop,
-      default_drops_only_slow_subscriber_share_after_hwm)
+TEST (cpp_framework_fanout_no_drop, default_drops_only_slow_subscriber_share_after_hwm)
 {
     binding_fanout_pair_t pair (false);
     EXPECT_FALSE (pair.publisher->options ().no_drop ());
@@ -202,16 +191,13 @@ TEST (cpp_framework_fanout_no_drop,
     EXPECT_LT (slow_count, publish_count);
 }
 
-TEST (cpp_framework_fanout_no_drop,
-      no_drop_waits_then_delivers_record_to_every_matching_subscriber)
+TEST (cpp_framework_fanout_no_drop, no_drop_waits_then_delivers_record_to_every_matching_subscriber)
 {
     binding_fanout_pair_t pair (true);
     pair.publisher->options ().send_timeout (2s);
     pair.fill_slow_pipe ();
 
-    auto pending = std::async (std::launch::async, [&] {
-        pair.publish (large_record);
-    });
+    auto pending = std::async (std::launch::async, [&] { pair.publish (large_record); });
     EXPECT_EQ (pending.wait_for (50ms), std::future_status::timeout);
     EXPECT_FALSE (pair.try_receive (*pair.fast));
 
@@ -226,8 +212,7 @@ TEST (cpp_framework_fanout_no_drop,
     } while (slow_payload != large_record);
 }
 
-TEST (cpp_framework_fanout_no_drop,
-      no_drop_send_timeout_maps_to_deadline_exceeded)
+TEST (cpp_framework_fanout_no_drop, no_drop_send_timeout_maps_to_deadline_exceeded)
 {
     framework_options_fixture_t fixture;
     fixture.options.add_fanout_channel ("events")
@@ -235,64 +220,54 @@ TEST (cpp_framework_fanout_no_drop,
       .set_no_drop ();
     fixture.options.apply ();
 
-    auto runtime = zlink::framework::detail::channel_runtime_t::from (
-      fixture.zlink.message_bus ());
+    auto runtime = zlink::framework::detail::channel_runtime_t::from (fixture.zlink.message_bus ());
     runtime.bind_serializers (fixture.serializers);
     runtime.bind_fanout_transport (
-      "events", [] (std::string, std::string, std::string, zlink::message_t,
-                     std::chrono::milliseconds) -> zlink::framework::task_t<void> {
-          throw zlink::submit_error_t (
-            zlink::submit_result_t::backpressured, ETIMEDOUT);
+      "events",
+      [] (std::string, std::string, std::string, zlink::message_t,
+          std::chrono::milliseconds) -> zlink::framework::task_t<void> {
+          throw zlink::submit_error_t (zlink::submit_result_t::backpressured, ETIMEDOUT);
       });
 
     const auto result = fixture.zlink.publisher ()
-                          .publish ("events", "fanout.no-drop",
-                                    fanout_record_t{"payload"})
-                          .async ().result ();
+                          .publish ("events", "fanout.no-drop", fanout_record_t{"payload"})
+                          .async ()
+                          .result ();
 
     ASSERT_FALSE (result);
-    EXPECT_EQ (result.error_kind (),
-               zlink::framework::framework_error_kind_t::deadline_exceeded);
+    EXPECT_EQ (result.error_kind (), zlink::framework::framework_error_kind_t::deadline_exceeded);
 }
 
-TEST (cpp_framework_fanout_no_drop,
-      subscriber_only_channel_rejects_no_drop_at_startup)
+TEST (cpp_framework_fanout_no_drop, subscriber_only_channel_rejects_no_drop_at_startup)
 {
     framework_options_fixture_t fixture;
-    fixture.options.add_fanout_channel ("events")
-      .enable_subscriber ()
-      .set_no_drop ();
+    fixture.options.add_fanout_channel ("events").enable_subscriber ().set_no_drop ();
 
     try {
         fixture.options.apply ();
         FAIL () << "subscriber-only fanout channel accepted NoDrop";
     }
     catch (const zlink::framework::framework_exception_t &error) {
-        EXPECT_EQ (error.kind (),
-                   zlink::framework::framework_error_kind_t::protocol_error);
-        EXPECT_NE (std::string (error.what ()).find ("NoDrop"),
-                   std::string::npos);
+        EXPECT_EQ (error.kind (), zlink::framework::framework_error_kind_t::protocol_error);
+        EXPECT_NE (std::string (error.what ()).find ("NoDrop"), std::string::npos);
     }
 }
 
-TEST (cpp_framework_fanout_no_drop,
-      builder_value_reaches_pub_and_xpub_socket_option)
+TEST (cpp_framework_fanout_no_drop, builder_value_reaches_pub_and_xpub_socket_option)
 {
     framework_options_fixture_t fixture;
-    fixture.options.add_fanout_channel ("default")
-      .enable_publisher (unique_endpoint ());
+    fixture.options.add_fanout_channel ("default").enable_publisher (unique_endpoint ());
     fixture.options.add_fanout_channel ("no-drop")
       .enable_publisher (unique_endpoint ())
       .set_no_drop ();
     fixture.options.apply ();
 
     const auto snapshots =
-      zlink::framework::detail::channel_runtime_t::from (
-        fixture.zlink.message_bus ()).channel_snapshots ();
+      zlink::framework::detail::channel_runtime_t::from (fixture.zlink.message_bus ())
+        .channel_snapshots ();
     const auto find_publisher = [&] (const std::string &name) {
-        return std::find_if (
-          snapshots.begin (), snapshots.end (),
-          [&] (const auto &channel) { return channel.name == name; });
+        return std::find_if (snapshots.begin (), snapshots.end (),
+                             [&] (const auto &channel) { return channel.name == name; });
     };
     const auto default_channel = find_publisher ("default");
     const auto no_drop_channel = find_publisher ("no-drop");

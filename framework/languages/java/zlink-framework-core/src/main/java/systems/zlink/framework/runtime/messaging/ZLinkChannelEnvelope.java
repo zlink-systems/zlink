@@ -1,22 +1,13 @@
 package systems.zlink.framework.runtime.messaging;
 
-import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.core.io.SerializedString;
 import com.fasterxml.jackson.core.util.JsonRecyclerPools;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.UUID;
+
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
@@ -24,15 +15,24 @@ import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.UUID;
+import java.util.concurrent.ArrayBlockingQueue;
+
 /**
- * Shared cross-language channel/SPOT-route wire envelope: a two-part frame of
- * {@code [JSON header, body]} with {@code formatMarker} 0xF2. The header field
- * names, message kinds and error code names match the canonical C++
- * implementation ({@code runtime/messaging/envelope_codec.cpp},
- * {@code runtime/channels/channel_reply_writer.cpp}) and the Node encoder
- * ({@code runtime/channels/channel-envelope.ts}) byte-for-byte in JSON
- * semantics, so Java requests/replies interoperate with the other language
- * frameworks on SPOT route and route mesh paths.
+ * Shared cross-language channel/SPOT-route wire envelope: a two-part frame of {@code [JSON header,
+ * body]} with {@code formatMarker} 0xF2. The header field names, message kinds and error code names
+ * match the canonical C++ implementation ({@code runtime/messaging/envelope_codec.cpp}, {@code
+ * runtime/channels/channel_reply_writer.cpp}) and the Node encoder ({@code
+ * runtime/channels/channel-envelope.ts}) byte-for-byte in JSON semantics, so Java requests/replies
+ * interoperate with the other language frameworks on SPOT route and route mesh paths.
  */
 public final class ZLinkChannelEnvelope {
     public static final int FORMAT_MARKER = 0xF2;
@@ -47,72 +47,66 @@ public final class ZLinkChannelEnvelope {
 
     // Jackson's default recycler is thread-local. Framework handlers use
     // virtual threads, so use Jackson's own bounded shared pool instead.
-    private static final ObjectMapper JSON = new ObjectMapper(JsonFactory.builder()
-        .recyclerPool(JsonRecyclerPools.sharedBoundedPool())
-        .build());
+    private static final ObjectMapper JSON =
+            new ObjectMapper(
+                    JsonFactory.builder()
+                            .recyclerPool(JsonRecyclerPools.sharedBoundedPool())
+                            .build());
     private static final int HEADER_INITIAL_CAPACITY = 256;
     private static final int HEADER_WRITER_POOL_CAPACITY =
-        Math.max(1, Runtime.getRuntime().availableProcessors());
+            Math.max(1, Runtime.getRuntime().availableProcessors());
     private static final ArrayBlockingQueue<HeaderWriter> HEADER_WRITERS =
-        new ArrayBlockingQueue<>(HEADER_WRITER_POOL_CAPACITY);
+            new ArrayBlockingQueue<>(HEADER_WRITER_POOL_CAPACITY);
     // Reuse canonical fixed-header tokens; metadata keys remain dynamic and
     // are never cached.
     private static final SerializedString FORMAT_MARKER_FIELD =
-        new SerializedString("formatMarker");
+            new SerializedString("formatMarker");
     private static final SerializedString FLOW_ID_FIELD = new SerializedString("flowId");
-    private static final SerializedString FLOW_ORIGIN_FIELD =
-        new SerializedString("flowOrigin");
+    private static final SerializedString FLOW_ORIGIN_FIELD = new SerializedString("flowOrigin");
     private static final SerializedString KIND_FIELD = new SerializedString("kind");
-    private static final SerializedString CHANNEL_NAME_FIELD =
-        new SerializedString("channelName");
-    private static final SerializedString MESSAGE_NAME_FIELD =
-        new SerializedString("messageName");
-    private static final SerializedString CONTENT_TYPE_FIELD =
-        new SerializedString("contentType");
+    private static final SerializedString CHANNEL_NAME_FIELD = new SerializedString("channelName");
+    private static final SerializedString MESSAGE_NAME_FIELD = new SerializedString("messageName");
+    private static final SerializedString CONTENT_TYPE_FIELD = new SerializedString("contentType");
     private static final SerializedString CORRELATION_ID_FIELD =
-        new SerializedString("correlationId");
+            new SerializedString("correlationId");
     private static final SerializedString DEADLINE_FIELD = new SerializedString("deadline");
     private static final SerializedString TOPIC_FIELD = new SerializedString("topic");
-    private static final SerializedString ERROR_CODE_FIELD =
-        new SerializedString("errorCode");
+    private static final SerializedString ERROR_CODE_FIELD = new SerializedString("errorCode");
     private static final SerializedString ERROR_MESSAGE_FIELD =
-        new SerializedString("errorMessage");
+            new SerializedString("errorMessage");
     private static final SerializedString SOURCE_FIELD = new SerializedString("source");
     private static final SerializedString METADATA_FIELD = new SerializedString("metadata");
 
-    private ZLinkChannelEnvelope() {
-    }
+    private ZLinkChannelEnvelope() {}
 
     /**
-     * Decoded/encoded envelope header. {@code correlationId}, {@code deadline},
-     * {@code topic}, {@code errorCode}, {@code errorMessage}, {@code source},
-     * {@code flowId} and {@code flowOrigin} are nullable; {@code metadata} is
-     * never null.
+     * Decoded/encoded envelope header. {@code correlationId}, {@code deadline}, {@code topic},
+     * {@code errorCode}, {@code errorMessage}, {@code source}, {@code flowId} and {@code
+     * flowOrigin} are nullable; {@code metadata} is never null.
      */
     public record Header(
-        int kind,
-        String channelName,
-        String messageName,
-        String contentType,
-        String correlationId,
-        String deadline,
-        String topic,
-        String errorCode,
-        String errorMessage,
-        String source,
-        Map<String, String> metadata,
-        String flowId,
-        ZLinkFlowOrigin flowOrigin) {
+            int kind,
+            String channelName,
+            String messageName,
+            String contentType,
+            String correlationId,
+            String deadline,
+            String topic,
+            String errorCode,
+            String errorMessage,
+            String source,
+            Map<String, String> metadata,
+            String flowId,
+            ZLinkFlowOrigin flowOrigin) {
 
         public Header {
             channelName = channelName == null ? "" : channelName;
             messageName = messageName == null ? "" : messageName;
-            contentType = contentType == null || contentType.isEmpty()
-                ? DEFAULT_CONTENT_TYPE
-                : contentType;
-            metadata = metadata == null || metadata.isEmpty()
-                ? Map.of()
-                : Map.copyOf(metadata);
+            contentType =
+                    contentType == null || contentType.isEmpty()
+                            ? DEFAULT_CONTENT_TYPE
+                            : contentType;
+            metadata = metadata == null || metadata.isEmpty() ? Map.of() : Map.copyOf(metadata);
         }
 
         public boolean isError() {
@@ -126,96 +120,94 @@ public final class ZLinkChannelEnvelope {
 
     /** Outbound request/command/publish header with an explicit flow value. */
     public static Header create(
-        int kind,
-        String channelName,
-        String messageName,
-        String contentType,
-        String topic,
-        Map<String, String> metadata,
-        ZLinkFlowContext.State flowState) {
+            int kind,
+            String channelName,
+            String messageName,
+            String contentType,
+            String topic,
+            Map<String, String> metadata,
+            ZLinkFlowContext.State flowState) {
         return create(
-            kind,
-            channelName,
-            messageName,
-            contentType,
-            topic,
-            metadata,
-            flowState,
-            kind == KIND_REQUEST ? ZLinkServiceOperationIds.next() : null);
+                kind,
+                channelName,
+                messageName,
+                contentType,
+                topic,
+                metadata,
+                flowState,
+                kind == KIND_REQUEST ? ZLinkServiceOperationIds.next() : null);
     }
 
     /** Internal request identity overload for the operation owner. */
     public static Header create(
-        int kind,
-        String channelName,
-        String messageName,
-        String contentType,
-        String topic,
-        Map<String, String> metadata,
-        ZLinkFlowContext.State flowState,
-        UUID operationId) {
+            int kind,
+            String channelName,
+            String messageName,
+            String contentType,
+            String topic,
+            Map<String, String> metadata,
+            ZLinkFlowContext.State flowState,
+            UUID operationId) {
         return new Header(
-            kind,
-            channelName,
-            messageName,
-            contentType,
-            kind == KIND_REQUEST
-                ? ZLinkServiceOperationIds.correlationId(operationId)
-                : null,
-            null,
-            topic,
-            null,
-            null,
-            null,
-            metadata,
-            flowState == null ? null : flowState.flowId(),
-            flowState == null ? null : flowState.origin());
+                kind,
+                channelName,
+                messageName,
+                contentType,
+                kind == KIND_REQUEST ? ZLinkServiceOperationIds.correlationId(operationId) : null,
+                null,
+                topic,
+                null,
+                null,
+                null,
+                metadata,
+                flowState == null ? null : flowState.flowId(),
+                flowState == null ? null : flowState.origin());
     }
 
     /** Normal reply header (kind 2) echoing the request identifiers. */
     public static Header reply(Header request) {
         return new Header(
-            KIND_RESPONSE,
-            request.channelName(),
-            request.messageName(),
-            request.contentType(),
-            request.correlationId(),
-            null,
-            null,
-            null,
-            null,
-            null,
-            Map.of(),
-            request.flowId(),
-            request.flowOrigin());
+                KIND_RESPONSE,
+                request.channelName(),
+                request.messageName(),
+                request.contentType(),
+                request.correlationId(),
+                null,
+                null,
+                null,
+                null,
+                null,
+                Map.of(),
+                request.flowId(),
+                request.flowOrigin());
     }
 
     /**
-     * Error reply header (kind 5). The {@code errorCode} carries the
-     * snake_case error kind name from the canonical C++ table; framework-origin
-     * and failure-origin markers travel in the header metadata object.
+     * Error reply header (kind 5). The {@code errorCode} carries the snake_case error kind name
+     * from the canonical C++ table; framework-origin and failure-origin markers travel in the
+     * header metadata object.
      */
     public static Header error(
-        Header request,
-        ZLinkFrameworkErrorKind kind,
-        String message,
-        Map<String, String> metadata) {
+            Header request,
+            ZLinkFrameworkErrorKind kind,
+            String message,
+            Map<String, String> metadata) {
         ZLinkFrameworkErrorKind effective =
-            kind == null ? ZLinkFrameworkErrorKind.INTERNAL_FAILURE : kind;
+                kind == null ? ZLinkFrameworkErrorKind.INTERNAL_FAILURE : kind;
         return new Header(
-            KIND_ERROR,
-            request == null ? "" : request.channelName(),
-            request == null ? "" : request.messageName(),
-            DEFAULT_CONTENT_TYPE,
-            request == null ? null : request.correlationId(),
-            null,
-            null,
-            errorCodeName(effective),
-            message == null ? "" : message,
-            null,
-            metadata,
-            request == null ? null : request.flowId(),
-            request == null ? null : request.flowOrigin());
+                KIND_ERROR,
+                request == null ? "" : request.channelName(),
+                request == null ? "" : request.messageName(),
+                DEFAULT_CONTENT_TYPE,
+                request == null ? null : request.correlationId(),
+                null,
+                null,
+                errorCodeName(effective),
+                message == null ? "" : message,
+                null,
+                metadata,
+                request == null ? null : request.flowId(),
+                request == null ? null : request.flowOrigin());
     }
 
     public static Message encodeHeader(Header header) {
@@ -228,9 +220,9 @@ public final class ZLinkChannelEnvelope {
             return encoded;
         } catch (IOException ex) {
             throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
-                "ZLink envelope header could not be encoded",
-                ex);
+                    ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+                    "ZLink envelope header could not be encoded",
+                    ex);
         } finally {
             if (complete) {
                 HEADER_WRITERS.offer(writer);
@@ -244,10 +236,10 @@ public final class ZLinkChannelEnvelope {
     }
 
     /**
-     * Strict header decode with C++-equivalent semantics: JSON parse failure,
-     * a missing/mismatched {@code formatMarker} or malformed flow fields are
-     * {@link ZLinkFrameworkErrorKind#PROTOCOL_ERROR}. Flow fields are read and
-     * validated only when {@code captureFlow} is set (spec 27 §4).
+     * Strict header decode with C++-equivalent semantics: JSON parse failure, a missing/mismatched
+     * {@code formatMarker} or malformed flow fields are {@link
+     * ZLinkFrameworkErrorKind#PROTOCOL_ERROR}. Flow fields are read and validated only when {@code
+     * captureFlow} is set (spec 27 §4).
      */
     public static Header decodeHeader(Message headerPart, boolean captureFlow) {
         try (JsonParser json = JSON.getFactory().createParser(new MessageInputStream(headerPart))) {
@@ -261,9 +253,9 @@ public final class ZLinkChannelEnvelope {
     }
 
     /**
-     * Lenient envelope probe for reply/branch points: returns {@code null}
-     * unless the parts are a well-formed two-part envelope. Never throws, so a
-     * raw single-part JSON payload is not mistaken for a corrupt envelope.
+     * Lenient envelope probe for reply/branch points: returns {@code null} unless the parts are a
+     * well-formed two-part envelope. Never throws, so a raw single-part JSON payload is not
+     * mistaken for a corrupt envelope.
      */
     public static Header tryDecodeHeader(List<Message> parts, boolean captureFlow) {
         if (!looksLikeEnvelope(parts)) {
@@ -277,10 +269,9 @@ public final class ZLinkChannelEnvelope {
     }
 
     /**
-     * Dispatch-side decode: {@code null} for legacy/internal raw parts (first
-     * part is not a JSON object); a JSON-object first part that fails strict
-     * envelope validation is a {@code PROTOCOL_ERROR} (task/spec parity with
-     * the C++ decoder).
+     * Dispatch-side decode: {@code null} for legacy/internal raw parts (first part is not a JSON
+     * object); a JSON-object first part that fails strict envelope validation is a {@code
+     * PROTOCOL_ERROR} (task/spec parity with the C++ decoder).
      */
     public static Header decodeDispatchHeader(List<Message> parts, boolean captureFlow) {
         if (!looksLikeEnvelope(parts)) {
@@ -314,8 +305,8 @@ public final class ZLinkChannelEnvelope {
     }
 
     /**
-     * Canonical snake_case error code table, 1:1 with C++
-     * {@code channel_reply_writer.cpp} {@code error_code_name}.
+     * Canonical snake_case error code table, 1:1 with C++ {@code channel_reply_writer.cpp} {@code
+     * error_code_name}.
      */
     public static String errorCodeName(ZLinkFrameworkErrorKind kind) {
         return switch (kind == null ? ZLinkFrameworkErrorKind.INTERNAL_FAILURE : kind) {
@@ -335,27 +326,38 @@ public final class ZLinkChannelEnvelope {
     }
 
     /**
-     * Maps a wire {@code errorCode} back to the public kind. Only the 12
-     * canonical snake_case names are valid; an uninterpretable error reply is
-     * a protocol error.
+     * Maps a wire {@code errorCode} back to the public kind. Only the 12 canonical snake_case names
+     * are valid; an uninterpretable error reply is a protocol error.
      */
     public static ZLinkFrameworkErrorKind errorKindFromCode(String errorCode) {
         if (errorCode == null || errorCode.isBlank()) {
             return ZLinkFrameworkErrorKind.PROTOCOL_ERROR;
         }
         switch (errorCode) {
-            case "not_found": return ZLinkFrameworkErrorKind.NOT_FOUND;
-            case "already_exists": return ZLinkFrameworkErrorKind.ALREADY_EXISTS;
-            case "type_mismatch": return ZLinkFrameworkErrorKind.TYPE_MISMATCH;
-            case "not_configured": return ZLinkFrameworkErrorKind.NOT_CONFIGURED;
-            case "rejected": return ZLinkFrameworkErrorKind.REJECTED;
-            case "unavailable": return ZLinkFrameworkErrorKind.UNAVAILABLE;
-            case "deadline_exceeded": return ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED;
-            case "shutting_down": return ZLinkFrameworkErrorKind.SHUTTING_DOWN;
-            case "protocol_error": return ZLinkFrameworkErrorKind.PROTOCOL_ERROR;
-            case "invalid_operation": return ZLinkFrameworkErrorKind.INVALID_OPERATION;
-            case "data_lost": return ZLinkFrameworkErrorKind.DATA_LOST;
-            case "internal_failure": return ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
+            case "not_found":
+                return ZLinkFrameworkErrorKind.NOT_FOUND;
+            case "already_exists":
+                return ZLinkFrameworkErrorKind.ALREADY_EXISTS;
+            case "type_mismatch":
+                return ZLinkFrameworkErrorKind.TYPE_MISMATCH;
+            case "not_configured":
+                return ZLinkFrameworkErrorKind.NOT_CONFIGURED;
+            case "rejected":
+                return ZLinkFrameworkErrorKind.REJECTED;
+            case "unavailable":
+                return ZLinkFrameworkErrorKind.UNAVAILABLE;
+            case "deadline_exceeded":
+                return ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED;
+            case "shutting_down":
+                return ZLinkFrameworkErrorKind.SHUTTING_DOWN;
+            case "protocol_error":
+                return ZLinkFrameworkErrorKind.PROTOCOL_ERROR;
+            case "invalid_operation":
+                return ZLinkFrameworkErrorKind.INVALID_OPERATION;
+            case "data_lost":
+                return ZLinkFrameworkErrorKind.DATA_LOST;
+            case "internal_failure":
+                return ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
             default:
                 break;
         }
@@ -426,15 +428,17 @@ public final class ZLinkChannelEnvelope {
             }
             switch (field) {
                 case "formatMarker" -> {
-                    marker = value == JsonToken.VALUE_NUMBER_INT
-                        && json.getNumberType() == JsonParser.NumberType.INT
-                        ? json.getIntValue()
-                        : 0;
+                    marker =
+                            value == JsonToken.VALUE_NUMBER_INT
+                                            && json.getNumberType() == JsonParser.NumberType.INT
+                                    ? json.getIntValue()
+                                    : 0;
                     json.skipChildren();
                 }
                 case "kind" -> {
-                    kindIsInt = value == JsonToken.VALUE_NUMBER_INT
-                        && json.getNumberType() == JsonParser.NumberType.INT;
+                    kindIsInt =
+                            value == JsonToken.VALUE_NUMBER_INT
+                                    && json.getNumberType() == JsonParser.NumberType.INT;
                     if (kindIsInt) {
                         kind = json.getIntValue();
                     }
@@ -503,8 +507,10 @@ public final class ZLinkChannelEnvelope {
                                 values = new LinkedHashMap<>();
                             }
                             values.put(
-                                key,
-                                metadataValue == JsonToken.VALUE_STRING ? json.getText() : null);
+                                    key,
+                                    metadataValue == JsonToken.VALUE_STRING
+                                            ? json.getText()
+                                            : null);
                             json.skipChildren();
                         }
                         if (values != null) {
@@ -530,9 +536,11 @@ public final class ZLinkChannelEnvelope {
                 case "flowOrigin" -> {
                     if (captureFlow) {
                         hasFlowOrigin = value != JsonToken.VALUE_NULL;
-                        flowOriginIsIntOrNull = value == JsonToken.VALUE_NULL
-                            || (value == JsonToken.VALUE_NUMBER_INT
-                                && json.getNumberType() == JsonParser.NumberType.INT);
+                        flowOriginIsIntOrNull =
+                                value == JsonToken.VALUE_NULL
+                                        || (value == JsonToken.VALUE_NUMBER_INT
+                                                && json.getNumberType()
+                                                        == JsonParser.NumberType.INT);
                         if (flowOriginIsIntOrNull && hasFlowOrigin) {
                             flowOriginValue = json.getIntValue();
                         }
@@ -577,26 +585,26 @@ public final class ZLinkChannelEnvelope {
             }
             if ((flowId == null) != (flowOrigin == null)) {
                 throw protocolError(
-                    "ZLink envelope flow id and origin must be present together", null);
+                        "ZLink envelope flow id and origin must be present together", null);
             }
             if (flowId != null && !ZLinkFlowContext.isValidFlowId(flowId)) {
                 throw protocolError("ZLink envelope flow id must be UUIDv7", null);
             }
         }
         return new Header(
-            kind,
-            channelName,
-            messageName,
-            contentType,
-            correlationId,
-            deadline,
-            topic,
-            errorCode,
-            errorMessage,
-            source,
-            metadata,
-            flowId,
-            flowOrigin);
+                kind,
+                channelName,
+                messageName,
+                contentType,
+                correlationId,
+                deadline,
+                topic,
+                errorCode,
+                errorMessage,
+                source,
+                metadata,
+                flowId,
+                flowOrigin);
     }
 
     private static boolean isStringOrNull(JsonToken token) {
@@ -605,15 +613,13 @@ public final class ZLinkChannelEnvelope {
 
     private static void validateOptionalString(String field, boolean valid) {
         if (!valid) {
-            throw protocolError(
-                "ZLink envelope " + field + " must be a string or null", null);
+            throw protocolError("ZLink envelope " + field + " must be a string or null", null);
         }
     }
 
     private static void validateFlowPair(String flowId, ZLinkFlowOrigin flowOrigin) {
         if ((flowId == null) != (flowOrigin == null)) {
-            throw protocolError(
-                "ZLink envelope flow id and origin must be present together", null);
+            throw protocolError("ZLink envelope flow id and origin must be present together", null);
         }
         if (flowId != null && !ZLinkFlowContext.isValidFlowId(flowId)) {
             throw protocolError("ZLink envelope flow id must be UUIDv7", null);
@@ -621,9 +627,7 @@ public final class ZLinkChannelEnvelope {
     }
 
     private static void writeNullableString(
-        JsonGenerator json,
-        SerializedString field,
-        String value) throws IOException {
+            JsonGenerator json, SerializedString field, String value) throws IOException {
         json.writeFieldName(field);
         if (value == null) {
             json.writeNull();
@@ -641,16 +645,16 @@ public final class ZLinkChannelEnvelope {
             return new HeaderWriter();
         } catch (IOException ex) {
             throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
-                "ZLink envelope header writer could not be initialized",
-                ex);
+                    ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+                    "ZLink envelope header writer could not be initialized",
+                    ex);
         }
     }
 
     /** A single borrower owns the generator and its output buffer at a time. */
     private static final class HeaderWriter {
         private final ReusableByteArrayOutputStream bytes =
-            new ReusableByteArrayOutputStream(HEADER_INITIAL_CAPACITY);
+                new ReusableByteArrayOutputStream(HEADER_INITIAL_CAPACITY);
         private final JsonGenerator json;
         private String channelName;
         private SerializedString channelNameToken;
@@ -774,7 +778,6 @@ public final class ZLinkChannelEnvelope {
     }
 
     private static ZLinkFrameworkException protocolError(String message, Throwable cause) {
-        return new ZLinkFrameworkException(
-            ZLinkFrameworkErrorKind.PROTOCOL_ERROR, message, cause);
+        return new ZLinkFrameworkException(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, message, cause);
     }
 }

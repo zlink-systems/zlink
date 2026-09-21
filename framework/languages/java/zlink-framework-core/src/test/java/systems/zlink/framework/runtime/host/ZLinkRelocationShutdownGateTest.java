@@ -8,8 +8,7 @@ import org.junit.jupiter.api.Test;
 final class ZLinkRelocationShutdownGateTest {
     @Test
     void shutdownWaitsForCurrentUnitAndStopsTheNextUnit() {
-        ZLinkRelocationShutdownGate gate =
-            new ZLinkRelocationShutdownGate();
+        ZLinkRelocationShutdownGate gate = new ZLinkRelocationShutdownGate();
 
         assertTrue(gate.beginRelocationUnit());
         assertFalse(gate.requestShutdown());
@@ -21,8 +20,7 @@ final class ZLinkRelocationShutdownGateTest {
 
     @Test
     void shutdownWithoutActiveRelocationCanStartDrainImmediately() {
-        ZLinkRelocationShutdownGate gate =
-            new ZLinkRelocationShutdownGate();
+        ZLinkRelocationShutdownGate gate = new ZLinkRelocationShutdownGate();
 
         assertTrue(gate.requestShutdown());
         assertTrue(gate.stopBeforeNextUnit());

@@ -63,13 +63,10 @@ namespace
 
 bool valid_error_code (const std::string &value) noexcept
 {
-    return value == "not_found" || value == "already_exists"
-           || value == "type_mismatch" || value == "not_configured"
-           || value == "rejected" || value == "unavailable"
-           || value == "deadline_exceeded"
-           || value == "shutting_down" || value == "protocol_error"
-           || value == "invalid_operation" || value == "data_lost"
-           || value == "internal_failure";
+    return value == "not_found" || value == "already_exists" || value == "type_mismatch"
+           || value == "not_configured" || value == "rejected" || value == "unavailable"
+           || value == "deadline_exceeded" || value == "shutting_down" || value == "protocol_error"
+           || value == "invalid_operation" || value == "data_lost" || value == "internal_failure";
 }
 
 result_t<void> validate_protocol_header (const envelope_header_t &header,
@@ -99,9 +96,8 @@ result_t<void> validate_protocol_header (const envelope_header_t &header,
     }
     if (header.kind == message_kind_t::error
         && (!header.error_code || !valid_error_code (*header.error_code))) {
-        return result_t<void>::failure (
-          framework_error_kind_t::protocol_error,
-          "ZLink error envelope requires a recognized errorCode");
+        return result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                        "ZLink error envelope requires a recognized errorCode");
     }
     return result_t<void>::success ();
 }
@@ -145,13 +141,27 @@ class header_writer_t
                 continue;
             append (std::string_view (value).substr (start, index - start));
             switch (byte) {
-                case '"': append ("\\\""); break;
-                case '\\': append ("\\\\"); break;
-                case '\b': append ("\\b"); break;
-                case '\f': append ("\\f"); break;
-                case '\n': append ("\\n"); break;
-                case '\r': append ("\\r"); break;
-                case '\t': append ("\\t"); break;
+                case '"':
+                    append ("\\\"");
+                    break;
+                case '\\':
+                    append ("\\\\");
+                    break;
+                case '\b':
+                    append ("\\b");
+                    break;
+                case '\f':
+                    append ("\\f");
+                    break;
+                case '\n':
+                    append ("\\n");
+                    break;
+                case '\r':
+                    append ("\\r");
+                    break;
+                case '\t':
+                    append ("\\t");
+                    break;
                 default: {
                     constexpr char hex[] = "0123456789abcdef";
                     const char escaped[] = {'\\', 'u', '0', '0', hex[byte >> 4], hex[byte & 15]};
@@ -182,9 +192,10 @@ class header_writer_t
             const auto lead = static_cast<unsigned char> (value[index++]);
             if (lead < 0x80)
                 continue;
-            const auto remaining = lead >= 0xc2 && lead <= 0xdf ? 1
+            const auto remaining = lead >= 0xc2 && lead <= 0xdf   ? 1
                                    : lead >= 0xe0 && lead <= 0xef ? 2
-                                   : lead >= 0xf0 && lead <= 0xf4 ? 3 : 0;
+                                   : lead >= 0xf0 && lead <= 0xf4 ? 3
+                                                                  : 0;
             if (remaining == 0 || value.size () - index < static_cast<std::size_t> (remaining))
                 return false;
             const auto second = static_cast<unsigned char> (value[index]);
@@ -311,12 +322,12 @@ zlink::message_t envelope_codec_t::encode_header (const envelope_header_t &heade
 {
     const auto &flow = flow_context_t::current ();
     const bool stamp_flow = !header.flow_id && flow && !flow->flow_id.empty ();
-    const auto *flow_id = stamp_flow ? &flow->flow_id
-                                    : header.flow_id ? &*header.flow_id : nullptr;
-    const auto flow_origin = stamp_flow ? std::optional<flow_origin_t> (flow->origin)
-                                       : header.flow_origin;
-    if (auto valid = validate_protocol_header (header, flow_id_t::format_marker,
-                                                flow_id, flow_origin); !valid) {
+    const auto *flow_id = stamp_flow ? &flow->flow_id : header.flow_id ? &*header.flow_id : nullptr;
+    const auto flow_origin =
+      stamp_flow ? std::optional<flow_origin_t> (flow->origin) : header.flow_origin;
+    if (auto valid =
+          validate_protocol_header (header, flow_id_t::format_marker, flow_id, flow_origin);
+        !valid) {
         throw framework_exception_t (valid.error_kind (), valid.error ()->what ());
     }
     auto &plan = header_plan ();
@@ -400,28 +411,39 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
   public:
     explicit header_sax_t (bool capture_flow) : _capture_flow (capture_flow) {}
 
-    bool null () override { return scalar ([] (header_scalar_t &value) { value.set_null (); }); }
+    bool null () override
+    {
+        return scalar ([] (header_scalar_t &value) { value.set_null (); });
+    }
     bool boolean (bool value) override
     {
-        return scalar ([value] (header_scalar_t &target) { target.set_number (static_cast<int> (value)); });
+        return scalar (
+          [value] (header_scalar_t &target) { target.set_number (static_cast<int> (value)); });
     }
     bool number_integer (number_integer_t value) override
     {
-        return scalar ([value] (header_scalar_t &target) { target.set_number (static_cast<int> (value)); });
+        return scalar (
+          [value] (header_scalar_t &target) { target.set_number (static_cast<int> (value)); });
     }
     bool number_unsigned (number_unsigned_t value) override
     {
-        return scalar ([value] (header_scalar_t &target) { target.set_number (static_cast<int> (value)); });
+        return scalar (
+          [value] (header_scalar_t &target) { target.set_number (static_cast<int> (value)); });
     }
     bool number_float (number_float_t value, const string_t &) override
     {
-        return scalar ([value] (header_scalar_t &target) { target.set_number (static_cast<int> (value)); });
+        return scalar (
+          [value] (header_scalar_t &target) { target.set_number (static_cast<int> (value)); });
     }
     bool string (string_t &value) override
     {
-        return scalar ([&value] (header_scalar_t &target) { target.set_string (std::move (value)); });
+        return scalar (
+          [&value] (header_scalar_t &target) { target.set_string (std::move (value)); });
     }
-    bool binary (binary_t &) override { return scalar ([] (header_scalar_t &value) { value.set_other (); }); }
+    bool binary (binary_t &) override
+    {
+        return scalar ([] (header_scalar_t &value) { value.set_other (); });
+    }
 
     bool start_object (std::size_t) override
     {
@@ -498,8 +520,7 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
             || !optional_string (_error_message) || !optional_string (_source)
             || !number_or_default (_format_marker))
             return failure ("ZLink envelope header has an invalid field type");
-        if (_capture_flow
-            && (!optional_string (_flow_id) || !number_or_default (_flow_origin)))
+        if (_capture_flow && (!optional_string (_flow_id) || !number_or_default (_flow_origin)))
             return failure ("ZLink envelope header flow fields are invalid");
         if (!_invalid_metadata_keys.empty ())
             return failure ("ZLink envelope header metadata value is invalid");
@@ -524,12 +545,14 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
             if (_flow_origin.type == header_value_t::number)
                 header.flow_origin = static_cast<flow_origin_t> (_flow_origin.number);
         }
-        const auto format_marker = _format_marker.type == header_value_t::number
-                                     ? _format_marker.number : 0;
+        const auto format_marker =
+          _format_marker.type == header_value_t::number ? _format_marker.number : 0;
         if (auto valid = validate_protocol_header (header, format_marker,
-                                                    header.flow_id ? &*header.flow_id : nullptr,
-                                                    header.flow_origin); !valid) {
-            return result_t<envelope_header_t>::failure (valid.error_kind (), valid.error ()->what ());
+                                                   header.flow_id ? &*header.flow_id : nullptr,
+                                                   header.flow_origin);
+            !valid) {
+            return result_t<envelope_header_t>::failure (valid.error_kind (),
+                                                         valid.error ()->what ());
         }
         return result_t<envelope_header_t>::success (std::move (header));
     }
@@ -543,20 +566,34 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
 
     static header_member_t member (const std::string &name)
     {
-        if (name == "kind") return header_member_t::kind;
-        if (name == "channelName") return header_member_t::channel_name;
-        if (name == "messageName") return header_member_t::message_name;
-        if (name == "contentType") return header_member_t::content_type;
-        if (name == "correlationId") return header_member_t::correlation_id;
-        if (name == "deadline") return header_member_t::deadline;
-        if (name == "topic") return header_member_t::topic;
-        if (name == "errorCode") return header_member_t::error_code;
-        if (name == "errorMessage") return header_member_t::error_message;
-        if (name == "source") return header_member_t::source;
-        if (name == "flowId") return header_member_t::flow_id;
-        if (name == "flowOrigin") return header_member_t::flow_origin;
-        if (name == "formatMarker") return header_member_t::format_marker;
-        if (name == "metadata") return header_member_t::metadata;
+        if (name == "kind")
+            return header_member_t::kind;
+        if (name == "channelName")
+            return header_member_t::channel_name;
+        if (name == "messageName")
+            return header_member_t::message_name;
+        if (name == "contentType")
+            return header_member_t::content_type;
+        if (name == "correlationId")
+            return header_member_t::correlation_id;
+        if (name == "deadline")
+            return header_member_t::deadline;
+        if (name == "topic")
+            return header_member_t::topic;
+        if (name == "errorCode")
+            return header_member_t::error_code;
+        if (name == "errorMessage")
+            return header_member_t::error_message;
+        if (name == "source")
+            return header_member_t::source;
+        if (name == "flowId")
+            return header_member_t::flow_id;
+        if (name == "flowOrigin")
+            return header_member_t::flow_origin;
+        if (name == "formatMarker")
+            return header_member_t::format_marker;
+        if (name == "metadata")
+            return header_member_t::metadata;
         return header_member_t::none;
     }
 
@@ -565,25 +602,38 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
         if (_depth != 1)
             return nullptr;
         switch (_member) {
-            case header_member_t::kind: return &_kind;
-            case header_member_t::channel_name: return &_channel_name;
-            case header_member_t::message_name: return &_message_name;
-            case header_member_t::content_type: return &_content_type;
-            case header_member_t::correlation_id: return &_correlation_id;
-            case header_member_t::deadline: return &_deadline;
-            case header_member_t::topic: return &_topic;
-            case header_member_t::error_code: return &_error_code;
-            case header_member_t::error_message: return &_error_message;
-            case header_member_t::source: return &_source;
-            case header_member_t::flow_id: return _capture_flow ? &_flow_id : nullptr;
-            case header_member_t::flow_origin: return _capture_flow ? &_flow_origin : nullptr;
-            case header_member_t::format_marker: return &_format_marker;
-            default: return nullptr;
+            case header_member_t::kind:
+                return &_kind;
+            case header_member_t::channel_name:
+                return &_channel_name;
+            case header_member_t::message_name:
+                return &_message_name;
+            case header_member_t::content_type:
+                return &_content_type;
+            case header_member_t::correlation_id:
+                return &_correlation_id;
+            case header_member_t::deadline:
+                return &_deadline;
+            case header_member_t::topic:
+                return &_topic;
+            case header_member_t::error_code:
+                return &_error_code;
+            case header_member_t::error_message:
+                return &_error_message;
+            case header_member_t::source:
+                return &_source;
+            case header_member_t::flow_id:
+                return _capture_flow ? &_flow_id : nullptr;
+            case header_member_t::flow_origin:
+                return _capture_flow ? &_flow_origin : nullptr;
+            case header_member_t::format_marker:
+                return &_format_marker;
+            default:
+                return nullptr;
         }
     }
 
-    template <typename Set>
-    bool scalar (Set set)
+    template <typename Set> bool scalar (Set set)
     {
         if (_metadata_object_depth != 0 && _depth == _metadata_object_depth) {
             header_scalar_t value;
@@ -619,9 +669,9 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
 
     void set_metadata_value (std::string value)
     {
-        _invalid_metadata_keys.erase (
-          std::remove (_invalid_metadata_keys.begin (), _invalid_metadata_keys.end (), _metadata_key),
-          _invalid_metadata_keys.end ());
+        _invalid_metadata_keys.erase (std::remove (_invalid_metadata_keys.begin (),
+                                                   _invalid_metadata_keys.end (), _metadata_key),
+                                      _invalid_metadata_keys.end ());
         const auto existing = _metadata.find (_metadata_key);
         if (existing != _metadata.end ())
             existing->second = std::move (value);
@@ -664,9 +714,9 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
 
     static result_t<envelope_header_t> failure (std::string_view reason)
     {
-        return result_t<envelope_header_t>::failure (
-          framework_error_kind_t::protocol_error,
-          std::string ("invalid ZLink envelope header: ") + std::string (reason));
+        return result_t<envelope_header_t>::failure (framework_error_kind_t::protocol_error,
+                                                     std::string ("invalid ZLink envelope header: ")
+                                                       + std::string (reason));
     }
 
     bool _capture_flow;

@@ -7,60 +7,50 @@ import java.util.Objects;
 import java.util.UUID;
 
 public record ZLinkAggregatePrepareRequest(
-    UUID aggregateId,
-    long aggregateGeneration,
-    List<ZLinkAggregateParticipant> participants,
-    byte[] inventoryDigest,
-    ZLinkMeshNodeDescriptorKey targetDescriptor,
-    long targetDescriptorLifecycleGeneration,
-    ZLinkPlacementCapacityBundle capacityBundle,
-    ZLinkLocationOwnerToken targetOwner) {
+        UUID aggregateId,
+        long aggregateGeneration,
+        List<ZLinkAggregateParticipant> participants,
+        byte[] inventoryDigest,
+        ZLinkMeshNodeDescriptorKey targetDescriptor,
+        long targetDescriptorLifecycleGeneration,
+        ZLinkPlacementCapacityBundle capacityBundle,
+        ZLinkLocationOwnerToken targetOwner) {
     public ZLinkAggregatePrepareRequest {
         Objects.requireNonNull(aggregateId, "aggregateId");
         if (aggregateId.getMostSignificantBits() == 0L
-            && aggregateId.getLeastSignificantBits() == 0L) {
-            throw new IllegalArgumentException(
-                "aggregateId must not be zero");
+                && aggregateId.getLeastSignificantBits() == 0L) {
+            throw new IllegalArgumentException("aggregateId must not be zero");
         }
         if (aggregateGeneration <= 0) {
-            throw new IllegalArgumentException(
-                "aggregateGeneration must be positive");
+            throw new IllegalArgumentException("aggregateGeneration must be positive");
         }
-        participants = List.copyOf(
-            Objects.requireNonNull(participants, "participants"));
+        participants = List.copyOf(Objects.requireNonNull(participants, "participants"));
         if (participants.isEmpty()) {
-            throw new IllegalArgumentException(
-                "participants must contain at least one entry");
+            throw new IllegalArgumentException("participants must contain at least one entry");
         }
-        inventoryDigest = Objects.requireNonNull(
-            inventoryDigest,
-            "inventoryDigest").clone();
+        inventoryDigest = Objects.requireNonNull(inventoryDigest, "inventoryDigest").clone();
         if (inventoryDigest.length != 32) {
-            throw new IllegalArgumentException(
-                "inventoryDigest must contain exactly 32 bytes");
+            throw new IllegalArgumentException("inventoryDigest must contain exactly 32 bytes");
         }
         Objects.requireNonNull(targetDescriptor, "targetDescriptor");
         if (targetDescriptorLifecycleGeneration == 0) {
             throw new IllegalArgumentException(
-                "targetDescriptorLifecycleGeneration must be non-zero");
+                    "targetDescriptorLifecycleGeneration must be non-zero");
         }
         Objects.requireNonNull(capacityBundle, "capacityBundle");
         Objects.requireNonNull(targetOwner, "targetOwner");
         byte[] previous = null;
         for (ZLinkAggregateParticipant participant : participants) {
             Objects.requireNonNull(participant, "participant");
-            byte[] current = participant.authorityKey()
-                .getBytes(StandardCharsets.UTF_8);
-            if (previous != null
-                && Arrays.compareUnsigned(previous, current) >= 0) {
+            byte[] current = participant.authorityKey().getBytes(StandardCharsets.UTF_8);
+            if (previous != null && Arrays.compareUnsigned(previous, current) >= 0) {
                 throw new IllegalArgumentException(
-                    "participants must be sorted by UTF-8 key bytes and unique");
+                        "participants must be sorted by UTF-8 key bytes and unique");
             }
             previous = current;
             if (participant.authorityPayload().length > 1024 * 1024
-                || participant.membershipMutation().length > 1024 * 1024) {
-                throw new IllegalArgumentException(
-                    "aggregate participant value exceeds 1 MiB");
+                    || participant.membershipMutation().length > 1024 * 1024) {
+                throw new IllegalArgumentException("aggregate participant value exceeds 1 MiB");
             }
         }
     }

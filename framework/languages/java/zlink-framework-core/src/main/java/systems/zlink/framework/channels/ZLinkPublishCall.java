@@ -13,8 +13,8 @@ public interface ZLinkPublishCall {
     }
 
     /**
-     * Completes after submission to each local transport or Spot queue has
-     * been attempted. It does not wait for a remote queue or handler.
+     * Completes after submission to each local transport or Spot queue has been attempted. It does
+     * not wait for a remote queue or handler.
      */
     CompletionStage<Void> submit();
 }

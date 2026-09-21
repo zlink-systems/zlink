@@ -15,7 +15,8 @@ public sealed class ChannelsTests : RegistrationValidationSupport
             {
                 options.AddRouteMesh("profile");
                 options.AddRouteMesh("profile");
-            }));
+            })
+        );
 
         Assert.Contains("Duplicate RouteMesh name", exception.Message, StringComparison.Ordinal);
     }
@@ -34,15 +35,16 @@ public sealed class ChannelsTests : RegistrationValidationSupport
 
         services.AddZLinkFramework(options =>
         {
-            var mesh = options.AddRouteMesh("play")
+            var mesh = options
+                .AddRouteMesh("play")
                 .Listen("tcp://127.0.0.1:7101")
                 .SetRoutingId(RoutingId.From("play"));
             mesh.Channel("play").Server();
-            mesh.PeerConnections.Connect(
-                RoutingId.From("peer"), "tcp://127.0.0.1:7102");
+            mesh.PeerConnections.Connect(RoutingId.From("peer"), "tcp://127.0.0.1:7102");
         });
 
-        var registration = services.BuildServiceProvider()
+        var registration = services
+            .BuildServiceProvider()
             .GetRequiredService<ZLinkFrameworkRegistration>();
         var node = Assert.Single(registration.SpotNodes.Values);
         var endpoint = Assert.Single(node.Router!.ManualConnections.ListConnections());
@@ -57,8 +59,7 @@ public sealed class ChannelsTests : RegistrationValidationSupport
 
         services.AddZLinkFramework(options =>
         {
-            var mesh = options.AddRouteMesh("play")
-                .Listen("tcp://127.0.0.1:7101");
+            var mesh = options.AddRouteMesh("play").Listen("tcp://127.0.0.1:7101");
             mesh.Channel("outbound-only").Client();
             mesh.Channel("requests")
                 .Server()
@@ -66,14 +67,16 @@ public sealed class ChannelsTests : RegistrationValidationSupport
                 .AddRequestHandler<
                     TestChannelRequestHandler,
                     TestChannelRequest,
-                    TestChannelReply>();
+                    TestChannelReply
+                >();
         });
 
-        var registration = services.BuildServiceProvider()
+        var registration = services
+            .BuildServiceProvider()
             .GetRequiredService<ZLinkFrameworkRegistration>();
-        var memberships = Assert.Single(registration.SpotNodes.Values)
-            .ChannelMemberships
-            .ToDictionary(static membership => membership.ChannelName);
+        var memberships = Assert
+            .Single(registration.SpotNodes.Values)
+            .ChannelMemberships.ToDictionary(static membership => membership.ChannelName);
 
         Assert.False(memberships["outbound-only"].IsServer);
         Assert.Empty(memberships["outbound-only"].RequestHandlers);
@@ -90,11 +93,11 @@ public sealed class ChannelsTests : RegistrationValidationSupport
         var exception = Assert.Throws<ZLinkConfigurationException>(() =>
             services.AddZLinkFramework(options =>
             {
-                var mesh = options.AddRouteMesh("play")
-                    .Listen("tcp://127.0.0.1:7101");
+                var mesh = options.AddRouteMesh("play").Listen("tcp://127.0.0.1:7101");
                 mesh.Channel("requests").Client();
                 mesh.Channel("requests").Server();
-            }));
+            })
+        );
 
         Assert.Contains("Duplicate channel membership", exception.Message);
     }
@@ -110,7 +113,9 @@ public sealed class ChannelsTests : RegistrationValidationSupport
 
         Assert.Throws<ZLinkConfigurationException>(() =>
             services.AddZLinkFramework(options =>
-                options.AddRouteMesh("play").SetRoutingIdPrefix(prefix)));
+                options.AddRouteMesh("play").SetRoutingIdPrefix(prefix)
+            )
+        );
     }
 
     [Fact]
@@ -124,7 +129,8 @@ public sealed class ChannelsTests : RegistrationValidationSupport
                 var mesh = options.AddRouteMesh("play");
                 mesh.SetRoutingIdPrefix("play");
                 mesh.SetRoutingId(RoutingId.From("fixed"));
-            }));
+            })
+        );
     }
 
     [Fact]
@@ -139,7 +145,8 @@ public sealed class ChannelsTests : RegistrationValidationSupport
         services.AddZLinkFramework(options =>
         {
             options.UseTestLocationStore();
-            options.AddRouteMesh("play")
+            options
+                .AddRouteMesh("play")
                 .Listen("tcp://127.0.0.1:7101")
                 .SetRoutingId(RoutingId.From("fixed"));
         });
@@ -153,13 +160,13 @@ public sealed class ChannelsTests : RegistrationValidationSupport
         var error = Assert.Throws<ZLinkConfigurationException>(() =>
             services.AddZLinkFramework(options =>
             {
-                var mesh = options.AddRouteMesh("play")
+                var mesh = options
+                    .AddRouteMesh("play")
                     .Listen("tcp://127.0.0.1:7101")
                     .SetRoutingIdPrefix("play");
-                mesh.PeerConnections.Connect(
-                    RoutingId.From("peer"),
-                    "tcp://127.0.0.1:7102");
-            }));
+                mesh.PeerConnections.Connect(RoutingId.From("peer"), "tcp://127.0.0.1:7102");
+            })
+        );
 
         Assert.Contains("only with automatic discovery", error.Message, StringComparison.Ordinal);
     }
@@ -170,15 +177,20 @@ public sealed class ChannelsTests : RegistrationValidationSupport
         var services = new ServiceCollection();
 
         services.AddZLinkFramework(options =>
-            options.AddRouteMesh("play")
+            options
+                .AddRouteMesh("play")
                 .Listen("tcp://127.0.0.1:7101")
                 .SetActorLimit(101)
                 .SetSpotLimit(202)
-                .SetActivationConcurrency(17));
+                .SetActivationConcurrency(17)
+        );
 
-        var node = Assert.Single(services.BuildServiceProvider()
-            .GetRequiredService<ZLinkFrameworkRegistration>()
-            .SpotNodes.Values);
+        var node = Assert.Single(
+            services
+                .BuildServiceProvider()
+                .GetRequiredService<ZLinkFrameworkRegistration>()
+                .SpotNodes.Values
+        );
         Assert.Equal(101, node.ActorLimit);
         Assert.Equal(202, node.SpotLimit);
         Assert.Equal(17, node.ActivationConcurrencyLimit);
@@ -190,13 +202,18 @@ public sealed class ChannelsTests : RegistrationValidationSupport
         var services = new ServiceCollection();
 
         services.AddZLinkFramework(options =>
-            options.AddRouteMesh("play")
+            options
+                .AddRouteMesh("play")
                 .Listen("tcp://127.0.0.1:7101")
-                .SetInstanceSpotIdleTimeout(TimeSpan.FromSeconds(3)));
+                .SetInstanceSpotIdleTimeout(TimeSpan.FromSeconds(3))
+        );
 
-        var node = Assert.Single(services.BuildServiceProvider()
-            .GetRequiredService<ZLinkFrameworkRegistration>()
-            .SpotNodes.Values);
+        var node = Assert.Single(
+            services
+                .BuildServiceProvider()
+                .GetRequiredService<ZLinkFrameworkRegistration>()
+                .SpotNodes.Values
+        );
         Assert.Equal(TimeSpan.FromSeconds(3), node.InstanceSpotIdleTimeout);
     }
 
@@ -207,8 +224,11 @@ public sealed class ChannelsTests : RegistrationValidationSupport
 
         Assert.Throws<ZLinkConfigurationException>(() =>
             services.AddZLinkFramework(options =>
-                options.AddRouteMesh("play")
-                    .SetInstanceSpotIdleTimeout(TimeSpan.FromMilliseconds(-1))));
+                options
+                    .AddRouteMesh("play")
+                    .SetInstanceSpotIdleTimeout(TimeSpan.FromMilliseconds(-1))
+            )
+        );
     }
 
     [Fact]
@@ -217,14 +237,19 @@ public sealed class ChannelsTests : RegistrationValidationSupport
         var services = new ServiceCollection();
 
         services.AddZLinkFramework(options =>
-            options.AddRouteMesh("play")
+            options
+                .AddRouteMesh("play")
                 .Listen("tcp://127.0.0.1:7101")
                 .SetActorLimit(0)
-                .SetSpotLimit(0));
+                .SetSpotLimit(0)
+        );
 
-        var node = Assert.Single(services.BuildServiceProvider()
-            .GetRequiredService<ZLinkFrameworkRegistration>()
-            .SpotNodes.Values);
+        var node = Assert.Single(
+            services
+                .BuildServiceProvider()
+                .GetRequiredService<ZLinkFrameworkRegistration>()
+                .SpotNodes.Values
+        );
         Assert.Equal(0, node.ActorLimit);
         Assert.Equal(0, node.SpotLimit);
     }
@@ -236,12 +261,20 @@ public sealed class ChannelsTests : RegistrationValidationSupport
 
         var send = Assert.Throws<ZLinkConfigurationException>(() =>
             services.AddZLinkFramework(options =>
-                options.ConfigureDispatch().Unhandled.Send = ZLinkUnhandledDispatchAction.ReplyError));
-        Assert.Contains("send dispatch cannot use ReplyError", send.Message, StringComparison.Ordinal);
+                options.ConfigureDispatch().Unhandled.Send = ZLinkUnhandledDispatchAction.ReplyError
+            )
+        );
+        Assert.Contains(
+            "send dispatch cannot use ReplyError",
+            send.Message,
+            StringComparison.Ordinal
+        );
 
         var sampleRate = Assert.Throws<ArgumentOutOfRangeException>(() =>
             services.AddZLinkFramework(options =>
-                options.ConfigureDispatch().Diagnostics.SetSampleRate(1.1d)));
+                options.ConfigureDispatch().Diagnostics.SetSampleRate(1.1d)
+            )
+        );
         Assert.Equal("rate", sampleRate.ParamName);
     }
 }

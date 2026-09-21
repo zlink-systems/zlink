@@ -6,20 +6,23 @@ internal static class ZLinkNetworkEndpointResolver
         string? explicitEndpoint,
         int? port,
         string? listenerBindHost,
-        ZLinkNetworkOptionsModel network)
+        ZLinkNetworkOptionsModel network
+    )
     {
         if (explicitEndpoint is not null)
             return ZLinkEndpointNotation.Normalize(explicitEndpoint);
         var bindHost = listenerBindHost ?? network.BindHost;
         return ZLinkEndpointNotation.Normalize(
-            $"tcp://{FormatAuthorityHost(bindHost)}:{port.GetValueOrDefault()}");
+            $"tcp://{FormatAuthorityHost(bindHost)}:{port.GetValueOrDefault()}"
+        );
     }
 
     public static string Advertise(
         string boundEndpoint,
         string? listenerAdvertiseHost,
         string? listenerBindHost,
-        ZLinkNetworkOptionsModel network)
+        ZLinkNetworkOptionsModel network
+    )
     {
         var endpoint = new Uri(boundEndpoint, UriKind.Absolute);
 
@@ -33,17 +36,15 @@ internal static class ZLinkNetworkEndpointResolver
             return ZLinkEndpointNotation.Normalize(boundEndpoint);
 
         var bindHost = listenerBindHost ?? network.BindHost;
-        var advertiseHost = listenerAdvertiseHost
-            ?? network.AdvertiseHost;
+        var advertiseHost = listenerAdvertiseHost ?? network.AdvertiseHost;
         if (advertiseHost is not null && IsWildcard(advertiseHost))
-            throw new ZLinkConfigurationException(
-                "AdvertiseHost must not be a wildcard address.");
+            throw new ZLinkConfigurationException("AdvertiseHost must not be a wildcard address.");
 
         advertiseHost ??= bindHost switch
         {
             "0.0.0.0" => "127.0.0.1",
             "::" => "::1",
-            _ => bindHost
+            _ => bindHost,
         };
 
         var builder = new UriBuilder(endpoint) { Host = advertiseHost };
@@ -55,7 +56,5 @@ internal static class ZLinkNetworkEndpointResolver
         || string.Equals(host, "::", StringComparison.Ordinal);
 
     private static string FormatAuthorityHost(string host) =>
-        Uri.CheckHostName(host) == UriHostNameType.IPv6
-            ? $"[{host}]"
-            : host;
+        Uri.CheckHostName(host) == UriHostNameType.IPv6 ? $"[{host}]" : host;
 }

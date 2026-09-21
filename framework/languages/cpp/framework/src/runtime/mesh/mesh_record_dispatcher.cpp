@@ -26,14 +26,11 @@ mesh_record_dispatcher_t::mesh_record_dispatcher_t (
 {
 }
 
-result_t<void>
-mesh_record_dispatcher_t::dispatch (
-  const runtime::host::receive_record_t &record,
-                                    std::vector<zlink::message_t> parts) const
+result_t<void> mesh_record_dispatcher_t::dispatch (const runtime::host::receive_record_t &record,
+                                                   std::vector<zlink::message_t> parts) const
 {
     using record_kind_t = runtime::host::record_kind_t;
-    if (record.kind != record_kind_t::node_send
-        && record.kind != record_kind_t::node_request
+    if (record.kind != record_kind_t::node_send && record.kind != record_kind_t::node_request
         && record.kind != record_kind_t::channel_send
         && record.kind != record_kind_t::channel_request) {
         return result_t<void>::failure (framework_error_kind_t::protocol_error,
@@ -50,11 +47,10 @@ mesh_record_dispatcher_t::dispatch (
     const std::string dispatch_channel =
       record.channel_name.empty () ? header.value ().channel_name : record.channel_name;
     const auto channel_dispatch =
-      record.kind == record_kind_t::channel_send
-      || record.kind == record_kind_t::channel_request;
+      record.kind == record_kind_t::channel_send || record.kind == record_kind_t::channel_request;
     route_packet_dispatcher_t dispatcher (
-      dispatch_channel, *_services, *_serializers, *_handlers,
-      _no_internal_packets, _dispatch_options, _filters,
+      dispatch_channel, *_services, *_serializers, *_handlers, _no_internal_packets,
+      _dispatch_options, _filters,
       channel_dispatch ? handler_dispatch_kind_t::channel_send
                        : handler_dispatch_kind_t::node_direct_send,
       channel_dispatch ? handler_dispatch_kind_t::channel_request
@@ -73,8 +69,8 @@ mesh_record_dispatcher_t::dispatch (
         return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                         "send handler produced a reply");
     }
-    const auto submit = runtime::host::reply (
-      record.reply_token, dispatched.value ()->parts.items ());
+    const auto submit =
+      runtime::host::reply (record.reply_token, dispatched.value ()->parts.items ());
     if (submit != zlink::submit_result_t::ok) {
         return result_t<void>::failure (framework_error_kind_t::internal_failure,
                                         "MeshNode reply submit failed");

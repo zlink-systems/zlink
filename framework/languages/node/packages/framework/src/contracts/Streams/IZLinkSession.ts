@@ -18,7 +18,6 @@ export interface ZLinkSessionDispatchContext {
   readonly canReply: boolean;
 }
 
-
 export interface ZLinkSessionFactory<TSession extends ZLinkSession = ZLinkSession> {
   create(context: ZLinkSessionContext): Promise<TSession>;
 }

@@ -13,8 +13,10 @@ internal static class ZLinkActorRemoteJoinRecoveryCodec
     internal static byte[] Encode(ZLinkActorRelocationRecoveryRecord value)
     {
         ArgumentNullException.ThrowIfNull(value);
-        if (value.Request.Request.Length > MaximumMessageBytes
-            || value.Reply.Length > MaximumMessageBytes)
+        if (
+            value.Request.Request.Length > MaximumMessageBytes
+            || value.Reply.Length > MaximumMessageBytes
+        )
             throw new ArgumentOutOfRangeException(nameof(value));
         Validate(value);
 
@@ -22,125 +24,137 @@ internal static class ZLinkActorRemoteJoinRecoveryCodec
         if (metadata.Length > MaximumMetadataBytes)
             throw new ArgumentOutOfRangeException(nameof(value));
         var request = value.Request;
-        return ServiceWirePilotCodec.EncodeZljrRecordV1(new(
-            new ServiceWirePilotCodec.ZljrNodeSourceV1(
-                Utf8.GetBytes(RoutingId.From(request.SourceNodeRid).ToHex()),
-                request.ActorNodeGeneration,
-                request.RelocationCoordinatorOwnerId,
-                request.RelocationCoordinatorLeaseGeneration),
-            new ServiceWirePilotCodec.OperationId(0, 0),
-            metadata,
-            request.Request,
-            value.Reply));
+        return ServiceWirePilotCodec.EncodeZljrRecordV1(
+            new(
+                new ServiceWirePilotCodec.ZljrNodeSourceV1(
+                    Utf8.GetBytes(RoutingId.From(request.SourceNodeRid).ToHex()),
+                    request.ActorNodeGeneration,
+                    request.RelocationCoordinatorOwnerId,
+                    request.RelocationCoordinatorLeaseGeneration
+                ),
+                new ServiceWirePilotCodec.OperationId(0, 0),
+                metadata,
+                request.Request,
+                value.Reply
+            )
+        );
     }
 
-    internal static ZLinkActorRelocationRecoveryRecord Decode(
-        ReadOnlySpan<byte> encoded) => Decode(encoded, out _);
+    internal static ZLinkActorRelocationRecoveryRecord Decode(ReadOnlySpan<byte> encoded) =>
+        Decode(encoded, out _);
 
     internal static ZLinkActorRelocationRecoveryRecord Decode(
         ReadOnlySpan<byte> encoded,
-        out ZLinkActorRelocationSourceFence source)
+        out ZLinkActorRelocationSourceFence source
+    )
     {
         source = default!;
         try
         {
-            var generated = ServiceWirePilotCodec.DecodeZljrRecordV1(
-                encoded.ToArray());
+            var generated = ServiceWirePilotCodec.DecodeZljrRecordV1(encoded.ToArray());
             if (generated.Operation.High != 0 || generated.Operation.Low != 0)
                 throw new InvalidDataException();
-            var value = JsonSerializer.Deserialize<
-                            ZLinkActorRelocationRecoveryRecord>(generated.Metadata)
-                        ?? throw new InvalidDataException();
-            if (value.Request is null
+            var value =
+                JsonSerializer.Deserialize<ZLinkActorRelocationRecoveryRecord>(generated.Metadata)
+                ?? throw new InvalidDataException();
+            if (
+                value.Request is null
                 || value.Request.Request is null
                 || value.Request.HandoffFrames is null
                 || value.Reply is null
                 || value.Request.Request.Length != 0
                 || value.Request.HandoffFrames.Count != 0
-                || value.Reply.Length != 0)
+                || value.Reply.Length != 0
+            )
                 throw new InvalidDataException();
             var restored = value with
             {
                 Request = value.Request with { Request = generated.Request },
-                Reply = generated.Reply
+                Reply = generated.Reply,
             };
             Validate(restored);
 
             var sourceRidHex = Utf8.GetString(generated.Source.NodeRid);
             var sourceRid = RoutingId.FromHex(sourceRidHex);
-            if (!sourceRid.ToBytes().SequenceEqual(restored.Request.SourceNodeRid)
-                || generated.Source.NodeGeneration
-                   != restored.Request.ActorNodeGeneration
+            if (
+                !sourceRid.ToBytes().SequenceEqual(restored.Request.SourceNodeRid)
+                || generated.Source.NodeGeneration != restored.Request.ActorNodeGeneration
                 || !StringComparer.Ordinal.Equals(
                     generated.Source.OwnerId,
-                    restored.Request.RelocationCoordinatorOwnerId)
+                    restored.Request.RelocationCoordinatorOwnerId
+                )
                 || generated.Source.OwnerLeaseGeneration
-                   != restored.Request.RelocationCoordinatorLeaseGeneration)
+                    != restored.Request.RelocationCoordinatorLeaseGeneration
+            )
                 throw new InvalidDataException();
             source = new ZLinkActorRelocationSourceFence(
                 generated.Source.OwnerId,
                 generated.Source.OwnerLeaseGeneration,
                 sourceRid,
-                generated.Source.NodeGeneration);
+                generated.Source.NodeGeneration
+            );
             return restored;
         }
-        catch (Exception error) when (error is JsonException
-                                      or DecoderFallbackException
-                                      or NotSupportedException
-                                      or ArgumentException
-                                      or OverflowException
-                                      or IndexOutOfRangeException
-                                      or EndOfStreamException)
+        catch (Exception error)
+            when (error
+                    is JsonException
+                        or DecoderFallbackException
+                        or NotSupportedException
+                        or ArgumentException
+                        or OverflowException
+                        or IndexOutOfRangeException
+                        or EndOfStreamException
+            )
         {
             throw new InvalidDataException(
                 "Canonical Actor Join recovery payload is malformed.",
-                error);
+                error
+            );
         }
     }
 
     internal static ZLinkActorRelocationRecoveryRecord Decode(
         ReadOnlySpan<byte> operationRecovery,
-        ReadOnlySpan<byte> legacyJsonRecovery)
+        ReadOnlySpan<byte> legacyJsonRecovery
+    )
     {
         if (!operationRecovery.IsEmpty && !legacyJsonRecovery.IsEmpty)
             throw new InvalidDataException(
-                "Actor Join recovery has conflicting durable representations.");
+                "Actor Join recovery has conflicting durable representations."
+            );
         if (!operationRecovery.IsEmpty)
             return Decode(operationRecovery);
         if (legacyJsonRecovery.IsEmpty)
             throw new InvalidDataException(
-                "Canonical Actor Join recovery metadata is unavailable.");
+                "Canonical Actor Join recovery metadata is unavailable."
+            );
         try
         {
-            var value = JsonSerializer.Deserialize<
-                            ZLinkActorRelocationRecoveryRecord>(
-                            legacyJsonRecovery)
-                        ?? throw new InvalidDataException();
+            var value =
+                JsonSerializer.Deserialize<ZLinkActorRelocationRecoveryRecord>(legacyJsonRecovery)
+                ?? throw new InvalidDataException();
             Validate(value);
             return value;
         }
-        catch (Exception error) when (error is JsonException
-                                      or NotSupportedException
-                                      or ArgumentException)
+        catch (Exception error)
+            when (error is JsonException or NotSupportedException or ArgumentException)
         {
             throw new InvalidDataException(
                 "Legacy Actor Join recovery payload is malformed.",
-                error);
+                error
+            );
         }
     }
 
-    private static byte[] SerializeMetadata(
-        ZLinkActorRelocationRecoveryRecord value)
+    private static byte[] SerializeMetadata(ZLinkActorRelocationRecoveryRecord value)
     {
-        var projection = JsonSerializer.SerializeToElement(value with
-        {
-            Request = value.Request with
+        var projection = JsonSerializer.SerializeToElement(
+            value with
             {
-                Request = [],
-                HandoffFrames = []
-            },
-            Reply = []
-        });
+                Request = value.Request with { Request = [], HandoffFrames = [] },
+                Reply = [],
+            }
+        );
         using var stream = new MemoryStream();
         using (var writer = new Utf8JsonWriter(stream))
         {
@@ -156,8 +170,7 @@ internal static class ZLinkActorRemoteJoinRecoveryCodec
                 writer.WriteStartObject();
                 foreach (var requestProperty in property.Value.EnumerateObject())
                 {
-                    if (!requestProperty.NameEquals(
-                            nameof(value.Request.TargetAttemptGeneration)))
+                    if (!requestProperty.NameEquals(nameof(value.Request.TargetAttemptGeneration)))
                         requestProperty.WriteTo(writer);
                 }
                 writer.WriteEndObject();
@@ -169,14 +182,17 @@ internal static class ZLinkActorRemoteJoinRecoveryCodec
 
     private static void Validate(ZLinkActorRelocationRecoveryRecord value)
     {
-        if (value is null || value.Request is null
+        if (
+            value is null
+            || value.Request is null
             || value.Request.Request is null
             || value.Request.HandoffFrames is null
-            || value.Reply is null)
-            throw new InvalidDataException(
-                "Canonical Actor Join recovery fields are missing.");
+            || value.Reply is null
+        )
+            throw new InvalidDataException("Canonical Actor Join recovery fields are missing.");
         var request = value.Request;
-        if (string.IsNullOrWhiteSpace(request.ActorId)
+        if (
+            string.IsNullOrWhiteSpace(request.ActorId)
             || string.IsNullOrWhiteSpace(request.ActorType)
             || string.IsNullOrWhiteSpace(request.HandoffId)
             || string.IsNullOrWhiteSpace(request.SourceSpotId)
@@ -193,28 +209,28 @@ internal static class ZLinkActorRemoteJoinRecoveryCodec
             || value.TargetSpotGeneration == 0
             || value.TargetAuthorityOwnerGeneration == 0
             || request.TargetNodeRid is not { Length: > 0 }
-            || !request.TargetNodeRid.AsSpan().SequenceEqual(
-                value.TargetNodeRid)
+            || !request.TargetNodeRid.AsSpan().SequenceEqual(value.TargetNodeRid)
             || request.TargetNodeGeneration != value.TargetNodeGeneration
             || request.TargetSpotGeneration != value.TargetSpotGeneration
-            || request.TargetAuthorityOwnerGeneration
-               != value.TargetAuthorityOwnerGeneration
+            || request.TargetAuthorityOwnerGeneration != value.TargetAuthorityOwnerGeneration
             || request.ActorNodeGeneration == 0
             || request.ExpectedOwnerLeaseGeneration == 0
-            || string.IsNullOrWhiteSpace(
-                request.RelocationCoordinatorOwnerId)
+            || string.IsNullOrWhiteSpace(request.RelocationCoordinatorOwnerId)
             || request.RelocationCoordinatorLeaseGeneration == 0
             || request.RelocationCoordinatorNodeRid is not { Length: > 0 }
             || request.RelocationCoordinatorNodeGeneration == 0
-            || string.IsNullOrWhiteSpace(
-                request.RelocationCoordinatorExpectedAuthorityStoreVersion)
-            || (value.OperationIdHigh == 0 && value.OperationIdLow == 0
-                && (!string.IsNullOrEmpty(value.ReplyContentType)
-                    || value.Reply.Length != 0))
-            || ((value.OperationIdHigh != 0 || value.OperationIdLow != 0)
-                && string.IsNullOrWhiteSpace(value.ReplyContentType)))
-            throw new InvalidDataException(
-                "Canonical Actor Join recovery identity is invalid.");
+            || string.IsNullOrWhiteSpace(request.RelocationCoordinatorExpectedAuthorityStoreVersion)
+            || (
+                value.OperationIdHigh == 0
+                && value.OperationIdLow == 0
+                && (!string.IsNullOrEmpty(value.ReplyContentType) || value.Reply.Length != 0)
+            )
+            || (
+                (value.OperationIdHigh != 0 || value.OperationIdLow != 0)
+                && string.IsNullOrWhiteSpace(value.ReplyContentType)
+            )
+        )
+            throw new InvalidDataException("Canonical Actor Join recovery identity is invalid.");
 
         try
         {
@@ -226,7 +242,8 @@ internal static class ZLinkActorRemoteJoinRecoveryCodec
         {
             throw new InvalidDataException(
                 "Canonical Actor Join recovery route is invalid.",
-                error);
+                error
+            );
         }
     }
 }

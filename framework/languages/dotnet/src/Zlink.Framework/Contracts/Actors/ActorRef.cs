@@ -13,7 +13,8 @@ public readonly record struct ActorRef(
     string ActorId,
     ulong ObjectGeneration,
     string MeshName,
-    RoutingId NodeRid)
+    RoutingId NodeRid
+)
 {
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
     private readonly string _actorId = ValidateActorId(ActorId);
@@ -49,9 +50,7 @@ public readonly record struct ActorRef(
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value);
         if (value!.Contains('\0'))
-            throw new ArgumentOutOfRangeException(
-                nameof(value),
-                "Actor ID must not contain NUL.");
+            throw new ArgumentOutOfRangeException(nameof(value), "Actor ID must not contain NUL.");
 
         int byteCount;
         try
@@ -63,13 +62,15 @@ public readonly record struct ActorRef(
             throw new ArgumentException(
                 "Actor ID must contain valid UTF-8 text.",
                 nameof(value),
-                exception);
+                exception
+            );
         }
 
         if (byteCount > byte.MaxValue)
             throw new ArgumentOutOfRangeException(
                 nameof(value),
-                "Actor ID must be 1..255 UTF-8 bytes.");
+                "Actor ID must be 1..255 UTF-8 bytes."
+            );
         return value;
     }
 
@@ -89,9 +90,7 @@ public readonly record struct ActorRef(
     private static RoutingId ValidateNodeRid(RoutingId value)
     {
         if (value.IsEmpty)
-            throw new ArgumentException(
-                "Actor owner routing id must not be empty.",
-                nameof(value));
+            throw new ArgumentException("Actor owner routing id must not be empty.", nameof(value));
         return value;
     }
 
@@ -102,7 +101,8 @@ public readonly record struct ActorRef(
         public override ActorRef Read(
             ref Utf8JsonReader reader,
             Type typeToConvert,
-            JsonSerializerOptions options)
+            JsonSerializerOptions options
+        )
         {
             if (reader.TokenType != JsonTokenType.StartObject)
                 throw new JsonException("ActorRef must be a JSON object.");
@@ -117,8 +117,9 @@ public readonly record struct ActorRef(
                 if (reader.TokenType != JsonTokenType.PropertyName)
                     throw new JsonException("ActorRef property name is required.");
 
-                var property = reader.GetString()
-                               ?? throw new JsonException("ActorRef property name is required.");
+                var property =
+                    reader.GetString()
+                    ?? throw new JsonException("ActorRef property name is required.");
                 if (!seen.Add(property))
                     throw new JsonException($"Duplicate ActorRef property '{property}'.");
                 if (!reader.Read())
@@ -143,25 +144,34 @@ public readonly record struct ActorRef(
                 }
             }
 
-            if (reader.TokenType != JsonTokenType.EndObject
+            if (
+                reader.TokenType != JsonTokenType.EndObject
                 || actorId is null
                 || objectGeneration is null
                 || meshName is null
-                || nodeRid is null)
+                || nodeRid is null
+            )
                 throw new JsonException(
-                    "ActorRef requires actorId, objectGeneration, meshName and nodeRid.");
+                    "ActorRef requires actorId, objectGeneration, meshName and nodeRid."
+                );
 
-            if (!long.TryParse(
+            if (
+                !long.TryParse(
                     objectGeneration,
                     NumberStyles.None,
                     CultureInfo.InvariantCulture,
-                    out var generation)
+                    out var generation
+                )
                 || generation <= 0
                 || !string.Equals(
                     objectGeneration,
                     generation.ToString(CultureInfo.InvariantCulture),
-                    StringComparison.Ordinal))
-                throw new JsonException("ActorRef objectGeneration must be a canonical decimal string.");
+                    StringComparison.Ordinal
+                )
+            )
+                throw new JsonException(
+                    "ActorRef objectGeneration must be a canonical decimal string."
+                );
 
             try
             {
@@ -169,13 +179,16 @@ public readonly record struct ActorRef(
                     actorId,
                     checked((ulong)generation),
                     meshName,
-                    RoutingId.FromHex(nodeRid));
+                    RoutingId.FromHex(nodeRid)
+                );
             }
-            catch (Exception exception) when (
-                exception is ArgumentException
-                or ArgumentOutOfRangeException
-                or FormatException
-                or OverflowException)
+            catch (Exception exception)
+                when (exception
+                        is ArgumentException
+                            or ArgumentOutOfRangeException
+                            or FormatException
+                            or OverflowException
+                )
             {
                 throw new JsonException("ActorRef contains an invalid value.", exception);
             }
@@ -184,7 +197,8 @@ public readonly record struct ActorRef(
         public override void Write(
             Utf8JsonWriter writer,
             ActorRef value,
-            JsonSerializerOptions options)
+            JsonSerializerOptions options
+        )
         {
             var actorId = ValidateActorId(value.ActorId);
             var objectGeneration = ValidateObjectGeneration(value.ObjectGeneration);
@@ -195,7 +209,8 @@ public readonly record struct ActorRef(
             writer.WriteString("actorId", actorId);
             writer.WriteString(
                 "objectGeneration",
-                objectGeneration.ToString(CultureInfo.InvariantCulture));
+                objectGeneration.ToString(CultureInfo.InvariantCulture)
+            );
             writer.WriteString("meshName", meshName);
             writer.WriteString("nodeRid", nodeRid.ToHex());
             writer.WriteEndObject();
@@ -206,7 +221,7 @@ public readonly record struct ActorRef(
             if (reader.TokenType != JsonTokenType.String)
                 throw new JsonException($"ActorRef {property} must be a string.");
             return reader.GetString()
-                   ?? throw new JsonException($"ActorRef {property} must not be null.");
+                ?? throw new JsonException($"ActorRef {property} must not be null.");
         }
     }
 }

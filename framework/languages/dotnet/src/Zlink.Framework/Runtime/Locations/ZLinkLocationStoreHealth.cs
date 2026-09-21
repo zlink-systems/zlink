@@ -22,9 +22,7 @@ internal sealed class ZLinkLocationStoreHealth
     //  The container resolves this type, so the parameterless constructor has
     //  to stay; the clock overload is for callers that already own one.
     public ZLinkLocationStoreHealth()
-        : this(TimeProvider.System)
-    {
-    }
+        : this(TimeProvider.System) { }
 
     internal ZLinkLocationStoreHealth(TimeProvider time)
     {
@@ -33,38 +31,49 @@ internal sealed class ZLinkLocationStoreHealth
 
     internal void ReportSuccess(string source)
     {
-        AwaitStateLane(_lane.RunAsync(() =>
-        {
-            if (_failures.Remove(source))
-                _recoveryGeneration++;
-            _lastSuccessAt = _time.GetUtcNow();
-        }));
+        AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                if (_failures.Remove(source))
+                    _recoveryGeneration++;
+                _lastSuccessAt = _time.GetUtcNow();
+            })
+        );
         Changed?.Invoke();
     }
 
     internal void ReportFailure(string source, Exception error)
     {
-        AwaitStateLane(_lane.RunAsync(() =>
-        {
-            _failures[source] = error.Message;
-            _lastFailureAt = _time.GetUtcNow();
-        }));
+        AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                _failures[source] = error.Message;
+                _lastFailureAt = _time.GetUtcNow();
+            })
+        );
         Changed?.Invoke();
     }
 
     internal Snapshot GetSnapshot()
     {
-        return AwaitStateLane(_lane.RunAsync(() =>
-        {
-            return new Snapshot(
-                _failures.Count == 0,
-                _lastSuccessAt,
-                _lastFailureAt,
-                _failures.Count == 0
-                    ? null
-                    : string.Join("; ", _failures.OrderBy(static pair => pair.Key)
-                        .Select(static pair => $"{pair.Key}: {pair.Value}")));
-        }));
+        return AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                return new Snapshot(
+                    _failures.Count == 0,
+                    _lastSuccessAt,
+                    _lastFailureAt,
+                    _failures.Count == 0
+                        ? null
+                        : string.Join(
+                            "; ",
+                            _failures
+                                .OrderBy(static pair => pair.Key)
+                                .Select(static pair => $"{pair.Key}: {pair.Value}")
+                        )
+                );
+            })
+        );
     }
 
     internal long RecoveryGeneration
@@ -76,13 +85,13 @@ internal sealed class ZLinkLocationStoreHealth
         bool Healthy,
         DateTimeOffset? LastSuccessAt,
         DateTimeOffset? LastFailureAt,
-        string? LastError);
+        string? LastError
+    );
 
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();
 
-    private static void AwaitStateLane(ValueTask operation) =>
-        operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 }
 
 internal static class ZLinkLocationStoreRead
@@ -93,7 +102,8 @@ internal static class ZLinkLocationStoreRead
         ZLinkLocationStoreHealth? health,
         string source,
         CancellationToken callerToken,
-        Func<CancellationToken, ValueTask<T>> read)
+        Func<CancellationToken, ValueTask<T>> read
+    )
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(callerToken);
         timeout.CancelAfter(Timeout);
@@ -102,7 +112,9 @@ internal static class ZLinkLocationStoreRead
             // WaitAsync bounds stores whose in-flight commands cannot observe
             // the token (a paused Redis holds replies indefinitely): the read
             // boundary must degrade within its timeout either way.
-            var result = await read(timeout.Token).AsTask().WaitAsync(timeout.Token)
+            var result = await read(timeout.Token)
+                .AsTask()
+                .WaitAsync(timeout.Token)
                 .ConfigureAwait(false);
             health?.ReportSuccess(source);
             return result;
@@ -115,7 +127,8 @@ internal static class ZLinkLocationStoreRead
         {
             var failure = new TimeoutException(
                 $"Location store read '{source}' exceeded {Timeout}.",
-                error);
+                error
+            );
             health?.ReportFailure(source, failure);
             ZLinkRuntimeMetrics.RecordLocationStoreError("read");
             throw failure;

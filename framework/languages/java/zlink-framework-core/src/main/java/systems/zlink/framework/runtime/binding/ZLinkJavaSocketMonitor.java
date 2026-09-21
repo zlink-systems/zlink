@@ -1,7 +1,5 @@
 package systems.zlink.framework.runtime.binding;
 
-import java.time.Duration;
-import java.util.Objects;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.eventing.MonitorEvent;
 import systems.zlink.contracts.eventing.PollEventFlags;
@@ -11,6 +9,9 @@ import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitor;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitorEvent;
+
+import java.time.Duration;
+import java.util.Objects;
 
 final class ZLinkJavaSocketMonitor implements ZLinkBackendSocketMonitor {
     private static final long MONITOR_SLOT = 1L;
@@ -31,7 +32,10 @@ final class ZLinkJavaSocketMonitor implements ZLinkBackendSocketMonitor {
         poller.add(monitor, MONITOR_SLOT, PollEventFlags.POLLIN);
     }
 
-    @Override public String name() { return "socketMonitor"; }
+    @Override
+    public String name() {
+        return "socketMonitor";
+    }
 
     @Override
     public synchronized boolean waitForReadable(Duration timeout) {
@@ -73,9 +77,6 @@ final class ZLinkJavaSocketMonitor implements ZLinkBackendSocketMonitor {
 
     private static ZLinkBackendSocketMonitorEvent fromMonitorEvent(MonitorEvent event) {
         return new ZLinkBackendSocketMonitorEvent(
-            event.event().name(),
-            event.routingId(),
-            event.localAddr(),
-            event.remoteAddr());
+                event.event().name(), event.routingId(), event.localAddr(), event.remoteAddr());
     }
 }

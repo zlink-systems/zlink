@@ -14,7 +14,8 @@ internal static class HttpClientText
 
     public static void RequireNonBlank(string value, string message)
     {
-        if (IsBlank(value)) throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.ProtocolError, message);
+        if (IsBlank(value))
+            throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.ProtocolError, message);
     }
 
     public static void RequirePositiveTimeout(TimeSpan value)
@@ -22,7 +23,8 @@ internal static class HttpClientText
         if (value <= TimeSpan.Zero)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ProtocolError,
-                "HTTP client timeout must be greater than zero");
+                "HTTP client timeout must be greater than zero"
+            );
     }
 
     public static string PercentEncode(string value)
@@ -30,10 +32,18 @@ internal static class HttpClientText
         var encoded = new StringBuilder(value.Length);
         foreach (var by in Encoding.UTF8.GetBytes(value))
         {
-            var unreserved = by is >= (byte)'A' and <= (byte)'Z'
-                or >= (byte)'a' and <= (byte)'z'
-                or >= (byte)'0' and <= (byte)'9'
-                or (byte)'-' or (byte)'_' or (byte)'.' or (byte)'~';
+            var unreserved =
+                by
+                is >= (byte)'A'
+                    and <= (byte)'Z'
+                    or >= (byte)'a'
+                    and <= (byte)'z'
+                    or >= (byte)'0'
+                    and <= (byte)'9'
+                    or (byte)'-'
+                    or (byte)'_'
+                    or (byte)'.'
+                    or (byte)'~';
             if (unreserved)
                 encoded.Append((char)by);
             else

@@ -7,11 +7,7 @@ import type {
 } from '@zlink-systems/framework';
 import type { ZLinkRedisRelocationOptions } from './redis-options';
 import { RedisConnection } from './redis-connection';
-import {
-  BLOB_PUT_SCRIPT,
-  BLOB_READ_SCRIPT,
-  BLOB_RENEW_SCRIPT
-} from './opaque-redis-scripts';
+import { BLOB_PUT_SCRIPT, BLOB_READ_SCRIPT, BLOB_RENEW_SCRIPT } from './opaque-redis-scripts';
 import { asArray, asString, toNumber } from './redis-values';
 
 const MAX_ENCODED_BLOB_BYTES = 64 * 1024 * 1024 + 23;
@@ -38,12 +34,14 @@ export class ZLinkRedisRelocationStore implements ZLinkRelocationStore {
     const referenceValue = requireReference(reference);
     requirePayload(payload);
     const retention = requireRetention(retentionMs);
-    const result = asArray(await this.connection.eval(
-      BLOB_PUT_SCRIPT,
-      [this.blobKey(referenceValue)],
-      [Buffer.from(payload), String(retention)],
-      signal
-    ));
+    const result = asArray(
+      await this.connection.eval(
+        BLOB_PUT_SCRIPT,
+        [this.blobKey(referenceValue)],
+        [Buffer.from(payload), String(retention)],
+        signal
+      )
+    );
     const kind = asString(result[0]);
     const storeNow = fromUnixMs(toNumber(result[1]));
     if (kind === 'conflict') return { kind, storeNow };
@@ -54,17 +52,11 @@ export class ZLinkRedisRelocationStore implements ZLinkRelocationStore {
     };
   }
 
-  async read(
-    reference: ZLinkBlobReference,
-    signal?: AbortSignal
-  ): Promise<ZLinkBlobReadResult> {
+  async read(reference: ZLinkBlobReference, signal?: AbortSignal): Promise<ZLinkBlobReadResult> {
     const referenceValue = requireReference(reference);
-    const result = asArray(await this.connection.eval(
-      BLOB_READ_SCRIPT,
-      [this.blobKey(referenceValue)],
-      [],
-      signal
-    ));
+    const result = asArray(
+      await this.connection.eval(BLOB_READ_SCRIPT, [this.blobKey(referenceValue)], [], signal)
+    );
     const storeNow = fromUnixMs(toNumber(result[1]));
     if (toNumber(result[0]) !== 1) return { kind: 'missing', storeNow };
     return {
@@ -82,12 +74,14 @@ export class ZLinkRedisRelocationStore implements ZLinkRelocationStore {
   ): Promise<ZLinkBlobRenewResult> {
     const referenceValue = requireReference(reference);
     const retention = requireRetention(retentionMs);
-    const result = asArray(await this.connection.eval(
-      BLOB_RENEW_SCRIPT,
-      [this.blobKey(referenceValue)],
-      [String(retention)],
-      signal
-    ));
+    const result = asArray(
+      await this.connection.eval(
+        BLOB_RENEW_SCRIPT,
+        [this.blobKey(referenceValue)],
+        [String(retention)],
+        signal
+      )
+    );
     const storeNow = fromUnixMs(toNumber(result[1]));
     if (toNumber(result[0]) !== 1) return { kind: 'missing', storeNow };
     return {
@@ -97,10 +91,7 @@ export class ZLinkRedisRelocationStore implements ZLinkRelocationStore {
     };
   }
 
-  async delete(
-    reference: ZLinkBlobReference,
-    signal?: AbortSignal
-  ): Promise<void> {
+  async delete(reference: ZLinkBlobReference, signal?: AbortSignal): Promise<void> {
     const referenceValue = requireReference(reference);
     await this.connection.command(['DEL', this.blobKey(referenceValue)], signal);
   }

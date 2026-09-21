@@ -44,11 +44,21 @@ export interface ZLinkSpotTimerHandler<TSpot> {
 }
 
 export interface ZLinkSpotActorSendHandler<TSpot, TActor extends ZLinkActor, TMessage> {
-  handle(spot: TSpot, actor: TActor, context: ZLinkMessageContext, message: TMessage): Promise<void>;
+  handle(
+    spot: TSpot,
+    actor: TActor,
+    context: ZLinkMessageContext,
+    message: TMessage
+  ): Promise<void>;
 }
 
 export interface ZLinkSpotActorRequestHandler<TSpot, TActor extends ZLinkActor, TRequest, TReply> {
-  handle(spot: TSpot, actor: TActor, context: ZLinkMessageContext, request: TRequest): Promise<TReply>;
+  handle(
+    spot: TSpot,
+    actor: TActor,
+    context: ZLinkMessageContext,
+    request: TRequest
+  ): Promise<TReply>;
 }
 
 export interface ZLinkEntrySpotActorSendHandler<
@@ -56,7 +66,12 @@ export interface ZLinkEntrySpotActorSendHandler<
   TActor extends ZLinkActor,
   TMessage
 > {
-  handle(spot: TEntrySpot, actor: TActor, context: ZLinkMessageContext, message: TMessage): Promise<void>;
+  handle(
+    spot: TEntrySpot,
+    actor: TActor,
+    context: ZLinkMessageContext,
+    message: TMessage
+  ): Promise<void>;
 }
 
 export interface ZLinkEntrySpotActorRequestHandler<
@@ -65,5 +80,10 @@ export interface ZLinkEntrySpotActorRequestHandler<
   TRequest,
   TReply
 > {
-  handle(spot: TEntrySpot, actor: TActor, context: ZLinkMessageContext, request: TRequest): Promise<TReply>;
+  handle(
+    spot: TEntrySpot,
+    actor: TActor,
+    context: ZLinkMessageContext,
+    request: TRequest
+  ): Promise<TReply>;
 }

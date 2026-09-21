@@ -1,9 +1,10 @@
 package systems.zlink.framework.runtime.internal.service;
 
-import java.io.IOException;
-import java.util.Objects;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
+
+import java.io.IOException;
+import java.util.Objects;
 
 /** Strict canonical reader/preserver for service-wire relocation controls. */
 final class ZLinkCanonicalRelocationControlCodec {
@@ -40,39 +41,35 @@ final class ZLinkCanonicalRelocationControlCodec {
         return decoded.encoded();
     }
 
-    private static byte[] generatedRoundTrip(int command, byte[] bytes)
-        throws IOException {
+    private static byte[] generatedRoundTrip(int command, byte[] bytes) throws IOException {
         return switch (command) {
             case ServiceWireConstants.COMMAND_RELOCATION_READY ->
-                ServiceWirePilotCodec.encodeRelocationReady30(
-                    ServiceWirePilotCodec.decodeRelocationReady30(bytes));
+                    ServiceWirePilotCodec.encodeRelocationReady30(
+                            ServiceWirePilotCodec.decodeRelocationReady30(bytes));
             case ServiceWireConstants.COMMAND_RELOCATION_DATA ->
-                ServiceWirePilotCodec.encodeRelocationData31(
-                    ServiceWirePilotCodec.decodeRelocationData31(bytes));
+                    ServiceWirePilotCodec.encodeRelocationData31(
+                            ServiceWirePilotCodec.decodeRelocationData31(bytes));
             case ServiceWireConstants.COMMAND_RELOCATION_CUTOVER ->
-                ServiceWirePilotCodec.encodeRelocationCutover34(
-                    ServiceWirePilotCodec.decodeRelocationCutover34(bytes));
+                    ServiceWirePilotCodec.encodeRelocationCutover34(
+                            ServiceWirePilotCodec.decodeRelocationCutover34(bytes));
             case ServiceWireConstants.COMMAND_RELOCATION_PREPARE ->
-                ServiceWirePilotCodec.encodeRelocationPrepare40(
-                    ServiceWirePilotCodec.decodeRelocationPrepare40(bytes));
+                    ServiceWirePilotCodec.encodeRelocationPrepare40(
+                            ServiceWirePilotCodec.decodeRelocationPrepare40(bytes));
             case ServiceWireConstants.COMMAND_RELOCATION_STATE ->
-                ServiceWirePilotCodec.encodeRelocationState52(
-                    ServiceWirePilotCodec.decodeRelocationState52(bytes));
+                    ServiceWirePilotCodec.encodeRelocationState52(
+                            ServiceWirePilotCodec.decodeRelocationState52(bytes));
             case ServiceWireConstants.COMMAND_RELOCATION_FAILED ->
-                ServiceWirePilotCodec.encodeRelocationFailed53(
-                    ServiceWirePilotCodec.decodeRelocationFailed53(bytes));
+                    ServiceWirePilotCodec.encodeRelocationFailed53(
+                            ServiceWirePilotCodec.decodeRelocationFailed53(bytes));
             default -> throw invalid("command");
         };
     }
 
     private static IllegalArgumentException invalid(String field) {
-        return new IllegalArgumentException(
-            "invalid canonical relocation control " + field);
+        return new IllegalArgumentException("invalid canonical relocation control " + field);
     }
 
-    private static IllegalArgumentException invalid(
-        String field, Throwable cause) {
-        return new IllegalArgumentException(
-            "invalid canonical relocation control " + field, cause);
+    private static IllegalArgumentException invalid(String field, Throwable cause) {
+        return new IllegalArgumentException("invalid canonical relocation control " + field, cause);
     }
 }

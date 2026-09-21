@@ -44,11 +44,7 @@ public sealed class RouteCodecTests
     [Fact]
     public void MeshMetadataCodec_Rejects_A_Malformed_Ingress_Frame()
     {
-        var malformed = new byte[]
-        {
-            1, 1,
-            3, (byte)'k'
-        };
+        var malformed = new byte[] { 1, 1, 3, (byte)'k' };
 
         Assert.False(ZLinkMeshMetadataCodec.TryDecode(malformed, out _));
     }
@@ -74,7 +70,7 @@ public sealed class RouteCodecTests
     {
         var config = new ZLinkSocketConfig
         {
-            SendTimeout = TimeSpan.FromMilliseconds(int.MaxValue)
+            SendTimeout = TimeSpan.FromMilliseconds(int.MaxValue),
         };
 
         Assert.Equal(TimeSpan.FromMilliseconds(int.MaxValue), config.SendTimeout);
@@ -87,7 +83,9 @@ public sealed class RouteCodecTests
     {
         var config = new ZLinkSocketConfig();
 
-        Assert.Throws<ZLinkConfigurationException>(() => config.SendTimeout = TimeSpan.FromTicks(ticks));
+        Assert.Throws<ZLinkConfigurationException>(() =>
+            config.SendTimeout = TimeSpan.FromTicks(ticks)
+        );
     }
 
     [Fact]
@@ -108,7 +106,7 @@ public sealed class RouteCodecTests
         {
             MaxMessageSize = 4096,
             SendHighWaterMark = 12,
-            ReceiveHighWaterMark = 34
+            ReceiveHighWaterMark = 34,
         };
 
         ZLinkChannelBundleFactory.ApplySocketConfig(socket.Options, config);
@@ -137,8 +135,14 @@ public sealed class RouteCodecTests
             null,
             null,
             null,
-            null);
-        var parts = ZLinkEnvelopeCodec.EncodeParts(header, new RouteProbe("hello"), typeof(RouteProbe), codecs);
+            null
+        );
+        var parts = ZLinkEnvelopeCodec.EncodeParts(
+            header,
+            new RouteProbe("hello"),
+            typeof(RouteProbe),
+            codecs
+        );
         var descriptor = new ZLinkRouteHandlerDescriptor(
             ZLinkMessageKind.Request,
             "play",
@@ -147,13 +151,16 @@ public sealed class RouteCodecTests
             typeof(RouteProbe),
             typeof(RouteProbeReply),
             ZLinkHandlerMethodInvokerFactory.Create(
-                typeof(RouteProbeHandler).GetMethod(nameof(RouteProbeHandler.HandleAsync))!));
+                typeof(RouteProbeHandler).GetMethod(nameof(RouteProbeHandler.HandleAsync))!
+            )
+        );
 
         var registration = new ZLinkFrameworkRegistration();
         registration.Filters.Add(typeof(RouteProbeFilter));
         var dispatcher = new ZLinkHandlerDispatcher(
             services.GetRequiredService<IServiceScopeFactory>(),
-            registration);
+            registration
+        );
         var invoker = new ZLinkRouteHandlerInvoker(dispatcher, codecs);
 
         var reply = await invoker.InvokeRequestAsync(
@@ -162,14 +169,13 @@ public sealed class RouteCodecTests
             RoutingId.From("source-node"),
             ZLinkEnvelopeCodec.DecodeHeader(parts),
             parts,
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         Assert.Equal("hello", RouteProbeHandler.LastRequest?.Text);
         Assert.Equal("application/route-test", ZLinkEnvelopeCodec.DecodeHeader(parts).ContentType);
         Assert.Equal(new RouteProbeReply("HELLO"), reply.Message);
-        Assert.Equal(
-            ZLinkHandlerDispatchKind.NodeDirectRequest,
-            filterProbe.DispatchKind);
+        Assert.Equal(ZLinkHandlerDispatchKind.NodeDirectRequest, filterProbe.DispatchKind);
         Assert.Equal("play", filterProbe.MeshName);
     }
 
@@ -195,13 +201,16 @@ public sealed class RouteCodecTests
             null,
             null,
             null,
-            null);
+            null
+        );
 
         using var request = Message.From("request");
-        var replyTask = dealer.Request()
+        var replyTask = dealer
+            .Request()
             .Message(request)
             .Timeout(TimeSpan.FromSeconds(2))
-            .Async().Reply;
+            .Async()
+            .Reply;
         using var received = await ReceiveAsync(router, TimeSpan.FromSeconds(2));
         ZLinkChannelReplyWriter.ReplyRequest(
             router,
@@ -209,10 +218,12 @@ public sealed class RouteCodecTests
             ZLinkChannelReplyWriter.CreateReplyHeader(
                 ZLinkMessageKind.Response,
                 "play",
-                requestHeader),
+                requestHeader
+            ),
             new RouteProbe("reply"),
             typeof(RouteProbe),
-            codecs);
+            codecs
+        );
 
         var events = new PollEvent[1];
         Assert.Equal(1, poller.Wait(events, TimeSpan.FromSeconds(2)));
@@ -221,12 +232,10 @@ public sealed class RouteCodecTests
         {
             Assert.Equal(
                 "application/route-test",
-                ZLinkEnvelopeCodec.DecodeHeader(parts).ContentType);
-            Assert.Equal("ROUTE:reply", Encoding.UTF8.GetString(
-                parts[1].AsReadOnlyMemory().Span));
-            Assert.Equal(
-                string.Empty,
-                ZLinkEnvelopeCodec.DecodeHeader(parts).MessageName);
+                ZLinkEnvelopeCodec.DecodeHeader(parts).ContentType
+            );
+            Assert.Equal("ROUTE:reply", Encoding.UTF8.GetString(parts[1].AsReadOnlyMemory().Span));
+            Assert.Equal(string.Empty, ZLinkEnvelopeCodec.DecodeHeader(parts).MessageName);
         }
         finally
         {
@@ -234,9 +243,7 @@ public sealed class RouteCodecTests
         }
     }
 
-    private static async Task<Received> ReceiveAsync(
-        IRouterSocket router,
-        TimeSpan timeout)
+    private static async Task<Received> ReceiveAsync(IRouterSocket router, TimeSpan timeout)
     {
         var deadlineStarted = Stopwatch.GetTimestamp();
         var received = Received.Create();
@@ -276,7 +283,8 @@ public sealed class RouteCodecTests
             initiator,
             initiatorRid,
             "reply-from-non-initiator",
-            TimeSpan.FromSeconds(3));
+            TimeSpan.FromSeconds(3)
+        );
     }
 
     private static async Task SendUntilReceivedAsync(
@@ -284,7 +292,8 @@ public sealed class RouteCodecTests
         IRouterSocket receiver,
         RoutingId targetRid,
         string payload,
-        TimeSpan timeout)
+        TimeSpan timeout
+    )
     {
         var deadlineStarted = Stopwatch.GetTimestamp();
         using var received = Received.Create();
@@ -294,13 +303,13 @@ public sealed class RouteCodecTests
             {
                 try
                 {
-                    await sender.Send(targetRid)
+                    await sender
+                        .Send(targetRid)
                         .Message(message)
-                        .Async(CancellationToken.None).Admitted;
+                        .Async(CancellationToken.None)
+                        .Admitted;
                 }
-                catch (ZlinkException)
-                {
-                }
+                catch (ZlinkException) { }
             }
 
             if (receiver.Recv(received, RecvFlags.DontWait))
@@ -326,7 +335,8 @@ public sealed class RouteCodecTests
         public ValueTask<RouteProbeReply> HandleAsync(
             RouteProbe request,
             ZLinkRouteMessageContext context,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             _ = context;
             _ = cancellationToken;
@@ -342,13 +352,13 @@ public sealed class RouteCodecTests
         public string? MeshName { get; set; }
     }
 
-    private sealed class RouteProbeFilter(RouteFilterProbe probe)
-        : IZLinkHandlerFilter
+    private sealed class RouteProbeFilter(RouteFilterProbe probe) : IZLinkHandlerFilter
     {
         public async ValueTask InvokeAsync(
             IZLinkHandlerFilterContext context,
             ZLinkHandlerFilterNext next,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             cancellationToken.ThrowIfCancellationRequested();
             probe.DispatchKind = context.DispatchKind;
@@ -365,7 +375,7 @@ public sealed class RouteCodecTests
             {
                 RouteProbe probe => probe.Text,
                 RouteProbeReply reply => reply.Text,
-                _ => throw new NotSupportedException(type.FullName)
+                _ => throw new NotSupportedException(type.FullName),
             };
             return ZLinkEncodedPayload.From(Encoding.UTF8.GetBytes("ROUTE:" + text));
         }
@@ -376,11 +386,11 @@ public sealed class RouteCodecTests
             var value = text.StartsWith("ROUTE:", StringComparison.Ordinal)
                 ? text["ROUTE:".Length..]
                 : text;
-            if (type == typeof(RouteProbe)) return new RouteProbe(value);
-            if (type == typeof(RouteProbeReply)) return new RouteProbeReply(value);
+            if (type == typeof(RouteProbe))
+                return new RouteProbe(value);
+            if (type == typeof(RouteProbeReply))
+                return new RouteProbeReply(value);
             throw new NotSupportedException(type.FullName);
         }
     }
-
-
 }

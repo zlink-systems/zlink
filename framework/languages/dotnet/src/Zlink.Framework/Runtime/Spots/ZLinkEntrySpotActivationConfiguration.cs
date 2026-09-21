@@ -56,9 +56,11 @@ internal sealed partial class ZLinkEntrySpotActivation
 
     internal async ValueTask ApplyScannedHandlerAsync(
         ZLinkScannedSpotHandler handler,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        if (handler.SpotType != EntrySpot.GetType()) return;
+        if (handler.SpotType != EntrySpot.GetType())
+            return;
 
         EnsureConfigurationOpen();
         _handlerInstances.Prepare(handler.HandlerType);
@@ -68,13 +70,21 @@ internal sealed partial class ZLinkEntrySpotActivation
                 _packets.Add(handler);
                 return;
             case ZLinkScannedSpotHandlerKind.Subscription:
-                if (handler.SpotNodeName is not null
-                    && !string.Equals(handler.SpotNodeName, SpotNodeName, StringComparison.Ordinal)) return;
-                var topic = handler.Topic
-                            ?? throw new InvalidOperationException("Scanned Entry Spot subscription requires a topic.");
-                var channelName = handler.ChannelName
-                                  ?? throw new InvalidOperationException(
-                                      "Scanned Entry Spot subscription requires a channel name.");
+                if (
+                    handler.SpotNodeName is not null
+                    && !string.Equals(handler.SpotNodeName, SpotNodeName, StringComparison.Ordinal)
+                )
+                    return;
+                var topic =
+                    handler.Topic
+                    ?? throw new InvalidOperationException(
+                        "Scanned Entry Spot subscription requires a topic."
+                    );
+                var channelName =
+                    handler.ChannelName
+                    ?? throw new InvalidOperationException(
+                        "Scanned Entry Spot subscription requires a channel name."
+                    );
                 if (handler.Method is { } subscriptionMethod)
                     _subscriptions.Add(channelName, topic, handler.HandlerType, subscriptionMethod);
                 else
@@ -84,36 +94,49 @@ internal sealed partial class ZLinkEntrySpotActivation
             case ZLinkScannedSpotHandlerKind.ActorRequest:
                 _actorHandlers.AddPacket(
                     handler.HandlerType,
-                    handler.ActorType ??
-                    throw new InvalidOperationException("Scanned Entry Spot actor handler requires an actor type."),
-                    handler.PacketName);
+                    handler.ActorType
+                        ?? throw new InvalidOperationException(
+                            "Scanned Entry Spot actor handler requires an actor type."
+                        ),
+                    handler.PacketName
+                );
                 return;
             case ZLinkScannedSpotHandlerKind.Timer:
-                _ = await _timers.AddAsync(
-                    handler.TimerName ??
-                    throw new InvalidOperationException("Scanned Entry Spot timer requires a name."),
-                    handler.TimerPeriod,
-                    null,
-                    handler.HandlerType,
-                    EntrySpot.GetType(),
-                    _stopSource.Token,
-                    async (descriptor, tick, ct) =>
-                    {
-                        await ExecuteQueuedAsync(
-                                static (activation, state, innerCt) => activation._invoker.InvokeTimerAsync(
-                                    state.Descriptor,
-                                    state.Tick,
-                                    innerCt),
-                                (Descriptor: descriptor, Tick: tick),
-                                ct)
-                            .ConfigureAwait(false);
-                        return true;
-                    },
-                    PublishTimerFailureAsync,
-                    cancellationToken).ConfigureAwait(false);
+                _ = await _timers
+                    .AddAsync(
+                        handler.TimerName
+                            ?? throw new InvalidOperationException(
+                                "Scanned Entry Spot timer requires a name."
+                            ),
+                        handler.TimerPeriod,
+                        null,
+                        handler.HandlerType,
+                        EntrySpot.GetType(),
+                        _stopSource.Token,
+                        async (descriptor, tick, ct) =>
+                        {
+                            await ExecuteQueuedAsync(
+                                    static (activation, state, innerCt) =>
+                                        activation._invoker.InvokeTimerAsync(
+                                            state.Descriptor,
+                                            state.Tick,
+                                            innerCt
+                                        ),
+                                    (Descriptor: descriptor, Tick: tick),
+                                    ct
+                                )
+                                .ConfigureAwait(false);
+                            return true;
+                        },
+                        PublishTimerFailureAsync,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
                 return;
             default:
-                throw new InvalidOperationException($"Unsupported scanned Entry Spot handler kind '{handler.Kind}'.");
+                throw new InvalidOperationException(
+                    $"Unsupported scanned Entry Spot handler kind '{handler.Kind}'."
+                );
         }
     }
 
@@ -130,6 +153,7 @@ internal sealed partial class ZLinkEntrySpotActivation
     {
         if (!_configurationOpen)
             throw new InvalidOperationException(
-                "Entry Spot handler registration is only allowed while Configure is running.");
+                "Entry Spot handler registration is only allowed while Configure is running."
+            );
     }
 }

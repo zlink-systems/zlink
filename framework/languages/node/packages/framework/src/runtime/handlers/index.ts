@@ -1,9 +1,12 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException  } from '../framework-errors-internal';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
 import {
   type Type,
   type ZLinkHandlerFilterNext,
   type ZLinkHandlerFilter,
-  type ZLinkHandlerFilterContext,
+  type ZLinkHandlerFilterContext
 } from '../../contracts';
 import {
   readZLinkDecoratorMetadata,
@@ -20,7 +23,9 @@ export interface ZLinkHandlerExposurePolicy {
   readonly explicitHandlers?: readonly Type[];
 }
 
-export function scanZLinkHandlerTypes(handlerTypes: readonly Type[]): readonly ZLinkHandlerDescriptor[] {
+export function scanZLinkHandlerTypes(
+  handlerTypes: readonly Type[]
+): readonly ZLinkHandlerDescriptor[] {
   return handlerTypes.flatMap((handlerType) =>
     readZLinkDecoratorMetadata(handlerType)
       .filter((metadata) => metadata.kind !== 'handlerGroup' && metadata.kind !== 'packet')
@@ -43,7 +48,10 @@ export function exposeZLinkHandlers(
       return false;
     }
     return readZLinkDecoratorMetadata(descriptor.handlerType).some(
-      (metadata) => metadata.kind === 'handlerGroup' && metadata.groupName !== undefined && groups.has(metadata.groupName)
+      (metadata) =>
+        metadata.kind === 'handlerGroup' &&
+        metadata.groupName !== undefined &&
+        groups.has(metadata.groupName)
     );
   });
 }
@@ -82,10 +90,12 @@ function invokeAtMostOnce(next: ZLinkHandlerFilterNext): ZLinkHandlerFilterNext 
   let invoked = false;
   return () => {
     if (invoked) {
-      return Promise.reject(createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.InvalidOperation,
-        'A handler filter cannot invoke next more than once.'
-      ));
+      return Promise.reject(
+        createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.InvalidOperation,
+          'A handler filter cannot invoke next more than once.'
+        )
+      );
     }
     invoked = true;
     return next();

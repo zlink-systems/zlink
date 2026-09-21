@@ -47,10 +47,9 @@ void open_proxy_tunnel (const http_client_options_t &options,
 
 } // namespace
 
-std::unique_ptr<pooled_connection_t>
-open_connection (const http_client_options_t &options,
-                 const hop_target_t &hop,
-                 std::chrono::milliseconds timeout)
+std::unique_ptr<pooled_connection_t> open_connection (const http_client_options_t &options,
+                                                      const hop_target_t &hop,
+                                                      std::chrono::milliseconds timeout)
 {
     auto connection = std::make_unique<pooled_connection_t> ();
     tcp::resolver resolver (connection->io);

@@ -3,12 +3,12 @@ using System.Net.WebSockets;
 
 namespace Systems.Zlink.Stream.Connector.Runtime.Transport;
 
-internal sealed class WebSocketConnection(
-    ClientWebSocket webSocket,
-    int maxReceivePayloadSize) : IZlinkStreamConnection
+internal sealed class WebSocketConnection(ClientWebSocket webSocket, int maxReceivePayloadSize)
+    : IZlinkStreamConnection
 {
-    private readonly long _maxReceiveFrameSize =
-        ZlinkStreamFrameCodec.GetMaxReceiveFrameSize(maxReceivePayloadSize);
+    private readonly long _maxReceiveFrameSize = ZlinkStreamFrameCodec.GetMaxReceiveFrameSize(
+        maxReceivePayloadSize
+    );
 
     private readonly byte[] _receiveBuffer = new byte[8192];
     private int _pendingLength;
@@ -28,7 +28,9 @@ internal sealed class WebSocketConnection(
             {
                 do
                 {
-                    result = await webSocket.ReceiveAsync(_receiveBuffer, cancellationToken).ConfigureAwait(false);
+                    result = await webSocket
+                        .ReceiveAsync(_receiveBuffer, cancellationToken)
+                        .ConfigureAwait(false);
                     if (result.MessageType == WebSocketMessageType.Close)
                     {
                         ArrayPool<byte>.Shared.Return(message);
@@ -36,14 +38,17 @@ internal sealed class WebSocketConnection(
                     }
 
                     if (result.MessageType != WebSocketMessageType.Binary)
-                        throw ZlinkStreamConnector.Error(ZlinkStreamErrorCode.FrameDecodeFailed,
-                            "WebSocket text messages are not supported.");
+                        throw ZlinkStreamConnector.Error(
+                            ZlinkStreamErrorCode.FrameDecodeFailed,
+                            "WebSocket text messages are not supported."
+                        );
 
                     var requiredCapacity = (long)messageLength + result.Count;
                     if (requiredCapacity > _maxReceiveFrameSize)
                         throw ZlinkStreamConnector.Error(
                             ZlinkStreamErrorCode.FrameTooLarge,
-                            "WebSocket message exceeds MaxReceivePayloadSize.");
+                            "WebSocket message exceeds MaxReceivePayloadSize."
+                        );
 
                     EnsureCapacity(ref message, messageLength, (int)requiredCapacity);
                     _receiveBuffer.AsSpan(0, result.Count).CopyTo(message.AsSpan(messageLength));
@@ -82,9 +87,14 @@ internal sealed class WebSocketConnection(
         return count;
     }
 
-    public async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken)
+    public async ValueTask WriteAsync(
+        ReadOnlyMemory<byte> buffer,
+        CancellationToken cancellationToken
+    )
     {
-        await webSocket.SendAsync(buffer, WebSocketMessageType.Binary, true, cancellationToken).ConfigureAwait(false);
+        await webSocket
+            .SendAsync(buffer, WebSocketMessageType.Binary, true, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     public async ValueTask CloseAsync(CancellationToken cancellationToken)
@@ -93,7 +103,8 @@ internal sealed class WebSocketConnection(
         try
         {
             if (webSocket.State is WebSocketState.Open or WebSocketState.CloseReceived)
-                await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "closed", cancellationToken)
+                await webSocket
+                    .CloseAsync(WebSocketCloseStatus.NormalClosure, "closed", cancellationToken)
                     .ConfigureAwait(false);
         }
         finally
@@ -104,10 +115,12 @@ internal sealed class WebSocketConnection(
 
     private static void EnsureCapacity(ref byte[] buffer, int existingLength, int requiredCapacity)
     {
-        if (buffer.Length >= requiredCapacity) return;
+        if (buffer.Length >= requiredCapacity)
+            return;
 
         var newLength = buffer.Length;
-        while (newLength < requiredCapacity) newLength = checked(newLength * 2);
+        while (newLength < requiredCapacity)
+            newLength = checked(newLength * 2);
 
         var next = ArrayPool<byte>.Shared.Rent(newLength);
         buffer.AsSpan(0, existingLength).CopyTo(next);
@@ -117,7 +130,8 @@ internal sealed class WebSocketConnection(
 
     private void ReturnPendingMessage()
     {
-        if (_pendingMessage is null) return;
+        if (_pendingMessage is null)
+            return;
 
         ArrayPool<byte>.Shared.Return(_pendingMessage);
         _pendingMessage = null;

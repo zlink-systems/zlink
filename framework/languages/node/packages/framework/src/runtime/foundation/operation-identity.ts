@@ -20,8 +20,7 @@ export function operationIdentityKey(
   if (operationId.high === 0n && operationId.low === 0n) {
     throw new RangeError('Operation identity must not be all zero.');
   }
-  return `${operationId.high.toString(16)}:${operationId.low.toString(16)}` as
-    ZLinkOperationIdentityKey;
+  return `${operationId.high.toString(16)}:${operationId.low.toString(16)}` as ZLinkOperationIdentityKey;
 }
 
 export function createRandomOperationIdentity(

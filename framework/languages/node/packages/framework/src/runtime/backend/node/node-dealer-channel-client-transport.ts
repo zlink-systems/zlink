@@ -1,23 +1,13 @@
-import type {
-  DealerSocket,
-  Message,
-  PubSocket
-} from '@zlink-systems/zlink';
+import type { DealerSocket, Message, PubSocket } from '@zlink-systems/zlink';
 import { ZLinkConfigurationException } from '../../configuration';
-import {
-  ZLinkSubmitStatus,
-  type ZLinkSubmitResult
-} from '../../messaging/submission-result';
+import { ZLinkSubmitStatus, type ZLinkSubmitResult } from '../../messaging/submission-result';
 import {
   decodeChannelReply,
   encodeChannelEnvelopeParts,
   ZLinkChannelMessageKind
 } from '../../channels/channel-envelope';
 import { throwIfAborted } from '../../abort';
-import {
-  appendParts,
-  submitRequestOperation
-} from '../../channels/channel-multipart';
+import { appendParts, submitRequestOperation } from '../../channels/channel-multipart';
 import type { ZLinkChannelClientTransport } from '../../channels/channel-transports';
 import { runWithOutboundFlow } from '../../diagnostics/flow-context';
 
@@ -40,21 +30,25 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
     throwIfAborted(signal);
     // Call-scoped flow (spec 27 §4): the envelope flow pair does not outlive
     // this outbound call.
-    await runWithOutboundFlow(true, () => appendParts(
-      this.dealer.send(),
-      encodeChannelEnvelopeParts(
-        ZLinkChannelMessageKind.Command,
-        channelName,
-        packetName,
-        message,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        true,
-        metadata
-      )
-    ).submit().admitted);
+    await runWithOutboundFlow(
+      true,
+      () =>
+        appendParts(
+          this.dealer.send(),
+          encodeChannelEnvelopeParts(
+            ZLinkChannelMessageKind.Command,
+            channelName,
+            packetName,
+            message,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            true,
+            metadata
+          )
+        ).submit().admitted
+    );
     return { status: ZLinkSubmitStatus.Submitted };
   }
 
@@ -67,23 +61,28 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
     metadata: ReadonlyMap<string, string> = EMPTY_METADATA
   ): Promise<TReply> {
     throwIfAborted(signal);
-    const operation = runWithOutboundFlow(true, () => appendParts(
-      this.dealer.request(),
-      encodeChannelEnvelopeParts(
-        ZLinkChannelMessageKind.Request,
-        channelName,
-        packetName,
-        request,
-        timeoutMs,
-        undefined,
-        undefined,
-        undefined,
-        true,
-        metadata
+    const operation = runWithOutboundFlow(true, () =>
+      appendParts(
+        this.dealer.request(),
+        encodeChannelEnvelopeParts(
+          ZLinkChannelMessageKind.Request,
+          channelName,
+          packetName,
+          request,
+          timeoutMs,
+          undefined,
+          undefined,
+          undefined,
+          true,
+          metadata
+        )
       )
-    ));
+    );
     if (timeoutMs !== undefined) operation.timeout(timeoutMs);
-    const reply = await submitRequestOperation({ submit: () => operation.submit().reply }, 'channel request');
+    const reply = await submitRequestOperation(
+      { submit: () => operation.submit().reply },
+      'channel request'
+    );
     try {
       return decodeChannelReply<TReply>(reply);
     } finally {
@@ -101,21 +100,23 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
     if (this.publisher === undefined) {
       throw new ZLinkConfigurationException('Channel publisher runtime is not started.');
     }
-    runWithOutboundFlow(true, () => appendParts(
-      this.publisher!.publish(topic),
-      encodeChannelEnvelopeParts(
-        ZLinkChannelMessageKind.Publish,
-        channelName,
-        packetName,
-        event,
-        undefined,
-        topic,
-        undefined,
-        undefined,
-        true,
-        metadata
-      )
-    ).submit());
+    runWithOutboundFlow(true, () =>
+      appendParts(
+        this.publisher!.publish(topic),
+        encodeChannelEnvelopeParts(
+          ZLinkChannelMessageKind.Publish,
+          channelName,
+          packetName,
+          event,
+          undefined,
+          topic,
+          undefined,
+          undefined,
+          true,
+          metadata
+        )
+      ).submit()
+    );
     return { status: ZLinkSubmitStatus.Submitted };
   }
 

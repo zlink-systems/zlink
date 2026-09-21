@@ -1,30 +1,28 @@
 package systems.zlink.framework.runtime.channels;
-import systems.zlink.framework.errors.ZLinkConfigurationException;
 
-import java.time.Duration;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.channels.ZLinkRequestHandler;
+import systems.zlink.framework.channels.ZLinkSendHandler;
 import systems.zlink.framework.configuration.ClientServerChannelBuilder;
 import systems.zlink.framework.configuration.FanoutChannelBuilder;
-import systems.zlink.framework.runtime.internal.configuration.RouteMeshChannelBuilder;
 import systems.zlink.framework.configuration.ZLinkClientServerChannelClientBuilder;
 import systems.zlink.framework.configuration.ZLinkClientServerChannelServerBuilder;
 import systems.zlink.framework.configuration.ZLinkEndpointConnections;
-import systems.zlink.framework.channels.ZLinkRequestHandler;
-import systems.zlink.framework.channels.ZLinkSendHandler;
+import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.runtime.internal.configuration.RouteMeshChannelBuilder;
 import systems.zlink.framework.runtime.internal.transport.ZLinkEndpointNotation;
 
+import java.time.Duration;
+
 public final class ChannelBuilders {
-    private ChannelBuilders() {
-    }
+    private ChannelBuilders() {}
 
     public static ClientServerChannelBuilder clientServer(ChannelRegistration registration) {
         return clientServer(registration, "127.0.0.1", null);
     }
 
     public static ClientServerChannelBuilder clientServer(
-        ChannelRegistration registration,
-        String bindHost,
-        String advertiseHost) {
+            ChannelRegistration registration, String bindHost, String advertiseHost) {
         return new ClientServer(registration, bindHost, advertiseHost);
     }
 
@@ -33,9 +31,7 @@ public final class ChannelBuilders {
     }
 
     public static FanoutChannelBuilder fanout(
-        ChannelRegistration registration,
-        String bindHost,
-        String advertiseHost) {
+            ChannelRegistration registration, String bindHost, String advertiseHost) {
         return new Fanout(registration, bindHost, advertiseHost);
     }
 
@@ -44,9 +40,8 @@ public final class ChannelBuilders {
     }
 
     private record ClientServer(
-        ChannelRegistration registration,
-        String bindHost,
-        String advertiseHost) implements ClientServerChannelBuilder {
+            ChannelRegistration registration, String bindHost, String advertiseHost)
+            implements ClientServerChannelBuilder {
         @Override
         public ZLinkClientServerChannelClientBuilder client() {
             registration.declareClient();
@@ -61,7 +56,7 @@ public final class ChannelBuilders {
     }
 
     private record ClientServerClient(ChannelRegistration registration)
-        implements ZLinkClientServerChannelClientBuilder {
+            implements ZLinkClientServerChannelClientBuilder {
         @Override
         public ZLinkClientServerChannelClientBuilder connect(String endpoint) {
             registration.addClientManualEndpoint(endpoint);
@@ -69,17 +64,14 @@ public final class ChannelBuilders {
         }
     }
 
-    private static final class ClientServerServer
-        implements ZLinkClientServerChannelServerBuilder {
+    private static final class ClientServerServer implements ZLinkClientServerChannelServerBuilder {
         private final ChannelRegistration registration;
         private String bindHost;
         private String advertiseHost;
         private Integer listenPort;
 
         private ClientServerServer(
-            ChannelRegistration registration,
-            String bindHost,
-            String advertiseHost) {
+                ChannelRegistration registration, String bindHost, String advertiseHost) {
             this.registration = registration;
             this.bindHost = bindHost;
             this.advertiseHost = advertiseHost;
@@ -97,7 +89,7 @@ public final class ChannelBuilders {
         public ZLinkClientServerChannelServerBuilder listen(int port) {
             if (port < 0 || port > 65_535) {
                 throw new ZLinkConfigurationException(
-                    "ClientServer listen port must be between 0 and 65535.");
+                        "ClientServer listen port must be between 0 and 65535.");
             }
             listenPort = port;
             applyListen();
@@ -132,42 +124,39 @@ public final class ChannelBuilders {
 
         @Override
         public <THandler extends ZLinkSendHandler<TMessage>, TMessage>
-        ZLinkClientServerChannelServerBuilder addSendHandler(
-            Class<THandler> handlerType,
-            Class<TMessage> messageType) {
-            registration.addSendHandler(new ChannelSendHandlerRegistration(
-                handlerType,
-                messageType,
-                null));
+                ZLinkClientServerChannelServerBuilder addSendHandler(
+                        Class<THandler> handlerType, Class<TMessage> messageType) {
+            registration.addSendHandler(
+                    new ChannelSendHandlerRegistration(handlerType, messageType, null));
             return this;
         }
 
         @Override
         public <THandler extends ZLinkRequestHandler<TRequest, TReply>, TRequest, TReply>
-        ZLinkClientServerChannelServerBuilder addRequestHandler(
-            Class<THandler> handlerType,
-            Class<TRequest> requestType,
-            Class<TReply> replyType) {
-            registration.addRequestHandler(new ChannelRequestHandlerRegistration(
-                handlerType,
-                requestType,
-                replyType,
-                null));
+                ZLinkClientServerChannelServerBuilder addRequestHandler(
+                        Class<THandler> handlerType,
+                        Class<TRequest> requestType,
+                        Class<TReply> replyType) {
+            registration.addRequestHandler(
+                    new ChannelRequestHandlerRegistration(
+                            handlerType, requestType, replyType, null));
             return this;
         }
 
         private void applyListen() {
             if (listenPort != null) {
                 registration.replaceClientServerBind(
-                    "tcp://" + ZLinkEndpointNotation.bracketIpv6Host(bindHost)
-                        + ":" + listenPort);
+                        "tcp://"
+                                + ZLinkEndpointNotation.bracketIpv6Host(bindHost)
+                                + ":"
+                                + listenPort);
             }
         }
 
         private static String requireHost(String host, String label) {
             if (host == null || host.isBlank()) {
                 throw new ZLinkConfigurationException(
-                    "ClientServer " + label + " must not be empty.");
+                        "ClientServer " + label + " must not be empty.");
             }
             return host;
         }
@@ -179,10 +168,7 @@ public final class ChannelBuilders {
         private String advertiseHost;
         private Integer listenPort;
 
-        private Fanout(
-            ChannelRegistration registration,
-            String bindHost,
-            String advertiseHost) {
+        private Fanout(ChannelRegistration registration, String bindHost, String advertiseHost) {
             this.registration = registration;
             this.bindHost = bindHost;
             this.advertiseHost = advertiseHost;
@@ -207,7 +193,7 @@ public final class ChannelBuilders {
         public FanoutChannelBuilder enablePublisher(int port) {
             if (port < 0 || port > 65_535) {
                 throw new ZLinkConfigurationException(
-                    "Fanout listen port must be between 0 and 65535.");
+                        "Fanout listen port must be between 0 and 65535.");
             }
             listenPort = port;
             registration.enablePublisher();
@@ -232,8 +218,10 @@ public final class ChannelBuilders {
         private void applyListen() {
             if (listenPort != null) {
                 registration.replacePublisherBind(
-                    "tcp://" + ZLinkEndpointNotation.bracketIpv6Host(bindHost)
-                        + ":" + listenPort);
+                        "tcp://"
+                                + ZLinkEndpointNotation.bracketIpv6Host(bindHost)
+                                + ":"
+                                + listenPort);
             }
         }
 
@@ -286,21 +274,15 @@ public final class ChannelBuilders {
         }
 
         @Override
-        public void addPublishHandler(
-            Class<?> handlerType,
-            Class<?> messageType) {
+        public void addPublishHandler(Class<?> handlerType, Class<?> messageType) {
             addPublishHandler(handlerType, messageType, null);
         }
 
         @Override
         public void addPublishHandler(
-            Class<?> handlerType,
-            Class<?> messageType,
-            String packetName) {
-            registration.addPublishHandler(new ChannelPublishHandlerRegistration(
-                handlerType,
-                messageType,
-                packetName));
+                Class<?> handlerType, Class<?> messageType, String packetName) {
+            registration.addPublishHandler(
+                    new ChannelPublishHandlerRegistration(handlerType, messageType, packetName));
         }
 
         @Override
@@ -313,10 +295,8 @@ public final class ChannelBuilders {
         @Override
         @SuppressWarnings({"unchecked", "rawtypes"})
         public FanoutChannelBuilder addPublishHandler(Class<?> handlerType, String packetName) {
-            registration.addPublishHandler(new ChannelPublishHandlerRegistration(
-                handlerType,
-                String.class,
-                packetName));
+            registration.addPublishHandler(
+                    new ChannelPublishHandlerRegistration(handlerType, String.class, packetName));
             return this;
         }
     }
@@ -365,44 +345,28 @@ public final class ChannelBuilders {
         }
 
         @Override
-        public void addSendHandler(
-            Class<?> handlerType,
-            Class<?> messageType) {
+        public void addSendHandler(Class<?> handlerType, Class<?> messageType) {
             addSendHandler(handlerType, messageType, null);
         }
 
         @Override
-        public void addSendHandler(
-            Class<?> handlerType,
-            Class<?> messageType,
-            String packetName) {
-            registration.addRouteSendHandler(new ChannelRouteSendHandlerRegistration(
-                handlerType,
-                messageType,
-                packetName));
+        public void addSendHandler(Class<?> handlerType, Class<?> messageType, String packetName) {
+            registration.addRouteSendHandler(
+                    new ChannelRouteSendHandlerRegistration(handlerType, messageType, packetName));
         }
 
         @Override
         public void addRequestHandler(
-            Class<?> handlerType,
-            Class<?> requestType,
-            Class<?> replyType) {
+                Class<?> handlerType, Class<?> requestType, Class<?> replyType) {
             addRequestHandler(handlerType, requestType, replyType, null);
         }
 
         @Override
         public void addRequestHandler(
-            Class<?> handlerType,
-            Class<?> requestType,
-            Class<?> replyType,
-            String packetName) {
-            registration.addRouteRequestHandler(new ChannelRouteRequestHandlerRegistration(
-                handlerType,
-                requestType,
-                replyType,
-                packetName));
+                Class<?> handlerType, Class<?> requestType, Class<?> replyType, String packetName) {
+            registration.addRouteRequestHandler(
+                    new ChannelRouteRequestHandlerRegistration(
+                            handlerType, requestType, replyType, packetName));
         }
-
     }
-
 }

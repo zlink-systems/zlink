@@ -1,22 +1,18 @@
-import type {
-  Disposable,
-  ZlinkStreamConnectionStateChanged,
-  ZlinkStreamError
-} from '../Contracts';
+import type { Disposable, ZlinkStreamConnectionStateChanged, ZlinkStreamError } from '../Contracts';
 import { subscription } from './ZlinkStreamSupport';
 
 export class ZlinkStreamConnectorEvents {
-  private readonly errorHandlers = new Set<(
-    error: ZlinkStreamError,
-    signal?: AbortSignal
-  ) => Promise<void> | void>();
+  private readonly errorHandlers = new Set<
+    (error: ZlinkStreamError, signal?: AbortSignal) => Promise<void> | void
+  >();
   private readonly disconnectedHandlers = new Set<(signal?: AbortSignal) => Promise<void> | void>();
-  private readonly stateHandlers = new Set<(
-    change: ZlinkStreamConnectionStateChanged,
-    signal?: AbortSignal
-  ) => Promise<void> | void>();
+  private readonly stateHandlers = new Set<
+    (change: ZlinkStreamConnectionStateChanged, signal?: AbortSignal) => Promise<void> | void
+  >();
 
-  onError(handler: (error: ZlinkStreamError, signal?: AbortSignal) => Promise<void> | void): Disposable {
+  onError(
+    handler: (error: ZlinkStreamError, signal?: AbortSignal) => Promise<void> | void
+  ): Disposable {
     this.errorHandlers.add(handler);
     return subscription(() => this.errorHandlers.delete(handler));
   }
@@ -26,10 +22,12 @@ export class ZlinkStreamConnectorEvents {
     return subscription(() => this.disconnectedHandlers.delete(handler));
   }
 
-  onStateChanged(handler: (
-    change: ZlinkStreamConnectionStateChanged,
-    signal?: AbortSignal
-  ) => Promise<void> | void): Disposable {
+  onStateChanged(
+    handler: (
+      change: ZlinkStreamConnectionStateChanged,
+      signal?: AbortSignal
+    ) => Promise<void> | void
+  ): Disposable {
     this.stateHandlers.add(handler);
     return subscription(() => this.stateHandlers.delete(handler));
   }
@@ -42,7 +40,10 @@ export class ZlinkStreamConnectorEvents {
     await this.publish([...this.disconnectedHandlers].map((handler) => () => handler(signal)));
   }
 
-  async publishStateChanged(change: ZlinkStreamConnectionStateChanged, signal?: AbortSignal): Promise<void> {
+  async publishStateChanged(
+    change: ZlinkStreamConnectionStateChanged,
+    signal?: AbortSignal
+  ): Promise<void> {
     await this.publish([...this.stateHandlers].map((handler) => () => handler(change, signal)));
   }
 

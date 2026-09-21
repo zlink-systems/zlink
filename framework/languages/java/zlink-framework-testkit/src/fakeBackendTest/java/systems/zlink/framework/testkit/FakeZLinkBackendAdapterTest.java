@@ -1,16 +1,18 @@
 package systems.zlink.framework.testkit;
-import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-import java.time.Duration;
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterOptions;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendContext;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotNodeMode;
-import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkChannelBackendAdapter;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+
+import java.time.Duration;
+import java.util.List;
 
 final class FakeZLinkBackendAdapterTest {
     @Test
@@ -22,24 +24,25 @@ final class FakeZLinkBackendAdapterTest {
         channel.createDealerSocket(context);
 
         ZLinkInternalSpotNode spotNode =
-            factory.createSpotAdapter(options).createSpotNode(context, ZLinkBackendSpotNodeMode.ALL);
+                factory.createSpotAdapter(options)
+                        .createSpotNode(context, ZLinkBackendSpotNodeMode.ALL);
         ZLinkBackendStreamSocket stream =
-            factory.createStreamAdapter(options).createStreamSocket(context, null);
+                factory.createStreamAdapter(options).createStreamSocket(context, null);
 
         factory.createMonitoringAdapter(options).openSocketMonitor(stream);
 
         assertEquals(
-            List.of(
-                "factory.channel",
-                "create.context",
-                "create.dealer",
-                "factory.spot",
-                "create.spotNode",
-                "factory.stream",
-                "create.stream",
-                "factory.monitoring",
-                "monitoring.open.stream",
-                "create.socketMonitor"),
-            factory.calls());
+                List.of(
+                        "factory.channel",
+                        "create.context",
+                        "create.dealer",
+                        "factory.spot",
+                        "create.spotNode",
+                        "factory.stream",
+                        "create.stream",
+                        "factory.monitoring",
+                        "monitoring.open.stream",
+                        "create.socketMonitor"),
+                factory.calls());
     }
 }

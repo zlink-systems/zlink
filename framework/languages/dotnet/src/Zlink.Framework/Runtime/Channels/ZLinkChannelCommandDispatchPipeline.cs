@@ -6,7 +6,8 @@ internal sealed class ZLinkChannelCommandDispatchPipeline(
     ZLinkHandlerDispatcher dispatcher,
     Func<string, IReadOnlySet<string>> resolveMappedGroups,
     ZLinkDispatchErrorReporter dispatchErrors,
-    ZLinkCodecRegistryBuilder codecs)
+    ZLinkCodecRegistryBuilder codecs
+)
 {
     public async Task DispatchAsync(
         string channelName,
@@ -14,7 +15,8 @@ internal sealed class ZLinkChannelCommandDispatchPipeline(
         ZLinkEnvelopeHeader header,
         CancellationToken cancellationToken,
         ZLinkMessageMetadata? metadata = null,
-        RoutingId? sourceNodeRid = null)
+        RoutingId? sourceNodeRid = null
+    )
     {
         var scope = new ZLinkDispatchFlowScope(
             ZLinkDispatchErrorSurface.Channel,
@@ -23,26 +25,32 @@ internal sealed class ZLinkChannelCommandDispatchPipeline(
             header.MessageName,
             channelName,
             header.ContentType,
-            header.CorrelationId);
-        if (!handlerRegistry.TryGetCommand(
+            header.CorrelationId
+        );
+        if (
+            !handlerRegistry.TryGetCommand(
                 channelName,
                 resolveMappedGroups(channelName),
                 header.MessageName,
-                out var endpoint)
-            || endpoint is null)
+                out var endpoint
+            ) || endpoint is null
+        )
         {
             scope.Dropped(dispatchErrors);
             return;
         }
 
-        if (!scope.TryDecode(
+        if (
+            !scope.TryDecode(
                 parts,
                 endpoint.MessageType,
                 header.ContentType,
                 codecs,
                 dispatchErrors,
                 ZLinkDispatchErrorAction.Drop,
-                out var message))
+                out var message
+            )
+        )
             return;
 
         var rawMessage = message as Message;
@@ -56,31 +64,32 @@ internal sealed class ZLinkChannelCommandDispatchPipeline(
                     header.MessageName,
                     header.ContentType,
                     metadata,
-                    header.CorrelationId)
+                    header.CorrelationId
+                )
                 : new ZLinkMessageContext(
                     meshName,
                     channelName,
                     header.MessageName,
                     header.ContentType,
                     metadata,
-                    header.CorrelationId);
+                    header.CorrelationId
+                );
             try
             {
-                await dispatcher.DispatchAsync(
+                await dispatcher
+                    .DispatchAsync(
                         endpoint,
                         message,
                         context,
                         ZLinkHandlerDispatchKind.ChannelSend,
-                        cancellationToken)
+                        cancellationToken
+                    )
                     .ConfigureAwait(false);
                 scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Dispatched);
             }
             catch (Exception ex)
             {
-                scope.HandlerException(
-                    dispatchErrors,
-                    ZLinkDispatchErrorAction.Drop,
-                    ex);
+                scope.HandlerException(dispatchErrors, ZLinkDispatchErrorAction.Drop, ex);
             }
         }
         finally
@@ -95,7 +104,8 @@ internal sealed class ZLinkChannelCommandDispatchPipeline(
         ZLinkEnvelopeHeader header,
         CancellationToken cancellationToken,
         ZLinkMessageMetadata? metadata = null,
-        RoutingId? sourceNodeRid = null)
+        RoutingId? sourceNodeRid = null
+    )
     {
         var scope = new ZLinkDispatchFlowScope(
             ZLinkDispatchErrorSurface.Channel,
@@ -104,26 +114,32 @@ internal sealed class ZLinkChannelCommandDispatchPipeline(
             header.MessageName,
             channelName,
             header.ContentType,
-            header.CorrelationId);
-        if (!handlerRegistry.TryGetCommand(
+            header.CorrelationId
+        );
+        if (
+            !handlerRegistry.TryGetCommand(
                 channelName,
                 resolveMappedGroups(channelName),
                 header.MessageName,
-                out var endpoint)
-            || endpoint is null)
+                out var endpoint
+            ) || endpoint is null
+        )
         {
             scope.Dropped(dispatchErrors);
             return;
         }
 
-        if (!scope.TryDecode(
+        if (
+            !scope.TryDecode(
                 parts,
                 endpoint.MessageType,
                 scope.ContentType!,
                 codecs,
                 dispatchErrors,
                 ZLinkDispatchErrorAction.Drop,
-                out var message))
+                out var message
+            )
+        )
             return;
 
         IZLinkMessageContext context = sourceNodeRid is { } source
@@ -134,32 +150,33 @@ internal sealed class ZLinkChannelCommandDispatchPipeline(
                 scope.PacketName!,
                 scope.ContentType,
                 metadata,
-                header.CorrelationId)
+                header.CorrelationId
+            )
             : new ZLinkMessageContext(
                 meshName,
                 channelName,
                 scope.PacketName!,
                 scope.ContentType,
                 metadata,
-                header.CorrelationId);
+                header.CorrelationId
+            );
         try
         {
-            await dispatcher.DispatchAsync(
+            await dispatcher
+                .DispatchAsync(
                     endpoint,
                     message,
                     context,
                     ZLinkHandlerDispatchKind.ChannelSend,
-                    cancellationToken)
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
 
             scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Dispatched);
         }
         catch (Exception ex)
         {
-            scope.HandlerException(
-                dispatchErrors,
-                ZLinkDispatchErrorAction.Drop,
-                ex);
+            scope.HandlerException(dispatchErrors, ZLinkDispatchErrorAction.Drop, ex);
         }
     }
 }

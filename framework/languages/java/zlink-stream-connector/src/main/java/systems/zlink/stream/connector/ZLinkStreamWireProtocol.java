@@ -27,49 +27,55 @@ final class ZLinkStreamWireProtocol {
     static final int FLAG_HAS_FLOW_ID = 0x10;
 
     private static final int KNOWN_FLAGS =
-        FLAG_HAS_REQUEST_SEQ | FLAG_HAS_METADATA | FLAG_PAYLOAD_COMPRESSED
-            | FLAG_HAS_CORRELATION_ID | FLAG_HAS_FLOW_ID;
+            FLAG_HAS_REQUEST_SEQ
+                    | FLAG_HAS_METADATA
+                    | FLAG_PAYLOAD_COMPRESSED
+                    | FLAG_HAS_CORRELATION_ID
+                    | FLAG_HAS_FLOW_ID;
     private static final int MAX_PACKET_NAME_BYTES = 255;
     private static final int MAX_METADATA_BYTES = 1024;
 
-    private ZLinkStreamWireProtocol() {
-    }
+    private ZLinkStreamWireProtocol() {}
 
     static byte[] encodeHeader(Header header) {
         String wireName = isReply(header.kind()) ? "" : header.name();
         validateHeader(header, wireName);
         byte[] name = wireName.getBytes(StandardCharsets.UTF_8);
-        byte[] metadata = header.metadata().isEmpty()
-            ? new byte[0]
-            : encodeMetadata(header.metadata());
+        byte[] metadata =
+                header.metadata().isEmpty() ? new byte[0] : encodeMetadata(header.metadata());
         boolean hasCorrelationId =
-            header.correlationId() != null && !header.correlationId().isEmpty();
-        byte[] correlation = hasCorrelationId
-            ? header.correlationId().getBytes(StandardCharsets.UTF_8)
-            : new byte[0];
+                header.correlationId() != null && !header.correlationId().isEmpty();
+        byte[] correlation =
+                hasCorrelationId
+                        ? header.correlationId().getBytes(StandardCharsets.UTF_8)
+                        : new byte[0];
         if (correlation.length > 255) {
             throw new IllegalArgumentException("correlation id is too long");
         }
         int flags = header.flags();
-        flags = header.requestSeq() == null
-            ? flags & ~FLAG_HAS_REQUEST_SEQ
-            : flags | FLAG_HAS_REQUEST_SEQ;
-        flags = header.metadata().isEmpty()
-            ? flags & ~FLAG_HAS_METADATA
-            : flags | FLAG_HAS_METADATA;
-        flags = hasCorrelationId
-            ? flags | FLAG_HAS_CORRELATION_ID
-            : flags & ~FLAG_HAS_CORRELATION_ID;
+        flags =
+                header.requestSeq() == null
+                        ? flags & ~FLAG_HAS_REQUEST_SEQ
+                        : flags | FLAG_HAS_REQUEST_SEQ;
+        flags =
+                header.metadata().isEmpty()
+                        ? flags & ~FLAG_HAS_METADATA
+                        : flags | FLAG_HAS_METADATA;
+        flags =
+                hasCorrelationId
+                        ? flags | FLAG_HAS_CORRELATION_ID
+                        : flags & ~FLAG_HAS_CORRELATION_ID;
         boolean hasFlow = header.flowId() != null;
         flags = hasFlow ? flags | FLAG_HAS_FLOW_ID : flags & ~FLAG_HAS_FLOW_ID;
 
-        int size = 4
-            + (header.requestSeq() == null ? 0 : Long.BYTES)
-            + 1
-            + name.length
-            + (metadata.length == 0 ? 0 : 2 + metadata.length)
-            + (hasCorrelationId ? 1 + correlation.length : 0)
-            + (hasFlow ? 37 : 0);
+        int size =
+                4
+                        + (header.requestSeq() == null ? 0 : Long.BYTES)
+                        + 1
+                        + name.length
+                        + (metadata.length == 0 ? 0 : 2 + metadata.length)
+                        + (hasCorrelationId ? 1 + correlation.length : 0)
+                        + (hasFlow ? 37 : 0);
         ByteBuffer buffer = ByteBuffer.allocate(size);
         buffer.put((byte) FORMAT_MARKER);
         buffer.put((byte) header.kind());
@@ -100,10 +106,9 @@ final class ZLinkStreamWireProtocol {
     }
 
     /**
-     * Decodes a stream header. With {@code validateFlow} false (diagnostics
-     * level Off, spec 27 §4) the trace-only flow field validation (UUIDv7
-     * shape, origin range) is skipped while every structural length check —
-     * including the fixed 37-byte flow trailer — still applies.
+     * Decodes a stream header. With {@code validateFlow} false (diagnostics level Off, spec 27 §4)
+     * the trace-only flow field validation (UUIDv7 shape, origin range) is skipped while every
+     * structural length check — including the fixed 37-byte flow trailer — still applies.
      */
     static Header decodeHeader(byte[] header, boolean validateFlow) {
         if (header.length < 5) {
@@ -111,7 +116,8 @@ final class ZLinkStreamWireProtocol {
         }
         ByteBuffer buffer = ByteBuffer.wrap(header);
         if (Byte.toUnsignedInt(buffer.get()) != FORMAT_MARKER) {
-            throw new IllegalArgumentException("stream header format marker is missing or unsupported");
+            throw new IllegalArgumentException(
+                    "stream header format marker is missing or unsupported");
         }
         int kind = Byte.toUnsignedInt(buffer.get());
         int codec = Byte.toUnsignedInt(buffer.get());
@@ -162,16 +168,17 @@ final class ZLinkStreamWireProtocol {
         if (buffer.hasRemaining()) {
             throw new IllegalArgumentException("stream header contains trailing bytes");
         }
-        Header decoded = new Header(
-            kind,
-            codec,
-            flags,
-            requestSeq,
-            new String(nameBytes, StandardCharsets.UTF_8),
-            metadata,
-            correlationId,
-            flowId,
-            flowOrigin);
+        Header decoded =
+                new Header(
+                        kind,
+                        codec,
+                        flags,
+                        requestSeq,
+                        new String(nameBytes, StandardCharsets.UTF_8),
+                        metadata,
+                        correlationId,
+                        flowId,
+                        flowOrigin);
         validateHeader(decoded, decoded.name(), validateFlow);
         return decoded;
     }
@@ -300,49 +307,53 @@ final class ZLinkStreamWireProtocol {
         validateHeader(header, packetName, true);
     }
 
-    private static void validateHeader(
-        Header header,
-        String packetName,
-        boolean validateFlow) {
+    private static void validateHeader(Header header, String packetName, boolean validateFlow) {
         validateEnum(header.kind(), header.codec(), header.flags());
         byte[] name = packetName.getBytes(StandardCharsets.UTF_8);
         if ((isReply(header.kind()) && name.length != 0)
-            || (!isReply(header.kind()) && name.length == 0)
-            || name.length > MAX_PACKET_NAME_BYTES) {
+                || (!isReply(header.kind()) && name.length == 0)
+                || name.length > MAX_PACKET_NAME_BYTES) {
             throw new IllegalArgumentException("packet name is invalid");
         }
-        boolean hasRequestSeq = header.requestSeq() != null
-            || (header.flags() & FLAG_HAS_REQUEST_SEQ) != 0;
-        boolean hasMetadata = !header.metadata().isEmpty()
-            || (header.flags() & FLAG_HAS_METADATA) != 0;
+        boolean hasRequestSeq =
+                header.requestSeq() != null || (header.flags() & FLAG_HAS_REQUEST_SEQ) != 0;
+        boolean hasMetadata =
+                !header.metadata().isEmpty() || (header.flags() & FLAG_HAS_METADATA) != 0;
         if (header.kind() == KIND_SEND && hasRequestSeq) {
             throw new IllegalArgumentException("send packet must not contain a request sequence");
         }
         if ((header.kind() == KIND_REQUEST || header.kind() == KIND_RESPONSE) && !hasRequestSeq) {
-            throw new IllegalArgumentException("request and response packets must contain a request sequence");
+            throw new IllegalArgumentException(
+                    "request and response packets must contain a request sequence");
         }
         if (header.kind() == KIND_ERROR && header.codec() != CODEC_JSON) {
             throw new IllegalArgumentException("error packet must use the JSON codec");
         }
         boolean hasCorrelationId =
-            header.correlationId() != null && !header.correlationId().isEmpty();
+                header.correlationId() != null && !header.correlationId().isEmpty();
         boolean hasFlow = header.flowId() != null;
         if (hasFlow) {
             if (validateFlow
-                && !header.flowId().matches("[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")) {
+                    && !header.flowId()
+                            .matches(
+                                    "[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")) {
                 throw new IllegalArgumentException("flow id must be a canonical UUIDv7");
             }
-            if (validateFlow
-                && (header.flowOrigin() < 1 || header.flowOrigin() > 4)) {
+            if (validateFlow && (header.flowOrigin() < 1 || header.flowOrigin() > 4)) {
                 throw new IllegalArgumentException("flow origin is invalid");
             }
         } else if (header.flowOrigin() != 0) {
             throw new IllegalArgumentException("flow id and origin must be present together");
         }
         if (header.kind() == KIND_CONTROL
-            && (header.flags() != 0 || hasRequestSeq || hasMetadata || hasCorrelationId || hasFlow
-                || header.codec() != CODEC_RAW)) {
-            throw new IllegalArgumentException("control packet must use raw codec and must not contain flags");
+                && (header.flags() != 0
+                        || hasRequestSeq
+                        || hasMetadata
+                        || hasCorrelationId
+                        || hasFlow
+                        || header.codec() != CODEC_RAW)) {
+            throw new IllegalArgumentException(
+                    "control packet must use raw codec and must not contain flags");
         }
     }
 
@@ -369,27 +380,27 @@ final class ZLinkStreamWireProtocol {
     }
 
     record Header(
-        int kind,
-        int codec,
-        int flags,
-        Long requestSeq,
-        String name,
-        Map<String, String> metadata,
-        String correlationId,
-        String flowId,
-        int flowOrigin) {
-        Header {
-            metadata = Collections.unmodifiableMap(new LinkedHashMap<>(metadata));
-        }
-
-        Header(
             int kind,
             int codec,
             int flags,
             Long requestSeq,
             String name,
             Map<String, String> metadata,
-            String correlationId) {
+            String correlationId,
+            String flowId,
+            int flowOrigin) {
+        Header {
+            metadata = Collections.unmodifiableMap(new LinkedHashMap<>(metadata));
+        }
+
+        Header(
+                int kind,
+                int codec,
+                int flags,
+                Long requestSeq,
+                String name,
+                Map<String, String> metadata,
+                String correlationId) {
             this(kind, codec, flags, requestSeq, name, metadata, correlationId, null, 0);
         }
     }

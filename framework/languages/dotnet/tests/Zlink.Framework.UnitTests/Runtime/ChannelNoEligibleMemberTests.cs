@@ -16,7 +16,9 @@ public sealed class ChannelNoEligibleMemberTests
         var error = Assert.IsType<ZLinkFrameworkException>(
             ZLinkRequestFailureMapper.CreateChannelCompletionException(
                 RequestResult.NotFound,
-                "Channel request to 'profile'"));
+                "Channel request to 'profile'"
+            )
+        );
 
         Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
     }
@@ -27,7 +29,9 @@ public sealed class ChannelNoEligibleMemberTests
         var error = Assert.IsType<ZLinkFrameworkException>(
             ZLinkRequestFailureMapper.CreateCompletionException(
                 RequestResult.NotFound,
-                "Node request to 'play-node'"));
+                "Node request to 'play-node'"
+            )
+        );
 
         Assert.Equal(ZLinkFrameworkErrorKind.NotFound, error.Kind);
     }
@@ -38,13 +42,17 @@ public sealed class ChannelNoEligibleMemberTests
         var notConnected = Assert.IsType<ZLinkFrameworkException>(
             ZLinkRequestFailureMapper.CreateChannelCompletionException(
                 RequestResult.NotConnected,
-                "Channel request to 'profile'"));
+                "Channel request to 'profile'"
+            )
+        );
         Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, notConnected.Kind);
 
         var timedOut = Assert.IsType<ZLinkFrameworkException>(
             ZLinkRequestFailureMapper.CreateChannelCompletionException(
                 RequestResult.TimedOut,
-                "Channel request to 'profile'"));
+                "Channel request to 'profile'"
+            )
+        );
         Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, timedOut.Kind);
     }
 }

@@ -4,7 +4,10 @@ import {
   requestResultToPublicErrorKind
 } from '../framework-errors-internal';
 import type { Message } from '../../contracts/Common/Message';
-import { type ZLinkBackendMessageLike as MessageLike, isZLinkBackendResultError } from '../backend/runtime-values';
+import {
+  type ZLinkBackendMessageLike as MessageLike,
+  isZLinkBackendResultError
+} from '../backend/runtime-values';
 import { ZLinkConfigurationException } from '../configuration';
 import { ZLinkFrameworkException } from '../../contracts';
 
@@ -35,7 +38,9 @@ export function appendParts<TNext extends ZLinkMultipartOperation<TNext>>(
   parts: readonly MessageLike[]
 ): TNext {
   if (parts.length === 0) {
-    throw new ZLinkConfigurationException('Channel multipart envelope must contain at least one part.');
+    throw new ZLinkConfigurationException(
+      'Channel multipart envelope must contain at least one part.'
+    );
   }
   let current: TNext = operation.message(parts[0]);
   for (let index = 1; index < parts.length; index++) {
@@ -44,9 +49,12 @@ export function appendParts<TNext extends ZLinkMultipartOperation<TNext>>(
   return current;
 }
 
-export async function submitRequestOperation(operation: {
-  submit(): Promise<readonly Message[]>;
-}, label: string): Promise<readonly Message[]> {
+export async function submitRequestOperation(
+  operation: {
+    submit(): Promise<readonly Message[]>;
+  },
+  label: string
+): Promise<readonly Message[]> {
   try {
     return await operation.submit();
   } catch (error) {

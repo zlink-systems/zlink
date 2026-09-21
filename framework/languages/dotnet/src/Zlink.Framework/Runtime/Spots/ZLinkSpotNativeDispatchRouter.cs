@@ -9,7 +9,8 @@ internal static class ZLinkSpotNativeDispatchRouter
         Action subscribeReadable,
         Action actorJoinReadable,
         Action actorLifecycleReadable,
-        Action<IReadOnlyList<ZLinkBackendActorPart>, IDisposable?> actorPartsReadable)
+        Action<IReadOnlyList<ZLinkBackendActorPart>, IDisposable?> actorPartsReadable
+    )
     {
         try
         {
@@ -41,8 +42,6 @@ internal static class ZLinkSpotNativeDispatchRouter
             });
         }
         catch (ZlinkHandlerException error)
-            when (error.Result == ZlinkHandlerException.ErrorCode.NotSupported)
-        {
-        }
+            when (error.Result == ZlinkHandlerException.ErrorCode.NotSupported) { }
     }
 }

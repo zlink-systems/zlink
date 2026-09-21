@@ -1,25 +1,25 @@
 package systems.zlink.framework.runtime.spots;
 
+import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
+import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime.LocalActorReply;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
+import systems.zlink.framework.runtime.internal.streams.ZLinkStreamErrorPayload;
+import systems.zlink.framework.runtime.streams.ZLinkStreamFrameCodec;
+import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
+import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
+import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
+import systems.zlink.framework.streams.ZLinkStreamCodec;
+import systems.zlink.framework.streams.ZLinkStreamMessageKind;
+
 import java.util.EnumSet;
 import java.util.Map;
 import java.util.Optional;
-import systems.zlink.contracts.messaging.Message;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
-import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime.LocalActorReply;
-import systems.zlink.framework.runtime.streams.ZLinkStreamFrameCodec;
-import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
-import systems.zlink.framework.streams.ZLinkStreamCodec;
-import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
-import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
-import systems.zlink.framework.runtime.internal.streams.ZLinkStreamErrorPayload;
-import systems.zlink.framework.streams.ZLinkStreamMessageKind;
-import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
 
 final class ActorPacketFrames {
-    private ActorPacketFrames() {
-    }
+    private ActorPacketFrames() {}
 
     static Header decode(ZLinkBackendActorReceived headerPart) {
         byte[] bytes = headerPart.message().toByteArray();
@@ -27,93 +27,88 @@ final class ActorPacketFrames {
             return decodeStream(bytes, headerPart.requestSeq());
         } catch (RuntimeException ignored) {
             return new Header(
-                headerPart.message().toUtf8String(),
-                headerPart.requestSeq(),
-                false,
-                0,
-                EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
-                Map.of(),
-                Optional.empty(),
-                Optional.empty(),
-                Optional.empty());
+                    headerPart.message().toUtf8String(),
+                    headerPart.requestSeq(),
+                    false,
+                    0,
+                    EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                    Map.of(),
+                    Optional.empty(),
+                    Optional.empty(),
+                    Optional.empty());
         }
     }
 
     static Message encodeReply(Header packetHeader, Message payload) {
         return encodeReply(
-            packetHeader,
-            payload,
-            packetHeader.packetName(),
-            ZLinkStreamCodec.fromValue(packetHeader.codec()));
+                packetHeader,
+                payload,
+                packetHeader.packetName(),
+                ZLinkStreamCodec.fromValue(packetHeader.codec()));
     }
 
     static Message encodeReply(
-        Header packetHeader,
-        Message payload,
-        String replyPacketName,
-        ZLinkStreamCodec replyCodec) {
+            Header packetHeader,
+            Message payload,
+            String replyPacketName,
+            ZLinkStreamCodec replyCodec) {
         if (!packetHeader.streamHeader() || packetHeader.requestSeq().isEmpty()) {
             return Message.from(payload);
         }
-        ZLinkStreamHeader replyHeader = ZLinkStreamHeader.createResponse(
-            packetHeader.toRequestHeader(),
-            replyCodec,
-            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
-            replyPacketName,
-            Map.of());
+        ZLinkStreamHeader replyHeader =
+                ZLinkStreamHeader.createResponse(
+                        packetHeader.toRequestHeader(),
+                        replyCodec,
+                        EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                        replyPacketName,
+                        Map.of());
         return Message.from(ZLinkStreamFrameCodec.encode(replyHeader, payload.toByteArray()));
     }
 
-    static Message encodeRoutedReply(
-        ZLinkStreamHeader requestHeader,
-        LocalActorReply reply) {
-        ZLinkStreamHeader replyHeader = ZLinkStreamHeader.createResponse(
-            requestHeader,
-            reply.codec(),
-            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
-            requestHeader.packetName(),
-            Map.of());
-        return Message.from(ZLinkStreamFrameCodec.encode(
-            replyHeader,
-            reply.payload().toByteArray()));
+    static Message encodeRoutedReply(ZLinkStreamHeader requestHeader, LocalActorReply reply) {
+        ZLinkStreamHeader replyHeader =
+                ZLinkStreamHeader.createResponse(
+                        requestHeader,
+                        reply.codec(),
+                        EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                        requestHeader.packetName(),
+                        Map.of());
+        return Message.from(
+                ZLinkStreamFrameCodec.encode(replyHeader, reply.payload().toByteArray()));
     }
 
-    static LocalActorReply decodeRoutedReply(
-        ZLinkStreamHeader requestHeader,
-        Message frame) {
+    static LocalActorReply decodeRoutedReply(ZLinkStreamHeader requestHeader, Message frame) {
         try {
             ZLinkStreamFrameCodec.DecodedFrame decoded =
-                ZLinkStreamFrameCodec.tryDecode(frame.toByteArray())
-                    .orElseThrow(() -> new IllegalArgumentException(
-                        "routed Actor reply is not a STREAM frame"));
-            ZLinkStreamHeader replyHeader =
-                ZLinkStreamHeaderCodec.decodeOrPlain(decoded.header());
+                    ZLinkStreamFrameCodec.tryDecode(frame.toByteArray())
+                            .orElseThrow(
+                                    () ->
+                                            new IllegalArgumentException(
+                                                    "routed Actor reply is not a STREAM frame"));
+            ZLinkStreamHeader replyHeader = ZLinkStreamHeaderCodec.decodeOrPlain(decoded.header());
             //  Flow fields are observation-only (spec 27 §2/§7): a reply from
             //  an Off peer legitimately carries none, so the fence compares
             //  them only when both sides carry a pair.
             if (replyHeader.kind() != ZLinkStreamMessageKind.RESPONSE
-                || !replyHeader.requestSequence().equals(
-                    requestHeader.requestSequence())
-                || !replyHeader.correlationId().equals(
-                    requestHeader.correlationId())
-                || (replyHeader.flowId().isPresent()
-                    && requestHeader.flowId().isPresent()
-                    && (!replyHeader.flowId().equals(requestHeader.flowId())
-                        || !replyHeader.flowOrigin().equals(
-                            requestHeader.flowOrigin())))) {
+                    || !replyHeader.requestSequence().equals(requestHeader.requestSequence())
+                    || !replyHeader.correlationId().equals(requestHeader.correlationId())
+                    || (replyHeader.flowId().isPresent()
+                            && requestHeader.flowId().isPresent()
+                            && (!replyHeader.flowId().equals(requestHeader.flowId())
+                                    || !replyHeader
+                                            .flowOrigin()
+                                            .equals(requestHeader.flowOrigin())))) {
                 throw new IllegalArgumentException(
-                    "routed Actor reply does not match its request fence");
+                        "routed Actor reply does not match its request fence");
             }
-            return new LocalActorReply(
-                Message.from(decoded.body()),
-                replyHeader.codec());
+            return new LocalActorReply(Message.from(decoded.body()), replyHeader.codec());
         } catch (ZLinkFrameworkException failure) {
             throw failure;
         } catch (RuntimeException failure) {
             throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                "routed Actor reply STREAM frame is invalid",
-                failure);
+                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                    "routed Actor reply STREAM frame is invalid",
+                    failure);
         }
     }
 
@@ -123,44 +118,44 @@ final class ActorPacketFrames {
             return Message.from(body);
         }
         ZLinkStreamHeader replyHeader =
-            ZLinkStreamHeader.createErrorResponse(packetHeader.toRequestHeader(), packetHeader.packetName());
+                ZLinkStreamHeader.createErrorResponse(
+                        packetHeader.toRequestHeader(), packetHeader.packetName());
         return Message.from(ZLinkStreamFrameCodec.encode(replyHeader, body));
     }
 
     private static Header decodeStream(byte[] bytes, Optional<Long> backendRequestSeq) {
         ZLinkStreamHeader header = ZLinkStreamHeaderCodec.decodeOrPlain(bytes);
         if (header.kind() != ZLinkStreamMessageKind.SEND
-            && header.kind() != ZLinkStreamMessageKind.REQUEST) {
+                && header.kind() != ZLinkStreamMessageKind.REQUEST) {
             throw new IllegalArgumentException("actor STREAM header is not dispatch kind");
         }
-        Optional<Long> requestSeq = header.requestSequence().isPresent()
-            ? header.requestSequence()
-            : backendRequestSeq;
+        Optional<Long> requestSeq =
+                header.requestSequence().isPresent() ? header.requestSequence() : backendRequestSeq;
         return new Header(
-            header.packetName(),
-            requestSeq,
-            true,
-            header.codec().value(),
-            header.flags(),
-            header.metadata(),
-            header.correlationId(),
-            header.flowId(),
-            header.flowOrigin());
+                header.packetName(),
+                requestSeq,
+                true,
+                header.codec().value(),
+                header.flags(),
+                header.metadata(),
+                header.correlationId(),
+                header.flowId(),
+                header.flowOrigin());
     }
 
     record Header(
-        String packetName,
-        Optional<Long> requestSeq,
-        boolean streamHeader,
-        int codec,
-        EnumSet<ZLinkStreamHeaderFlag> flags,
-        Map<String, String> metadata,
-        Optional<String> correlationId,
-        Optional<String> flowId,
-        Optional<ZLinkFlowOrigin> flowOrigin) {
+            String packetName,
+            Optional<Long> requestSeq,
+            boolean streamHeader,
+            int codec,
+            EnumSet<ZLinkStreamHeaderFlag> flags,
+            Map<String, String> metadata,
+            Optional<String> correlationId,
+            Optional<String> flowId,
+            Optional<ZLinkFlowOrigin> flowOrigin) {
         Header {
             EnumSet<ZLinkStreamHeaderFlag> normalizedFlags =
-                EnumSet.noneOf(ZLinkStreamHeaderFlag.class);
+                    EnumSet.noneOf(ZLinkStreamHeaderFlag.class);
             if (flags != null) {
                 normalizedFlags.addAll(flags);
             }
@@ -173,28 +168,30 @@ final class ActorPacketFrames {
 
         ZLinkStreamHeader toRequestHeader() {
             return new ZLinkStreamHeader(
-                ZLinkStreamMessageKind.REQUEST,
-                ZLinkStreamCodec.fromValue(codec),
-                flags,
-                requestSeq,
-                packetName,
-                metadata,
-                correlationId,
-                flowId,
-                flowOrigin);
+                    ZLinkStreamMessageKind.REQUEST,
+                    ZLinkStreamCodec.fromValue(codec),
+                    flags,
+                    requestSeq,
+                    packetName,
+                    metadata,
+                    correlationId,
+                    flowId,
+                    flowOrigin);
         }
 
         ZLinkStreamHeader toStreamHeader() {
             return new ZLinkStreamHeader(
-                requestSeq.isPresent() ? ZLinkStreamMessageKind.REQUEST : ZLinkStreamMessageKind.SEND,
-                ZLinkStreamCodec.fromValue(codec),
-                flags,
-                requestSeq,
-                packetName,
-                metadata,
-                correlationId,
-                flowId,
-                flowOrigin);
+                    requestSeq.isPresent()
+                            ? ZLinkStreamMessageKind.REQUEST
+                            : ZLinkStreamMessageKind.SEND,
+                    ZLinkStreamCodec.fromValue(codec),
+                    flags,
+                    requestSeq,
+                    packetName,
+                    metadata,
+                    correlationId,
+                    flowId,
+                    flowOrigin);
         }
     }
 }

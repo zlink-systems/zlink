@@ -8,24 +8,24 @@ internal sealed class ZLinkActorOperationTarget(
     ZLinkFrameworkRuntime runtime,
     IZLinkBackendSpotNode node,
     string meshName,
-    ZLinkCodecRegistryBuilder codecs) :
-    IActorCreateOperationTarget,
-    IActorDestroyOperationTarget
+    ZLinkCodecRegistryBuilder codecs
+) : IActorCreateOperationTarget, IActorDestroyOperationTarget
 {
     private static readonly TimeSpan TerminalRetention = TimeSpan.FromMinutes(5);
 
     public async ValueTask<ActorCreateOperationTerminal> CreateAsync(
         ActorCreateOperation operation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var operationId = new ZLinkCreationOperationId(
             operation.SourceNodeRid,
             operation.SourceNodeGeneration,
             operation.OperationId.High,
-            operation.OperationId.Low);
-        var replay = await authorityStore.ReadCreationTerminalAsync(
-                operationId,
-                cancellationToken)
+            operation.OperationId.Low
+        );
+        var replay = await authorityStore
+            .ReadCreationTerminalAsync(operationId, cancellationToken)
             .ConfigureAwait(false);
         if (replay is ZLinkCreationTerminalReadResult.Found retained)
         {
@@ -36,64 +36,75 @@ internal sealed class ZLinkActorOperationTarget(
         }
 
         var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(operation.ActorId);
-        var read = await authorityStore.ReadAuthorityAsync(key, cancellationToken)
+        var read = await authorityStore
+            .ReadAuthorityAsync(key, cancellationToken)
             .ConfigureAwait(false);
         if (read is not ZLinkAuthorityReadResult.Found found)
             throw Stale(operation.ActorId, "The reserved Actor authority is missing.");
         var snapshot = found.Snapshot;
         ValidateFence(operation, snapshot);
-        if (!ZLinkActorAuthorityPayloadCodec.TryDecode(snapshot.Payload.Span, out var authority)
+        if (
+            !ZLinkActorAuthorityPayloadCodec.TryDecode(snapshot.Payload.Span, out var authority)
             || authority.State != ZLinkActorAuthorityState.Creating
             || !string.Equals(authority.ActorId, operation.ActorId, StringComparison.Ordinal)
             || !string.Equals(authority.StableType, operation.StableType, StringComparison.Ordinal)
             || authority.NodeRid != node.RoutingId
-            || authority.NodeGeneration != node.MeshStatus().LifecycleGeneration)
+            || authority.NodeGeneration != node.MeshStatus().LifecycleGeneration
+        )
             throw Protocol(operation.ActorId, "The pending Actor authority payload is invalid.");
-        if (snapshot.ReservedCreation is not { } pending
+        if (
+            snapshot.ReservedCreation is not { } pending
             || !string.Equals(
                 pending.ReservationId,
                 operation.Reservation.ReservationId,
-                StringComparison.Ordinal)
+                StringComparison.Ordinal
+            )
             || !ZLinkInlineCreationIntentCodec.TryDecode(
                 pending.RequestContentReference,
                 pending.RequestSha256.Span,
                 pending.RequestEncodedSize,
-                out var content)
-            || !ZLinkApplicationPayloadEnvelopeCodec.TryDecode(content, out var application))
+                out var content
+            )
+            || !ZLinkApplicationPayloadEnvelopeCodec.TryDecode(content, out var application)
+        )
             throw Protocol(operation.ActorId, "The immutable Actor creation content is invalid.");
 
         using var requestPayload = Message.From(application.Payload.Span);
         var request = ZLinkMessage.FromEnvelopePayload(
             application.ContentType,
             requestPayload,
-            codecs);
+            codecs
+        );
         CreateActorResult prepared;
         try
         {
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"actor_create_prepare_start actor={operation.ActorId} "
-                + $"target={node.RoutingId} generation={snapshot.ObjectGeneration} "
-                + $"authority_generation={snapshot.AuthorityOwnerGeneration}");
-            prepared = await runtime.PrepareReservedActorAsync(
+                    + $"target={node.RoutingId} generation={snapshot.ObjectGeneration} "
+                    + $"authority_generation={snapshot.AuthorityOwnerGeneration}"
+            );
+            prepared = await runtime
+                .PrepareReservedActorAsync(
                     operation.ActorId,
                     operation.StableType,
                     request,
                     snapshot.ObjectGeneration,
                     snapshot.AuthorityOwnerGeneration,
-                    cancellationToken)
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
         }
         catch (Exception exception)
         {
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"actor_create_prepare_failed actor={operation.ActorId} "
-                + $"target={node.RoutingId} exception={exception.GetType().Name} "
-                + $"message={exception.Message}");
+                    + $"target={node.RoutingId} exception={exception.GetType().Name} "
+                    + $"message={exception.Message}"
+            );
             try
             {
-                await runtime.DiscardReservedActorAsync(
-                        operation.ActorId,
-                        CancellationToken.None)
+                await runtime
+                    .DiscardReservedActorAsync(operation.ActorId, CancellationToken.None)
                     .ConfigureAwait(false);
             }
             catch
@@ -105,15 +116,15 @@ internal sealed class ZLinkActorOperationTarget(
                     operation,
                     operationId,
                     Reservation(operation, key, snapshot),
-                    cancellationToken)
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
         }
 
         if (prepared.Response is { Accepted: false } rejected)
         {
-            await runtime.DiscardReservedActorAsync(
-                    operation.ActorId,
-                    CancellationToken.None)
+            await runtime
+                .DiscardReservedActorAsync(operation.ActorId, CancellationToken.None)
                 .ConfigureAwait(false);
             return await CompleteAsync(
                     operation,
@@ -123,9 +134,11 @@ internal sealed class ZLinkActorOperationTarget(
                         RequestResult.Ok,
                         ServiceWireConstants.FrameworkErrorCode.None,
                         new ActorCreateCompletion(ActorCreateResult.Rejected, default),
-                        EncodeReply(operation.Correlation, rejected.Reply)),
+                        EncodeReply(operation.Correlation, rejected.Reply)
+                    ),
                     readyPayload: null,
-                    cancellationToken)
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
         }
 
@@ -133,7 +146,8 @@ internal sealed class ZLinkActorOperationTarget(
             operation.ActorId,
             snapshot.ObjectGeneration,
             meshName,
-            node.RoutingId);
+            node.RoutingId
+        );
         var readyPayload = ZLinkActorAuthorityPayloadCodec.Encode(
             authority with
             {
@@ -142,43 +156,48 @@ internal sealed class ZLinkActorOperationTarget(
                 OwnerLeaseGeneration = checked((ulong)snapshot.OwnerLeaseGeneration),
                 MeshName = meshName,
                 NodeRid = node.RoutingId,
-                NodeGeneration = node.MeshStatus().LifecycleGeneration
-            });
+                NodeGeneration = node.MeshStatus().LifecycleGeneration,
+            }
+        );
         var terminal = new ActorCreateOperationTerminal(
             RequestResult.Ok,
             ServiceWireConstants.FrameworkErrorCode.None,
             new ActorCreateCompletion(ActorCreateResult.Created, published),
-            EncodeReply(operation.Correlation, prepared.Response?.Reply));
+            EncodeReply(operation.Correlation, prepared.Response?.Reply)
+        );
         ActorCreateOperationTerminal completed;
         try
         {
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"actor_create_complete_start actor={operation.ActorId} "
-                + $"target={node.RoutingId} result={terminal.Completion?.Result}");
+                    + $"target={node.RoutingId} result={terminal.Completion?.Result}"
+            );
             completed = await CompleteAsync(
                     operation,
                     operationId,
                     Reservation(operation, key, snapshot),
                     terminal,
                     readyPayload,
-                    cancellationToken)
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"actor_create_complete_done actor={operation.ActorId} "
-                + $"target={node.RoutingId} result={completed.Completion?.Result}");
+                    + $"target={node.RoutingId} result={completed.Completion?.Result}"
+            );
         }
         catch (Exception exception)
         {
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"actor_create_complete_failed actor={operation.ActorId} "
-                + $"target={node.RoutingId} exception={exception.GetType().Name} "
-                + $"message={exception.Message}");
+                    + $"target={node.RoutingId} exception={exception.GetType().Name} "
+                    + $"message={exception.Message}"
+            );
             throw;
         }
         if (completed.Completion?.Result != ActorCreateResult.Created)
-            await runtime.DiscardReservedActorAsync(
-                    operation.ActorId,
-                    CancellationToken.None)
+            await runtime
+                .DiscardReservedActorAsync(operation.ActorId, CancellationToken.None)
                 .ConfigureAwait(false);
         return completed;
     }
@@ -187,114 +206,120 @@ internal sealed class ZLinkActorOperationTarget(
         ActorCreateOperation operation,
         ActorCreateOperationTerminal terminal,
         CancellationToken cancellationToken,
-        ZLinkAuthoritySnapshot? committedAuthority = null)
+        ZLinkAuthoritySnapshot? committedAuthority = null
+    )
     {
-        if (terminal.Completion is not
-            {
-                Result: ActorCreateResult.Created,
-                Actor: var committedActor
-            })
+        if (
+            terminal.Completion
+            is not { Result: ActorCreateResult.Created, Actor: var committedActor }
+        )
             return;
 
-        await runtime.PublishCreatedReservedActorAsync(
+        await runtime
+            .PublishCreatedReservedActorAsync(
                 operation.ActorId,
                 operation.StableType,
                 committedActor,
                 cancellationToken,
-                committedAuthority)
+                committedAuthority
+            )
             .ConfigureAwait(false);
     }
 
     public async ValueTask<ActorDestroyOperationTerminal> DestroyAsync(
         ActorDestroyOperation operation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(
-            operation.Actor.ActorId);
-        var read = await authorityStore.ReadAuthorityAsync(key, cancellationToken)
+        var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(operation.Actor.ActorId);
+        var read = await authorityStore
+            .ReadAuthorityAsync(key, cancellationToken)
             .ConfigureAwait(false);
         if (read is ZLinkAuthorityReadResult.Missing)
             return Destroyed(false);
 
         var snapshot = ((ZLinkAuthorityReadResult.Found)read).Snapshot;
-        if (snapshot.ObjectGeneration != operation.Actor.ObjectGeneration
-            || snapshot.AuthorityOwnerGeneration
-                != operation.AuthorityOwnerGeneration
+        if (
+            snapshot.ObjectGeneration != operation.Actor.ObjectGeneration
+            || snapshot.AuthorityOwnerGeneration != operation.AuthorityOwnerGeneration
             || snapshot.OwnerLeaseGeneration <= 0
-            || (ulong)snapshot.OwnerLeaseGeneration
-                != operation.OwnerLeaseGeneration
-            || snapshot.Allocation.ObjectKind
-                != ZLinkPlacementObjectKind.Actor)
-            throw Stale(
-                operation.Actor.ActorId,
-                "The Actor destroy authority fence is stale.");
-        if (!ZLinkActorAuthorityPayloadCodec.TryDecode(
-                snapshot.Payload.Span,
-                out var authority)
+            || (ulong)snapshot.OwnerLeaseGeneration != operation.OwnerLeaseGeneration
+            || snapshot.Allocation.ObjectKind != ZLinkPlacementObjectKind.Actor
+        )
+            throw Stale(operation.Actor.ActorId, "The Actor destroy authority fence is stale.");
+        if (
+            !ZLinkActorAuthorityPayloadCodec.TryDecode(snapshot.Payload.Span, out var authority)
             || authority.State != ZLinkActorAuthorityState.Ready
             || authority.NodeRid != operation.TargetNodeRid
             || authority.NodeGeneration != operation.TargetNodeGeneration
             || authority.NodeRid != node.RoutingId
-            || authority.NodeGeneration
-                != node.MeshStatus().LifecycleGeneration)
+            || authority.NodeGeneration != node.MeshStatus().LifecycleGeneration
+        )
             throw Stale(
                 operation.Actor.ActorId,
-                "The Actor is moving or its current owner changed.");
-        if (!runtime.TryGetCreatedActorState(
-                operation.Actor.ActorId,
-                out var state)
+                "The Actor is moving or its current owner changed."
+            );
+        if (
+            !runtime.TryGetCreatedActorState(operation.Actor.ActorId, out var state)
             || state.NativeActorRef is not { } current
             || state.Actor is not { } instance
             || current.Generation != operation.Actor.ObjectGeneration
-            || current.NodeRid != node.RoutingId)
+            || current.NodeRid != node.RoutingId
+        )
             throw Stale(
                 operation.Actor.ActorId,
-                "The current owner does not contain the exact Actor incarnation.");
+                "The current owner does not contain the exact Actor incarnation."
+            );
 
-        await runtime.DestroyActorAsync(
-                node.RoutingId,
-                instance,
-                cancellationToken)
+        await runtime
+            .DestroyActorAsync(node.RoutingId, instance, cancellationToken)
             .ConfigureAwait(false);
-        var deleted = await authorityStore.CompareExchangeAuthorityAsync(
+        var deleted = await authorityStore
+            .CompareExchangeAuthorityAsync(
                 key,
                 snapshot.StoreVersion,
                 new ZLinkAuthorityMutation.Delete(),
-                cancellationToken)
+                cancellationToken
+            )
             .ConfigureAwait(false);
-        if (deleted is ZLinkAuthorityCompareExchangeResult.Deleted
-            or ZLinkAuthorityCompareExchangeResult.Conflict
-            {
-                Current: ZLinkAuthorityReadResult.Missing
-            })
+        if (
+            deleted
+            is ZLinkAuthorityCompareExchangeResult.Deleted
+                or ZLinkAuthorityCompareExchangeResult.Conflict
+                {
+                    Current: ZLinkAuthorityReadResult.Missing
+                }
+        )
             return Destroyed(true);
-        throw Stale(
-            operation.Actor.ActorId,
-            "The Actor authority changed during destroy.");
+        throw Stale(operation.Actor.ActorId, "The Actor authority changed during destroy.");
     }
 
     private static ActorDestroyOperationTerminal Destroyed(bool value) =>
         new(
             RequestResult.Ok,
             ServiceWireConstants.FrameworkErrorCode.None,
-            new ActorDestroyCompletion(value));
+            new ActorDestroyCompletion(value)
+        );
 
     private async ValueTask<ActorCreateOperationTerminal> FailAsync(
         ActorCreateOperation operation,
         ZLinkCreationOperationId operationId,
         ZLinkObjectReservation reservation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var terminal = new ActorCreateOperationTerminal(
             RequestResult.InternalError,
-            ServiceWireConstants.FrameworkErrorCode.ActorCreateFailed);
+            ServiceWireConstants.FrameworkErrorCode.ActorCreateFailed
+        );
         return await CompleteAsync(
                 operation,
                 operationId,
                 reservation,
                 terminal,
                 readyPayload: null,
-                cancellationToken)
+                cancellationToken
+            )
             .ConfigureAwait(false);
     }
 
@@ -304,24 +329,25 @@ internal sealed class ZLinkActorOperationTarget(
         ZLinkObjectReservation reservation,
         ActorCreateOperationTerminal terminal,
         ReadOnlyMemory<byte>? readyPayload,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var envelope = ZLinkActorCreationTerminalCodec.Encode(terminal, codecs);
         var publication = new ZLinkCreationTerminalPublication(
             operationId,
             envelope,
-            DateTimeOffset.FromUnixTimeMilliseconds(
-                    checked((long)operation.DeadlineUnixMs))
-                .Add(TerminalRetention));
-        ZLinkObjectCreationCompletion completion = readyPayload is { } ready
-            ? new ZLinkObjectCreationCompletion.Created(ready, publication)
+            DateTimeOffset
+                .FromUnixTimeMilliseconds(checked((long)operation.DeadlineUnixMs))
+                .Add(TerminalRetention)
+        );
+        ZLinkObjectCreationCompletion completion =
+            readyPayload is { } ready
+                ? new ZLinkObjectCreationCompletion.Created(ready, publication)
             : terminal.Completion?.Result == ActorCreateResult.Rejected
                 ? new ZLinkObjectCreationCompletion.Rejected(publication)
-                : new ZLinkObjectCreationCompletion.Failed(publication);
-        var result = await authorityStore.CompleteCreationAsync(
-                reservation,
-                completion,
-                cancellationToken)
+            : new ZLinkObjectCreationCompletion.Failed(publication);
+        var result = await authorityStore
+            .CompleteCreationAsync(reservation, completion, cancellationToken)
             .ConfigureAwait(false);
         switch (result)
         {
@@ -332,7 +358,8 @@ internal sealed class ZLinkActorOperationTarget(
                         operation,
                         createdTerminal,
                         CancellationToken.None,
-                        created.Snapshot)
+                        created.Snapshot
+                    )
                     .ConfigureAwait(false);
                 return createdTerminal;
             }
@@ -343,10 +370,7 @@ internal sealed class ZLinkActorOperationTarget(
             case ZLinkObjectCreationCompleteResult.AlreadyCompleted existing:
             {
                 var existingTerminal = DecodeTerminal(existing.Terminal);
-                await PublishCreatedActorAsync(
-                        operation,
-                        existingTerminal,
-                        CancellationToken.None)
+                await PublishCreatedActorAsync(operation, existingTerminal, CancellationToken.None)
                     .ConfigureAwait(false);
                 return existingTerminal;
             }
@@ -354,10 +378,7 @@ internal sealed class ZLinkActorOperationTarget(
             {
                 var replay = await ReplayAfterConflictAsync(operationId, operation.ActorId)
                     .ConfigureAwait(false);
-                await PublishCreatedActorAsync(
-                        operation,
-                        replay,
-                        CancellationToken.None)
+                await PublishCreatedActorAsync(operation, replay, CancellationToken.None)
                     .ConfigureAwait(false);
                 return replay;
             }
@@ -366,11 +387,11 @@ internal sealed class ZLinkActorOperationTarget(
 
     private async ValueTask<ActorCreateOperationTerminal> ReplayAfterConflictAsync(
         ZLinkCreationOperationId operationId,
-        string actorId)
+        string actorId
+    )
     {
-        var replay = await authorityStore.ReadCreationTerminalAsync(
-                operationId,
-                CancellationToken.None)
+        var replay = await authorityStore
+            .ReadCreationTerminalAsync(operationId, CancellationToken.None)
             .ConfigureAwait(false);
         if (replay is ZLinkCreationTerminalReadResult.Found found)
             return DecodeTerminal(found.Record);
@@ -379,10 +400,13 @@ internal sealed class ZLinkActorOperationTarget(
 
     private ActorCreateOperationTerminal DecodeTerminal(ZLinkCreationTerminalRecord record)
     {
-        if (!ZLinkActorCreationTerminalCodec.TryDecode(
+        if (
+            !ZLinkActorCreationTerminalCodec.TryDecode(
                 record.TerminalEnvelope,
                 codecs,
-                out var decoded))
+                out var decoded
+            )
+        )
             throw Protocol(string.Empty, "The retained Actor creation terminal is invalid.");
         ActorCreateCompletion? completion = null;
         if (decoded.Completion is { } retained)
@@ -394,19 +418,21 @@ internal sealed class ZLinkActorOperationTarget(
                         retained.ActorId,
                         retained.ObjectGeneration,
                         meshName,
-                        node.RoutingId));
+                        node.RoutingId
+                    )
+            );
         return new ActorCreateOperationTerminal(
             decoded.Result,
             decoded.FailureCode,
             completion,
-            decoded.ReplyParts);
+            decoded.ReplyParts
+        );
     }
 
-    private IReadOnlyList<ReadOnlyMemory<byte>>? EncodeReply(
-        ulong correlation,
-        ZLinkMessage? reply)
+    private IReadOnlyList<ReadOnlyMemory<byte>>? EncodeReply(ulong correlation, ZLinkMessage? reply)
     {
-        if (reply is null) return null;
+        if (reply is null)
+            return null;
         var parts = ZLinkEnvelopeCodec.EncodeParts(
             new ZLinkEnvelopeHeader(
                 ZLinkMessageKind.Response,
@@ -414,14 +440,20 @@ internal sealed class ZLinkActorOperationTarget(
                 string.Empty,
                 ZLinkEnvelopeCodec.DefaultContentType,
                 correlation.ToString(CultureInfo.InvariantCulture),
-                null, null, null, null),
+                null,
+                null,
+                null,
+                null
+            ),
             reply,
             typeof(ZLinkMessage),
-            codecs);
+            codecs
+        );
         try
         {
-            return parts.Select(static part =>
-                (ReadOnlyMemory<byte>)part.AsReadOnlyMemory().ToArray()).ToArray();
+            return parts
+                .Select(static part => (ReadOnlyMemory<byte>)part.AsReadOnlyMemory().ToArray())
+                .ToArray();
         }
         finally
         {
@@ -432,7 +464,8 @@ internal sealed class ZLinkActorOperationTarget(
     private static ZLinkObjectReservation Reservation(
         ActorCreateOperation operation,
         ZLinkAuthorityKey key,
-        ZLinkAuthoritySnapshot snapshot) =>
+        ZLinkAuthoritySnapshot snapshot
+    ) =>
         new(
             key,
             operation.Reservation.ExpectedStoreVersion,
@@ -443,27 +476,37 @@ internal sealed class ZLinkActorOperationTarget(
             operation.Reservation.TargetNodeGeneration,
             new ZLinkLocationOwnerToken(
                 operation.Reservation.TargetOwnerId,
-                operation.Reservation.TargetOwnerLeaseGeneration));
+                operation.Reservation.TargetOwnerLeaseGeneration
+            )
+        );
 
     private static void ValidateFence(
         ActorCreateOperation operation,
-        ZLinkAuthoritySnapshot snapshot)
+        ZLinkAuthoritySnapshot snapshot
+    )
     {
         var fence = operation.Reservation;
-        if (snapshot.ObjectGeneration != fence.ObjectGeneration
+        if (
+            snapshot.ObjectGeneration != fence.ObjectGeneration
             || snapshot.AuthorityOwnerGeneration != fence.AuthorityOwnerGeneration
-            || !string.Equals(snapshot.StoreVersion, fence.ExpectedStoreVersion, StringComparison.Ordinal)
+            || !string.Equals(
+                snapshot.StoreVersion,
+                fence.ExpectedStoreVersion,
+                StringComparison.Ordinal
+            )
             || snapshot.Allocation.ObjectKind != ZLinkPlacementObjectKind.Actor
-            || !string.Equals(snapshot.Allocation.StableType, operation.StableType, StringComparison.Ordinal)
+            || !string.Equals(
+                snapshot.Allocation.StableType,
+                operation.StableType,
+                StringComparison.Ordinal
+            )
             || snapshot.Allocation.Descriptor.Rid != fence.TargetNodeRid
             || snapshot.Allocation.DescriptorLifecycleGeneration != fence.TargetNodeGeneration
             || !string.Equals(snapshot.OwnerId, fence.TargetOwnerId, StringComparison.Ordinal)
             || snapshot.OwnerLeaseGeneration != checked((long)fence.TargetOwnerLeaseGeneration)
             || snapshot.Allocation.Capacity
-            != new ZLinkCapacityVector(
-                checked((int)fence.PendingCapacityDelta),
-                0,
-                null))
+                != new ZLinkCapacityVector(checked((int)fence.PendingCapacityDelta), 0, null)
+        )
             throw Stale(operation.ActorId, "The Actor creation reservation fence is stale.");
     }
 
@@ -471,10 +514,12 @@ internal sealed class ZLinkActorOperationTarget(
         new(
             ZLinkFrameworkErrorKind.Unavailable,
             string.IsNullOrEmpty(actorId) ? message : $"Actor '{actorId}': {message}",
-            ZLinkRetryAdvice.RetryAfterBackoff);
+            ZLinkRetryAdvice.RetryAfterBackoff
+        );
 
     private static ZLinkFrameworkException Protocol(string actorId, string message) =>
         new(
             ZLinkFrameworkErrorKind.ProtocolError,
-            string.IsNullOrEmpty(actorId) ? message : $"Actor '{actorId}': {message}");
+            string.IsNullOrEmpty(actorId) ? message : $"Actor '{actorId}': {message}"
+        );
 }

@@ -18,22 +18,21 @@ public sealed class ServiceRuntimeFoundationTests
     [Theory]
     [InlineData(1024)]
     [InlineData(17 * 1024 * 1024)]
-    public void FrameworkMultipart_Encodes_Without_A_RouteMesh_Message_Bound(
-        int partLength)
+    public void FrameworkMultipart_Encodes_Without_A_RouteMesh_Message_Bound(int partLength)
     {
         var parts = new ReadOnlyMemory<byte>[] { new byte[partLength] };
 
         var expectedLength =
-            ZLinkApplicationPayloadEnvelopeCodec.GetFrameworkMultipartEncodedLength(
-                parts);
-        var encoded = ZLinkApplicationPayloadEnvelopeCodec
-            .EncodeFrameworkMultipart(parts);
+            ZLinkApplicationPayloadEnvelopeCodec.GetFrameworkMultipartEncodedLength(parts);
+        var encoded = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts);
 
         Assert.Equal(expectedLength, encoded.LongLength);
         Assert.True(
             ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
                 encoded,
-                out var decoded));
+                out var decoded
+            )
+        );
         try
         {
             Assert.Equal(partLength, Assert.Single(decoded).Size);
@@ -50,17 +49,19 @@ public sealed class ServiceRuntimeFoundationTests
         using var header = Message.From(new byte[] { 1, 2, 3 });
         using var body = Message.From(new byte[] { 4, 5, 6, 7 });
         IReadOnlyList<Message> parts = [header, body];
-        var expectedWire = ZLinkApplicationPayloadEnvelopeCodec
-            .EncodeFrameworkMultipart(parts);
+        var expectedWire = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts);
 
-        using var encoded = ZLinkApplicationPayloadEnvelopeCodec
-            .EncodeFrameworkMultipartMessage(parts);
+        using var encoded = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(
+            parts
+        );
 
         Assert.Equal(expectedWire, encoded.ToArray());
         Assert.True(
             ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(
                 encoded,
-                out var decoded));
+                out var decoded
+            )
+        );
         Assert.NotNull(decoded);
         Assert.Equal(new byte[] { 1, 2, 3 }, decoded.GetSpan(0).ToArray());
         Assert.Equal(new byte[] { 4, 5, 6, 7 }, decoded.GetSpan(1).ToArray());
@@ -79,7 +80,8 @@ public sealed class ServiceRuntimeFoundationTests
             RoutingId.From("source-node"),
             12,
             13,
-            14);
+            14
+        );
         var target = new ZLinkServiceWireCodec.MessageFollowRoute(
             ZLinkServiceWireCodec.MessageFollowActorKind,
             "actor-1",
@@ -87,7 +89,8 @@ public sealed class ServiceRuntimeFoundationTests
             RoutingId.From("target-node"),
             15,
             16,
-            17);
+            17
+        );
         var record = new ZLinkServiceWireCodec.MessageFollowRecord(
             source,
             target,
@@ -95,7 +98,8 @@ public sealed class ServiceRuntimeFoundationTests
             3,
             4096,
             new MeshOperationId(21, 22),
-            23);
+            23
+        );
 
         var encoded = ZLinkServiceWireCodec.EncodeMessageFollow(record);
 
@@ -103,16 +107,14 @@ public sealed class ServiceRuntimeFoundationTests
         Assert.Equal((byte)1, encoded[5]);
         Assert.Equal(
             (uint)(encoded.Length - 10),
-            BinaryPrimitives.ReadUInt32BigEndian(encoded.AsSpan(6)));
-        Assert.True(ZLinkServiceWireCodec.TryDecodeMessageFollow(
-            encoded,
-            out var decoded,
-            out var error));
+            BinaryPrimitives.ReadUInt32BigEndian(encoded.AsSpan(6))
+        );
+        Assert.True(
+            ZLinkServiceWireCodec.TryDecodeMessageFollow(encoded, out var decoded, out var error)
+        );
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
         Assert.Equal(record, decoded);
-        Assert.Equal(
-            encoded,
-            ZLinkServiceWireCodec.EncodeMessageFollow(decoded));
+        Assert.Equal(encoded, ZLinkServiceWireCodec.EncodeMessageFollow(decoded));
     }
 
     [Fact]
@@ -125,7 +127,8 @@ public sealed class ServiceRuntimeFoundationTests
             RoutingId.From("node"),
             4,
             5,
-            6);
+            6
+        );
         var encoded = ZLinkServiceWireCodec.EncodeMessageFollow(
             new ZLinkServiceWireCodec.MessageFollowRecord(
                 route,
@@ -134,26 +137,26 @@ public sealed class ServiceRuntimeFoundationTests
                 1024,
                 16 * 1024 * 1024,
                 new MeshOperationId(7, 8),
-                0));
+                0
+            )
+        );
 
         var wrongVersion = encoded.ToArray();
         wrongVersion[5] = 2;
-        Assert.False(ZLinkServiceWireCodec.TryDecodeMessageFollow(
-            wrongVersion,
-            out _,
-            out var wrongVersionError));
-        Assert.Equal(
-            ZLinkServiceWireCodec.DecodeError.UnsupportedVersion,
-            wrongVersionError);
+        Assert.False(
+            ZLinkServiceWireCodec.TryDecodeMessageFollow(
+                wrongVersion,
+                out _,
+                out var wrongVersionError
+            )
+        );
+        Assert.Equal(ZLinkServiceWireCodec.DecodeError.UnsupportedVersion, wrongVersionError);
 
         var trailing = encoded.Concat(new byte[] { 0 }).ToArray();
-        Assert.False(ZLinkServiceWireCodec.TryDecodeMessageFollow(
-            trailing,
-            out _,
-            out var trailingError));
-        Assert.Equal(
-            ZLinkServiceWireCodec.DecodeError.InvalidField,
-            trailingError);
+        Assert.False(
+            ZLinkServiceWireCodec.TryDecodeMessageFollow(trailing, out _, out var trailingError)
+        );
+        Assert.Equal(ZLinkServiceWireCodec.DecodeError.InvalidField, trailingError);
 
         var volumeRecord = new ZLinkServiceWireCodec.MessageFollowRecord(
             route,
@@ -162,11 +165,15 @@ public sealed class ServiceRuntimeFoundationTests
             uint.MaxValue,
             uint.MaxValue,
             new MeshOperationId(1, 1),
-            0);
-        Assert.True(ZLinkServiceWireCodec.TryDecodeMessageFollow(
-            ZLinkServiceWireCodec.EncodeMessageFollow(volumeRecord),
-            out var decodedVolumeRecord,
-            out var volumeError));
+            0
+        );
+        Assert.True(
+            ZLinkServiceWireCodec.TryDecodeMessageFollow(
+                ZLinkServiceWireCodec.EncodeMessageFollow(volumeRecord),
+                out var decodedVolumeRecord,
+                out var volumeError
+            )
+        );
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, volumeError);
         Assert.Equal(volumeRecord, decodedVolumeRecord);
     }
@@ -181,46 +188,163 @@ public sealed class ServiceRuntimeFoundationTests
                 RoutingId.From("actor-owner"),
                 2,
                 3,
-                4),
+                4
+            ),
             new ZLinkServiceWireCodec.BoundSessionReplacedRetiredSession(
                 RoutingId.From("session-owner"),
                 5,
                 "session-runtime",
                 6,
                 RoutingId.From("session-a"),
-                7));
+                7
+            )
+        );
 
         var expected = new byte[]
         {
-            90, 77, 1, 51, 0,
-            7, 97, 99, 116, 111, 114, 45, 97,
-            0, 0, 0, 0, 0, 0, 0, 1,
-            11, 97, 99, 116, 111, 114, 45, 111, 119, 110, 101, 114,
-            0, 0, 0, 0, 0, 0, 0, 2,
-            0, 0, 0, 0, 0, 0, 0, 3,
-            0, 0, 0, 0, 0, 0, 0, 4,
-            13, 115, 101, 115, 115, 105, 111, 110, 45, 111, 119, 110, 101, 114,
-            0, 0, 0, 0, 0, 0, 0, 5,
-            15, 115, 101, 115, 115, 105, 111, 110, 45, 114, 117, 110, 116, 105, 109, 101,
-            0, 0, 0, 0, 0, 0, 0, 6,
-            9, 115, 101, 115, 115, 105, 111, 110, 45, 97,
-            0, 0, 0, 0, 0, 0, 0, 7
+            90,
+            77,
+            1,
+            51,
+            0,
+            7,
+            97,
+            99,
+            116,
+            111,
+            114,
+            45,
+            97,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            11,
+            97,
+            99,
+            116,
+            111,
+            114,
+            45,
+            111,
+            119,
+            110,
+            101,
+            114,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            2,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            3,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            4,
+            13,
+            115,
+            101,
+            115,
+            115,
+            105,
+            111,
+            110,
+            45,
+            111,
+            119,
+            110,
+            101,
+            114,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            5,
+            15,
+            115,
+            101,
+            115,
+            115,
+            105,
+            111,
+            110,
+            45,
+            114,
+            117,
+            110,
+            116,
+            105,
+            109,
+            101,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            6,
+            9,
+            115,
+            101,
+            115,
+            115,
+            105,
+            111,
+            110,
+            45,
+            97,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            7,
         };
 
         var encoded = ZLinkServiceWireCodec.EncodeBoundSessionReplaced(record);
         Assert.Equal(expected, encoded);
-        Assert.True(ZLinkServiceWireCodec.TryDecodeBoundSessionReplaced(
-            encoded,
-            out var decoded,
-            out var error));
+        Assert.True(
+            ZLinkServiceWireCodec.TryDecodeBoundSessionReplaced(
+                encoded,
+                out var decoded,
+                out var error
+            )
+        );
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
         Assert.Equal(record, decoded);
 
         var trailing = encoded.Append((byte)0).ToArray();
-        Assert.False(ZLinkServiceWireCodec.TryDecodeBoundSessionReplaced(
-            trailing,
-            out _,
-            out var trailingError));
+        Assert.False(
+            ZLinkServiceWireCodec.TryDecodeBoundSessionReplaced(
+                trailing,
+                out _,
+                out var trailingError
+            )
+        );
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.TrailingByte, trailingError);
     }
 
@@ -244,60 +368,81 @@ public sealed class ServiceRuntimeFoundationTests
         retiredOwner.SetRoutingId(retiredOwnerRid);
         retiredOwner.SetBind(retiredOwnerEndpoint);
         retiredOwner.SetBoundSessionReplacedNotificationHandler(
-            (_, _) => Interlocked.Increment(ref notifications));
+            (_, _) => Interlocked.Increment(ref notifications)
+        );
         retiredOwner.Start();
         authority.Start();
 
         await WaitUntilAsync(() =>
             authority.Status().AdmittedPeerCount == 1
-            && retiredOwner.Status().AdmittedPeerCount == 1);
-        var authorityGeneration = Assert.Single(retiredOwner.Peers())
-            .LifecycleGeneration;
-        var retiredOwnerGeneration = Assert.Single(authority.Peers())
-            .LifecycleGeneration;
+            && retiredOwner.Status().AdmittedPeerCount == 1
+        );
+        var authorityGeneration = Assert.Single(retiredOwner.Peers()).LifecycleGeneration;
+        var retiredOwnerGeneration = Assert.Single(authority.Peers()).LifecycleGeneration;
 
         ZLinkServiceWireCodec.BoundSessionReplacedRecord Record(
             RoutingId sourceRid,
             ulong sourceGeneration,
-            ulong ownerGeneration) => new(
-            new ZLinkServiceWireCodec.BoundSessionReplacedActorAuthority(
-                "actor-a",
-                ObjectGeneration: 17,
-                sourceRid,
-                sourceGeneration,
-                ExpectedAuthorityOwnerGeneration: 19,
-                ExpectedOwnerLeaseGeneration: 23),
-            new ZLinkServiceWireCodec.BoundSessionReplacedRetiredSession(
-                retiredOwnerRid,
-                ownerGeneration,
-                "retired-owner",
-                SessionOwnerLeaseGeneration: 29,
-                RoutingId.From("retired-session"),
-                RetiredBindingGeneration: 31));
+            ulong ownerGeneration
+        ) =>
+            new(
+                new ZLinkServiceWireCodec.BoundSessionReplacedActorAuthority(
+                    "actor-a",
+                    ObjectGeneration: 17,
+                    sourceRid,
+                    sourceGeneration,
+                    ExpectedAuthorityOwnerGeneration: 19,
+                    ExpectedOwnerLeaseGeneration: 23
+                ),
+                new ZLinkServiceWireCodec.BoundSessionReplacedRetiredSession(
+                    retiredOwnerRid,
+                    ownerGeneration,
+                    "retired-owner",
+                    SessionOwnerLeaseGeneration: 29,
+                    RoutingId.From("retired-session"),
+                    RetiredBindingGeneration: 31
+                )
+            );
 
-        Assert.True(authority.TrySendBoundSessionReplacedNotification(
-            retiredOwnerRid,
-            Record(authorityRid, authorityGeneration, retiredOwnerGeneration)));
+        Assert.True(
+            authority.TrySendBoundSessionReplacedNotification(
+                retiredOwnerRid,
+                Record(authorityRid, authorityGeneration, retiredOwnerGeneration)
+            )
+        );
         await WaitUntilAsync(() => Volatile.Read(ref notifications) == 1);
 
         var protocolErrors = monitor.Status().ProtocolErrors;
-        Assert.True(authority.TrySendBoundSessionReplacedNotification(
-            retiredOwnerRid,
-            Record(RoutingId.From("forged-authority"), authorityGeneration, retiredOwnerGeneration)));
+        Assert.True(
+            authority.TrySendBoundSessionReplacedNotification(
+                retiredOwnerRid,
+                Record(
+                    RoutingId.From("forged-authority"),
+                    authorityGeneration,
+                    retiredOwnerGeneration
+                )
+            )
+        );
         await WaitUntilAsync(() => monitor.Status().ProtocolErrors > protocolErrors);
         Assert.Equal(1, Volatile.Read(ref notifications));
 
         protocolErrors = monitor.Status().ProtocolErrors;
-        Assert.True(authority.TrySendBoundSessionReplacedNotification(
-            retiredOwnerRid,
-            Record(authorityRid, authorityGeneration + 1, retiredOwnerGeneration)));
+        Assert.True(
+            authority.TrySendBoundSessionReplacedNotification(
+                retiredOwnerRid,
+                Record(authorityRid, authorityGeneration + 1, retiredOwnerGeneration)
+            )
+        );
         await WaitUntilAsync(() => monitor.Status().ProtocolErrors > protocolErrors);
         Assert.Equal(1, Volatile.Read(ref notifications));
 
         protocolErrors = monitor.Status().ProtocolErrors;
-        Assert.True(authority.TrySendBoundSessionReplacedNotification(
-            retiredOwnerRid,
-            Record(authorityRid, authorityGeneration, retiredOwnerGeneration + 1)));
+        Assert.True(
+            authority.TrySendBoundSessionReplacedNotification(
+                retiredOwnerRid,
+                Record(authorityRid, authorityGeneration, retiredOwnerGeneration + 1)
+            )
+        );
         await WaitUntilAsync(() => monitor.Status().ProtocolErrors > protocolErrors);
         Assert.Equal(1, Volatile.Read(ref notifications));
     }
@@ -308,27 +453,37 @@ public sealed class ServiceRuntimeFoundationTests
         var frameworkRoot = Common.FrameworkTestEnvironment.GetFrameworkRoot();
         var fixturePath = Path.GetFullPath(
             "../../runtime/protocol/golden/service-decoder-fixtures-v1.json",
-            frameworkRoot);
+            frameworkRoot
+        );
         using var document = JsonDocument.Parse(File.ReadAllText(fixturePath));
 
         foreach (var fixture in document.RootElement.GetProperty("canonical").EnumerateArray())
         {
-            var bytes = fixture.GetProperty("bytes").EnumerateArray()
-                .Select(static item => item.GetByte()).ToArray();
-            Assert.True(ZLinkServiceWireCodec.TryDecodeLiveness(
-                bytes, out var record, out var error));
+            var bytes = fixture
+                .GetProperty("bytes")
+                .EnumerateArray()
+                .Select(static item => item.GetByte())
+                .ToArray();
+            Assert.True(
+                ZLinkServiceWireCodec.TryDecodeLiveness(bytes, out var record, out var error)
+            );
             Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
             Assert.Equal(fixture.GetProperty("commandId").GetByte(), (byte)record.Command);
             Assert.Equal(0x0102030405060708UL, record.ProbeId);
-            Assert.Equal(bytes, ZLinkServiceWireCodec.EncodeLiveness(record.Command, record.ProbeId));
+            Assert.Equal(
+                bytes,
+                ZLinkServiceWireCodec.EncodeLiveness(record.Command, record.ProbeId)
+            );
         }
 
         foreach (var fixture in document.RootElement.GetProperty("malformed").EnumerateArray())
         {
-            var bytes = fixture.GetProperty("bytes").EnumerateArray()
-                .Select(static item => item.GetByte()).ToArray();
-            Assert.False(ZLinkServiceWireCodec.TryDecodeLiveness(
-                bytes, out _, out var error));
+            var bytes = fixture
+                .GetProperty("bytes")
+                .EnumerateArray()
+                .Select(static item => item.GetByte())
+                .ToArray();
+            Assert.False(ZLinkServiceWireCodec.TryDecodeLiveness(bytes, out _, out var error));
             Assert.Equal(ExpectedError(fixture.GetProperty("error").GetString()!), error);
         }
     }
@@ -338,7 +493,8 @@ public sealed class ServiceRuntimeFoundationTests
     {
         var encoded = ZLinkServiceWireCodec.EncodeLiveness(
             ServiceWireConstants.Command.LivenessProbe,
-            1);
+            1
+        );
         Assert.Equal(ServiceWireConstants.Magic0, encoded[0]);
         Assert.Equal(ServiceWireConstants.Magic1, encoded[1]);
         Assert.Equal(ServiceWireConstants.WireMajor, encoded[2]);
@@ -346,19 +502,19 @@ public sealed class ServiceRuntimeFoundationTests
         var text = ZLinkServiceWireCodec.EncodeText("가");
         Assert.Equal(3, text[0]);
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            ZLinkServiceWireCodec.EncodeText(new string('a', 256)));
+            ZLinkServiceWireCodec.EncodeText(new string('a', 256))
+        );
     }
 
     [Fact]
     public void InfrastructureControl_AllowsOnlyBoundedCommands()
     {
         using var liveness = Message.From(
-            ZLinkServiceWireCodec.EncodeLiveness(
-                ServiceWireConstants.Command.LivenessProbe,
-                1));
-        Assert.True(ZLinkManagedMeshNode.IsAllowedInfrastructureControl(
-            [liveness],
-            out var command));
+            ZLinkServiceWireCodec.EncodeLiveness(ServiceWireConstants.Command.LivenessProbe, 1)
+        );
+        Assert.True(
+            ZLinkManagedMeshNode.IsAllowedInfrastructureControl([liveness], out var command)
+        );
         Assert.Equal(ServiceWireConstants.Command.LivenessProbe, command);
 
         using var application = Message.From(
@@ -366,56 +522,72 @@ public sealed class ServiceRuntimeFoundationTests
                 ServiceWireConstants.Command.NodeSend,
                 0,
                 null,
-                false));
-        Assert.False(ZLinkManagedMeshNode.IsAllowedInfrastructureControl(
-            [application],
-            out _));
+                false
+            )
+        );
+        Assert.False(ZLinkManagedMeshNode.IsAllowedInfrastructureControl([application], out _));
 
-        using var applicationReply = Message.From(
-            ZLinkServiceWireCodec.EncodeReply(1, 0, 0));
+        using var applicationReply = Message.From(ZLinkServiceWireCodec.EncodeReply(1, 0, 0));
         using var replyPayload = Message.From(
             ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(
-                new ReadOnlyMemory<byte>[] { new byte[] { 1, 2, 3 } }));
-        Assert.True(ZLinkManagedMeshNode.IsAllowedInfrastructureControl(
-            [applicationReply, replyPayload],
-            out command));
+                new ReadOnlyMemory<byte>[] { new byte[] { 1, 2, 3 } }
+            )
+        );
+        Assert.True(
+            ZLinkManagedMeshNode.IsAllowedInfrastructureControl(
+                [applicationReply, replyPayload],
+                out command
+            )
+        );
         Assert.Equal(ServiceWireConstants.Command.Reply, command);
 
         using var largeReplyPayload = Message.From(
             ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(
-                new ReadOnlyMemory<byte>[]
-                {
-                    new byte[(256 * 1024) + 1]
-                }));
-        Assert.True(ZLinkManagedMeshNode.IsAllowedInfrastructureControl(
-            [applicationReply, largeReplyPayload],
-            out command));
+                new ReadOnlyMemory<byte>[] { new byte[(256 * 1024) + 1] }
+            )
+        );
+        Assert.True(
+            ZLinkManagedMeshNode.IsAllowedInfrastructureControl(
+                [applicationReply, largeReplyPayload],
+                out command
+            )
+        );
         Assert.Equal(ServiceWireConstants.Command.Reply, command);
 
         using var invalidReplyPayload = Message.From(new byte[] { 1, 2, 3 });
-        Assert.False(ZLinkManagedMeshNode.IsAllowedInfrastructureControl(
-            [applicationReply, invalidReplyPayload],
-            out _));
+        Assert.False(
+            ZLinkManagedMeshNode.IsAllowedInfrastructureControl(
+                [applicationReply, invalidReplyPayload],
+                out _
+            )
+        );
 
         using var extraReplyPayload = Message.From(
             ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(
-                new ReadOnlyMemory<byte>[] { new byte[] { 4 } }));
+                new ReadOnlyMemory<byte>[] { new byte[] { 4 } }
+            )
+        );
         using var extraReplyPart = Message.From(new byte[] { 5 });
-        Assert.False(ZLinkManagedMeshNode.IsAllowedInfrastructureControl(
-            [applicationReply, extraReplyPayload, extraReplyPart],
-            out _));
+        Assert.False(
+            ZLinkManagedMeshNode.IsAllowedInfrastructureControl(
+                [applicationReply, extraReplyPayload, extraReplyPart],
+                out _
+            )
+        );
 
-        using var relocationData = Message.From(new byte[]
-        {
-            ServiceWireConstants.Magic0,
-            ServiceWireConstants.Magic1,
-            ServiceWireConstants.WireMajor,
-            (byte)ServiceWireConstants.Command.RelocationData,
-            0
-        });
-        Assert.True(ZLinkManagedMeshNode.IsAllowedInfrastructureControl(
-            [relocationData],
-            out command));
+        using var relocationData = Message.From(
+            new byte[]
+            {
+                ServiceWireConstants.Magic0,
+                ServiceWireConstants.Magic1,
+                ServiceWireConstants.WireMajor,
+                (byte)ServiceWireConstants.Command.RelocationData,
+                0,
+            }
+        );
+        Assert.True(
+            ZLinkManagedMeshNode.IsAllowedInfrastructureControl([relocationData], out command)
+        );
         Assert.Equal(ServiceWireConstants.Command.RelocationData, command);
 
         var largeRelocationData = new byte[(256 * 1024) + 1];
@@ -424,14 +596,17 @@ public sealed class ServiceRuntimeFoundationTests
         largeRelocationData[2] = ServiceWireConstants.WireMajor;
         largeRelocationData[3] = (byte)ServiceWireConstants.Command.RelocationData;
         using var largeRelocation = Message.From(largeRelocationData);
-        Assert.True(ZLinkManagedMeshNode.IsAllowedInfrastructureControl(
-            [largeRelocation],
-            out command));
+        Assert.True(
+            ZLinkManagedMeshNode.IsAllowedInfrastructureControl([largeRelocation], out command)
+        );
         Assert.Equal(ServiceWireConstants.Command.RelocationData, command);
 
-        Assert.False(ZLinkManagedMeshNode.IsAllowedInfrastructureControl(
-            [relocationData, extraReplyPayload],
-            out _));
+        Assert.False(
+            ZLinkManagedMeshNode.IsAllowedInfrastructureControl(
+                [relocationData, extraReplyPayload],
+                out _
+            )
+        );
 
         var oversizedBytes = new byte[(256 * 1024) + 1];
         oversizedBytes[0] = ServiceWireConstants.Magic0;
@@ -439,18 +614,15 @@ public sealed class ServiceRuntimeFoundationTests
         oversizedBytes[2] = ServiceWireConstants.WireMajor;
         oversizedBytes[3] = (byte)ServiceWireConstants.Command.Hello;
         using var oversized = Message.From(oversizedBytes);
-        Assert.False(ZLinkManagedMeshNode.IsAllowedInfrastructureControl(
-            [oversized],
-            out _));
+        Assert.False(ZLinkManagedMeshNode.IsAllowedInfrastructureControl([oversized], out _));
 
-        var tooMany = Enumerable.Range(0, 65)
+        var tooMany = Enumerable
+            .Range(0, 65)
             .Select(_ => Message.From(ReadOnlySpan<byte>.Empty))
             .ToArray();
         try
         {
-            Assert.False(ZLinkManagedMeshNode.IsAllowedInfrastructureControl(
-                tooMany,
-                out _));
+            Assert.False(ZLinkManagedMeshNode.IsAllowedInfrastructureControl(tooMany, out _));
         }
         finally
         {
@@ -465,7 +637,7 @@ public sealed class ServiceRuntimeFoundationTests
         var channels = new Dictionary<string, uint>(StringComparer.Ordinal)
         {
             ["worker"] = 75,
-            ["admin"] = 0
+            ["admin"] = 0,
         };
 
         var encoded = ZLinkServiceWireCodec.EncodeRouteAdmission(
@@ -474,20 +646,21 @@ public sealed class ServiceRuntimeFoundationTests
             "tcp://127.0.0.1:7070",
             17,
             23,
-            channels);
+            channels
+        );
 
-        var lifecycleOffset = 10
-            + 1 + "orders"u8.Length
-            + 1 + ZLinkServiceSecurityIdentity.Plaintext.Length;
-        Assert.Equal(
-            17UL,
-            BinaryPrimitives.ReadUInt64BigEndian(encoded.AsSpan(lifecycleOffset)));
+        var lifecycleOffset =
+            10 + 1 + "orders"u8.Length + 1 + ZLinkServiceSecurityIdentity.Plaintext.Length;
+        Assert.Equal(17UL, BinaryPrimitives.ReadUInt64BigEndian(encoded.AsSpan(lifecycleOffset)));
 
-        Assert.True(ZLinkServiceWireCodec.TryDecodeRouteAdmission(
-            encoded,
-            out var command,
-            out var admission,
-            out var error));
+        Assert.True(
+            ZLinkServiceWireCodec.TryDecodeRouteAdmission(
+                encoded,
+                out var command,
+                out var admission,
+                out var error
+            )
+        );
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
         Assert.Equal(ServiceWireConstants.Command.Hello, command);
         Assert.Equal("orders", admission.MeshName);
@@ -505,9 +678,7 @@ public sealed class ServiceRuntimeFoundationTests
         Assert.Equal(128U, admission.PendingCapacityLimit);
         Assert.Equal(0U, admission.ActiveCapacityUsed);
         Assert.Equal(0U, admission.PendingCapacityUsed);
-        Assert.Equal(
-            new byte[] { 1, 2, 6, 7, 8, 9, 10, 11, 12 },
-            admission.ExtensionFields.Keys);
+        Assert.Equal(new byte[] { 1, 2, 6, 7, 8, 9, 10, 11, 12 }, admission.ExtensionFields.Keys);
         Assert.Equal(
             encoded,
             ZLinkServiceWireCodec.EncodeRouteAdmission(
@@ -519,7 +690,9 @@ public sealed class ServiceRuntimeFoundationTests
                 admission.Channels,
                 admission.ObjectRole,
                 admission.RuntimeState,
-                admission.SecurityIdentity));
+                admission.SecurityIdentity
+            )
+        );
     }
 
     [Fact]
@@ -531,17 +704,18 @@ public sealed class ServiceRuntimeFoundationTests
             "tcp://127.0.0.1:7070",
             17,
             23,
-            new Dictionary<string, uint>(StringComparer.Ordinal)
-            {
-                ["worker"] = 75
-            });
+            new Dictionary<string, uint>(StringComparer.Ordinal) { ["worker"] = 75 }
+        );
         var extended = AppendDescriptorExtension(encoded, 13, [0xaa, 0xbb]);
 
-        Assert.True(ZLinkServiceWireCodec.TryDecodeRouteAdmission(
-            extended,
-            out _,
-            out var admission,
-            out var error));
+        Assert.True(
+            ZLinkServiceWireCodec.TryDecodeRouteAdmission(
+                extended,
+                out _,
+                out var admission,
+                out var error
+            )
+        );
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
         Assert.Equal(new byte[] { 0xaa, 0xbb }, admission.ExtensionFields[13]);
         Assert.Equal(extended.AsSpan(10).ToArray(), admission.DescriptorBytes);
@@ -557,7 +731,8 @@ public sealed class ServiceRuntimeFoundationTests
             17,
             23,
             new Dictionary<string, uint>(StringComparer.Ordinal),
-            (byte)ZLinkMeshNodeObjectRole.Client);
+            (byte)ZLinkMeshNodeObjectRole.Client
+        );
 
         var admission = DecodeAdmission(encoded);
 
@@ -567,10 +742,7 @@ public sealed class ServiceRuntimeFoundationTests
     [Fact]
     public void AdmissionGuard_ValidatesRevisionAndImmutableFieldsBeforeMutation()
     {
-        var channels = new Dictionary<string, uint>(StringComparer.Ordinal)
-        {
-            ["worker"] = 75
-        };
+        var channels = new Dictionary<string, uint>(StringComparer.Ordinal) { ["worker"] = 75 };
         var current = DecodeAdmission(
             ZLinkServiceWireCodec.EncodeRouteAdmission(
                 ServiceWireConstants.Command.Hello,
@@ -578,14 +750,18 @@ public sealed class ServiceRuntimeFoundationTests
                 "tcp://127.0.0.1:7070",
                 17,
                 23,
-                channels));
+                channels
+            )
+        );
 
         Assert.Equal(
             ZLinkServiceAdmissionDecision.Idempotent,
             ZLinkServiceAdmissionGuard.Evaluate(
                 current,
                 ServiceWireConstants.Command.Update,
-                current));
+                current
+            )
+        );
 
         var newer = DecodeAdmission(
             ZLinkServiceWireCodec.EncodeRouteAdmission(
@@ -594,16 +770,13 @@ public sealed class ServiceRuntimeFoundationTests
                 "tcp://127.0.0.1:7070",
                 17,
                 24,
-                new Dictionary<string, uint>(StringComparer.Ordinal)
-                {
-                    ["worker"] = 25
-                }));
+                new Dictionary<string, uint>(StringComparer.Ordinal) { ["worker"] = 25 }
+            )
+        );
         Assert.Equal(
             ZLinkServiceAdmissionDecision.Accept,
-            ZLinkServiceAdmissionGuard.Evaluate(
-                current,
-                ServiceWireConstants.Command.Update,
-                newer));
+            ZLinkServiceAdmissionGuard.Evaluate(current, ServiceWireConstants.Command.Update, newer)
+        );
 
         var sameRevisionDifferentBytes = DecodeAdmission(
             ZLinkServiceWireCodec.EncodeRouteAdmission(
@@ -612,16 +785,17 @@ public sealed class ServiceRuntimeFoundationTests
                 "tcp://127.0.0.1:7070",
                 17,
                 23,
-                new Dictionary<string, uint>(StringComparer.Ordinal)
-                {
-                    ["worker"] = 25
-                }));
+                new Dictionary<string, uint>(StringComparer.Ordinal) { ["worker"] = 25 }
+            )
+        );
         Assert.Equal(
             ZLinkServiceAdmissionDecision.Reject,
             ZLinkServiceAdmissionGuard.Evaluate(
                 current,
                 ServiceWireConstants.Command.Update,
-                sameRevisionDifferentBytes));
+                sameRevisionDifferentBytes
+            )
+        );
 
         var immutableMutationBytes = ZLinkServiceWireCodec.EncodeRouteAdmission(
             ServiceWireConstants.Command.Update,
@@ -629,7 +803,8 @@ public sealed class ServiceRuntimeFoundationTests
             "tcp://127.0.0.1:7070",
             17,
             24,
-            channels);
+            channels
+        );
         var securityOffset = FindSequence(immutableMutationBytes, "default"u8);
         "changed"u8.CopyTo(immutableMutationBytes.AsSpan(securityOffset));
         var immutableMutation = DecodeAdmission(immutableMutationBytes);
@@ -638,52 +813,79 @@ public sealed class ServiceRuntimeFoundationTests
             ZLinkServiceAdmissionGuard.Evaluate(
                 current,
                 ServiceWireConstants.Command.Update,
-                immutableMutation));
-        Assert.True(ZLinkServiceAdmissionGuard.MatchesExpectedRoute(
-            "tcp://127.0.0.1:7070",
-            ZLinkServiceSecurityIdentity.Plaintext,
-            current.LifecycleGeneration,
-            current));
-        Assert.True(ZLinkServiceAdmissionGuard.MatchesExpectedTransportRoute(
-            "tcp://127.0.0.1:7070",
-            ZLinkServiceSecurityIdentity.Plaintext,
-            ZLinkServiceSecurityIdentity.Plaintext,
-            current.LifecycleGeneration,
-            current with { SecurityIdentity = "default" }));
-        Assert.False(ZLinkServiceAdmissionGuard.MatchesExpectedRoute(
-            "tcp://127.0.0.1:7071",
-            ZLinkServiceSecurityIdentity.Plaintext,
-            current.LifecycleGeneration,
-            current));
-        Assert.False(ZLinkServiceAdmissionGuard.MatchesExpectedRoute(
-            "tcp://127.0.0.1:7070",
-            "different-security",
-            current.LifecycleGeneration,
-            current));
-        Assert.False(ZLinkServiceAdmissionGuard.MatchesExpectedRoute(
-            "tcp://127.0.0.1:7070",
-            ZLinkServiceSecurityIdentity.Plaintext,
-            current.LifecycleGeneration + 1,
-            current));
-        Assert.True(ZLinkServiceAdmissionGuard.MatchesExpectedTransportRoute(
-            "tcp://127.0.0.1:7070",
-            ZLinkServiceSecurityIdentity.Plaintext,
-            ZLinkServiceSecurityIdentity.Plaintext,
-            current.LifecycleGeneration,
-            current));
-        Assert.False(ZLinkServiceAdmissionGuard.MatchesExpectedTransportRoute(
-            "tcp://127.0.0.1:7070",
-            "tls:configured",
-            ZLinkServiceSecurityIdentity.Plaintext,
-            current.LifecycleGeneration,
-            current with { SecurityIdentity = "tls:configured" }));
+                immutableMutation
+            )
+        );
+        Assert.True(
+            ZLinkServiceAdmissionGuard.MatchesExpectedRoute(
+                "tcp://127.0.0.1:7070",
+                ZLinkServiceSecurityIdentity.Plaintext,
+                current.LifecycleGeneration,
+                current
+            )
+        );
+        Assert.True(
+            ZLinkServiceAdmissionGuard.MatchesExpectedTransportRoute(
+                "tcp://127.0.0.1:7070",
+                ZLinkServiceSecurityIdentity.Plaintext,
+                ZLinkServiceSecurityIdentity.Plaintext,
+                current.LifecycleGeneration,
+                current with
+                {
+                    SecurityIdentity = "default",
+                }
+            )
+        );
+        Assert.False(
+            ZLinkServiceAdmissionGuard.MatchesExpectedRoute(
+                "tcp://127.0.0.1:7071",
+                ZLinkServiceSecurityIdentity.Plaintext,
+                current.LifecycleGeneration,
+                current
+            )
+        );
+        Assert.False(
+            ZLinkServiceAdmissionGuard.MatchesExpectedRoute(
+                "tcp://127.0.0.1:7070",
+                "different-security",
+                current.LifecycleGeneration,
+                current
+            )
+        );
+        Assert.False(
+            ZLinkServiceAdmissionGuard.MatchesExpectedRoute(
+                "tcp://127.0.0.1:7070",
+                ZLinkServiceSecurityIdentity.Plaintext,
+                current.LifecycleGeneration + 1,
+                current
+            )
+        );
+        Assert.True(
+            ZLinkServiceAdmissionGuard.MatchesExpectedTransportRoute(
+                "tcp://127.0.0.1:7070",
+                ZLinkServiceSecurityIdentity.Plaintext,
+                ZLinkServiceSecurityIdentity.Plaintext,
+                current.LifecycleGeneration,
+                current
+            )
+        );
+        Assert.False(
+            ZLinkServiceAdmissionGuard.MatchesExpectedTransportRoute(
+                "tcp://127.0.0.1:7070",
+                "tls:configured",
+                ZLinkServiceSecurityIdentity.Plaintext,
+                current.LifecycleGeneration,
+                current with
+                {
+                    SecurityIdentity = "tls:configured",
+                }
+            )
+        );
 
         Assert.Equal(
             ZLinkServiceAdmissionDecision.Reject,
-            ZLinkServiceAdmissionGuard.Evaluate(
-                null,
-                ServiceWireConstants.Command.Update,
-                newer));
+            ZLinkServiceAdmissionGuard.Evaluate(null, ServiceWireConstants.Command.Update, newer)
+        );
     }
 
     [Fact]
@@ -702,7 +904,9 @@ public sealed class ServiceRuntimeFoundationTests
                 "out:tcp://mesh-z:0001",
                 incomingLifecycleGeneration: 17,
                 ZLinkServiceConnectionDirection.Inbound,
-                "in:tcp://mesh-z:0002"));
+                "in:tcp://mesh-z:0002"
+            )
+        );
         Assert.Equal(
             ZLinkServiceDuplicateConnectionDecision.UseIncoming,
             ZLinkServiceAdmissionGuard.SelectConnection(
@@ -713,7 +917,9 @@ public sealed class ServiceRuntimeFoundationTests
                 "out:tcp://mesh-a:0002",
                 incomingLifecycleGeneration: 17,
                 ZLinkServiceConnectionDirection.Inbound,
-                "in:tcp://mesh-a:0001"));
+                "in:tcp://mesh-a:0001"
+            )
+        );
         Assert.Equal(
             ZLinkServiceDuplicateConnectionDecision.KeepCurrent,
             ZLinkServiceAdmissionGuard.SelectConnection(
@@ -724,7 +930,9 @@ public sealed class ServiceRuntimeFoundationTests
                 "out:tcp://mesh-z:0001",
                 incomingLifecycleGeneration: 17,
                 ZLinkServiceConnectionDirection.Outbound,
-                "out:tcp://mesh-z:0002"));
+                "out:tcp://mesh-z:0002"
+            )
+        );
         Assert.Equal(
             ZLinkServiceDuplicateConnectionDecision.NotDuplicate,
             ZLinkServiceAdmissionGuard.SelectConnection(
@@ -735,7 +943,9 @@ public sealed class ServiceRuntimeFoundationTests
                 "out:tcp://mesh-z:0001",
                 incomingLifecycleGeneration: 19,
                 ZLinkServiceConnectionDirection.Inbound,
-                "in:tcp://mesh-z:0002"));
+                "in:tcp://mesh-z:0002"
+            )
+        );
     }
 
     [Fact]
@@ -751,11 +961,10 @@ public sealed class ServiceRuntimeFoundationTests
             Endpoint: "tcp://127.0.0.1:7002",
             ChannelCount: 2,
             LastError: 0,
-            LastChangedMs: 41);
+            LastChangedMs: 41
+        );
 
-        var mapped = peer.ToFramework(
-            "tcp://127.0.0.1:7001",
-            new MeshPeerChannel("orders", 75));
+        var mapped = peer.ToFramework("tcp://127.0.0.1:7001", new MeshPeerChannel("orders", 75));
 
         Assert.Equal("orders", mapped.ChannelName);
         Assert.Equal(75, mapped.Weight);
@@ -775,23 +984,23 @@ public sealed class ServiceRuntimeFoundationTests
     {
         var empty = ZLinkServiceWireCodec.EncodeReply(7, 0, 0);
         Assert.Equal(21, empty.Length);
-        Assert.Equal(
-            "5A4D01140000000000000000070000000000000000",
-            Convert.ToHexString(empty));
+        Assert.Equal("5A4D01140000000000000000070000000000000000", Convert.ToHexString(empty));
 
         Assert.Equal(
             "5A4D0114000000000000000008000000660000000E",
-            Convert.ToHexString(ZLinkServiceWireCodec.EncodeReply(8, 102, 14)));
+            Convert.ToHexString(ZLinkServiceWireCodec.EncodeReply(8, 102, 14))
+        );
 
-        var tailed = ZLinkServiceWireCodec.EncodeReply(
-            8, 102, 14, new byte[] { 1, 2, 3 });
+        var tailed = ZLinkServiceWireCodec.EncodeReply(8, 102, 14, new byte[] { 1, 2, 3 });
         Assert.Equal(24, tailed.Length);
         Assert.Equal(
             "5A4D0114000000000000000008000000660000000E010203",
-            Convert.ToHexString(tailed));
+            Convert.ToHexString(tailed)
+        );
 
-        Assert.True(ZLinkServiceWireCodec.TryDecodeReply(
-            tailed, out var decoded, out var decodeError));
+        Assert.True(
+            ZLinkServiceWireCodec.TryDecodeReply(tailed, out var decoded, out var decodeError)
+        );
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, decodeError);
         Assert.Equal(new byte[] { 1, 2, 3 }, decoded.Tail);
     }
@@ -803,11 +1012,15 @@ public sealed class ServiceRuntimeFoundationTests
             ServiceWireConstants.Command.ChannelRequest,
             41,
             "worker",
-            hasMetadata: true);
-        Assert.True(ZLinkServiceWireCodec.TryDecodeApplication(
-            request,
-            out var application,
-            out var requestError));
+            hasMetadata: true
+        );
+        Assert.True(
+            ZLinkServiceWireCodec.TryDecodeApplication(
+                request,
+                out var application,
+                out var requestError
+            )
+        );
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, requestError);
         Assert.Equal(41UL, application.Correlation);
         Assert.Equal("worker", application.ChannelName);
@@ -818,10 +1031,9 @@ public sealed class ServiceRuntimeFoundationTests
         //  decode and surfaces through the integrity-violation fallback with
         //  the synthesized protocolError(104)+requestProtocolError(16) pair.
         var reply = ZLinkServiceWireCodec.EncodeReply(41, 105, 19);
-        Assert.True(ZLinkServiceWireCodec.TryDecodeReply(
-            reply,
-            out var terminal,
-            out var replyError));
+        Assert.True(
+            ZLinkServiceWireCodec.TryDecodeReply(reply, out var terminal, out var replyError)
+        );
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, replyError);
         Assert.Equal(41UL, terminal.Correlation);
         Assert.Equal(105, terminal.TerminalResult);
@@ -830,46 +1042,50 @@ public sealed class ServiceRuntimeFoundationTests
         //  EncodeReply itself now rejects illegal pairs (schema
         //  terminal-failure-integrity), so illegal frames for the decode
         //  assertions below are byte-patched from a legal frame.
-        Assert.Throws<ArgumentException>(
-            () => ZLinkServiceWireCodec.EncodeReply(41, 101, 19));
+        Assert.Throws<ArgumentException>(() => ZLinkServiceWireCodec.EncodeReply(41, 101, 19));
 
-        foreach (var (illegalTerminal, illegalFailure) in new[]
-                 {
-                     (-3, 19U),   // unknown terminal
-                     (101, 19U),  // boundary terminal must carry None
-                     (104, 3U),   // typed pair mismatch
-                     (102, 18U),  // typed pair mismatch
-                 })
+        foreach (
+            var (illegalTerminal, illegalFailure) in new[]
+            {
+                (-3, 19U), // unknown terminal
+                (101, 19U), // boundary terminal must carry None
+                (104, 3U), // typed pair mismatch
+                (102, 18U), // typed pair mismatch
+            }
+        )
         {
             var illegal = ZLinkServiceWireCodec.EncodeReply(41, 105, 19);
             System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(
-                illegal.AsSpan(13), illegalTerminal);
+                illegal.AsSpan(13),
+                illegalTerminal
+            );
             System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(
-                illegal.AsSpan(17), illegalFailure);
-            Assert.False(ZLinkServiceWireCodec.TryDecodeReply(
-                illegal,
-                out _,
-                out var illegalError));
-            Assert.Equal(
-                ZLinkServiceWireCodec.DecodeError.InvalidField, illegalError);
-            Assert.True(ZLinkServiceWireCodec.TryDecodeReplyIntegrityViolation(
-                illegal,
-                out var synthesized));
+                illegal.AsSpan(17),
+                illegalFailure
+            );
+            Assert.False(
+                ZLinkServiceWireCodec.TryDecodeReply(illegal, out _, out var illegalError)
+            );
+            Assert.Equal(ZLinkServiceWireCodec.DecodeError.InvalidField, illegalError);
+            Assert.True(
+                ZLinkServiceWireCodec.TryDecodeReplyIntegrityViolation(illegal, out var synthesized)
+            );
             Assert.Equal(41UL, synthesized.Correlation);
             Assert.Equal(104, synthesized.TerminalResult);
             Assert.Equal(16U, synthesized.FailureCode);
         }
 
         var legalSynthesis = ZLinkServiceWireCodec.EncodeReply(41, 104, 16);
-        Assert.True(ZLinkServiceWireCodec.TryDecodeReply(
-            legalSynthesis,
-            out var synthesizedPair,
-            out var synthesizedError));
+        Assert.True(
+            ZLinkServiceWireCodec.TryDecodeReply(
+                legalSynthesis,
+                out var synthesizedPair,
+                out var synthesizedError
+            )
+        );
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, synthesizedError);
         Assert.Equal(16U, synthesizedPair.FailureCode);
-        Assert.False(ZLinkServiceWireCodec.TryDecodeReplyIntegrityViolation(
-            legalSynthesis,
-            out _));
+        Assert.False(ZLinkServiceWireCodec.TryDecodeReplyIntegrityViolation(legalSynthesis, out _));
     }
 
     [Fact]
@@ -917,8 +1133,8 @@ public sealed class ServiceRuntimeFoundationTests
             local.Start();
 
             await WaitUntilAsync(() =>
-                local.Status().AdmittedPeerCount == 1
-                && firstRemote.Status().AdmittedPeerCount == 1);
+                local.Status().AdmittedPeerCount == 1 && firstRemote.Status().AdmittedPeerCount == 1
+            );
         }
 
         // Mesh liveness expires after 15 seconds without an acknowledgement.
@@ -933,8 +1149,8 @@ public sealed class ServiceRuntimeFoundationTests
         replacement.Start();
 
         await WaitUntilAsync(() =>
-            local.Status().AdmittedPeerCount == 1
-            && replacement.Status().AdmittedPeerCount == 1);
+            local.Status().AdmittedPeerCount == 1 && replacement.Status().AdmittedPeerCount == 1
+        );
     }
 
     [Fact]
@@ -960,8 +1176,8 @@ public sealed class ServiceRuntimeFoundationTests
         source.Start();
 
         await WaitUntilAsync(() =>
-            source.Status().AdmittedPeerCount == 1
-            && target.Status().AdmittedPeerCount == 1);
+            source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+        );
         var targetIntent = Assert.Single(source.Peers()).ConnectionIntentId;
 
         // Spec 30 §5 requires the selected target to remain admitted and
@@ -973,11 +1189,15 @@ public sealed class ServiceRuntimeFoundationTests
 
         await WaitUntilAsync(() =>
             source.Status().State == MeshNodeState.Draining
-            && source.Peers().Any(peer =>
-                peer.ConnectionIntentId == targetIntent
-                && peer.RoutingId == targetRid
-                && peer.State == MeshPeerState.Admitted
-                && peer.DescriptorRevision == target.Status().DescriptorRevision));
+            && source
+                .Peers()
+                .Any(peer =>
+                    peer.ConnectionIntentId == targetIntent
+                    && peer.RoutingId == targetRid
+                    && peer.State == MeshPeerState.Admitted
+                    && peer.DescriptorRevision == target.Status().DescriptorRevision
+                )
+        );
     }
 
     [Fact]
@@ -1004,19 +1224,14 @@ public sealed class ServiceRuntimeFoundationTests
         await using var backend = new ZLinkBackendSpotNodeWrapper(node);
 
         var entry = backend.EntrySpot();
-        var descriptorEntrySpotId =
-            "orders-entry-00000000-0000-4000-8000-000000000001";
+        var descriptorEntrySpotId = "orders-entry-00000000-0000-4000-8000-000000000001";
 
         entry.SetRoutingId(ZLinkSpotId.ToNativeRoutingId(descriptorEntrySpotId));
 
         var native = node.GetOrCreateSpot(descriptorEntrySpotId, out var created);
         Assert.False(created);
-        Assert.Equal(
-            ZLinkSpotId.ToNativeRoutingId(descriptorEntrySpotId),
-            native.RoutingId);
-        Assert.Equal(
-            ZLinkSpotId.ToNativeRoutingId(descriptorEntrySpotId),
-            entry.RoutingId);
+        Assert.Equal(ZLinkSpotId.ToNativeRoutingId(descriptorEntrySpotId), native.RoutingId);
+        Assert.Equal(ZLinkSpotId.ToNativeRoutingId(descriptorEntrySpotId), entry.RoutingId);
     }
 
     [Fact]
@@ -1025,13 +1240,10 @@ public sealed class ServiceRuntimeFoundationTests
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var node = new ZLinkManagedMeshNode(context, "orders");
         node.SetRoutingId(RoutingId.From("orders-entry-owner"));
-        await using var pump = new ZLinkMeshDispatchPump(
-            node,
-            new ZLinkMeshCompletionTable());
+        await using var pump = new ZLinkMeshDispatchPump(node, new ZLinkMeshCompletionTable());
 
         var previousSpotId = "orders-entry-owner";
-        var descriptorEntrySpotId =
-            "orders-entry-00000000-0000-4000-8000-000000000001";
+        var descriptorEntrySpotId = "orders-entry-00000000-0000-4000-8000-000000000001";
         var state = pump.RegisterSpot(previousSpotId);
 
         pump.RekeySpot(previousSpotId, descriptorEntrySpotId, state);
@@ -1062,7 +1274,8 @@ public sealed class ServiceRuntimeFoundationTests
     public async Task ManagedNode_RejectsAdmissionThatDoesNotMatchDiscovery(
         bool mismatchEndpoint,
         bool mismatchSecurityIdentity,
-        bool mismatchLifecycleGeneration)
+        bool mismatchLifecycleGeneration
+    )
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var source = new ZLinkManagedMeshNode(context, "orders");
@@ -1084,14 +1297,13 @@ public sealed class ServiceRuntimeFoundationTests
         target.SetPeerExpectation(
             sourceRid,
             mismatchEndpoint ? $"inproc://unexpected-{suffix}" : sourceEndpoint,
-            mismatchSecurityIdentity
-                ? "tls:unexpected"
-                : ZLinkServiceSecurityIdentity.Plaintext,
+            mismatchSecurityIdentity ? "tls:unexpected" : ZLinkServiceSecurityIdentity.Plaintext,
             mismatchLifecycleGeneration
                 ? sourceLifecycleGeneration == ulong.MaxValue
                     ? sourceLifecycleGeneration - 1
                     : sourceLifecycleGeneration + 1
-                : sourceLifecycleGeneration);
+                : sourceLifecycleGeneration
+        );
         using var monitor = target.OpenMonitor();
 
         target.Start();
@@ -1117,7 +1329,9 @@ public sealed class ServiceRuntimeFoundationTests
                 nodeRid,
                 [requestPart],
                 out var transportOperation,
-                TimeSpan.FromSeconds(1)));
+                TimeSpan.FromSeconds(1)
+            )
+        );
 
         Assert.Equal(localOperation.High, transportOperation.High);
         Assert.Equal(localOperation.Low + 1, transportOperation.Low);
@@ -1134,17 +1348,11 @@ public sealed class ServiceRuntimeFoundationTests
         using var requestPart = Message.From(new byte[] { 1, 2, 3 });
         Assert.Equal(
             SubmitResult.Ok,
-            node.RequestToNode(
-                nodeRid,
-                [requestPart],
-                out var operationId,
-                TimeSpan.FromSeconds(1)));
+            node.RequestToNode(nodeRid, [requestPart], out var operationId, TimeSpan.FromSeconds(1))
+        );
 
         using var ready = new MeshReadyBatch();
-        Assert.False(node.DrainReady(
-            MeshReadyDomains.All,
-            ready,
-            RecvFlags.DontWait));
+        Assert.False(node.DrainReady(MeshReadyDomains.All, ready, RecvFlags.DontWait));
         Assert.Equal(1, ready.Count);
 
         using var claim = ready.TakeClaim(0);
@@ -1161,10 +1369,7 @@ public sealed class ServiceRuntimeFoundationTests
         Assert.False(claim.Receive(received, RecvFlags.DontWait));
         claim.Dispose();
         ready.Reset();
-        node.DrainReady(
-            MeshReadyDomains.Infrastructure,
-            ready,
-            RecvFlags.DontWait);
+        node.DrainReady(MeshReadyDomains.Infrastructure, ready, RecvFlags.DontWait);
         using var completionClaim = ready.TakeClaim(0);
         Assert.True(completionClaim.Receive(received, RecvFlags.DontWait));
         Assert.Equal(1, received.Count);
@@ -1184,28 +1389,36 @@ public sealed class ServiceRuntimeFoundationTests
         var table = new ZLinkMeshCompletionTable();
         node.SetCompletionHandlerCore(table.TryComplete);
         using var payload = Message.From(new byte[] { 1 });
-        Assert.Equal(SubmitResult.Ok,
-            node.RequestToNode(rid, [payload], out var operationId, TimeSpan.FromSeconds(3)));
+        Assert.Equal(
+            SubmitResult.Ok,
+            node.RequestToNode(rid, [payload], out var operationId, TimeSpan.FromSeconds(3))
+        );
         var completed = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        Assert.True(table.Register(operationId, (record, parts) =>
-        {
-            try
-            {
-                Assert.True(ZLinkCompletionDispatcher.IsCurrentExecution);
-                Assert.Equal(operationId, record.OperationId);
-                Assert.Equal((int)RequestResult.Ok, record.TerminalResult);
-                completed.TrySetResult();
-            }
-            catch (Exception exception)
-            {
-                completed.TrySetException(exception);
-            }
-            finally
-            {
-                ZLinkMessageParts.DisposeAll(parts);
-            }
-        }));
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        Assert.True(
+            table.Register(
+                operationId,
+                (record, parts) =>
+                {
+                    try
+                    {
+                        Assert.True(ZLinkCompletionDispatcher.IsCurrentExecution);
+                        Assert.Equal(operationId, record.OperationId);
+                        Assert.Equal((int)RequestResult.Ok, record.TerminalResult);
+                        completed.TrySetResult();
+                    }
+                    catch (Exception exception)
+                    {
+                        completed.TrySetException(exception);
+                    }
+                    finally
+                    {
+                        ZLinkMessageParts.DisposeAll(parts);
+                    }
+                }
+            )
+        );
         using var ready = new MeshReadyBatch();
         node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
         using var claim = ready.TakeClaim(0);
@@ -1236,10 +1449,7 @@ public sealed class ServiceRuntimeFoundationTests
             while (!stop.IsCancellationRequested)
             {
                 ready.Reset();
-                node.DrainReady(
-                    MeshReadyDomains.Application,
-                    ready,
-                    RecvFlags.DontWait);
+                node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
                 for (var index = 0; index < ready.Count; index++)
                 {
                     using var claim = ready.TakeClaim(index);
@@ -1265,9 +1475,7 @@ public sealed class ServiceRuntimeFoundationTests
         for (var index = 0; index < 2_000; index++)
         {
             using var part = Message.From(new byte[] { 1, 2, 3, 4 });
-            Assert.Equal(
-                SubmitResult.Ok,
-                node.SendToNode(nodeRid, [part]));
+            Assert.Equal(SubmitResult.Ok, node.SendToNode(nodeRid, [part]));
         }
 
         await statusTask;
@@ -1284,7 +1492,8 @@ public sealed class ServiceRuntimeFoundationTests
     [InlineData(true, 17 * 1024 * 1024)]
     public async Task ManagedNodes_RemoteNodeAndChannelRequestsUseNativeReplyCompletion(
         bool channelRequest,
-        int payloadLength)
+        int payloadLength
+    )
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var source = new ZLinkManagedMeshNode(context, "orders");
@@ -1305,17 +1514,26 @@ public sealed class ServiceRuntimeFoundationTests
         target.Start();
         source.Start();
 
-        await WaitUntilAsync(() => source.Status().AdmittedPeerCount == 1
-                                   && target.Status().AdmittedPeerCount == 1);
+        await WaitUntilAsync(() =>
+            source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+        );
 
-        var requestPayload = Enumerable.Range(0, payloadLength)
+        var requestPayload = Enumerable
+            .Range(0, payloadLength)
             .Select(static index => checked((byte)(index % 251)))
             .ToArray();
         using var requestPart = Message.From(requestPayload);
         MeshOperationId operationId;
         var submit = channelRequest
-            ? source.EntrySpot().RequestToChannel("worker", [requestPart], out operationId, TimeSpan.FromSeconds(3))
-            : source.RequestToNode(targetRid, [requestPart], out operationId, TimeSpan.FromSeconds(3));
+            ? source
+                .EntrySpot()
+                .RequestToChannel("worker", [requestPart], out operationId, TimeSpan.FromSeconds(3))
+            : source.RequestToNode(
+                targetRid,
+                [requestPart],
+                out operationId,
+                TimeSpan.FromSeconds(3)
+            );
         Assert.Equal(SubmitResult.Ok, submit);
 
         using var targetReady = new MeshReadyBatch();
@@ -1330,8 +1548,14 @@ public sealed class ServiceRuntimeFoundationTests
         Assert.True(targetClaim.Receive(targetBatch, RecvFlags.DontWait));
         Assert.Equal(1, targetBatch.Count);
         var request = targetBatch[0];
-        Assert.Equal(channelRequest ? MeshRecordKind.ChannelRequest : MeshRecordKind.NodeRequest, request.Kind);
-        Assert.Equal(channelRequest ? MeshOperationKind.ChannelRequest : MeshOperationKind.NodeRequest, request.OperationKind);
+        Assert.Equal(
+            channelRequest ? MeshRecordKind.ChannelRequest : MeshRecordKind.NodeRequest,
+            request.Kind
+        );
+        Assert.Equal(
+            channelRequest ? MeshOperationKind.ChannelRequest : MeshOperationKind.NodeRequest,
+            request.OperationKind
+        );
         Assert.Equal(sourceRid, request.SourceNodeRid);
         Assert.Equal(operationId.Low, request.OperationId.Low);
         Assert.Equal(channelRequest ? "worker" : null, request.ChannelName);
@@ -1365,7 +1589,10 @@ public sealed class ServiceRuntimeFoundationTests
         var completion = sourceBatch[0];
         Assert.Equal(MeshRecordKind.Completion, completion.Kind);
         Assert.Equal(operationId, completion.OperationId);
-        Assert.Equal(channelRequest ? MeshOperationKind.ChannelRequest : MeshOperationKind.NodeRequest, completion.OperationKind);
+        Assert.Equal(
+            channelRequest ? MeshOperationKind.ChannelRequest : MeshOperationKind.NodeRequest,
+            completion.OperationKind
+        );
         Assert.Equal((int)RequestResult.Ok, completion.TerminalResult);
         Assert.Equal(0, completion.FailureErrno);
         var receivedReplyParts = sourceBatch.RetainMessage(0);
@@ -1401,14 +1628,17 @@ public sealed class ServiceRuntimeFoundationTests
         source.Start();
 
         using var requestPart = Message.From(new byte[] { 1, 2, 3 });
-        var request = source.RequestToChannelDirectAsync(
-            "source",
-            "worker",
-            [requestPart],
-            SendFlags.None,
-            ReadOnlyMemory<byte>.Empty,
-            TimeSpan.FromSeconds(3),
-            CancellationToken.None).AsTask();
+        var request = source
+            .RequestToChannelDirectAsync(
+                "source",
+                "worker",
+                [requestPart],
+                SendFlags.None,
+                ReadOnlyMemory<byte>.Empty,
+                TimeSpan.FromSeconds(3),
+                CancellationToken.None
+            )
+            .AsTask();
 
         target.SetRoutingId(targetRid);
         target.SetBind(targetEndpoint);
@@ -1453,7 +1683,9 @@ public sealed class ServiceRuntimeFoundationTests
                 SendFlags.None,
                 ReadOnlyMemory<byte>.Empty,
                 TimeSpan.FromSeconds(3),
-                CancellationToken.None));
+                CancellationToken.None
+            )
+        );
 
         Assert.Equal(ZlinkSubmitException.ErrorCode.NotFound, error.Result);
     }
@@ -1489,37 +1721,43 @@ public sealed class ServiceRuntimeFoundationTests
         // Admitted states never coexist in one snapshot. Capture and disconnect
         // the connecting stale peer synchronously (it is present at startup),
         // then confirm the remote peer reaches Admitted on its own.
-        var stale = Assert.Single(
-            local.Peers(),
-            peer => peer.RoutingId == staleRid);
+        var stale = Assert.Single(local.Peers(), peer => peer.RoutingId == staleRid);
         Assert.Equal(MeshPeerState.Connecting, stale.State);
 
-        Assert.True(localBackend.DisconnectPeerBeforeAdmission(
-            stale.RoutingId,
-            stale.Endpoint,
-            stale.LifecycleGeneration));
+        Assert.True(
+            localBackend.DisconnectPeerBeforeAdmission(
+                stale.RoutingId,
+                stale.Endpoint,
+                stale.LifecycleGeneration
+            )
+        );
 
         Assert.DoesNotContain(
             local.Peers(),
-            peer => peer.ConnectionIntentId == stale.ConnectionIntentId);
+            peer => peer.ConnectionIntentId == stale.ConnectionIntentId
+        );
 
         await WaitUntilAsync(() =>
-            local.Peers().Any(peer =>
-                peer.RoutingId == remoteRid
-                && peer.State == MeshPeerState.Admitted));
+            local
+                .Peers()
+                .Any(peer => peer.RoutingId == remoteRid && peer.State == MeshPeerState.Admitted)
+        );
 
-        var retained = Assert.Single(
-            local.Peers(),
-            peer => peer.RoutingId == remoteRid);
+        var retained = Assert.Single(local.Peers(), peer => peer.RoutingId == remoteRid);
         Assert.Equal(MeshPeerState.Admitted, retained.State);
-        Assert.False(localBackend.DisconnectPeerBeforeAdmission(
-            retained.RoutingId,
-            retained.Endpoint,
-            retained.LifecycleGeneration));
+        Assert.False(
+            localBackend.DisconnectPeerBeforeAdmission(
+                retained.RoutingId,
+                retained.Endpoint,
+                retained.LifecycleGeneration
+            )
+        );
         Assert.Contains(
             local.Peers(),
-            peer => peer.ConnectionIntentId == retained.ConnectionIntentId
-                    && peer.State == MeshPeerState.Admitted);
+            peer =>
+                peer.ConnectionIntentId == retained.ConnectionIntentId
+                && peer.State == MeshPeerState.Admitted
+        );
     }
 
     [Fact]
@@ -1542,38 +1780,47 @@ public sealed class ServiceRuntimeFoundationTests
         var replacementIntent = local.ConnectPeer(remoteEndpoint, replacementRid);
         local.Start();
 
-        var oldPeer = Assert.Single(
-            local.Peers(),
-            peer => peer.ConnectionIntentId == oldIntent);
+        var oldPeer = Assert.Single(local.Peers(), peer => peer.ConnectionIntentId == oldIntent);
         Assert.Contains(
             local.Peers(),
-            peer => peer.ConnectionIntentId == replacementIntent
-                    && peer.State == MeshPeerState.Connecting);
+            peer =>
+                peer.ConnectionIntentId == replacementIntent
+                && peer.State == MeshPeerState.Connecting
+        );
 
-        Assert.True(localBackend.DisconnectPeerBeforeAdmission(
-            oldRid,
-            remoteEndpoint,
-            lifecycleGeneration: 0));
+        Assert.True(
+            localBackend.DisconnectPeerBeforeAdmission(
+                oldRid,
+                remoteEndpoint,
+                lifecycleGeneration: 0
+            )
+        );
 
         Assert.DoesNotContain(
             local.Peers(),
-            peer => peer.ConnectionIntentId == oldPeer.ConnectionIntentId);
+            peer => peer.ConnectionIntentId == oldPeer.ConnectionIntentId
+        );
         Assert.Contains(
             local.Peers(),
-            peer => peer.ConnectionIntentId == replacementIntent
-                    && peer.State == MeshPeerState.Connecting);
+            peer =>
+                peer.ConnectionIntentId == replacementIntent
+                && peer.State == MeshPeerState.Connecting
+        );
 
         remote.SetRoutingId(replacementRid);
         remote.SetBind(remoteEndpoint);
         remote.Start();
 
         await WaitUntilAsync(() =>
-            local.Peers().Any(peer =>
-                peer.RoutingId == replacementRid
-                && peer.State == MeshPeerState.Admitted)
-            && remote.Peers().Any(peer =>
-                peer.RoutingId == localRid
-                && peer.State == MeshPeerState.Admitted));
+            local
+                .Peers()
+                .Any(peer =>
+                    peer.RoutingId == replacementRid && peer.State == MeshPeerState.Admitted
+                )
+            && remote
+                .Peers()
+                .Any(peer => peer.RoutingId == localRid && peer.State == MeshPeerState.Admitted)
+        );
     }
 
     [Fact]
@@ -1600,39 +1847,47 @@ public sealed class ServiceRuntimeFoundationTests
                     // The auto-connect owner removes the old intent before it
                     // installs the new RID at the same endpoint.
                     localBackend.DisconnectPeer(remoteEndpoint);
-                    await WaitUntilAsync(() => !local.Peers().Any(peer =>
-                        string.Equals(
-                            peer.Endpoint,
-                            remoteEndpoint,
-                            StringComparison.Ordinal)));
+                    await WaitUntilAsync(() =>
+                        !local
+                            .Peers()
+                            .Any(peer =>
+                                string.Equals(
+                                    peer.Endpoint,
+                                    remoteEndpoint,
+                                    StringComparison.Ordinal
+                                )
+                            )
+                    );
                     await remote.DisposeAsync();
                     remote = null;
                 }
 
-                var remoteRid = RoutingId.From(
-                    $"tcp-replacement-remote-{generation}-{suffix}");
+                var remoteRid = RoutingId.From($"tcp-replacement-remote-{generation}-{suffix}");
                 remote = new ZLinkManagedMeshNode(context, "tcp-replacement");
                 remote.SetRoutingId(remoteRid);
-                remote.SetBind(
-                    generation == 0
-                        ? "tcp://127.0.0.1:0"
-                        : remoteEndpoint);
+                remote.SetBind(generation == 0 ? "tcp://127.0.0.1:0" : remoteEndpoint);
                 remote.Start();
                 remoteEndpoint = remote.Status().LocalEndpoint;
 
                 localBackend.ConnectPeer(
                     remoteRid,
                     remoteEndpoint,
-                    ZLinkServiceSecurityIdentity.Plaintext);
+                    ZLinkServiceSecurityIdentity.Plaintext
+                );
 
                 var expectedRid = remoteRid;
                 await WaitUntilAsync(() =>
-                    local.Peers().Any(peer =>
-                        peer.RoutingId == expectedRid
-                        && peer.State == MeshPeerState.Admitted)
-                    && remote!.Peers().Any(peer =>
-                        peer.RoutingId == localRid
-                        && peer.State == MeshPeerState.Admitted));
+                    local
+                        .Peers()
+                        .Any(peer =>
+                            peer.RoutingId == expectedRid && peer.State == MeshPeerState.Admitted
+                        )
+                    && remote!
+                        .Peers()
+                        .Any(peer =>
+                            peer.RoutingId == localRid && peer.State == MeshPeerState.Admitted
+                        )
+                );
             }
         }
         finally
@@ -1642,12 +1897,12 @@ public sealed class ServiceRuntimeFoundationTests
         }
     }
 
-
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task ManagedNodes_RemoteSpotAndActorRequestsRequireOneNativeReplyCompletion(
-        bool actorRequest)
+        bool actorRequest
+    )
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var source = new ZLinkManagedMeshNode(context, "objects");
@@ -1667,27 +1922,41 @@ public sealed class ServiceRuntimeFoundationTests
 
         var actor = target.CreateActor($"actor-{suffix}");
         var spot = (ZLinkManagedSpot)target.GetOrCreateSpot($"spot-{suffix}", out _);
-        Assert.True(target.TryGetActorAuthority(
-            actor, out var actorAuthority, out var actorLease));
+        Assert.True(target.TryGetActorAuthority(actor, out var actorAuthority, out var actorLease));
         source.ObserveActorAuthority(
-            actor, target.Status().LifecycleGeneration, actorAuthority, actorLease);
+            actor,
+            target.Status().LifecycleGeneration,
+            actorAuthority,
+            actorLease
+        );
         source.ObserveSpotAuthority(
-            targetRid, spot.SpotId, spot.LifecycleGeneration,
-            target.Status().LifecycleGeneration, spot.AuthorityOwnerGeneration, 17);
+            targetRid,
+            spot.SpotId,
+            spot.LifecycleGeneration,
+            target.Status().LifecycleGeneration,
+            spot.AuthorityOwnerGeneration,
+            17
+        );
         target.Start();
         source.Start();
-        await WaitUntilAsync(
-            () => source.Status().AdmittedPeerCount == 1
-                  && target.Status().AdmittedPeerCount == 1);
+        await WaitUntilAsync(() =>
+            source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+        );
 
         using var requestPart = Message.From(new byte[] { 3, 1, 4, 1, 5 });
         MeshOperationId operationId;
         var submit = actorRequest
-            ? source.RequestToActor(
-                actor, [requestPart], out operationId, TimeSpan.FromSeconds(3))
-            : source.EntrySpot().RequestToSpot(
-                targetRid, spot.SpotId, spot.LifecycleGeneration,
-                [requestPart], out operationId, TimeSpan.FromSeconds(3));
+            ? source.RequestToActor(actor, [requestPart], out operationId, TimeSpan.FromSeconds(3))
+            : source
+                .EntrySpot()
+                .RequestToSpot(
+                    targetRid,
+                    spot.SpotId,
+                    spot.LifecycleGeneration,
+                    [requestPart],
+                    out operationId,
+                    TimeSpan.FromSeconds(3)
+                );
         Assert.Equal(SubmitResult.Ok, submit);
 
         using var targetReady = new MeshReadyBatch();
@@ -1695,26 +1964,29 @@ public sealed class ServiceRuntimeFoundationTests
         await WaitUntilAsync(() =>
         {
             targetReady.Reset();
-            target.DrainReady(
-                MeshReadyDomains.Application, targetReady, RecvFlags.DontWait);
-            requestReadyIndex = Enumerable.Range(0, targetReady.Count)
+            target.DrainReady(MeshReadyDomains.Application, targetReady, RecvFlags.DontWait);
+            requestReadyIndex = Enumerable
+                .Range(0, targetReady.Count)
                 .FirstOrDefault(
-                    index => actorRequest
-                        ? targetReady[index].OwnerKind == MeshOwnerKind.Actor
-                        : targetReady[index].OwnerKind == MeshOwnerKind.Spot
-                          && targetReady[index].SpotId == spot.SpotId,
-                    -1);
+                    index =>
+                        actorRequest
+                            ? targetReady[index].OwnerKind == MeshOwnerKind.Actor
+                            : targetReady[index].OwnerKind == MeshOwnerKind.Spot
+                                && targetReady[index].SpotId == spot.SpotId,
+                    -1
+                );
             return requestReadyIndex >= 0;
         });
         using var targetClaim = targetReady.TakeClaim(requestReadyIndex);
         using var targetBatch = new MeshReceiveBatch();
         Assert.True(targetClaim.Receive(targetBatch, RecvFlags.DontWait));
         var request = Assert.Single(
-            Enumerable.Range(0, targetBatch.Count)
-                .Select(index => targetBatch[index]));
+            Enumerable.Range(0, targetBatch.Count).Select(index => targetBatch[index])
+        );
         Assert.Equal(
             actorRequest ? MeshRecordKind.ActorRequest : MeshRecordKind.SpotRequest,
-            request.Kind);
+            request.Kind
+        );
         Assert.Equal(operationId, request.OperationId);
         Assert.Equal(operationId.Low, request.ReplyRouteId);
 
@@ -1727,29 +1999,27 @@ public sealed class ServiceRuntimeFoundationTests
         await WaitUntilAsync(() =>
         {
             sourceReady.Reset();
-            source.DrainReady(
-                MeshReadyDomains.Infrastructure, sourceReady, RecvFlags.DontWait);
+            source.DrainReady(MeshReadyDomains.Infrastructure, sourceReady, RecvFlags.DontWait);
             return sourceReady.Count == 1;
         });
         using var sourceClaim = sourceReady.TakeClaim(0);
         using var sourceBatch = new MeshReceiveBatch();
         Assert.True(sourceClaim.Receive(sourceBatch, RecvFlags.DontWait));
         var completion = Assert.Single(
-            Enumerable.Range(0, sourceBatch.Count)
-                .Select(index => sourceBatch[index]));
+            Enumerable.Range(0, sourceBatch.Count).Select(index => sourceBatch[index])
+        );
         Assert.Equal(MeshRecordKind.Completion, completion.Kind);
         Assert.Equal(operationId, completion.OperationId);
         Assert.Equal(
             actorRequest ? MeshOperationKind.ActorRequest : MeshOperationKind.SpotRequest,
-            completion.OperationKind);
+            completion.OperationKind
+        );
         Assert.Equal((int)RequestResult.Ok, completion.TerminalResult);
         Assert.Equal(0, completion.FailureErrno);
         var retainedReply = sourceBatch.RetainMessage(0);
         try
         {
-            Assert.Equal(
-                new byte[] { 9, 2, 6, 5 },
-                Assert.Single(retainedReply).ToArray());
+            Assert.Equal(new byte[] { 9, 2, 6, 5 }, Assert.Single(retainedReply).ToArray());
         }
         finally
         {
@@ -1779,14 +2049,13 @@ public sealed class ServiceRuntimeFoundationTests
         source.SetLocalOwnerLeaseGeneration(17);
         target.SetLocalOwnerLeaseGeneration(17);
         var sourceSpot = (ZLinkManagedSpot)source.EntrySpot();
-        var targetSpot = (ZLinkManagedSpot)target.GetOrCreateSpot(
-            $"message-follow-spot-{suffix}",
-            out _);
+        var targetSpot = (ZLinkManagedSpot)
+            target.GetOrCreateSpot($"message-follow-spot-{suffix}", out _);
         target.Start();
         source.Start();
-        await WaitUntilAsync(
-            () => source.Status().AdmittedPeerCount == 1
-                  && target.Status().AdmittedPeerCount == 1);
+        await WaitUntilAsync(() =>
+            source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+        );
 
         using var first = Message.From("first");
         using var second = Message.From("second");
@@ -1803,16 +2072,14 @@ public sealed class ServiceRuntimeFoundationTests
             messageFollowHopCount: 1,
             [first, second],
             metadata: default,
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         using var ready = new MeshReadyBatch();
         await WaitUntilAsync(() =>
         {
             ready.Reset();
-            target.DrainReady(
-                MeshReadyDomains.Application,
-                ready,
-                RecvFlags.DontWait);
+            target.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
             return ready.Count == 1;
         });
         using (var claim = ready.TakeClaim(0))
@@ -1820,8 +2087,8 @@ public sealed class ServiceRuntimeFoundationTests
         {
             Assert.True(claim.Receive(received, RecvFlags.DontWait));
             var record = Assert.Single(
-                Enumerable.Range(0, received.Count)
-                    .Select(index => received[index]));
+                Enumerable.Range(0, received.Count).Select(index => received[index])
+            );
             Assert.Equal(MeshRecordKind.SpotSend, record.Kind);
             Assert.Equal(operationId, record.OperationId);
             Assert.Equal(2, record.PartCount);
@@ -1864,23 +2131,18 @@ public sealed class ServiceRuntimeFoundationTests
         target.Start();
         source.Start();
 
-        await WaitUntilAsync(
-            () => source.Status().AdmittedPeerCount == 1
-                  && target.Status().AdmittedPeerCount == 1);
+        await WaitUntilAsync(() =>
+            source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+        );
 
         using var payload = Message.From(new byte[] { 7, 8, 9 });
-        Assert.Equal(
-            SubmitResult.Ok,
-            source.EntrySpot().SendToChannel("worker", [payload]));
+        Assert.Equal(SubmitResult.Ok, source.EntrySpot().SendToChannel("worker", [payload]));
 
         using var ready = new MeshReadyBatch();
         await WaitUntilAsync(() =>
         {
             ready.Reset();
-            target.DrainReady(
-                MeshReadyDomains.All,
-                ready,
-                RecvFlags.DontWait);
+            target.DrainReady(MeshReadyDomains.All, ready, RecvFlags.DontWait);
             return ready.Count == 1;
         });
 
@@ -1900,74 +2162,61 @@ public sealed class ServiceRuntimeFoundationTests
         var endpoint = $"inproc://raw-port-{suffix}";
         var senderRid = RoutingId.From("raw-sender");
         var receiverRid = RoutingId.From("raw-receiver");
-        using var sender = new ZLinkRawRouterServicePort(
-            context,
-            senderRid,
-            endpoint + "-sender");
-        using var receiver = new ZLinkRawRouterServicePort(
-            context,
-            receiverRid,
-            endpoint);
+        using var sender = new ZLinkRawRouterServicePort(context, senderRid, endpoint + "-sender");
+        using var receiver = new ZLinkRawRouterServicePort(context, receiverRid, endpoint);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            sender.SendAsync(
-                receiverRid,
-                new ReadOnlyMemory<byte>[] { new byte[] { 1 } }));
+            sender.SendAsync(receiverRid, new ReadOnlyMemory<byte>[] { new byte[] { 1 } })
+        );
 
         receiver.Start();
         sender.Start();
         sender.Connect(endpoint, receiverRid);
 
-        var payload = new ReadOnlyMemory<byte>[]
-        {
-            new byte[] { 1, 2, 3 },
-            new byte[] { 4, 5 }
-        };
+        var payload = new ReadOnlyMemory<byte>[] { new byte[] { 1, 2, 3 }, new byte[] { 4, 5 } };
         await sender.SendAsync(receiverRid, payload);
 
         ZLinkRawRouterEnvelope? envelope = null;
-        Assert.True(SpinWait.SpinUntil(
-            () => receiver.TryReceive(out envelope),
-            TimeSpan.FromSeconds(5)));
+        Assert.True(
+            SpinWait.SpinUntil(() => receiver.TryReceive(out envelope), TimeSpan.FromSeconds(5))
+        );
         var receivedEnvelope = Assert.IsType<ZLinkRawRouterEnvelope>(envelope);
         using (receivedEnvelope)
         {
             Assert.Equal(senderRid, receivedEnvelope.SourceRoutingId);
             Assert.Equal(2, receivedEnvelope.Parts.Count);
-            Assert.Equal(
-                new byte[] { 1, 2, 3 },
-                receivedEnvelope.Parts[0].ToArray());
-            Assert.Equal(
-                new byte[] { 4, 5 },
-                receivedEnvelope.Parts[1].ToArray());
+            Assert.Equal(new byte[] { 1, 2, 3 }, receivedEnvelope.Parts[0].ToArray());
+            Assert.Equal(new byte[] { 4, 5 }, receivedEnvelope.Parts[1].ToArray());
         }
 
         var requestTask = sender.RequestAsync(
             receiverRid,
             new ReadOnlyMemory<byte>[] { new byte[] { 9, 8 } },
-            TimeSpan.FromSeconds(3));
+            TimeSpan.FromSeconds(3)
+        );
         envelope = null;
-        Assert.True(SpinWait.SpinUntil(
-            () => receiver.TryReceive(out envelope),
-            TimeSpan.FromSeconds(5)));
+        Assert.True(
+            SpinWait.SpinUntil(() => receiver.TryReceive(out envelope), TimeSpan.FromSeconds(5))
+        );
         var requestEnvelope = Assert.IsType<ZLinkRawRouterEnvelope>(envelope);
         using (requestEnvelope)
         {
             Assert.True(requestEnvelope.CanReply);
-            requestEnvelope.Reply(
-                new ReadOnlyMemory<byte>[] { new byte[] { 7, 6, 5 } });
+            requestEnvelope.Reply(new ReadOnlyMemory<byte>[] { new byte[] { 7, 6, 5 } });
         }
-        Assert.True(SpinWait.SpinUntil(
-            () =>
-            {
-                sender.TryReceive(out var unexpected);
-                unexpected?.Dispose();
-                return requestTask.IsCompleted;
-            },
-            TimeSpan.FromSeconds(5)));
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    sender.TryReceive(out var unexpected);
+                    unexpected?.Dispose();
+                    return requestTask.IsCompleted;
+                },
+                TimeSpan.FromSeconds(5)
+            )
+        );
         using var reply = await requestTask;
-        Assert.Equal(new byte[] { 7, 6, 5 },
-            Assert.Single(reply.Parts).ToArray());
+        Assert.Equal(new byte[] { 7, 6, 5 }, Assert.Single(reply.Parts).ToArray());
 
         sender.Dispose();
         Assert.Throws<ObjectDisposedException>(() => sender.TryReceive(out _));
@@ -2002,12 +2251,16 @@ public sealed class ServiceRuntimeFoundationTests
         var rightObservedNotRequired = false;
         await WaitUntilAsync(() =>
         {
-            leftObservedNotRequired |= Drain(leftMonitor).Any(meshEvent =>
-                meshEvent.Kind == MeshMonitorEventKind.PeerNotRequired
-                && meshEvent.PeerRid == right.RoutingId);
-            rightObservedNotRequired |= Drain(rightMonitor).Any(meshEvent =>
-                meshEvent.Kind == MeshMonitorEventKind.PeerNotRequired
-                && meshEvent.PeerRid == left.RoutingId);
+            leftObservedNotRequired |= Drain(leftMonitor)
+                .Any(meshEvent =>
+                    meshEvent.Kind == MeshMonitorEventKind.PeerNotRequired
+                    && meshEvent.PeerRid == right.RoutingId
+                );
+            rightObservedNotRequired |= Drain(rightMonitor)
+                .Any(meshEvent =>
+                    meshEvent.Kind == MeshMonitorEventKind.PeerNotRequired
+                    && meshEvent.PeerRid == left.RoutingId
+                );
             return leftObservedNotRequired && rightObservedNotRequired;
         });
 
@@ -2043,13 +2296,15 @@ public sealed class ServiceRuntimeFoundationTests
 
         await WaitUntilAsync(() =>
             left.Peers().Any(static peer => peer.State == MeshPeerState.Admitted)
-            && right.Peers().Any(static peer => peer.State == MeshPeerState.Admitted));
+            && right.Peers().Any(static peer => peer.State == MeshPeerState.Admitted)
+        );
 
         Assert.Equal(1u, left.Status().AdmittedPeerCount);
         Assert.Equal(1u, right.Status().AdmittedPeerCount);
         Assert.DoesNotContain(
             left.Peers().Concat(right.Peers()),
-            static peer => peer.State == MeshPeerState.NotRequired);
+            static peer => peer.State == MeshPeerState.NotRequired
+        );
     }
 
     [Fact]
@@ -2077,19 +2332,16 @@ public sealed class ServiceRuntimeFoundationTests
             lifecycleGeneration: 1,
             descriptorRevision: 1,
             new Dictionary<string, uint>(StringComparer.Ordinal),
-            objectRole: (byte)ZLinkMeshNodeObjectRole.Client);
+            objectRole: (byte)ZLinkMeshNodeObjectRole.Client
+        );
         using (var firstHello = Message.From(encodedHello))
-            await source.Send()
-                .Message(firstHello)
-                .Async(CancellationToken.None).Admitted;
+            await source.Send().Message(firstHello).Async(CancellationToken.None).Admitted;
         using (var repeatedHello = Message.From(encodedHello))
-            await source.Send()
-                .Message(repeatedHello)
-                .Async(CancellationToken.None).Admitted;
+            await source.Send().Message(repeatedHello).Async(CancellationToken.None).Admitted;
 
         await WaitUntilAsync(() =>
-            target.Peers().Length == 1
-            && target.Peers()[0].State == MeshPeerState.NotRequired);
+            target.Peers().Length == 1 && target.Peers()[0].State == MeshPeerState.NotRequired
+        );
         await Task.Delay(TimeSpan.FromMilliseconds(1100));
 
         var peer = Assert.Single(target.Peers());
@@ -2120,7 +2372,8 @@ public sealed class ServiceRuntimeFoundationTests
 
         await WaitUntilAsync(() =>
             server.Peers().Any(static peer => peer.State == MeshPeerState.Admitted)
-            && client.Peers().Any(static peer => peer.State == MeshPeerState.Admitted));
+            && client.Peers().Any(static peer => peer.State == MeshPeerState.Admitted)
+        );
         var peerCount = server.Peers().Length;
         using var payload = Message.From(new byte[] { 1 });
 
@@ -2131,10 +2384,7 @@ public sealed class ServiceRuntimeFoundationTests
         await WaitUntilAsync(() =>
         {
             ready.Reset();
-            client.DrainReady(
-                MeshReadyDomains.Application,
-                ready,
-                RecvFlags.DontWait);
+            client.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
             return ready.Count > 0;
         });
         using var claim = ready.TakeClaim(0);
@@ -2142,8 +2392,8 @@ public sealed class ServiceRuntimeFoundationTests
         Assert.True(claim.Receive(received, RecvFlags.DontWait));
         Assert.Contains(
             MeshRecordKind.NodeSend,
-            Enumerable.Range(0, received.Count)
-                .Select(index => received[index].Kind));
+            Enumerable.Range(0, received.Count).Select(index => received[index].Kind)
+        );
     }
 
     [Fact]
@@ -2155,25 +2405,32 @@ public sealed class ServiceRuntimeFoundationTests
                 ZLinkApplicationJobQueueProfile.Balanced,
                 ConfiguredManualMax: 1,
                 EffectiveProcessorCount: 8,
-                EffectiveMaxQueuedApplicationJobs: 1));
+                EffectiveMaxQueuedApplicationJobs: 1
+            )
+        );
         await using var source = new ZLinkManagedMeshNode(context, "orders");
         await using var target = new ZLinkManagedMeshNode(
             context,
             "orders",
-            applicationJobQueue: applicationJobQueue);
+            applicationJobQueue: applicationJobQueue
+        );
         await using var pump = new ZLinkMeshDispatchPump(
             target,
             new ZLinkMeshCompletionTable(),
-            applicationJobQueue);
+            applicationJobQueue
+        );
         var dispatched = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        pump.SetNodeRouteHandler((records, _) =>
-        {
-            foreach (var record in records)
-                record.Dispose();
-            dispatched.TrySetResult();
-            return ValueTask.CompletedTask;
-        });
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        pump.SetNodeRouteHandler(
+            (records, _) =>
+            {
+                foreach (var record in records)
+                    record.Dispose();
+                dispatched.TrySetResult();
+                return ValueTask.CompletedTask;
+            }
+        );
         var suffix = Guid.NewGuid().ToString("N");
         var sourceEndpoint = $"inproc://orders-pre-receive-source-{suffix}";
         var targetEndpoint = $"inproc://orders-pre-receive-target-{suffix}";
@@ -2190,14 +2447,14 @@ public sealed class ServiceRuntimeFoundationTests
         source.Start();
 
         await WaitUntilAsync(() =>
-            source.Status().AdmittedPeerCount == 1
-            && target.Status().AdmittedPeerCount == 1);
+            source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+        );
 
-        using var occupied = await applicationJobQueue
-            .AcquireAsync(CancellationToken.None);
+        using var occupied = await applicationJobQueue.AcquireAsync(CancellationToken.None);
         Assert.Equal(
             ZLinkApplicationJobQueuePressureState.Paused,
-            applicationJobQueue.GetStatus().PressureState);
+            applicationJobQueue.GetStatus().PressureState
+        );
         using var payload = Message.From(new byte[] { 1, 2, 3 });
         Assert.Equal(SubmitResult.Ok, source.SendToNode(targetRid, [payload]));
 
@@ -2211,14 +2468,10 @@ public sealed class ServiceRuntimeFoundationTests
         {
             var status = applicationJobQueue.GetStatus();
             return target.Status().PendingApplicationMessages == 0
-                && status.PressureState
-                   == ZLinkApplicationJobQueuePressureState.Running
+                && status.PressureState == ZLinkApplicationJobQueuePressureState.Running
                 && status.CapacityWaiters == 0;
         });
-        Assert.Equal(
-            0UL,
-            applicationJobQueue.GetPressureMetrics()
-                .FlowStateConfigFailures);
+        Assert.Equal(0UL, applicationJobQueue.GetPressureMetrics().FlowStateConfigFailures);
     }
 
     [Fact]
@@ -2231,30 +2484,37 @@ public sealed class ServiceRuntimeFoundationTests
                 ZLinkApplicationJobQueueProfile.Balanced,
                 ConfiguredManualMax: capacity,
                 EffectiveProcessorCount: capacity,
-                EffectiveMaxQueuedApplicationJobs: capacity));
+                EffectiveMaxQueuedApplicationJobs: capacity
+            )
+        );
         await using var source = new ZLinkManagedMeshNode(context, "orders");
         await using var target = new ZLinkManagedMeshNode(
             context,
             "orders",
-            applicationJobQueue: applicationJobQueue);
+            applicationJobQueue: applicationJobQueue
+        );
         await using var pump = new ZLinkMeshDispatchPump(
             target,
             new ZLinkMeshCompletionTable(),
-            applicationJobQueue);
+            applicationJobQueue
+        );
         var completed = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var receivedCount = 0;
         var maximumBatch = 0;
-        pump.SetNodeRouteHandler((records, _) =>
-        {
-            maximumBatch = Math.Max(maximumBatch, records.Count);
-            receivedCount += records.Count;
-            foreach (var record in records)
-                record.Dispose();
-            if (receivedCount == capacity)
-                completed.TrySetResult();
-            return ValueTask.CompletedTask;
-        });
+        pump.SetNodeRouteHandler(
+            (records, _) =>
+            {
+                maximumBatch = Math.Max(maximumBatch, records.Count);
+                receivedCount += records.Count;
+                foreach (var record in records)
+                    record.Dispose();
+                if (receivedCount == capacity)
+                    completed.TrySetResult();
+                return ValueTask.CompletedTask;
+            }
+        );
         var suffix = Guid.NewGuid().ToString("N");
         var sourceEndpoint = $"inproc://orders-batch-source-{suffix}";
         var targetEndpoint = $"inproc://orders-batch-target-{suffix}";
@@ -2270,26 +2530,22 @@ public sealed class ServiceRuntimeFoundationTests
         source.Start();
 
         await WaitUntilAsync(() =>
-            source.Status().AdmittedPeerCount == 1
-            && target.Status().AdmittedPeerCount == 1);
+            source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+        );
         for (var index = 0; index < capacity; index++)
         {
             using var payload = Message.From(new byte[] { checked((byte)index) });
             Assert.Equal(SubmitResult.Ok, source.SendToNode(targetRid, [payload]));
         }
 
-        await WaitUntilAsync(() =>
-            target.Status().PendingApplicationMessages == capacity);
+        await WaitUntilAsync(() => target.Status().PendingApplicationMessages == capacity);
         Assert.Equal((ulong)capacity, applicationJobQueue.GetStatus().PermitsInUse);
         pump.EnsureStarted();
 
         await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.InRange(maximumBatch, 2, capacity);
-        await WaitUntilAsync(() =>
-            applicationJobQueue.GetStatus().PermitsInUse == 0);
-        Assert.Equal(
-            (ulong)capacity,
-            applicationJobQueue.GetStatus().PeakPermitsInUse);
+        await WaitUntilAsync(() => applicationJobQueue.GetStatus().PermitsInUse == 0);
+        Assert.Equal((ulong)capacity, applicationJobQueue.GetStatus().PeakPermitsInUse);
     }
 
     [Fact]
@@ -2307,11 +2563,14 @@ public sealed class ServiceRuntimeFoundationTests
                 ZLinkApplicationJobQueueProfile.Balanced,
                 ConfiguredManualMax: 1,
                 EffectiveProcessorCount: 8,
-                EffectiveMaxQueuedApplicationJobs: 1));
+                EffectiveMaxQueuedApplicationJobs: 1
+            )
+        );
         await using var requester = new ZLinkManagedMeshNode(
             context,
             "orders",
-            applicationJobQueue: applicationJobQueue);
+            applicationJobQueue: applicationJobQueue
+        );
         await using var replier = new ZLinkManagedMeshNode(context, "orders");
         var suffix = Guid.NewGuid().ToString("N");
         var requesterEndpoint = $"inproc://orders-saturated-requester-{suffix}";
@@ -2328,13 +2587,12 @@ public sealed class ServiceRuntimeFoundationTests
         requester.Start();
 
         await WaitUntilAsync(() =>
-            requester.Status().AdmittedPeerCount == 1
-            && replier.Status().AdmittedPeerCount == 1);
+            requester.Status().AdmittedPeerCount == 1 && replier.Status().AdmittedPeerCount == 1
+        );
 
         //  Saturate the requester's ordinary job flow: the single permit is
         //  held externally, so Core pauses the inbound application lane.
-        using var occupied = await applicationJobQueue
-            .AcquireAsync(CancellationToken.None);
+        using var occupied = await applicationJobQueue.AcquireAsync(CancellationToken.None);
         Assert.Equal(0UL, applicationJobQueue.GetStatus().CapacityWaiters);
         Assert.Equal(0UL, requester.Status().PendingApplicationMessages);
 
@@ -2346,16 +2604,15 @@ public sealed class ServiceRuntimeFoundationTests
                 replierRid,
                 [requestPart],
                 out var operationId,
-                TimeSpan.FromSeconds(3)));
+                TimeSpan.FromSeconds(3)
+            )
+        );
 
         using var replierReady = new MeshReadyBatch();
         await WaitUntilAsync(() =>
         {
             replierReady.Reset();
-            replier.DrainReady(
-                MeshReadyDomains.Application,
-                replierReady,
-                RecvFlags.DontWait);
+            replier.DrainReady(MeshReadyDomains.Application, replierReady, RecvFlags.DontWait);
             return replierReady.Count == 1;
         });
         using var replierClaim = replierReady.TakeClaim(0);
@@ -2377,14 +2634,13 @@ public sealed class ServiceRuntimeFoundationTests
             requester.DrainReady(
                 MeshReadyDomains.Infrastructure,
                 completionReady,
-                RecvFlags.DontWait);
+                RecvFlags.DontWait
+            );
             return completionReady.Count == 1;
         });
         var saturated = applicationJobQueue.GetStatus();
         Assert.Equal(1UL, saturated.PermitsInUse);
-        Assert.Equal(
-            ZLinkApplicationJobQueuePressureState.Paused,
-            saturated.PressureState);
+        Assert.Equal(ZLinkApplicationJobQueuePressureState.Paused, saturated.PressureState);
         Assert.Equal(0UL, requester.Status().PendingApplicationMessages);
         using var completionClaim = completionReady.TakeClaim(0);
         using var completionBatch = new MeshReceiveBatch();
@@ -2401,7 +2657,8 @@ public sealed class ServiceRuntimeFoundationTests
         occupied.ReleaseForHandlerStart();
         Assert.Equal(
             ZLinkApplicationJobQueuePressureState.Running,
-            applicationJobQueue.GetStatus().PressureState);
+            applicationJobQueue.GetStatus().PressureState
+        );
     }
 
     [Fact]
@@ -2413,11 +2670,14 @@ public sealed class ServiceRuntimeFoundationTests
                 ZLinkApplicationJobQueueProfile.Balanced,
                 ConfiguredManualMax: 1,
                 EffectiveProcessorCount: 8,
-                EffectiveMaxQueuedApplicationJobs: 1));
+                EffectiveMaxQueuedApplicationJobs: 1
+            )
+        );
         await using var target = new ZLinkManagedMeshNode(
             context,
             "orders",
-            applicationJobQueue: applicationJobQueue);
+            applicationJobQueue: applicationJobQueue
+        );
         await using var monitor = target.OpenMonitor();
         var suffix = Guid.NewGuid().ToString("N");
         var targetEndpoint = $"inproc://orders-finite-control-target-{suffix}";
@@ -2432,22 +2692,23 @@ public sealed class ServiceRuntimeFoundationTests
         using var source = context.CreateDealerSocket();
         source.SetRoutingId(sourceRid);
         source.Connect(targetEndpoint);
-        using (var hello = Message.From(
-                   ZLinkServiceWireCodec.EncodeRouteAdmission(
-                       ServiceWireConstants.Command.Hello,
-                       "orders",
-                       sourceEndpoint,
-                       lifecycleGeneration: 1,
-                       descriptorRevision: 1,
-                       new Dictionary<string, uint>(StringComparer.Ordinal),
-                       objectRole: (byte)ZLinkMeshNodeObjectRole.Client)))
-            await source.Send()
-                .Message(hello)
-                .Async(CancellationToken.None).Admitted;
+        using (
+            var hello = Message.From(
+                ZLinkServiceWireCodec.EncodeRouteAdmission(
+                    ServiceWireConstants.Command.Hello,
+                    "orders",
+                    sourceEndpoint,
+                    lifecycleGeneration: 1,
+                    descriptorRevision: 1,
+                    new Dictionary<string, uint>(StringComparer.Ordinal),
+                    objectRole: (byte)ZLinkMeshNodeObjectRole.Client
+                )
+            )
+        )
+            await source.Send().Message(hello).Async(CancellationToken.None).Admitted;
 
         await WaitUntilAsync(() => target.Peers().Length == 1);
-        await WaitUntilAsync(() =>
-            applicationJobQueue.GetStatus().PermitsInUse == 0);
+        await WaitUntilAsync(() => applicationJobQueue.GetStatus().PermitsInUse == 0);
         var controlStatus = applicationJobQueue.GetStatus();
         Assert.Equal(1UL, controlStatus.PeakPermitsInUse);
         Assert.Equal(0UL, controlStatus.ReservedSupplyPermits);
@@ -2456,13 +2717,10 @@ public sealed class ServiceRuntimeFoundationTests
         applicationJobQueue.ResetMetrics();
         var protocolErrors = monitor.Status().ProtocolErrors;
         using (var malformed = Message.From(new byte[] { 1, 2, 3, 4, 5 }))
-            await source.Send()
-                .Message(malformed)
-                .Async(CancellationToken.None).Admitted;
+            await source.Send().Message(malformed).Async(CancellationToken.None).Admitted;
 
         await WaitUntilAsync(() => monitor.Status().ProtocolErrors > protocolErrors);
-        await WaitUntilAsync(() =>
-            applicationJobQueue.GetStatus().PermitsInUse == 0);
+        await WaitUntilAsync(() => applicationJobQueue.GetStatus().PermitsInUse == 0);
         var malformedStatus = applicationJobQueue.GetStatus();
         Assert.Equal(1UL, malformedStatus.PeakPermitsInUse);
         Assert.Equal(0UL, malformedStatus.ReservedSupplyPermits);
@@ -2478,16 +2736,20 @@ public sealed class ServiceRuntimeFoundationTests
                 ZLinkApplicationJobQueueProfile.Balanced,
                 ConfiguredManualMax: 1,
                 EffectiveProcessorCount: 8,
-                EffectiveMaxQueuedApplicationJobs: 1));
+                EffectiveMaxQueuedApplicationJobs: 1
+            )
+        );
         await using var source = new ZLinkManagedMeshNode(context, "events");
         await using var target = new ZLinkManagedMeshNode(
             context,
             "events",
-            applicationJobQueue: applicationJobQueue);
+            applicationJobQueue: applicationJobQueue
+        );
         await using var pump = new ZLinkMeshDispatchPump(
             target,
             new ZLinkMeshCompletionTable(),
-            applicationJobQueue);
+            applicationJobQueue
+        );
         var suffix = Guid.NewGuid().ToString("N");
         var sourceEndpoint = $"inproc://events-multicast-source-{suffix}";
         var targetEndpoint = $"inproc://events-multicast-target-{suffix}";
@@ -2502,19 +2764,17 @@ public sealed class ServiceRuntimeFoundationTests
         target.SetRoutingId(targetRid);
         target.SetBind(targetEndpoint);
         target.AddChannel(channelName);
-        var firstSpot = (ZLinkManagedSpot)target.GetOrCreateSpot(
-            $"events-first-{suffix}",
-            out _);
-        var secondSpot = (ZLinkManagedSpot)target.GetOrCreateSpot(
-            $"events-second-{suffix}",
-            out _);
+        var firstSpot = (ZLinkManagedSpot)target.GetOrCreateSpot($"events-first-{suffix}", out _);
+        var secondSpot = (ZLinkManagedSpot)target.GetOrCreateSpot($"events-second-{suffix}", out _);
         firstSpot.SetSubscription(channelName, topic);
         secondSpot.SetSubscription(channelName, topic);
 
         var firstDelivery = new TaskCompletionSource<ZLinkBackendSubscribeMessage>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var secondDelivery = new TaskCompletionSource<ZLinkBackendSubscribeMessage>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var deliveries = 0;
         void Capture(ZLinkMeshDispatchPump.SpotDispatchState state)
         {
@@ -2528,32 +2788,36 @@ public sealed class ServiceRuntimeFoundationTests
 
         var firstState = pump.RegisterSpot(firstSpot.SpotId);
         var secondState = pump.RegisterSpot(secondSpot.SpotId);
-        pump.SetDispatchHandler(firstSpot.SpotId, _ =>
-        {
-            Capture(firstState);
-            return (ValueTask.CompletedTask, null);
-        });
-        pump.SetDispatchHandler(secondSpot.SpotId, _ =>
-        {
-            Capture(secondState);
-            return (ValueTask.CompletedTask, null);
-        });
+        pump.SetDispatchHandler(
+            firstSpot.SpotId,
+            _ =>
+            {
+                Capture(firstState);
+                return (ValueTask.CompletedTask, null);
+            }
+        );
+        pump.SetDispatchHandler(
+            secondSpot.SpotId,
+            _ =>
+            {
+                Capture(secondState);
+                return (ValueTask.CompletedTask, null);
+            }
+        );
 
         target.Start();
         pump.EnsureStarted();
         source.Start();
         await WaitUntilAsync(() =>
-            source.Status().AdmittedPeerCount == 1
-            && target.Status().AdmittedPeerCount == 1);
+            source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+        );
 
         var sourceSpot = source.EntrySpot();
         using var payload = Message.From(new byte[] { 7, 8, 9 });
         sourceSpot.Publish(channelName, topic, [payload]);
 
-        using var first = await firstDelivery.Task
-            .WaitAsync(TimeSpan.FromSeconds(3));
-        await WaitUntilAsync(() =>
-            applicationJobQueue.GetStatus().CapacityWaiters == 1);
+        using var first = await firstDelivery.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        await WaitUntilAsync(() => applicationJobQueue.GetStatus().CapacityWaiters == 1);
         Assert.False(secondDelivery.Task.IsCompleted);
         var firstStatus = applicationJobQueue.GetStatus();
         Assert.Equal(1UL, firstStatus.QueuedApplicationJobs);
@@ -2562,16 +2826,14 @@ public sealed class ServiceRuntimeFoundationTests
         Assert.NotNull(first.ApplicationJobAdmission);
         first.ApplicationJobAdmission!.ReleaseForHandlerStart();
 
-        using var second = await secondDelivery.Task
-            .WaitAsync(TimeSpan.FromSeconds(3));
+        using var second = await secondDelivery.Task.WaitAsync(TimeSpan.FromSeconds(3));
         var secondStatus = applicationJobQueue.GetStatus();
         Assert.Equal(1UL, secondStatus.QueuedApplicationJobs);
         Assert.Equal(1UL, secondStatus.PermitsInUse);
         Assert.NotNull(second.ApplicationJobAdmission);
         second.ApplicationJobAdmission!.ReleaseForHandlerStart();
 
-        await WaitUntilAsync(() =>
-            applicationJobQueue.GetStatus().PermitsInUse == 0);
+        await WaitUntilAsync(() => applicationJobQueue.GetStatus().PermitsInUse == 0);
         Assert.Equal(2, Volatile.Read(ref deliveries));
     }
 
@@ -2584,16 +2846,20 @@ public sealed class ServiceRuntimeFoundationTests
                 ZLinkApplicationJobQueueProfile.Balanced,
                 ConfiguredManualMax: 1,
                 EffectiveProcessorCount: 8,
-                EffectiveMaxQueuedApplicationJobs: 1));
+                EffectiveMaxQueuedApplicationJobs: 1
+            )
+        );
         await using var source = new ZLinkManagedMeshNode(context, "events");
         await using var target = new ZLinkManagedMeshNode(
             context,
             "events",
-            applicationJobQueue: applicationJobQueue);
+            applicationJobQueue: applicationJobQueue
+        );
         await using var pump = new ZLinkMeshDispatchPump(
             target,
             new ZLinkMeshCompletionTable(),
-            applicationJobQueue);
+            applicationJobQueue
+        );
         var suffix = Guid.NewGuid().ToString("N");
         var sourceEndpoint = $"inproc://events-shutdown-source-{suffix}";
         var targetEndpoint = $"inproc://events-shutdown-target-{suffix}";
@@ -2608,17 +2874,16 @@ public sealed class ServiceRuntimeFoundationTests
         target.SetRoutingId(targetRid);
         target.SetBind(targetEndpoint);
         target.AddChannel(channelName);
-        var firstSpot = (ZLinkManagedSpot)target.GetOrCreateSpot(
-            $"events-shutdown-first-{suffix}",
-            out _);
-        var secondSpot = (ZLinkManagedSpot)target.GetOrCreateSpot(
-            $"events-shutdown-second-{suffix}",
-            out _);
+        var firstSpot = (ZLinkManagedSpot)
+            target.GetOrCreateSpot($"events-shutdown-first-{suffix}", out _);
+        var secondSpot = (ZLinkManagedSpot)
+            target.GetOrCreateSpot($"events-shutdown-second-{suffix}", out _);
         firstSpot.SetSubscription(channelName, topic);
         secondSpot.SetSubscription(channelName, topic);
 
         var firstDelivery = new TaskCompletionSource<ZLinkBackendSubscribeMessage>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         void Capture(ZLinkMeshDispatchPump.SpotDispatchState state)
         {
             if (state.Subscriptions.TryDequeue(out var message))
@@ -2626,32 +2891,36 @@ public sealed class ServiceRuntimeFoundationTests
         }
         var firstState = pump.RegisterSpot(firstSpot.SpotId);
         var secondState = pump.RegisterSpot(secondSpot.SpotId);
-        pump.SetDispatchHandler(firstSpot.SpotId, _ =>
-        {
-            Capture(firstState);
-            return (ValueTask.CompletedTask, null);
-        });
-        pump.SetDispatchHandler(secondSpot.SpotId, _ =>
-        {
-            Capture(secondState);
-            return (ValueTask.CompletedTask, null);
-        });
+        pump.SetDispatchHandler(
+            firstSpot.SpotId,
+            _ =>
+            {
+                Capture(firstState);
+                return (ValueTask.CompletedTask, null);
+            }
+        );
+        pump.SetDispatchHandler(
+            secondSpot.SpotId,
+            _ =>
+            {
+                Capture(secondState);
+                return (ValueTask.CompletedTask, null);
+            }
+        );
 
         target.Start();
         pump.EnsureStarted();
         source.Start();
         await WaitUntilAsync(() =>
-            source.Status().AdmittedPeerCount == 1
-            && target.Status().AdmittedPeerCount == 1);
+            source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+        );
 
         var sourceSpot = source.EntrySpot();
         using var payload = Message.From(new byte[] { 7, 8, 9 });
         sourceSpot.Publish(channelName, topic, [payload]);
 
-        using var first = await firstDelivery.Task
-            .WaitAsync(TimeSpan.FromSeconds(3));
-        await WaitUntilAsync(() =>
-            applicationJobQueue.GetStatus().CapacityWaiters == 1);
+        using var first = await firstDelivery.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        await WaitUntilAsync(() => applicationJobQueue.GetStatus().CapacityWaiters == 1);
         Assert.Equal(1UL, applicationJobQueue.GetStatus().PermitsInUse);
 
         await pump.DisposeAsync();
@@ -2660,8 +2929,7 @@ public sealed class ServiceRuntimeFoundationTests
         Assert.Equal(1UL, applicationJobQueue.GetStatus().PermitsInUse);
         first.ApplicationJobAdmission?.ReleaseForHandlerStart();
         first.Dispose();
-        await WaitUntilAsync(() =>
-            applicationJobQueue.GetStatus().PermitsInUse == 0);
+        await WaitUntilAsync(() => applicationJobQueue.GetStatus().PermitsInUse == 0);
     }
 
     [Fact]
@@ -2691,20 +2959,18 @@ public sealed class ServiceRuntimeFoundationTests
         source.Start();
 
         await WaitUntilAsync(() => source.Status().AdmittedPeerCount == 2);
-        var admittedEndpoints = source.Peers()
+        var admittedEndpoints = source
+            .Peers()
             .Where(static peer => peer.State == MeshPeerState.Admitted)
             .Select(static peer => peer.Endpoint)
             .Order(StringComparer.Ordinal)
             .ToArray();
-        Assert.True(
-            new[] { endpointA, endpointB }.SequenceEqual(admittedEndpoints));
+        Assert.True(new[] { endpointA, endpointB }.SequenceEqual(admittedEndpoints));
 
         for (var index = 0; index < 4; index++)
         {
             using var payload = Message.From(new byte[] { checked((byte)index) });
-            Assert.Equal(
-                SubmitResult.Ok,
-                source.EntrySpot().SendToChannel("worker", [payload]));
+            Assert.Equal(SubmitResult.Ok, source.EntrySpot().SendToChannel("worker", [payload]));
         }
 
         await WaitForApplicationRecordAsync(targetA);
@@ -2733,9 +2999,7 @@ public sealed class ServiceRuntimeFoundationTests
         var table = new ZLinkMeshCompletionTable();
         var operation = new MeshOperationId(0, 8);
         RequestResult? completed = null;
-        Assert.True(table.RegisterRequest(
-            operation,
-            (result, _) => completed = result));
+        Assert.True(table.RegisterRequest(operation, (result, _) => completed = result));
 
         table.FailAll(RequestResult.Terminated);
         await table.CompletionDrained;
@@ -2764,7 +3028,8 @@ public sealed class ServiceRuntimeFoundationTests
                 Assert.Equal(correlation, id);
                 table.Complete(Completion(id), Array.Empty<Message>());
                 return SubmitResult.Ok;
-            });
+            }
+        );
 
         Assert.Equal(SubmitResult.Ok, submit);
         await table.CompletionDrained;
@@ -2782,7 +3047,9 @@ public sealed class ServiceRuntimeFoundationTests
             table.RegisterBeforeSubmit(
                 correlation,
                 (_, _) => calls++,
-                _ => SubmitResult.Backpressured));
+                _ => SubmitResult.Backpressured
+            )
+        );
 
         using var late = Message.From(new byte[] { 1 });
         table.Complete(Completion(correlation), [late]);
@@ -2796,10 +3063,11 @@ public sealed class ServiceRuntimeFoundationTests
     {
         var store = new ZLinkInMemoryLocationStore();
         var ownerRid = RoutingId.From("owner");
-        var owner = Assert.IsType<ZLinkOwnerLeaseClaimResult.Claimed>(
-            await store.ClaimOwnerLeaseAsync(
-                "owner",
-                TimeSpan.FromMinutes(1))).Token;
+        var owner = Assert
+            .IsType<ZLinkOwnerLeaseClaimResult.Claimed>(
+                await store.ClaimOwnerLeaseAsync("owner", TimeSpan.FromMinutes(1))
+            )
+            .Token;
         var descriptor = new ZLinkMeshNodeDescriptor(
             "mesh",
             ownerRid,
@@ -2810,7 +3078,8 @@ public sealed class ServiceRuntimeFoundationTests
             string.Empty,
             owner.OwnerId,
             owner.LeaseGeneration,
-            DateTimeOffset.UtcNow)
+            DateTimeOffset.UtcNow
+        )
         {
             ObjectRole = ZLinkMeshNodeObjectRole.Server,
             EntrySpotId = "entry-owner",
@@ -2822,25 +3091,19 @@ public sealed class ServiceRuntimeFoundationTests
                     "cart",
                     ZLinkObjectMaintenancePolicyKind.Disabled,
                     false,
-                    0)
+                    0
+                ),
             ],
             Capacity = new ZLinkPlacementCapacity(
                 new ZLinkPopulationCapacity(0, 0, 0),
                 new ZLinkPopulationCapacity(0, 0, 0),
-                [
-                    new ZLinkSpotTypeCapacity(
-                        ZLinkPlacementObjectKind.InstanceSpot,
-                        "cart",
-                        0,
-                        0,
-                        0)
-                ])
+                [new ZLinkSpotTypeCapacity(ZLinkPlacementObjectKind.InstanceSpot, "cart", 0, 0, 0)]
+            ),
         };
         Assert.Equal(
             ZLinkLocationWriteStatus.Stored,
-            (await store.UpdateMeshNodeAsync(
-                descriptor,
-                ZLinkLocationWriteIntent.NewClaim)).Status);
+            (await store.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim)).Status
+        );
 
         var key = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey("spot");
         var creating = new ZLinkInstanceSpotAuthorityPayload(
@@ -2852,7 +3115,8 @@ public sealed class ServiceRuntimeFoundationTests
             3,
             owner.OwnerId,
             checked((ulong)owner.LeaseGeneration),
-            null);
+            null
+        );
         var reserved = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
             await store.ReserveAsync(
                 new ZLinkObjectReservationRequest(
@@ -2872,34 +3136,40 @@ public sealed class ServiceRuntimeFoundationTests
                         new ZLinkSpotTypeCapacityDelta(
                             ZLinkPlacementObjectKind.InstanceSpot,
                             "cart",
-                            1)))));
-        var readyPayload = creating with
-        {
-            State = ZLinkInstanceSpotAuthorityState.Ready
-        };
+                            1
+                        )
+                    )
+                )
+            )
+        );
+        var readyPayload = creating with { State = ZLinkInstanceSpotAuthorityState.Ready };
         var committed = Assert.IsType<ZLinkObjectCommitResult.Committed>(
             await store.CommitAsync(
                 reserved.Reservation,
-                ZLinkInstanceSpotAuthorityPayloadCodec.Encode(readyPayload)));
-        Assert.Equal(
-            reserved.Reservation.ObjectGeneration,
-            committed.Snapshot.ObjectGeneration);
+                ZLinkInstanceSpotAuthorityPayloadCodec.Encode(readyPayload)
+            )
+        );
+        Assert.Equal(reserved.Reservation.ObjectGeneration, committed.Snapshot.ObjectGeneration);
         Assert.Equal(
             reserved.Reservation.AuthorityOwnerGeneration,
-            committed.Snapshot.AuthorityOwnerGeneration);
+            committed.Snapshot.AuthorityOwnerGeneration
+        );
 
         Assert.IsType<ZLinkAuthorityCompareExchangeResult.Conflict>(
             await store.CompareExchangeAuthorityAsync(
                 key,
                 reserved.Reservation.StoreVersion,
-                new ZLinkAuthorityMutation.Delete()));
+                new ZLinkAuthorityMutation.Delete()
+            )
+        );
         Assert.IsType<ZLinkAuthorityCompareExchangeResult.Deleted>(
             await store.CompareExchangeAuthorityAsync(
                 key,
                 committed.Snapshot.StoreVersion,
-                new ZLinkAuthorityMutation.Delete()));
-        Assert.IsType<ZLinkAuthorityReadResult.Missing>(
-            await store.ReadAuthorityAsync(key));
+                new ZLinkAuthorityMutation.Delete()
+            )
+        );
+        Assert.IsType<ZLinkAuthorityReadResult.Missing>(await store.ReadAuthorityAsync(key));
     }
 
     [Fact]
@@ -2912,8 +3182,7 @@ public sealed class ServiceRuntimeFoundationTests
         Assert.Equal(MeshNodeState.Stopped, monitor.Status().State);
     }
 
-    private static IReadOnlyList<MeshMonitorEvent> Drain(
-        IMeshNodeMonitor monitor)
+    private static IReadOnlyList<MeshMonitorEvent> Drain(IMeshNodeMonitor monitor)
     {
         var events = new List<MeshMonitorEvent>();
         while (monitor.Recv(RecvFlags.DontWait) is { } meshEvent)
@@ -2938,7 +3207,8 @@ public sealed class ServiceRuntimeFoundationTests
             0,
             0,
             0,
-            null);
+            null
+        );
 
     private static ZLinkServiceWireCodec.DecodeError ExpectedError(string error) =>
         error switch
@@ -2949,16 +3219,19 @@ public sealed class ServiceRuntimeFoundationTests
             "invalid-field" => ZLinkServiceWireCodec.DecodeError.InvalidField,
             "truncated-field" => ZLinkServiceWireCodec.DecodeError.TruncatedField,
             "trailing-byte" => ZLinkServiceWireCodec.DecodeError.TrailingByte,
-            _ => throw new InvalidOperationException(error)
+            _ => throw new InvalidOperationException(error),
         };
 
     private static ZLinkServiceWireCodec.AdmissionRecord DecodeAdmission(byte[] bytes)
     {
-        Assert.True(ZLinkServiceWireCodec.TryDecodeRouteAdmission(
-            bytes,
-            out _,
-            out var admission,
-            out var error));
+        Assert.True(
+            ZLinkServiceWireCodec.TryDecodeRouteAdmission(
+                bytes,
+                out _,
+                out var admission,
+                out var error
+            )
+        );
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
         return admission;
     }
@@ -2966,7 +3239,8 @@ public sealed class ServiceRuntimeFoundationTests
     private static byte[] AppendDescriptorExtension(
         byte[] encoded,
         byte id,
-        ReadOnlySpan<byte> value)
+        ReadOnlySpan<byte> value
+    )
     {
         var offset = 10;
         offset += 1 + encoded[offset];
@@ -2987,16 +3261,16 @@ public sealed class ServiceRuntimeFoundationTests
         encoded.CopyTo(result, 0);
         BinaryPrimitives.WriteUInt32BigEndian(
             result.AsSpan(offset),
-            checked(previousLength + (uint)(1 + sizeof(uint) + value.Length)));
+            checked(previousLength + (uint)(1 + sizeof(uint) + value.Length))
+        );
         var tail = encoded.Length;
         result[tail] = id;
-        BinaryPrimitives.WriteUInt32BigEndian(
-            result.AsSpan(tail + 1),
-            checked((uint)value.Length));
+        BinaryPrimitives.WriteUInt32BigEndian(result.AsSpan(tail + 1), checked((uint)value.Length));
         value.CopyTo(result.AsSpan(tail + 1 + sizeof(uint)));
         BinaryPrimitives.WriteUInt32BigEndian(
             result.AsSpan(6),
-            checked((uint)(result.Length - 10)));
+            checked((uint)(result.Length - 10))
+        );
         return result;
     }
 
@@ -3008,17 +3282,13 @@ public sealed class ServiceRuntimeFoundationTests
         throw new InvalidOperationException("Test sequence was not found.");
     }
 
-    private static async Task WaitForApplicationRecordAsync(
-        ZLinkManagedMeshNode node)
+    private static async Task WaitForApplicationRecordAsync(ZLinkManagedMeshNode node)
     {
         using var ready = new MeshReadyBatch();
         await WaitUntilAsync(() =>
         {
             ready.Reset();
-            node.DrainReady(
-                MeshReadyDomains.Application,
-                ready,
-                RecvFlags.DontWait);
+            node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
             return ready.Count > 0;
         });
         using var claim = ready.TakeClaim(0);
@@ -3026,8 +3296,8 @@ public sealed class ServiceRuntimeFoundationTests
         Assert.True(claim.Receive(received, RecvFlags.DontWait));
         Assert.Contains(
             MeshRecordKind.ChannelSend,
-            Enumerable.Range(0, received.Count)
-                .Select(index => received[index].Kind));
+            Enumerable.Range(0, received.Count).Select(index => received[index].Kind)
+        );
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition)

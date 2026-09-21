@@ -1,5 +1,5 @@
-using System.Text;
 using System.Buffers.Binary;
+using System.Text;
 using Zlink.Framework.Runtime.Actors;
 
 namespace Zlink.Framework.Runtime.Locations;
@@ -10,16 +10,19 @@ internal sealed record ZLinkRelocationPublicationRequest(
     string TargetOwnerId,
     long TargetOwnerLeaseGeneration,
     ReadOnlyMemory<byte> ApplicationAuthorityPayload,
-    ZLinkRelocationEnvelope Envelope);
+    ZLinkRelocationEnvelope Envelope
+);
 
 internal sealed record ZLinkPublishedRelocation(
     ZLinkAuthoritySnapshot Authority,
     ZLinkRelocationStored Relocation,
-    ZLinkRelocationEnvelope Envelope);
+    ZLinkRelocationEnvelope Envelope
+);
 
 internal sealed record ZLinkPreparedRelocation(
     ZLinkRelocationStored Relocation,
-    ZLinkRelocationEnvelope Envelope)
+    ZLinkRelocationEnvelope Envelope
+)
 {
     /// <summary>Total length of the encoded logical payload stream.</summary>
     internal long LogicalLength { get; init; }
@@ -30,12 +33,14 @@ internal sealed record ZLinkPreparedRelocation(
     /// <summary>Chunk count of the persisted logical payload stream.</summary>
     internal int ChunkCount { get; init; }
 
-    internal ZLinkRelocationManifestReference Reference => new(
-        Relocation.Reference,
-        Relocation.ChecksumCrc32c,
-        Envelope.AggregateId,
-        Envelope.AggregateGeneration,
-        Envelope.InventoryDigest);
+    internal ZLinkRelocationManifestReference Reference =>
+        new(
+            Relocation.Reference,
+            Relocation.ChecksumCrc32c,
+            Envelope.AggregateId,
+            Envelope.AggregateGeneration,
+            Envelope.InventoryDigest
+        );
 }
 
 internal sealed record ZLinkRelocationManifestReference(
@@ -43,13 +48,12 @@ internal sealed record ZLinkRelocationManifestReference(
     uint ChecksumCrc32c,
     Guid AggregateId,
     ulong AggregateGeneration,
-    ReadOnlyMemory<byte> InventoryDigest);
+    ReadOnlyMemory<byte> InventoryDigest
+);
 
-internal sealed class ZLinkRelocationDataLostException(string message)
-    : IOException(message);
+internal sealed class ZLinkRelocationDataLostException(string message) : IOException(message);
 
-internal sealed class ZLinkRelocationPublicationConflictException(
-    ZLinkAuthorityReadResult current)
+internal sealed class ZLinkRelocationPublicationConflictException(ZLinkAuthorityReadResult current)
     : InvalidOperationException("The relocation authority publication conflicted.")
 {
     internal ZLinkAuthorityReadResult Current { get; } = current;
@@ -57,13 +61,15 @@ internal sealed class ZLinkRelocationPublicationConflictException(
 
 internal sealed class ZLinkRelocationPublicationCoordinator(
     IZLinkLocationRepository authorityStore,
-    IZLinkRelocationRepository relocationStore)
+    IZLinkRelocationRepository relocationStore
+)
 {
     private static readonly TimeSpan Retention = TimeSpan.FromHours(24);
 
     internal async ValueTask<ZLinkPublishedRelocation> PublishAsync(
         ZLinkRelocationPublicationRequest request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentNullException.ThrowIfNull(request);
         ValidateRequest(request);
@@ -77,15 +83,13 @@ internal sealed class ZLinkRelocationPublicationCoordinator(
 
     internal async ValueTask<ZLinkPreparedRelocation> PrepareAsync(
         ZLinkRelocationEnvelope envelope,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentNullException.ThrowIfNull(envelope);
         cancellationToken.ThrowIfCancellationRequested();
-        var tree = await ZLinkRelocationTreeStore.PutAsync(
-                relocationStore,
-                envelope,
-                Retention,
-                cancellationToken)
+        var tree = await ZLinkRelocationTreeStore
+            .PutAsync(relocationStore, envelope, Retention, cancellationToken)
             .ConfigureAwait(false);
         var stored = tree.Root;
         try
@@ -94,7 +98,7 @@ internal sealed class ZLinkRelocationPublicationCoordinator(
             {
                 LogicalLength = tree.LogicalLength,
                 LogicalChecksumCrc32c = tree.LogicalChecksumCrc32c,
-                ChunkCount = tree.ChunkCount
+                ChunkCount = tree.ChunkCount,
             };
         }
         catch
@@ -104,8 +108,7 @@ internal sealed class ZLinkRelocationPublicationCoordinator(
         }
     }
 
-    internal ValueTask DiscardPreparedAsync(
-        ZLinkPreparedRelocation prepared)
+    internal ValueTask DiscardPreparedAsync(ZLinkPreparedRelocation prepared)
     {
         ArgumentNullException.ThrowIfNull(prepared);
         return DeleteOrphanAsync(prepared.Relocation.Reference);
@@ -114,7 +117,8 @@ internal sealed class ZLinkRelocationPublicationCoordinator(
     internal async ValueTask<ZLinkPublishedRelocation> PublishPreparedAsync(
         ZLinkRelocationPublicationRequest request,
         ZLinkPreparedRelocation prepared,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(prepared);
@@ -122,8 +126,7 @@ internal sealed class ZLinkRelocationPublicationCoordinator(
         ValidatePrepared(request.Envelope, prepared);
         if (cancellationToken.IsCancellationRequested)
         {
-            await DeleteOrphanAsync(prepared.Relocation.Reference)
-                .ConfigureAwait(false);
+            await DeleteOrphanAsync(prepared.Relocation.Reference).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
         }
 
@@ -131,25 +134,29 @@ internal sealed class ZLinkRelocationPublicationCoordinator(
         byte[] publishedPayload;
         try
         {
-            await ZLinkRelocationTreeStore.RenewTreeAsync(
+            await ZLinkRelocationTreeStore
+                .RenewTreeAsync(
                     relocationStore,
                     stored.Reference,
                     stored.ChecksumCrc32c,
                     Retention,
-                    cancellationToken)
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
             if (!request.Envelope.CanonicalLogicalStream.IsEmpty)
             {
-                if (!ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
+                if (
+                    !ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
                         request.ApplicationAuthorityPayload.Span,
-                        out var canonical)
+                        out var canonical
+                    )
                     || canonical.RelocationReference != stored.Reference
-                    || canonical.RelocationChecksumCrc32c
-                       != stored.ChecksumCrc32c)
+                    || canonical.RelocationChecksumCrc32c != stored.ChecksumCrc32c
+                )
                     throw new InvalidDataException(
-                        "Canonical relocation publication payload does not match its immutable root.");
-                publishedPayload =
-                    request.ApplicationAuthorityPayload.ToArray();
+                        "Canonical relocation publication payload does not match its immutable root."
+                    );
+                publishedPayload = request.ApplicationAuthorityPayload.ToArray();
             }
             else
             {
@@ -162,7 +169,9 @@ internal sealed class ZLinkRelocationPublicationCoordinator(
                         request.Envelope.InventoryDigest,
                         request.TargetOwnerId,
                         request.TargetOwnerLeaseGeneration,
-                        request.ApplicationAuthorityPayload));
+                        request.ApplicationAuthorityPayload
+                    )
+                );
             }
         }
         catch
@@ -173,48 +182,44 @@ internal sealed class ZLinkRelocationPublicationCoordinator(
 
         try
         {
-            var result = await authorityStore.CompareExchangeAuthorityAsync(
+            var result = await authorityStore
+                .CompareExchangeAuthorityAsync(
                     request.AuthorityKey,
                     request.ExpectedStoreVersion,
                     new ZLinkAuthorityMutation.Put(
                         publishedPayload,
                         ZLinkAuthorityGenerationTransition.Preserve,
                         TargetOwner: null,
-                        TargetAllocation: null),
-                    cancellationToken)
+                        TargetAllocation: null
+                    ),
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
             switch (result)
             {
                 case ZLinkAuthorityCompareExchangeResult.Stored success:
                     ValidatePublishedSnapshot(success.Snapshot, request, stored);
-                    return new ZLinkPublishedRelocation(
-                        success.Snapshot,
-                        stored,
-                        request.Envelope);
+                    return new ZLinkPublishedRelocation(success.Snapshot, stored, request.Envelope);
 
                 case ZLinkAuthorityCompareExchangeResult.Conflict conflict:
-                    if (TryReconcilePublished(
-                            conflict.Current,
-                            request,
-                            stored,
-                            out var reconciled))
-                        return new ZLinkPublishedRelocation(
-                            reconciled,
-                            stored,
-                            request.Envelope);
+                    if (
+                        TryReconcilePublished(conflict.Current, request, stored, out var reconciled)
+                    )
+                        return new ZLinkPublishedRelocation(reconciled, stored, request.Envelope);
                     await DeleteOrphanAsync(stored.Reference).ConfigureAwait(false);
-                    throw new ZLinkRelocationPublicationConflictException(
-                        conflict.Current);
+                    throw new ZLinkRelocationPublicationConflictException(conflict.Current);
 
                 case ZLinkAuthorityCompareExchangeResult.GenerationExhausted:
                     await DeleteOrphanAsync(stored.Reference).ConfigureAwait(false);
                     throw new ZLinkAuthorityGenerationExhaustedException(
-                        "publishing relocation authority");
+                        "publishing relocation authority"
+                    );
 
                 default:
                     await DeleteOrphanAsync(stored.Reference).ConfigureAwait(false);
                     throw new InvalidOperationException(
-                        "The authority store returned an invalid relocation publication result.");
+                        "The authority store returned an invalid relocation publication result."
+                    );
             }
         }
         catch (ZLinkRelocationPublicationConflictException)
@@ -226,20 +231,14 @@ internal sealed class ZLinkRelocationPublicationCoordinator(
             // A provider exception or waiter cancellation can happen after the
             // CAS committed. Reconcile against the authority before deleting the
             // immutable root, because deleting a published root is data loss.
-            var current = await TryReadAuthorityWithoutCancellationAsync(
-                    request.AuthorityKey)
+            var current = await TryReadAuthorityWithoutCancellationAsync(request.AuthorityKey)
                 .ConfigureAwait(false);
-            if (current is not null
-                && TryReconcilePublished(
-                    current,
-                    request,
-                    stored,
-                    out var reconciled))
+            if (
+                current is not null
+                && TryReconcilePublished(current, request, stored, out var reconciled)
+            )
             {
-                return new ZLinkPublishedRelocation(
-                    reconciled,
-                    stored,
-                    request.Envelope);
+                return new ZLinkPublishedRelocation(reconciled, stored, request.Envelope);
             }
 
             await DeleteOrphanAsync(stored.Reference).ConfigureAwait(false);
@@ -249,49 +248,56 @@ internal sealed class ZLinkRelocationPublicationCoordinator(
 
     internal async ValueTask<ZLinkRelocationEnvelope> ReadPreparedAsync(
         ZLinkRelocationManifestReference reference,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentNullException.ThrowIfNull(reference);
         ValidateManifestReference(reference);
-        var envelope = await ZLinkRelocationTreeStore.GetAsync(
+        var envelope = await ZLinkRelocationTreeStore
+            .GetAsync(
                 relocationStore,
                 reference.Reference,
                 reference.ChecksumCrc32c,
-                cancellationToken)
+                cancellationToken
+            )
             .ConfigureAwait(false);
         return ValidateRoot(envelope, reference);
     }
 
     internal async ValueTask<ZLinkPublishedRelocation?> RecoverAsync(
         ZLinkAuthorityKey key,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
-        var read = await authorityStore.ReadAuthorityAsync(key, cancellationToken)
+        var read = await authorityStore
+            .ReadAuthorityAsync(key, cancellationToken)
             .ConfigureAwait(false);
         if (read is ZLinkAuthorityReadResult.Missing)
             return null;
         var authority = ((ZLinkAuthorityReadResult.Found)read).Snapshot;
-        if (!ZLinkRelocationAuthorityPayloadCodec.TryDecode(
+        if (
+            !ZLinkRelocationAuthorityPayloadCodec.TryDecode(
                 authority.Payload.Span,
-                out var publication))
+                out var publication
+            )
+        )
             return null;
-        if (!string.Equals(
-                publication.TargetOwnerId,
-                authority.OwnerId,
-                StringComparison.Ordinal)
-            || publication.TargetOwnerLeaseGeneration
-            != authority.OwnerLeaseGeneration)
+        if (
+            !string.Equals(publication.TargetOwnerId, authority.OwnerId, StringComparison.Ordinal)
+            || publication.TargetOwnerLeaseGeneration != authority.OwnerLeaseGeneration
+        )
             throw new ZLinkRelocationDataLostException(
-                $"Published relocation authority '{key.Value}' has an invalid owner fence.");
+                $"Published relocation authority '{key.Value}' has an invalid owner fence."
+            );
 
         var reference = new ZLinkRelocationManifestReference(
             publication.Reference,
             publication.ChecksumCrc32c,
             publication.AggregateId,
             publication.AggregateGeneration,
-            publication.InventoryDigest);
-        var envelope = await ReadPreparedAsync(reference, cancellationToken)
-            .ConfigureAwait(false);
+            publication.InventoryDigest
+        );
+        var envelope = await ReadPreparedAsync(reference, cancellationToken).ConfigureAwait(false);
 
         return new ZLinkPublishedRelocation(
             authority,
@@ -299,39 +305,44 @@ internal sealed class ZLinkRelocationPublicationCoordinator(
                 publication.Reference,
                 publication.ChecksumCrc32c,
                 default,
-                authority.StoreNow),
-            envelope);
+                authority.StoreNow
+            ),
+            envelope
+        );
     }
 
     internal async ValueTask<ZLinkAuthoritySnapshot?> ReleasePublishedAsync(
         ZLinkAuthorityKey key,
         string reference,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key.Value);
         ArgumentException.ThrowIfNullOrWhiteSpace(reference);
-        var read = await authorityStore.ReadAuthorityAsync(
-                key,
-                cancellationToken)
+        var read = await authorityStore
+            .ReadAuthorityAsync(key, cancellationToken)
             .ConfigureAwait(false);
-        if (read is not ZLinkAuthorityReadResult.Found found
+        if (
+            read is not ZLinkAuthorityReadResult.Found found
             || !ZLinkRelocationAuthorityPayloadCodec.TryDecode(
                 found.Snapshot.Payload.Span,
-                out var publication)
-            || !string.Equals(
-                publication.Reference,
-                reference,
-                StringComparison.Ordinal))
+                out var publication
+            )
+            || !string.Equals(publication.Reference, reference, StringComparison.Ordinal)
+        )
             return null;
-        var released = await authorityStore.CompareExchangeAuthorityAsync(
+        var released = await authorityStore
+            .CompareExchangeAuthorityAsync(
                 key,
                 found.Snapshot.StoreVersion,
                 new ZLinkAuthorityMutation.Put(
                     publication.ApplicationPayload,
                     ZLinkAuthorityGenerationTransition.Preserve,
                     null,
-                    null),
-                cancellationToken)
+                    null
+                ),
+                cancellationToken
+            )
             .ConfigureAwait(false);
         if (released is ZLinkAuthorityCompareExchangeResult.Stored stored)
         {
@@ -343,38 +354,46 @@ internal sealed class ZLinkRelocationPublicationCoordinator(
 
     private static ZLinkRelocationEnvelope ValidateRoot(
         ZLinkRelocationEnvelope envelope,
-        ZLinkRelocationManifestReference reference)
+        ZLinkRelocationManifestReference reference
+    )
     {
-        if (!envelope.CanonicalLogicalStream.IsEmpty
-            || (envelope.Participants.Count > 0
-                && envelope.Participants.All(
-                    participant =>
-                        ZLinkCanonicalParticipantRecoveryCodec.IsEncoded(
-                            participant.RecoveryPayload.Span))))
+        if (
+            !envelope.CanonicalLogicalStream.IsEmpty
+            || (
+                envelope.Participants.Count > 0
+                && envelope.Participants.All(participant =>
+                    ZLinkCanonicalParticipantRecoveryCodec.IsEncoded(
+                        participant.RecoveryPayload.Span
+                    )
+                )
+            )
+        )
         {
             if (envelope.AggregateId != reference.AggregateId)
                 throw new ZLinkRelocationDataLostException(
-                    $"Relocation root '{reference.Reference}' does not match its manifest.");
-            return envelope with
-            {
-                AggregateGeneration = reference.AggregateGeneration
-            };
+                    $"Relocation root '{reference.Reference}' does not match its manifest."
+                );
+            return envelope with { AggregateGeneration = reference.AggregateGeneration };
         }
-        if (envelope.AggregateId != reference.AggregateId
+        if (
+            envelope.AggregateId != reference.AggregateId
             || envelope.AggregateGeneration != reference.AggregateGeneration
-            || !envelope.InventoryDigest.Span.SequenceEqual(
-                reference.InventoryDigest.Span))
+            || !envelope.InventoryDigest.Span.SequenceEqual(reference.InventoryDigest.Span)
+        )
             throw new ZLinkRelocationDataLostException(
-                $"Relocation root '{reference.Reference}' does not match its manifest.");
+                $"Relocation root '{reference.Reference}' does not match its manifest."
+            );
         return envelope;
     }
 
     private async ValueTask<ZLinkAuthorityReadResult?> TryReadAuthorityWithoutCancellationAsync(
-        ZLinkAuthorityKey key)
+        ZLinkAuthorityKey key
+    )
     {
         try
         {
-            return await authorityStore.ReadAuthorityAsync(key, CancellationToken.None)
+            return await authorityStore
+                .ReadAuthorityAsync(key, CancellationToken.None)
                 .ConfigureAwait(false);
         }
         catch
@@ -387,10 +406,8 @@ internal sealed class ZLinkRelocationPublicationCoordinator(
     {
         try
         {
-            await ZLinkRelocationTreeStore.DeleteTreeAsync(
-                    relocationStore,
-                    reference,
-                    CancellationToken.None)
+            await ZLinkRelocationTreeStore
+                .DeleteTreeAsync(relocationStore, reference, CancellationToken.None)
                 .ConfigureAwait(false);
         }
         catch
@@ -406,68 +423,79 @@ internal sealed class ZLinkRelocationPublicationCoordinator(
         if (request.TargetOwnerLeaseGeneration <= 0)
             throw new ArgumentOutOfRangeException(
                 nameof(request),
-                "The target owner lease generation must be positive.");
+                "The target owner lease generation must be positive."
+            );
         if (request.ApplicationAuthorityPayload.Length > 1024 * 1024)
             throw new ArgumentOutOfRangeException(
                 nameof(request),
-                "The application authority payload cannot exceed 1 MiB.");
+                "The application authority payload cannot exceed 1 MiB."
+            );
     }
 
     private static void ValidatePrepared(
         ZLinkRelocationEnvelope requested,
-        ZLinkPreparedRelocation prepared)
+        ZLinkPreparedRelocation prepared
+    )
     {
         var reference = prepared.Reference;
         ValidateManifestReference(reference);
-        if (requested.AggregateId != reference.AggregateId
+        if (
+            requested.AggregateId != reference.AggregateId
             || requested.AggregateGeneration != reference.AggregateGeneration
-            || !requested.InventoryDigest.Span.SequenceEqual(
-                reference.InventoryDigest.Span))
+            || !requested.InventoryDigest.Span.SequenceEqual(reference.InventoryDigest.Span)
+        )
             throw new ArgumentException(
                 "The prepared relocation does not match the publication request.",
-                nameof(prepared));
-        if (!ZLinkRelocationEnvelopeCodec.ComputeEncodedSha256(requested)
-                .AsSpan().SequenceEqual(
-                    ZLinkRelocationEnvelopeCodec.ComputeEncodedSha256(
-                        prepared.Envelope)))
+                nameof(prepared)
+            );
+        if (
+            !ZLinkRelocationEnvelopeCodec
+                .ComputeEncodedSha256(requested)
+                .AsSpan()
+                .SequenceEqual(ZLinkRelocationEnvelopeCodec.ComputeEncodedSha256(prepared.Envelope))
+        )
             throw new ArgumentException(
                 "The prepared relocation root does not match the publication request.",
-                nameof(prepared));
+                nameof(prepared)
+            );
     }
 
-    private static void ValidateManifestReference(
-        ZLinkRelocationManifestReference reference)
+    private static void ValidateManifestReference(ZLinkRelocationManifestReference reference)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(reference.Reference);
-        if (reference.AggregateId == Guid.Empty
+        if (
+            reference.AggregateId == Guid.Empty
             || reference.AggregateGeneration is 0 or > long.MaxValue
-            || reference.InventoryDigest.Length != 32)
+            || reference.InventoryDigest.Length != 32
+        )
             throw new ArgumentException(
                 "The relocation manifest reference is invalid.",
-                nameof(reference));
+                nameof(reference)
+            );
     }
 
     private static bool TryReconcilePublished(
         ZLinkAuthorityReadResult current,
         ZLinkRelocationPublicationRequest request,
         ZLinkRelocationStored stored,
-        out ZLinkAuthoritySnapshot snapshot)
+        out ZLinkAuthoritySnapshot snapshot
+    )
     {
         snapshot = null!;
-        if (current is not ZLinkAuthorityReadResult.Found found
+        if (
+            current is not ZLinkAuthorityReadResult.Found found
             || !ZLinkRelocationAuthorityPayloadCodec.TryDecode(
                 found.Snapshot.Payload.Span,
-                out var publication)
-            || !string.Equals(
-                publication.Reference,
-                stored.Reference,
-                StringComparison.Ordinal)
+                out var publication
+            )
+            || !string.Equals(publication.Reference, stored.Reference, StringComparison.Ordinal)
             || publication.ChecksumCrc32c != stored.ChecksumCrc32c
             || publication.AggregateId != request.Envelope.AggregateId
-            || publication.AggregateGeneration
-            != request.Envelope.AggregateGeneration
+            || publication.AggregateGeneration != request.Envelope.AggregateGeneration
             || !publication.InventoryDigest.Span.SequenceEqual(
-                request.Envelope.InventoryDigest.Span))
+                request.Envelope.InventoryDigest.Span
+            )
+        )
             return false;
         ValidatePublishedSnapshot(found.Snapshot, request, stored);
         snapshot = found.Snapshot;
@@ -477,29 +505,32 @@ internal sealed class ZLinkRelocationPublicationCoordinator(
     private static void ValidatePublishedSnapshot(
         ZLinkAuthoritySnapshot snapshot,
         ZLinkRelocationPublicationRequest request,
-        ZLinkRelocationStored stored)
+        ZLinkRelocationStored stored
+    )
     {
-        if (snapshot.ObjectGeneration is 0 or > long.MaxValue
-            || snapshot.AuthorityOwnerGeneration is 0 or > long.MaxValue)
+        if (
+            snapshot.ObjectGeneration is 0 or > long.MaxValue
+            || snapshot.AuthorityOwnerGeneration is 0 or > long.MaxValue
+        )
+            throw new InvalidDataException("Authority Store returned an invalid generation.");
+        if (
+            !string.Equals(snapshot.OwnerId, request.TargetOwnerId, StringComparison.Ordinal)
+            || snapshot.OwnerLeaseGeneration != request.TargetOwnerLeaseGeneration
+        )
             throw new InvalidDataException(
-                "Authority Store returned an invalid generation.");
-        if (!string.Equals(
-                snapshot.OwnerId,
-                request.TargetOwnerId,
-                StringComparison.Ordinal)
-            || snapshot.OwnerLeaseGeneration != request.TargetOwnerLeaseGeneration)
-            throw new InvalidDataException(
-                "Authority Store did not publish the requested target owner fence.");
-        if (!ZLinkRelocationAuthorityPayloadCodec.TryDecode(
+                "Authority Store did not publish the requested target owner fence."
+            );
+        if (
+            !ZLinkRelocationAuthorityPayloadCodec.TryDecode(
                 snapshot.Payload.Span,
-                out var publication)
-            || !string.Equals(
-                publication.Reference,
-                stored.Reference,
-                StringComparison.Ordinal)
-            || publication.ChecksumCrc32c != stored.ChecksumCrc32c)
+                out var publication
+            )
+            || !string.Equals(publication.Reference, stored.Reference, StringComparison.Ordinal)
+            || publication.ChecksumCrc32c != stored.ChecksumCrc32c
+        )
             throw new InvalidDataException(
-                "Authority Store did not preserve the relocation publication.");
+                "Authority Store did not preserve the relocation publication."
+            );
     }
 }
 
@@ -511,7 +542,8 @@ internal sealed record ZLinkRelocationAuthorityPayload(
     ReadOnlyMemory<byte> InventoryDigest,
     string TargetOwnerId,
     long TargetOwnerLeaseGeneration,
-    ReadOnlyMemory<byte> ApplicationPayload)
+    ReadOnlyMemory<byte> ApplicationPayload
+)
 {
     internal bool IsCanonical { get; init; }
     internal long ApplicationVersion { get; init; }
@@ -539,18 +571,18 @@ internal static class ZLinkRelocationAuthorityPayloadCodec
         writer.Flush();
         if (stream.Length > 1024 * 1024)
             throw new InvalidOperationException(
-                "The authority relocation payload cannot exceed 1 MiB.");
+                "The authority relocation payload cannot exceed 1 MiB."
+            );
         return stream.ToArray();
     }
 
     internal static bool TryDecode(
         ReadOnlySpan<byte> encoded,
-        out ZLinkRelocationAuthorityPayload payload)
+        out ZLinkRelocationAuthorityPayload payload
+    )
     {
         payload = null!;
-        if (ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                encoded,
-                out var canonical))
+        if (ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(encoded, out var canonical))
         {
             if (canonical.AggregateGeneration == 0)
                 return false;
@@ -565,10 +597,11 @@ internal static class ZLinkRelocationAuthorityPayloadCodec
                 new byte[32],
                 canonical.TargetOwnerId,
                 checked((long)canonical.TargetOwnerLeaseGeneration),
-                canonical.SteadyAuthorityPayload)
+                canonical.SteadyAuthorityPayload
+            )
             {
                 IsCanonical = true,
-                ApplicationVersion = canonical.ApplicationVersion
+                ApplicationVersion = canonical.ApplicationVersion,
             };
             return true;
         }
@@ -586,11 +619,13 @@ internal static class ZLinkRelocationAuthorityPayloadCodec
             var targetOwnerId = ReadString(reader);
             var targetLeaseGeneration = reader.ReadInt64();
             var applicationPayload = ReadBytes(reader);
-            if (aggregateId == Guid.Empty
+            if (
+                aggregateId == Guid.Empty
                 || aggregateGeneration is 0 or > long.MaxValue
                 || inventoryDigest.Length != 32
                 || targetLeaseGeneration <= 0
-                || stream.Position != stream.Length)
+                || stream.Position != stream.Length
+            )
                 return false;
             payload = new ZLinkRelocationAuthorityPayload(
                 reference,
@@ -600,12 +635,12 @@ internal static class ZLinkRelocationAuthorityPayloadCodec
                 inventoryDigest,
                 targetOwnerId,
                 targetLeaseGeneration,
-                applicationPayload);
+                applicationPayload
+            );
             return true;
         }
-        catch (Exception error) when (error is IOException
-                                      or ArgumentException
-                                      or OverflowException)
+        catch (Exception error)
+            when (error is IOException or ArgumentException or OverflowException)
         {
             return false;
         }

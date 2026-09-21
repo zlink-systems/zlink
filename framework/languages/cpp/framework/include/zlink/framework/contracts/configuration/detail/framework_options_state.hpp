@@ -83,12 +83,10 @@ inline bool is_valid_automatic_routing_id_prefix (std::string_view value) noexce
         return false;
     }
     for (const auto character : value) {
-        const auto is_alphanumeric =
-          (character >= 'A' && character <= 'Z')
-          || (character >= 'a' && character <= 'z')
-          || (character >= '0' && character <= '9');
-        if (!is_alphanumeric && character != '.' && character != '_'
-            && character != '-') {
+        const auto is_alphanumeric = (character >= 'A' && character <= 'Z')
+                                     || (character >= 'a' && character <= 'z')
+                                     || (character >= '0' && character <= '9');
+        if (!is_alphanumeric && character != '.' && character != '_' && character != '-') {
             return false;
         }
     }
@@ -106,18 +104,14 @@ enum class handler_group_kind_t
     publish = 2
 };
 
-template <typename T> concept static_topic_name = requires
-{
-    {
-        T::topic_name
-    } -> std::convertible_to<const char *>;
+template <typename T>
+concept static_topic_name = requires {
+    { T::topic_name } -> std::convertible_to<const char *>;
 };
 
-template <typename T> concept static_session_name = requires
-{
-    {
-        T::session_name
-    } -> std::convertible_to<const char *>;
+template <typename T>
+concept static_session_name = requires {
+    { T::session_name } -> std::convertible_to<const char *>;
 };
 
 template <typename THandler, typename TPayload> std::string handler_topic_name ()
@@ -173,9 +167,7 @@ template <typename TSession> struct injected_stream_session_registrar_t
             return;
         }
         services.add_factory<TSession> (
-          [] (service_provider_t &provider) {
-              return make_injected_unique<TSession> (provider);
-          },
+          [] (service_provider_t &provider) { return make_injected_unique<TSession> (provider); },
           service_lifetime_t::scoped);
     }
 };
@@ -406,16 +398,12 @@ struct framework_options_state_t
     std::set<std::string> client_server_channels_with_server;
     std::map<std::string, std::size_t> client_server_client_registration_counts;
     std::map<std::string, std::size_t> client_server_server_registration_counts;
-    std::map<std::string, std::string>
-      client_server_server_advertise_hosts;
-    std::map<std::string, std::string>
-      client_server_server_advertise_host_overrides;
+    std::map<std::string, std::string> client_server_server_advertise_hosts;
+    std::map<std::string, std::string> client_server_server_advertise_host_overrides;
     std::map<std::string, std::optional<std::chrono::milliseconds>>
       client_server_default_request_timeouts;
-    std::map<std::string, std::function<void (channel_builder_t &)>>
-      client_server_client_actions;
-    std::map<std::string, std::function<void (channel_builder_t &)>>
-      client_server_server_actions;
+    std::map<std::string, std::function<void (channel_builder_t &)>> client_server_client_actions;
+    std::map<std::string, std::function<void (channel_builder_t &)>> client_server_server_actions;
     std::set<std::string> fanout_channels_with_publisher;
     std::set<std::string> fanout_channels_with_subscriber;
     std::set<std::string> fanout_channels_with_no_drop_configuration;
@@ -423,8 +411,7 @@ struct framework_options_state_t
     std::set<std::string> fanout_channels_with_manual_subscriber;
     std::map<std::string, std::set<std::string>> fanout_subscription_topics;
     std::map<std::string, std::string> fanout_publisher_advertise_hosts;
-    std::map<std::string, std::string>
-      fanout_publisher_advertise_host_overrides;
+    std::map<std::string, std::string> fanout_publisher_advertise_host_overrides;
     std::set<std::string> route_mesh_channels;
     std::set<std::string> mesh_node_channel_names;
     std::set<std::string> route_mesh_channels_with_bind;
@@ -464,7 +451,6 @@ struct framework_options_state_t
     {
         keyed_zlink_actions[std::move (key)] = std::move (action);
     }
-
 };
 
 } // namespace detail

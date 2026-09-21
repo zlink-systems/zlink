@@ -11,8 +11,10 @@ namespace
 class hosted_service_mock_t final : public zlink::framework::hosted_service_t
 {
   public:
-    MOCK_METHOD (zlink::framework::task_t<void>, start,
-                 (zlink::framework::service_provider_t & services), (override));
+    MOCK_METHOD (zlink::framework::task_t<void>,
+                 start,
+                 (zlink::framework::service_provider_t & services),
+                 (override));
     MOCK_METHOD (void, stop, (), (noexcept, override));
 };
 

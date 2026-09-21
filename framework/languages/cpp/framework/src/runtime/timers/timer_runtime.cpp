@@ -36,15 +36,14 @@ bool timer_t::is_disposed () const noexcept
 namespace
 {
 
-void complete_cancel_if_ready (
-  const std::shared_ptr<detail::timer_state_t> &state)
+void complete_cancel_if_ready (const std::shared_ptr<detail::timer_state_t> &state)
 {
     std::shared_ptr<detail::task_completion_source_t<void>> completion;
     std::optional<result_t<void>> result;
     {
         std::lock_guard lock (state->mutex);
-        if (!state->cancel_completed && state->cancel_completion
-            && state->cleanup_result && !state->running) {
+        if (!state->cancel_completed && state->cancel_completion && state->cleanup_result
+            && !state->running) {
             state->cancel_completed = true;
             completion = state->cancel_completion;
             result = state->cleanup_result;
@@ -71,8 +70,7 @@ task_t<void> timer_t::cancel ()
             state->disposed.store (true, std::memory_order_release);
             state->pending_fire = false;
             state->pending_fire_count = 0;
-            state->cancel_completion =
-              std::make_shared<detail::task_completion_source_t<void>> ();
+            state->cancel_completion = std::make_shared<detail::task_completion_source_t<void>> ();
             resource = std::move (state->native_timer);
             owns_cleanup = true;
         }
@@ -81,8 +79,7 @@ task_t<void> timer_t::cancel ()
 
     auto task = completion->task ();
     if (owns_cleanup) {
-        auto cleanup_result = resource ? resource->cancel ()
-                                       : result_t<void>::success ();
+        auto cleanup_result = resource ? resource->cancel () : result_t<void>::success ();
         {
             std::lock_guard lock (state->mutex);
             state->cleanup_result = std::move (cleanup_result);
@@ -92,13 +89,13 @@ task_t<void> timer_t::cancel ()
     return task;
 }
 
-timer_t spot_context_t::add_timer_erased (std::string name,
-                                          std::chrono::milliseconds period,
-                                          timer_options_t options,
-                                          std::type_index handler_type,
-                                          std::function<std::shared_ptr<void> (
-                                            service_provider_t *)> handler_factory,
-                                          detail::timer_state_t::handler_invoker_t handler_invoker)
+timer_t spot_context_t::add_timer_erased (
+  std::string name,
+  std::chrono::milliseconds period,
+  timer_options_t options,
+  std::type_index handler_type,
+  std::function<std::shared_ptr<void> (service_provider_t *)> handler_factory,
+  detail::timer_state_t::handler_invoker_t handler_invoker)
 {
     ensure_submission_open ();
     if (name.empty ()) {
@@ -112,8 +109,7 @@ timer_t spot_context_t::add_timer_erased (std::string name,
     if (options.overrun_policy == timer_overrun_policy_t::catch_up_bounded
         && (options.max_catch_up_ticks == 0
             || options.max_catch_up_ticks
-                 > static_cast<std::uint64_t> (
-                   std::numeric_limits<int>::max ()))) {
+                 > static_cast<std::uint64_t> (std::numeric_limits<int>::max ()))) {
         throw framework_exception_t (framework_error_kind_t::protocol_error,
                                      "SPOT timer max catch-up ticks must be between 1 and INT_MAX");
     }
@@ -132,23 +128,18 @@ timer_t spot_context_t::add_timer_erased (std::string name,
     state->period = period;
     state->options = options;
     state->handler_type = handler_type;
-    const auto existing_handler =
-      _state->timer_handler_instances.find (handler_type);
+    const auto existing_handler = _state->timer_handler_instances.find (handler_type);
     if (existing_handler != _state->timer_handler_instances.end ()) {
         state->handler_instance = existing_handler->second;
     } else {
         auto *activation_services =
-          _state->activation_scope
-            ? &_state->activation_scope->provider ()
-            : nullptr;
+          _state->activation_scope ? &_state->activation_scope->provider () : nullptr;
         auto handler_instance = handler_factory (activation_services);
         if (!handler_instance) {
-            throw framework_exception_t (
-              framework_error_kind_t::not_configured,
-              "SPOT timer handler factory returned null");
+            throw framework_exception_t (framework_error_kind_t::not_configured,
+                                         "SPOT timer handler factory returned null");
         }
-        _state->timer_handler_instances.emplace (
-          handler_type, handler_instance);
+        _state->timer_handler_instances.emplace (handler_type, handler_instance);
         state->handler_instance = handler_instance;
     }
     state->handler_invoker = std::move (handler_invoker);
@@ -161,11 +152,11 @@ timer_t spot_context_t::add_timer_erased (std::string name,
     state->native_timer = std::move (native_timer);
     auto context = _state;
     const auto timer_queue = state->serial_queue;
-    native_timer_loop->start (
-      period, std::numeric_limits<std::uint64_t>::max (),
-      [context, state, timer_queue] (std::uint64_t fire_count) {
-          detail::timer_runtime_t::post_fire_count (context, state, timer_queue, fire_count);
-      });
+    native_timer_loop->start (period, std::numeric_limits<std::uint64_t>::max (),
+                              [context, state, timer_queue] (std::uint64_t fire_count) {
+                                  detail::timer_runtime_t::post_fire_count (
+                                    context, state, timer_queue, fire_count);
+                              });
     _state->timers.push_back (state);
     return timer_t (state);
 }
@@ -186,8 +177,7 @@ result_t<void> core_timer_resource_t::cancel () noexcept
             failure = error;
         }
         catch (const std::exception &error) {
-            failure.emplace (framework_error_kind_t::internal_failure,
-                             error.what ());
+            failure.emplace (framework_error_kind_t::internal_failure, error.what ());
         }
         catch (...) {
             failure.emplace (framework_error_kind_t::internal_failure,
@@ -203,8 +193,7 @@ result_t<void> core_timer_resource_t::cancel () noexcept
     }
     catch (const std::exception &error) {
         if (!failure) {
-            failure.emplace (framework_error_kind_t::internal_failure,
-                             error.what ());
+            failure.emplace (framework_error_kind_t::internal_failure, error.what ());
         }
     }
     catch (...) {
@@ -227,10 +216,11 @@ timer_runtime_t timer_runtime_t::from (spot_context_t &context)
     return timer_runtime_t (context._state);
 }
 
-void timer_runtime_t::post_fire_count (const std::shared_ptr<spot_context_state_t> &context,
-                                       const std::shared_ptr<timer_state_t> &state,
-                                       const std::shared_ptr<runtime::serial_execution_queue_t> &queue,
-                                       std::uint64_t fire_count)
+void timer_runtime_t::post_fire_count (
+  const std::shared_ptr<spot_context_state_t> &context,
+  const std::shared_ptr<timer_state_t> &state,
+  const std::shared_ptr<runtime::serial_execution_queue_t> &queue,
+  std::uint64_t fire_count)
 {
     if (!context || !state) {
         return;
@@ -250,19 +240,19 @@ void timer_runtime_t::post_fire_count (const std::shared_ptr<spot_context_state_
         state->pending_fire = true;
     }
     auto work = [context, state] (auto complete) mutable {
-          std::uint64_t pending_fire_count = 0;
-          {
-              std::lock_guard lock (state->mutex);
-              pending_fire_count = state->pending_fire_count;
-              state->pending_fire = false;
-              state->pending_fire_count = 0;
-          }
-          framework::timer_t timer (state);
-          auto runtime = timer_runtime_t (context);
-          auto task = runtime.dispatch_fire_count_async (timer, pending_fire_count);
-          detail::observe_task_completion (
-            task, [complete] (const result_t<timer_tick_t> &) mutable { complete ([] {}); });
-      };
+        std::uint64_t pending_fire_count = 0;
+        {
+            std::lock_guard lock (state->mutex);
+            pending_fire_count = state->pending_fire_count;
+            state->pending_fire = false;
+            state->pending_fire_count = 0;
+        }
+        framework::timer_t timer (state);
+        auto runtime = timer_runtime_t (context);
+        auto task = runtime.dispatch_fire_count_async (timer, pending_fire_count);
+        detail::observe_task_completion (
+          task, [complete] (const result_t<timer_tick_t> &) mutable { complete ([] {}); });
+    };
     const auto queue_name = "spot-timer:" + state->name;
     const bool posted = queue ? queue->try_post_async (queue_name, std::move (work))
                               : context->try_post_serial_async (queue_name, std::move (work));
@@ -277,53 +267,45 @@ void timer_runtime_t::post_fire_count (const std::shared_ptr<spot_context_state_
 namespace
 {
 
-template <typename T>
-void append_observation (std::deque<T> &history, T value)
+template <typename T> void append_observation (std::deque<T> &history, T value)
 {
     if (history.size () == timer_state_t::observation_history_limit)
         history.pop_front ();
     history.push_back (std::move (value));
 }
 
-std::vector<timer_tick_t> make_ticks (timer_state_t &state,
-                                      std::uint64_t fire_count)
+std::vector<timer_tick_t> make_ticks (timer_state_t &state, std::uint64_t fire_count)
 {
     const auto previous_index = state.last_scheduled_index;
     const auto available = std::max<std::uint64_t> (1, fire_count);
     const auto due_index = previous_index + available;
     std::uint64_t first_index = due_index;
     std::uint64_t delivery_count = 1;
-    if (state.options.overrun_policy
-        == timer_overrun_policy_t::delay_next_tick) {
+    if (state.options.overrun_policy == timer_overrun_policy_t::delay_next_tick) {
         first_index = previous_index + 1;
-    } else if (state.options.overrun_policy
-               == timer_overrun_policy_t::catch_up_bounded) {
-        delivery_count = std::min (available,
-                                   state.options.max_catch_up_ticks);
+    } else if (state.options.overrun_policy == timer_overrun_policy_t::catch_up_bounded) {
+        delivery_count = std::min (available, state.options.max_catch_up_ticks);
         first_index = due_index - delivery_count + 1;
     }
 
     std::vector<timer_tick_t> ticks;
     ticks.reserve (static_cast<std::size_t> (delivery_count));
     const auto started_elapsed =
-      state.options.overrun_policy
-          == timer_overrun_policy_t::delay_next_tick
+      state.options.overrun_policy == timer_overrun_policy_t::delay_next_tick
         ? state.period * (state.delivery_index + 1)
         : state.period * due_index;
     for (std::uint64_t offset = 0; offset < delivery_count; ++offset) {
         const auto scheduled_index = first_index + offset;
-        const auto skipped_ticks =
-          offset == 0 ? scheduled_index - previous_index - 1 : 0;
+        const auto skipped_ticks = offset == 0 ? scheduled_index - previous_index - 1 : 0;
         ++state.delivery_index;
-        timer_tick_t tick{
-          state.name,
-          state.delivery_index,
-          scheduled_index,
-          state.period,
-          state.period * scheduled_index,
-          started_elapsed,
-          started_elapsed - state.period * scheduled_index,
-          skipped_ticks};
+        timer_tick_t tick{state.name,
+                          state.delivery_index,
+                          scheduled_index,
+                          state.period,
+                          state.period * scheduled_index,
+                          started_elapsed,
+                          started_elapsed - state.period * scheduled_index,
+                          skipped_ticks};
         append_observation (state.delivered_ticks, tick);
         ticks.push_back (std::move (tick));
     }
@@ -355,19 +337,17 @@ timer_runtime_t::dispatch_fire_count (timer_t &timer,
 {
     if (timer.is_disposed ()) {
         return detail::boundary_failure<timer_tick_t> (detail::boundary_error_t::closed,
-                                                "SPOT timer is disposed");
+                                                       "SPOT timer is disposed");
     }
     {
         std::lock_guard lock (timer._state->mutex);
         if (timer._state->disposed.load (std::memory_order_acquire)) {
-            return detail::boundary_failure<timer_tick_t> (
-              detail::boundary_error_t::closed,
-              "SPOT timer is disposed");
+            return detail::boundary_failure<timer_tick_t> (detail::boundary_error_t::closed,
+                                                           "SPOT timer is disposed");
         }
         if (timer._state->running) {
-            return result_t<timer_tick_t>::failure (
-              framework_error_kind_t::rejected,
-              "SPOT timer callback is already running");
+            return result_t<timer_tick_t>::failure (framework_error_kind_t::rejected,
+                                                    "SPOT timer callback is already running");
         }
         timer._state->running = true;
     }
@@ -377,9 +357,8 @@ timer_runtime_t::dispatch_fire_count (timer_t &timer,
             timer._state->running = false;
         }
         complete_cancel_if_ready (timer._state);
-        return detail::boundary_failure<timer_tick_t> (
-          detail::boundary_error_t::closed,
-          "SPOT timer activation is closed");
+        return detail::boundary_failure<timer_tick_t> (detail::boundary_error_t::closed,
+                                                       "SPOT timer activation is closed");
     }
     auto reset_running = [&timer, this] {
         _context->leave_callback ();
@@ -427,14 +406,13 @@ task_t<timer_tick_t> timer_runtime_t::dispatch_fire_count_async (timer_t &timer,
     auto context = _context;
     if (!state || state->disposed) {
         co_return detail::boundary_failure<timer_tick_t> (detail::boundary_error_t::closed,
-                                                   "SPOT timer is disposed");
+                                                          "SPOT timer is disposed");
     }
     {
         std::lock_guard lock (state->mutex);
         if (state->disposed.load (std::memory_order_acquire)) {
-            co_return detail::boundary_failure<timer_tick_t> (
-              detail::boundary_error_t::closed,
-              "SPOT timer is disposed");
+            co_return detail::boundary_failure<timer_tick_t> (detail::boundary_error_t::closed,
+                                                              "SPOT timer is disposed");
         }
         if (state->running) {
             state->pending_fire = true;
@@ -480,9 +458,8 @@ task_t<timer_tick_t> timer_runtime_t::dispatch_fire_count_async (timer_t &timer,
             state->running = false;
         }
         complete_cancel_if_ready (state);
-        co_return detail::boundary_failure<timer_tick_t> (
-          detail::boundary_error_t::closed,
-          "SPOT timer activation is closed");
+        co_return detail::boundary_failure<timer_tick_t> (detail::boundary_error_t::closed,
+                                                          "SPOT timer activation is closed");
     }
     auto reset_running = [context, state] {
         bool post_pending = false;
@@ -512,19 +489,17 @@ task_t<timer_tick_t> timer_runtime_t::dispatch_fire_count_async (timer_t &timer,
           message_flow_tracer_t (fire_snapshot.channel_runtime->dispatch).mode ());
         auto handler_instance = state->handler_instance.lock ();
         if (!handler_instance) {
-            throw framework_exception_t (
-              framework_error_kind_t::protocol_error,
-              "SPOT timer handler activation is no longer available");
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         "SPOT timer handler activation is no longer available");
         }
         for (const auto &tick : ticks) {
-            auto handler_task = state->handler_invoker (
-              fire_snapshot.spot_instance.get (), handler_instance.get (),
-              *fire_snapshot.channel_runtime->serializers, tick);
+            auto handler_task =
+              state->handler_invoker (fire_snapshot.spot_instance.get (), handler_instance.get (),
+                                      *fire_snapshot.channel_runtime->serializers, tick);
             (void) co_await handler_task;
         }
         reset_running ();
-        co_return result_t<timer_tick_t>::success (
-          std::move (ticks.back ()));
+        co_return result_t<timer_tick_t>::success (std::move (ticks.back ()));
     }
     catch (const framework_exception_t &error) {
         const auto stopped = state->options.stop_on_unhandled_exception;
@@ -572,8 +547,7 @@ void timer_runtime_t::cancel_all (spot_context_state_t &context) noexcept
     }
 }
 
-void timer_test_access_t::finish_callback (
-  const std::shared_ptr<timer_state_t> &state)
+void timer_test_access_t::finish_callback (const std::shared_ptr<timer_state_t> &state)
 {
     {
         std::lock_guard lock (state->mutex);
@@ -587,8 +561,7 @@ std::vector<timer_failure_event_t> timer_runtime_t::failure_events (const timer_
     if (!timer._state) {
         return {};
     }
-    return {timer._state->failure_events.begin (),
-            timer._state->failure_events.end ()};
+    return {timer._state->failure_events.begin (), timer._state->failure_events.end ()};
 }
 
 std::vector<timer_tick_t> timer_runtime_t::delivered_ticks (const timer_t &timer) const
@@ -596,8 +569,7 @@ std::vector<timer_tick_t> timer_runtime_t::delivered_ticks (const timer_t &timer
     if (!timer._state) {
         return {};
     }
-    return {timer._state->delivered_ticks.begin (),
-            timer._state->delivered_ticks.end ()};
+    return {timer._state->delivered_ticks.begin (), timer._state->delivered_ticks.end ()};
 }
 
 } // namespace zlink::framework::detail

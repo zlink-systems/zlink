@@ -3,94 +3,94 @@ package systems.zlink.framework.runtime.binding;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 
 /**
- * Pins the relocation-forward relay failure classification
- * (spec 32-framework-error-model:83-92 + the schema
- * terminal-failure-integrity rule): the received (terminal, failureCode)
- * pair relays unchanged, and every synthesized pair is schema-valid.
+ * Pins the relocation-forward relay failure classification (spec 32-framework-error-model:83-92 +
+ * the schema terminal-failure-integrity rule): the received (terminal, failureCode) pair relays
+ * unchanged, and every synthesized pair is schema-valid.
  */
 final class ZLinkJavaRawMeshNodeRelayFailurePairTest {
 
     @Test
     void relayedReplyTerminalPairIsPreservedUnchanged() {
         assertArrayEquals(
-            new int[] {106, 18},
-            ZLinkJavaRawMeshNode.relayedFailurePair(
-                new ZLinkJavaRawMeshNode
-                    .ZLinkRelayedReplyTerminalException(106, 18)));
+                new int[] {106, 18},
+                ZLinkJavaRawMeshNode.relayedFailurePair(
+                        new ZLinkJavaRawMeshNode.ZLinkRelayedReplyTerminalException(106, 18)));
         assertArrayEquals(
-            new int[] {107, 33},
-            ZLinkJavaRawMeshNode.relayedFailurePair(
-                new ZLinkJavaRawMeshNode
-                    .ZLinkRelayedReplyTerminalException(107, 33)));
+                new int[] {107, 33},
+                ZLinkJavaRawMeshNode.relayedFailurePair(
+                        new ZLinkJavaRawMeshNode.ZLinkRelayedReplyTerminalException(107, 33)));
     }
 
     @Test
     void transportAndMalformedFailuresRelaySchemaValidPairs() {
         //  A boundary transport terminal relays its value with none.
         assertArrayEquals(
-            new int[] {101, 0},
-            ZLinkJavaRawMeshNode.relayedFailurePair(
-                new ZlinkRequestException(RequestResult.TIMED_OUT)));
+                new int[] {101, 0},
+                ZLinkJavaRawMeshNode.relayedFailurePair(
+                        new ZlinkRequestException(RequestResult.TIMED_OUT)));
         //  A typed transport terminal cannot carry none, so it falls back to
         //  the generic internalError+requestFailed pair.
         assertArrayEquals(
-            new int[] {105, 17},
-            ZLinkJavaRawMeshNode.relayedFailurePair(
-                new ZlinkRequestException(RequestResult.NOT_FOUND)));
+                new int[] {105, 17},
+                ZLinkJavaRawMeshNode.relayedFailurePair(
+                        new ZlinkRequestException(RequestResult.NOT_FOUND)));
         //  A malformed forwarded reply relays
         //  protocolError+requestProtocolError (a bare 104+0 would itself
         //  violate the schema integrity rule).
         assertArrayEquals(
-            new int[] {104, 16},
-            ZLinkJavaRawMeshNode.relayedFailurePair(
-                new IllegalArgumentException("malformed forwarded reply")));
+                new int[] {104, 16},
+                ZLinkJavaRawMeshNode.relayedFailurePair(
+                        new IllegalArgumentException("malformed forwarded reply")));
         //  Anything else is an unexpressible Framework failure
         //  (spec 32:119-120).
         assertArrayEquals(
-            new int[] {105, 17},
-            ZLinkJavaRawMeshNode.relayedFailurePair(
-                new IllegalStateException("unexpected relay failure")));
+                new int[] {105, 17},
+                ZLinkJavaRawMeshNode.relayedFailurePair(
+                        new IllegalStateException("unexpected relay failure")));
     }
 
     @Test
     void actorDispatchUnavailableAndRejectionKeepTheirFrameworkKinds() {
         assertArrayEquals(
-            new int[] {105, 17},
-            ZLinkJavaRawMeshNode.relayedFailurePair(
-                new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.UNAVAILABLE,
-                    "actor placement unavailable")));
+                new int[] {105, 17},
+                ZLinkJavaRawMeshNode.relayedFailurePair(
+                        new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                "actor placement unavailable")));
         assertArrayEquals(
-            new int[] {106, 15},
-            ZLinkJavaRawMeshNode.relayedFailurePair(
-                new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.REJECTED,
-                    "actor dispatch admission is closed")));
+                new int[] {106, 15},
+                ZLinkJavaRawMeshNode.relayedFailurePair(
+                        new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.REJECTED,
+                                "actor dispatch admission is closed")));
     }
 
     @Test
     void canonicalActorJoinKeepsStoreFailureTerminalKinds() {
-        assertArrayEquals(new int[] {102, 14},
-            ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(
-                new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.NOT_FOUND, "missing")));
-        assertArrayEquals(new int[] {104, 16},
-            ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(
-                new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR, "fence")));
-        assertArrayEquals(new int[] {107, 4},
-            ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(
-                new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.TYPE_MISMATCH, "type")));
-        assertArrayEquals(new int[] {106, 15},
-            ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(
-                new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.REJECTED, "rejected")));
+        assertArrayEquals(
+                new int[] {102, 14},
+                ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(
+                        new ZLinkFrameworkException(ZLinkFrameworkErrorKind.NOT_FOUND, "missing")));
+        assertArrayEquals(
+                new int[] {104, 16},
+                ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(
+                        new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.PROTOCOL_ERROR, "fence")));
+        assertArrayEquals(
+                new int[] {107, 4},
+                ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(
+                        new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.TYPE_MISMATCH, "type")));
+        assertArrayEquals(
+                new int[] {106, 15},
+                ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(
+                        new ZLinkFrameworkException(ZLinkFrameworkErrorKind.REJECTED, "rejected")));
     }
 }

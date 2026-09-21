@@ -18,7 +18,9 @@ internal sealed class ZLinkMeshNodeBuilder(ZLinkSpotNodeRegistration registratio
     public IZLinkMeshNodeBuilder Listen(string endpoint)
     {
         if (string.IsNullOrWhiteSpace(endpoint))
-            throw new ZLinkConfigurationException("MeshNode ROUTER bind endpoint must not be empty.");
+            throw new ZLinkConfigurationException(
+                "MeshNode ROUTER bind endpoint must not be empty."
+            );
 
         EnsureRouter().BindEndpoint = endpoint;
         EnsureRouter().ListenPort = null;
@@ -29,7 +31,8 @@ internal sealed class ZLinkMeshNodeBuilder(ZLinkSpotNodeRegistration registratio
     {
         if (port is < 0 or > 65535)
             throw new ZLinkConfigurationException(
-                "MeshNode listen port must be between 0 and 65535.");
+                "MeshNode listen port must be between 0 and 65535."
+            );
         var router = EnsureRouter();
         router.ListenPort = port;
         router.BindEndpoint = null;
@@ -40,7 +43,8 @@ internal sealed class ZLinkMeshNodeBuilder(ZLinkSpotNodeRegistration registratio
     {
         EnsureRouter().BindHost = ZLinkChannelEndpointBuilderSupport.Validate(
             bindHost,
-            "MeshNode bind host must not be empty.");
+            "MeshNode bind host must not be empty."
+        );
         return this;
     }
 
@@ -48,19 +52,19 @@ internal sealed class ZLinkMeshNodeBuilder(ZLinkSpotNodeRegistration registratio
     {
         EnsureRouter().AdvertiseHost = ZLinkChannelEndpointBuilderSupport.Validate(
             advertiseHost,
-            "MeshNode advertise host must not be empty.");
+            "MeshNode advertise host must not be empty."
+        );
         return this;
     }
 
     public IZLinkMeshNodeBuilder SetRoutingId(RoutingId routingId)
     {
-        if (registration.HasExplicitRoutingId
-            || registration.RoutingIdPrefix is not null)
+        if (registration.HasExplicitRoutingId || registration.RoutingIdPrefix is not null)
             throw new ZLinkConfigurationException(
-                "MeshNode routing mode can be configured only once.");
+                "MeshNode routing mode can be configured only once."
+            );
         if (routingId.Size == 0)
-            throw new ZLinkConfigurationException(
-                "MeshNode routing ID must not be empty.");
+            throw new ZLinkConfigurationException("MeshNode routing ID must not be empty.");
         registration.RoutingId = routingId;
         registration.HasExplicitRoutingId = true;
         return this;
@@ -68,20 +72,26 @@ internal sealed class ZLinkMeshNodeBuilder(ZLinkSpotNodeRegistration registratio
 
     public IZLinkMeshNodeBuilder SetRoutingIdPrefix(string prefix)
     {
-        if (registration.HasExplicitRoutingId
-            || registration.RoutingIdPrefix is not null)
+        if (registration.HasExplicitRoutingId || registration.RoutingIdPrefix is not null)
             throw new ZLinkConfigurationException(
-                "MeshNode routing mode can be configured only once.");
-        if (string.IsNullOrEmpty(prefix)
+                "MeshNode routing mode can be configured only once."
+            );
+        if (
+            string.IsNullOrEmpty(prefix)
             || prefix.Length > 64
             || prefix.Any(static character =>
-                !((character >= 'A' && character <= 'Z')
-                  || (character >= 'a' && character <= 'z')
-                  || (character >= '0' && character <= '9')
-                  || character is '.' or '_' or '-')))
+                !(
+                    (character >= 'A' && character <= 'Z')
+                    || (character >= 'a' && character <= 'z')
+                    || (character >= '0' && character <= '9')
+                    || character is '.' or '_' or '-'
+                )
+            )
+        )
             throw new ZLinkConfigurationException(
                 "MeshNode routing-id prefix must contain 1 to 64 ASCII "
-                + "letters, digits, '.', '_' or '-'.");
+                    + "letters, digits, '.', '_' or '-'."
+            );
         registration.RoutingIdPrefix = prefix;
         return this;
     }
@@ -119,13 +129,13 @@ internal sealed class ZLinkMeshNodeBuilder(ZLinkSpotNodeRegistration registratio
     {
         if (timeout < TimeSpan.Zero)
             throw new ZLinkConfigurationException(
-                "Instance Spot idle timeout must not be negative.");
+                "Instance Spot idle timeout must not be negative."
+            );
         registration.InstanceSpotIdleTimeout = timeout;
         return this;
     }
 
-    public IZLinkMeshObjectRoleBuilder Objects() =>
-        new ZLinkMeshObjectRoleBuilder(registration);
+    public IZLinkMeshObjectRoleBuilder Objects() => new ZLinkMeshObjectRoleBuilder(registration);
 
     public IZLinkMeshNodeSocketConfig ConfigureRouterSocket() => EnsureRouter().SocketConfig;
 
@@ -144,60 +154,64 @@ internal sealed class ZLinkMeshNodeBuilder(ZLinkSpotNodeRegistration registratio
     public IZLinkMeshNodeBuilder AddRouteSendHandler<THandler, TMessage>(string? packetName = null)
         where THandler : class, IZLinkRouteSendHandler<TMessage>
     {
-        registration.RouteSendHandlers.Add(new ZLinkRouteHandlerRegistration(
-            typeof(THandler),
-            typeof(TMessage),
-            null,
-            packetName));
+        registration.RouteSendHandlers.Add(
+            new ZLinkRouteHandlerRegistration(typeof(THandler), typeof(TMessage), null, packetName)
+        );
         return this;
     }
 
     public IZLinkMeshNodeBuilder AddRouteSendHandler<THandler>(string? packetName = null)
         where THandler : class
     {
-        var args = ZLinkTypedHandlerBuilderSupport.ResolveSingleHandlerInterface(
+        var args = ZLinkTypedHandlerBuilderSupport
+            .ResolveSingleHandlerInterface(
                 typeof(THandler),
                 typeof(IZLinkRouteSendHandler<>),
-                "route send")
+                "route send"
+            )
             .GetGenericArguments();
-        registration.RouteSendHandlers.Add(new ZLinkRouteHandlerRegistration(
-            typeof(THandler),
-            args[0],
-            null,
-            packetName));
+        registration.RouteSendHandlers.Add(
+            new ZLinkRouteHandlerRegistration(typeof(THandler), args[0], null, packetName)
+        );
         return this;
     }
 
-    public IZLinkMeshNodeBuilder AddRouteRequestHandler<THandler, TRequest, TReply>(string? packetName = null)
+    public IZLinkMeshNodeBuilder AddRouteRequestHandler<THandler, TRequest, TReply>(
+        string? packetName = null
+    )
         where THandler : class, IZLinkRouteRequestHandler<TRequest, TReply>
     {
-        registration.RouteRequestHandlers.Add(new ZLinkRouteHandlerRegistration(
-            typeof(THandler),
-            typeof(TRequest),
-            typeof(TReply),
-            packetName));
+        registration.RouteRequestHandlers.Add(
+            new ZLinkRouteHandlerRegistration(
+                typeof(THandler),
+                typeof(TRequest),
+                typeof(TReply),
+                packetName
+            )
+        );
         return this;
     }
 
     public IZLinkMeshNodeBuilder AddRouteRequestHandler<THandler>(string? packetName = null)
         where THandler : class
     {
-        var args = ZLinkTypedHandlerBuilderSupport.ResolveSingleHandlerInterface(
+        var args = ZLinkTypedHandlerBuilderSupport
+            .ResolveSingleHandlerInterface(
                 typeof(THandler),
                 typeof(IZLinkRouteRequestHandler<,>),
-                "route request")
+                "route request"
+            )
             .GetGenericArguments();
-        registration.RouteRequestHandlers.Add(new ZLinkRouteHandlerRegistration(
-            typeof(THandler),
-            args[0],
-            args[1],
-            packetName));
+        registration.RouteRequestHandlers.Add(
+            new ZLinkRouteHandlerRegistration(typeof(THandler), args[0], args[1], packetName)
+        );
         return this;
     }
 
     internal void RegisterSpotFactory<TSpot>(
         string spotType,
-        Action<IZLinkUserSpotFactoryBuilder<TSpot>> configure)
+        Action<IZLinkUserSpotFactoryBuilder<TSpot>> configure
+    )
         where TSpot : class, IZLinkSpot
     {
         EnsureServerRole();
@@ -208,13 +222,17 @@ internal sealed class ZLinkMeshNodeBuilder(ZLinkSpotNodeRegistration registratio
         factory.CompleteConfiguration();
         var effectiveOptions = factory.Configuration;
         ValidateUserSpotFactoryOptions(effectiveOptions);
-        if (effectiveOptions.ExecutionMode == ZLinkUserSpotExecutionMode.PerActor
-            && factory.Relocation.PolicyKind != 1)
+        if (
+            effectiveOptions.ExecutionMode == ZLinkUserSpotExecutionMode.PerActor
+            && factory.Relocation.PolicyKind != 1
+        )
             throw new ZLinkConfigurationException(
-                "PerActor User Spots must use RecreateOnRelocation.");
+                "PerActor User Spots must use RecreateOnRelocation."
+            );
         if (!registration.SpotFactories.Add(typeof(TSpot)))
             throw new ZLinkConfigurationException(
-                $"Duplicate SPOT factory '{typeof(TSpot)}' on MeshNode '{registration.SpotNodeName}'.");
+                $"Duplicate SPOT factory '{typeof(TSpot)}' on MeshNode '{registration.SpotNodeName}'."
+            );
         registration.UserSpotFactoryOptions.Add(typeof(TSpot), effectiveOptions);
         AddRelocation(
             registration.SpotRelocations,
@@ -224,14 +242,16 @@ internal sealed class ZLinkMeshNodeBuilder(ZLinkSpotNodeRegistration registratio
                 ? null
                 : new ZLinkObjectPlacementOptions
                 {
-                    MaxActiveObjects = effectiveOptions.StableTypeLimit
+                    MaxActiveObjects = effectiveOptions.StableTypeLimit,
                 },
-            factory.Relocation);
+            factory.Relocation
+        );
     }
 
     internal void RegisterInstanceSpotFactory<TSpot>(
         string instanceSpotType,
-        Action<IZLinkInstanceSpotFactoryBuilder<TSpot>> configure)
+        Action<IZLinkInstanceSpotFactoryBuilder<TSpot>> configure
+    )
         where TSpot : class, IZLinkInstanceSpot
     {
         EnsureServerRole();
@@ -240,14 +260,16 @@ internal sealed class ZLinkMeshNodeBuilder(ZLinkSpotNodeRegistration registratio
         var factory = new ZLinkInstanceSpotFactoryBuilder<TSpot>();
         configure(factory);
         factory.CompleteConfiguration();
-        if (!registration.InstanceSpotFactories.TryAdd(
+        if (
+            !registration.InstanceSpotFactories.TryAdd(
                 instanceSpotType,
-                new ZLinkInstanceSpotFactoryRegistration(
-                    typeof(TSpot),
-                    factory.Configuration)))
+                new ZLinkInstanceSpotFactoryRegistration(typeof(TSpot), factory.Configuration)
+            )
+        )
             throw new ZLinkConfigurationException(
                 $"Duplicate Instance Spot factory '{instanceSpotType}' on "
-                + $"MeshNode '{registration.SpotNodeName}'.");
+                    + $"MeshNode '{registration.SpotNodeName}'."
+            );
         var effectiveOptions = factory.Configuration;
         ValidateStableTypeLimit(effectiveOptions.StableTypeLimit, "Instance Spot");
         AddRelocation(
@@ -255,7 +277,8 @@ internal sealed class ZLinkMeshNodeBuilder(ZLinkSpotNodeRegistration registratio
             instanceSpotType,
             typeof(TSpot),
             PlacementFromStableTypeLimit(effectiveOptions.StableTypeLimit),
-            factory.Relocation);
+            factory.Relocation
+        );
     }
 
     internal void RegisterEntrySpot<TEntrySpot>()
@@ -264,14 +287,16 @@ internal sealed class ZLinkMeshNodeBuilder(ZLinkSpotNodeRegistration registratio
         EnsureServerRole();
         if (registration.EntrySpotType is not null)
             throw new ZLinkConfigurationException(
-                $"Duplicate Entry Spot registry on MeshNode '{registration.SpotNodeName}'.");
+                $"Duplicate Entry Spot registry on MeshNode '{registration.SpotNodeName}'."
+            );
 
         registration.EntrySpotType = typeof(TEntrySpot);
     }
 
     internal void RegisterActorFactory<TActor, TFactory>(
         string actorType,
-        Action<IZLinkActorFactoryBuilder<TActor>> configure)
+        Action<IZLinkActorFactoryBuilder<TActor>> configure
+    )
         where TActor : class, IZLinkActor
         where TFactory : class, IZLinkActorFactory<TActor>
     {
@@ -285,13 +310,15 @@ internal sealed class ZLinkMeshNodeBuilder(ZLinkSpotNodeRegistration registratio
             actorType,
             typeof(TFactory),
             "Actor factory name must not be empty.",
-            $"Duplicate actor factory '{actorType}'.");
+            $"Duplicate actor factory '{actorType}'."
+        );
         AddRelocation(
             registration.ActorRelocations,
             actorType,
             typeof(TActor),
             null,
-            factory.Relocation);
+            factory.Relocation
+        );
     }
 
     private ZLinkSpotRouterCapabilityRegistration EnsureRouter()
@@ -304,30 +331,32 @@ internal sealed class ZLinkMeshNodeBuilder(ZLinkSpotNodeRegistration registratio
     {
         if (string.IsNullOrWhiteSpace(channelName))
             throw new ZLinkConfigurationException("Channel membership name must not be empty.");
-        if (System.Text.Encoding.UTF8.GetByteCount(channelName) > 255
-            || channelName.Contains('\0'))
+        if (System.Text.Encoding.UTF8.GetByteCount(channelName) > 255 || channelName.Contains('\0'))
             throw new ZLinkConfigurationException(
-                "Channel membership name must be 1 to 255 UTF-8 bytes without NUL.");
+                "Channel membership name must be 1 to 255 UTF-8 bytes without NUL."
+            );
     }
 
     internal static ZLinkMeshChannelMembership AddChannelMembership(
         ZLinkSpotNodeRegistration registration,
         string channelName,
-        bool isServer)
+        bool isServer
+    )
     {
         ValidateChannelName(channelName);
-        if (registration.ChannelMemberships.Any(
-                membership => string.Equals(
-                    membership.ChannelName,
-                    channelName,
-                    StringComparison.Ordinal)))
+        if (
+            registration.ChannelMemberships.Any(membership =>
+                string.Equals(membership.ChannelName, channelName, StringComparison.Ordinal)
+            )
+        )
             throw new ZLinkConfigurationException(
-                $"Duplicate channel membership '{channelName}' on MeshNode '{registration.SpotNodeName}'.");
+                $"Duplicate channel membership '{channelName}' on MeshNode '{registration.SpotNodeName}'."
+            );
 
         var membership = new ZLinkMeshChannelMembership
         {
             ChannelName = channelName,
-            IsServer = isServer
+            IsServer = isServer,
         };
         registration.ChannelMemberships.Add(membership);
         return membership;
@@ -337,7 +366,8 @@ internal sealed class ZLinkMeshNodeBuilder(ZLinkSpotNodeRegistration registratio
     {
         if (registration.ObjectRole == ZLinkMeshNodeObjectRole.Client)
             throw new ZLinkConfigurationException(
-                $"MeshNode '{registration.SpotNodeName}' is configured as an Object Client.");
+                $"MeshNode '{registration.SpotNodeName}' is configured as an Object Client."
+            );
         registration.ObjectRole = ZLinkMeshNodeObjectRole.Server;
         registration.ObjectRoleSelected = true;
     }
@@ -347,31 +377,36 @@ internal sealed class ZLinkMeshNodeBuilder(ZLinkSpotNodeRegistration registratio
         string stableType,
         Type instanceType,
         ZLinkObjectPlacementOptions? placement,
-        ZLinkRelocationFactoryConfiguration relocation)
+        ZLinkRelocationFactoryConfiguration relocation
+    )
     {
         var effectivePlacement = placement ?? new ZLinkObjectPlacementOptions();
         ValidatePlacement(effectivePlacement);
-        if (!target.TryAdd(
+        if (
+            !target.TryAdd(
                 stableType,
                 new ZLinkObjectRelocationRegistration(
                     instanceType,
                     effectivePlacement,
                     relocation.PolicyKind,
                     relocation.AdapterType,
-                    relocation.AdapterInvoker)))
+                    relocation.AdapterInvoker
+                )
+            )
+        )
             throw new ZLinkConfigurationException(
-                $"Duplicate relocation registration '{stableType}'.");
+                $"Duplicate relocation registration '{stableType}'."
+            );
     }
 
     private static void ValidateObjectType(string stableType, string kind)
     {
         if (string.IsNullOrWhiteSpace(stableType))
+            throw new ZLinkConfigurationException($"{kind} type must not be empty.");
+        if (System.Text.Encoding.UTF8.GetByteCount(stableType) > 255 || stableType.Contains('\0'))
             throw new ZLinkConfigurationException(
-                $"{kind} type must not be empty.");
-        if (System.Text.Encoding.UTF8.GetByteCount(stableType) > 255
-            || stableType.Contains('\0'))
-            throw new ZLinkConfigurationException(
-                $"{kind} type must be 1 to 255 UTF-8 bytes without NUL.");
+                $"{kind} type must be 1 to 255 UTF-8 bytes without NUL."
+            );
     }
 
     private static void ValidatePositiveLimit(int limit, string name)
@@ -383,56 +418,56 @@ internal sealed class ZLinkMeshNodeBuilder(ZLinkSpotNodeRegistration registratio
     private static void ValidatePopulationLimit(int limit, string name)
     {
         if (limit < 0)
-            throw new ZLinkConfigurationException(
-                $"{name} must be zero (unlimited) or greater.");
+            throw new ZLinkConfigurationException($"{name} must be zero (unlimited) or greater.");
     }
 
     private static void ValidatePlacement(ZLinkObjectPlacementOptions placement)
     {
         if (placement.MaxActiveObjects is <= 0)
-            throw new ZLinkConfigurationException(
-                "MaxActiveObjects must be greater than zero.");
+            throw new ZLinkConfigurationException("MaxActiveObjects must be greater than zero.");
         if (placement.MaxPendingActivations is <= 0)
             throw new ZLinkConfigurationException(
-                "MaxPendingActivations must be greater than zero.");
+                "MaxPendingActivations must be greater than zero."
+            );
     }
 
-    private static void ValidateUserSpotFactoryOptions(
-        ZLinkUserSpotFactoryConfiguration options)
+    private static void ValidateUserSpotFactoryOptions(ZLinkUserSpotFactoryConfiguration options)
     {
         if (options.StableTypeLimit < 0)
             throw new ZLinkConfigurationException(
-                "User Spot StableTypeLimit must not be negative.");
+                "User Spot StableTypeLimit must not be negative."
+            );
         if (!Enum.IsDefined(options.ExecutionMode))
-            throw new ZLinkConfigurationException(
-                "User Spot execution mode is not supported.");
+            throw new ZLinkConfigurationException("User Spot execution mode is not supported.");
         if (!Enum.IsDefined(options.RelocationCoordinationMode))
             throw new ZLinkConfigurationException(
-                "User Spot relocation coordination mode is not supported.");
-        if (options.ExecutionMode != ZLinkUserSpotExecutionMode.SpotWide
+                "User Spot relocation coordination mode is not supported."
+            );
+        if (
+            options.ExecutionMode != ZLinkUserSpotExecutionMode.SpotWide
             && options.RelocationCoordinationMode
-            == ZLinkSpotRelocationCoordinationMode.ApplicationSignaled)
+                == ZLinkSpotRelocationCoordinationMode.ApplicationSignaled
+        )
             throw new ZLinkConfigurationException(
-                "ApplicationSignaled relocation coordination mode is valid only for SpotWide User Spots.");
+                "ApplicationSignaled relocation coordination mode is valid only for SpotWide User Spots."
+            );
     }
 
     private static void ValidateStableTypeLimit(int limit, string kind)
     {
         if (limit < 0)
-            throw new ZLinkConfigurationException(
-                $"{kind} StableTypeLimit must not be negative.");
+            throw new ZLinkConfigurationException($"{kind} StableTypeLimit must not be negative.");
     }
 
     private static ZLinkObjectPlacementOptions? PlacementFromStableTypeLimit(int limit) =>
-        limit == 0
-            ? null
-            : new ZLinkObjectPlacementOptions { MaxActiveObjects = limit };
+        limit == 0 ? null : new ZLinkObjectPlacementOptions { MaxActiveObjects = limit };
 }
 
 internal sealed record ZLinkRelocationFactoryConfiguration(
     byte PolicyKind,
     Type? AdapterType,
-    IZLinkRelocationAdapterInvoker? AdapterInvoker);
+    IZLinkRelocationAdapterInvoker? AdapterInvoker
+);
 
 internal abstract class ZLinkFactoryBuilderBase
 {
@@ -442,7 +477,8 @@ internal abstract class ZLinkFactoryBuilderBase
     internal ZLinkRelocationFactoryConfiguration Relocation =>
         _relocation
         ?? throw new ZLinkConfigurationException(
-            "A factory must configure exactly one relocation policy.");
+            "A factory must configure exactly one relocation policy."
+        );
 
     internal void CompleteConfiguration()
     {
@@ -454,27 +490,32 @@ internal abstract class ZLinkFactoryBuilderBase
     {
         if (_configurationComplete)
             throw new ZLinkConfigurationException(
-                "A factory builder cannot be changed after its configure callback returns.");
+                "A factory builder cannot be changed after its configure callback returns."
+            );
     }
 
     protected void SelectRelocation(
         byte policyKind,
         Type? adapterType = null,
-        IZLinkRelocationAdapterInvoker? adapterInvoker = null)
+        IZLinkRelocationAdapterInvoker? adapterInvoker = null
+    )
     {
         EnsureConfigurationIsOpen();
         if (_relocation is not null)
             throw new ZLinkConfigurationException(
-                "A factory must configure exactly one relocation policy.");
+                "A factory must configure exactly one relocation policy."
+            );
         _relocation = new ZLinkRelocationFactoryConfiguration(
             policyKind,
             adapterType,
-            adapterInvoker);
+            adapterInvoker
+        );
     }
 }
 
 internal sealed class ZLinkActorFactoryBuilder<TActor>
-    : ZLinkFactoryBuilderBase, IZLinkActorFactoryBuilder<TActor>
+    : ZLinkFactoryBuilderBase,
+        IZLinkActorFactoryBuilder<TActor>
     where TActor : class, IZLinkActor
 {
     public IZLinkActorFactoryBuilder<TActor> DisableRelocation()
@@ -492,20 +533,21 @@ internal sealed class ZLinkActorFactoryBuilder<TActor>
     public IZLinkActorFactoryBuilder<TActor> PreserveStateWith<TAdapter>()
         where TAdapter : class, IZLinkActorRelocationAdapter<TActor>
     {
-        IZLinkRelocationAdapterInvoker invoker =
-            new ZLinkActorRelocationAdapterInvoker<TActor>(typeof(TAdapter));
+        IZLinkRelocationAdapterInvoker invoker = new ZLinkActorRelocationAdapterInvoker<TActor>(
+            typeof(TAdapter)
+        );
         SelectRelocation(2, typeof(TAdapter), invoker);
         return this;
     }
 }
 
 internal sealed class ZLinkUserSpotFactoryBuilder<TSpot>
-    : ZLinkFactoryBuilderBase, IZLinkUserSpotFactoryBuilder<TSpot>
+    : ZLinkFactoryBuilderBase,
+        IZLinkUserSpotFactoryBuilder<TSpot>
     where TSpot : class, IZLinkSpot
 {
     private int _stableTypeLimit;
-    private ZLinkUserSpotExecutionMode _executionMode =
-        ZLinkUserSpotExecutionMode.SpotWide;
+    private ZLinkUserSpotExecutionMode _executionMode = ZLinkUserSpotExecutionMode.SpotWide;
     private ZLinkSpotRelocationCoordinationMode _relocationCoordinationMode =
         ZLinkSpotRelocationCoordinationMode.FrameworkManaged;
 
@@ -517,13 +559,13 @@ internal sealed class ZLinkUserSpotFactoryBuilder<TSpot>
         EnsureConfigurationIsOpen();
         if (limit <= 0)
             throw new ZLinkConfigurationException(
-                "User Spot StableTypeLimit must be greater than zero.");
+                "User Spot StableTypeLimit must be greater than zero."
+            );
         _stableTypeLimit = limit;
         return this;
     }
 
-    public IZLinkUserSpotFactoryBuilder<TSpot> ExecutionMode(
-        ZLinkUserSpotExecutionMode mode)
+    public IZLinkUserSpotFactoryBuilder<TSpot> ExecutionMode(ZLinkUserSpotExecutionMode mode)
     {
         EnsureConfigurationIsOpen();
         _executionMode = mode;
@@ -531,7 +573,8 @@ internal sealed class ZLinkUserSpotFactoryBuilder<TSpot>
     }
 
     public IZLinkUserSpotFactoryBuilder<TSpot> RelocationCoordinationMode(
-        ZLinkSpotRelocationCoordinationMode mode)
+        ZLinkSpotRelocationCoordinationMode mode
+    )
     {
         EnsureConfigurationIsOpen();
         _relocationCoordinationMode = mode;
@@ -553,28 +596,30 @@ internal sealed class ZLinkUserSpotFactoryBuilder<TSpot>
     public IZLinkUserSpotFactoryBuilder<TSpot> PreserveStateWith<TAdapter>()
         where TAdapter : class, IZLinkSpotRelocationAdapter<TSpot>
     {
-        IZLinkRelocationAdapterInvoker invoker =
-            new ZLinkSpotRelocationAdapterInvoker<TSpot>(typeof(TAdapter));
+        IZLinkRelocationAdapterInvoker invoker = new ZLinkSpotRelocationAdapterInvoker<TSpot>(
+            typeof(TAdapter)
+        );
         SelectRelocation(2, typeof(TAdapter), invoker);
         return this;
     }
 }
 
 internal sealed class ZLinkInstanceSpotFactoryBuilder<TSpot>
-    : ZLinkFactoryBuilderBase, IZLinkInstanceSpotFactoryBuilder<TSpot>
+    : ZLinkFactoryBuilderBase,
+        IZLinkInstanceSpotFactoryBuilder<TSpot>
     where TSpot : class, IZLinkInstanceSpot
 {
     private int _stableTypeLimit;
 
-    internal ZLinkInstanceSpotFactoryConfiguration Configuration =>
-        new(_stableTypeLimit);
+    internal ZLinkInstanceSpotFactoryConfiguration Configuration => new(_stableTypeLimit);
 
     public IZLinkInstanceSpotFactoryBuilder<TSpot> StableTypeLimit(int limit)
     {
         EnsureConfigurationIsOpen();
         if (limit <= 0)
             throw new ZLinkConfigurationException(
-                "Instance Spot StableTypeLimit must be greater than zero.");
+                "Instance Spot StableTypeLimit must be greater than zero."
+            );
         _stableTypeLimit = limit;
         return this;
     }
@@ -594,15 +639,15 @@ internal sealed class ZLinkInstanceSpotFactoryBuilder<TSpot>
     public IZLinkInstanceSpotFactoryBuilder<TSpot> PreserveStateWith<TAdapter>()
         where TAdapter : class, IZLinkSpotRelocationAdapter<TSpot>
     {
-        IZLinkRelocationAdapterInvoker invoker =
-            new ZLinkSpotRelocationAdapterInvoker<TSpot>(typeof(TAdapter));
+        IZLinkRelocationAdapterInvoker invoker = new ZLinkSpotRelocationAdapterInvoker<TSpot>(
+            typeof(TAdapter)
+        );
         SelectRelocation(2, typeof(TAdapter), invoker);
         return this;
     }
 }
 
-internal sealed class ZLinkMeshObjectRoleBuilder(
-    ZLinkSpotNodeRegistration registration)
+internal sealed class ZLinkMeshObjectRoleBuilder(ZLinkSpotNodeRegistration registration)
     : IZLinkMeshObjectRoleBuilder
 {
     public IZLinkMeshObjectClientBuilder Client()
@@ -621,17 +666,16 @@ internal sealed class ZLinkMeshObjectRoleBuilder(
     {
         if (registration.ObjectRoleSelected)
             throw new ZLinkConfigurationException(
-                $"Object role for MeshNode '{registration.SpotNodeName}' was already selected.");
+                $"Object role for MeshNode '{registration.SpotNodeName}' was already selected."
+            );
         registration.ObjectRole = role;
         registration.ObjectRoleSelected = true;
     }
 }
 
-internal sealed class ZLinkMeshObjectClientBuilder
-    : IZLinkMeshObjectClientBuilder;
+internal sealed class ZLinkMeshObjectClientBuilder : IZLinkMeshObjectClientBuilder;
 
-internal sealed class ZLinkMeshObjectServerBuilder(
-    ZLinkSpotNodeRegistration registration)
+internal sealed class ZLinkMeshObjectServerBuilder(ZLinkSpotNodeRegistration registration)
     : IZLinkMeshObjectServerBuilder
 {
     private readonly ZLinkMeshNodeBuilder _builder = new(registration);
@@ -645,7 +689,8 @@ internal sealed class ZLinkMeshObjectServerBuilder(
 
     public IZLinkMeshObjectServerBuilder AddSpotFactory<TSpot>(
         string spotType,
-        Action<IZLinkUserSpotFactoryBuilder<TSpot>> configure)
+        Action<IZLinkUserSpotFactoryBuilder<TSpot>> configure
+    )
         where TSpot : class, IZLinkSpot
     {
         _builder.RegisterSpotFactory(spotType, configure);
@@ -654,31 +699,30 @@ internal sealed class ZLinkMeshObjectServerBuilder(
 
     public IZLinkMeshObjectServerBuilder AddInstanceSpotFactory<TSpot>(
         string instanceSpotType,
-        Action<IZLinkInstanceSpotFactoryBuilder<TSpot>> configure)
+        Action<IZLinkInstanceSpotFactoryBuilder<TSpot>> configure
+    )
         where TSpot : class, IZLinkInstanceSpot
     {
-        _builder.RegisterInstanceSpotFactory(
-            instanceSpotType,
-            configure);
+        _builder.RegisterInstanceSpotFactory(instanceSpotType, configure);
         return this;
     }
 
     public IZLinkMeshObjectServerBuilder AddActorFactory<TActor, TFactory>(
         string actorType,
-        Action<IZLinkActorFactoryBuilder<TActor>> configure)
+        Action<IZLinkActorFactoryBuilder<TActor>> configure
+    )
         where TActor : class, IZLinkActor
         where TFactory : class, IZLinkActorFactory<TActor>
     {
-        _builder.RegisterActorFactory<TActor, TFactory>(
-            actorType,
-            configure);
+        _builder.RegisterActorFactory<TActor, TFactory>(actorType, configure);
         return this;
     }
 }
 
 internal sealed class ZLinkMeshChannelRoleBuilder(
     ZLinkSpotNodeRegistration registration,
-    string channelName) : IZLinkMeshChannelRoleBuilder
+    string channelName
+) : IZLinkMeshChannelRoleBuilder
 {
     private bool _selected;
 
@@ -698,18 +742,14 @@ internal sealed class ZLinkMeshChannelRoleBuilder(
     {
         if (_selected)
             throw new ZLinkConfigurationException(
-                $"Channel membership '{channelName}' already selected a role.");
+                $"Channel membership '{channelName}' already selected a role."
+            );
         _selected = true;
-        return ZLinkMeshNodeBuilder.AddChannelMembership(
-            registration,
-            channelName,
-            isServer);
+        return ZLinkMeshNodeBuilder.AddChannelMembership(registration, channelName, isServer);
     }
 }
 
-internal sealed class ZLinkMeshChannelClientBuilder : IZLinkMeshChannelClientBuilder
-{
-}
+internal sealed class ZLinkMeshChannelClientBuilder : IZLinkMeshChannelClientBuilder { }
 
 // Logical channel membership builder (spec 05-route-mesh §4). Weight and the
 // channel-scoped IZLinkSendHandler/IZLinkRequestHandler namespace are recorded on
@@ -730,60 +770,65 @@ internal sealed class ZLinkMeshChannelBuilder(ZLinkMeshChannelMembership members
         return this;
     }
 
-    public IZLinkMeshChannelServerBuilder AddSendHandler<THandler, TMessage>(string? packetName = null)
+    public IZLinkMeshChannelServerBuilder AddSendHandler<THandler, TMessage>(
+        string? packetName = null
+    )
         where THandler : class, IZLinkSendHandler<TMessage>
     {
-        membership.SendHandlers.Add(new ZLinkChannelHandlerRegistration(
-            typeof(THandler),
-            typeof(TMessage),
-            null,
-            packetName));
+        membership.SendHandlers.Add(
+            new ZLinkChannelHandlerRegistration(
+                typeof(THandler),
+                typeof(TMessage),
+                null,
+                packetName
+            )
+        );
         return this;
     }
 
     public IZLinkMeshChannelServerBuilder AddSendHandler<THandler>(string? packetName = null)
         where THandler : class
     {
-        var args = ZLinkTypedHandlerBuilderSupport.ResolveSingleHandlerInterface(
-                typeof(THandler),
-                typeof(IZLinkSendHandler<>),
-                "send")
+        var args = ZLinkTypedHandlerBuilderSupport
+            .ResolveSingleHandlerInterface(typeof(THandler), typeof(IZLinkSendHandler<>), "send")
             .GetGenericArguments();
-        membership.SendHandlers.Add(new ZLinkChannelHandlerRegistration(
-            typeof(THandler),
-            args[0],
-            null,
-            packetName));
+        membership.SendHandlers.Add(
+            new ZLinkChannelHandlerRegistration(typeof(THandler), args[0], null, packetName)
+        );
         return this;
     }
 
-    public IZLinkMeshChannelServerBuilder AddRequestHandler<THandler, TRequest, TReply>(string? packetName = null)
+    public IZLinkMeshChannelServerBuilder AddRequestHandler<THandler, TRequest, TReply>(
+        string? packetName = null
+    )
         where THandler : class, IZLinkRequestHandler<TRequest, TReply>
     {
-        membership.RequestHandlers.Add(new ZLinkChannelHandlerRegistration(
-            typeof(THandler),
-            typeof(TRequest),
-            typeof(TReply),
-            packetName));
+        membership.RequestHandlers.Add(
+            new ZLinkChannelHandlerRegistration(
+                typeof(THandler),
+                typeof(TRequest),
+                typeof(TReply),
+                packetName
+            )
+        );
         return this;
     }
 
     public IZLinkMeshChannelServerBuilder AddRequestHandler<THandler>(string? packetName = null)
         where THandler : class
     {
-        var args = ZLinkTypedHandlerBuilderSupport.ResolveSingleHandlerInterface(
+        var args = ZLinkTypedHandlerBuilderSupport
+            .ResolveSingleHandlerInterface(
                 typeof(THandler),
                 typeof(IZLinkRequestHandler<,>),
-                "request")
+                "request"
+            )
             .GetGenericArguments();
-        membership.RequestHandlers.Add(new ZLinkChannelHandlerRegistration(
-            typeof(THandler),
-            args[0],
-            args[1],
-            packetName));
+        membership.RequestHandlers.Add(
+            new ZLinkChannelHandlerRegistration(typeof(THandler), args[0], args[1], packetName)
+        );
         return this;
     }
-
 }
 
 // Adapter over the MeshNode ROUTER's manual connection set and expected peer RIDs
@@ -804,9 +849,11 @@ internal sealed class ZLinkMeshPeerConnections(ZLinkSpotRouterCapabilityRegistra
             throw new ZLinkConfigurationException("Expected peer routing id must not be empty.");
 
         ValidateEndpoint(endpoint);
-        if (router.PeerRoutingIds.TryGetValue(endpoint, out var previousRid)
+        if (
+            router.PeerRoutingIds.TryGetValue(endpoint, out var previousRid)
             && previousRid != expectedRoutingId
-            && router.ManualConnections.ListConnections().Contains(endpoint, StringComparer.Ordinal))
+            && router.ManualConnections.ListConnections().Contains(endpoint, StringComparer.Ordinal)
+        )
             router.ManualConnections.Disconnect(endpoint);
         router.PeerRoutingIds[endpoint] = expectedRoutingId;
         try
@@ -829,16 +876,20 @@ internal sealed class ZLinkMeshPeerConnections(ZLinkSpotRouterCapabilityRegistra
 
     public IReadOnlyList<ZLinkMeshPeerConnection> ListConnections()
     {
-        return router.ManualConnections.ListConnections()
+        return router
+            .ManualConnections.ListConnections()
             .Select(endpoint => new ZLinkMeshPeerConnection(
                 endpoint,
-                router.PeerRoutingIds.TryGetValue(endpoint, out var rid) ? rid : null))
+                router.PeerRoutingIds.TryGetValue(endpoint, out var rid) ? rid : null
+            ))
             .ToArray();
     }
 
     private static void ValidateEndpoint(string endpoint)
     {
         if (string.IsNullOrWhiteSpace(endpoint))
-            throw new ZLinkConfigurationException("Manual MeshNode peer endpoint must not be empty.");
+            throw new ZLinkConfigurationException(
+                "Manual MeshNode peer endpoint must not be empty."
+            );
     }
 }

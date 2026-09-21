@@ -13,7 +13,8 @@ internal static class ZlinkStreamTransportFactory
 
     public static async ValueTask<IZlinkStreamConnection> ConnectAsync(
         ZlinkStreamConnectorOptions options,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var transport = ResolveTransport(options);
         return transport is ZlinkStreamTransport.WebSocket or ZlinkStreamTransport.WebSocketSecure
@@ -23,7 +24,8 @@ internal static class ZlinkStreamTransportFactory
 
     private static async ValueTask<IZlinkStreamConnection> ConnectWebSocketAsync(
         ZlinkStreamConnectorOptions options,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var webSocket = new ClientWebSocket();
         try
@@ -44,7 +46,8 @@ internal static class ZlinkStreamTransportFactory
     private static async ValueTask<IZlinkStreamConnection> ConnectStreamAsync(
         ZlinkStreamConnectorOptions options,
         ZlinkStreamTransport transport,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var tcp = new TcpClient();
         try
@@ -58,12 +61,12 @@ internal static class ZlinkStreamTransportFactory
                 var ssl = new SslStream(
                     stream,
                     false,
-                    options.SkipServerCertificateValidation
-                        ? (_, _, _, _) => true
-                        : null);
+                    options.SkipServerCertificateValidation ? (_, _, _, _) => true : null
+                );
                 try
                 {
-                    await ssl.AuthenticateAsClientAsync(options.Endpoint.Host).WaitAsync(cancellationToken)
+                    await ssl.AuthenticateAsClientAsync(options.Endpoint.Host)
+                        .WaitAsync(cancellationToken)
                         .ConfigureAwait(false);
                     stream = ssl;
                 }
@@ -93,13 +96,15 @@ internal static class ZlinkStreamTransportFactory
             "wss" => ZlinkStreamTransport.WebSocketSecure,
             _ => throw ZlinkStreamConnector.Error(
                 ZlinkStreamErrorCode.ConfigurationError,
-                "Endpoint scheme is not supported.")
+                "Endpoint scheme is not supported."
+            ),
         };
 
         if (options.Transport is { } configured && configured != inferred)
             throw ZlinkStreamConnector.Error(
                 ZlinkStreamErrorCode.ConfigurationError,
-                "Configured transport conflicts with endpoint scheme.");
+                "Configured transport conflicts with endpoint scheme."
+            );
 
         return inferred;
     }

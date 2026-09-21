@@ -1,8 +1,5 @@
 import type { ZLinkActor } from '../../contracts';
-import type {
-  ZLinkBackendActorRef,
-  ZLinkBackendMeshNode
-} from '../backend/contracts';
+import type { ZLinkBackendActorRef, ZLinkBackendMeshNode } from '../backend/contracts';
 import { closeMeshCompletion } from '../backend';
 import { RequestResult } from '../backend/runtime-values';
 import type { ZLinkActorManagerOptions } from './actor-runtime-contracts';
@@ -60,8 +57,9 @@ export class ZLinkTransferredActorRollbackCoordinator {
     if (this.tasks.has(actor.context.actorId)) {
       return;
     }
-    const task = this.retry(actor, state, node, actorRef)
-      .finally(() => this.tasks.delete(actor.context.actorId));
+    const task = this.retry(actor, state, node, actorRef).finally(() =>
+      this.tasks.delete(actor.context.actorId)
+    );
     this.tasks.set(actor.context.actorId, task);
   }
 
@@ -72,8 +70,11 @@ export class ZLinkTransferredActorRollbackCoordinator {
     actorRef: ZLinkBackendActorRef | undefined
   ): Promise<void> {
     const retryDelay = new ZLinkActorRetryDelay();
-    while (this.states.get(actor.context.actorId) === state && this.options.shutdownSignal?.aborted !== true) {
-      if (!await retryDelay.wait(this.options.shutdownSignal)) return;
+    while (
+      this.states.get(actor.context.actorId) === state &&
+      this.options.shutdownSignal?.aborted !== true
+    ) {
+      if (!(await retryDelay.wait(this.options.shutdownSignal))) return;
       try {
         if (node !== undefined && actorRef !== undefined) {
           await this.destroyNativeActor(node, actorRef);
@@ -95,11 +96,15 @@ export class ZLinkTransferredActorRollbackCoordinator {
     if (completions === undefined) {
       throw new Error('Actor rollback requires a running MeshNode completion table.');
     }
-    const completion = await completions.submit(() => node.destroyActor({
-      nodeRid: actorRef.nodeRid,
-      actorId: actorRef.actorId,
-      generation: actorRef.generation
-    }), signal);
+    const completion = await completions.submit(
+      () =>
+        node.destroyActor({
+          nodeRid: actorRef.nodeRid,
+          actorId: actorRef.actorId,
+          generation: actorRef.generation
+        }),
+      signal
+    );
     try {
       if (completion.terminalResult !== RequestResult.Ok) {
         throw new Error(

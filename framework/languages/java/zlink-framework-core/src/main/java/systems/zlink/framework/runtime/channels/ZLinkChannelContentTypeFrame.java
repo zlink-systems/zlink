@@ -1,17 +1,17 @@
 package systems.zlink.framework.runtime.channels;
 
+import systems.zlink.contracts.messaging.Message;
+
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Objects;
-import systems.zlink.contracts.messaging.Message;
 
 /** Carries the framework-selected application content type inside internal frames. */
 public final class ZLinkChannelContentTypeFrame {
     public static final String DEFAULT_CONTENT_TYPE = "application/json";
     private static final String PREFIX = "__zlink.content-type\n";
 
-    private ZLinkChannelContentTypeFrame() {
-    }
+    private ZLinkChannelContentTypeFrame() {}
 
     public static Message encode(String contentType) {
         String value = Objects.requireNonNull(contentType, "contentType");

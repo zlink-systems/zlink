@@ -4,7 +4,8 @@ public sealed record ZLinkLocationRuntimeStatus(
     bool StoreHealthy,
     bool OwnerLeaseHealthy,
     DateTimeOffset? LastRefreshAt,
-    DateTimeOffset? OwnerLeaseRenewedAt);
+    DateTimeOffset? OwnerLeaseRenewedAt
+);
 
 public enum ZLinkLocationTopologyState
 {
@@ -13,13 +14,14 @@ public enum ZLinkLocationTopologyState
     Ready = 3,
     Lost = 4,
     Error = 5,
-    Stopped = 6
+    Stopped = 6,
 }
 
 public sealed record ZLinkLocationTopologyFilter(
     string? MeshName = null,
     RoutingId? NodeRid = null,
-    ZLinkLocationTopologyState? State = null);
+    ZLinkLocationTopologyState? State = null
+);
 
 /// <summary>
 /// One MeshNode descriptor projected with liveness. Spot and Actor rows are
@@ -31,10 +33,10 @@ public sealed record ZLinkLocationTopologyEntry(
     string Endpoint,
     bool Draining,
     ZLinkLocationTopologyState State,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt
+);
 
-public sealed record ZLinkLocationServiceSummaryFilter(
-    string? MeshName = null);
+public sealed record ZLinkLocationServiceSummaryFilter(string? MeshName = null);
 
 public sealed record ZLinkLocationServiceSummary(
     string MeshName,
@@ -42,4 +44,5 @@ public sealed record ZLinkLocationServiceSummary(
     uint ReadyCount,
     uint ErrorCount,
     uint StoppedCount,
-    DateTimeOffset LastUpdatedAt);
+    DateTimeOffset LastUpdatedAt
+);

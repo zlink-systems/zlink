@@ -1,6 +1,4 @@
-import type {
-  Message,
-} from '../../contracts/Common/Message';
+import type { Message } from '../../contracts/Common/Message';
 import type {
   RequestResult,
   SubmitResult,
@@ -69,11 +67,13 @@ export const OperationKind = Object.freeze({
 } as const);
 
 export function operationRequiresReply(operationKind: number): boolean {
-  return operationKind === OperationKind.NodeRequest
-    || operationKind === OperationKind.ChannelRequest
-    || operationKind === OperationKind.SpotRequest
-    || operationKind === OperationKind.ActorRequest
-    || operationKind === OperationKind.InstanceSpotRequest;
+  return (
+    operationKind === OperationKind.NodeRequest ||
+    operationKind === OperationKind.ChannelRequest ||
+    operationKind === OperationKind.SpotRequest ||
+    operationKind === OperationKind.ActorRequest ||
+    operationKind === OperationKind.InstanceSpotRequest
+  );
 }
 
 export const ActorLifecycleKind = Object.freeze({

@@ -1,27 +1,17 @@
 package systems.zlink.framework.runtime.spots;
-import java.time.Instant;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import org.junit.jupiter.api.Test;
+
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason;
+
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.junit.jupiter.api.Test;
-import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.framework.locations.ZLinkActivationConcurrency;
-import systems.zlink.framework.locations.ZLinkCapacityUsage;
-import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
-import systems.zlink.framework.locations.ZLinkPlacementCapacity;
-import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
-import systems.zlink.framework.locations.ZLinkSpotTypeCapacity;
-import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason;
-import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
-import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor;
 
 final class ZLinkUserSpotRetireRuntimePreflightTest {
     @Test
@@ -29,47 +19,50 @@ final class ZLinkUserSpotRetireRuntimePreflightTest {
         var events = new ArrayList<String>();
         var stateTransitions = new AtomicInteger();
         var relocationStarts = new AtomicInteger();
-        var plan = new ZLinkUserSpotRetireRuntime.RelocationPlan(
-            List.of("spot-a", "spot-b"),
-            List.of("actor-c"));
+        var plan =
+                new ZLinkUserSpotRetireRuntime.RelocationPlan(
+                        List.of("spot-a", "spot-b"), List.of("actor-c"));
 
-        CompletionException failure = assertThrows(
-            CompletionException.class,
-            () -> ZLinkUserSpotRetireRuntime.executePlan(
-                plan,
-                spotId -> {
-                    events.add("preflight:" + spotId);
-                    return spotId.equals("spot-b")
-                        ? CompletableFuture.failedFuture(
-                            new ZLinkUserSpotRetireRuntime
-                                .RelocationBlockedException(
-                                    ZLinkFrameworkRelocationReason
-                                        .TARGET_UNAVAILABLE,
-                                    "no target"))
-                        : CompletableFuture.completedFuture(null);
-                },
-                actorId -> {
-                    events.add("preflight:" + actorId);
-                    return CompletableFuture.completedFuture(null);
-                },
-                stateTransitions::incrementAndGet,
-                () -> false,
-                spotId -> {
-                    relocationStarts.incrementAndGet();
-                    return CompletableFuture.completedFuture(null);
-                },
-                actorId -> {
-                    relocationStarts.incrementAndGet();
-                    return CompletableFuture.completedFuture(null);
-                }).toCompletableFuture().join());
+        CompletionException failure =
+                assertThrows(
+                        CompletionException.class,
+                        () ->
+                                ZLinkUserSpotRetireRuntime.executePlan(
+                                                plan,
+                                                spotId -> {
+                                                    events.add("preflight:" + spotId);
+                                                    return spotId.equals("spot-b")
+                                                            ? CompletableFuture.failedFuture(
+                                                                    new ZLinkUserSpotRetireRuntime
+                                                                            .RelocationBlockedException(
+                                                                            ZLinkFrameworkRelocationReason
+                                                                                    .TARGET_UNAVAILABLE,
+                                                                            "no target"))
+                                                            : CompletableFuture.completedFuture(
+                                                                    null);
+                                                },
+                                                actorId -> {
+                                                    events.add("preflight:" + actorId);
+                                                    return CompletableFuture.completedFuture(null);
+                                                },
+                                                stateTransitions::incrementAndGet,
+                                                () -> false,
+                                                spotId -> {
+                                                    relocationStarts.incrementAndGet();
+                                                    return CompletableFuture.completedFuture(null);
+                                                },
+                                                actorId -> {
+                                                    relocationStarts.incrementAndGet();
+                                                    return CompletableFuture.completedFuture(null);
+                                                })
+                                        .toCompletableFuture()
+                                        .join());
 
         assertEquals(
-            ZLinkFrameworkRelocationReason.TARGET_UNAVAILABLE,
-            ((ZLinkUserSpotRetireRuntime.RelocationBlockedException)
-                failure.getCause()).reason());
-        assertEquals(
-            List.of("preflight:spot-a", "preflight:spot-b"),
-            events);
+                ZLinkFrameworkRelocationReason.TARGET_UNAVAILABLE,
+                ((ZLinkUserSpotRetireRuntime.RelocationBlockedException) failure.getCause())
+                        .reason());
+        assertEquals(List.of("preflight:spot-a", "preflight:spot-b"), events);
         assertEquals(0, stateTransitions.get());
         assertEquals(0, relocationStarts.get());
     }
@@ -77,97 +70,97 @@ final class ZLinkUserSpotRetireRuntimePreflightTest {
     @Test
     void allUnitsPassPreflightBeforeHostStateOrRelocationChanges() {
         var events = new ArrayList<String>();
-        var plan = new ZLinkUserSpotRetireRuntime.RelocationPlan(
-            List.of("spot-a", "spot-b"),
-            List.of("actor-c"));
+        var plan =
+                new ZLinkUserSpotRetireRuntime.RelocationPlan(
+                        List.of("spot-a", "spot-b"), List.of("actor-c"));
 
         ZLinkUserSpotRetireRuntime.executePlan(
-            plan,
-            spotId -> {
-                events.add("preflight:" + spotId);
-                return CompletableFuture.completedFuture(null);
-            },
-            actorId -> {
-                events.add("preflight:" + actorId);
-                return CompletableFuture.completedFuture(null);
-            },
-            () -> events.add("host-state"),
-            () -> false,
-            spotId -> {
-                events.add("relocate:" + spotId);
-                return CompletableFuture.completedFuture(null);
-            },
-            actorId -> {
-                events.add("relocate:" + actorId);
-                return CompletableFuture.completedFuture(null);
-            }).toCompletableFuture().join();
+                        plan,
+                        spotId -> {
+                            events.add("preflight:" + spotId);
+                            return CompletableFuture.completedFuture(null);
+                        },
+                        actorId -> {
+                            events.add("preflight:" + actorId);
+                            return CompletableFuture.completedFuture(null);
+                        },
+                        () -> events.add("host-state"),
+                        () -> false,
+                        spotId -> {
+                            events.add("relocate:" + spotId);
+                            return CompletableFuture.completedFuture(null);
+                        },
+                        actorId -> {
+                            events.add("relocate:" + actorId);
+                            return CompletableFuture.completedFuture(null);
+                        })
+                .toCompletableFuture()
+                .join();
 
-        assertEquals(List.of(
-            "preflight:spot-a",
-            "preflight:spot-b",
-            "preflight:actor-c",
-            "host-state",
-            "relocate:spot-a",
-            "relocate:spot-b",
-            "relocate:actor-c"), events);
+        assertEquals(
+                List.of(
+                        "preflight:spot-a",
+                        "preflight:spot-b",
+                        "preflight:actor-c",
+                        "host-state",
+                        "relocate:spot-a",
+                        "relocate:spot-b",
+                        "relocate:actor-c"),
+                events);
     }
 
     @Test
     void relocationWaitsForAwaitedHostAdmissionPublication() {
         var events = new ArrayList<String>();
         var publication = new CompletableFuture<Void>();
-        var completion = ZLinkUserSpotRetireRuntime.executePlan(
-            new ZLinkUserSpotRetireRuntime.RelocationPlan(
-                List.of("spot-a"), List.of()),
-            spotId -> CompletableFuture.completedFuture(null),
-            actorId -> CompletableFuture.completedFuture(null),
-            () -> {
-                events.add("publication-started");
-                return publication;
-            },
-            () -> false,
-            spotId -> {
-                events.add("relocation-started");
-                return CompletableFuture.completedFuture(null);
-            },
-            actorId -> CompletableFuture.completedFuture(null));
+        var completion =
+                ZLinkUserSpotRetireRuntime.executePlan(
+                        new ZLinkUserSpotRetireRuntime.RelocationPlan(List.of("spot-a"), List.of()),
+                        spotId -> CompletableFuture.completedFuture(null),
+                        actorId -> CompletableFuture.completedFuture(null),
+                        () -> {
+                            events.add("publication-started");
+                            return publication;
+                        },
+                        () -> false,
+                        spotId -> {
+                            events.add("relocation-started");
+                            return CompletableFuture.completedFuture(null);
+                        },
+                        actorId -> CompletableFuture.completedFuture(null));
 
         assertEquals(List.of("publication-started"), events);
         assertEquals(false, completion.toCompletableFuture().isDone());
 
         publication.complete(null);
         completion.toCompletableFuture().join();
-        assertEquals(
-            List.of("publication-started", "relocation-started"),
-            events);
+        assertEquals(List.of("publication-started", "relocation-started"), events);
     }
 
     @Test
     void readyUnitsRelocateWithoutWaitingForAnEarlierUnitToFinish() {
         var first = new CompletableFuture<Void>();
         var events = new ArrayList<String>();
-        var completion = ZLinkUserSpotRetireRuntime.executePlan(
-            new ZLinkUserSpotRetireRuntime.RelocationPlan(
-                List.of("spot-a", "spot-b"), List.of("actor-c")),
-            spotId -> CompletableFuture.completedFuture(null),
-            actorId -> CompletableFuture.completedFuture(null),
-            () -> {
-            },
-            () -> false,
-            spotId -> {
-                events.add("start:" + spotId);
-                return spotId.equals("spot-a")
-                    ? first
-                    : CompletableFuture.completedFuture(null);
-            },
-            actorId -> {
-                events.add("start:" + actorId);
-                return CompletableFuture.completedFuture(null);
-            });
+        var completion =
+                ZLinkUserSpotRetireRuntime.executePlan(
+                        new ZLinkUserSpotRetireRuntime.RelocationPlan(
+                                List.of("spot-a", "spot-b"), List.of("actor-c")),
+                        spotId -> CompletableFuture.completedFuture(null),
+                        actorId -> CompletableFuture.completedFuture(null),
+                        () -> {},
+                        () -> false,
+                        spotId -> {
+                            events.add("start:" + spotId);
+                            return spotId.equals("spot-a")
+                                    ? first
+                                    : CompletableFuture.completedFuture(null);
+                        },
+                        actorId -> {
+                            events.add("start:" + actorId);
+                            return CompletableFuture.completedFuture(null);
+                        });
 
-        assertEquals(
-            List.of("start:spot-a", "start:spot-b", "start:actor-c"),
-            events);
+        assertEquals(List.of("start:spot-a", "start:spot-b", "start:actor-c"), events);
         assertEquals(false, completion.toCompletableFuture().isDone());
 
         first.complete(null);
@@ -185,30 +178,29 @@ final class ZLinkUserSpotRetireRuntimePreflightTest {
         }
         spotIds.add("ready");
 
-        var completion = ZLinkUserSpotRetireRuntime.executePlan(
-            new ZLinkUserSpotRetireRuntime.RelocationPlan(
-                List.copyOf(spotIds), List.of()),
-            spotId -> CompletableFuture.completedFuture(null),
-            actorId -> CompletableFuture.completedFuture(null),
-            () -> {
-            },
-            () -> false,
-            spotId -> {
-                started.add(spotId);
-                if (spotId.equals("ready")) {
-                    return CompletableFuture.completedFuture(null);
-                }
-                var turnBoundary = new CompletableFuture<Void>();
-                held.add(turnBoundary);
-                return turnBoundary;
-            },
-            actorId -> CompletableFuture.completedFuture(null));
+        var completion =
+                ZLinkUserSpotRetireRuntime.executePlan(
+                        new ZLinkUserSpotRetireRuntime.RelocationPlan(
+                                List.copyOf(spotIds), List.of()),
+                        spotId -> CompletableFuture.completedFuture(null),
+                        actorId -> CompletableFuture.completedFuture(null),
+                        () -> {},
+                        () -> false,
+                        spotId -> {
+                            started.add(spotId);
+                            if (spotId.equals("ready")) {
+                                return CompletableFuture.completedFuture(null);
+                            }
+                            var turnBoundary = new CompletableFuture<Void>();
+                            held.add(turnBoundary);
+                            return turnBoundary;
+                        },
+                        actorId -> CompletableFuture.completedFuture(null));
 
         assertEquals(
-            spotIds.size(),
-            started.size(),
-            "every unit must reach its own admission point; "
-                + "started=" + started);
+                spotIds.size(),
+                started.size(),
+                "every unit must reach its own admission point; " + "started=" + started);
         assertEquals(false, completion.toCompletableFuture().isDone());
 
         held.forEach(turnBoundary -> turnBoundary.complete(null));
@@ -222,30 +214,30 @@ final class ZLinkUserSpotRetireRuntimePreflightTest {
         var second = new CompletableFuture<Void>();
         var settled = new ArrayList<String>();
 
-        var completion = ZLinkUserSpotRetireRuntime.executePlan(
-            new ZLinkUserSpotRetireRuntime.RelocationPlan(
-                List.of("spot-a", "spot-b"), List.of()),
-            spotId -> CompletableFuture.completedFuture(null),
-            actorId -> CompletableFuture.completedFuture(null),
-            () -> {
-            },
-            () -> false,
-            spotId -> {
-                settled.add(spotId);
-                return spotId.equals("spot-a")
-                    ? CompletableFuture.failedFuture(
-                        new IllegalStateException("first"))
-                    : second;
-            },
-            actorId -> CompletableFuture.completedFuture(null));
+        var completion =
+                ZLinkUserSpotRetireRuntime.executePlan(
+                        new ZLinkUserSpotRetireRuntime.RelocationPlan(
+                                List.of("spot-a", "spot-b"), List.of()),
+                        spotId -> CompletableFuture.completedFuture(null),
+                        actorId -> CompletableFuture.completedFuture(null),
+                        () -> {},
+                        () -> false,
+                        spotId -> {
+                            settled.add(spotId);
+                            return spotId.equals("spot-a")
+                                    ? CompletableFuture.failedFuture(
+                                            new IllegalStateException("first"))
+                                    : second;
+                        },
+                        actorId -> CompletableFuture.completedFuture(null));
 
         assertEquals(List.of("spot-a", "spot-b"), settled);
         assertEquals(false, completion.toCompletableFuture().isDone());
 
         second.complete(null);
-        var failure = assertThrows(
-            CompletionException.class,
-            () -> completion.toCompletableFuture().join());
+        var failure =
+                assertThrows(
+                        CompletionException.class, () -> completion.toCompletableFuture().join());
         assertEquals("first", failure.getCause().getMessage());
     }
 }

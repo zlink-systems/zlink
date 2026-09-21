@@ -4,8 +4,9 @@
 그 밖의 모양은 언어별 포매터의 출력이 정한다. 손으로 접은 줄바꿈은 포매터가 되돌리므로 규칙을
 따로 외울 필요가 없다 — `scripts/format/format.sh`를 실행하면 된다.
 
-적용 범위는 현재 `framework/languages/<lang>/{quickstart,tutorial,samples}`이다. 가이드가 `--8<--`로 그
-소스를 발췌하므로 줄바꿈이 곧 문서의 모양이다. 저장소 전체로 넓히는 것은 별도 작업이다.
+적용 범위는 `framework/languages/<lang>`의 소스 트리 전체(생성물·빌드 산출물 제외, 목록은
+`scripts/format/format.sh`의 `source_excludes` 하나)이다. 가이드가 `--8<--`로 quickstart·tutorial·samples
+소스를 발췌하므로 줄바꿈이 곧 문서의 모양이다. core·bindings로 넓히는 것은 별도 작업이다.
 
 ## 1. 규칙
 
@@ -38,7 +39,7 @@
 |---|---|---|---|
 | C# | CSharpier | `framework/languages/dotnet/.config/dotnet-tools.json` | `.csharpierrc` `printWidth: 100`; `.csharpierignore`가 `csproj`·`props`·`targets`를 제외 |
 | TypeScript | Prettier | `framework/languages/node/package.json` `devDependencies` | `.prettierrc` `printWidth: 100`, `singleQuote`, `trailingComma: none` |
-| Java | google-java-format `--aosp` | `scripts/format/format.sh` `GJF_VERSION` | 없음(4칸 들여쓰기, 연속 8칸). import 정렬과 미사용 import 제거를 포함한다 |
+| Java | google-java-format `--aosp --skip-reflowing-long-strings` | `scripts/format/format.sh` `GJF_VERSION` | 없음(4칸 들여쓰기, 연속 8칸). import 정렬과 미사용 import 제거를 포함한다. 긴 문자열 reflow는 escape가 든 문자열을 깨뜨려 끈다(#858) |
 | Kotlin | ktfmt `--kotlinlang-style` | `scripts/format/format.sh` `KTFMT_VERSION` | 없음(4칸 들여쓰기) |
 | C++ | clang-format 18 | `scripts/format/format.sh` `CLANG_FORMAT_MAJOR` | 저장소 `.clang-format`(ColumnLimit 100)에 `quickstart/.clang-format`·`tutorial/.clang-format`·`samples/.clang-format`이 `BinPackArguments: false`와 `PenaltyBreakAssignment: 1000`을 더한다 |
 

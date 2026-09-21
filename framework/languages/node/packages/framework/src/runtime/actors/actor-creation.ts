@@ -1,15 +1,16 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException } from '../framework-errors-internal';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
 import type {
   RoutingId,
   Type,
   ZLinkActor,
   ZLinkActorCreateResponse,
-  ZLinkActorFactory,
+  ZLinkActorFactory
 } from '../../contracts';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
-import {
-  ZLinkMessage
-} from '../../contracts';
+import { ZLinkMessage } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
 import { ZLinkConfigurationException } from '../configuration';
 import { DefaultZLinkActorContext } from './actor-context';
@@ -54,14 +55,7 @@ export class ZLinkActorCreationCoordinator {
           this.options.actorDestroyedCleanup?.(actorId);
           state.clearAfterDestroy();
         },
-        () => this.createActorAfterClaim(
-          actorId,
-          actorType,
-          state,
-          createRequest,
-          true,
-          signal
-        )
+        () => this.createActorAfterClaim(actorId, actorType, state, createRequest, true, signal)
       );
       if (activation.activated !== undefined) {
         if (activation.activated.status !== 'created') {
@@ -102,18 +96,22 @@ export class ZLinkActorCreationCoordinator {
     restore: ((actor: ZLinkActor) => Promise<void>) | undefined
   ): Promise<ZLinkActorCreationAttemptResult> {
     void actorId;
-    const context = state.ensureContext(() => new DefaultZLinkActorContext(
-      state,
-      this.options.joinCoordinator,
-      this.options.boundSessionFactory,
-      this.options.messageSerializers,
-      this.options.actorMeshNameProvider
-    ));
+    const context = state.ensureContext(
+      () =>
+        new DefaultZLinkActorContext(
+          state,
+          this.options.joinCoordinator,
+          this.options.boundSessionFactory,
+          this.options.messageSerializers,
+          this.options.actorMeshNameProvider
+        )
+    );
     const actor = await (await this.createFactory(actorType)).create(context);
     attachTransferredActorContext(actor, context);
     await restore?.(actor);
     state.bindActor(actor, context);
-    const nativeActorNode = this.options.nativeActorNode ?? this.options.nativeActorNodeProvider?.();
+    const nativeActorNode =
+      this.options.nativeActorNode ?? this.options.nativeActorNodeProvider?.();
     if (nativeActorNode !== undefined) {
       state.ensureNativeActorRef(nativeActorNode);
     }
@@ -129,14 +127,18 @@ export class ZLinkActorCreationCoordinator {
     signal?: AbortSignal
   ): Promise<ZLinkActorCreationAttemptResult> {
     const factory = await this.createFactory(actorType);
-    const context = state.ensureContext(() => new DefaultZLinkActorContext(
-      state,
-      this.options.joinCoordinator,
-      this.options.boundSessionFactory,
-      this.options.messageSerializers,
-      this.options.actorMeshNameProvider
-    ));
-    const nativeActorNode = this.options.nativeActorNode ?? this.options.nativeActorNodeProvider?.();
+    const context = state.ensureContext(
+      () =>
+        new DefaultZLinkActorContext(
+          state,
+          this.options.joinCoordinator,
+          this.options.boundSessionFactory,
+          this.options.messageSerializers,
+          this.options.actorMeshNameProvider
+        )
+    );
+    const nativeActorNode =
+      this.options.nativeActorNode ?? this.options.nativeActorNodeProvider?.();
     let actor: ZLinkActor;
     try {
       actor = await factory.create(context, signal);
@@ -154,9 +156,7 @@ export class ZLinkActorCreationCoordinator {
       }
       meshName = state.meshName ?? '';
       if (meshName.length === 0 && state.nativeActorRef === undefined) {
-        throw new ZLinkConfigurationException(
-          `Actor '${actorId}' has no RouteMesh identity.`
-        );
+        throw new ZLinkConfigurationException(`Actor '${actorId}' has no RouteMesh identity.`);
       }
       if (nativeActorNode !== undefined) {
         const actorRef = state.ensureNativeActorRef(nativeActorNode, createRequest.nativeRequest);
@@ -171,14 +171,15 @@ export class ZLinkActorCreationCoordinator {
 
     let response: ZLinkActorCreateResponse;
     try {
-      response = nodeRid === undefined
-        ? { accepted: true }
-        : await this.options.actorCreatedNotifier?.(
-          nodeRid,
-          actor,
-          createRequest.callbackRequest,
-          signal
-        ) ?? { accepted: true };
+      response =
+        nodeRid === undefined
+          ? { accepted: true }
+          : ((await this.options.actorCreatedNotifier?.(
+              nodeRid,
+              actor,
+              createRequest.callbackRequest,
+              signal
+            )) ?? { accepted: true });
     } catch (error) {
       await this.discardStagingActor(state, nativeActorNode);
       return { status: 'failed', error };
@@ -233,10 +234,12 @@ export class ZLinkActorCreationCoordinator {
   }
 
   private resolveLocationNodeRid(): RoutingId {
-    const nativeActorNode = this.options.nativeActorNode ?? this.options.nativeActorNodeProvider?.();
-    const nodeRid = nativeActorNode === undefined
-      ? this.options.actorCreatedNodeRidProvider?.()
-      : toFrameworkRoutingId(nativeActorNode.status().routingId as never);
+    const nativeActorNode =
+      this.options.nativeActorNode ?? this.options.nativeActorNodeProvider?.();
+    const nodeRid =
+      nativeActorNode === undefined
+        ? this.options.actorCreatedNodeRidProvider?.()
+        : toFrameworkRoutingId(nativeActorNode.status().routingId as never);
     if (nodeRid === undefined) {
       throw new ZLinkConfigurationException('Location actor claim requires a node routing id.');
     }

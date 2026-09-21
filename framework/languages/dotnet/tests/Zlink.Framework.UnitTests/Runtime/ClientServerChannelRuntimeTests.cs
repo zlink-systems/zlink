@@ -5,10 +5,10 @@ using System.Net.Sockets;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Zlink.Framework.AspNetCore;
+using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Codecs;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
-using Zlink.Framework.LocationProvider;
 
 namespace Zlink.Framework.UnitTests;
 
@@ -27,7 +27,9 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                     "work",
                     parts,
                     CancellationToken.None,
-                    new byte[] { 1 }));
+                    new byte[] { 1 }
+                )
+            );
 
             parts.AssertDisposedOnce();
         }
@@ -51,7 +53,9 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                     parts,
                     TimeSpan.FromSeconds(1),
                     CancellationToken.None,
-                    new byte[] { 1 }));
+                    new byte[] { 1 }
+                )
+            );
 
             parts.AssertDisposedOnce();
         }
@@ -74,7 +78,9 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 await runtime.SendToChannelAsync(
                     "missing-route-channel",
                     parts,
-                    CancellationToken.None));
+                    CancellationToken.None
+                )
+            );
 
             Assert.Equal(ZLinkFrameworkErrorKind.NotFound, error.Kind);
             parts.AssertDisposedOnce();
@@ -96,16 +102,17 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         {
             var client = server.GetRequiredService<IZLinkRouteClient>();
             var sendError = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
-                client.SendToChannel("work", new EchoSend("send"))
-                    .Async()
-                    .AsTask());
+                client.SendToChannel("work", new EchoSend("send")).Async().AsTask()
+            );
             Assert.Equal(ZLinkFrameworkErrorKind.NotConfigured, sendError.Kind);
 
             var requestError = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
-                client.RequestToChannel("work", new EchoRequest("request"))
+                client
+                    .RequestToChannel("work", new EchoRequest("request"))
                     .Timeout(TimeSpan.FromMilliseconds(50))
                     .Async<EchoReply>()
-                    .AsTask());
+                    .AsTask()
+            );
             Assert.Equal(ZLinkFrameworkErrorKind.NotConfigured, requestError.Kind);
             Assert.False(server.GetRequiredService<EchoProbe>().Received.Task.IsCompleted);
         }
@@ -122,22 +129,38 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     [InlineData(30, -5)]
     public async Task ReadinessWaitUsesMonotonicRequestTimeoutAndFiveSecondCap(
         int requestTimeoutSeconds,
-        int wallJumpSeconds)
+        int wallJumpSeconds
+    )
     {
         var time = new ReadinessTimeProvider(wallJumpSeconds);
         await using var client = new ZLinkClientServerClientRuntime(
-            "work", null!, null!, null!,
+            "work",
+            null!,
+            null!,
+            null!,
             TimeSpan.FromSeconds(requestTimeoutSeconds),
-            CancellationToken.None, null!, timeProvider: time);
+            CancellationToken.None,
+            null!,
+            timeProvider: time
+        );
 
         var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
-            client.RequestAsync([], TimeSpan.FromSeconds(requestTimeoutSeconds),
-                CancellationToken.None).AsTask().WaitAsync(TimeSpan.FromSeconds(2)));
+            client
+                .RequestAsync(
+                    [],
+                    TimeSpan.FromSeconds(requestTimeoutSeconds),
+                    CancellationToken.None
+                )
+                .AsTask()
+                .WaitAsync(TimeSpan.FromSeconds(2))
+        );
 
         Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, error.Kind);
-        Assert.InRange(time.Elapsed.TotalSeconds,
+        Assert.InRange(
+            time.Elapsed.TotalSeconds,
             Math.Min(requestTimeoutSeconds, 5),
-            Math.Min(requestTimeoutSeconds, 5) + 0.5);
+            Math.Min(requestTimeoutSeconds, 5) + 0.5
+        );
         Assert.Equal(0, time.WallReads);
     }
 
@@ -147,11 +170,13 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         internal TimeSpan Elapsed { get; private set; }
         internal int WallReads { get; private set; }
         public override long TimestampFrequency => _time.TimestampFrequency;
+
         public override DateTimeOffset GetUtcNow()
         {
             WallReads++;
             return _time.GetUtcNow();
         }
+
         public override long GetTimestamp()
         {
             var timestamp = _time.GetTimestamp();
@@ -172,11 +197,13 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         try
         {
             var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
-                client.GetRequiredService<IZLinkRouteClient>()
+                client
+                    .GetRequiredService<IZLinkRouteClient>()
                     .RequestToChannel("work", new EchoRequest("request"))
                     .Timeout(TimeSpan.FromMilliseconds(20))
                     .Async<EchoReply>()
-                    .AsTask());
+                    .AsTask()
+            );
 
             Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, error.Kind);
         }
@@ -193,10 +220,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         await runtime.StartAsync(CancellationToken.None);
         var activation = new MetadataFailureSpotActivation();
-        var endpoint = new ZLinkSpotOutboundEndpoint(
-            activation,
-            outbound: null!,
-            runtime);
+        var endpoint = new ZLinkSpotOutboundEndpoint(activation, outbound: null!, runtime);
         activation.OutboundEndpoint = endpoint;
         var parts = new SingleAccessMessageParts();
         try
@@ -206,7 +230,9 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                     "work",
                     parts,
                     CancellationToken.None,
-                    new byte[] { 1 }));
+                    new byte[] { 1 }
+                )
+            );
 
             parts.AssertDisposedOnce();
         }
@@ -224,10 +250,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         await runtime.StartAsync(CancellationToken.None);
         var activation = new MetadataFailureSpotActivation();
-        var endpoint = new ZLinkSpotOutboundEndpoint(
-            activation,
-            outbound: null!,
-            runtime);
+        var endpoint = new ZLinkSpotOutboundEndpoint(activation, outbound: null!, runtime);
         activation.OutboundEndpoint = endpoint;
         var parts = new SingleAccessMessageParts();
         try
@@ -238,7 +261,9 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                     parts,
                     TimeSpan.FromSeconds(1),
                     CancellationToken.None,
-                    new byte[] { 1 }));
+                    new byte[] { 1 }
+                )
+            );
 
             parts.AssertDisposedOnce();
         }
@@ -265,45 +290,47 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         await clientRuntime.StartAsync(CancellationToken.None);
         try
         {
-            var clientTransport =
-                clientRuntime.GetClientServerClientRuntime("work");
+            var clientTransport = clientRuntime.GetClientServerClientRuntime("work");
             await WaitUntilAsync(
                 clientTransport,
                 () => clientTransport.ReadyCount == 1,
-                TimeSpan.FromSeconds(10));
-            Assert.True(
-                clientTransport.ReadyCount == 1,
-                clientTransport.AdmissionDiagnostics);
-            var serverState = await serverRuntime.EnsureStartedStateAsync(
-                CancellationToken.None);
-            var serverIdentity = GetServerBundle(serverState, "work")
-                .ClientServerServer!;
+                TimeSpan.FromSeconds(10)
+            );
+            Assert.True(clientTransport.ReadyCount == 1, clientTransport.AdmissionDiagnostics);
+            var serverState = await serverRuntime.EnsureStartedStateAsync(CancellationToken.None);
+            var serverIdentity = GetServerBundle(serverState, "work").ClientServerServer!;
             try
             {
                 await WaitUntilAsync(
                     clientTransport,
-                    () => clientTransport.LivenessAckCount > 0
-                        && serverIdentity.LivenessAckCount > 0,
-                    TimeSpan.FromSeconds(8));
+                    () =>
+                        clientTransport.LivenessAckCount > 0 && serverIdentity.LivenessAckCount > 0,
+                    TimeSpan.FromSeconds(8)
+                );
             }
             catch (TimeoutException exception)
             {
                 throw new TimeoutException(
                     $"clientAck={clientTransport.LivenessAckCount}, clientProbe={clientTransport.ReceivedLivenessProbeCount}, clientSent={clientTransport.SentLivenessProbeCount}, serverAck={serverIdentity.LivenessAckCount}, serverProbe={serverIdentity.LivenessProbeCount}, serverReceived={serverIdentity.ReceivedLivenessProbeCount}, peers={await serverIdentity.GetAdmittedPeerCountAsync()}, {clientTransport.AdmissionDiagnostics}",
-                    exception);
+                    exception
+                );
             }
-            await client.GetRequiredService<IZLinkRouteClient>()
+            await client
+                .GetRequiredService<IZLinkRouteClient>()
                 .SendToChannel("work", new EchoSend("queued"))
                 .Async();
             Assert.Equal(
                 "queued",
-                await server.GetRequiredService<EchoProbe>().Received.Task
-                    .WaitAsync(TimeSpan.FromSeconds(5)));
+                await server
+                    .GetRequiredService<EchoProbe>()
+                    .Received.Task.WaitAsync(TimeSpan.FromSeconds(5))
+            );
 
             EchoReply reply;
             try
             {
-                reply = await client.GetRequiredService<IZLinkRouteClient>()
+                reply = await client
+                    .GetRequiredService<IZLinkRouteClient>()
                     .RequestToChannel("work", new EchoRequest("ready"))
                     .Timeout(TimeSpan.FromSeconds(5))
                     .Async<EchoReply>();
@@ -312,7 +339,8 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             {
                 throw new InvalidOperationException(
                     "ClientServer server runtime failed.",
-                    runtimeFailure);
+                    runtimeFailure
+                );
             }
 
             Assert.Equal("ready", reply.Value);
@@ -340,22 +368,27 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             await WaitUntilAsync(
                 clientRuntime.GetClientServerClientRuntime("work"),
                 () => clientRuntime.GetClientServerClientRuntime("work").ReadyCount == 1,
-                TimeSpan.FromSeconds(5));
+                TimeSpan.FromSeconds(5)
+            );
             var payload = new string('x', 1024);
 
             var sendError = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
-                client.GetRequiredService<IZLinkRouteClient>()
+                client
+                    .GetRequiredService<IZLinkRouteClient>()
                     .SendToChannel("work", new EchoSend(payload))
                     .Async()
-                    .AsTask());
+                    .AsTask()
+            );
             Assert.Equal(ZLinkFrameworkErrorKind.Rejected, sendError.Kind);
 
             var requestError = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
-                client.GetRequiredService<IZLinkRouteClient>()
+                client
+                    .GetRequiredService<IZLinkRouteClient>()
                     .RequestToChannel("work", new EchoRequest(payload))
                     .Timeout(TimeSpan.FromSeconds(2))
                     .Async<EchoReply>()
-                    .AsTask());
+                    .AsTask()
+            );
             Assert.Equal(ZLinkFrameworkErrorKind.Rejected, requestError.Kind);
             Assert.False(server.GetRequiredService<EchoProbe>().Received.Task.IsCompleted);
         }
@@ -369,22 +402,30 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     [Fact]
     public async Task NegotiatedBoundConvertsOversizedServerReplyToRejected()
     {
-        var logDirectory = Environment.GetEnvironmentVariable("ZLINK_TEST_FLOW_DIRECTORY")
-            ?? Zlink.Framework.Tests.Common.FrameworkTestEnvironment.CreateTestLogDirectory("oversized-server-reply");
+        var logDirectory =
+            Environment.GetEnvironmentVariable("ZLINK_TEST_FLOW_DIRECTORY")
+            ?? Zlink.Framework.Tests.Common.FrameworkTestEnvironment.CreateTestLogDirectory(
+                "oversized-server-reply"
+            );
         var flowFilePath = Path.Combine(
-            logDirectory, $"oversized-server-reply-{Guid.NewGuid():N}.flow");
+            logDirectory,
+            $"oversized-server-reply-{Guid.NewGuid():N}.flow"
+        );
         using var listener = new TestHostMessageFlowListener(flowFilePath);
         output.WriteLine($"Message flow file: {flowFilePath}");
-        var diagnosticsLevel = Environment.GetEnvironmentVariable("ZLINK_TEST_FLOW_LEVEL") is { } level
+        var diagnosticsLevel = Environment.GetEnvironmentVariable("ZLINK_TEST_FLOW_LEVEL")
+            is { } level
             ? Enum.Parse<ZLinkDiagnosticsLevel>(level)
             : ZLinkDiagnosticsLevel.Normal;
         var port = ReservePort();
         await using var server = CreateLargeReplyServer(port, maximumMessageBytes: 512);
         await using var client = CreateClient(port, maximumMessageBytes: 4096);
-        server.GetRequiredService<ZLinkFrameworkRegistration>().DispatchOptions.Diagnostics
-            .SetLevel(diagnosticsLevel);
-        client.GetRequiredService<ZLinkFrameworkRegistration>().DispatchOptions.Diagnostics
-            .SetLevel(diagnosticsLevel);
+        server
+            .GetRequiredService<ZLinkFrameworkRegistration>()
+            .DispatchOptions.Diagnostics.SetLevel(diagnosticsLevel);
+        client
+            .GetRequiredService<ZLinkFrameworkRegistration>()
+            .DispatchOptions.Diagnostics.SetLevel(diagnosticsLevel);
         var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
         var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
 
@@ -395,13 +436,16 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             await WaitUntilAsync(
                 clientRuntime.GetClientServerClientRuntime("work"),
                 () => clientRuntime.GetClientServerClientRuntime("work").ReadyCount == 1,
-                TimeSpan.FromSeconds(5));
+                TimeSpan.FromSeconds(5)
+            );
             var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
-                client.GetRequiredService<IZLinkRouteClient>()
+                client
+                    .GetRequiredService<IZLinkRouteClient>()
                     .RequestToChannel("work", new LargeReplyRequest("reply"))
                     .Timeout(TimeSpan.FromSeconds(2))
                     .Async<LargeReply>()
-                    .AsTask());
+                    .AsTask()
+            );
             Assert.Equal(ZLinkFrameworkErrorKind.Rejected, error.Kind);
         }
         finally
@@ -430,7 +474,8 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         services.AddSingleton(probe);
         services.AddZLinkFramework(options =>
         {
-            options.AddClientServerChannel("work")
+            options
+                .AddClientServerChannel("work")
                 .Server()
                 .Listen(port)
                 .AddRequestHandler<FlowEchoHandler, FlowEchoRequest, EchoReply>();
@@ -447,12 +492,14 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             await WaitUntilAsync(
                 clientRuntime.GetClientServerClientRuntime("work"),
                 () => clientRuntime.GetClientServerClientRuntime("work").ReadyCount == 1,
-                TimeSpan.FromSeconds(5));
+                TimeSpan.FromSeconds(5)
+            );
 
             EchoReply reply;
             using (ZLinkFlowContext.EnterExisting(flowId, ZLinkFlowOrigin.Application))
             {
-                reply = await client.GetRequiredService<IZLinkRouteClient>()
+                reply = await client
+                    .GetRequiredService<IZLinkRouteClient>()
                     .RequestToChannel("work", new FlowEchoRequest("flow"))
                     .Timeout(TimeSpan.FromSeconds(5))
                     .Async<EchoReply>();
@@ -495,17 +542,16 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         await clientRuntime.StartAsync(CancellationToken.None);
         try
         {
-            var clientTransport =
-                clientRuntime.GetClientServerClientRuntime("work");
+            var clientTransport = clientRuntime.GetClientServerClientRuntime("work");
             await WaitUntilAsync(
                 clientTransport,
                 () => clientTransport.ReadyCount == 1,
-                TimeSpan.FromSeconds(5));
-            var serverState = await serverRuntime.EnsureStartedStateAsync(
-                CancellationToken.None);
-            var serverIdentity = GetServerBundle(serverState, "work")
-                .ClientServerServer!;
-            var request = client.GetRequiredService<IZLinkRouteClient>()
+                TimeSpan.FromSeconds(5)
+            );
+            var serverState = await serverRuntime.EnsureStartedStateAsync(CancellationToken.None);
+            var serverIdentity = GetServerBundle(serverState, "work").ClientServerServer!;
+            var request = client
+                .GetRequiredService<IZLinkRouteClient>()
                 .RequestToChannel("work", new BlockingRequest("blocked"))
                 .Timeout(TimeSpan.FromSeconds(15))
                 .Async<EchoReply>()
@@ -516,13 +562,12 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             await WaitUntilAsync(
                 clientTransport,
                 () => serverIdentity.LivenessProbeCount > baselineProbeCount,
-                TimeSpan.FromSeconds(8));
+                TimeSpan.FromSeconds(8)
+            );
             Assert.Equal(1, clientTransport.ReadyCount);
 
             blocking.Release.TrySetResult();
-            Assert.Equal(
-                "blocked",
-                (await request.WaitAsync(TimeSpan.FromSeconds(5))).Value);
+            Assert.Equal("blocked", (await request.WaitAsync(TimeSpan.FromSeconds(5))).Value);
         }
         finally
         {
@@ -549,20 +594,22 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         await clientRuntime.StartAsync(CancellationToken.None);
         try
         {
-            var clientTransport =
-                clientRuntime.GetClientServerClientRuntime("work");
+            var clientTransport = clientRuntime.GetClientServerClientRuntime("work");
             await WaitUntilAsync(
                 clientTransport,
                 () => clientTransport.ReadyCount == 1,
-                TimeSpan.FromSeconds(5));
-            var request = client.GetRequiredService<IZLinkRouteClient>()
+                TimeSpan.FromSeconds(5)
+            );
+            var request = client
+                .GetRequiredService<IZLinkRouteClient>()
                 .RequestToChannel("work", new BlockingRequest("late"))
                 .Timeout(TimeSpan.FromSeconds(3))
                 .Async<EchoReply>()
                 .AsTask();
             await blocking.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-            await serverRuntime.StopAsync(CancellationToken.None)
+            await serverRuntime
+                .StopAsync(CancellationToken.None)
                 .AsTask()
                 .WaitAsync(TimeSpan.FromSeconds(3));
             blocking.Release.TrySetResult();
@@ -591,28 +638,25 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         await clientRuntime.StartAsync(CancellationToken.None);
         try
         {
-            var transport =
-                clientRuntime.GetClientServerClientRuntime("work");
+            var transport = clientRuntime.GetClientServerClientRuntime("work");
             await WaitUntilAsync(
                 transport,
                 () => transport.ReadyCount == 1,
-                TimeSpan.FromSeconds(5));
-            var serverState = await serverRuntime.EnsureStartedStateAsync(
-                CancellationToken.None);
-            await GetServerBundle(serverState, "work")
-                .ClientServerServer!
-                .MarkDrainingAsync();
+                TimeSpan.FromSeconds(5)
+            );
+            var serverState = await serverRuntime.EnsureStartedStateAsync(CancellationToken.None);
+            await GetServerBundle(serverState, "work").ClientServerServer!.MarkDrainingAsync();
             await WaitUntilAsync(
                 transport,
                 () => transport.ReadyCount == 0,
-                TimeSpan.FromSeconds(8));
-            await GetServerBundle(serverState, "work")
-                .ClientServerServer!
-                .MarkServingAsync();
+                TimeSpan.FromSeconds(8)
+            );
+            await GetServerBundle(serverState, "work").ClientServerServer!.MarkServingAsync();
             await WaitUntilAsync(
                 transport,
                 () => transport.ReadyCount == 1,
-                TimeSpan.FromSeconds(8));
+                TimeSpan.FromSeconds(8)
+            );
         }
         finally
         {
@@ -634,24 +678,24 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             await WaitUntilAsync(
                 transport,
                 () => transport.ReadyCount == 1,
-                TimeSpan.FromSeconds(5));
+                TimeSpan.FromSeconds(5)
+            );
 
             Assert.Equal(1, transport.PhysicalConnectionCount);
-            var reply = await provider.GetRequiredService<IZLinkRouteClient>()
+            var reply = await provider
+                .GetRequiredService<IZLinkRouteClient>()
                 .RequestToChannel("work", new EchoRequest("local"))
                 .Timeout(TimeSpan.FromSeconds(5))
                 .Async<EchoReply>();
             Assert.Equal("local:local", reply.Value);
 
-            var state = await runtime.EnsureStartedStateAsync(
-                CancellationToken.None);
-            await GetServerBundle(state, "work")
-                .ClientServerServer!
-                .MarkDrainingAsync();
+            var state = await runtime.EnsureStartedStateAsync(CancellationToken.None);
+            await GetServerBundle(state, "work").ClientServerServer!.MarkDrainingAsync();
             await WaitUntilAsync(
                 transport,
                 () => transport.ReadyCount == 0,
-                TimeSpan.FromSeconds(2));
+                TimeSpan.FromSeconds(2)
+            );
         }
         finally
         {
@@ -664,24 +708,30 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     [InlineData(0, false)]
     public async Task ServerOnlyTopologyReadinessUsesLocalReadyServer(
         int weight,
-        bool expectedReady)
+        bool expectedReady
+    )
     {
         await using var provider = CreateServer(0, weight: weight);
-        var hosted = provider.GetServices<IHostedService>().Single(
-            static service => service is ZLinkFrameworkHostedService);
+        var hosted = provider
+            .GetServices<IHostedService>()
+            .Single(static service => service is ZLinkFrameworkHostedService);
         await hosted.StartAsync(CancellationToken.None);
         try
         {
-            Assert.Equal(ZLinkFrameworkRuntimeState.Serving,
-                provider.GetRequiredService<ZLinkFrameworkHostLifecycleState>().State);
-            var status = provider.GetRequiredService<IZLinkClientServerRuntime>()
-                .GetStatus("work");
+            Assert.Equal(
+                ZLinkFrameworkRuntimeState.Serving,
+                provider.GetRequiredService<ZLinkFrameworkHostLifecycleState>().State
+            );
+            var status = provider.GetRequiredService<IZLinkClientServerRuntime>().GetStatus("work");
 
             Assert.Equal(
                 Zlink.Framework.Contracts.Configuration.ZLinkClientServerRole.Server,
-                status.LocalRole);
-            Assert.Equal(expectedReady ? ZLinkTopologyState.Ready : ZLinkTopologyState.Degraded,
-                status.State);
+                status.LocalRole
+            );
+            Assert.Equal(
+                expectedReady ? ZLinkTopologyState.Ready : ZLinkTopologyState.Degraded,
+                status.State
+            );
             Assert.Equal(expectedReady, status.IsReady);
             Assert.Equal(expectedReady ? 1 : 0, status.ReadyTargetCount);
             var target = Assert.Single(status.Targets);
@@ -698,19 +748,22 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     public async Task ClientOnlyTopologyWithoutReadyTargetIsDegraded()
     {
         await using var provider = CreateClient(ReservePort());
-        var hosted = provider.GetServices<IHostedService>().Single(
-            static service => service is ZLinkFrameworkHostedService);
+        var hosted = provider
+            .GetServices<IHostedService>()
+            .Single(static service => service is ZLinkFrameworkHostedService);
         await hosted.StartAsync(CancellationToken.None);
         try
         {
-            Assert.Equal(ZLinkFrameworkRuntimeState.Serving,
-                provider.GetRequiredService<ZLinkFrameworkHostLifecycleState>().State);
-            var status = provider.GetRequiredService<IZLinkClientServerRuntime>()
-                .GetStatus("work");
+            Assert.Equal(
+                ZLinkFrameworkRuntimeState.Serving,
+                provider.GetRequiredService<ZLinkFrameworkHostLifecycleState>().State
+            );
+            var status = provider.GetRequiredService<IZLinkClientServerRuntime>().GetStatus("work");
 
             Assert.Equal(
                 Zlink.Framework.Contracts.Configuration.ZLinkClientServerRole.Client,
-                status.LocalRole);
+                status.LocalRole
+            );
             Assert.Equal(ZLinkTopologyState.Degraded, status.State);
             Assert.False(status.IsReady);
             Assert.Equal(0, status.ReadyTargetCount);
@@ -727,10 +780,8 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     {
         await using var provider = CreateLocalClientAndServer();
         var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
-        var monitoring =
-            provider.GetRequiredService<IZLinkClientServerRuntime>();
-        var hostLifecycle =
-            provider.GetRequiredService<ZLinkFrameworkHostLifecycleState>();
+        var monitoring = provider.GetRequiredService<IZLinkClientServerRuntime>();
+        var hostLifecycle = provider.GetRequiredService<ZLinkFrameworkHostLifecycleState>();
         hostLifecycle.TransitionTo(ZLinkFrameworkRuntimeState.Serving);
 
         await runtime.StartAsync(CancellationToken.None);
@@ -740,20 +791,19 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             await WaitUntilAsync(
                 transport,
                 () => transport.ReadyCount == 1,
-                TimeSpan.FromSeconds(5));
+                TimeSpan.FromSeconds(5)
+            );
 
             var ready = monitoring.GetStatus("work");
             Assert.Equal(
-                Zlink.Framework.Contracts.Configuration
-                    .ZLinkClientServerRole.ClientAndServer,
-                ready.LocalRole);
+                Zlink.Framework.Contracts.Configuration.ZLinkClientServerRole.ClientAndServer,
+                ready.LocalRole
+            );
             Assert.True(ready.IsReady);
             Assert.Equal(ZLinkTopologyState.Ready, ready.State);
             Assert.Equal(1, ready.ReadyTargetCount);
             var readyServer = Assert.Single(ready.Targets);
-            Assert.Equal(
-                ZLinkPeerState.Ready,
-                readyServer.State);
+            Assert.Equal(ZLinkPeerState.Ready, readyServer.State);
 
             hostLifecycle.TransitionTo(ZLinkFrameworkRuntimeState.Relocating);
             var relocating = monitoring.GetStatus("work");
@@ -762,36 +812,28 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             Assert.Equal(1, relocating.ReadyTargetCount);
             hostLifecycle.TransitionTo(ZLinkFrameworkRuntimeState.Serving);
 
-            using var timeout = new CancellationTokenSource(
-                TimeSpan.FromSeconds(8));
-            await using var events = monitoring.ObserveAsync(
-                    "work",
-                    timeout.Token)
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            await using var events = monitoring
+                .ObserveAsync("work", timeout.Token)
                 .GetAsyncEnumerator(timeout.Token);
-            await using var secondEvents = monitoring.ObserveAsync(
-                    "work",
-                    timeout.Token)
+            await using var secondEvents = monitoring
+                .ObserveAsync("work", timeout.Token)
                 .GetAsyncEnumerator(timeout.Token);
-            var firstChange = WaitForTargetStateAsync(
-                events,
-                ZLinkPeerState.Draining);
-            var secondChange = WaitForTargetStateAsync(
-                secondEvents,
-                ZLinkPeerState.Draining);
-            var state = await runtime.EnsureStartedStateAsync(
-                CancellationToken.None);
-            await GetServerBundle(state, "work")
-                .ClientServerServer!
-                .MarkDrainingAsync();
+            var firstChange = WaitForTargetStateAsync(events, ZLinkPeerState.Draining);
+            var secondChange = WaitForTargetStateAsync(secondEvents, ZLinkPeerState.Draining);
+            var state = await runtime.EnsureStartedStateAsync(CancellationToken.None);
+            await GetServerBundle(state, "work").ClientServerServer!.MarkDrainingAsync();
 
             Assert.True(await firstChange);
             Assert.True(await secondChange);
             Assert.Equal(
                 ZLinkPeerState.Draining,
-                Assert.Single(events.Current.Status.Targets).State);
+                Assert.Single(events.Current.Status.Targets).State
+            );
             Assert.Equal(
                 ZLinkPeerState.Draining,
-                Assert.Single(secondEvents.Current.Status.Targets).State);
+                Assert.Single(secondEvents.Current.Status.Targets).State
+            );
             Assert.False(events.Current.Status.IsReady);
             Assert.False(monitoring.GetStatus("work").IsReady);
         }
@@ -803,11 +845,11 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
 
     private static async Task<bool> WaitForTargetStateAsync(
         IAsyncEnumerator<ZLinkObservedStatus<ZLinkClientServerStatus>> observer,
-        ZLinkPeerState expected)
+        ZLinkPeerState expected
+    )
     {
         while (await observer.MoveNextAsync())
-            if (observer.Current.Status.Targets.Any(target =>
-                    target.State == expected))
+            if (observer.Current.Status.Targets.Any(target => target.State == expected))
                 return true;
         return false;
     }
@@ -825,12 +867,15 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             await WaitUntilAsync(
                 transport,
                 () => transport.AdmissionCompletedCount == 1,
-                TimeSpan.FromSeconds(5));
+                TimeSpan.FromSeconds(5)
+            );
             Assert.Equal(0, transport.ReadyCount);
             var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
-                await provider.GetRequiredService<IZLinkRouteClient>()
+                await provider
+                    .GetRequiredService<IZLinkRouteClient>()
                     .SendToChannel("work", new EchoSend("excluded"))
-                    .Async());
+                    .Async()
+            );
             Assert.Equal(ZLinkFrameworkErrorKind.NotFound, error.Kind);
         }
         finally
@@ -860,29 +905,31 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         try
         {
             await serverDiscovery.StartAsync(
-                await serverRuntime.EnsureStartedStateAsync(CancellationToken.None));
+                await serverRuntime.EnsureStartedStateAsync(CancellationToken.None)
+            );
             await clientDiscovery.StartAsync(
-                await clientRuntime.EnsureStartedStateAsync(CancellationToken.None));
+                await clientRuntime.EnsureStartedStateAsync(CancellationToken.None)
+            );
 
             var descriptorPage = await store.ListClientServersAsync(
                 "work",
-                new ZLinkPageRequest(16));
+                new ZLinkPageRequest(16)
+            );
             var descriptor = Assert.Single(descriptorPage.Items);
             Assert.NotEqual(0UL, descriptor.LifecycleGeneration);
             Assert.NotEqual(0UL, descriptor.DescriptorRevision);
             Assert.NotEqual(0, descriptor.ServerRid.Size);
             Assert.DoesNotContain(":0", descriptor.Endpoint, StringComparison.Ordinal);
 
-            var reply = await client.GetRequiredService<IZLinkRouteClient>()
+            var reply = await client
+                .GetRequiredService<IZLinkRouteClient>()
                 .RequestToChannel("work", new EchoRequest("automatic"))
                 .Timeout(TimeSpan.FromSeconds(5))
                 .Async<EchoReply>();
             Assert.Equal("only:automatic", reply.Value);
 
             Assert.True(await serverDiscovery.MarkDrainingAsync());
-            descriptorPage = await store.ListClientServersAsync(
-                "work",
-                new ZLinkPageRequest(16));
+            descriptorPage = await store.ListClientServersAsync("work", new ZLinkPageRequest(16));
             descriptor = Assert.Single(descriptorPage.Items);
             Assert.Equal(ZLinkFrameworkRuntimeState.Draining, descriptor.State);
             Assert.Equal(0, descriptor.Weight);
@@ -898,9 +945,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             await serverLocations.StopAsync();
         }
 
-        Assert.Empty((await store.ListClientServersAsync(
-            "work",
-            new ZLinkPageRequest(16))).Items);
+        Assert.Empty((await store.ListClientServersAsync("work", new ZLinkPageRequest(16))).Items);
     }
 
     [Fact]
@@ -919,7 +964,8 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             locations.OwnerLeaseRenewTimeout = TimeSpan.FromMilliseconds(20);
             locations.OwnerLeaseTtl = TimeSpan.FromSeconds(2);
             locations.OwnerLeaseFencingMargin = TimeSpan.FromMilliseconds(100);
-            options.AddClientServerChannel("work")
+            options
+                .AddClientServerChannel("work")
                 .Server()
                 .Listen(0)
                 .AddSendHandler<EchoSendHandler, EchoSend>()
@@ -936,18 +982,22 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         try
         {
             await autoConnect.StartAsync(
-                await runtime.EnsureStartedStateAsync(CancellationToken.None));
-            Assert.Empty((await store.ListClientServersAsync(
-                "work", new ZLinkPageRequest(16))).Items);
+                await runtime.EnsureStartedStateAsync(CancellationToken.None)
+            );
+            Assert.Empty(
+                (await store.ListClientServersAsync("work", new ZLinkPageRequest(16))).Items
+            );
 
             failing.FailWrites = false;
             ZLinkClientServerServerDescriptor? descriptor = null;
             var startedAt = Stopwatch.GetTimestamp();
             while (Stopwatch.GetElapsedTime(startedAt) < TimeSpan.FromSeconds(1))
             {
-                descriptor = (await store.ListClientServersAsync(
-                    "work", new ZLinkPageRequest(16))).Items.SingleOrDefault();
-                if (descriptor is not null) break;
+                descriptor = (
+                    await store.ListClientServersAsync("work", new ZLinkPageRequest(16))
+                ).Items.SingleOrDefault();
+                if (descriptor is not null)
+                    break;
                 await Task.Delay(5);
             }
 
@@ -973,83 +1023,84 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         await using var client = CreateAutomaticClient(locationProvider);
         var providers = new[] { first, second, excluded, client };
         foreach (var provider in providers)
-            await provider.GetRequiredService<ZLinkLocationRuntime>()
+            await provider
+                .GetRequiredService<ZLinkLocationRuntime>()
                 .StartAsync(RoutingId.From(Guid.NewGuid().ToString("N")));
         foreach (var provider in providers)
-            await provider.GetRequiredService<ZLinkFrameworkRuntime>()
+            await provider
+                .GetRequiredService<ZLinkFrameworkRuntime>()
                 .StartAsync(CancellationToken.None);
         try
         {
             foreach (var provider in providers)
-                await provider.GetRequiredService<ZLinkLocationAutoConnectHost>()
-                    .StartAsync(await provider.GetRequiredService<ZLinkFrameworkRuntime>()
-                        .EnsureStartedStateAsync(CancellationToken.None));
+                await provider
+                    .GetRequiredService<ZLinkLocationAutoConnectHost>()
+                    .StartAsync(
+                        await provider
+                            .GetRequiredService<ZLinkFrameworkRuntime>()
+                            .EnsureStartedStateAsync(CancellationToken.None)
+                    );
 
-            var clientTransport =
-                client.GetRequiredService<ZLinkFrameworkRuntime>()
-                    .GetClientServerClientRuntime("work");
+            var clientTransport = client
+                .GetRequiredService<ZLinkFrameworkRuntime>()
+                .GetClientServerClientRuntime("work");
             try
             {
                 await WaitUntilAsync(
                     clientTransport,
-                    () => clientTransport.ReadyCount == 2
+                    () =>
+                        clientTransport.ReadyCount == 2
                         && clientTransport.AdmissionCompletedCount == 3,
-                    TimeSpan.FromSeconds(10));
+                    TimeSpan.FromSeconds(10)
+                );
             }
             catch (TimeoutException exception)
             {
-                throw new TimeoutException(
-                    clientTransport.AdmissionDiagnostics,
-                    exception);
+                throw new TimeoutException(clientTransport.AdmissionDiagnostics, exception);
             }
             var route = client.GetRequiredService<IZLinkRouteClient>();
             var selected = new Dictionary<string, int>(StringComparer.Ordinal);
             for (var index = 0; index < 12; index++)
             {
-                var reply = await route.RequestToChannel(
-                        "work",
-                        new EchoRequest(index.ToString()))
+                var reply = await route
+                    .RequestToChannel("work", new EchoRequest(index.ToString()))
                     .Timeout(TimeSpan.FromSeconds(5))
                     .Async<EchoReply>();
                 var server = reply.Value.Split(':', 2)[0];
                 selected[server] = selected.GetValueOrDefault(server) + 1;
             }
 
-            Assert.Equal(
-                new[] { "first", "second" },
-                selected.Keys.Order(StringComparer.Ordinal));
+            Assert.Equal(new[] { "first", "second" }, selected.Keys.Order(StringComparer.Ordinal));
             Assert.Equal(3, selected["first"]);
             Assert.Equal(9, selected["second"]);
 
-            var runtimeOptions =
-                first.GetRequiredService<IZLinkRouteMeshRuntimeOptions>();
+            var runtimeOptions = first.GetRequiredService<IZLinkRouteMeshRuntimeOptions>();
             runtimeOptions.Channel("work").Weight = 0;
-            Assert.Throws<ZLinkConfigurationException>(
-                () => runtimeOptions.Channel("work").Weight = 10_001);
+            Assert.Throws<ZLinkConfigurationException>(() =>
+                runtimeOptions.Channel("work").Weight = 10_001
+            );
             await WaitUntilAsync(
                 clientTransport,
                 () => clientTransport.ReadyCount == 1,
-                TimeSpan.FromSeconds(5));
+                TimeSpan.FromSeconds(5)
+            );
             for (var index = 0; index < 4; index++)
             {
-                var reply = await route.RequestToChannel(
-                        "work",
-                        new EchoRequest($"after-{index}"))
+                var reply = await route
+                    .RequestToChannel("work", new EchoRequest($"after-{index}"))
                     .Timeout(TimeSpan.FromSeconds(5))
                     .Async<EchoReply>();
                 Assert.StartsWith("second:", reply.Value);
             }
-            var ownerId = first.GetRequiredService<ZLinkLocationRuntime>()
-                .OwnerId;
+            var ownerId = first.GetRequiredService<ZLinkLocationRuntime>().OwnerId;
             ZLinkClientServerServerDescriptor? updated = null;
             var updateDeadlineTimeout = TimeSpan.FromSeconds(5);
             var updateDeadlineStarted = Stopwatch.GetTimestamp();
             while (Stopwatch.GetElapsedTime(updateDeadlineStarted) < updateDeadlineTimeout)
             {
-                updated = (await store.ListClientServersAsync(
-                        "work",
-                        new ZLinkPageRequest(16))).Items
-                    .Single(row => row.OwnerId == ownerId);
+                updated = (
+                    await store.ListClientServersAsync("work", new ZLinkPageRequest(16))
+                ).Items.Single(row => row.OwnerId == ownerId);
                 if (updated.Weight == 0)
                     break;
                 await Task.Delay(10);
@@ -1061,7 +1112,8 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             foreach (var provider in providers.Reverse())
                 await provider.GetRequiredService<ZLinkLocationAutoConnectHost>().StopAsync();
             foreach (var provider in providers.Reverse())
-                await provider.GetRequiredService<ZLinkFrameworkRuntime>()
+                await provider
+                    .GetRequiredService<ZLinkFrameworkRuntime>()
                     .StopAsync(CancellationToken.None);
             foreach (var provider in providers.Reverse())
                 await provider.GetRequiredService<ZLinkLocationRuntime>().StopAsync();
@@ -1089,31 +1141,35 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         try
         {
             await serverDiscovery.StartAsync(
-                await serverRuntime.EnsureStartedStateAsync(CancellationToken.None));
+                await serverRuntime.EnsureStartedStateAsync(CancellationToken.None)
+            );
             await clientDiscovery.StartAsync(
-                await clientRuntime.EnsureStartedStateAsync(CancellationToken.None));
+                await clientRuntime.EnsureStartedStateAsync(CancellationToken.None)
+            );
 
-            var descriptor = Assert.Single((await store.ListClientServersAsync(
-                "work",
-                new ZLinkPageRequest(16))).Items);
-            var transport =
-                clientRuntime.GetClientServerClientRuntime("work");
+            var descriptor = Assert.Single(
+                (await store.ListClientServersAsync("work", new ZLinkPageRequest(16))).Items
+            );
+            var transport = clientRuntime.GetClientServerClientRuntime("work");
             await WaitUntilAsync(
                 transport,
                 () => transport.ReadyCount == 1,
-                TimeSpan.FromSeconds(5));
+                TimeSpan.FromSeconds(5)
+            );
 
             transport.AddManual(descriptor.Endpoint);
             await WaitUntilAsync(
                 transport,
-                () => transport.ConnectionIntentCount == 2
-                    && transport.PhysicalConnectionCount == 1,
-                TimeSpan.FromSeconds(5));
+                () =>
+                    transport.ConnectionIntentCount == 2 && transport.PhysicalConnectionCount == 1,
+                TimeSpan.FromSeconds(5)
+            );
 
             transport.RemoveManual(descriptor.Endpoint);
             Assert.Equal(1, transport.ConnectionIntentCount);
             Assert.Equal(1, transport.PhysicalConnectionCount);
-            var reply = await client.GetRequiredService<IZLinkRouteClient>()
+            var reply = await client
+                .GetRequiredService<IZLinkRouteClient>()
                 .RequestToChannel("work", new EchoRequest("deduped"))
                 .Timeout(TimeSpan.FromSeconds(5))
                 .Async<EchoReply>();
@@ -1152,28 +1208,31 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         try
         {
             await serverDiscovery.StartAsync(
-                await serverRuntime.EnsureStartedStateAsync(CancellationToken.None));
+                await serverRuntime.EnsureStartedStateAsync(CancellationToken.None)
+            );
             await clientDiscovery.StartAsync(
-                await clientRuntime.EnsureStartedStateAsync(CancellationToken.None));
-            var first = Assert.Single((await store.ListClientServersAsync(
-                "work",
-                new ZLinkPageRequest(16))).Items);
-            var clientTransport =
-                clientRuntime.GetClientServerClientRuntime("work");
+                await clientRuntime.EnsureStartedStateAsync(CancellationToken.None)
+            );
+            var first = Assert.Single(
+                (await store.ListClientServersAsync("work", new ZLinkPageRequest(16))).Items
+            );
+            var clientTransport = clientRuntime.GetClientServerClientRuntime("work");
             await WaitUntilAsync(
                 clientTransport,
                 () => clientTransport.ReadyCount == 1,
-                TimeSpan.FromSeconds(5));
+                TimeSpan.FromSeconds(5)
+            );
 
             await serverDiscovery.StopAsync();
             await serverRuntime.StopAsync(CancellationToken.None);
             await serverRuntime.StartAsync(CancellationToken.None);
             await serverDiscovery.StartAsync(
-                await serverRuntime.EnsureStartedStateAsync(CancellationToken.None));
+                await serverRuntime.EnsureStartedStateAsync(CancellationToken.None)
+            );
 
-            var second = Assert.Single((await store.ListClientServersAsync(
-                "work",
-                new ZLinkPageRequest(16))).Items);
+            var second = Assert.Single(
+                (await store.ListClientServersAsync("work", new ZLinkPageRequest(16))).Items
+            );
             Assert.Equal(first.ServerRid, second.ServerRid);
             Assert.NotEqual(first.LifecycleGeneration, second.LifecycleGeneration);
             Assert.Equal(first.Endpoint, second.Endpoint);
@@ -1183,8 +1242,10 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             await WaitUntilAsync(
                 clientTransport,
                 () => clientTransport.ReadyCount == 1,
-                TimeSpan.FromSeconds(5));
-            var reply = await client.GetRequiredService<IZLinkRouteClient>()
+                TimeSpan.FromSeconds(5)
+            );
+            var reply = await client
+                .GetRequiredService<IZLinkRouteClient>()
                 .RequestToChannel("work", new EchoRequest("after-restart"))
                 .Timeout(TimeSpan.FromSeconds(5))
                 .Async<EchoReply>();
@@ -1204,7 +1265,8 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     private static async Task WaitUntilAsync(
         ZLinkClientServerClientRuntime transport,
         Func<bool> condition,
-        TimeSpan timeout)
+        TimeSpan timeout
+    )
     {
         var startedAt = Stopwatch.GetTimestamp();
         while (true)
@@ -1213,7 +1275,8 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 return;
 
             var changed = new TaskCompletionSource(
-                TaskCreationOptions.RunContinuationsAsynchronously);
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
             void OnStateChanged() => changed.TrySetResult();
 
             transport.StateChanged += OnStateChanged;
@@ -1227,8 +1290,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 {
                     if (condition())
                         return;
-                    throw new TimeoutException(
-                        "ClientServer condition was not reached.");
+                    throw new TimeoutException("ClientServer condition was not reached.");
                 }
 
                 try
@@ -1239,8 +1301,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 {
                     if (condition())
                         return;
-                    throw new TimeoutException(
-                        "ClientServer condition was not reached.");
+                    throw new TimeoutException("ClientServer condition was not reached.");
                 }
             }
             finally
@@ -1252,17 +1313,20 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
 
     private static ZLinkChannelRuntimeBundle GetServerBundle(
         ZLinkFrameworkComponentState state,
-        string channelName) =>
-        state.ClientServerServerBundles[ZLinkChannelName.FromBoundary(
-            channelName,
-            nameof(channelName))];
+        string channelName
+    ) =>
+        state.ClientServerServerBundles[
+            ZLinkChannelName.FromBoundary(channelName, nameof(channelName))
+        ];
 
     [Fact]
     public void ClientServerRegistration_AllowsEachRoleOnceAndRejectsDuplicateRole()
     {
         var unselected = Assert.Throws<ZLinkConfigurationException>(() =>
-            new ServiceCollection().AddZLinkFramework(
-                options => options.AddClientServerChannel("work")));
+            new ServiceCollection().AddZLinkFramework(options =>
+                options.AddClientServerChannel("work")
+            )
+        );
         Assert.Contains("at least once", unselected.Message, StringComparison.Ordinal);
 
         var services = new ServiceCollection();
@@ -1271,7 +1335,8 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         services.AddZLinkFramework(options =>
         {
             options.AddClientServerChannel("work").Client().Connect("tcp://127.0.0.1:7001");
-            options.AddClientServerChannel("work")
+            options
+                .AddClientServerChannel("work")
                 .Server()
                 .Listen(0)
                 .AddRequestHandler<EchoHandler, EchoRequest, EchoReply>();
@@ -1282,19 +1347,30 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             {
                 options.AddClientServerChannel("work").Client().Connect("tcp://127.0.0.1:7001");
                 options.AddClientServerChannel("work").Client().Connect("tcp://127.0.0.1:7002");
-            }));
-        Assert.Contains("role 'Client' is already registered", duplicateClient.Message, StringComparison.Ordinal);
+            })
+        );
+        Assert.Contains(
+            "role 'Client' is already registered",
+            duplicateClient.Message,
+            StringComparison.Ordinal
+        );
 
         var duplicateServer = Assert.Throws<ZLinkConfigurationException>(() =>
             new ServiceCollection().AddZLinkFramework(options =>
             {
-                options.AddClientServerChannel("work")
+                options
+                    .AddClientServerChannel("work")
                     .Server()
                     .Listen(0)
                     .AddRequestHandler<EchoHandler, EchoRequest, EchoReply>();
                 options.AddClientServerChannel("work").Server();
-            }));
-        Assert.Contains("role 'Server' is already registered", duplicateServer.Message, StringComparison.Ordinal);
+            })
+        );
+        Assert.Contains(
+            "role 'Server' is already registered",
+            duplicateServer.Message,
+            StringComparison.Ordinal
+        );
     }
 
     [Fact]
@@ -1307,11 +1383,13 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         {
             options.AddClientServerChannel("orders").Client().Connect("tcp://127.0.0.1:7001");
             options.AddClientServerChannel("billing").Client().Connect("tcp://127.0.0.1:7002");
-            options.AddClientServerChannel("orders-server")
+            options
+                .AddClientServerChannel("orders-server")
                 .Server()
                 .Listen(0)
                 .AddRequestHandler<EchoHandler, EchoRequest, EchoReply>();
-            options.AddClientServerChannel("billing-server")
+            options
+                .AddClientServerChannel("billing-server")
                 .Server()
                 .Listen(0)
                 .AddRequestHandler<EchoHandler, EchoRequest, EchoReply>();
@@ -1320,18 +1398,15 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         var collision = Assert.Throws<ZLinkConfigurationException>(() =>
             new ServiceCollection().AddZLinkFramework(options =>
             {
-                options.AddRouteMesh("mesh")
-                    .Listen("tcp://127.0.0.1:0")
-                    .Channel("orders")
-                    .Server();
-                options.AddClientServerChannel("orders")
-                    .Client()
-                    .Connect("tcp://127.0.0.1:7001");
-            }));
+                options.AddRouteMesh("mesh").Listen("tcp://127.0.0.1:0").Channel("orders").Server();
+                options.AddClientServerChannel("orders").Client().Connect("tcp://127.0.0.1:7001");
+            })
+        );
         Assert.Contains(
             "registered on both RouteMesh and ClientServer physical paths",
             collision.Message,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
     }
 
     [Fact]
@@ -1344,34 +1419,41 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         var providers = new[] { local, remote };
 
         foreach (var provider in providers)
-            await provider.GetRequiredService<ZLinkLocationRuntime>()
+            await provider
+                .GetRequiredService<ZLinkLocationRuntime>()
                 .StartAsync(RoutingId.From(Guid.NewGuid().ToString("N")));
         foreach (var provider in providers)
-            await provider.GetRequiredService<ZLinkFrameworkRuntime>()
+            await provider
+                .GetRequiredService<ZLinkFrameworkRuntime>()
                 .StartAsync(CancellationToken.None);
 
         try
         {
             foreach (var provider in providers)
-                await provider.GetRequiredService<ZLinkLocationAutoConnectHost>()
-                    .StartAsync(await provider.GetRequiredService<ZLinkFrameworkRuntime>()
-                        .EnsureStartedStateAsync(CancellationToken.None));
+                await provider
+                    .GetRequiredService<ZLinkLocationAutoConnectHost>()
+                    .StartAsync(
+                        await provider
+                            .GetRequiredService<ZLinkFrameworkRuntime>()
+                            .EnsureStartedStateAsync(CancellationToken.None)
+                    );
 
-            var transport = local.GetRequiredService<ZLinkFrameworkRuntime>()
+            var transport = local
+                .GetRequiredService<ZLinkFrameworkRuntime>()
                 .GetClientServerClientRuntime("work");
             await WaitUntilAsync(
                 transport,
                 () => transport.ReadyCount == 2,
-                TimeSpan.FromSeconds(10));
+                TimeSpan.FromSeconds(10)
+            );
             var buildsBeforeCalls = transport.ReadySelectionPlanBuildCount;
 
             var route = local.GetRequiredService<IZLinkRouteClient>();
             var selected = new HashSet<string>(StringComparer.Ordinal);
             for (var index = 0; index < 12; index++)
             {
-                var reply = await route.RequestToChannel(
-                        "work",
-                        new EchoRequest(index.ToString()))
+                var reply = await route
+                    .RequestToChannel("work", new EchoRequest(index.ToString()))
                     .Timeout(TimeSpan.FromSeconds(5))
                     .Async<EchoReply>();
                 selected.Add(reply.Value.Split(':', 2)[0]);
@@ -1379,37 +1461,34 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
 
             Assert.Equal(
                 new[] { "local", "remote" },
-                selected.OrderBy(static value => value, StringComparer.Ordinal));
-            Assert.Equal(
-                buildsBeforeCalls,
-                transport.ReadySelectionPlanBuildCount);
+                selected.OrderBy(static value => value, StringComparer.Ordinal)
+            );
+            Assert.Equal(buildsBeforeCalls, transport.ReadySelectionPlanBuildCount);
 
             Assert.True(
-                await local.GetRequiredService<ZLinkLocationAutoConnectHost>()
-                    .MarkDrainingAsync());
+                await local.GetRequiredService<ZLinkLocationAutoConnectHost>().MarkDrainingAsync()
+            );
             await WaitUntilAsync(
                 transport,
                 () => transport.ReadyCount == 1,
-                TimeSpan.FromSeconds(5));
-            var buildsAfterCandidateChange =
-                transport.ReadySelectionPlanBuildCount;
+                TimeSpan.FromSeconds(5)
+            );
+            var buildsAfterCandidateChange = transport.ReadySelectionPlanBuildCount;
             Assert.True(buildsAfterCandidateChange > buildsBeforeCalls);
-            var afterDrain = await route.RequestToChannel(
-                    "work",
-                    new EchoRequest("after-drain"))
+            var afterDrain = await route
+                .RequestToChannel("work", new EchoRequest("after-drain"))
                 .Timeout(TimeSpan.FromSeconds(5))
                 .Async<EchoReply>();
             Assert.Equal("remote:after-drain", afterDrain.Value);
-            Assert.Equal(
-                buildsAfterCandidateChange,
-                transport.ReadySelectionPlanBuildCount);
+            Assert.Equal(buildsAfterCandidateChange, transport.ReadySelectionPlanBuildCount);
         }
         finally
         {
             foreach (var provider in providers.Reverse())
                 await provider.GetRequiredService<ZLinkLocationAutoConnectHost>().StopAsync();
             foreach (var provider in providers.Reverse())
-                await provider.GetRequiredService<ZLinkFrameworkRuntime>()
+                await provider
+                    .GetRequiredService<ZLinkFrameworkRuntime>()
                     .StopAsync(CancellationToken.None);
             foreach (var provider in providers.Reverse())
                 await provider.GetRequiredService<ZLinkLocationRuntime>().StopAsync();
@@ -1424,33 +1503,42 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         await using var local = CreateAutomaticClientAndServer(
             locationProvider,
             "local",
-            weight: 0);
+            weight: 0
+        );
         await using var remote = CreateAutomaticServer(locationProvider, "remote");
         var providers = new[] { local, remote };
 
         foreach (var provider in providers)
-            await provider.GetRequiredService<ZLinkLocationRuntime>()
+            await provider
+                .GetRequiredService<ZLinkLocationRuntime>()
                 .StartAsync(RoutingId.From(Guid.NewGuid().ToString("N")));
         foreach (var provider in providers)
-            await provider.GetRequiredService<ZLinkFrameworkRuntime>()
+            await provider
+                .GetRequiredService<ZLinkFrameworkRuntime>()
                 .StartAsync(CancellationToken.None);
 
         try
         {
             foreach (var provider in providers)
-                await provider.GetRequiredService<ZLinkLocationAutoConnectHost>()
-                    .StartAsync(await provider.GetRequiredService<ZLinkFrameworkRuntime>()
-                        .EnsureStartedStateAsync(CancellationToken.None));
+                await provider
+                    .GetRequiredService<ZLinkLocationAutoConnectHost>()
+                    .StartAsync(
+                        await provider
+                            .GetRequiredService<ZLinkFrameworkRuntime>()
+                            .EnsureStartedStateAsync(CancellationToken.None)
+                    );
 
-            var transport = local.GetRequiredService<ZLinkFrameworkRuntime>()
+            var transport = local
+                .GetRequiredService<ZLinkFrameworkRuntime>()
                 .GetClientServerClientRuntime("work");
             await WaitUntilAsync(
                 transport,
-                () => transport.ReadyCount == 1
-                    && transport.AdmissionCompletedCount == 2,
-                TimeSpan.FromSeconds(10));
+                () => transport.ReadyCount == 1 && transport.AdmissionCompletedCount == 2,
+                TimeSpan.FromSeconds(10)
+            );
 
-            var reply = await local.GetRequiredService<IZLinkRouteClient>()
+            var reply = await local
+                .GetRequiredService<IZLinkRouteClient>()
                 .RequestToChannel("work", new EchoRequest("weighted"))
                 .Timeout(TimeSpan.FromSeconds(5))
                 .Async<EchoReply>();
@@ -1461,7 +1549,8 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             foreach (var provider in providers.Reverse())
                 await provider.GetRequiredService<ZLinkLocationAutoConnectHost>().StopAsync();
             foreach (var provider in providers.Reverse())
-                await provider.GetRequiredService<ZLinkFrameworkRuntime>()
+                await provider
+                    .GetRequiredService<ZLinkFrameworkRuntime>()
                     .StopAsync(CancellationToken.None);
             foreach (var provider in providers.Reverse())
                 await provider.GetRequiredService<ZLinkLocationRuntime>().StopAsync();
@@ -1472,24 +1561,25 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     public void ClientServerControlProtocol_UsesExactBinaryAdmissionRecords()
     {
         using var hello = ZLinkClientServerControlProtocol.EncodeHello(
-            new ZLinkClientServerControlProtocol.Hello(
-                "work",
-                "plaintext",
-                4096));
+            new ZLinkClientServerControlProtocol.Hello("work", "plaintext", 4096)
+        );
         Assert.Equal(
             "5A4D010100020000001501001204776F726B010764656661756C7400001000",
-            Convert.ToHexString(hello.AsReadOnlyMemory().Span));
-        Assert.True(
-            ZLinkClientServerControlProtocol.TryDecodeHello(
-                [hello],
-                out var decodedHello));
+            Convert.ToHexString(hello.AsReadOnlyMemory().Span)
+        );
+        Assert.True(ZLinkClientServerControlProtocol.TryDecodeHello([hello], out var decodedHello));
         Assert.Equal("work", decodedHello!.ChannelName);
         Assert.Equal("default", decodedHello.SecurityIdentity);
         Assert.Equal(4096U, decodedHello.NormalizedEffectiveMaxMessageBytes);
-        Assert.True(ZLinkClientServerControlProtocol.SecurityIdentityMatches(
-            "plaintext", "default"));
-        Assert.False(ZLinkClientServerControlProtocol.SecurityIdentityMatches(
-            "authenticated-client", "default"));
+        Assert.True(
+            ZLinkClientServerControlProtocol.SecurityIdentityMatches("plaintext", "default")
+        );
+        Assert.False(
+            ZLinkClientServerControlProtocol.SecurityIdentityMatches(
+                "authenticated-client",
+                "default"
+            )
+        );
 
         using var admit = ZLinkClientServerControlProtocol.EncodeAdmission(
             new ZLinkClientServerControlProtocol.Admission(
@@ -1501,11 +1591,12 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 ZLinkFrameworkRuntimeState.Serving,
                 "plaintext",
                 4096,
-                "tcp://127.0.0.1:7002"));
+                "tcp://127.0.0.1:7002"
+            )
+        );
         Assert.True(
-            ZLinkClientServerControlProtocol.TryDecodeAdmission(
-                [admit],
-                out var decodedAdmission));
+            ZLinkClientServerControlProtocol.TryDecodeAdmission([admit], out var decodedAdmission)
+        );
         Assert.Equal(RoutingId.From("server-a"), decodedAdmission!.ServerRid);
         Assert.Equal(3UL, decodedAdmission.LifecycleGeneration);
         Assert.Equal(7UL, decodedAdmission.DescriptorRevision);
@@ -1518,48 +1609,37 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             {
                 DescriptorRevision = 8,
                 Weight = 0,
-                State = ZLinkFrameworkRuntimeState.Draining
-            });
+                State = ZLinkFrameworkRuntimeState.Draining,
+            }
+        );
         Assert.True(
-            ZLinkClientServerControlProtocol.TryDecodeUpdate(
-                [update],
-                out var decodedUpdate));
+            ZLinkClientServerControlProtocol.TryDecodeUpdate([update], out var decodedUpdate)
+        );
         Assert.Equal(8UL, decodedUpdate!.DescriptorRevision);
         Assert.Equal(0, decodedUpdate.Weight);
-        Assert.Equal(
-            ZLinkFrameworkRuntimeState.Draining,
-            decodedUpdate.State);
+        Assert.Equal(ZLinkFrameworkRuntimeState.Draining, decodedUpdate.State);
 
-        using var probe =
-            ZLinkClientServerControlProtocol.EncodeLivenessProbe(11);
+        using var probe = ZLinkClientServerControlProtocol.EncodeLivenessProbe(11);
         Assert.Equal(
             "5A4D010500000000000000000B",
-            Convert.ToHexString(probe.AsReadOnlyMemory().Span));
+            Convert.ToHexString(probe.AsReadOnlyMemory().Span)
+        );
         Assert.True(
-            ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(
-                [probe],
-                out var probeId));
+            ZLinkClientServerControlProtocol.TryDecodeLivenessProbe([probe], out var probeId)
+        );
         Assert.Equal(11UL, probeId);
 
-        using var ack =
-            ZLinkClientServerControlProtocol.EncodeLivenessAck(11);
+        using var ack = ZLinkClientServerControlProtocol.EncodeLivenessAck(11);
         Assert.Equal(
             "5A4D010600000000000000000B",
-            Convert.ToHexString(ack.AsReadOnlyMemory().Span));
-        Assert.True(
-            ZLinkClientServerControlProtocol.TryDecodeLivenessAck(
-                [ack],
-                out var ackId));
+            Convert.ToHexString(ack.AsReadOnlyMemory().Span)
+        );
+        Assert.True(ZLinkClientServerControlProtocol.TryDecodeLivenessAck([ack], out var ackId));
         Assert.Equal(11UL, ackId);
 
         using var reject = ZLinkClientServerControlProtocol.EncodeReject(1);
-        Assert.Equal(
-            "5A4D01030000000001",
-            Convert.ToHexString(reject.AsReadOnlyMemory().Span));
-        Assert.True(
-            ZLinkClientServerControlProtocol.TryDecodeReject(
-                [reject],
-                out var reason));
+        Assert.Equal("5A4D01030000000001", Convert.ToHexString(reject.AsReadOnlyMemory().Span));
+        Assert.True(ZLinkClientServerControlProtocol.TryDecodeReject([reject], out var reason));
         Assert.Equal(1U, reason);
     }
 
@@ -1581,15 +1661,12 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 ZLinkFrameworkRuntimeState.Serving,
                 "plaintext",
                 4096,
-                "TCP://Host.Example.com:0443/"));
+                "TCP://Host.Example.com:0443/"
+            )
+        );
 
-        Assert.True(
-            ZLinkClientServerControlProtocol.TryDecodeAdmission(
-                [admit],
-                out var decoded));
-        Assert.Equal(
-            "tcp://host.example.com:443",
-            decoded!.AdvertisedEndpoint);
+        Assert.True(ZLinkClientServerControlProtocol.TryDecodeAdmission([admit], out var decoded));
+        Assert.Equal("tcp://host.example.com:443", decoded!.AdvertisedEndpoint);
     }
 
     [Fact]
@@ -1632,16 +1709,15 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 SecurityIdentity: "plaintext",
                 OwnerId: "test-owner",
                 LeaseGeneration: 1,
-                UpdatedAt: default);
+                UpdatedAt: default
+            );
             transport.ReplaceAutomatic([expected]);
 
             using var hello = await PollReceivedAsync(
                 storage => TryReceive(router, storage),
-                TimeSpan.FromSeconds(5));
-            Assert.True(
-                ZLinkClientServerControlProtocol.TryDecodeHello(
-                    hello.Parts,
-                    out _));
+                TimeSpan.FromSeconds(5)
+            );
+            Assert.True(ZLinkClientServerControlProtocol.TryDecodeHello(hello.Parts, out _));
 
             // Same physical target as `endpoint`, but different (equivalent)
             // notation: uppercase scheme, leading-zero port, trailing slash.
@@ -1656,23 +1732,22 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                     ZLinkFrameworkRuntimeState.Serving,
                     "plaintext",
                     1024 * 1024,
-                    mismatchedNotation));
-            hello.Reply()
-                .Message(admission)
-                .Submit();
+                    mismatchedNotation
+                )
+            );
+            hello.Reply().Message(admission).Submit();
 
             try
             {
                 await WaitUntilAsync(
                     transport,
                     () => transport.ReadyCount == 1,
-                    TimeSpan.FromSeconds(5));
+                    TimeSpan.FromSeconds(5)
+                );
             }
             catch (TimeoutException exception)
             {
-                throw new TimeoutException(
-                    transport.AdmissionDiagnostics,
-                    exception);
+                throw new TimeoutException(transport.AdmissionDiagnostics, exception);
             }
             Assert.Equal(1, transport.ReadyCount);
         }
@@ -1709,51 +1784,59 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         try
         {
             await serverDiscovery.StartAsync(
-                await serverRuntime.EnsureStartedStateAsync(CancellationToken.None));
+                await serverRuntime.EnsureStartedStateAsync(CancellationToken.None)
+            );
             var actual = Assert.Single(
-                (await store.ListClientServersAsync(
-                    "work",
-                    new ZLinkPageRequest(16))).Items);
+                (await store.ListClientServersAsync("work", new ZLinkPageRequest(16))).Items
+            );
             Assert.Equal(
                 ZLinkLocationWriteStatus.Stored,
                 await store.RemoveClientServerAsync(
-                    new ZLinkClientServerServerDescriptorKey(
-                        actual.ChannelName,
-                        actual.ServerRid),
-                    serverLocations.OwnerToken));
+                    new ZLinkClientServerServerDescriptorKey(actual.ChannelName, actual.ServerRid),
+                    serverLocations.OwnerToken
+                )
+            );
 
             // Same physical target, different (but equivalent) notation:
             // uppercase scheme, leading-zero port, trailing slash. The
             // server still binds and admits using its own canonical value.
             var mismatchedNotation =
-                "TCP://" + new Uri(actual.Endpoint, UriKind.Absolute).Host
-                + ":0" + new Uri(actual.Endpoint, UriKind.Absolute).Port + "/";
+                "TCP://"
+                + new Uri(actual.Endpoint, UriKind.Absolute).Host
+                + ":0"
+                + new Uri(actual.Endpoint, UriKind.Absolute).Port
+                + "/";
             var forged = actual with { Endpoint = mismatchedNotation };
             Assert.Equal(
                 ZLinkLocationWriteStatus.Stored,
-                (await store.UpdateClientServerAsync(
-                    forged,
-                    ZLinkLocationWriteIntent.NewClaim)).Status);
+                (
+                    await store.UpdateClientServerAsync(forged, ZLinkLocationWriteIntent.NewClaim)
+                ).Status
+            );
 
             await clientDiscovery.StartAsync(
-                await clientRuntime.EnsureStartedStateAsync(CancellationToken.None));
+                await clientRuntime.EnsureStartedStateAsync(CancellationToken.None)
+            );
             var transport = clientRuntime.GetClientServerClientRuntime("work");
             try
             {
                 await WaitUntilAsync(
                     transport,
                     () => transport.ReadyCount == 1,
-                    TimeSpan.FromSeconds(5));
+                    TimeSpan.FromSeconds(5)
+                );
             }
             catch (TimeoutException exception)
             {
                 throw new TimeoutException(
                     $"forged={forged.Endpoint} {transport.AdmissionDiagnostics}",
-                    exception);
+                    exception
+                );
             }
             Assert.Equal(1, transport.ReadyCount);
 
-            var reply = await client.GetRequiredService<IZLinkRouteClient>()
+            var reply = await client
+                .GetRequiredService<IZLinkRouteClient>()
                 .RequestToChannel("work", new EchoRequest("notation"))
                 .Timeout(TimeSpan.FromSeconds(5))
                 .Async<EchoReply>();
@@ -1785,17 +1868,18 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         dealer.Connect(endpoint);
 
         var hello = ZLinkClientServerControlProtocol.EncodeHello(
-            new ZLinkClientServerControlProtocol.Hello(
-                "work",
-                "plaintext",
-                4096));
-        var admissionTask = dealer.Request()
+            new ZLinkClientServerControlProtocol.Hello("work", "plaintext", 4096)
+        );
+        var admissionTask = dealer
+            .Request()
             .Message(hello)
             .Timeout(TimeSpan.FromSeconds(2))
-            .Async(CancellationToken.None).Reply;
+            .Async(CancellationToken.None)
+            .Reply;
         using var inbound = await PollReceivedAsync(
             storage => router.Recv(storage, RecvFlags.DontWait),
-            TimeSpan.FromSeconds(2));
+            TimeSpan.FromSeconds(2)
+        );
         var sourceRid = Assert.IsType<RoutingId>(inbound.RoutingId);
         var replyToken = Assert.IsType<ReplyToken>(inbound.ReplyToken);
         var admit = ZLinkClientServerControlProtocol.EncodeAdmission(
@@ -1808,27 +1892,33 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 ZLinkFrameworkRuntimeState.Serving,
                 "plaintext",
                 4096,
-                endpoint));
+                endpoint
+            )
+        );
         router.Reply(sourceRid, replyToken).Message(admit).Submit();
         var events = new PollEvent[2];
         Assert.True(poller.Wait(events, TimeSpan.FromSeconds(2)) > 0);
         ZLinkMessageParts.DisposeAll(await admissionTask);
 
-        var probe =
-            ZLinkClientServerControlProtocol.EncodeLivenessProbe(17);
-        var probeAdmission = router.Send(sourceRid)
+        var probe = ZLinkClientServerControlProtocol.EncodeLivenessProbe(17);
+        var probeAdmission = router
+            .Send(sourceRid)
             .Message(probe)
-            .Async(CancellationToken.None).Admitted;
+            .Async(CancellationToken.None)
+            .Admitted;
         if (!probeAdmission.IsCompleted)
             Assert.True(poller.Wait(events, TimeSpan.FromSeconds(2)) > 0);
         await probeAdmission;
         using var delivered = await PollReceivedAsync(
             storage => dealer.Recv(storage, RecvFlags.DontWait),
-            TimeSpan.FromSeconds(2));
+            TimeSpan.FromSeconds(2)
+        );
         Assert.True(
             ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(
                 delivered.Parts,
-                out var probeId));
+                out var probeId
+            )
+        );
         Assert.Equal(17UL, probeId);
     }
 
@@ -1848,53 +1938,48 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             var transport = runtime.GetClientServerClientRuntime("work");
             using var hello = await PollReceivedAsync(
                 storage => TryReceive(router, storage),
-                TimeSpan.FromSeconds(5));
-            Assert.True(
-                ZLinkClientServerControlProtocol.TryDecodeHello(
-                    hello.Parts,
-                    out _));
+                TimeSpan.FromSeconds(5)
+            );
+            Assert.True(ZLinkClientServerControlProtocol.TryDecodeHello(hello.Parts, out _));
             ReplyAdmission(router, hello, endpoint);
             await WaitUntilAsync(
                 transport,
                 () => transport.ReadyCount == 1,
-                TimeSpan.FromSeconds(5));
+                TimeSpan.FromSeconds(5)
+            );
 
-            var clientRid = hello.RoutingId
-                ?? throw new InvalidOperationException(
-                    "missing client routing id");
-            using var probe =
-                ZLinkClientServerControlProtocol.EncodeLivenessProbe(17);
-            await router.Send(clientRid)
-                .Message(probe)
-                .Async(CancellationToken.None).Admitted;
+            var clientRid =
+                hello.RoutingId ?? throw new InvalidOperationException("missing client routing id");
+            using var probe = ZLinkClientServerControlProtocol.EncodeLivenessProbe(17);
+            await router.Send(clientRid).Message(probe).Async(CancellationToken.None).Admitted;
             using var reply = await PollReceivedAsync(
                 storage => TryReceive(router, storage),
-                TimeSpan.FromSeconds(3));
+                TimeSpan.FromSeconds(3)
+            );
             Assert.True(
-                ZLinkClientServerControlProtocol.TryDecodeLivenessAck(
-                    reply.Parts,
-                    out var probeId));
+                ZLinkClientServerControlProtocol.TryDecodeLivenessAck(reply.Parts, out var probeId)
+            );
             Assert.Equal(17UL, probeId);
 
-            using var draining =
-                ZLinkClientServerControlProtocol.EncodeUpdate(
-                    new ZLinkClientServerControlProtocol.Admission(
-                        "work",
-                        RoutingId.From("manual-server"),
-                        1,
-                        2,
-                        0,
-                        ZLinkFrameworkRuntimeState.Draining,
-                        "plaintext",
-                        1024 * 1024,
-                        endpoint));
-            await router.Send(clientRid)
-                .Message(draining)
-                .Async(CancellationToken.None).Admitted;
+            using var draining = ZLinkClientServerControlProtocol.EncodeUpdate(
+                new ZLinkClientServerControlProtocol.Admission(
+                    "work",
+                    RoutingId.From("manual-server"),
+                    1,
+                    2,
+                    0,
+                    ZLinkFrameworkRuntimeState.Draining,
+                    "plaintext",
+                    1024 * 1024,
+                    endpoint
+                )
+            );
+            await router.Send(clientRid).Message(draining).Async(CancellationToken.None).Admitted;
             await WaitUntilAsync(
                 transport,
                 () => transport.ReadyCount == 0,
-                TimeSpan.FromSeconds(3));
+                TimeSpan.FromSeconds(3)
+            );
         }
         finally
         {
@@ -1918,21 +2003,41 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         {
             var transport = runtime.GetClientServerClientRuntime("work");
             using var hello = await PollReceivedAsync(
-                storage => TryReceive(router, storage), TimeSpan.FromSeconds(5));
+                storage => TryReceive(router, storage),
+                TimeSpan.FromSeconds(5)
+            );
             ReplyAdmission(router, hello, endpoint);
-            await WaitUntilAsync(transport, () => transport.ReadyCount == 1, TimeSpan.FromSeconds(5));
+            await WaitUntilAsync(
+                transport,
+                () => transport.ReadyCount == 1,
+                TimeSpan.FromSeconds(5)
+            );
 
             time.AdvanceMonotonic(TimeSpan.FromSeconds(5));
             using var first = await PollReceivedAsync(
-                storage => TryReceive(router, storage), TimeSpan.FromSeconds(5));
-            Assert.True(ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(first.Parts, out var firstId));
+                storage => TryReceive(router, storage),
+                TimeSpan.FromSeconds(5)
+            );
+            Assert.True(
+                ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(
+                    first.Parts,
+                    out var firstId
+                )
+            );
             Assert.NotNull(first.ReplyToken);
             Assert.NotEqual(0UL, firstId);
 
             time.AdvanceMonotonic(TimeSpan.FromSeconds(5));
             using var second = await PollReceivedAsync(
-                storage => TryReceive(router, storage), TimeSpan.FromSeconds(5));
-            Assert.True(ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(second.Parts, out var secondId));
+                storage => TryReceive(router, storage),
+                TimeSpan.FromSeconds(5)
+            );
+            Assert.True(
+                ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(
+                    second.Parts,
+                    out var secondId
+                )
+            );
             Assert.NotNull(second.ReplyToken);
             Assert.Equal(firstId, secondId);
             Assert.Equal(1, transport.ReadyCount);
@@ -1940,13 +2045,19 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             time.AdvanceMonotonic(TimeSpan.FromSeconds(5));
             try
             {
-                await WaitUntilAsync(transport, () => transport.ReadyCount == 0, TimeSpan.FromSeconds(5));
+                await WaitUntilAsync(
+                    transport,
+                    () => transport.ReadyCount == 0,
+                    TimeSpan.FromSeconds(5)
+                );
             }
             catch (TimeoutException exception)
             {
                 throw new TimeoutException(
                     $"elapsed={time.GetElapsedTime(0)}; sent={transport.SentLivenessProbeCount}; "
-                    + $"acks={transport.LivenessAckCount}; {transport.AdmissionDiagnostics}", exception);
+                        + $"acks={transport.LivenessAckCount}; {transport.AdmissionDiagnostics}",
+                    exception
+                );
             }
             Assert.Equal(0, transport.LivenessAckCount);
             Assert.Equal(2, transport.SentLivenessProbeCount);
@@ -1973,17 +2084,30 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         {
             var transport = runtime.GetClientServerClientRuntime("work");
             using var hello = await PollReceivedAsync(
-                storage => TryReceive(router, storage), TimeSpan.FromSeconds(5));
+                storage => TryReceive(router, storage),
+                TimeSpan.FromSeconds(5)
+            );
             ReplyAdmission(router, hello, endpoint);
-            await WaitUntilAsync(transport, () => transport.ReadyCount == 1, TimeSpan.FromSeconds(5));
+            await WaitUntilAsync(
+                transport,
+                () => transport.ReadyCount == 1,
+                TimeSpan.FromSeconds(5)
+            );
             ulong previousId = 0;
 
             for (var index = 0; index < 3; index++)
             {
                 time.AdvanceMonotonic(TimeSpan.FromSeconds(5));
                 using var probe = await PollReceivedAsync(
-                    storage => TryReceive(router, storage), TimeSpan.FromSeconds(5));
-                Assert.True(ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(probe.Parts, out var probeId));
+                    storage => TryReceive(router, storage),
+                    TimeSpan.FromSeconds(5)
+                );
+                Assert.True(
+                    ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(
+                        probe.Parts,
+                        out var probeId
+                    )
+                );
                 Assert.NotEqual(previousId, probeId);
                 Assert.NotEqual(0UL, probeId);
                 Assert.NotNull(probe.ReplyToken);
@@ -1994,7 +2118,9 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 var expectedAcks = index + 1;
                 await WaitUntilAsync(
                     transport,
-                    () => transport.LivenessAckCount == expectedAcks, TimeSpan.FromSeconds(1));
+                    () => transport.LivenessAckCount == expectedAcks,
+                    TimeSpan.FromSeconds(1)
+                );
                 previousId = probeId;
             }
             Assert.Equal(1, transport.ReadyCount);
@@ -2008,7 +2134,8 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
 
     private static async Task<Received> PollReceivedAsync(
         Func<Received, bool> receive,
-        TimeSpan timeout)
+        TimeSpan timeout
+    )
     {
         var received = Received.Create();
         var deadlineStarted = Stopwatch.GetTimestamp();
@@ -2033,10 +2160,8 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         var clientLocations = client.GetRequiredService<ZLinkLocationRuntime>();
         var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
         var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
-        var serverDiscovery =
-            server.GetRequiredService<ZLinkLocationAutoConnectHost>();
-        var clientDiscovery =
-            client.GetRequiredService<ZLinkLocationAutoConnectHost>();
+        var serverDiscovery = server.GetRequiredService<ZLinkLocationAutoConnectHost>();
+        var clientDiscovery = client.GetRequiredService<ZLinkLocationAutoConnectHost>();
 
         await serverLocations.StartAsync(RoutingId.From("identity-owner"));
         await clientLocations.StartAsync(RoutingId.From("identity-client"));
@@ -2045,40 +2170,40 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         try
         {
             await serverDiscovery.StartAsync(
-                await serverRuntime.EnsureStartedStateAsync(
-                    CancellationToken.None));
+                await serverRuntime.EnsureStartedStateAsync(CancellationToken.None)
+            );
             var actual = Assert.Single(
-                (await store.ListClientServersAsync(
-                    "work",
-                    new ZLinkPageRequest(16))).Items);
+                (await store.ListClientServersAsync("work", new ZLinkPageRequest(16))).Items
+            );
             Assert.Equal(
                 ZLinkLocationWriteStatus.Stored,
                 await store.RemoveClientServerAsync(
-                    new ZLinkClientServerServerDescriptorKey(
-                        actual.ChannelName,
-                        actual.ServerRid),
-                    serverLocations.OwnerToken));
+                    new ZLinkClientServerServerDescriptorKey(actual.ChannelName, actual.ServerRid),
+                    serverLocations.OwnerToken
+                )
+            );
             var forged = actual with
             {
                 LifecycleGeneration = actual.LifecycleGeneration + 1,
                 DescriptorRevision = 1,
-                SecurityIdentity = "forged-security"
+                SecurityIdentity = "forged-security",
             };
             Assert.Equal(
                 ZLinkLocationWriteStatus.Stored,
-                (await store.UpdateClientServerAsync(
-                    forged,
-                    ZLinkLocationWriteIntent.NewClaim)).Status);
+                (
+                    await store.UpdateClientServerAsync(forged, ZLinkLocationWriteIntent.NewClaim)
+                ).Status
+            );
 
             await clientDiscovery.StartAsync(
-                await clientRuntime.EnsureStartedStateAsync(
-                    CancellationToken.None));
-            var transport =
-                clientRuntime.GetClientServerClientRuntime("work");
+                await clientRuntime.EnsureStartedStateAsync(CancellationToken.None)
+            );
+            var transport = clientRuntime.GetClientServerClientRuntime("work");
             await WaitUntilAsync(
                 transport,
                 () => transport.AdmissionCompletedCount == 1,
-                TimeSpan.FromSeconds(5));
+                TimeSpan.FromSeconds(5)
+            );
             Assert.Equal(0, transport.ReadyCount);
         }
         finally
@@ -2107,22 +2232,26 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         {
             var transport = runtime.GetClientServerClientRuntime("work");
             RoutingId clientRid;
-            using (var firstHello = await PollReceivedAsync(
-                       storage => TryReceive(router, storage),
-                       TimeSpan.FromSeconds(5)))
+            using (
+                var firstHello = await PollReceivedAsync(
+                    storage => TryReceive(router, storage),
+                    TimeSpan.FromSeconds(5)
+                )
+            )
             {
-                Assert.True(ZLinkClientServerControlProtocol.TryDecodeHello(
-                    firstHello.Parts, out _));
-                clientRid = firstHello.RoutingId
-                    ?? throw new InvalidOperationException(
-                        "missing client routing id");
+                Assert.True(
+                    ZLinkClientServerControlProtocol.TryDecodeHello(firstHello.Parts, out _)
+                );
+                clientRid =
+                    firstHello.RoutingId
+                    ?? throw new InvalidOperationException("missing client routing id");
             }
 
             using var secondHello = await PollReceivedAsync(
                 storage => TryReceive(router, storage),
-                TimeSpan.FromSeconds(5));
-            Assert.True(ZLinkClientServerControlProtocol.TryDecodeHello(
-                secondHello.Parts, out _));
+                TimeSpan.FromSeconds(5)
+            );
+            Assert.True(ZLinkClientServerControlProtocol.TryDecodeHello(secondHello.Parts, out _));
             Assert.Equal(clientRid, secondHello.RoutingId);
             ReplyAdmission(router, secondHello, endpoint);
 
@@ -2131,19 +2260,19 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 await WaitUntilAsync(
                     transport,
                     () => transport.ReadyCount == 1,
-                    TimeSpan.FromSeconds(5));
+                    TimeSpan.FromSeconds(5)
+                );
             }
             catch (TimeoutException exception)
             {
-                throw new TimeoutException(
-                    transport.AdmissionDiagnostics,
-                    exception);
+                throw new TimeoutException(transport.AdmissionDiagnostics, exception);
             }
             Assert.Equal(1, transport.PhysicalConnectionCount);
             Assert.Contains(
                 "generation=1;",
                 transport.AdmissionDiagnostics,
-                StringComparison.Ordinal);
+                StringComparison.Ordinal
+            );
         }
         finally
         {
@@ -2167,24 +2296,26 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             var transport = runtime.GetClientServerClientRuntime("work");
             using var firstHello = await PollReceivedAsync(
                 storage => TryReceive(router, storage),
-                TimeSpan.FromSeconds(5));
-            Assert.True(ZLinkClientServerControlProtocol.TryDecodeHello(
-                firstHello.Parts, out _));
+                TimeSpan.FromSeconds(5)
+            );
+            Assert.True(ZLinkClientServerControlProtocol.TryDecodeHello(firstHello.Parts, out _));
             ReplyAdmission(router, firstHello, endpoint);
             await WaitUntilAsync(
                 transport,
                 () => transport.ReadyCount == 1,
-                TimeSpan.FromSeconds(5));
-            var clientRid = firstHello.RoutingId
+                TimeSpan.FromSeconds(5)
+            );
+            var clientRid =
+                firstHello.RoutingId
                 ?? throw new InvalidOperationException("missing client routing id");
 
             router.DisconnectRid(clientRid);
 
             using var secondHello = await PollReceivedAsync(
                 storage => TryReceive(router, storage),
-                TimeSpan.FromSeconds(5));
-            Assert.True(ZLinkClientServerControlProtocol.TryDecodeHello(
-                secondHello.Parts, out _));
+                TimeSpan.FromSeconds(5)
+            );
+            Assert.True(ZLinkClientServerControlProtocol.TryDecodeHello(secondHello.Parts, out _));
             Assert.Equal(clientRid, secondHello.RoutingId);
             Assert.Equal(1, transport.PhysicalConnectionCount);
             Assert.Equal(0, transport.ReadyCount);
@@ -2192,7 +2323,8 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             await WaitUntilAsync(
                 transport,
                 () => transport.ReadyCount == 1,
-                TimeSpan.FromSeconds(5));
+                TimeSpan.FromSeconds(5)
+            );
 
             // A physical reconnect performs one service handshake. No delayed
             // admission fallback may submit another Hello on the admitted peer.
@@ -2222,53 +2354,55 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             var transport = runtime.GetClientServerClientRuntime("work");
             using var firstHello = await PollReceivedAsync(
                 storage => TryReceive(router, storage),
-                TimeSpan.FromSeconds(5));
-            Assert.True(
-                ZLinkClientServerControlProtocol.TryDecodeHello(
-                    firstHello.Parts,
-                    out _));
+                TimeSpan.FromSeconds(5)
+            );
+            Assert.True(ZLinkClientServerControlProtocol.TryDecodeHello(firstHello.Parts, out _));
             ReplyAdmission(router, firstHello, endpoint);
             await WaitUntilAsync(
                 transport,
                 () => transport.ReadyCount == 1,
-                TimeSpan.FromSeconds(5));
+                TimeSpan.FromSeconds(5)
+            );
 
-            var malformed = Message.From(
-                new byte[] { 0x5a, 0x4d, 0x01, 0xff, 0x00 });
-            await router.Send(
+            var malformed = Message.From(new byte[] { 0x5a, 0x4d, 0x01, 0xff, 0x00 });
+            await router
+                .Send(
                     firstHello.RoutingId
-                        ?? throw new InvalidOperationException(
-                            "missing client routing id"))
-                    .Message(malformed)
-                    .Async(CancellationToken.None).Admitted;
+                        ?? throw new InvalidOperationException("missing client routing id")
+                )
+                .Message(malformed)
+                .Async(CancellationToken.None)
+                .Admitted;
 
             Received secondHello;
             try
             {
                 secondHello = await PollReceivedAsync(
                     storage => TryReceive(router, storage),
-                    TimeSpan.FromSeconds(5));
+                    TimeSpan.FromSeconds(5)
+                );
             }
             catch (TimeoutException exception)
             {
                 throw new TimeoutException(
                     $"{exception.Message} diagnostics={transport.AdmissionDiagnostics}; "
-                    + $"physical={transport.PhysicalConnectionCount}; "
-                    + $"ready={transport.ReadyCount}",
-                    exception);
+                        + $"physical={transport.PhysicalConnectionCount}; "
+                        + $"ready={transport.ReadyCount}",
+                    exception
+                );
             }
             using (secondHello)
             {
                 Assert.True(
-                    ZLinkClientServerControlProtocol.TryDecodeHello(
-                        secondHello.Parts,
-                        out _));
+                    ZLinkClientServerControlProtocol.TryDecodeHello(secondHello.Parts, out _)
+                );
                 ReplyAdmission(router, secondHello, endpoint);
             }
             await WaitUntilAsync(
                 transport,
                 () => transport.ReadyCount == 1,
-                TimeSpan.FromSeconds(5));
+                TimeSpan.FromSeconds(5)
+            );
         }
         finally
         {
@@ -2289,10 +2423,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         return router.Recv(storage, RecvFlags.DontWait);
     }
 
-    private static void ReplyAdmission(
-        IRouterSocket router,
-        Received hello,
-        string endpoint)
+    private static void ReplyAdmission(IRouterSocket router, Received hello, string endpoint)
     {
         var admission = ZLinkClientServerControlProtocol.EncodeAdmission(
             new ZLinkClientServerControlProtocol.Admission(
@@ -2304,10 +2435,10 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 ZLinkFrameworkRuntimeState.Serving,
                 "plaintext",
                 1024 * 1024,
-                endpoint));
-        hello.Reply()
-            .Message(admission)
-            .Submit();
+                endpoint
+            )
+        );
+        hello.Reply().Message(admission).Submit();
     }
 
     [Fact]
@@ -2324,14 +2455,10 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             dealer.SetRoutingId(RoutingId.From("malformed-client"));
             dealer.Connect($"tcp://127.0.0.1:{port}");
             await Task.Delay(100);
-            var malformed = Message.From(
-                new byte[] { 0x5a, 0x4d, 0x01, 0xff, 0x00 });
-            await dealer.Send()
-                .Message(malformed)
-                .Async(CancellationToken.None).Admitted;
+            var malformed = Message.From(new byte[] { 0x5a, 0x4d, 0x01, 0xff, 0x00 });
+            await dealer.Send().Message(malformed).Async(CancellationToken.None).Admitted;
             await Task.Delay(250);
-            Assert.False(
-                server.GetRequiredService<EchoProbe>().Received.Task.IsCompleted);
+            Assert.False(server.GetRequiredService<EchoProbe>().Received.Task.IsCompleted);
         }
         finally
         {
@@ -2342,14 +2469,16 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     private static ServiceProvider CreateServer(
         int port,
         long maximumMessageBytes = 16L * 1024L * 1024L,
-        int weight = 100)
+        int weight = 100
+    )
     {
         var services = new ServiceCollection();
         services.AddSingleton<EchoProbe>();
         services.AddSingleton(new ServerIdentity(string.Empty));
         services.AddZLinkFramework(options =>
         {
-            options.AddClientServerChannel("work")
+            options
+                .AddClientServerChannel("work")
                 .Server()
                 .Listen(port)
                 .SetWeight(weight)
@@ -2357,29 +2486,30 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 .AddRequestHandler<EchoHandler, EchoRequest, EchoReply>();
         });
         var provider = services.BuildServiceProvider();
-        provider.GetRequiredService<ZLinkFrameworkRegistration>()
-            .Channels["work"].Server!.SocketConfig.MaxMessageSize =
-            maximumMessageBytes;
+        provider
+            .GetRequiredService<ZLinkFrameworkRegistration>()
+            .Channels["work"]
+            .Server!.SocketConfig.MaxMessageSize = maximumMessageBytes;
         return provider;
     }
 
-    private static ServiceProvider CreateLargeReplyServer(
-        int port,
-        long maximumMessageBytes)
+    private static ServiceProvider CreateLargeReplyServer(int port, long maximumMessageBytes)
     {
         var services = new ServiceCollection();
         services.AddSingleton(new ServerIdentity(string.Empty));
         services.AddZLinkFramework(options =>
         {
-            options.AddClientServerChannel("work")
+            options
+                .AddClientServerChannel("work")
                 .Server()
                 .Listen(port)
                 .AddRequestHandler<LargeReplyHandler, LargeReplyRequest, LargeReply>();
         });
         var provider = services.BuildServiceProvider();
-        provider.GetRequiredService<ZLinkFrameworkRegistration>()
-            .Channels["work"].Server!.SocketConfig.MaxMessageSize =
-            maximumMessageBytes;
+        provider
+            .GetRequiredService<ZLinkFrameworkRegistration>()
+            .Channels["work"]
+            .Server!.SocketConfig.MaxMessageSize = maximumMessageBytes;
         return provider;
     }
 
@@ -2390,7 +2520,8 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         services.AddSingleton(new ServerIdentity(string.Empty));
         services.AddZLinkFramework(options =>
         {
-            options.AddClientServerChannel("work")
+            options
+                .AddClientServerChannel("work")
                 .Server()
                 .Listen(port)
                 .AddRequestHandler<BlockingRequestHandler, BlockingRequest, EchoReply>();
@@ -2401,20 +2532,17 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     private static ServiceProvider CreateClient(
         int port,
         long maximumMessageBytes = 16L * 1024L * 1024L,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null
+    )
     {
         var services = new ServiceCollection();
         services.AddZLinkFramework(options =>
         {
-            options.AddClientServerChannel("work")
-                .Client()
-                .Connect($"tcp://127.0.0.1:{port}");
+            options.AddClientServerChannel("work").Client().Connect($"tcp://127.0.0.1:{port}");
         });
         var provider = services.BuildServiceProvider();
-        var registration =
-            provider.GetRequiredService<ZLinkFrameworkRegistration>();
-        registration.Channels["work"].Client!.SocketConfig.MaxMessageSize =
-            maximumMessageBytes;
+        var registration = provider.GetRequiredService<ZLinkFrameworkRegistration>();
+        registration.Channels["work"].Client!.SocketConfig.MaxMessageSize = maximumMessageBytes;
         if (timeProvider is not null)
             registration.TimeProvider = timeProvider;
         return provider;
@@ -2424,7 +2552,8 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         IZLinkLocationStore store,
         string name,
         int weight = 100,
-        int port = 0)
+        int port = 0
+    )
     {
         var services = new ServiceCollection();
         services.AddSingleton<EchoProbe>();
@@ -2432,7 +2561,8 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         services.AddZLinkFramework(options =>
         {
             options.AddLocationStore(store);
-            options.AddClientServerChannel("work")
+            options
+                .AddClientServerChannel("work")
                 .Server()
                 .Listen(port)
                 .SetWeight(weight)
@@ -2442,8 +2572,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         return services.BuildServiceProvider();
     }
 
-    private static ServiceProvider CreateAutomaticClient(
-        IZLinkLocationStore store)
+    private static ServiceProvider CreateAutomaticClient(IZLinkLocationStore store)
     {
         var services = new ServiceCollection();
         services.AddZLinkFramework(options =>
@@ -2457,7 +2586,8 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     private static ServiceProvider CreateAutomaticClientAndServer(
         IZLinkLocationStore store,
         string name,
-        int weight = 100)
+        int weight = 100
+    )
     {
         var services = new ServiceCollection();
         services.AddSingleton<EchoProbe>();
@@ -2466,7 +2596,8 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         {
             options.AddLocationStore(store);
             options.AddClientServerChannel("work").Client();
-            options.AddClientServerChannel("work")
+            options
+                .AddClientServerChannel("work")
                 .Server()
                 .Listen(0)
                 .SetWeight(weight)
@@ -2484,7 +2615,8 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         services.AddZLinkFramework(options =>
         {
             options.AddClientServerChannel("work").Client();
-            options.AddClientServerChannel("work")
+            options
+                .AddClientServerChannel("work")
                 .Server()
                 .Listen(0)
                 .SetWeight(weight)
@@ -2501,21 +2633,23 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
 
         public ValueTask<ZLinkStoreReadResult> ReadAsync(
             ZLinkStoreKey key,
-            CancellationToken cancellationToken = default) =>
-            inner.ReadAsync(key, cancellationToken);
+            CancellationToken cancellationToken = default
+        ) => inner.ReadAsync(key, cancellationToken);
 
         public ValueTask<ZLinkStoreWriteResult> WriteAsync(
             ZLinkStoreWriteRequest request,
-            CancellationToken cancellationToken = default) =>
+            CancellationToken cancellationToken = default
+        ) =>
             FailWrites
                 ? ValueTask.FromException<ZLinkStoreWriteResult>(
-                    new InvalidOperationException("store unavailable"))
+                    new InvalidOperationException("store unavailable")
+                )
                 : inner.WriteAsync(request, cancellationToken);
 
         public ValueTask<ZLinkStoreScanResult> ScanAsync(
             ZLinkStoreScanRequest request,
-            CancellationToken cancellationToken = default) =>
-            inner.ScanAsync(request, cancellationToken);
+            CancellationToken cancellationToken = default
+        ) => inner.ScanAsync(request, cancellationToken);
     }
 
     private static int ReservePort()
@@ -2531,7 +2665,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         private readonly Message[] _parts =
         [
             Message.From(new byte[] { 1, 2, 3 }),
-            Message.From(new byte[] { 4, 5, 6 })
+            Message.From(new byte[] { 4, 5, 6 }),
         ];
 
         public int Count => _parts.Length;
@@ -2542,7 +2676,8 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             {
                 if (Interlocked.Increment(ref _accessCounts[index]) != 1)
                     throw new InvalidOperationException(
-                        $"Message part {index} was consumed more than once.");
+                        $"Message part {index} was consumed more than once."
+                    );
                 return _parts[index];
             }
         }
@@ -2550,8 +2685,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         public void AssertDisposedOnce()
         {
             Assert.All(_accessCounts, count => Assert.Equal(1, count));
-            Assert.All(_parts, part =>
-                Assert.Throws<ObjectDisposedException>(() => _ = part.Size));
+            Assert.All(_parts, part => Assert.Throws<ObjectDisposedException>(() => _ = part.Size));
         }
 
         public void DisposeRemaining()
@@ -2563,9 +2697,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                     _ = part.Size;
                     part.Dispose();
                 }
-                catch (ObjectDisposedException)
-                {
-                }
+                catch (ObjectDisposedException) { }
             }
         }
 
@@ -2580,9 +2712,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
 
     private sealed class MetadataFailureSpotActivation : IZLinkCurrentSpotActivation
     {
-        public void EnsureOperationAllowed()
-        {
-        }
+        public void EnsureOperationAllowed() { }
 
         public string ChannelName => "entry";
 
@@ -2637,7 +2767,8 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         public ValueTask<EchoReply> HandleAsync(
             FlowEchoRequest request,
             IZLinkMessageContext context,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             cancellationToken.ThrowIfCancellationRequested();
             var flow = ZLinkFlowContext.Current;
@@ -2664,7 +2795,8 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         public async ValueTask<EchoReply> HandleAsync(
             BlockingRequest request,
             IZLinkMessageContext context,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             Assert.Equal("work", context.ChannelName);
             probe.Entered.TrySetResult();
@@ -2685,7 +2817,8 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         public ValueTask HandleAsync(
             EchoSend message,
             IZLinkMessageContext context,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             cancellationToken.ThrowIfCancellationRequested();
             Assert.Equal("work", context.ChannelName);
@@ -2700,29 +2833,32 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         public ValueTask<EchoReply> HandleAsync(
             EchoRequest request,
             IZLinkMessageContext context,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             cancellationToken.ThrowIfCancellationRequested();
             Assert.Equal("work", context.ChannelName);
-            return ValueTask.FromResult(new EchoReply(
-                string.IsNullOrEmpty(identity.Name)
-                    ? request.Value
-                    : $"{identity.Name}:{request.Value}"));
+            return ValueTask.FromResult(
+                new EchoReply(
+                    string.IsNullOrEmpty(identity.Name)
+                        ? request.Value
+                        : $"{identity.Name}:{request.Value}"
+                )
+            );
         }
     }
 
-    private sealed class LargeReplyHandler
-        : IZLinkRequestHandler<LargeReplyRequest, LargeReply>
+    private sealed class LargeReplyHandler : IZLinkRequestHandler<LargeReplyRequest, LargeReply>
     {
         public ValueTask<LargeReply> HandleAsync(
             LargeReplyRequest request,
             IZLinkMessageContext context,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             cancellationToken.ThrowIfCancellationRequested();
             Assert.Equal("work", context.ChannelName);
-            return ValueTask.FromResult(new LargeReply(
-                request.Value + new string('y', 2048)));
+            return ValueTask.FromResult(new LargeReply(request.Value + new string('y', 2048)));
         }
     }
 }

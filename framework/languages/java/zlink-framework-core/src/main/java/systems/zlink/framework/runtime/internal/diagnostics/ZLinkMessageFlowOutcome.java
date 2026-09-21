@@ -14,7 +14,11 @@ public enum ZLinkMessageFlowOutcome {
 
     private final int value;
 
-    ZLinkMessageFlowOutcome(int value) { this.value = value; }
+    ZLinkMessageFlowOutcome(int value) {
+        this.value = value;
+    }
 
-    public int value() { return value; }
+    public int value() {
+        return value;
+    }
 }

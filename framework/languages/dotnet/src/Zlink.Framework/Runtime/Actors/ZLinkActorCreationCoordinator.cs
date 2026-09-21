@@ -12,7 +12,8 @@ internal sealed class ZLinkActorCreationCoordinator(
     Func<ZLinkActorRuntimeState, ZLinkActorContext> ensureActorContext,
     Func<IZLinkActor, ZLinkActorRuntimeState, ZLinkActorContext> bindActorContext,
     Func<ZLinkActorRuntimeState, ZLinkBackendActorRef, CancellationToken, ValueTask> teardownActor,
-    Func<string, ZLinkActivationConcurrencyAdmission?>? getActivationAdmission = null)
+    Func<string, ZLinkActivationConcurrencyAdmission?>? getActivationAdmission = null
+)
 {
     private IZLinkActorLocationLifecycle? Lifecycle { get; } = lifecycle;
 
@@ -23,22 +24,28 @@ internal sealed class ZLinkActorCreationCoordinator(
         ZLinkMessage createRequest,
         bool failIfExists,
         ZLinkActorClaimMode claimMode,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var factoryType = ResolveActorFactory(actorType);
 
-        var creation = await state.GetOrStartActorCreationAsync(
+        var creation = await state
+            .GetOrStartActorCreationAsync(
                 actorType,
                 failIfExists,
-                () => CreateActorCoreAsync(
-                    state,
-                    actorId,
-                    actorType,
-                    factoryType,
-                    createRequest,
-                    claimMode,
-                    CancellationToken.None).AsTask(),
-                cancellationToken)
+                () =>
+                    CreateActorCoreAsync(
+                            state,
+                            actorId,
+                            actorType,
+                            factoryType,
+                            createRequest,
+                            claimMode,
+                            CancellationToken.None
+                        )
+                        .AsTask(),
+                cancellationToken
+            )
             .ConfigureAwait(false);
 
         // A waiter's cancellation never owns shared creation cleanup. The
@@ -47,7 +54,8 @@ internal sealed class ZLinkActorCreationCoordinator(
         return new CreateActorResult(
             actor,
             creation.Created,
-            creation.Created ? createRequest : ZLinkMessage.Empty);
+            creation.Created ? createRequest : ZLinkMessage.Empty
+        );
     }
 
     public async ValueTask<CreateActorResult> PrepareReservedActorAsync(
@@ -57,31 +65,38 @@ internal sealed class ZLinkActorCreationCoordinator(
         ZLinkMessage createRequest,
         ulong objectGeneration,
         ulong authorityOwnerGeneration,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var factoryType = ResolveActorFactory(actorType);
         state.BeginReservedCreation();
         try
         {
-            var creation = await state.GetOrStartActorCreationAsync(
+            var creation = await state
+                .GetOrStartActorCreationAsync(
                     actorType,
                     true,
-                    () => ActivateActorCoreAsync(
-                        state,
-                        actorId,
-                        actorType,
-                        factoryType,
-                        createRequest,
-                        CancellationToken.None,
-                        objectGeneration,
-                        authorityOwnerGeneration).AsTask(),
-                    cancellationToken)
+                    () =>
+                        ActivateActorCoreAsync(
+                                state,
+                                actorId,
+                                actorType,
+                                factoryType,
+                                createRequest,
+                                CancellationToken.None,
+                                objectGeneration,
+                                authorityOwnerGeneration
+                            )
+                            .AsTask(),
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
             var actor = await creation.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
             return new CreateActorResult(
                 actor,
                 creation.Created,
-                creation.Created ? createRequest : ZLinkMessage.Empty);
+                creation.Created ? createRequest : ZLinkMessage.Empty
+            );
         }
         catch
         {
@@ -99,22 +114,28 @@ internal sealed class ZLinkActorCreationCoordinator(
         string actorType,
         ulong objectGeneration,
         ulong authorityOwnerGeneration,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var factoryType = ResolveActorFactory(actorType);
-        var creation = await state.GetOrStartActorCreationAsync(
+        var creation = await state
+            .GetOrStartActorCreationAsync(
                 actorType,
                 false,
-                () => ActivateActorCoreAsync(
-                    state,
-                    actorId,
-                    actorType,
-                    factoryType,
-                    ZLinkMessage.Empty,
-                    CancellationToken.None,
-                    objectGeneration,
-                    authorityOwnerGeneration).AsTask(),
-                cancellationToken)
+                () =>
+                    ActivateActorCoreAsync(
+                            state,
+                            actorId,
+                            actorType,
+                            factoryType,
+                            ZLinkMessage.Empty,
+                            CancellationToken.None,
+                            objectGeneration,
+                            authorityOwnerGeneration
+                        )
+                        .AsTask(),
+                cancellationToken
+            )
             .ConfigureAwait(false);
         var actor = await creation.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
         return new CreateActorResult(actor, creation.Created, ZLinkMessage.Empty);
@@ -130,23 +151,29 @@ internal sealed class ZLinkActorCreationCoordinator(
         ulong authorityOwnerGeneration,
         ZLinkActorClaimMode claimMode,
         bool publishActorRef,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        var creation = await state.GetOrStartActorCreationAsync(
+        var creation = await state
+            .GetOrStartActorCreationAsync(
                 actorType,
                 false,
-                () => CreateRelocatedActorCoreAsync(
-                    state,
-                    actorId,
-                    actorType,
-                    relocation,
-                    relocationState,
-                    objectGeneration,
-                    authorityOwnerGeneration,
-                    claimMode,
-                    CancellationToken.None,
-                    publishActorRef).AsTask(),
-                cancellationToken)
+                () =>
+                    CreateRelocatedActorCoreAsync(
+                            state,
+                            actorId,
+                            actorType,
+                            relocation,
+                            relocationState,
+                            objectGeneration,
+                            authorityOwnerGeneration,
+                            claimMode,
+                            CancellationToken.None,
+                            publishActorRef
+                        )
+                        .AsTask(),
+                cancellationToken
+            )
             .ConfigureAwait(false);
 
         // A relocation creation belongs to the handoff transaction once it
@@ -171,7 +198,8 @@ internal sealed class ZLinkActorCreationCoordinator(
         ulong authorityOwnerGeneration,
         ZLinkActorClaimMode claimMode,
         CancellationToken cancellationToken,
-        bool publishActorRef)
+        bool publishActorRef
+    )
     {
         var factoryType = ResolveActorFactory(actorType);
         if (Lifecycle is not { } lifecycle)
@@ -184,33 +212,37 @@ internal sealed class ZLinkActorCreationCoordinator(
                     relocationState,
                     objectGeneration,
                     authorityOwnerGeneration,
-                    cancellationToken)
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
 
         var meshName =
-            Host.ZLinkActorDrainCoordinator.ResolveMeshName(
-                runtime.Registration,
-                actorType)
+            Host.ZLinkActorDrainCoordinator.ResolveMeshName(runtime.Registration, actorType)
             ?? throw new InvalidOperationException(
-                $"Actor '{actorId}' does not have an owner Mesh.");
-        var outcome = await lifecycle.ExecuteActorClaimThenActivateAsync(
+                $"Actor '{actorId}' does not have an owner Mesh."
+            );
+        var outcome = await lifecycle
+            .ExecuteActorClaimThenActivateAsync(
                 ZLinkMeshName.FromBoundary(meshName, nameof(meshName)),
                 actorType,
                 ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
                 getActorSpotNode()?.RoutingId ?? default,
                 deactivate: _ => runtime.DeactivateActorOnOwnershipLossAsync(actorId),
-                activate: ct => ActivateRelocatedActorCoreAsync(
-                    state,
-                    actorId,
-                    actorType,
-                    factoryType,
-                    relocation,
-                    relocationState,
-                    objectGeneration,
-                    authorityOwnerGeneration,
-                    ct),
+                activate: ct =>
+                    ActivateRelocatedActorCoreAsync(
+                        state,
+                        actorId,
+                        actorType,
+                        factoryType,
+                        relocation,
+                        relocationState,
+                        objectGeneration,
+                        authorityOwnerGeneration,
+                        ct
+                    ),
                 cancellationToken,
-                claimMode)
+                claimMode
+            )
             .ConfigureAwait(false);
         if (outcome.Activated is not { } actor)
         {
@@ -219,7 +251,8 @@ internal sealed class ZLinkActorCreationCoordinator(
                 ZLinkFrameworkErrorKind.InternalFailure,
                 location is null
                     ? $"Actor '{actorId}' relocation claim was rejected and no live location row was found."
-                    : $"Actor '{actorId}' is already active on node '{location.OwnerNodeRid}' (relocation claim conflict).");
+                    : $"Actor '{actorId}' is already active on node '{location.OwnerNodeRid}' (relocation claim conflict)."
+            );
         }
 
         if (publishActorRef && state.NativeActorRef is { } nativeRef)
@@ -228,7 +261,8 @@ internal sealed class ZLinkActorCreationCoordinator(
                     actorId,
                     nativeRef,
                     lifecycle,
-                    cancellationToken)
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
         return actor;
     }
@@ -242,7 +276,8 @@ internal sealed class ZLinkActorCreationCoordinator(
         ReadOnlyMemory<byte> relocationState,
         ulong objectGeneration,
         ulong authorityOwnerGeneration,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var activationAdmission = getActivationAdmission?.Invoke(actorType);
         activationAdmission?.Acquire($"ACTOR '{actorId}'");
@@ -254,7 +289,8 @@ internal sealed class ZLinkActorCreationCoordinator(
                 actorId,
                 ZLinkMessage.Empty,
                 objectGeneration,
-                authorityOwnerGeneration);
+                authorityOwnerGeneration
+            );
             var context = ensureActorContext(state);
             try
             {
@@ -264,7 +300,8 @@ internal sealed class ZLinkActorCreationCoordinator(
                         context,
                         relocation,
                         relocationState,
-                        cancellationToken)
+                        cancellationToken
+                    )
                     .ConfigureAwait(false);
                 bindActorContext(actor, state);
                 return actor;
@@ -294,25 +331,22 @@ internal sealed class ZLinkActorCreationCoordinator(
         ZLinkActorContext context,
         ZLinkObjectRelocationRegistration relocation,
         ReadOnlyMemory<byte> relocationState,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var factory = (IZLinkActorFactory)scopedServices.GetRequiredService(factoryType);
-        var actor = await factory.CreateAsync(context, cancellationToken)
-            .ConfigureAwait(false);
+        var actor = await factory.CreateAsync(context, cancellationToken).ConfigureAwait(false);
         if (actor is null)
             throw new InvalidOperationException($"Actor factory '{factoryType}' returned null.");
         if (!ReferenceEquals(actor.Context, context))
             throw new InvalidOperationException(
-                $"Actor factory '{factoryType}' must return an Actor that exposes the provided context.");
+                $"Actor factory '{factoryType}' must return an Actor that exposes the provided context."
+            );
 
         try
         {
-            await ZLinkActorRelocationRegistry.RestoreAsync(
-                    scopedServices,
-                    relocation,
-                    actor,
-                    relocationState,
-                    cancellationToken)
+            await ZLinkActorRelocationRegistry
+                .RestoreAsync(scopedServices, relocation, actor, relocationState, cancellationToken)
                 .ConfigureAwait(false);
             return actor;
         }
@@ -328,9 +362,9 @@ internal sealed class ZLinkActorCreationCoordinator(
         {
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InternalFailure,
-                $"Actor '{context.ActorId}' relocation restore failed: "
-                + restoreFailure.Message,
-                innerException: restoreFailure);
+                $"Actor '{context.ActorId}' relocation restore failed: " + restoreFailure.Message,
+                innerException: restoreFailure
+            );
         }
     }
 
@@ -344,7 +378,8 @@ internal sealed class ZLinkActorCreationCoordinator(
         CancellationToken cancellationToken,
         bool publishActorRef = true,
         ulong? reservedGeneration = null,
-        ulong? reservedAuthorityOwnerGeneration = null)
+        ulong? reservedAuthorityOwnerGeneration = null
+    )
     {
         if (Lifecycle is not { } lifecycle)
             return await ActivateActorCoreAsync(
@@ -355,35 +390,39 @@ internal sealed class ZLinkActorCreationCoordinator(
                     createRequest,
                     cancellationToken,
                     reservedGeneration,
-                    reservedAuthorityOwnerGeneration)
+                    reservedAuthorityOwnerGeneration
+                )
                 .ConfigureAwait(false);
 
         // Claim-then-activate (location resolver store draft, section 17):
         // the actor location claim must succeed before any instance exists.
         // A losing claimer backs off without activating.
         var meshName =
-            Host.ZLinkActorDrainCoordinator.ResolveMeshName(
-                runtime.Registration,
-                actorType)
+            Host.ZLinkActorDrainCoordinator.ResolveMeshName(runtime.Registration, actorType)
             ?? throw new InvalidOperationException(
-                $"Actor '{actorId}' does not have an owner Mesh.");
-        var outcome = await lifecycle.ExecuteActorClaimThenActivateAsync(
+                $"Actor '{actorId}' does not have an owner Mesh."
+            );
+        var outcome = await lifecycle
+            .ExecuteActorClaimThenActivateAsync(
                 ZLinkMeshName.FromBoundary(meshName, nameof(meshName)),
                 actorType,
                 ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
                 getActorSpotNode()?.RoutingId ?? default,
                 deactivate: _ => runtime.DeactivateActorOnOwnershipLossAsync(actorId),
-                activate: ct => ActivateActorCoreAsync(
-                    state,
-                    actorId,
-                    actorType,
-                    factoryType,
-                    createRequest,
-                    ct,
-                    reservedGeneration,
-                    reservedAuthorityOwnerGeneration),
+                activate: ct =>
+                    ActivateActorCoreAsync(
+                        state,
+                        actorId,
+                        actorType,
+                        factoryType,
+                        createRequest,
+                        ct,
+                        reservedGeneration,
+                        reservedAuthorityOwnerGeneration
+                    ),
                 cancellationToken,
-                claimMode)
+                claimMode
+            )
             .ConfigureAwait(false);
         if (outcome.Activated is not { } actor)
         {
@@ -392,7 +431,8 @@ internal sealed class ZLinkActorCreationCoordinator(
                 ZLinkFrameworkErrorKind.InternalFailure,
                 location is null
                     ? $"Actor '{actorId}' location claim was rejected and no live location row was found."
-                    : $"Actor '{actorId}' is already active on node '{location.OwnerNodeRid}' (location claim conflict).");
+                    : $"Actor '{actorId}' is already active on node '{location.OwnerNodeRid}' (location claim conflict)."
+            );
         }
 
         if (publishActorRef && state.NativeActorRef is { } nativeRef)
@@ -401,7 +441,8 @@ internal sealed class ZLinkActorCreationCoordinator(
                     actorId,
                     nativeRef,
                     lifecycle,
-                    cancellationToken)
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
 
         return actor;
@@ -415,7 +456,8 @@ internal sealed class ZLinkActorCreationCoordinator(
         ZLinkMessage createRequest,
         CancellationToken cancellationToken,
         ulong? reservedGeneration = null,
-        ulong? reservedAuthorityOwnerGeneration = null)
+        ulong? reservedAuthorityOwnerGeneration = null
+    )
     {
         var activationAdmission = getActivationAdmission?.Invoke(actorType);
         activationAdmission?.Acquire($"ACTOR '{actorId}'");
@@ -427,19 +469,25 @@ internal sealed class ZLinkActorCreationCoordinator(
                 actorId,
                 createRequest,
                 reservedGeneration,
-                reservedAuthorityOwnerGeneration);
+                reservedAuthorityOwnerGeneration
+            );
             var context = ensureActorContext(state);
             try
             {
-                var factory = (IZLinkActorFactory)scope.ServiceProvider.GetRequiredService(factoryType);
-                var actor = await factory.CreateAsync(context, cancellationToken)
+                var factory = (IZLinkActorFactory)
+                    scope.ServiceProvider.GetRequiredService(factoryType);
+                var actor = await factory
+                    .CreateAsync(context, cancellationToken)
                     .ConfigureAwait(false);
                 if (actor is null)
-                    throw new InvalidOperationException($"Actor factory '{factoryType}' returned null.");
+                    throw new InvalidOperationException(
+                        $"Actor factory '{factoryType}' returned null."
+                    );
 
                 if (!ReferenceEquals(actor.Context, context))
                     throw new InvalidOperationException(
-                        $"Actor factory '{factoryType}' must return an Actor that exposes the provided context.");
+                        $"Actor factory '{factoryType}' must return an Actor that exposes the provided context."
+                    );
 
                 bindActorContext(actor, state);
                 return actor;
@@ -458,19 +506,23 @@ internal sealed class ZLinkActorCreationCoordinator(
 
     private async ValueTask DestroyStagedNativeActorAsync(
         ZLinkActorRuntimeState state,
-        Exception activationFailure)
+        Exception activationFailure
+    )
     {
-        if (state.NativeActorRef is not { } nativeActor) return;
+        if (state.NativeActorRef is not { } nativeActor)
+            return;
 
         var node = getActorSpotNode();
-        if (node is null) return;
+        if (node is null)
+            return;
 
         try
         {
             await node.DestroyActorAsync(
                     nativeActor,
                     runtime.Registration.DefaultRequestTimeout,
-                    CancellationToken.None)
+                    CancellationToken.None
+                )
                 .ConfigureAwait(false);
         }
         catch (Exception cleanupFailure)
@@ -484,10 +536,12 @@ internal sealed class ZLinkActorCreationCoordinator(
         string actorId,
         ZLinkMessage createRequest,
         ulong? reservedGeneration = null,
-        ulong? reservedAuthorityOwnerGeneration = null)
+        ulong? reservedAuthorityOwnerGeneration = null
+    )
     {
         var node = getActorSpotNode();
-        if (node is null || state.NativeActorRef is not null) return;
+        if (node is null || state.NativeActorRef is not null)
+            return;
 
         var existingRef = node.ActorLookup(actorId);
         if (existingRef is not null)
@@ -497,15 +551,19 @@ internal sealed class ZLinkActorCreationCoordinator(
         }
 
         using var nativeCreateRequest = createRequest.ToRawMessage(runtime.Registration.Codecs);
-        state.BindNativeActorRef(reservedGeneration is { } generation
-            ? node.CreateReservedActor(
-                actorId,
-                generation,
-                reservedAuthorityOwnerGeneration
-                ?? throw new InvalidOperationException(
-                    "Reserved Actor creation requires an authority owner generation."),
-                nativeCreateRequest)
-            : node.CreateActor(actorId, nativeCreateRequest));
+        state.BindNativeActorRef(
+            reservedGeneration is { } generation
+                ? node.CreateReservedActor(
+                    actorId,
+                    generation,
+                    reservedAuthorityOwnerGeneration
+                        ?? throw new InvalidOperationException(
+                            "Reserved Actor creation requires an authority owner generation."
+                        ),
+                    nativeCreateRequest
+                )
+                : node.CreateActor(actorId, nativeCreateRequest)
+        );
     }
 
     private async ValueTask PublishActorRefOrCompensateAsync(
@@ -513,28 +571,34 @@ internal sealed class ZLinkActorCreationCoordinator(
         string actorId,
         ZLinkBackendActorRef nativeActor,
         IZLinkActorLocationLifecycle lifecycle,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         try
         {
-            await lifecycle.PublishActorRefAsync(
+            await lifecycle
+                .PublishActorRefAsync(
                     ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
                     nativeActor.ToNative(
                         Host.ZLinkActorDrainCoordinator.ResolveMeshName(
                             runtime.Registration,
                             state.ActorType
+                                ?? throw new InvalidOperationException(
+                                    $"Actor '{actorId}' does not have a stable type."
+                                )
+                        )
                             ?? throw new InvalidOperationException(
-                                $"Actor '{actorId}' does not have a stable type."))
-                        ?? throw new InvalidOperationException(
-                            $"Actor '{actorId}' does not have an owner Mesh.")),
-                    cancellationToken)
+                                $"Actor '{actorId}' does not have an owner Mesh."
+                            )
+                    ),
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
         }
         catch (Exception publishFailure)
         {
-            await state.ExecuteLockedAsync(
-                    state.BeginTeardownOnLane,
-                    CancellationToken.None)
+            await state
+                .ExecuteLockedAsync(state.BeginTeardownOnLane, CancellationToken.None)
                 .ConfigureAwait(false);
 
             try
@@ -546,11 +610,8 @@ internal sealed class ZLinkActorCreationCoordinator(
             {
                 runtime.RunDetached(
                     "actor-creation-compensation",
-                    ct => ReconcileCreationCompensationAsync(
-                        state,
-                        actorId,
-                        nativeActor,
-                        ct));
+                    ct => ReconcileCreationCompensationAsync(state, actorId, nativeActor, ct)
+                );
                 throw new AggregateException(publishFailure, cleanupFailure);
             }
             throw;
@@ -561,14 +622,19 @@ internal sealed class ZLinkActorCreationCoordinator(
         ZLinkActorRuntimeState state,
         string actorId,
         ZLinkBackendActorRef nativeActor,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        await ZLinkReconciliationRunner.RunAsync(
+        await ZLinkReconciliationRunner
+            .RunAsync(
                 token => teardownActor(state, nativeActor, token),
-                exception => ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"actor creation compensation retry for '{actorId}': {exception.Message}"),
+                exception =>
+                    ZLinkFrameworkDebugLog.SpotDiscovery(
+                        $"actor creation compensation retry for '{actorId}': {exception.Message}"
+                    ),
                 cancellationToken,
-                static exception => exception is OperationCanceledException)
+                static exception => exception is OperationCanceledException
+            )
             .ConfigureAwait(false);
     }
 }

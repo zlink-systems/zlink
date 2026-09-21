@@ -3,7 +3,7 @@ package systems.zlink.stream.connector;
 final class ZLinkConnectorFlowContext {
     private static final ThreadLocal<State> CURRENT = new ThreadLocal<>();
 
-    private ZLinkConnectorFlowContext() { }
+    private ZLinkConnectorFlowContext() {}
 
     static State current() {
         return CURRENT.get();
@@ -16,8 +16,8 @@ final class ZLinkConnectorFlowContext {
 
     static State inbound(String flowId, int flowOrigin) {
         return flowId == null
-            ? new State(ZLinkConnectorFlowIds.next(), 1)
-            : new State(flowId, flowOrigin);
+                ? new State(ZLinkConnectorFlowIds.next(), 1)
+                : new State(flowId, flowOrigin);
     }
 
     static Scope enter(State state) {
@@ -32,7 +32,7 @@ final class ZLinkConnectorFlowContext {
         };
     }
 
-    record State(String flowId, int flowOrigin) { }
+    record State(String flowId, int flowOrigin) {}
 
     @FunctionalInterface
     interface Scope extends AutoCloseable {

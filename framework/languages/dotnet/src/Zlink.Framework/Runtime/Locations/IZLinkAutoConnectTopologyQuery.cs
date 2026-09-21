@@ -5,7 +5,7 @@ internal enum ZLinkRouteMeshTargetClassification
     Unknown = 0,
     ObjectClientTarget = 1,
     RequiredNotConnected = 2,
-    ReadyEligible = 3
+    ReadyEligible = 3,
 }
 
 /// <summary>
@@ -17,15 +17,13 @@ internal enum ZLinkRouteMeshTargetClassification
 /// </summary>
 internal interface IZLinkAutoConnectTopologyQuery
 {
-    ZLinkRouteMeshTargetClassification ClassifyRouteMeshTarget(
-        string meshName,
-        RoutingId nodeRid);
+    ZLinkRouteMeshTargetClassification ClassifyRouteMeshTarget(string meshName, RoutingId nodeRid);
 
-    IReadOnlyList<ZLinkRouteMeshPeerIdentity>? GetCompleteRouteMeshPeers(
-        string meshName) => null;
+    IReadOnlyList<ZLinkRouteMeshPeerIdentity>? GetCompleteRouteMeshPeers(string meshName) => null;
 }
 
 internal readonly record struct ZLinkRouteMeshPeerIdentity(
     RoutingId NodeRid,
     ulong LifecycleGeneration,
-    bool Draining);
+    bool Draining
+);

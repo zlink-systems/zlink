@@ -18,7 +18,9 @@ export class ZLinkLocalSpotRouteTransport {
     timeoutMs?: number
   ): Promise<void> {
     if (this.dispatcher === undefined) {
-      throw new ZLinkConfigurationException(`Route channel '${routerChannelId}' could not dispatch local SPOT send.`);
+      throw new ZLinkConfigurationException(
+        `Route channel '${routerChannelId}' could not dispatch local SPOT send.`
+      );
     }
     await this.dispatcher.send(spotId, packetName, message, {
       channelName: routerChannelId,
@@ -37,7 +39,9 @@ export class ZLinkLocalSpotRouteTransport {
     signal?: AbortSignal
   ): Promise<TReply> {
     if (this.dispatcher === undefined) {
-      throw new ZLinkConfigurationException(`Route channel '${routerChannelId}' could not dispatch local SPOT request.`);
+      throw new ZLinkConfigurationException(
+        `Route channel '${routerChannelId}' could not dispatch local SPOT request.`
+      );
     }
     const pending = this.dispatcher.request<TReply>(spotId, packetName, request, {
       channelName: routerChannelId,
@@ -47,12 +51,23 @@ export class ZLinkLocalSpotRouteTransport {
     if (effectiveTimeoutMs === undefined) return pending;
     return new Promise<TReply>((resolve, reject) => {
       const timeout = setTimeout(
-        () => reject(new ZLinkConfigurationException(`Route channel '${routerChannelId}' local SPOT request timed out.`)),
+        () =>
+          reject(
+            new ZLinkConfigurationException(
+              `Route channel '${routerChannelId}' local SPOT request timed out.`
+            )
+          ),
         effectiveTimeoutMs
       );
       pending.then(
-        (value) => { clearTimeout(timeout); resolve(value); },
-        (error) => { clearTimeout(timeout); reject(error); }
+        (value) => {
+          clearTimeout(timeout);
+          resolve(value);
+        },
+        (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        }
       );
     });
   }

@@ -8,7 +8,7 @@ public sealed class RegressionTests
     private static readonly string[] ExcludedFileNames =
     [
         "public-symbol-delta-v11.ko.md",
-        "quickstart.ko.md"
+        "quickstart.ko.md",
     ];
 
     private static readonly string[] DotNetContractDocuments =
@@ -26,10 +26,7 @@ public sealed class RegressionTests
     /// 언어마다 내용이 달라지는 장이다. `.NET` 디렉터리가 소유하고 앞뒤 장을 잇는
     /// adapter nav 마커를 가진다.
     /// </summary>
-    private static readonly string[] LanguageGuideDocuments =
-    [
-        "13-interface-catalog.ko.md"
-    ];
+    private static readonly string[] LanguageGuideDocuments = ["13-interface-catalog.ko.md"];
 
     /// <summary>
     /// 모든 언어가 같은 내용을 공유하는 장이다. 공통 정본이 소유하며 언어별로 앞뒤가
@@ -69,7 +66,7 @@ public sealed class RegressionTests
         "53-deliverydispatch.ko.md",
         "54-shoppingmall.ko.md",
         "55-gamequest.ko.md",
-        "56-zoneworld.ko.md"
+        "56-zoneworld.ko.md",
     ];
 
     [Fact]
@@ -91,19 +88,26 @@ public sealed class RegressionTests
             // The reference tree is an unlisted preview and is not part of the
             // public contract document set until its ownership and nav entry are
             // finalized.
-            Path.Combine(directory, "reference")
+            Path.Combine(directory, "reference"),
         };
         var actualDocuments = Directory
             .EnumerateFiles(directory, "*.ko.md", SearchOption.AllDirectories)
             .Where(path => !excludedRoots.Any(root => IsUnderDirectory(path, root, false)))
             // The quickstart is onboarding prose like the guide, not a contract
             // document; it carries no regression-test section.
-            .Where(path => !ExcludedFileNames.Contains(Path.GetFileName(path), StringComparer.Ordinal))
-            .Concat(GetDotNetContractDocs()
-                .Where(path => !string.Equals(
-                    Path.GetFileName(path),
-                    "README.ko.md",
-                    StringComparison.Ordinal)))
+            .Where(path =>
+                !ExcludedFileNames.Contains(Path.GetFileName(path), StringComparer.Ordinal)
+            )
+            .Concat(
+                GetDotNetContractDocs()
+                    .Where(path =>
+                        !string.Equals(
+                            Path.GetFileName(path),
+                            "README.ko.md",
+                            StringComparison.Ordinal
+                        )
+                    )
+            )
             .Select(Path.GetFileName)
             .OfType<string>()
             .Order(StringComparer.Ordinal)
@@ -116,7 +120,8 @@ public sealed class RegressionTests
         Assert.NotEmpty(references);
         Assert.DoesNotContain(
             references,
-            static reference => reference.StartsWith("planned:", StringComparison.Ordinal));
+            static reference => reference.StartsWith("planned:", StringComparison.Ordinal)
+        );
     }
 
     [Fact]
@@ -128,11 +133,13 @@ public sealed class RegressionTests
         Assert.Contains(
             "ContractSurfaceCoverage.Fixed_spec_snapshot_matches_every_exported_contract_signature",
             readme,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
         Assert.Contains(
             "RegressionTests.DotNetContractRegressionTestReferences_Resolve_ToActiveTestMethods",
             readme,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
     }
 
     [Fact]
@@ -152,9 +159,12 @@ public sealed class RegressionTests
         // 언어별 디렉터리는 직접 쓴 장과 공통 소스에서 생성한 장을 함께 담는다.
         Assert.Equal(
             LanguageGuideDocuments.Concat(CommonGuideDocuments).Order(StringComparer.Ordinal),
-            actual);
-        Assert.True(File.Exists(Path.Combine(guideRoot, "README.ko.md")),
-            "언어별 가이드는 읽는 순서를 제시하는 진입점 README를 가진다.");
+            actual
+        );
+        Assert.True(
+            File.Exists(Path.Combine(guideRoot, "README.ko.md")),
+            "언어별 가이드는 읽는 순서를 제시하는 진입점 README를 가진다."
+        );
 
         foreach (var document in LanguageGuideDocuments.Concat(CommonGuideDocuments))
         {
@@ -196,7 +206,8 @@ public sealed class RegressionTests
             // 탭 밖 산문만 본다.
             Assert.DoesNotMatch(
                 @"\]\([^)]*languages/(dotnet|cpp|java|kotlin|node)/",
-                OutsideLanguageTabs(text));
+                OutsideLanguageTabs(text)
+            );
         }
     }
 
@@ -258,7 +269,7 @@ public sealed class RegressionTests
         "01-overview.ko.md",
         "03-concepts.ko.md",
         "16-options.ko.md",
-        "17-alternative.ko.md"
+        "17-alternative.ko.md",
     ];
 
     /// <summary>
@@ -295,7 +306,11 @@ public sealed class RegressionTests
 
             if (withoutOwningSpec.Contains(document, StringComparer.Ordinal))
             {
-                Assert.Contains("이 장에는 계약을 소유하는 스펙 문서가 없다", text, StringComparison.Ordinal);
+                Assert.Contains(
+                    "이 장에는 계약을 소유하는 스펙 문서가 없다",
+                    text,
+                    StringComparison.Ordinal
+                );
                 continue;
             }
 
@@ -313,7 +328,16 @@ public sealed class RegressionTests
     {
         var sourceLanguages = new[]
         {
-            "csharp", "cs", "cpp", "c++", "java", "kotlin", "typescript", "ts", "javascript", "js"
+            "csharp",
+            "cs",
+            "cpp",
+            "c++",
+            "java",
+            "kotlin",
+            "typescript",
+            "ts",
+            "javascript",
+            "js",
         };
         var offenders = new List<string>();
 
@@ -326,9 +350,11 @@ public sealed class RegressionTests
             {
                 // 탭 안의 fence는 4칸 들여쓴다 — 줄 첫 칸에서 시작하면 탭 밖이다.
                 var line = lines[index];
-                if (!line.StartsWith("```", StringComparison.Ordinal)) continue;
+                if (!line.StartsWith("```", StringComparison.Ordinal))
+                    continue;
                 var language = line[3..].Trim();
-                if (!sourceLanguages.Contains(language, StringComparer.OrdinalIgnoreCase)) continue;
+                if (!sourceLanguages.Contains(language, StringComparer.OrdinalIgnoreCase))
+                    continue;
                 offenders.Add($"{document}:{index + 1}: ```{language}");
             }
         }
@@ -341,9 +367,17 @@ public sealed class RegressionTests
     {
         var guideAndSampleDocs = Directory
             .EnumerateFiles(
-                Path.Combine(GetDotNetDocRoot(), "guide"), "*.ko.md", SearchOption.AllDirectories)
-            .Concat(Directory.EnumerateFiles(
-                GetCommonGuideServerRoot(), "*.ko.md", SearchOption.AllDirectories))
+                Path.Combine(GetDotNetDocRoot(), "guide"),
+                "*.ko.md",
+                SearchOption.AllDirectories
+            )
+            .Concat(
+                Directory.EnumerateFiles(
+                    GetCommonGuideServerRoot(),
+                    "*.ko.md",
+                    SearchOption.AllDirectories
+                )
+            )
             .ToArray();
 
         foreach (var path in guideAndSampleDocs)
@@ -354,22 +388,20 @@ public sealed class RegressionTests
         }
 
         // RouteMesh 등록과 peer 연결은 전용 언어 계약이 함께 소유한다.
-        var routeMesh = File.ReadAllText(Path.Combine(
-            GetDotNetContractDocRoot(),
-            "interfaces",
-            "03-configuration-topology.ko.md"));
+        var routeMesh = File.ReadAllText(
+            Path.Combine(
+                GetDotNetContractDocRoot(),
+                "interfaces",
+                "03-configuration-topology.ko.md"
+            )
+        );
 
-        Assert.DoesNotContain("AcceptSpotRoutesFromChannel", routeMesh,
-            StringComparison.Ordinal);
-        Assert.Contains("AddRouteMesh", routeMesh,
-            StringComparison.Ordinal);
-        Assert.Contains("IZLinkMeshNodeBuilder", routeMesh,
-            StringComparison.Ordinal);
-        Assert.Contains("IZLinkMeshPeerConnections", routeMesh,
-            StringComparison.Ordinal);
+        Assert.DoesNotContain("AcceptSpotRoutesFromChannel", routeMesh, StringComparison.Ordinal);
+        Assert.Contains("AddRouteMesh", routeMesh, StringComparison.Ordinal);
+        Assert.Contains("IZLinkMeshNodeBuilder", routeMesh, StringComparison.Ordinal);
+        Assert.Contains("IZLinkMeshPeerConnections", routeMesh, StringComparison.Ordinal);
         Assert.DoesNotContain("NonPublic", routeMesh, StringComparison.Ordinal);
-        Assert.DoesNotContain("internal/private", routeMesh,
-            StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("internal/private", routeMesh, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -382,25 +414,37 @@ public sealed class RegressionTests
             var text = File.ReadAllText(path);
             Assert.DoesNotContain("IZLinkBoundSessionRequestCall", text, StringComparison.Ordinal);
             Assert.DoesNotContain("BoundSession.Request", text, StringComparison.Ordinal);
-            Assert.DoesNotContain("Request<TRequest>(TRequest request)", text, StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                "Request<TRequest>(TRequest request)",
+                text,
+                StringComparison.Ordinal
+            );
         }
     }
 
     [Fact]
     public void DotNetDocs_DoNotDocument_Replaced_Spot_Address_Contracts()
     {
-        var roots = new[] { GetDotNetDocRoot(), GetDotNetContractDocRoot(), GetCommonGuideServerRoot() };
+        var roots = new[]
+        {
+            GetDotNetDocRoot(),
+            GetDotNetContractDocRoot(),
+            GetCommonGuideServerRoot(),
+        };
         var forbidden = new[]
         {
             "IZLinkSpotRefResolver",
             "ResolveSpotRefAsync",
             "IZLinkActorAddressResolver",
             "ResolveActorSpotRefAsync",
-            "IZLinkSpotLocationResolver"
+            "IZLinkSpotLocationResolver",
         };
 
-        foreach (var path in roots.SelectMany(root =>
-                     Directory.EnumerateFiles(root, "*.ko.md", SearchOption.AllDirectories)))
+        foreach (
+            var path in roots.SelectMany(root =>
+                Directory.EnumerateFiles(root, "*.ko.md", SearchOption.AllDirectories)
+            )
+        )
         {
             var text = File.ReadAllText(path);
             foreach (var symbol in forbidden)
@@ -415,13 +459,28 @@ public sealed class RegressionTests
         var docs = GetDotNetAndCommonGuideDocs();
         var forbidden = new (Regex Pattern, string Reason)[]
         {
-            (new Regex(@"\bEnable(?:Server|Client|Publisher|Subscriber)\s*\([\s\S]{0,160}?Action<", RegexOptions.Compiled),
-                "nested capability callback"),
-            (new Regex(@"\bUseManualConnections\s*\([\s\S]{0,160}?Action<", RegexOptions.Compiled),
-                "manual connection callback"),
-            (new Regex(@"\bAddNode\s*\([\s\S]{0,160}?Action<", RegexOptions.Compiled), "spot mesh node callback"),
-            (new Regex(@"\bConfigureEntrySpot\s*\([\s\S]{0,160}?Action<", RegexOptions.Compiled),
-                "entry spot options callback")
+            (
+                new Regex(
+                    @"\bEnable(?:Server|Client|Publisher|Subscriber)\s*\([\s\S]{0,160}?Action<",
+                    RegexOptions.Compiled
+                ),
+                "nested capability callback"
+            ),
+            (
+                new Regex(
+                    @"\bUseManualConnections\s*\([\s\S]{0,160}?Action<",
+                    RegexOptions.Compiled
+                ),
+                "manual connection callback"
+            ),
+            (
+                new Regex(@"\bAddNode\s*\([\s\S]{0,160}?Action<", RegexOptions.Compiled),
+                "spot mesh node callback"
+            ),
+            (
+                new Regex(@"\bConfigureEntrySpot\s*\([\s\S]{0,160}?Action<", RegexOptions.Compiled),
+                "entry spot options callback"
+            ),
         };
         var offenders = new List<string>();
 
@@ -442,7 +501,8 @@ public sealed class RegressionTests
     {
         var matrix = File.ReadAllText(ResolveDoc("regression-test-matrix.ko.md"));
 
-        foreach (var document in DotNetContractDocuments) Assert.Contains(document, matrix, StringComparison.Ordinal);
+        foreach (var document in DotNetContractDocuments)
+            Assert.Contains(document, matrix, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -452,28 +512,26 @@ public sealed class RegressionTests
         var unresolved = new List<string>();
 
         var document = "regression-test-matrix.ko.md";
-        var references = ExtractRegressionTestReferences(File.ReadAllText(ResolveDoc(document))).ToArray();
+        var references = ExtractRegressionTestReferences(File.ReadAllText(ResolveDoc(document)))
+            .ToArray();
         Assert.NotEmpty(references);
 
         foreach (var reference in references)
-                if (reference.StartsWith("SCRIPT:", StringComparison.Ordinal))
-                {
-                    var languageRoot = Path.GetFullPath(Path.Combine(
-                        GetDotNetDocRoot(),
-                        "..",
-                        "..",
-                        "..",
-                        "languages",
-                        "dotnet"));
-                    if (!File.Exists(Path.Combine(languageRoot, reference[7..])))
-                        unresolved.Add($"{document}: {reference}");
-                }
-                else if (!activeTests.Contains(reference))
+            if (reference.StartsWith("SCRIPT:", StringComparison.Ordinal))
+            {
+                var languageRoot = Path.GetFullPath(
+                    Path.Combine(GetDotNetDocRoot(), "..", "..", "..", "languages", "dotnet")
+                );
+                if (!File.Exists(Path.Combine(languageRoot, reference[7..])))
                     unresolved.Add($"{document}: {reference}");
+            }
+            else if (!activeTests.Contains(reference))
+                unresolved.Add($"{document}: {reference}");
 
         Assert.True(
             unresolved.Count == 0,
-            $"Unresolved regression references:{Environment.NewLine}{string.Join(Environment.NewLine, unresolved.Order(StringComparer.Ordinal))}");
+            $"Unresolved regression references:{Environment.NewLine}{string.Join(Environment.NewLine, unresolved.Order(StringComparer.Ordinal))}"
+        );
     }
 
     [Fact]
@@ -481,21 +539,22 @@ public sealed class RegressionTests
     {
         var interfaceRoot = Path.Combine(GetDotNetContractDocRoot(), "interfaces");
         var matrix = File.ReadAllText(ResolveDoc("regression-test-matrix.ko.md"));
-        const string owner = "ContractSurfaceCoverage.DotNetExactInterfaceDeclarations_Match_Source_And_Package_Exports";
+        const string owner =
+            "ContractSurfaceCoverage.DotNetExactInterfaceDeclarations_Match_Source_And_Package_Exports";
 
         var missing = Directory
             .EnumerateFiles(interfaceRoot, "*.ko.md", SearchOption.TopDirectoryOnly)
-            .Where(path => !string.Equals(
-                Path.GetFileName(path),
-                "README.ko.md",
-                StringComparison.Ordinal))
+            .Where(path =>
+                !string.Equals(Path.GetFileName(path), "README.ko.md", StringComparison.Ordinal)
+            )
             .Where(path =>
             {
                 var document = Path.GetFileName(path);
                 return !Regex.IsMatch(
                     matrix,
                     $@"(?m)^\|\s*`{Regex.Escape(document)}`\s*\|.*`{Regex.Escape(owner)}`",
-                    RegexOptions.CultureInvariant);
+                    RegexOptions.CultureInvariant
+                );
             })
             .Select(Path.GetFileName)
             .Order(StringComparer.Ordinal)
@@ -503,7 +562,8 @@ public sealed class RegressionTests
 
         Assert.True(
             missing.Length == 0,
-            $"Exact interface documents without an explicit regression owner: {string.Join(", ", missing)}");
+            $"Exact interface documents without an explicit regression owner: {string.Join(", ", missing)}"
+        );
     }
 
     [Fact]
@@ -515,7 +575,11 @@ public sealed class RegressionTests
         Assert.Contains("local actor mailbox dispatch", matrix, StringComparison.Ordinal);
         Assert.Contains("user Spot actor dispatch serialization", matrix, StringComparison.Ordinal);
         Assert.Contains("session actor dispatch ordering", matrix, StringComparison.Ordinal);
-        Assert.Contains("actor dispatch location after mailbox wait", matrix, StringComparison.Ordinal);
+        Assert.Contains(
+            "actor dispatch location after mailbox wait",
+            matrix,
+            StringComparison.Ordinal
+        );
         Assert.Contains("session callback task dispatch", matrix, StringComparison.Ordinal);
         Assert.Contains("session callback 직렬성", matrix, StringComparison.Ordinal);
         Assert.Contains("runtime task exception observation", matrix, StringComparison.Ordinal);
@@ -531,11 +595,13 @@ public sealed class RegressionTests
         Assert.Contains(
             "RunCpuWorker_Async_Holds_Serial_Turn_Until_Work_Completes",
             matrix,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
         Assert.Contains(
             "RunCpuWorker_Yield_Releases_And_Resumes_Through_Serial_Turn",
             matrix,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
         Assert.Contains("E2E:ATD-B3", matrix, StringComparison.Ordinal);
         Assert.Contains("`Yield(...)`", matrix, StringComparison.Ordinal);
     }
@@ -544,15 +610,18 @@ public sealed class RegressionTests
     public void SpotNodeContractsUseTheLocationStoreAsTheAddressSourceOfTruth()
     {
         // Location Store 요구 조건은 언어별 configuration exact interface가 소유한다.
-        var dotnet = File.ReadAllText(Path.Combine(
-            GetDotNetContractDocRoot(),
-            "interfaces",
-            "03-configuration-topology.ko.md"));
-        var node = File.ReadAllText(Path.GetFullPath(Path.Combine(
-            GetDotNetContractDocRoot(),
-            "..",
-            "node",
-            "01-system-structure.ko.md")));
+        var dotnet = File.ReadAllText(
+            Path.Combine(
+                GetDotNetContractDocRoot(),
+                "interfaces",
+                "03-configuration-topology.ko.md"
+            )
+        );
+        var node = File.ReadAllText(
+            Path.GetFullPath(
+                Path.Combine(GetDotNetContractDocRoot(), "..", "node", "01-system-structure.ko.md")
+            )
+        );
 
         Assert.Contains("location store", dotnet, StringComparison.Ordinal);
         Assert.Contains("location store", node, StringComparison.Ordinal);
@@ -563,30 +632,42 @@ public sealed class RegressionTests
     [Fact]
     public void DotNetLanguageContractsPreserveTheReviewedPublicRuntimeDecisions()
     {
-        var handlers = File.ReadAllText(Path.Combine(
-            GetDotNetContractDocRoot(),
-            "interfaces",
-            "06-actors.ko.md"));
-        var system = File.ReadAllText(Path.Combine(
-            GetDotNetContractDocRoot(),
-            "interfaces",
-            "02-configuration-host.ko.md"));
-        var routeMesh = File.ReadAllText(Path.Combine(
-            GetDotNetContractDocRoot(),
-            "interfaces",
-            "03-configuration-topology.ko.md"));
-        var locationStore = File.ReadAllText(Path.Combine(
-            GetDotNetContractDocRoot(),
-            "interfaces",
-            "08-authority-relocation.ko.md"));
+        var handlers = File.ReadAllText(
+            Path.Combine(GetDotNetContractDocRoot(), "interfaces", "06-actors.ko.md")
+        );
+        var system = File.ReadAllText(
+            Path.Combine(GetDotNetContractDocRoot(), "interfaces", "02-configuration-host.ko.md")
+        );
+        var routeMesh = File.ReadAllText(
+            Path.Combine(
+                GetDotNetContractDocRoot(),
+                "interfaces",
+                "03-configuration-topology.ko.md"
+            )
+        );
+        var locationStore = File.ReadAllText(
+            Path.Combine(GetDotNetContractDocRoot(), "interfaces", "08-authority-relocation.ko.md")
+        );
 
-        Assert.Contains("public interface IZLinkMeshNodeBuilder", routeMesh, StringComparison.Ordinal);
-        Assert.Contains("public interface IZLinkMeshPeerConnections", routeMesh, StringComparison.Ordinal);
+        Assert.Contains(
+            "public interface IZLinkMeshNodeBuilder",
+            routeMesh,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "public interface IZLinkMeshPeerConnections",
+            routeMesh,
+            StringComparison.Ordinal
+        );
         Assert.Contains("string? packetName = null", routeMesh, StringComparison.Ordinal);
         Assert.Contains("`ZLinkConfigurationException`", system, StringComparison.Ordinal);
         Assert.Contains("ASP.NET Core", system, StringComparison.Ordinal);
         Assert.Contains("public interface IZLinkActorClient", handlers, StringComparison.Ordinal);
-        Assert.Contains("public interface IZLinkLocationStore", locationStore, StringComparison.Ordinal);
+        Assert.Contains(
+            "public interface IZLinkLocationStore",
+            locationStore,
+            StringComparison.Ordinal
+        );
     }
 
     [Fact]
@@ -596,33 +677,35 @@ public sealed class RegressionTests
         //  also hosts http-client/stream-connector/draft).
         var specRoot = Path.Combine(GetCommonSpecRoot(), "server");
         var deletedSpecRoot = Path.GetFullPath(
-            Path.Combine(GetCommonSpecRoot(), "..", "..", "spec"));
+            Path.Combine(GetCommonSpecRoot(), "..", "..", "spec")
+        );
         //  주제 디렉터리로 재구성한 뒤의 경로다. 옛 전역 번호 문서는 archive/에 있다.
         var required = new[]
         {
             "02-channel-transport/01-channel-topology.ko.md",
             "03-spot-actor/04-actor-model.ko.md",
             "04-session/02-session-actor-binding.ko.md",
-            "02-channel-transport/05-transport-liveness.ko.md"
+            "02-channel-transport/05-transport-liveness.ko.md",
         };
-        var writingGuide = Path.GetFullPath(Path.Combine(
-            GetCommonSpecRoot(),
-            "..",
-            "..",
-            "..",
-            "..",
-            "..",
-            "doc",
-            "principal",
-            "documentation",
-            "spec-writing-guide.ko.md"));
+        var writingGuide = Path.GetFullPath(
+            Path.Combine(
+                GetCommonSpecRoot(),
+                "..",
+                "..",
+                "..",
+                "..",
+                "..",
+                "doc",
+                "principal",
+                "documentation",
+                "spec-writing-guide.ko.md"
+            )
+        );
 
         Assert.False(Directory.Exists(deletedSpecRoot));
         Assert.All(required, file => Assert.True(File.Exists(Path.Combine(specRoot, file)), file));
         Assert.True(File.Exists(writingGuide), writingGuide);
-        Assert.False(File.Exists(Path.Combine(
-            specRoot,
-            "00-spec-writing-guide.ko.md")));
+        Assert.False(File.Exists(Path.Combine(specRoot, "00-spec-writing-guide.ko.md")));
         Assert.True(Directory.Exists(Path.Combine(GetDotNetContractDocRoot(), "interfaces")));
     }
 
@@ -637,15 +720,18 @@ public sealed class RegressionTests
                 "framework",
                 "doc",
                 "framework",
-                "dotnet");
+                "dotnet"
+            );
 
-            if (Directory.Exists(candidate)) return candidate;
+            if (Directory.Exists(candidate))
+                return candidate;
 
             current = current.Parent;
         }
 
         throw new DirectoryNotFoundException(
-            "Could not find framework/doc/framework/dotnet from test runtime.");
+            "Could not find framework/doc/framework/dotnet from test runtime."
+        );
     }
 
     /// <summary>
@@ -657,17 +743,23 @@ public sealed class RegressionTests
             GetCommonSpecRoot(),
             "stream-connector",
             "languages",
-            "dotnet");
+            "dotnet"
+        );
         var httpClientRoot = Path.Combine(
             GetCommonSpecRoot(),
             "http-client",
             "languages",
-            "dotnet");
+            "dotnet"
+        );
 
         return Directory
             .EnumerateFiles(GetDotNetContractDocRoot(), "*.ko.md", SearchOption.TopDirectoryOnly)
-            .Concat(Directory.EnumerateFiles(connectorRoot, "*.ko.md", SearchOption.TopDirectoryOnly))
-            .Concat(Directory.EnumerateFiles(httpClientRoot, "*.ko.md", SearchOption.TopDirectoryOnly))
+            .Concat(
+                Directory.EnumerateFiles(connectorRoot, "*.ko.md", SearchOption.TopDirectoryOnly)
+            )
+            .Concat(
+                Directory.EnumerateFiles(httpClientRoot, "*.ko.md", SearchOption.TopDirectoryOnly)
+            )
             .Order(StringComparer.Ordinal)
             .ToArray();
     }
@@ -683,8 +775,9 @@ public sealed class RegressionTests
     /// </summary>
     private static string GetCommonGuideServerRoot()
     {
-        return Path.GetFullPath(Path.Combine(
-            GetDotNetDocRoot(), "..", "common", "guide", "server"));
+        return Path.GetFullPath(
+            Path.Combine(GetDotNetDocRoot(), "..", "common", "guide", "server")
+        );
     }
 
     /// <summary>
@@ -694,11 +787,19 @@ public sealed class RegressionTests
     {
         return Directory
             .EnumerateFiles(GetDotNetDocRoot(), "*.ko.md", SearchOption.AllDirectories)
-            .Concat(Directory.EnumerateFiles(
-                GetCommonGuideServerRoot(), "*.ko.md", SearchOption.AllDirectories))
-            .Where(static path => !path.Contains(
-                $"{Path.DirectorySeparatorChar}draft{Path.DirectorySeparatorChar}",
-                StringComparison.Ordinal))
+            .Concat(
+                Directory.EnumerateFiles(
+                    GetCommonGuideServerRoot(),
+                    "*.ko.md",
+                    SearchOption.AllDirectories
+                )
+            )
+            .Where(static path =>
+                !path.Contains(
+                    $"{Path.DirectorySeparatorChar}draft{Path.DirectorySeparatorChar}",
+                    StringComparison.Ordinal
+                )
+            )
             .Order(StringComparer.Ordinal)
             .ToArray();
     }
@@ -706,46 +807,45 @@ public sealed class RegressionTests
     private static string GetDotNetContractDocRoot()
     {
         var dotnetDocRoot = GetDotNetDocRoot();
-        var contractRoot = Path.GetFullPath(Path.Combine(
-            dotnetDocRoot,
-            "..",
-            "common",
-            "spec",
-            "server",
-            "languages",
-            "dotnet"));
+        var contractRoot = Path.GetFullPath(
+            Path.Combine(dotnetDocRoot, "..", "common", "spec", "server", "languages", "dotnet")
+        );
 
         return Directory.Exists(contractRoot)
             ? contractRoot
             : throw new DirectoryNotFoundException(
-                "Could not find framework/doc/framework/common/spec/server/languages/dotnet from test runtime.");
+                "Could not find framework/doc/framework/common/spec/server/languages/dotnet from test runtime."
+            );
     }
 
     private static string ResolveDoc(string fileName)
     {
         var matches = Directory
             .EnumerateFiles(GetDotNetDocRoot(), fileName, SearchOption.AllDirectories)
-            .Concat(Directory.EnumerateFiles(
-                GetDotNetContractDocRoot(),
-                fileName,
-                SearchOption.TopDirectoryOnly))
-            .Where(path => !string.Equals(
-                Path.GetFileName(path),
-                "README.ko.md",
-                StringComparison.Ordinal)
+            .Concat(
+                Directory.EnumerateFiles(
+                    GetDotNetContractDocRoot(),
+                    fileName,
+                    SearchOption.TopDirectoryOnly
+                )
+            )
+            .Where(path =>
+                !string.Equals(Path.GetFileName(path), "README.ko.md", StringComparison.Ordinal)
                 || string.Equals(
                     Path.GetDirectoryName(path),
                     GetDotNetDocRoot(),
-                    StringComparison.Ordinal))
+                    StringComparison.Ordinal
+                )
+            )
             .ToArray();
 
         return matches.Length switch
         {
             1 => matches[0],
-            0 => throw new FileNotFoundException(
-                $"Could not find .NET document '{fileName}'."),
+            0 => throw new FileNotFoundException($"Could not find .NET document '{fileName}'."),
             _ => throw new InvalidOperationException(
-                $"Ambiguous document '{fileName}': {string.Join(", ", matches)}")
+                $"Ambiguous document '{fileName}': {string.Join(", ", matches)}"
+            ),
         };
     }
 
@@ -754,7 +854,8 @@ public sealed class RegressionTests
         var sectionMatch = Regex.Match(
             text,
             @"^## [^\r\n]*회귀 테스트[^\r\n]*\r?\n(?<body>.*?)(?=^## |\z)",
-            RegexOptions.Multiline | RegexOptions.Singleline);
+            RegexOptions.Multiline | RegexOptions.Singleline
+        );
 
         Assert.True(sectionMatch.Success, "Missing regression test section.");
 
@@ -762,11 +863,16 @@ public sealed class RegressionTests
             .Matches(
                 sectionMatch.Groups["body"].Value,
                 @"^\| (?<cell>.*?) \|",
-                RegexOptions.Multiline)
-            .SelectMany(static row => Regex
-                .Matches(row.Groups["cell"].Value, @"`(?<test>[^`]+)`")
-                .Select(static match => match.Groups["test"].Value)
-                .Where(static value => !value.EndsWith(".ko.md", StringComparison.OrdinalIgnoreCase)))
+                RegexOptions.Multiline
+            )
+            .SelectMany(static row =>
+                Regex
+                    .Matches(row.Groups["cell"].Value, @"`(?<test>[^`]+)`")
+                    .Select(static match => match.Groups["test"].Value)
+                    .Where(static value =>
+                        !value.EndsWith(".ko.md", StringComparison.OrdinalIgnoreCase)
+                    )
+            )
             .ToArray();
     }
 
@@ -775,7 +881,9 @@ public sealed class RegressionTests
         var testsRoot = GetTestsRoot();
         var sourceFiles = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (var projectPath in EnumerateFilesSkippingGeneratedDirectories(testsRoot, "*.csproj"))
+        foreach (
+            var projectPath in EnumerateFilesSkippingGeneratedDirectories(testsRoot, "*.csproj")
+        )
             AddProjectSources(projectPath, sourceFiles);
 
         var activeTests = new HashSet<string>(StringComparer.Ordinal);
@@ -784,19 +892,26 @@ public sealed class RegressionTests
             var text = File.ReadAllText(sourceFile);
             var classMatches = Regex.Matches(
                 text,
-                @"(?m)^\s*(?:(?:public|internal|file|private|protected)\s+)*(?:(?:sealed|static|abstract|partial|new)\s+)*class\s+(?<class>[A-Za-z_][A-Za-z0-9_]*)\b");
+                @"(?m)^\s*(?:(?:public|internal|file|private|protected)\s+)*(?:(?:sealed|static|abstract|partial|new)\s+)*class\s+(?<class>[A-Za-z_][A-Za-z0-9_]*)\b"
+            );
 
-            if (classMatches.Count == 0) continue;
+            if (classMatches.Count == 0)
+                continue;
 
-            foreach (Match methodMatch in Regex.Matches(
-                         text,
-                         @"\bpublic\s+(?:async\s+)?(?:Task|void)\s+(?<method>[A-Za-z_][A-Za-z0-9_]*)\s*\("))
+            foreach (
+                Match methodMatch in Regex.Matches(
+                    text,
+                    @"\bpublic\s+(?:async\s+)?(?:Task|void)\s+(?<method>[A-Za-z_][A-Za-z0-9_]*)\s*\("
+                )
+            )
             {
                 var className = classMatches
                     .Last(match => match.Index < methodMatch.Index)
-                    .Groups["class"].Value;
+                    .Groups["class"]
+                    .Value;
                 var methodName = methodMatch.Groups["method"].Value;
-                if (HasFactOrTheoryAttribute(text, methodMatch.Index)) activeTests.Add($"{className}.{methodName}");
+                if (HasFactOrTheoryAttribute(text, methodMatch.Index))
+                    activeTests.Add($"{className}.{methodName}");
             }
         }
 
@@ -807,17 +922,19 @@ public sealed class RegressionTests
     {
         foreach (var line in ledger.Split('\n'))
         {
-            if (!line.StartsWith("| DN-", StringComparison.Ordinal)) continue;
+            if (!line.StartsWith("| DN-", StringComparison.Ordinal))
+                continue;
             var cells = line.Split('|');
-            if (cells.Length < 6) continue;
+            if (cells.Length < 6)
+                continue;
             var proofCell = cells[^2];
             foreach (Match match in Regex.Matches(proofCell, @"`(?<reference>[^`]+)`"))
             {
                 var reference = match.Groups["reference"].Value;
-                if (reference.StartsWith("E2E:", StringComparison.Ordinal)
-                    || Regex.IsMatch(
-                        reference,
-                        @"^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$"))
+                if (
+                    reference.StartsWith("E2E:", StringComparison.Ordinal)
+                    || Regex.IsMatch(reference, @"^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$")
+                )
                     yield return reference;
             }
         }
@@ -826,16 +943,18 @@ public sealed class RegressionTests
     private static bool HasFactOrTheoryAttribute(string text, int methodIndex)
     {
         var prefix = text[..methodIndex];
-        var factIndex = new[] { "[Fact", "[Theory", "[SkippableFact", "[SkippableTheory" }
-            .Max(attribute => prefix.LastIndexOf(attribute, StringComparison.Ordinal));
-        if (factIndex < 0) return false;
+        var factIndex = new[] { "[Fact", "[Theory", "[SkippableFact", "[SkippableTheory" }.Max(
+            attribute => prefix.LastIndexOf(attribute, StringComparison.Ordinal)
+        );
+        if (factIndex < 0)
+            return false;
 
-        var priorMethod = Regex.Matches(
-                prefix,
-                @"\bpublic\s+(?:async\s+)?(?:Task|void)\s+[A-Za-z_][A-Za-z0-9_]*\s*\(")
+        var priorMethod = Regex
+            .Matches(prefix, @"\bpublic\s+(?:async\s+)?(?:Task|void)\s+[A-Za-z_][A-Za-z0-9_]*\s*\(")
             .Cast<Match>()
             .LastOrDefault();
-        if (priorMethod is not null && factIndex < priorMethod.Index) return false;
+        if (priorMethod is not null && factIndex < priorMethod.Index)
+            return false;
 
         var attributes = prefix[factIndex..];
         return !Regex.IsMatch(attributes, @"\bSkip\s*=");
@@ -844,60 +963,87 @@ public sealed class RegressionTests
     private static bool IsUnderDirectory(
         string path,
         string directory,
-        bool includeDirectChildrenOnly)
+        bool includeDirectChildrenOnly
+    )
     {
         var actualDirectory = Path.GetDirectoryName(path);
-        if (actualDirectory is null) return false;
+        if (actualDirectory is null)
+            return false;
 
-        if (includeDirectChildrenOnly) return string.Equals(actualDirectory, directory, StringComparison.Ordinal);
+        if (includeDirectChildrenOnly)
+            return string.Equals(actualDirectory, directory, StringComparison.Ordinal);
 
         var relative = Path.GetRelativePath(directory, actualDirectory);
         return relative == "."
-               || (!relative.StartsWith("..", StringComparison.Ordinal)
-                   && !Path.IsPathRooted(relative));
+            || (
+                !relative.StartsWith("..", StringComparison.Ordinal) && !Path.IsPathRooted(relative)
+            );
     }
 
     private static void AddProjectSources(string projectPath, ISet<string> sourceFiles)
     {
-        var projectDirectory = Path.GetDirectoryName(projectPath)
-                               ?? throw new InvalidOperationException(
-                                   $"Could not get project directory for '{projectPath}'.");
+        var projectDirectory =
+            Path.GetDirectoryName(projectPath)
+            ?? throw new InvalidOperationException(
+                $"Could not get project directory for '{projectPath}'."
+            );
         var document = XDocument.Load(projectPath);
         var defaultCompileItems = document
             .Descendants("EnableDefaultCompileItems")
-            .LastOrDefault()?.Value;
-        var projectSources = string.Equals(defaultCompileItems, "false", StringComparison.OrdinalIgnoreCase)
+            .LastOrDefault()
+            ?.Value;
+        var projectSources = string.Equals(
+            defaultCompileItems,
+            "false",
+            StringComparison.OrdinalIgnoreCase
+        )
             ? new HashSet<string>(StringComparer.Ordinal)
             : Directory
                 .EnumerateFiles(projectDirectory, "*.cs", SearchOption.AllDirectories)
-                .Where(static path => !path.Contains(
-                                          $"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}",
-                                          StringComparison.Ordinal)
-                                      && !path.Contains(
-                                          $"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}",
-                                          StringComparison.Ordinal))
+                .Where(static path =>
+                    !path.Contains(
+                        $"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}",
+                        StringComparison.Ordinal
+                    )
+                    && !path.Contains(
+                        $"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}",
+                        StringComparison.Ordinal
+                    )
+                )
                 .Select(Path.GetFullPath)
                 .ToHashSet(StringComparer.Ordinal);
 
-        foreach (var remove in document.Descendants("Compile")
-                     .SelectMany(static element => element.Attributes("Remove")))
+        foreach (
+            var remove in document
+                .Descendants("Compile")
+                .SelectMany(static element => element.Attributes("Remove"))
+        )
         foreach (var removedPath in ResolveProjectPattern(projectDirectory, remove.Value))
             projectSources.Remove(removedPath);
 
-        foreach (var include in document.Descendants("Compile")
-                     .SelectMany(static element => element.Attributes("Include")))
+        foreach (
+            var include in document
+                .Descendants("Compile")
+                .SelectMany(static element => element.Attributes("Include"))
+        )
         foreach (var includedPath in ResolveProjectPattern(projectDirectory, include.Value))
             projectSources.Add(includedPath);
 
-        foreach (var sourceFile in projectSources) sourceFiles.Add(sourceFile);
+        foreach (var sourceFile in projectSources)
+            sourceFiles.Add(sourceFile);
     }
 
-    private static IEnumerable<string> ResolveProjectPattern(string projectDirectory, string pattern)
+    private static IEnumerable<string> ResolveProjectPattern(
+        string projectDirectory,
+        string pattern
+    )
     {
-        if (pattern.Contains('*', StringComparison.Ordinal)) yield break;
+        if (pattern.Contains('*', StringComparison.Ordinal))
+            yield break;
 
         var path = Path.GetFullPath(Path.Combine(projectDirectory, pattern));
-        if (File.Exists(path)) yield return path;
+        if (File.Exists(path))
+            yield return path;
     }
 
     private static string GetTestsRoot()
@@ -906,19 +1052,28 @@ public sealed class RegressionTests
 
         while (current is not null)
         {
-            var candidate = Path.Combine(current.FullName, "framework", "languages", "dotnet", "tests");
-            if (Directory.Exists(candidate)) return candidate;
+            var candidate = Path.Combine(
+                current.FullName,
+                "framework",
+                "languages",
+                "dotnet",
+                "tests"
+            );
+            if (Directory.Exists(candidate))
+                return candidate;
 
             current = current.Parent;
         }
 
         throw new DirectoryNotFoundException(
-            "Could not find framework/languages/dotnet/tests from test runtime.");
+            "Could not find framework/languages/dotnet/tests from test runtime."
+        );
     }
 
     private static IEnumerable<string> EnumerateFilesSkippingGeneratedDirectories(
         string root,
-        string pattern)
+        string pattern
+    )
     {
         var pending = new Stack<string>();
         pending.Push(root);
@@ -927,13 +1082,26 @@ public sealed class RegressionTests
         {
             var directory = pending.Pop();
 
-            foreach (var file in Directory.EnumerateFiles(directory, pattern, SearchOption.TopDirectoryOnly))
+            foreach (
+                var file in Directory.EnumerateFiles(
+                    directory,
+                    pattern,
+                    SearchOption.TopDirectoryOnly
+                )
+            )
                 yield return file;
 
-            foreach (var child in Directory.EnumerateDirectories(directory, "*", SearchOption.TopDirectoryOnly))
+            foreach (
+                var child in Directory.EnumerateDirectories(
+                    directory,
+                    "*",
+                    SearchOption.TopDirectoryOnly
+                )
+            )
             {
                 var name = Path.GetFileName(child);
-                if (name is "bin" or "obj" or "logs" or "nuget-packages" or "artifacts") continue;
+                if (name is "bin" or "obj" or "logs" or "nuget-packages" or "artifacts")
+                    continue;
                 pending.Push(child);
             }
         }

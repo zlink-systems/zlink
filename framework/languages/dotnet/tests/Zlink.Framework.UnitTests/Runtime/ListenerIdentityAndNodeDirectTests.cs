@@ -17,19 +17,22 @@ public sealed class ListenerIdentityAndNodeDirectTests
     [InlineData("::", "tcp://[::1]:7101")]
     public void Wildcard_bind_without_advertise_host_uses_same_family_loopback(
         string bindHost,
-        string expected)
+        string expected
+    )
     {
         var network = new ZLinkNetworkOptionsModel();
         var boundEndpoint = ZLinkNetworkEndpointResolver.Bind(
             explicitEndpoint: null,
             port: 7101,
             listenerBindHost: bindHost,
-            network);
+            network
+        );
         var advertised = ZLinkNetworkEndpointResolver.Advertise(
             boundEndpoint,
             listenerAdvertiseHost: null,
             listenerBindHost: bindHost,
-            network);
+            network
+        );
 
         Assert.Equal(expected, advertised);
     }
@@ -43,7 +46,8 @@ public sealed class ListenerIdentityAndNodeDirectTests
         builder.Logging.ClearProviders();
         builder.Services.AddZLinkFramework(options =>
         {
-            options.AddRouteMesh("invalid-advertise-mesh")
+            options
+                .AddRouteMesh("invalid-advertise-mesh")
                 .Listen()
                 .SetAdvertiseHost(advertiseHost)
                 .SetRoutingId(RoutingId.From("invalid-advertise-node"))
@@ -51,8 +55,9 @@ public sealed class ListenerIdentityAndNodeDirectTests
         });
         using var host = builder.Build();
 
-        var exception = await Assert.ThrowsAsync<ZLinkConfigurationException>(
-            () => host.StartAsync());
+        var exception = await Assert.ThrowsAsync<ZLinkConfigurationException>(() =>
+            host.StartAsync()
+        );
         Assert.Contains("AdvertiseHost must not be a wildcard", exception.Message);
     }
 
@@ -64,18 +69,18 @@ public sealed class ListenerIdentityAndNodeDirectTests
         builder.Services.AddZLinkFramework(options =>
         {
             options.ConfigureNetwork().BindHost = "0.0.0.0";
-            options.AddRouteMesh("listener-mesh")
+            options
+                .AddRouteMesh("listener-mesh")
                 .Listen()
                 .SetRoutingId(RoutingId.From("listener-mesh-node"))
                 .AddRouteRequestHandler<ProbeHandler, ProbeRequest, ProbeReply>();
-            options.AddClientServerChannel("listener-client-server")
+            options
+                .AddClientServerChannel("listener-client-server")
                 .Server()
                 .Listen()
                 .AddRequestHandler<ProbeHandler, ProbeRequest, ProbeReply>();
             options.AddFanoutChannel("listener-fanout").EnablePublisher();
-            options.AddStreamNode("listener-stream")
-                .Bind()
-                .AddSession<TestSession>();
+            options.AddStreamNode("listener-stream").Bind().AddSession<TestSession>();
         });
         using var host = builder.Build();
 
@@ -91,18 +96,21 @@ public sealed class ListenerIdentityAndNodeDirectTests
         using var target = BuildMeshHost(
             RoutingId.From("wildcard-target"),
             port,
-            bindHost: "0.0.0.0");
+            bindHost: "0.0.0.0"
+        );
         await target.StartAsync();
         using var source = BuildMeshHost(
             RoutingId.From("wildcard-source"),
             ReserveTcpPort(),
             expectedPeerRid: targetRid,
-            peerEndpoint: $"tcp://127.0.0.1:{port}");
+            peerEndpoint: $"tcp://127.0.0.1:{port}"
+        );
         await source.StartAsync();
         try
         {
             await WaitForPeerAsync(source, targetRid);
-            var reply = await source.Services.GetRequiredService<IZLinkRouteClient>()
+            var reply = await source
+                .Services.GetRequiredService<IZLinkRouteClient>()
                 .RequestToNode("listener-node-direct", targetRid, new ProbeRequest("ping"))
                 .Async<ProbeReply>();
 
@@ -125,12 +133,14 @@ public sealed class ListenerIdentityAndNodeDirectTests
         using var source = BuildMeshHost(
             RoutingId.From("endpoint-only-source"),
             ReserveTcpPort(),
-            peerEndpoint: $"tcp://127.0.0.1:{port}");
+            peerEndpoint: $"tcp://127.0.0.1:{port}"
+        );
         await source.StartAsync();
         try
         {
             await WaitForPeerAsync(source, targetRid);
-            var reply = await source.Services.GetRequiredService<IZLinkRouteClient>()
+            var reply = await source
+                .Services.GetRequiredService<IZLinkRouteClient>()
                 .RequestToNode("listener-node-direct", targetRid, new ProbeRequest("endpoint"))
                 .Async<ProbeReply>();
 
@@ -149,10 +159,7 @@ public sealed class ListenerIdentityAndNodeDirectTests
         var logger = new RecordingMeshNodeLogger();
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var source = new ZLinkManagedMeshNode(context, "warning-mesh");
-        await using var target = new ZLinkManagedMeshNode(
-            context,
-            "warning-mesh",
-            logger: logger);
+        await using var target = new ZLinkManagedMeshNode(context, "warning-mesh", logger: logger);
         var suffix = Guid.NewGuid().ToString("N");
         var sourceRid = RoutingId.From($"warning-source-{suffix}");
         var targetRid = RoutingId.From($"warning-target-{suffix}");
@@ -168,7 +175,8 @@ public sealed class ListenerIdentityAndNodeDirectTests
             sourceRid,
             intentEndpoint,
             ZLinkServiceSecurityIdentity.Plaintext,
-            source.Status().LifecycleGeneration);
+            source.Status().LifecycleGeneration
+        );
 
         target.Start();
         source.Start();
@@ -177,8 +185,16 @@ public sealed class ListenerIdentityAndNodeDirectTests
         var entry = Assert.Single(logger.Entries);
         Assert.Equal(LogLevel.Warning, entry.Level);
         Assert.Contains("reason=route_mismatch", entry.Message, StringComparison.Ordinal);
-        Assert.Contains($"intent_endpoint={intentEndpoint}", entry.Message, StringComparison.Ordinal);
-        Assert.Contains($"advertised_endpoint={sourceEndpoint}", entry.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            $"intent_endpoint={intentEndpoint}",
+            entry.Message,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            $"advertised_endpoint={sourceEndpoint}",
+            entry.Message,
+            StringComparison.Ordinal
+        );
     }
 
     private static IHost BuildMeshHost(
@@ -186,18 +202,21 @@ public sealed class ListenerIdentityAndNodeDirectTests
         int listenPort,
         string bindHost = "127.0.0.1",
         RoutingId? expectedPeerRid = null,
-        string? peerEndpoint = null)
+        string? peerEndpoint = null
+    )
     {
         var builder = Host.CreateApplicationBuilder();
         builder.Logging.ClearProviders();
         builder.Services.AddZLinkFramework(options =>
         {
-            var mesh = options.AddRouteMesh("listener-node-direct")
+            var mesh = options
+                .AddRouteMesh("listener-node-direct")
                 .Listen(listenPort)
                 .SetBindHost(bindHost)
                 .SetRoutingId(routingId)
                 .AddRouteRequestHandler<ProbeHandler, ProbeRequest, ProbeReply>();
-            if (peerEndpoint is null) return;
+            if (peerEndpoint is null)
+                return;
             if (expectedPeerRid is { } expected)
                 mesh.PeerConnections.Connect(expected, peerEndpoint);
             else
@@ -209,8 +228,11 @@ public sealed class ListenerIdentityAndNodeDirectTests
     private static async Task WaitForPeerAsync(IHost host, RoutingId peerRid)
     {
         var runtime = host.Services.GetRequiredService<IZLinkRouteMeshRuntime>();
-        await WaitUntilAsync(() => runtime.GetStatus("listener-node-direct")
-            .Peers.Any(peer => peer.NodeRid == peerRid && peer.State == ZLinkPeerState.Ready));
+        await WaitUntilAsync(() =>
+            runtime
+                .GetStatus("listener-node-direct")
+                .Peers.Any(peer => peer.NodeRid == peerRid && peer.State == ZLinkPeerState.Ready)
+        );
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition)
@@ -218,7 +240,8 @@ public sealed class ListenerIdentityAndNodeDirectTests
         var deadline = Stopwatch.GetTimestamp() + Stopwatch.Frequency * 5;
         while (Stopwatch.GetTimestamp() < deadline)
         {
-            if (condition()) return;
+            if (condition())
+                return;
             await Task.Delay(10);
         }
         Assert.Fail("The expected runtime condition was not reached.");
@@ -242,28 +265,29 @@ public sealed class ListenerIdentityAndNodeDirectTests
 
     public sealed record ProbeReply(string Value);
 
-    public sealed class ProbeHandler :
-        IZLinkRouteRequestHandler<ProbeRequest, ProbeReply>,
-        IZLinkRequestHandler<ProbeRequest, ProbeReply>
+    public sealed class ProbeHandler
+        : IZLinkRouteRequestHandler<ProbeRequest, ProbeReply>,
+            IZLinkRequestHandler<ProbeRequest, ProbeReply>
     {
         ValueTask<ProbeReply> IZLinkRouteRequestHandler<ProbeRequest, ProbeReply>.HandleAsync(
             ProbeRequest request,
             ZLinkRouteMessageContext context,
-            CancellationToken cancellationToken) =>
-            ValueTask.FromResult(new ProbeReply($"{request.Value}-reply"));
+            CancellationToken cancellationToken
+        ) => ValueTask.FromResult(new ProbeReply($"{request.Value}-reply"));
 
         public ValueTask<ProbeReply> HandleAsync(
             ProbeRequest request,
             IZLinkMessageContext context,
-            CancellationToken cancellationToken) =>
-            ValueTask.FromResult(new ProbeReply($"{request.Value}-reply"));
+            CancellationToken cancellationToken
+        ) => ValueTask.FromResult(new ProbeReply($"{request.Value}-reply"));
     }
 
     private sealed class RecordingMeshNodeLogger : ILogger<ZLinkManagedMeshNode>
     {
         internal ConcurrentQueue<(LogLevel Level, string Message)> Entries { get; } = new();
 
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
 
         public bool IsEnabled(LogLevel logLevel) => true;
 
@@ -272,7 +296,7 @@ public sealed class ListenerIdentityAndNodeDirectTests
             EventId eventId,
             TState state,
             Exception? exception,
-            Func<TState, Exception?, string> formatter) =>
-            Entries.Enqueue((logLevel, formatter(state, exception)));
+            Func<TState, Exception?, string> formatter
+        ) => Entries.Enqueue((logLevel, formatter(state, exception)));
     }
 }

@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 package systems.zlink.httpclient.internal;
 
+import systems.zlink.framework.errors.ZLinkFrameworkException;
+
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -11,7 +13,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.function.Consumer;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
 
 /**
  * Reads and decodes HTTP response bodies for the wrapper: buffered read with the configured size
@@ -22,8 +23,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 final class ResponseBodyReader {
 
     /** A decoded body together with the headers after any {@code Content-Encoding} removal. */
-    record DecodedBody(byte[] body, Map<String, String> headers) {
-    }
+    record DecodedBody(byte[] body, Map<String, String> headers) {}
 
     private final HttpClientOptions options;
 
@@ -33,12 +33,15 @@ final class ResponseBodyReader {
 
     void streamToSink(InputStream stream, Consumer<byte[]> sink) {
         try {
-            BoundedRead.copy(stream, options.maxResponseBodySize(), ResponseBodyReader::tooLarge,
-                (buffer, length) -> {
-                    byte[] chunk = new byte[length];
-                    System.arraycopy(buffer, 0, chunk, 0, length);
-                    sink.accept(chunk);
-                });
+            BoundedRead.copy(
+                    stream,
+                    options.maxResponseBodySize(),
+                    ResponseBodyReader::tooLarge,
+                    (buffer, length) -> {
+                        byte[] chunk = new byte[length];
+                        System.arraycopy(buffer, 0, chunk, 0, length);
+                        sink.accept(chunk);
+                    });
         } catch (IOException cause) {
             // Surface as an unchecked IOException so RetryPolicy can classify a body-read transport
             // failure (e.g. connection reset) as retriable, rather than masking it.
@@ -49,8 +52,11 @@ final class ResponseBodyReader {
     byte[] readBuffered(InputStream stream) {
         try {
             ByteArrayOutputStream output = new ByteArrayOutputStream();
-            BoundedRead.copy(stream, options.maxResponseBodySize(), ResponseBodyReader::tooLarge,
-                (buffer, length) -> output.write(buffer, 0, length));
+            BoundedRead.copy(
+                    stream,
+                    options.maxResponseBodySize(),
+                    ResponseBodyReader::tooLarge,
+                    (buffer, length) -> output.write(buffer, 0, length));
             return output.toByteArray();
         } catch (IOException cause) {
             // Surface as an unchecked IOException so RetryPolicy can classify a body-read transport
@@ -71,13 +77,13 @@ final class ResponseBodyReader {
         }
         if (encoding.equalsIgnoreCase("gzip")) {
             return new DecodedBody(
-                ResponseCompression.gunzip(bytes, options.maxResponseBodySize()),
-                stripEncodingHeaders(headers));
+                    ResponseCompression.gunzip(bytes, options.maxResponseBodySize()),
+                    stripEncodingHeaders(headers));
         }
         if (encoding.equalsIgnoreCase("deflate")) {
             return new DecodedBody(
-                ResponseCompression.inflateDeflate(bytes, options.maxResponseBodySize()),
-                stripEncodingHeaders(headers));
+                    ResponseCompression.inflateDeflate(bytes, options.maxResponseBodySize()),
+                    stripEncodingHeaders(headers));
         }
         return new DecodedBody(bytes, headers);
     }
@@ -85,7 +91,8 @@ final class ResponseBodyReader {
     static Map<String, String> collectHeaders(Map<String, List<String>> headers) {
         Map<String, String> result = new LinkedHashMap<>();
         for (Map.Entry<String, List<String>> entry : headers.entrySet()) {
-            result.put(entry.getKey().toLowerCase(Locale.ROOT), String.join(", ", entry.getValue()));
+            result.put(
+                    entry.getKey().toLowerCase(Locale.ROOT), String.join(", ", entry.getValue()));
         }
         return result;
     }

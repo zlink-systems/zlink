@@ -1,10 +1,5 @@
 package systems.zlink.framework.runtime.actors;
-import systems.zlink.framework.spots.SpotRef;
 
-import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
-import java.util.function.Function;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.actors.ZLinkActor;
@@ -14,6 +9,12 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteInte
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteStatus;
 import systems.zlink.framework.runtime.locations.ZLinkLocationLifecycle;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
+import systems.zlink.framework.spots.SpotRef;
+
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.function.Function;
 
 final class ZLinkActorLocationCoordinator {
     private final Function<String, String> actorTypeResolver;
@@ -52,29 +53,29 @@ final class ZLinkActorLocationCoordinator {
     }
 
     CompletionStage<Void> claimActor(
-        String actorType,
-        String actorId,
-        RoutingId ownerNodeRid,
-        ZLinkLocationWriteIntent intent,
-        Runnable ownershipLost) {
+            String actorType,
+            String actorId,
+            RoutingId ownerNodeRid,
+            ZLinkLocationWriteIntent intent,
+            Runnable ownershipLost) {
         if (lifecycle == null || intent == null) {
             return CompletableFuture.completedFuture(null);
         }
-        CompletionStage<ZLinkLocationWriteStatus> claim = intent == ZLinkLocationWriteIntent.TAKEOVER
-            ? lifecycle.takeoverActor(actorType, actorId, ownerNodeRid, ownershipLost)
-            : lifecycle.claimActor(actorType, actorId, ownerNodeRid, ownershipLost);
-        return claim.thenCompose(status -> {
-            if (status == ZLinkLocationWriteStatus.STORED) {
-                return CompletableFuture.completedFuture(null);
-            }
-            return CompletableFuture.failedFuture(actorCreateLocationFailure(actorId, status));
-        });
+        CompletionStage<ZLinkLocationWriteStatus> claim =
+                intent == ZLinkLocationWriteIntent.TAKEOVER
+                        ? lifecycle.takeoverActor(actorType, actorId, ownerNodeRid, ownershipLost)
+                        : lifecycle.claimActor(actorType, actorId, ownerNodeRid, ownershipLost);
+        return claim.thenCompose(
+                status -> {
+                    if (status == ZLinkLocationWriteStatus.STORED) {
+                        return CompletableFuture.completedFuture(null);
+                    }
+                    return CompletableFuture.failedFuture(
+                            actorCreateLocationFailure(actorId, status));
+                });
     }
 
-    CompletionStage<Void> setActorRef(
-        String actorType,
-        String actorId,
-        ActorRef actorRef) {
+    CompletionStage<Void> setActorRef(String actorType, String actorId, ActorRef actorRef) {
         if (lifecycle == null) {
             return CompletableFuture.completedFuture(null);
         }
@@ -85,45 +86,43 @@ final class ZLinkActorLocationCoordinator {
         if (resolvers == null) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
-        return resolvers.resolveActor(actorId)
-            .thenApply(row -> row == null
-                ? Optional.empty()
-                : Optional.of(row.actorRef()));
+        return resolvers
+                .resolveActor(actorId)
+                .thenApply(row -> row == null ? Optional.empty() : Optional.of(row.actorRef()));
     }
 
     //  Resolves the Spot an Actor currently belongs to. The Actor authority row
     //  already carries the current Spot id, so this reads the same row `find`
     //  uses instead of taking a second lookup path.
-    CompletionStage<Optional<SpotRef>>
-        findStoredSpotRef(String actorId) {
+    CompletionStage<Optional<SpotRef>> findStoredSpotRef(String actorId) {
         if (resolvers == null) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
-        return resolvers.resolveActor(actorId)
-            .thenApply(row -> row == null
-                    || row.spotId() == null
-                    || row.spotId().isEmpty()
-                ? Optional.empty()
-                : Optional.of(new SpotRef(
-                    row.spotId(),
-                    row.authorityOwnerGeneration(),
-                    row.meshName(),
-                    row.nodeRid())));
+        return resolvers
+                .resolveActor(actorId)
+                .thenApply(
+                        row ->
+                                row == null || row.spotId() == null || row.spotId().isEmpty()
+                                        ? Optional.empty()
+                                        : Optional.of(
+                                                new SpotRef(
+                                                        row.spotId(),
+                                                        row.authorityOwnerGeneration(),
+                                                        row.meshName(),
+                                                        row.nodeRid())));
     }
 
-    CompletionStage<ZLinkStoreLocationResolvers.ActorRoute>
-        resolveStoredActorRoute(String actorId) {
+    CompletionStage<ZLinkStoreLocationResolvers.ActorRoute> resolveStoredActorRoute(
+            String actorId) {
         if (resolvers == null) {
             return CompletableFuture.failedFuture(
-                new IllegalStateException(
-                    "Location Store resolver is unavailable"));
+                    new IllegalStateException("Location Store resolver is unavailable"));
         }
         resolvers.invalidateActorRoute(actorId);
         return resolvers.resolveActor(actorId);
     }
 
-    CompletionStage<Optional<ActorRef>> findStoredActorRefExact(
-        String actorId) {
+    CompletionStage<Optional<ActorRef>> findStoredActorRefExact(String actorId) {
         if (resolvers == null) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
@@ -131,19 +130,16 @@ final class ZLinkActorLocationCoordinator {
         return findStoredActorRef(actorId);
     }
 
-    CompletionStage<systems.zlink.framework.runtime.locations
-        .ZLinkStoreLocationResolvers.DirectJoinSessionFence>
-        directJoinSessionFence(
-            String actorId,
-            RoutingId sessionOwnerNodeRid,
-            RoutingId targetNodeRid) {
+    CompletionStage<
+                    systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers
+                            .DirectJoinSessionFence>
+            directJoinSessionFence(
+                    String actorId, RoutingId sessionOwnerNodeRid, RoutingId targetNodeRid) {
         if (resolvers == null) {
             return CompletableFuture.failedFuture(
-                new IllegalStateException(
-                    "Location Store resolver is unavailable"));
+                    new IllegalStateException("Location Store resolver is unavailable"));
         }
-        return resolvers.resolveDirectJoinSessionFence(
-            actorId, sessionOwnerNodeRid, targetNodeRid);
+        return resolvers.resolveDirectJoinSessionFence(actorId, sessionOwnerNodeRid, targetNodeRid);
     }
 
     CompletionStage<Void> actorJoinedSpot(ZLinkActor actor, String spotId) {
@@ -158,13 +154,15 @@ final class ZLinkActorLocationCoordinator {
         if (meshName == null || meshName.isBlank()) {
             return CompletableFuture.completedFuture(null);
         }
-        CompletionStage<Void> joined = lifecycle.notifyActorJoinedSpot(
-            actorType, actor.context().actorId(), meshName, spotId);
-        return joined.thenRun(() -> {
-            if (resolvers != null) {
-                resolvers.invalidateActorRoute(actor.context().actorId());
-            }
-        });
+        CompletionStage<Void> joined =
+                lifecycle.notifyActorJoinedSpot(
+                        actorType, actor.context().actorId(), meshName, spotId);
+        return joined.thenRun(
+                () -> {
+                    if (resolvers != null) {
+                        resolvers.invalidateActorRoute(actor.context().actorId());
+                    }
+                });
     }
 
     CompletionStage<Void> actorLeftSpot(ZLinkActor actor) {
@@ -196,15 +194,11 @@ final class ZLinkActorLocationCoordinator {
         return lifecycle.releaseActor(actorType == null ? "" : actorType, actorId);
     }
 
-    CompletionStage<Void> releaseActorExact(
-        String actorType,
-        ActorRef actor) {
+    CompletionStage<Void> releaseActorExact(String actorType, ActorRef actor) {
         if (lifecycle == null) {
             return CompletableFuture.completedFuture(null);
         }
-        return lifecycle.releaseActorExact(
-            actorType == null ? "" : actorType,
-            actor);
+        return lifecycle.releaseActorExact(actorType == null ? "" : actorType, actor);
     }
 
     void abandonActor(String actorId) {
@@ -217,16 +211,16 @@ final class ZLinkActorLocationCoordinator {
         if (lifecycle == null || routeSessionRid == null || sourceNodeRid == null) {
             return;
         }
-        lifecycle.bindActorSessionRoute(routeSessionRid, actorId, sourceNodeRid)
-            .exceptionally(error -> null);
+        lifecycle
+                .bindActorSessionRoute(routeSessionRid, actorId, sourceNodeRid)
+                .exceptionally(error -> null);
     }
 
     void removeSessionRoute(RoutingId routeSessionRid) {
         if (lifecycle == null || routeSessionRid == null) {
             return;
         }
-        lifecycle.removeActorSessionRoute(routeSessionRid)
-            .exceptionally(error -> null);
+        lifecycle.removeActorSessionRoute(routeSessionRid).exceptionally(error -> null);
     }
 
     private String actorTypeFor(ZLinkActor actor) {
@@ -235,15 +229,16 @@ final class ZLinkActorLocationCoordinator {
     }
 
     private static RuntimeException actorCreateLocationFailure(
-        String actorId,
-        ZLinkLocationWriteStatus status) {
+            String actorId, ZLinkLocationWriteStatus status) {
         if (status == ZLinkLocationWriteStatus.REJECTED_CONFLICT) {
             return new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.REJECTED,
-                "Actor '" + actorId + "' location is owned by another runtime.");
+                    ZLinkFrameworkErrorKind.REJECTED,
+                    "Actor '" + actorId + "' location is owned by another runtime.");
         }
         return new ZLinkFrameworkException(
-            ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
-            "Actor '" + actorId + "' location claim failed because the location store is unavailable.");
+                ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+                "Actor '"
+                        + actorId
+                        + "' location claim failed because the location store is unavailable.");
     }
 }

@@ -217,15 +217,17 @@ function receiverFor(options: {
     clearJoinedSpot: () => undefined
   };
   return new ZLinkRemoteActorJoinReceiver({
-    authorityStore: () => ({ readAuthority: options.readAuthority } as never),
-    actorManager: () => ({
-      getOrCreateActor: options.getOrCreateActor,
-      requireRelocationActorFactory: options.requireRelocationActorFactory ?? (() => undefined),
-      getState: () => state
-    } as never),
-    spotManager: () => ({
-      admitActorJoin: async () => ({ accepted: false })
-    } as never)
+    authorityStore: () => ({ readAuthority: options.readAuthority }) as never,
+    actorManager: () =>
+      ({
+        getOrCreateActor: options.getOrCreateActor,
+        requireRelocationActorFactory: options.requireRelocationActorFactory ?? (() => undefined),
+        getState: () => state
+      }) as never,
+    spotManager: () =>
+      ({
+        admitActorJoin: async () => ({ accepted: false })
+      }) as never
   });
 }
 

@@ -30,17 +30,11 @@ import {
   ZLINK_ROUTE_MESH_RUNTIME,
   ZLINK_SPOT_MANAGER,
   ZLINK_SPOT_OUTBOUND,
-  ZLINK_SPOT_PUBLISHER_CLIENT,
+  ZLINK_SPOT_PUBLISHER_CLIENT
 } from './tokens';
-import {
-  ZLINK_ACTOR_SPOT_HANDLE_RESOLVER,
-  ZLINK_SPOT_HANDLE_RESOLVER
-} from './internal-tokens';
+import { ZLINK_ACTOR_SPOT_HANDLE_RESOLVER, ZLINK_SPOT_HANDLE_RESOLVER } from './internal-tokens';
 import { framework, type FrameworkRuntimeHost } from './framework-loader';
-import {
-  currentNestDispatchContext,
-  runInNestDispatchScope
-} from './dispatch-scope';
+import { currentNestDispatchContext, runInNestDispatchScope } from './dispatch-scope';
 
 type RuntimeHostWithNestLifecycle = FrameworkRuntimeHost & OnModuleInit & OnModuleDestroy;
 
@@ -52,7 +46,8 @@ interface AlwaysAvailableClientProviderSpec {
 const ALWAYS_AVAILABLE_CLIENT_PROVIDER_SPECS: readonly AlwaysAvailableClientProviderSpec[] = [
   {
     token: ZLINK_CHANNEL_CLIENT,
-    create: (registration, runtime) => framework.createIntegrationChannelClient(registration, runtime)
+    create: (registration, runtime) =>
+      framework.createIntegrationChannelClient(registration, runtime)
   },
   {
     token: ZLINK_CHANNEL_RUNTIME_OPTIONS,
@@ -60,7 +55,8 @@ const ALWAYS_AVAILABLE_CLIENT_PROVIDER_SPECS: readonly AlwaysAvailableClientProv
   },
   {
     token: ZLINK_FANOUT_CLIENT,
-    create: (registration, runtime) => framework.createIntegrationFanoutClient(registration, runtime)
+    create: (registration, runtime) =>
+      framework.createIntegrationFanoutClient(registration, runtime)
   },
   {
     token: ZLINK_ROUTE_CLIENT,
@@ -72,7 +68,9 @@ const ALWAYS_AVAILABLE_CLIENT_PROVIDER_SPECS: readonly AlwaysAvailableClientProv
   }
 ];
 
-export function alwaysAvailableClientProviders(registration?: ZLinkFrameworkRegistration): Provider[] {
+export function alwaysAvailableClientProviders(
+  registration?: ZLinkFrameworkRegistration
+): Provider[] {
   return [
     ...ALWAYS_AVAILABLE_CLIENT_PROVIDER_SPECS.map((spec) =>
       createAlwaysAvailableClientProvider(spec, registration)
@@ -106,14 +104,14 @@ export function alwaysAvailableClientTokens(): InjectionToken[] {
     ZLINK_ROUTE_CLIENT,
     ZLINK_FANOUT_CLIENT,
     ZLINK_BOUND_SESSION_FACTORY,
-    ZLINK_MESSAGE_METADATA_POLICY,
+    ZLINK_MESSAGE_METADATA_POLICY
   ];
 }
 
 export function conditionalClientProviders(registration: ZLinkFrameworkRegistration): Provider[] {
-  return CONDITIONAL_CLIENT_PROVIDER_SPECS
-    .filter((spec) => spec.isEnabled(registration))
-    .map((spec) => createConditionalClientProvider(spec, registration));
+  return CONDITIONAL_CLIENT_PROVIDER_SPECS.filter((spec) => spec.isEnabled(registration)).map(
+    (spec) => createConditionalClientProvider(spec, registration)
+  );
 }
 
 interface ConditionalClientProviderSpec {
@@ -132,16 +130,21 @@ const CONDITIONAL_CLIENT_PROVIDER_SPECS: readonly ConditionalClientProviderSpec[
   {
     token: ZLINK_CLIENT_SERVER_RUNTIME,
     requiresRuntime: true,
-    isEnabled: (registration) => [...registration.channels.values()]
-      .some(channel => channel.client !== undefined || channel.server !== undefined),
+    isEnabled: (registration) =>
+      [...registration.channels.values()].some(
+        (channel) => channel.client !== undefined || channel.server !== undefined
+      ),
     create: (_registration, runtime) => requireRuntime(runtime).clientServerRuntime
   },
   {
     token: ZLINK_FANOUT_RUNTIME,
     requiresRuntime: true,
-    isEnabled: (registration) => [...registration.channels.values()]
-      .some(channel => channel.subscriber !== undefined
-        && (channel.subscriber.manualConnections?.length ?? 0) === 0),
+    isEnabled: (registration) =>
+      [...registration.channels.values()].some(
+        (channel) =>
+          channel.subscriber !== undefined &&
+          (channel.subscriber.manualConnections?.length ?? 0) === 0
+      ),
     create: (_registration, runtime) => requireRuntime(runtime).fanoutRuntime
   },
   {
@@ -159,7 +162,8 @@ const CONDITIONAL_CLIENT_PROVIDER_SPECS: readonly ConditionalClientProviderSpec[
   {
     token: ZLINK_SPOT_MANAGER,
     requiresRuntime: true,
-    isEnabled: (registration) => framework.hasSpotNode(registration) && hasLocationStores(registration),
+    isEnabled: (registration) =>
+      framework.hasSpotNode(registration) && hasLocationStores(registration),
     create: (registration, runtime, moduleRef, discovery) =>
       createSpotManager(registration, requireRuntime(runtime), moduleRef, discovery)
   },
@@ -180,7 +184,8 @@ const CONDITIONAL_CLIENT_PROVIDER_SPECS: readonly ConditionalClientProviderSpec[
   {
     token: ZLINK_ACTOR_CLIENT,
     requiresRuntime: true,
-    isEnabled: (registration) => framework.hasSpotNode(registration) && hasLocationStores(registration),
+    isEnabled: (registration) =>
+      framework.hasSpotNode(registration) && hasLocationStores(registration),
     create: (_registration, runtime) =>
       framework.createIntegrationActorClient(requireRuntime(runtime))
   },
@@ -204,7 +209,9 @@ const CONDITIONAL_CLIENT_PROVIDER_SPECS: readonly ConditionalClientProviderSpec[
     create: (_registration, runtime) => {
       const query = requireRuntime(runtime).locationRuntimeQuery;
       if (query === undefined) {
-        throw new framework.ZLinkConfigurationException('Location runtime query requires location stores.');
+        throw new framework.ZLinkConfigurationException(
+          'Location runtime query requires location stores.'
+        );
       }
       return query;
     }
@@ -216,7 +223,9 @@ const CONDITIONAL_CLIENT_PROVIDER_SPECS: readonly ConditionalClientProviderSpec[
     create: (_registration, runtime) => {
       const resolver = requireRuntime(runtime).createLocationHandleResolver();
       if (resolver === undefined) {
-        throw new framework.ZLinkConfigurationException('SpotHandle resolver requires location stores.');
+        throw new framework.ZLinkConfigurationException(
+          'SpotHandle resolver requires location stores.'
+        );
       }
       return resolver;
     }
@@ -228,7 +237,9 @@ const CONDITIONAL_CLIENT_PROVIDER_SPECS: readonly ConditionalClientProviderSpec[
     create: (_registration, runtime) => {
       const resolver = requireRuntime(runtime).createLocationHandleResolver();
       if (resolver === undefined) {
-        throw new framework.ZLinkConfigurationException('Actor SpotHandle resolver requires location stores.');
+        throw new framework.ZLinkConfigurationException(
+          'Actor SpotHandle resolver requires location stores.'
+        );
       }
       return resolver;
     }
@@ -263,7 +274,11 @@ function createConditionalClientProviderFromSpec(
     provide: spec.token,
     inject: conditionalClientProviderInject(spec, options),
     useFactory: (...args: unknown[]) => {
-      const { registration, runtime, moduleRef, discovery } = conditionalClientProviderArgs(spec, options, args);
+      const { registration, runtime, moduleRef, discovery } = conditionalClientProviderArgs(
+        spec,
+        options,
+        args
+      );
       if (options.checkEnabled && !spec.isEnabled(registration)) {
         return null;
       }
@@ -295,8 +310,8 @@ function conditionalClientProviderArgs(
   readonly discovery: DiscoveryService;
 } {
   let index = 0;
-  const registration = options.registration ?? args[index++] as ZLinkFrameworkRegistration;
-  const runtime = spec.requiresRuntime ? args[index++] as FrameworkRuntimeHost : undefined;
+  const registration = options.registration ?? (args[index++] as ZLinkFrameworkRegistration);
+  const runtime = spec.requiresRuntime ? (args[index++] as FrameworkRuntimeHost) : undefined;
   const moduleRef = args[index++] as ModuleRef;
   const discovery = args[index++] as DiscoveryService;
   return { registration, runtime, moduleRef, discovery };
@@ -325,8 +340,9 @@ export function conditionalClientTokens(): InjectionToken[] {
 }
 
 function hasLocationStores(registration: ZLinkFrameworkRegistration): boolean {
-  return registration.locations.useInMemoryStores
-    || registration.locations.storeInstance !== undefined;
+  return (
+    registration.locations.useInMemoryStores || registration.locations.storeInstance !== undefined
+  );
 }
 
 export function createRuntimeHost(
@@ -348,7 +364,10 @@ export function createRuntimeHost(
   return runtime;
 }
 
-function createProviderResolver(moduleRef: ModuleRef, discovery?: DiscoveryService): ZLinkProviderResolver {
+function createProviderResolver(
+  moduleRef: ModuleRef,
+  discovery?: DiscoveryService
+): ZLinkProviderResolver {
   const resolver: ZLinkProviderResolver = {
     get<T>(type: Type<T>): T | undefined {
       const discovered = findDiscoveredProviderInstance<T>(discovery, type);
@@ -399,25 +418,19 @@ function createProviderResolver(moduleRef: ModuleRef, discovery?: DiscoveryServi
               }
               let instance = instances.get(type);
               if (instance === undefined) {
-                instance = createNestHandlerInstance(
-                  moduleRef,
-                  contextId,
-                  dependencies,
-                  type
-                )
-                  .then(async (created) => {
+                instance = createNestHandlerInstance(moduleRef, contextId, dependencies, type).then(
+                  async (created) => {
                     if (disposed) {
                       await disposeNestOwnedHandler(created);
-                      throw new Error(
-                        'Handler instance scope was disposed during activation.'
-                      );
+                      throw new Error('Handler instance scope was disposed during activation.');
                     }
                     owned.push(created);
                     return created;
-                  });
+                  }
+                );
                 instances.set(type, instance);
               }
-              return await instance as T;
+              return (await instance) as T;
             },
             async dispose(): Promise<void> {
               if (disposed) return;
@@ -437,35 +450,30 @@ function createProviderResolver(moduleRef: ModuleRef, discovery?: DiscoveryServi
       enumerable: false
     }
   );
-  framework.registerIntegrationHandlerFilterScope(
-    resolver,
-    (context, callback) => runInNestDispatchScope(
-      moduleRef,
-      context,
-      async () => {
-        const contextId = currentNestDispatchContext()!;
-        const dependencies = new Map<unknown, Promise<unknown>>();
-        const owned: unknown[] = [];
-        try {
-          return await callback({
-            async resolve<T>(type: Type<T>): Promise<T> {
-              const instance = await createNestHandlerInstance(
-                moduleRef,
-                contextId,
-                dependencies,
-                type
-              );
-              owned.push(instance);
-              return instance;
-            }
-          });
-        } finally {
-          for (let index = owned.length - 1; index >= 0; index -= 1) {
-            await disposeNestOwnedHandler(owned[index]);
+  framework.registerIntegrationHandlerFilterScope(resolver, (context, callback) =>
+    runInNestDispatchScope(moduleRef, context, async () => {
+      const contextId = currentNestDispatchContext()!;
+      const dependencies = new Map<unknown, Promise<unknown>>();
+      const owned: unknown[] = [];
+      try {
+        return await callback({
+          async resolve<T>(type: Type<T>): Promise<T> {
+            const instance = await createNestHandlerInstance(
+              moduleRef,
+              contextId,
+              dependencies,
+              type
+            );
+            owned.push(instance);
+            return instance;
           }
+        });
+      } finally {
+        for (let index = owned.length - 1; index >= 0; index -= 1) {
+          await disposeNestOwnedHandler(owned[index]);
         }
       }
-    )
+    })
   );
   return resolver;
 }
@@ -493,37 +501,28 @@ export async function createNestHandlerInstance<T>(
   type: Type<T>
 ): Promise<T> {
   const reflected = [
-    ...(Reflect.getMetadata(PARAMTYPES_METADATA, type) as readonly InjectionToken[] | undefined ?? [])
+    ...((Reflect.getMetadata(PARAMTYPES_METADATA, type) as readonly InjectionToken[] | undefined) ??
+      [])
   ];
-  const declared = Reflect.getMetadata(
-    SELF_DECLARED_DEPS_METADATA,
-    type
-  ) as readonly { readonly index: number; readonly param: InjectionToken }[] | undefined;
+  const declared = Reflect.getMetadata(SELF_DECLARED_DEPS_METADATA, type) as
+    readonly { readonly index: number; readonly param: InjectionToken }[] | undefined;
   for (const dependency of declared ?? []) {
     reflected[dependency.index] = dependency.param;
   }
   const optional = new Set<number>(
-    Reflect.getMetadata(OPTIONAL_DEPS_METADATA, type) as readonly number[] | undefined ?? []
+    (Reflect.getMetadata(OPTIONAL_DEPS_METADATA, type) as readonly number[] | undefined) ?? []
   );
-  const parameters = await Promise.all(reflected.map((token, index) =>
-    resolveNestHandlerDependency(
-      moduleRef,
-      contextId,
-      dependencies,
-      token,
-      optional.has(index)
+  const parameters = await Promise.all(
+    reflected.map((token, index) =>
+      resolveNestHandlerDependency(moduleRef, contextId, dependencies, token, optional.has(index))
     )
-  ));
+  );
   const instance = new (type as unknown as new (...args: unknown[]) => T)(...parameters);
-  const properties = Reflect.getMetadata(
-    PROPERTY_DEPS_METADATA,
-    type
-  ) as readonly { readonly key: string | symbol; readonly type: InjectionToken }[] | undefined;
+  const properties = Reflect.getMetadata(PROPERTY_DEPS_METADATA, type) as
+    readonly { readonly key: string | symbol; readonly type: InjectionToken }[] | undefined;
   const optionalProperties = new Set<string | symbol>(
-    Reflect.getMetadata(
-      OPTIONAL_PROPERTY_DEPS_METADATA,
-      type
-    ) as readonly (string | symbol)[] | undefined ?? []
+    (Reflect.getMetadata(OPTIONAL_PROPERTY_DEPS_METADATA, type) as
+      readonly (string | symbol)[] | undefined) ?? []
   );
   for (const property of properties ?? []) {
     const dependency = await resolveNestHandlerDependency(
@@ -547,21 +546,19 @@ async function resolveNestHandlerDependency(
   token: unknown,
   optional: boolean
 ): Promise<unknown> {
-  const forwardReference = typeof token === 'object'
-    && token !== null
-    && 'forwardRef' in token
-    ? token as { readonly forwardRef?: unknown }
-    : undefined;
-  const resolvedToken = typeof forwardReference?.forwardRef === 'function'
-    ? (forwardReference.forwardRef as () => unknown)()
-    : token;
+  const forwardReference =
+    typeof token === 'object' && token !== null && 'forwardRef' in token
+      ? (token as { readonly forwardRef?: unknown })
+      : undefined;
+  const resolvedToken =
+    typeof forwardReference?.forwardRef === 'function'
+      ? (forwardReference.forwardRef as () => unknown)()
+      : token;
   let dependency = dependencies.get(resolvedToken);
   if (dependency === undefined) {
-    dependency = moduleRef.resolve(
-      resolvedToken as Parameters<ModuleRef['get']>[0],
-      contextId,
-      { strict: false }
-    );
+    dependency = moduleRef.resolve(resolvedToken as Parameters<ModuleRef['get']>[0], contextId, {
+      strict: false
+    });
     dependencies.set(resolvedToken, dependency);
   }
   try {
@@ -573,16 +570,15 @@ async function resolveNestHandlerDependency(
   }
 }
 
-function findDiscoveredProviderInstance<T>(discovery: DiscoveryService | undefined, type: Type<T>): T | undefined {
+function findDiscoveredProviderInstance<T>(
+  discovery: DiscoveryService | undefined,
+  type: Type<T>
+): T | undefined {
   for (const wrapper of discovery?.getProviders() ?? []) {
     if (
-      wrapper.instance !== undefined
-      && wrapper.instance !== null
-      && (
-        wrapper.token === type
-        || wrapper.metatype === type
-        || wrapper.instance.constructor === type
-      )
+      wrapper.instance !== undefined &&
+      wrapper.instance !== null &&
+      (wrapper.token === type || wrapper.metatype === type || wrapper.instance.constructor === type)
     ) {
       return wrapper.instance as T;
     }

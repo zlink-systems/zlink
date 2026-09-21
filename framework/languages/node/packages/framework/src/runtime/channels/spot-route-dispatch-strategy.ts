@@ -1,7 +1,11 @@
 import type { Message } from '../../contracts/Common/Message';
 import type { RoutingId } from '../../contracts';
 import type { ZLinkFrameworkRegistration } from '../configuration';
-import type { ZLinkBackendSpot, ZLinkBackendSpotNode, ZLinkBackendSpotRouteBridge } from '../backend/contracts';
+import type {
+  ZLinkBackendSpot,
+  ZLinkBackendSpotNode,
+  ZLinkBackendSpotRouteBridge
+} from '../backend/contracts';
 import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
 import {
   encodeChannelEnvelopeParts,
@@ -103,9 +107,8 @@ export class ZLinkSpotRouteDispatchStrategy {
   ): Promise<void> {
     // Call-scoped flow (spec 27 §4): the envelope flow pair lives only for
     // the duration of this outbound call, never in the caller's context.
-    return runWithOutboundFlow(
-      this.options.flowCreationEnabled?.() ?? true,
-      () => this.routeSendToSpotScoped(spotRouteTarget, packetName, message, signal, metadata, timeoutMs)
+    return runWithOutboundFlow(this.options.flowCreationEnabled?.() ?? true, () =>
+      this.routeSendToSpotScoped(spotRouteTarget, packetName, message, signal, metadata, timeoutMs)
     );
   }
 
@@ -143,8 +146,10 @@ export class ZLinkSpotRouteDispatchStrategy {
       this.options.flowCreationEnabled?.() ?? true,
       metadata
     ) as readonly Message[];
-    if (this.targets.hasNamedSpotNode(spotRouteTarget.routerChannelId)
-      && await this.spotNodeTransport.send(spotRouteTarget, parts, signal)) {
+    if (
+      this.targets.hasNamedSpotNode(spotRouteTarget.routerChannelId) &&
+      (await this.spotNodeTransport.send(spotRouteTarget, parts, signal))
+    ) {
       return;
     }
     if (this.bridgeTransport.has(spotRouteTarget.routerChannelId)) {
@@ -169,9 +174,15 @@ export class ZLinkSpotRouteDispatchStrategy {
     signal?: AbortSignal,
     metadata?: ReadonlyMap<string, string>
   ): Promise<TReply> {
-    return runWithOutboundFlow(
-      this.options.flowCreationEnabled?.() ?? true,
-      () => this.routeRequestToSpotScoped<TReply>(spotRouteTarget, packetName, request, timeoutMs, signal, metadata)
+    return runWithOutboundFlow(this.options.flowCreationEnabled?.() ?? true, () =>
+      this.routeRequestToSpotScoped<TReply>(
+        spotRouteTarget,
+        packetName,
+        request,
+        timeoutMs,
+        signal,
+        metadata
+      )
     );
   }
 
@@ -219,7 +230,13 @@ export class ZLinkSpotRouteDispatchStrategy {
       if (namedSpotNodeRequest !== undefined) return namedSpotNodeRequest;
     }
     if (this.bridgeTransport.has(spotRouteTarget.routerChannelId)) {
-      return this.bridgeTransport.request<TReply>(spotRouteTarget, parts, codecs, timeoutMs, signal);
+      return this.bridgeTransport.request<TReply>(
+        spotRouteTarget,
+        parts,
+        codecs,
+        timeoutMs,
+        signal
+      );
     }
     if (this.targets.hasBoundRouteRouter(spotRouteTarget.routerChannelId)) {
       return this.routerSocketTransport.request<TReply>(
@@ -296,7 +313,13 @@ export class ZLinkSpotRouteDispatchStrategy {
     timeoutMs: number | undefined,
     signal?: AbortSignal
   ): Promise<readonly Message[]> {
-    return this.sourceSpotRouter.requestRaw(sourceSpot, spotRouteTarget, request, timeoutMs, signal);
+    return this.sourceSpotRouter.requestRaw(
+      sourceSpot,
+      spotRouteTarget,
+      request,
+      timeoutMs,
+      signal
+    );
   }
 
   async routeRequestRawToSpot(
@@ -318,12 +341,16 @@ export class ZLinkSpotRouteDispatchStrategy {
     if (this.bridgeTransport.has(spotRouteTarget.routerChannelId)) {
       return this.bridgeTransport.requestRaw(spotRouteTarget, request, timeoutMs, signal);
     }
-    const spotNodeRequest = this.spotNodeTransport.requestRaw(spotRouteTarget, request, timeoutMs, signal);
+    const spotNodeRequest = this.spotNodeTransport.requestRaw(
+      spotRouteTarget,
+      request,
+      timeoutMs,
+      signal
+    );
     if (spotNodeRequest !== undefined) {
       return spotNodeRequest;
     }
 
     return this.routerSocketTransport.requestRaw(spotRouteTarget, request, timeoutMs, signal);
   }
-
 }

@@ -8,8 +8,10 @@ using Zlink.Framework.UnitTests.Runtime;
 var actorJoinOnly = args.Contains("--actor-join");
 ThreadPool.GetMinThreads(out _, out var minIoThreads);
 ThreadPool.GetMaxThreads(out _, out var maxIoThreads);
-if (!actorJoinOnly && (!ThreadPool.SetMinThreads(1, minIoThreads)
-    || !ThreadPool.SetMaxThreads(1, maxIoThreads)))
+if (
+    !actorJoinOnly
+    && (!ThreadPool.SetMinThreads(1, minIoThreads) || !ThreadPool.SetMaxThreads(1, maxIoThreads))
+)
     throw new InvalidOperationException("Could not limit the ThreadPool to one worker.");
 ThreadPool.GetMaxThreads(out var maxWorkers, out _);
 Console.WriteLine($"ThreadPool maximum workers: {maxWorkers}");
@@ -20,16 +22,30 @@ var spot = new EntrySpotActorDispatchTests();
 var relocation = new RelocationBehaviorConformanceTests();
 (string Name, Func<Task> Run)[] regressions =
 [
-    (nameof(timer.Concurrent_cancel_callers_observe_the_same_cleanup_failure_after_pump_completion),
-        timer.Concurrent_cancel_callers_observe_the_same_cleanup_failure_after_pump_completion),
-    (nameof(maintenance.Shutdown_expired_before_drain_still_invokes_force_stop),
-        maintenance.Shutdown_expired_before_drain_still_invokes_force_stop),
-    (nameof(spot.Current_Spot_Publish_Emits_Sent_With_Spot_Rid_And_Current_Flow),
-        spot.Current_Spot_Publish_Emits_Sent_With_Spot_Rid_And_Current_Flow),
-    (nameof(relocation.ActorJoin_runtime_preserves_observable_order_and_exact_callback_counts),
-        relocation.ActorJoin_runtime_preserves_observable_order_and_exact_callback_counts),
-    (nameof(relocation.ActorJoin_repeated_moves_release_source_instances_and_membership_obligations),
-        relocation.ActorJoin_repeated_moves_release_source_instances_and_membership_obligations)
+    (
+        nameof(
+            timer.Concurrent_cancel_callers_observe_the_same_cleanup_failure_after_pump_completion
+        ),
+        timer.Concurrent_cancel_callers_observe_the_same_cleanup_failure_after_pump_completion
+    ),
+    (
+        nameof(maintenance.Shutdown_expired_before_drain_still_invokes_force_stop),
+        maintenance.Shutdown_expired_before_drain_still_invokes_force_stop
+    ),
+    (
+        nameof(spot.Current_Spot_Publish_Emits_Sent_With_Spot_Rid_And_Current_Flow),
+        spot.Current_Spot_Publish_Emits_Sent_With_Spot_Rid_And_Current_Flow
+    ),
+    (
+        nameof(relocation.ActorJoin_runtime_preserves_observable_order_and_exact_callback_counts),
+        relocation.ActorJoin_runtime_preserves_observable_order_and_exact_callback_counts
+    ),
+    (
+        nameof(
+            relocation.ActorJoin_repeated_moves_release_source_instances_and_membership_obligations
+        ),
+        relocation.ActorJoin_repeated_moves_release_source_instances_and_membership_obligations
+    ),
 ];
 
 var failures = 0;

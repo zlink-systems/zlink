@@ -18,9 +18,8 @@ namespace
 
 std::size_t normalized_byte_cost (serial_work_options_t options) noexcept
 {
-    return options.byte_cost == 0
-             ? serial_execution_queue_t::fixed_work_byte_cost
-             : options.byte_cost;
+    return options.byte_cost == 0 ? serial_execution_queue_t::fixed_work_byte_cost
+                                  : options.byte_cost;
 }
 
 } // namespace
@@ -52,9 +51,7 @@ class serial_deferred_barrier_t final : public detail::deferred_barrier_t
             _complete = std::move (complete);
             if (_state == state_t::pending)
                 return;
-            work = _state == state_t::activated
-                     ? std::move (_work)
-                     : std::function<void ()>{};
+            work = _state == state_t::activated ? std::move (_work) : std::function<void ()>{};
             async_work = _state == state_t::activated ? std::move (_async_work) : async_work_t{};
             complete = std::move (_complete);
         }
@@ -64,17 +61,15 @@ class serial_deferred_barrier_t final : public detail::deferred_barrier_t
     result_t<void> activate (std::function<void ()> work) override
     {
         if (!work) {
-            return result_t<void>::failure (
-              framework_error_kind_t::not_configured,
-              "Deferred Actor join barrier work is empty");
+            return result_t<void>::failure (framework_error_kind_t::not_configured,
+                                            "Deferred Actor join barrier work is empty");
         }
         serial_execution_queue_t::async_completion_t complete;
         {
             std::lock_guard lock (_mutex);
             if (_state != state_t::pending) {
-                return result_t<void>::failure (
-                  framework_error_kind_t::invalid_operation,
-                  "Deferred Actor join barrier is already terminal");
+                return result_t<void>::failure (framework_error_kind_t::invalid_operation,
+                                                "Deferred Actor join barrier is already terminal");
             }
             _state = state_t::activated;
             _work = std::move (work);
@@ -90,17 +85,15 @@ class serial_deferred_barrier_t final : public detail::deferred_barrier_t
     result_t<void> activate_async (async_work_t work) override
     {
         if (!work) {
-            return result_t<void>::failure (
-              framework_error_kind_t::not_configured,
-              "Deferred Actor join barrier async work is empty");
+            return result_t<void>::failure (framework_error_kind_t::not_configured,
+                                            "Deferred Actor join barrier async work is empty");
         }
         serial_execution_queue_t::async_completion_t complete;
         {
             std::lock_guard lock (_mutex);
             if (_state != state_t::pending) {
-                return result_t<void>::failure (
-                  framework_error_kind_t::invalid_operation,
-                  "Deferred Actor join barrier is already terminal");
+                return result_t<void>::failure (framework_error_kind_t::invalid_operation,
+                                                "Deferred Actor join barrier is already terminal");
             }
             _state = state_t::activated;
             _async_work = std::move (work);
@@ -184,8 +177,8 @@ class serial_deferred_barrier_t final : public detail::deferred_barrier_t
             return;
         }
         if (async_work) {
-            auto completion = std::make_shared<serial_execution_queue_t::async_completion_t> (
-              std::move (complete));
+            auto completion =
+              std::make_shared<serial_execution_queue_t::async_completion_t> (std::move (complete));
             try {
                 async_work ([completion, release] (result_t<void> result) mutable {
                     (*completion) ([result = std::move (result), release] () mutable {
@@ -219,17 +212,21 @@ class serial_deferred_barrier_t final : public detail::deferred_barrier_t
     std::function<void ()> _release;
 };
 
-class serial_turn_handle_impl_t final : public detail::serial_turn_t,
-                                       public std::enable_shared_from_this<serial_turn_handle_impl_t>
+class serial_turn_handle_impl_t final
+    : public detail::serial_turn_t,
+      public std::enable_shared_from_this<serial_turn_handle_impl_t>
 {
   public:
     serial_turn_handle_impl_t (serial_execution_queue_t &queue,
-                              std::string name,
-                              serial_work_lane_t lane,
-                              bool after_active_phase,
-                              serial_execution_queue_t::async_completion_t complete) :
-        _queue (queue), _name (std::move (name)), _lane (lane),
-        _after_active_phase (after_active_phase), _complete (std::move (complete))
+                               std::string name,
+                               serial_work_lane_t lane,
+                               bool after_active_phase,
+                               serial_execution_queue_t::async_completion_t complete) :
+        _queue (queue),
+        _name (std::move (name)),
+        _lane (lane),
+        _after_active_phase (after_active_phase),
+        _complete (std::move (complete))
     {
     }
 
@@ -248,36 +245,35 @@ class serial_turn_handle_impl_t final : public detail::serial_turn_t,
     {
         return [self = shared_from_this ()] (std::function<void ()> work) mutable {
             auto continuation = std::move (work);
-            if (self->_queue.try_post_async (self->_name + "-await-resume",
-                                             [work = continuation] (auto complete) mutable {
-                                                 try {
-                                                     work ();
-                                                 }
-                                                 catch (...) {
-                                                 }
-                                                 complete ([] {});
-                                                 },
-                                                 serial_work_options_t{
-                                                   self->_lane,
-                                                   serial_execution_queue_t::fixed_work_byte_cost})) {
+            if (self->_queue.try_post_async (
+                  self->_name + "-await-resume",
+                  [work = continuation] (auto complete) mutable {
+                      try {
+                          work ();
+                      }
+                      catch (...) {
+                      }
+                      complete ([] {});
+                  },
+                  serial_work_options_t{self->_lane,
+                                        serial_execution_queue_t::fixed_work_byte_cost})) {
                 return;
             }
             if (continuation) {
                 auto continuation_state =
-                  std::make_shared<std::function<void ()>> (
-                    std::move (continuation));
+                  std::make_shared<std::function<void ()>> (std::move (continuation));
                 if (!self->_queue._executor.try_submit_internal (
-                  [work = continuation_state] () mutable {
-                      detail::set_serial_resume_failure (
-                        framework_error_kind_t::shutting_down,
-                        "serial execution queue executor is stopping");
-                      try {
-                          (*work) ();
-                      }
-                      catch (...) {
-                      }
-                      (void) detail::take_serial_resume_failure ();
-                  })) {
+                      [work = continuation_state] () mutable {
+                          detail::set_serial_resume_failure (
+                            framework_error_kind_t::shutting_down,
+                            "serial execution queue executor is stopping");
+                          try {
+                              (*work) ();
+                          }
+                          catch (...) {
+                          }
+                          (void) detail::take_serial_resume_failure ();
+                      })) {
                     detail::set_serial_resume_failure (
                       framework_error_kind_t::shutting_down,
                       "serial execution queue executor is stopping");
@@ -296,13 +292,11 @@ class serial_turn_handle_impl_t final : public detail::serial_turn_t,
     bool is_after_active_phase () const noexcept override { return _after_active_phase; }
     bool allows_yield () const noexcept override { return _queue.allows_yield (); }
 
-    result_t<void> defer (std::function<void ()> work,
-                          std::function<void ()> cancel) override
+    result_t<void> defer (std::function<void ()> work, std::function<void ()> cancel) override
     {
         if (!work) {
-            return result_t<void>::failure (
-              framework_error_kind_t::not_configured,
-              "Deferred Actor join work is empty");
+            return result_t<void>::failure (framework_error_kind_t::not_configured,
+                                            "Deferred Actor join work is empty");
         }
         std::lock_guard lock (_mutex);
         if (_released) {
@@ -310,8 +304,7 @@ class serial_turn_handle_impl_t final : public detail::serial_turn_t,
               framework_error_kind_t::not_configured,
               "Actor join defer requires an open Framework handler turn");
         }
-        _deferred.push_back (
-          deferred_work_t{std::move (work), std::move (cancel)});
+        _deferred.push_back (deferred_work_t{std::move (work), std::move (cancel)});
         return result_t<void>::success ();
     }
 
@@ -326,10 +319,7 @@ class serial_turn_handle_impl_t final : public detail::serial_turn_t,
         cancel_entries (deferred);
     }
 
-    bool complete (std::function<void ()> completion)
-    {
-        return finish (std::move (completion));
-    }
+    bool complete (std::function<void ()> completion) { return finish (std::move (completion)); }
 
   private:
     struct deferred_work_t
@@ -354,32 +344,29 @@ class serial_turn_handle_impl_t final : public detail::serial_turn_t,
         if (!complete) {
             return false;
         }
-        complete ([this, completion = std::move (completion),
-                   deferred = std::move (deferred)] () mutable {
-            try {
-                if (completion)
-                    completion ();
-            }
-            catch (...) {
-                cancel_entries (deferred);
-                throw;
-            }
-            if (deferred.empty ()) {
-                return;
-            }
-            auto entries = std::make_shared<std::vector<deferred_work_t>> (
-              std::move (deferred));
-            if (!_queue.try_post_deferred (
-                  _name + "-deferred",
-                  [entries] () mutable {
+        complete (
+          [this, completion = std::move (completion), deferred = std::move (deferred)] () mutable {
+              try {
+                  if (completion)
+                      completion ();
+              }
+              catch (...) {
+                  cancel_entries (deferred);
+                  throw;
+              }
+              if (deferred.empty ()) {
+                  return;
+              }
+              auto entries = std::make_shared<std::vector<deferred_work_t>> (std::move (deferred));
+              if (!_queue.try_post_deferred (_name + "-deferred", [entries] () mutable {
                       for (auto &entry : *entries) {
                           if (entry.activate)
                               entry.activate ();
                       }
                   })) {
-                cancel_entries (*entries);
-            }
-        });
+                  cancel_entries (*entries);
+              }
+          });
         return true;
     }
 
@@ -405,12 +392,12 @@ class serial_turn_handle_impl_t final : public detail::serial_turn_t,
     bool _released = false;
 };
 
-serial_execution_queue_t::serial_execution_queue_t (
-  offload_executor_t &executor,
-  serial_execution_queue_options_t options,
-  error_handler_t error_handler,
-  serial_lane_policy_t policy) :
-    _executor (executor), _options (options),
+serial_execution_queue_t::serial_execution_queue_t (offload_executor_t &executor,
+                                                    serial_execution_queue_options_t options,
+                                                    error_handler_t error_handler,
+                                                    serial_lane_policy_t policy) :
+    _executor (executor),
+    _options (options),
     _lane_policy (std::move (policy)),
     _error_handler (std::move (error_handler))
 {
@@ -438,16 +425,19 @@ bool serial_execution_queue_t::try_post (std::string name,
     if (!work) {
         throw std::invalid_argument ("serial execution queue work is empty");
     }
-    return try_post_async (std::move (name), [work = std::move (work)] (auto complete) mutable {
-        try {
-            work ();
-            complete ([] {});
-        }
-        catch (...) {
-            auto error = std::current_exception ();
-            complete ([error] { std::rethrow_exception (error); });
-        }
-    }, std::move (options));
+    return try_post_async (
+      std::move (name),
+      [work = std::move (work)] (auto complete) mutable {
+          try {
+              work ();
+              complete ([] {});
+          }
+          catch (...) {
+              auto error = std::current_exception ();
+              complete ([error] { std::rethrow_exception (error); });
+          }
+      },
+      std::move (options));
 }
 
 bool serial_execution_queue_t::try_post_async (std::string name, async_work_t work)
@@ -491,19 +481,14 @@ bool serial_execution_queue_t::try_post_async (std::string name,
     return accepted;
 }
 
-result_t<serial_submission_id_t>
-serial_execution_queue_t::try_post_cancellable_async (
-  std::string name,
-  async_work_t work,
-  std::function<void ()> cancel,
-  serial_work_options_t options)
+result_t<serial_submission_id_t> serial_execution_queue_t::try_post_cancellable_async (
+  std::string name, async_work_t work, std::function<void ()> cancel, serial_work_options_t options)
 {
     if (!work) {
         throw std::invalid_argument ("serial execution queue work is empty");
     }
     if (!cancel) {
-        throw std::invalid_argument (
-          "serial execution queue cancellation is empty");
+        throw std::invalid_argument ("serial execution queue cancellation is empty");
     }
 
     const auto transfer_owner_reservation = options.transfer_owner_reservation;
@@ -511,9 +496,8 @@ serial_execution_queue_t::try_post_cancellable_async (
     {
         std::lock_guard<std::mutex> lock (_mutex);
         if (_closed) {
-            return result_t<serial_submission_id_t>::failure (
-              framework_error_kind_t::shutting_down,
-              "serial execution queue is closed");
+            return result_t<serial_submission_id_t>::failure (framework_error_kind_t::shutting_down,
+                                                              "serial execution queue is closed");
         }
         if (_next_submission_id == 0) {
             return result_t<serial_submission_id_t>::failure (
@@ -522,12 +506,10 @@ serial_execution_queue_t::try_post_cancellable_async (
         }
 
         submission_id = _next_submission_id++;
-        if (!enqueue_locked (std::move (name), std::move (work),
-                             std::move (options), submission_id,
+        if (!enqueue_locked (std::move (name), std::move (work), std::move (options), submission_id,
                              std::move (cancel))) {
             return result_t<serial_submission_id_t>::failure (
-              framework_error_kind_t::shutting_down,
-              "serial execution queue executor is stopping");
+              framework_error_kind_t::shutting_down, "serial execution queue executor is stopping");
         }
     }
     if (transfer_owner_reservation) {
@@ -541,8 +523,7 @@ serial_execution_queue_t::try_post_cancellable_async (
 }
 
 serial_cancel_submission_outcome_t
-serial_execution_queue_t::cancel_submission (
-  serial_submission_id_t submission_id) noexcept
+serial_execution_queue_t::cancel_submission (serial_submission_id_t submission_id) noexcept
 {
     if (submission_id == 0)
         return serial_cancel_submission_outcome_t::already_terminal;
@@ -555,8 +536,8 @@ serial_execution_queue_t::cancel_submission (
         std::lock_guard<std::mutex> lock (_mutex);
         const auto unlink = [&] (lane_state_t &lane) {
             const auto unlink_from = [&] (auto &queue) {
-                const auto item = std::find_if (
-                  queue.begin (), queue.end (), [&] (const auto &candidate) {
+                const auto item =
+                  std::find_if (queue.begin (), queue.end (), [&] (const auto &candidate) {
                       return candidate.submission_id == submission_id;
                   });
                 if (item == queue.end ())
@@ -571,23 +552,18 @@ serial_execution_queue_t::cancel_submission (
                 queue.erase (item);
                 return true;
             };
-            return unlink_from (lane.queue)
-                   || unlink_from (lane.after_active_queue);
+            return unlink_from (lane.queue) || unlink_from (lane.after_active_queue);
         };
 
         if (unlink (_application) || unlink (_lifecycle)) {
             outcome = serial_cancel_submission_outcome_t::queued_cancelled;
-            if (!has_ready_locked () && _active == 0 && !_draining
-                && !_drain_scheduled) {
+            if (!has_ready_locked () && _active == 0 && !_draining && !_drain_scheduled) {
                 _empty.notify_all ();
             }
         } else {
-            if (_active_turn
-                && _active_turn->submission_id == submission_id
-                && _active_turn->turn
+            if (_active_turn && _active_turn->submission_id == submission_id && _active_turn->turn
                 && !_active_turn->turn->released ()) {
-                outcome =
-                  serial_cancel_submission_outcome_t::active_cancel_requested;
+                outcome = serial_cancel_submission_outcome_t::active_cancel_requested;
                 if (!_active_turn->cancel_requested) {
                     _active_turn->cancel_requested = true;
                     active_cancel = std::move (_active_turn->cancel);
@@ -611,15 +587,13 @@ bool serial_execution_queue_t::post_async_wait (std::string name,
                                                 async_work_t work,
                                                 std::function<bool ()> stop_requested)
 {
-    return post_async_wait (std::move (name), std::move (work), {},
-                            std::move (stop_requested));
+    return post_async_wait (std::move (name), std::move (work), {}, std::move (stop_requested));
 }
 
-bool serial_execution_queue_t::post_async_wait (
-  std::string name,
-  async_work_t work,
-  serial_work_options_t options,
-  std::function<bool ()> stop_requested)
+bool serial_execution_queue_t::post_async_wait (std::string name,
+                                                async_work_t work,
+                                                serial_work_options_t options,
+                                                std::function<bool ()> stop_requested)
 {
     if (!work) {
         throw std::invalid_argument ("serial execution queue work is empty");
@@ -643,9 +617,7 @@ bool serial_execution_queue_t::post_async_wait (
     return accepted;
 }
 
-bool serial_execution_queue_t::try_post_deferred (
-  std::string name,
-  std::function<void ()> work)
+bool serial_execution_queue_t::try_post_deferred (std::string name, std::function<void ()> work)
 {
     if (!work) {
         throw std::invalid_argument ("serial execution queue work is empty");
@@ -655,8 +627,7 @@ bool serial_execution_queue_t::try_post_deferred (
         return false;
     }
     _deferred_after_active.push_back (
-      deferred_work_t{std::move (name), std::move (work),
-                      fixed_work_byte_cost});
+      deferred_work_t{std::move (name), std::move (work), fixed_work_byte_cost});
     ++_lifecycle.messages;
     _lifecycle.bytes += fixed_work_byte_cost;
     return true;
@@ -667,19 +638,14 @@ serial_execution_queue_t::reserve_barrier_next (std::string name)
 {
     auto barrier = std::make_shared<serial_deferred_barrier_t> ();
     const auto submission = try_post_cancellable_async (
-          std::move (name),
-          [barrier] (auto complete) mutable {
-              barrier->reached (std::move (complete));
-          },
-          [barrier] { barrier->cancel (); },
-          serial_work_options_t{serial_work_lane_t::lifecycle});
+      std::move (name),
+      [barrier] (auto complete) mutable { barrier->reached (std::move (complete)); },
+      [barrier] { barrier->cancel (); }, serial_work_options_t{serial_work_lane_t::lifecycle});
     if (!submission) {
         return result_t<std::shared_ptr<detail::deferred_barrier_t>>::failure (
-          submission.error_kind (),
-          "Deferred Actor join target queue is closed");
+          submission.error_kind (), "Deferred Actor join target queue is closed");
     }
-    return result_t<std::shared_ptr<detail::deferred_barrier_t>>::success (
-      std::move (barrier));
+    return result_t<std::shared_ptr<detail::deferred_barrier_t>>::success (std::move (barrier));
 }
 
 result_t<std::shared_ptr<detail::deferred_barrier_t>>
@@ -696,26 +662,21 @@ serial_execution_queue_t::reserve_handoff_barrier (std::string name)
     auto lower_fence = [depth_owner = _actor_handoff_fence_depth] {
         auto depth = depth_owner->load (std::memory_order_acquire);
         while (depth > 0
-               && !depth_owner->compare_exchange_weak (
-                 depth, depth - 1, std::memory_order_acq_rel, std::memory_order_acquire)) {
+               && !depth_owner->compare_exchange_weak (depth, depth - 1, std::memory_order_acq_rel,
+                                                       std::memory_order_acquire)) {
         }
     };
     auto barrier = std::make_shared<serial_deferred_barrier_t> (lower_fence);
     const auto submission = try_post_cancellable_async (
-          std::move (name),
-          [barrier] (auto complete) mutable {
-              barrier->reached (std::move (complete));
-          },
-          [barrier] { barrier->cancel (); },
-          serial_work_options_t{serial_work_lane_t::application});
+      std::move (name),
+      [barrier] (auto complete) mutable { barrier->reached (std::move (complete)); },
+      [barrier] { barrier->cancel (); }, serial_work_options_t{serial_work_lane_t::application});
     if (!submission) {
         lower_fence ();
         return result_t<std::shared_ptr<detail::deferred_barrier_t>>::failure (
-          submission.error_kind (),
-          "Deferred Actor handoff barrier queue is closed");
+          submission.error_kind (), "Deferred Actor handoff barrier queue is closed");
     }
-    return result_t<std::shared_ptr<detail::deferred_barrier_t>>::success (
-      std::move (barrier));
+    return result_t<std::shared_ptr<detail::deferred_barrier_t>>::success (std::move (barrier));
 }
 
 void serial_execution_queue_t::post (std::string name, std::function<void ()> work)
@@ -755,11 +716,9 @@ void serial_execution_queue_t::run (std::string name, std::function<void ()> wor
 void serial_execution_queue_t::drain ()
 {
     std::unique_lock<std::mutex> lock (_mutex);
-    _empty.wait (
-      lock, [&] {
-          return !has_ready_locked () && _active == 0 && !_draining
-                 && !_drain_scheduled;
-      });
+    _empty.wait (lock, [&] {
+        return !has_ready_locked () && _active == 0 && !_draining && !_drain_scheduled;
+    });
 }
 
 void serial_execution_queue_t::close ()
@@ -779,10 +738,8 @@ void serial_execution_queue_t::cancel_pending ()
         std::lock_guard<std::mutex> lock (_mutex);
         _closed = true;
         cancelled_items.reserve (
-          _application.queue.size ()
-          + _application.after_active_queue.size ()
-          + _lifecycle.queue.size ()
-          + _lifecycle.after_active_queue.size ());
+          _application.queue.size () + _application.after_active_queue.size ()
+          + _lifecycle.queue.size () + _lifecycle.after_active_queue.size ());
         const auto clear_queued = [&cancelled_items] (lane_state_t &lane) {
             std::size_t queued_bytes = 0;
             for (auto &item : lane.queue) {
@@ -793,12 +750,9 @@ void serial_execution_queue_t::cancel_pending ()
                 queued_bytes += item.byte_cost;
                 cancelled_items.push_back (std::move (item));
             }
-            const auto queued_messages =
-              lane.queue.size () + lane.after_active_queue.size ();
+            const auto queued_messages = lane.queue.size () + lane.after_active_queue.size ();
             lane.messages -= queued_messages;
-            lane.bytes = queued_bytes <= lane.bytes
-                           ? lane.bytes - queued_bytes
-                           : 0;
+            lane.bytes = queued_bytes <= lane.bytes ? lane.bytes - queued_bytes : 0;
             lane.queue.clear ();
             lane.after_active_queue.clear ();
         };
@@ -813,14 +767,11 @@ void serial_execution_queue_t::cancel_pending ()
                 _lifecycle.bytes = 0;
         }
         _deferred_after_active.clear ();
-        if (_active_turn && _active_turn->turn
-            && !_active_turn->turn->released ()) {
-            if (_active_turn->submission_id != 0
-                && !_active_turn->cancel_requested) {
+        if (_active_turn && _active_turn->turn && !_active_turn->turn->released ()) {
+            if (_active_turn->submission_id != 0 && !_active_turn->cancel_requested) {
                 _active_turn->cancel_requested = true;
                 if (_active_turn->cancel) {
-                    active_cancellations.push_back (
-                      std::move (_active_turn->cancel));
+                    active_cancellations.push_back (std::move (_active_turn->cancel));
                 }
             }
         }
@@ -903,9 +854,8 @@ bool serial_execution_queue_t::enqueue_locked (std::string name,
     const auto bytes = normalized_byte_cost (options);
     auto &lane = lane_locked (options.lane);
     auto turn = create_turn (name, options.lane, false);
-    lane.queue.push_back (
-      work_item_t{std::move (name), std::move (work), options.lane, bytes,
-                  false, submission_id, std::move (cancel), std::move (turn)});
+    lane.queue.push_back (work_item_t{std::move (name), std::move (work), options.lane, bytes,
+                                      false, submission_id, std::move (cancel), std::move (turn)});
     ++lane.messages;
     lane.bytes += bytes;
     if (schedule_drain_locked ())
@@ -922,10 +872,8 @@ bool serial_execution_queue_t::has_ready_locked () const noexcept
            || !_lifecycle.queue.empty () || !_lifecycle.after_active_queue.empty ();
 }
 
-std::shared_ptr<serial_turn_handle_impl_t>
-serial_execution_queue_t::create_turn (const std::string &name,
-                                       serial_work_lane_t lane,
-                                       bool after_active_phase)
+std::shared_ptr<serial_turn_handle_impl_t> serial_execution_queue_t::create_turn (
+  const std::string &name, serial_work_lane_t lane, bool after_active_phase)
 {
     return std::make_shared<serial_turn_handle_impl_t> (
       *this, name, lane, after_active_phase,
@@ -939,14 +887,12 @@ serial_execution_queue_t::create_turn (const std::string &name,
               complete_one (std::move (name), std::move (completion), false);
               return;
           }
-          auto completion_state =
-            std::make_shared<std::pair<std::string, std::function<void ()>>> (
-              std::move (name), std::move (completion));
-          if (!_executor.try_submit_internal (
-                [this, completion_state] () mutable {
-                    complete_one (std::move (completion_state->first),
-                                  std::move (completion_state->second), true);
-                })) {
+          auto completion_state = std::make_shared<std::pair<std::string, std::function<void ()>>> (
+            std::move (name), std::move (completion));
+          if (!_executor.try_submit_internal ([this, completion_state] () mutable {
+                  complete_one (std::move (completion_state->first),
+                                std::move (completion_state->second), true);
+              })) {
               complete_one (std::move (completion_state->first),
                             std::move (completion_state->second), false);
           }
@@ -965,24 +911,19 @@ void serial_execution_queue_t::activate_turn_locked (work_item_t &item) noexcept
     item.cancel = {};
 }
 
-serial_execution_queue_t::work_item_t
-serial_execution_queue_t::take_next_locked ()
+serial_execution_queue_t::work_item_t serial_execution_queue_t::take_next_locked ()
 {
     const bool application_ready = !_application.queue.empty ();
-    const bool application_after_active_ready =
-      !_application.after_active_queue.empty ();
-    const bool lifecycle_after_active_ready =
-      !_lifecycle.after_active_queue.empty ();
-    const bool lifecycle_ready =
-      lifecycle_after_active_ready || !_lifecycle.queue.empty ();
+    const bool application_after_active_ready = !_application.after_active_queue.empty ();
+    const bool lifecycle_after_active_ready = !_lifecycle.after_active_queue.empty ();
+    const bool lifecycle_ready = lifecycle_after_active_ready || !_lifecycle.queue.empty ();
     const bool any_application_ready = application_ready || application_after_active_ready;
     serial_work_lane_t selected_lane = serial_work_lane_t::application;
     if (lifecycle_ready && !any_application_ready) {
         selected_lane = serial_work_lane_t::lifecycle;
     } else if (lifecycle_ready && any_application_ready) {
         const bool lifecycle_must_yield =
-          _lifecycle_debt
-          || _lifecycle_streak >= _options.lifecycle_burst_limit;
+          _lifecycle_debt || _lifecycle_streak >= _options.lifecycle_burst_limit;
         if (!lifecycle_must_yield)
             selected_lane = serial_work_lane_t::lifecycle;
     }
@@ -996,8 +937,7 @@ serial_execution_queue_t::take_next_locked ()
     activate_turn_locked (item);
     if (selected_lane == serial_work_lane_t::lifecycle) {
         ++_lifecycle_streak;
-        if (application_ready
-            && _lifecycle_streak >= _options.lifecycle_burst_limit)
+        if (application_ready && _lifecycle_streak >= _options.lifecycle_burst_limit)
             _lifecycle_debt = true;
     } else {
         _lifecycle_streak = 0;
@@ -1007,8 +947,7 @@ serial_execution_queue_t::take_next_locked ()
 }
 
 void serial_execution_queue_t::report_deferred_error (
-  const std::string &name,
-  const std::exception_ptr &error) const noexcept
+  const std::string &name, const std::exception_ptr &error) const noexcept
 {
     if (!_error_handler)
         return;
@@ -1047,10 +986,8 @@ void serial_execution_queue_t::execute_item (work_item_t item)
     auto name = item.name;
     auto turn = std::move (item.turn);
     if (!turn) {
-        report_deferred_error (
-          name,
-          std::make_exception_ptr (
-            std::logic_error ("serial execution queue turn was not registered")));
+        report_deferred_error (name, std::make_exception_ptr (std::logic_error (
+                                       "serial execution queue turn was not registered")));
         complete_one (std::move (name), [] {}, false);
         return;
     }
@@ -1101,26 +1038,20 @@ void serial_execution_queue_t::complete_one (std::string name,
             const auto deferred_name = deferred.name;
             try {
                 auto work = std::move (deferred.work);
-                work_item_t item{
-                  deferred.name,
-                  [work = std::move (work)] (auto complete) mutable {
-                      try {
-                          if (work)
-                              work ();
-                          complete ([] {});
-                      }
-                      catch (...) {
-                          const auto error = std::current_exception ();
-                          complete ([error] {
-                              std::rethrow_exception (error);
-                          });
-                      }
-                  },
-                  serial_work_lane_t::lifecycle,
-                  deferred.byte_cost,
-                  true};
-                item.turn = create_turn (
-                  item.name, serial_work_lane_t::lifecycle, true);
+                work_item_t item{deferred.name,
+                                 [work = std::move (work)] (auto complete) mutable {
+                                     try {
+                                         if (work)
+                                             work ();
+                                         complete ([] {});
+                                     }
+                                     catch (...) {
+                                         const auto error = std::current_exception ();
+                                         complete ([error] { std::rethrow_exception (error); });
+                                     }
+                                 },
+                                 serial_work_lane_t::lifecycle, deferred.byte_cost, true};
+                item.turn = create_turn (item.name, serial_work_lane_t::lifecycle, true);
                 _lifecycle.after_active_queue.push_back (std::move (item));
             }
             catch (...) {
@@ -1134,8 +1065,7 @@ void serial_execution_queue_t::complete_one (std::string name,
             }
         }
 
-        if (_active_turn
-            && (!_active_turn->turn || _active_turn->turn->released ())) {
+        if (_active_turn && (!_active_turn->turn || _active_turn->turn->released ())) {
             _active_turn.reset ();
         }
         if (_active_lane) {
@@ -1152,8 +1082,7 @@ void serial_execution_queue_t::complete_one (std::string name,
         --_active;
         const bool claim_expired =
           _options.owner_time_budget.count () != 0 && _claim_started_at
-          && std::chrono::steady_clock::now () - *_claim_started_at
-               >= _options.owner_time_budget;
+          && std::chrono::steady_clock::now () - *_claim_started_at >= _options.owner_time_budget;
         if (has_ready_locked ()) {
             if (allow_inline_claim && !claim_expired) {
                 _draining = true;

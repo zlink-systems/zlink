@@ -6,9 +6,8 @@ import java.util.concurrent.CompletableFuture;
 // without a restart. The change is read live by every dispatch surface. Thread-safe.
 public interface ZLinkMessageFlowControl {
     /**
-     * Synchronous compatibility bridge. Do not call from a framework execution
-     * context such as a handler or callback; use {@link #setMessageFlowModeAsync}
-     * there.
+     * Synchronous compatibility bridge. Do not call from a framework execution context such as a
+     * handler or callback; use {@link #setMessageFlowModeAsync} there.
      */
     default void setMessageFlowMode(ZLinkMessageFlowLogMode mode) {
         setMessageFlowModeAsync(mode).join();

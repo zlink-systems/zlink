@@ -3,7 +3,8 @@ namespace Zlink.Framework.Runtime.Spots;
 internal sealed class ZLinkSpotOutboundTransport(
     IZLinkBackendSpot nativeSpot,
     TimeSpan? sendTimeout,
-    CancellationToken stopToken) : IAsyncDisposable
+    CancellationToken stopToken
+) : IAsyncDisposable
 {
     private readonly TimeSpan _sendTimeout = ValidateTimeout(sendTimeout);
 
@@ -13,7 +14,8 @@ internal sealed class ZLinkSpotOutboundTransport(
         string channelName,
         string topic,
         IReadOnlyList<Message> parts,
-        ReadOnlyMemory<byte> metadata = default)
+        ReadOnlyMemory<byte> metadata = default
+    )
     {
         nativeSpot.Publish(channelName, topic, parts, SendFlags.None, metadata);
     }
@@ -29,7 +31,8 @@ internal sealed class ZLinkSpotOutboundTransport(
         ulong authorityOwnerGeneration,
         ulong ownerLeaseGeneration,
         IReadOnlyList<Message> parts,
-        ReadOnlyMemory<byte> metadata = default)
+        ReadOnlyMemory<byte> metadata = default
+    )
     {
         ObserveSpotAuthority(
             targetNodeRid,
@@ -37,7 +40,8 @@ internal sealed class ZLinkSpotOutboundTransport(
             targetSpotGeneration,
             targetNodeGeneration,
             authorityOwnerGeneration,
-            ownerLeaseGeneration);
+            ownerLeaseGeneration
+        );
         return ZLinkSubmitFailureMapper.AcceptOrThrow(
             nativeSpot.SendToSpot(
                 targetNodeRid,
@@ -45,8 +49,10 @@ internal sealed class ZLinkSpotOutboundTransport(
                 targetSpotGeneration,
                 parts,
                 SendFlags.DontWait,
-                metadata),
-            $"SPOT '{targetSpotId}' on node '{targetNodeRid}'");
+                metadata
+            ),
+            $"SPOT '{targetSpotId}' on node '{targetNodeRid}'"
+        );
     }
 
     public async ValueTask<ZLinkOneWaySubmitResult> SendToSpotAsync(
@@ -58,7 +64,8 @@ internal sealed class ZLinkSpotOutboundTransport(
         ulong ownerLeaseGeneration,
         IReadOnlyList<Message> parts,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default)
+        ReadOnlyMemory<byte> metadata = default
+    )
     {
         try
         {
@@ -68,15 +75,18 @@ internal sealed class ZLinkSpotOutboundTransport(
                 targetSpotGeneration,
                 targetNodeGeneration,
                 authorityOwnerGeneration,
-                ownerLeaseGeneration);
-            await nativeSpot.SendToSpotAsync(
+                ownerLeaseGeneration
+            );
+            await nativeSpot
+                .SendToSpotAsync(
                     targetNodeRid,
                     targetSpotId,
                     targetSpotGeneration,
                     parts,
                     SendFlags.None,
                     cancellationToken,
-                    metadata)
+                    metadata
+                )
                 .ConfigureAwait(false);
             return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Submitted);
         }
@@ -105,19 +115,23 @@ internal sealed class ZLinkSpotOutboundTransport(
         byte messageFollowHopCount,
         IReadOnlyList<Message> parts,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default)
+        ReadOnlyMemory<byte> metadata = default
+    )
     {
         try
         {
             if (nativeSpot is not IZLinkBackendSpotMessageFollower relay)
                 throw new InvalidOperationException(
-                    "The Spot backend does not support Message Follow.");
+                    "The Spot backend does not support Message Follow."
+                );
 
             using var terminal = CancellationTokenSource.CreateLinkedTokenSource(
                 cancellationToken,
-                stopToken);
+                stopToken
+            );
             terminal.CancelAfter(_sendTimeout);
-            await relay.MessageFollowSendToSpotAsync(
+            await relay
+                .MessageFollowSendToSpotAsync(
                     targetNodeRid,
                     targetSpotId,
                     targetSpotGeneration,
@@ -128,20 +142,18 @@ internal sealed class ZLinkSpotOutboundTransport(
                     messageFollowHopCount,
                     parts,
                     metadata,
-                    terminal.Token)
+                    terminal.Token
+                )
                 .ConfigureAwait(false);
-            return new ZLinkOneWaySubmitResult(
-                ZLinkOneWaySubmitStatus.Submitted);
+            return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Submitted);
         }
         catch (OperationCanceledException) when (stopToken.IsCancellationRequested)
         {
-            return new ZLinkOneWaySubmitResult(
-                ZLinkOneWaySubmitStatus.Shutdown);
+            return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Shutdown);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            return new ZLinkOneWaySubmitResult(
-                ZLinkOneWaySubmitStatus.TimedOut);
+            return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.TimedOut);
         }
         catch (ZlinkSubmitException failure)
         {
@@ -149,8 +161,7 @@ internal sealed class ZLinkSpotOutboundTransport(
         }
         catch (ObjectDisposedException)
         {
-            return new ZLinkOneWaySubmitResult(
-                ZLinkOneWaySubmitStatus.Shutdown);
+            return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Shutdown);
         }
         finally
         {
@@ -164,15 +175,18 @@ internal sealed class ZLinkSpotOutboundTransport(
         ulong targetSpotGeneration,
         ulong targetNodeGeneration,
         ulong authorityOwnerGeneration,
-        ulong ownerLeaseGeneration)
+        ulong ownerLeaseGeneration
+    )
     {
         ZLinkFrameworkDebugLog.SpotDiscovery(
             $"spot_authority_observe target_node={targetNodeRid} "
-            + $"spot={targetSpotId} object_gen={targetSpotGeneration} "
-            + $"node_gen={targetNodeGeneration} "
-            + $"authority_gen={authorityOwnerGeneration} "
-            + $"lease_gen={ownerLeaseGeneration}");
-        if (targetNodeRid == default
+                + $"spot={targetSpotId} object_gen={targetSpotGeneration} "
+                + $"node_gen={targetNodeGeneration} "
+                + $"authority_gen={authorityOwnerGeneration} "
+                + $"lease_gen={ownerLeaseGeneration}"
+        );
+        if (
+            targetNodeRid == default
             // Node-control routes and Entry Spot routes do not carry a
             // user-Spot object generation. They are fenced by the node and
             // owner generations, while the backend observer requires a
@@ -180,30 +194,34 @@ internal sealed class ZLinkSpotOutboundTransport(
             || targetSpotGeneration == 0
             || targetNodeGeneration == 0
             || authorityOwnerGeneration == 0
-            || ownerLeaseGeneration == 0)
+            || ownerLeaseGeneration == 0
+        )
             return;
         if (nativeSpot is not IZLinkBackendAuthorityObserver observer)
             throw new InvalidOperationException(
-                "The Spot backend does not support authority fencing.");
+                "The Spot backend does not support authority fencing."
+            );
         observer.ObserveSpotAuthority(
             targetNodeRid,
             targetSpotId,
             targetSpotGeneration,
             targetNodeGeneration,
             authorityOwnerGeneration,
-            ownerLeaseGeneration);
+            ownerLeaseGeneration
+        );
     }
 
     public async ValueTask<ZLinkOneWaySubmitResult> SendToChannelAsync(
         string channelName,
         IReadOnlyList<Message> parts,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default)
+        ReadOnlyMemory<byte> metadata = default
+    )
     {
         try
         {
-            await nativeSpot.SendToChannelAsync(
-                    channelName, parts, SendFlags.None, cancellationToken, metadata)
+            await nativeSpot
+                .SendToChannelAsync(channelName, parts, SendFlags.None, cancellationToken, metadata)
                 .ConfigureAwait(false);
             return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Submitted);
         }
@@ -226,12 +244,20 @@ internal sealed class ZLinkSpotOutboundTransport(
         IReadOnlyList<Message> parts,
         TimeSpan timeout,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default)
+        ReadOnlyMemory<byte> metadata = default
+    )
     {
         try
         {
-            return await nativeSpot.RequestToChannelAsync(
-                    channelName, parts, SendFlags.None, timeout, cancellationToken, metadata)
+            return await nativeSpot
+                .RequestToChannelAsync(
+                    channelName,
+                    parts,
+                    SendFlags.None,
+                    timeout,
+                    cancellationToken,
+                    metadata
+                )
                 .ConfigureAwait(false);
         }
         catch (ZLinkRequestTerminalException terminal)
@@ -239,18 +265,22 @@ internal sealed class ZLinkSpotOutboundTransport(
             throw ZLinkRequestFailureMapper.CreateChannelCompletionException(
                 terminal.Result,
                 terminal.FailureErrno,
-                $"Channel request to '{channelName}' failed with result '{terminal.Result}'.");
+                $"Channel request to '{channelName}' failed with result '{terminal.Result}'."
+            );
         }
         catch (ZlinkRequestException failure)
         {
             throw ZLinkRequestFailureMapper.CreateChannelCompletionException(
                 (RequestResult)(int)failure.Result,
-                $"Channel request to '{channelName}' failed with result '{failure.Result}'.");
+                $"Channel request to '{channelName}' failed with result '{failure.Result}'."
+            );
         }
         catch (ZlinkSubmitException failure)
         {
             throw ZLinkRequestFailureMapper.CreateChannelSubmitException(
-                failure, $"Channel request to '{channelName}'");
+                failure,
+                $"Channel request to '{channelName}'"
+            );
         }
         finally
         {
@@ -268,7 +298,8 @@ internal sealed class ZLinkSpotOutboundTransport(
         IReadOnlyList<Message> parts,
         TimeSpan timeout,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default)
+        ReadOnlyMemory<byte> metadata = default
+    )
     {
         try
         {
@@ -278,8 +309,10 @@ internal sealed class ZLinkSpotOutboundTransport(
                 targetSpotGeneration,
                 targetNodeGeneration,
                 authorityOwnerGeneration,
-                ownerLeaseGeneration);
-            return await nativeSpot.RequestToSpotAsync(
+                ownerLeaseGeneration
+            );
+            return await nativeSpot
+                .RequestToSpotAsync(
                     targetNodeRid,
                     targetSpotId,
                     targetSpotGeneration,
@@ -287,7 +320,8 @@ internal sealed class ZLinkSpotOutboundTransport(
                     SendFlags.None,
                     timeout,
                     cancellationToken,
-                    metadata)
+                    metadata
+                )
                 .ConfigureAwait(false);
         }
         catch (ZLinkRequestTerminalException terminal)
@@ -295,18 +329,22 @@ internal sealed class ZLinkSpotOutboundTransport(
             throw ZLinkRequestFailureMapper.CreateCompletionException(
                 terminal.Result,
                 terminal.FailureErrno,
-                $"SPOT request to '{targetSpotId}' on node '{targetNodeRid}' failed with result '{terminal.Result}'.");
+                $"SPOT request to '{targetSpotId}' on node '{targetNodeRid}' failed with result '{terminal.Result}'."
+            );
         }
         catch (ZlinkRequestException failure)
         {
             throw ZLinkRequestFailureMapper.CreateCompletionException(
                 (RequestResult)(int)failure.Result,
-                $"SPOT request to '{targetSpotId}' on node '{targetNodeRid}' failed with result '{failure.Result}'.");
+                $"SPOT request to '{targetSpotId}' on node '{targetNodeRid}' failed with result '{failure.Result}'."
+            );
         }
         catch (ZlinkSubmitException failure)
         {
             throw ZLinkRequestFailureMapper.CreateSubmitException(
-                failure, $"SPOT request to '{targetSpotId}' on node '{targetNodeRid}'");
+                failure,
+                $"SPOT request to '{targetSpotId}' on node '{targetNodeRid}'"
+            );
         }
         finally
         {
@@ -320,35 +358,36 @@ internal sealed class ZLinkSpotOutboundTransport(
     //  (06-framework-api "no eligible select-one member").
     private static ZLinkOneWaySubmitResult DirectSubmitFailure(
         ZlinkSubmitException failure,
-        bool selectOne = false) =>
+        bool selectOne = false
+    ) =>
         failure.Result switch
         {
-            ZlinkSubmitException.ErrorCode.NotConnected =>
-                new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.RouteNotConnected),
-            ZlinkSubmitException.ErrorCode.NotFound =>
-                new ZLinkOneWaySubmitResult(selectOne
+            ZlinkSubmitException.ErrorCode.NotConnected => new ZLinkOneWaySubmitResult(
+                ZLinkOneWaySubmitStatus.RouteNotConnected
+            ),
+            ZlinkSubmitException.ErrorCode.NotFound => new ZLinkOneWaySubmitResult(
+                selectOne
                     ? ZLinkOneWaySubmitStatus.RouteNotConnected
-                    : ZLinkOneWaySubmitStatus.TargetNotFound),
-            ZlinkSubmitException.ErrorCode.Terminated =>
-                new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Shutdown),
-            ZlinkSubmitException.ErrorCode.Backpressured =>
-                new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Backpressured),
-            _ => throw ZLinkRequestFailureMapper.CreateSubmitException(
-                failure, "Direct Spot send")
+                    : ZLinkOneWaySubmitStatus.TargetNotFound
+            ),
+            ZlinkSubmitException.ErrorCode.Terminated => new ZLinkOneWaySubmitResult(
+                ZLinkOneWaySubmitStatus.Shutdown
+            ),
+            ZlinkSubmitException.ErrorCode.Backpressured => new ZLinkOneWaySubmitResult(
+                ZLinkOneWaySubmitStatus.Backpressured
+            ),
+            _ => throw ZLinkRequestFailureMapper.CreateSubmitException(failure, "Direct Spot send"),
         };
 
     private static TimeSpan ValidateTimeout(TimeSpan? timeout)
     {
         try
         {
-            return ZLinkSocketConfig.NormalizeSendTimeout(timeout)
-                   ?? TimeSpan.FromSeconds(1);
+            return ZLinkSocketConfig.NormalizeSendTimeout(timeout) ?? TimeSpan.FromSeconds(1);
         }
         catch (ZLinkConfigurationException error)
         {
-            throw new ArgumentOutOfRangeException(
-                nameof(timeout), timeout, error.Message);
+            throw new ArgumentOutOfRangeException(nameof(timeout), timeout, error.Message);
         }
     }
-
 }

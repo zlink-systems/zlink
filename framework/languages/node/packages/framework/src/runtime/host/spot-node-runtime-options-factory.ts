@@ -1,5 +1,4 @@
-import type {
-} from '../../contracts';
+import type {} from '../../contracts';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
 import type { ZLinkRuntimeEventPublisher } from '../diagnostics';
 import {
@@ -18,7 +17,10 @@ import type {
   ZLinkDetachedTaskRunner,
   ZLinkSpotRoutedTransport
 } from '../spots';
-import type { ZLinkEntryActorRuntime, ZLinkSpotActorTransferRuntime } from '../spots/spot-runtime-ports';
+import type {
+  ZLinkEntryActorRuntime,
+  ZLinkSpotActorTransferRuntime
+} from '../spots/spot-runtime-ports';
 import type { MeshRouterResolver } from './mesh-router-resolver';
 import type { ZLinkBoundSessionRelay } from './bound-session-relay';
 import type { ZLinkActorHandoffCoordinator } from '../actors';
@@ -55,8 +57,14 @@ export class ZLinkSpotNodeRuntimeOptionsFactory {
       primaryMeshName: this.options.meshRouters.primaryMeshName(),
       backendAdapterFactory: this.options.backendAdapterFactory,
       context: this.options.context,
-      channelClient: new DefaultZLinkChannelClient(this.options.registration, this.options.channelTransport),
-      fanoutClient: new DefaultZLinkFanoutClient(this.options.registration, this.options.channelTransport),
+      channelClient: new DefaultZLinkChannelClient(
+        this.options.registration,
+        this.options.channelTransport
+      ),
+      fanoutClient: new DefaultZLinkFanoutClient(
+        this.options.registration,
+        this.options.channelTransport
+      ),
       spotPublisherClient: new DefaultZLinkSpotPublisherClient(
         this.options.registration,
         this.options.spotPublisherTransport
@@ -68,8 +76,7 @@ export class ZLinkSpotNodeRuntimeOptionsFactory {
       runtimeEventPublisher: this.options.runtimeEventPublisher,
       metrics: this.options.metrics,
       applicationJobQueue: this.options.applicationJobQueue,
-      applicationJobReceiveFlowFailureSink:
-        this.options.applicationJobReceiveFlowFailureSink,
+      applicationJobReceiveFlowFailureSink: this.options.applicationJobReceiveFlowFailureSink,
       detachedTaskRunner: this.options.detachedTaskRunner,
       messageSerializers: this.options.registration.messageSerializers,
       entryActorRuntime: this.options.entryActorRuntime,
@@ -78,5 +85,4 @@ export class ZLinkSpotNodeRuntimeOptionsFactory {
       actorHandoffRuntime: this.options.actorHandoff
     };
   }
-
 }

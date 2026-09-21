@@ -1,20 +1,10 @@
 import { ZLinkFrameworkRuntimeState } from '../../contracts';
 
 export type MaintenanceAdmissionState =
-  | 'preparing'
-  | 'serving'
-  | 'retiring'
-  | 'draining'
-  | 'stopped'
-  | 'error';
+  'preparing' | 'serving' | 'retiring' | 'draining' | 'stopped' | 'error';
 
 export type DiscoveryAvailability =
-  | 'preparing'
-  | 'serving'
-  | 'retiring'
-  | 'stopped'
-  | 'error'
-  | 'disconnected';
+  'preparing' | 'serving' | 'retiring' | 'stopped' | 'error' | 'disconnected';
 
 /** Derives public readiness from the public runtime state authority. */
 export function runtimeStateIsReady(state: ZLinkFrameworkRuntimeState): boolean {
@@ -34,13 +24,19 @@ export function maintenanceAdmissionState(
   state: ZLinkFrameworkRuntimeState
 ): MaintenanceAdmissionState {
   switch (state) {
-    case ZLinkFrameworkRuntimeState.Preparing: return 'preparing';
-    case ZLinkFrameworkRuntimeState.Serving: return 'serving';
+    case ZLinkFrameworkRuntimeState.Preparing:
+      return 'preparing';
+    case ZLinkFrameworkRuntimeState.Serving:
+      return 'serving';
     case ZLinkFrameworkRuntimeState.Relocating:
-    case ZLinkFrameworkRuntimeState.Relocated: return 'retiring';
-    case ZLinkFrameworkRuntimeState.Draining: return 'draining';
-    case ZLinkFrameworkRuntimeState.Stopped: return 'stopped';
-    case ZLinkFrameworkRuntimeState.Error: return 'error';
+    case ZLinkFrameworkRuntimeState.Relocated:
+      return 'retiring';
+    case ZLinkFrameworkRuntimeState.Draining:
+      return 'draining';
+    case ZLinkFrameworkRuntimeState.Stopped:
+      return 'stopped';
+    case ZLinkFrameworkRuntimeState.Error:
+      return 'error';
   }
 }
 
@@ -49,13 +45,18 @@ export function discoveryAvailabilityForRuntimeState(
   state: ZLinkFrameworkRuntimeState
 ): Exclude<DiscoveryAvailability, 'disconnected'> {
   switch (state) {
-    case ZLinkFrameworkRuntimeState.Preparing: return 'preparing';
-    case ZLinkFrameworkRuntimeState.Serving: return 'serving';
+    case ZLinkFrameworkRuntimeState.Preparing:
+      return 'preparing';
+    case ZLinkFrameworkRuntimeState.Serving:
+      return 'serving';
     case ZLinkFrameworkRuntimeState.Relocating:
     case ZLinkFrameworkRuntimeState.Relocated:
-    case ZLinkFrameworkRuntimeState.Draining: return 'retiring';
-    case ZLinkFrameworkRuntimeState.Stopped: return 'stopped';
-    case ZLinkFrameworkRuntimeState.Error: return 'error';
+    case ZLinkFrameworkRuntimeState.Draining:
+      return 'retiring';
+    case ZLinkFrameworkRuntimeState.Stopped:
+      return 'stopped';
+    case ZLinkFrameworkRuntimeState.Error:
+      return 'error';
   }
 }
 

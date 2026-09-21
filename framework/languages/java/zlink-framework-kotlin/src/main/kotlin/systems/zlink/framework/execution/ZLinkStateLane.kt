@@ -2,6 +2,8 @@ package systems.zlink.framework.execution
 
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.coroutines.AbstractCoroutineContextElement
+import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -10,8 +12,6 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlin.coroutines.AbstractCoroutineContextElement
-import kotlin.coroutines.CoroutineContext
 
 /**
  * Single-owner execution lane for one component's mutable state.
@@ -39,8 +39,7 @@ internal class ZLinkStateLane {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     /** Returns whether this coroutine is currently executing a turn on this lane. */
-    internal suspend fun isOnLane(): Boolean =
-        currentCoroutineContext()[LaneContext]?.lane === this
+    internal suspend fun isOnLane(): Boolean = currentCoroutineContext()[LaneContext]?.lane === this
 
     /**
      * Runs [work] on this lane and returns its result.
@@ -61,7 +60,7 @@ internal class ZLinkStateLane {
                     } catch (error: Throwable) {
                         completion.completeExceptionally(error)
                     }
-                },
+                }
             )
             scheduleDrain()
         }
@@ -91,9 +90,7 @@ internal class ZLinkStateLane {
 
     private fun scheduleDrain() {
         if (scheduled.compareAndSet(false, true)) {
-            scope.launch {
-                drain()
-            }
+            scope.launch { drain() }
         }
     }
 
@@ -142,13 +139,9 @@ internal class ZLinkStateLane {
         drained.await()
     }
 
-    private class WorkItem(
-        val execute: suspend () -> Unit,
-    )
+    private class WorkItem(val execute: suspend () -> Unit)
 
-    private class LaneContext(
-        val lane: ZLinkStateLane,
-    ) : AbstractCoroutineContextElement(Key) {
+    private class LaneContext(val lane: ZLinkStateLane) : AbstractCoroutineContextElement(Key) {
         companion object Key : CoroutineContext.Key<LaneContext>
     }
 

@@ -1,12 +1,5 @@
-import type {
-  ZLinkMessage,
-  ZLinkMessageSerializer,
-  ZLinkSessionActor
-} from '../../contracts';
-import {
-  ZLinkSubmitStatus,
-  type ZLinkSubmitResult
-} from '../messaging/submission-result';
+import type { ZLinkMessage, ZLinkMessageSerializer, ZLinkSessionActor } from '../../contracts';
+import { ZLinkSubmitStatus, type ZLinkSubmitResult } from '../messaging/submission-result';
 import type { Message } from '../../contracts/Common/Message';
 import { encodeFrameworkPayloadMessage } from '../messaging/payload-codec';
 import {
@@ -17,29 +10,30 @@ import {
 } from './protocol';
 import { throwIfAborted } from '../abort';
 import { captureZLinkExecutionTurn } from '../execution';
-import {
-  ZLinkActorSessionBindingRegistry
-} from './actor-session-binding-registry';
+import { ZLinkActorSessionBindingRegistry } from './actor-session-binding-registry';
 import { ZLinkActorSessionLifecycleCoordinator } from './actor-session-lifecycle-coordinator';
 import { ZLinkManagedStream } from './managed-stream';
-import {
-  DefaultZLinkSessionActor,
-  DefaultZLinkSessionContext
-} from './session-context';
-import {
-  ZLinkStreamFrameMessageFactory
-} from './stream-frame-factory';
+import { DefaultZLinkSessionActor, DefaultZLinkSessionContext } from './session-context';
+import { ZLinkStreamFrameMessageFactory } from './stream-frame-factory';
 
 export interface ZLinkBoundActorRelaySenderOptions {
   readonly actorBindTimeoutMs?: number;
   readonly messageSerializers?: ReadonlyMap<string, ZLinkMessageSerializer>;
-  readonly relay?: (actor: ZLinkSessionActor, header: ZLinkStreamFrameHeader, payload: Message, signal?: AbortSignal) => Promise<boolean>;
+  readonly relay?: (
+    actor: ZLinkSessionActor,
+    header: ZLinkStreamFrameHeader,
+    payload: Message,
+    signal?: AbortSignal
+  ) => Promise<boolean>;
   readonly notifyDisconnected?: (actor: ZLinkSessionActor, signal?: AbortSignal) => Promise<void>;
 }
 
 export class ZLinkBoundActorRelaySender {
   constructor(
-    private readonly routes: ZLinkActorSessionBindingRegistry<DefaultZLinkSessionContext, DefaultZLinkSessionActor>,
+    private readonly routes: ZLinkActorSessionBindingRegistry<
+      DefaultZLinkSessionContext,
+      DefaultZLinkSessionActor
+    >,
     private readonly frameMessages: ZLinkStreamFrameMessageFactory,
     private readonly options: ZLinkBoundActorRelaySenderOptions = {},
     private readonly lifecycle = new ZLinkActorSessionLifecycleCoordinator()
@@ -51,13 +45,11 @@ export class ZLinkBoundActorRelaySender {
     signal?: AbortSignal,
     dispatchHeader?: ZLinkStreamFrameHeader
   ): Promise<ZLinkSubmitResult> {
-    const header = dispatchHeader === undefined
-      ? await this.currentHeader(actor)
-      : await this.requireDispatchHeader(actor, dispatchHeader);
-    if (
-      header.kind === ZLinkStreamMessageKind.Request
-      && header.requestSeq !== undefined
-    ) {
+    const header =
+      dispatchHeader === undefined
+        ? await this.currentHeader(actor)
+        : await this.requireDispatchHeader(actor, dispatchHeader);
+    if (header.kind === ZLinkStreamMessageKind.Request && header.requestSeq !== undefined) {
       const operation = async (): Promise<ZLinkSubmitResult> => {
         const admission = await this.routes.beginAcceptedRequestFrameWhenReady(
           actor.actorId,
@@ -70,13 +62,16 @@ export class ZLinkBoundActorRelaySender {
           await admission.complete();
         }
       };
-      if (await this.routes.isSealed(actor.actorId) && captureZLinkExecutionTurn() !== undefined) {
+      if (
+        (await this.routes.isSealed(actor.actorId)) &&
+        captureZLinkExecutionTurn() !== undefined
+      ) {
         void operation().catch(() => undefined);
         return { status: ZLinkSubmitStatus.Submitted };
       }
       return await operation();
     }
-    if (await this.routes.isSealed(actor.actorId) && captureZLinkExecutionTurn() !== undefined) {
+    if ((await this.routes.isSealed(actor.actorId)) && captureZLinkExecutionTurn() !== undefined) {
       //  Spec 32:62 — a Send completes once the source outbound queue
       //  accepts it; spec 05 — infrastructure send progress must not depend
       //  on the application turn. When the CALLER IS an application turn
@@ -89,12 +84,14 @@ export class ZLinkBoundActorRelaySender {
       //  Non-turn callers (stream ingress relays) keep the waiting
       //  semantics so a held frame across a failed rebind still
       //  terminalizes to the caller.
-      void this.routes.runAcceptedFrameWhenReady(
-        actor.actorId,
-        actor.bindingToken,
-        () => this.relayAcceptedFrame(actor, payload, signal),
-        signal
-      ).catch(() => undefined);
+      void this.routes
+        .runAcceptedFrameWhenReady(
+          actor.actorId,
+          actor.bindingToken,
+          () => this.relayAcceptedFrame(actor, payload, signal),
+          signal
+        )
+        .catch(() => undefined);
       return { status: ZLinkSubmitStatus.Submitted };
     }
     return this.routes.runAcceptedFrameWhenReady(
@@ -112,7 +109,7 @@ export class ZLinkBoundActorRelaySender {
     header?: ZLinkStreamFrameHeader,
     requestAdmission?: { beginSubmission(signal?: AbortSignal): Promise<void> | undefined }
   ): Promise<ZLinkSubmitResult> {
-    const activeHeader = header ?? await this.currentHeader(actor);
+    const activeHeader = header ?? (await this.currentHeader(actor));
     const started = await this.lifecycle.run(actor.actorId, async () => {
       const completion = this.relayInsideLifecycle(
         actor,
@@ -122,8 +119,8 @@ export class ZLinkBoundActorRelaySender {
         requestAdmission
       );
       if (
-        activeHeader.kind === ZLinkStreamMessageKind.Request
-        && activeHeader.requestSeq !== undefined
+        activeHeader.kind === ZLinkStreamMessageKind.Request &&
+        activeHeader.requestSeq !== undefined
       ) {
         // A routed REQUEST only needs this lane while its ordered submission
         // is started. Its admission acknowledgement can depend on relocation
@@ -167,7 +164,7 @@ export class ZLinkBoundActorRelaySender {
     currentHeader?: ZLinkStreamFrameHeader,
     requestAdmission?: { beginSubmission(signal?: AbortSignal): Promise<void> | undefined }
   ): Promise<ZLinkSubmitResult> {
-    const header = currentHeader ?? await this.currentHeader(actor);
+    const header = currentHeader ?? (await this.currentHeader(actor));
     const held = requestAdmission?.beginSubmission(signal);
     if (held !== undefined) await held;
     throwIfAborted(signal);
@@ -184,7 +181,9 @@ export class ZLinkBoundActorRelaySender {
         return { status: ZLinkSubmitStatus.TargetNotFound };
       }
       const headerMessage = this.frameMessages.createBinaryMessage(encodeStreamHeader(header));
-      const framePayloadMessage = this.frameMessages.createBinaryMessage(messageToBytes(payloadMessage));
+      const framePayloadMessage = this.frameMessages.createBinaryMessage(
+        messageToBytes(payloadMessage)
+      );
       try {
         return await route.context.stream.submitBoundActor(
           actor.actorId,
@@ -216,9 +215,9 @@ export class ZLinkBoundActorRelaySender {
       return route;
     });
     if (
-      unbindNative
-      && detached.bindingToken === actor.bindingToken
-      && detached.context.stream instanceof ZLinkManagedStream
+      unbindNative &&
+      detached.bindingToken === actor.bindingToken &&
+      detached.context.stream instanceof ZLinkManagedStream
     ) {
       await detached.context.stream.unbindActor(
         actor.actorId,
@@ -237,10 +236,10 @@ export class ZLinkBoundActorRelaySender {
         const detached = await this.lifecycle.run(actor.actorId, async () => {
           const route = await this.routes.route(actor.actorId);
           if (
-            route === undefined
-            || route.context !== context
-            || route.actor !== actor
-            || route.bindingToken !== actor.bindingToken
+            route === undefined ||
+            route.context !== context ||
+            route.actor !== actor ||
+            route.bindingToken !== actor.bindingToken
           ) {
             return false;
           }
@@ -259,9 +258,12 @@ export class ZLinkBoundActorRelaySender {
             new Promise<never>((_, reject) => {
               controller.signal.addEventListener(
                 'abort',
-                () => reject(new Error(
-                  `Actor '${actor.actorId}' disconnect notification exceeded ${timeoutMs} ms.`
-                )),
+                () =>
+                  reject(
+                    new Error(
+                      `Actor '${actor.actorId}' disconnect notification exceeded ${timeoutMs} ms.`
+                    )
+                  ),
                 { once: true }
               );
             })

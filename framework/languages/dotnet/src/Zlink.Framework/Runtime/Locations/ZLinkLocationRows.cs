@@ -19,21 +19,26 @@ internal sealed class ZLinkEpochMillisecondsJsonConverter : JsonConverter<DateTi
     public override DateTimeOffset Read(
         ref Utf8JsonReader reader,
         Type typeToConvert,
-        JsonSerializerOptions options)
+        JsonSerializerOptions options
+    )
     {
         if (reader.TokenType != JsonTokenType.String)
             throw new JsonException("Epoch millisecond timestamps must be decimal strings.");
         var encoded = reader.GetString();
-        if (encoded is null
+        if (
+            encoded is null
             || !long.TryParse(
                 encoded,
                 NumberStyles.AllowLeadingSign,
                 CultureInfo.InvariantCulture,
-                out var value)
+                out var value
+            )
             || !string.Equals(
                 encoded,
                 value.ToString(CultureInfo.InvariantCulture),
-                StringComparison.Ordinal))
+                StringComparison.Ordinal
+            )
+        )
             throw new JsonException("Epoch millisecond timestamp string is not canonical.");
         return DateTimeOffset.FromUnixTimeMilliseconds(value);
     }
@@ -41,9 +46,11 @@ internal sealed class ZLinkEpochMillisecondsJsonConverter : JsonConverter<DateTi
     public override void Write(
         Utf8JsonWriter writer,
         DateTimeOffset value,
-        JsonSerializerOptions options) =>
+        JsonSerializerOptions options
+    ) =>
         writer.WriteStringValue(
-            value.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture));
+            value.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture)
+        );
 }
 
 /// <summary>
@@ -59,24 +66,25 @@ internal sealed record ZLinkMeshNodeDescriptor(
     string MeshName,
     [property: JsonPropertyName("routingIdHex")] RoutingId Rid,
     [property: JsonConverter(typeof(ZLinkJsonSerializerOptions.FrameworkUnsigned64JsonConverter))]
-    ulong LifecycleGeneration,
+        ulong LifecycleGeneration,
     [property: JsonConverter(typeof(ZLinkJsonSerializerOptions.FrameworkUnsigned64JsonConverter))]
-    ulong DescriptorRevision,
+        ulong DescriptorRevision,
     string Endpoint,
     IReadOnlyDictionary<string, int> ChannelWeights,
     string SecurityIdentity,
     string OwnerId,
     [property: JsonConverter(typeof(ZLinkJsonSerializerOptions.FrameworkSigned64JsonConverter))]
-    long LeaseGeneration,
+        long LeaseGeneration,
     [property: JsonPropertyName("updatedAtEpochMs")]
     [property: JsonConverter(typeof(ZLinkEpochMillisecondsJsonConverter))]
-    DateTimeOffset UpdatedAt)
+        DateTimeOffset UpdatedAt
+)
 {
     [JsonConverter(typeof(ZLinkJsonSerializerOptions.FrameworkSigned64JsonConverter))]
     public long ApplicationVersion { get; init; }
 
-    public IReadOnlyList<ZLinkObjectCapability> ObjectCapabilities { get; init; }
-        = Array.Empty<ZLinkObjectCapability>();
+    public IReadOnlyList<ZLinkObjectCapability> ObjectCapabilities { get; init; } =
+        Array.Empty<ZLinkObjectCapability>();
 
     public string? MaintenanceWave { get; init; }
 
@@ -89,14 +97,14 @@ internal sealed record ZLinkMeshNodeDescriptor(
 
     public int PlacementWeight { get; init; } = 100;
 
-    public ZLinkPlacementCapacity Capacity { get; init; }
-        = new(
+    public ZLinkPlacementCapacity Capacity { get; init; } =
+        new(
             new ZLinkPopulationCapacity(0, 0, 0),
             new ZLinkPopulationCapacity(0, 0, 0),
-            Array.Empty<ZLinkSpotTypeCapacity>());
+            Array.Empty<ZLinkSpotTypeCapacity>()
+        );
 
-    public ZLinkActivationConcurrency ActivationConcurrency { get; init; }
-        = new(0, 128);
+    public ZLinkActivationConcurrency ActivationConcurrency { get; init; } = new(0, 128);
 }
 
 // Embedded as the authority record's allocation.descriptor field
@@ -104,7 +112,8 @@ internal sealed record ZLinkMeshNodeDescriptor(
 // the C# property name Rid.
 internal readonly record struct ZLinkMeshNodeDescriptorKey(
     string MeshName,
-    [property: JsonPropertyName("routingIdHex")] RoutingId Rid);
+    [property: JsonPropertyName("routingIdHex")] RoutingId Rid
+);
 
 // Field names/types/converters below are the canonical opaque-record
 // contract (21-location-runtime.md#2.4's ClientServer server descriptor
@@ -113,24 +122,26 @@ internal sealed record ZLinkClientServerServerDescriptor(
     string ChannelName,
     [property: JsonPropertyName("serverRoutingIdHex")] RoutingId ServerRid,
     [property: JsonConverter(typeof(ZLinkJsonSerializerOptions.FrameworkUnsigned64JsonConverter))]
-    ulong LifecycleGeneration,
+        ulong LifecycleGeneration,
     [property: JsonConverter(typeof(ZLinkJsonSerializerOptions.FrameworkUnsigned64JsonConverter))]
-    ulong DescriptorRevision,
+        ulong DescriptorRevision,
     string Endpoint,
     int Weight,
     [property: JsonConverter(typeof(ZLinkCamelCaseEnumJsonConverter<ZLinkFrameworkRuntimeState>))]
-    ZLinkFrameworkRuntimeState State,
+        ZLinkFrameworkRuntimeState State,
     string SecurityIdentity,
     string OwnerId,
     [property: JsonConverter(typeof(ZLinkJsonSerializerOptions.FrameworkSigned64JsonConverter))]
-    long LeaseGeneration,
+        long LeaseGeneration,
     [property: JsonPropertyName("updatedAtEpochMs")]
     [property: JsonConverter(typeof(ZLinkEpochMillisecondsJsonConverter))]
-    DateTimeOffset UpdatedAt);
+        DateTimeOffset UpdatedAt
+);
 
 internal readonly record struct ZLinkClientServerServerDescriptorKey(
     string ChannelName,
-    RoutingId ServerRid);
+    RoutingId ServerRid
+);
 
 // Same fields as ZLinkClientServerServerDescriptor minus Weight
 // (21-location-runtime.md#2.4's fanout publisher descriptor table).
@@ -138,30 +149,32 @@ internal sealed record ZLinkFanoutPublisherDescriptor(
     string ChannelName,
     [property: JsonPropertyName("publisherRoutingIdHex")] RoutingId PublisherRid,
     [property: JsonConverter(typeof(ZLinkJsonSerializerOptions.FrameworkUnsigned64JsonConverter))]
-    ulong LifecycleGeneration,
+        ulong LifecycleGeneration,
     [property: JsonConverter(typeof(ZLinkJsonSerializerOptions.FrameworkUnsigned64JsonConverter))]
-    ulong DescriptorRevision,
+        ulong DescriptorRevision,
     string Endpoint,
     [property: JsonConverter(typeof(ZLinkCamelCaseEnumJsonConverter<ZLinkFrameworkRuntimeState>))]
-    ZLinkFrameworkRuntimeState State,
+        ZLinkFrameworkRuntimeState State,
     string SecurityIdentity,
     string OwnerId,
     [property: JsonConverter(typeof(ZLinkJsonSerializerOptions.FrameworkSigned64JsonConverter))]
-    long LeaseGeneration,
+        long LeaseGeneration,
     [property: JsonPropertyName("updatedAtEpochMs")]
     [property: JsonConverter(typeof(ZLinkEpochMillisecondsJsonConverter))]
-    DateTimeOffset UpdatedAt);
+        DateTimeOffset UpdatedAt
+);
 
 internal readonly record struct ZLinkFanoutPublisherDescriptorKey(
     string ChannelName,
-    RoutingId PublisherRid);
+    RoutingId PublisherRid
+);
 
 [JsonConverter(typeof(ZLinkCamelCaseEnumJsonConverter<ZLinkMeshNodeObjectRole>))]
 internal enum ZLinkMeshNodeObjectRole
 {
     None = 0,
     Client = 1,
-    Server = 2
+    Server = 2,
 }
 
 [JsonConverter(typeof(ZLinkCamelCaseEnumJsonConverter<ZLinkObjectMaintenancePolicyKind>))]
@@ -170,7 +183,7 @@ internal enum ZLinkObjectMaintenancePolicyKind
     Unspecified = 0,
     Disabled = 1,
     Recreate = 2,
-    Snapshot = 3
+    Snapshot = 3,
 }
 
 internal sealed record ZLinkObjectCapability(
@@ -178,25 +191,23 @@ internal sealed record ZLinkObjectCapability(
     string StableType,
     ZLinkObjectMaintenancePolicyKind Policy,
     bool HasSnapshotAdapter,
-    int Limit);
+    int Limit
+);
 
-internal sealed record ZLinkPopulationCapacity(
-    int Active,
-    int Reserved,
-    int Limit);
+internal sealed record ZLinkPopulationCapacity(int Active, int Reserved, int Limit);
 
 internal sealed record ZLinkSpotTypeCapacity(
     ZLinkPlacementObjectKind ObjectKind,
     string StableType,
     int Active,
     int Reserved,
-    int Limit);
+    int Limit
+);
 
 internal sealed record ZLinkPlacementCapacity(
     ZLinkPopulationCapacity Actors,
     ZLinkPopulationCapacity Spots,
-    IReadOnlyList<ZLinkSpotTypeCapacity> SpotTypes);
+    IReadOnlyList<ZLinkSpotTypeCapacity> SpotTypes
+);
 
-internal sealed record ZLinkActivationConcurrency(
-    int Active,
-    int Limit);
+internal sealed record ZLinkActivationConcurrency(int Active, int Limit);

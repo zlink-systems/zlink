@@ -8,9 +8,7 @@ public sealed class RemoteRelayFrameAssemblerTests
     [Fact]
     public void RemoteRequestAdmissionBoundsProcessAndBindingIndependently()
     {
-        var admission = new ZLinkBoundedRemoteRequestAdmission(
-            maxTotal: 3,
-            maxPerBinding: 2);
+        var admission = new ZLinkBoundedRemoteRequestAdmission(maxTotal: 3, maxPerBinding: 2);
 
         Assert.True(admission.TryAcquire(Binding("actor-a", "binding-a")));
         Assert.True(admission.TryAcquire(Binding("actor-a", "binding-a")));
@@ -32,7 +30,8 @@ public sealed class RemoteRelayFrameAssemblerTests
     {
         using var assembler = new ZLinkRemoteRelayFrameAssembler(
             TimeSpan.FromSeconds(1),
-            static () => CancellationToken.None);
+            static () => CancellationToken.None
+        );
         var first = Key(operationLow: 1);
         var second = Key(operationLow: 2);
 
@@ -54,7 +53,8 @@ public sealed class RemoteRelayFrameAssemblerTests
     {
         using var assembler = new ZLinkRemoteRelayFrameAssembler(
             TimeSpan.FromSeconds(1),
-            static () => CancellationToken.None);
+            static () => CancellationToken.None
+        );
         var key = Key(operationLow: 3);
 
         _ = await AppendAsync(assembler, key, [1], true);
@@ -71,7 +71,8 @@ public sealed class RemoteRelayFrameAssemblerTests
     {
         using var assembler = new ZLinkRemoteRelayFrameAssembler(
             TimeSpan.FromSeconds(1),
-            static () => CancellationToken.None);
+            static () => CancellationToken.None
+        );
         var key = Key(operationLow: 7);
 
         _ = await AppendAsync(assembler, key, [1], true);
@@ -91,19 +92,22 @@ public sealed class RemoteRelayFrameAssemblerTests
     {
         using var assembler = new ZLinkRemoteRelayFrameAssembler(
             TimeSpan.FromSeconds(1),
-            static () => CancellationToken.None);
+            static () => CancellationToken.None
+        );
         var previousLifecycle = Key(
             operationLow: 8,
             sourceNodeGeneration: 11,
             requestSourceOwnerId: "source-owner-1",
             requestSourceLeaseGeneration: 12,
-            requestSourceNodeGeneration: 11);
+            requestSourceNodeGeneration: 11
+        );
         var restartedLifecycle = Key(
             operationLow: 8,
             sourceNodeGeneration: 21,
             requestSourceOwnerId: "source-owner-2",
             requestSourceLeaseGeneration: 22,
-            requestSourceNodeGeneration: 21);
+            requestSourceNodeGeneration: 21
+        );
 
         _ = await AppendAsync(assembler, previousLifecycle, [1], true);
         var rejected = await AppendAsync(assembler, previousLifecycle, [2], false);
@@ -127,7 +131,8 @@ public sealed class RemoteRelayFrameAssemblerTests
         using var assembler = new ZLinkRemoteRelayFrameAssembler(
             TimeSpan.FromMilliseconds(20),
             () => shutdown.Token,
-            time);
+            time
+        );
         var expired = Key(operationLow: 4);
         _ = await AppendAsync(assembler, expired, [1], true);
         time.AdvanceMonotonic(TimeSpan.FromMilliseconds(20));
@@ -147,13 +152,11 @@ public sealed class RemoteRelayFrameAssemblerTests
     {
         using var assembler = new ZLinkRemoteRelayFrameAssembler(
             TimeSpan.FromSeconds(1),
-            static () => CancellationToken.None);
+            static () => CancellationToken.None
+        );
         var oversized = new byte[(16 * 1024 * 1024) + 1];
 
-        var oversizedAppend = await assembler.TryAppendAsync(
-            Key(operationLow: 6),
-            oversized,
-            true);
+        var oversizedAppend = await assembler.TryAppendAsync(Key(operationLow: 6), oversized, true);
         Assert.False(oversizedAppend.Accepted);
     }
 
@@ -161,7 +164,8 @@ public sealed class RemoteRelayFrameAssemblerTests
         ZLinkRemoteRelayFrameAssembler assembler,
         ZLinkRemoteRelayFrameKey key,
         byte[] part,
-        bool hasMore)
+        bool hasMore
+    )
     {
         var append = await assembler.TryAppendAsync(key, part, hasMore);
         Assert.True(append.Accepted);
@@ -173,22 +177,25 @@ public sealed class RemoteRelayFrameAssemblerTests
         ulong sourceNodeGeneration = 11,
         string requestSourceOwnerId = "source-owner",
         ulong requestSourceLeaseGeneration = 12,
-        ulong requestSourceNodeGeneration = 11) => new(
-        RouteKind: 1,
-        ActorId: "actor",
-        ActorGeneration: 3,
-        BindingIdentity: "binding",
-        SourceNodeRid: "source-node",
-        SourceNodeGeneration: sourceNodeGeneration,
-        SourceSessionRid: "source-session",
-        RequestSourceOwnerId: requestSourceOwnerId,
-        RequestSourceLeaseGeneration: requestSourceLeaseGeneration,
-        RequestSourceNodeRid: "source-node",
-        RequestSourceNodeGeneration: requestSourceNodeGeneration,
-        OperationHigh: 7,
-        OperationLow: operationLow,
-        ReplyRequestId: operationLow,
-        TargetNodeGeneration: 8,
-        AuthorityOwnerGeneration: 9,
-        OwnerLeaseGeneration: 10);
+        ulong requestSourceNodeGeneration = 11
+    ) =>
+        new(
+            RouteKind: 1,
+            ActorId: "actor",
+            ActorGeneration: 3,
+            BindingIdentity: "binding",
+            SourceNodeRid: "source-node",
+            SourceNodeGeneration: sourceNodeGeneration,
+            SourceSessionRid: "source-session",
+            RequestSourceOwnerId: requestSourceOwnerId,
+            RequestSourceLeaseGeneration: requestSourceLeaseGeneration,
+            RequestSourceNodeRid: "source-node",
+            RequestSourceNodeGeneration: requestSourceNodeGeneration,
+            OperationHigh: 7,
+            OperationLow: operationLow,
+            ReplyRequestId: operationLow,
+            TargetNodeGeneration: 8,
+            AuthorityOwnerGeneration: 9,
+            OwnerLeaseGeneration: 10
+        );
 }

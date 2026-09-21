@@ -4,14 +4,16 @@ namespace Zlink.Framework.Runtime.Streams;
 
 internal abstract class ZLinkSessionStreamCallBase<TMessage>(
     ZLinkSessionContext context,
-    TMessage message)
+    TMessage message
+)
 {
     private readonly ZLinkOneWayCallGate _submission = new("Session operation");
 
     private readonly ZLinkStreamSendBuilder<TMessage> _builder = new(
         message,
         context.Codecs,
-        context.CompressionCodec);
+        context.CompressionCodec
+    );
 
     public ZLinkSessionStreamCallBase<TMessage> Metadata(string key, string value)
     {
@@ -22,7 +24,8 @@ internal abstract class ZLinkSessionStreamCallBase<TMessage>(
     public ZLinkSessionStreamCallBase<TMessage> Metadata(ZLinkMessageMetadata metadata)
     {
         ArgumentNullException.ThrowIfNull(metadata);
-        foreach (var (key, value) in metadata.Values) _builder.AddMetadata(key, value);
+        foreach (var (key, value) in metadata.Values)
+            _builder.AddMetadata(key, value);
         return this;
     }
 
@@ -38,29 +41,26 @@ internal abstract class ZLinkSessionStreamCallBase<TMessage>(
         CancellationToken cancellationToken,
         TimeSpan? admissionTimeout = null,
         bool validateBeforeCancellation = false,
-        bool isReply = false)
+        bool isReply = false
+    )
     {
-        if (!validateBeforeCancellation) cancellationToken.ThrowIfCancellationRequested();
+        if (!validateBeforeCancellation)
+            cancellationToken.ThrowIfCancellationRequested();
         var frame = _builder.Build(
-            (codec, flags, messageName, metadata) => CreateHeader(
-                codec,
-                flags,
-                messageName,
-                metadata,
-                context.CurrentDispatchContext),
-            out var header);
+            (codec, flags, messageName, metadata) =>
+                CreateHeader(codec, flags, messageName, metadata, context.CurrentDispatchContext),
+            out var header
+        );
         if (validateBeforeCancellation && cancellationToken.IsCancellationRequested)
         {
             frame.Dispose();
             cancellationToken.ThrowIfCancellationRequested();
         }
-        var result = await context.SubmitAsync(
-                frame,
-                cancellationToken,
-                isReply,
-                admissionTimeout)
+        var result = await context
+            .SubmitAsync(frame, cancellationToken, isReply, admissionTimeout)
             .ConfigureAwait(false);
-        if (result.Status == ZLinkOneWaySubmitStatus.Submitted) context.TraceWritten(header);
+        if (result.Status == ZLinkOneWaySubmitStatus.Submitted)
+            context.TraceWritten(header);
         return result;
     }
 
@@ -69,25 +69,27 @@ internal abstract class ZLinkSessionStreamCallBase<TMessage>(
         ZlinkStreamHeaderFlags flags,
         string messageName,
         ZlinkStreamMetadata metadata,
-        ZLinkSessionDispatchContext? currentDispatch);
+        ZLinkSessionDispatchContext? currentDispatch
+    );
 }
 
-internal sealed class ZLinkSessionSendCall<TMessage>(
-    ZLinkSessionContext context,
-    TMessage message)
-    : ZLinkSessionStreamCallBase<TMessage>(context, message), IZLinkSessionSendCall
+internal sealed class ZLinkSessionSendCall<TMessage>(ZLinkSessionContext context, TMessage message)
+    : ZLinkSessionStreamCallBase<TMessage>(context, message),
+        IZLinkSessionSendCall
 {
     private TimeSpan? _admissionTimeout;
 
     IZLinkSessionSendCall IZLinkMetadataCall<IZLinkSessionSendCall>.Metadata(
         string key,
-        string value)
+        string value
+    )
     {
         return (IZLinkSessionSendCall)Metadata(key, value);
     }
 
     IZLinkSessionSendCall IZLinkMetadataCall<IZLinkSessionSendCall>.Metadata(
-        ZLinkMessageMetadata metadata)
+        ZLinkMessageMetadata metadata
+    )
     {
         return (IZLinkSessionSendCall)Metadata(metadata);
     }
@@ -106,11 +108,10 @@ internal sealed class ZLinkSessionSendCall<TMessage>(
     internal static TimeSpan NormalizeAdmissionTimeout(TimeSpan timeout)
     {
         return ZLinkSocketConfig.NormalizeSendTimeout(timeout)
-               ?? throw new ZLinkConfigurationException("timeout is required.");
+            ?? throw new ZLinkConfigurationException("timeout is required.");
     }
 
-    public ValueTask Async(
-        CancellationToken cancellationToken = default)
+    public ValueTask Async(CancellationToken cancellationToken = default)
     {
         ClaimSubmission();
         return ExecuteAsync(cancellationToken, _admissionTimeout)
@@ -122,7 +123,8 @@ internal sealed class ZLinkSessionSendCall<TMessage>(
         ZlinkStreamHeaderFlags flags,
         string messageName,
         ZlinkStreamMetadata metadata,
-        ZLinkSessionDispatchContext? currentDispatch)
+        ZLinkSessionDispatchContext? currentDispatch
+    )
     {
         _ = currentDispatch;
         return new ZlinkStreamHeader(
@@ -132,29 +134,29 @@ internal sealed class ZLinkSessionSendCall<TMessage>(
             null,
             messageName,
             metadata,
-            ZlinkStreamCorrelation.Next());
+            ZlinkStreamCorrelation.Next()
+        );
     }
 }
 
-internal sealed class ZLinkSessionReplyCall<TMessage>(
-    ZLinkSessionContext context,
-    TMessage message)
-    : ZLinkSessionStreamCallBase<TMessage>(context, message), IZLinkSessionReplyCall
+internal sealed class ZLinkSessionReplyCall<TMessage>(ZLinkSessionContext context, TMessage message)
+    : ZLinkSessionStreamCallBase<TMessage>(context, message),
+        IZLinkSessionReplyCall
 {
     IZLinkSessionReplyCall IZLinkSessionReplyCall.Compress()
     {
         return (IZLinkSessionReplyCall)Compress();
     }
 
-    public ValueTask Async(
-        CancellationToken cancellationToken = default)
+    public ValueTask Async(CancellationToken cancellationToken = default)
     {
         ClaimSubmission();
         return ExecuteAsync(
                 cancellationToken,
                 admissionTimeout: null,
                 validateBeforeCancellation: true,
-                isReply: true)
+                isReply: true
+            )
             .EnsureAcceptedAsync("Session reply");
     }
 
@@ -163,11 +165,16 @@ internal sealed class ZLinkSessionReplyCall<TMessage>(
         ZlinkStreamHeaderFlags flags,
         string messageName,
         ZlinkStreamMetadata metadata,
-        ZLinkSessionDispatchContext? currentDispatch)
+        ZLinkSessionDispatchContext? currentDispatch
+    )
     {
-        if (currentDispatch?.RuntimeState is not ZlinkStreamHeader header
-            || header.RequestSeq is not { } requestSeq)
-            throw new InvalidOperationException("Reply is only available while handling a request packet.");
+        if (
+            currentDispatch?.RuntimeState is not ZlinkStreamHeader header
+            || header.RequestSeq is not { } requestSeq
+        )
+            throw new InvalidOperationException(
+                "Reply is only available while handling a request packet."
+            );
         if (!currentDispatch.TryClaimReply())
             throw new InvalidOperationException("The reply token has already been used.");
 
@@ -177,6 +184,7 @@ internal sealed class ZLinkSessionReplyCall<TMessage>(
             codec,
             flags,
             requestSeq,
-            metadata);
+            metadata
+        );
     }
 }

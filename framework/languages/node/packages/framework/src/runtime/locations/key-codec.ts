@@ -13,7 +13,8 @@ import { encodeRoutingIdStorageHex } from '../routing-id';
 // changes do not leak into runtime models.
 export const ZLinkLocationKeyCodec = Object.freeze({
   encodePeerKey(key: ZLinkPeerLocationKey): string {
-    const identity = key.nodeRid === undefined ? key.endpoint ?? '' : encodeRoutingIdHex(key.nodeRid);
+    const identity =
+      key.nodeRid === undefined ? (key.endpoint ?? '') : encodeRoutingIdHex(key.nodeRid);
     return encodeSegments(
       zlinkLocationAutoConnectTypeName(key.autoConnectType),
       key.meshName,
@@ -43,9 +44,7 @@ function normalizeActorType(actorType: string | undefined): string {
 }
 
 function encodeSegments(...segments: readonly string[]): string {
-  return segments.map(
-    (segment) => `${Buffer.byteLength(segment, 'utf8')}:${segment}`
-  ).join('');
+  return segments.map((segment) => `${Buffer.byteLength(segment, 'utf8')}:${segment}`).join('');
 }
 
 function requireSpotId(value: string): string {

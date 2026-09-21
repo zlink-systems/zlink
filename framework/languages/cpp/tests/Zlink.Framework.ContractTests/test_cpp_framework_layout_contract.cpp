@@ -55,30 +55,15 @@ class layout_directory_entry_t
     {
     }
 
-    bool is_regular_file () const
-    {
-        return std::filesystem::is_regular_file (status_);
-    }
+    bool is_regular_file () const { return std::filesystem::is_regular_file (status_); }
 
-    bool is_directory () const
-    {
-        return std::filesystem::is_directory (status_);
-    }
+    bool is_directory () const { return std::filesystem::is_directory (status_); }
 
-    const std::filesystem::path &path () const
-    {
-        return entry_.path ();
-    }
+    const std::filesystem::path &path () const { return entry_.path (); }
 
-    const layout_file_contents_t &contents () const
-    {
-        return contents_;
-    }
+    const layout_file_contents_t &contents () const { return contents_; }
 
-    layout_file_contents_t &contents ()
-    {
-        return contents_;
-    }
+    layout_file_contents_t &contents () { return contents_; }
 
   private:
     std::filesystem::directory_entry entry_;
@@ -86,8 +71,7 @@ class layout_directory_entry_t
     layout_file_contents_t contents_;
 };
 
-bool is_in_directory_tree (const std::filesystem::path &path,
-                           const std::filesystem::path &root)
+bool is_in_directory_tree (const std::filesystem::path &path, const std::filesystem::path &root)
 {
     const auto relative = path.lexically_relative (root);
     return !relative.empty () && *relative.begin () != "..";
@@ -114,10 +98,7 @@ class layout_snapshot_t
         }
     }
 
-    const std::deque<layout_directory_entry_t> &entries () const
-    {
-        return entries_;
-    }
+    const std::deque<layout_directory_entry_t> &entries () const { return entries_; }
 
     const layout_file_contents_t &file_contents (const std::filesystem::path &path)
     {
@@ -192,22 +173,16 @@ class layout_recursive_directory_entries_t
         std::size_t index_ = 0;
     };
 
-    iterator_t begin () const
-    {
-        return iterator_t{root_};
-    }
+    iterator_t begin () const { return iterator_t{root_}; }
 
-    std::default_sentinel_t end () const
-    {
-        return {};
-    }
+    std::default_sentinel_t end () const { return {}; }
 
   private:
     std::filesystem::path root_;
 };
 
-layout_recursive_directory_entries_t layout_recursive_directory_entries (
-  const std::filesystem::path &root)
+layout_recursive_directory_entries_t
+layout_recursive_directory_entries (const std::filesystem::path &root)
 {
     return layout_recursive_directory_entries_t{root};
 }
@@ -332,7 +307,8 @@ bool public_headers_do_not_expose_runtime_dependencies (const std::filesystem::p
             continue;
         }
 
-        const auto relative_text = std::filesystem::relative (entry.path (), root).generic_string ();
+        const auto relative_text =
+          std::filesystem::relative (entry.path (), root).generic_string ();
         std::size_t line_no = 0;
         for (const auto line : entry.contents ().lines) {
             ++line_no;
@@ -826,8 +802,7 @@ bool runner_generated_config_files_are_private_and_cleaned (const std::filesyste
             continue;
         }
         if (extension == ".sh"
-            && content.find ("zlink_sample_write_private_file \"$CONFIG_DIR/")
-                 == std::string::npos
+            && content.find ("zlink_sample_write_private_file \"$CONFIG_DIR/") == std::string::npos
             && content.find ("zlink_sample_write_private_file \"$path\"") == std::string::npos) {
             std::cerr << "runner-generated application config must be written through "
                          "zlink_sample_write_private_file (mode 0600): "
@@ -874,8 +849,7 @@ bool sample_runners_need_no_other_runtime (const std::filesystem::path &root)
         for (const auto line : entry.contents ().lines) {
             ++line_no;
             if (line.find ("python") != std::string::npos
-                || line.find ("node.exe") != std::string::npos
-                || line.find ("node ") == 0) {
+                || line.find ("node.exe") != std::string::npos || line.find ("node ") == 0) {
                 std::cerr << "sample runner must not require Python or Node: " << entry.path ()
                           << ':' << line_no << '\n';
                 ok = false;
@@ -900,9 +874,9 @@ bool downloadable_archives_carry_identical_bootstrap (const std::filesystem::pat
         std::cerr << "tutorial/bootstrap.cmake and samples/bootstrap.cmake must be identical\n";
         ok = false;
     }
-    for (const auto *required : {"tutorial/README.ko.md", "tutorial/README.md",
-                                 "samples/README.ko.md", "samples/README.md",
-                                 "samples/CMakeLists.txt"}) {
+    for (const auto *required :
+         {"tutorial/README.ko.md", "tutorial/README.md", "samples/README.ko.md",
+          "samples/README.md", "samples/CMakeLists.txt"}) {
         if (!std::filesystem::exists (root / required)) {
             std::cerr << "downloadable archive entry point is missing: " << required << '\n';
             ok = false;
@@ -929,8 +903,7 @@ bool cpp_runners_prefer_the_selected_build_directory (const std::filesystem::pat
                           << entry.path () << '\n';
                 ok = false;
             }
-            if (content.find ("$CPP_DIR/build/linux-ninja-vcpkg-debug")
-                != std::string::npos) {
+            if (content.find ("$CPP_DIR/build/linux-ninja-vcpkg-debug") != std::string::npos) {
                 std::cerr << "C++ runner dependency path bypasses the selected BUILD_DIR: "
                           << entry.path () << '\n';
                 ok = false;
@@ -1530,8 +1503,8 @@ int main ()
                           "samples run one at a time through their own runner");
     ok &= require_absent (root / "samples/run_samples.ps1",
                           "samples run one at a time through their own runner");
-    for (const auto &runner : {"TicTacToe", "Bingo", "DeliveryDispatch", "SupportChat",
-                               "GameQuest", "ShoppingMall", "ZoneWorld"}) {
+    for (const auto &runner : {"TicTacToe", "Bingo", "DeliveryDispatch", "SupportChat", "GameQuest",
+                               "ShoppingMall", "ZoneWorld"}) {
         ok &= require_exists (root / "samples" / runner / "run_sample.sh");
         ok &= require_exists (root / "samples" / runner / "run_sample.ps1");
     }

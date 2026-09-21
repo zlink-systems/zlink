@@ -1,8 +1,8 @@
 package systems.zlink.framework.runtime.internal.binding.spot;
-import java.util.Objects;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 /** Framework-owned reusable ready-owner storage. */
 final class FrameworkReadyBatch implements ReadyBatch {
@@ -12,8 +12,7 @@ final class FrameworkReadyBatch implements ReadyBatch {
 
     FrameworkReadyBatch(int capacity) {
         if (capacity <= 0) {
-            throw new IllegalArgumentException(
-                "ready batch capacity must be positive");
+            throw new IllegalArgumentException("ready batch capacity must be positive");
         }
         this.capacity = capacity;
     }
@@ -50,10 +49,7 @@ final class FrameworkReadyBatch implements ReadyBatch {
     @Override
     public void close() {
         closed = true;
-        entries.stream()
-            .map(Entry::claim)
-            .filter(Objects::nonNull)
-            .forEach(Claim::close);
+        entries.stream().map(Entry::claim).filter(Objects::nonNull).forEach(Claim::close);
         entries.clear();
     }
 
@@ -72,6 +68,5 @@ final class FrameworkReadyBatch implements ReadyBatch {
         }
     }
 
-    private record Entry(ReadyRecord record, Claim claim) {
-    }
+    private record Entry(ReadyRecord record, Claim claim) {}
 }

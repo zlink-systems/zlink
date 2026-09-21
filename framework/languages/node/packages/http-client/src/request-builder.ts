@@ -12,7 +12,12 @@ import type {
   ZLinkHttpMethod
 } from './types';
 import type { HttpRequestSpec } from './runtime/request-performer';
-import { makeMultipartBoundary, percentEncode, requireNonBlank, requirePositiveTimeout } from './runtime/text';
+import {
+  makeMultipartBoundary,
+  percentEncode,
+  requireNonBlank,
+  requirePositiveTimeout
+} from './runtime/text';
 
 interface MultipartPart {
   name: string;
@@ -44,19 +49,19 @@ export class ZLinkHttpRequestBuilder {
     client: ZLinkHttpClient | undefined,
     private readonly method: ZLinkHttpMethod,
     private readonly path: string,
-    clientFactory?: ZLinkHttpClientBuilder,
+    clientFactory?: ZLinkHttpClientBuilder
   ) {
     this.clientInstance = client;
     this.clientFactory = clientFactory;
     // A one-shot request (builder verb shortcut) owns the lazily-built client and closes it once the
     // request completes.
     this.ownsClient = clientFactory !== undefined;
-    this.executionTurn = client?.executionScheduler?.capture()
-      ?? clientFactory?.captureExecutionTurn();
+    this.executionTurn =
+      client?.executionScheduler?.capture() ?? clientFactory?.captureExecutionTurn();
     if (path.length === 0 || path[0] !== '/') {
       throw new ZLinkFrameworkException(
         ZLinkFrameworkErrorKind.ProtocolError,
-        'HTTP request path must start with /',
+        'HTTP request path must start with /'
       );
     }
   }
@@ -67,7 +72,7 @@ export class ZLinkHttpRequestBuilder {
     if (this.ownsClient && this.consumed) {
       throw new ZLinkFrameworkException(
         ZLinkFrameworkErrorKind.ProtocolError,
-        'A one-shot HTTP request can only be submitted once',
+        'A one-shot HTTP request can only be submitted once'
       );
     }
     this.consumed = true;
@@ -75,7 +80,7 @@ export class ZLinkHttpRequestBuilder {
       if (this.clientFactory === undefined) {
         throw new ZLinkFrameworkException(
           ZLinkFrameworkErrorKind.ProtocolError,
-          'HTTP request has no client',
+          'HTTP request has no client'
         );
       }
       this.clientInstance = this.clientFactory.build();
@@ -116,7 +121,7 @@ export class ZLinkHttpRequestBuilder {
       if (typeof value !== 'string') {
         throw new ZLinkFrameworkException(
           ZLinkFrameworkErrorKind.ProtocolError,
-          'HTTP request raw body content is required',
+          'HTTP request raw body content is required'
         );
       }
       requireNonBlank(contentType, 'HTTP request body content type is required');
@@ -137,7 +142,7 @@ export class ZLinkHttpRequestBuilder {
     if (typeof provider !== 'function') {
       throw new ZLinkFrameworkException(
         ZLinkFrameworkErrorKind.ProtocolError,
-        'HTTP request body stream provider is required',
+        'HTTP request body stream provider is required'
       );
     }
     requireNonBlank(contentType, 'HTTP request body content type is required');
@@ -185,7 +190,7 @@ export class ZLinkHttpRequestBuilder {
     if (typeof sink !== 'function') {
       throw new ZLinkFrameworkException(
         ZLinkFrameworkErrorKind.ProtocolError,
-        'HTTP request download sink is required',
+        'HTTP request download sink is required'
       );
     }
     const request = this.makeRequest(sink);
@@ -215,7 +220,7 @@ export class ZLinkHttpRequestBuilder {
     if (raw.status >= 400) {
       throw new ZLinkFrameworkException(
         ZLinkFrameworkErrorKind.InternalFailure,
-        `HTTP request failed with status ${raw.status}`,
+        `HTTP request failed with status ${raw.status}`
       );
     }
     let body: T;
@@ -228,7 +233,7 @@ export class ZLinkHttpRequestBuilder {
         throw new ZLinkFrameworkException(
           ZLinkFrameworkErrorKind.ProtocolError,
           cause instanceof Error ? cause.message : 'HTTP response body decode failed',
-          cause,
+          cause
         );
       }
     }
@@ -257,7 +262,7 @@ export class ZLinkHttpRequestBuilder {
       ...(this.bodyProviderValue !== undefined ? { bodyProvider: this.bodyProviderValue } : {}),
       headers,
       ...(this.timeoutMsValue !== undefined ? { timeoutMs: this.timeoutMsValue } : {}),
-      ...(sink !== undefined ? { sink } : {}),
+      ...(sink !== undefined ? { sink } : {})
     };
   }
 
@@ -278,7 +283,7 @@ export class ZLinkHttpRequestBuilder {
     if (this.countBodySources() > 1) {
       throw new ZLinkFrameworkException(
         ZLinkFrameworkErrorKind.ProtocolError,
-        'HTTP request accepts a single body source: body, body_stream, form, or multipart',
+        'HTTP request accepts a single body source: body, body_stream, form, or multipart'
       );
     }
 
@@ -341,10 +346,12 @@ class ZLinkFrameworkHttpRequestBuilder extends ZLinkHttpRequestBuilder {
   /** Executes a typed request while yielding the current Spot turn. */
   yield<T>(): Promise<HttpResponse<T>> {
     if (this.executionTurn === undefined) {
-      return Promise.reject(new ZLinkFrameworkException(
-        ZLinkFrameworkErrorKind.ProtocolError,
-        'HTTP yield requires a framework Spot turn'
-      ));
+      return Promise.reject(
+        new ZLinkFrameworkException(
+          ZLinkFrameworkErrorKind.ProtocolError,
+          'HTTP yield requires a framework Spot turn'
+        )
+      );
     }
     return this.executionTurn.yieldPromise(this.executeTyped<T>());
   }

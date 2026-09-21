@@ -2,8 +2,8 @@ using Zlink.Framework.Runtime.Streams;
 
 namespace Zlink.Framework.Runtime.Actors;
 
-using System.Text;
 using System.Buffers.Binary;
+using System.Text;
 
 internal static class ZLinkActorBoundSessionRelay
 {
@@ -14,7 +14,8 @@ internal static class ZLinkActorBoundSessionRelay
         return string.Equals(
             header.Name,
             ZLinkRemoteActorJoinPackets.SessionDisconnectedPacketName,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
     }
 
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
@@ -22,34 +23,38 @@ internal static class ZLinkActorBoundSessionRelay
     internal static bool MatchesRelaySource(
         ZLinkActorBoundSession session,
         RoutingId sourceNodeRid,
-        RoutingId sourceSessionRid)
+        RoutingId sourceSessionRid
+    )
     {
         return session.SessionNodeRid is { } sessionNodeRid
-               && sessionNodeRid == sourceNodeRid
-               && session.SessionRid == sourceSessionRid;
+            && sessionNodeRid == sourceNodeRid
+            && session.SessionRid == sourceSessionRid;
     }
 
     public static byte[] EncodeSessionDisconnected(
         string bindingToken,
         ulong bindingGeneration,
-        ulong sessionOwnerNodeGeneration)
+        ulong sessionOwnerNodeGeneration
+    )
     {
-        if (string.IsNullOrWhiteSpace(bindingToken)
+        if (
+            string.IsNullOrWhiteSpace(bindingToken)
             || bindingGeneration == 0
-            || sessionOwnerNodeGeneration == 0)
+            || sessionOwnerNodeGeneration == 0
+        )
             throw new InvalidOperationException(
-                "Actor session disconnect requires an exact binding identity.");
+                "Actor session disconnect requires an exact binding identity."
+            );
         var token = StrictUtf8.GetBytes(bindingToken);
         var payload = new byte[sizeof(uint) + token.Length + (sizeof(ulong) * 2)];
         BinaryPrimitives.WriteUInt32BigEndian(payload, checked((uint)token.Length));
         token.CopyTo(payload.AsSpan(sizeof(uint)));
         var generationOffset = sizeof(uint) + token.Length;
-        BinaryPrimitives.WriteUInt64BigEndian(
-            payload.AsSpan(generationOffset),
-            bindingGeneration);
+        BinaryPrimitives.WriteUInt64BigEndian(payload.AsSpan(generationOffset), bindingGeneration);
         BinaryPrimitives.WriteUInt64BigEndian(
             payload.AsSpan(generationOffset + sizeof(ulong)),
-            sessionOwnerNodeGeneration);
+            sessionOwnerNodeGeneration
+        );
         return payload;
     }
 
@@ -58,30 +63,33 @@ internal static class ZLinkActorBoundSessionRelay
         RoutingId sourceNodeRid,
         RoutingId sourceSessionRid,
         Message payload,
-        out string bindingToken)
+        out string bindingToken
+    )
     {
         bindingToken = string.Empty;
         var bytes = payload.AsReadOnlyMemory();
-        if (!TryDecodeSessionDisconnected(
+        if (
+            !TryDecodeSessionDisconnected(
                 bytes.Span,
                 out var decodedBindingToken,
                 out var bindingGeneration,
-                out var sessionOwnerNodeGeneration))
+                out var sessionOwnerNodeGeneration
+            )
+        )
             return false;
         // Final relocation replay runs before the session-owner route commit.
         // The target therefore exposes the exact committed target projection
         // through the inbound view even though _boundSession is not promoted
         // until the route update is acknowledged.
-        if (!state.TryGetBoundSessionForInbound(out var current)
-            || !string.Equals(
-                current.BindingToken,
-                decodedBindingToken,
-                StringComparison.Ordinal)
+        if (
+            !state.TryGetBoundSessionForInbound(out var current)
+            || !string.Equals(current.BindingToken, decodedBindingToken, StringComparison.Ordinal)
             || current.SessionNodeRid is not { } currentNodeRid
             || currentNodeRid != sourceNodeRid
             || current.SessionRid != sourceSessionRid
             || current.BindingGeneration != bindingGeneration
-            || current.SessionOwnerNodeGeneration != sessionOwnerNodeGeneration)
+            || current.SessionOwnerNodeGeneration != sessionOwnerNodeGeneration
+        )
         {
             //  Dropping here leaves the Actor holding a binding whose session
             //  is gone; the caller traces it (spec 26 §2.1).
@@ -96,21 +104,24 @@ internal static class ZLinkActorBoundSessionRelay
         ReadOnlySpan<byte> payload,
         out string bindingToken,
         out ulong bindingGeneration,
-        out ulong sessionOwnerNodeGeneration)
+        out ulong sessionOwnerNodeGeneration
+    )
     {
         bindingToken = string.Empty;
         bindingGeneration = 0;
         sessionOwnerNodeGeneration = 0;
-        if (payload.Length < sizeof(uint) + (sizeof(ulong) * 2)) return false;
+        if (payload.Length < sizeof(uint) + (sizeof(ulong) * 2))
+            return false;
         var tokenLength = BinaryPrimitives.ReadUInt32BigEndian(payload);
-        if (tokenLength == 0
+        if (
+            tokenLength == 0
             || tokenLength > int.MaxValue
-            || payload.Length != sizeof(uint) + (int)tokenLength + (sizeof(ulong) * 2))
+            || payload.Length != sizeof(uint) + (int)tokenLength + (sizeof(ulong) * 2)
+        )
             return false;
         try
         {
-            bindingToken = StrictUtf8.GetString(
-                payload.Slice(sizeof(uint), (int)tokenLength));
+            bindingToken = StrictUtf8.GetString(payload.Slice(sizeof(uint), (int)tokenLength));
         }
         catch (DecoderFallbackException)
         {
@@ -118,9 +129,11 @@ internal static class ZLinkActorBoundSessionRelay
         }
         var generationOffset = sizeof(uint) + (int)tokenLength;
         bindingGeneration = BinaryPrimitives.ReadUInt64BigEndian(
-            payload.Slice(generationOffset, sizeof(ulong)));
+            payload.Slice(generationOffset, sizeof(ulong))
+        );
         sessionOwnerNodeGeneration = BinaryPrimitives.ReadUInt64BigEndian(
-            payload.Slice(generationOffset + sizeof(ulong), sizeof(ulong)));
+            payload.Slice(generationOffset + sizeof(ulong), sizeof(ulong))
+        );
         return bindingGeneration != 0 && sessionOwnerNodeGeneration != 0;
     }
 
@@ -130,7 +143,8 @@ internal static class ZLinkActorBoundSessionRelay
         RoutingId sourceNodeRid,
         RoutingId sourceSessionRid,
         ulong requestId,
-        uint flags)
+        uint flags
+    )
     {
         var isNoBind = IsNoBindRequest(requestId, flags);
         var scope = ZLinkBoundSessionDispatchScope.Enter(actorId);
@@ -152,11 +166,14 @@ internal static class ZLinkActorBoundSessionRelay
         string? replyCapability,
         ZlinkStreamHeader requestHeader,
         Func<IReadOnlyList<Message>, SubmitResult>? directReply = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
-        if (requestHeader.Kind != ZlinkStreamMessageKind.Request
+        if (
+            requestHeader.Kind != ZlinkStreamMessageKind.Request
             || requestHeader.RequestSeq is null
-            || !IsNoBindRequest(requestId, flags))
+            || !IsNoBindRequest(requestId, flags)
+        )
             return false;
 
         await ReplyNoBindAsync(
@@ -168,11 +185,15 @@ internal static class ZLinkActorBoundSessionRelay
                 flags,
                 replyCapability,
                 requestHeader,
-                ZLinkActorReply.FromError(new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.NotFound,
-                    $"Actor '{actorRef.ActorId}' is not available.")),
+                ZLinkActorReply.FromError(
+                    new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.NotFound,
+                        $"Actor '{actorRef.ActorId}' is not available."
+                    )
+                ),
                 directReply,
-                cancellationToken)
+                cancellationToken
+            )
             .ConfigureAwait(false);
         return true;
     }
@@ -190,12 +211,14 @@ internal static class ZLinkActorBoundSessionRelay
         ZlinkStreamHeader requestHeader,
         ZLinkActorReply reply,
         CancellationToken cancellationToken,
-        Func<IReadOnlyList<Message>, SubmitResult>? directReply = null)
+        Func<IReadOnlyList<Message>, SubmitResult>? directReply = null
+    )
     {
         ZLinkFrameworkDebugLog.SpotDiscovery(
             $"actor_reply_begin actor={actorId} request_id={requestId} "
-            + $"flags={flags} no_bind={isNoBind} capability={(!string.IsNullOrWhiteSpace(replyCapability))} "
-            + $"source_node={sourceNodeRid} direct={directReply is not null}");
+                + $"flags={flags} no_bind={isNoBind} capability={(!string.IsNullOrWhiteSpace(replyCapability))} "
+                + $"source_node={sourceNodeRid} direct={directReply is not null}"
+        );
         if (isNoBind)
         {
             await ReplyNoBindAsync(
@@ -209,7 +232,8 @@ internal static class ZLinkActorBoundSessionRelay
                     requestHeader,
                     reply,
                     directReply,
-                    cancellationToken)
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
             return;
         }
@@ -230,10 +254,13 @@ internal static class ZLinkActorBoundSessionRelay
         ZlinkStreamHeader requestHeader,
         ZLinkFrameworkException exception,
         CancellationToken cancellationToken,
-        Func<IReadOnlyList<Message>, SubmitResult>? directReply = null)
+        Func<IReadOnlyList<Message>, SubmitResult>? directReply = null
+    )
     {
-        if (requestHeader.Kind != ZlinkStreamMessageKind.Request
-            || requestHeader.RequestSeq is null)
+        if (
+            requestHeader.Kind != ZlinkStreamMessageKind.Request
+            || requestHeader.RequestSeq is null
+        )
             return;
 
         var dispatch = EnterDispatch(
@@ -242,7 +269,8 @@ internal static class ZLinkActorBoundSessionRelay
             sourceNodeRid,
             sourceSessionRid,
             requestId,
-            flags);
+            flags
+        );
         try
         {
             await SendReplyAsync(
@@ -258,7 +286,8 @@ internal static class ZLinkActorBoundSessionRelay
                     requestHeader,
                     ZLinkActorReply.FromError(exception),
                     cancellationToken,
-                    directReply)
+                    directReply
+                )
                 .ConfigureAwait(false);
             await dispatch.DrainAsync(cancellationToken).ConfigureAwait(false);
         }
@@ -279,40 +308,45 @@ internal static class ZLinkActorBoundSessionRelay
         ZlinkStreamHeader requestHeader,
         ZLinkActorReply reply,
         Func<IReadOnlyList<Message>, SubmitResult>? directReply,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var frame = reply.ToFrame(requestHeader);
         ZLinkFrameworkDebugLog.SpotDiscovery(
             $"actor_reply_no_bind_begin actor={actorRef.ActorId} request_id={requestId} "
-            + $"source_node={sourceNodeRid} source_session={sourceSessionRid} "
-            + $"capability={(!string.IsNullOrWhiteSpace(replyCapability))} "
-            + $"direct={directReply is not null}");
+                + $"source_node={sourceNodeRid} source_session={sourceSessionRid} "
+                + $"capability={(!string.IsNullOrWhiteSpace(replyCapability))} "
+                + $"direct={directReply is not null}"
+        );
         if (directReply is not null)
         {
             cancellationToken.ThrowIfCancellationRequested();
             using var replyMessage = Message.From(frame);
             var result = directReply([replyMessage]);
             if (result is not (SubmitResult.Ok or SubmitResult.Backpressured))
-                throw new ZlinkSubmitException(
-                    (ZlinkSubmitException.ErrorCode)(int)result);
+                throw new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)result);
         }
         else
         {
             using var replyMessage = Message.From(frame);
-            await runtime.ReplyActorNoBindAsync(
+            await runtime
+                .ReplyActorNoBindAsync(
                     actorRef,
                     sourceNodeRid,
                     sourceSessionRid,
                     requestId,
                     flags,
                     replyCapability,
-                    [replyMessage])
+                    [replyMessage]
+                )
                 .ConfigureAwait(false);
         }
         runtime.LogActorHandoff(
-            $"request_reply_direct actor={actorRef.ActorId} request_id={requestId} caller_node={sourceNodeRid}");
+            $"request_reply_direct actor={actorRef.ActorId} request_id={requestId} caller_node={sourceNodeRid}"
+        );
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"actor_reply_no_bind_done actor={actorRef.ActorId} request_id={requestId}");
+            $"actor_reply_no_bind_done actor={actorRef.ActorId} request_id={requestId}"
+        );
     }
 
     private static async ValueTask SendFrameAsync(
@@ -320,47 +354,50 @@ internal static class ZLinkActorBoundSessionRelay
         string actorId,
         RoutingId sourceSessionRid,
         byte[] frame,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var sourceBindingToken = sourceSessionRid.IsEmpty
-            ? runtime.TryGetActorBoundSessionForOutbound(
-                actorId,
-                out var current)
+            ? runtime.TryGetActorBoundSessionForOutbound(actorId, out var current)
                 ? current.BindingToken
                 : throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.InvalidOperation,
                     $"Actor '{actorId}' has no current bound session for its reply.",
-                    ZLinkRetryAdvice.RetryAfterBackoff)
+                    ZLinkRetryAdvice.RetryAfterBackoff
+                )
             : ZLinkActorBoundSessionBindingToken.Native(sourceSessionRid);
         using var terminal = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
-            runtime.ShutdownToken);
+            runtime.ShutdownToken
+        );
         terminal.CancelAfter(runtime.Registration.DefaultRequestTimeout);
         using var frameMessage = Message.From(frame);
         try
         {
-            await runtime.SendActorBoundSessionIfCurrentAsync(
+            await runtime
+                .SendActorBoundSessionIfCurrentAsync(
                     actorId,
                     sourceBindingToken,
                     [frameMessage],
-                    terminal.Token)
+                    terminal.Token
+                )
                 .EnsureAcceptedAsync("Actor request reply relay")
                 .ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (
-            runtime.ShutdownToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (runtime.ShutdownToken.IsCancellationRequested)
         {
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ShuttingDown,
-                "Actor request reply relay was interrupted by runtime shutdown.");
+                "Actor request reply relay was interrupted by runtime shutdown."
+            );
         }
-        catch (OperationCanceledException) when (
-            !cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.DeadlineExceeded,
                 "Actor request reply relay timed out before local admission completed.",
-                ZLinkRetryAdvice.RetryAfterBackoff);
+                ZLinkRetryAdvice.RetryAfterBackoff
+            );
         }
     }
 
@@ -368,12 +405,12 @@ internal static class ZLinkActorBoundSessionRelay
     {
         return requestId != 0 && (flags & ActorRecvInfoNoBind) != 0;
     }
-
 }
 
 internal readonly struct ZLinkActorBoundSessionDispatch(
     bool isNoBind,
-    ZLinkBoundSessionDispatchScope scope) : IAsyncDisposable
+    ZLinkBoundSessionDispatchScope scope
+) : IAsyncDisposable
 {
     public bool IsNoBind => isNoBind;
 

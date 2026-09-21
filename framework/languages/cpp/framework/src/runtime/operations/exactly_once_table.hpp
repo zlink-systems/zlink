@@ -19,8 +19,7 @@ enum class exactly_once_claim_state
     completed
 };
 
-template <typename TValue>
-struct exactly_once_claim_t
+template <typename TValue> struct exactly_once_claim_t
 {
     exactly_once_claim_state state = exactly_once_claim_state::pending;
     std::optional<TValue> value;
@@ -30,9 +29,7 @@ struct exactly_once_claim_t
 // keeps duplicate delivery from being accepted between the reservation and
 // completion steps; callers may remove a pending entry only when the work
 // itself failed and can be retried.
-template <typename TKey,
-          typename TValue,
-          typename THash = std::hash<TKey>>
+template <typename TKey, typename TValue, typename THash = std::hash<TKey>>
 class exactly_once_table_t
 {
   public:
@@ -108,8 +105,7 @@ class exactly_once_table_t
         return _entries.erase (key) != 0;
     }
 
-    template <typename TPredicate>
-    std::size_t erase_if (TPredicate predicate)
+    template <typename TPredicate> std::size_t erase_if (TPredicate predicate)
     {
         std::lock_guard lock (_mutex);
         std::size_t erased = 0;

@@ -4,10 +4,7 @@ import type { ZLinkPeerLocationResolver } from '../../contracts/Locations/Resolv
 import type { ZLinkDomainLocationStore as ZLinkLocationStore } from '../locations/domain-store-contract';
 import type { ZLinkPeerLocation } from '../../contracts/Locations/Rows';
 import { ZLinkLocationAutoConnectType } from '../../contracts/Locations/Values';
-import {
-  ZLinkFrameworkRuntimeState,
-  ZLinkLocationRole
-} from '../../contracts';
+import { ZLinkFrameworkRuntimeState, ZLinkLocationRole } from '../../contracts';
 import type { ZLinkSpotNodeOptions } from '../configuration';
 import type { ZLinkBackendMeshNode } from '../backend/contracts';
 import { AsyncResource } from 'node:async_hooks';
@@ -83,37 +80,28 @@ export function spotNodeAutoConnectCapability(
     nodeRid: String(status.routingId),
     endpoint,
     objectRole: spotNode.objectRole ?? 'none',
-    hasRouteMeshServerChannel: Object.values(spotNode.meshChannels ?? {})
-      .some((channel) => channel.server === true)
+    hasRouteMeshServerChannel: Object.values(spotNode.meshChannels ?? {}).some(
+      (channel) => channel.server === true
+    )
   };
   const manualConnections = hasManualRouterConnections(spotNode);
   return {
     local,
-    executor: new ZLinkSpotNodeAutoConnectExecutor(
-      node,
-      manualConnections
-    )
+    executor: new ZLinkSpotNodeAutoConnectExecutor(node, manualConnections)
   };
 }
 
-function meshDescriptorPeerResolver(
-  runtime: ZLinkLocationRuntime
-): ZLinkPeerLocationResolver {
+function meshDescriptorPeerResolver(runtime: ZLinkLocationRuntime): ZLinkPeerLocationResolver {
   return {
     async listLivePeers(
       filter: ZLinkPeerLocationFilter,
       signal?: AbortSignal
     ): Promise<readonly ZLinkPeerLocation[]> {
       if (
-        filter.meshName === undefined
-        || (
-          filter.autoConnectType !== undefined
-          && filter.autoConnectType !== ZLinkLocationAutoConnectType.RouteMesh
-        )
-        || (
-          filter.role !== undefined
-          && filter.role !== ZLinkLocationRole.Router
-        )
+        filter.meshName === undefined ||
+        (filter.autoConnectType !== undefined &&
+          filter.autoConnectType !== ZLinkLocationAutoConnectType.RouteMesh) ||
+        (filter.role !== undefined && filter.role !== ZLinkLocationRole.Router)
       ) {
         return [];
       }
@@ -133,23 +121,25 @@ function meshDescriptorPeerResolver(
           updatedAt: descriptor.updatedAt,
           metadata: {
             objectRole: descriptor.objectRole,
-            hasRouteMeshServerChannel:
-              String(Object.keys(descriptor.channelWeights).length > 0),
+            hasRouteMeshServerChannel: String(Object.keys(descriptor.channelWeights).length > 0),
             descriptorRevision: descriptor.descriptorRevision.toString(),
             securityIdentity: descriptor.securityIdentity
           }
         }))
-        .filter(peer =>
-          (filter.nodeRid === undefined || String(peer.nodeRid) === String(filter.nodeRid))
-          && (filter.endpoint === undefined || peer.endpoint === filter.endpoint)
+        .filter(
+          (peer) =>
+            (filter.nodeRid === undefined || String(peer.nodeRid) === String(filter.nodeRid)) &&
+            (filter.endpoint === undefined || peer.endpoint === filter.endpoint)
         );
     }
   };
 }
 
 function hasManualRouterConnections(spotNode: ZLinkSpotNodeOptions): boolean {
-  return (spotNode.router?.manualConnections?.length ?? 0) > 0
-    || (spotNode.router?.manualPeerConnections?.length ?? 0) > 0;
+  return (
+    (spotNode.router?.manualConnections?.length ?? 0) > 0 ||
+    (spotNode.router?.manualPeerConnections?.length ?? 0) > 0
+  );
 }
 
 const detachedSpotNodeAutoConnectResource = new AsyncResource('zlink:spot-node-autoconnect');
@@ -186,17 +176,16 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
 
   disconnectStalePeers(targets: readonly ZLinkAutoConnectTarget[]): void {
     if (this.manualConnections) return;
-    const current = new Map(targets
-      .filter((target) => target.nodeRid !== undefined)
-      .map((target) => [String(target.nodeRid), target]));
+    const current = new Map(
+      targets
+        .filter((target) => target.nodeRid !== undefined)
+        .map((target) => [String(target.nodeRid), target])
+    );
     const peers = this.node.peers();
     for (const peer of peers) {
       if (peer.routingId === null) continue;
       const target = current.get(String(peer.routingId));
-      if (
-        target !== undefined
-        && peer.endpoint === target.endpoint
-      ) {
+      if (target !== undefined && peer.endpoint === target.endpoint) {
         continue;
       }
       this.node.disconnectPeer(peer.routingId, peer.lifecycleGeneration);
@@ -208,25 +197,35 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
     // reached the admitted table yet. Shutdown must remove that intent before
     // it can treat the automatic route as disconnected.
     if (this.connectionIntents.has(connectionKey(target))) return false;
-    return !this.node.peers().some((peer) =>
-      peer.routingId !== null &&
-      peer.endpoint === target.endpoint &&
-      (target.nodeRid === undefined || String(peer.routingId) === String(target.nodeRid)) &&
-      peer.lifecycleGeneration === target.lifecycleGeneration &&
-      peer.state === 3);
+    return !this.node
+      .peers()
+      .some(
+        (peer) =>
+          peer.routingId !== null &&
+          peer.endpoint === target.endpoint &&
+          (target.nodeRid === undefined || String(peer.routingId) === String(target.nodeRid)) &&
+          peer.lifecycleGeneration === target.lifecycleGeneration &&
+          peer.state === 3
+      );
   }
 
   replaceNotRequired(targets: readonly ZLinkAutoConnectTarget[]): void {
-    this.node.replaceDiscoveredNotRequiredPeers?.(targets
-      .filter((target): target is ZLinkAutoConnectTarget & {
-        readonly nodeRid: NonNullable<ZLinkAutoConnectTarget['nodeRid']>;
-      } => target.nodeRid !== undefined)
-      .map(target => ({
-        nodeRoutingId: String(target.nodeRid),
-        lifecycleGeneration: target.lifecycleGeneration,
-        descriptorRevision: target.descriptorRevision ?? 1n,
-        endpoint: target.endpoint
-      })));
+    this.node.replaceDiscoveredNotRequiredPeers?.(
+      targets
+        .filter(
+          (
+            target
+          ): target is ZLinkAutoConnectTarget & {
+            readonly nodeRid: NonNullable<ZLinkAutoConnectTarget['nodeRid']>;
+          } => target.nodeRid !== undefined
+        )
+        .map((target) => ({
+          nodeRoutingId: String(target.nodeRid),
+          lifecycleGeneration: target.lifecycleGeneration,
+          descriptorRevision: target.descriptorRevision ?? 1n,
+          endpoint: target.endpoint
+        }))
+    );
   }
 
   expectPeers(targets: readonly ZLinkAutoConnectTarget[]): void {
@@ -235,9 +234,7 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
       this.node.expectPeer?.({
         nodeRoutingId: String(target.nodeRid),
         endpoint: target.endpoint,
-        securityIdentity: toAdmissionSecurityIdentity(
-          target.metadata?.securityIdentity
-        ),
+        securityIdentity: toAdmissionSecurityIdentity(target.metadata?.securityIdentity),
         lifecycleGeneration: target.lifecycleGeneration
       });
     }
@@ -258,12 +255,8 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
     try {
       const connectionIntentId = await this.node.connectPeer({
         endpoint: target.endpoint,
-        expectedRid: target.nodeRid === undefined
-          ? undefined
-          : toBackendRoutingId(target.nodeRid),
-        expectedSecurityIdentity: toAdmissionSecurityIdentity(
-          target.metadata?.securityIdentity
-        ),
+        expectedRid: target.nodeRid === undefined ? undefined : toBackendRoutingId(target.nodeRid),
+        expectedSecurityIdentity: toAdmissionSecurityIdentity(target.metadata?.securityIdentity),
         expectedLifecycleGeneration: target.lifecycleGeneration
       });
       const accepted = await this.lane.run(() => {

@@ -4,11 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.nio.charset.StandardCharsets;
-import java.util.Set;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ConcurrentHashMap;
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkHandlerFilter;
 import systems.zlink.framework.ZLinkHandlerFilterContext;
@@ -20,6 +17,11 @@ import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 
+import java.nio.charset.StandardCharsets;
+import java.util.Set;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentHashMap;
+
 final class ZLinkFrameworkRuntimeCodecTest {
     @Test
     void predicateCodecExtensionKeepsJsonFallbackForOtherPayloadTypes() {
@@ -28,10 +30,12 @@ final class ZLinkFrameworkRuntimeCodecTest {
 
         ZLinkMessageSerializer serializer = ZLinkFrameworkRuntime.serializerFor(options);
 
-        Marker marker = serializer.deserialize(serializer.serialize(new Marker("custom")), Marker.class);
+        Marker marker =
+                serializer.deserialize(serializer.serialize(new Marker("custom")), Marker.class);
         assertEquals(new Marker("custom"), marker);
 
-        Fallback fallback = serializer.deserialize(serializer.serialize(new Fallback("json")), Fallback.class);
+        Fallback fallback =
+                serializer.deserialize(serializer.serialize(new Fallback("json")), Fallback.class);
         assertEquals(new Fallback("json"), fallback);
     }
 
@@ -40,11 +44,11 @@ final class ZLinkFrameworkRuntimeCodecTest {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.codecs().use(MarkerCodecExtension::register);
 
-        try (ZLinkFrameworkRuntime ignored = ZLinkFrameworkRuntime.start(
-            options, new ZLinkJavaBackendAdapterFactory())) {
+        try (ZLinkFrameworkRuntime ignored =
+                ZLinkFrameworkRuntime.start(options, new ZLinkJavaBackendAdapterFactory())) {
             assertThrows(
-                ZLinkConfigurationException.class,
-                () -> options.codecs().use(MarkerCodecExtension::register));
+                    ZLinkConfigurationException.class,
+                    () -> options.codecs().use(MarkerCodecExtension::register));
         }
     }
 
@@ -54,23 +58,23 @@ final class ZLinkFrameworkRuntimeCodecTest {
         options.useFilter(PreparedFilter.class);
         TrackingActivator activator = new TrackingActivator();
 
-        try (ZLinkFrameworkRuntime ignored = ZLinkFrameworkRuntime.start(
-            options, new ZLinkJavaBackendAdapterFactory(), activator)) {
+        try (ZLinkFrameworkRuntime ignored =
+                ZLinkFrameworkRuntime.start(
+                        options, new ZLinkJavaBackendAdapterFactory(), activator)) {
             assertTrue(activator.prepared.contains(PreparedFilter.class));
         }
     }
 
-    record Marker(String value) {
-    }
+    record Marker(String value) {}
 
-    record Fallback(String value) {
-    }
+    record Fallback(String value) {}
 
     static final class MarkerSerializer implements ZLinkMessageSerializer {
         @Override
         public <T> ZLinkEncodedPayload serialize(T value) {
             Marker marker = (Marker) value;
-            return ZLinkEncodedPayload.from(("MARKER:" + marker.value()).getBytes(StandardCharsets.UTF_8));
+            return ZLinkEncodedPayload.from(
+                    ("MARKER:" + marker.value()).getBytes(StandardCharsets.UTF_8));
         }
 
         @Override
@@ -83,24 +87,22 @@ final class ZLinkFrameworkRuntimeCodecTest {
 
     static final class MarkerCodecExtension {
         static void register(ZLinkCodecRegistrar codecs) {
-            codecs.addSerializer("application/x-marker", new MarkerSerializer(), Marker.class::equals);
+            codecs.addSerializer(
+                    "application/x-marker", new MarkerSerializer(), Marker.class::equals);
         }
     }
 
     public static final class PreparedFilter implements ZLinkHandlerFilter {
         @Override
         public <T> CompletionStage<T> invoke(
-            ZLinkHandlerFilterContext context,
-            ZLinkHandlerFilterNext<T> next) {
+                ZLinkHandlerFilterContext context, ZLinkHandlerFilterNext<T> next) {
             return next.invoke();
         }
     }
 
-    private static final class TrackingActivator
-        implements ZLinkHandlerActivator {
+    private static final class TrackingActivator implements ZLinkHandlerActivator {
         private final Set<Class<?>> prepared = ConcurrentHashMap.newKeySet();
-        private final ZLinkHandlerActivator delegate =
-            ZLinkHandlerActivator.reflection();
+        private final ZLinkHandlerActivator delegate = ZLinkHandlerActivator.reflection();
 
         @Override
         public void prepare(Class<?> handlerType) {

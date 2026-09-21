@@ -34,8 +34,7 @@ inline void validate_finite_numbers (const nlohmann::json &value)
     }
 }
 
-template <typename TIterator>
-nlohmann::json parse_profile (TIterator begin, TIterator end)
+template <typename TIterator> nlohmann::json parse_profile (TIterator begin, TIterator end)
 {
     if (begin != end) {
         auto cursor = begin;
@@ -45,32 +44,27 @@ nlohmann::json parse_profile (TIterator begin, TIterator end)
             if (cursor != end) {
                 const auto third = static_cast<unsigned char> (*cursor);
                 if (first == 0xef && second == 0xbb && third == 0xbf) {
-                    throw std::invalid_argument (
-                      "framework-json-v1 rejects a UTF-8 BOM");
+                    throw std::invalid_argument ("framework-json-v1 rejects a UTF-8 BOM");
                 }
             }
         }
     }
 
     std::map<int, std::unordered_set<std::string>> object_keys;
-    auto reject_duplicate_keys =
-      [&object_keys] (int depth, nlohmann::json::parse_event_t event,
-                      nlohmann::json &parsed) {
-          if (event == nlohmann::json::parse_event_t::object_start) {
-              object_keys[depth + 1].clear ();
-          }
-          else if (event == nlohmann::json::parse_event_t::key) {
-              auto &keys = object_keys[depth];
-              if (!keys.insert (parsed.get<std::string> ()).second) {
-                  throw std::invalid_argument (
-                    "framework-json-v1 rejects duplicate properties");
-              }
-          }
-          else if (event == nlohmann::json::parse_event_t::object_end) {
-              object_keys.erase (depth + 1);
-          }
-          return true;
-      };
+    auto reject_duplicate_keys = [&object_keys] (int depth, nlohmann::json::parse_event_t event,
+                                                 nlohmann::json &parsed) {
+        if (event == nlohmann::json::parse_event_t::object_start) {
+            object_keys[depth + 1].clear ();
+        } else if (event == nlohmann::json::parse_event_t::key) {
+            auto &keys = object_keys[depth];
+            if (!keys.insert (parsed.get<std::string> ()).second) {
+                throw std::invalid_argument ("framework-json-v1 rejects duplicate properties");
+            }
+        } else if (event == nlohmann::json::parse_event_t::object_end) {
+            object_keys.erase (depth + 1);
+        }
+        return true;
+    };
     auto parsed = nlohmann::json::parse (begin, end, reject_duplicate_keys);
     validate_finite_numbers (parsed);
     return parsed;

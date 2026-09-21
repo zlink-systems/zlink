@@ -3,8 +3,7 @@ using Zlink.Framework.Runtime.Spots;
 
 namespace Zlink.Framework.Runtime.Host;
 
-internal sealed class ZLinkSpotRouteRouterDispatcher(
-    Func<ZLinkFrameworkComponentState> getState)
+internal sealed class ZLinkSpotRouteRouterDispatcher(Func<ZLinkFrameworkComponentState> getState)
 {
     public ValueTask<ZLinkOneWaySubmitResult> SendAsync(
         string routerChannelId,
@@ -16,18 +15,21 @@ internal sealed class ZLinkSpotRouteRouterDispatcher(
         ulong ownerLeaseGeneration,
         IReadOnlyList<Message> parts,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default)
+        ReadOnlyMemory<byte> metadata = default
+    )
     {
-        return ResolveMeshNode(routerChannelId).EntryOutbound.SendToSpotAsync(
-            targetNodeRid,
-            targetSpotId,
-            targetSpotGeneration,
-            targetNodeGeneration,
-            authorityOwnerGeneration,
-            ownerLeaseGeneration,
-            parts,
-            cancellationToken,
-            metadata);
+        return ResolveMeshNode(routerChannelId)
+            .EntryOutbound.SendToSpotAsync(
+                targetNodeRid,
+                targetSpotId,
+                targetSpotGeneration,
+                targetNodeGeneration,
+                authorityOwnerGeneration,
+                ownerLeaseGeneration,
+                parts,
+                cancellationToken,
+                metadata
+            );
     }
 
     /// <summary>Performs the first non-blocking Spot-send admission attempt
@@ -41,17 +43,20 @@ internal sealed class ZLinkSpotRouteRouterDispatcher(
         ulong authorityOwnerGeneration,
         ulong ownerLeaseGeneration,
         IReadOnlyList<Message> parts,
-        ReadOnlyMemory<byte> metadata = default)
+        ReadOnlyMemory<byte> metadata = default
+    )
     {
-        return ResolveMeshNode(routerChannelId).EntryOutbound.TrySendToSpotOnce(
-            targetNodeRid,
-            targetSpotId,
-            targetSpotGeneration,
-            targetNodeGeneration,
-            authorityOwnerGeneration,
-            ownerLeaseGeneration,
-            parts,
-            metadata);
+        return ResolveMeshNode(routerChannelId)
+            .EntryOutbound.TrySendToSpotOnce(
+                targetNodeRid,
+                targetSpotId,
+                targetSpotGeneration,
+                targetNodeGeneration,
+                authorityOwnerGeneration,
+                ownerLeaseGeneration,
+                parts,
+                metadata
+            );
     }
 
     public async ValueTask<ZLinkBackendRouteReceived> RequestAsync(
@@ -65,9 +70,11 @@ internal sealed class ZLinkSpotRouteRouterDispatcher(
         IReadOnlyList<Message> parts,
         TimeSpan timeout,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default)
+        ReadOnlyMemory<byte> metadata = default
+    )
     {
-        return await ResolveMeshNode(routerChannelId).EntryOutbound.RequestToSpotAsync(
+        return await ResolveMeshNode(routerChannelId)
+            .EntryOutbound.RequestToSpotAsync(
                 targetNodeRid,
                 targetSpotId,
                 targetSpotGeneration,
@@ -77,7 +84,8 @@ internal sealed class ZLinkSpotRouteRouterDispatcher(
                 parts,
                 timeout,
                 cancellationToken,
-                metadata)
+                metadata
+            )
             .ConfigureAwait(false);
     }
 
@@ -89,10 +97,13 @@ internal sealed class ZLinkSpotRouteRouterDispatcher(
     private ZLinkSpotNodeRuntime ResolveMeshNode(string meshName)
     {
         var state = getState();
-        if (state.SpotNodes.TryGetValue(meshName, out var node)
-            && node.Registration.Router is not null)
+        if (
+            state.SpotNodes.TryGetValue(meshName, out var node)
+            && node.Registration.Router is not null
+        )
             return node;
         throw new ZLinkConfigurationException(
-            $"RouteMesh '{meshName}' is not registered with a router-capable MeshNode.");
+            $"RouteMesh '{meshName}' is not registered with a router-capable MeshNode."
+        );
     }
 }

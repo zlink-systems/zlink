@@ -9,6 +9,7 @@ internal sealed class ZLinkBoundSessionDispatchScope : IAsyncDisposable
     private readonly string _actorId;
     private readonly ZLinkStateLane _lane = new();
     private readonly Queue<Func<CancellationToken, ValueTask>> _deferredOperations = new();
+
     // This serializes the external deferred-operation protocol. It is not state ownership:
     // the queue and drained flag remain owned by _lane.
     private readonly SemaphoreSlim _drainGate = new(1, 1);
@@ -42,16 +43,12 @@ internal sealed class ZLinkBoundSessionDispatchScope : IAsyncDisposable
         return new ZLinkBoundSessionDispatchScope(actorId);
     }
 
-    public static bool TryDeferClose(
-        string actorId,
-        Func<CancellationToken, ValueTask> closeAsync)
+    public static bool TryDeferClose(string actorId, Func<CancellationToken, ValueTask> closeAsync)
     {
         return TryDefer(actorId, closeAsync);
     }
 
-    public static bool TryDefer(
-        string actorId,
-        Func<CancellationToken, ValueTask> operationAsync)
+    public static bool TryDefer(string actorId, Func<CancellationToken, ValueTask> operationAsync)
     {
         var scope = CurrentScope.Value;
         if (scope is null || !string.Equals(scope._actorId, actorId, StringComparison.Ordinal))
@@ -77,7 +74,8 @@ internal sealed class ZLinkBoundSessionDispatchScope : IAsyncDisposable
             while (true)
             {
                 var operation = await _lane.RunAsync(PrepareDrain).ConfigureAwait(false);
-                if (operation is null) return;
+                if (operation is null)
+                    return;
 
                 await operation(cancellationToken).ConfigureAwait(false);
                 await _lane.RunAsync(() => CompleteDrain(operation)).ConfigureAwait(false);
@@ -91,7 +89,8 @@ internal sealed class ZLinkBoundSessionDispatchScope : IAsyncDisposable
 
     private bool Defer(Func<CancellationToken, ValueTask> operationAsync)
     {
-        if (_drained) return false;
+        if (_drained)
+            return false;
         if (_deferredOperations.Count >= MaxDeferredOperations)
             throw new InvalidOperationException("Bound-session deferred submit queue is full.");
         _deferredOperations.Enqueue(operationAsync);
@@ -100,18 +99,23 @@ internal sealed class ZLinkBoundSessionDispatchScope : IAsyncDisposable
 
     private Func<CancellationToken, ValueTask>? PrepareDrain()
     {
-        if (_drained) return null;
-        if (_deferredOperations.TryPeek(out var operation)) return operation;
+        if (_drained)
+            return null;
+        if (_deferredOperations.TryPeek(out var operation))
+            return operation;
         _drained = true;
         return null;
     }
 
     private void CompleteDrain(Func<CancellationToken, ValueTask> operation)
     {
-        if (!_deferredOperations.TryDequeue(out var completed)
-            || !ReferenceEquals(completed, operation))
+        if (
+            !_deferredOperations.TryDequeue(out var completed)
+            || !ReferenceEquals(completed, operation)
+        )
             throw new InvalidOperationException(
-                "Bound-session deferred operation order changed while draining.");
+                "Bound-session deferred operation order changed while draining."
+            );
     }
 
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>

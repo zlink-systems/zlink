@@ -12,14 +12,11 @@ namespace Zlink.Framework.Contracts.Locations;
 /// also used by unrelated wire codecs whose enum encoding isn't part of
 /// this contract.
 /// </summary>
-internal sealed class ZLinkCamelCaseEnumJsonConverter<TEnum>
-    : JsonStringEnumConverter<TEnum>
+internal sealed class ZLinkCamelCaseEnumJsonConverter<TEnum> : JsonStringEnumConverter<TEnum>
     where TEnum : struct, Enum
 {
     public ZLinkCamelCaseEnumJsonConverter()
-        : base(JsonNamingPolicy.CamelCase)
-    {
-    }
+        : base(JsonNamingPolicy.CamelCase) { }
 }
 
 [JsonConverter(typeof(ZLinkCamelCaseEnumJsonConverter<ZLinkPlacementObjectKind>))]
@@ -27,5 +24,5 @@ internal enum ZLinkPlacementObjectKind
 {
     Actor = 1,
     UserSpot = 2,
-    InstanceSpot = 3
+    InstanceSpot = 3,
 }

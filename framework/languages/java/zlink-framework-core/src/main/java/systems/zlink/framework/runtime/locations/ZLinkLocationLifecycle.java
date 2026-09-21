@@ -1,27 +1,26 @@
 package systems.zlink.framework.runtime.locations;
-import java.util.Objects;
-import java.util.Optional;
 
-import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ConcurrentHashMap;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ActorRef;
-import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectFound;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityDelete;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityDeleted;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectFound;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPut;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityStored;
-import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityGenerationTransition;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteStatus;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.spots.ZLinkSpotKind;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
+
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentHashMap;
 
 /** Tracks process-local materializations; durable ownership is stored only as authority. */
 public final class ZLinkLocationLifecycle implements AutoCloseable {
@@ -32,9 +31,9 @@ public final class ZLinkLocationLifecycle implements AutoCloseable {
     private final ZLinkLocationRuntime runtime;
     private final ZLinkLocationRepository store;
     private final ZLinkActorAuthorityPayloadCodec actorAuthorities =
-        new ZLinkActorAuthorityPayloadCodec();
+            new ZLinkActorAuthorityPayloadCodec();
     private final ZLinkServiceAuthorityPayloadCodec spotAuthorities =
-        new ZLinkServiceAuthorityPayloadCodec();
+            new ZLinkServiceAuthorityPayloadCodec();
 
     public ZLinkLocationLifecycle(ZLinkLocationRuntime runtime) {
         this.runtime = Objects.requireNonNull(runtime, "runtime");
@@ -50,27 +49,28 @@ public final class ZLinkLocationLifecycle implements AutoCloseable {
     }
 
     public CompletionStage<ZLinkLocationWriteStatus> claimSpot(
-        String meshName,
-        String spotId,
-        long spotGeneration,
-        String spotType,
-        RoutingId nodeRid,
-        ZLinkSpotKind spotKind,
-        String routeEndpoint,
-        Runnable deactivate) {
+            String meshName,
+            String spotId,
+            long spotGeneration,
+            String spotType,
+            RoutingId nodeRid,
+            ZLinkSpotKind spotKind,
+            String routeEndpoint,
+            Runnable deactivate) {
         spots.add(spotId);
         return CompletableFuture.completedFuture(ZLinkLocationWriteStatus.STORED);
     }
 
     public CompletionStage<ZLinkLocationWriteStatus> claimSpot(
-        String meshName,
-        String spotId,
-        String spotType,
-        RoutingId nodeRid,
-        ZLinkSpotKind spotKind,
-        String routeEndpoint,
-        Runnable deactivate) {
-        return claimSpot(meshName, spotId, 1L, spotType, nodeRid, spotKind, routeEndpoint, deactivate);
+            String meshName,
+            String spotId,
+            String spotType,
+            RoutingId nodeRid,
+            ZLinkSpotKind spotKind,
+            String routeEndpoint,
+            Runnable deactivate) {
+        return claimSpot(
+                meshName, spotId, 1L, spotType, nodeRid, spotKind, routeEndpoint, deactivate);
     }
 
     public CompletionStage<Void> releaseSpot(String meshName, String spotId) {
@@ -79,19 +79,13 @@ public final class ZLinkLocationLifecycle implements AutoCloseable {
     }
 
     public CompletionStage<ZLinkLocationWriteStatus> claimActor(
-        String actorType,
-        String actorId,
-        RoutingId nodeRid,
-        Runnable deactivate) {
+            String actorType, String actorId, RoutingId nodeRid, Runnable deactivate) {
         actors.putIfAbsent(actorId, nullActorRef(actorId, nodeRid));
         return CompletableFuture.completedFuture(ZLinkLocationWriteStatus.STORED);
     }
 
     public CompletionStage<ZLinkLocationWriteStatus> takeoverActor(
-        String actorType,
-        String actorId,
-        RoutingId nodeRid,
-        Runnable deactivate) {
+            String actorType, String actorId, RoutingId nodeRid, Runnable deactivate) {
         actors.put(actorId, nullActorRef(actorId, nodeRid));
         return CompletableFuture.completedFuture(ZLinkLocationWriteStatus.STORED);
     }
@@ -106,77 +100,120 @@ public final class ZLinkLocationLifecycle implements AutoCloseable {
     }
 
     public CompletionStage<Void> notifyActorJoinedSpot(
-        String actorType, String actorId, String meshName, String spotId) {
+            String actorType, String actorId, String meshName, String spotId) {
         ActorRef actorRef = actors.get(actorId);
         if (actorRef == null) {
-            return CompletableFuture.failedFuture(new IllegalStateException(
-                "Actor reference is unavailable for durable Spot join: "
-                    + actorId));
+            return CompletableFuture.failedFuture(
+                    new IllegalStateException(
+                            "Actor reference is unavailable for durable Spot join: " + actorId));
         }
         String actorKey = ZLinkAuthorityKeyCodec.actor(actorId);
         String spotKey = ZLinkAuthorityKeyCodec.spot(spotId);
-        return store.read(actorKey, NEVER_CANCEL).thenCompose(actorRead -> {
-            if (!(actorRead instanceof ZLinkAuthoritySnapshot actorSnapshot)) {
-                return CompletableFuture.failedFuture(new IllegalStateException(
-                    "Actor authority is unavailable: " + actorId));
-            }
-            var actor = actorAuthorities.decode(actorSnapshot.payload())
-                .orElseThrow(() -> new IllegalStateException(
-                    "Actor authority payload is invalid: " + actorId));
-            if (actor.state() != ZLinkActorAuthorityPayloadCodec.State.READY
-                || !actor.actorId().equals(actorId)
-                || !actor.stableType().equals(actorType)
-                || actorSnapshot.objectGeneration()
-                    != actorRef.objectGeneration()) {
-                return CompletableFuture.failedFuture(new IllegalStateException(
-                    "Actor authority changed before durable Spot join: "
-                        + actorId));
-            }
-            return store.read(spotKey, NEVER_CANCEL).thenCompose(spotRead -> {
-                if (!(spotRead instanceof ZLinkAuthoritySnapshot spotSnapshot)) {
-                    return CompletableFuture.failedFuture(
-                        new IllegalStateException(
-                            "Spot authority is unavailable: " + spotId));
-                }
-                var spot = spotAuthorities.decode(spotSnapshot.payload())
-                    .orElseThrow(() -> new IllegalStateException(
-                        "Spot authority payload is invalid: " + spotId));
-                if (spot.user().isEmpty()
-                    || spot.state()
-                        != ZLinkServiceAuthorityPayloadCodec.State.READY
-                    || !spot.spotId().equals(spotId)
-                    || !spot.meshName().equals(meshName)
-                    || !spot.nodeRid().equals(actorRef.nodeRid())) {
-                    return CompletableFuture.failedFuture(
-                        new IllegalStateException(
-                            "Spot authority changed before durable Actor join: "
-                                + spotId));
-                }
-                byte[] next = actorAuthorities.encode(
-                    ZLinkActorAuthorityPayloadCodec.State.READY,
-                    actor.stableType(),
-                    actor.actorId(),
-                    spot.spotId(),
-                    spotSnapshot.objectGeneration(),
-                    ZLinkSpotKind.USER.value(),
-                    actor.ownerId(),
-                    actor.ownerLeaseGeneration(),
-                    spot.meshName(),
-                    spot.nodeRid(),
-                    spot.nodeGeneration());
-                return store.compareExchange(
-                        actorKey,
-                        new ZLinkAuthorityExpectFound(
-                            actorSnapshot.storeVersion()),
-                        new ZLinkAuthorityPut(next),
-                        NEVER_CANCEL)
-                    .thenCompose(result -> result instanceof ZLinkAuthorityStored
-                        ? CompletableFuture.completedFuture(null)
-                        : CompletableFuture.failedFuture(new IllegalStateException(
-                            "Actor Spot join authority CAS conflicted: "
-                                + actorId)));
-            });
-        });
+        return store.read(actorKey, NEVER_CANCEL)
+                .thenCompose(
+                        actorRead -> {
+                            if (!(actorRead instanceof ZLinkAuthoritySnapshot actorSnapshot)) {
+                                return CompletableFuture.failedFuture(
+                                        new IllegalStateException(
+                                                "Actor authority is unavailable: " + actorId));
+                            }
+                            var actor =
+                                    actorAuthorities
+                                            .decode(actorSnapshot.payload())
+                                            .orElseThrow(
+                                                    () ->
+                                                            new IllegalStateException(
+                                                                    "Actor authority payload is"
+                                                                            + " invalid: "
+                                                                            + actorId));
+                            if (actor.state() != ZLinkActorAuthorityPayloadCodec.State.READY
+                                    || !actor.actorId().equals(actorId)
+                                    || !actor.stableType().equals(actorType)
+                                    || actorSnapshot.objectGeneration()
+                                            != actorRef.objectGeneration()) {
+                                return CompletableFuture.failedFuture(
+                                        new IllegalStateException(
+                                                "Actor authority changed before durable Spot join: "
+                                                        + actorId));
+                            }
+                            return store.read(spotKey, NEVER_CANCEL)
+                                    .thenCompose(
+                                            spotRead -> {
+                                                if (!(spotRead
+                                                        instanceof
+                                                        ZLinkAuthoritySnapshot spotSnapshot)) {
+                                                    return CompletableFuture.failedFuture(
+                                                            new IllegalStateException(
+                                                                    "Spot authority is unavailable:"
+                                                                            + " "
+                                                                            + spotId));
+                                                }
+                                                var spot =
+                                                        spotAuthorities
+                                                                .decode(spotSnapshot.payload())
+                                                                .orElseThrow(
+                                                                        () ->
+                                                                                new IllegalStateException(
+                                                                                        "Spot authority"
+                                                                                                + " payload"
+                                                                                                + " is invalid:"
+                                                                                                + " "
+                                                                                                + spotId));
+                                                if (spot.user().isEmpty()
+                                                        || spot.state()
+                                                                != ZLinkServiceAuthorityPayloadCodec
+                                                                        .State.READY
+                                                        || !spot.spotId().equals(spotId)
+                                                        || !spot.meshName().equals(meshName)
+                                                        || !spot.nodeRid()
+                                                                .equals(actorRef.nodeRid())) {
+                                                    return CompletableFuture.failedFuture(
+                                                            new IllegalStateException(
+                                                                    "Spot authority changed before"
+                                                                            + " durable Actor join: "
+                                                                            + spotId));
+                                                }
+                                                byte[] next =
+                                                        actorAuthorities.encode(
+                                                                ZLinkActorAuthorityPayloadCodec
+                                                                        .State.READY,
+                                                                actor.stableType(),
+                                                                actor.actorId(),
+                                                                spot.spotId(),
+                                                                spotSnapshot.objectGeneration(),
+                                                                ZLinkSpotKind.USER.value(),
+                                                                actor.ownerId(),
+                                                                actor.ownerLeaseGeneration(),
+                                                                spot.meshName(),
+                                                                spot.nodeRid(),
+                                                                spot.nodeGeneration());
+                                                return store.compareExchange(
+                                                                actorKey,
+                                                                new ZLinkAuthorityExpectFound(
+                                                                        actorSnapshot
+                                                                                .storeVersion()),
+                                                                new ZLinkAuthorityPut(next),
+                                                                NEVER_CANCEL)
+                                                        .thenCompose(
+                                                                result ->
+                                                                        result
+                                                                                        instanceof
+                                                                                        ZLinkAuthorityStored
+                                                                                ? CompletableFuture
+                                                                                        .completedFuture(
+                                                                                                null)
+                                                                                : CompletableFuture
+                                                                                        .failedFuture(
+                                                                                                new IllegalStateException(
+                                                                                                        "Actor"
+                                                                                                                + " Spot"
+                                                                                                                + " join"
+                                                                                                                + " authority"
+                                                                                                                + " CAS conflicted:"
+                                                                                                                + " "
+                                                                                                                + actorId)));
+                                            });
+                        });
     }
 
     public CompletionStage<Void> notifyActorLeftSpot(String actorType, String actorId) {
@@ -184,7 +221,7 @@ public final class ZLinkLocationLifecycle implements AutoCloseable {
     }
 
     public CompletionStage<Void> notifyActorMovedToEntrySpot(
-        String actorType, String actorId, RoutingId nodeRid) {
+            String actorType, String actorId, RoutingId nodeRid) {
         return CompletableFuture.completedFuture(null);
     }
 
@@ -194,55 +231,64 @@ public final class ZLinkLocationLifecycle implements AutoCloseable {
     }
 
     /**
-     * Removes the durable authority only when it still describes the supplied
-     * actor incarnation. A stale reference is rejected instead of deleting a
-     * newer actor with the same logical id.
+     * Removes the durable authority only when it still describes the supplied actor incarnation. A
+     * stale reference is rejected instead of deleting a newer actor with the same logical id.
      */
-    public CompletionStage<Void> releaseActorExact(
-        String actorType,
-        ActorRef expected) {
+    public CompletionStage<Void> releaseActorExact(String actorType, ActorRef expected) {
         String actorId = expected.actorId();
         String actorKey = ZLinkAuthorityKeyCodec.actor(actorId);
-        return store.read(actorKey, NEVER_CANCEL).thenCompose(read -> {
-            if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
-                actors.remove(actorId, expected);
-                return CompletableFuture.completedFuture(null);
-            }
-            var authority = actorAuthorities.decode(snapshot.payload())
-                .orElseThrow(() -> new IllegalStateException(
-                    "Actor authority payload is invalid: " + actorId));
-            if (authority.state() != ZLinkActorAuthorityPayloadCodec.State.READY
-                || !authority.stableType().equals(actorType)
-                || !authority.actorId().equals(actorId)
-                || !authority.meshName().equals(expected.meshName())
-                || !authority.nodeRid().equals(expected.nodeRid())
-                || snapshot.objectGeneration() != expected.objectGeneration()) {
-                return CompletableFuture.failedFuture(new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
-                    "actor authority is not the requested incarnation: "
-                        + actorId));
-            }
-            return store.compareExchange(
-                    actorKey,
-                    new ZLinkAuthorityExpectFound(snapshot.storeVersion()),
-                    new ZLinkAuthorityDelete(),
-                    NEVER_CANCEL)
-                .thenCompose(result -> {
-                    if (!(result instanceof ZLinkAuthorityDeleted)) {
-                        return CompletableFuture.failedFuture(
-                            new ZLinkFrameworkException(
-                                ZLinkFrameworkErrorKind.INVALID_OPERATION,
-                                "actor authority changed before destroy: "
-                                    + actorId));
-                    }
-                    actors.remove(actorId, expected);
-                    return CompletableFuture.completedFuture(null);
-                });
-        });
+        return store.read(actorKey, NEVER_CANCEL)
+                .thenCompose(
+                        read -> {
+                            if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
+                                actors.remove(actorId, expected);
+                                return CompletableFuture.completedFuture(null);
+                            }
+                            var authority =
+                                    actorAuthorities
+                                            .decode(snapshot.payload())
+                                            .orElseThrow(
+                                                    () ->
+                                                            new IllegalStateException(
+                                                                    "Actor authority payload is"
+                                                                            + " invalid: "
+                                                                            + actorId));
+                            if (authority.state() != ZLinkActorAuthorityPayloadCodec.State.READY
+                                    || !authority.stableType().equals(actorType)
+                                    || !authority.actorId().equals(actorId)
+                                    || !authority.meshName().equals(expected.meshName())
+                                    || !authority.nodeRid().equals(expected.nodeRid())
+                                    || snapshot.objectGeneration() != expected.objectGeneration()) {
+                                return CompletableFuture.failedFuture(
+                                        new ZLinkFrameworkException(
+                                                ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                                                "actor authority is not the requested incarnation: "
+                                                        + actorId));
+                            }
+                            return store.compareExchange(
+                                            actorKey,
+                                            new ZLinkAuthorityExpectFound(snapshot.storeVersion()),
+                                            new ZLinkAuthorityDelete(),
+                                            NEVER_CANCEL)
+                                    .thenCompose(
+                                            result -> {
+                                                if (!(result instanceof ZLinkAuthorityDeleted)) {
+                                                    return CompletableFuture.failedFuture(
+                                                            new ZLinkFrameworkException(
+                                                                    ZLinkFrameworkErrorKind
+                                                                            .INVALID_OPERATION,
+                                                                    "actor authority changed before"
+                                                                            + " destroy: "
+                                                                            + actorId));
+                                                }
+                                                actors.remove(actorId, expected);
+                                                return CompletableFuture.completedFuture(null);
+                                            });
+                        });
     }
 
     public CompletionStage<Void> bindActorSessionRoute(
-        RoutingId sessionRid, String actorId, RoutingId ownerNodeRid) {
+            RoutingId sessionRid, String actorId, RoutingId ownerNodeRid) {
         sessionRoutes.add(sessionRid);
         return CompletableFuture.completedFuture(null);
     }

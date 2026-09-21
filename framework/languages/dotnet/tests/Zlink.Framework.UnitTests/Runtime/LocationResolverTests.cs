@@ -1,6 +1,6 @@
 using System.Security.Cryptography;
-using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.AspNetCore;
+using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.UnitTests;
 
@@ -18,18 +18,19 @@ public sealed class LocationResolverTests
         var options = new ZLinkLocationOptions
         {
             PollingInterval = TimeSpan.Zero,
-            RouteCacheMaxAge = TimeSpan.FromSeconds(10)
+            RouteCacheMaxAge = TimeSpan.FromSeconds(10),
         };
         var observed = new ZLinkObservedLocationGenerations();
         var resolvers = new ZLinkStoreLocationResolvers(
             fixture.Store,
-            new ZLinkOwnerLeaseTracker(
-                fixture.Store, options, fixture.Time),
+            new ZLinkOwnerLeaseTracker(fixture.Store, options, fixture.Time),
             observed,
-            options: options);
+            options: options
+        );
         await AuthorityLocationTestFixture.PublishActorAsync(
             fixture.Store,
-            InMemoryLocationStoreTests.Actor(OwnerA));
+            InMemoryLocationStoreTests.Actor(OwnerA)
+        );
 
         var first = await resolvers.ResolveActorRowAsync(ActorKey);
         Assert.Equal(OwnerA, first!.OwnerId);
@@ -37,7 +38,8 @@ public sealed class LocationResolverTests
         await AuthorityLocationTestFixture.PublishActorAsync(
             fixture.Store,
             InMemoryLocationStoreTests.Actor(OwnerB),
-            replace: true);
+            replace: true
+        );
 
         var second = await resolvers.ResolveActorRowAsync(ActorKey);
         Assert.Equal(OwnerA, second!.OwnerId);
@@ -55,35 +57,32 @@ public sealed class LocationResolverTests
         {
             PollingInterval = TimeSpan.Zero,
             RouteCacheMaxAge = TimeSpan.FromSeconds(15),
-            OwnerLeaseFencingMargin = TimeSpan.FromSeconds(5)
+            OwnerLeaseFencingMargin = TimeSpan.FromSeconds(5),
         };
         var resolvers = new ZLinkStoreLocationResolvers(
             fixture.Store,
             new ZLinkOwnerLeaseTracker(fixture.Store, options, fixture.Time),
             new ZLinkObservedLocationGenerations(),
-            options: options);
+            options: options
+        );
         await AuthorityLocationTestFixture.PublishActorAsync(
             fixture.Store,
-            InMemoryLocationStoreTests.Actor(OwnerA));
+            InMemoryLocationStoreTests.Actor(OwnerA)
+        );
 
-        Assert.Equal(
-            OwnerA,
-            (await resolvers.ResolveActorRowAsync(ActorKey))!.OwnerId);
+        Assert.Equal(OwnerA, (await resolvers.ResolveActorRowAsync(ActorKey))!.OwnerId);
 
         await AuthorityLocationTestFixture.PublishActorAsync(
             fixture.Store,
             InMemoryLocationStoreTests.Actor(OwnerB),
-            replace: true);
+            replace: true
+        );
 
         fixture.Time.AdvanceMonotonicOnly(TimeSpan.FromSeconds(9));
-        Assert.Equal(
-            OwnerA,
-            (await resolvers.ResolveActorRowAsync(ActorKey))!.OwnerId);
+        Assert.Equal(OwnerA, (await resolvers.ResolveActorRowAsync(ActorKey))!.OwnerId);
 
         fixture.Time.AdvanceMonotonicOnly(TimeSpan.FromSeconds(1));
-        Assert.Equal(
-            OwnerB,
-            (await resolvers.ResolveActorRowAsync(ActorKey))!.OwnerId);
+        Assert.Equal(OwnerB, (await resolvers.ResolveActorRowAsync(ActorKey))!.OwnerId);
     }
 
     [Fact]
@@ -92,7 +91,8 @@ public sealed class LocationResolverTests
         var fixture = await FixtureAsync();
         await AuthorityLocationTestFixture.PublishActorAsync(
             fixture.Store,
-            InMemoryLocationStoreTests.Actor(OwnerA));
+            InMemoryLocationStoreTests.Actor(OwnerA)
+        );
         var row = await fixture.Resolvers.ResolveActorRowAsync(ActorKey);
         Assert.NotNull(row);
 
@@ -103,7 +103,8 @@ public sealed class LocationResolverTests
             row.OwnerNodeRid,
             row.OwnerNodeGeneration,
             row.AuthorityOwnerGeneration,
-            checked((ulong)row.LeaseGeneration));
+            checked((ulong)row.LeaseGeneration)
+        );
         var target = new ZLinkServiceWireCodec.MessageFollowRoute(
             ZLinkServiceWireCodec.MessageFollowActorKind,
             row.ActorId,
@@ -111,7 +112,8 @@ public sealed class LocationResolverTests
             RoutingId.From("node-2"),
             row.OwnerNodeGeneration + 1,
             row.AuthorityOwnerGeneration + 1,
-            checked((ulong)row.LeaseGeneration + 1));
+            checked((ulong)row.LeaseGeneration + 1)
+        );
         var record = new ZLinkServiceWireCodec.MessageFollowRecord(
             source,
             target,
@@ -119,7 +121,8 @@ public sealed class LocationResolverTests
             1,
             32,
             new MeshOperationId(4, 5),
-            6);
+            6
+        );
         var staleSource = new ZLinkServiceWireCodec.MessageFollowRoute(
             ZLinkServiceWireCodec.MessageFollowActorKind,
             row.ActorId,
@@ -127,7 +130,8 @@ public sealed class LocationResolverTests
             row.OwnerNodeRid,
             row.OwnerNodeGeneration,
             row.AuthorityOwnerGeneration,
-            checked((ulong)row.LeaseGeneration + 1));
+            checked((ulong)row.LeaseGeneration + 1)
+        );
         var staleRecord = new ZLinkServiceWireCodec.MessageFollowRecord(
             staleSource,
             target,
@@ -135,11 +139,10 @@ public sealed class LocationResolverTests
             1,
             32,
             new MeshOperationId(4, 5),
-            6);
+            6
+        );
 
-        Assert.False(
-            fixture.Resolvers.InvalidateMessageFollowRoute(
-                staleRecord));
+        Assert.False(fixture.Resolvers.InvalidateMessageFollowRoute(staleRecord));
         Assert.True(fixture.Resolvers.HasCachedActorRoute(ActorKey));
         Assert.True(fixture.Resolvers.InvalidateMessageFollowRoute(record));
         Assert.False(fixture.Resolvers.HasCachedActorRoute(ActorKey));
@@ -156,7 +159,8 @@ public sealed class LocationResolverTests
         // next resolve — the create-if-absent race depends on it.
         await AuthorityLocationTestFixture.PublishActorAsync(
             fixture.Store,
-            InMemoryLocationStoreTests.Actor(OwnerA));
+            InMemoryLocationStoreTests.Actor(OwnerA)
+        );
 
         Assert.NotNull(await fixture.Resolvers.ResolveActorRowAsync(ActorKey));
     }
@@ -167,7 +171,8 @@ public sealed class LocationResolverTests
         var fixture = await FixtureAsync();
         await AuthorityLocationTestFixture.PublishActorAsync(
             fixture.Store,
-            InMemoryLocationStoreTests.Actor(OwnerA));
+            InMemoryLocationStoreTests.Actor(OwnerA)
+        );
         Assert.NotNull(await fixture.Resolvers.ResolveActorRowAsync(ActorKey));
 
         // Owner A crashes: no more heartbeats, the lease runs out. The row
@@ -176,12 +181,9 @@ public sealed class LocationResolverTests
 
         Assert.Null(await fixture.Resolvers.ResolveActorRowAsync(ActorKey));
 
-        var resolution = await fixture.Resolvers.ResolveActorRowWithStatusAsync(
-            ActorKey);
+        var resolution = await fixture.Resolvers.ResolveActorRowWithStatusAsync(ActorKey);
         Assert.Null(resolution.Row);
-        Assert.Equal(
-            ZLinkLocationResolutionKind.KnownUnavailable,
-            resolution.Kind);
+        Assert.Equal(ZLinkLocationResolutionKind.KnownUnavailable, resolution.Kind);
     }
 
     [Fact]
@@ -189,13 +191,10 @@ public sealed class LocationResolverTests
     {
         var fixture = await FixtureAsync();
 
-        var resolution = await fixture.Resolvers.ResolveActorRowWithStatusAsync(
-            ActorKey);
+        var resolution = await fixture.Resolvers.ResolveActorRowWithStatusAsync(ActorKey);
 
         Assert.Null(resolution.Row);
-        Assert.Equal(
-            ZLinkLocationResolutionKind.Missing,
-            resolution.Kind);
+        Assert.Equal(ZLinkLocationResolutionKind.Missing, resolution.Kind);
     }
 
     [Fact]
@@ -207,8 +206,9 @@ public sealed class LocationResolverTests
             InMemoryLocationStoreTests.Actor(OwnerA) with
             {
                 ActorRef = new ActorRef("actor-1", 10, "play", RoutingId.From("node-1")),
-                MembershipEpoch = 2
-            });
+                MembershipEpoch = 2,
+            }
+        );
         Assert.NotNull(await fixture.Resolvers.ResolveActorRowAsync(ActorKey));
 
         // Expiry hides the actor from resolution but does not delete authority.
@@ -221,20 +221,21 @@ public sealed class LocationResolverTests
         {
             ActorRef = new ActorRef("actor-1", 20, "play", RoutingId.From("node-2")),
             OwnerNodeRid = RoutingId.From("node-2"),
-            MembershipEpoch = 0
+            MembershipEpoch = 0,
         };
         var stale = Assert.IsType<ZLinkAuthorityReadResult.Found>(
-            await AuthorityLocationTestFixture.ReadActorAsync(
-                fixture.Store,
-                "actor-1"));
+            await AuthorityLocationTestFixture.ReadActorAsync(fixture.Store, "actor-1")
+        );
         Assert.IsType<ZLinkAuthorityCompareExchangeResult.Conflict>(
             await fixture.Store.CompareExchangeAuthorityAsync(
                 ZLinkActorAuthorityPayloadCodec.AuthorityKey("actor-1"),
                 stale.Snapshot.StoreVersion,
-                new ZLinkAuthorityMutation.Delete()));
-        Assert.Null(await AuthorityLocationTestFixture.PublishActorAsync(
-            fixture.Store,
-            replacement));
+                new ZLinkAuthorityMutation.Delete()
+            )
+        );
+        Assert.Null(
+            await AuthorityLocationTestFixture.PublishActorAsync(fixture.Store, replacement)
+        );
 
         Assert.Null(await fixture.Resolvers.ResolveActorRowAsync(ActorKey));
     }
@@ -249,8 +250,9 @@ public sealed class LocationResolverTests
             fixture.Store,
             InMemoryLocationStoreTests.Spot(OwnerA, "spot-recreated") with
             {
-                SpotGeneration = 10
-            });
+                SpotGeneration = 10,
+            }
+        );
         Assert.NotNull(await fixture.Resolvers.ResolveSpotRowAsync(key));
 
         fixture.Time.Advance(LeaseTtl + TimeSpan.FromSeconds(1));
@@ -258,17 +260,16 @@ public sealed class LocationResolverTests
 
         var resolution = await fixture.Resolvers.ResolveSpotRowWithStatusAsync(key);
         Assert.Null(resolution.Row);
-        Assert.Equal(
-            ZLinkLocationResolutionKind.KnownUnavailable,
-            resolution.Kind);
+        Assert.Equal(ZLinkLocationResolutionKind.KnownUnavailable, resolution.Kind);
 
         var claim = await AuthorityLocationTestFixture.PublishSpotAsync(
             fixture.Store,
             InMemoryLocationStoreTests.Spot(OwnerB, "spot-recreated") with
             {
                 OwnerNodeRid = RoutingId.From("node-2"),
-                SpotGeneration = 1
-            });
+                SpotGeneration = 1,
+            }
+        );
         Assert.Null(claim);
 
         Assert.Null(await fixture.Resolvers.ResolveSpotRowAsync(key));
@@ -288,14 +289,18 @@ public sealed class LocationResolverTests
     {
         var fixture = await FixtureAsync();
         await fixture.Store.UpdateMeshNodeAsync(
-            InMemoryLocationStoreTests.MeshNode(OwnerA), ZLinkLocationWriteIntent.NewClaim);
+            InMemoryLocationStoreTests.MeshNode(OwnerA),
+            ZLinkLocationWriteIntent.NewClaim
+        );
         await fixture.Store.UpdateMeshNodeAsync(
             InMemoryLocationStoreTests.MeshNode(
                 OwnerB,
                 "tcp://127.0.0.1:5002",
                 "node-2",
-                leaseGeneration: fixture.OwnerB.LeaseGeneration),
-            ZLinkLocationWriteIntent.NewClaim);
+                leaseGeneration: fixture.OwnerB.LeaseGeneration
+            ),
+            ZLinkLocationWriteIntent.NewClaim
+        );
 
         var both = await fixture.Resolvers.ListLiveMeshNodesAsync("play");
         Assert.Equal(2, both.Count);
@@ -316,14 +321,15 @@ public sealed class LocationResolverTests
         var predecessor = InMemoryLocationStoreTests.MeshNode(OwnerA) with
         {
             LifecycleGeneration = 20,
-            DescriptorRevision = 4
+            DescriptorRevision = 4,
         };
-        await fixture.Store.UpdateMeshNodeAsync(
-            predecessor, ZLinkLocationWriteIntent.NewClaim);
+        await fixture.Store.UpdateMeshNodeAsync(predecessor, ZLinkLocationWriteIntent.NewClaim);
         Assert.Equal(
             20UL,
-            Assert.Single(await fixture.Resolvers.ListLiveMeshNodesAsync("play"))
-                .LifecycleGeneration);
+            Assert
+                .Single(await fixture.Resolvers.ListLiveMeshNodesAsync("play"))
+                .LifecycleGeneration
+        );
 
         // The store takeover replaces the row atomically. A polling reader can
         // therefore see the new owner without ever observing a missing key.
@@ -335,13 +341,16 @@ public sealed class LocationResolverTests
             OwnerB,
             "tcp://127.0.0.1:5002",
             "node-1",
-            leaseGeneration: successorOwner.LeaseGeneration) with
+            leaseGeneration: successorOwner.LeaseGeneration
+        ) with
         {
             LifecycleGeneration = 10,
-            DescriptorRevision = 1
+            DescriptorRevision = 1,
         };
         var takeover = await fixture.Store.UpdateMeshNodeAsync(
-            successor, ZLinkLocationWriteIntent.Takeover);
+            successor,
+            ZLinkLocationWriteIntent.Takeover
+        );
         Assert.Equal(ZLinkLocationWriteStatus.Stored, takeover.Status);
 
         var resolved = Assert.Single(await fixture.Resolvers.ListLiveMeshNodesAsync("play"));
@@ -364,24 +373,20 @@ public sealed class LocationResolverTests
         var owner = await inner.ClaimLiveOwnerAsync(OwnerA, LeaseTtl);
         var initial = InMemoryLocationStoreTests.MeshNode(
             OwnerA,
-            leaseGeneration: owner.LeaseGeneration);
+            leaseGeneration: owner.LeaseGeneration
+        );
         Assert.Equal(
             ZLinkLocationWriteStatus.Stored,
-            (await inner.UpdateMeshNodeAsync(
-                initial,
-                ZLinkLocationWriteIntent.NewClaim)).Status);
+            (await inner.UpdateMeshNodeAsync(initial, ZLinkLocationWriteIntent.NewClaim)).Status
+        );
         var current = initial with { DescriptorRevision = 2 };
         Assert.Equal(
             ZLinkLocationWriteStatus.Stored,
-            (await inner.UpdateMeshNodeAsync(
-                current,
-                ZLinkLocationWriteIntent.Renew)).Status);
+            (await inner.UpdateMeshNodeAsync(current, ZLinkLocationWriteIntent.Renew)).Status
+        );
 
         var store = new StaleFirstMeshNodeListStore(inner, initial);
-        var options = new ZLinkLocationOptions
-        {
-            PollingInterval = TimeSpan.Zero
-        };
+        var options = new ZLinkLocationOptions { PollingInterval = TimeSpan.Zero };
         var observed = new ZLinkObservedLocationGenerations();
         observed.ObserveDescriptor(current);
         var resolvers = new ZLinkStoreLocationResolvers(
@@ -389,7 +394,8 @@ public sealed class LocationResolverTests
             new ZLinkOwnerLeaseTracker(store, options, time),
             observed,
             options: options,
-            timeProvider: time);
+            timeProvider: time
+        );
 
         var live = await resolvers.ListLiveMeshNodesAsync("play");
 
@@ -404,21 +410,25 @@ public sealed class LocationResolverTests
         var fixture = await FixtureAsync();
         await AuthorityLocationTestFixture.PublishSpotAsync(
             fixture.Store,
-            InMemoryLocationStoreTests.Spot(OwnerA, "spot-1"));
+            InMemoryLocationStoreTests.Spot(OwnerA, "spot-1")
+        );
 
         var addresses = new ZLinkLocationAddressResolvers(
             fixture.Resolvers,
-            new ZLinkSpotHandleRegistry());
+            new ZLinkSpotHandleRegistry()
+        );
 
         var address = Assert.IsType<ZLinkResolvedSpotHandle>(
-            await addresses.ResolveSpotHandleAsync("spot-1"));
+            await addresses.ResolveSpotHandleAsync("spot-1")
+        );
 
         Assert.Equal("spot-1", address.SpotId);
         Assert.Equal(RoutingId.From("node-1"), address.Snapshot.NodeRid);
         Assert.Equal(ZLinkSpotKind.User, address.Snapshot.SpotKind);
 
         var sameGlobalAddress = Assert.IsType<ZLinkResolvedSpotHandle>(
-            await addresses.ResolveSpotHandleAsync("spot-1"));
+            await addresses.ResolveSpotHandleAsync("spot-1")
+        );
         Assert.Equal("play", sameGlobalAddress.MeshName);
     }
 
@@ -433,14 +443,17 @@ public sealed class LocationResolverTests
             {
                 MeshName = "external",
                 SpotId = sharedRid,
-                OwnerNodeRid = RoutingId.From("node-1")
-            });
+                OwnerNodeRid = RoutingId.From("node-1"),
+            }
+        );
         var addresses = new ZLinkLocationAddressResolvers(
             fixture.Resolvers,
-            new ZLinkSpotHandleRegistry());
+            new ZLinkSpotHandleRegistry()
+        );
 
         var handle = Assert.IsType<ZLinkResolvedSpotHandle>(
-            await addresses.ResolveSpotHandleAsync(sharedRid));
+            await addresses.ResolveSpotHandleAsync(sharedRid)
+        );
 
         Assert.Equal("external", handle.MeshName);
         Assert.Equal(RoutingId.From("node-1"), handle.Snapshot.NodeRid);
@@ -452,19 +465,25 @@ public sealed class LocationResolverTests
         var fixture = await FixtureAsync();
         await AuthorityLocationTestFixture.PublishActorAsync(
             fixture.Store,
-            InMemoryLocationStoreTests.Actor(OwnerA, "actor-entry"));
+            InMemoryLocationStoreTests.Actor(OwnerA, "actor-entry")
+        );
         var addresses = new ZLinkLocationAddressResolvers(
             fixture.Resolvers,
-            new ZLinkSpotHandleRegistry());
+            new ZLinkSpotHandleRegistry()
+        );
 
         var handle = Assert.IsType<ZLinkResolvedSpotHandle>(
-            await addresses.ResolveActorSpotHandleAsync("actor-entry"));
+            await addresses.ResolveActorSpotHandleAsync("actor-entry")
+        );
 
         Assert.Equal(RoutingId.From("node-1"), handle.Snapshot.NodeRid);
         Assert.Equal(handle.Snapshot.SpotId, handle.SpotId);
         Assert.Equal(ZLinkSpotKind.Entry, handle.Snapshot.SpotKind);
-        Assert.Null(typeof(IZLinkLocationRepository).Assembly.GetType(
-            "Zlink.Framework.Contracts.Locations.SpotHandle"));
+        Assert.Null(
+            typeof(IZLinkLocationRepository).Assembly.GetType(
+                "Zlink.Framework.Contracts.Locations.SpotHandle"
+            )
+        );
     }
 
     [Fact]
@@ -474,7 +493,7 @@ public sealed class LocationResolverTests
         var play = InMemoryLocationStoreTests.Actor(OwnerA, "shared-actor") with
         {
             SpotKind = ZLinkSpotKind.User,
-            SpotId = "play-spot"
+            SpotId = "play-spot",
         };
         var external = InMemoryLocationStoreTests.Actor(OwnerB, "shared-actor") with
         {
@@ -482,27 +501,27 @@ public sealed class LocationResolverTests
             ActorRef = new ActorRef("shared-actor", 1, "play", RoutingId.From("node-2")),
             OwnerNodeRid = RoutingId.From("node-2"),
             SpotKind = ZLinkSpotKind.User,
-            SpotId = "external-spot"
+            SpotId = "external-spot",
         };
-        Assert.NotNull(await AuthorityLocationTestFixture.PublishActorAsync(
-            fixture.Store,
-            play));
-        Assert.Null(await AuthorityLocationTestFixture.PublishActorAsync(
-            fixture.Store,
-            external));
+        Assert.NotNull(await AuthorityLocationTestFixture.PublishActorAsync(fixture.Store, play));
+        Assert.Null(await AuthorityLocationTestFixture.PublishActorAsync(fixture.Store, external));
         var handles = new ZLinkSpotHandleRegistry();
         var addresses = new ZLinkLocationAddressResolvers(fixture.Resolvers, handles);
 
         var playHandle = Assert.IsType<ZLinkResolvedSpotHandle>(
-            await addresses.ResolveActorSpotHandleAsync("shared-actor"));
+            await addresses.ResolveActorSpotHandleAsync("shared-actor")
+        );
         var externalHandle = Assert.IsType<ZLinkResolvedSpotHandle>(
-            await addresses.ResolveActorSpotHandleAsync("shared-actor"));
+            await addresses.ResolveActorSpotHandleAsync("shared-actor")
+        );
 
-        await handles.UpdateActorAsync(external with
-        {
-            SpotId = "external-moved",
-            MembershipEpoch = external.MembershipEpoch + 1
-        });
+        await handles.UpdateActorAsync(
+            external with
+            {
+                SpotId = "external-moved",
+                MembershipEpoch = external.MembershipEpoch + 1,
+            }
+        );
 
         Assert.Equal(playHandle.MeshName, externalHandle.MeshName);
         Assert.Equal("external-moved", playHandle.SpotId);
@@ -515,37 +534,43 @@ public sealed class LocationResolverTests
         var fixture = await FixtureAsync();
         await AuthorityLocationTestFixture.PublishSpotAsync(
             fixture.Store,
-            InMemoryLocationStoreTests.Spot(OwnerA, "spot-mapped"));
+            InMemoryLocationStoreTests.Spot(OwnerA, "spot-mapped")
+        );
         await AuthorityLocationTestFixture.PublishActorAsync(
             fixture.Store,
             InMemoryLocationStoreTests.Actor(OwnerA, "actor-mapped") with
             {
                 SpotKind = ZLinkSpotKind.User,
-                SpotId = "spot-mapped"
-            });
+                SpotId = "spot-mapped",
+            }
+        );
 
         var handles = new ZLinkSpotHandleRegistry();
-        var addresses = new ZLinkLocationAddressResolvers(
-            fixture.Resolvers,
-            handles);
+        var addresses = new ZLinkLocationAddressResolvers(fixture.Resolvers, handles);
 
         var spot = Assert.IsType<ZLinkResolvedSpotHandle>(
-            await addresses.ResolveSpotHandleAsync("spot-mapped"));
+            await addresses.ResolveSpotHandleAsync("spot-mapped")
+        );
         var actor = Assert.IsType<ZLinkResolvedSpotHandle>(
-            await addresses.ResolveActorSpotHandleAsync("actor-mapped"));
+            await addresses.ResolveActorSpotHandleAsync("actor-mapped")
+        );
         Assert.Equal("play", spot.Snapshot.RouterChannelId);
         Assert.Equal("play", actor.Snapshot.RouterChannelId);
 
-        await handles.UpdateSpotAsync(InMemoryLocationStoreTests.Spot(OwnerA, "spot-mapped") with
-        {
-            SpotGeneration = 2
-        });
-        await handles.UpdateActorAsync(InMemoryLocationStoreTests.Actor(OwnerA, "actor-mapped") with
-        {
-            SpotKind = ZLinkSpotKind.User,
-            SpotId = "spot-mapped",
-            MembershipEpoch = 2
-        });
+        await handles.UpdateSpotAsync(
+            InMemoryLocationStoreTests.Spot(OwnerA, "spot-mapped") with
+            {
+                SpotGeneration = 2,
+            }
+        );
+        await handles.UpdateActorAsync(
+            InMemoryLocationStoreTests.Actor(OwnerA, "actor-mapped") with
+            {
+                SpotKind = ZLinkSpotKind.User,
+                SpotId = "spot-mapped",
+                MembershipEpoch = 2,
+            }
+        );
         Assert.Equal("play", spot.Snapshot.RouterChannelId);
         Assert.Equal("play", actor.Snapshot.RouterChannelId);
     }
@@ -555,19 +580,24 @@ public sealed class LocationResolverTests
     {
         var fixture = await FixtureAsync();
         var initial = InMemoryLocationStoreTests.Spot(OwnerA, "spot-refresh");
-        await AuthorityLocationTestFixture.PublishSpotAsync(
-            fixture.Store,
-            initial);
+        await AuthorityLocationTestFixture.PublishSpotAsync(fixture.Store, initial);
         var addresses = new ZLinkLocationAddressResolvers(
             fixture.Resolvers,
-            new ZLinkSpotHandleRegistry());
+            new ZLinkSpotHandleRegistry()
+        );
         var handle = Assert.IsType<ZLinkResolvedSpotHandle>(
-            await addresses.ResolveSpotHandleAsync(initial.SpotId));
+            await addresses.ResolveSpotHandleAsync(initial.SpotId)
+        );
 
         await AuthorityLocationTestFixture.PublishSpotAsync(
             fixture.Store,
-            initial with { OwnerNodeRid = RoutingId.From("node-2"), OwnerId = OwnerB },
-            replace: true);
+            initial with
+            {
+                OwnerNodeRid = RoutingId.From("node-2"),
+                OwnerId = OwnerB,
+            },
+            replace: true
+        );
         var attempts = 0;
         var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
             await ZLinkSpotHandleRequestExecution.ExecuteAsync<bool>(
@@ -576,11 +606,12 @@ public sealed class LocationResolverTests
                 {
                     attempts++;
                     return ValueTask.FromException<bool>(
-                        new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.NotFound,
-                            "stale route"));
+                        new ZLinkFrameworkException(ZLinkFrameworkErrorKind.NotFound, "stale route")
+                    );
                 },
-                CancellationToken.None));
+                CancellationToken.None
+            )
+        );
 
         Assert.Equal(ZLinkFrameworkErrorKind.NotFound, error.Kind);
         Assert.Equal(ZLinkRetryAdvice.DoNotRetry, error.RetryAdvice);
@@ -592,25 +623,26 @@ public sealed class LocationResolverTests
     {
         var invalidated = false;
         var handle = new ZLinkResolvedSpotHandle(
-            new ZLinkSpotHandleSnapshot(
-                "play",
-                RoutingId.From("node-1"),
-                "spot-unavailable",
-                1),
+            new ZLinkSpotHandleSnapshot("play", RoutingId.From("node-1"), "spot-unavailable", 1),
             1,
-            _ => ValueTask.FromResult<
-                (ZLinkSpotHandleSnapshot Snapshot, ulong Version)?>(null),
-            () => invalidated = true);
+            _ => ValueTask.FromResult<(ZLinkSpotHandleSnapshot Snapshot, ulong Version)?>(null),
+            () => invalidated = true
+        );
 
         var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
             await ZLinkSpotHandleRequestExecution.ExecuteAsync<bool>(
                 handle,
-                _ => ValueTask.FromException<bool>(
-                    new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.Unavailable,
-                        "stale route",
-                        ZLinkRetryAdvice.RetryAfterBackoff)),
-                CancellationToken.None));
+                _ =>
+                    ValueTask.FromException<bool>(
+                        new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.Unavailable,
+                            "stale route",
+                            ZLinkRetryAdvice.RetryAfterBackoff
+                        )
+                    ),
+                CancellationToken.None
+            )
+        );
 
         Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
         Assert.True(invalidated);
@@ -623,16 +655,19 @@ public sealed class LocationResolverTests
         var handle = new ZLinkResolvedSpotHandle(
             new ZLinkSpotHandleSnapshot("play", RoutingId.From("node-1"), spotId, 1),
             1,
-            _ => ValueTask.FromResult<(ZLinkSpotHandleSnapshot, ulong)?>(null));
+            _ => ValueTask.FromResult<(ZLinkSpotHandleSnapshot, ulong)?>(null)
+        );
         var handles = new ZLinkSpotHandleRegistry();
         await handles.RegisterSpotAsync(new ZLinkSpotLocationKey(spotId), handle);
 
-        await handles.UpdateSpotAsync(InMemoryLocationStoreTests.Spot(OwnerB, "shared-spot") with
-        {
-            MeshName = "other",
-            OwnerNodeRid = RoutingId.From("node-2"),
-            SpotGeneration = 2
-        });
+        await handles.UpdateSpotAsync(
+            InMemoryLocationStoreTests.Spot(OwnerB, "shared-spot") with
+            {
+                MeshName = "other",
+                OwnerNodeRid = RoutingId.From("node-2"),
+                SpotGeneration = 2,
+            }
+        );
         await handles.RemoveSpotAsync(new ZLinkSpotLocationKey(spotId), 3);
 
         Assert.Throws<ZLinkFrameworkException>(() => _ = handle.Snapshot);
@@ -646,11 +681,13 @@ public sealed class LocationResolverTests
         var first = new ZLinkResolvedSpotHandle(
             new ZLinkSpotHandleSnapshot("play", RoutingId.From("node-1"), spotId, 1),
             1,
-            _ => ValueTask.FromResult<(ZLinkSpotHandleSnapshot, ulong)?>(null));
+            _ => ValueTask.FromResult<(ZLinkSpotHandleSnapshot, ulong)?>(null)
+        );
         var second = new ZLinkResolvedSpotHandle(
             new ZLinkSpotHandleSnapshot("play", RoutingId.From("node-2"), spotId, 2),
             2,
-            _ => ValueTask.FromResult<(ZLinkSpotHandleSnapshot, ulong)?>(null));
+            _ => ValueTask.FromResult<(ZLinkSpotHandleSnapshot, ulong)?>(null)
+        );
         var handles = new ZLinkSpotHandleRegistry();
         await handles.RegisterSpotAsync(key, first);
         await handles.RegisterSpotAsync(key, second);
@@ -667,26 +704,30 @@ public sealed class LocationResolverTests
     {
         var fixture = await FixtureAsync();
         var initial = InMemoryLocationStoreTests.Spot(OwnerA, "spot-watch-map");
-        await AuthorityLocationTestFixture.PublishSpotAsync(
-            fixture.Store,
-            initial);
+        await AuthorityLocationTestFixture.PublishSpotAsync(fixture.Store, initial);
         var options = new ZLinkLocationOptions { PollingInterval = TimeSpan.FromMinutes(1) };
         var handles = new ZLinkSpotHandleRegistry();
-        var resolver = new ZLinkLocationAddressResolvers(
-            fixture.Resolvers,
-            handles);
+        var resolver = new ZLinkLocationAddressResolvers(fixture.Resolvers, handles);
         var handle = Assert.IsType<ZLinkResolvedSpotHandle>(
-            await resolver.ResolveSpotHandleAsync(initial.SpotId));
+            await resolver.ResolveSpotHandleAsync(initial.SpotId)
+        );
         var takeover = Assert.IsType<ZLinkAuthoritySnapshot>(
             await AuthorityLocationTestFixture.PublishSpotAsync(
-            fixture.Store,
-            initial with { OwnerId = OwnerB, OwnerNodeRid = RoutingId.From("node-2") },
-            replace: true));
+                fixture.Store,
+                initial with
+                {
+                    OwnerId = OwnerB,
+                    OwnerNodeRid = RoutingId.From("node-2"),
+                },
+                replace: true
+            )
+        );
         await using var host = new ZLinkSpotHandleWatchHost(
             null,
             fixture.Resolvers,
             handles,
-            options);
+            options
+        );
 
         await host.ApplyAsync(
             new ZLinkLocationChanged(
@@ -694,8 +735,10 @@ public sealed class LocationResolverTests
                 new ZLinkLocationKey.Spot(new ZLinkSpotLocationKey(initial.SpotId)),
                 ZLinkLocationChangeType.Upserted,
                 takeover.AuthorityOwnerGeneration,
-                DateTimeOffset.UtcNow),
-            CancellationToken.None);
+                DateTimeOffset.UtcNow
+            ),
+            CancellationToken.None
+        );
 
         Assert.Equal(RoutingId.From("node-2"), handle.Snapshot.NodeRid);
         Assert.Equal("play", handle.Snapshot.RouterChannelId);
@@ -707,20 +750,19 @@ public sealed class LocationResolverTests
         var fixture = await FixtureAsync();
         var initial = InMemoryLocationStoreTests.Spot(OwnerA, "spot-watch");
         var written = Assert.IsType<ZLinkAuthoritySnapshot>(
-            await AuthorityLocationTestFixture.PublishSpotAsync(
-                fixture.Store,
-                initial));
+            await AuthorityLocationTestFixture.PublishSpotAsync(fixture.Store, initial)
+        );
         var handles = new ZLinkSpotHandleRegistry();
-        var resolver = new ZLinkLocationAddressResolvers(
-            fixture.Resolvers,
-            handles);
+        var resolver = new ZLinkLocationAddressResolvers(fixture.Resolvers, handles);
         var handle = Assert.IsType<ZLinkResolvedSpotHandle>(
-            await resolver.ResolveSpotHandleAsync(initial.SpotId));
+            await resolver.ResolveSpotHandleAsync(initial.SpotId)
+        );
         await using var host = new ZLinkSpotHandleWatchHost(
             null,
             fixture.Resolvers,
             handles,
-            new ZLinkLocationOptions { PollingInterval = TimeSpan.FromMinutes(1) });
+            new ZLinkLocationOptions { PollingInterval = TimeSpan.FromMinutes(1) }
+        );
 
         await host.ApplyAsync(
             new ZLinkLocationChanged(
@@ -728,16 +770,20 @@ public sealed class LocationResolverTests
                 new ZLinkLocationKey.Spot(new ZLinkSpotLocationKey(initial.SpotId)),
                 ZLinkLocationChangeType.Removed,
                 written.AuthorityOwnerGeneration,
-                DateTimeOffset.UtcNow),
-            CancellationToken.None);
+                DateTimeOffset.UtcNow
+            ),
+            CancellationToken.None
+        );
 
         Assert.Throws<ZLinkFrameworkException>(() => _ = handle.Snapshot);
 
-        await handles.UpdateSpotAsync(initial with
-        {
-            OwnerNodeRid = RoutingId.From("node-recovered"),
-            SpotGeneration = written.ObjectGeneration + 1
-        });
+        await handles.UpdateSpotAsync(
+            initial with
+            {
+                OwnerNodeRid = RoutingId.From("node-recovered"),
+                SpotGeneration = written.ObjectGeneration + 1,
+            }
+        );
 
         Assert.Equal(RoutingId.From("node-recovered"), handle.Snapshot.NodeRid);
     }
@@ -748,17 +794,14 @@ public sealed class LocationResolverTests
         var refreshCalls = 0;
         var operationCalls = 0;
         var handle = new ZLinkResolvedSpotHandle(
-            new ZLinkSpotHandleSnapshot(
-                "play",
-                RoutingId.From("node-1"),
-                "spot-1",
-                1),
+            new ZLinkSpotHandleSnapshot("play", RoutingId.From("node-1"), "spot-1", 1),
             1,
             _ =>
             {
                 refreshCalls++;
                 return ValueTask.FromResult<(ZLinkSpotHandleSnapshot, ulong)?>(null);
-            });
+            }
+        );
 
         var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
             await ZLinkSpotHandleRequestExecution.ExecuteAsync<bool>(
@@ -768,9 +811,12 @@ public sealed class LocationResolverTests
                     operationCalls++;
                     throw new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.Unavailable,
-                        "route is converging");
+                        "route is converging"
+                    );
                 },
-                CancellationToken.None));
+                CancellationToken.None
+            )
+        );
 
         Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
         Assert.Equal(1, operationCalls);
@@ -781,21 +827,15 @@ public sealed class LocationResolverTests
     public void Spot_Handle_Does_Not_Apply_An_Older_Version()
     {
         var handle = new ZLinkResolvedSpotHandle(
-            new ZLinkSpotHandleSnapshot(
-                "play",
-                RoutingId.From("node-new"),
-                "spot-new",
-                2),
+            new ZLinkSpotHandleSnapshot("play", RoutingId.From("node-new"), "spot-new", 2),
             2,
-            _ => ValueTask.FromResult<(ZLinkSpotHandleSnapshot, ulong)?>(null));
+            _ => ValueTask.FromResult<(ZLinkSpotHandleSnapshot, ulong)?>(null)
+        );
 
         handle.Update(
-            new ZLinkSpotHandleSnapshot(
-                "play",
-                RoutingId.From("node-old"),
-                "spot-old",
-                1),
-            1);
+            new ZLinkSpotHandleSnapshot("play", RoutingId.From("node-old"), "spot-old", 1),
+            1
+        );
         handle.Invalidate(1);
 
         Assert.Equal(RoutingId.From("node-new"), handle.Snapshot.NodeRid);
@@ -803,19 +843,13 @@ public sealed class LocationResolverTests
 
         handle.Invalidate(3);
         handle.Update(
-            new ZLinkSpotHandleSnapshot(
-                "play",
-                RoutingId.From("node-same"),
-                "spot-same",
-                3),
-            3);
+            new ZLinkSpotHandleSnapshot("play", RoutingId.From("node-same"), "spot-same", 3),
+            3
+        );
         handle.Update(
-            new ZLinkSpotHandleSnapshot(
-                "play",
-                RoutingId.From("node-delayed"),
-                "spot-delayed",
-                2),
-            2);
+            new ZLinkSpotHandleSnapshot("play", RoutingId.From("node-delayed"), "spot-delayed", 2),
+            2
+        );
         Assert.Throws<ZLinkFrameworkException>(() => _ = handle.Snapshot);
     }
 
@@ -825,16 +859,15 @@ public sealed class LocationResolverTests
         var fixture = await FixtureAsync();
         var addresses = new ZLinkLocationAddressResolvers(
             fixture.Resolvers,
-            new ZLinkSpotHandleRegistry());
+            new ZLinkSpotHandleRegistry()
+        );
 
         var entryActor = InMemoryLocationStoreTests.Actor(OwnerA) with
         {
             SpotId = "entry:test",
-            SpotGeneration = 1
+            SpotGeneration = 1,
         };
-        await AuthorityLocationTestFixture.PublishActorAsync(
-            fixture.Store,
-            entryActor);
+        await AuthorityLocationTestFixture.PublishActorAsync(fixture.Store, entryActor);
 
         var entryAddress = await addresses.ResolveActorSpotHandleAsync(entryActor.ActorId);
         Assert.NotNull(entryAddress);
@@ -844,11 +877,9 @@ public sealed class LocationResolverTests
         {
             ActorRef = new ActorRef("actor-2", 1, "play", RoutingId.From("node-1")),
             SpotKind = ZLinkSpotKind.User,
-            SpotId = "spot-7"
+            SpotId = "spot-7",
         };
-        await AuthorityLocationTestFixture.PublishActorAsync(
-            fixture.Store,
-            userActor);
+        await AuthorityLocationTestFixture.PublishActorAsync(fixture.Store, userActor);
 
         var userAddress = await addresses.ResolveActorSpotHandleAsync(userActor.ActorId);
         Assert.NotNull(userAddress);
@@ -862,16 +893,16 @@ public sealed class LocationResolverTests
         var actor = InMemoryLocationStoreTests.Actor(OwnerA) with
         {
             SpotKind = ZLinkSpotKind.User,
-            SpotId = "spot-old"
+            SpotId = "spot-old",
         };
-        await AuthorityLocationTestFixture.PublishActorAsync(
-            fixture.Store,
-            actor);
+        await AuthorityLocationTestFixture.PublishActorAsync(fixture.Store, actor);
         var addresses = new ZLinkLocationAddressResolvers(
             fixture.Resolvers,
-            new ZLinkSpotHandleRegistry());
+            new ZLinkSpotHandleRegistry()
+        );
         var handle = Assert.IsType<ZLinkResolvedSpotHandle>(
-            await addresses.ResolveActorSpotHandleAsync(actor.ActorId));
+            await addresses.ResolveActorSpotHandleAsync(actor.ActorId)
+        );
 
         await AuthorityLocationTestFixture.PublishActorAsync(
             fixture.Store,
@@ -880,9 +911,10 @@ public sealed class LocationResolverTests
                 OwnerId = OwnerB,
                 OwnerNodeRid = RoutingId.From("node-2"),
                 SpotId = "spot-new",
-                MembershipEpoch = actor.MembershipEpoch + 1
+                MembershipEpoch = actor.MembershipEpoch + 1,
             },
-            replace: true);
+            replace: true
+        );
 
         var attempts = 0;
         var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
@@ -892,11 +924,12 @@ public sealed class LocationResolverTests
                 {
                     attempts++;
                     return ValueTask.FromException<bool>(
-                        new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.NotFound,
-                            "actor moved"));
+                        new ZLinkFrameworkException(ZLinkFrameworkErrorKind.NotFound, "actor moved")
+                    );
                 },
-                CancellationToken.None));
+                CancellationToken.None
+            )
+        );
 
         Assert.Equal(ZLinkFrameworkErrorKind.NotFound, error.Kind);
         Assert.Equal(1, attempts);
@@ -910,24 +943,23 @@ public sealed class LocationResolverTests
         var actor = InMemoryLocationStoreTests.Actor(OwnerA) with
         {
             SpotKind = ZLinkSpotKind.User,
-            SpotId = "spot-old"
+            SpotId = "spot-old",
         };
-        await AuthorityLocationTestFixture.PublishActorAsync(
-            fixture.Store,
-            actor);
+        await AuthorityLocationTestFixture.PublishActorAsync(fixture.Store, actor);
         var handles = new ZLinkSpotHandleRegistry();
-        var addresses = new ZLinkLocationAddressResolvers(
-            fixture.Resolvers,
-            handles);
+        var addresses = new ZLinkLocationAddressResolvers(fixture.Resolvers, handles);
         var handle = Assert.IsType<ZLinkResolvedSpotHandle>(
-            await addresses.ResolveActorSpotHandleAsync(actor.ActorId));
+            await addresses.ResolveActorSpotHandleAsync(actor.ActorId)
+        );
 
-        await handles.UpdateActorAsync(actor with
-        {
-            OwnerNodeRid = RoutingId.From("node-2"),
-            SpotId = "spot-new",
-            MembershipEpoch = actor.MembershipEpoch + 1
-        });
+        await handles.UpdateActorAsync(
+            actor with
+            {
+                OwnerNodeRid = RoutingId.From("node-2"),
+                SpotId = "spot-new",
+                MembershipEpoch = actor.MembershipEpoch + 1,
+            }
+        );
 
         Assert.Equal(RoutingId.From("node-2"), handle.Snapshot.NodeRid);
         Assert.Equal("spot-new", handle.SpotId);
@@ -940,26 +972,24 @@ public sealed class LocationResolverTests
         var actor = InMemoryLocationStoreTests.Actor(OwnerA) with
         {
             SpotKind = ZLinkSpotKind.User,
-            SpotId = "spot-old"
+            SpotId = "spot-old",
         };
-        await AuthorityLocationTestFixture.PublishActorAsync(
-            fixture.Store,
-            actor);
+        await AuthorityLocationTestFixture.PublishActorAsync(fixture.Store, actor);
         var locationOptions = new ZLinkLocationOptions
         {
-            PollingInterval = TimeSpan.FromMilliseconds(10)
+            PollingInterval = TimeSpan.FromMilliseconds(10),
         };
         var handles = new ZLinkSpotHandleRegistry();
-        var addresses = new ZLinkLocationAddressResolvers(
-            fixture.Resolvers,
-            handles);
+        var addresses = new ZLinkLocationAddressResolvers(fixture.Resolvers, handles);
         var handle = Assert.IsType<ZLinkResolvedSpotHandle>(
-            await addresses.ResolveActorSpotHandleAsync(actor.ActorId));
+            await addresses.ResolveActorSpotHandleAsync(actor.ActorId)
+        );
         await using var host = new ZLinkSpotHandleWatchHost(
             null,
             fixture.Resolvers,
             handles,
-            locationOptions);
+            locationOptions
+        );
         await host.StartAsync(CancellationToken.None);
 
         await AuthorityLocationTestFixture.PublishActorAsync(
@@ -969,14 +999,13 @@ public sealed class LocationResolverTests
                 OwnerId = OwnerB,
                 OwnerNodeRid = RoutingId.From("node-2"),
                 SpotId = "spot-new",
-                MembershipEpoch = actor.MembershipEpoch + 1
+                MembershipEpoch = actor.MembershipEpoch + 1,
             },
-            replace: true);
+            replace: true
+        );
 
         fixture.Time.Advance(TimeSpan.FromSeconds(15));
-        await WaitUntilAsync(
-            () => handle.SpotId == "spot-new",
-            TimeSpan.FromSeconds(2));
+        await WaitUntilAsync(() => handle.SpotId == "spot-new", TimeSpan.FromSeconds(2));
         Assert.Equal(RoutingId.From("node-2"), handle.Snapshot.NodeRid);
         Assert.Equal("play", handle.Snapshot.RouterChannelId);
     }
@@ -989,34 +1018,39 @@ public sealed class LocationResolverTests
             null,
             fixture.Resolvers,
             new ZLinkSpotHandleRegistry(),
-            new ZLinkLocationOptions { PollingInterval = TimeSpan.FromMilliseconds(10) });
+            new ZLinkLocationOptions { PollingInterval = TimeSpan.FromMilliseconds(10) }
+        );
         await host.StartAsync(CancellationToken.None);
         await Task.WhenAll(
             host.StopAsync(CancellationToken.None),
             host.DisposeAsync().AsTask(),
-            host.DisposeAsync().AsTask());
+            host.DisposeAsync().AsTask()
+        );
         await host.DisposeAsync();
     }
 
-    private static async ValueTask ReserveCreatingActorAsync(
-        ZLinkInMemoryLocationStore store)
+    private static async ValueTask ReserveCreatingActorAsync(ZLinkInMemoryLocationStore store)
     {
         var actor = InMemoryLocationStoreTests.Actor(OwnerA) with
         {
             OwnerNodeGeneration = 1,
             SpotId = "entry-node-1",
-            SpotGeneration = 1
+            SpotGeneration = 1,
         };
         var committed = Assert.IsType<ZLinkAuthoritySnapshot>(
-            await AuthorityLocationTestFixture.PublishActorAsync(store, actor));
+            await AuthorityLocationTestFixture.PublishActorAsync(store, actor)
+        );
         var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actor.ActorId);
         Assert.IsType<ZLinkAuthorityCompareExchangeResult.Deleted>(
             await store.CompareExchangeAuthorityAsync(
                 key,
                 committed.StoreVersion,
-                new ZLinkAuthorityMutation.Delete()));
-        var owner = Assert.IsType<ZLinkOwnerLeaseReadResult.Found>(
-            await store.ReadOwnerLeaseAsync(OwnerA)).Token;
+                new ZLinkAuthorityMutation.Delete()
+            )
+        );
+        var owner = Assert
+            .IsType<ZLinkOwnerLeaseReadResult.Found>(await store.ReadOwnerLeaseAsync(OwnerA))
+            .Token;
         var creating = ZLinkActorAuthorityPayloadCodec.Encode(
             new ZLinkActorAuthorityPayload(
                 ZLinkActorAuthorityState.Creating,
@@ -1029,7 +1063,9 @@ public sealed class LocationResolverTests
                 checked((ulong)owner.LeaseGeneration),
                 actor.MeshName,
                 actor.OwnerNodeRid,
-                actor.OwnerNodeGeneration));
+                actor.OwnerNodeGeneration
+            )
+        );
         var intent = System.Text.Encoding.UTF8.GetBytes("create:actor-1");
         Assert.IsType<ZLinkObjectReserveResult.Reserved>(
             await store.ReserveAsync(
@@ -1044,7 +1080,10 @@ public sealed class LocationResolverTests
                     actor.OwnerNodeGeneration,
                     owner,
                     creating,
-                    new ZLinkCapacityVector(1, 0, null))));
+                    new ZLinkCapacityVector(1, 0, null)
+                )
+            )
+        );
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
@@ -1059,10 +1098,7 @@ public sealed class LocationResolverTests
     {
         await Task.Yield();
         var observed = new ZLinkObservedLocationGenerations();
-        var epoch2 = InMemoryLocationStoreTests.Actor(OwnerA) with
-        {
-            MembershipEpoch = 2
-        };
+        var epoch2 = InMemoryLocationStoreTests.Actor(OwnerA) with { MembershipEpoch = 2 };
         var epoch1 = epoch2 with { MembershipEpoch = 1 };
 
         Assert.True(observed.AcceptActor(epoch2));
@@ -1075,11 +1111,8 @@ public sealed class LocationResolverTests
         var registration = new ZLinkFrameworkRegistration();
         registration.SpotNodes.Add(
             "play",
-            new ZLinkSpotNodeRegistration
-            {
-                SpotNodeName = "play",
-                SpotMeshChannelName = "play"
-            });
+            new ZLinkSpotNodeRegistration { SpotNodeName = "play", SpotMeshChannelName = "play" }
+        );
         return registration;
     }
 
@@ -1088,21 +1121,18 @@ public sealed class LocationResolverTests
         var time = new ManualTimeProvider();
         var store = new ZLinkInMemoryLocationStore(time);
         var ownerA = await store.ClaimLiveOwnerAsync(OwnerA, LeaseTtl);
-        var ownerB = await store.ClaimLiveOwnerAsync(
-            OwnerB,
-            TimeSpan.FromMinutes(5));
+        var ownerB = await store.ClaimLiveOwnerAsync(OwnerB, TimeSpan.FromMinutes(5));
 
         var options = new ZLinkLocationOptions
         {
             // Keep the lease snapshot maximally fresh in unit tests so lease
             // expiry is observed on the next read.
-            PollingInterval = TimeSpan.Zero
+            PollingInterval = TimeSpan.Zero,
         };
 
         var tracker = new ZLinkOwnerLeaseTracker(store, options, time);
         var observed = new ZLinkObservedLocationGenerations();
-        var resolvers = new ZLinkStoreLocationResolvers(
-            store, tracker, observed);
+        var resolvers = new ZLinkStoreLocationResolvers(store, tracker, observed);
         return new ResolverFixture(store, resolvers, time, ownerA, ownerB);
     }
 
@@ -1111,27 +1141,28 @@ public sealed class LocationResolverTests
         ZLinkStoreLocationResolvers Resolvers,
         ManualTimeProvider Time,
         ZLinkLocationOwnerToken OwnerA,
-        ZLinkLocationOwnerToken OwnerB);
+        ZLinkLocationOwnerToken OwnerB
+    );
 
     private sealed class StaleFirstMeshNodeListStore(
         ZLinkInMemoryLocationStore inner,
-        ZLinkMeshNodeDescriptor staleRow) : ZLinkLocationStoreTestDouble
+        ZLinkMeshNodeDescriptor staleRow
+    ) : ZLinkLocationStoreTestDouble
     {
         internal int ListCalls { get; private set; }
 
-        public override ValueTask<ZLinkLocationPage<ZLinkMeshNodeDescriptor>>
-            ListMeshNodesAsync(
-                string meshName,
-                ZLinkPageRequest page,
-                CancellationToken cancellationToken = default)
+        public override ValueTask<ZLinkLocationPage<ZLinkMeshNodeDescriptor>> ListMeshNodesAsync(
+            string meshName,
+            ZLinkPageRequest page,
+            CancellationToken cancellationToken = default
+        )
         {
             ListCalls++;
             if (ListCalls == 1)
             {
                 return ValueTask.FromResult(
-                    new ZLinkLocationPage<ZLinkMeshNodeDescriptor>(
-                        [staleRow],
-                        null));
+                    new ZLinkLocationPage<ZLinkMeshNodeDescriptor>([staleRow], null)
+                );
             }
 
             return inner.ListMeshNodesAsync(meshName, page, cancellationToken);
@@ -1139,7 +1170,7 @@ public sealed class LocationResolverTests
 
         public override ValueTask<ZLinkOwnerLeaseReadResult> ReadOwnerLeaseAsync(
             string ownerId,
-            CancellationToken cancellationToken = default) =>
-            inner.ReadOwnerLeaseAsync(ownerId, cancellationToken);
+            CancellationToken cancellationToken = default
+        ) => inner.ReadOwnerLeaseAsync(ownerId, cancellationToken);
     }
 }

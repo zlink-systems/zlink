@@ -1,8 +1,9 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 package systems.zlink.httpclient.internal;
 
-import java.net.URI;
 import systems.zlink.httpclient.ZLinkHttpMethod;
+
+import java.net.URI;
 
 /**
  * Stateless redirect and target-URL rules for the wrapper-owned redirect loop. Mirrors the C++
@@ -12,25 +13,27 @@ import systems.zlink.httpclient.ZLinkHttpMethod;
 final class RedirectPolicy {
 
     /** Result of a redirect method/body rewrite. */
-    record Rewrite(ZLinkHttpMethod method, String body) {
-    }
+    record Rewrite(ZLinkHttpMethod method, String body) {}
 
-    private RedirectPolicy() {
-    }
+    private RedirectPolicy() {}
 
     /** Combines the base URL path prefix with the request target. */
     static String makeTarget(String prefix, String path) {
         if (prefix == null || prefix.isEmpty() || prefix.equals("/")) {
             return path;
         }
-        return prefix.endsWith("/") ? prefix.substring(0, prefix.length() - 1) + path : prefix + path;
+        return prefix.endsWith("/")
+                ? prefix.substring(0, prefix.length() - 1) + path
+                : prefix + path;
     }
 
     static boolean isRedirect(int status) {
         return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
     }
 
-    /** Normalised origin (scheme://host:port) with default ports applied, for same-origin checks. */
+    /**
+     * Normalised origin (scheme://host:port) with default ports applied, for same-origin checks.
+     */
     static String originOf(URI uri) {
         int port = uri.getPort();
         if (port == -1) {
@@ -70,7 +73,7 @@ final class RedirectPolicy {
             }
         } catch (IllegalArgumentException cause) {
             throw HttpClientErrors.protocol(
-                "HTTP redirect location is not supported: " + location, cause);
+                    "HTTP redirect location is not supported: " + location, cause);
         }
         throw HttpClientErrors.protocol("HTTP redirect location is not supported: " + location);
     }

@@ -60,14 +60,16 @@ class ZLinkStateLaneTest {
         val perCaller = 50
         try {
             coroutineScope {
-                (0 until callers).map { caller ->
-                    launch(Dispatchers.Default) {
-                        repeat(perCaller) { index ->
-                            val key = caller * perCaller + index
-                            lane.run { state[key] = key }
+                (0 until callers)
+                    .map { caller ->
+                        launch(Dispatchers.Default) {
+                            repeat(perCaller) { index ->
+                                val key = caller * perCaller + index
+                                lane.run { state[key] = key }
+                            }
                         }
                     }
-                }.forEach { it.join() }
+                    .forEach { it.join() }
             }
 
             assertEquals(callers * perCaller, lane.run { state.size })
@@ -83,17 +85,19 @@ class ZLinkStateLaneTest {
         val observedOverlap = AtomicBoolean(false)
         try {
             coroutineScope {
-                (0 until 64).map {
-                    async(Dispatchers.Default) {
-                        lane.run {
-                            if (inFlight.incrementAndGet() != 1) {
-                                observedOverlap.set(true)
+                (0 until 64)
+                    .map {
+                        async(Dispatchers.Default) {
+                            lane.run {
+                                if (inFlight.incrementAndGet() != 1) {
+                                    observedOverlap.set(true)
+                                }
+                                repeat(200) { Thread.onSpinWait() }
+                                inFlight.decrementAndGet()
                             }
-                            repeat(200) { Thread.onSpinWait() }
-                            inFlight.decrementAndGet()
                         }
                     }
-                }.awaitAll()
+                    .awaitAll()
             }
 
             assertFalse(observedOverlap.get())
@@ -107,9 +111,7 @@ class ZLinkStateLaneTest {
         val lane = ZLinkStateLane()
         val order = mutableListOf<Int>()
         try {
-            repeat(100) { value ->
-                assertTrue(lane.tryPost { order += value })
-            }
+            repeat(100) { value -> assertTrue(lane.tryPost { order += value }) }
 
             assertEquals((0 until 100).toList(), lane.run { order.toList() })
         } finally {
@@ -122,9 +124,7 @@ class ZLinkStateLaneTest {
         val lane = ZLinkStateLane()
         var count = 0
         try {
-            repeat(250) {
-                assertTrue(lane.tryPost { count++ })
-            }
+            repeat(250) { assertTrue(lane.tryPost { count++ }) }
 
             assertEquals(250, lane.run { count })
         } finally {
@@ -136,11 +136,7 @@ class ZLinkStateLaneTest {
     fun `reentering the same lane fails instead of hanging`() = runBlocking {
         val lane = ZLinkStateLane()
         try {
-            val error = withTimeout(3_000) {
-                lane.run {
-                    failureFrom { lane.run { 1 } }
-                }
-            }
+            val error = withTimeout(3_000) { lane.run { failureFrom { lane.run { 1 } } } }
 
             assertTrue(error.message!!.contains("already runs on the state lane"))
         } finally {
@@ -177,9 +173,7 @@ class ZLinkStateLaneTest {
         val lane = ZLinkStateLane()
         var completed = 0
 
-        repeat(200) {
-            assertTrue(lane.tryPost { completed++ })
-        }
+        repeat(200) { assertTrue(lane.tryPost { completed++ }) }
         lane.closeAndJoin()
 
         assertEquals(200, completed)
@@ -200,7 +194,7 @@ class ZLinkStateLaneTest {
         val lane = ZLinkStateLane()
         lane.closeAndJoin()
 
-        assertFalse(lane.tryPost { })
+        assertFalse(lane.tryPost {})
     }
 
     @Test

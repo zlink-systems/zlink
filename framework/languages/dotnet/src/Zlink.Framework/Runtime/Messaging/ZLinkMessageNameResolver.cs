@@ -9,16 +9,19 @@ internal static class ZLinkMessageNameResolver
 
     public static string ResolveFromMessage(object? message)
     {
-        var messageType = message?.GetType()
-                          ?? throw new InvalidOperationException("Message type is required.");
+        var messageType =
+            message?.GetType() ?? throw new InvalidOperationException("Message type is required.");
         return ResolveFromType(messageType);
     }
 
     public static string ResolveFromType(Type type)
     {
         ArgumentNullException.ThrowIfNull(type);
-        return Cache.GetOrAdd(type, static messageType =>
-            messageType.GetCustomAttribute<ZLinkPacketAttribute>()?.PacketName
-            ?? messageType.Name);
+        return Cache.GetOrAdd(
+            type,
+            static messageType =>
+                messageType.GetCustomAttribute<ZLinkPacketAttribute>()?.PacketName
+                ?? messageType.Name
+        );
     }
 }

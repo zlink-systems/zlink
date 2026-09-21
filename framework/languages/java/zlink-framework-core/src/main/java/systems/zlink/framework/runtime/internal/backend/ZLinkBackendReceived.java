@@ -1,12 +1,13 @@
 package systems.zlink.framework.runtime.internal.backend;
-import java.util.Objects;
+
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.messaging.Message;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
-import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.messaging.Message;
 
 public final class ZLinkBackendReceived implements AutoCloseable {
     private final ZLinkBackendRequestResult result;
@@ -24,269 +25,308 @@ public final class ZLinkBackendReceived implements AutoCloseable {
     private final String contentType;
 
     public ZLinkBackendReceived(
-        ZLinkBackendRequestResult result,
-        Optional<RoutingId> routingId,
-        Optional<String> spotId,
-        Optional<Long> requestSeq,
-        byte[] applicationMetadata,
-        byte[] acceptedJournalRecord,
-        List<Message> parts,
-        Consumer<List<Message>> reply,
-        Runnable closeAction,
-        String contentType) {
+            ZLinkBackendRequestResult result,
+            Optional<RoutingId> routingId,
+            Optional<String> spotId,
+            Optional<Long> requestSeq,
+            byte[] applicationMetadata,
+            byte[] acceptedJournalRecord,
+            List<Message> parts,
+            Consumer<List<Message>> reply,
+            Runnable closeAction,
+            String contentType) {
         this(
-            result,
-            0,
-            routingId,
-            spotId,
-            requestSeq,
-            applicationMetadata,
-            () -> acceptedJournalRecord == null ? new byte[0] : acceptedJournalRecord,
-            acceptedJournalRecord == null ? 0 : acceptedJournalRecord.length,
-            parts,
-            reply,
-            closeAction,
-            contentType);
-        this.acceptedJournalRecord = acceptedJournalRecord == null
-            ? new byte[0]
-            : acceptedJournalRecord;
+                result,
+                0,
+                routingId,
+                spotId,
+                requestSeq,
+                applicationMetadata,
+                () -> acceptedJournalRecord == null ? new byte[0] : acceptedJournalRecord,
+                acceptedJournalRecord == null ? 0 : acceptedJournalRecord.length,
+                parts,
+                reply,
+                closeAction,
+                contentType);
+        this.acceptedJournalRecord =
+                acceptedJournalRecord == null ? new byte[0] : acceptedJournalRecord;
     }
 
     private ZLinkBackendReceived(
-        ZLinkBackendRequestResult result,
-        int failureCode,
-        Optional<RoutingId> routingId,
-        Optional<String> spotId,
-        Optional<Long> requestSeq,
-        byte[] applicationMetadata,
-        Supplier<byte[]> acceptedJournalRecordSupplier,
-        int acceptedJournalRecordSizeHint,
-        List<Message> parts,
-        Consumer<List<Message>> reply,
-        Runnable closeAction,
-        String contentType) {
+            ZLinkBackendRequestResult result,
+            int failureCode,
+            Optional<RoutingId> routingId,
+            Optional<String> spotId,
+            Optional<Long> requestSeq,
+            byte[] applicationMetadata,
+            Supplier<byte[]> acceptedJournalRecordSupplier,
+            int acceptedJournalRecordSizeHint,
+            List<Message> parts,
+            Consumer<List<Message>> reply,
+            Runnable closeAction,
+            String contentType) {
         this.result = result == null ? ZLinkBackendRequestResult.OK : result;
         this.failureCode = Math.max(0, failureCode);
         this.routingId = routingId == null ? Optional.empty() : routingId;
         this.spotId = spotId == null ? Optional.empty() : spotId;
         this.requestSeq = requestSeq == null ? Optional.empty() : requestSeq;
-        this.applicationMetadata = applicationMetadata == null
-            ? new byte[0]
-            : applicationMetadata.clone();
-        this.acceptedJournalRecordSupplier = Objects.requireNonNull(
-            acceptedJournalRecordSupplier, "acceptedJournalRecordSupplier");
+        this.applicationMetadata =
+                applicationMetadata == null ? new byte[0] : applicationMetadata.clone();
+        this.acceptedJournalRecordSupplier =
+                Objects.requireNonNull(
+                        acceptedJournalRecordSupplier, "acceptedJournalRecordSupplier");
         this.acceptedJournalRecordSizeHint = Math.max(0, acceptedJournalRecordSizeHint);
         this.parts = Objects.requireNonNull(parts, "parts");
         this.reply = reply;
-        this.closeAction = closeAction == null ? () -> { } : closeAction;
+        this.closeAction = closeAction == null ? () -> {} : closeAction;
         this.contentType = contentType;
     }
 
     public static ZLinkBackendReceived lazyJournal(
-        ZLinkBackendRequestResult result,
-        Optional<RoutingId> routingId,
-        Optional<String> spotId,
-        Optional<Long> requestSeq,
-        byte[] applicationMetadata,
-        Supplier<byte[]> acceptedJournalRecord,
-        int acceptedJournalRecordSizeHint,
-        List<Message> parts,
-        Consumer<List<Message>> reply,
-        Runnable closeAction,
-        String contentType) {
+            ZLinkBackendRequestResult result,
+            Optional<RoutingId> routingId,
+            Optional<String> spotId,
+            Optional<Long> requestSeq,
+            byte[] applicationMetadata,
+            Supplier<byte[]> acceptedJournalRecord,
+            int acceptedJournalRecordSizeHint,
+            List<Message> parts,
+            Consumer<List<Message>> reply,
+            Runnable closeAction,
+            String contentType) {
         return new ZLinkBackendReceived(
-            result, 0, routingId, spotId, requestSeq, applicationMetadata,
-            acceptedJournalRecord, acceptedJournalRecordSizeHint, parts, reply,
-            closeAction, contentType);
+                result,
+                0,
+                routingId,
+                spotId,
+                requestSeq,
+                applicationMetadata,
+                acceptedJournalRecord,
+                acceptedJournalRecordSizeHint,
+                parts,
+                reply,
+                closeAction,
+                contentType);
     }
 
-    public ZLinkBackendRequestResult result() { return result; }
+    public ZLinkBackendRequestResult result() {
+        return result;
+    }
+
     /** The fine framework failure code from the reply header (0 if absent). */
-    public int failureCode() { return failureCode; }
-    public Optional<RoutingId> routingId() { return routingId; }
-    public Optional<String> spotId() { return spotId; }
-    public Optional<Long> requestSeq() { return requestSeq; }
-    public boolean isRequest() { return requestSeq.isPresent() || reply != null; }
-    public boolean hasDirectReplyPath() { return reply != null; }
-    public List<Message> parts() { return parts; }
-    public Consumer<List<Message>> reply() { return reply; }
-    public Runnable closeAction() { return closeAction; }
-    public String contentType() { return contentType; }
+    public int failureCode() {
+        return failureCode;
+    }
+
+    public Optional<RoutingId> routingId() {
+        return routingId;
+    }
+
+    public Optional<String> spotId() {
+        return spotId;
+    }
+
+    public Optional<Long> requestSeq() {
+        return requestSeq;
+    }
+
+    public boolean isRequest() {
+        return requestSeq.isPresent() || reply != null;
+    }
+
+    public boolean hasDirectReplyPath() {
+        return reply != null;
+    }
+
+    public List<Message> parts() {
+        return parts;
+    }
+
+    public Consumer<List<Message>> reply() {
+        return reply;
+    }
+
+    public Runnable closeAction() {
+        return closeAction;
+    }
+
+    public String contentType() {
+        return contentType;
+    }
+
     public int applicationMetadataSize() {
         return applicationMetadata.length;
     }
 
     public int acceptedJournalRecordSize() {
         byte[] materialized = acceptedJournalRecord;
-        return materialized == null
-            ? acceptedJournalRecordSizeHint
-            : materialized.length;
+        return materialized == null ? acceptedJournalRecordSizeHint : materialized.length;
     }
 
     /** Backward-compatible constructor without an inbound content type. */
     public ZLinkBackendReceived(
-        ZLinkBackendRequestResult result,
-        Optional<RoutingId> routingId,
-        Optional<String> spotId,
-        Optional<Long> requestSeq,
-        byte[] applicationMetadata,
-        byte[] acceptedJournalRecord,
-        List<Message> parts,
-        Consumer<List<Message>> reply,
-        Runnable closeAction) {
+            ZLinkBackendRequestResult result,
+            Optional<RoutingId> routingId,
+            Optional<String> spotId,
+            Optional<Long> requestSeq,
+            byte[] applicationMetadata,
+            byte[] acceptedJournalRecord,
+            List<Message> parts,
+            Consumer<List<Message>> reply,
+            Runnable closeAction) {
         this(
-            result,
-            routingId,
-            spotId,
-            requestSeq,
-            applicationMetadata,
-            acceptedJournalRecord,
-            parts,
-            reply,
-            closeAction,
-            null);
+                result,
+                routingId,
+                spotId,
+                requestSeq,
+                applicationMetadata,
+                acceptedJournalRecord,
+                parts,
+                reply,
+                closeAction,
+                null);
     }
 
     public ZLinkBackendReceived(
-        ZLinkBackendRequestResult result,
-        Optional<RoutingId> routingId,
-        Optional<String> spotId,
-        Optional<Long> requestSeq,
-        byte[] applicationMetadata,
-        List<Message> parts,
-        Consumer<List<Message>> reply,
-        Runnable closeAction) {
+            ZLinkBackendRequestResult result,
+            Optional<RoutingId> routingId,
+            Optional<String> spotId,
+            Optional<Long> requestSeq,
+            byte[] applicationMetadata,
+            List<Message> parts,
+            Consumer<List<Message>> reply,
+            Runnable closeAction) {
         this(
-            result,
-            routingId,
-            spotId,
-            requestSeq,
-            applicationMetadata,
-            new byte[0],
-            parts,
-            reply,
-            closeAction,
-            null);
+                result,
+                routingId,
+                spotId,
+                requestSeq,
+                applicationMetadata,
+                new byte[0],
+                parts,
+                reply,
+                closeAction,
+                null);
     }
 
     public ZLinkBackendReceived(
-        ZLinkBackendRequestResult result,
-        Optional<RoutingId> routingId,
-        Optional<String> spotId,
-        Optional<Long> requestSeq,
-        List<Message> parts,
-        Consumer<List<Message>> reply,
-        Runnable closeAction) {
+            ZLinkBackendRequestResult result,
+            Optional<RoutingId> routingId,
+            Optional<String> spotId,
+            Optional<Long> requestSeq,
+            List<Message> parts,
+            Consumer<List<Message>> reply,
+            Runnable closeAction) {
         this(
-            result,
-            routingId,
-            spotId,
-            requestSeq,
-            new byte[0],
-            new byte[0],
-            parts,
-            reply,
-            closeAction,
-            null);
+                result,
+                routingId,
+                spotId,
+                requestSeq,
+                new byte[0],
+                new byte[0],
+                parts,
+                reply,
+                closeAction,
+                null);
     }
 
     public ZLinkBackendReceived(
-        Optional<RoutingId> routingId,
-        Optional<String> spotId,
-        Optional<Long> requestSeq,
-        List<Message> parts) {
+            Optional<RoutingId> routingId,
+            Optional<String> spotId,
+            Optional<Long> requestSeq,
+            List<Message> parts) {
         this(
-            ZLinkBackendRequestResult.OK,
-            routingId,
-            spotId,
-            requestSeq,
-            new byte[0],
-            new byte[0],
-            parts,
-            null,
-            () -> { },
-            null);
+                ZLinkBackendRequestResult.OK,
+                routingId,
+                spotId,
+                requestSeq,
+                new byte[0],
+                new byte[0],
+                parts,
+                null,
+                () -> {},
+                null);
     }
 
     public ZLinkBackendReceived(
-        Optional<RoutingId> routingId,
-        Optional<String> spotId,
-        Optional<Long> requestSeq,
-        List<Message> parts,
-        Consumer<List<Message>> reply) {
+            Optional<RoutingId> routingId,
+            Optional<String> spotId,
+            Optional<Long> requestSeq,
+            List<Message> parts,
+            Consumer<List<Message>> reply) {
         this(
-            ZLinkBackendRequestResult.OK,
-            routingId,
-            spotId,
-            requestSeq,
-            new byte[0],
-            new byte[0],
-            parts,
-            reply,
-            () -> { },
-            null);
+                ZLinkBackendRequestResult.OK,
+                routingId,
+                spotId,
+                requestSeq,
+                new byte[0],
+                new byte[0],
+                parts,
+                reply,
+                () -> {},
+                null);
     }
 
     public ZLinkBackendReceived(
-        Optional<RoutingId> routingId,
-        Optional<String> spotId,
-        Optional<Long> requestSeq,
-        List<Message> parts,
-        Consumer<List<Message>> reply,
-        Runnable closeAction) {
+            Optional<RoutingId> routingId,
+            Optional<String> spotId,
+            Optional<Long> requestSeq,
+            List<Message> parts,
+            Consumer<List<Message>> reply,
+            Runnable closeAction) {
         this(
-            ZLinkBackendRequestResult.OK,
-            routingId,
-            spotId,
-            requestSeq,
-            new byte[0],
-            new byte[0],
-            parts,
-            reply,
-            closeAction,
-            null);
+                ZLinkBackendRequestResult.OK,
+                routingId,
+                spotId,
+                requestSeq,
+                new byte[0],
+                new byte[0],
+                parts,
+                reply,
+                closeAction,
+                null);
     }
 
     public ZLinkBackendReceived(
-        ZLinkBackendRequestResult result,
-        Optional<RoutingId> routingId,
-        Optional<String> spotId,
-        Optional<Long> requestSeq,
-        List<Message> parts) {
+            ZLinkBackendRequestResult result,
+            Optional<RoutingId> routingId,
+            Optional<String> spotId,
+            Optional<Long> requestSeq,
+            List<Message> parts) {
         this(
-            result,
-            routingId,
-            spotId,
-            requestSeq,
-            new byte[0],
-            new byte[0],
-            parts,
-            null,
-            () -> { },
-            null);
+                result,
+                routingId,
+                spotId,
+                requestSeq,
+                new byte[0],
+                new byte[0],
+                parts,
+                null,
+                () -> {},
+                null);
     }
 
     /** Completion-site constructor that carries the reply's fine failure code. */
     public ZLinkBackendReceived(
-        ZLinkBackendRequestResult result,
-        int failureCode,
-        Optional<RoutingId> routingId,
-        Optional<String> spotId,
-        Optional<Long> requestSeq,
-        List<Message> parts) {
+            ZLinkBackendRequestResult result,
+            int failureCode,
+            Optional<RoutingId> routingId,
+            Optional<String> spotId,
+            Optional<Long> requestSeq,
+            List<Message> parts) {
         this(
-            result,
-            failureCode,
-            routingId,
-            spotId,
-            requestSeq,
-            new byte[0],
-            () -> new byte[0],
-            0,
-            parts,
-            null,
-            () -> { },
-            null);
+                result,
+                failureCode,
+                routingId,
+                spotId,
+                requestSeq,
+                new byte[0],
+                () -> new byte[0],
+                0,
+                parts,
+                null,
+                () -> {},
+                null);
     }
 
     public byte[] applicationMetadata() {
@@ -300,9 +340,10 @@ public final class ZLinkBackendReceived implements AutoCloseable {
         }
         synchronized (this) {
             if (acceptedJournalRecord == null) {
-                acceptedJournalRecord = Objects.requireNonNull(
-                    acceptedJournalRecordSupplier.get(),
-                    "accepted journal supplier returned null");
+                acceptedJournalRecord =
+                        Objects.requireNonNull(
+                                acceptedJournalRecordSupplier.get(),
+                                "accepted journal supplier returned null");
             }
             return acceptedJournalRecord;
         }

@@ -5,7 +5,7 @@ namespace Zlink.Framework.Runtime.Locations;
 internal enum ZLinkAuthorityKeyKind
 {
     Actor,
-    Spot
+    Spot,
 }
 
 internal static class ZLinkAuthorityKeyCodec
@@ -20,14 +20,10 @@ internal static class ZLinkAuthorityKeyCodec
     internal static ZLinkAuthorityKey EncodeSpot(string spotId) =>
         Encode(ZLinkAuthorityKeyKind.Spot, spotId, nameof(spotId));
 
-    internal static bool TryDecodeActor(
-        ZLinkAuthorityKey key,
-        out string actorId) =>
+    internal static bool TryDecodeActor(ZLinkAuthorityKey key, out string actorId) =>
         TryDecode(key, ZLinkAuthorityKeyKind.Actor, out actorId);
 
-    internal static bool TryDecodeSpot(
-        ZLinkAuthorityKey key,
-        out string spotId) =>
+    internal static bool TryDecodeSpot(ZLinkAuthorityKey key, out string spotId) =>
         TryDecode(key, ZLinkAuthorityKeyKind.Spot, out spotId);
 
     internal static string DecodeActor(ZLinkAuthorityKey key) =>
@@ -39,7 +35,8 @@ internal static class ZLinkAuthorityKeyCodec
     private static ZLinkAuthorityKey Encode(
         ZLinkAuthorityKeyKind kind,
         string identity,
-        string parameterName)
+        string parameterName
+    )
     {
         ArgumentNullException.ThrowIfNull(identity, parameterName);
         byte[] bytes;
@@ -52,11 +49,11 @@ internal static class ZLinkAuthorityKeyCodec
             throw new ArgumentException(
                 "Authority identity must be valid UTF-8 text.",
                 parameterName,
-                error);
+                error
+            );
         }
 
-        if (bytes.Length is 0 or > MaximumIdentityBytes
-            || identity.Contains('\0'))
+        if (bytes.Length is 0 or > MaximumIdentityBytes || identity.Contains('\0'))
             throw new ArgumentOutOfRangeException(parameterName);
 
         var discriminator = kind == ZLinkAuthorityKeyKind.Actor ? 'a' : 's';
@@ -75,12 +72,12 @@ internal static class ZLinkAuthorityKeyCodec
     private static bool TryDecode(
         ZLinkAuthorityKey key,
         ZLinkAuthorityKeyKind expectedKind,
-        out string identity)
+        out string identity
+    )
     {
         identity = string.Empty;
         var encodedKey = key.Value;
-        if (string.IsNullOrEmpty(encodedKey)
-            || encodedKey.Length > MaximumEncodedKeyBytes)
+        if (string.IsNullOrEmpty(encodedKey) || encodedKey.Length > MaximumEncodedKeyBytes)
             return false;
 
         var discriminator = expectedKind == ZLinkAuthorityKeyKind.Actor ? 'a' : 's';
@@ -89,20 +86,22 @@ internal static class ZLinkAuthorityKeyCodec
             return false;
 
         var lengthEnd = encodedKey.IndexOf(':', prefix.Length);
-        if (lengthEnd < 0
+        if (
+            lengthEnd < 0
             || !TryParseCanonicalLength(
                 encodedKey.AsSpan(prefix.Length, lengthEnd - prefix.Length),
-                out var expectedLength))
+                out var expectedLength
+            )
+        )
             return false;
 
         var encodedIdentity = encodedKey.AsSpan(lengthEnd + 1);
-        if (encodedIdentity.Length < expectedLength
-            || encodedIdentity.Length > expectedLength * 3)
+        if (encodedIdentity.Length < expectedLength || encodedIdentity.Length > expectedLength * 3)
             return false;
 
         Span<byte> bytes = stackalloc byte[MaximumIdentityBytes];
         var byteCount = 0;
-        for (var index = 0; index < encodedIdentity.Length;)
+        for (var index = 0; index < encodedIdentity.Length; )
         {
             if (byteCount == expectedLength)
                 return false;
@@ -117,9 +116,11 @@ internal static class ZLinkAuthorityKeyCodec
                 continue;
             }
 
-            if (index + 2 >= encodedIdentity.Length
+            if (
+                index + 2 >= encodedIdentity.Length
                 || !TryUpperHex(encodedIdentity[index + 1], out var high)
-                || !TryUpperHex(encodedIdentity[index + 2], out var low))
+                || !TryUpperHex(encodedIdentity[index + 2], out var low)
+            )
                 return false;
             var decoded = checked((byte)((high << 4) | low));
             if (IsUnreserved(decoded))
@@ -148,19 +149,16 @@ internal static class ZLinkAuthorityKeyCodec
         }
     }
 
-    private static string Decode(
-        ZLinkAuthorityKey key,
-        ZLinkAuthorityKeyKind expectedKind)
+    private static string Decode(ZLinkAuthorityKey key, ZLinkAuthorityKeyKind expectedKind)
     {
         if (TryDecode(key, expectedKind, out var identity))
             return identity;
         throw new InvalidDataException(
-            $"Authority key '{key.Value}' is not canonical authority-key-v1.");
+            $"Authority key '{key.Value}' is not canonical authority-key-v1."
+        );
     }
 
-    private static bool TryParseCanonicalLength(
-        ReadOnlySpan<char> text,
-        out int length)
+    private static bool TryParseCanonicalLength(ReadOnlySpan<char> text, out int length)
     {
         length = 0;
         if (text.Length is 0 or > 3 || text[0] is < '1' or > '9')
@@ -191,8 +189,15 @@ internal static class ZLinkAuthorityKeyCodec
     }
 
     private static bool IsUnreserved(byte value) =>
-        value is >= (byte)'A' and <= (byte)'Z'
-        or >= (byte)'a' and <= (byte)'z'
-        or >= (byte)'0' and <= (byte)'9'
-        or (byte)'-' or (byte)'.' or (byte)'_' or (byte)'~';
+        value
+            is >= (byte)'A'
+                and <= (byte)'Z'
+                or >= (byte)'a'
+                and <= (byte)'z'
+                or >= (byte)'0'
+                and <= (byte)'9'
+                or (byte)'-'
+                or (byte)'.'
+                or (byte)'_'
+                or (byte)'~';
 }

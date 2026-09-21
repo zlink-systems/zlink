@@ -4,10 +4,7 @@ import java.time.Instant;
 import java.util.Objects;
 
 public record ZLinkStoreValue(
-    byte[] bytes,
-    ZLinkStoreVersion version,
-    Instant expiresAt,
-    Instant storeNow) {
+        byte[] bytes, ZLinkStoreVersion version, Instant expiresAt, Instant storeNow) {
     public ZLinkStoreValue {
         bytes = Objects.requireNonNull(bytes, "bytes").clone();
         Objects.requireNonNull(version, "version");

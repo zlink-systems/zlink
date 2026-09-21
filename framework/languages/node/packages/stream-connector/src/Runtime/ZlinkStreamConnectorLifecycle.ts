@@ -80,7 +80,9 @@ export class ZlinkStreamConnectorLifecycle {
     if (this.connectTask !== undefined) {
       return await this.connectTask;
     }
-    this.connectTask = this.connectOnce(signal).finally(() => { this.connectTask = undefined; });
+    this.connectTask = this.connectOnce(signal).finally(() => {
+      this.connectTask = undefined;
+    });
     return await this.connectTask;
   }
 
@@ -95,7 +97,10 @@ export class ZlinkStreamConnectorLifecycle {
           this.lateConnectCleanupError = error;
           throw error;
         }
-        throw connectorError(ZlinkStreamErrorCode.Disconnected, 'Connector closed while connecting.');
+        throw connectorError(
+          ZlinkStreamErrorCode.Disconnected,
+          'Connector closed while connecting.'
+        );
       }
       this.currentConnection = connection;
       this.connectionGeneration += 1;
@@ -113,7 +118,8 @@ export class ZlinkStreamConnectorLifecycle {
       this.startReceiveLoop();
     } catch (cause) {
       if (this.closeRequested) {
-        const message = cause instanceof Error ? cause.message : 'Connector closed while connecting.';
+        const message =
+          cause instanceof Error ? cause.message : 'Connector closed while connecting.';
         const error = toStreamError(cause, ZlinkStreamErrorCode.Disconnected, message);
         throw new ZlinkStreamException(error);
       }
@@ -143,14 +149,23 @@ export class ZlinkStreamConnectorLifecycle {
     if (this.currentState === ZlinkStreamConnectionState.Closed) {
       return;
     }
-    this.closeTask = this.closeOnce(signal).finally(() => { this.closeTask = undefined; });
+    this.closeTask = this.closeOnce(signal).finally(() => {
+      this.closeTask = undefined;
+    });
     return await this.closeTask;
   }
 
   async serverClosing(reason: ZlinkStreamCloseReason): Promise<void> {
     this.closeReasonValue = reason;
-    const error = { code: ZlinkStreamErrorCode.Disconnected, message: `Server closed the session: ${reason}.` };
-    await this.disconnectForTransportFailure(error, this.currentConnection, this.connectionGeneration);
+    const error = {
+      code: ZlinkStreamErrorCode.Disconnected,
+      message: `Server closed the session: ${reason}.`
+    };
+    await this.disconnectForTransportFailure(
+      error,
+      this.currentConnection,
+      this.connectionGeneration
+    );
   }
 
   private async closeOnce(signal?: AbortSignal): Promise<void> {
@@ -175,7 +190,10 @@ export class ZlinkStreamConnectorLifecycle {
     } catch (error) {
       errors.push(error);
     }
-    this.pendingRequests.failAll({ code: ZlinkStreamErrorCode.Disconnected, message: 'Connector closed.' });
+    this.pendingRequests.failAll({
+      code: ZlinkStreamErrorCode.Disconnected,
+      message: 'Connector closed.'
+    });
     // Spec stream-connector 32 §10.1.1: closing the connector ends the
     // connection a wait was observing, and the wait ends with it.
     this.receivedMessages.connectionEnded();
@@ -203,7 +221,10 @@ export class ZlinkStreamConnectorLifecycle {
   }
 
   connectionForSend(): ZlinkStreamConnection {
-    if (this.currentConnection === undefined || this.currentState !== ZlinkStreamConnectionState.Connected) {
+    if (
+      this.currentConnection === undefined ||
+      this.currentState !== ZlinkStreamConnectionState.Connected
+    ) {
       throw connectorError(ZlinkStreamErrorCode.Disconnected, 'Connector is not connected.');
     }
     return this.currentConnection;
@@ -329,7 +350,11 @@ export class ZlinkStreamConnectorLifecycle {
       }
     } catch (cause) {
       if (signal.aborted) return;
-      const error = toStreamError(cause, ZlinkStreamErrorCode.FrameDecodeFailed, 'Receive loop failed.');
+      const error = toStreamError(
+        cause,
+        ZlinkStreamErrorCode.FrameDecodeFailed,
+        'Receive loop failed.'
+      );
       await this.disconnectForTransportFailure(error, connection, generation);
     } finally {
       this.receiveLoopSleeping = false;
@@ -369,7 +394,9 @@ export class ZlinkStreamConnectorLifecycle {
     if (this.receiveLoopAbort === undefined || !this.receiveLoopSleeping) {
       return;
     }
-    const settled = new Promise<void>((resolve) => { this.receiveLoopSettled.push(resolve); });
+    const settled = new Promise<void>((resolve) => {
+      this.receiveLoopSettled.push(resolve);
+    });
     this.receiveLoopWake?.();
     await settled;
   }
@@ -385,9 +412,11 @@ export class ZlinkStreamConnectorLifecycle {
     generation: number,
     signal: AbortSignal
   ): boolean {
-    return !signal.aborted &&
+    return (
+      !signal.aborted &&
       this.currentState === ZlinkStreamConnectionState.Connected &&
-      this.isCurrentConnection(connection, generation);
+      this.isCurrentConnection(connection, generation)
+    );
   }
 
   private async runHeartbeatTick(): Promise<void> {
@@ -397,7 +426,11 @@ export class ZlinkStreamConnectorLifecycle {
     if (Date.now() - this.lastInboundAt > this.options.heartbeat.timeoutMs) {
       this.closeReasonValue = 'HeartbeatTimeout';
       const error = { code: ZlinkStreamErrorCode.Disconnected, message: 'Heartbeat timed out.' };
-      await this.disconnectForTransportFailure(error, this.currentConnection, this.connectionGeneration);
+      await this.disconnectForTransportFailure(
+        error,
+        this.currentConnection,
+        this.connectionGeneration
+      );
       return;
     }
     const connection = this.currentConnection;
@@ -431,16 +464,22 @@ export class ZlinkStreamConnectorLifecycle {
     // handler that calls `connect` would otherwise wait for the task its own
     // caller has not yet left, and one whose promise never settles would keep
     // the `Promise.allSettled` in `publishDisconnected` from ever returning.
-    this.disconnectTask = this.tearDownConnection(error)
-      .finally(() => { this.disconnectTask = undefined; });
+    this.disconnectTask = this.tearDownConnection(error).finally(() => {
+      this.disconnectTask = undefined;
+    });
     await this.disconnectTask;
     await this.announceDisconnect(error);
   }
 
-  private isCurrentConnection(connection: ZlinkStreamConnection | undefined, generation: number): boolean {
-    return !this.closeRequested &&
+  private isCurrentConnection(
+    connection: ZlinkStreamConnection | undefined,
+    generation: number
+  ): boolean {
+    return (
+      !this.closeRequested &&
       this.currentConnection === connection &&
-      this.connectionGeneration === generation;
+      this.connectionGeneration === generation
+    );
   }
 
   /** Transport teardown only — no application callback runs from here. */
@@ -477,7 +516,9 @@ export class ZlinkStreamConnectorLifecycle {
       void this.events.publishDisconnected().catch(() => undefined);
     }
     if (this.shouldReconnect()) {
-      queueMicrotask(() => { void this.connect().catch(() => undefined); });
+      queueMicrotask(() => {
+        void this.connect().catch(() => undefined);
+      });
     }
   }
 

@@ -76,15 +76,13 @@ class service_mailbox_t
     void end_application_drain (const std::string &owner);
 
     bool try_enqueue (service_mailbox_record_t &&record);
-    std::optional<service_mailbox_claim_t>
-    try_claim (service_mailbox_domain_t domain,
-               std::size_t message_budget,
-               std::size_t byte_budget);
-    std::optional<service_mailbox_claim_t>
-    try_claim_owner (service_mailbox_domain_t domain,
-                     const std::string &owner,
-                     std::size_t message_budget,
-                     std::size_t byte_budget);
+    std::optional<service_mailbox_claim_t> try_claim (service_mailbox_domain_t domain,
+                                                      std::size_t message_budget,
+                                                      std::size_t byte_budget);
+    std::optional<service_mailbox_claim_t> try_claim_owner (service_mailbox_domain_t domain,
+                                                            const std::string &owner,
+                                                            std::size_t message_budget,
+                                                            std::size_t byte_budget);
     bool release (const service_mailbox_claim_t &claim);
     void close ();
 
@@ -92,7 +90,13 @@ class service_mailbox_t
     std::size_t pending_bytes (service_mailbox_domain_t domain) const;
 
   private:
-    enum class owner_phase_t { idle, ready, draining, retained };
+    enum class owner_phase_t
+    {
+        idle,
+        ready,
+        draining,
+        retained
+    };
 
     struct owner_queue_t
     {
@@ -140,9 +144,12 @@ class service_mailbox_t
 inline std::string service_mailbox_t::application_owner (const host::ready_record_t &owner)
 {
     switch (owner.owner_kind) {
-        case host::owner_kind_t::node: return application_owner (owner.owner_kind);
-        case host::owner_kind_t::channel: return application_owner (owner.owner_kind, owner.channel_name);
-        case host::owner_kind_t::spot: return application_owner (owner.owner_kind, owner.spot_id);
+        case host::owner_kind_t::node:
+            return application_owner (owner.owner_kind);
+        case host::owner_kind_t::channel:
+            return application_owner (owner.owner_kind, owner.channel_name);
+        case host::owner_kind_t::spot:
+            return application_owner (owner.owner_kind, owner.spot_id);
         case host::owner_kind_t::actor:
             if (owner.actor)
                 return application_owner (owner.owner_kind, owner.actor->actor_id ().value ());

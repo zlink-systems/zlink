@@ -30,8 +30,7 @@ struct listener_status_t
     std::string endpoint;
     std::chrono::system_clock::time_point observed_at{};
 
-    friend bool operator== (const listener_status_t &,
-                            const listener_status_t &) = default;
+    friend bool operator== (const listener_status_t &, const listener_status_t &) = default;
 };
 
 struct observation_loss_t
@@ -39,12 +38,10 @@ struct observation_loss_t
     std::uint64_t coalesced_count = 0;
     std::uint64_t discarded_terminal_count = 0;
 
-    friend bool operator== (const observation_loss_t &,
-                            const observation_loss_t &) = default;
+    friend bool operator== (const observation_loss_t &, const observation_loss_t &) = default;
 };
 
-template <typename TStatus>
-struct observed_status_t final
+template <typename TStatus> struct observed_status_t final
 {
     TStatus status;
     observation_loss_t loss;
@@ -54,8 +51,7 @@ struct core_hwm_status_t
 {
     std::optional<std::uint64_t> configured_memory_limit_bytes;
     std::optional<std::uint64_t> configured_budget_bytes;
-    core_hwm_profile_t configured_profile =
-      core_hwm_profile_t::balanced;
+    core_hwm_profile_t configured_profile = core_hwm_profile_t::balanced;
     std::uint64_t effective_budget_bytes = 0;
     std::uint64_t total_applied_hwm_bytes = 0;
     std::uint64_t core_queue_accounted_bytes = 0;
@@ -80,14 +76,12 @@ struct core_hwm_status_t
     std::uint64_t retired_queue_count = 0;
     std::uint64_t deferred_origin_credit_bytes = 0;
 
-    friend bool operator== (const core_hwm_status_t &,
-                            const core_hwm_status_t &) = default;
+    friend bool operator== (const core_hwm_status_t &, const core_hwm_status_t &) = default;
 };
 
 struct application_job_queue_status_t
 {
-    application_job_queue_profile_t configured_profile =
-      application_job_queue_profile_t::balanced;
+    application_job_queue_profile_t configured_profile = application_job_queue_profile_t::balanced;
     std::optional<std::uint32_t> configured_manual_max;
     std::uint32_t effective_processor_count = 1;
     std::uint32_t effective_max_queued_application_jobs = 1;
@@ -122,12 +116,10 @@ struct host_capacity_status_t
 
 struct framework_runtime_status_t
 {
-    framework_runtime_state_t state =
-      framework_runtime_state_t::preparing;
+    framework_runtime_state_t state = framework_runtime_state_t::preparing;
     bool is_ready = false;
     bool accepting_work = false;
-    std::optional<std::chrono::system_clock::time_point>
-      operation_deadline;
+    std::optional<std::chrono::system_clock::time_point> operation_deadline;
     std::optional<relocation_result_t> relocation_result;
     std::optional<termination_result_t> termination_result;
     host_capacity_status_t capacity;
@@ -151,14 +143,10 @@ class framework_runtime_t
     virtual ~framework_runtime_t () = default;
     virtual framework_runtime_status_t status () const = 0;
     virtual void reset_capacity_metrics () = 0;
-    virtual listener_status_t listener_status (
-      listener_kind_t kind,
-      std::string name) const = 0;
-    virtual std::unique_ptr<runtime_observation_t>
-    observe (
+    virtual listener_status_t listener_status (listener_kind_t kind, std::string name) const = 0;
+    virtual std::unique_ptr<runtime_observation_t> observe (
       std::size_t capacity,
-      std::function<void (
-        const observed_status_t<framework_runtime_status_t> &)> observer) = 0;
+      std::function<void (const observed_status_t<framework_runtime_status_t> &)> observer) = 0;
 };
 
 } // namespace zlink::framework

@@ -43,17 +43,11 @@ export class ZLinkRedisLocationStore implements ZLinkLocationStore {
     this.domain = `${options.keyPrefix}:${NAMESPACE}`;
   }
 
-  async read(
-    key: ZLinkStoreKey,
-    signal?: AbortSignal
-  ): Promise<ZLinkStoreReadResult> {
+  async read(key: ZLinkStoreKey, signal?: AbortSignal): Promise<ZLinkStoreReadResult> {
     const logicalKey = requireKey(key);
-    const result = asArray(await this.connection.eval(
-      OPAQUE_READ_SCRIPT,
-      [this.rowKey(logicalKey)],
-      [],
-      signal
-    ));
+    const result = asArray(
+      await this.connection.eval(OPAQUE_READ_SCRIPT, [this.rowKey(logicalKey)], [], signal)
+    );
     const storeNow = fromUnixMs(toNumber(result[1]));
     if (toNumber(result[0]) !== 1) return { kind: 'missing', storeNow };
     requireMatchingKey(asString(result[2]), logicalKey);
@@ -73,24 +67,26 @@ export class ZLinkRedisLocationStore implements ZLinkLocationStore {
     signal?: AbortSignal
   ): Promise<ZLinkStoreWriteResult> {
     const encoded = encodeWrite(request);
-    const result = asArray(await this.connection.eval(
-      OPAQUE_WRITE_SCRIPT,
-      [
-        this.indexKey(),
-        this.mapKey(),
-        this.cleanupKey(),
-        this.sequenceKey(),
-        this.snapshotExpiryKey(),
-        this.snapshotBoundaryKey(),
-        ...encoded.keys.map(key => this.rowKey(key))
-      ],
-      [
-        JSON.stringify(encoded.conditions),
-        JSON.stringify(encoded.mutations),
-        ...encoded.putBytes
-      ],
-      signal
-    ));
+    const result = asArray(
+      await this.connection.eval(
+        OPAQUE_WRITE_SCRIPT,
+        [
+          this.indexKey(),
+          this.mapKey(),
+          this.cleanupKey(),
+          this.sequenceKey(),
+          this.snapshotExpiryKey(),
+          this.snapshotBoundaryKey(),
+          ...encoded.keys.map((key) => this.rowKey(key))
+        ],
+        [
+          JSON.stringify(encoded.conditions),
+          JSON.stringify(encoded.mutations),
+          ...encoded.putBytes
+        ],
+        signal
+      )
+    );
     const storeNow = fromUnixMs(toNumber(result[1]));
     const outcome = asString(result[0]);
     if (outcome === 'conflict') return { kind: 'conflict', storeNow };
@@ -110,10 +106,7 @@ export class ZLinkRedisLocationStore implements ZLinkLocationStore {
     return { kind: 'applied', putVersions, storeNow };
   }
 
-  async scan(
-    request: ZLinkStoreScanRequest,
-    signal?: AbortSignal
-  ): Promise<ZLinkStoreScanResult> {
+  async scan(request: ZLinkStoreScanRequest, signal?: AbortSignal): Promise<ZLinkStoreScanResult> {
     requireScanRequest(request);
     if (request.cursor === undefined) {
       const snapshotId = randomUUID();
@@ -143,10 +136,7 @@ export class ZLinkRedisLocationStore implements ZLinkLocationStore {
     await this.connection.dispose();
   }
 
-  private async readScanPage(
-    snapshotId: string,
-    raw: unknown
-  ): Promise<ZLinkStoreScanResult> {
+  private async readScanPage(snapshotId: string, raw: unknown): Promise<ZLinkStoreScanResult> {
     const result = asArray(raw);
     const outcome = asString(result[0]);
     if (outcome === 'expired') return { kind: 'expired' };
@@ -174,9 +164,10 @@ export class ZLinkRedisLocationStore implements ZLinkLocationStore {
       kind: 'page',
       value: {
         items,
-        nextCursor: nextKey.length === 0
-          ? undefined
-          : scanCursor(`${snapshotId}:${Buffer.from(nextKey, 'utf8').toString('hex')}`),
+        nextCursor:
+          nextKey.length === 0
+            ? undefined
+            : scanCursor(`${snapshotId}:${Buffer.from(nextKey, 'utf8').toString('hex')}`),
         storeNow
       }
     };
@@ -235,11 +226,11 @@ interface EncodedWrite {
 }
 
 function encodeWrite(request: ZLinkStoreWriteRequest): EncodedWrite {
-  const conditionKeys = request.conditions.map(condition => requireKey(condition.key));
-  const mutationKeys = request.mutations.map(mutation => requireKey(mutation.key));
+  const conditionKeys = request.conditions.map((condition) => requireKey(condition.key));
+  const mutationKeys = request.mutations.map((mutation) => requireKey(mutation.key));
   if (
-    new Set(conditionKeys).size !== conditionKeys.length
-    || new Set(mutationKeys).size !== mutationKeys.length
+    new Set(conditionKeys).size !== conditionKeys.length ||
+    new Set(mutationKeys).size !== mutationKeys.length
   ) {
     throw new RangeError('Location Store condition and mutation keys must be unique.');
   }
@@ -251,7 +242,7 @@ function encodeWrite(request: ZLinkStoreWriteRequest): EncodedWrite {
   // adds 6 to this 1-based index before indexing into KEYS.
   const keyIndex = new Map(keys.map((key, index) => [key, index + 1]));
   let encodedBytes = 0;
-  const conditions = request.conditions.map(condition => {
+  const conditions = request.conditions.map((condition) => {
     const key = requireKey(condition.key);
     encodedBytes += Buffer.byteLength(key, 'utf8');
     if (condition.kind === 'missing') return ['missing', keyIndex.get(key), key];
@@ -260,19 +251,14 @@ function encodeWrite(request: ZLinkStoreWriteRequest): EncodedWrite {
     return ['version', keyIndex.get(key), key, expected];
   });
   const putBytes: Buffer[] = [];
-  const mutations = request.mutations.map(mutation => {
+  const mutations = request.mutations.map((mutation) => {
     const key = requireKey(mutation.key);
     encodedBytes += Buffer.byteLength(key, 'utf8');
     if (mutation.kind === 'delete') return ['delete', keyIndex.get(key), key];
     requireValue(mutation.bytes, mutation.retentionMs);
     encodedBytes += mutation.bytes.byteLength;
     putBytes.push(Buffer.from(mutation.bytes));
-    return [
-      'put',
-      keyIndex.get(key),
-      key,
-      mutation.retentionMs ?? false
-    ];
+    return ['put', keyIndex.get(key), key, mutation.retentionMs ?? false];
   });
   if (encodedBytes > MAX_WRITE_BYTES) {
     throw new RangeError('Location Store write exceeds 4 MiB encoded input.');
@@ -327,10 +313,7 @@ function requireValue(bytes: Uint8Array, retentionMs: number | undefined): void 
   if (bytes.byteLength > MAX_VALUE_BYTES) {
     throw new RangeError('Location Store value exceeds 1 MiB.');
   }
-  if (
-    retentionMs !== undefined
-    && (!Number.isSafeInteger(retentionMs) || retentionMs < 1)
-  ) {
+  if (retentionMs !== undefined && (!Number.isSafeInteger(retentionMs) || retentionMs < 1)) {
     throw new RangeError('Location Store retention must be a positive safe integer.');
   }
 }
@@ -344,9 +327,9 @@ function parseCursor(cursor: ZLinkStoreScanCursor): {
   const snapshotId = separator < 0 ? '' : value.slice(0, separator);
   const lastKeyHex = separator < 0 ? '' : value.slice(separator + 1);
   if (
-    !/^[0-9a-f-]{36}$/.test(snapshotId)
-    || !/^[0-9a-f]*$/.test(lastKeyHex)
-    || lastKeyHex.length % 2 !== 0
+    !/^[0-9a-f-]{36}$/.test(snapshotId) ||
+    !/^[0-9a-f]*$/.test(lastKeyHex) ||
+    lastKeyHex.length % 2 !== 0
   ) {
     throw new RangeError('Location Store scan cursor is invalid.');
   }

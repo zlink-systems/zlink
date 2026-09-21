@@ -86,8 +86,11 @@ export function decodeActorMessageFollowContext(
   const hopCount = input.hopCount;
   const checksum = input.payloadChecksumSha256;
   if (typeof request !== 'boolean') throw invalidContext('request must be boolean');
-  if (!Number.isSafeInteger(hopCount) || (hopCount as number) < 0
-      || (hopCount as number) > ZLINK_MESSAGE_FOLLOW_MAX_HOPS) {
+  if (
+    !Number.isSafeInteger(hopCount) ||
+    (hopCount as number) < 0 ||
+    (hopCount as number) > ZLINK_MESSAGE_FOLLOW_MAX_HOPS
+  ) {
     throw invalidContext('hopCount is outside 0..8');
   }
   if (typeof checksum !== 'string' || !/^[0-9a-f]{64}$/.test(checksum)) {
@@ -102,16 +105,20 @@ export function decodeActorMessageFollowContext(
   if (!request && replyRouteId !== undefined) {
     throw invalidContext('one-way context must not contain replyRouteId');
   }
-  if (!Array.isArray(input.visitedOwners)
-      || input.visitedOwners.some(item => typeof item !== 'string' || item.length === 0)
-      || input.visitedOwners.length !== (hopCount as number) + 1) {
+  if (
+    !Array.isArray(input.visitedOwners) ||
+    input.visitedOwners.some((item) => typeof item !== 'string' || item.length === 0) ||
+    input.visitedOwners.length !== (hopCount as number) + 1
+  ) {
     throw invalidContext('visitedOwners does not match hopCount');
   }
   const visitedOwners = [...input.visitedOwners] as string[];
   const targetOwnerKeys = messageFollowOwnerFenceCompatibleKeys(targetOwner);
-  if (new Set(visitedOwners).size !== visitedOwners.length
-      || !targetOwnerKeys.includes(visitedOwners[visitedOwners.length - 1])
-      || visitedOwners.slice(0, -1).some(key => targetOwnerKeys.includes(key))) {
+  if (
+    new Set(visitedOwners).size !== visitedOwners.length ||
+    !targetOwnerKeys.includes(visitedOwners[visitedOwners.length - 1]) ||
+    visitedOwners.slice(0, -1).some((key) => targetOwnerKeys.includes(key))
+  ) {
     throw invalidContext('visited owner fence chain is invalid');
   }
   return freezeContext({
@@ -141,8 +148,11 @@ export function advanceActorMessageFollowContext(
     throw invalidContext('Message Follow reached the 8-hop limit');
   }
   const targetKey = messageFollowOwnerFenceKey(targetOwner);
-  if (messageFollowOwnerFenceCompatibleKeys(targetOwner)
-    .some(key => context.visitedOwners.includes(key))) {
+  if (
+    messageFollowOwnerFenceCompatibleKeys(targetOwner).some((key) =>
+      context.visitedOwners.includes(key)
+    )
+  ) {
     throw invalidContext('Message Follow owner loop was detected');
   }
   return freezeContext({
@@ -167,8 +177,7 @@ export function attachActorMessageFollowContext(
 export function actorMessageFollowContext(
   actorRef: ActorRef | undefined
 ): ZLinkActorMessageFollowContext | undefined {
-  return (actorRef as ActorRefWithMessageFollow | undefined)
-    ?.__zlinkMessageFollowContext;
+  return (actorRef as ActorRefWithMessageFollow | undefined)?.__zlinkMessageFollowContext;
 }
 
 export function actorMessageFollowPayloadChecksum(parts: readonly Message[]): string {
@@ -192,9 +201,7 @@ export function verifyActorMessageFollowPayload(
   }
 }
 
-export function messageFollowOwnerFenceKey(
-  fence: ZLinkActorMessageFollowOwnerFence
-): string {
+export function messageFollowOwnerFenceKey(fence: ZLinkActorMessageFollowOwnerFence): string {
   return JSON.stringify([
     'zlink-actor-message-follow-owner-fence',
     2,
@@ -245,10 +252,7 @@ export function ownerFence(input: {
   return Object.freeze(value);
 }
 
-function decodeOwnerFence(
-  value: unknown,
-  name: string
-): ZLinkActorMessageFollowOwnerFence {
+function decodeOwnerFence(value: unknown, name: string): ZLinkActorMessageFollowOwnerFence {
   if (typeof value !== 'object' || value === null) {
     throw invalidContext(`${name} must be an object`);
   }
@@ -269,9 +273,7 @@ function decodeOwnerFence(
   });
 }
 
-function freezeContext(
-  context: ZLinkActorMessageFollowContext
-): ZLinkActorMessageFollowContext {
+function freezeContext(context: ZLinkActorMessageFollowContext): ZLinkActorMessageFollowContext {
   return Object.freeze({
     ...context,
     sourceOwner: Object.freeze({ ...context.sourceOwner }),
@@ -281,8 +283,7 @@ function freezeContext(
 }
 
 function requireId(value: unknown, name: string): string {
-  if (typeof value !== 'string' || !/^[0-9a-f]{32}$/.test(value)
-      || /^0+$/.test(value)) {
+  if (typeof value !== 'string' || !/^[0-9a-f]{32}$/.test(value) || /^0+$/.test(value)) {
     throw invalidContext(`${name} must be a nonzero 128-bit lowercase hex value`);
   }
   return value;
@@ -308,8 +309,12 @@ function requirePositiveBigInt(value: unknown, name: string): string {
 
 function optionalNodeRidHex(value: unknown, name: string): string | undefined {
   if (value === undefined) return undefined;
-  if (typeof value !== 'string' || value.length === 0 || value.length % 2 !== 0
-      || !/^[0-9a-f]+$/.test(value)) {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.length % 2 !== 0 ||
+    !/^[0-9a-f]+$/.test(value)
+  ) {
     throw invalidContext(`${name} must be non-empty lowercase hexadecimal bytes`);
   }
   return value;
@@ -320,18 +325,23 @@ function messageFollowOwnerFenceCompatibleKeys(
 ): readonly string[] {
   const canonical = messageFollowOwnerFenceKey(fence);
   const textHex = encodeRoutingIdStorageHex(fence.nodeRid);
-  if (fence.nodeRid.includes('\u0000')
-      || fence.ownerId.includes('\u0000')
-      || (fence.nodeRidHex !== undefined && fence.nodeRidHex !== textHex)) {
+  if (
+    fence.nodeRid.includes('\u0000') ||
+    fence.ownerId.includes('\u0000') ||
+    (fence.nodeRidHex !== undefined && fence.nodeRidHex !== textHex)
+  ) {
     return [canonical];
   }
-  return [canonical, [
-    fence.nodeRid,
-    fence.nodeGeneration,
-    fence.ownerId,
-    fence.ownerLeaseGeneration,
-    fence.authorityOwnerGeneration
-  ].join('\u0000')];
+  return [
+    canonical,
+    [
+      fence.nodeRid,
+      fence.nodeGeneration,
+      fence.ownerId,
+      fence.ownerLeaseGeneration,
+      fence.authorityOwnerGeneration
+    ].join('\u0000')
+  ];
 }
 
 function optionalPositiveSafeInteger(value: unknown, name: string): number | undefined {

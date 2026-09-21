@@ -24,46 +24,61 @@ public sealed partial class StreamConnectorTests
             await using var stream = tcp.GetStream();
             await WritePacketAsync(
                 stream,
-                headerCodec.Encode(new ZlinkStreamHeader(
-                    ZlinkStreamMessageKind.Send,
-                    ZlinkStreamCodec.Raw,
-                    ZlinkStreamHeaderFlags.None,
-                    null,
-                    "slow-predicate",
-                    ZlinkStreamMetadata.Empty)).ToArray(),
-                "payload"u8.ToArray());
+                headerCodec
+                    .Encode(
+                        new ZlinkStreamHeader(
+                            ZlinkStreamMessageKind.Send,
+                            ZlinkStreamCodec.Raw,
+                            ZlinkStreamHeaderFlags.None,
+                            null,
+                            "slow-predicate",
+                            ZlinkStreamMetadata.Empty
+                        )
+                    )
+                    .ToArray(),
+                "payload"u8.ToArray()
+            );
             await done.Task.WaitAsync(TimeSpan.FromSeconds(15));
         });
 
-        await using var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-        {
-            Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
-            Heartbeat = DisabledHeartbeat(),
-            Reconnect = new ZlinkStreamReconnectOptions { Enabled = false }
-        });
+        await using var connector = ZlinkStreamConnectorFactory.Create(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
+                Heartbeat = DisabledHeartbeat(),
+                Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
+            }
+        );
 
         await connector.Connect.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(15));
         await WaitUntilAsync(
             () => connector.ReceivedCount("slow-predicate") == 1,
-            TimeSpan.FromSeconds(15));
+            TimeSpan.FromSeconds(15)
+        );
 
-        var predicateEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var releasePredicate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var predicateEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releasePredicate = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var stateInsidePredicate = ZlinkStreamConnectionState.Created;
-        var wait = Task.Run(async () => await connector
-            .WaitFor("slow-predicate")
-            .Timeout(TimeSpan.FromSeconds(15))
-            .Where(_ =>
-            {
-                // Reading the lifecycle surface takes the lifecycle lock. Doing it from a
-                // predicate that still held the receive queue lock would be the reverse of
-                // the order the reconnect path takes the two.
-                stateInsidePredicate = connector.State;
-                predicateEntered.TrySetResult();
-                releasePredicate.Task.Wait(TimeSpan.FromSeconds(15));
-                return true;
-            })
-            .Async());
+        var wait = Task.Run(async () =>
+            await connector
+                .WaitFor("slow-predicate")
+                .Timeout(TimeSpan.FromSeconds(15))
+                .Where(_ =>
+                {
+                    // Reading the lifecycle surface takes the lifecycle lock. Doing it from a
+                    // predicate that still held the receive queue lock would be the reverse of
+                    // the order the reconnect path takes the two.
+                    stateInsidePredicate = connector.State;
+                    predicateEntered.TrySetResult();
+                    releasePredicate.Task.Wait(TimeSpan.FromSeconds(15));
+                    return true;
+                })
+                .Async()
+        );
 
         await predicateEntered.Task.WaitAsync(TimeSpan.FromSeconds(15));
 
@@ -96,8 +111,12 @@ public sealed partial class StreamConnectorTests
         listener.Start();
         var endpoint = (IPEndPoint)listener.LocalEndpoint;
         var headerCodec = new ZlinkStreamHeaderCodec();
-        var staleRecorded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var reconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var staleRecorded = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var reconnected = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var server = Task.Run(async () =>
         {
@@ -106,14 +125,20 @@ public sealed partial class StreamConnectorTests
                 await using var stream = first.GetStream();
                 await WritePacketAsync(
                     stream,
-                    headerCodec.Encode(new ZlinkStreamHeader(
-                        ZlinkStreamMessageKind.Send,
-                        ZlinkStreamCodec.Raw,
-                        ZlinkStreamHeaderFlags.None,
-                        null,
-                        "stale",
-                        ZlinkStreamMetadata.Empty)).ToArray(),
-                    "stale-payload"u8.ToArray());
+                    headerCodec
+                        .Encode(
+                            new ZlinkStreamHeader(
+                                ZlinkStreamMessageKind.Send,
+                                ZlinkStreamCodec.Raw,
+                                ZlinkStreamHeaderFlags.None,
+                                null,
+                                "stale",
+                                ZlinkStreamMetadata.Empty
+                            )
+                        )
+                        .ToArray(),
+                    "stale-payload"u8.ToArray()
+                );
                 await staleRecorded.Task.WaitAsync(TimeSpan.FromSeconds(15));
             }
 
@@ -123,35 +148,38 @@ public sealed partial class StreamConnectorTests
             await done.Task.WaitAsync(TimeSpan.FromSeconds(15));
         });
 
-        await using var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-        {
-            Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
-            Heartbeat = DisabledHeartbeat(),
-            Reconnect = new ZlinkStreamReconnectOptions
+        await using var connector = ZlinkStreamConnectorFactory.Create(
+            new ZlinkStreamConnectorOptions
             {
-                InitialDelay = TimeSpan.FromMilliseconds(10),
-                MaxDelay = TimeSpan.FromMilliseconds(10),
-                BackoffFactor = 1.0,
-                MaxAttempts = 20
+                Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
+                Heartbeat = DisabledHeartbeat(),
+                Reconnect = new ZlinkStreamReconnectOptions
+                {
+                    InitialDelay = TimeSpan.FromMilliseconds(10),
+                    MaxDelay = TimeSpan.FromMilliseconds(10),
+                    BackoffFactor = 1.0,
+                    MaxAttempts = 20,
+                },
             }
-        });
+        );
 
         await connector.Connect.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(15));
-        await WaitUntilAsync(
-            () => connector.ReceivedCount("stale") == 1,
-            TimeSpan.FromSeconds(15));
+        await WaitUntilAsync(() => connector.ReceivedCount("stale") == 1, TimeSpan.FromSeconds(15));
         staleRecorded.SetResult();
 
         await reconnected.Task.WaitAsync(TimeSpan.FromSeconds(15));
         await WaitUntilAsync(
-            () => connector.State == ZlinkStreamConnectionState.Connected
-                  && connector.ReceivedCount("stale") == 0,
-            TimeSpan.FromSeconds(15));
+            () =>
+                connector.State == ZlinkStreamConnectionState.Connected
+                && connector.ReceivedCount("stale") == 0,
+            TimeSpan.FromSeconds(15)
+        );
 
         // The counters say the new connection received nothing, and the history has to say
         // the same thing: the wait finds nothing and ends on its own timeout.
         var failure = await Assert.ThrowsAsync<ZlinkStreamException>(async () =>
-            await connector.WaitFor("stale").Timeout(TimeSpan.FromMilliseconds(200)).Async());
+            await connector.WaitFor("stale").Timeout(TimeSpan.FromMilliseconds(200)).Async()
+        );
 
         Assert.Equal(ZlinkStreamErrorCode.ValidationFailed, failure.Error.Code);
 
@@ -170,8 +198,12 @@ public sealed partial class StreamConnectorTests
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
         var endpoint = (IPEndPoint)listener.LocalEndpoint;
-        var dropFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var reconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var dropFirst = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var reconnected = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var server = Task.Run(async () =>
         {
@@ -186,26 +218,33 @@ public sealed partial class StreamConnectorTests
             await done.Task.WaitAsync(TimeSpan.FromSeconds(15));
         });
 
-        await using var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-        {
-            Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
-            Heartbeat = DisabledHeartbeat(),
-            Reconnect = new ZlinkStreamReconnectOptions
+        await using var connector = ZlinkStreamConnectorFactory.Create(
+            new ZlinkStreamConnectorOptions
             {
-                InitialDelay = TimeSpan.FromMilliseconds(10),
-                MaxDelay = TimeSpan.FromMilliseconds(10),
-                BackoffFactor = 1.0,
-                MaxAttempts = 20
+                Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
+                Heartbeat = DisabledHeartbeat(),
+                Reconnect = new ZlinkStreamReconnectOptions
+                {
+                    InitialDelay = TimeSpan.FromMilliseconds(10),
+                    MaxDelay = TimeSpan.FromMilliseconds(10),
+                    BackoffFactor = 1.0,
+                    MaxAttempts = 20,
+                },
             }
-        });
+        );
 
         await connector.Connect.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(15));
-        var wait = connector.WaitFor("never-arrives").Timeout(TimeSpan.FromSeconds(15)).Async().AsTask();
+        var wait = connector
+            .WaitFor("never-arrives")
+            .Timeout(TimeSpan.FromSeconds(15))
+            .Async()
+            .AsTask();
         dropFirst.SetResult();
 
         await reconnected.Task.WaitAsync(TimeSpan.FromSeconds(15));
         var failure = await Assert.ThrowsAsync<ZlinkStreamException>(async () =>
-            await wait.WaitAsync(TimeSpan.FromSeconds(15)));
+            await wait.WaitAsync(TimeSpan.FromSeconds(15))
+        );
 
         Assert.Equal(ZlinkStreamErrorCode.Disconnected, failure.Error.Code);
 
@@ -232,25 +271,35 @@ public sealed partial class StreamConnectorTests
             await drop.Task.WaitAsync(TimeSpan.FromSeconds(15));
         });
 
-        await using var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-        {
-            Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
-            Heartbeat = DisabledHeartbeat(),
-            Reconnect = new ZlinkStreamReconnectOptions { Enabled = false }
-        });
+        await using var connector = ZlinkStreamConnectorFactory.Create(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
+                Heartbeat = DisabledHeartbeat(),
+                Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
+            }
+        );
 
         await connector.Connect.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(15));
-        var wait = connector.WaitFor("never-arrives").Timeout(TimeSpan.FromSeconds(5)).Async().AsTask();
+        var wait = connector
+            .WaitFor("never-arrives")
+            .Timeout(TimeSpan.FromSeconds(5))
+            .Async()
+            .AsTask();
         var startedAt = Environment.TickCount64;
         drop.SetResult();
         await server.WaitAsync(TimeSpan.FromSeconds(15));
 
         var failure = await Assert.ThrowsAsync<ZlinkStreamException>(async () =>
-            await wait.WaitAsync(TimeSpan.FromSeconds(15)));
+            await wait.WaitAsync(TimeSpan.FromSeconds(15))
+        );
 
         Assert.Equal(ZlinkStreamErrorCode.Disconnected, failure.Error.Code);
         // Released by the ending, not by the 5 s wait timeout.
-        Assert.True(Environment.TickCount64 - startedAt < 2000, "the wait waited for its own timeout");
+        Assert.True(
+            Environment.TickCount64 - startedAt < 2000,
+            "the wait waited for its own timeout"
+        );
     }
 
     /// <summary>
@@ -271,32 +320,42 @@ public sealed partial class StreamConnectorTests
             await drop.Task.WaitAsync(TimeSpan.FromSeconds(15));
         });
 
-        await using var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-        {
-            Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
-            Heartbeat = DisabledHeartbeat(),
-            Reconnect = new ZlinkStreamReconnectOptions
+        await using var connector = ZlinkStreamConnectorFactory.Create(
+            new ZlinkStreamConnectorOptions
             {
-                InitialDelay = TimeSpan.FromSeconds(3),
-                MaxDelay = TimeSpan.FromSeconds(3),
-                BackoffFactor = 1.0,
-                MaxAttempts = 20
+                Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
+                Heartbeat = DisabledHeartbeat(),
+                Reconnect = new ZlinkStreamReconnectOptions
+                {
+                    InitialDelay = TimeSpan.FromSeconds(3),
+                    MaxDelay = TimeSpan.FromSeconds(3),
+                    BackoffFactor = 1.0,
+                    MaxAttempts = 20,
+                },
             }
-        });
+        );
 
         await connector.Connect.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(15));
-        var wait = connector.WaitFor("never-arrives").Timeout(TimeSpan.FromSeconds(5)).Async().AsTask();
+        var wait = connector
+            .WaitFor("never-arrives")
+            .Timeout(TimeSpan.FromSeconds(5))
+            .Async()
+            .AsTask();
         var startedAt = Environment.TickCount64;
         drop.SetResult();
         await server.WaitAsync(TimeSpan.FromSeconds(15));
 
         var failure = await Assert.ThrowsAsync<ZlinkStreamException>(async () =>
-            await wait.WaitAsync(TimeSpan.FromSeconds(15)));
+            await wait.WaitAsync(TimeSpan.FromSeconds(15))
+        );
 
         Assert.Equal(ZlinkStreamErrorCode.Disconnected, failure.Error.Code);
         // The reconnect waits at least half of its 3 s base delay, so a release inside
         // 1 s happened at the ending, not at the next connection - which does not exist.
-        Assert.True(Environment.TickCount64 - startedAt < 1000, "the wait outlived the ending of its connection");
+        Assert.True(
+            Environment.TickCount64 - startedAt < 1000,
+            "the wait outlived the ending of its connection"
+        );
         Assert.Equal(ZlinkStreamConnectionState.Reconnecting, connector.State);
         Assert.False(listener.Pending());
     }
@@ -318,23 +377,33 @@ public sealed partial class StreamConnectorTests
             await done.Task.WaitAsync(TimeSpan.FromSeconds(15));
         });
 
-        var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-        {
-            Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
-            Heartbeat = DisabledHeartbeat(),
-            Reconnect = new ZlinkStreamReconnectOptions { Enabled = false }
-        });
+        var connector = ZlinkStreamConnectorFactory.Create(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
+                Heartbeat = DisabledHeartbeat(),
+                Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
+            }
+        );
 
         await connector.Connect.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(15));
-        var wait = connector.WaitFor("never-arrives").Timeout(TimeSpan.FromSeconds(5)).Async().AsTask();
+        var wait = connector
+            .WaitFor("never-arrives")
+            .Timeout(TimeSpan.FromSeconds(5))
+            .Async()
+            .AsTask();
         var startedAt = Environment.TickCount64;
         await connector.Close.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(15));
 
         var failure = await Assert.ThrowsAsync<ZlinkStreamException>(async () =>
-            await wait.WaitAsync(TimeSpan.FromSeconds(15)));
+            await wait.WaitAsync(TimeSpan.FromSeconds(15))
+        );
 
         Assert.Equal(ZlinkStreamErrorCode.Disconnected, failure.Error.Code);
-        Assert.True(Environment.TickCount64 - startedAt < 2000, "the wait waited for its own timeout");
+        Assert.True(
+            Environment.TickCount64 - startedAt < 2000,
+            "the wait waited for its own timeout"
+        );
 
         done.SetResult();
         await server.WaitAsync(TimeSpan.FromSeconds(15));

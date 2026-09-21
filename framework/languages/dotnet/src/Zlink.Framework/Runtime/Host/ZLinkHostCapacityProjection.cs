@@ -17,7 +17,8 @@ internal sealed class ZLinkHostCapacityProjection
     internal ZLinkHostCapacityProjection(
         IZLinkBackendRuntimeContext context,
         ZLinkInboundDispatchOptionsModel configuration,
-        ZLinkApplicationJobQueue applicationJobQueue)
+        ZLinkApplicationJobQueue applicationJobQueue
+    )
     {
         _context = context;
         _configuration = configuration;
@@ -26,29 +27,35 @@ internal sealed class ZLinkHostCapacityProjection
 
     internal ZLinkHostCapacityStatus GetStatus()
     {
-        return AwaitStateLane(_lane.RunAsync(() =>
-        {
-            var core = _context.GetCoreHwmBudgetSnapshot();
-            return new ZLinkHostCapacityStatus(
-                _measurementEpoch,
-                MapCoreStatus(core, _configuration),
-                _applicationJobQueue.GetStatus());
-        }));
+        return AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                var core = _context.GetCoreHwmBudgetSnapshot();
+                return new ZLinkHostCapacityStatus(
+                    _measurementEpoch,
+                    MapCoreStatus(core, _configuration),
+                    _applicationJobQueue.GetStatus()
+                );
+            })
+        );
     }
 
     internal void ResetMetrics()
     {
-        AwaitStateLane(_lane.RunAsync(() =>
-        {
-            _context.ResetCoreHwmBudgetMetrics();
-            _applicationJobQueue.ResetMetrics();
-            _measurementEpoch = checked(_measurementEpoch + 1);
-        }));
+        AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                _context.ResetCoreHwmBudgetMetrics();
+                _applicationJobQueue.ResetMetrics();
+                _measurementEpoch = checked(_measurementEpoch + 1);
+            })
+        );
     }
 
     internal static ZLinkCoreHwmStatus MapCoreStatus(
         CoreHwmBudgetSnapshot snapshot,
-        ZLinkInboundDispatchOptionsModel configuration) =>
+        ZLinkInboundDispatchOptionsModel configuration
+    ) =>
         new(
             configuration.CoreHwmMemoryLimitBytes,
             configuration.CoreHwmBudgetBytes,
@@ -75,11 +82,11 @@ internal sealed class ZLinkHostCapacityProjection
             snapshot.ActiveReceiveQueueCount,
             snapshot.OutstandingApplicationLeaseCount,
             snapshot.RetiredQueueCount,
-            snapshot.DeferredOriginCreditBytes);
+            snapshot.DeferredOriginCreditBytes
+        );
 
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();
 
-    private static void AwaitStateLane(ValueTask operation) =>
-        operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 }

@@ -27,8 +27,8 @@ std::vector<std::byte> from_hex (std::string_view value)
     std::vector<std::byte> result;
     result.reserve (value.size () / 2);
     for (std::size_t index = 0; index < value.size (); index += 2)
-        result.push_back (static_cast<std::byte> (
-          (digit (value[index]) << 4) | digit (value[index + 1])));
+        result.push_back (
+          static_cast<std::byte> ((digit (value[index]) << 4) | digit (value[index + 1])));
     return result;
 }
 
@@ -45,8 +45,7 @@ std::string hex (std::span<const std::byte> value)
     return result;
 }
 
-template <typename T>
-bool equals_text (const T &value, std::string_view expected)
+template <typename T> bool equals_text (const T &value, std::string_view expected)
 {
     if constexpr (requires { value.value (); })
         return value.value () == expected;
@@ -83,8 +82,7 @@ std::vector<std::byte> relocation_slot (std::uint8_t phase,
         actor_authority_detail::append_u64be (slot, 0);
         actor_authority_detail::append_u8 (slot, 0);
         actor_authority_detail::append_u64be (slot, 0);
-    }
-    else {
+    } else {
         append_rid (slot, "target-node");
         actor_authority_detail::append_u64be (slot, 5);
         actor_authority_detail::append_text8 (slot, "target-owner");
@@ -97,7 +95,7 @@ std::vector<std::byte> relocation_slot (std::uint8_t phase,
     actor_authority_detail::append_u8 (slot, 0); // coordinatorExpectedStoreVersion absent
     actor_authority_detail::append_u8 (slot, phase);
     actor_authority_detail::append_u64be (slot, 0); // applicationVersion i64
-    actor_authority_detail::append_u8 (slot, 0); // sourceCleanupState pending
+    actor_authority_detail::append_u8 (slot, 0);    // sourceCleanupState pending
     return slot;
 }
 
@@ -106,25 +104,24 @@ std::vector<std::byte> relocation_state (const nlohmann::json &decoded)
     const auto &relocation = decoded.at ("relocation");
     const auto phase = decoded.at ("phase").get<std::string> ();
     const auto source_cleanup = decoded.at ("sourceCleanupState").get<std::string> ();
-    const auto phase_value = phase == "preparing" ? 1
-                           : phase == "captured" ? 2
-                           : phase == "prepared" ? 3
-                           : phase == "committed" ? 4
-                           : phase == "activating" ? 5
-                           : phase == "activated" ? 6
-                           : phase == "cleaning" ? 7
-                           : phase == "completed" ? 8
-                           : phase == "aborted" ? 9
-                                                : 0;
-    const auto cleanup_value = source_cleanup == "pending" ? 0
-                             : source_cleanup == "completed" ? 1
-                             : source_cleanup == "sourceLeaseExpired" ? 2
-                                                                  : 3;
+    const auto phase_value = phase == "preparing"    ? 1
+                             : phase == "captured"   ? 2
+                             : phase == "prepared"   ? 3
+                             : phase == "committed"  ? 4
+                             : phase == "activating" ? 5
+                             : phase == "activated"  ? 6
+                             : phase == "cleaning"   ? 7
+                             : phase == "completed"  ? 8
+                             : phase == "aborted"    ? 9
+                                                     : 0;
+    const auto cleanup_value = source_cleanup == "pending"              ? 0
+                               : source_cleanup == "completed"          ? 1
+                               : source_cleanup == "sourceLeaseExpired" ? 2
+                                                                        : 3;
     const auto hex_bytes = [] (const nlohmann::json &value) {
         return from_hex (value.get<std::string> ());
     };
-    const auto append_rid_hex = [&] (std::vector<std::byte> &bytes,
-                                     const nlohmann::json &value) {
+    const auto append_rid_hex = [&] (std::vector<std::byte> &bytes, const nlohmann::json &value) {
         const auto rid = hex_bytes (value);
         actor_authority_detail::append_u8 (bytes, static_cast<std::uint8_t> (rid.size ()));
         actor_authority_detail::append_bytes (bytes, rid);
@@ -156,11 +153,13 @@ std::vector<std::byte> relocation_state (const nlohmann::json &decoded)
     else
         actor_authority_detail::append_text8 (body, target_owner);
     actor_authority_detail::append_u64be (body, u64 (decoded.at ("targetOwnerLeaseGeneration")));
-    actor_authority_detail::append_text8 (body, decoded.at ("coordinatorOwnerId").get<std::string> ());
+    actor_authority_detail::append_text8 (body,
+                                          decoded.at ("coordinatorOwnerId").get<std::string> ());
     actor_authority_detail::append_u64be (body, u64 (decoded.at ("coordinatorLeaseGeneration")));
     append_rid_hex (body, decoded.at ("coordinatorNodeRidHex"));
     actor_authority_detail::append_u64be (body, u64 (decoded.at ("coordinatorNodeGeneration")));
-    const auto expected_version = decoded.at ("coordinatorExpectedStoreVersion").get<std::string> ();
+    const auto expected_version =
+      decoded.at ("coordinatorExpectedStoreVersion").get<std::string> ();
     if (expected_version.empty ())
         actor_authority_detail::append_u8 (body, 0);
     else
@@ -181,9 +180,9 @@ bool accepts_relocation_state (std::span<const std::byte> state,
 {
     try {
         actor_authority_detail::reader_t reader (state);
-        return actor_authority_detail::read_actor_authority_relocation_state (
-                 reader, root_generation)
-          && reader.done ();
+        return actor_authority_detail::read_actor_authority_relocation_state (reader,
+                                                                              root_generation)
+               && reader.done ();
     }
     catch (...) {
         return false;
@@ -191,7 +190,7 @@ bool accepts_relocation_state (std::span<const std::byte> state,
 }
 
 std::vector<std::byte> with_relocation_slot (const std::vector<std::byte> &authority,
-                                              const std::vector<std::byte> &slot)
+                                             const std::vector<std::byte> &slot)
 {
     const auto canonical = decode_canonical_authority_payload (authority);
     assert (canonical && canonical->body.size () >= 10);
@@ -262,8 +261,7 @@ int main ()
       "0f101112131415161718191a1b1c1d1e1f000004d200000000000000010000000000000000f9"
       "558cce";
     assert (hex (instance_bytes) == node_instance_hex);
-    assert (encode_instance_spot_authority_payload (instance)
-            == from_hex (node_instance_hex));
+    assert (encode_instance_spot_authority_payload (instance) == from_hex (node_instance_hex));
     const auto decoded_instance = decode_instance_spot_authority_payload (instance_bytes);
     assert (decoded_instance && decoded_instance->state == instance.state
             && decoded_instance->stable_type == instance.stable_type
@@ -285,36 +283,29 @@ int main ()
     }
     assert (invalid_cursor_rejected);
 
-    constexpr std::string_view actor_hex =
-      "5a4c4155010000000000340001001001410142010143"
-      "0000000000000002010144000000000000000301450146"
-      "000000000000000400000000000000000000b2374797";
+    constexpr std::string_view actor_hex = "5a4c4155010000000000340001001001410142010143"
+                                           "0000000000000002010144000000000000000301450146"
+                                           "000000000000000400000000000000000000b2374797";
     const auto actor = encode_actor_authority_payload (actor_payload ());
     assert (hex (actor) == actor_hex);
     const auto decoded = decode_actor_authority_payload (actor, 17);
     assert (decoded && decoded->actor.object_generation () == 17
-            && decoded->actor.actor_id ().value () == "B"
-            && equals_text (decoded->spot_id, "C")
+            && decoded->actor.actor_id ().value () == "B" && equals_text (decoded->spot_id, "C")
             && decoded->spot_generation == 2
-            && decoded->spot_kind == actor_authority_spot_kind_t::entry
-            && decoded->owner_id == "D" && decoded->owner_lease_generation == 3
-            && decoded->node_generation == 4);
+            && decoded->spot_kind == actor_authority_spot_kind_t::entry && decoded->owner_id == "D"
+            && decoded->owner_lease_generation == 3 && decoded->node_generation == 4);
 
     // .NET source phase 2 carries an allocated relocation slot before target
     // selection: targetAttemptGeneration and every target fence are zero.
-    const auto source_phase_authority =
-      with_relocation_slot (actor, relocation_slot (2, 2, 0));
+    const auto source_phase_authority = with_relocation_slot (actor, relocation_slot (2, 2, 0));
     const auto source_phase = decode_actor_authority_payload (source_phase_authority, 17);
     assert (source_phase && source_phase->actor.actor_id ().value () == "B"
-            && equals_text (source_phase->spot_id, "C")
-            && source_phase->spot_generation == 2
+            && equals_text (source_phase->spot_id, "C") && source_phase->spot_generation == 2
             && source_phase->owner_id == "D");
 
-    const auto target_phase_authority =
-      with_relocation_slot (actor, relocation_slot (3, 2, 9));
+    const auto target_phase_authority = with_relocation_slot (actor, relocation_slot (3, 2, 9));
     const auto target_phase = decode_actor_authority_payload (target_phase_authority, 17);
-    const auto target_phase_canonical =
-      decode_canonical_authority_payload (target_phase_authority);
+    const auto target_phase_canonical = decode_canonical_authority_payload (target_phase_authority);
     assert (target_phase && target_phase_canonical
             && encode_canonical_authority_payload (*target_phase_canonical)
                  == target_phase_authority);
@@ -327,67 +318,62 @@ int main ()
     for (const auto &entry : relocation_golden.at ("valid")) {
         const auto state = relocation_state (entry.at ("decoded"));
         assert (hex (state) == entry.at ("hex").get<std::string> ());
-        const auto root_generation = entry.at ("rootAggregateGeneration").is_null ()
-          ? std::optional<std::uint64_t>{}
-          : std::optional<std::uint64_t>{std::stoull (
-              entry.at ("rootAggregateGeneration").get<std::string> ())};
+        const auto root_generation =
+          entry.at ("rootAggregateGeneration").is_null ()
+            ? std::optional<std::uint64_t>{}
+            : std::optional<std::uint64_t>{
+                std::stoull (entry.at ("rootAggregateGeneration").get<std::string> ())};
         assert (accepts_relocation_state (state, root_generation));
         assert (decode_actor_authority_payload (
-          with_relocation_slot (actor, std::vector<std::byte> (state.begin () + 5, state.end ())), 17));
+          with_relocation_slot (actor, std::vector<std::byte> (state.begin () + 5, state.end ())),
+          17));
     }
     for (const auto &entry : relocation_golden.at ("invalid")) {
         const auto state = from_hex (entry.at ("hex").get<std::string> ());
-        const auto root_generation = std::stoull (
-          entry.at ("rootAggregateGeneration").get<std::string> ());
+        const auto root_generation =
+          std::stoull (entry.at ("rootAggregateGeneration").get<std::string> ());
         assert (!accepts_relocation_state (state, root_generation));
     }
 
-    constexpr std::string_view user_spot_hex =
-      "5a4c41550100000000002c"
-      "0002000802000501420141010144"
-      "0000000000000003"
-      "01450146"
-      "0000000000000004"
-      "0000000000"
-      "0000000000"
-      "034b8d34";
-    const auto user_spot = encode_user_spot_authority_payload ({
-      .state = user_spot_authority_state_t::ready,
-      .stable_type = "A",
-      .spot_id = "B",
-      .owner_id = "D",
-      .owner_lease_generation = 3,
-      .mesh_name = "E",
-      .node_rid = node_rid_t::from_string ("F"),
-      .node_generation = 4});
+    constexpr std::string_view user_spot_hex = "5a4c41550100000000002c"
+                                               "0002000802000501420141010144"
+                                               "0000000000000003"
+                                               "01450146"
+                                               "0000000000000004"
+                                               "0000000000"
+                                               "0000000000"
+                                               "034b8d34";
+    const auto user_spot =
+      encode_user_spot_authority_payload ({.state = user_spot_authority_state_t::ready,
+                                           .stable_type = "A",
+                                           .spot_id = "B",
+                                           .owner_id = "D",
+                                           .owner_lease_generation = 3,
+                                           .mesh_name = "E",
+                                           .node_rid = node_rid_t::from_string ("F"),
+                                           .node_generation = 4});
     assert (hex (user_spot) == user_spot_hex);
-    const auto decoded_user_spot =
-      decode_ready_user_spot_authority_payload (user_spot);
-    assert (decoded_user_spot
-            && decoded_user_spot->stable_type == "A"
-            && decoded_user_spot->spot_id == "B"
-            && decoded_user_spot->owner_id == "D"
-            && decoded_user_spot->owner_lease_generation == 3
-            && decoded_user_spot->mesh_name == "E"
+    const auto decoded_user_spot = decode_ready_user_spot_authority_payload (user_spot);
+    assert (decoded_user_spot && decoded_user_spot->stable_type == "A"
+            && decoded_user_spot->spot_id == "B" && decoded_user_spot->owner_id == "D"
+            && decoded_user_spot->owner_lease_generation == 3 && decoded_user_spot->mesh_name == "E"
             && decoded_user_spot->node_rid.value () == "F"
             && decoded_user_spot->node_generation == 4);
-    const auto closing_user_spot = encode_user_spot_authority_payload ({
-      .state = user_spot_authority_state_t::closing,
-      .stable_type = "A",
-      .spot_id = "B",
-      .owner_id = "D",
-      .owner_lease_generation = 3,
-      .mesh_name = "E",
-      .node_rid = node_rid_t::from_string ("F"),
-      .node_generation = 4});
+    const auto closing_user_spot =
+      encode_user_spot_authority_payload ({.state = user_spot_authority_state_t::closing,
+                                           .stable_type = "A",
+                                           .spot_id = "B",
+                                           .owner_id = "D",
+                                           .owner_lease_generation = 3,
+                                           .mesh_name = "E",
+                                           .node_rid = node_rid_t::from_string ("F"),
+                                           .node_generation = 4});
     assert (!decode_ready_user_spot_authority_payload (closing_user_spot));
-    const std::string_view legacy_user_spot =
-      "zlink:user-spot:ready:v1\nA\nB\n1\n1";
+    const std::string_view legacy_user_spot = "zlink:user-spot:ready:v1\nA\nB\n1\n1";
     std::vector<std::byte> legacy_user_spot_bytes;
     legacy_user_spot_bytes.reserve (legacy_user_spot.size ());
     for (const auto byte : legacy_user_spot)
         legacy_user_spot_bytes.push_back (
           static_cast<std::byte> (static_cast<unsigned char> (byte)));
     assert (!decode_ready_user_spot_authority_payload (legacy_user_spot_bytes));
-
 }

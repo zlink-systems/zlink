@@ -6,10 +6,7 @@ import {
 } from '../framework-errors-internal';
 import { isZLinkBackendResultError } from '../backend/runtime-values';
 import type { Message } from '../../contracts/Common/Message';
-import {
-  ZLinkSubmitStatus,
-  type ZLinkSubmitResult
-} from '../messaging/submission-result';
+import { ZLinkSubmitStatus, type ZLinkSubmitResult } from '../messaging/submission-result';
 import {
   ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome,
   type ZLinkRuntimeMessageFlowResult,
@@ -60,9 +57,8 @@ export class ZLinkChannelOutboundOperations {
   ): Promise<ZLinkSubmitResult> {
     // Call-scoped flow (spec 27 §4): the envelope encoder and the trace
     // points below share one ambient flow that does not outlive this call.
-    return runWithOutboundFlow(
-      this.dispatchServices.flowCreationEnabled(),
-      () => this.sendScoped(channelName, packetName, message, signal, metadata)
+    return runWithOutboundFlow(this.dispatchServices.flowCreationEnabled(), () =>
+      this.sendScoped(channelName, packetName, message, signal, metadata)
     );
   }
 
@@ -132,7 +128,7 @@ export class ZLinkChannelOutboundOperations {
       channelRouteKind: 'client_server',
       serverRid,
       packetName,
-      correlationId: undefined,
+      correlationId: undefined
     });
   }
 
@@ -144,10 +140,11 @@ export class ZLinkChannelOutboundOperations {
     signal?: AbortSignal,
     metadata?: ReadonlyMap<string, string>
   ): Promise<TReply> {
-    return keepChannelRequestAlive(runWithOutboundFlow(
-      this.dispatchServices.flowCreationEnabled(),
-      () => this.requestScoped<TReply>(channelName, packetName, request, timeoutMs, signal, metadata)
-    ));
+    return keepChannelRequestAlive(
+      runWithOutboundFlow(this.dispatchServices.flowCreationEnabled(), () =>
+        this.requestScoped<TReply>(channelName, packetName, request, timeoutMs, signal, metadata)
+      )
+    );
   }
 
   private async requestScoped<TReply>(
@@ -165,10 +162,7 @@ export class ZLinkChannelOutboundOperations {
     const traceTerminal = (result: ZLinkRuntimeMessageFlowResult): void => {
       if (terminalRecorded) return;
       terminalRecorded = true;
-      this.dispatchServices.beginOutbound(
-        ZLinkMessageFlowOutcome.ReplyReceived,
-        result
-      )?.trace({
+      this.dispatchServices.beginOutbound(ZLinkMessageFlowOutcome.ReplyReceived, result)?.trace({
         surface: ZLinkDispatchErrorSurface.Channel,
         messageKind: ZLinkDispatchMessageKind.Request,
         channelName,
@@ -181,9 +175,14 @@ export class ZLinkChannelOutboundOperations {
     };
     try {
       throwIfAborted(signal);
-      const dealer = await this.sockets.awaitClientDealerForOutbound(channelName, signal, deadlineAtMs);
+      const dealer = await this.sockets.awaitClientDealerForOutbound(
+        channelName,
+        signal,
+        deadlineAtMs
+      );
       // Binding timeouts are whole milliseconds; rounding down keeps the call's deadline.
-      const remainingMs = deadlineAtMs === undefined ? undefined : Math.floor(deadlineAtMs - performance.now());
+      const remainingMs =
+        deadlineAtMs === undefined ? undefined : Math.floor(deadlineAtMs - performance.now());
       if (dealer === undefined || (remainingMs !== undefined && remainingMs <= 0)) {
         throw createInternalFrameworkException(
           this.sockets.hasKnownClientServerTargets(channelName)
@@ -267,9 +266,8 @@ export class ZLinkChannelOutboundOperations {
     event: unknown,
     metadata: ReadonlyMap<string, string> = EMPTY_OUTBOUND_METADATA
   ): ZLinkSubmitResult {
-    return runWithOutboundFlow(
-      this.dispatchServices.flowCreationEnabled(),
-      () => this.tryPublishScoped(channelName, topic, packetName, event, metadata)
+    return runWithOutboundFlow(this.dispatchServices.flowCreationEnabled(), () =>
+      this.tryPublishScoped(channelName, topic, packetName, event, metadata)
     );
   }
 
@@ -308,9 +306,8 @@ export class ZLinkChannelOutboundOperations {
     signal?: AbortSignal,
     metadata: ReadonlyMap<string, string> = EMPTY_OUTBOUND_METADATA
   ): Promise<ZLinkSubmitResult> {
-    return runWithOutboundFlow(
-      this.dispatchServices.flowCreationEnabled(),
-      () => this.publishScoped(channelName, topic, packetName, event, signal, metadata)
+    return runWithOutboundFlow(this.dispatchServices.flowCreationEnabled(), () =>
+      this.publishScoped(channelName, topic, packetName, event, signal, metadata)
     );
   }
 
@@ -352,9 +349,8 @@ export class ZLinkChannelOutboundOperations {
     signal?: AbortSignal,
     metadata: ReadonlyMap<string, string> = EMPTY_OUTBOUND_METADATA
   ): Promise<ZLinkSubmitResult> {
-    return runWithOutboundFlow(
-      this.dispatchServices.flowCreationEnabled(),
-      () => this.routeSubmitScoped(routerChannelId, targetNodeRid, packetName, message, signal, metadata)
+    return runWithOutboundFlow(this.dispatchServices.flowCreationEnabled(), () =>
+      this.routeSubmitScoped(routerChannelId, targetNodeRid, packetName, message, signal, metadata)
     );
   }
 
@@ -426,9 +422,8 @@ export class ZLinkChannelOutboundOperations {
     signal?: AbortSignal,
     metadata?: ReadonlyMap<string, string>
   ): Promise<TReply> {
-    return runWithOutboundFlow(
-      this.dispatchServices.flowCreationEnabled(),
-      () => this.routeRequestScoped<TReply>(
+    return runWithOutboundFlow(this.dispatchServices.flowCreationEnabled(), () =>
+      this.routeRequestScoped<TReply>(
         routerChannelId,
         targetNodeRid,
         packetName,
@@ -455,10 +450,7 @@ export class ZLinkChannelOutboundOperations {
     const traceTerminal = (result: ZLinkRuntimeMessageFlowResult): void => {
       if (terminalRecorded) return;
       terminalRecorded = true;
-      this.dispatchServices.beginOutbound(
-        ZLinkMessageFlowOutcome.ReplyReceived,
-        result
-      )?.trace({
+      this.dispatchServices.beginOutbound(ZLinkMessageFlowOutcome.ReplyReceived, result)?.trace({
         surface: ZLinkDispatchErrorSurface.RouteMeshChannel,
         messageKind: ZLinkDispatchMessageKind.Request,
         channelName: routerChannelId,
@@ -520,8 +512,8 @@ export class ZLinkChannelOutboundOperations {
         traceTerminal(requestTerminalResult(error, signal));
       }
       if (
-        this.sockets.routeMemberStatus(routerChannelId, targetNodeRid) === 'disconnected'
-        && (isSubmitDeadline(error) || error instanceof ZLinkRouteDisconnectedError)
+        this.sockets.routeMemberStatus(routerChannelId, targetNodeRid) === 'disconnected' &&
+        (isSubmitDeadline(error) || error instanceof ZLinkRouteDisconnectedError)
       ) {
         throw createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.RouteNotConnected,
@@ -557,8 +549,10 @@ export function keepChannelRequestAlive<T>(request: Promise<T>): Promise<T> {
 }
 
 function isSubmitDeadline(error: unknown): boolean {
-  return error instanceof ZLinkFrameworkException
-    && internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.DeadlineExceeded;
+  return (
+    error instanceof ZLinkFrameworkException &&
+    internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.DeadlineExceeded
+  );
 }
 
 function publishResult(status: ZLinkSubmitStatus): ZLinkSubmitResult {
@@ -577,7 +571,9 @@ function requestTerminalResult(
 }
 
 function isRemoteChannelErrorReply(error: unknown): boolean {
-  return error instanceof ZLinkFrameworkException
-    && 'origin' in error
-    && (error as { readonly origin?: unknown }).origin !== undefined;
+  return (
+    error instanceof ZLinkFrameworkException &&
+    'origin' in error &&
+    (error as { readonly origin?: unknown }).origin !== undefined
+  );
 }

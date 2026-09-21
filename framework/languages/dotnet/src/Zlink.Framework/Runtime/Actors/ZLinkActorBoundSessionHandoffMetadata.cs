@@ -26,16 +26,17 @@ internal static class ZLinkActorBoundSessionHandoffMetadata
 
     internal static bool TryDecode(
         ReadOnlySpan<byte> encoded,
-        out ZLinkActorBoundSessionHandoffFence value)
+        out ZLinkActorBoundSessionHandoffFence value
+    )
     {
         value = null!;
-        if (encoded.Length < Magic.Length + 1
-            || !encoded[..Magic.Length].SequenceEqual(Magic))
+        if (encoded.Length < Magic.Length + 1 || !encoded[..Magic.Length].SequenceEqual(Magic))
             return false;
         try
         {
             var reader = new Reader(encoded[Magic.Length..]);
-            if (reader.Byte() != Version) return false;
+            if (reader.Byte() != Version)
+                return false;
             var actorId = reader.Text();
             var actorGeneration = reader.U64();
             var sessionRid = RoutingId.From(reader.Bytes(reader.U16()));
@@ -43,10 +44,12 @@ internal static class ZLinkActorBoundSessionHandoffMetadata
             var bindingGeneration = reader.U64();
             var sessionSequence = reader.U64();
             reader.End();
-            if (actorGeneration == 0
+            if (
+                actorGeneration == 0
                 || sessionRid.IsEmpty
                 || bindingGeneration == 0
-                || sessionSequence == 0)
+                || sessionSequence == 0
+            )
                 return false;
             value = new ZLinkActorBoundSessionHandoffFence(
                 actorId,
@@ -54,12 +57,12 @@ internal static class ZLinkActorBoundSessionHandoffMetadata
                 sessionRid,
                 bindingToken,
                 bindingGeneration,
-                sessionSequence);
+                sessionSequence
+            );
             return true;
         }
-        catch (Exception error) when (error is ArgumentException
-                                      or EndOfStreamException
-                                      or DecoderFallbackException)
+        catch (Exception error)
+            when (error is ArgumentException or EndOfStreamException or DecoderFallbackException)
         {
             return false;
         }
@@ -102,9 +105,13 @@ internal static class ZLinkActorBoundSessionHandoffMetadata
         private int _offset;
 
         internal byte Byte() => Bytes(1)[0];
+
         internal ushort U16() => BinaryPrimitives.ReadUInt16BigEndian(Bytes(2));
+
         internal ulong U64() => BinaryPrimitives.ReadUInt64BigEndian(Bytes(8));
+
         internal string Text() => StrictUtf8.GetString(Bytes(U16()));
+
         internal ReadOnlySpan<byte> Bytes(int count)
         {
             if (count < 0 || _offset > _bytes.Length - count)
@@ -116,7 +123,8 @@ internal static class ZLinkActorBoundSessionHandoffMetadata
 
         internal void End()
         {
-            if (_offset != _bytes.Length) throw new EndOfStreamException();
+            if (_offset != _bytes.Length)
+                throw new EndOfStreamException();
         }
     }
 }

@@ -1,7 +1,5 @@
 package systems.zlink.framework.runtime.binding;
 
-import java.time.Duration;
-import java.util.Objects;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.eventing.PollEventFlags;
 import systems.zlink.contracts.eventing.PollEvents;
@@ -9,12 +7,15 @@ import systems.zlink.contracts.eventing.PollSourceKind;
 import systems.zlink.contracts.eventing.Poller;
 import systems.zlink.contracts.sockets.Socket;
 
+import java.time.Duration;
+import java.util.Objects;
+
 /**
  * Owns the public zlink Poller used to guard one Framework socket receive.
  *
- * <p>The Framework asks this object whether the socket is readable before it
- * calls the socket's public receive method. The poller and its reusable event
- * storage remain binding-owned, so receive loops do not know binding details.</p>
+ * <p>The Framework asks this object whether the socket is readable before it calls the socket's
+ * public receive method. The poller and its reusable event storage remain binding-owned, so receive
+ * loops do not know binding details.
  */
 final class ZLinkJavaSocketReceivePoller implements AutoCloseable {
     private static final long SOCKET_SLOT = 1L;
@@ -30,9 +31,7 @@ final class ZLinkJavaSocketReceivePoller implements AutoCloseable {
         this(socket, true);
     }
 
-    ZLinkJavaSocketReceivePoller(
-        Socket socket,
-        boolean ownsCompletionQueue) {
+    ZLinkJavaSocketReceivePoller(Socket socket, boolean ownsCompletionQueue) {
         Objects.requireNonNull(socket, "socket");
         this.socket = socket;
         this.ownsCompletionQueue = ownsCompletionQueue;
@@ -50,11 +49,11 @@ final class ZLinkJavaSocketReceivePoller implements AutoCloseable {
         // draining on this public poller.
         if (ownsCompletionQueue) {
             poller.add(
-                socket,
-                SOCKET_SLOT,
-                PollEventFlags.POLLIN,
-                PollEventFlags.POLLOUT,
-                PollEventFlags.POLLCOMPLETION);
+                    socket,
+                    SOCKET_SLOT,
+                    PollEventFlags.POLLIN,
+                    PollEventFlags.POLLOUT,
+                    PollEventFlags.POLLCOMPLETION);
         } else {
             poller.add(socket, SOCKET_SLOT, PollEventFlags.POLLIN);
         }
@@ -69,8 +68,8 @@ final class ZLinkJavaSocketReceivePoller implements AutoCloseable {
         int count = poller.wait(events, timeout);
         for (int index = 0; index < count; index++) {
             if (events.sourceKind(index) == PollSourceKind.SOCKET
-                && events.slot(index) == SOCKET_SLOT
-                && isReadable(events, index)) {
+                    && events.slot(index) == SOCKET_SLOT
+                    && isReadable(events, index)) {
                 return true;
             }
         }
@@ -82,8 +81,8 @@ final class ZLinkJavaSocketReceivePoller implements AutoCloseable {
         // wake-up. The caller performs the public recv and owns the resulting
         // peer/error handling, matching the .NET poller contract.
         return events.hasEvent(index, PollEventFlags.POLLIN)
-            || events.hasEvent(index, PollEventFlags.POLLERR)
-            || events.hasEvent(index, PollEventFlags.POLLPRI);
+                || events.hasEvent(index, PollEventFlags.POLLERR)
+                || events.hasEvent(index, PollEventFlags.POLLPRI);
     }
 
     @Override

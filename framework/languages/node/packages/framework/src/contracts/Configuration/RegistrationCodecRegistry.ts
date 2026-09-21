@@ -31,7 +31,9 @@ export function createCodecRegistry(
   });
 }
 
-export class RegistrationCodecRegistryBuilder implements ZLinkCodecRegistryBuilder, ZLinkCodecRegistrar {
+export class RegistrationCodecRegistryBuilder
+  implements ZLinkCodecRegistryBuilder, ZLinkCodecRegistrar
+{
   private readonly options: MutableCodecRegistryOptions;
 
   constructor(options: MutableCodecRegistryOptions = { serializers: [], streamCodecs: [] }) {
@@ -100,7 +102,9 @@ export class RegistrationCodecRegistryBuilder implements ZLinkCodecRegistryBuild
     canSerialize?: ZLinkMessageTypeSelector
   ): this {
     const normalized = normalizeCodecContentType(contentType);
-    const existing = this.options.serializers.findIndex((entry) => entry.contentType === normalized);
+    const existing = this.options.serializers.findIndex(
+      (entry) => entry.contentType === normalized
+    );
     const registration = { contentType: normalized, serializer, canSerialize };
     if (existing >= 0) this.options.serializers.splice(existing, 1);
     this.options.serializers.push(registration);
@@ -109,7 +113,9 @@ export class RegistrationCodecRegistryBuilder implements ZLinkCodecRegistryBuild
 
   addStreamCodec(contentType: string, codec: unknown): this {
     const normalized = normalizeCodecContentType(contentType);
-    const existing = this.options.streamCodecs.findIndex((entry) => entry.contentType === normalized);
+    const existing = this.options.streamCodecs.findIndex(
+      (entry) => entry.contentType === normalized
+    );
     const registration = { contentType: normalized, codec };
     if (existing >= 0) this.options.streamCodecs.splice(existing, 1);
     this.options.streamCodecs.push(registration);

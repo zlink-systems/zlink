@@ -16,9 +16,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * Elastic worker pool for CPU offload.
  *
- * <p>Semantics: threads are created on demand up to {@code maxThreads}, idle threads
- * above {@code minThreads} are reclaimed after {@code idleTimeout}; waiting work
- * remains queued until a worker can run it.
+ * <p>Semantics: threads are created on demand up to {@code maxThreads}, idle threads above {@code
+ * minThreads} are reclaimed after {@code idleTimeout}; waiting work remains queued until a worker
+ * can run it.
  */
 public final class ZLinkWorkerPool implements AutoCloseable {
     private static final AtomicInteger POOL_SEQUENCE = new AtomicInteger();
@@ -31,16 +31,12 @@ public final class ZLinkWorkerPool implements AutoCloseable {
     private final Set<Runnable> shutdownListeners = ConcurrentHashMap.newKeySet();
     private volatile ScheduledExecutorService timeoutScheduler;
 
-    public ZLinkWorkerPool(
-        int minThreads,
-        int maxThreads,
-        Duration idleTimeout) {
+    public ZLinkWorkerPool(int minThreads, int maxThreads, Duration idleTimeout) {
         if (minThreads < 0) {
             throw new IllegalArgumentException("worker minThreads must be >= 0");
         }
         if (maxThreads < 1 || maxThreads < minThreads) {
-            throw new IllegalArgumentException(
-                "worker maxThreads must be >= 1 and >= minThreads");
+            throw new IllegalArgumentException("worker maxThreads must be >= 1 and >= minThreads");
         }
         if (idleTimeout == null || idleTimeout.isNegative()) {
             throw new IllegalArgumentException("worker idleTimeout must not be negative");
@@ -49,20 +45,25 @@ public final class ZLinkWorkerPool implements AutoCloseable {
         this.queue = new ElasticTaskQueue();
         int poolId = POOL_SEQUENCE.incrementAndGet();
         AtomicInteger threadSequence = new AtomicInteger();
-        this.executor = new ThreadPoolExecutor(
-            minThreads,
-            maxThreads,
-            Math.max(1, idleTimeout.toMillis()),
-            TimeUnit.MILLISECONDS,
-            queue,
-            task -> {
-                Thread thread = new Thread(
-                    task,
-                    "zlink-worker-" + poolId + "-" + threadSequence.incrementAndGet());
-                thread.setDaemon(true);
-                return thread;
-            },
-            this::queueWhenSaturated);
+        this.executor =
+                new ThreadPoolExecutor(
+                        minThreads,
+                        maxThreads,
+                        Math.max(1, idleTimeout.toMillis()),
+                        TimeUnit.MILLISECONDS,
+                        queue,
+                        task -> {
+                            Thread thread =
+                                    new Thread(
+                                            task,
+                                            "zlink-worker-"
+                                                    + poolId
+                                                    + "-"
+                                                    + threadSequence.incrementAndGet());
+                            thread.setDaemon(true);
+                            return thread;
+                        },
+                        this::queueWhenSaturated);
         queue.bind(executor, inFlightTasks);
     }
 
@@ -75,13 +76,14 @@ public final class ZLinkWorkerPool implements AutoCloseable {
         inFlightTasks.incrementAndGet();
         boolean submitted = false;
         try {
-            executor.execute(() -> {
-                try {
-                    task.run();
-                } finally {
-                    inFlightTasks.decrementAndGet();
-                }
-            });
+            executor.execute(
+                    () -> {
+                        try {
+                            task.run();
+                        } finally {
+                            inFlightTasks.decrementAndGet();
+                        }
+                    });
             submitted = true;
         } finally {
             if (!submitted) {
@@ -97,11 +99,13 @@ public final class ZLinkWorkerPool implements AutoCloseable {
             synchronized (this) {
                 scheduler = timeoutScheduler;
                 if (scheduler == null) {
-                    scheduler = Executors.newSingleThreadScheduledExecutor(task -> {
-                        Thread thread = new Thread(task, "zlink-worker-timeout");
-                        thread.setDaemon(true);
-                        return thread;
-                    });
+                    scheduler =
+                            Executors.newSingleThreadScheduledExecutor(
+                                    task -> {
+                                        Thread thread = new Thread(task, "zlink-worker-timeout");
+                                        thread.setDaemon(true);
+                                        return thread;
+                                    });
                     timeoutScheduler = scheduler;
                 }
             }
@@ -126,7 +130,7 @@ public final class ZLinkWorkerPool implements AutoCloseable {
     public Runnable registerShutdownListener(Runnable listener) {
         if (shutdownRequested.get()) {
             listener.run();
-            return () -> { };
+            return () -> {};
         }
         shutdownListeners.add(listener);
         if (shutdownRequested.get() && shutdownListeners.remove(listener)) {
@@ -172,8 +176,8 @@ public final class ZLinkWorkerPool implements AutoCloseable {
     }
 
     /**
-     * Queue that reports itself full while the pool can still grow, so the
-     * executor creates threads before queueing (elastic scale-out).
+     * Queue that reports itself full while the pool can still grow, so the executor creates threads
+     * before queueing (elastic scale-out).
      */
     private static final class ElasticTaskQueue extends LinkedBlockingQueue<Runnable> {
         private transient volatile ThreadPoolExecutor pool;

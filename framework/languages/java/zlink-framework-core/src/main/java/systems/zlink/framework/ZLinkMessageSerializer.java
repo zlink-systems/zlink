@@ -2,9 +2,7 @@ package systems.zlink.framework;
 
 import java.util.Objects;
 
-/**
- * Payload serializer used by framework handlers and connector helpers.
- */
+/** Payload serializer used by framework handlers and connector helpers. */
 public interface ZLinkMessageSerializer {
     <T> ZLinkEncodedPayload serialize(T value);
 
@@ -19,6 +17,5 @@ public interface ZLinkMessageSerializer {
 
     <T> T deserialize(ZLinkEncodedPayload payload, Class<T> type);
 
-    default void prepare(Class<?> type) {
-    }
+    default void prepare(Class<?> type) {}
 }

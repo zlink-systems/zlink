@@ -18,7 +18,8 @@ public sealed class CoverageCriticalRuntimeTests
         var compressed = LZ4Pickler.Pickle(new byte[64 * 1024 + 1]);
 
         Assert.Throws<InvalidOperationException>(() =>
-            ZLinkLz4StreamCompressionCodec.DecompressPayload(compressed, 64 * 1024));
+            ZLinkLz4StreamCompressionCodec.DecompressPayload(compressed, 64 * 1024)
+        );
     }
 
     [Fact]
@@ -28,7 +29,8 @@ public sealed class CoverageCriticalRuntimeTests
         var builder = new ZLinkStreamSendBuilder<CompressionProbe>(
             new CompressionProbe("hello"),
             new ZLinkCodecRegistryBuilder(),
-            compression);
+            compression
+        );
         ZlinkStreamHeader? capturedHeader = null;
         byte[]? capturedFrame = null;
 
@@ -42,7 +44,8 @@ public sealed class CoverageCriticalRuntimeTests
                     flags,
                     null,
                     name,
-                    metadata);
+                    metadata
+                );
                 return capturedHeader;
             },
             message =>
@@ -50,7 +53,8 @@ public sealed class CoverageCriticalRuntimeTests
                 capturedFrame = message.ToArray();
                 return true;
             },
-            "send failed");
+            "send failed"
+        );
 
         Assert.NotNull(capturedHeader);
         Assert.True(capturedHeader.Flags.HasFlag(ZlinkStreamHeaderFlags.PayloadCompressed));
@@ -64,21 +68,27 @@ public sealed class CoverageCriticalRuntimeTests
     {
         var compression = new PrefixCompressionCodec();
         var payload = compression.Compress(
-            ZLinkStreamPacketPayloadCodec.EncodeJson(new CompressionProbe("hello"), typeof(CompressionProbe)));
+            ZLinkStreamPacketPayloadCodec.EncodeJson(
+                new CompressionProbe("hello"),
+                typeof(CompressionProbe)
+            )
+        );
         var header = new ZlinkStreamHeader(
             ZlinkStreamMessageKind.Send,
             ZlinkStreamCodec.Json,
             ZlinkStreamHeaderFlags.PayloadCompressed,
             null,
             nameof(CompressionProbe),
-            ZlinkStreamMetadata.Empty);
+            ZlinkStreamMetadata.Empty
+        );
 
         using var message = Message.From(payload.Span);
         var decoded = ZLinkStreamPacketPayloadCodec.DecodeMessage(
             header,
             message,
             new ZLinkCodecRegistryBuilder(),
-            compression);
+            compression
+        );
 
         Assert.Equal(new CompressionProbe("hello"), decoded.Decode<CompressionProbe>());
 
@@ -88,7 +98,9 @@ public sealed class CoverageCriticalRuntimeTests
                 header,
                 oversized,
                 new ZLinkCodecRegistryBuilder(),
-                new OversizedCompressionCodec()));
+                new OversizedCompressionCodec()
+            )
+        );
     }
 
     [Fact]
@@ -98,14 +110,16 @@ public sealed class CoverageCriticalRuntimeTests
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddZLinkFramework(options =>
         {
-            options.AddStreamNode("stream-a")
+            options
+                .AddStreamNode("stream-a")
                 .Bind(firstEndpoint)
                 .AddSession<StartupFailureTestSession>();
             //  같은 host 안에서 같은 session type을 두 node에 등록하면 등록 검증이 먼저
             //  거부하므로(STREAM 서버 session §3.2), 두 번째 node는 다른 type을 쓴다.
             //  이 테스트가 확인하려는 것은 endpoint 실패로 startup이 깨질 때 이미 만든
             //  stream runtime을 dispose하는가이다.
-            options.AddStreamNode("stream-b")
+            options
+                .AddStreamNode("stream-b")
                 .Bind("invalid://startup-failure")
                 .AddSession<SecondStartupFailureTestSession>();
         });
@@ -134,15 +148,21 @@ public sealed class CoverageCriticalRuntimeTests
 
     private sealed record CompressionProbe(string Text);
 
-    private sealed class SecondStartupFailureTestSession(IZLinkSessionContext context) : IZLinkSession
+    private sealed class SecondStartupFailureTestSession(IZLinkSessionContext context)
+        : IZLinkSession
     {
         public IZLinkSessionContext Context { get; } = context;
 
-        public ValueTask OnConnectedAsync(CancellationToken cancellationToken) => ValueTask.CompletedTask;
+        public ValueTask OnConnectedAsync(CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
 
-        public ValueTask OnDisconnectedAsync(CancellationToken cancellationToken) => ValueTask.CompletedTask;
+        public ValueTask OnDisconnectedAsync(CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
 
-        public ValueTask OnErrorAsync(ZLinkStreamError error, CancellationToken cancellationToken) => ValueTask.CompletedTask;
+        public ValueTask OnErrorAsync(
+            ZLinkStreamError error,
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
     }
 
     private sealed class StartupFailureTestSession(IZLinkSessionContext context) : IZLinkSession
@@ -177,7 +197,10 @@ public sealed class CoverageCriticalRuntimeTests
             return compressed;
         }
 
-        public ReadOnlyMemory<byte> Decompress(ReadOnlyMemory<byte> payload, int maxDecompressedPayloadSize)
+        public ReadOnlyMemory<byte> Decompress(
+            ReadOnlyMemory<byte> payload,
+            int maxDecompressedPayloadSize
+        )
         {
             if (payload.Length == 0 || payload.Span[0] != Marker)
                 throw new InvalidOperationException("Unexpected custom compression marker.");
@@ -193,7 +216,10 @@ public sealed class CoverageCriticalRuntimeTests
             return payload;
         }
 
-        public ReadOnlyMemory<byte> Decompress(ReadOnlyMemory<byte> payload, int maxDecompressedPayloadSize)
+        public ReadOnlyMemory<byte> Decompress(
+            ReadOnlyMemory<byte> payload,
+            int maxDecompressedPayloadSize
+        )
         {
             return new byte[maxDecompressedPayloadSize + 1];
         }

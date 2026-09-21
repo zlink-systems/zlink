@@ -1,8 +1,9 @@
 package systems.zlink.framework.spots;
 
+import systems.zlink.contracts.core.RoutingId;
+
 import java.time.Duration;
 import java.util.concurrent.CompletionStage;
-import systems.zlink.contracts.core.RoutingId;
 
 public interface ZLinkInstanceSpotContext {
     String meshName();
@@ -24,8 +25,5 @@ public interface ZLinkInstanceSpotContext {
     CompletionStage<Boolean> close();
 
     CompletionStage<ZLinkTimer> addTimer(
-        String name,
-        Duration period,
-        Class<?> handlerType,
-        ZLinkTimerOptions options);
+            String name, Duration period, Class<?> handlerType, ZLinkTimerOptions options);
 }

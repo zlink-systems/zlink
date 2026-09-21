@@ -32,7 +32,8 @@ public interface IZLinkStreamNodeBuilder
     IZLinkStreamNodeBuilder SetTlsServer(
         string certificatePath,
         string keyPath,
-        bool requireClientCertificate = false);
+        bool requireClientCertificate = false
+    );
 
     IZLinkStreamNodeBuilder AddSession<TSession>()
         where TSession : class, IZLinkSession;
@@ -91,11 +92,13 @@ public interface IZLinkClientServerChannelServerBuilder
     IZLinkClientServerChannelServerBuilder AddHandlerGroup(string groupName);
 
     IZLinkClientServerChannelServerBuilder AddSendHandler<THandler, TMessage>(
-        string? packetName = null)
+        string? packetName = null
+    )
         where THandler : class, IZLinkSendHandler<TMessage>;
 
     IZLinkClientServerChannelServerBuilder AddRequestHandler<THandler, TRequest, TReply>(
-        string? packetName = null)
+        string? packetName = null
+    )
         where THandler : class, IZLinkRequestHandler<TRequest, TReply>;
 }
 

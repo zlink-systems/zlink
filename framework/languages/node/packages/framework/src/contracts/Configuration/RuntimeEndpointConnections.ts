@@ -72,7 +72,10 @@ class RuntimeEndpointConnections implements ZLinkEndpointConnections {
   }
 }
 
-export function endpointConnections(owner: object, endpoints: readonly string[]): ZLinkEndpointConnections {
+export function endpointConnections(
+  owner: object,
+  endpoints: readonly string[]
+): ZLinkEndpointConnections {
   let controller = controllers.get(owner);
   if (controller === undefined) {
     controller = new RuntimeEndpointConnections(endpoints);

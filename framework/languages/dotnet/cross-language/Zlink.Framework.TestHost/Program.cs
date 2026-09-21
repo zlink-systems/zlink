@@ -18,23 +18,25 @@ internal sealed class Program
         var options = TestHostOptions.Parse(args);
         var readyFilePath = options.ReadyFilePath;
 
-        Console.SetOut(TextWriter.Synchronized(new StreamWriter(
-            Console.OpenStandardOutput(),
-            new UTF8Encoding(false))
-        {
-            AutoFlush = true
-        }));
+        Console.SetOut(
+            TextWriter.Synchronized(
+                new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false))
+                {
+                    AutoFlush = true,
+                }
+            )
+        );
 
         var builder = Host.CreateApplicationBuilder(args);
         builder.Logging.ClearProviders();
 
         TestHostScenarioConfigurator.Configure(builder.Services, options);
-        builder.Services.AddHostedService(provider =>
-            new ReadySignalHostedService(
-                provider.GetRequiredService<IHostApplicationLifetime>(),
-                readyFilePath,
-                options.StopFilePath,
-                options.Mode));
+        builder.Services.AddHostedService(provider => new ReadySignalHostedService(
+            provider.GetRequiredService<IHostApplicationLifetime>(),
+            readyFilePath,
+            options.StopFilePath,
+            options.Mode
+        ));
 
         using var host = builder.Build();
         await host.RunAsync();
@@ -43,13 +45,12 @@ internal sealed class Program
 
 internal sealed class StartupSpotCreationHostedService(
     IZLinkSpotManager spotManager,
-    string meshName) : IHostedService
+    string meshName
+) : IHostedService
 {
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        _ = await spotManager.Create("startup-stage")
-            .InMesh(meshName)
-            .Async(cancellationToken);
+        _ = await spotManager.Create("startup-stage").InMesh(meshName).Async(cancellationToken);
     }
 
     public Task StopAsync(CancellationToken cancellationToken)
@@ -62,13 +63,15 @@ internal sealed class ChannelStartupPublishHostedService(
     IZLinkFanoutClient publisher,
     string channelName,
     string topic,
-    string value) : BackgroundService
+    string value
+) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
         {
-            await publisher.Publish(channelName, topic, new TestHostPublishedEvent(value))
+            await publisher
+                .Publish(channelName, topic, new TestHostPublishedEvent(value))
                 .Async(stoppingToken);
 
             try
@@ -87,7 +90,8 @@ internal sealed class ChannelClientStartupRequestHostedService(
     IZLinkRouteClient client,
     TestHostEventSink sink,
     string channelName,
-    string value) : IHostedService
+    string value
+) : IHostedService
 {
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -108,16 +112,15 @@ internal sealed class SpotStartupPublishHostedService(
     IZLinkSpotPublisherClient publisher,
     string channelName,
     string topic,
-    string value) : BackgroundService
+    string value
+) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
         {
-            await publisher.Publish(
-                    channelName,
-                    topic,
-                    new StartupStageEvent(value))
+            await publisher
+                .Publish(channelName, topic, new StartupStageEvent(value))
                 .Async(stoppingToken);
 
             try
@@ -151,7 +154,9 @@ internal sealed class RelocationActor(string actorId, IZLinkActorContext context
 internal sealed class RelocationActorFactory : IZLinkActorFactory<RelocationActor>
 {
     public ValueTask<RelocationActor> CreateAsync(
-        IZLinkActorContext context, CancellationToken cancellationToken = default)
+        IZLinkActorContext context,
+        CancellationToken cancellationToken = default
+    )
     {
         return ValueTask.FromResult(new RelocationActor(context.ActorId, context));
     }
@@ -160,7 +165,9 @@ internal sealed class RelocationActorFactory : IZLinkActorFactory<RelocationActo
 internal sealed class RelocationActorAdapter : IZLinkActorRelocationAdapter<RelocationActor>
 {
     public ValueTask<byte[]> CaptureAsync(
-        RelocationActor actor, CancellationToken cancellationToken)
+        RelocationActor actor,
+        CancellationToken cancellationToken
+    )
     {
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
@@ -171,7 +178,10 @@ internal sealed class RelocationActorAdapter : IZLinkActorRelocationAdapter<Relo
     }
 
     public ValueTask RestoreAsync(
-        RelocationActor actor, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
+        RelocationActor actor,
+        ReadOnlyMemory<byte> payload,
+        CancellationToken cancellationToken
+    )
     {
         // Node's cross-language relocation host writes its fixture state as
         // JSON metadata, a newline, then the byte-exact application body.
@@ -182,17 +192,15 @@ internal sealed class RelocationActorAdapter : IZLinkActorRelocationAdapter<Relo
         {
             var separator = encoded.IndexOf((byte)'\n');
             if (separator < 0)
-                throw new InvalidDataException(
-                    "Node relocation payload header is missing.");
+                throw new InvalidDataException("Node relocation payload header is missing.");
             using var header = JsonDocument.Parse(encoded[..separator].ToArray());
-            actor.StateVersion = header.RootElement
-                .GetProperty("stateVersion").GetInt32();
-            var nodeLength = header.RootElement
-                .GetProperty("applicationStateBytes").GetInt32();
+            actor.StateVersion = header.RootElement.GetProperty("stateVersion").GetInt32();
+            var nodeLength = header.RootElement.GetProperty("applicationStateBytes").GetInt32();
             actor.ApplicationState = encoded[(separator + 1)..].ToArray();
             if (actor.ApplicationState.Length != nodeLength)
                 throw new InvalidDataException(
-                    "Node relocation application state size changed during restore.");
+                    "Node relocation application state size changed during restore."
+                );
             return ValueTask.CompletedTask;
         }
         using var stream = new MemoryStream(payload.ToArray());
@@ -201,7 +209,9 @@ internal sealed class RelocationActorAdapter : IZLinkActorRelocationAdapter<Relo
         var length = reader.ReadInt32();
         actor.ApplicationState = reader.ReadBytes(length);
         if (actor.ApplicationState.Length != length)
-            throw new InvalidOperationException("relocation application state size changed during restore");
+            throw new InvalidOperationException(
+                "relocation application state size changed during restore"
+            );
         return ValueTask.CompletedTask;
     }
 }
@@ -211,7 +221,11 @@ internal sealed record CrossLangActorCreateReq(int StateVersion, int Application
 internal sealed record CrossLangProbeReq(string Marker);
 
 internal sealed record CrossLangProbeRes(
-    string NodeRid, int StateVersion, int ApplicationStateBytes, string Marker);
+    string NodeRid,
+    int StateVersion,
+    int ApplicationStateBytes,
+    string Marker
+);
 
 internal sealed class RelocationEntrySpot(IZLinkEntrySpotContext context)
     : IZLinkEntrySpot<RelocationActor>
@@ -227,14 +241,18 @@ internal sealed class RelocationEntrySpot(IZLinkEntrySpotContext context)
     }
 
     public ValueTask<ZLinkActorCreateResponse> OnCreateActorAsync(
-        RelocationActor actor, ZLinkMessage createRequest, CancellationToken cancellationToken)
+        RelocationActor actor,
+        ZLinkMessage createRequest,
+        CancellationToken cancellationToken
+    )
     {
         if (!createRequest.IsEmpty)
         {
             var request = createRequest.Decode<CrossLangActorCreateReq>();
             actor.StateVersion = request.StateVersion;
             var state = new byte[Math.Max(0, request.ApplicationStateBytes)];
-            for (var index = 0; index < state.Length; index++) state[index] = (byte)(index % 251);
+            for (var index = 0; index < state.Length; index++)
+                state[index] = (byte)(index % 251);
             actor.ApplicationState = state;
         }
         return ValueTask.FromResult(ZLinkActorCreateResponse.Accept());
@@ -254,19 +272,31 @@ internal sealed class RelocationEntrySpot(IZLinkEntrySpotContext context)
 }
 
 internal sealed class RelocationProbeHandler(TestHostEventSink sink)
-    : IZLinkEntrySpotActorRequestHandler<RelocationEntrySpot, RelocationActor, CrossLangProbeReq, CrossLangProbeRes>
+    : IZLinkEntrySpotActorRequestHandler<
+        RelocationEntrySpot,
+        RelocationActor,
+        CrossLangProbeReq,
+        CrossLangProbeRes
+    >
 {
     public ValueTask<CrossLangProbeRes> HandleAsync(
         RelocationEntrySpot entrySpot,
         RelocationActor actor,
         IZLinkMessageContext context,
         CrossLangProbeReq request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var nodeRid = entrySpot.Context.NodeRid.ToString();
         sink.Append($"entry-spot-probe-served|node={nodeRid}|actor={actor.ActorId}");
-        return ValueTask.FromResult(new CrossLangProbeRes(
-            nodeRid, actor.StateVersion, actor.ApplicationState.Length, request.Marker));
+        return ValueTask.FromResult(
+            new CrossLangProbeRes(
+                nodeRid,
+                actor.StateVersion,
+                actor.ApplicationState.Length,
+                request.Marker
+            )
+        );
     }
 }
 
@@ -277,12 +307,22 @@ internal sealed record BeginUserSpotJoinReq(string TargetSpotId, string Marker);
 internal sealed record UserSpotJoinReq(string Marker);
 
 internal sealed record UserSpotJoinRes(
-    bool Accepted, string ActorId, string SpotId, string NodeRid, string Marker);
+    bool Accepted,
+    string ActorId,
+    string SpotId,
+    string NodeRid,
+    string Marker
+);
 
 internal sealed record UserSpotProbeReq(string Marker);
 
 internal sealed record UserSpotProbeRes(
-    string ActorId, string SpotId, string NodeRid, int StateVersion, string Marker);
+    string ActorId,
+    string SpotId,
+    string NodeRid,
+    int StateVersion,
+    string Marker
+);
 
 internal sealed record UserSpotDiscoveryProbeReq(string Marker);
 
@@ -293,33 +333,40 @@ internal sealed class BeginUserSpotJoinHandler
         RelocationEntrySpot,
         RelocationActor,
         BeginUserSpotJoinReq,
-        UserSpotJoinRes>
+        UserSpotJoinRes
+    >
 {
     public ValueTask<UserSpotJoinRes> HandleAsync(
         RelocationEntrySpot entrySpot,
         RelocationActor actor,
         IZLinkMessageContext context,
         BeginUserSpotJoinReq request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         _ = context;
         cancellationToken.ThrowIfCancellationRequested();
-        actor.Context.JoinSpot(request.TargetSpotId, new UserSpotJoinReq(request.Marker))
+        actor
+            .Context.JoinSpot(request.TargetSpotId, new UserSpotJoinReq(request.Marker))
             .Timeout(TimeSpan.FromSeconds(30))
             .Defer();
-        return ValueTask.FromResult(new UserSpotJoinRes(
-            true,
-            actor.ActorId,
-            request.TargetSpotId,
-            entrySpot.Context.NodeRid.ToString(),
-            request.Marker));
+        return ValueTask.FromResult(
+            new UserSpotJoinRes(
+                true,
+                actor.ActorId,
+                request.TargetSpotId,
+                entrySpot.Context.NodeRid.ToString(),
+                request.Marker
+            )
+        );
     }
 }
 
 internal sealed class UserSpotJoinObserver
 {
     private readonly TaskCompletionSource _joined = new(
-        TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCreationOptions.RunContinuationsAsynchronously
+    );
 
     public Task Joined => _joined.Task;
 
@@ -329,7 +376,8 @@ internal sealed class UserSpotJoinObserver
 internal sealed class RelocationUserSpot(
     IZLinkSpotContext context,
     TestHostEventSink sink,
-    UserSpotJoinObserver observer) : IZLinkSpot<RelocationActor>
+    UserSpotJoinObserver observer
+) : IZLinkSpot<RelocationActor>
 {
     public const string SpotType = "cross-lang-relocation-user-spot-type";
 
@@ -342,7 +390,8 @@ internal sealed class RelocationUserSpot(
 
     public ValueTask<ZLinkSpotCreateResponse> OnCreateAsync(
         ZLinkMessage request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         _ = request.IsEmpty ? null : request.Decode<UserSpotCreateReq>();
@@ -352,30 +401,31 @@ internal sealed class RelocationUserSpot(
     public ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
         string actorId,
         ZLinkMessage request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         var join = request.Decode<UserSpotJoinReq>();
         var nodeRid = Context.NodeRid.ToString();
         sink.Append($"user-spot-admission|accepted=true|actor={actorId}|spot={Context.SpotId}");
-        return ValueTask.FromResult(ZLinkSpotActorJoinResult.Accept(new UserSpotJoinRes(
-            true, actorId, Context.SpotId, nodeRid, join.Marker)));
+        return ValueTask.FromResult(
+            ZLinkSpotActorJoinResult.Accept(
+                new UserSpotJoinRes(true, actorId, Context.SpotId, nodeRid, join.Marker)
+            )
+        );
     }
 
-    public ValueTask OnJoinedActorAsync(
-        RelocationActor actor,
-        CancellationToken cancellationToken)
+    public ValueTask OnJoinedActorAsync(RelocationActor actor, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         sink.Append(
-            $"user-spot-joined|actor={actor.ActorId}|spot={Context.SpotId}|nodeRid={Context.NodeRid}");
+            $"user-spot-joined|actor={actor.ActorId}|spot={Context.SpotId}|nodeRid={Context.NodeRid}"
+        );
         observer.Complete();
         return ValueTask.CompletedTask;
     }
 
-    public ValueTask OnLeaveActorAsync(
-        RelocationActor actor,
-        CancellationToken cancellationToken)
+    public ValueTask OnLeaveActorAsync(RelocationActor actor, CancellationToken cancellationToken)
     {
         _ = actor;
         cancellationToken.ThrowIfCancellationRequested();
@@ -388,25 +438,30 @@ internal sealed class UserSpotProbeHandler(TestHostEventSink sink)
         RelocationUserSpot,
         RelocationActor,
         UserSpotProbeReq,
-        UserSpotProbeRes>
+        UserSpotProbeRes
+    >
 {
     public ValueTask<UserSpotProbeRes> HandleAsync(
         RelocationUserSpot spot,
         RelocationActor actor,
         IZLinkMessageContext context,
         UserSpotProbeReq request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         _ = context;
         cancellationToken.ThrowIfCancellationRequested();
         var nodeRid = spot.Context.NodeRid.ToString();
         sink.Append($"user-spot-probe-served|nodeRid={nodeRid}|actor={actor.ActorId}");
-        return ValueTask.FromResult(new UserSpotProbeRes(
-            actor.ActorId,
-            spot.Context.SpotId,
-            nodeRid,
-            actor.StateVersion,
-            request.Marker));
+        return ValueTask.FromResult(
+            new UserSpotProbeRes(
+                actor.ActorId,
+                spot.Context.SpotId,
+                nodeRid,
+                actor.StateVersion,
+                request.Marker
+            )
+        );
     }
 }
 
@@ -422,7 +477,8 @@ internal sealed class UserSpotTargetHostedService(
     string actorId,
     string meshName,
     string sourceNodeRid,
-    int placementWeight) : IHostedService
+    int placementWeight
+) : IHostedService
 {
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -440,7 +496,8 @@ internal sealed class UserSpotTargetHostedService(
         // gives the source --placement-weight 0.
         runtimeOptions.Mesh(meshName).PlacementWeight = placementWeight;
         sink.Append(
-            $"user-spot-created|spot={created.Spot.SpotId}|nodeRid={targetNodeRid}|state={created.State}");
+            $"user-spot-created|spot={created.Spot.SpotId}|nodeRid={targetNodeRid}|state={created.State}"
+        );
         _ = ObserveSourcePeerAsync(routes, routeMesh, cancellationToken);
         _ = ProbeAsync(targetNodeRid, observer, cancellationToken);
     }
@@ -448,7 +505,8 @@ internal sealed class UserSpotTargetHostedService(
     private async Task ObserveSourcePeerAsync(
         IZLinkRouteClient routes,
         IZLinkRouteMeshRuntime routeMesh,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -461,19 +519,19 @@ internal sealed class UserSpotTargetHostedService(
                         .RequestToNode(
                             meshName,
                             RoutingId.From(sourceNodeRid),
-                            new UserSpotDiscoveryProbeReq("reciprocal-discovery"))
+                            new UserSpotDiscoveryProbeReq("reciprocal-discovery")
+                        )
                         .Timeout(TimeSpan.FromSeconds(2))
                         .Async<UserSpotDiscoveryProbeRes>(cancellationToken);
                     if (StringComparer.Ordinal.Equals(reply.NodeRid, sourceNodeRid))
                     {
                         sink.Append(
-                            $"user-spot-source-peer-ready|ready=true|peers={status.ReadyPeerCount}");
+                            $"user-spot-source-peer-ready|ready=true|peers={status.ReadyPeerCount}"
+                        );
                         return;
                     }
                 }
-                catch (ZLinkFrameworkException)
-                {
-                }
+                catch (ZLinkFrameworkException) { }
             }
             await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken);
         }
@@ -482,7 +540,8 @@ internal sealed class UserSpotTargetHostedService(
     private async Task ProbeAsync(
         string targetNodeRid,
         UserSpotJoinObserver observer,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         await observer.Joined.WaitAsync(TimeSpan.FromSeconds(75), cancellationToken);
         var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(90);
@@ -499,7 +558,8 @@ internal sealed class UserSpotTargetHostedService(
                 {
                     sink.Append(
                         $"user-spot-probe|nodeRid={reply.NodeRid}|targetRid={targetNodeRid}"
-                        + $"|actor={reply.ActorId}|stateVersion={reply.StateVersion}");
+                            + $"|actor={reply.ActorId}|stateVersion={reply.StateVersion}"
+                    );
                     return;
                 }
                 lastFailure = $"unexpected-owner:{reply.NodeRid}";
@@ -510,7 +570,9 @@ internal sealed class UserSpotTargetHostedService(
             }
             await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
         }
-        sink.Append($"user-spot-probe-timeout|targetRid={targetNodeRid}|failure={lastFailure ?? "none"}");
+        sink.Append(
+            $"user-spot-probe-timeout|targetRid={targetNodeRid}|failure={lastFailure ?? "none"}"
+        );
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
@@ -525,7 +587,8 @@ internal sealed class UserSpotSourceHostedService(
     string spotId,
     string meshName,
     IZLinkRouteMeshRuntimeOptions runtimeOptions,
-    int placementWeight) : IHostedService
+    int placementWeight
+) : IHostedService
 {
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -539,7 +602,9 @@ internal sealed class UserSpotSourceHostedService(
         while (routeMesh.GetStatus(meshName).ReadyPeerCount == 0)
         {
             if (DateTimeOffset.UtcNow >= discoveryDeadline)
-                throw new TimeoutException("automatic RouteMesh discovery did not admit the Node target");
+                throw new TimeoutException(
+                    "automatic RouteMesh discovery did not admit the Node target"
+                );
             await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken);
         }
         sink.Append("user-spot-source-peer-ready|ready=true");
@@ -564,13 +629,13 @@ internal sealed class UserSpotSourceHostedService(
             ZLinkActorCreateResult.Created => "created",
             ZLinkActorCreateResult.Existing => "existing",
             ZLinkActorCreateResult.Rejected => "rejected",
-            _ => "unknown"
+            _ => "unknown",
         };
         var nodeRid = created switch
         {
             ZLinkActorCreateResult.Created value => value.Actor.NodeRid.ToString(),
             ZLinkActorCreateResult.Existing value => value.Actor.NodeRid.ToString(),
-            _ => "none"
+            _ => "none",
         };
         sink.Append($"user-spot-source-actor-created|status={status}|node={nodeRid}");
 
@@ -580,7 +645,8 @@ internal sealed class UserSpotSourceHostedService(
             .Async<UserSpotJoinRes>(cancellationToken);
         sink.Append(
             $"user-spot-join-request-reply|accepted={reply.Accepted.ToString().ToLowerInvariant()}"
-            + $"|actor={reply.ActorId}|spot={reply.SpotId}");
+                + $"|actor={reply.ActorId}|spot={reply.SpotId}"
+        );
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
@@ -591,7 +657,8 @@ internal sealed class EntryRelocationSourceHostedService(
     IZLinkFrameworkRuntime runtime,
     TestHostEventSink sink,
     string actorId,
-    int payloadBytes) : IHostedService
+    int payloadBytes
+) : IHostedService
 {
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -605,14 +672,14 @@ internal sealed class EntryRelocationSourceHostedService(
             ZLinkActorCreateResult.Created => "created",
             ZLinkActorCreateResult.Existing => "existing",
             ZLinkActorCreateResult.Rejected => "rejected",
-            _ => "unknown"
+            _ => "unknown",
         };
         sink.Append($"entry-spot-create|status={status}");
         var ownerBefore = created switch
         {
             ZLinkActorCreateResult.Created c => c.Actor.NodeRid.ToString(),
             ZLinkActorCreateResult.Existing e => e.Actor.NodeRid.ToString(),
-            _ => "none"
+            _ => "none",
         };
         sink.Append($"entry-spot-owner-before|node={ownerBefore}");
 
@@ -631,11 +698,15 @@ internal sealed class EntryRelocationSourceHostedService(
                 new ZLinkFrameworkRelocationOptions
                 {
                     Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
-                    Deadline = TimeSpan.FromSeconds(30)
+                    Deadline = TimeSpan.FromSeconds(30),
                 },
-                cancellationToken);
-            sink.Append($"relocate-attempt|attempt={attempt}|outcome={relocation.Outcome}|reason={relocation.Reason}");
-            if (relocation.Outcome == ZLinkFrameworkRelocationOutcome.Relocated || attempt >= 5) break;
+                cancellationToken
+            );
+            sink.Append(
+                $"relocate-attempt|attempt={attempt}|outcome={relocation.Outcome}|reason={relocation.Reason}"
+            );
+            if (relocation.Outcome == ZLinkFrameworkRelocationOutcome.Relocated || attempt >= 5)
+                break;
             attempt++;
         }
         sink.Append($"relocate-result|outcome={relocation.Outcome}|reason={relocation.Reason}");
@@ -650,7 +721,8 @@ internal sealed class EntryRelocationTargetHostedService(
     TestHostEventSink sink,
     string actorId,
     string meshName,
-    string sourceNodeRid) : IHostedService
+    string sourceNodeRid
+) : IHostedService
 {
     // This node's own routing id is framework-assigned (Object-role MeshNodes
     // cannot use a fixed routing id -- see ConfigureEntryRelocation), so a
@@ -681,7 +753,8 @@ internal sealed class EntryRelocationTargetHostedService(
                     .RequestToActor(actorId, new CrossLangProbeReq("post-relocate-probe"))
                     .Timeout(TimeSpan.FromSeconds(5))
                     .Async<CrossLangProbeRes>(cancellationToken);
-                if (lastReply.NodeRid != sourceNodeRid) break;
+                if (lastReply.NodeRid != sourceNodeRid)
+                    break;
             }
             catch (ZLinkFrameworkException failure)
             {
@@ -695,12 +768,14 @@ internal sealed class EntryRelocationTargetHostedService(
         {
             sink.Append(
                 $"entry-spot-probe-timeout|last={lastReply?.NodeRid ?? "none"}"
-                + $"|failure={lastFailure ?? "none"}");
+                    + $"|failure={lastFailure ?? "none"}"
+            );
             return;
         }
         sink.Append(
             $"entry-spot-probe|nodeRid={lastReply.NodeRid}|stateVersion={lastReply.StateVersion}"
-            + $"|applicationStateBytes={lastReply.ApplicationStateBytes}");
+                + $"|applicationStateBytes={lastReply.ApplicationStateBytes}"
+        );
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
@@ -712,10 +787,12 @@ internal sealed class TestHostEventSink(string? path)
 
     public void Append(string value)
     {
-        if (string.IsNullOrWhiteSpace(path)) return;
+        if (string.IsNullOrWhiteSpace(path))
+            return;
 
         var directory = Path.GetDirectoryName(path);
-        if (!string.IsNullOrWhiteSpace(directory)) Directory.CreateDirectory(directory);
+        if (!string.IsNullOrWhiteSpace(directory))
+            Directory.CreateDirectory(directory);
 
         lock (_gate)
         {
@@ -732,7 +809,8 @@ internal sealed class StartupStageSpot(IZLinkSpotContext context) : IZLinkSpot
     {
         Context.Handlers.AddSubscribe<StartupStageSubscriptionHandler>(
             Context.MeshName,
-            "stage.monitor");
+            "stage.monitor"
+        );
     }
 }
 
@@ -743,7 +821,8 @@ internal sealed class StartupStageSubscriptionHandler(TestHostEventSink sink)
         StartupStageSpot spot,
         StartupStageEvent message,
         ZLinkPublishMessageContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         _ = spot;
         _ = context;
@@ -771,7 +850,8 @@ internal sealed class TestHostRouteRequestHandler(TestHostEventSink sink)
     public ValueTask<TestHostRouteReply> HandleAsync(
         TestHostRouteRequest request,
         ZLinkRouteMessageContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         sink.Append($"route-server|{request.Value}|{context.SourceNodeRid}");
@@ -783,7 +863,8 @@ internal sealed class RouteClientStartupRequestHostedService(
     IZLinkRouteClient client,
     TestHostEventSink sink,
     string channelName,
-    string value) : IHostedService
+    string value
+) : IHostedService
 {
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -794,14 +875,19 @@ internal sealed class RouteClientStartupRequestHostedService(
             try
             {
                 reply = await client
-                    .RequestToNode(channelName, RoutingId.From("node-route"), new TestHostRouteRequest(value))
+                    .RequestToNode(
+                        channelName,
+                        RoutingId.From("node-route"),
+                        new TestHostRouteRequest(value)
+                    )
                     .Timeout(TimeSpan.FromSeconds(5))
                     .Async<TestHostRouteReply>(cancellationToken);
                 break;
             }
             catch (ZLinkFrameworkException exception)
                 when (exception.Kind == ZLinkFrameworkErrorKind.Unavailable
-                      && DateTimeOffset.UtcNow < deadline)
+                    && DateTimeOffset.UtcNow < deadline
+                )
             {
                 await Task.Delay(TimeSpan.FromMilliseconds(25), cancellationToken);
             }
@@ -829,42 +915,48 @@ internal sealed record TestHostSpotRouteMissingRequest(string Value);
 /// </summary>
 internal static class TestHostErrorWire
 {
-    public static string Name(ZLinkFrameworkErrorKind kind) => kind switch
-    {
-        ZLinkFrameworkErrorKind.NotFound => "not_found",
-        ZLinkFrameworkErrorKind.AlreadyExists => "already_exists",
-        ZLinkFrameworkErrorKind.TypeMismatch => "type_mismatch",
-        ZLinkFrameworkErrorKind.NotConfigured => "not_configured",
-        ZLinkFrameworkErrorKind.Rejected => "rejected",
-        ZLinkFrameworkErrorKind.Unavailable => "unavailable",
-        ZLinkFrameworkErrorKind.DeadlineExceeded => "deadline_exceeded",
-        ZLinkFrameworkErrorKind.ShuttingDown => "shutting_down",
-        ZLinkFrameworkErrorKind.ProtocolError => "protocol_error",
-        ZLinkFrameworkErrorKind.InvalidOperation => "invalid_operation",
-        ZLinkFrameworkErrorKind.DataLost => "data_lost",
-        _ => "internal_failure"
-    };
+    public static string Name(ZLinkFrameworkErrorKind kind) =>
+        kind switch
+        {
+            ZLinkFrameworkErrorKind.NotFound => "not_found",
+            ZLinkFrameworkErrorKind.AlreadyExists => "already_exists",
+            ZLinkFrameworkErrorKind.TypeMismatch => "type_mismatch",
+            ZLinkFrameworkErrorKind.NotConfigured => "not_configured",
+            ZLinkFrameworkErrorKind.Rejected => "rejected",
+            ZLinkFrameworkErrorKind.Unavailable => "unavailable",
+            ZLinkFrameworkErrorKind.DeadlineExceeded => "deadline_exceeded",
+            ZLinkFrameworkErrorKind.ShuttingDown => "shutting_down",
+            ZLinkFrameworkErrorKind.ProtocolError => "protocol_error",
+            ZLinkFrameworkErrorKind.InvalidOperation => "invalid_operation",
+            ZLinkFrameworkErrorKind.DataLost => "data_lost",
+            _ => "internal_failure",
+        };
 
     public static Exception CreateFrameworkException(ZLinkFrameworkErrorKind kind, string message)
     {
         var constructor = typeof(ZLinkFrameworkException)
             .GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic)
             .Single();
-        var arguments = constructor.GetParameters()
-            .Select(parameter => parameter.Position switch
-            {
-                0 => (object?)kind,
-                1 => message,
-                _ => null
-            })
+        var arguments = constructor
+            .GetParameters()
+            .Select(parameter =>
+                parameter.Position switch
+                {
+                    0 => (object?)kind,
+                    1 => message,
+                    _ => null,
+                }
+            )
             .ToArray();
         return (Exception)constructor.Invoke(arguments);
     }
 
     public static string Origin(ZLinkFrameworkException exception)
     {
-        var property = typeof(ZLinkFrameworkException)
-            .GetProperty("Origin", BindingFlags.Instance | BindingFlags.NonPublic);
+        var property = typeof(ZLinkFrameworkException).GetProperty(
+            "Origin",
+            BindingFlags.Instance | BindingFlags.NonPublic
+        );
         return property?.GetValue(exception)?.ToString()?.ToLowerInvariant() ?? "unspecified";
     }
 }
@@ -875,7 +967,8 @@ internal sealed class TestHostSpotRouteRequestHandler(TestHostEventSink sink)
     public ValueTask<TestHostSpotRouteReply> HandleAsync(
         TestHostSpotRouteRequest request,
         ZLinkRouteMessageContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         sink.Append($"spot-route-server|{request.Value}|{context.SourceNodeRid}");
@@ -889,7 +982,8 @@ internal sealed class TestHostSpotRouteFailRequestHandler
     public ValueTask<TestHostSpotRouteReply> HandleAsync(
         TestHostSpotRouteFailRequest request,
         ZLinkRouteMessageContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         _ = context;
         cancellationToken.ThrowIfCancellationRequested();
@@ -897,7 +991,8 @@ internal sealed class TestHostSpotRouteFailRequestHandler
         // "rejected" and must NOT carry the zlink.origin=framework marker.
         throw TestHostErrorWire.CreateFrameworkException(
             ZLinkFrameworkErrorKind.Rejected,
-            "application spot route failure");
+            "application spot route failure"
+        );
     }
 }
 
@@ -912,7 +1007,8 @@ internal sealed class SpotRouteClientScenarioHostedService(
     TestHostEventSink sink,
     string channelName,
     string peerRid,
-    string value) : IHostedService
+    string value
+) : IHostedService
 {
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -930,9 +1026,11 @@ internal sealed class SpotRouteClientScenarioHostedService(
                 break;
             }
             catch (ZLinkFrameworkException exception)
-                when (exception.Kind is ZLinkFrameworkErrorKind.Unavailable
-                          or ZLinkFrameworkErrorKind.DeadlineExceeded
-                      && DateTimeOffset.UtcNow < deadline)
+                when (exception.Kind
+                        is ZLinkFrameworkErrorKind.Unavailable
+                            or ZLinkFrameworkErrorKind.DeadlineExceeded
+                    && DateTimeOffset.UtcNow < deadline
+                )
             {
                 await Task.Delay(TimeSpan.FromMilliseconds(50), cancellationToken);
             }
@@ -941,16 +1039,23 @@ internal sealed class SpotRouteClientScenarioHostedService(
                 // Terminal (a)-failure: recorded so the runner can pin
                 // known cross-language divergences.
                 sink.Append(
-                    $"spot-route-error|kind={TestHostErrorWire.Name(exception.Kind)}|origin={TestHostErrorWire.Origin(exception)}");
+                    $"spot-route-error|kind={TestHostErrorWire.Name(exception.Kind)}|origin={TestHostErrorWire.Origin(exception)}"
+                );
                 return;
             }
         }
         sink.Append($"spot-route-reply|{reply.Value}");
 
         await RecordFailureAsync(
-            "spot-route-missing", new TestHostSpotRouteMissingRequest(value), cancellationToken);
+            "spot-route-missing",
+            new TestHostSpotRouteMissingRequest(value),
+            cancellationToken
+        );
         await RecordFailureAsync(
-            "spot-route-app-error", new TestHostSpotRouteFailRequest(value), cancellationToken);
+            "spot-route-app-error",
+            new TestHostSpotRouteFailRequest(value),
+            cancellationToken
+        );
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
@@ -958,7 +1063,8 @@ internal sealed class SpotRouteClientScenarioHostedService(
     private async Task RecordFailureAsync<TRequest>(
         string marker,
         TRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         try
         {
@@ -971,7 +1077,8 @@ internal sealed class SpotRouteClientScenarioHostedService(
         catch (ZLinkFrameworkException exception)
         {
             sink.Append(
-                $"{marker}|kind={TestHostErrorWire.Name(exception.Kind)}|origin={TestHostErrorWire.Origin(exception)}");
+                $"{marker}|kind={TestHostErrorWire.Name(exception.Kind)}|origin={TestHostErrorWire.Origin(exception)}"
+            );
         }
     }
 }
@@ -982,7 +1089,8 @@ internal sealed class TestHostProfileRequestHandler
     public ValueTask<TestHostProfileReply> HandleAsync(
         TestHostProfileRequest request,
         IZLinkMessageContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         _ = context;
         cancellationToken.ThrowIfCancellationRequested();
@@ -996,7 +1104,8 @@ internal sealed class TestHostProfileSendHandler(TestHostEventSink sink)
     public ValueTask HandleAsync(
         TestHostProfileSend message,
         IZLinkMessageContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         _ = context;
         cancellationToken.ThrowIfCancellationRequested();
@@ -1014,7 +1123,8 @@ internal sealed class ChannelSubscriptionEventHandler(TestHostEventSink sink)
     public ValueTask HandleAsync(
         TestHostPublishedEvent @event,
         ZLinkPublishMessageContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         _ = cancellationToken;
         sink.Append($"profile.changed:{@event.Value}");
@@ -1027,7 +1137,8 @@ internal sealed class TestHostRawStreamRecorder(TestHostEventSink sink)
     public void RecordConnected(IZLinkSessionContext context)
     {
         sink.Append(
-            $"connected|{context.SessionId}|{context.RoutingId?.ToHex() ?? "<null>"}|{context.LocalAddr ?? "<null>"}|{context.RemoteAddr ?? "<null>"}");
+            $"connected|{context.SessionId}|{context.RoutingId?.ToHex() ?? "<null>"}|{context.LocalAddr ?? "<null>"}|{context.RemoteAddr ?? "<null>"}"
+        );
     }
 
     public void RecordPayload(string payload)
@@ -1049,30 +1160,38 @@ internal sealed class TestHostRawStreamRecorder(TestHostEventSink sink)
 internal sealed class StreamClientStartupRequestHostedService(
     TestHostEventSink sink,
     string endpoint,
-    string value) : IHostedService
+    string value
+) : IHostedService
 {
     private IZlinkStreamConnector? _connector;
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        _connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-        {
-            Endpoint = new Uri(endpoint),
-            DispatchMode = ZlinkStreamDispatchMode.Immediate,
-            Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
-            Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
-            RequestTimeout = TimeSpan.FromSeconds(5)
-        });
-        _ = _connector.OnDisconnected((disconnected, _) =>
-        {
-            sink.Append($"stream-disconnected|{disconnected.CloseReason}");
-            return ValueTask.CompletedTask;
-        });
+        _connector = ZlinkStreamConnectorFactory.Create(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri(endpoint),
+                DispatchMode = ZlinkStreamDispatchMode.Immediate,
+                Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
+                Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
+                RequestTimeout = TimeSpan.FromSeconds(5),
+            }
+        );
+        _ = _connector.OnDisconnected(
+            (disconnected, _) =>
+            {
+                sink.Append($"stream-disconnected|{disconnected.CloseReason}");
+                return ValueTask.CompletedTask;
+            }
+        );
         await _connector.Connect.Async(cancellationToken);
         var pending = _connector
-            .Request(new ZlinkStreamEncodedPayload(
-                ZlinkStreamCodec.Json,
-                Encoding.UTF8.GetBytes($"\"{value}\"")))
+            .Request(
+                new ZlinkStreamEncodedPayload(
+                    ZlinkStreamCodec.Json,
+                    Encoding.UTF8.GetBytes($"\"{value}\"")
+                )
+            )
             .PacketName("RawPing")
             .Compress()
             .Timeout(TimeSpan.FromSeconds(5))
@@ -1083,13 +1202,15 @@ internal sealed class StreamClientStartupRequestHostedService(
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        if (_connector is not null) await _connector.DisposeAsync();
+        if (_connector is not null)
+            await _connector.DisposeAsync();
     }
 }
 
 internal sealed class TestHostRawStreamSession(
     TestHostRawStreamRecorder recorder,
-    IZLinkSessionContext context) : IZLinkSession
+    IZLinkSessionContext context
+) : IZLinkSession
 {
     public IZLinkSessionContext Context { get; } = context;
 
@@ -1107,9 +1228,7 @@ internal sealed class TestHostRawStreamSession(
         return ValueTask.CompletedTask;
     }
 
-    public ValueTask OnErrorAsync(
-        ZLinkStreamError error,
-        CancellationToken cancellationToken)
+    public ValueTask OnErrorAsync(ZLinkStreamError error, CancellationToken cancellationToken)
     {
         _ = cancellationToken;
         recorder.RecordError(error);
@@ -1119,13 +1238,12 @@ internal sealed class TestHostRawStreamSession(
     public async ValueTask OnDispatchAsync(
         ZLinkSessionDispatchContext dispatch,
         ZLinkMessage payload,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         _ = cancellationToken;
         _ = dispatch;
         recorder.RecordPayload(payload.Decode<string>());
-        await Context.Client.Reply("pong")
-            .Compress()
-            .Async(cancellationToken);
+        await Context.Client.Reply("pong").Compress().Async(cancellationToken);
     }
 }

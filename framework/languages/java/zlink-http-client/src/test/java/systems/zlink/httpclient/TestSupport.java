@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 package systems.zlink.httpclient;
-import java.util.concurrent.Executors;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
@@ -8,6 +7,7 @@ import com.sun.net.httpserver.HttpServer;
 import com.sun.net.httpserver.HttpsConfigurator;
 import com.sun.net.httpserver.HttpsParameters;
 import com.sun.net.httpserver.HttpsServer;
+
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -22,6 +22,8 @@ import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.util.Base64;
+import java.util.concurrent.Executors;
+
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
@@ -31,11 +33,9 @@ import javax.net.ssl.X509TrustManager;
 /** Shared test servers and certificate helpers. */
 final class TestSupport {
 
-    private TestSupport() {
-    }
+    private TestSupport() {}
 
-    record Server(String baseUrl, AutoCloseable closeable) {
-    }
+    record Server(String baseUrl, AutoCloseable closeable) {}
 
     static String resourcePath(String resource) {
         try {
@@ -63,14 +63,15 @@ final class TestSupport {
         try {
             HttpsServer server = HttpsServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
             SSLContext sslContext = serverSslContext();
-            server.setHttpsConfigurator(new HttpsConfigurator(sslContext) {
-                @Override
-                public void configure(HttpsParameters params) {
-                    SSLParameters sslParameters = sslContext.getDefaultSSLParameters();
-                    sslParameters.setNeedClientAuth(needClientAuth);
-                    params.setSSLParameters(sslParameters);
-                }
-            });
+            server.setHttpsConfigurator(
+                    new HttpsConfigurator(sslContext) {
+                        @Override
+                        public void configure(HttpsParameters params) {
+                            SSLParameters sslParameters = sslContext.getDefaultSSLParameters();
+                            sslParameters.setNeedClientAuth(needClientAuth);
+                            params.setSSLParameters(sslParameters);
+                        }
+                    });
             server.createContext("/", handler);
             server.start();
             int port = server.getAddress().getPort();
@@ -105,28 +106,30 @@ final class TestSupport {
     }
 
     private static SSLContext serverSslContext() throws Exception {
-        X509Certificate cert = readCertificate(Files.readAllBytes(Path.of(resourcePath("/tls/server-cert.pem"))));
-        PrivateKey key = readPrivateKey(Files.readString(Path.of(resourcePath("/tls/server-key.pem"))));
+        X509Certificate cert =
+                readCertificate(Files.readAllBytes(Path.of(resourcePath("/tls/server-cert.pem"))));
+        PrivateKey key =
+                readPrivateKey(Files.readString(Path.of(resourcePath("/tls/server-key.pem"))));
         KeyStore keyStore = KeyStore.getInstance(KeyStore.getDefaultType());
         keyStore.load(null, null);
         keyStore.setKeyEntry("server", key, new char[0], new X509Certificate[] {cert});
-        KeyManagerFactory keyManagerFactory = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+        KeyManagerFactory keyManagerFactory =
+                KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
         keyManagerFactory.init(keyStore, new char[0]);
 
-        TrustManager trustAll = new X509TrustManager() {
-            @Override
-            public void checkClientTrusted(X509Certificate[] chain, String authType) {
-            }
+        TrustManager trustAll =
+                new X509TrustManager() {
+                    @Override
+                    public void checkClientTrusted(X509Certificate[] chain, String authType) {}
 
-            @Override
-            public void checkServerTrusted(X509Certificate[] chain, String authType) {
-            }
+                    @Override
+                    public void checkServerTrusted(X509Certificate[] chain, String authType) {}
 
-            @Override
-            public X509Certificate[] getAcceptedIssuers() {
-                return new X509Certificate[0];
-            }
-        };
+                    @Override
+                    public X509Certificate[] getAcceptedIssuers() {
+                        return new X509Certificate[0];
+                    }
+                };
 
         SSLContext context = SSLContext.getInstance("TLS");
         context.init(keyManagerFactory.getKeyManagers(), new TrustManager[] {trustAll}, null);
@@ -134,15 +137,16 @@ final class TestSupport {
     }
 
     private static X509Certificate readCertificate(byte[] pem) throws Exception {
-        return (X509Certificate) CertificateFactory.getInstance("X.509")
-            .generateCertificate(new ByteArrayInputStream(pem));
+        return (X509Certificate)
+                CertificateFactory.getInstance("X.509")
+                        .generateCertificate(new ByteArrayInputStream(pem));
     }
 
     private static PrivateKey readPrivateKey(String pem) throws Exception {
-        String base64 = pem
-            .replaceAll("-----BEGIN (RSA )?PRIVATE KEY-----", "")
-            .replaceAll("-----END (RSA )?PRIVATE KEY-----", "")
-            .replaceAll("\\s", "");
+        String base64 =
+                pem.replaceAll("-----BEGIN (RSA )?PRIVATE KEY-----", "")
+                        .replaceAll("-----END (RSA )?PRIVATE KEY-----", "")
+                        .replaceAll("\\s", "");
         byte[] der = Base64.getDecoder().decode(base64);
         return KeyFactory.getInstance("RSA").generatePrivate(new PKCS8EncodedKeySpec(der));
     }

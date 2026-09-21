@@ -155,11 +155,10 @@ enum class bound_session_bind_admission_t
     actor_not_ready
 };
 
-bool bound_session_bind_actor_matches (
-  const protocol::actor_route_fence_t &requested,
-  const std::optional<stateful::object_ref_t> &local_actor,
-  const zlink::routing_id_t &local_routing_id,
-  std::uint64_t local_node_generation) noexcept;
+bool bound_session_bind_actor_matches (const protocol::actor_route_fence_t &requested,
+                                       const std::optional<stateful::object_ref_t> &local_actor,
+                                       const zlink::routing_id_t &local_routing_id,
+                                       std::uint64_t local_node_generation) noexcept;
 
 bound_session_bind_admission_t
 classify_bound_session_bind_admission (bool local_actor_matches) noexcept;
@@ -723,9 +722,10 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
       const std::function<bool ()> &next_application_receive = {});
     bool dispatch_application_owner (
       const std::string &owner,
-      const std::function<void (const ready_record_t &, const receive_record_t &,
-                               std::vector<zlink::message_t>)> &dispatch,
-      const std::function<void ()> &started, const std::function<void ()> &rejected);
+      const std::function<void (
+        const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> &dispatch,
+      const std::function<void ()> &started,
+      const std::function<void ()> &rejected);
     bool wait_for_dispatch_activity (std::chrono::milliseconds timeout,
                                      bool accept_application_receive = true) noexcept;
     void signal_dispatch_activity () noexcept;
@@ -764,11 +764,12 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     actor_ref_t framework_actor_ref (const stateful::object_ref_t &object,
                                      std::string actor_type) const;
     call_id_t next_operation ();
-    void register_local_completion (pending_operation_t &operation,
-                                    std::chrono::milliseconds timeout,
-                                    spot_request_completion_t completion = {},
-                                    std::function<void ()> incomplete = {},
-                                    mesh_request_surface_t request_surface = mesh_request_surface_t::none);
+    void register_local_completion (
+      pending_operation_t &operation,
+      std::chrono::milliseconds timeout,
+      spot_request_completion_t completion = {},
+      std::function<void ()> incomplete = {},
+      mesh_request_surface_t request_surface = mesh_request_surface_t::none);
     bool enqueue_completion (const pending_operation_t &operation,
                              receive_record_t record,
                              std::vector<zlink::message_t> parts);
@@ -804,7 +805,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                               std::string_view target_spot_id,
                               std::uint64_t target_spot_generation);
     void invalidate_spot_route_fence (const protocol::message_follow_notice_t &notice);
-    bool complete_local_request (const pending_operation_t &operation, const std::vector<zlink::message_t> &parts);
+    bool complete_local_request (const pending_operation_t &operation,
+                                 const std::vector<zlink::message_t> &parts);
     void complete_operation (const pending_operation_t &operation,
                              operation_kind_t kind,
                              foundation::operation_terminal_t terminal,
@@ -812,8 +814,9 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     task_t<std::size_t> dispatch_user_spot_operations ();
     std::size_t dispatch_application_claim (
       mesh::service_mailbox_claim_t claim,
-      const std::function<void (const ready_record_t &, const receive_record_t &,
-                               std::vector<zlink::message_t>)> &dispatch);
+      const std::function<void (const ready_record_t &,
+                                const receive_record_t &,
+                                std::vector<zlink::message_t>)> &dispatch);
     bool dispatch_bound_session_send (const mesh::service_mailbox_record_t &record,
                                       std::function<void ()> retain_mailbox_reservation = {},
                                       std::function<void ()> release_mailbox_reservation = {});
@@ -1033,17 +1036,17 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     std::function<void ()> _maintenance_started;
     std::function<void ()> _maintenance_closing;
     runtime::offload_executor_t _relocation_session_terminal_lane_executor;
-    mutable runtime::state_lane_t
-      _relocation_session_terminal_lane{_relocation_session_terminal_lane_executor};
+    mutable runtime::state_lane_t _relocation_session_terminal_lane{
+      _relocation_session_terminal_lane_executor};
     runtime::offload_executor_t _user_spot_terminal_lane_executor;
     mutable runtime::state_lane_t _user_spot_terminal_lane{_user_spot_terminal_lane_executor};
     mutable std::mutex _mutex;
     runtime::offload_executor_t _lifecycle_configuration_lane_executor;
-    mutable runtime::state_lane_t
-      _lifecycle_configuration_lane{_lifecycle_configuration_lane_executor};
+    mutable runtime::state_lane_t _lifecycle_configuration_lane{
+      _lifecycle_configuration_lane_executor};
     runtime::offload_executor_t _local_dispatch_completion_lane_executor;
-    mutable runtime::state_lane_t
-      _local_dispatch_completion_lane{_local_dispatch_completion_lane_executor};
+    mutable runtime::state_lane_t _local_dispatch_completion_lane{
+      _local_dispatch_completion_lane_executor};
     std::deque<local_application_dispatch_t> _local_application_dispatches;
     std::map<std::string, stateful::object_ref_t> _spots;
     std::map<std::string, std::pair<std::string, stateful::object_ref_t>> _actors;

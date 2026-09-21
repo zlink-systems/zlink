@@ -1,47 +1,66 @@
 package systems.zlink.framework.runtime.streams;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.CompletionStage;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.util.EnumSet;
-import java.util.Map;
-import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
+import java.util.EnumSet;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
+
 final class ZLinkFlowHeaderContractTest {
     @Test
     void markerAndFlowPairRoundTrip() {
         ZLinkFlowContext.State flow = ZLinkFlowContext.create(ZLinkFlowOrigin.APPLICATION);
-        ZLinkStreamHeader header = new ZLinkStreamHeader(
-            ZLinkStreamMessageKind.SEND, ZLinkStreamCodec.JSON,
-            EnumSet.noneOf(ZLinkStreamHeaderFlag.class), Optional.empty(),
-            "Move", Map.of(), Optional.of("corr-1"), Optional.of(flow.flowId()),
-            Optional.of(flow.origin()));
+        ZLinkStreamHeader header =
+                new ZLinkStreamHeader(
+                        ZLinkStreamMessageKind.SEND,
+                        ZLinkStreamCodec.JSON,
+                        EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                        Optional.empty(),
+                        "Move",
+                        Map.of(),
+                        Optional.of("corr-1"),
+                        Optional.of(flow.flowId()),
+                        Optional.of(flow.origin()));
 
         byte[] encoded = ZLinkStreamHeaderCodec.encode(header);
         assertEquals(0xF2, Byte.toUnsignedInt(encoded[0]));
         assertEquals(header, ZLinkStreamHeaderCodec.decodeOrPlain(encoded));
-        assertTrue(flow.flowId().matches(
-            "[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"));
+        assertTrue(
+                flow.flowId()
+                        .matches(
+                                "[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"));
     }
 
     @Test
     void markerAndOptionalPairAreMandatory() {
-        assertThrows(IllegalArgumentException.class,
-            () -> ZLinkStreamHeaderCodec.decodeOrPlain(new byte[] {1, 0, 0, 1, 'x'}));
-        assertThrows(IllegalArgumentException.class, () -> new ZLinkStreamHeader(
-            ZLinkStreamMessageKind.SEND, ZLinkStreamCodec.JSON,
-            EnumSet.noneOf(ZLinkStreamHeaderFlag.class), Optional.empty(),
-            "Move", Map.of(), Optional.empty(), Optional.of(
-                "018f2f1d-5d52-7b70-8f08-13fecf6f6abc"), Optional.empty()));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> ZLinkStreamHeaderCodec.decodeOrPlain(new byte[] {1, 0, 0, 1, 'x'}));
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        new ZLinkStreamHeader(
+                                ZLinkStreamMessageKind.SEND,
+                                ZLinkStreamCodec.JSON,
+                                EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                                Optional.empty(),
+                                "Move",
+                                Map.of(),
+                                Optional.empty(),
+                                Optional.of("018f2f1d-5d52-7b70-8f08-13fecf6f6abc"),
+                                Optional.empty()));
     }
 
     @Test
@@ -76,14 +95,13 @@ final class ZLinkFlowHeaderContractTest {
 
     @Test
     void enterOrCreateInstallsInboundPairOrStartsNewFlow() {
-        ZLinkFlowContext.State inbound =
-            ZLinkFlowContext.create(ZLinkFlowOrigin.APPLICATION);
+        ZLinkFlowContext.State inbound = ZLinkFlowContext.create(ZLinkFlowOrigin.APPLICATION);
         try (ZLinkFlowContext.Scope ignored =
-                 ZLinkFlowContext.enterOrCreate(inbound, ZLinkFlowOrigin.INBOUND)) {
+                ZLinkFlowContext.enterOrCreate(inbound, ZLinkFlowOrigin.INBOUND)) {
             assertEquals(inbound, ZLinkFlowContext.current());
         }
         try (ZLinkFlowContext.Scope ignored =
-                 ZLinkFlowContext.enterOrCreate(null, ZLinkFlowOrigin.INBOUND)) {
+                ZLinkFlowContext.enterOrCreate(null, ZLinkFlowOrigin.INBOUND)) {
             assertEquals(ZLinkFlowOrigin.INBOUND, ZLinkFlowContext.current().origin());
         }
         assertEquals(null, ZLinkFlowContext.current());
@@ -92,26 +110,19 @@ final class ZLinkFlowHeaderContractTest {
     @Test
     void outboundEntryPreservesAmbientCreatesApplicationAndSuppressesAtOff() {
         try (ZLinkFlowContext.Scope ignored =
-                 ZLinkFlowContext.enterCurrentOrCreate(
-                     ZLinkFlowOrigin.APPLICATION, true)) {
-            assertEquals(
-                ZLinkFlowOrigin.APPLICATION,
-                ZLinkFlowContext.current().origin());
-            assertTrue(ZLinkFlowContext.isValidFlowId(
-                ZLinkFlowContext.current().flowId()));
+                ZLinkFlowContext.enterCurrentOrCreate(ZLinkFlowOrigin.APPLICATION, true)) {
+            assertEquals(ZLinkFlowOrigin.APPLICATION, ZLinkFlowContext.current().origin());
+            assertTrue(ZLinkFlowContext.isValidFlowId(ZLinkFlowContext.current().flowId()));
         }
 
-        ZLinkFlowContext.State inbound =
-            ZLinkFlowContext.create(ZLinkFlowOrigin.INBOUND);
+        ZLinkFlowContext.State inbound = ZLinkFlowContext.create(ZLinkFlowOrigin.INBOUND);
         try (ZLinkFlowContext.Scope ignored = ZLinkFlowContext.enter(inbound)) {
             try (ZLinkFlowContext.Scope outbound =
-                     ZLinkFlowContext.enterCurrentOrCreate(
-                         ZLinkFlowOrigin.APPLICATION, true)) {
+                    ZLinkFlowContext.enterCurrentOrCreate(ZLinkFlowOrigin.APPLICATION, true)) {
                 assertEquals(inbound, ZLinkFlowContext.current());
             }
             try (ZLinkFlowContext.Scope off =
-                     ZLinkFlowContext.enterCurrentOrCreate(
-                         ZLinkFlowOrigin.APPLICATION, false)) {
+                    ZLinkFlowContext.enterCurrentOrCreate(ZLinkFlowOrigin.APPLICATION, false)) {
                 assertEquals(null, ZLinkFlowContext.current());
             }
             assertEquals(inbound, ZLinkFlowContext.current());
@@ -120,12 +131,9 @@ final class ZLinkFlowHeaderContractTest {
 
     @Test
     void flowIdValidationRequiresCanonicalUuidV7() {
-        assertTrue(ZLinkFlowContext.isValidFlowId(
-            "018f2f1d-5d52-7b70-8f08-13fecf6f6abc"));
-        assertEquals(false, ZLinkFlowContext.isValidFlowId(
-            "018f2f1d-5d52-6b70-8f08-13fecf6f6abc"));
-        assertEquals(false, ZLinkFlowContext.isValidFlowId(
-            "018F2F1D-5D52-7B70-8F08-13FECF6F6ABC"));
+        assertTrue(ZLinkFlowContext.isValidFlowId("018f2f1d-5d52-7b70-8f08-13fecf6f6abc"));
+        assertEquals(false, ZLinkFlowContext.isValidFlowId("018f2f1d-5d52-6b70-8f08-13fecf6f6abc"));
+        assertEquals(false, ZLinkFlowContext.isValidFlowId("018F2F1D-5D52-7B70-8F08-13FECF6F6ABC"));
         assertEquals(false, ZLinkFlowContext.isValidFlowId("not-a-flow-id"));
     }
 
@@ -143,8 +151,8 @@ final class ZLinkFlowHeaderContractTest {
         assertEquals(null, ZLinkFlowContext.current());
 
         CompletableFuture<String> noFlow = new CompletableFuture<>();
-        var noFlowObserved = ZLinkFlowContext.propagate(noFlow)
-            .thenApply(value -> ZLinkFlowContext.current());
+        var noFlowObserved =
+                ZLinkFlowContext.propagate(noFlow).thenApply(value -> ZLinkFlowContext.current());
         noFlow.complete("ok");
         assertEquals(null, noFlowObserved.toCompletableFuture().join());
 
@@ -152,8 +160,9 @@ final class ZLinkFlowHeaderContractTest {
         try (ZLinkFlowContext.Scope ignored = ZLinkFlowContext.enter(first)) {
             var propagatedFailure = ZLinkFlowContext.propagate(failed);
             failed.completeExceptionally(new IllegalStateException("expected"));
-            assertThrows(CompletionException.class,
-                () -> propagatedFailure.toCompletableFuture().join());
+            assertThrows(
+                    CompletionException.class,
+                    () -> propagatedFailure.toCompletableFuture().join());
         }
     }
 }

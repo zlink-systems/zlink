@@ -26,10 +26,7 @@ export class ZLinkSpotNodeRouteTransport {
     }
     try {
       throwIfAborted(signal);
-      await awaitWithAbort(
-        router.sendToSpot(target.targetNodeRid, target.spotId, parts),
-        signal
-      );
+      await awaitWithAbort(router.sendToSpot(target.targetNodeRid, target.spotId, parts), signal);
       return true;
     } finally {
       closeMessages(parts);
@@ -50,21 +47,21 @@ export class ZLinkSpotNodeRouteTransport {
     const effectiveTimeoutMs = timeoutMs ?? this.registration.requestTimeoutMs ?? 30_000;
     throwIfAborted(signal);
     const operation = router.requestToSpot(
-        target.targetNodeRid,
-        target.spotId,
-        parts,
-        effectiveTimeoutMs
-      );
+      target.targetNodeRid,
+      target.spotId,
+      parts,
+      effectiveTimeoutMs
+    );
     return awaitWithAbort(operation, signal, () => {
       void operation.then(closeMessages, () => undefined);
     }).then((replyParts) => {
-        try {
-          return decodeChannelReply<TReply>(replyParts, codecs);
-        } finally {
-          closeMessages(replyParts);
-          closeMessages(parts);
-        }
-      });
+      try {
+        return decodeChannelReply<TReply>(replyParts, codecs);
+      } finally {
+        closeMessages(replyParts);
+        closeMessages(parts);
+      }
+    });
   }
 
   requestRaw(

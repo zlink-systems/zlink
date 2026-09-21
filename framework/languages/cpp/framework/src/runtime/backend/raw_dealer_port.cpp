@@ -19,33 +19,26 @@
 
 namespace zlink::framework::detail::backend
 {
-raw_dealer_port_t::raw_dealer_port_t (
-  zlink::dealer_socket_t &socket,
-  std::mutex *shared_socket_mutex,
-  zlink::poller_t *shared_poller,
-  std::uintptr_t poller_slot) :
-    _owned_poller (shared_poller == nullptr
-                     ? std::make_unique<zlink::poller_t> ()
-                     : nullptr),
+raw_dealer_port_t::raw_dealer_port_t (zlink::dealer_socket_t &socket,
+                                      std::mutex *shared_socket_mutex,
+                                      zlink::poller_t *shared_poller,
+                                      std::uintptr_t poller_slot) :
+    _owned_poller (shared_poller == nullptr ? std::make_unique<zlink::poller_t> () : nullptr),
     _poller (shared_poller != nullptr ? shared_poller : _owned_poller.get ()),
     _poller_slot (poller_slot == 0 ? 1 : poller_slot),
     _socket (&socket),
-    _socket_mutex (shared_socket_mutex != nullptr ? shared_socket_mutex
-                                                  : &_owned_socket_mutex)
+    _socket_mutex (shared_socket_mutex != nullptr ? shared_socket_mutex : &_owned_socket_mutex)
 {
-    _poller->add (
-      socket,
-      zlink::poll_event_flag_t::pollin
-        | zlink::poll_event_flag_t::pollout
-        | zlink::poll_event_flag_t::pollcompletion,
-      _poller_slot);
+    _poller->add (socket,
+                  zlink::poll_event_flag_t::pollin | zlink::poll_event_flag_t::pollout
+                    | zlink::poll_event_flag_t::pollcompletion,
+                  _poller_slot);
 }
 
 task_t<bool> raw_dealer_port_t::send (const raw_message_t &parts)
 {
     if (parts.empty ()) {
-        throw std::invalid_argument (
-          "raw dealer send requires message parts");
+        throw std::invalid_argument ("raw dealer send requires message parts");
     }
     auto messages = materialize_binding_parts (parts);
     std::optional<zlink::async_result_t<void>> pending;
@@ -55,8 +48,7 @@ task_t<bool> raw_dealer_port_t::send (const raw_message_t &parts)
             if (!_socket) {
                 co_return false;
             }
-            auto operation =
-              std::move (_socket->send ()).message (messages[0]);
+            auto operation = std::move (_socket->send ()).message (messages[0]);
             for (std::size_t index = 1; index < messages.size (); ++index) {
                 operation = std::move (operation).message (messages[index]);
             }
@@ -75,9 +67,8 @@ task_t<bool> raw_dealer_port_t::send (const raw_message_t &parts)
     }
 }
 
-task_t<zlink::submit_result_t> raw_dealer_port_t::send (
-  const raw_message_t &parts,
-  std::chrono::milliseconds timeout)
+task_t<zlink::submit_result_t> raw_dealer_port_t::send (const raw_message_t &parts,
+                                                        std::chrono::milliseconds timeout)
 {
     if (parts.empty () || timeout <= std::chrono::milliseconds::zero ()) {
         throw std::invalid_argument (
@@ -91,8 +82,7 @@ task_t<zlink::submit_result_t> raw_dealer_port_t::send (
             if (!_socket) {
                 co_return zlink::submit_result_t::terminated;
             }
-            auto operation =
-              std::move (_socket->send ()).message (messages[0]);
+            auto operation = std::move (_socket->send ()).message (messages[0]);
             for (std::size_t index = 1; index < messages.size (); ++index) {
                 operation = std::move (operation).message (messages[index]);
             }
@@ -118,25 +108,20 @@ task_t<zlink::submit_result_t> raw_dealer_port_t::send (
     }
 }
 
-task_t<raw_request_completion_t> raw_dealer_port_t::request (
-  const raw_message_t &parts,
-  std::chrono::milliseconds timeout)
+task_t<raw_request_completion_t> raw_dealer_port_t::request (const raw_message_t &parts,
+                                                             std::chrono::milliseconds timeout)
 {
-    if (parts.empty ()
-        || timeout <= std::chrono::milliseconds::zero ()) {
-        throw std::invalid_argument (
-          "raw dealer request requires parts and timeout");
+    if (parts.empty () || timeout <= std::chrono::milliseconds::zero ()) {
+        throw std::invalid_argument ("raw dealer request requires parts and timeout");
     }
     auto messages = materialize_binding_parts (parts);
     std::optional<zlink::async_result_t<std::vector<zlink::message_t>>> pending;
     {
         std::lock_guard lock (*_socket_mutex);
         if (!_socket) {
-            co_return raw_request_completion_t{
-              raw_request_result_t::terminated, {}};
+            co_return raw_request_completion_t{raw_request_result_t::terminated, {}};
         }
-        auto operation =
-          std::move (_socket->request ()).message (messages[0]);
+        auto operation = std::move (_socket->request ()).message (messages[0]);
         for (std::size_t index = 1; index < messages.size (); ++index) {
             operation = std::move (operation).message (messages[index]);
         }
@@ -144,22 +129,18 @@ task_t<raw_request_completion_t> raw_dealer_port_t::request (
     }
     try {
         auto reply = co_await std::move (*pending);
-        co_return raw_request_completion_t{
-          raw_request_result_t::ok, copy_binding_parts (reply)};
+        co_return raw_request_completion_t{raw_request_result_t::ok, copy_binding_parts (reply)};
     }
     catch (const zlink::request_error_t &error) {
-        co_return raw_request_completion_t{
-          map_binding_request_result (error.result ()), {}};
+        co_return raw_request_completion_t{map_binding_request_result (error.result ()), {}};
     }
     catch (const zlink::submit_error_t &error) {
         const auto result =
-          error.result () == zlink::submit_result_t::backpressured
-            ? raw_request_result_t::timed_out
+          error.result () == zlink::submit_result_t::backpressured ? raw_request_result_t::timed_out
           : error.result () == zlink::submit_result_t::not_connected
             ? raw_request_result_t::not_connected
-          : error.result () == zlink::submit_result_t::terminated
-            ? raw_request_result_t::terminated
-            : raw_request_result_t::failed;
+          : error.result () == zlink::submit_result_t::terminated ? raw_request_result_t::terminated
+                                                                  : raw_request_result_t::failed;
         co_return raw_request_completion_t{result, {}};
     }
 }
@@ -178,12 +159,10 @@ std::optional<raw_message_t> raw_dealer_port_t::try_receive ()
              == 0) {
         return std::nullopt;
     }
-    const auto result =
-      _socket->recv (_received, zlink::recv_flags_t::dontwait);
+    const auto result = _socket->recv (_received, zlink::recv_flags_t::dontwait);
     if (result == static_cast<int> (zlink::recv_result_t::no_data)
         || result == static_cast<int> (zlink::recv_result_t::busy)
-        || (result == -1
-            && (errno == EAGAIN || errno == EWOULDBLOCK))) {
+        || (result == -1 && (errno == EAGAIN || errno == EWOULDBLOCK))) {
         return std::nullopt;
     }
     if (result != 0) {

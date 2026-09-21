@@ -1,17 +1,15 @@
 package systems.zlink.framework.runtime.streams;
 
+import systems.zlink.framework.streams.ZLinkStreamCodec;
+import systems.zlink.framework.streams.ZLinkStreamMessageKind;
+
 import java.nio.ByteBuffer;
 import java.util.EnumSet;
 import java.util.Map;
 import java.util.Optional;
-import systems.zlink.framework.streams.ZLinkStreamCodec;
-import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
-import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
-import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
 public final class ZLinkStreamFrameCodec {
-    private ZLinkStreamFrameCodec() {
-    }
+    private ZLinkStreamFrameCodec() {}
 
     public static byte[] encode(ZLinkStreamHeader header, byte[] body) {
         return encode(ZLinkStreamHeaderCodec.encode(header), body);
@@ -53,20 +51,20 @@ public final class ZLinkStreamFrameCodec {
     }
 
     public static byte[] encode(
-        ZLinkStreamMessageKind kind,
-        ZLinkStreamCodec codec,
-        Optional<Long> requestSeq,
-        String packetName,
-        byte[] body) {
+            ZLinkStreamMessageKind kind,
+            ZLinkStreamCodec codec,
+            Optional<Long> requestSeq,
+            String packetName,
+            byte[] body) {
         return encode(
-            new ZLinkStreamHeader(
-                kind,
-                codec,
-                EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
-                requestSeq,
-                packetName,
-                Map.of()),
-            body);
+                new ZLinkStreamHeader(
+                        kind,
+                        codec,
+                        EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                        requestSeq,
+                        packetName,
+                        Map.of()),
+                body);
     }
 
     public record DecodedFrame(byte[] header, byte[] body) {

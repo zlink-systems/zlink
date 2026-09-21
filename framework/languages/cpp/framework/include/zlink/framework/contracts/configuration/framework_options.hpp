@@ -505,7 +505,8 @@ class codec_options_builder_t
     }
 
     template <typename TExtension>
-    requires std::default_initializable<TExtension> codec_options_builder_t &use ()
+        requires std::default_initializable<TExtension>
+    codec_options_builder_t &use ()
     {
         return use (TExtension{});
     }
@@ -886,8 +887,7 @@ class fanout_channel_builder_t
     fanout_channel_builder_t &set_no_drop (bool no_drop = true)
     {
         _no_drop = no_drop;
-        _options->fanout_channels_with_no_drop_configuration.insert (
-          _channel_name);
+        _options->fanout_channels_with_no_drop_configuration.insert (_channel_name);
         apply ();
         return *this;
     }
@@ -959,7 +959,7 @@ class fanout_channel_builder_t
                 result.assign (found->second.begin (), found->second.end ());
             }
             return result;
-        } ();
+        }();
         if (subscriber_enabled) {
             _options->fanout_channels_with_subscriber.insert (channel_name);
         } else {
@@ -975,8 +975,7 @@ class fanout_channel_builder_t
           "fanout_channel:" + channel_name,
           [channel_name, options, publisher_endpoint, publisher_port, publisher_bind_host_override,
            subscriber_enabled, subscriber_endpoints, routing_id, automatic_routing_id_prefix,
-           no_drop,
-           subscriber_uses_discovery, subscription_topics] (zlink_builder_t &zlink) {
+           no_drop, subscriber_uses_discovery, subscription_topics] (zlink_builder_t &zlink) {
               auto channel = zlink.channel (channel_name);
               if (publisher_port.has_value () || !publisher_endpoint.empty ()) {
                   /* Publisher discovery (Location
@@ -1292,8 +1291,8 @@ class stream_node_options_builder_t
     }
 
     template <typename TSession>
-    requires std::derived_from<TSession, packet_stream_session_t> stream_node_options_builder_t &
-    register_session ()
+        requires std::derived_from<TSession, packet_stream_session_t>
+    stream_node_options_builder_t &register_session ()
     {
         auto session_name = detail::stream_session_name<TSession> ();
         set_session_name (session_name);
@@ -1577,11 +1576,11 @@ class zlink_framework_options_t
         return *this;
     }
 
-    template <typename TStore> requires std::derived_from<TStore, location_store_t> &&requires
-    {
-        typename TStore::options_type;
-        typename TStore::options_builder_type;
-    }
+    template <typename TStore>
+        requires std::derived_from<TStore, location_store_t> && requires {
+            typename TStore::options_type;
+            typename TStore::options_builder_type;
+        }
     typename TStore::options_builder_type add_location_store ()
     {
         if (_options->has_location_store_instance) {
@@ -1615,11 +1614,11 @@ class zlink_framework_options_t
         return *this;
     }
 
-    template <typename TStore> requires std::derived_from<TStore, relocation_store_t> &&requires
-    {
-        typename TStore::options_type;
-        typename TStore::options_builder_type;
-    }
+    template <typename TStore>
+        requires std::derived_from<TStore, relocation_store_t> && requires {
+            typename TStore::options_type;
+            typename TStore::options_builder_type;
+        }
     typename TStore::options_builder_type add_relocation_store ()
     {
         if (_options->has_relocation_store_instance) {

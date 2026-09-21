@@ -6,29 +6,24 @@ internal sealed class ZLinkChannelPublishDispatchPipeline(
     ZLinkHandlerDispatcher dispatcher,
     Func<string, IReadOnlySet<string>> resolveMappedGroups,
     ZLinkDispatchErrorReporter dispatchErrors,
-    ZLinkCodecRegistryBuilder codecs)
+    ZLinkCodecRegistryBuilder codecs
+)
 {
     internal ZLinkChannelPublishDispatchPipeline(
         ZLinkHandlerRegistry handlerRegistry,
         ZLinkHandlerDispatcher dispatcher,
         Func<string, IReadOnlySet<string>> resolveMappedGroups,
         ZLinkDispatchErrorReporter dispatchErrors,
-        ZLinkCodecRegistryBuilder codecs)
-        : this(
-            null,
-            handlerRegistry,
-            dispatcher,
-            resolveMappedGroups,
-            dispatchErrors,
-            codecs)
-    {
-    }
+        ZLinkCodecRegistryBuilder codecs
+    )
+        : this(null, handlerRegistry, dispatcher, resolveMappedGroups, dispatchErrors, codecs) { }
 
     public async Task DispatchAsync(
         string channelName,
         TopicMessage topicMessage,
         ZLinkEnvelopeHeader header,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var scope = new ZLinkDispatchFlowScope(
             ZLinkDispatchErrorSurface.ClassicFanout,
@@ -39,32 +34,37 @@ internal sealed class ZLinkChannelPublishDispatchPipeline(
             header.ContentType,
             header.CorrelationId,
             topicMessage.Topic,
-            header.Source);
+            header.Source
+        );
         var endpoints = handlerRegistry.GetPublishes(
             channelName,
             resolveMappedGroups(channelName),
-            header.MessageName);
+            header.MessageName
+        );
         if (endpoints.Count == 0)
         {
             if (dispatchErrors.Enabled)
-                dispatchErrors.Report(new ZLinkDispatchFailure(
-                    ZLinkDispatchErrorSurface.ClassicFanout,
-                    ZLinkDispatchMessageKind.Send,
-                    ZLinkDispatchErrorReason.HandlerMissing,
-                    ZLinkDispatchErrorAction.Drop,
-                    header.MessageName,
-                    channelName,
-                    topicMessage.Topic,
-                    SourceRid: header.Source,
-                    CorrelationId: header.CorrelationId));
+                dispatchErrors.Report(
+                    new ZLinkDispatchFailure(
+                        ZLinkDispatchErrorSurface.ClassicFanout,
+                        ZLinkDispatchMessageKind.Send,
+                        ZLinkDispatchErrorReason.HandlerMissing,
+                        ZLinkDispatchErrorAction.Drop,
+                        header.MessageName,
+                        channelName,
+                        topicMessage.Topic,
+                        SourceRid: header.Source,
+                        CorrelationId: header.CorrelationId
+                    )
+                );
             return;
         }
 
         Dictionary<Type, object?>? decodedMessages = null;
         var metadata = header.Metadata is { Count: > 0 }
-            ? new ZLinkMessageMetadata(new Dictionary<string, string>(
-                header.Metadata,
-                StringComparer.Ordinal))
+            ? new ZLinkMessageMetadata(
+                new Dictionary<string, string>(header.Metadata, StringComparer.Ordinal)
+            )
             : ZLinkMessageMetadata.Empty;
         var context = new ZLinkPublishMessageContext(
             meshName,
@@ -74,7 +74,8 @@ internal sealed class ZLinkChannelPublishDispatchPipeline(
             metadata,
             header.CorrelationId,
             topicMessage.Topic,
-            header.Source);
+            header.Source
+        );
         foreach (var endpoint in endpoints)
         {
             decodedMessages ??= new Dictionary<Type, object?>();
@@ -86,7 +87,8 @@ internal sealed class ZLinkChannelPublishDispatchPipeline(
                         topicMessage.Parts,
                         endpoint.MessageType,
                         scope.ContentType!,
-                        codecs);
+                        codecs
+                    );
                 }
                 catch
                 {
@@ -104,20 +106,19 @@ internal sealed class ZLinkChannelPublishDispatchPipeline(
                 await ZLinkApplicationJobQueueInvocation
                     .EnsureQueuedPermitAsync(cancellationToken)
                     .ConfigureAwait(false);
-                await dispatcher.DispatchAsync(
+                await dispatcher
+                    .DispatchAsync(
                         endpoint,
                         message,
                         context,
                         ZLinkHandlerDispatchKind.ClassicFanout,
-                        cancellationToken)
+                        cancellationToken
+                    )
                     .ConfigureAwait(false);
             }
             catch (Exception ex)
             {
-                scope.HandlerException(
-                    dispatchErrors,
-                    ZLinkDispatchErrorAction.Drop,
-                    ex);
+                scope.HandlerException(dispatchErrors, ZLinkDispatchErrorAction.Drop, ex);
             }
         }
     }

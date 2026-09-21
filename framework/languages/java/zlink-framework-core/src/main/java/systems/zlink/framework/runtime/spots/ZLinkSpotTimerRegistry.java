@@ -1,5 +1,16 @@
 package systems.zlink.framework.runtime.spots;
-import java.util.logging.Logger;
+
+import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.runtime.handlers.ZLinkHandlerMethodInvoker;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
+import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
+import systems.zlink.framework.spots.ZLinkTimer;
+import systems.zlink.framework.spots.ZLinkTimerOptions;
+import systems.zlink.framework.spots.ZLinkTimerOverrunPolicy;
+import systems.zlink.framework.spots.ZLinkTimerTick;
 
 import java.lang.reflect.InvocationTargetException;
 import java.time.Duration;
@@ -16,18 +27,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
-import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.framework.errors.ZLinkConfigurationException;
-import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
-import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
-import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
-import systems.zlink.framework.runtime.handlers.ZLinkHandlerMethodInvoker;
-import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
-import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
-import systems.zlink.framework.spots.ZLinkTimer;
-import systems.zlink.framework.spots.ZLinkTimerOptions;
-import systems.zlink.framework.spots.ZLinkTimerOverrunPolicy;
-import systems.zlink.framework.spots.ZLinkTimerTick;
+import java.util.logging.Logger;
 
 final class ZLinkSpotTimerRegistry implements AutoCloseable {
     private final String spotId;
@@ -58,31 +58,31 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
     }
 
     ZLinkSpotTimerRegistry(
-        String spotId,
-        ScheduledExecutorService executor,
-        ZLinkHandlerActivator handlerFactory,
-        List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers,
-        ZLinkRuntimeEventDispatcher eventDispatcher,
-        String sourceName,
-        Dispatch dispatch) {
+            String spotId,
+            ScheduledExecutorService executor,
+            ZLinkHandlerActivator handlerFactory,
+            List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers,
+            ZLinkRuntimeEventDispatcher eventDispatcher,
+            String sourceName,
+            Dispatch dispatch) {
         this(
-            spotId,
-            executor,
-            new ZLinkHandlerInstanceOwner(handlerFactory),
-            suspendHandlerInvokers,
-            eventDispatcher,
-            sourceName,
-            dispatch);
+                spotId,
+                executor,
+                new ZLinkHandlerInstanceOwner(handlerFactory),
+                suspendHandlerInvokers,
+                eventDispatcher,
+                sourceName,
+                dispatch);
     }
 
     ZLinkSpotTimerRegistry(
-        String spotId,
-        ScheduledExecutorService executor,
-        ZLinkHandlerInstanceOwner handlers,
-        List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers,
-        ZLinkRuntimeEventDispatcher eventDispatcher,
-        String sourceName,
-        Dispatch dispatch) {
+            String spotId,
+            ScheduledExecutorService executor,
+            ZLinkHandlerInstanceOwner handlers,
+            List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers,
+            ZLinkRuntimeEventDispatcher eventDispatcher,
+            String sourceName,
+            Dispatch dispatch) {
         this.spotId = spotId;
         this.executor = executor;
         this.handlers = handlers;
@@ -93,19 +93,16 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
     }
 
     void setSpot(Object spot) {
-        inStateLane(() -> {
-            this.spot = spot;
-            return null;
-        });
+        inStateLane(
+                () -> {
+                    this.spot = spot;
+                    return null;
+                });
     }
 
     CompletionStage<ZLinkTimer> add(
-        String name,
-        Duration period,
-        Class<?> handlerType,
-        ZLinkTimerOptions options) {
-        AddedTimer added = inStateLane(() -> addCore(
-            name, period, handlerType, options));
+            String name, Duration period, Class<?> handlerType, ZLinkTimerOptions options) {
+        AddedTimer added = inStateLane(() -> addCore(name, period, handlerType, options));
         if (added.previous() != null) {
             added.previous().close();
         }
@@ -114,13 +111,9 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
     }
 
     private AddedTimer addCore(
-        String name,
-        Duration period,
-        Class<?> handlerType,
-        ZLinkTimerOptions options) {
+            String name, Duration period, Class<?> handlerType, ZLinkTimerOptions options) {
         if (frozen) {
-            throw new ZLinkConfigurationException(
-                "timer registration is sealed for relocation");
+            throw new ZLinkConfigurationException("timer registration is sealed for relocation");
         }
         if (name == null || name.isBlank()) {
             throw new ZLinkConfigurationException("timer name is required");
@@ -128,19 +121,17 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
         if (period == null || period.isNegative() || period.isZero()) {
             throw new ZLinkConfigurationException("timer period must be positive");
         }
-        ZLinkTimerOptions timerOptions = options == null
-            ? new ZLinkTimerOptions(
-                ZLinkTimerOverrunPolicy.SKIP_LATE_TICKS,
-                1,
-                false)
-            : options;
+        ZLinkTimerOptions timerOptions =
+                options == null
+                        ? new ZLinkTimerOptions(ZLinkTimerOverrunPolicy.SKIP_LATE_TICKS, 1, false)
+                        : options;
         if (timerOptions.overrunPolicy() == null) {
             throw new ZLinkConfigurationException("timer overrun policy is required");
         }
         if (timerOptions.overrunPolicy() == ZLinkTimerOverrunPolicy.CATCH_UP_BOUNDED
-            && timerOptions.maxCatchUpTicks() <= 0) {
+                && timerOptions.maxCatchUpTicks() <= 0) {
             throw new ZLinkConfigurationException(
-                "timer maxCatchUpTicks must be greater than zero");
+                    "timer maxCatchUpTicks must be greater than zero");
         }
         ManagedTimer timer = new ManagedTimer(name, period, handlerType, timerOptions);
         ManagedTimer previous = timers.put(name, timer);
@@ -157,27 +148,32 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
         List<ScheduledFuture<?>> futures = List.of();
         if (!frozen) {
             frozen = true;
-            futures = timers.values().stream()
-                .map(ManagedTimer::freezeCore)
-                .flatMap(Optional::stream)
-                .toList();
+            futures =
+                    timers.values().stream()
+                            .map(ManagedTimer::freezeCore)
+                            .flatMap(Optional::stream)
+                            .toList();
         }
-        FrozenTimers snapshot = new FrozenTimers(timers.values().stream()
-            .filter(timer -> !timer.isDisposedCore())
-            .map(ManagedTimer::snapshot)
-            .sorted(Comparator.comparing(TimerSnapshot::name))
-            .toList());
+        FrozenTimers snapshot =
+                new FrozenTimers(
+                        timers.values().stream()
+                                .filter(timer -> !timer.isDisposedCore())
+                                .map(ManagedTimer::snapshot)
+                                .sorted(Comparator.comparing(TimerSnapshot::name))
+                                .toList());
         return new FreezeState(snapshot, futures);
     }
 
     void resume() {
-        List<ManagedTimer> current = inStateLane(() -> {
-            if (!frozen) {
-                return List.of();
-            }
-            frozen = false;
-            return List.copyOf(timers.values());
-        });
+        List<ManagedTimer> current =
+                inStateLane(
+                        () -> {
+                            if (!frozen) {
+                                return List.of();
+                            }
+                            frozen = false;
+                            return List.copyOf(timers.values());
+                        });
         current.forEach(ManagedTimer::resume);
     }
 
@@ -187,8 +183,8 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
     }
 
     boolean hasActiveTimers() {
-        return inStateLane(() -> timers.values().stream()
-            .anyMatch(timer -> !timer.isDisposedCore()));
+        return inStateLane(
+                () -> timers.values().stream().anyMatch(timer -> !timer.isDisposedCore()));
     }
 
     void stageRestore(FrozenTimers state) {
@@ -204,80 +200,86 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
             ManagedTimer timer = new ManagedTimer(snapshot);
             if (timers.put(snapshot.name(), timer) != null) {
                 throw new ZLinkConfigurationException(
-                    "duplicate timer in relocation envelope: " + snapshot.name());
+                        "duplicate timer in relocation envelope: " + snapshot.name());
             }
         }
         return new RestoreState(previous);
     }
 
     void publishStagedRestore() {
-        List<ManagedTimer> current = inStateLane(() -> {
-            if (!frozen) {
-                throw new IllegalStateException(
-                    "timer relocation staging is not active");
-            }
-            frozen = false;
-            return List.copyOf(timers.values());
-        });
+        List<ManagedTimer> current =
+                inStateLane(
+                        () -> {
+                            if (!frozen) {
+                                throw new IllegalStateException(
+                                        "timer relocation staging is not active");
+                            }
+                            frozen = false;
+                            return List.copyOf(timers.values());
+                        });
         current.forEach(ManagedTimer::resume);
     }
 
     @Override
     public void close() {
-        List<ManagedTimer> current = inStateLane(() -> {
-            List<ManagedTimer> active = List.copyOf(timers.values());
-            timers.clear();
-            frozen = false;
-            return active;
-        });
+        List<ManagedTimer> current =
+                inStateLane(
+                        () -> {
+                            List<ManagedTimer> active = List.copyOf(timers.values());
+                            timers.clear();
+                            frozen = false;
+                            return active;
+                        });
         current.forEach(ManagedTimer::close);
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
     private CompletionStage<Void> invokeHandler(
-        Object handlerSpot,
-        Class<?> handlerType,
-        ZLinkTimerTick tick) {
+            Object handlerSpot, Class<?> handlerType, ZLinkTimerTick tick) {
         try {
             Object handler = handlers.instance(handlerType);
-            return ZLinkHandlerMethodInvoker
-                .invokeHandler(
-                    handler,
-                    "handle",
-                    new Object[] {handlerSpot, tick},
-                    suspendHandlerInvokers)
-                .thenApply(ignored -> null);
+            return ZLinkHandlerMethodInvoker.invokeHandler(
+                            handler,
+                            "handle",
+                            new Object[] {handlerSpot, tick},
+                            suspendHandlerInvokers)
+                    .thenApply(ignored -> null);
         } catch (RuntimeException ex) {
-            return CompletableFuture.failedFuture(new ZLinkConfigurationException(
-                "failed to create timer handler: " + handlerType.getName(),
-                ex));
+            return CompletableFuture.failedFuture(
+                    new ZLinkConfigurationException(
+                            "failed to create timer handler: " + handlerType.getName(), ex));
         }
     }
 
     private void publishFailure(
-        ManagedTimer timer,
-        ZLinkTimerTick tick,
-        Throwable error,
-        boolean stopped) {
+            ManagedTimer timer, ZLinkTimerTick tick, Throwable error, boolean stopped) {
         Throwable failure = unwrap(error);
-        Logger.getLogger(
-            ZLinkSpotTimerRegistry.class.getName()).warning(
-                (stopped ? "Spot timer stopped" : "Spot timer handler failed")
-                    + ": source=" + sourceName
-                    + ", spotId=" + spotId
-                    + ", timer=" + timer.name
-                    + ", handler=" + timer.handlerType.getName()
-                    + ", deliveryIndex=" + tick.deliveryIndex()
-                    + ", scheduledIndex=" + tick.scheduledIndex()
-                    + ", exception=" + failure.getClass().getName()
-                    + ", message=" + String.valueOf(failure.getMessage()));
+        Logger.getLogger(ZLinkSpotTimerRegistry.class.getName())
+                .warning(
+                        (stopped ? "Spot timer stopped" : "Spot timer handler failed")
+                                + ": source="
+                                + sourceName
+                                + ", spotId="
+                                + spotId
+                                + ", timer="
+                                + timer.name
+                                + ", handler="
+                                + timer.handlerType.getName()
+                                + ", deliveryIndex="
+                                + tick.deliveryIndex()
+                                + ", scheduledIndex="
+                                + tick.scheduledIndex()
+                                + ", exception="
+                                + failure.getClass().getName()
+                                + ", message="
+                                + String.valueOf(failure.getMessage()));
     }
 
     private static Throwable unwrap(Throwable error) {
         Throwable current = error;
         while ((current instanceof CompletionException
-            || current instanceof InvocationTargetException)
-            && current.getCause() != null) {
+                        || current instanceof InvocationTargetException)
+                && current.getCause() != null) {
             current = current.getCause();
         }
         return current;
@@ -297,10 +299,7 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
         private CompletableFuture<Void> finalization;
 
         ManagedTimer(
-            String name,
-            Duration period,
-            Class<?> handlerType,
-            ZLinkTimerOptions options) {
+                String name, Duration period, Class<?> handlerType, ZLinkTimerOptions options) {
             handlers.prepare(handlerType);
             this.name = name;
             this.handlerType = handlerType;
@@ -319,138 +318,153 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
         }
 
         void start() {
-            Long delay = inStateLane(() -> disposed
-                ? null
-                : schedule.initialDelayNanos());
+            Long delay = inStateLane(() -> disposed ? null : schedule.initialDelayNanos());
             if (delay != null) {
                 scheduleNext(delay);
             }
         }
 
         private void scheduleNext(long delayNanos) {
-            SchedulePlan plan = inStateLane(() -> {
-                if (disposed || frozen) {
-                    return null;
-                }
-                long boundedDelay = Math.max(0L, delayNanos);
-                ScheduleAttempt attempt = new ScheduleAttempt();
-                scheduled = attempt;
-                nextScheduledAt = safePlusNanos(Instant.now(), boundedDelay);
-                return new SchedulePlan(attempt, boundedDelay);
-            });
+            SchedulePlan plan =
+                    inStateLane(
+                            () -> {
+                                if (disposed || frozen) {
+                                    return null;
+                                }
+                                long boundedDelay = Math.max(0L, delayNanos);
+                                ScheduleAttempt attempt = new ScheduleAttempt();
+                                scheduled = attempt;
+                                nextScheduledAt = safePlusNanos(Instant.now(), boundedDelay);
+                                return new SchedulePlan(attempt, boundedDelay);
+                            });
             if (plan == null) {
                 return;
             }
-            ScheduledFuture<?> task = executor.schedule(
-                () -> run(plan.attempt()),
-                plan.delayNanos(),
-                TimeUnit.NANOSECONDS);
-            boolean cancel = inStateLane(() -> {
-                if (disposed || frozen || scheduled != plan.attempt()) {
-                    return true;
-                }
-                future = task;
-                return false;
-            });
+            ScheduledFuture<?> task =
+                    executor.schedule(
+                            () -> run(plan.attempt()), plan.delayNanos(), TimeUnit.NANOSECONDS);
+            boolean cancel =
+                    inStateLane(
+                            () -> {
+                                if (disposed || frozen || scheduled != plan.attempt()) {
+                                    return true;
+                                }
+                                future = task;
+                                return false;
+                            });
             if (cancel) {
                 task.cancel(false);
             }
         }
 
         private void run(ScheduleAttempt attempt) {
-            ZLinkSpotTimerSchedule.PendingTick selected = inStateLane(() -> {
-                if (disposed || frozen || scheduled != attempt) {
-                    return null;
-                }
-                scheduled = null;
-                future = null;
-                ZLinkSpotTimerSchedule.PendingTick next = schedule.nextTick(
-                    schedule.startedElapsedNanos(),
-                    Instant.now());
-                pendingTick = next;
-                nextScheduledAt = null;
-                return next;
-            });
+            ZLinkSpotTimerSchedule.PendingTick selected =
+                    inStateLane(
+                            () -> {
+                                if (disposed || frozen || scheduled != attempt) {
+                                    return null;
+                                }
+                                scheduled = null;
+                                future = null;
+                                ZLinkSpotTimerSchedule.PendingTick next =
+                                        schedule.nextTick(
+                                                schedule.startedElapsedNanos(), Instant.now());
+                                pendingTick = next;
+                                nextScheduledAt = null;
+                                return next;
+                            });
             if (selected != null) {
                 dispatchPending(selected);
             }
         }
 
-        private void dispatchPending(
-            ZLinkSpotTimerSchedule.PendingTick selected) {
+        private void dispatchPending(ZLinkSpotTimerSchedule.PendingTick selected) {
             ZLinkTimerTick tick = selected.tick();
-            dispatch.enqueue(name, () -> {
-                HandlerInvocation invocation = inStateLane(() -> {
-                    if (disposed || frozen || pendingTick != selected) {
-                        return null;
-                    }
-                    activeDispatch = new ActiveDispatch(
-                        selected,
-                        new CompletableFuture<>());
-                    return new HandlerInvocation(spot, handlerType);
-                });
-                return invocation == null
-                    ? CompletableFuture.completedFuture(null)
-                    : invokeHandler(invocation.spot(), invocation.handlerType(), tick);
-            })
-                .whenComplete((ignored, error) -> {
-                    DispatchResult result = inStateLane(() -> {
-                        boolean stillCurrent = !frozen
-                            && !disposed
-                            && pendingTick == selected;
-                        CompletableFuture<Void> dispatchCompletion =
-                            activeDispatch != null
-                                && activeDispatch.tick() == selected
-                                ? activeDispatch.completion()
-                                : null;
-                        if (!stillCurrent) {
-                            return new DispatchResult(
-                                false,
-                                false,
-                                false,
-                                dispatchCompletion);
-                        }
-                        boolean stopped = error != null
-                            && options.stopOnUnhandledException();
-                        if (error == null) {
-                            schedule.markDelivered(selected);
-                        }
-                        pendingTick = null;
-                        return new DispatchResult(
-                            true,
-                            stopped,
-                            !stopped,
-                            dispatchCompletion);
-                    });
-                    Throwable completionFailure = null;
-                    try {
-                        if (result.stillCurrent() && error != null) {
-                            if (result.stopped()) {
-                                close();
-                            }
-                            publishFailure(this, tick, error, result.stopped());
-                        }
-                    } catch (RuntimeException | Error failure) {
-                        completionFailure = failure;
-                    }
-                    if (result.dispatchCompletion() != null) {
-                        if (completionFailure == null) {
-                            result.dispatchCompletion().complete(null);
-                        } else {
-                            result.dispatchCompletion().completeExceptionally(
-                                completionFailure);
-                        }
-                    }
-                    if (result.reschedule()) {
-                        scheduleAfterDispatch();
-                    }
-                });
+            dispatch.enqueue(
+                            name,
+                            () -> {
+                                HandlerInvocation invocation =
+                                        inStateLane(
+                                                () -> {
+                                                    if (disposed
+                                                            || frozen
+                                                            || pendingTick != selected) {
+                                                        return null;
+                                                    }
+                                                    activeDispatch =
+                                                            new ActiveDispatch(
+                                                                    selected,
+                                                                    new CompletableFuture<>());
+                                                    return new HandlerInvocation(spot, handlerType);
+                                                });
+                                return invocation == null
+                                        ? CompletableFuture.completedFuture(null)
+                                        : invokeHandler(
+                                                invocation.spot(), invocation.handlerType(), tick);
+                            })
+                    .whenComplete(
+                            (ignored, error) -> {
+                                DispatchResult result =
+                                        inStateLane(
+                                                () -> {
+                                                    boolean stillCurrent =
+                                                            !frozen
+                                                                    && !disposed
+                                                                    && pendingTick == selected;
+                                                    CompletableFuture<Void> dispatchCompletion =
+                                                            activeDispatch != null
+                                                                            && activeDispatch.tick()
+                                                                                    == selected
+                                                                    ? activeDispatch.completion()
+                                                                    : null;
+                                                    if (!stillCurrent) {
+                                                        return new DispatchResult(
+                                                                false,
+                                                                false,
+                                                                false,
+                                                                dispatchCompletion);
+                                                    }
+                                                    boolean stopped =
+                                                            error != null
+                                                                    && options
+                                                                            .stopOnUnhandledException();
+                                                    if (error == null) {
+                                                        schedule.markDelivered(selected);
+                                                    }
+                                                    pendingTick = null;
+                                                    return new DispatchResult(
+                                                            true,
+                                                            stopped,
+                                                            !stopped,
+                                                            dispatchCompletion);
+                                                });
+                                Throwable completionFailure = null;
+                                try {
+                                    if (result.stillCurrent() && error != null) {
+                                        if (result.stopped()) {
+                                            close();
+                                        }
+                                        publishFailure(this, tick, error, result.stopped());
+                                    }
+                                } catch (RuntimeException | Error failure) {
+                                    completionFailure = failure;
+                                }
+                                if (result.dispatchCompletion() != null) {
+                                    if (completionFailure == null) {
+                                        result.dispatchCompletion().complete(null);
+                                    } else {
+                                        result.dispatchCompletion()
+                                                .completeExceptionally(completionFailure);
+                                    }
+                                }
+                                if (result.reschedule()) {
+                                    scheduleAfterDispatch();
+                                }
+                            });
         }
 
         private void scheduleAfterDispatch() {
-            Long delay = inStateLane(() -> disposed
-                ? null
-                : schedule.delayAfterDispatchNanos());
+            Long delay = inStateLane(() -> disposed ? null : schedule.delayAfterDispatchNanos());
             if (delay != null) {
                 scheduleNext(delay);
             }
@@ -464,19 +478,22 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
         }
 
         void resume() {
-            ResumePlan plan = inStateLane(() -> {
-                if (disposed) {
-                    return null;
-                }
-                if (pendingTick != null) {
-                    return new ResumePlan(pendingTick, 0L);
-                }
-                Instant scheduledAt = nextScheduledAt;
-                long delay = scheduledAt == null
-                    ? schedule.delayAfterDispatchNanos()
-                    : nanosUntil(scheduledAt);
-                return new ResumePlan(null, delay);
-            });
+            ResumePlan plan =
+                    inStateLane(
+                            () -> {
+                                if (disposed) {
+                                    return null;
+                                }
+                                if (pendingTick != null) {
+                                    return new ResumePlan(pendingTick, 0L);
+                                }
+                                Instant scheduledAt = nextScheduledAt;
+                                long delay =
+                                        scheduledAt == null
+                                                ? schedule.delayAfterDispatchNanos()
+                                                : nanosUntil(scheduledAt);
+                                return new ResumePlan(null, delay);
+                            });
             if (plan == null) {
                 return;
             }
@@ -489,11 +506,11 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
 
         TimerSnapshot snapshot() {
             return new TimerSnapshot(
-                name,
-                handlerType,
-                schedule.snapshot(),
-                Optional.ofNullable(nextScheduledAt),
-                Optional.ofNullable(pendingTick));
+                    name,
+                    handlerType,
+                    schedule.snapshot(),
+                    Optional.ofNullable(nextScheduledAt),
+                    Optional.ofNullable(pendingTick));
         }
 
         boolean isDisposedCore() {
@@ -524,25 +541,21 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
         }
 
         private CompletableFuture<Void> getOrStartFinalization() {
-            FinalizationPlan plan = inStateLane(() -> {
-                if (finalization != null) {
-                    return new FinalizationPlan(
-                        finalization,
-                        null,
-                        null,
-                        false);
-                }
-                finalization = new CompletableFuture<>();
-                timers.remove(name, this);
-                Optional<ScheduledFuture<?>> task = disposeCore();
-                return new FinalizationPlan(
-                    finalization,
-                    task.orElse(null),
-                    activeDispatch == null
-                        ? null
-                        : activeDispatch.completion(),
-                    true);
-            });
+            FinalizationPlan plan =
+                    inStateLane(
+                            () -> {
+                                if (finalization != null) {
+                                    return new FinalizationPlan(finalization, null, null, false);
+                                }
+                                finalization = new CompletableFuture<>();
+                                timers.remove(name, this);
+                                Optional<ScheduledFuture<?>> task = disposeCore();
+                                return new FinalizationPlan(
+                                        finalization,
+                                        task.orElse(null),
+                                        activeDispatch == null ? null : activeDispatch.completion(),
+                                        true);
+                            });
             if (plan.start()) {
                 completeFinalization(plan);
             }
@@ -558,25 +571,27 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
             }
 
             Throwable capturedCleanupFailure = cleanupFailure;
-            CompletionStage<Void> drain = plan.activeDispatch() == null
-                ? CompletableFuture.completedFuture(null)
-                : plan.activeDispatch();
-            drain.whenComplete((ignored, dispatchFailure) -> {
-                Throwable failure = capturedCleanupFailure;
-                if (dispatchFailure != null) {
-                    Throwable unwrapped = unwrap(dispatchFailure);
-                    if (failure == null) {
-                        failure = unwrapped;
-                    } else if (failure != unwrapped) {
-                        failure.addSuppressed(unwrapped);
-                    }
-                }
-                if (failure == null) {
-                    plan.finalization().complete(null);
-                } else {
-                    plan.finalization().completeExceptionally(failure);
-                }
-            });
+            CompletionStage<Void> drain =
+                    plan.activeDispatch() == null
+                            ? CompletableFuture.completedFuture(null)
+                            : plan.activeDispatch();
+            drain.whenComplete(
+                    (ignored, dispatchFailure) -> {
+                        Throwable failure = capturedCleanupFailure;
+                        if (dispatchFailure != null) {
+                            Throwable unwrapped = unwrap(dispatchFailure);
+                            if (failure == null) {
+                                failure = unwrapped;
+                            } else if (failure != unwrapped) {
+                                failure.addSuppressed(unwrapped);
+                            }
+                        }
+                        if (failure == null) {
+                            plan.finalization().complete(null);
+                        } else {
+                            plan.finalization().completeExceptionally(failure);
+                        }
+                    });
         }
     }
 
@@ -590,69 +605,59 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
 
     private record AddedTimer(ManagedTimer timer, ManagedTimer previous) {}
 
-    private record FreezeState(
-        FrozenTimers snapshot,
-        List<ScheduledFuture<?>> futures) {}
+    private record FreezeState(FrozenTimers snapshot, List<ScheduledFuture<?>> futures) {}
 
     private record RestoreState(List<ManagedTimer> timers) {}
 
     private record SchedulePlan(ScheduleAttempt attempt, long delayNanos) {}
 
-    private record ResumePlan(
-        ZLinkSpotTimerSchedule.PendingTick pendingTick,
-        long delayNanos) {}
+    private record ResumePlan(ZLinkSpotTimerSchedule.PendingTick pendingTick, long delayNanos) {}
 
     private record HandlerInvocation(Object spot, Class<?> handlerType) {}
 
     private record ActiveDispatch(
-        ZLinkSpotTimerSchedule.PendingTick tick,
-        CompletableFuture<Void> completion) {}
+            ZLinkSpotTimerSchedule.PendingTick tick, CompletableFuture<Void> completion) {}
 
     private record DispatchResult(
-        boolean stillCurrent,
-        boolean stopped,
-        boolean reschedule,
-        CompletableFuture<Void> dispatchCompletion) {}
+            boolean stillCurrent,
+            boolean stopped,
+            boolean reschedule,
+            CompletableFuture<Void> dispatchCompletion) {}
 
     private record FinalizationPlan(
-        CompletableFuture<Void> finalization,
-        ScheduledFuture<?> task,
-        CompletableFuture<Void> activeDispatch,
-        boolean start) {}
+            CompletableFuture<Void> finalization,
+            ScheduledFuture<?> task,
+            CompletableFuture<Void> activeDispatch,
+            boolean start) {}
 
     record FrozenTimers(List<TimerSnapshot> timers) {
         FrozenTimers {
             timers = List.copyOf(timers);
-            long distinctNames = timers.stream()
-                .map(TimerSnapshot::name)
-                .distinct()
-                .count();
+            long distinctNames = timers.stream().map(TimerSnapshot::name).distinct().count();
             if (distinctNames != timers.size()) {
-                throw new ZLinkConfigurationException(
-                    "duplicate timer in relocation envelope");
+                throw new ZLinkConfigurationException("duplicate timer in relocation envelope");
             }
         }
     }
 
     record TimerSnapshot(
-        String name,
-        Class<?> handlerType,
-        ZLinkSpotTimerSchedule.State schedule,
-        Optional<Instant> nextScheduledAt,
-        Optional<ZLinkSpotTimerSchedule.PendingTick> pendingTick) {
+            String name,
+            Class<?> handlerType,
+            ZLinkSpotTimerSchedule.State schedule,
+            Optional<Instant> nextScheduledAt,
+            Optional<ZLinkSpotTimerSchedule.PendingTick> pendingTick) {
         TimerSnapshot {
             if (name == null
-                || name.isBlank()
-                || handlerType == null
-                || schedule == null
-                || nextScheduledAt == null
-                || pendingTick == null) {
-                throw new ZLinkConfigurationException(
-                    "invalid timer relocation state");
+                    || name.isBlank()
+                    || handlerType == null
+                    || schedule == null
+                    || nextScheduledAt == null
+                    || pendingTick == null) {
+                throw new ZLinkConfigurationException("invalid timer relocation state");
             }
             if (nextScheduledAt.isPresent() == pendingTick.isPresent()) {
                 throw new ZLinkConfigurationException(
-                    "timer relocation state must contain exactly one next action");
+                        "timer relocation state must contain exactly one next action");
             }
         }
     }
@@ -661,9 +666,7 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
         try {
             return Duration.between(Instant.now(), deadline).toNanos();
         } catch (ArithmeticException error) {
-            return deadline.isAfter(Instant.now())
-                ? Long.MAX_VALUE
-                : Long.MIN_VALUE;
+            return deadline.isAfter(Instant.now()) ? Long.MAX_VALUE : Long.MIN_VALUE;
         }
     }
 
@@ -677,8 +680,6 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
 
     @FunctionalInterface
     interface Dispatch {
-        CompletionStage<Void> enqueue(
-            String timerName,
-            Supplier<CompletionStage<Void>> operation);
+        CompletionStage<Void> enqueue(String timerName, Supplier<CompletionStage<Void>> operation);
     }
 }

@@ -3,15 +3,15 @@ package systems.zlink.framework.execution;
 /**
  * The domain state a serial execution lane is permitted to carry.
  *
- * <p>The variants are deliberately closed.  In particular, a session lane
- * cannot be constructed with Spot relocation state, and an Actor delivery
- * lane cannot be constructed with either lifecycle state.</p>
+ * <p>The variants are deliberately closed. In particular, a session lane cannot be constructed with
+ * Spot relocation state, and an Actor delivery lane cannot be constructed with either lifecycle
+ * state.
  */
-public sealed interface ZLinkExecutionLanePolicy permits
-    ZLinkExecutionLanePolicy.Spot,
-    ZLinkExecutionLanePolicy.Session,
-    ZLinkExecutionLanePolicy.ActorDelivery,
-    ZLinkExecutionLanePolicy.Generic {
+public sealed interface ZLinkExecutionLanePolicy
+        permits ZLinkExecutionLanePolicy.Spot,
+                ZLinkExecutionLanePolicy.Session,
+                ZLinkExecutionLanePolicy.ActorDelivery,
+                ZLinkExecutionLanePolicy.Generic {
 
     /** Spot lanes alone may resume a turn after its gate has been returned. */
     boolean releasesGateOnIncompleteStage();

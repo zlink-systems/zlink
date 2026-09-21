@@ -89,17 +89,28 @@ export function canonicalActorJoinHandoffId(input: {
 }): string {
   const actor = textBytes(input.actorId, 'actorId');
   if (actor.byteLength > 0xffff) throw new RangeError('Actor id exceeds u16 bytes.');
-  const digest = createHash('sha256').update(Buffer.concat([
-    Buffer.from(input.sourceActorNodeRid),
-    u16(actor.byteLength),
-    actor,
-    u64(input.actorGeneration),
-    u64(input.sourceActorNodeGeneration),
-    u64(input.correlation)
-  ])).digest().subarray(0, 16);
+  const digest = createHash('sha256')
+    .update(
+      Buffer.concat([
+        Buffer.from(input.sourceActorNodeRid),
+        u16(actor.byteLength),
+        actor,
+        u64(input.actorGeneration),
+        u64(input.sourceActorNodeGeneration),
+        u64(input.correlation)
+      ])
+    )
+    .digest()
+    .subarray(0, 16);
   return Buffer.from([
-    digest[3]!, digest[2]!, digest[1]!, digest[0]!,
-    digest[5]!, digest[4]!, digest[7]!, digest[6]!,
+    digest[3]!,
+    digest[2]!,
+    digest[1]!,
+    digest[0]!,
+    digest[5]!,
+    digest[4]!,
+    digest[7]!,
+    digest[6]!,
     ...digest.subarray(8)
   ]).toString('hex');
 }
@@ -116,10 +127,10 @@ export function encodeCanonicalActorJoinRecoverySavedWork(
   if (request.byteLength > MAXIMUM_MESSAGE_BYTES || reply.byteLength > MAXIMUM_MESSAGE_BYTES) {
     throw new RangeError('Actor Join recovery message exceeds 1 MiB.');
   }
-  const replyContentType = operationId === undefined ? null : requireText(
-    input.replyContentType,
-    'Actor Join reply content type'
-  );
+  const replyContentType =
+    operationId === undefined
+      ? null
+      : requireText(input.replyContentType, 'Actor Join reply content type');
   const metadata = encodeMetadataJson({
     Request: {
       ActorId: requireText(input.actorId, 'Actor id'),
@@ -209,21 +220,23 @@ export function encodeCanonicalActorJoinRecoverySavedWork(
   if (metadata.byteLength > MAXIMUM_METADATA_BYTES) {
     throw new RangeError('Actor Join recovery metadata exceeds 256 KiB.');
   }
-  return Buffer.from(encodeGeneratedZljrRecordV1({
-    source: {
-      nodeRid: Buffer.from(encodeRoutingIdStorageHex(input.sourceNodeRid), 'utf8'),
-      nodeGeneration: nonZeroU64(input.actorNodeGeneration, 'source node generation'),
-      ownerId: input.coordinator.ownerId,
-      ownerLeaseGeneration: nonZeroU64(
-        input.coordinator.leaseGeneration,
-        'source owner lease generation'
-      )
-    },
-    operation: { high: 0n, low: 0n },
-    metadata,
-    request,
-    reply
-  }));
+  return Buffer.from(
+    encodeGeneratedZljrRecordV1({
+      source: {
+        nodeRid: Buffer.from(encodeRoutingIdStorageHex(input.sourceNodeRid), 'utf8'),
+        nodeGeneration: nonZeroU64(input.actorNodeGeneration, 'source node generation'),
+        ownerId: input.coordinator.ownerId,
+        ownerLeaseGeneration: nonZeroU64(
+          input.coordinator.leaseGeneration,
+          'source owner lease generation'
+        )
+      },
+      operation: { high: 0n, low: 0n },
+      metadata,
+      request,
+      reply
+    })
+  );
 }
 
 export function decodeCanonicalActorJoinRecoverySavedWork(
@@ -241,17 +254,20 @@ export function decodeCanonicalActorJoinRecoverySavedWork(
     }
     const payload = frozen.applicationPayload;
     if (
-      frozen.recordKind !== 1
-      || frozen.sourceKind !== 1
-      || payload?.packetName !== RECOVERY_PACKET_NAME
-      || payload.contentType !== RECOVERY_CONTENT_TYPE
+      frozen.recordKind !== 1 ||
+      frozen.sourceKind !== 1 ||
+      payload?.packetName !== RECOVERY_PACKET_NAME ||
+      payload.contentType !== RECOVERY_CONTENT_TYPE
     ) {
       return undefined;
     }
     throw error;
   }
   const metadataBytes = Buffer.from(record.metadata);
-  const metadata = JSON.parse(quoteJsonIntegers(metadataBytes.toString('utf8'))) as Record<string, unknown>;
+  const metadata = JSON.parse(quoteJsonIntegers(metadataBytes.toString('utf8'))) as Record<
+    string,
+    unknown
+  >;
   const requestValue = object(metadata.Request, 'Request');
   const handoffId = text(requestValue.HandoffId, 'Request.HandoffId');
   const relocationAggregateId = canonicalUuid(
@@ -262,10 +278,7 @@ export function decodeCanonicalActorJoinRecoverySavedWork(
     requestValue.ReservedPayloadBytes,
     'Request.ReservedPayloadBytes'
   );
-  if (
-    canonicalUuid(handoffId) !== relocationAggregateId
-    || reservationToken !== handoffId
-  ) {
+  if (canonicalUuid(handoffId) !== relocationAggregateId || reservationToken !== handoffId) {
     throw new TypeError('Canonical Actor Join recovery reservation identity changed.');
   }
   const request = Buffer.from(record.request);
@@ -329,9 +342,9 @@ export function routingIdBytes(value: RoutingId): Buffer {
 
 function encodeMetadataJson(value: unknown): Buffer {
   const marker = '__zlink_u64__:';
-  const encoded = JSON.stringify(value, (_key, item) => typeof item === 'bigint'
-    ? `${marker}${item.toString()}`
-    : item);
+  const encoded = JSON.stringify(value, (_key, item) =>
+    typeof item === 'bigint' ? `${marker}${item.toString()}` : item
+  );
   return Buffer.from(encoded.replace(new RegExp(`"${marker}(\\d+)"`, 'gu'), '$1'), 'utf8');
 }
 
@@ -373,8 +386,10 @@ function canonicalUuid(value: string): string {
   if (!/^[0-9a-f]{32}$/u.test(hex) || /^0+$/u.test(hex)) {
     throw new TypeError('Actor Join relocation id is invalid.');
   }
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}`
-    + `-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  return (
+    `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}` +
+    `-${hex.slice(16, 20)}-${hex.slice(20)}`
+  );
 }
 
 function predictedRelocationPayloadBytes(
@@ -385,17 +400,19 @@ function predictedRelocationPayloadBytes(
     throw new RangeError('Actor Join request size is invalid.');
   }
   if (
-    relocationContentType !== RECREATE_RELOCATION_CONTENT_TYPE
-    && relocationContentType !== SNAPSHOT_RELOCATION_CONTENT_TYPE
+    relocationContentType !== RECREATE_RELOCATION_CONTENT_TYPE &&
+    relocationContentType !== SNAPSHOT_RELOCATION_CONTENT_TYPE
   ) {
     throw new TypeError('Actor Join relocation content type is invalid.');
   }
-  return FRAMEWORK_METADATA_UPPER_BOUND_BYTES
-    + ACCEPTED_JOURNAL_UPPER_BOUND_BYTES
-    + requestBytes
-    + (relocationContentType === SNAPSHOT_RELOCATION_CONTENT_TYPE
+  return (
+    FRAMEWORK_METADATA_UPPER_BOUND_BYTES +
+    ACCEPTED_JOURNAL_UPPER_BOUND_BYTES +
+    requestBytes +
+    (relocationContentType === SNAPSHOT_RELOCATION_CONTENT_TYPE
       ? SNAPSHOT_APPLICATION_STATE_RESERVATION_BYTES
-      : 0);
+      : 0)
+  );
 }
 
 function textBytes(value: string, name: string): Buffer {
@@ -445,7 +462,8 @@ function nullableText(value: unknown, name: string): string | undefined {
 }
 
 function integer(value: unknown, name: string): bigint {
-  if (typeof value !== 'string' || !/^\d+$/u.test(value)) throw new TypeError(`${name} is invalid.`);
+  if (typeof value !== 'string' || !/^\d+$/u.test(value))
+    throw new TypeError(`${name} is invalid.`);
   const parsed = BigInt(value);
   if (parsed > 0xffff_ffff_ffff_ffffn) throw new TypeError(`${name} exceeds u64.`);
   return parsed;

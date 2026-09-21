@@ -12,7 +12,9 @@ import {
   type ZLinkCodecSerializerSelection
 } from '../../contracts/Configuration/CodecSerializerSelection';
 
-export class DefaultZLinkCodecRegistryBuilder implements ZLinkCodecRegistryBuilder, ZLinkCodecRegistrar {
+export class DefaultZLinkCodecRegistryBuilder
+  implements ZLinkCodecRegistryBuilder, ZLinkCodecRegistrar
+{
   private readonly serializers = new Map<string, ZLinkMessageSerializer>();
   private readonly serializerSelections = new Map<string, ZLinkCodecSerializerSelection>();
   private readonly streamCodecs = new Map<string, unknown>();
@@ -65,5 +67,4 @@ export class DefaultZLinkCodecRegistryBuilder implements ZLinkCodecRegistryBuild
     this.codecs.add(normalized);
     return this;
   }
-
 }

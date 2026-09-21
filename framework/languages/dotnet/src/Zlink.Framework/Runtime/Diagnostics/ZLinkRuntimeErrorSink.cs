@@ -6,8 +6,7 @@ internal sealed class ZLinkRuntimeErrorSink : IZLinkRuntimeFailureReporter, IDis
     private Action<Exception>? _unhandledCallbackException;
     private int _disposed;
 
-    public ZLinkRuntimeErrorSink(
-        Action<Exception>? processFailure = null)
+    public ZLinkRuntimeErrorSink(Action<Exception>? processFailure = null)
     {
         _processFailure = processFailure ?? ReportProcessFailure;
     }
@@ -16,7 +15,8 @@ internal sealed class ZLinkRuntimeErrorSink : IZLinkRuntimeFailureReporter, IDis
     {
         add
         {
-            if (Volatile.Read(ref _disposed) == 0) _unhandledCallbackException += value;
+            if (Volatile.Read(ref _disposed) == 0)
+                _unhandledCallbackException += value;
         }
         remove => _unhandledCallbackException -= value;
     }
@@ -26,9 +26,7 @@ internal sealed class ZLinkRuntimeErrorSink : IZLinkRuntimeFailureReporter, IDis
         ReportUnhandledCallbackException(exception);
     }
 
-    public void ReportRuntimeTaskException(
-        string taskName,
-        Exception exception)
+    public void ReportRuntimeTaskException(string taskName, Exception exception)
     {
         ZLinkFrameworkDebugLog.TaskFailure(taskName, exception);
         NotifyUnhandledCallbackException(exception);
@@ -36,7 +34,8 @@ internal sealed class ZLinkRuntimeErrorSink : IZLinkRuntimeFailureReporter, IDis
 
     public void ReportUnhandledCallbackException(Exception exception)
     {
-        if (Volatile.Read(ref _disposed) != 0) return;
+        if (Volatile.Read(ref _disposed) != 0)
+            return;
         ZLinkFrameworkDebugLog.UnhandledCallbackFailure(exception);
         NotifyUnhandledCallbackException(exception);
     }
@@ -51,34 +50,30 @@ internal sealed class ZLinkRuntimeErrorSink : IZLinkRuntimeFailureReporter, IDis
             {
                 _processFailure(exception);
             }
-            catch
-            {
-            }
+            catch { }
             try
             {
                 callback?.Invoke(exception);
             }
-            catch
-            {
-            }
+            catch { }
         };
     }
 
     private static void ReportProcessFailure(Exception exception) =>
         System.Diagnostics.Trace.TraceError(
             "ZLink detached generation cleanup failed: {0}",
-            exception);
+            exception
+        );
 
     private void NotifyUnhandledCallbackException(Exception exception)
     {
-        if (Volatile.Read(ref _disposed) != 0) return;
+        if (Volatile.Read(ref _disposed) != 0)
+            return;
         try
         {
             _unhandledCallbackException?.Invoke(exception);
         }
-        catch
-        {
-        }
+        catch { }
     }
 
     public void Dispose()

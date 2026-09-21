@@ -8,12 +8,14 @@ internal static class ZLinkHandlerMethodShape
         Type handlerType,
         MethodInfo method,
         int expectedCount,
-        string description)
+        string description
+    )
     {
         var parameters = method.GetParameters();
         if (parameters.Length != expectedCount)
             throw new InvalidOperationException(
-                $"{description} '{handlerType}' method '{method.Name}' must declare exactly {expectedCount} parameters.");
+                $"{description} '{handlerType}' method '{method.Name}' must declare exactly {expectedCount} parameters."
+            );
 
         return parameters;
     }
@@ -23,23 +25,31 @@ internal static class ZLinkHandlerMethodShape
         MethodInfo method,
         ParameterInfo parameter,
         string description,
-        string position = "last")
+        string position = "last"
+    )
     {
         if (parameter.ParameterType != typeof(CancellationToken))
             throw new InvalidOperationException(
-                $"{description} '{handlerType}' method '{method.Name}' must use CancellationToken as the {position} parameter.");
+                $"{description} '{handlerType}' method '{method.Name}' must use CancellationToken as the {position} parameter."
+            );
     }
 
     public static Type RequireReplyType(Type returnType, string description)
     {
-        if (returnType.IsGenericType
-            && (returnType.GetGenericTypeDefinition() == typeof(ValueTask<>)
-                || returnType.GetGenericTypeDefinition() == typeof(Task<>)))
+        if (
+            returnType.IsGenericType
+            && (
+                returnType.GetGenericTypeDefinition() == typeof(ValueTask<>)
+                || returnType.GetGenericTypeDefinition() == typeof(Task<>)
+            )
+        )
             return returnType.GetGenericArguments()[0];
 
-        if (returnType == typeof(ValueTask)
+        if (
+            returnType == typeof(ValueTask)
             || returnType == typeof(Task)
-            || returnType == typeof(void))
+            || returnType == typeof(void)
+        )
             throw new InvalidOperationException($"{description} must return a reply value.");
 
         return returnType;
@@ -48,12 +58,15 @@ internal static class ZLinkHandlerMethodShape
     public static void RequireNoReply(Type handlerType, MethodInfo method, string description)
     {
         var returnType = method.ReturnType;
-        if (returnType == typeof(void)
+        if (
+            returnType == typeof(void)
             || returnType == typeof(ValueTask)
-            || returnType == typeof(Task))
+            || returnType == typeof(Task)
+        )
             return;
 
         throw new InvalidOperationException(
-            $"{description} '{handlerType}' method '{method.Name}' must not return a reply value.");
+            $"{description} '{handlerType}' method '{method.Name}' must not return a reply value."
+        );
     }
 }

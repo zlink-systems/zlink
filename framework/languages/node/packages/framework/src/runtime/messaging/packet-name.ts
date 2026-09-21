@@ -20,9 +20,10 @@ export function resolveFrameworkPacketName(
   explicitPacketName: string | undefined,
   surface: string
 ): string {
-  const packetName = normalizePacketName(explicitPacketName)
-    ?? tryDecoratorPacketName(payload)
-    ?? tryConstructorPacketName(payload);
+  const packetName =
+    normalizePacketName(explicitPacketName) ??
+    tryDecoratorPacketName(payload) ??
+    tryConstructorPacketName(payload);
   if (packetName === undefined) {
     throw new ZLinkConfigurationException(
       `${surface} packetName is required when the payload type cannot provide one.`
@@ -48,9 +49,10 @@ export function readFrameworkPacketJsonContract(
   const expectedPacketName = normalizePacketName(explicitPacketName);
   for (const metadata of readZLinkDecoratorMetadata(type)) {
     if (
-      metadata.kind === 'packet'
-      && metadata.jsonContract !== undefined
-      && (expectedPacketName === undefined || normalizePacketName(metadata.packetName) === expectedPacketName)
+      metadata.kind === 'packet' &&
+      metadata.jsonContract !== undefined &&
+      (expectedPacketName === undefined ||
+        normalizePacketName(metadata.packetName) === expectedPacketName)
     ) {
       return metadata.jsonContract;
     }

@@ -12,7 +12,8 @@ public sealed class FanoutNoDropTests
     private static readonly byte[] FillerPayload = CreatePayload(0x11);
     private static readonly byte[] TargetPayload = CreatePayload(0x22);
     private static readonly ulong RecordHwm = checked(
-        (ulong)(FillerPayload.Length + Encoding.UTF8.GetByteCount(Topic)));
+        (ulong)(FillerPayload.Length + Encoding.UTF8.GetByteCount(Topic))
+    );
 
     [Fact]
     public void DefaultNoDrop_DropsOnlySlowSubscriberRecord_AndPublishSucceeds()
@@ -31,7 +32,8 @@ public sealed class FanoutNoDropTests
         Assert.False(pair.Publisher.Options.NoDrop);
         Assert.DoesNotContain(
             pair.DrainMarkers(pair.SlowSubscriber),
-            static marker => marker == 0x22);
+            static marker => marker == 0x22
+        );
     }
 
     [Fact]
@@ -64,17 +66,17 @@ public sealed class FanoutNoDropTests
         pair.FillSlowSubscriberQueue();
         var started = Stopwatch.GetTimestamp();
 
-        var bindingFailure = Assert.Throws<ZlinkSubmitException>(() =>
-            pair.Publish(TargetPayload));
+        var bindingFailure = Assert.Throws<ZlinkSubmitException>(() => pair.Publish(TargetPayload));
         var elapsed = Stopwatch.GetElapsedTime(started);
         var mapped = Assert.IsType<ZLinkFrameworkException>(
-            ZLinkRequestFailureMapper.CreateSubmitException(
-                bindingFailure, "Fanout publish"));
+            ZLinkRequestFailureMapper.CreateSubmitException(bindingFailure, "Fanout publish")
+        );
 
         Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, mapped.Kind);
         Assert.True(
             elapsed >= TimeSpan.FromMilliseconds(75),
-            $"Publish returned after {elapsed.TotalMilliseconds:F1} ms instead of waiting for the {sendTimeout.TotalMilliseconds:F0} ms send timeout.");
+            $"Publish returned after {elapsed.TotalMilliseconds:F1} ms instead of waiting for the {sendTimeout.TotalMilliseconds:F0} ms send timeout."
+        );
     }
 
     [Fact]
@@ -85,11 +87,13 @@ public sealed class FanoutNoDropTests
         var error = Assert.Throws<ZLinkConfigurationException>(() =>
             services.AddZLinkFramework(options =>
             {
-                options.AddFanoutChannel("events")
+                options
+                    .AddFanoutChannel("events")
                     .SetNoDrop()
                     .Connect("inproc://fanout-nodrop-subscriber")
                     .AddHandler<TestFanoutHandler, TestFanoutEvent>();
-            }));
+            })
+        );
 
         Assert.Contains("NoDrop", error.Message, StringComparison.Ordinal);
         Assert.Contains("without publisher", error.Message, StringComparison.Ordinal);
@@ -106,7 +110,8 @@ public sealed class FanoutNoDropTests
 
         ZLinkChannelBundleFactory.ApplyPublisherSocketConfig(
             publisher.Options,
-            registration.Channels["events"]);
+            registration.Channels["events"]
+        );
 
         Assert.Equal(noDrop, publisher.Options.NoDrop);
     }
@@ -137,7 +142,8 @@ public sealed class FanoutNoDropTests
         public ValueTask HandleAsync(
             TestFanoutEvent message,
             ZLinkPublishMessageContext context,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             cancellationToken.ThrowIfCancellationRequested();
             return ValueTask.CompletedTask;
@@ -159,11 +165,11 @@ public sealed class FanoutNoDropTests
             SlowSubscriber = _context.CreateSubSocket();
 
             var registration = CreateRegistration(noDrop);
-            registration.Channels["events"].Publisher!.SocketConfig.SendTimeout =
-                sendTimeout;
+            registration.Channels["events"].Publisher!.SocketConfig.SendTimeout = sendTimeout;
             ZLinkChannelBundleFactory.ApplyPublisherSocketConfig(
                 Publisher.Options,
-                registration.Channels["events"]);
+                registration.Channels["events"]
+            );
             Assert.Equal(sendTimeout, Publisher.Options.SendTimeout);
             Assert.Equal(noDrop ?? false, Publisher.Options.NoDrop);
             Publisher.Options.Verbose = true;
@@ -196,7 +202,8 @@ public sealed class FanoutNoDropTests
             }
 
             throw new Xunit.Sdk.XunitException(
-                "Publisher queue did not report backpressure at its configured HWM.");
+                "Publisher queue did not report backpressure at its configured HWM."
+            );
         }
 
         internal void Publish(byte[] payload)
@@ -229,8 +236,7 @@ public sealed class FanoutNoDropTests
                     return;
             }
 
-            throw new Xunit.Sdk.XunitException(
-                $"Subscriber did not receive marker 0x{marker:X2}.");
+            throw new Xunit.Sdk.XunitException($"Subscriber did not receive marker 0x{marker:X2}.");
         }
 
         internal IReadOnlyList<byte> DrainMarkers(ISubSocket subscriber)

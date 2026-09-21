@@ -1,8 +1,9 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException  } from '../framework-errors-internal';
-import type { Message } from '../../contracts/Common/Message';
 import {
-  ZLinkFrameworkException
-} from '../../contracts';
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
+import type { Message } from '../../contracts/Common/Message';
+import { ZLinkFrameworkException } from '../../contracts';
 import type { ZLinkSpotPublisherClientTransport } from '../channels';
 import type { ZLinkSubmitResult } from '../messaging/submission-result';
 

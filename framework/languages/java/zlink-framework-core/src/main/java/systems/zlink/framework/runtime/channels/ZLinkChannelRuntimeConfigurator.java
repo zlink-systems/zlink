@@ -1,14 +1,15 @@
 package systems.zlink.framework.runtime.channels;
-import java.util.UUID;
-import systems.zlink.contracts.core.RoutingId;
 
-import java.util.function.BiConsumer;
+import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendContext;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendDealerSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendPublisherSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSubscriberSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkChannelBackendAdapter;
+
+import java.util.UUID;
+import java.util.function.BiConsumer;
 
 final class ZLinkChannelRuntimeConfigurator {
     private final ZLinkChannelBackendAdapter backend;
@@ -22,15 +23,15 @@ final class ZLinkChannelRuntimeConfigurator {
     private final boolean dedicatedClientServerRuntime;
 
     ZLinkChannelRuntimeConfigurator(
-        ZLinkChannelBackendAdapter backend,
-        ZLinkBackendContext context,
-        ZLinkChannelSocketRegistry sockets,
-        ZLinkChannelDispatchRegistry dispatchRegistry,
-        ZLinkChannelHandlerCatalog handlers,
-        BiConsumer<String, ZLinkBackendRouterSocket> startRequestLoop,
-        BiConsumer<String, ZLinkBackendRouterSocket> startRouteLoop,
-        BiConsumer<String, ZLinkBackendSubscriberSocket> startSubscribeLoop,
-        boolean dedicatedClientServerRuntime) {
+            ZLinkChannelBackendAdapter backend,
+            ZLinkBackendContext context,
+            ZLinkChannelSocketRegistry sockets,
+            ZLinkChannelDispatchRegistry dispatchRegistry,
+            ZLinkChannelHandlerCatalog handlers,
+            BiConsumer<String, ZLinkBackendRouterSocket> startRequestLoop,
+            BiConsumer<String, ZLinkBackendRouterSocket> startRouteLoop,
+            BiConsumer<String, ZLinkBackendSubscriberSocket> startSubscribeLoop,
+            boolean dedicatedClientServerRuntime) {
         this.backend = backend;
         this.context = context;
         this.sockets = sockets;
@@ -64,10 +65,9 @@ final class ZLinkChannelRuntimeConfigurator {
         ZLinkBackendRouterSocket router = backend.createRouterSocket(context);
         router.setChannelName(channel.name());
         RoutingId serverRoutingId =
-            channel.routingId() == null
-                ? RoutingId.from(
-                    UUID.randomUUID())
-                : channel.routingId();
+                channel.routingId() == null
+                        ? RoutingId.from(UUID.randomUUID())
+                        : channel.routingId();
         router.setRoutingId(serverRoutingId);
         applyServerSocketOptions(channel, router);
         // Apply the host's current absolute flow state before this ROUTER is
@@ -77,9 +77,7 @@ final class ZLinkChannelRuntimeConfigurator {
             router.bind(endpoint);
         }
         dispatchRegistry.registerClientServer(
-            channel.name(),
-            handlers.sendHandlers(channel),
-            handlers.requestHandlers(channel));
+                channel.name(), handlers.sendHandlers(channel), handlers.requestHandlers(channel));
         startRequestLoop.accept(channel.name(), router);
     }
 
@@ -88,30 +86,24 @@ final class ZLinkChannelRuntimeConfigurator {
             ZLinkBackendPublisherSocket publisher = backend.createPublisherSocket(context);
             publisher.setChannelName(channel.name());
             RoutingId publisherRoutingId =
-                channel.routingId() == null
-                    ? RoutingId.from(
-                        channel.routingIdPrefix() + "-" + UUID.randomUUID())
-                    : channel.routingId();
+                    channel.routingId() == null
+                            ? RoutingId.from(channel.routingIdPrefix() + "-" + UUID.randomUUID())
+                            : channel.routingId();
             publisher.setRoutingId(publisherRoutingId);
             applyFanoutPublisherSocketOptions(channel, publisher);
             for (String endpoint : channel.publisherBinds()) {
                 publisher.bind(endpoint);
             }
-            sockets.registerPublisher(
-                channel.name(), publisherRoutingId, publisher);
+            sockets.registerPublisher(channel.name(), publisherRoutingId, publisher);
         }
         if (!channel.subscriberEnabled()) {
             return;
         }
         if (channel.automaticSubscriberEnabled()) {
-            dispatchRegistry.registerFanout(
-                channel.name(),
-                handlers.publishHandlers(channel));
+            dispatchRegistry.registerFanout(channel.name(), handlers.publishHandlers(channel));
             return;
         }
-        dispatchRegistry.registerFanout(
-            channel.name(),
-            handlers.publishHandlers(channel));
+        dispatchRegistry.registerFanout(channel.name(), handlers.publishHandlers(channel));
     }
 
     private void configureRouteMesh(ChannelRegistration channel) {
@@ -131,21 +123,19 @@ final class ZLinkChannelRuntimeConfigurator {
             router.bind(endpoint);
         }
         dispatchRegistry.registerRoute(
-            channel.name(),
-            handlers.routeSendHandlers(channel),
-            handlers.routeRequestHandlers(channel));
+                channel.name(),
+                handlers.routeSendHandlers(channel),
+                handlers.routeRequestHandlers(channel));
         startRouteLoop.accept(channel.name(), router);
     }
 
     private static void applyFanoutPublisherSocketOptions(
-        ChannelRegistration channel,
-        ZLinkBackendPublisherSocket publisher) {
+            ChannelRegistration channel, ZLinkBackendPublisherSocket publisher) {
         publisher.setNoDrop(channel.noDrop());
     }
 
     private static void applyServerSocketOptions(
-        ChannelRegistration channel,
-        ZLinkBackendRouterSocket router) {
+            ChannelRegistration channel, ZLinkBackendRouterSocket router) {
         var options = channel.serverSocketOptions();
         if (options.maxMessageSize() > 0) {
             router.setMaxMessageSize(options.maxMessageSize());

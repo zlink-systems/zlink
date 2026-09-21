@@ -1,6 +1,5 @@
 package systems.zlink.framework.kotlin
 
-import org.junit.jupiter.api.Assertions
 import java.util.concurrent.CompletableFuture
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
@@ -32,5 +31,4 @@ class KotlinCompletionStageAwaitIntegrationTest {
         assertEquals(expected::class, actual!!::class)
         assertEquals(expected.message, actual.message)
     }
-
 }

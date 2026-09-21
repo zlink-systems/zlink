@@ -29,7 +29,7 @@ export function makeTarget(prefix: string, path: string): string {
 export function rewriteForRedirect(
   status: number,
   method: ZLinkHttpMethod,
-  body: string | undefined,
+  body: string | undefined
 ): { method: ZLinkHttpMethod; body: string | undefined } {
   if (status === 303 || ((status === 301 || status === 302) && method === 'POST')) {
     return { method: 'GET', body: undefined };

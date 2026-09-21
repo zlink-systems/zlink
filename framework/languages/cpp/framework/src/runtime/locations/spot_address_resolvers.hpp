@@ -32,11 +32,11 @@ class spot_address_resolver_t
 {
   public:
     virtual ~spot_address_resolver_t () = default;
-    virtual task_t<std::optional<spot_address_t>>
-    resolve_spot_address (std::string mesh_name, std::string spot_id) = 0;
+    virtual task_t<std::optional<spot_address_t>> resolve_spot_address (std::string mesh_name,
+                                                                        std::string spot_id) = 0;
     virtual void invalidate_spot_address (std::string_view spot_id) = 0;
-    virtual bool invalidate_spot_address_if_matches (
-      std::string_view spot_id, const spot_address_t &expected)
+    virtual bool invalidate_spot_address_if_matches (std::string_view spot_id,
+                                                     const spot_address_t &expected)
     {
         (void) spot_id;
         (void) expected;
@@ -49,14 +49,10 @@ class actor_address_resolver_t
 {
   public:
     virtual ~actor_address_resolver_t () = default;
-    virtual task_t<std::optional<spot_address_t>>
-    resolve_actor_address (std::string actor_id) = 0;
-    virtual void invalidate_actor_address (std::string_view actor_id)
-    {
-        (void) actor_id;
-    }
-    virtual bool invalidate_actor_address_if_matches (
-      std::string_view actor_id, const spot_address_t &expected)
+    virtual task_t<std::optional<spot_address_t>> resolve_actor_address (std::string actor_id) = 0;
+    virtual void invalidate_actor_address (std::string_view actor_id) { (void) actor_id; }
+    virtual bool invalidate_actor_address_if_matches (std::string_view actor_id,
+                                                      const spot_address_t &expected)
     {
         (void) actor_id;
         (void) expected;

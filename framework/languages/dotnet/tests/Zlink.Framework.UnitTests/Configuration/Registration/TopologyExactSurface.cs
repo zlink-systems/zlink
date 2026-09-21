@@ -10,11 +10,12 @@ public sealed class TopologyExactSurfaceTests
     {
         var frameworkMethods = MethodNames<IZLinkFrameworkOptions>();
         Assert.Contains(nameof(IZLinkFrameworkOptions.ConfigureNetwork), frameworkMethods);
-        Assert.Contains(
-            nameof(IZLinkFrameworkOptions.ConfigureInboundDispatch),
-            frameworkMethods);
+        Assert.Contains(nameof(IZLinkFrameworkOptions.ConfigureInboundDispatch), frameworkMethods);
         Assert.DoesNotContain("ActorTransferTimeout", PropertyNames<IZLinkFrameworkOptions>());
-        Assert.DoesNotContain("ActorTransferForwardWindow", PropertyNames<IZLinkFrameworkOptions>());
+        Assert.DoesNotContain(
+            "ActorTransferForwardWindow",
+            PropertyNames<IZLinkFrameworkOptions>()
+        );
 
         var meshMethods = MethodNames<IZLinkMeshNodeBuilder>();
         Assert.Contains(nameof(IZLinkMeshNodeBuilder.Channel), meshMethods);
@@ -27,22 +28,32 @@ public sealed class TopologyExactSurfaceTests
         Assert.DoesNotContain("SetObjectCapacity", meshMethods);
 
         var streamMethods = typeof(IZLinkStreamNodeBuilder).GetMethods();
-        Assert.Contains(streamMethods, static method =>
-            method.Name == nameof(IZLinkStreamNodeBuilder.Bind)
-            && method.GetParameters() is [{ ParameterType: var type }]
-            && type == typeof(int));
+        Assert.Contains(
+            streamMethods,
+            static method =>
+                method.Name == nameof(IZLinkStreamNodeBuilder.Bind)
+                && method.GetParameters() is [{ ParameterType: var type }]
+                && type == typeof(int)
+        );
         var actorDispatch = Assert.Single(
             streamMethods,
-            static method => method.Name == nameof(IZLinkStreamNodeBuilder.EnableActorDispatch));
+            static method => method.Name == nameof(IZLinkStreamNodeBuilder.EnableActorDispatch)
+        );
         Assert.Empty(actorDispatch.GetParameters());
-        Assert.Contains(streamMethods, static method =>
-            method.Name == nameof(IZLinkStreamNodeBuilder.ConfigureSocket)
-            && method.ReturnType == typeof(IZLinkStreamSocketConfig));
-        Assert.Contains(streamMethods, static method =>
-            method.Name == nameof(IZLinkStreamNodeBuilder.MaxMessageSize)
-            && method.ReturnType == typeof(IZLinkStreamNodeBuilder)
-            && method.GetParameters() is [{ ParameterType: var type }]
-            && type == typeof(long));
+        Assert.Contains(
+            streamMethods,
+            static method =>
+                method.Name == nameof(IZLinkStreamNodeBuilder.ConfigureSocket)
+                && method.ReturnType == typeof(IZLinkStreamSocketConfig)
+        );
+        Assert.Contains(
+            streamMethods,
+            static method =>
+                method.Name == nameof(IZLinkStreamNodeBuilder.MaxMessageSize)
+                && method.ReturnType == typeof(IZLinkStreamNodeBuilder)
+                && method.GetParameters() is [{ ParameterType: var type }]
+                && type == typeof(long)
+        );
         Assert.Null(typeof(IZLinkStreamSocketConfig).GetProperty("MaxMessageSize"));
     }
 
@@ -56,11 +67,13 @@ public sealed class TopologyExactSurfaceTests
             network.BindHost = "0.0.0.0";
             network.AdvertiseHost = "node.example.net";
 
-            options.AddRouteMesh("mesh")
+            options
+                .AddRouteMesh("mesh")
                 .Listen()
                 .SetBindHost("127.0.0.2")
                 .SetAdvertiseHost("mesh.example.net");
-            var stream = options.AddStreamNode("stream")
+            var stream = options
+                .AddStreamNode("stream")
                 .Bind()
                 .SetBindHost("127.0.0.3")
                 .SetAdvertiseHost("stream.example.net")
@@ -90,10 +103,8 @@ public sealed class TopologyExactSurfaceTests
     {
         var services = new ServiceCollection();
         services.AddZLinkFramework(options =>
-            options.AddStreamNode("stream")
-                .Bind()
-                .MaxMessageSize(0)
-                .AddSession<TestSession>());
+            options.AddStreamNode("stream").Bind().MaxMessageSize(0).AddSession<TestSession>()
+        );
 
         using var provider = services.BuildServiceProvider();
         var registration = provider.GetRequiredService<ZLinkFrameworkRegistration>();
@@ -104,9 +115,7 @@ public sealed class TopologyExactSurfaceTests
             .AddStreamNode("default")
             .Bind()
             .AddSession<TestSession>();
-        Assert.Equal(
-            64L * 1024L,
-            defaults.StreamNodes["default"].SocketConfig.MaxMessageSize);
+        Assert.Equal(64L * 1024L, defaults.StreamNodes["default"].SocketConfig.MaxMessageSize);
     }
 
     [Fact]
@@ -115,19 +124,22 @@ public sealed class TopologyExactSurfaceTests
         var services = new ServiceCollection();
         var error = Assert.Throws<ZLinkConfigurationException>(() =>
             services.AddZLinkFramework(options =>
-                options.AddStreamNode("stream")
-                    .Bind()
-                    .MaxMessageSize(-1)
-                    .AddSession<TestSession>()));
+                options.AddStreamNode("stream").Bind().MaxMessageSize(-1).AddSession<TestSession>()
+            )
+        );
 
         Assert.Contains("MaxMessageSize", error.Message, StringComparison.Ordinal);
     }
 
     private static HashSet<string> MethodNames<T>() =>
-        typeof(T).GetMethods().Select(static method => method.Name)
+        typeof(T)
+            .GetMethods()
+            .Select(static method => method.Name)
             .ToHashSet(StringComparer.Ordinal);
 
     private static HashSet<string> PropertyNames<T>() =>
-        typeof(T).GetProperties().Select(static property => property.Name)
+        typeof(T)
+            .GetProperties()
+            .Select(static property => property.Name)
             .ToHashSet(StringComparer.Ordinal);
 }

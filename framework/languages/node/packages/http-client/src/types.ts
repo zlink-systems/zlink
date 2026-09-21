@@ -1,14 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 /** HTTP methods supported by the ZLink HTTP client. */
-export type ZLinkHttpMethod =
-  | 'GET'
-  | 'POST'
-  | 'PUT'
-  | 'DELETE'
-  | 'PATCH'
-  | 'HEAD'
-  | 'OPTIONS';
+export type ZLinkHttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'HEAD' | 'OPTIONS';
 
 /**
  * Raw HTTP response with status, headers, and the buffered body as a string. Response header

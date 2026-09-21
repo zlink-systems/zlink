@@ -29,7 +29,10 @@ export function normalizeOptions(
   }
   const inferredTransport = inferTransport(endpoint);
   if (options.transport !== undefined && options.transport !== inferredTransport) {
-    throw connectorError(ZlinkStreamErrorCode.ConfigurationError, 'Configured transport conflicts with endpoint scheme.');
+    throw connectorError(
+      ZlinkStreamErrorCode.ConfigurationError,
+      'Configured transport conflicts with endpoint scheme.'
+    );
   }
   validatePositive(options.connectTimeoutMs ?? 5000, 'ConnectTimeout');
   validatePositive(options.requestTimeoutMs ?? 30000, 'RequestTimeout');
@@ -99,13 +102,15 @@ function resolveCompressionCodec(options: ZlinkStreamConnectorOptions) {
   const compression = options.compression ?? ZlinkStreamCompression.Lz4;
   if (compression === ZlinkStreamCompression.None) {
     if (options.compressionCodec !== undefined) {
-      throw connectorError(ZlinkStreamErrorCode.ConfigurationError, 'compressionCodec cannot be set when compression is none.');
+      throw connectorError(
+        ZlinkStreamErrorCode.ConfigurationError,
+        'compressionCodec cannot be set when compression is none.'
+      );
     }
     return undefined;
   }
   return options.compressionCodec;
 }
-
 
 export function validateDiagnosticsLevel(level: ZlinkStreamDiagnosticsLevel | undefined): void {
   if (level !== undefined && !validDiagnosticsLevels.has(level)) {
@@ -129,7 +134,10 @@ function validateHeartbeat(options: ZlinkStreamHeartbeatOptions | undefined): vo
   validatePositive(intervalMs, 'Heartbeat interval');
   validatePositive(timeoutMs, 'Heartbeat timeout');
   if (timeoutMs <= intervalMs) {
-    throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Heartbeat timeout must be greater than the heartbeat interval.');
+    throw connectorError(
+      ZlinkStreamErrorCode.ValidationFailed,
+      'Heartbeat timeout must be greater than the heartbeat interval.'
+    );
   }
 }
 
@@ -141,12 +149,18 @@ function validateReconnect(options: ZlinkStreamReconnectOptions | undefined): vo
   validatePositive(options?.initialDelayMs ?? 250, 'Reconnect InitialDelay');
   validatePositive(options?.maxDelayMs ?? 5000, 'Reconnect MaxDelay');
   if ((options?.backoffFactor ?? 2.0) < 1.0) {
-    throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Reconnect BackoffFactor must be at least 1.0.');
+    throw connectorError(
+      ZlinkStreamErrorCode.ValidationFailed,
+      'Reconnect BackoffFactor must be at least 1.0.'
+    );
   }
   // Spec stream-connector 32 §6: `null` is how this option says "unlimited".
   // Only a stated number is range-checked.
   const maxAttempts = options?.maxAttempts === undefined ? 3 : options.maxAttempts;
   if (maxAttempts !== null && !(Number.isFinite(maxAttempts) && maxAttempts > 0)) {
-    throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Reconnect MaxAttempts must be null or positive.');
+    throw connectorError(
+      ZlinkStreamErrorCode.ValidationFailed,
+      'Reconnect MaxAttempts must be null or positive.'
+    );
   }
 }

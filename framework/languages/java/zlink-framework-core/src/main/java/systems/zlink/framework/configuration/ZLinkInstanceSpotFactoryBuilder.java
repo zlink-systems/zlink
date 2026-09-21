@@ -15,6 +15,5 @@ public interface ZLinkInstanceSpotFactoryBuilder<TSpot extends ZLinkInstanceSpot
 
     void recreateOnRelocation();
 
-    void preserveStateWith(
-        Class<? extends ZLinkSpotRelocationAdapter<TSpot>> adapterClass);
+    void preserveStateWith(Class<? extends ZLinkSpotRelocationAdapter<TSpot>> adapterClass);
 }

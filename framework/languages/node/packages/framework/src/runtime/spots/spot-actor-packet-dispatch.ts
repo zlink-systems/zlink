@@ -1,15 +1,11 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException, internalFrameworkErrorKind  } from '../framework-errors-internal';
-import type {
-  ActorRef,
-  ZLinkActor,
-  ZLinkMessageSerializer,
-  ZLinkSpot
-} from '../../contracts';
-import type { Message } from '../../contracts/Common/Message';
 import {
-  ZLinkFrameworkException,
-  zlinkMessageMetadata
-} from '../../contracts';
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException,
+  internalFrameworkErrorKind
+} from '../framework-errors-internal';
+import type { ActorRef, ZLinkActor, ZLinkMessageSerializer, ZLinkSpot } from '../../contracts';
+import type { Message } from '../../contracts/Common/Message';
+import { ZLinkFrameworkException, zlinkMessageMetadata } from '../../contracts';
 import {
   ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome,
   ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
@@ -96,9 +92,10 @@ interface ZLinkSpotActorPacketDispatchOptions {
   readonly actorLeft?: (actorId: string) => boolean;
   readonly routeBeforeLocal?: (
     delivery: ZLinkActorPacketDelivery
-  ) => Promise<{ readonly handled: boolean; readonly response?: unknown } | undefined> |
-    { readonly handled: boolean; readonly response?: unknown } |
-    undefined;
+  ) =>
+    | Promise<{ readonly handled: boolean; readonly response?: unknown } | undefined>
+    | { readonly handled: boolean; readonly response?: unknown }
+    | undefined;
   readonly onRemoteBoundSessionTarget?: (
     actorId: string,
     target: ZLinkRemoteBoundSessionTarget | undefined
@@ -170,85 +167,85 @@ export class ZLinkSpotActorPacketDispatch {
     let requestDeadlineUnixMs: number | undefined;
     try {
       header = decodeStreamHeader(messageToBytes(parts[0]), flowEnabled);
-      requestDeadlineUnixMs = header.kind === ZLinkStreamMessageKind.Request
-        ? decodeActorRequestDeadlineUnixMs(messageToBytes(parts[0]))
-        : undefined;
+      requestDeadlineUnixMs =
+        header.kind === ZLinkStreamMessageKind.Request
+          ? decodeActorRequestDeadlineUnixMs(messageToBytes(parts[0]))
+          : undefined;
     } catch (error) {
       this.reportInvalidFrame(actorId, ZLinkDispatchMessageKind.ActorSend, error);
       throw error;
     }
-    return runWithFlow(createInboundFlow(
-      header.flowId,
-      header.flowOrigin,
-      flowEnabled
-    ), async () => {
-      const messageKind = header.kind === ZLinkStreamMessageKind.Request
-        ? ZLinkDispatchMessageKind.ActorRequest
-        : ZLinkDispatchMessageKind.ActorSend;
-      const action = messageKind === ZLinkDispatchMessageKind.ActorRequest
-        ? ZLinkDispatchErrorAction.ReplyError
-        : ZLinkDispatchErrorAction.Drop;
-      this.trace(ZLinkMessageFlowOutcome.Received, actorId, header, messageKind);
-      if (
-        this.options.actorLeft?.(actorId) === true &&
-        header.name === ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET
-      ) {
-        return undefined;
-      }
-      if (
-        remoteBoundSessionTarget !== undefined
-        && actorMessageFollowContext(fallbackActorRef) === undefined
-      ) {
-        // A replayed handoff/Message Follow packet keeps its captured Session
-        // route solely for that packet's response. It cannot republish the
-        // predecessor route over a binding already confirmed by a later Actor
-        // owner turn.
-        this.options.onRemoteBoundSessionTarget?.(actorId, remoteBoundSessionTarget);
-      }
-      const routed = await this.options.routeBeforeLocal?.(
-        delivery
-      );
-      if (routed?.handled === true) {
-        return routed.response;
-      }
-      const actor = this.options.resolveActor(actorId);
-      if (actor === undefined) {
-        return this.handleMissingActor(
+    return runWithFlow(
+      createInboundFlow(header.flowId, header.flowOrigin, flowEnabled),
+      async () => {
+        const messageKind =
+          header.kind === ZLinkStreamMessageKind.Request
+            ? ZLinkDispatchMessageKind.ActorRequest
+            : ZLinkDispatchMessageKind.ActorSend;
+        const action =
+          messageKind === ZLinkDispatchMessageKind.ActorRequest
+            ? ZLinkDispatchErrorAction.ReplyError
+            : ZLinkDispatchErrorAction.Drop;
+        this.trace(ZLinkMessageFlowOutcome.Received, actorId, header, messageKind);
+        if (
+          this.options.actorLeft?.(actorId) === true &&
+          header.name === ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET
+        ) {
+          return undefined;
+        }
+        if (
+          remoteBoundSessionTarget !== undefined &&
+          actorMessageFollowContext(fallbackActorRef) === undefined
+        ) {
+          // A replayed handoff/Message Follow packet keeps its captured Session
+          // route solely for that packet's response. It cannot republish the
+          // predecessor route over a binding already confirmed by a later Actor
+          // owner turn.
+          this.options.onRemoteBoundSessionTarget?.(actorId, remoteBoundSessionTarget);
+        }
+        const routed = await this.options.routeBeforeLocal?.(delivery);
+        if (routed?.handled === true) {
+          return routed.response;
+        }
+        const actor = this.options.resolveActor(actorId);
+        if (actor === undefined) {
+          return this.handleMissingActor(
+            actorId,
+            parts,
+            header,
+            messageKind,
+            action,
+            returnResponse,
+            remoteBoundSessionTarget,
+            fallbackActorRef,
+            requestTerminal
+          );
+        }
+        if (header.name === ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET) {
+          this.options.onRemoteBoundSessionTarget?.(actorId, undefined);
+          await this.options.onDisconnectActor(actor);
+          return undefined;
+        }
+        const decodePayload = this.createPayloadDecoder(parts[1], header);
+        return this.dispatchActorPacket(
+          actor,
           actorId,
-          parts,
+          decodePayload,
           header,
           messageKind,
           action,
           returnResponse,
           remoteBoundSessionTarget,
           fallbackActorRef,
-          requestTerminal
+          requestTerminal,
+          requestDeadlineUnixMs,
+          zlinkSerialWorkOptions(
+            parts[1].data().byteLength,
+            zlinkMetadataByteLength(header.metadata)
+          )
         );
       }
-      if (header.name === ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET) {
-        this.options.onRemoteBoundSessionTarget?.(actorId, undefined);
-        await this.options.onDisconnectActor(actor);
-        return undefined;
-      }
-      const decodePayload = this.createPayloadDecoder(parts[1], header);
-      return this.dispatchActorPacket(
-        actor,
-        actorId,
-        decodePayload,
-        header,
-        messageKind,
-        action,
-        returnResponse,
-        remoteBoundSessionTarget,
-        fallbackActorRef,
-        requestTerminal,
-        requestDeadlineUnixMs,
-        zlinkSerialWorkOptions(
-          parts[1].data().byteLength,
-          zlinkMetadataByteLength(header.metadata)
-        )
-      );
-    });
+    );
   }
 
   private async handleMissingActor(
@@ -263,14 +260,14 @@ export class ZLinkSpotActorPacketDispatch {
     requestTerminal: ZLinkActorRequestTerminal | undefined
   ): Promise<unknown> {
     if (
-      this.options.routeToActorJoinPrewarm !== undefined
-      && fallbackActorRef !== undefined
-      && parts.length >= 2
+      this.options.routeToActorJoinPrewarm !== undefined &&
+      fallbackActorRef !== undefined &&
+      parts.length >= 2 &&
       //  A Request without a terminal has no way to complete once
       //  migrated later — parking it would leave the caller hanging
       //  forever with no reply route. Fall through to the existing
       //  missing-actor handling for that shape instead.
-      && (messageKind !== ZLinkDispatchMessageKind.ActorRequest || requestTerminal !== undefined)
+      (messageKind !== ZLinkDispatchMessageKind.ActorRequest || requestTerminal !== undefined)
     ) {
       const parked = this.parkForActorJoinPrewarm(
         actorId,
@@ -300,7 +297,11 @@ export class ZLinkSpotActorPacketDispatch {
       ZLinkFrameworkInternalErrorKind.ActorDispatchHandlerNotFound,
       `SPOT actor is not registered locally: ${actorId}`
     );
-    if (header.requestSeq !== undefined && !returnResponse && this.options.actorErrorSender !== undefined) {
+    if (
+      header.requestSeq !== undefined &&
+      !returnResponse &&
+      this.options.actorErrorSender !== undefined
+    ) {
       await this.options.actorErrorSender(
         actorId,
         header.name,
@@ -389,13 +390,14 @@ export class ZLinkSpotActorPacketDispatch {
     message: Message,
     header: ReturnType<typeof decodeStreamHeader>
   ): () => unknown {
-    return () => decodeFrameworkTypedPayloadMessage(
-      message,
-      this.options.messageSerializers,
-      undefined,
-      streamCodecContentType(header.codec),
-      header.name
-    );
+    return () =>
+      decodeFrameworkTypedPayloadMessage(
+        message,
+        this.options.messageSerializers,
+        undefined,
+        streamCodecContentType(header.codec),
+        header.name
+      );
   }
 
   private async dispatchActorPacket(
@@ -412,9 +414,7 @@ export class ZLinkSpotActorPacketDispatch {
     requestDeadlineUnixMs: number | undefined,
     workOptions: ZLinkSerialWorkOptions
   ): Promise<unknown> {
-    const spot = typeof this.options.spot === 'function'
-      ? this.options.spot()
-      : this.options.spot;
+    const spot = typeof this.options.spot === 'function' ? this.options.spot() : this.options.spot;
     const dispatcher = new ZLinkSpotActorDispatcher({
       registry: this.options.registry,
       spot,
@@ -422,20 +422,15 @@ export class ZLinkSpotActorPacketDispatch {
       serial: this.options.serial,
       serialWorkOptions: workOptions,
       messageSerializers: this.options.messageSerializers,
-      onAdmitted: () => this.trace(
-        ZLinkMessageFlowOutcome.Admitted,
-        actorId,
-        header,
-        messageKind
-      ),
+      onAdmitted: () => this.trace(ZLinkMessageFlowOutcome.Admitted, actorId, header, messageKind),
       onHandlerStart: () => {
         // A transferred backlog is returned to the Actor queue as one FIFO
         // prefix. Check the request deadline when its owner turn actually
         // starts, not when that prefix is admitted.
         if (
-          messageKind === ZLinkDispatchMessageKind.ActorRequest
-          && requestDeadlineUnixMs !== undefined
-          && Date.now() >= requestDeadlineUnixMs
+          messageKind === ZLinkDispatchMessageKind.ActorRequest &&
+          requestDeadlineUnixMs !== undefined &&
+          Date.now() >= requestDeadlineUnixMs
         ) {
           throw createInternalFrameworkException(
             ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
@@ -443,12 +438,7 @@ export class ZLinkSpotActorPacketDispatch {
           );
         }
         releaseApplicationJobPermitBeforeHandler();
-        this.trace(
-          ZLinkMessageFlowOutcome.Dispatched,
-          actorId,
-          header,
-          messageKind
-        );
+        this.trace(ZLinkMessageFlowOutcome.Dispatched, actorId, header, messageKind);
       }
     });
     try {
@@ -458,7 +448,12 @@ export class ZLinkSpotActorPacketDispatch {
           metadata: zlinkMessageMetadata(header.metadata),
           correlationId: header.correlationId ?? undefined
         });
-        this.trace(ZLinkMessageFlowOutcome.Completed, actorId, header, ZLinkDispatchMessageKind.ActorSend);
+        this.trace(
+          ZLinkMessageFlowOutcome.Completed,
+          actorId,
+          header,
+          ZLinkDispatchMessageKind.ActorSend
+        );
         return undefined;
       }
       if (header.kind !== ZLinkStreamMessageKind.Request || header.requestSeq === undefined) {
@@ -477,59 +472,95 @@ export class ZLinkSpotActorPacketDispatch {
       if (returnResponse && requestTerminal !== undefined) {
         let preparedReply: unknown;
         let preparedReplyReady = false;
-        await dispatcher.dispatchRequestThenDecoded(actor, header.name, decodePayload, {
-          meshName: spot.context.meshName,
-          metadata: zlinkMessageMetadata(header.metadata),
-          correlationId: header.correlationId ?? header.requestSeq.toString()
-        }, async (response) => {
-          this.trace(ZLinkMessageFlowOutcome.Replied, actorId, header, ZLinkDispatchMessageKind.ActorRequest);
-          await requestTerminal(response, preparedReplyReady ? preparedReply : undefined);
-        }, requestTerminal.prepare === undefined
-          ? undefined
-          : async (response) => {
-              preparedReply = await requestTerminal.prepare!(response);
-              preparedReplyReady = true;
-            });
+        await dispatcher.dispatchRequestThenDecoded(
+          actor,
+          header.name,
+          decodePayload,
+          {
+            meshName: spot.context.meshName,
+            metadata: zlinkMessageMetadata(header.metadata),
+            correlationId: header.correlationId ?? header.requestSeq.toString()
+          },
+          async (response) => {
+            this.trace(
+              ZLinkMessageFlowOutcome.Replied,
+              actorId,
+              header,
+              ZLinkDispatchMessageKind.ActorRequest
+            );
+            await requestTerminal(response, preparedReplyReady ? preparedReply : undefined);
+          },
+          requestTerminal.prepare === undefined
+            ? undefined
+            : async (response) => {
+                preparedReply = await requestTerminal.prepare!(response);
+                preparedReplyReady = true;
+              }
+        );
         return undefined;
       }
       if (returnResponse || this.options.actorResponseSender === undefined) {
-        const response = await dispatcher.dispatchRequestDecoded(actor, header.name, decodePayload, {
+        const response = await dispatcher.dispatchRequestDecoded(
+          actor,
+          header.name,
+          decodePayload,
+          {
+            meshName: spot.context.meshName,
+            metadata: zlinkMessageMetadata(header.metadata),
+            correlationId: header.correlationId ?? header.requestSeq.toString()
+          }
+        );
+        this.trace(
+          ZLinkMessageFlowOutcome.Replied,
+          actorId,
+          header,
+          ZLinkDispatchMessageKind.ActorRequest
+        );
+        return response;
+      }
+      await dispatcher.dispatchRequestThenDecoded(
+        actor,
+        header.name,
+        decodePayload,
+        {
           meshName: spot.context.meshName,
           metadata: zlinkMessageMetadata(header.metadata),
           correlationId: header.correlationId ?? header.requestSeq.toString()
-        });
-        this.trace(ZLinkMessageFlowOutcome.Replied, actorId, header, ZLinkDispatchMessageKind.ActorRequest);
-        return response;
-      }
-      await dispatcher.dispatchRequestThenDecoded(actor, header.name, decodePayload, {
-        meshName: spot.context.meshName,
-        metadata: zlinkMessageMetadata(header.metadata),
-        correlationId: header.correlationId ?? header.requestSeq.toString()
-      }, async (response, replyOptions) => {
-        this.trace(ZLinkMessageFlowOutcome.Replied, actorId, header, ZLinkDispatchMessageKind.ActorRequest);
-        await this.options.actorResponseSender?.(
-          actor,
-          header.name,
-          requestSeq,
-          response,
-          replyOptions,
-          fallbackBoundSessionTarget,
-          fallbackActorRef,
-          undefined
-        );
-      });
+        },
+        async (response, replyOptions) => {
+          this.trace(
+            ZLinkMessageFlowOutcome.Replied,
+            actorId,
+            header,
+            ZLinkDispatchMessageKind.ActorRequest
+          );
+          await this.options.actorResponseSender?.(
+            actor,
+            header.name,
+            requestSeq,
+            response,
+            replyOptions,
+            fallbackBoundSessionTarget,
+            fallbackActorRef,
+            undefined
+          );
+        }
+      );
       return undefined;
     } catch (error) {
       this.options.dispatchErrors?.report({
         surface: ZLinkDispatchErrorSurface.SpotActor,
         messageKind,
-        reason: error instanceof ZLinkFrameworkException
-          && internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.ActorDispatchHandlerNotFound
-          ? ZLinkDispatchErrorReason.HandlerMissing
-          : error instanceof ZLinkFrameworkException
-            && internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.PayloadDecodeFailed
-            ? ZLinkDispatchErrorReason.PayloadDecodeFailed
-            : ZLinkDispatchErrorReason.HandlerException,
+        reason:
+          error instanceof ZLinkFrameworkException &&
+          internalFrameworkErrorKind(error) ===
+            ZLinkFrameworkInternalErrorKind.ActorDispatchHandlerNotFound
+            ? ZLinkDispatchErrorReason.HandlerMissing
+            : error instanceof ZLinkFrameworkException &&
+                internalFrameworkErrorKind(error) ===
+                  ZLinkFrameworkInternalErrorKind.PayloadDecodeFailed
+              ? ZLinkDispatchErrorReason.PayloadDecodeFailed
+              : ZLinkDispatchErrorReason.HandlerException,
         action,
         packetName: header.name,
         spotId: this.options.spotId(),

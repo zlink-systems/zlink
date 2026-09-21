@@ -14,7 +14,8 @@ public static class ZlinkStreamAssert
     {
         if (string.IsNullOrWhiteSpace(message))
             throw new ArgumentException("Assertion message is required.", nameof(message));
-        if (!condition) throw new InvalidOperationException(message);
+        if (!condition)
+            throw new InvalidOperationException(message);
     }
 
     /// <summary>
@@ -22,7 +23,8 @@ public static class ZlinkStreamAssert
     /// </summary>
     public static async ValueTask<ZlinkStreamError> ExpectFailureAsync(
         Func<CancellationToken, ValueTask> action,
-        string? errorKind = null)
+        string? errorKind = null
+    )
     {
         ArgumentNullException.ThrowIfNull(action);
 
@@ -33,11 +35,14 @@ public static class ZlinkStreamAssert
         catch (Exception exception)
         {
             var error = Classify(exception);
-            if (errorKind is not null
-                && !string.Equals(error.Code.ToString(), errorKind, StringComparison.Ordinal))
+            if (
+                errorKind is not null
+                && !string.Equals(error.Code.ToString(), errorKind, StringComparison.Ordinal)
+            )
                 throw new InvalidOperationException(
                     $"Expected failure kind '{errorKind}', got '{error.Code}'.",
-                    exception);
+                    exception
+                );
             return error;
         }
 
@@ -47,8 +52,7 @@ public static class ZlinkStreamAssert
     /// <summary>
     ///     Executes an action and requires a timeout failure; other failures are propagated.
     /// </summary>
-    public static async ValueTask ExpectTimeoutAsync(
-        Func<CancellationToken, ValueTask> action)
+    public static async ValueTask ExpectTimeoutAsync(Func<CancellationToken, ValueTask> action)
     {
         ArgumentNullException.ThrowIfNull(action);
 
@@ -58,8 +62,12 @@ public static class ZlinkStreamAssert
         }
         catch (Exception exception)
         {
-            if (TryClassifyKnownFailure(exception, out var error)
-                && error.Code is ZlinkStreamErrorCode.RequestTimeout or ZlinkStreamErrorCode.ConnectTimeout)
+            if (
+                TryClassifyKnownFailure(exception, out var error)
+                && error.Code
+                    is ZlinkStreamErrorCode.RequestTimeout
+                        or ZlinkStreamErrorCode.ConnectTimeout
+            )
                 return;
 
             ExceptionDispatchInfo.Capture(exception).Throw();
@@ -70,15 +78,14 @@ public static class ZlinkStreamAssert
 
     private static ZlinkStreamError Classify(Exception exception)
     {
-        if (TryClassifyKnownFailure(exception, out var error)) return error;
+        if (TryClassifyKnownFailure(exception, out var error))
+            return error;
 
         ExceptionDispatchInfo.Capture(exception).Throw();
         throw new InvalidOperationException("Unreachable code.");
     }
 
-    private static bool TryClassifyKnownFailure(
-        Exception exception,
-        out ZlinkStreamError error)
+    private static bool TryClassifyKnownFailure(Exception exception, out ZlinkStreamError error)
     {
         if (exception is ZlinkStreamException streamException)
         {
@@ -94,7 +101,7 @@ public static class ZlinkStreamAssert
                 ArgumentException => ZlinkStreamErrorCode.ValidationFailed,
                 HttpRequestException => ZlinkStreamErrorCode.Disconnected,
                 IOException => ZlinkStreamErrorCode.Disconnected,
-                _ => (ZlinkStreamErrorCode?)null
+                _ => (ZlinkStreamErrorCode?)null,
             };
             if (code is { } knownCode)
             {

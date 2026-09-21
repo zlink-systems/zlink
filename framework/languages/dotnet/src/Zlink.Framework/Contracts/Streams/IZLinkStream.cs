@@ -13,9 +13,7 @@ public interface IZLinkStream
     /// <summary>
     ///     Writes a stream payload through the framework message boundary.
     /// </summary>
-    bool Write(
-        ZLinkMessage payload,
-        SendFlags flags = SendFlags.None);
+    bool Write(ZLinkMessage payload, SendFlags flags = SendFlags.None);
 
     ValueTask CloseAsync();
 }

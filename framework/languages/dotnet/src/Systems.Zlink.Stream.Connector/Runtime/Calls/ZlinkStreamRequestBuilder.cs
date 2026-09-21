@@ -6,8 +6,11 @@ internal sealed class ZlinkStreamRequestBuilder : IZlinkStreamRequestCall
     private readonly IZlinkStreamConnectorInternal _connector;
     private readonly ZlinkStreamCallBuilderState _state;
 
-    internal ZlinkStreamRequestBuilder(IZlinkStreamConnectorInternal connector, string? name,
-        ZlinkStreamEncodedPayload payload)
+    internal ZlinkStreamRequestBuilder(
+        IZlinkStreamConnectorInternal connector,
+        string? name,
+        ZlinkStreamEncodedPayload payload
+    )
     {
         _connector = connector;
         _body = payload;
@@ -44,16 +47,21 @@ internal sealed class ZlinkStreamRequestBuilder : IZlinkStreamRequestCall
         return this;
     }
 
-    public async ValueTask<ZlinkStreamEncodedPayload> Async(CancellationToken cancellationToken = default)
+    public async ValueTask<ZlinkStreamEncodedPayload> Async(
+        CancellationToken cancellationToken = default
+    )
     {
         _state.EnsureNotExecuted();
-        return await _connector.RequestEncodedAsync(
-            _state.ResolveMessageName(),
-            _body,
-            _state.Metadata,
-            _state.Compress,
-            _state.Timeout ?? _connector.Options.RequestTimeout,
-            cancellationToken).ConfigureAwait(false);
+        return await _connector
+            .RequestEncodedAsync(
+                _state.ResolveMessageName(),
+                _body,
+                _state.Metadata,
+                _state.Compress,
+                _state.Timeout ?? _connector.Options.RequestTimeout,
+                cancellationToken
+            )
+            .ConfigureAwait(false);
     }
 
     public void Submit(Action<ZlinkStreamResult> callback)
@@ -66,7 +74,8 @@ internal sealed class ZlinkStreamRequestBuilder : IZlinkStreamRequestCall
             _state.Metadata,
             _state.Compress,
             _state.Timeout ?? _connector.Options.RequestTimeout,
-            callback);
+            callback
+        );
     }
 
     public void Submit(Action<ZlinkStreamResult<ZlinkStreamEncodedPayload>> callback)
@@ -79,6 +88,7 @@ internal sealed class ZlinkStreamRequestBuilder : IZlinkStreamRequestCall
             _state.Metadata,
             _state.Compress,
             _state.Timeout ?? _connector.Options.RequestTimeout,
-            callback);
+            callback
+        );
     }
 }

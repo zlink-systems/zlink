@@ -3,28 +3,30 @@ package systems.zlink.framework.runtime.channels;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import org.junit.jupiter.api.Test;
+
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.backend.ZLinkMeshDispatchRecord;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeStatus;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
+
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
-import org.junit.jupiter.api.Test;
-import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeStatus;
-import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
-import systems.zlink.framework.errors.ZLinkConfigurationException;
-import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
-import systems.zlink.framework.runtime.internal.backend.ZLinkMeshDispatchRecord;
 
 final class ZLinkRouteMeshRuntimeOptionsRuntimeTest {
     @Test
     void liveWeightMutationUpdatesTheNodeAndPublishesOneRevision() {
         TestMeshNode node = new TestMeshNode("game", Map.of("orders", 100));
         AtomicInteger revisions = new AtomicInteger();
-        var runtime = new ZLinkRouteMeshRuntimeOptionsRuntime(
-            Map.of("game", node),
-            revisions::incrementAndGet);
+        var runtime =
+                new ZLinkRouteMeshRuntimeOptionsRuntime(
+                        Map.of("game", node), revisions::incrementAndGet);
 
         runtime.mesh("game").setPlacementWeight(0);
         runtime.channel("game", "orders").weight(10_000);
@@ -42,22 +44,18 @@ final class ZLinkRouteMeshRuntimeOptionsRuntimeTest {
     void weightRangeAndChannelIdentityAreValidatedBeforeMutation() {
         TestMeshNode game = new TestMeshNode("game", Map.of("orders", 100));
         TestMeshNode admin = new TestMeshNode("admin", Map.of("orders", 100));
-        var runtime = new ZLinkRouteMeshRuntimeOptionsRuntime(
-            Map.of("game", game, "admin", admin),
-            () -> { });
+        var runtime =
+                new ZLinkRouteMeshRuntimeOptionsRuntime(
+                        Map.of("game", game, "admin", admin), () -> {});
 
         assertThrows(
-            ZLinkConfigurationException.class,
-            () -> runtime.mesh("game").setPlacementWeight(-1));
+                ZLinkConfigurationException.class,
+                () -> runtime.mesh("game").setPlacementWeight(-1));
         assertThrows(
-            ZLinkConfigurationException.class,
-            () -> runtime.channel("game", "orders").weight(10_001));
-        assertThrows(
-            ZLinkConfigurationException.class,
-            () -> runtime.channel("orders"));
-        assertThrows(
-            ZLinkConfigurationException.class,
-            () -> runtime.channel("game", "missing"));
+                ZLinkConfigurationException.class,
+                () -> runtime.channel("game", "orders").weight(10_001));
+        assertThrows(ZLinkConfigurationException.class, () -> runtime.channel("orders"));
+        assertThrows(ZLinkConfigurationException.class, () -> runtime.channel("game", "missing"));
     }
 
     private static final class TestMeshNode implements ZLinkInternalMeshNode {
@@ -76,8 +74,7 @@ final class ZLinkRouteMeshRuntimeOptionsRuntimeTest {
         }
 
         @Override
-        public void setBind(String endpoint) {
-        }
+        public void setBind(String endpoint) {}
 
         @Override
         public void addChannel(String channelName) {
@@ -105,12 +102,10 @@ final class ZLinkRouteMeshRuntimeOptionsRuntimeTest {
         }
 
         @Override
-        public void setRoutingId(RoutingId routingId) {
-        }
+        public void setRoutingId(RoutingId routingId) {}
 
         @Override
-        public void start() {
-        }
+        public void start() {}
 
         @Override
         public long connectPeer(String endpoint) {
@@ -118,9 +113,7 @@ final class ZLinkRouteMeshRuntimeOptionsRuntimeTest {
         }
 
         @Override
-        public long connectPeer(
-            String endpoint,
-            RoutingId expectedRoutingId) {
+        public long connectPeer(String endpoint, RoutingId expectedRoutingId) {
             return 0;
         }
 
@@ -140,12 +133,9 @@ final class ZLinkRouteMeshRuntimeOptionsRuntimeTest {
         }
 
         @Override
-        public void startDispatch(
-            Consumer<ZLinkMeshDispatchRecord> receiver) {
-        }
+        public void startDispatch(Consumer<ZLinkMeshDispatchRecord> receiver) {}
 
         @Override
-        public void close() {
-        }
+        public void close() {}
     }
 }

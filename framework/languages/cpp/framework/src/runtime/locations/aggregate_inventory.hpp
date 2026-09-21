@@ -99,10 +99,10 @@ inline bytes_t bytes_from_string (std::string_view value)
 inline json_t encode_participant (const aggregate_participant_t &participant)
 {
     json_t result{{"key", participant.key.value},
-                   {"expectedStoreVersion", participant.expected_store_version},
-                   {"ownerTransition", static_cast<int> (participant.owner_transition)},
-                   {"authorityPayload", hex (participant.authority_payload)},
-                   {"membershipMutation", hex (participant.membership_mutation)}};
+                  {"expectedStoreVersion", participant.expected_store_version},
+                  {"ownerTransition", static_cast<int> (participant.owner_transition)},
+                  {"authorityPayload", hex (participant.authority_payload)},
+                  {"membershipMutation", hex (participant.membership_mutation)}};
     return result;
 }
 
@@ -111,8 +111,7 @@ inline aggregate_participant_t decode_participant (const json_t &value)
     aggregate_participant_t result{
       {value.at ("key").get<std::string> ()},
       value.at ("expectedStoreVersion").get<std::string> (),
-      static_cast<authority_generation_transition_t> (
-        value.at ("ownerTransition").get<int> ()),
+      static_cast<authority_generation_transition_t> (value.at ("ownerTransition").get<int> ()),
       unhex (value.at ("authorityPayload").get<std::string> ()),
       unhex (value.at ("membershipMutation").get<std::string> ())};
     return result;
@@ -124,38 +123,31 @@ inline bytes_t encode_page (std::size_t index,
     json_t entries = json_t::array ();
     for (const auto &participant : participants)
         entries.push_back (encode_participant (participant));
-    const auto encoded = json_t{{"version", 1},
-                                {"pageIndex", index},
-                                {"entries", std::move (entries)}}
-                           .dump ();
+    const auto encoded =
+      json_t{{"version", 1}, {"pageIndex", index}, {"entries", std::move (entries)}}.dump ();
     return bytes_from_string (encoded);
 }
 
-inline std::optional<std::vector<aggregate_participant_t>> decode_page (
-  const bytes_t &encoded,
-  std::optional<std::size_t> expected_page_index = std::nullopt)
+inline std::optional<std::vector<aggregate_participant_t>>
+decode_page (const bytes_t &encoded, std::optional<std::size_t> expected_page_index = std::nullopt)
 {
     if (encoded.empty () || encoded.size () > page_byte_limit)
         return std::nullopt;
     try {
-        const auto text = std::string (reinterpret_cast<const char *> (encoded.data ()),
-                                       encoded.size ());
+        const auto text =
+          std::string (reinterpret_cast<const char *> (encoded.data ()), encoded.size ());
         const auto value = json_t::parse (text);
         if (value.value ("version", 0) != 1 || !value.contains ("pageIndex")
             || (expected_page_index
-                && value.at ("pageIndex").get<std::size_t> ()
-                     != *expected_page_index)
-            || !value.at ("entries").is_array ()
-            || value.at ("entries").size () > page_item_limit)
+                && value.at ("pageIndex").get<std::size_t> () != *expected_page_index)
+            || !value.at ("entries").is_array () || value.at ("entries").size () > page_item_limit)
             return std::nullopt;
         std::vector<aggregate_participant_t> participants;
         participants.reserve (value.at ("entries").size ());
         for (const auto &entry : value.at ("entries")) {
             const auto participant = decode_participant (entry);
-            if (participant.key.value.empty ()
-                || participant.expected_store_version.empty ()
-                || participant.owner_transition
-                     != authority_generation_transition_t::new_owner)
+            if (participant.key.value.empty () || participant.expected_store_version.empty ()
+                || participant.owner_transition != authority_generation_transition_t::new_owner)
                 return std::nullopt;
             participants.push_back (participant);
         }
@@ -174,33 +166,30 @@ inline bytes_t encode_index_page (std::size_t level,
     json_t entries = json_t::array ();
     for (const auto &digest : child_digests)
         entries.push_back (hex (bytes_t (digest.begin (), digest.end ())));
-    return bytes_from_string (
-      json_t{{"version", 1},
-             {"level", level},
-             {"pageIndex", page_index},
-             {"childStart", child_start},
-             {"entries", std::move (entries)}}
-        .dump ());
+    return bytes_from_string (json_t{
+      {"version", 1},
+      {"level", level},
+      {"pageIndex", page_index},
+      {"childStart", child_start},
+      {"entries",
+       std::move (entries)}}.dump ());
 }
 
-inline std::optional<index_page_t> decode_index_page (
-  const bytes_t &encoded,
-  std::optional<std::size_t> expected_level = std::nullopt,
-  std::optional<std::size_t> expected_page_index = std::nullopt,
-  std::optional<std::size_t> expected_child_start = std::nullopt)
+inline std::optional<index_page_t>
+decode_index_page (const bytes_t &encoded,
+                   std::optional<std::size_t> expected_level = std::nullopt,
+                   std::optional<std::size_t> expected_page_index = std::nullopt,
+                   std::optional<std::size_t> expected_child_start = std::nullopt)
 {
     if (encoded.empty () || encoded.size () > page_byte_limit)
         return std::nullopt;
     try {
-        const auto text = std::string (
-          reinterpret_cast<const char *> (encoded.data ()), encoded.size ());
+        const auto text =
+          std::string (reinterpret_cast<const char *> (encoded.data ()), encoded.size ());
         const auto value = json_t::parse (text);
-        if (value.value ("version", 0) != 1
-            || !value.contains ("level")
-            || !value.contains ("pageIndex")
-            || !value.contains ("childStart")
-            || !value.at ("entries").is_array ()
-            || value.at ("entries").empty ()
+        if (value.value ("version", 0) != 1 || !value.contains ("level")
+            || !value.contains ("pageIndex") || !value.contains ("childStart")
+            || !value.at ("entries").is_array () || value.at ("entries").empty ()
             || value.at ("entries").size () > index_item_limit)
             return std::nullopt;
         const auto level = value.at ("level").get<std::size_t> ();
@@ -311,14 +300,11 @@ inline std::optional<tree_t> build_tree (const std::vector<aggregate_participant
         std::size_t level = 0;
         while (children.size () > 1) {
             std::vector<digest_t> next;
-            next.reserve ((children.size () + index_item_limit - 1)
-                          / index_item_limit);
+            next.reserve ((children.size () + index_item_limit - 1) / index_item_limit);
             std::size_t page_index = 0;
-            for (std::size_t child_start = 0;
-                 child_start < children.size ();
+            for (std::size_t child_start = 0; child_start < children.size ();
                  child_start += index_item_limit, ++page_index) {
-                const auto end = std::min (
-                  child_start + index_item_limit, children.size ());
+                const auto end = std::min (child_start + index_item_limit, children.size ());
                 std::vector<digest_t> page_children (
                   children.begin () + static_cast<std::ptrdiff_t> (child_start),
                   children.begin () + static_cast<std::ptrdiff_t> (end));
@@ -327,9 +313,8 @@ inline std::optional<tree_t> build_tree (const std::vector<aggregate_participant
                 page.page_index = page_index;
                 page.child_start = child_start;
                 page.child_digests = std::move (page_children);
-                page.encoded = encode_index_page (
-                  page.level, page.page_index, page.child_start,
-                  page.child_digests);
+                page.encoded = encode_index_page (page.level, page.page_index, page.child_start,
+                                                  page.child_digests);
                 if (page.encoded.size () > page_byte_limit)
                     return std::nullopt;
                 page.digest = sha256 (page.encoded);

@@ -1,8 +1,9 @@
 package systems.zlink.stream.connector;
 
+import systems.zlink.contracts.messaging.Message;
+
 import java.util.Map;
 import java.util.Objects;
-import systems.zlink.contracts.messaging.Message;
 
 final class ZLinkStreamConnectorPayloadCodec {
     private final ZLinkStreamConnectorConfiguration configuration;
@@ -14,10 +15,10 @@ final class ZLinkStreamConnectorPayloadCodec {
     ZLinkStreamEncodedPayload copy(ZLinkStreamEncodedPayload payload) {
         Objects.requireNonNull(payload, "payload");
         return new ZLinkStreamEncodedPayload(
-            DefaultZLinkStreamConnector.validatePacketName(payload.packetName()),
-            Message.from(payload.payload()),
-            Map.copyOf(payload.metadata()),
-            requireCodec(payload.codec()));
+                DefaultZLinkStreamConnector.validatePacketName(payload.packetName()),
+                Message.from(payload.payload()),
+                Map.copyOf(payload.metadata()),
+                requireCodec(payload.codec()));
     }
 
     byte[] encode(ZLinkStreamEncodedPayload payload, boolean compress) {
@@ -32,8 +33,7 @@ final class ZLinkStreamConnectorPayloadCodec {
             //  asks to compress fails. §9 files that under CompressionFailed
             //  because only this one send operation fails.
             throw ZLinkStreamException.of(
-                ZLinkStreamErrorCode.COMPRESSION_FAILED,
-                "compression codec is not configured");
+                    ZLinkStreamErrorCode.COMPRESSION_FAILED, "compression codec is not configured");
         }
         byte[] compressed;
         try {
@@ -42,9 +42,9 @@ final class ZLinkStreamConnectorPayloadCodec {
             throw alreadyCoded;
         } catch (RuntimeException failure) {
             throw ZLinkStreamException.of(
-                ZLinkStreamErrorCode.COMPRESSION_FAILED,
-                "stream payload compression failed",
-                failure);
+                    ZLinkStreamErrorCode.COMPRESSION_FAILED,
+                    "stream payload compression failed",
+                    failure);
         }
         requireWithinSendLimit(compressed);
         return compressed;
@@ -60,8 +60,8 @@ final class ZLinkStreamConnectorPayloadCodec {
             //  frame that carries the compressed flag is rejected as
             //  DecompressionFailed.
             throw ZLinkStreamException.of(
-                ZLinkStreamErrorCode.DECOMPRESSION_FAILED,
-                "compression codec is not configured");
+                    ZLinkStreamErrorCode.DECOMPRESSION_FAILED,
+                    "compression codec is not configured");
         }
         byte[] decoded;
         try {
@@ -70,14 +70,14 @@ final class ZLinkStreamConnectorPayloadCodec {
             throw alreadyCoded;
         } catch (RuntimeException failure) {
             throw ZLinkStreamException.of(
-                ZLinkStreamErrorCode.DECOMPRESSION_FAILED,
-                "stream payload decompression failed",
-                failure);
+                    ZLinkStreamErrorCode.DECOMPRESSION_FAILED,
+                    "stream payload decompression failed",
+                    failure);
         }
         if (decoded.length > configuration.limits().receivePayload()) {
             throw ZLinkStreamException.of(
-                ZLinkStreamErrorCode.DECOMPRESSION_FAILED,
-                "decompressed stream payload exceeds maximum stream payload size");
+                    ZLinkStreamErrorCode.DECOMPRESSION_FAILED,
+                    "decompressed stream payload exceeds maximum stream payload size");
         }
         return decoded;
     }

@@ -33,7 +33,8 @@ internal sealed class ZLinkSpotActivationDispatcher
         Func<ZLinkSpotActorHandlerRegistry?> actorHandlers,
         Func<ZLinkSpotHandlerInvoker> handlerInvoker,
         Func<IZLinkActor, CancellationToken, ValueTask>? commitAcceptedActorJoin = null,
-        bool acceptActorJoinWithoutHandler = false)
+        bool acceptActorJoinWithoutHandler = false
+    )
     {
         this.runtime = runtime;
         this.nativeSpot = nativeSpot;
@@ -43,19 +44,23 @@ internal sealed class ZLinkSpotActivationDispatcher
         this.handlerInvoker = handlerInvoker;
         var loggerFactory = runtime.Services.GetService<ILoggerFactory>();
         var flowLogger = ZLinkMessageFlowTracer.CreateLogger(loggerFactory);
-        _logger = loggerFactory?.CreateLogger<ZLinkSpotActivationDispatcher>()
-                  ?? NullLogger<ZLinkSpotActivationDispatcher>.Instance;
+        _logger =
+            loggerFactory?.CreateLogger<ZLinkSpotActivationDispatcher>()
+            ?? NullLogger<ZLinkSpotActivationDispatcher>.Instance;
         _dispatchErrors = new ZLinkDispatchErrorReporter(
             runtime.Registration.DispatchOptions,
             flowLogger,
-            runtime);
+            runtime
+        );
         _actorPacketDispatcher = new ZLinkSpotActorPacketDispatcher(
             actorHandlers,
             handlerInvoker,
-            _dispatchErrors);
+            _dispatchErrors
+        );
         _actorPipeline = new ZLinkActorInboundPipeline(
             runtime,
-            new ZLinkUserSpotActorInboundEndpoint(runtime, actors, _actorPacketDispatcher));
+            new ZLinkUserSpotActorInboundEndpoint(runtime, actors, _actorPacketDispatcher)
+        );
         _actorJoinDispatcher = new ZLinkSpotActorJoinDispatcher(
             runtime,
             nativeSpot,
@@ -63,10 +68,13 @@ internal sealed class ZLinkSpotActivationDispatcher
             actorJoins,
             actors,
             handlerInvoker,
-            runtime.Services.GetService<ILoggerFactory>()?.CreateLogger<ZLinkSpotActorJoinDispatcher>(),
+            runtime
+                .Services.GetService<ILoggerFactory>()
+                ?.CreateLogger<ZLinkSpotActorJoinDispatcher>(),
             commitAcceptedActorJoin,
             _dispatchErrors,
-            acceptActorJoinWithoutHandler);
+            acceptActorJoinWithoutHandler
+        );
         _routeDispatcher = new ZLinkSpotRouteDispatcher(
             channelName,
             spotId,
@@ -74,13 +82,13 @@ internal sealed class ZLinkSpotActivationDispatcher
             handlerInvoker,
             runtime.Registration.Codecs,
             _dispatchErrors,
-            DispatchInternalRoutePacketAsync);
+            DispatchInternalRoutePacketAsync
+        );
     }
 
     public ZLinkSpotActorPacketDispatcher ActorPackets => _actorPacketDispatcher;
 
-    public async ValueTask<bool> DispatchActorJoinDrainAsync(
-        CancellationToken cancellationToken)
+    public async ValueTask<bool> DispatchActorJoinDrainAsync(CancellationToken cancellationToken)
     {
         var startedAt = Stopwatch.GetTimestamp();
         var count = 0;
@@ -94,20 +102,21 @@ internal sealed class ZLinkSpotActivationDispatcher
             {
                 request = nativeSpot.RecvActorJoin(RecvFlags.DontWait);
             }
-            catch (ZlinkRecvException ex)
-                when (ex.Result == ZlinkRecvException.ErrorCode.NoData)
+            catch (ZlinkRecvException ex) when (ex.Result == ZlinkRecvException.ErrorCode.NoData)
             {
                 return false;
             }
 
-            if (request is null) return false;
-            bytes = checked(
-                bytes + ZLinkReceiveBatchBudget.MeasureParts(request.Parts));
+            if (request is null)
+                return false;
+            bytes = checked(bytes + ZLinkReceiveBatchBudget.MeasureParts(request.Parts));
             count++;
 
             try
             {
-                await _actorJoinDispatcher.DispatchAsync(request, cancellationToken).ConfigureAwait(false);
+                await _actorJoinDispatcher
+                    .DispatchAsync(request, cancellationToken)
+                    .ConfigureAwait(false);
             }
             finally
             {
@@ -120,22 +129,24 @@ internal sealed class ZLinkSpotActivationDispatcher
     public async ValueTask DispatchActorFramesAsync(
         ZLinkSpotActorFrameBatch frames,
         ZLinkSpotSerialExecutor executor,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        await _actorPipeline.DispatchAsync(frames, executor, cancellationToken)
+        await _actorPipeline
+            .DispatchAsync(frames, executor, cancellationToken)
             .ConfigureAwait(false);
     }
 
     public ValueTask DispatchActorReplayFramesAsync(
         ZLinkSpotActorFrameBatch frames,
         Action<long> acknowledgeFrame,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         return _actorPipeline.DispatchReplayAsync(frames, acknowledgeFrame, cancellationToken);
     }
 
-    public async ValueTask<bool> DispatchRouteDrainAsync(
-        CancellationToken cancellationToken)
+    public async ValueTask<bool> DispatchRouteDrainAsync(CancellationToken cancellationToken)
     {
         var startedAt = Stopwatch.GetTimestamp();
         var count = 0;
@@ -145,7 +156,8 @@ internal sealed class ZLinkSpotActivationDispatcher
             if (ZLinkReceiveBatchBudget.IsExhausted(count, bytes, startedAt))
                 return true;
             var received = nativeSpot.RecvRoute(RecvFlags.DontWait);
-            if (received is null) return false;
+            if (received is null)
+                return false;
 
             var recordBytes = ZLinkReceiveBatchBudget.MeasureParts(received.Parts);
             bytes = checked(bytes + recordBytes);
@@ -158,7 +170,8 @@ internal sealed class ZLinkSpotActivationDispatcher
 
     public async ValueTask DispatchRouteAsync(
         ZLinkBackendRouteReceived received,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         await _routeDispatcher.DispatchAsync(received, cancellationToken).ConfigureAwait(false);
     }
@@ -166,28 +179,36 @@ internal sealed class ZLinkSpotActivationDispatcher
     private async ValueTask<bool> DispatchInternalRoutePacketAsync(
         ZLinkBackendRouteReceived received,
         ZLinkEnvelopeHeader header,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        if (!string.Equals(
+        if (
+            !string.Equals(
                 header.MessageName,
                 ZLinkRemoteActorJoinPackets.RequestPacketName,
-                StringComparison.Ordinal)
+                StringComparison.Ordinal
+            )
             && !string.Equals(
                 header.MessageName,
                 ZLinkRemoteActorJoinPackets.AdmissionPacketName,
-                StringComparison.Ordinal)
+                StringComparison.Ordinal
+            )
             && !string.Equals(
                 header.MessageName,
                 ZLinkRemoteActorJoinPackets.AdmissionAbortPacketName,
-                StringComparison.Ordinal)
+                StringComparison.Ordinal
+            )
             && !string.Equals(
                 header.MessageName,
                 ZLinkRemoteActorJoinPackets.CommitPacketName,
-                StringComparison.Ordinal)
+                StringComparison.Ordinal
+            )
             && !string.Equals(
                 header.MessageName,
                 ZLinkRemoteActorJoinPackets.HandoffCompletionPacketName,
-                StringComparison.Ordinal))
+                StringComparison.Ordinal
+            )
+        )
             return false;
 
         if (received.Parts.Count < 2)
@@ -197,73 +218,100 @@ internal sealed class ZLinkSpotActivationDispatcher
                 header,
                 new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.ProtocolError,
-                    "Remote actor join request body part is missing.")
+                    "Remote actor join request body part is missing."
+                )
                 {
-                    Origin = ZLinkErrorOrigin.Framework
-                });
+                    Origin = ZLinkErrorOrigin.Framework,
+                }
+            );
             return true;
         }
 
         try
         {
-            if (string.Equals(header.MessageName, ZLinkRemoteActorJoinPackets.AdmissionPacketName, StringComparison.Ordinal))
+            if (
+                string.Equals(
+                    header.MessageName,
+                    ZLinkRemoteActorJoinPackets.AdmissionPacketName,
+                    StringComparison.Ordinal
+                )
+            )
             {
-                var admissionRequest = ZLinkRemoteActorJoinPackets.DecodeAdmissionRequest(received.Parts);
-                var admissionReply = await runtime.AdmitRoutedActorJoinAsync(
+                var admissionRequest = ZLinkRemoteActorJoinPackets.DecodeAdmissionRequest(
+                    received.Parts
+                );
+                var admissionReply = await runtime
+                    .AdmitRoutedActorJoinAsync(
                         ZLinkSpotId.FromNativeRoutingId(nativeSpot.RoutingId),
                         admissionRequest,
-                        cancellationToken)
+                        cancellationToken
+                    )
                     .ConfigureAwait(false);
                 var admissionReplyParts = ZLinkSpotReplyEnvelope.EncodeResponseParts(
                     channelName,
                     header.MessageName,
                     header.CorrelationId,
                     admissionReply,
-                    typeof(ZLinkRemoteActorAdmissionReply));
+                    typeof(ZLinkRemoteActorAdmissionReply)
+                );
                 ZLinkSpotReplySubmitter.SubmitAndDispose(received, admissionReplyParts);
                 return true;
             }
 
-            if (string.Equals(
+            if (
+                string.Equals(
                     header.MessageName,
                     ZLinkRemoteActorJoinPackets.AdmissionAbortPacketName,
-                    StringComparison.Ordinal))
+                    StringComparison.Ordinal
+                )
+            )
             {
-                var abortRequest =
-                    ZLinkRemoteActorJoinPackets.DecodeAdmissionAbortRequest(
-                        received.Parts);
-                await runtime.AbortRoutedActorJoinAdmissionAsync(
-                        ZLinkSpotId.FromNativeRoutingId(
-                            nativeSpot.RoutingId),
+                var abortRequest = ZLinkRemoteActorJoinPackets.DecodeAdmissionAbortRequest(
+                    received.Parts
+                );
+                await runtime
+                    .AbortRoutedActorJoinAdmissionAsync(
+                        ZLinkSpotId.FromNativeRoutingId(nativeSpot.RoutingId),
                         abortRequest,
-                        cancellationToken)
+                        cancellationToken
+                    )
                     .ConfigureAwait(false);
                 var abortReplyParts = ZLinkSpotReplyEnvelope.EncodeResponseParts(
                     channelName,
                     header.MessageName,
                     header.CorrelationId,
                     abortRequest,
-                    typeof(ZLinkRemoteActorAdmissionAbortRequest));
-                ZLinkSpotReplySubmitter.SubmitAndDispose(
-                    received,
-                    abortReplyParts);
+                    typeof(ZLinkRemoteActorAdmissionAbortRequest)
+                );
+                ZLinkSpotReplySubmitter.SubmitAndDispose(received, abortReplyParts);
                 return true;
             }
 
-            if (string.Equals(header.MessageName, ZLinkRemoteActorJoinPackets.HandoffCompletionPacketName, StringComparison.Ordinal))
+            if (
+                string.Equals(
+                    header.MessageName,
+                    ZLinkRemoteActorJoinPackets.HandoffCompletionPacketName,
+                    StringComparison.Ordinal
+                )
+            )
             {
-                var completionRequest = ZLinkRemoteActorJoinPackets.DecodeHandoffCompletionRequest(received.Parts);
-                await runtime.CompleteRoutedActorHandoffAsync(
+                var completionRequest = ZLinkRemoteActorJoinPackets.DecodeHandoffCompletionRequest(
+                    received.Parts
+                );
+                await runtime
+                    .CompleteRoutedActorHandoffAsync(
                         ZLinkSpotId.FromNativeRoutingId(nativeSpot.RoutingId),
                         completionRequest,
-                        cancellationToken)
+                        cancellationToken
+                    )
                     .ConfigureAwait(false);
                 var completionReplyParts = ZLinkSpotReplyEnvelope.EncodeResponseParts(
                     channelName,
                     header.MessageName,
                     header.CorrelationId,
                     completionRequest,
-                    typeof(ZLinkRemoteActorHandoffCompletionRequest));
+                    typeof(ZLinkRemoteActorHandoffCompletionRequest)
+                );
                 ZLinkSpotReplySubmitter.SubmitAndDispose(received, completionReplyParts);
                 return true;
             }
@@ -273,16 +321,19 @@ internal sealed class ZLinkSpotActivationDispatcher
             // may hold longer than the request timeout, and the source's
             // deduped retry awaits the same preparation. Cancelling the
             // processing with the request would abort the in-flight join.
-            var reply = await runtime.JoinRoutedActorAsync(
-                ZLinkSpotId.FromNativeRoutingId(nativeSpot.RoutingId),
-                joinRequest,
-                runtime.ShutdownToken)
-            .ConfigureAwait(false);
+            var reply = await runtime
+                .JoinRoutedActorAsync(
+                    ZLinkSpotId.FromNativeRoutingId(nativeSpot.RoutingId),
+                    joinRequest,
+                    runtime.ShutdownToken
+                )
+                .ConfigureAwait(false);
             var replyParts = ZLinkRemoteActorJoinPackets.EncodeJoinReplyEnvelope(
                 channelName,
                 header.MessageName,
                 header.CorrelationId,
-                reply);
+                reply
+            );
             ZLinkSpotReplySubmitter.SubmitAndDispose(received, replyParts);
 
             return true;
@@ -297,7 +348,8 @@ internal sealed class ZLinkSpotActivationDispatcher
     private void ReplyInternalRouteError(
         ZLinkBackendRouteReceived received,
         ZLinkEnvelopeHeader header,
-        Exception exception)
+        Exception exception
+    )
     {
         // Internal route dispatcher failures are framework-generated
         // (zlink.origin marker): these packets never reach an application
@@ -307,15 +359,22 @@ internal sealed class ZLinkSpotActivationDispatcher
             header.MessageName,
             header.CorrelationId,
             exception,
-            forceFrameworkOrigin: true);
+            forceFrameworkOrigin: true
+        );
         ZLinkSpotReplySubmitter.SubmitAndDispose(received, replyParts);
     }
 
     public async ValueTask DispatchSubscriptionsAsync(CancellationToken cancellationToken)
     {
         await subscriptions
-            .DrainAsync(nativeSpot, runtime.Registration.Codecs, _dispatchErrors, _logger, InvokeSubscriptionAsync,
-                cancellationToken)
+            .DrainAsync(
+                nativeSpot,
+                runtime.Registration.Codecs,
+                _dispatchErrors,
+                _logger,
+                InvokeSubscriptionAsync,
+                cancellationToken
+            )
             .ConfigureAwait(false);
     }
 
@@ -328,23 +387,24 @@ internal sealed class ZLinkSpotActivationDispatcher
                 _dispatchErrors,
                 _logger,
                 static (_, _, _, _) => ValueTask.CompletedTask,
-                cancellationToken)
+                cancellationToken
+            )
             .ConfigureAwait(false);
     }
 
     internal static bool IsInfrastructureRoute(ZLinkBackendRouteReceived received)
     {
-        if (received.Parts.Count == 0) return false;
+        if (received.Parts.Count == 0)
+            return false;
         try
         {
-            var header = ZLinkEnvelopeCodec.DecodeHeader(
-                received.Parts,
-                validateFlow: false);
-            return header.MessageName is ZLinkRemoteActorJoinPackets.RequestPacketName
-                or ZLinkRemoteActorJoinPackets.AdmissionPacketName
-                or ZLinkRemoteActorJoinPackets.AdmissionAbortPacketName
-                or ZLinkRemoteActorJoinPackets.CommitPacketName
-                or ZLinkRemoteActorJoinPackets.HandoffCompletionPacketName;
+            var header = ZLinkEnvelopeCodec.DecodeHeader(received.Parts, validateFlow: false);
+            return header.MessageName
+                is ZLinkRemoteActorJoinPackets.RequestPacketName
+                    or ZLinkRemoteActorJoinPackets.AdmissionPacketName
+                    or ZLinkRemoteActorJoinPackets.AdmissionAbortPacketName
+                    or ZLinkRemoteActorJoinPackets.CommitPacketName
+                    or ZLinkRemoteActorJoinPackets.HandoffCompletionPacketName;
         }
         catch
         {
@@ -361,23 +421,24 @@ internal sealed class ZLinkSpotActivationDispatcher
         string channelName,
         ZLinkAcceptedWorkAdmission admission,
         bool localTarget,
-        bool validateFlow)
+        bool validateFlow
+    )
     {
         using (received)
         {
-            if (!received.CanReply || received.Parts.Count == 0) return;
+            if (!received.CanReply || received.Parts.Count == 0)
+                return;
             try
             {
-                var header = DecodeRejectionHeader(
-                    received, channelName, validateFlow);
-                if (header is null) return;
+                var header = DecodeRejectionHeader(received, channelName, validateFlow);
+                if (header is null)
+                    return;
                 var errorKind = admission switch
                 {
-                    ZLinkAcceptedWorkAdmission.Closed =>
-                        ZLinkFrameworkErrorKind.ShuttingDown,
+                    ZLinkAcceptedWorkAdmission.Closed => ZLinkFrameworkErrorKind.ShuttingDown,
                     ZLinkAcceptedWorkAdmission.RelocationMoving =>
                         ZLinkFrameworkErrorKind.Unavailable,
-                    _ => ZLinkFrameworkErrorKind.Rejected
+                    _ => ZLinkFrameworkErrorKind.Rejected,
                 };
                 //  Sealed/rejected admission is framework-generated
                 //  (zlink.origin marker on the error reply).
@@ -393,32 +454,34 @@ internal sealed class ZLinkSpotActivationDispatcher
                                 "SPOT application admission is closed.",
                             ZLinkAcceptedWorkAdmission.RelocationMoving =>
                                 "SPOT application admission is relocating.",
-                            _ => "SPOT application admission was rejected."
-                        })
+                            _ => "SPOT application admission was rejected.",
+                        }
+                    )
                     {
-                        Origin = ZLinkErrorOrigin.Framework
-                    });
+                        Origin = ZLinkErrorOrigin.Framework,
+                    }
+                );
                 ZLinkSpotReplySubmitter.SubmitAndDispose(received, reply);
             }
-            catch
-            {
-            }
+            catch { }
         }
     }
 
     internal static void RejectApplicationRouteForRelocation(
         ZLinkBackendRouteReceived received,
         string channelName,
-        bool validateFlow)
+        bool validateFlow
+    )
     {
         using (received)
         {
-            if (!received.CanReply || received.Parts.Count == 0) return;
+            if (!received.CanReply || received.Parts.Count == 0)
+                return;
             try
             {
-                var header = DecodeRejectionHeader(
-                    received, channelName, validateFlow);
-                if (header is null) return;
+                var header = DecodeRejectionHeader(received, channelName, validateFlow);
+                if (header is null)
+                    return;
                 //  Relocation ingress refusal is framework-generated
                 //  (zlink.origin marker on the error reply).
                 var reply = ZLinkSpotReplyEnvelope.EncodeErrorParts(
@@ -428,31 +491,33 @@ internal sealed class ZLinkSpotActivationDispatcher
                     new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.Unavailable,
                         "SPOT relocation ingress hold is full or sealed.",
-                        ZLinkRetryAdvice.RetryAfterBackoff)
+                        ZLinkRetryAdvice.RetryAfterBackoff
+                    )
                     {
-                        Origin = ZLinkErrorOrigin.Framework
-                    });
+                        Origin = ZLinkErrorOrigin.Framework,
+                    }
+                );
                 ZLinkSpotReplySubmitter.SubmitAndDispose(received, reply);
             }
-            catch
-            {
-            }
+            catch { }
         }
     }
 
     internal static void RejectApplicationRouteForStaleMessageFollow(
         ZLinkBackendRouteReceived received,
         string channelName,
-        bool validateFlow)
+        bool validateFlow
+    )
     {
         using (received)
         {
-            if (!received.CanReply || received.Parts.Count == 0) return;
+            if (!received.CanReply || received.Parts.Count == 0)
+                return;
             try
             {
-                var header = DecodeRejectionHeader(
-                    received, channelName, validateFlow);
-                if (header is null) return;
+                var header = DecodeRejectionHeader(received, channelName, validateFlow);
+                if (header is null)
+                    return;
                 //  Stale route fence refusal is framework-generated
                 //  (zlink.origin marker on the error reply).
                 var reply = ZLinkSpotReplyEnvelope.EncodeErrorParts(
@@ -461,15 +526,15 @@ internal sealed class ZLinkSpotActivationDispatcher
                     header.CorrelationId,
                     new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.InvalidOperation,
-                        "The Spot Message Follow route is stale.")
+                        "The Spot Message Follow route is stale."
+                    )
                     {
-                        Origin = ZLinkErrorOrigin.Framework
-                    });
+                        Origin = ZLinkErrorOrigin.Framework,
+                    }
+                );
                 ZLinkSpotReplySubmitter.SubmitAndDispose(received, reply);
             }
-            catch
-            {
-            }
+            catch { }
         }
     }
 
@@ -478,7 +543,8 @@ internal sealed class ZLinkSpotActivationDispatcher
     private static ZLinkEnvelopeHeader? DecodeRejectionHeader(
         ZLinkBackendRouteReceived received,
         string channelName,
-        bool validateFlow)
+        bool validateFlow
+    )
     {
         try
         {
@@ -492,7 +558,9 @@ internal sealed class ZLinkSpotActivationDispatcher
                     ZLinkSpotReplyEnvelope.EncodeProtocolErrorParts(
                         channelName,
                         protocolError.Header,
-                        protocolError.Message));
+                        protocolError.Message
+                    )
+                );
             return null;
         }
     }
@@ -501,15 +569,13 @@ internal sealed class ZLinkSpotActivationDispatcher
         ZLinkSpotSubscriptionDescriptor descriptor,
         object? message,
         ZLinkPublishMessageContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         try
         {
-            await handlerInvoker().InvokeSubscriptionAsync(
-                    descriptor,
-                    message,
-                    context,
-                    cancellationToken)
+            await handlerInvoker()
+                .InvokeSubscriptionAsync(descriptor, message, context, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -519,11 +585,9 @@ internal sealed class ZLinkSpotActivationDispatcher
                 _dispatchErrors.Flow.CaptureEnabled,
                 ZLinkDispatchMessageKind.Publish,
                 descriptor.MessageName,
-                topic: descriptor.Topic);
-            scope.HandlerException(
-                _dispatchErrors,
-                ZLinkDispatchErrorAction.Drop,
-                ex);
+                topic: descriptor.Topic
+            );
+            scope.HandlerException(_dispatchErrors, ZLinkDispatchErrorAction.Drop, ex);
         }
     }
 }

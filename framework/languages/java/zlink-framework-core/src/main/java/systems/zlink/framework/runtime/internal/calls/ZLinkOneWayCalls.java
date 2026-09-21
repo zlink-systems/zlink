@@ -1,13 +1,14 @@
 package systems.zlink.framework.runtime.internal.calls;
 
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.atomic.AtomicBoolean;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Shared one-way admission and error mapping for all runtime families. */
 public final class ZLinkOneWayCalls {
@@ -21,56 +22,59 @@ public final class ZLinkOneWayCalls {
     // an independent CompletableFuture from toCompletableFuture(), so the
     // shared already-completed admission still satisfies stage isolation.
     private static final CompletionStage<Void> IMMEDIATE_ADMISSION =
-        CompletableFuture.completedStage(null);
+            CompletableFuture.completedStage(null);
 
-    private ZLinkOneWayCalls() {
-    }
+    private ZLinkOneWayCalls() {}
 
     public static <T> CompletionStage<T> beginOneWay(AtomicBoolean submitted) {
         if (submitted.compareAndSet(false, true)) {
             return null;
         }
-        return CompletableFuture.failedFuture(new ZLinkFrameworkException(
-            ZLinkFrameworkErrorKind.INVALID_OPERATION,
-            "call has already been submitted"));
+        return CompletableFuture.failedFuture(
+                new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                        "call has already been submitted"));
     }
 
     public static CompletionStage<Void> oneWayStatus(int status) {
         RuntimeException failure = failureForStatus(status);
         return failure == null
-            ? CompletableFuture.completedFuture(null)
-            : CompletableFuture.failedFuture(failure);
+                ? CompletableFuture.completedFuture(null)
+                : CompletableFuture.failedFuture(failure);
     }
 
     public static RuntimeException failureForStatus(int status) {
         return switch (status) {
             case SUBMITTED -> null;
-            case TIMED_OUT, BACKPRESSURED -> new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
-                "one-way submission did not obtain queue capacity before the send deadline");
-            case ROUTE_NOT_CONNECTED -> new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.UNAVAILABLE,
-                "one-way route is not connected");
+            case TIMED_OUT, BACKPRESSURED ->
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                            "one-way submission did not obtain queue capacity before the send"
+                                    + " deadline");
+            case ROUTE_NOT_CONNECTED ->
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.UNAVAILABLE, "one-way route is not connected");
             //  Framework-generated admission terminal: the marker keeps
             //  NotFound usable as the stale-route control signal now that
             //  stale detection requires kind + framework origin.
-            case TARGET_NOT_FOUND -> ZLinkFrameworkErrorOrigin.framework(
-                ZLinkFrameworkErrorKind.NOT_FOUND,
-                "one-way target was not found");
-            case SHUTDOWN -> new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.SHUTTING_DOWN,
-                "framework runtime is shutting down");
-            default -> throw new IllegalArgumentException(
-                "unknown one-way admission status: " + status);
+            case TARGET_NOT_FOUND ->
+                    ZLinkFrameworkErrorOrigin.framework(
+                            ZLinkFrameworkErrorKind.NOT_FOUND, "one-way target was not found");
+            case SHUTDOWN ->
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+                            "framework runtime is shutting down");
+            default ->
+                    throw new IllegalArgumentException(
+                            "unknown one-way admission status: " + status);
         };
     }
 
     /**
      * Returns the binding's successful DONT_WAIT admission marker.
      *
-     * <p>Only this marker means that admission is already terminal. A generic
-     * completed stage can still represent a mapped failure and must retain the
-     * normal one-way adapter.
+     * <p>Only this marker means that admission is already terminal. A generic completed stage can
+     * still represent a mapped failure and must retain the normal one-way adapter.
      */
     public static CompletionStage<Void> immediateAdmission() {
         return IMMEDIATE_ADMISSION;
@@ -86,42 +90,47 @@ public final class ZLinkOneWayCalls {
             return submission;
         }
         CompletableFuture<Void> source = submission.toCompletableFuture();
-        CompletableFuture<Void> result = new CompletableFuture<>() {
-            @Override
-            public boolean cancel(boolean mayInterruptIfRunning) {
-                boolean cancelled = super.cancel(mayInterruptIfRunning);
-                if (cancelled) {
-                    source.cancel(mayInterruptIfRunning);
-                }
-                return cancelled;
-            }
-        };
-        submission.whenComplete((ignored, error) -> {
-            if (error == null) {
-                result.complete(null);
-                return;
-            }
-            Throwable cause = unwrap(error);
-            if (cause instanceof ZlinkSubmitException submit) {
-                CompletionStage<Void> mapped = switch (submit.getResult()) {
-                    case BACKPRESSURED -> oneWayStatus(BACKPRESSURED);
-                    case NOT_ADMITTED -> oneWayStatus(
-                        isRouteUnavailableErrno(submit.getNativeErrno())
-                            ? ROUTE_NOT_CONNECTED
-                            : BACKPRESSURED);
-                    case NOT_CONNECTED -> oneWayStatus(ROUTE_NOT_CONNECTED);
-                    case NOT_FOUND -> oneWayStatus(TARGET_NOT_FOUND);
-                    case TERMINATED -> oneWayStatus(SHUTDOWN);
-                    default -> null;
+        CompletableFuture<Void> result =
+                new CompletableFuture<>() {
+                    @Override
+                    public boolean cancel(boolean mayInterruptIfRunning) {
+                        boolean cancelled = super.cancel(mayInterruptIfRunning);
+                        if (cancelled) {
+                            source.cancel(mayInterruptIfRunning);
+                        }
+                        return cancelled;
+                    }
                 };
-                if (mapped != null) {
-                    mapped.whenComplete((unused, mappedError) ->
-                        result.completeExceptionally(unwrap(mappedError)));
-                    return;
-                }
-            }
-            result.completeExceptionally(cause);
-        });
+        submission.whenComplete(
+                (ignored, error) -> {
+                    if (error == null) {
+                        result.complete(null);
+                        return;
+                    }
+                    Throwable cause = unwrap(error);
+                    if (cause instanceof ZlinkSubmitException submit) {
+                        CompletionStage<Void> mapped =
+                                switch (submit.getResult()) {
+                                    case BACKPRESSURED -> oneWayStatus(BACKPRESSURED);
+                                    case NOT_ADMITTED ->
+                                            oneWayStatus(
+                                                    isRouteUnavailableErrno(submit.getNativeErrno())
+                                                            ? ROUTE_NOT_CONNECTED
+                                                            : BACKPRESSURED);
+                                    case NOT_CONNECTED -> oneWayStatus(ROUTE_NOT_CONNECTED);
+                                    case NOT_FOUND -> oneWayStatus(TARGET_NOT_FOUND);
+                                    case TERMINATED -> oneWayStatus(SHUTDOWN);
+                                    default -> null;
+                                };
+                        if (mapped != null) {
+                            mapped.whenComplete(
+                                    (unused, mappedError) ->
+                                            result.completeExceptionally(unwrap(mappedError)));
+                            return;
+                        }
+                    }
+                    result.completeExceptionally(cause);
+                });
         return result;
     }
 
