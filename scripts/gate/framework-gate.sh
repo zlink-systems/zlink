@@ -7,7 +7,7 @@ require_quiet || exit 2
 unset ZLINK_LIBRARY_PATH; : > "$LOGS/results.txt"
 # Formatting first: it is the cheapest step and the guides excerpt these sources as they are
 # (doc/principal/dev/source-formatting.ko.md).
-run format-check . env JAVA_HOME="$ZLINK_FORMAT_JAVA_HOME" PATH="$ZLINK_FORMAT_JAVA_HOME/bin:$PATH" bash scripts/format/format.sh --check
+run format-check . bash scripts/format/format.sh --check
 # One sample per invocation. A batch runner let a stalled sample hold the
 # whole language's run and made interference between samples indistinguishable
 # from a defect in any one of them (#405).

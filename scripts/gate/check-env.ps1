@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([switch]$FormatCheck)
+param()
 
 $ErrorActionPreference = "Stop"
 $missing = 0
@@ -49,13 +49,5 @@ if ($nodeMajor -ge 20) { Report-Ok "node >= 20" } else { Report-Missing "node >=
 $cmakeCommand = Get-Command cmake.exe, cmake -ErrorAction SilentlyContinue | Select-Object -First 1
 $cmakeVersion = if ($cmakeCommand) { ((& $cmakeCommand.Source --version | Select-Object -First 1) -replace '^.*\s', '') } else { $null }
 if ($cmakeVersion -and ([version]$cmakeVersion -ge [version]"3.20")) { Report-Ok "cmake >= 3.20" } else { Report-Missing "cmake >= 3.20" "winget install Kitware.CMake" }
-
-if ($FormatCheck) {
-  $formatJava = $env:ZLINK_FORMAT_JAVA_HOME
-  $formatJavaExe = if ($formatJava) { Join-Path $formatJava "bin\java.exe" } else { $null }
-  if ($formatJavaExe -and (Test-Path -LiteralPath $formatJavaExe -ErrorAction SilentlyContinue) -and (Get-MajorVersion $formatJavaExe) -eq 22) {
-    Report-Ok "JDK 22 for format"
-  } else { Report-Missing "JDK 22 for format" "winget install EclipseAdoptium.Temurin.22.JDK; `$env:ZLINK_FORMAT_JAVA_HOME='C:\Program Files\Eclipse Adoptium\jdk-22'" }
-}
 
 if ($missing -ne 0) { exit 1 }

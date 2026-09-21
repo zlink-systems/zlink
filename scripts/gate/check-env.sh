@@ -11,23 +11,8 @@ gate_java_major() { # <java executable> -> major, or nothing
   printf '%s\n' "${BASH_REMATCH[1]}"
 }
 
-gate_find_jdk22() {
-  local home java candidate
-  for home in "${ZLINK_FORMAT_JAVA_HOME:-}" "${JAVA_HOME_22:-}" "${JAVA_HOME:-}" \
-      /usr/lib/jvm/temurin-22-jdk-amd64 /usr/lib/jvm/java-22-openjdk-amd64; do
-    [[ -n "$home" && -x "$home/bin/java" ]] || continue
-    [[ "$(gate_java_major "$home/bin/java")" == 22 ]] && { printf '%s\n' "$home"; return 0; }
-  done
-  java="$(command -v java-22 2>/dev/null || true)"
-  [[ -n "$java" ]] || return 1
-  candidate="$(cd "$(dirname "$(readlink -f "$java")")/.." && pwd)"
-  [[ "$(gate_java_major "$candidate/bin/java")" == 22 ]] || return 1
-  printf '%s\n' "$candidate"
-}
-
 check_env() {
-  local format=0 missing=0 java java_major node_major cmake_version browser_root jdk22 java_candidate
-  [[ "${1:-}" == "--format" ]] && format=1
+  local missing=0 java java_major node_major cmake_version browser_root java_candidate
 
   export VCPKG_OVERLAY_PORTS="${VCPKG_OVERLAY_PORTS:-$gate_env_root/vcpkg/ports}"
 
@@ -101,17 +86,6 @@ check_env() {
   else
     echo "missing ninja: sudo apt install ninja-build"
     ((missing++))
-  fi
-
-  if ((format)); then
-    jdk22="$(gate_find_jdk22 2>/dev/null || true)"
-    if [[ -n "$jdk22" ]]; then
-      export ZLINK_FORMAT_JAVA_HOME="$jdk22"
-      echo "ok JDK 22 for format"
-    else
-      echo "missing JDK 22 for format: sudo apt install openjdk-22-jdk"
-      ((missing++))
-    fi
   fi
 
   ((missing == 0))

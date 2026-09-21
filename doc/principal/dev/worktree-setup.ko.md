@@ -28,7 +28,6 @@
 | `Playwright Chromium` | Node·shared ZoneWorld client의 브라우저 샘플. 머신 캐시(Playwright 기본 위치: Linux `~/.cache/ms-playwright`, Windows `%LOCALAPPDATA%\ms-playwright`) 하나를 모든 트리가 쓴다 |
 | `docker` | 샘플의 Redis, cross-language e2e |
 | `dotnet`, `node >= 20`, `cmake >= 3.20`, `ninja`(Linux) | 각 언어 빌드. Windows는 MSVC generator를 쓰므로 ninja가 없다 |
-| `JDK 22 for format` | `scripts/format/format.sh`의 google-java-format 1.25.2가 JDK 25에서 실패한다(#798). `framework-gate.sh`(format-check 포함)에서만 검사한다 |
 
 WSL 셸 profile에 `JAVA_HOME`·`VCPKG_ROOT`를 두면 새 셸마다 다시 export하지 않는다. Windows는
 User 환경 변수로 같은 값을 둔다(Machine 값이 다른 버전을 가리키면 `JAVA_HOME`을 보는 도구는

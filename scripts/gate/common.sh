@@ -3,9 +3,7 @@
 Z="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TAG="${1:?usage: <script> <tag>}"
 source "$Z/scripts/gate/check-env.sh"
-check_env_args=()
-[[ "$(basename "$0")" == framework-gate.sh ]] && check_env_args+=(--format)
-check_env "${check_env_args[@]}" || return $?
+check_env || return $?
 mkdir -p /dev/shm/zlink-tmp-{gate,node,java,dotnet}
 # Core runtime the gates run against. Default is the dev build; a release check sets
 # ZLINK_GATE_CORE_LIB to a release prefix lib dir (e.g. ~/.cache/zlink/core/0.17.3/linux-x64/lib).
