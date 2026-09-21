@@ -85,7 +85,9 @@ TEXT_SUFFIXES = (
 #  소유자는 이 둘이고, 미러에 두 번째 사본을 손으로 관리하지 않는다.
 ROOT_FILES = (".gitignore", ".gitattributes")
 
-README_KO = """# ZLink {title} examples
+README_KO = """[English](./README.md) | **한국어**
+
+# ZLink {title} examples
 
 [zlink-systems/zlink](https://github.com/zlink-systems/zlink)의
 `framework/languages/{lang}/`를 내보낸 읽기 전용 미러다. `main`은 최신 릴리스에 그 뒤의
@@ -101,10 +103,11 @@ README_KO = """# ZLink {title} examples
 각 디렉터리의 README가 전제 조건·빌드·실행·검증 절차를 적는다. 문서는
 [zlink.systems](https://zlink.systems)에 있다.
 
-영어 대응 문서는 [README.md](README.md)다.
 """
 
-README_EN = """# ZLink {title} examples
+README_EN = """**English** | [한국어](./README.ko.md)
+
+# ZLink {title} examples
 
 A read-only mirror of `framework/languages/{lang}/` in
 [zlink-systems/zlink](https://github.com/zlink-systems/zlink). `main` is the latest release
@@ -120,7 +123,6 @@ issues and pull requests to the source repository — this one accepts no PRs.
 Each directory's README carries the prerequisites, build, run and verify steps. The documentation
 lives at [zlink.systems](https://zlink.systems).
 
-The Korean counterpart is [README.ko.md](README.ko.md).
 """
 
 
