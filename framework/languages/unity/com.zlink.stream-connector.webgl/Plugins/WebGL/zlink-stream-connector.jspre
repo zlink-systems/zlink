@@ -1,7 +1,7 @@
 // GENERATED FILE - DO NOT EDIT.
 // Produced by framework/languages/node/scripts/sync-unity-webgl-package.mjs from
 // @zlink-systems/stream-connector (package root, IIFE build).
-// Package version: 0.18.0
+// Package version: 0.20.0
 //
 // This is the same TypeScript connector the npm package root ships. The UPM
 // adapter adds no wire runtime of its own (stream-connector spec 32 section 11).
@@ -2175,8 +2175,8 @@ var ZlinkStreamConnectorBundle = (() => {
         }
         const error = toStreamError(cause, "connectTimeout" /* ConnectTimeout */, "Connect failed.");
         (_a = this.closeReasonValue) != null ? _a : this.closeReasonValue = "TransportError";
-        await this.setState("disconnected" /* Disconnected */, error, signal);
-        await this.publishDisconnectedOnce(signal);
+        void this.setState("disconnected" /* Disconnected */, error, signal);
+        this.publishDisconnectedWithoutWaiting(signal);
         throw new ZlinkStreamException(error);
       }
     }
@@ -2224,7 +2224,7 @@ var ZlinkStreamConnectorBundle = (() => {
       }
       this.pendingRequests.failAll({ code: "disconnected" /* Disconnected */, message: "Connector closed." });
       this.receivedMessages.connectionEnded();
-      await this.setState("closed" /* Closed */, void 0, signal);
+      void this.setState("closed" /* Closed */, void 0, signal);
       this.publishDisconnectedWithoutWaiting(signal);
       if (errors.length === 1) throw errors[0];
       if (errors.length > 1) throw new AggregateError(errors, "Stream connector close failed.");
@@ -2458,29 +2458,23 @@ var ZlinkStreamConnectorBundle = (() => {
     /**
      * Runs once the teardown promise has settled, so a handler reached from here
      * may call `connect` without waiting for a task its own caller still holds.
-     * The reconnect is queued before the notification is awaited for the same
-     * reason: spec stream-connector 32 §6 has reconnect on by default, and a
+     * The reconnect is queued after both notifications have been started for the
+     * same reason: spec stream-connector 32 §6 has reconnect on by default, and a
      * handler that is slow — or whose promise never settles at all — must not
-     * cost the connector the attempt. The state is already `Disconnected` and the
-     * state handlers are already invoked by the time the queued microtask runs,
-     * because `setState` records the state and hands the change to the handlers
-     * before it awaits any of them.
+     * cost the connector the attempt.
      */
     async announceDisconnect(error) {
       if (this.closeRequested) return;
       const announce = this.claimDisconnectedPublish();
-      const notified = (async () => {
-        await this.setState("disconnected" /* Disconnected */, error);
-        if (announce) {
-          await this.events.publishDisconnected();
-        }
-      })();
+      void this.setState("disconnected" /* Disconnected */, error);
+      if (announce) {
+        void this.events.publishDisconnected().catch(() => void 0);
+      }
       if (this.shouldReconnect()) {
         queueMicrotask(() => {
           void this.connect().catch(() => void 0);
         });
       }
-      await notified;
     }
     shouldReconnect() {
       return this.options.reconnect.enabled && !this.closeRequested;
