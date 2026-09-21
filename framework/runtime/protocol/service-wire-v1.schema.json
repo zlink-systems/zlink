@@ -675,7 +675,8 @@
         "frozen-record-body.completion.failureCode",
         "reply.failureCode",
         "replyRelay.failureCode",
-        "relocation-control-data.failureCode"
+        "relocation-control-data.failureCode",
+        "creation-operation-terminal-v1.failureCode"
       ],
       "success": {
         "terminalResult": "ok",

@@ -372,6 +372,10 @@ Validator는 각 kind의 object를 자기 코드의 기대값과 **literal로 �
 문서용이 아니라 build-time에 검사되는 데이터다 — 규칙이 바뀌면 validator의 기대값과 schema를
 함께 바꿔야 하고, 한쪽만 바뀐 schema는 통과하지 못한다. 반면 이 tuple을 runtime decoder의 검사로
 내리는 것은 `terminal-failure-integrity`(terminal result·failure code·payload의 허용 조합) 하나다.
+그 `fields`는 검사를 받는 wire owner의 유일한 목록이며, `terminalResult`와 `failureCode`를 함께
+선언한 owner(type의 `fields`·`body`, command의 `body`, 또는 이름 있는 conditional-union case;
+`layout`과 `otherwise` fallback은 이 쌍을 가질 수 없다) 전부를 적는다 — validator가 두 집합의
+동치를 검사하고, lowering은 이 목록에 있는 owner에만 검사를 붙인다.
 나머지 kind의 규범은 [§9](#9-profile과-소유-조항)의 소유 절이 정하고 runtime이 그 절에 따라
 구현하며, schema는 그 규범을 기계가 대조할 수 있는 형태로 보존한다.
 

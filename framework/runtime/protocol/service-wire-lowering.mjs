@@ -531,16 +531,16 @@ function runtimePredicateOperation(predicate, targets) {
   };
 }
 
-function terminalFailureFields(fields) {
-  const names = new Set(fields.map((field) => field.name));
-  return names.has("terminalResult") && names.has("failureCode");
-}
-
-function ownerRuntimePredicates(name, runtimePredicates, fields = []) {
-  if (!terminalFailureFields(fields)) return [];
-  return runtimePredicates.map((predicate) =>
-    runtimePredicateOperation(predicate.reference, [`${name}.failureCode`]),
-  );
+// The schema's `terminal-failure-integrity.fields` list is the only owner of
+// which wire owners carry the predicate; the validator keeps that list equal
+// to the owners that declare the terminalResult/failureCode pair.
+function ownerRuntimePredicates(name, runtimePredicates) {
+  const target = `${name}.failureCode`;
+  return runtimePredicates
+    .filter((predicate) => predicate.targets.includes(target))
+    .map((predicate) =>
+      runtimePredicateOperation(predicate.reference, [target]),
+    );
 }
 
 function vectorComparisonSources(constraint) {
@@ -708,11 +708,7 @@ function lowerUnionOtherwise(otherwise, model) {
 }
 
 function typeOperations(type, node, model, runtimePredicates) {
-  const predicates = ownerRuntimePredicates(
-    type.name,
-    runtimePredicates,
-    type.fields ?? type.body ?? [],
-  );
+  const predicates = ownerRuntimePredicates(type.name, runtimePredicates);
   if (type.kind === "integer") {
     return [
       {
@@ -892,7 +888,6 @@ function typeOperations(type, node, model, runtimePredicates) {
                   ...ownerRuntimePredicates(
                     `${type.name}.${Object.values(entry.when).join(".")}`,
                     runtimePredicates,
-                    entry.fields,
                   ),
                 ],
               },
@@ -1069,7 +1064,7 @@ function lowerCommand(command, model, runtimePredicates) {
       op: "payload",
       ...node.payload,
     },
-    ...ownerRuntimePredicates(command.name, runtimePredicates, command.body),
+    ...ownerRuntimePredicates(command.name, runtimePredicates),
   ];
   return node;
 }
@@ -1565,6 +1560,11 @@ function assertLoweringCoverage(schema, ir) {
       `$.types: lowered conditional-union inventory differs from the schema`,
     );
   }
+  const terminalTargets = new Set(
+    schema.semanticConstraints
+      .filter((constraint) => constraint.kind === "terminal-failure-integrity")
+      .flatMap((constraint) => constraint.fields),
+  );
   for (const source of sourceUnions) {
     const lowered = loweredUnions.find((type) => type.name === source.name);
     if (
@@ -1603,9 +1603,12 @@ function assertLoweringCoverage(schema, ir) {
           .slice(0, constraintOffset)
           .some((operation) => operation.op !== "field") ||
         JSON.stringify(constraints) !== JSON.stringify(expectedConstraints) ||
-        (terminalFailureFields(sourceCase.fields) && predicates.length !== 1) ||
-        (!terminalFailureFields(sourceCase.fields) &&
-          predicates.length !== 0) ||
+        predicates.length !==
+          (terminalTargets.has(
+            `${source.name}.${Object.values(sourceCase.when).join(".")}.failureCode`,
+          )
+            ? 1
+            : 0) ||
         trailingOperations.length !== constraints.length + predicates.length
       ) {
         errors.push(

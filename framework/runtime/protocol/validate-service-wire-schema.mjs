@@ -157,6 +157,7 @@ function validateSchema(schema) {
 
   validateTypeCycles(types, fail);
   validateSemanticConstraints(schema.semanticConstraints, contexts, fail);
+  validateTerminalFailureOwners(schema, fail);
   validateCommands(schema.commands, schema.reservedCommandRanges, flags, contexts, types, bounds, fail);
   validateLivenessProfile(schema.livenessProfile, schema.commands, fail);
   validateFanoutLivenessProfile(schema.fanoutLivenessProfile, fail);
@@ -1367,6 +1368,7 @@ function validateSemanticConstraints(constraints, contexts, fail) {
         "reply.failureCode",
         "replyRelay.failureCode",
         "relocation-control-data.failureCode",
+        "creation-operation-terminal-v1.failureCode",
       ],
       success: {
         terminalResult: "ok",
@@ -1751,6 +1753,65 @@ function validateSemanticConstraints(constraints, contexts, fail) {
   for (const kind of ["implies", ...expectedExact.keys()]) {
     if (!seenKinds.has(kind)) {
       fail("$.semanticConstraints", `missing required semantic constraint ${kind}`);
+    }
+  }
+}
+
+// `terminal-failure-integrity.fields` is the only owner of the list of wire
+// owners whose terminalResult/failureCode pair the generated codecs check
+// (07 §8.2). The list must name exactly the owners that declare both fields —
+// a type's fields/body, a command's body, or one named conditional-union case — so a new
+// terminal owner cannot appear without the taxonomy check, and the list cannot
+// name an owner that has no pair. A union's `otherwise` fallback has no name
+// on the wire and a `layout` carries no field operations that could hold the
+// check, so neither may carry the pair.
+function terminalFailureOwners(schema, fail) {
+  const declaresPair = (fields) => {
+    const names = new Set((Array.isArray(fields) ? fields : [])
+      .map((field) => (isObject(field) ? field.name : undefined)));
+    return names.has("terminalResult") && names.has("failureCode");
+  };
+  const owners = [];
+  for (const type of Array.isArray(schema.types) ? schema.types : []) {
+    if (!isObject(type)) continue;
+    if (declaresPair(type.fields ?? type.body)) owners.push(type.name);
+    for (const entry of Array.isArray(type.cases) ? type.cases : []) {
+      if (isObject(entry) && isObject(entry.when) && declaresPair(entry.fields)) {
+        owners.push(`${type.name}.${Object.values(entry.when).join(".")}`);
+      }
+    }
+    if (isObject(type.otherwise) && declaresPair(type.otherwise.fields)) {
+      fail(`$.types[${type.name}].otherwise.fields`,
+        "the terminalResult/failureCode pair must be declared by a named case, not the fallback");
+    }
+    if (declaresPair(type.layout)) {
+      fail(`$.types[${type.name}].layout`,
+        "the terminalResult/failureCode pair must be declared by fields or a named case, not a layout");
+    }
+  }
+  for (const command of Array.isArray(schema.commands) ? schema.commands : []) {
+    if (isObject(command) && declaresPair(command.body)) owners.push(command.name);
+  }
+  return owners;
+}
+
+function validateTerminalFailureOwners(schema, fail) {
+  const constraint = (Array.isArray(schema.semanticConstraints) ? schema.semanticConstraints : [])
+    .find((entry) => isObject(entry) && entry.kind === "terminal-failure-integrity");
+  if (!constraint || !Array.isArray(constraint.fields)) return;
+  const location = "$.semanticConstraints[terminal-failure-integrity].fields";
+  const listed = new Set(constraint.fields
+    .filter((entry) => typeof entry === "string" && entry.endsWith(".failureCode"))
+    .map((entry) => entry.slice(0, -".failureCode".length)));
+  const declared = new Set(terminalFailureOwners(schema, fail));
+  for (const owner of declared) {
+    if (!listed.has(owner)) {
+      fail(location, `owner ${owner} declares terminalResult and failureCode but is not listed`);
+    }
+  }
+  for (const owner of listed) {
+    if (!declared.has(owner)) {
+      fail(location, `lists ${owner}, which declares no terminalResult/failureCode pair`);
     }
   }
 }
@@ -6809,13 +6870,16 @@ function walk(value, location, visitor) {
   }
 }
 
-function expectInvalid(schema, label, mutate) {
+function expectInvalid(schema, label, mutate, pattern) {
   const candidate = clone(schema);
   mutate(candidate);
   try {
     validateSchema(candidate);
   } catch (error) {
     if (error instanceof SchemaValidationError) {
+      if (pattern && !error.errors.some((entry) => entry.includes(pattern))) {
+        throw new Error(`negative self-test failed for another reason: ${label}\n${error.errors.join("\n")}`);
+      }
       return;
     }
     throw error;
@@ -7732,9 +7796,54 @@ function runSelfTests(schema) {
       );
       constraint.fencingMarginMs = 1000;
     }],
+    ["terminal owner not listed in the taxonomy", (candidate) => {
+      const owner = candidate.types.find((type) => type.name === "actor-ref");
+      owner.fields.push(
+        { name: "terminalResult", $ref: "request-terminal-result" },
+        { name: "failureCode", $ref: "framework-error-code" },
+      );
+    }, "owner actor-ref declares terminalResult and failureCode but is not listed"],
+    ["terminal union case not listed in the taxonomy", (candidate) => {
+      const body = candidate.types.find((type) => type.name === "frozen-record-body");
+      const completion = body.cases.find((entry) => entry.when.recordKind === "completion");
+      completion.when.recordKind = "nodeSend";
+      body.cases.find((entry) => entry.when.recordKind === "nodeSend" && entry !== completion)
+        .when.recordKind = "completion";
+    }, "but is not listed"],
+    ["terminal pair in a union fallback", (candidate) => {
+      const union = candidate.types.find(
+        (type) => type.kind === "conditional-union" && isObject(type.otherwise),
+      );
+      union.otherwise.fields.push(
+        { name: "terminalResult", $ref: "request-terminal-result" },
+        { name: "failureCode", $ref: "framework-error-code" },
+      );
+    }, "must be declared by a named case, not the fallback"],
+    ["terminal pair in a layout", (candidate) => {
+      const frame = candidate.types.find((type) => type.name === "metadata-frame");
+      frame.layout = [
+        { name: "terminalResult", $ref: "request-terminal-result", constant: "ok" },
+        { name: "failureCode", $ref: "framework-error-code", counts: "entries" },
+        { name: "entries", kind: "repeat", countFrom: "failureCode", item: { $ref: "metadata-entry" } },
+      ];
+    }, "must be declared by fields or a named case, not a layout"],
+    ["taxonomy lists an owner without the pair", (candidate) => {
+      const constraint = candidate.semanticConstraints.find(
+        (entry) => entry.kind === "terminal-failure-integrity",
+      );
+      constraint.fields.push("actor-ref.failureCode");
+    }, "lists actor-ref, which declares no terminalResult/failureCode pair"],
+    ["taxonomy omits a terminal owner", (candidate) => {
+      const constraint = candidate.semanticConstraints.find(
+        (entry) => entry.kind === "terminal-failure-integrity",
+      );
+      constraint.fields = constraint.fields.filter(
+        (entry) => entry !== "creation-operation-terminal-v1.failureCode",
+      );
+    }, "owner creation-operation-terminal-v1 declares terminalResult and failureCode but is not listed"],
   ];
-  for (const [label, mutate] of tests) {
-    expectInvalid(schema, label, mutate);
+  for (const [label, mutate, pattern] of tests) {
+    expectInvalid(schema, label, mutate, pattern);
   }
   return tests.length;
 }
