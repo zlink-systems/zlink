@@ -25,8 +25,7 @@
 
 ## Category
 
-Public contract 감사 categorization([contract-inventory](../../../contract-inventory/route-mesh-v11-public-contract-trace.json))과
-같은 8개 category를 챕터로 사용한다. 언어 사이에 이미 검증된 분류라 새로 만들지 않는다.
+이 표의 8개 category를 챕터로 쓴다. 언어 사이에 이미 검증된 분류라 새로 만들지 않는다.
 
 | Category | 상태 | 대응 spec |
 |---|---|---|
@@ -39,7 +38,7 @@ Public contract 감사 categorization([contract-inventory](../../../contract-inv
 | [Location authority](07-location-authority.ko.md) | 작성 완료 | 21-location-runtime, 22-location-store-redis, 23-relocation-store-redis, 30-host-relocation-flow |
 | [Observability diagnostics](08-observability-diagnostics.ko.md) | 작성 완료 | 24-runtime-monitoring, 25-runtime-metrics, 26-message-flow-tracing, 27-flow-correlation, 29-transport-liveness |
 
-번호는 이 순서를 그대로 따른다(contract-inventory의 category 순서와 같다).
+번호는 이 표의 순서를 그대로 따른다.
 
 ko·en 모두 갖췄고 나머지 4개 framework 언어(C++·Java·Kotlin·Node.js)로도 같은 구조를
 확장했다. `mkdocs.yml` nav에 올라가 있다.

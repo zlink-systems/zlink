@@ -31,9 +31,8 @@ failure.
 
 ## Category
 
-The chapters use the same 8 categories as the public-contract audit categorization
-([contract-inventory](../../../contract-inventory/route-mesh-v11-public-contract-trace.json)).
-This taxonomy is already verified across languages, so this tree does not invent a new one.
+The chapters use the 8 categories in this table. This taxonomy is already verified across
+languages, so this tree does not invent a new one.
 
 | Category | Status | Corresponding spec |
 |---|---|---|
@@ -46,7 +45,7 @@ This taxonomy is already verified across languages, so this tree does not invent
 | [Location authority](07-location-authority.en.md) | Complete | 21-location-runtime, 22-location-store-redis, 23-relocation-store-redis, 30-host-relocation-flow |
 | [Observability diagnostics](08-observability-diagnostics.en.md) | Complete | 24-runtime-monitoring, 25-runtime-metrics, 26-message-flow-tracing, 27-flow-correlation, 29-transport-liveness |
 
-Numbering follows this same order (the same order contract-inventory uses for its categories).
+Numbering follows the order in this table.
 
 ko and en are both complete, and the same structure has been extended to the remaining four
 framework languages (C++, Java, Kotlin, Node.js). This document tree is wired into `mkdocs.yml`
