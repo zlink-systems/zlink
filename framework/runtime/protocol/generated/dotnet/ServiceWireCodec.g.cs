@@ -1983,6 +1983,7 @@ internal static class ServiceWireCodec
         if (value.TerminalResult == RequestTerminalResult.Ok && !(value.FailureCode == FrameworkErrorCode.None && value.HasCreation == Bool8.True)) throw Error("terminal success shape");
         if (!(value.TerminalResult == RequestTerminalResult.Ok) && !(value.HasCreation == Bool8.False && value.HasApplicationPayload == Bool8.False)) throw Error("terminal failure shape");
         if (value.Creation is ActorCreateTerminalCase0 && !(value.HasApplicationPayload == Bool8.False)) throw Error("existing payload");
+        ValidateTerminalFailure(value.TerminalResult, value.FailureCode);
         body.End("creation-operation-terminal-v1");
         if ((ulong)(encodedStart - reader.Remaining) > 1048576UL) throw Error("creation-operation-terminal-v1: encoded limit"); return value;
     }
@@ -1992,6 +1993,7 @@ internal static class ServiceWireCodec
         if (value.TerminalResult == RequestTerminalResult.Ok && !(value.FailureCode == FrameworkErrorCode.None && value.HasCreation == Bool8.True)) throw Error("terminal success shape");
         if (!(value.TerminalResult == RequestTerminalResult.Ok) && !(value.HasCreation == Bool8.False && value.HasApplicationPayload == Bool8.False)) throw Error("terminal failure shape");
         if (value.Creation is ActorCreateTerminalCase0 && !(value.HasApplicationPayload == Bool8.False)) throw Error("existing payload");
+        ValidateTerminalFailure(value.TerminalResult, value.FailureCode);
         var body = new Writer();
         WriteRequestTerminalResult(body, value.TerminalResult, context);
         WriteFrameworkErrorCode(body, value.FailureCode, context);
@@ -4571,7 +4573,6 @@ internal static class ServiceWireCodec
             var Payload = ReadApplicationPayloadEnvelopeV1(selected, context);
             var caseValue = new FrozenRecordBodyCase0(Payload);
             FrozenRecordBody value = caseValue;
-            if (value is FrozenRecordBodyCase10 terminal) ValidateTerminalFailure(terminal.TerminalResult, terminal.FailureCode);
             return value;
         }
         else if (RecordKind == MeshRecordKind.NodeRequest)
@@ -4579,7 +4580,6 @@ internal static class ServiceWireCodec
             var Payload = ReadApplicationPayloadEnvelopeV1(selected, context);
             var caseValue = new FrozenRecordBodyCase1(Payload);
             FrozenRecordBody value = caseValue;
-            if (value is FrozenRecordBodyCase10 terminal) ValidateTerminalFailure(terminal.TerminalResult, terminal.FailureCode);
             return value;
         }
         else if (RecordKind == MeshRecordKind.ChannelSend)
@@ -4588,7 +4588,6 @@ internal static class ServiceWireCodec
             var Payload = ReadApplicationPayloadEnvelopeV1(selected, context);
             var caseValue = new FrozenRecordBodyCase2(ChannelName, Payload);
             FrozenRecordBody value = caseValue;
-            if (value is FrozenRecordBodyCase10 terminal) ValidateTerminalFailure(terminal.TerminalResult, terminal.FailureCode);
             return value;
         }
         else if (RecordKind == MeshRecordKind.ChannelRequest)
@@ -4597,7 +4596,6 @@ internal static class ServiceWireCodec
             var Payload = ReadApplicationPayloadEnvelopeV1(selected, context);
             var caseValue = new FrozenRecordBodyCase3(ChannelName, Payload);
             FrozenRecordBody value = caseValue;
-            if (value is FrozenRecordBodyCase10 terminal) ValidateTerminalFailure(terminal.TerminalResult, terminal.FailureCode);
             return value;
         }
         else if (RecordKind == MeshRecordKind.SpotSend)
@@ -4606,7 +4604,6 @@ internal static class ServiceWireCodec
             var Payload = ReadApplicationPayloadEnvelopeV1(selected, context);
             var caseValue = new FrozenRecordBodyCase4(TargetSpot, Payload);
             FrozenRecordBody value = caseValue;
-            if (value is FrozenRecordBodyCase10 terminal) ValidateTerminalFailure(terminal.TerminalResult, terminal.FailureCode);
             return value;
         }
         else if (RecordKind == MeshRecordKind.SpotRequest)
@@ -4615,7 +4612,6 @@ internal static class ServiceWireCodec
             var Payload = ReadApplicationPayloadEnvelopeV1(selected, context);
             var caseValue = new FrozenRecordBodyCase5(TargetSpot, Payload);
             FrozenRecordBody value = caseValue;
-            if (value is FrozenRecordBodyCase10 terminal) ValidateTerminalFailure(terminal.TerminalResult, terminal.FailureCode);
             return value;
         }
         else if (RecordKind == MeshRecordKind.SpotMulticast)
@@ -4625,7 +4621,6 @@ internal static class ServiceWireCodec
             var Payload = ReadApplicationPayloadEnvelopeV1(selected, context);
             var caseValue = new FrozenRecordBodyCase6(ChannelName, Topic, Payload);
             FrozenRecordBody value = caseValue;
-            if (value is FrozenRecordBodyCase10 terminal) ValidateTerminalFailure(terminal.TerminalResult, terminal.FailureCode);
             return value;
         }
         else if (RecordKind == MeshRecordKind.SpotControl)
@@ -4633,7 +4628,6 @@ internal static class ServiceWireCodec
             var Control = ReadActorControlData(selected, context);
             var caseValue = new FrozenRecordBodyCase7(Control);
             FrozenRecordBody value = caseValue;
-            if (value is FrozenRecordBodyCase10 terminal) ValidateTerminalFailure(terminal.TerminalResult, terminal.FailureCode);
             return value;
         }
         else if (RecordKind == MeshRecordKind.ActorSend)
@@ -4642,7 +4636,6 @@ internal static class ServiceWireCodec
             var Payload = ReadApplicationPayloadEnvelopeV1(selected, context);
             var caseValue = new FrozenRecordBodyCase8(TargetActor, Payload);
             FrozenRecordBody value = caseValue;
-            if (value is FrozenRecordBodyCase10 terminal) ValidateTerminalFailure(terminal.TerminalResult, terminal.FailureCode);
             return value;
         }
         else if (RecordKind == MeshRecordKind.ActorRequest)
@@ -4651,7 +4644,6 @@ internal static class ServiceWireCodec
             var Payload = ReadApplicationPayloadEnvelopeV1(selected, context);
             var caseValue = new FrozenRecordBodyCase9(TargetActor, Payload);
             FrozenRecordBody value = caseValue;
-            if (value is FrozenRecordBodyCase10 terminal) ValidateTerminalFailure(terminal.TerminalResult, terminal.FailureCode);
             return value;
         }
         else if (RecordKind == MeshRecordKind.Completion)
@@ -4666,8 +4658,8 @@ internal static class ServiceWireCodec
             }
             else Payload = null;
             var caseValue = new FrozenRecordBodyCase10(TerminalResult, FailureCode, HasPayload, Payload);
+            ValidateTerminalFailure(caseValue.TerminalResult, caseValue.FailureCode);
             FrozenRecordBody value = caseValue;
-            if (value is FrozenRecordBodyCase10 terminal) ValidateTerminalFailure(terminal.TerminalResult, terminal.FailureCode);
             return value;
         }
         else if (RecordKind == MeshRecordKind.SendReady)
@@ -4675,7 +4667,6 @@ internal static class ServiceWireCodec
             var Destination = ReadSendReadyDestination(selected, context);
             var caseValue = new FrozenRecordBodyCase11(Destination);
             FrozenRecordBody value = caseValue;
-            if (value is FrozenRecordBodyCase10 terminal) ValidateTerminalFailure(terminal.TerminalResult, terminal.FailureCode);
             return value;
         }
         else if (RecordKind == MeshRecordKind.RelocationControl)
@@ -4683,7 +4674,6 @@ internal static class ServiceWireCodec
             var Control = ReadRelocationControlData(selected, context);
             var caseValue = new FrozenRecordBodyCase12(Control);
             FrozenRecordBody value = caseValue;
-            if (value is FrozenRecordBodyCase10 terminal) ValidateTerminalFailure(terminal.TerminalResult, terminal.FailureCode);
             return value;
         }
         else if (RecordKind == MeshRecordKind.InstanceSpotActivation)
@@ -4694,7 +4684,6 @@ internal static class ServiceWireCodec
             var Payload = ReadApplicationPayloadEnvelopeV1(selected, context);
             var caseValue = new FrozenRecordBodyCase13(Route, SourceNodeGeneration, OperationKind, Payload);
             FrozenRecordBody value = caseValue;
-            if (value is FrozenRecordBodyCase10 terminal) ValidateTerminalFailure(terminal.TerminalResult, terminal.FailureCode);
             return value;
         }
         throw Error("frozen-record-body: discriminator");
@@ -4773,6 +4762,7 @@ internal static class ServiceWireCodec
         }
         case FrozenRecordBodyCase10 item:
         {
+            ValidateTerminalFailure(item.TerminalResult, item.FailureCode);
             if (enclosingRecordKind != MeshRecordKind.Completion) throw Error("frozen-record-body: discriminator");
             WriteRequestTerminalResult(writer, item.TerminalResult, context);
             WriteFrameworkErrorCode(writer, item.FailureCode, context);
@@ -4808,7 +4798,6 @@ internal static class ServiceWireCodec
         }
         default: throw Error("frozen-record-body: variant");
         }
-        if (value is FrozenRecordBodyCase10 terminal) ValidateTerminalFailure(terminal.TerminalResult, terminal.FailureCode);
     }
 
     internal static FrozenSourceIdentity DecodeFrozenSourceIdentity(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadFrozenSourceIdentity(reader, context); reader.End("frozen-source-identity"); return value; }

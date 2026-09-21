@@ -72,7 +72,7 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
             );
         }
 
-        Assert.Equal(101, cases.Count);
+        Assert.Equal(102, cases.Count);
         var operationCases = index
             .RootElement.GetProperty("operationCases")
             .EnumerateArray()
@@ -82,7 +82,7 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
             operationCases.Count(item => item.GetProperty("expect").GetString() == "accept")
         );
         Assert.Equal(
-            49,
+            50,
             operationCases.Count(item => item.GetProperty("expect").GetString() == "reject")
         );
         Assert.Equal(
@@ -321,6 +321,10 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
                 bytes,
                 context
             ),
+            "creation-operation-terminal-v1" => ServiceWireCodec.DecodeCreationOperationTerminalV1(
+                bytes,
+                context
+            ),
             _ => throw new ConformanceHarnessException($"operation type decode {type}"),
         };
 
@@ -373,6 +377,10 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
             ),
             "application-payload-bytes" => ServiceWireCodec.EncodeApplicationPayloadBytes(
                 (ServiceWireCodec.ApplicationPayloadBytes)value,
+                context
+            ),
+            "creation-operation-terminal-v1" => ServiceWireCodec.EncodeCreationOperationTerminalV1(
+                (ServiceWireCodec.CreationOperationTerminalV1)value,
                 context
             ),
             _ => throw new ConformanceHarnessException($"operation type encode {type}"),
@@ -430,6 +438,23 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
             bytes.AsSpan().Fill((byte)input.GetProperty("repeatByte").GetInt32());
             return new ServiceWireCodec.ApplicationPayloadBytes(bytes);
         }
+        if (type == "creation-operation-terminal-v1")
+            return new ServiceWireCodec.CreationOperationTerminalV1(
+                Enum.Parse<ServiceWireCodec.RequestTerminalResult>(
+                    Pascal(input.GetProperty("terminalResult").GetString()!)
+                ),
+                Enum.Parse<ServiceWireCodec.FrameworkErrorCode>(
+                    Pascal(input.GetProperty("failureCode").GetString()!)
+                ),
+                Enum.Parse<ServiceWireCodec.Bool8>(
+                    Pascal(input.GetProperty("hasCreation").GetString()!)
+                ),
+                null,
+                Enum.Parse<ServiceWireCodec.Bool8>(
+                    Pascal(input.GetProperty("hasApplicationPayload").GetString()!)
+                ),
+                null
+            );
         throw new ConformanceHarnessException($"operation input {name}");
     }
 

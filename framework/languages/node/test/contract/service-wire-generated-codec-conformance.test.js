@@ -21,7 +21,6 @@ execFileSync(process.execPath, [
 ], { cwd: nodeRoot, stdio: 'inherit' });
 
 const codec = require(path.join(outputDirectory, 'service_wire_codec.generated.js'));
-const constants = require('../../../../runtime/protocol/generated/node/service_wire_constants.js');
 const pilot = require('../../packages/framework/dist/runtime/protocol/service_wire_pilot_codec.generated');
 const {
   decodeCanonicalAuthorityPayload,
@@ -37,10 +36,7 @@ const catalog = JSON.parse(fs.readFileSync(
 ));
 const context = {
   effectiveCompleteMessageBytes: 4294967295,
-  effectiveCompleteMessageBytesMinusActualEnvelopeOverhead: 4294966774,
-  runtimePredicates: {
-    'service-wire-constants.valid-terminal-failure': constants.isValidServiceWireTerminalFailure
-  }
+  effectiveCompleteMessageBytesMinusActualEnvelopeOverhead: 4294966774
 };
 
 after(() => fs.rmSync(outputDirectory, { recursive: true, force: true }));
@@ -219,7 +215,7 @@ test('generated TypeScript codec consumes every indexed conformance case', () =>
   assert.equal(catalog.fixtures.reduce((count, fixture) => count + fixture.canonical.length, 0), 11);
   assert.equal(catalog.fixtures.reduce((count, fixture) => count + fixture.malformed.length, 0), 12);
   assert.equal(catalog.operationCases.filter((entry) => entry.expect === 'accept').length, 29);
-  assert.equal(catalog.operationCases.filter((entry) => entry.expect === 'reject').length, 49);
+  assert.equal(catalog.operationCases.filter((entry) => entry.expect === 'reject').length, 50);
   const boundaryPairs = new Map();
   for (const entry of catalog.operationCases.filter((candidate) =>
     candidate.boundaryPair !== undefined)) {
