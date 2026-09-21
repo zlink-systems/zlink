@@ -125,6 +125,59 @@ zlink_sample_unregister_framework_role() {
   unset "ZLINK_SAMPLE_FRAMEWORK_ROLE_LOG_OFFSETS[${role_log}]"
 }
 
+zlink_sample_print_framework_failure_evidence() {
+  local log_dir="$1"
+  shift
+  local role_log
+  local node_name
+  local log_file
+  local first_line
+  local -a role_logs=("$@")
+  local -a evidence_role_logs=()
+  local -A seen_logs=()
+  for role_log in "${role_logs[@]}"; do
+    [[ -n "${role_log}" ]] || continue
+    if [[ -z "${seen_logs[$role_log]:-}" ]]; then
+      evidence_role_logs+=("${role_log}")
+      seen_logs["${role_log}"]=1
+    fi
+  done
+  while IFS= read -r -d '' log_file; do
+    role_log="${log_file##*/}"
+    case "${role_log}" in
+      *.err.log|client.log|runner.log|proxy-*.log)
+        continue
+        ;;
+    esac
+    if [[ -z "${seen_logs[$role_log]:-}" ]]; then
+      evidence_role_logs+=("${role_log}")
+      seen_logs["${role_log}"]=1
+    fi
+  done < <(find "${log_dir}" -maxdepth 1 -type f -name '*.log' -print0 | sort -z)
+  for role_log in "${evidence_role_logs[@]}"; do
+    node_name="${role_log%.log}"
+    log_file="${log_dir}/${role_log}"
+    first_line=1
+    if declare -p ZLINK_SAMPLE_FRAMEWORK_ROLE_LOG_OFFSETS >/dev/null 2>&1; then
+      first_line="${ZLINK_SAMPLE_FRAMEWORK_ROLE_LOG_OFFSETS[$role_log]:-1}"
+    fi
+    printf '=== Framework lifecycle failure evidence node=%s ===\n' "${node_name}"
+    if [[ -f "${log_file}" ]]; then
+      tail -n 200 "${log_file}" | awk -v prefix="[${node_name}] " '{ print prefix $0 }'
+      printf '%s\n' "--- termination markers node=${node_name} ---"
+      {
+        tail -n +"${first_line}" "${log_file}" \
+          | grep -E 'ZLINK_FRAMEWORK_(READY|TERMINATION)' || true
+      } | awk -v prefix="[${node_name}] " '{ print prefix $0 }'
+    else
+      printf '[%s] <missing log: %s>\n' "${node_name}" "${log_file}"
+      printf '%s\n' "--- termination markers node=${node_name} ---"
+      printf '[%s] <no termination markers>\n' "${node_name}"
+    fi
+    printf '%s\n' "=== End framework lifecycle failure evidence node=${node_name} ==="
+  done
+}
+
 zlink_sample_verify_framework_termination() {
   local log_dir="$1"
   [[ -n "${log_dir}" ]] || return 0
@@ -165,6 +218,7 @@ STOPPED_NONE=${stopped_count} FORCE_STOPPED=${force_stopped_count}" >&2
     fi
   done
   if [[ "${failed}" != "0" ]]; then
+    zlink_sample_print_framework_failure_evidence "${log_dir}" "${role_logs[@]}"
     return 1
   fi
   return 0

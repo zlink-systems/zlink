@@ -568,13 +568,28 @@ jobs:
         working-directory: examples/zlink-java-examples/samples
         run: bash ../../run_readme_step.sh README.ko.md 빌드 linux
 
+      - name: Prepare sample run artifact directory
+        run: mkdir -p sample-run
+
       - name: Sample run (README's own 실행/linux block)
         working-directory: examples/zlink-java-examples/samples
+        env:
+          ZLINK_SAMPLE_KEEP_RUN_DIR: '1'
+          TMPDIR: ${{ github.workspace }}/sample-run
         run: bash ../../run_readme_step.sh README.ko.md 실행 linux
 
       - name: Sample verify (README's own 검증/linux block)
         working-directory: examples/zlink-java-examples/samples
         run: bash ../../run_readme_step.sh README.ko.md 검증 linux
+
+      - name: Upload sample run directory on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sample-run-java-linux
+          path: sample-run
+          retention-days: 7
+          if-no-files-found: warn
 
   java-windows:
     name: java / windows-2022 (no checkout)
@@ -683,6 +698,11 @@ jobs:
         shell: bash
         run: bash ../../run_readme_step.sh README.ko.md 빌드 windows
 
+      - name: Prepare sample run artifact directory
+        if: steps.memurai.outcome == 'success'
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force -Path sample-run | Out-Null
+
       # Sample runners create their own Redis as a Linux Docker container; GitHub-hosted
       # windows-2022 runners run Windows containers only (see the Memurai note above), so the
       # Windows sample cells are verified locally, not here. Install and build still run.
@@ -690,6 +710,10 @@ jobs:
         if: false
         working-directory: examples/zlink-java-examples/samples
         shell: bash
+        env:
+          ZLINK_SAMPLE_KEEP_RUN_DIR: '1'
+          TEMP: ${{ github.workspace }}\sample-run
+          TMP: ${{ github.workspace }}\sample-run
         run: bash ../../run_readme_step.sh README.ko.md 실행 windows
 
       # Sample runners create their own Redis as a Linux Docker container; GitHub-hosted
@@ -700,6 +724,15 @@ jobs:
         working-directory: examples/zlink-java-examples/samples
         shell: bash
         run: bash ../../run_readme_step.sh README.ko.md 검증 windows
+
+      - name: Upload sample run directory on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sample-run-java-windows
+          path: sample-run
+          retention-days: 7
+          if-no-files-found: warn
 
   cpp-linux:
     name: cpp / ubuntu-24.04 (no checkout)

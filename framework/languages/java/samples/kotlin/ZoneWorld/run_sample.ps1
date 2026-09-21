@@ -659,6 +659,7 @@ try {
             [Console]::Error.WriteLine("Process cleanup failed: $($_.Exception.Message)")
         }
     }
+    if (-not $RunSucceeded) { Write-ZlinkSampleFrameworkFailureEvidence $LogDir }
     if ($RedisContainer) { Remove-ZlinkSampleRedis $RedisContainer }
     if (-not $RunSucceeded -or $env:ZLINK_SAMPLE_KEEP_RUN_DIR -eq "1") {
         Write-Host "runDir=$RunDir"

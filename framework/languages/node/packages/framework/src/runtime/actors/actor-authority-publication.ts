@@ -92,7 +92,7 @@ export async function publishInitialActorAuthority(
           },
           hasApplicationPayload: 'false'
         },
-        { runtimePredicates: {} }
+        {}
       )
     );
     const operationId = randomOperationId();
