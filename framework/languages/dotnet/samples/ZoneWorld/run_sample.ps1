@@ -643,57 +643,6 @@ try {
         Invoke-ZoneWorldClient "ZW-G2"
     }
 
-    if ($BrowserSmoke -and -not $NoBrowserSmoke) {
-        Write-Host "==> shared browser client"
-        $browserRootCandidate = Join-Path $ScriptDir "../../../shared_sample/zoneworld/client"
-        if (-not (Test-Path -LiteralPath $browserRootCandidate)) {
-            throw ("-BrowserSmoke needs shared_sample/zoneworld/client, which lives outside " +
-                "the samples package and ships only in a full zlink repository checkout. " +
-                "Clone https://github.com/zlink-systems/zlink and run this sample from " +
-                "framework/languages/dotnet/samples/ZoneWorld there, or omit -BrowserSmoke.")
-        }
-        $browserRoot = (Resolve-Path $browserRootCandidate).Path
-        $browserDist = Join-Path $RunDir "browser-dist"
-        $browserMarker = Join-Path $RunDir "browser-lifecycle-armed"
-        $browserConfig = Join-Path $RunDir "playwright.live.config.mjs"
-        Push-Location $browserRoot
-        try {
-            & npm run prepare:browser
-            if ($LASTEXITCODE -ne 0) { throw "ZoneWorld browser dependency preparation failed with exit code $LASTEXITCODE." }
-            & npm exec vite build -- --outDir $browserDist
-            if ($LASTEXITCODE -ne 0) { throw "ZoneWorld browser build failed with exit code $LASTEXITCODE." }
-        }
-        finally { Pop-Location }
-        @{ gateway = $GatewayEndpoint; ops = $OpsEndpoint } | ConvertTo-Json |
-            Set-Content -LiteralPath (Join-Path $browserDist "config.json") -Encoding UTF8
-        $playwright = @{
-            testDir = (Join-Path $browserRoot "tests/live")
-            timeout = 45000
-            workers = 1
-            use = @{ baseURL = "http://127.0.0.1:$BrowserPreviewPort"; headless = $true }
-            metadata = @{ lifecycleMarker = $browserMarker; lifecycleNodeId = "zone-node-2" }
-        }
-        "export default $($playwright | ConvertTo-Json -Depth 6);" |
-            Set-Content -LiteralPath $browserConfig -Encoding UTF8
-        $npm = (Get-Command npm.cmd -ErrorAction Stop).Source
-        $preview = Start-SampleProcess "browser-preview" $npm $LogDir -WorkingDirectory $browserRoot `
-            -Arguments @("exec", "vite", "preview", "--", "--host", "127.0.0.1", "--port", "$BrowserPreviewPort", "--outDir", $browserDist)
-        Wait-SampleTcpEndpoint "browser preview" "tcp://127.0.0.1:$BrowserPreviewPort" -Attempts 200
-        $browser = Start-SampleProcess "browser" $npm $LogDir -WorkingDirectory $browserRoot `
-            -Arguments @("exec", "playwright", "test", "--", "--config", $browserConfig)
-        for ($attempt = 0; $attempt -lt 450 -and -not (Test-Path -LiteralPath $browserMarker); $attempt++) {
-            if ($browser.HasExited) { break }
-            Start-Sleep -Milliseconds 100
-        }
-        if (-not (Test-Path -LiteralPath $browserMarker)) {
-            throw "ZoneWorld browser client did not arm its node lifecycle check."
-        }
-        Stop-ZoneWorldNode "zone-node-2"
-        Wait-SampleProcess -Process $browser -Description "ZoneWorld browser" -TimeoutSeconds 90
-        Start-ZoneWorldNode "zone-node-2"
-        Stop-SampleProcess -Process $preview -Force
-    }
-
     $excluded = @("ZW-D2", "ZW-F2", "ZW-C2", "ZW-C3", "ZW-B4", "ZW-E5", "ZW-E5-arm",
         "ZW-G1", "ZW-G2", "ZW-G3", "ZW-G4", "ZW-G5")
     $clientScenarios = @($Scenario.Split(',', [System.StringSplitOptions]::RemoveEmptyEntries) |
@@ -832,6 +781,56 @@ try {
             "ZW-G1", "ZW-G2-rid", "ZW-G2", "ZW-G3", "ZW-G4", "ZW-G5")
     }
     if ($Status -ne 0) { throw "One or more ZoneWorld runner verdicts failed." }
+
+    if ($BrowserSmoke -and -not $NoBrowserSmoke) {
+        Write-Host "==> shared browser client"
+        $browserRootCandidate = Join-Path $ScriptDir "../../../shared_sample/zoneworld/client"
+        if (-not (Test-Path -LiteralPath $browserRootCandidate)) {
+            throw ("--browser-smoke needs shared_sample/zoneworld/client, which lives outside " +
+                "the samples package and ships only in a full zlink repository checkout. " +
+                "Clone https://github.com/zlink-systems/zlink and run this sample from " +
+                "framework/languages/dotnet/samples/ZoneWorld there, or omit --browser-smoke.")
+        }
+        $browserRoot = (Resolve-Path $browserRootCandidate).Path
+        $browserDist = Join-Path $RunDir "browser-dist"
+        $browserMarker = Join-Path $RunDir "browser-lifecycle-armed"
+        $browserConfig = Join-Path $RunDir "playwright.live.config.mjs"
+        Push-Location $browserRoot
+        try {
+            & npm run prepare:browser
+            if ($LASTEXITCODE -ne 0) { throw "ZoneWorld browser dependency preparation failed with exit code $LASTEXITCODE." }
+            & npm exec vite build -- --outDir $browserDist
+            if ($LASTEXITCODE -ne 0) { throw "ZoneWorld browser build failed with exit code $LASTEXITCODE." }
+        }
+        finally { Pop-Location }
+        @{ gateway = $GatewayEndpoint; ops = $OpsEndpoint } | ConvertTo-Json |
+            Set-Content -LiteralPath (Join-Path $browserDist "config.json") -Encoding UTF8
+        $playwright = @{
+            testDir = (Join-Path $browserRoot "tests/live")
+            timeout = 45000
+            workers = 1
+            use = @{ baseURL = "http://127.0.0.1:$BrowserPreviewPort"; headless = $true }
+            metadata = @{ lifecycleMarker = $browserMarker; lifecycleNodeId = "zone-node-2" }
+        }
+        "export default $($playwright | ConvertTo-Json -Depth 6);" |
+            Set-Content -LiteralPath $browserConfig -Encoding UTF8
+        $npm = (Get-Command npm.cmd -ErrorAction Stop).Source
+        $preview = Start-SampleProcess "browser-preview" $npm $LogDir -WorkingDirectory $browserRoot `
+            -Arguments @("exec", "vite", "preview", "--", "--host", "127.0.0.1", "--port", "$BrowserPreviewPort", "--outDir", $browserDist)
+        Wait-SampleTcpEndpoint "browser preview" "tcp://127.0.0.1:$BrowserPreviewPort" -Attempts 200
+        $browser = Start-SampleProcess "browser" $npm $LogDir -WorkingDirectory $browserRoot `
+            -Arguments @("exec", "playwright", "test", "--", "--config", $browserConfig)
+        for ($attempt = 0; $attempt -lt 450 -and -not (Test-Path -LiteralPath $browserMarker); $attempt++) {
+            if ($browser.HasExited) { break }
+            Start-Sleep -Milliseconds 100
+        }
+        if (-not (Test-Path -LiteralPath $browserMarker)) {
+            throw "ZoneWorld browser client did not arm its node lifecycle check."
+        }
+        Stop-ZoneWorldNode "zone-node-2"
+        Wait-SampleProcess -Process $browser -Description "ZoneWorld browser" -TimeoutSeconds 90
+        Stop-SampleProcess -Process $preview -Force
+    }
     $RunSucceeded = $true
 }
 finally {
