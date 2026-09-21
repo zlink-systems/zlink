@@ -25,6 +25,7 @@ Framework 0.20.0은 binding 1.2.1과 Core 1.2.0을 사용합니다. Framework �
 - 네 언어 tutorial에 Instance Spot `MatchQueue` 예제를 추가하고, C++·.NET·Java·Kotlin·Node/TypeScript의 snippet marker를 정렬했습니다. (#666)
 - tutorial·samples 소스를 언어별 포매터 출력에 맞추고 `scripts/format/format.sh --check`를 공통 진입점으로 정했습니다. (#761)
 - ZoneWorld 샘플의 shared browser client가 `npm run prepare:browser` 하나로 의존성과 Chromium을 스스로 준비하고, runner는 browser lane을 transition client를 arm하기 전에 끝냅니다(ops 세션의 application idle 30초 안에 준비가 끝나지 않으면 ZW-C3가 실패했습니다). (#815)
+- shared browser client의 `prepare:browser`가 링크된 workspace 패키지(`stream-connector` 등)의 빌드 산출물이 없으면 workspace `npm ci`·build까지 준비합니다. 새 worktree의 browser 모드가 vite 단계에서 막히지 않습니다. (#822)
 
 ## 설치
 

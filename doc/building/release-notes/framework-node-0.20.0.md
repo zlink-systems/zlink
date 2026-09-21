@@ -25,6 +25,7 @@ This is a pre-1.0 contract release. No migration procedure is provided for the e
 - Added the Instance Spot `MatchQueue` example to the four-language tutorials and aligned the C++, .NET, Java, Kotlin and Node/TypeScript snippet markers. (#666)
 - Reformatted tutorial and sample sources with each language's formatter and made `scripts/format/format.sh --check` the common entry point. (#761)
 - The ZoneWorld shared browser client prepares its own dependencies and Chromium through `npm run prepare:browser`, and the runner finishes the browser lane before arming the transition client (preparation that outlived the ops session's 30 s application idle timeout failed ZW-C3). (#815)
+- The shared browser client's `prepare:browser` also builds the linked workspace packages (`stream-connector`, …) when their outputs are missing, so browser mode in a fresh worktree no longer stops at vite. (#822)
 
 ## Install
 

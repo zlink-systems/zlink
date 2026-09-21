@@ -24,6 +24,7 @@ This is a pre-1.0 contract release. No migration procedure is provided for the e
 - Reformatted tutorial and sample sources with each language's formatter and made `scripts/format/format.sh --check` the common entry point. (#761)
 - The ZoneWorld shared browser client prepares its own dependencies and Chromium through `npm run prepare:browser`; `run_sample` browser smoke needs no separate install. (#815)
 - ZoneWorld `run_sample` runs the browser smoke (crash lane) after the baseline scenarios. Running baseline ZW-A3 and B1–B6 after zone-node-2 had been replaced by a zero-zone node made them fail. (#819)
+- ZoneWorld `run_sample` runs the browser smoke in a child topology like G4 and B8; the baseline scenarios and the shared client's Playwright tests both assume the initial topology, so they could not share one. (#824)
 
 ## Install
 

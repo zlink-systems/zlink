@@ -24,6 +24,7 @@ Framework 0.20.0은 binding 1.2.2와 Core 1.2.0을 사용합니다. Framework �
 - tutorial·samples 소스를 언어별 포매터 출력에 맞추고 `scripts/format/format.sh --check`를 공통 진입점으로 정했습니다. (#761)
 - ZoneWorld 샘플의 shared browser client가 `npm run prepare:browser` 하나로 의존성과 Chromium을 스스로 준비합니다. `run_sample`의 browser smoke는 별도 설치 없이 돕니다. (#815)
 - ZoneWorld `run_sample`의 browser smoke(crash lane)를 baseline 시나리오 뒤로 옮겼습니다. zone-node-2를 종료한 뒤 zone 0개 replacement로 바꾼 상태에서 baseline ZW-A3·B1~B6이 돌아 실패했습니다. (#819)
+- ZoneWorld `run_sample`의 browser smoke는 G4·B8처럼 child topology에서 돕니다. baseline 시나리오와 shared client의 Playwright 테스트가 모두 초기 토폴로지를 전제하므로 같은 토폴로지를 공유할 수 없었습니다. (#824)
 
 ## 설치
 
