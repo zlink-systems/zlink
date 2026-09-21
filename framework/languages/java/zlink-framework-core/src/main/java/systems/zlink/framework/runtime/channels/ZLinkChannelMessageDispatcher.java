@@ -360,19 +360,19 @@ final class ZLinkChannelMessageDispatcher {
                                     Map.of(),
                                     contentType)))
                                 .whenComplete((reply, error) -> {
-                                    try {
-                                        if (error != null) {
-                                            errors.replyError(
-                                                router,
-                                                received,
-                                                ZLinkDispatchErrorSurface.CHANNEL,
-                                                ZLinkDispatchMessageKind.REQUEST,
-                                                ZLinkChannelDispatchReporter.reasonFrom(error),
-                                                packetName,
-                                                channelName,
-                                                null,
-                                                error);
-                                        } else {
+                                    if (error != null) {
+                                        errors.replyError(
+                                            router,
+                                            received,
+                                            ZLinkDispatchErrorSurface.CHANNEL,
+                                            ZLinkDispatchMessageKind.REQUEST,
+                                            ZLinkChannelDispatchReporter.reasonFrom(error),
+                                            packetName,
+                                            channelName,
+                                            null,
+                                            error);
+                                    } else {
+                                        try {
                                             ZLinkChannelDispatchReporter.replyAndClose(
                                                 router,
                                                 received,
@@ -384,9 +384,17 @@ final class ZLinkChannelMessageDispatcher {
                                                 channelName,
                                                 null,
                                                 requestSeq);
+                                        } catch (RuntimeException replyFailure) {
+                                            errors.report(
+                                                ZLinkDispatchErrorSurface.CHANNEL,
+                                                ZLinkDispatchMessageKind.REQUEST,
+                                                ZLinkDispatchErrorReason.REPLY_PATH_MISSING,
+                                                ZLinkDispatchErrorAction.DROP,
+                                                packetName,
+                                                channelName,
+                                                null,
+                                                replyFailure);
                                         }
-                                    } finally {
-
                                     }
                                 });
                         } catch (RuntimeException failure) {

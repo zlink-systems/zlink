@@ -14,7 +14,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
@@ -28,10 +33,12 @@ import systems.zlink.framework.channels.ZLinkRouteSendHandler;
 import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.channels.ZLinkSendHandler;
 import systems.zlink.framework.channels.ZLinkRequestHandler;
+import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 
 import systems.zlink.framework.handlers.ZLinkHandlerGroup;
 import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
+import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshDispatchRecord;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.drain.ZLinkMeshDrainCoordinator;
@@ -228,6 +235,70 @@ final class ZLinkMeshApplicationDispatcherTest {
             ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
             replyKind.get(2, TimeUnit.SECONDS));
         assertFalse(ProtocolRequestHandler.received.isDone());
+    }
+
+    @Test
+    void nodeReplyWriteFailureReportsMissingPathWithoutRepliedTrace() throws Exception {
+        List<String> traces = new CopyOnWriteArrayList<>();
+        CompletableFuture<String> dispatchError = new CompletableFuture<>();
+        Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
+        Level previousLevel = logger.getLevel();
+        Handler traceHandler = new Handler() {
+            @Override
+            public void publish(LogRecord record) {
+                String message = record.getMessage();
+                traces.add(message);
+                if (message.contains("event_id=zlink.dispatch_error")
+                    && message.contains("reason=reply_path_missing")) {
+                    dispatchError.complete(message);
+                }
+            }
+
+            @Override
+            public void flush() {
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+        logger.setLevel(Level.ALL);
+        logger.addHandler(traceHandler);
+        try {
+            MeshNodeRegistration mesh = new MeshNodeRegistration("game");
+            mesh.listen("inproc://mesh-reply-write-failure");
+            mesh.addRouteRequestHandler(
+                ProtocolRequestHandler.class,
+                String.class,
+                String.class);
+            ZLinkFrameworkRegistration framework = new ZLinkFrameworkRegistration();
+            framework.dispatchOptions().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+            ZLinkMeshApplicationDispatcher dispatcher =
+                new ZLinkMeshApplicationDispatcher(
+                    mesh,
+                    new ZLinkStringMessageSerializer(),
+                    framework,
+                    ZLinkHandlerActivator.reflection(),
+                    (token, parts) -> {
+                        throw new IllegalStateException("reply path closed");
+                    });
+
+            dispatcher.accept(record(
+                RecordKind.NODE_REQUEST,
+                null,
+                "request",
+                Map.of(),
+                null,
+                ignored -> {
+                    throw new IllegalStateException("reply path closed");
+                }));
+
+            assertTrue(dispatchError.get(2, TimeUnit.SECONDS).contains("action=drop"));
+            assertFalse(traces.stream().anyMatch(line -> line.contains("phase=replied")));
+        } finally {
+            logger.removeHandler(traceHandler);
+            logger.setLevel(previousLevel);
+        }
     }
 
     @Test

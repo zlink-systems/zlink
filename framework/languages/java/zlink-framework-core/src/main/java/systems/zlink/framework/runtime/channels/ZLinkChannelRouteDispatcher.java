@@ -294,10 +294,24 @@ final class ZLinkChannelRouteDispatcher {
         Message payload = Message.from(packet.payload());
         registry.routeRequestQueue(channelName).enqueue(() ->
             handler.handle(source, payload)
-                .thenAccept(reply -> ZLinkChannelDispatchReporter.replyAndClose(
-                    router,
-                    received,
-                    reply))
+                .thenAccept(reply -> {
+                    try {
+                        ZLinkChannelDispatchReporter.replyAndClose(
+                            router,
+                            received,
+                            reply);
+                    } catch (RuntimeException replyFailure) {
+                        errors.report(
+                            ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
+                            ZLinkDispatchMessageKind.REQUEST,
+                            ZLinkDispatchErrorReason.REPLY_PATH_MISSING,
+                            ZLinkDispatchErrorAction.DROP,
+                            packet.packetName(),
+                            channelName,
+                            source.toString(),
+                            replyFailure);
+                    }
+                })
                 .whenComplete((ignored, error) -> payload.close()));
         return true;
     }
@@ -329,20 +343,20 @@ final class ZLinkChannelRouteDispatcher {
                                         : Map.of(),
                                     contentType)))
                                 .whenComplete((reply, error) -> {
-                                    try {
-                                        if (error != null) {
-                                            errors.replyError(
-                                                router,
-                                                received,
-                                                ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
-                                                ZLinkDispatchMessageKind.REQUEST,
-                                                ZLinkChannelDispatchReporter.reasonFrom(error),
-                                                packet.packetName(),
-                                                channelName,
-                                                source.toString(),
-                                                packet.header(),
-                                                error);
-                                        } else {
+                                    if (error != null) {
+                                        errors.replyError(
+                                            router,
+                                            received,
+                                            ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
+                                            ZLinkDispatchMessageKind.REQUEST,
+                                            ZLinkChannelDispatchReporter.reasonFrom(error),
+                                            packet.packetName(),
+                                            channelName,
+                                            source.toString(),
+                                            packet.header(),
+                                            error);
+                                    } else {
+                                        try {
                                             ZLinkChannelDispatchReporter.replyPayloadAndClose(
                                                 router,
                                                 received,
@@ -355,9 +369,17 @@ final class ZLinkChannelRouteDispatcher {
                                                 channelName,
                                                 requestSeq,
                                                 source);
+                                        } catch (RuntimeException replyFailure) {
+                                            errors.report(
+                                                ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
+                                                ZLinkDispatchMessageKind.REQUEST,
+                                                ZLinkDispatchErrorReason.REPLY_PATH_MISSING,
+                                                ZLinkDispatchErrorAction.DROP,
+                                                packet.packetName(),
+                                                channelName,
+                                                source.toString(),
+                                                replyFailure);
                                         }
-                                    } finally {
-
                                     }
                                 });
                         } catch (RuntimeException failure) {
