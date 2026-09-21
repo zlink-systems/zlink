@@ -8,6 +8,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "check-env.ps1")
 . (Join-Path $PSScriptRoot "..\local-package\core\windows-x64-contract.ps1")
 if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
   $RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path

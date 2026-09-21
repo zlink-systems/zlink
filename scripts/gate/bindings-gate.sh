@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Binding contract suites (7 languages) against the current core/build-dev, serialized behind the samples lock.
-source "$(dirname "${BASH_SOURCE[0]}")/common.sh"; cd "$Z"; require_quiet || exit 2
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh" || exit $?
+cd "$Z" || exit
+require_quiet || exit 2
 : > "$LOGS/results.txt"
 LIB="$CORE_LIB"; INC="$Z/core/include"
 run c        bindings/c      env ZLINK_C_CORE_BUILD_DIR="$Z/core/build-dev" ZLINK_CORE_INCLUDE_DIR="$INC" bash tests/run_tests.sh
