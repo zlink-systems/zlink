@@ -63,7 +63,19 @@ application이 다시 묶지 않는다.
 논리적으로 끊겼다고 알릴 때만 application이 직접 호출한다.
 
 끊김은 Actor를 지우지도 Entry Spot으로 옮기지도 않는다. 다시 접속한 session은 같은 참조를 다시
-조회해 묶을 수 있다.
+조회해 [다시 묶을 수 있다](24-actor-session.ko.md#31-묶기). TicTacToe의 게임 Spot은 끊긴 Actor를
+표시할 뿐 room과 경기 상태에서는 빼지 않는다.
+
+```kotlin
+--8<-- "framework/languages/java/samples/kotlin/TicTacToe/Server/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/server/play/infrastructure/zlink/spots/tictactoegamespot/TicTacToeGame.kt:doc-disconnect-actor"
+```
+
+**실행 결과.** 2026-09-22에 .NET TicTacToe의 `run_sample.sh`를 실행하고 host client가 연결을
+닫았을 때 `play-a.log`에는 묶인 Actor 하나가 있던 연결의 실제 기록이 남았다.
+
+```text
+20:12:39.106 info: TicTacToe.Server.Play.Infrastructure.ZLink.Sessions.PlaySession[0] client -> play stream: disconnected. sessionId=00000002, actors=1
+```
 
 **한 Actor의 통지가 실패해도 나머지는 계속한다.** Framework는 연결이 끊긴 시점의 묶음 목록을
 고정하고 각 Actor에 알리는데, 그중 하나가 실패하거나 callback이 기한을 넘겨도 남은 Actor 통지와
@@ -71,6 +83,11 @@ session 정리를 멈추지 않는다.
 
 **자동 통지와 직접 호출이 겹쳐도 callback은 한 번만 실행된다.** 같은 묶음에 대한 두 통지를
 Framework가 합치므로, 직접 호출한 직후에 연결이 끊겨도 Spot의 끊김 callback이 두 번 돌지 않는다.
+연결은 유지하지만 application 규약상 끊겼다고 처리할 때만 Actor에 직접 알린다.
+
+```kotlin
+actor.notifyDisconnected().await()
+```
 
 ## 4. 묶기가 실패하거나 무효가 되는 경우
 

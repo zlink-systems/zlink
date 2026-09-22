@@ -65,7 +65,19 @@ automatically. The application calls explicitly only to announce a logical disco
 connection is still up.
 
 A disconnect neither deletes the Actor nor moves it to the Entry Spot. A session that reconnects can
-look the same reference up again and bind.
+look the same reference up again and [bind it again](24-actor-session.en.md#31-binding). TicTacToe's
+game Spot marks the disconnected Actor but leaves the room and match state in place.
+
+```kotlin
+--8<-- "framework/languages/java/samples/kotlin/TicTacToe/Server/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/server/play/infrastructure/zlink/spots/tictactoegamespot/TicTacToeGame.kt:doc-disconnect-actor"
+```
+
+**Run result.** On 2026-09-22, running .NET TicTacToe's `run_sample.sh` and closing the host
+client left this real record for the connection that held one bound Actor in `play-a.log`.
+
+```text
+20:12:39.106 info: TicTacToe.Server.Play.Infrastructure.ZLink.Sessions.PlaySession[0] client -> play stream: disconnected. sessionId=00000002, actors=1
+```
 
 **A failed notification for one Actor does not stop the rest.** The framework fixes the list of
 bindings held when the connection dropped and notifies each Actor; one of them failing, or a
@@ -73,7 +85,12 @@ callback overrunning its deadline, does not stop the remaining notifications or 
 
 **An automatic notification overlapping an explicit call still runs the callback once.** The
 framework merges the two notifications for the same binding, so a drop right after an explicit call
-does not run the Spot's disconnect callback twice.
+does not run the Spot's disconnect callback twice. Call the Actor directly only when the connection
+is still up but the application protocol treats it as disconnected.
+
+```kotlin
+actor.notifyDisconnected().await()
+```
 
 ## 4. When a Bind Fails or Becomes Void
 

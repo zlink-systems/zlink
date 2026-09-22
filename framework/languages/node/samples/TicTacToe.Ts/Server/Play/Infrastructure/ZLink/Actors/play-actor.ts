@@ -58,6 +58,7 @@ class PlayActor implements ZLinkActor, TicTacToeActor {
   roomId?: string;
   pendingJoinRoomId?: string;
   destroyAfterEntrySpotJoin = false;
+  disconnected = false;
   private nextSeq: number;
 
   constructor(
@@ -118,6 +119,10 @@ class PlayActor implements ZLinkActor, TicTacToeActor {
 
   markForDestroyAfterRoomLeave(): void {
     this.destroyAfterEntrySpotJoin = true;
+  }
+
+  markDisconnected(): void {
+    this.disconnected = true;
   }
 }
 
