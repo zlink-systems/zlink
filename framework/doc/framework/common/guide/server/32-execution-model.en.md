@@ -1,5 +1,7 @@
 # The Execution Model
 
+This chapter quotes code from the `Bingo` sample's `Server` directory. Bootstrap and build that language's sample tree to inspect the execution-model examples below in running code.
+
 !!! info "What you get from this chapter"
 
     You can tell what runs together inside one Spot, what queues up behind it, and what decides

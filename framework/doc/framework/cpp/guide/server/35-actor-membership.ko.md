@@ -18,6 +18,8 @@ title: "Actor membership · C++"
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
+이 장은 `TicTacToe` 샘플의 `Server` 디렉터리에서 코드를 인용한다. 해당 언어 sample tree를 bootstrap하고 build하면 아래 Actor membership 예제를 실제 코드에서 확인할 수 있다.
+
 !!! info "이 장을 읽고 나면"
 
     Actor를 Spot 사이로 옮기고, 그 이동을 받는 쪽에서 승인하거나 거절할 수 있다.

@@ -18,6 +18,8 @@ title: "Session과 Actor 연결 · Java"
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
+이 장은 [tutorial의 `Server`·`StreamClient` 디렉터리와 「실행」 절](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.ko.md#실행)에서 코드를 인용하며, 그 tree를 bootstrap하고 build하면 아래 실행 결과를 재현할 수 있다.
+
 !!! info "이 장을 읽고 나면"
 
     외부 client의 연결 하나를 Actor 하나에 묶고, 그 Actor가 같은 연결로 알림을 보낼 수 있다.
@@ -106,7 +108,7 @@ Actor는 자기에게 묶인 연결을 알고 있다. 응답이 아니라 **스�
 
 ## 5. 실행 결과
 
-아래 명령은 tutorial(`framework/languages/java/tutorial/java`)의 Server를 그 README의 「실행」 절대로 띄운 상태에서 StreamClient를 실행한다. StreamClient는 Server의 stream endpoint에 연결한다.
+tutorial README의 「실행」 절대로 Server를 실행한 상태에서 아래 명령으로 StreamClient를 시작하면, StreamClient가 보낸 bind request와 받은 Actor 알림은 StreamClient process의 stdout에 나오고 session·Actor handler 기록은 Server process의 stdout 또는 `server.log`에 나온다.
 
 ```bash
 dotnet run --project StreamClient/StreamClient.csproj

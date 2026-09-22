@@ -18,6 +18,8 @@ title: "모니터링 · Node/TypeScript"
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
+tutorial의 Server와 Client를 [README의 「실행」 절](https://github.com/zlink-systems/zlink-node-examples/blob/main/tutorial/README.ko.md#실행)대로 bootstrap하고 build해 실행하면, 이 장의 관측 호출로 그 process들의 상태와 기록을 읽을 수 있다.
+
 !!! info "이 장을 읽고 나면"
 
     지금 무엇이 준비되었는지 읽고, 그 상태가 바뀔 때마다 받고, message 하나가 어디서

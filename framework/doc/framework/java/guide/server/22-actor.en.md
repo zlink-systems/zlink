@@ -18,6 +18,8 @@ View in another language — [C++](../../../cpp/guide/server/22-actor.en.md) · 
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
+This chapter quotes code from the tutorial's [`Server` and `Client` directories and its Run section](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.md#run); bootstrapping and building that tree reproduces the results below.
+
 !!! info "What you get from this chapter"
 
     You can create one entity by id, send messages to it, and receive answers.
@@ -124,6 +126,11 @@ Unlike a Spot, **the calling side decides the id**, because a value that already
 player id — is used as it stands. Call again with the same id and nothing is created; the existing
 one comes back.
 
+The tutorial `Server` first defines the `game` route mesh. A mesh name names the set of nodes
+where an Actor may be placed, and `inMesh` selects that set when creating one. [The receiving side
+of Channel Messaging](20-channel-messaging.en.md#32-the-receiving-side--the-node-serving-the-channel)
+shows the registration code, and [Location Runtime §7](../../../common/spec/server/05-location-relocation/01-location-runtime.en.md#7-creating-an-actor-or-user-spot) defines the selection rule.
+
 ```java
 --8<-- "framework/languages/java/tutorial/java/Client/src/main/java/systems/zlink/tutorial/client/ClientApplication.java:actor-create-call"
 ```
@@ -154,7 +161,7 @@ When you need an answer, send a request.
 
 ## 4. What You See When You Run It
 
-The commands below run against the tutorial (`framework/languages/java/tutorial/java`) with its Server and Client started as described in the README's "Run" section; the address is the Client's HTTP surface.
+With the tutorial Server and Client running as the README's Run section specifies, send these `curl` requests to the Client's HTTP surface: each HTTP response appears on `curl` stdout, and handler records appear on the Server process's stdout or in `server.log`.
 
 ```bash
 curl -X POST http://127.0.0.1:5080/players/p7 \

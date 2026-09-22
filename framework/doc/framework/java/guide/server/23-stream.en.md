@@ -18,6 +18,10 @@ View in another language — [C++](../../../cpp/guide/server/23-stream.en.md) ·
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
+This chapter quotes code from the tutorial's [`Server` and `StreamClient` directories and its Run section](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.md#run); bootstrapping and building that tree reproduces the results below.
+
+A client that reaches a STREAM node uses its language's stream connector. [Client stream connector](../../../install.en.md#client-stream-connector) covers installation for Unity, Unreal, browser, Node, .NET, Java, and C++ clients, and the [stream connector guide](../stream-connector/README.en.md) for that language covers connection and packet handling.
+
 !!! info "What you get from this chapter"
 
     You can let a program outside the mesh attach over one connection, send requests and
@@ -117,7 +121,7 @@ This process references no Framework. It references one separately published **c
 
 ## 5. What You See When You Run It
 
-The command below runs the tutorial (`framework/languages/java/tutorial/java`) StreamClient with its Server started as described in the README's "Run" section; StreamClient connects to the Server's stream endpoint.
+With the tutorial Server running as the README's Run section specifies, start StreamClient with the command below: the request it sends and response it receives appear on the StreamClient process's stdout, while connection and handler records appear on the Server process's stdout or in `server.log`.
 
 ```bash
 dotnet run --project StreamClient/StreamClient.csproj

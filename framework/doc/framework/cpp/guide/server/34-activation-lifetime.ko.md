@@ -18,6 +18,8 @@ title: "활성화와 수명 · C++"
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
+이 장은 `TicTacToe` 샘플의 `Server` 디렉터리에서 코드를 인용한다. 해당 언어 sample tree를 bootstrap하고 build하면 아래 활성화와 수명 예제를 실제 코드에서 확인할 수 있다.
+
 !!! info "이 장을 읽고 나면"
 
     Spot 종류마다 언제 만들어지고 어떤 callback을 받는지, 그리고 그 안에 주입한 서비스가

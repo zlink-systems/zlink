@@ -18,6 +18,8 @@ View in another language — **C++** · [C#/.NET](../../../dotnet/guide/server/0
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
+This chapter quotes code from the tutorial's [`Server` and `Client` directories and its Run section](https://github.com/zlink-systems/zlink-cpp-examples/blob/main/tutorial/README.md#run); bootstrapping and building that tree reproduces the results explained in later chapters.
+
 !!! info "What you get from this chapter"
 
     You can tell what a channel, a Spot, an Actor, STREAM and Location each are, and when to

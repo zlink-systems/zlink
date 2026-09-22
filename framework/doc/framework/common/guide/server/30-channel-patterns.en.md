@@ -1,5 +1,7 @@
 # How Channels Work
 
+This chapter quotes code from the tutorial's `Server` and `Client` directories and the `TicTacToe` and `ZoneWorld` sample directories. Bootstrap and build the corresponding tree for each language to inspect the described connections and target selection in running code.
+
 !!! info "What you get from this chapter"
 
     You learn which connection each of the three arrangements opens, who it picks

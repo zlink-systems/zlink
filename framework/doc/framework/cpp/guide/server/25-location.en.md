@@ -18,6 +18,8 @@ View in another language — **C++** · [C#/.NET](../../../dotnet/guide/server/2
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
+This chapter quotes code from the tutorial's [`Client` directory and its Run section](https://github.com/zlink-systems/zlink-cpp-examples/blob/main/tutorial/README.md#run); bootstrapping and building that tree reproduces the results below.
+
 !!! info "What you get from this chapter"
 
     You can ask which node a Spot or Actor is on right now, holding nothing but its id.
@@ -68,7 +70,7 @@ result is therefore not a verdict that no such id exists.
 
 ## 4. What You See When You Run It
 
-The commands below run against the tutorial (`framework/languages/cpp/tutorial`) with its Server and Client started as described in the README's "Run" section; the address is the Client's HTTP surface.
+With the tutorial Server and Client running as the README's Run section specifies, send these `curl` requests to the Client's HTTP surface: each HTTP response appears on `curl` stdout, and the creation and lookup handler records appear on the Server process's stdout or in `server.log`.
 
 ```bash
 curl -X POST http://127.0.0.1:5080/rooms \

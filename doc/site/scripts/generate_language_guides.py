@@ -210,8 +210,17 @@ LANGUAGE_PATHS = {
     "kotlin": ("framework/languages/java/tutorial/kotlin", "framework/languages/java/samples/kotlin/{name}"),
     "node": ("framework/languages/node/tutorial", "framework/languages/node/samples/{name}.Ts"),
 }
+EXAMPLE_REPOSITORIES = {
+    "dotnet": "zlink-dotnet-examples",
+    "cpp": "zlink-cpp-examples",
+    "java": "zlink-java-examples",
+    "kotlin": "zlink-java-examples",
+    "node": "zlink-node-examples",
+}
 PLACEHOLDER_RE = re.compile(
     r"framework/languages/<(?:언어|language|lang)>/(tutorial|samples)(?:/([A-Za-z0-9_.-]+))?")
+EXAMPLE_REPOSITORY_RE = re.compile(
+    r"https://github\.com/zlink-systems/zlink-<(?:언어|language|lang)>-examples")
 
 
 def resolve_language_paths(text: str, lang_dir: str) -> str:
@@ -225,7 +234,9 @@ def resolve_language_paths(text: str, lang_dir: str) -> str:
             return samples.rsplit("/", 1)[0]
         return samples.format(name=name)
 
-    return PLACEHOLDER_RE.sub(repl, text)
+    text = PLACEHOLDER_RE.sub(repl, text)
+    return EXAMPLE_REPOSITORY_RE.sub(
+        f"https://github.com/zlink-systems/{EXAMPLE_REPOSITORIES[lang_dir]}", text)
 
 
 def link_chapter_refs(text: str, available: dict[str, str], suffix: str) -> str:

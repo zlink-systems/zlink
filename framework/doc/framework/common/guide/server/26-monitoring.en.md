@@ -1,5 +1,7 @@
 # Monitoring
 
+Bootstrap, build, and run the tutorial Server and Client as its [README Run section](https://github.com/zlink-systems/zlink-<language>-examples/blob/main/tutorial/README.md#run) specifies, then use this chapter's observation calls to read those processes' status and records.
+
 !!! info "What you get from this chapter"
 
     You can read what is ready right now, receive that state whenever it changes, and record
