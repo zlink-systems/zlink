@@ -6193,26 +6193,35 @@ final class ZLinkJavaRawMeshNode
                                     authority != null && authority.isPresent()
                                             ? authority.orElseThrow().ownerLeaseGeneration()
                                             : 1L;
-                            boolean accepted =
-                                    failure == null
-                                            && ((ZLinkJavaRawSpotNode) spotNode())
-                                                    .acceptRemoteStreamBinding(
-                                                            inbound.source(),
-                                                            sourceGeneration,
-                                                            ownerId,
-                                                            ownerLease,
-                                                            binding);
-                            port.reply(
-                                    requireStarted(),
-                                    inbound.source(),
-                                    inbound.requestSequence(),
-                                    List.of(
-                                            wire.encodeReplyHeader(
-                                                    binding.correlation(),
-                                                    accepted ? 0 : 102,
-                                                    accepted ? 0 : 1)));
+                            if (failure != null) {
+                                replyBoundSessionBind(inbound, binding, false);
+                                return null;
+                            }
+                            ((ZLinkJavaRawSpotNode) spotNode())
+                                    .acceptRemoteStreamBinding(
+                                            inbound.source(),
+                                            sourceGeneration,
+                                            ownerId,
+                                            ownerLease,
+                                            binding,
+                                            accepted ->
+                                                    replyBoundSessionBind(
+                                                            inbound, binding, accepted));
                             return null;
                         });
+    }
+
+    private void replyBoundSessionBind(
+            ZLinkJavaRawServicePort.Inbound inbound,
+            ZLinkServiceM6BWireCodec.BoundSessionBind binding,
+            boolean accepted) {
+        port.reply(
+                requireStarted(),
+                inbound.source(),
+                inbound.requestSequence(),
+                List.of(
+                        wire.encodeReplyHeader(
+                                binding.correlation(), accepted ? 0 : 102, accepted ? 0 : 1)));
     }
 
     private void dispatchBoundSessionReplaced(ZLinkJavaRawServicePort.Inbound inbound) {

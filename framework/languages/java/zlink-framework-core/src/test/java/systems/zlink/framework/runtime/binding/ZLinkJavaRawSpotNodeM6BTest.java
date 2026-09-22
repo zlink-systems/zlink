@@ -2193,6 +2193,11 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                     .submit(Duration.ofSeconds(1))
                     .toCompletableFuture()
                     .get(1, TimeUnit.SECONDS);
+            assertFalse(
+                    ((ZLinkJavaRawSpotNode) node.spotNode()).hasLocalActorBoundSessionRoute(actor));
+            stream.publishBoundActor(sessionRid, actor.actorId());
+            assertTrue(
+                    ((ZLinkJavaRawSpotNode) node.spotNode()).hasLocalActorBoundSessionRoute(actor));
             try (Message message = Message.from("stream-ingress")) {
                 assertTrue(
                         stream.sendBoundActor(
@@ -2207,6 +2212,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                     .submit(Duration.ofSeconds(1))
                     .toCompletableFuture()
                     .get(1, TimeUnit.SECONDS);
+            stream.publishBoundActor(sessionRid, actor.actorId());
             try (Message stale = Message.from("stale-local-ingress")) {
                 assertFalse(
                         ((ZLinkJavaRawSpotNode) node.spotNode())
@@ -2268,6 +2274,44 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                             7,
                             new ZLinkServiceM6BWireCodec.BoundSessionBind(
                                     2, route, inactive.sessionRid(), true, 3)));
+        }
+    }
+
+    @Test
+    void remoteBindingIsPublishedOnlyAfterCommandReplySubmission() throws Exception {
+        try (var context = Zlink.createContext();
+                var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            RoutingId nodeRid = RoutingId.from("jvm-m6b-linearized-node");
+            RoutingId sourceRid = RoutingId.from("jvm-m6b-linearized-source");
+            node.setRoutingId(nodeRid);
+            node.setBind("inproc://jvm-m6b-linearized-" + System.nanoTime());
+            node.start();
+
+            ZLinkJavaRawSpotNode target = (ZLinkJavaRawSpotNode) node.spotNode();
+            ZLinkBackendActorRef actor;
+            try (Message create = Message.from("create")) {
+                actor = target.createActor("linearized-actor", create);
+            }
+            target.rememberActorAuthority(actor, 41, 1);
+            var route =
+                    new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                            actor, node.lifecycleGeneration(), 41, 1);
+            var command =
+                    new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                            1, route, RoutingId.from("jvm-m6b-linearized-session"), true, 3);
+
+            assertTrue(
+                    target.acceptRemoteStreamBinding(
+                            sourceRid,
+                            7,
+                            sourceRid.toString(),
+                            1,
+                            command,
+                            accepted -> {
+                                assertTrue(accepted);
+                                assertFalse(target.hasRemoteActorBoundSessionRoute(actor));
+                            }));
+            assertTrue(target.hasRemoteActorBoundSessionRoute(actor));
         }
     }
 

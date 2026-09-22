@@ -203,6 +203,14 @@ final class ZLinkStreamReceiveDispatcher {
                         : null;
         ZLinkFlowOrigin flowOrigin =
                 flow == null ? null : ZLinkFlowOrigin.fromWireValue(flow.flowOrigin());
+        String actorId = header.actorSlot() == null ? null : actors.actorId(header.actorSlot());
+        List<ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>> registered =
+                List.copyOf(handlers.getOrDefault(header.name(), List.of()));
+        List<ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>> actorRegistered =
+                header.actorSlot() == null
+                        ? List.of()
+                        : actors.handlers(header.actorSlot(), header.name());
+        boolean hasRegisteredHandlers = !registered.isEmpty() || !actorRegistered.isEmpty();
         ZLinkStreamMessage<ZLinkStreamEncodedPayload> message =
                 new ZLinkStreamMessage<>(
                         header.name(),
@@ -214,20 +222,10 @@ final class ZLinkStreamReceiveDispatcher {
                         header.metadata(),
                         flow == null ? null : flow.flowId(),
                         flowOrigin,
-                        header.actorSlot() == null ? null : actors.actorId(header.actorSlot()));
+                        actorId);
         Supplier<CompletionStage<Void>> dispatch =
                 () -> {
-                    // The registered list is a CopyOnWriteArrayList. Its iterator already
-                    // provides the snapshot required while callbacks may register or
-                    // remove handlers, so copying it again for every received message
-                    // only adds hot-path allocation.
-                    List<ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>> registered =
-                            handlers.getOrDefault(header.name(), List.of());
-                    List<ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>> actorRegistered =
-                            header.actorSlot() == null
-                                    ? List.of()
-                                    : actors.handlers(header.actorSlot(), header.name());
-                    if (registered.isEmpty() && actorRegistered.isEmpty()) {
+                    if (!hasRegisteredHandlers) {
                         message.payload().payload().close();
                         return CompletableFuture.completedFuture(null);
                     }
@@ -240,7 +238,7 @@ final class ZLinkStreamReceiveDispatcher {
                                     payload,
                                     flow,
                                     flowOrigin,
-                                    message.actorId());
+                                    actorId);
                     completion =
                             invokeHandlers(
                                     completion,
@@ -249,18 +247,14 @@ final class ZLinkStreamReceiveDispatcher {
                                     payload,
                                     flow,
                                     flowOrigin,
-                                    message.actorId());
+                                    actorId);
                     return completion.whenComplete(
                             (ignored, error) -> message.payload().payload().close());
                 };
         dispatchQueue.addMessage(
                 message,
                 dispatch,
-                () ->
-                        !handlers.getOrDefault(header.name(), List.of()).isEmpty()
-                                || (header.actorSlot() != null
-                                        && !actors.handlers(header.actorSlot(), header.name())
-                                                .isEmpty()),
+                () -> hasRegisteredHandlers,
                 configuration.dispatchMode() == ZLinkStreamDispatchMode.IMMEDIATE);
     }
 

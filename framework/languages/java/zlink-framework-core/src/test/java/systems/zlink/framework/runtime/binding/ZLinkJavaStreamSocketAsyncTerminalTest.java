@@ -199,6 +199,7 @@ final class ZLinkJavaStreamSocketAsyncTerminalTest {
                     .submit(Duration.ofSeconds(1))
                     .toCompletableFuture()
                     .get(1, TimeUnit.SECONDS);
+            stream.publishBoundActor(sessionRid, actor.actorId());
             ZLinkStreamHeader header =
                     new ZLinkStreamHeader(
                             ZLinkStreamMessageKind.SEND,
@@ -253,6 +254,7 @@ final class ZLinkJavaStreamSocketAsyncTerminalTest {
                     .submit(Duration.ofSeconds(1))
                     .toCompletableFuture()
                     .get(1, TimeUnit.SECONDS);
+            stream.publishBoundActor(sessionRid, actor.actorId());
             ZLinkStreamHeader header =
                     new ZLinkStreamHeader(
                             ZLinkStreamMessageKind.SEND,

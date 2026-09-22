@@ -100,6 +100,15 @@ final class ZLinkSessionActorBindingContractTest {
 
         assertSame(first, same);
         assertEquals(List.of("$zlink.actor.bound", "$zlink.actor.bound"), stream.controlNames());
+        assertEquals(
+                List.of(
+                        "commit:actor-1",
+                        "control:$zlink.actor.bound",
+                        "publish:actor-1",
+                        "commit:actor-2",
+                        "control:$zlink.actor.bound",
+                        "publish:actor-2"),
+                stream.bindingEvents);
         assertEquals(1, stream.controlSlot(0));
         assertEquals(2, stream.controlSlot(1));
 
@@ -768,6 +777,7 @@ final class ZLinkSessionActorBindingContractTest {
 
     private static final class FakeStream implements ZLinkBackendStreamSocket {
         private final List<String> binds = new ArrayList<>();
+        private final List<String> bindingEvents = new ArrayList<>();
         private final List<ControlFrame> controls = new ArrayList<>();
         //  `unbindActor` is submitted from a pool thread (ZLinkBoundActor
         //  hops off the completing thread on purpose), so the recording list
@@ -867,6 +877,7 @@ final class ZLinkSessionActorBindingContractTest {
                 SendFlags flags) {
             if (header.kind() == ZLinkStreamMessageKind.CONTROL) {
                 controls.add(new ControlFrame(header.packetName(), parts.getFirst().toByteArray()));
+                bindingEvents.add("control:" + header.packetName());
             }
             return true;
         }
@@ -903,7 +914,13 @@ final class ZLinkSessionActorBindingContractTest {
         public ZLinkBackendActorBindOperation bindActor(
                 RoutingId sessionRid, ZLinkBackendActorRef actor) {
             binds.add(actor.actorId());
+            bindingEvents.add("commit:" + actor.actorId());
             return timeout -> CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public void publishBoundActor(RoutingId sessionRid, String actorId) {
+            bindingEvents.add("publish:" + actorId);
         }
 
         @Override

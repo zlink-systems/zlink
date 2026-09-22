@@ -1,6 +1,8 @@
 package systems.zlink.stream.connector;
 
 import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -70,7 +72,7 @@ final class ZLinkStreamActorRegistry {
     synchronized List<ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>> handlers(
             int slot, String name) {
         DefaultActor actor = bySlot.get(slot);
-        return actor == null ? List.of() : actor.handlers(name);
+        return actor == null ? List.of() : List.copyOf(actor.handlers(name));
     }
 
     void bound(byte[] payload) {
@@ -84,7 +86,7 @@ final class ZLinkStreamActorRegistry {
         }
         byte[] id = new byte[idLength];
         buffer.get(id);
-        String actorId = new String(id, StandardCharsets.UTF_8);
+        String actorId = decodeActorId(id);
         DefaultActor actor;
         synchronized (this) {
             if (bySlot.containsKey(slot) || byId.containsKey(actorId)) {
@@ -112,9 +114,8 @@ final class ZLinkStreamActorRegistry {
                 throw new IllegalArgumentException("Actor unbound control uses an unknown slot");
             }
             byId.remove(actor.actorId());
-            actor.close();
         }
-        publish(unboundHandlers, actor);
+        publishUnbound(actor);
     }
 
     void connectionEnded() {
@@ -142,27 +143,53 @@ final class ZLinkStreamActorRegistry {
 
     private void publish(List<ZLinkStreamActorHandler> handlers, DefaultActor actor) {
         for (ZLinkStreamActorHandler handler : handlers) {
-            Runnable invoke =
-                    () -> {
-                        try {
-                            handler.handle(actor)
-                                    .exceptionally(
-                                            failure -> {
-                                                errorPublisher.accept(
-                                                        DefaultZLinkStreamConnector
-                                                                .userCallbackFailed(failure));
-                                                return null;
-                                            });
-                        } catch (Throwable failure) {
-                            errorPublisher.accept(
-                                    DefaultZLinkStreamConnector.userCallbackFailed(failure));
-                        }
-                    };
+            Runnable invoke = () -> invoke(handler, actor);
             if (configuration.dispatchMode() == ZLinkStreamDispatchMode.IMMEDIATE) {
                 invoke.run();
             } else {
                 dispatchQueue.add(invoke);
             }
+        }
+    }
+
+    private void publishUnbound(DefaultActor actor) {
+        List<ZLinkStreamActorHandler> handlers = List.copyOf(unboundHandlers);
+        Runnable invoke =
+                () -> {
+                    actor.close();
+                    handlers.forEach(handler -> invoke(handler, actor));
+                };
+        if (configuration.dispatchMode() == ZLinkStreamDispatchMode.IMMEDIATE) {
+            invoke.run();
+        } else {
+            dispatchQueue.add(invoke);
+        }
+    }
+
+    private void invoke(ZLinkStreamActorHandler handler, DefaultActor actor) {
+        try {
+            handler.handle(actor)
+                    .exceptionally(
+                            failure -> {
+                                errorPublisher.accept(
+                                        DefaultZLinkStreamConnector.userCallbackFailed(failure));
+                                return null;
+                            });
+        } catch (Throwable failure) {
+            errorPublisher.accept(DefaultZLinkStreamConnector.userCallbackFailed(failure));
+        }
+    }
+
+    private static String decodeActorId(byte[] encoded) {
+        try {
+            return StandardCharsets.UTF_8
+                    .newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(encoded))
+                    .toString();
+        } catch (CharacterCodingException invalid) {
+            throw new IllegalArgumentException("Actor id is not valid UTF-8", invalid);
         }
     }
 

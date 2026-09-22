@@ -44,6 +44,9 @@ public interface ZLinkBackendStreamSocket extends ZLinkBackendSocket, ZLinkBacke
         return 0;
     }
 
+    /** Publishes a prepared native route after the Actor-bound control has been submitted. */
+    default void publishBoundActor(RoutingId sessionRid, String actorId) {}
+
     void onTransportError(ZLinkBackendStreamErrorHandler handler);
 
     void startSessionService();

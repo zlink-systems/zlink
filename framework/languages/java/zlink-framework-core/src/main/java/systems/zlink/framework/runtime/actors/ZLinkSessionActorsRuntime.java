@@ -714,6 +714,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                     return announceBound(actor)
                             .thenApply(
                                     ignored -> {
+                                        stream.publishBoundActor(sessionRid, actor.actorId());
                                         installBinding(actor);
                                         return actor;
                                     });

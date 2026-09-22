@@ -278,9 +278,14 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
     @Override
     public CompletionStage<Void> sendBoundSessionPushAsync(
             RoutingId routingId, int actorSlot, List<Message> parts) {
+        return sendBoundSessionPushAsync(routingId, actorSlot, parts, null);
+    }
+
+    CompletionStage<Void> sendBoundSessionPushAsync(
+            RoutingId routingId, int actorSlot, List<Message> parts, Duration timeout) {
         Message frame = ZLinkJavaStreamFraming.withActorSlot(parts, actorSlot);
         try {
-            return sendBoundSessionPushAsync(routingId, List.of(frame), null);
+            return sendBoundSessionPushAsync(routingId, List.of(frame), timeout);
         } finally {
             frame.close();
         }
@@ -663,6 +668,18 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
     @Override
     public long boundActorBindingGeneration(RoutingId sessionRid, String actorId) {
         return requireBinding(sessionRid, actorId).generation();
+    }
+
+    @Override
+    public void publishBoundActor(RoutingId sessionRid, String actorId) {
+        SessionBinding binding = requireBinding(sessionRid, actorId);
+        rawSpotNode()
+                .publishStreamSession(
+                        sessionRid,
+                        binding.actor(),
+                        binding.generation(),
+                        binding.actorSlot(),
+                        this);
     }
 
     @Override
