@@ -54,7 +54,7 @@ builder unchanged. The opaque Java `byte[]` appears as Kotlin
 `CompletionStage`. A separate suspending adapter, `TState`,
 `stateContractId`, state class, or `ZLinkMessage`-based relocation API
 isn't created. The state-preservation policy is configured with
-`preserveStateWith(ActorAdapter::class.java)`, and the match between
+`preserveStateWith<ActorAdapter>()`, and the match between
 factory and adapter target is validated before socket bind. A policy
 passing a null adapter class through Java interop is also rejected as a
 startup configuration error before bind.
@@ -231,7 +231,7 @@ public interface systems.zlink.framework.kotlin.ZLinkSuspendingSpotActorRequestH
 public interface systems.zlink.framework.kotlin.ZLinkKotlinActorCreateCall {
  public abstract systems.zlink.framework.kotlin.ZLinkKotlinActorCreateCall inMesh(java.lang.String);
  public abstract systems.zlink.framework.kotlin.ZLinkKotlinActorCreateCall request(java.lang.Object);
- public abstract systems.zlink.framework.kotlin.ZLinkKotlinActorCreateCall timeout-LRDsOJo(long);
+ public abstract systems.zlink.framework.kotlin.ZLinkKotlinActorCreateCall timeout(java.time.Duration);
  public abstract java.lang.Object await(kotlin.coroutines.Continuation<? super systems.zlink.framework.actors.ZLinkActorCreateResult>);
  public abstract java.lang.Object yield(kotlin.coroutines.Continuation<? super systems.zlink.framework.actors.ZLinkActorCreateResult>);
 }
