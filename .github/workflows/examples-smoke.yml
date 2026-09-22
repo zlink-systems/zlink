@@ -248,6 +248,10 @@ jobs:
               zlink-redis-[0-9]*) docker rm -f "${redis_name}" 2>/dev/null || true ;;
             esac
           fi
+      - name: Samples root solution build (Samples.sln)
+        working-directory: examples/zlink-dotnet-examples/samples
+        run: dotnet build Samples.sln
+
       - name: Sample install (README's own 내려받기와 설치/linux block)
         working-directory: examples/zlink-dotnet-examples/samples
         run: bash ../../run_readme_step.sh README.ko.md "내려받기와 설치" linux
@@ -303,6 +307,10 @@ jobs:
         working-directory: examples/zlink-dotnet-examples/tutorial
         shell: bash
         run: bash ../../run_readme_step.sh README.ko.md 빌드 windows
+
+      - name: Samples root solution build (Samples.sln)
+        working-directory: examples/zlink-dotnet-examples/samples
+        run: dotnet build Samples.sln
 
       # GitHub-hosted windows-2022 runners cannot run Linux Docker containers
       # (Docker there is Windows-container-only; switching to Linux containers

@@ -53,6 +53,21 @@ dotnet build TicTacToe/TicTacToe.sln
 dotnet build TicTacToe\TicTacToe.sln
 ```
 
+## Opening it in an IDE
+
+Opening `Samples.sln` in Rider or Visual Studio 2022 or 2026 opens the seven samples' projects,
+one solution folder each. To open one sample, open `<Sample>/<Sample>.sln`. Both solutions point
+at the same project files, so a build from either gives the same result.
+
+A sample scenario is run by `run_sample.sh`/`run_sample.ps1`, not by the IDE's startup projects.
+The runner creates the Redis container for that run, writes each server role's configuration file
+and endpoint, starts the same project as several instances, drives the client scenario to the end
+and then cleans everything up — none of which `Multiple startup projects` can produce. The IDE is
+for reading, editing and building the code; to debug one role, start the runner and attach to that
+role's process (Rider **Run → Attach to Process**, Visual Studio **Debug → Attach to Process**;
+the process name is the role's project name). The runner stops the processes; the attached
+debugger is detached with the IDE's Stop button.
+
 ## Run
 
 Each sample root owns `run_sample.sh` and `run_sample.ps1`, and one invocation
