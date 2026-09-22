@@ -212,24 +212,59 @@ public sealed class MessageFlowTracerTests
     [Fact]
     public void DispatchErrorIsOneUnsampledRecordWithoutPseudoPhase()
     {
+        const int errorMessageMaxLength = 512;
         var activities = CaptureActivities(out var listener);
+        var message =
+            "Authorization: Bearer auth Bearer standalone password=p token=t "
+            + new string('x', errorMessageMaxLength + 1)
+            + "\n   at Secret.Handler()";
+        var expectedMessage = (
+            "Authorization: <redacted> Bearer <redacted> password=<redacted> token=<redacted> "
+            + new string('x', errorMessageMaxLength + 1)
+        )[..errorMessageMaxLength];
         using (listener)
         {
             var options = new ZLinkDispatchOptionsModel();
             options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Errors);
             options.Diagnostics.SetSampleRate(0);
-            var reporter = new ZLinkDispatchErrorReporter(options, new CapturingLogger());
+            var logger = new CapturingLogger();
+            var reporter = new ZLinkDispatchErrorReporter(options, logger);
+            InvalidOperationException exception;
+            try
+            {
+                throw new InvalidOperationException(message);
+            }
+            catch (InvalidOperationException caught)
+            {
+                exception = caught;
+            }
 
             reporter.Report(
                 new ZLinkDispatchFailure(
                     ZLinkDispatchErrorSurface.ClassicFanout,
                     ZLinkDispatchMessageKind.Send,
-                    ZLinkDispatchErrorReason.HandlerMissing,
+                    ZLinkDispatchErrorReason.HandlerException,
                     ZLinkDispatchErrorAction.Drop,
                     "packet",
-                    "channel"
+                    "channel",
+                    Exception: exception
                 )
             );
+
+            Assert.Contains(
+                logger.Fields,
+                field =>
+                    field.Key == "error_type" && (string?)field.Value == "InvalidOperationException"
+            );
+            Assert.Contains(
+                logger.Fields,
+                field => field.Key == "error_message" && (string?)field.Value == expectedMessage
+            );
+            Assert.DoesNotContain("Bearer auth", logger.Message);
+            Assert.DoesNotContain("Bearer standalone", logger.Message);
+            Assert.DoesNotContain("password=p", logger.Message);
+            Assert.DoesNotContain("token=t", logger.Message);
+            Assert.DoesNotContain("Secret.Handler", logger.Message);
         }
 
         var activity = Assert.Single(activities);
@@ -238,9 +273,51 @@ public sealed class MessageFlowTracerTests
         Assert.Equal("classic_fanout", activity.GetTagItem("surface"));
         Assert.Equal("send", activity.GetTagItem("message_kind"));
         Assert.Equal("failed", activity.GetTagItem("outcome"));
-        Assert.Equal("no_handler", activity.GetTagItem("reason"));
+        Assert.Equal("handler_exception", activity.GetTagItem("reason"));
         Assert.Equal("drop", activity.GetTagItem("action"));
+        Assert.Equal("InvalidOperationException", activity.GetTagItem("error_type"));
+        Assert.Equal(expectedMessage, activity.GetTagItem("error_message"));
         Assert.Null(activity.GetTagItem("channel_route_kind"));
+    }
+
+    [Fact]
+    public void DispatchErrorKeepsEmptyMessageInTraceAndStructuredLog()
+    {
+        var activities = CaptureActivities(out var listener);
+        var logger = new CapturingLogger();
+        using (listener)
+        {
+            var options = new ZLinkDispatchOptionsModel();
+            options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Errors);
+            var reporter = new ZLinkDispatchErrorReporter(options, logger);
+
+            reporter.Report(
+                new ZLinkDispatchFailure(
+                    ZLinkDispatchErrorSurface.ClassicFanout,
+                    ZLinkDispatchMessageKind.Send,
+                    ZLinkDispatchErrorReason.HandlerException,
+                    ZLinkDispatchErrorAction.Drop,
+                    PacketName: null,
+                    ChannelName: null,
+                    Exception: new InvalidOperationException(string.Empty)
+                )
+            );
+        }
+
+        Assert.Contains(
+            logger.Fields,
+            field =>
+                field.Key == "error_type" && (string?)field.Value == "InvalidOperationException"
+        );
+        var logMessage = Assert.Single(logger.Fields, field => field.Key == "error_message");
+        Assert.Equal(string.Empty, (string?)logMessage.Value);
+        var activity = Assert.Single(activities);
+        Assert.Contains(
+            activity.TagObjects,
+            tag => tag.Key == "error_type" && (string?)tag.Value == "InvalidOperationException"
+        );
+        var traceMessage = Assert.Single(activity.TagObjects, tag => tag.Key == "error_message");
+        Assert.Equal(string.Empty, (string?)traceMessage.Value);
     }
 
     [Fact]

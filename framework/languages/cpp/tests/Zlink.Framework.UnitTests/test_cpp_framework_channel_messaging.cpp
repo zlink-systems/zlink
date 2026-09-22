@@ -1603,7 +1603,9 @@ int main ()
         || observed_dispatch_errors[0].channel_name.value_or ("") != "local"
         || observed_dispatch_errors[0].topic.value_or ("") != "request"
         || observed_dispatch_errors[0].correlation_id.value_or ("") != "corr-payload-decode"
-        || !observed_dispatch_errors[0].exception) {
+        || observed_dispatch_errors[0].exception
+        || observed_dispatch_errors[0].error_type.value_or ("").empty ()
+        || observed_dispatch_errors[0].error_message.value_or ("").empty ()) {
         return 110;
     }
     clear_dispatch_errors (dispatch_errors, dispatch_errors_mutex);
@@ -1646,7 +1648,10 @@ int main ()
         || observed_dispatch_errors[0].channel_name.value_or ("") != "local"
         || observed_dispatch_errors[0].topic.value_or ("") != "request"
         || observed_dispatch_errors[0].correlation_id.value_or ("") != "corr-handler-exception"
-        || !observed_dispatch_errors[0].exception) {
+        || observed_dispatch_errors[0].exception
+        || observed_dispatch_errors[0].error_type.value_or ("").empty ()
+        || observed_dispatch_errors[0].error_message.value_or ("")
+             != "DERR-007 handler exception") {
         return 107;
     }
     clear_dispatch_errors (dispatch_errors, dispatch_errors_mutex);

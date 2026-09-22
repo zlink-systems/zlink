@@ -22,7 +22,7 @@ View in another language — [C++](../../../cpp/guide/server/51-tictactoe.en.md)
 
     You can open the TicTacToe sample in an editor and follow the code from the HTTP call that
     creates a room to the point where both players leave and their Actors are destroyed. The code in
-    this chapter comes from the [TicTacToe sample in the per-language example repositories](https://github.com/zlink-systems/zlink-java-examples/tree/main/samples/TicTacToe).
+    this chapter comes from the [TicTacToe sample in the per-language example repositories](https://github.com/zlink-systems/zlink-kotlin-examples/tree/main/samples/TicTacToe).
 
 [Picking a Sample](14-samples.en.md#3-tictactoe--building-a-real-time-head-to-head-game-server)
 introduced what this sample demonstrates. This chapter is what you read after that introduction —

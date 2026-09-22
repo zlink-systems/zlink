@@ -387,13 +387,15 @@ class ZLinkMessageFlowTracerTest {
                         null,
                         ZLinkDispatchErrorReason.HANDLER_MISSING,
                         ZLinkDispatchErrorAction.DROP,
-                        null,
-                        null);
+                        IllegalStateException.class.getSimpleName(),
+                        "handler failed");
         String errorLine = ZLinkTraceFormat.flowLine(dispatchError, null);
         assertTrue(errorLine.contains("event_id=zlink.dispatch_error"));
         assertTrue(errorLine.contains("surface=classic_fanout"));
         assertTrue(errorLine.contains("reason=no_handler"));
         assertTrue(errorLine.contains("action=drop"));
+        assertTrue(errorLine.contains("error_type=IllegalStateException"));
+        assertTrue(errorLine.contains("error_message=handler failed"));
         assertTrue(errorLine.contains("outcome=failed"));
         assertFalse(errorLine.contains(" phase="));
         assertEquals(ZLinkDispatchErrorAction.DROP, dispatchError.errorAction());
@@ -445,6 +447,75 @@ class ZLinkMessageFlowTracerTest {
                                 null,
                                 null,
                                 null));
+    }
+
+    @Test
+    void dispatchErrorTraceAndLogShareSanitizedHandlerDetails() {
+        String message =
+                "Authorization: Bearer auth Bearer standalone password=p token=t "
+                        + "x".repeat(513)
+                        + "\n at Secret.Handler";
+        String expected =
+                ("Authorization: <redacted> Bearer <redacted> password=<redacted> token=<redacted> "
+                                + "x".repeat(513))
+                        .substring(0, 512);
+        ZLinkDispatchErrorReporter.ErrorDetails details =
+                ZLinkDispatchErrorReporter.errorDetails(new IllegalStateException(message));
+        ZLinkMessageFlowEvent dispatchError =
+                ZLinkMessageFlowEvent.dispatchError(
+                        ZLinkDispatchErrorSurface.CHANNEL,
+                        ZLinkDispatchMessageKind.SEND,
+                        "Notice",
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
+                        ZLinkDispatchErrorAction.DROP,
+                        details.type(),
+                        details.message());
+
+        String line = ZLinkTraceFormat.flowLine(dispatchError, null);
+
+        assertEquals("IllegalStateException", dispatchError.errorType());
+        assertEquals(expected, dispatchError.errorMessage());
+        assertTrue(line.contains("error_type=IllegalStateException"));
+        assertTrue(line.contains("error_message=" + expected));
+        assertFalse(line.contains("Bearer auth"));
+        assertFalse(line.contains("Bearer standalone"));
+        assertFalse(line.contains("password=p"));
+        assertFalse(line.contains("token=t"));
+        assertFalse(line.contains("Secret.Handler"));
+    }
+
+    @Test
+    void dispatchErrorTraceAndLogKeepEmptyMessage() {
+        ZLinkDispatchErrorReporter.ErrorDetails details =
+                ZLinkDispatchErrorReporter.errorDetails(new IllegalStateException());
+        ZLinkMessageFlowEvent dispatchError =
+                ZLinkMessageFlowEvent.dispatchError(
+                        ZLinkDispatchErrorSurface.CHANNEL,
+                        ZLinkDispatchMessageKind.SEND,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
+                        ZLinkDispatchErrorAction.DROP,
+                        details.type(),
+                        details.message());
+
+        String line = ZLinkTraceFormat.flowLine(dispatchError, null);
+
+        assertEquals("IllegalStateException", dispatchError.errorType());
+        assertEquals("", dispatchError.errorMessage());
+        assertTrue(line.contains("error_type=IllegalStateException"));
+        assertTrue(line.contains("error_message="));
     }
 
     @Test

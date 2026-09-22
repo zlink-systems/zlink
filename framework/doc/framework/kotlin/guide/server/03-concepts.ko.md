@@ -21,7 +21,7 @@ title: "3. 핵심 개념 · Kotlin"
 !!! info "이 장을 읽고 나면"
 
     channel · Spot · Actor · STREAM · Location이 각각 무엇이고 언제 고르는지 알 수 있다.
-    이 장의 코드는 [언어별 예제 저장소](https://github.com/zlink-systems/zlink-java-examples)에서 가져왔다.
+    이 장의 코드는 [언어별 예제 저장소](https://github.com/zlink-systems/zlink-kotlin-examples)에서 가져왔다.
 
 ZLink framework는 **channel · spot · actor · stream · location**을 핵심 개념으로
 제공한다. 뒤의 장은 이 개념들을 각각 자세히 다룬다.

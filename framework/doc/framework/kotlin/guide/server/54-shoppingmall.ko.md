@@ -21,7 +21,7 @@ title: "ShoppingMall 따라 읽기 · Kotlin"
 !!! info "이 장을 읽고 나면"
 
     ShoppingMall 샘플을 편집기에 열고, HTTP로 접수된 주문이 owner Spot에서 재고 예약 → 결제 승인 →
-    확정으로 진행되고 실패하면 보상되기까지 코드를 따라갈 수 있다. 이 장의 코드는 [언어별 예제 저장소의 ShoppingMall 샘플](https://github.com/zlink-systems/zlink-java-examples/tree/main/samples/ShoppingMall)에서 가져온다.
+    확정으로 진행되고 실패하면 보상되기까지 코드를 따라갈 수 있다. 이 장의 코드는 [언어별 예제 저장소의 ShoppingMall 샘플](https://github.com/zlink-systems/zlink-kotlin-examples/tree/main/samples/ShoppingMall)에서 가져온다.
 
 [샘플 고르기](14-samples.ko.md#7-shoppingmall--주문-처리-시스템-구축)가 이 샘플이 무엇을 보여 주는지
 소개했다. 이 장은 그 소개 다음에 읽는 자리다 — 역할과 코드 위치, 주요 시나리오의 메시지 흐름,

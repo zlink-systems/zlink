@@ -1088,13 +1088,6 @@ class relocation_entry_spot_t final : public fw::entry_spot_t<relocation_actor_t
         co_return fw::actor_create_response_t::accept ();
     }
 
-    fw::task_t<fw::spot_actor_join_result_t> on_actor_join (std::string_view actor_id,
-                                                            const fw::message_t &request) override
-    {
-        (void) actor_id;
-        co_return fw::spot_actor_join_result_t::accept (request);
-    }
-
     fw::task_t<void> on_actor_joined (relocation_actor_t &) override { co_return; }
     fw::task_t<void> on_leave_actor (relocation_actor_t &) override { co_return; }
 

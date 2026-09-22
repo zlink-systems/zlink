@@ -35,14 +35,12 @@ typical online game server.
 
 Clone the repository below and run the samples from `samples/`.
 
-[:material-github: **zlink-java-examples**](https://github.com/zlink-systems/zlink-java-examples){ .md-button .md-button--primary }
+[:material-github: **zlink-kotlin-examples**](https://github.com/zlink-systems/zlink-kotlin-examples){ .md-button .md-button--primary }
 
 ```bash
-git clone https://github.com/zlink-systems/zlink-java-examples.git
-cd zlink-java-examples/samples
+git clone https://github.com/zlink-systems/zlink-kotlin-examples.git
+cd zlink-kotlin-examples/samples
 ```
-
-The Kotlin samples share a Gradle project with the Java ones, so they use the same repository.
 
 `main` is the latest release plus the fixes merged since, with package versions pinned to that
 release. An older release is the tag `vA.B.C` (`git checkout vA.B.C`). Send issues and PRs to

@@ -22,7 +22,7 @@ View in another language — [C++](../../../cpp/guide/server/21-spot.en.md) · [
 
     You can create a stateful object addressed by id, send messages to it, and
     receive answers. The code in this chapter comes from the
-    [language-specific example repositories](https://github.com/zlink-systems/zlink-java-examples).
+    [language-specific example repositories](https://github.com/zlink-systems/zlink-kotlin-examples).
 
 In [Channel Messaging](20-channel-messaging.en.md) a call was received by one of the nodes
 serving the name. That path does not work when the recipient is already decided. **A Spot is a

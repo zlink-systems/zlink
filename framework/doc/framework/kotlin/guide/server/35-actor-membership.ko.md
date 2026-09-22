@@ -21,7 +21,7 @@ title: "Actor membership · Kotlin"
 !!! info "이 장을 읽고 나면"
 
     Actor를 Spot 사이로 옮기고, 그 이동을 받는 쪽에서 승인하거나 거절할 수 있다.
-    이 장의 코드는 [언어별 예제 저장소의 TicTacToe 샘플](https://github.com/zlink-systems/zlink-java-examples/tree/main/samples/TicTacToe)에서 가져온다.
+    이 장의 코드는 [언어별 예제 저장소의 TicTacToe 샘플](https://github.com/zlink-systems/zlink-kotlin-examples/tree/main/samples/TicTacToe)에서 가져온다.
 
 [Actor](22-actor.ko.md)는 언제나 어떤 Spot 안에 있고, 만들어진 직후에는 Entry Spot에 있다.
 이 장은 **그 Actor를 User Spot으로 옮기는 절차**를 다룬다 — 게임 방이 그 예다 — 누가 승인하고, 언제 실행되며, 무엇이

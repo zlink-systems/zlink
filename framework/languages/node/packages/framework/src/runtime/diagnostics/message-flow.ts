@@ -34,6 +34,7 @@ export const DEFAULT_ZLINK_DIAGNOSTICS: ZLinkDiagnosticsOptions = {
 
 const telemetryLogger = openTelemetryLogs.getLogger('@zlink-systems/framework');
 const telemetryTracer = openTelemetryTrace.getTracer('@zlink-systems/framework');
+const ERROR_MESSAGE_MAX_LENGTH = 512;
 let diagnosticsGeneration = 0n;
 
 interface ZLinkTelemetryRecord {
@@ -384,7 +385,7 @@ function toTelemetryRecord(
     messageSizeBytes,
     durationSeconds,
     errorType: flow.errorType,
-    errorMessage: boundedText(flow.errorMessage),
+    errorMessage: flow.errorMessage,
     errorCauseType: flow.errorCauseType,
     errorCauseMessage: boundedText(flow.errorCauseMessage)
   };
@@ -461,6 +462,9 @@ function structuredLogBodyAttributes(record: ZLinkTelemetryRecord): Attributes {
     origin: record.flowOrigin,
     outcome: record.outcome,
     reason: record.reason,
+    action: record.action,
+    error_type: record.errorType,
+    error_message: record.errorMessage,
     size: record.messageSizeBytes
   });
 }
@@ -571,7 +575,7 @@ function hashFlowId(flowId: string): number {
 }
 
 function boundedText(value: string | undefined): string | undefined {
-  return value === undefined ? undefined : value.slice(0, 512);
+  return value === undefined ? undefined : value.slice(0, ERROR_MESSAGE_MAX_LENGTH);
 }
 
 function toSnakeCase(value: string): string {

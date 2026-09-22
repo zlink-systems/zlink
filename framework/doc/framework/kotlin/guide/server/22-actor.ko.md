@@ -21,7 +21,7 @@ title: "Actor · Kotlin"
 !!! info "이 장을 읽고 나면"
 
     개체 하나를 id로 만들고, 그것에 메시지를 보내고 답을 받을 수 있다.
-    이 장의 코드는 [예제 저장소의 tutorial README](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.ko.md)에서 가져왔으며, README의 「내려받기와 설치」·「빌드」·「실행」 절을 따르면 아래 결과를 재현할 수 있다.
+    이 장의 코드는 [예제 저장소의 tutorial README](https://github.com/zlink-systems/zlink-kotlin-examples/blob/main/tutorial/README.ko.md)에서 가져왔으며, README의 「내려받기와 설치」·「빌드」·「실행」 절을 따르면 아래 결과를 재현할 수 있다.
 
 [Spot](21-spot.ko.md)이 방·queue처럼 **여럿이 함께 사용하는 자리**를 다뤘다면, Actor는 플레이어
 하나, 세션 하나처럼 **개체 단위 상태**를 맡는다. 둘 다 id로 호출하고 한 번에 하나씩 처리하는
@@ -191,7 +191,7 @@ curl http://127.0.0.1:5080/players/p7
 - 여럿이 함께 사용하는 자리 — [Spot](21-spot.ko.md)
 - 이름으로 호출하는 경로 — [Channel 메시징](20-channel-messaging.ko.md)
 - 이동과 membership — [Actor membership](35-actor-membership.ko.md)
-- 이 장 코드의 실행본 — [예제 저장소의 tutorial README](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.ko.md)
+- 이 장 코드의 실행본 — [예제 저장소의 tutorial README](https://github.com/zlink-systems/zlink-kotlin-examples/blob/main/tutorial/README.ko.md)
 
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();

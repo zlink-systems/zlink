@@ -22,7 +22,7 @@ View in another language — [C++](../../../cpp/guide/server/54-shoppingmall.en.
 
     You can open the ShoppingMall sample in an editor and follow the code from an order accepted over
     HTTP, through inventory reservation → payment authorization → confirmation inside the owner Spot,
-    and through compensation when a step fails. The code in this chapter comes from the [ShoppingMall sample in the per-language example repositories](https://github.com/zlink-systems/zlink-java-examples/tree/main/samples/ShoppingMall).
+    and through compensation when a step fails. The code in this chapter comes from the [ShoppingMall sample in the per-language example repositories](https://github.com/zlink-systems/zlink-kotlin-examples/tree/main/samples/ShoppingMall).
 
 [Picking a Sample](14-samples.en.md#7-shoppingmall--building-an-order-processing-system) introduced
 what this sample demonstrates. This chapter is what you read after that introduction — the roles and

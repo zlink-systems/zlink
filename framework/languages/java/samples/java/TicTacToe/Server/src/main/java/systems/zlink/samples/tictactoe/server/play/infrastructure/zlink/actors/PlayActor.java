@@ -116,6 +116,7 @@ public final class PlayActor implements ZLinkActor {
                 .send(new JoinGameFailedNotify(roomId, failed.kind().name()))
                 .submit();
     }
+
     // --8<-- [end:doc-join-completed]
 
     public String requireJoinedGame() {

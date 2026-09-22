@@ -122,6 +122,7 @@ public final class TicTacToeGame implements ZLinkSpot<PlayActor> {
         actor.markDisconnected();
         return CompletableFuture.completedFuture(null);
     }
+
     // --8<-- [end:doc-disconnect-actor]
 
     // --8<-- [start:doc-ttt-timer-register]

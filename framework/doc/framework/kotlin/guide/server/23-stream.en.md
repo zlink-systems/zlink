@@ -21,7 +21,7 @@ View in another language — [C++](../../../cpp/guide/server/23-stream.en.md) ·
 !!! info "What you get from this chapter"
 
     You can let a program outside the mesh attach over one connection, send requests and
-    receive answers. The code comes from the [tutorial README in the examples repository](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.md); follow its Download, Build, and Run sections to reproduce the results below.
+    receive answers. The code comes from the [tutorial README in the examples repository](https://github.com/zlink-systems/zlink-kotlin-examples/blob/main/tutorial/README.md); follow its Download, Build, and Run sections to reproduce the results below.
 
 A client that reaches a STREAM node uses its language's stream connector. [Client stream connector](../../../install.en.md#client-stream-connector) covers installation for Unity, Unreal, browser, Node, .NET, Java, and C++ clients, and the [stream connector guide](../stream-connector/README.en.md) for that language covers connection and packet handling.
 
@@ -145,7 +145,7 @@ connection to an Actor — covered by [Session and Actor](24-actor-session.en.md
 - Binding a connection to an entity — [Session and Actor](24-actor-session.en.md)
 - State objects called by id — [Spot](21-spot.en.md) · [Actor](22-actor.en.md)
 - The whole session lifecycle and its options — [STREAM](23-stream.en.md)
-- A running version of this chapter's code — [the tutorial README in the examples repository](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.md)
+- A running version of this chapter's code — [the tutorial README in the examples repository](https://github.com/zlink-systems/zlink-kotlin-examples/blob/main/tutorial/README.md)
 
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();

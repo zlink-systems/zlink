@@ -22,7 +22,7 @@ title: "활성화와 수명 · Kotlin"
 
     Spot 종류마다 언제 만들어지고 어떤 callback을 받는지, 그리고 그 안에 주입한 서비스가
     얼마나 사는지 알 수 있다.
-    이 장의 코드는 [언어별 예제 저장소의 TicTacToe 샘플](https://github.com/zlink-systems/zlink-java-examples/tree/main/samples/TicTacToe)에서 가져온다.
+    이 장의 코드는 [언어별 예제 저장소의 TicTacToe 샘플](https://github.com/zlink-systems/zlink-kotlin-examples/tree/main/samples/TicTacToe)에서 가져온다.
 
 [Spot](21-spot.ko.md)은 **application이 명시적으로 만드는 Spot**을 다뤘다. 이 장은
 나머지 종류와의 차이, 종류마다 받는 lifecycle callback, 그리고 Spot이 살아 있는 동안 유지되는

@@ -21,7 +21,7 @@ View in another language — [C++](../../../cpp/guide/server/22-actor.en.md) · 
 !!! info "What you get from this chapter"
 
     You can create one entity by id, send messages to it, and receive answers.
-    The code comes from the [tutorial README in the examples repository](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.md); follow its Download, Build, and Run sections to reproduce the results below.
+    The code comes from the [tutorial README in the examples repository](https://github.com/zlink-systems/zlink-kotlin-examples/blob/main/tutorial/README.md); follow its Download, Build, and Run sections to reproduce the results below.
 
 [Spot](21-spot.en.md) covered **a place several parties share**, such as a room or a queue. An
 Actor holds **per-entity state** instead — one player, one session. Both are called by id and
@@ -199,7 +199,7 @@ during a move by [Relocation](37-relocation.en.md).
 - A place several parties share — [Spot](21-spot.en.md)
 - The path that calls by name — [Channel Messaging](20-channel-messaging.en.md)
 - Moving and membership — [Actor Membership](35-actor-membership.en.md)
-- A running version of this chapter's code — [the tutorial README in the examples repository](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.md)
+- A running version of this chapter's code — [the tutorial README in the examples repository](https://github.com/zlink-systems/zlink-kotlin-examples/blob/main/tutorial/README.md)
 
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();

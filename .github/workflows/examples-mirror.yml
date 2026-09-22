@@ -49,6 +49,7 @@ on:
       - 'framework/languages/*/quickstart/**'
       - 'framework/languages/*/tutorial/**'
       - 'framework/languages/*/samples/**'
+      - 'framework/languages/engines/**'
       - 'scripts/tutorial/export_examples.py'
       - '.gitignore'
       - '.gitattributes'
@@ -64,7 +65,7 @@ on:
 
 # One run per ref and language. A single group for the whole workflow kept
 # only one *pending* run — GitHub cancels the older pending run in a group
-# when a newer one queues — so the four framework-<lang>/v0.20.0 tags pushed
+# when a newer one queues — so the five framework-<lang>/v0.20.0 tags pushed
 # back to back lost three of their runs. Per-language runs push to different
 # mirrors, so they never race; `main` runs touch the same mirrors but arrive
 # far apart. (In a called workflow `github.workflow` is the caller's name.)
@@ -84,6 +85,8 @@ jobs:
       # Empty on a main push; the mirror gets a `v<version>` tag only for a tag run.
       version: ${{ steps.pick.outputs.version }}
       languages: ${{ steps.pick.outputs.languages }}
+      target_ids: ${{ steps.pick.outputs.target_ids }}
+      targets: ${{ steps.pick.outputs.targets }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -99,20 +102,34 @@ jobs:
           set -euo pipefail
           ref="${DISPATCH_REF:-${GITHUB_REF_NAME}}"
           version=""
+          released() {
+            local lang="$1"
+            local declared="$2"
+            git rev-parse -q --verify "refs/tags/framework-${lang}/v${declared}" >/dev/null \
+              || git rev-parse -q --verify "refs/tags/framework/v${declared}" >/dev/null
+          }
+          append_target() {
+            if [ "${target_ids}" = '[]' ]; then
+              target_ids="[\"$1\"]"
+            else
+              target_ids="${target_ids%]},\"$1\"]"
+            fi
+          }
           case "${ref}" in
-            framework/v*) languages='["cpp","dotnet","java","node"]' ;;
+            framework/v*) languages='["cpp","dotnet","java","kotlin","node"]' ;;
             framework-cpp/v*) languages='["cpp"]' ;;
             framework-dotnet/v*) languages='["dotnet"]' ;;
-            framework-java/v*) languages='["java"]' ;;
+            framework-java/v*) languages='["java","kotlin"]' ;;
             framework-node/v*) languages='["node"]' ;;
             main)
               # A language is mirrored from main only when the version its
               # VERSION file names is already released (tagged).
               languages="["
-              for lang in cpp dotnet java node; do
-                declared="$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' "framework/languages/${lang}/VERSION")"
-                if git rev-parse -q --verify "refs/tags/framework-${lang}/v${declared}" >/dev/null \
-                   || git rev-parse -q --verify "refs/tags/framework/v${declared}" >/dev/null; then
+              for lang in cpp dotnet java kotlin node; do
+                source_lang="${lang}"
+                [ "${lang}" = kotlin ] && source_lang=java
+                declared="$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' "framework/languages/${source_lang}/VERSION")"
+                if released "${source_lang}" "${declared}"; then
                   languages="${languages}\"${lang}\","
                 else
                   echo "::notice::${lang}: VERSION ${declared} is not tagged yet; skipped until the release tag mirrors it"
@@ -130,42 +147,109 @@ jobs:
               *) echo "::error::${ref} does not release ${CALL_LANGUAGE}"; exit 1 ;;
             esac
           fi
+          target_ids="${languages}"
+          release_lane="${CALL_LANGUAGE}"
+          if [ -z "${release_lane}" ]; then
+            case "${ref}" in
+              framework-cpp/v*) release_lane=cpp ;;
+              framework-dotnet/v*) release_lane=dotnet ;;
+              framework-node/v*) release_lane=node ;;
+            esac
+          fi
+          all_engine_targets=false
+          if [ -z "${CALL_LANGUAGE}" ] \
+             && [[ "${ref}" == main || "${ref}" == framework/v* ]]; then
+            all_engine_targets=true
+          fi
+          cpp_version="$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' framework/languages/cpp/VERSION)"
+          dotnet_version="$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' framework/languages/dotnet/VERSION)"
+          node_version="$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' framework/languages/node/VERSION)"
+          if [ -d framework/languages/engines/Server ] \
+             && released dotnet "${dotnet_version}" \
+             && { ${all_engine_targets} || [ "${release_lane}" = dotnet ]; }; then
+            append_target engine-server
+          fi
+          if [ -d framework/languages/engines/Unity ] \
+             && released dotnet "${dotnet_version}" \
+             && released node "${node_version}" \
+             && { ${all_engine_targets} \
+                  || [ "${release_lane}" = dotnet ] \
+                  || [ "${release_lane}" = node ]; }; then
+            append_target unity
+          fi
+          if [ -d framework/languages/engines/Unreal ] \
+             && released cpp "${cpp_version}" \
+             && { ${all_engine_targets} || [ "${release_lane}" = cpp ]; }; then
+            append_target unreal
+          fi
           if [ "${ref}" != main ]; then
             version="${ref##*/v}"
             if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
               echo "::error::tag ${ref} does not end in /vA.B.C"; exit 1
             fi
           fi
-          echo "ref=${ref}, version=${version:-none}, languages=${languages}"
-          echo "ref=${ref}" >> "$GITHUB_OUTPUT"
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "languages=${languages}" >> "$GITHUB_OUTPUT"
+          targets="$(jq -cn --argjson enabled "${target_ids}" '
+            [
+              {id:"cpp", mirror:"zlink-systems/zlink-cpp-examples",
+               tree:".artifacts/examples/zlink-cpp-examples", source_path:"framework/languages/cpp",
+               secret:"EXAMPLES_MIRROR_KEY_CPP"},
+              {id:"dotnet", mirror:"zlink-systems/zlink-dotnet-examples",
+               tree:".artifacts/examples/zlink-dotnet-examples", source_path:"framework/languages/dotnet",
+               secret:"EXAMPLES_MIRROR_KEY_DOTNET"},
+              {id:"java", mirror:"zlink-systems/zlink-java-examples",
+               tree:".artifacts/examples/zlink-java-examples", source_path:"framework/languages/java",
+               secret:"EXAMPLES_MIRROR_KEY_JAVA"},
+              {id:"node", mirror:"zlink-systems/zlink-node-examples",
+               tree:".artifacts/examples/zlink-node-examples", source_path:"framework/languages/node",
+               secret:"EXAMPLES_MIRROR_KEY_NODE"},
+              {id:"engine-server", mirror:"zlink-systems/zlink-engine-server",
+               tree:".artifacts/examples/zlink-engine-server",
+               source_path:"framework/languages/engines/Server",
+               secret:"EXAMPLES_MIRROR_KEY_ENGINE_SERVER"},
+              {id:"unity", mirror:"zlink-systems/zlink-unity-examples",
+               tree:".artifacts/examples/zlink-unity-examples",
+               source_path:"framework/languages/engines/Unity",
+               secret:"EXAMPLES_MIRROR_KEY_UNITY"},
+              {id:"unreal", mirror:"zlink-systems/zlink-unreal-examples",
+               tree:".artifacts/examples/zlink-unreal-examples",
+               source_path:"framework/languages/engines/Unreal",
+               secret:"EXAMPLES_MIRROR_KEY_UNREAL"}
+            ] | map(select(.id as $id | $enabled | index($id)))
+          ')"
+          echo "ref=${ref}, version=${version:-none}, languages=${languages}, target_ids=${target_ids}, targets=${targets}"
+          {
+            echo "ref=${ref}"
+            echo "version=${version}"
+            echo "languages=${languages}"
+            echo "target_ids=${target_ids}"
+            echo "targets=${targets}"
+          } >> "$GITHUB_OUTPUT"
 
   # Same trees, built and run from their READMEs in jobs without a checkout.
-  # Only the languages this run mirrors are smoked: a mirror is pushed on its
-  # own language's proof, so another language's unpublished packages cannot
-  # block it.
+  # Only this run's language lanes and dependency-ready engine targets are
+  # smoked before their mirrors are pushed.
   smoke:
     name: Smoke the exported trees
     needs: resolve
-    if: needs.resolve.outputs.languages != '[]'
+    if: needs.resolve.outputs.target_ids != '[]'
     uses: ./.github/workflows/examples-smoke.yml
     with:
       ref: ${{ needs.resolve.outputs.ref }}
-      languages: ${{ needs.resolve.outputs.languages }}
+      languages: ${{ needs.resolve.outputs.target_ids }}
 
   push:
-    name: Push zlink-${{ matrix.lang }}-examples
+    name: Push ${{ matrix.target.id }} mirror
     needs: [resolve, smoke]
-    if: needs.resolve.outputs.languages != '[]'
+    if: needs.resolve.outputs.target_ids != '[]'
     runs-on: ubuntu-24.04
+    env:
+      MIRROR: ${{ matrix.target.mirror }}
+      TREE: ${{ matrix.target.tree }}
+      SOURCE_PATH: ${{ matrix.target.source_path }}
     strategy:
       fail-fast: false
       matrix:
-        lang: ${{ fromJSON(needs.resolve.outputs.languages) }}
-    env:
-      MIRROR: zlink-systems/zlink-${{ matrix.lang }}-examples
-      TREE: .artifacts/examples/zlink-${{ matrix.lang }}-examples
+        target: ${{ fromJSON(needs.resolve.outputs.targets) }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -178,19 +262,20 @@ jobs:
       - name: Export the tree at the ref
         run: python3 scripts/tutorial/export_examples.py .artifacts/examples HEAD
 
-      # One secret per mirror, named after the language; the shell picks it so
-      # the matrix stays a plain list (a matrix `include` with an unmatched
-      # `lang` would add that language to the run instead of annotating it).
+      # One write-only deploy key per configured mirror target.
       - name: Load the mirror's deploy key
         env:
           EXAMPLES_MIRROR_KEY_CPP: ${{ secrets.EXAMPLES_MIRROR_KEY_CPP }}
           EXAMPLES_MIRROR_KEY_DOTNET: ${{ secrets.EXAMPLES_MIRROR_KEY_DOTNET }}
           EXAMPLES_MIRROR_KEY_JAVA: ${{ secrets.EXAMPLES_MIRROR_KEY_JAVA }}
+          EXAMPLES_MIRROR_KEY_KOTLIN: ${{ secrets.EXAMPLES_MIRROR_KEY_KOTLIN }}
           EXAMPLES_MIRROR_KEY_NODE: ${{ secrets.EXAMPLES_MIRROR_KEY_NODE }}
+          EXAMPLES_MIRROR_KEY_ENGINE_SERVER: ${{ secrets.EXAMPLES_MIRROR_KEY_ENGINE_SERVER }}
+          EXAMPLES_MIRROR_KEY_UNITY: ${{ secrets.EXAMPLES_MIRROR_KEY_UNITY }}
+          EXAMPLES_MIRROR_KEY_UNREAL: ${{ secrets.EXAMPLES_MIRROR_KEY_UNREAL }}
         run: |
           set -euo pipefail
-          name="EXAMPLES_MIRROR_KEY_${{ matrix.lang }}"
-          name="${name^^}"
+          name="${{ matrix.target.secret }}"
           DEPLOY_KEY="${!name:-}"
           if [ -z "${DEPLOY_KEY}" ]; then
             echo "::error::secret ${name} is empty"; exit 1
@@ -235,7 +320,7 @@ jobs:
             echo "tree unchanged since $(git rev-parse --short HEAD)"
           else
             git commit -q -m "${REF} — zlink@${source}" \
-              -m "Exported from https://github.com/${GITHUB_REPOSITORY}/tree/${source}/framework/languages/${{ matrix.lang }}"
+              -m "Exported from https://github.com/${GITHUB_REPOSITORY}/tree/${source}/${SOURCE_PATH}"
           fi
           if [ -n "${VERSION}" ]; then
             git tag -f "v${VERSION}"

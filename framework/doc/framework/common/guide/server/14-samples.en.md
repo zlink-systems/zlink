@@ -46,14 +46,13 @@ Clone the repository below and run the samples from `samples/`.
 
 === "Kotlin"
 
-    [:material-github: **zlink-java-examples**](https://github.com/zlink-systems/zlink-java-examples){ .md-button .md-button--primary }
+    [:material-github: **zlink-kotlin-examples**](https://github.com/zlink-systems/zlink-kotlin-examples){ .md-button .md-button--primary }
 
     ```bash
-    git clone https://github.com/zlink-systems/zlink-java-examples.git
-    cd zlink-java-examples/samples
+    git clone https://github.com/zlink-systems/zlink-kotlin-examples.git
+    cd zlink-kotlin-examples/samples
     ```
 
-    The Kotlin samples share a Gradle project with the Java ones, so they use the same repository.
 
 === "Node/TypeScript"
 

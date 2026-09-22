@@ -10,7 +10,6 @@ import { decodeServiceWireFrozenRecord } from './service-stateful-wire-codec';
 const RECOVERY_PACKET_NAME = '__zlink.actor.routed_join.recovery';
 const RECOVERY_CONTENT_TYPE = 'application/x-zlink-actor-routed-join-recovery-v1';
 const MAXIMUM_METADATA_BYTES = 256 * 1024;
-const MAXIMUM_MESSAGE_BYTES = 1024 * 1024;
 const FRAMEWORK_METADATA_UPPER_BOUND_BYTES = 64 * 1024;
 const ACCEPTED_JOURNAL_UPPER_BOUND_BYTES = 16 * 1024 * 1024;
 const SNAPSHOT_APPLICATION_STATE_RESERVATION_BYTES = 64 * 1024 * 1024;
@@ -124,9 +123,6 @@ export function encodeCanonicalActorJoinRecoverySavedWork(
   const operationId = input.operationId;
   const reply = operationId === undefined ? Buffer.alloc(0) : Buffer.from(input.reply ?? []);
   const request = Buffer.from(input.request);
-  if (request.byteLength > MAXIMUM_MESSAGE_BYTES || reply.byteLength > MAXIMUM_MESSAGE_BYTES) {
-    throw new RangeError('Actor Join recovery message exceeds 1 MiB.');
-  }
   const replyContentType =
     operationId === undefined
       ? null

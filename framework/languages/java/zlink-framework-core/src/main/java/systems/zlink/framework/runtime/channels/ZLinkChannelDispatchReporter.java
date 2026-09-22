@@ -10,7 +10,6 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
-import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchFailure;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
 
@@ -205,22 +204,19 @@ final class ZLinkChannelDispatchReporter {
             String topic,
             String sourceRid,
             Throwable error) {
-        Throwable cause = unwrap(error);
         reporter.report(
-                new ZLinkDispatchFailure(
-                        surface,
-                        kind,
-                        reason,
-                        action,
-                        packetName == null || packetName.isBlank() ? null : packetName,
-                        channelName,
-                        topic,
-                        null,
-                        null,
-                        sourceRid,
-                        null,
-                        errorType(cause),
-                        errorMessage(cause)));
+                surface,
+                kind,
+                reason,
+                action,
+                packetName == null || packetName.isBlank() ? null : packetName,
+                channelName,
+                topic,
+                null,
+                null,
+                sourceRid,
+                null,
+                error);
     }
 
     static ZLinkDispatchErrorReason reasonFrom(Throwable error) {
@@ -362,14 +358,6 @@ final class ZLinkChannelDispatchReporter {
         return error instanceof CompletionException && error.getCause() != null
                 ? error.getCause()
                 : error;
-    }
-
-    private static String errorType(Throwable error) {
-        return error == null ? null : error.getClass().getSimpleName();
-    }
-
-    private static String errorMessage(Throwable error) {
-        return error == null ? null : error.getMessage();
     }
 
     private static String errorText(
