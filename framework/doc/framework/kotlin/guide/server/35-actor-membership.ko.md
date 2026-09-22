@@ -99,9 +99,8 @@ handler와 분리해 실행하는 background 작업에서 호출하면 `InvalidO
 
 ### 2.3 결과를 받는 자리
 
-결과는 Actor의 join 완료 callback으로 온다. 탭의 callback 이름은 C#/.NET의
-`OnJoinCompletedAsync`, C++의 `on_join_completed`, Java·Kotlin·Node/TypeScript의
-`onJoinCompleted`다.
+결과는 Actor의 join 완료 callback(`onJoinCompleted`)으로 온다. 언어별 표기는 탭의 코드가
+보여 준다.
 
 ```kotlin
 --8<-- "framework/languages/java/samples/kotlin/TicTacToe/Server/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/server/play/infrastructure/zlink/actors/PlayActor.kt:doc-join-completed"
