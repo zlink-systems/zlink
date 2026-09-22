@@ -133,6 +133,24 @@ Get-Content client.pid, server.pid | ForEach-Object {
 Get-Job | Stop-Job -ErrorAction SilentlyContinue
 ```
 
+## Running from an IDE
+
+`bootstrap.cmake` records the exact arguments it configured this folder with as the preset `zlink`
+in `CMakeUserPresets.json`. Visual Studio, Rider and CLion read that preset when they open the
+folder, so after one bootstrap the IDE continues in the same `build/`. The bootstrap rewrites the
+file every time; it is not edited by hand.
+
+1. Run `cmake -P bootstrap.cmake` from the [Build](#build) section once in a terminal (an IDE cannot
+   run a `-P` script).
+2. **Visual Studio 2022 or 2026**: File › Open › Folder on this directory. Pick the preset `zlink`
+   in the CMake settings; configuration completes and the startup item list shows `quickstart_server` and `quickstart_client`. Start the
+   server first, then the client.
+3. **Rider or CLion**: open this directory's `CMakeLists.txt` as the project. Enable the preset
+   `zlink` under Settings › Build, Execution, Deployment › CMake; configuration completes and run
+   configurations for `quickstart_server` and `quickstart_client` appear.
+4. Stop with the IDE's Stop button; the IDE ends the process tree, so the [Stop](#stop) section's
+   commands are not needed.
+
 ## Troubleshooting
 
 The install-time symptoms (Conan not found, unsupported compiler settings, download failures, missing
@@ -153,7 +171,7 @@ README. Specific to this project:
 | `Server/` | Registers the `greeting` channel handler and listens on `7301` |
 | `Client/` | Connects to the server, exposes `GET /hello/{name}`, calls `greeting` |
 | `bootstrap.cmake` | The install script; identical to the tutorial's and the samples' |
-| `CMakePresets.json` | IDE presets (Visual Studio, Rider, CLion) pointing at the `.zlink/` the bootstrap made |
+| `CMakeUserPresets.json` | the IDE preset `zlink` the bootstrap writes (git-ignored). [Running from an IDE](#running-from-an-ide) |
 
 ## What to carry into your own project
 
