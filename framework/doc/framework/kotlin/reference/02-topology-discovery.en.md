@@ -74,7 +74,7 @@ a dispatcher. Choose this mutually exclusively with the Java reference's
 
 ---
 
-## `actorFactory { }` (configuration time, reified DSL)
+## `addActorFactory { }` (configuration time, reified DSL)
 
 A DSL that wraps `ZLinkMeshObjectServerBuilder.addActorFactory(...)` with a reified type
 parameter.
