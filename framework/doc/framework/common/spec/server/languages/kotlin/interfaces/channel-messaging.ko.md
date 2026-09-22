@@ -285,7 +285,7 @@ public interface systems.zlink.framework.kotlin.ZLinkKotlinSubmissionCall {
 }
 public interface systems.zlink.framework.kotlin.ZLinkKotlinRequestCall<TReply> {
  public abstract systems.zlink.framework.kotlin.ZLinkKotlinRequestCall<TReply> metadata(java.lang.String, java.lang.String);
- public abstract systems.zlink.framework.kotlin.ZLinkKotlinRequestCall<TReply> timeout-LRDsOJo(long);
+ public abstract systems.zlink.framework.kotlin.ZLinkKotlinRequestCall<TReply> timeout(java.time.Duration);
  public abstract java.lang.Object await(kotlin.coroutines.Continuation<? super TReply>);
  public abstract java.lang.Object yield(kotlin.coroutines.Continuation<? super TReply>);
 }

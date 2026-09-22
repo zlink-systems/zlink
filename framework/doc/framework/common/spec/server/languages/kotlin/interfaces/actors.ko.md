@@ -202,7 +202,7 @@ public interface systems.zlink.framework.kotlin.ZLinkSuspendingSpotActorRequestH
 public interface systems.zlink.framework.kotlin.ZLinkKotlinActorCreateCall {
  public abstract systems.zlink.framework.kotlin.ZLinkKotlinActorCreateCall inMesh(java.lang.String);
  public abstract systems.zlink.framework.kotlin.ZLinkKotlinActorCreateCall request(java.lang.Object);
- public abstract systems.zlink.framework.kotlin.ZLinkKotlinActorCreateCall timeout-LRDsOJo(long);
+ public abstract systems.zlink.framework.kotlin.ZLinkKotlinActorCreateCall timeout(java.time.Duration);
  public abstract java.lang.Object await(kotlin.coroutines.Continuation<? super systems.zlink.framework.actors.ZLinkActorCreateResult>);
  public abstract java.lang.Object yield(kotlin.coroutines.Continuation<? super systems.zlink.framework.actors.ZLinkActorCreateResult>);
 }
