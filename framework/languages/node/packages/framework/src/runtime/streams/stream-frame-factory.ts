@@ -74,7 +74,8 @@ export class ZLinkStreamFrameMessageFactory {
     compressed: boolean,
     requestSeq: bigint | undefined,
     payload: unknown,
-    correlationId?: string
+    correlationId?: string,
+    actorSlot?: number
   ): Message {
     const flow =
       (this.options.flowCreationEnabled?.() ?? true)
@@ -97,7 +98,8 @@ export class ZLinkStreamFrameMessageFactory {
         metadata,
         correlationId,
         flowId: flow?.flowId,
-        flowOrigin: flow?.flowOrigin
+        flowOrigin: flow?.flowOrigin,
+        actorSlot
       })
     );
   }

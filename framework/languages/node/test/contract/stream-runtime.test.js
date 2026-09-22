@@ -77,6 +77,215 @@ test('stream runtime is exported from framework root surface', () => {
   assert.equal(typeof framework.DefaultZLinkSessionContext, 'function');
 });
 
+test('STREAM server header codec round-trips Actor slots and rejects malformed slot headers', () => {
+  const encoded = streamProtocol.encodeStreamHeader({
+    kind: streamProtocol.ZLinkStreamMessageKind.Send,
+    codec: streamProtocol.ZLinkStreamCodec.Json,
+    flags: streamProtocol.ZLinkStreamHeaderFlags.None,
+    name: 'ActorPacket',
+    metadata: new Map(),
+    actorSlot: 513
+  });
+  const decoded = streamProtocol.decodeStreamHeader(encoded);
+  assert.equal(decoded.actorSlot, 513);
+  assert.notEqual(
+    decoded.flags & streamProtocol.ZLinkStreamHeaderFlags.HasActorSlot,
+    0
+  );
+
+  const missingSlot = encoded.slice(0, -2);
+  assert.throws(() => streamProtocol.decodeStreamHeader(missingSlot), /actor slot is incomplete/);
+  assert.throws(
+    () => streamProtocol.encodeStreamHeader({
+      kind: streamProtocol.ZLinkStreamMessageKind.Send,
+      codec: streamProtocol.ZLinkStreamCodec.Json,
+      flags: streamProtocol.ZLinkStreamHeaderFlags.None,
+      name: 'ActorPacket',
+      metadata: new Map(),
+      actorSlot: 0
+    }),
+    /actor slot is invalid/
+  );
+  assert.throws(
+    () => streamProtocol.encodeStreamHeader({
+      kind: streamProtocol.ZLinkStreamMessageKind.Control,
+      codec: streamProtocol.ZLinkStreamCodec.Raw,
+      flags: streamProtocol.ZLinkStreamHeaderFlags.None,
+      name: '$zlink.actor.bound',
+      metadata: new Map(),
+      actorSlot: 1
+    }),
+    /Control packet must not contain/
+  );
+});
+
+test('managed STREAM binding orders lifecycle controls around slotted Actor packets', async () => {
+  const socket = new FakeStreamSocket();
+  const runtime = new framework.ZLinkStreamBindingRuntime({
+    messageFactory: binaryMessageFactory()
+  });
+  const context = runtime.createSessionContext(
+    new framework.ZLinkManagedStream(socket, 'backend-rid', 'public-session')
+  );
+  const actorRef = { nodeRid: 'node-a', actorId: 'actor-slot-a', generation: 1n };
+  const actor = await context.actors.bind(actorRef);
+
+  assert.equal(socket.sends.length, 1);
+  const bound = decodeServerFrame(bytesOf(socket.sends[0][1]));
+  assert.equal(bound.header.name, '$zlink.actor.bound');
+  assert.equal(bound.header.actorSlot, undefined);
+  assert.deepEqual([...bound.payload], [1, 0, 1, 12, ...Buffer.from('actor-slot-a')]);
+
+  assert.equal(
+    await runtime.sendLocalBoundSession(actor.actorId, { ready: true }, 'ActorReady', new Map()),
+    true
+  );
+  const packet = decodeServerFrame(bytesOf(socket.sends[1][1]));
+  assert.equal(packet.header.actorSlot, 1);
+  const dispatch = createSessionDispatchContext(packet.header, context.actorForSlot(1));
+  assert.equal(dispatch.actor, actor);
+  assert.equal(
+    createSessionDispatchContext(
+      { ...packet.header, actorSlot: 99 },
+      context.actorForSlot(99)
+    ).actor,
+    undefined
+  );
+
+  assert.equal(await context.actors.bindOrGet(actorRef), actor);
+  assert.equal(socket.sends.length, 2);
+
+  await actor.notifyDisconnected();
+  const unbound = decodeServerFrame(bytesOf(socket.sends[2][1]));
+  assert.equal(unbound.header.name, '$zlink.actor.unbound');
+  assert.equal(unbound.header.actorSlot, undefined);
+  assert.deepEqual([...unbound.payload], [1, 0, 1]);
+
+  await context.actors.bind({ nodeRid: 'node-b', actorId: 'actor-slot-b', generation: 1n });
+  const rebound = decodeServerFrame(bytesOf(socket.sends[3][1]));
+  assert.equal(rebound.header.name, '$zlink.actor.bound');
+  assert.deepEqual([...rebound.payload.slice(0, 4)], [1, 0, 2, 12]);
+});
+
+test('managed STREAM does not expose a binding delivery path before bound control enqueue', async () => {
+  const socket = new FakeStreamSocket();
+  let releaseBound;
+  const boundCanFinish = new Promise((resolve) => { releaseBound = resolve; });
+  let boundStarted;
+  const boundDidStart = new Promise((resolve) => { boundStarted = resolve; });
+  socket.submit = async function submit(...args) {
+    this.sends.push(args);
+    if (decodeServerFrame(bytesOf(args[1])).header.name === '$zlink.actor.bound') {
+      boundStarted();
+      await boundCanFinish;
+    }
+  };
+  const runtime = new framework.ZLinkStreamBindingRuntime({
+    messageFactory: binaryMessageFactory()
+  });
+  const context = runtime.createSessionContext(
+    new framework.ZLinkManagedStream(socket, 'backend-rid', 'public-session')
+  );
+
+  const binding = context.actors.bind({
+    nodeRid: 'node-a',
+    actorId: 'actor-racing-push',
+    generation: 1n
+  });
+  await boundDidStart;
+  let deliverySettled = false;
+  const delivery = runtime
+    .sendLocalBoundSession('actor-racing-push', { ready: true }, 'ActorReady', new Map())
+    .then((result) => {
+      deliverySettled = true;
+      return result;
+    });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(deliverySettled, false);
+
+  releaseBound();
+  await binding;
+  assert.equal(await delivery, true);
+  assert.deepEqual(
+    socket.sends.map(([, message]) => decodeServerFrame(bytesOf(message)).header.name),
+    ['$zlink.actor.bound', 'ActorReady']
+  );
+  assert.equal(decodeServerFrame(bytesOf(socket.sends[1][1])).header.actorSlot, 1);
+});
+
+test('managed STREAM relocation preserves the Actor slot and emits no lifecycle controls', async () => {
+  const socket = new FakeStreamSocket();
+  const runtime = new framework.ZLinkStreamBindingRuntime({
+    messageFactory: binaryMessageFactory()
+  });
+  const context = runtime.createSessionContext(
+    new framework.ZLinkManagedStream(socket, 'backend-rid', 'public-session')
+  );
+  const actor = await context.actors.bind({
+    nodeRid: 'node-a',
+    actorId: 'actor-relocated-slot',
+    generation: 7n
+  });
+
+  await runtime.refreshActor({
+    nodeRid: 'node-b',
+    actorId: 'actor-relocated-slot',
+    generation: 7n
+  });
+  assert.equal((await context.actors.find(actor.actorId)).ref.nodeRid, 'node-b');
+  assert.equal(socket.sends.length, 1);
+  assert.equal(decodeServerFrame(bytesOf(socket.sends[0][1])).header.name, '$zlink.actor.bound');
+
+  assert.equal(
+    await runtime.sendLocalBoundSession(actor.actorId, { moved: true }, 'Relocated', new Map()),
+    true
+  );
+  assert.equal(decodeServerFrame(bytesOf(socket.sends[1][1])).header.actorSlot, 1);
+});
+
+test('managed STREAM serializes concurrent Actor slot exhaustion at binding commit', async () => {
+  const socket = new FakeStreamSocket();
+  const stream = new framework.ZLinkManagedStream(socket, 'backend-rid', 'public-session');
+  stream.nextActorSlot = 0xffff;
+  const runtime = new framework.ZLinkStreamBindingRuntime();
+  const context = runtime.createSessionContext(stream);
+  runtime.routes.nextActorSlots?.set(context, 0xffff);
+  let releaseBinds;
+  const bindsCanFinish = new Promise((resolve) => { releaseBinds = resolve; });
+  let bindCount = 0;
+  let bothStarted;
+  const bothDidStart = new Promise((resolve) => { bothStarted = resolve; });
+  socket.bindActor = async function bindActor(sessionRid, actor, timeoutMs) {
+    this.boundActors.push({ sessionRid, actor, timeoutMs });
+    bindCount += 1;
+    if (bindCount === 2) bothStarted();
+    await bindsCanFinish;
+  };
+
+  const first = context.actors.bind({
+    nodeRid: 'node-a',
+    actorId: 'actor-last-slot',
+    generation: 1n
+  });
+  const second = context.actors.bind({
+    nodeRid: 'node-a',
+    actorId: 'actor-overflow',
+    generation: 1n
+  });
+  await bothDidStart;
+  releaseBinds();
+  const outcomes = await Promise.allSettled([first, second]);
+
+  assert.equal(outcomes.filter(({ status }) => status === 'fulfilled').length, 1);
+  const rejected = outcomes.find(({ status }) => status === 'rejected');
+  assert.equal(rejected?.reason?.kind, framework.ZLinkFrameworkErrorKind.InvalidOperation);
+  assert.equal(socket.sends.length, 1);
+  assert.deepEqual(
+    [...decodeServerFrame(bytesOf(socket.sends[0][1])).payload.slice(0, 3)],
+    [1, 0xff, 0xff]
+  );
+});
+
 test('managed stream synchronous writes preserve blocking defaults and explicit DontWait', () => {
   const socket = new FakeStreamSocket();
   const stream = new framework.ZLinkManagedStream(socket, 'session-rid', 'public-session');
@@ -233,6 +442,7 @@ test('managed stream binds Session Actors through the Framework service without 
     sendHighWaterMark: 16,
     onSendReady() {},
     send() { return true; },
+    async submit() {},
     disconnectPeer() {},
     recv() { return undefined; }
   };
@@ -326,7 +536,7 @@ test('managed stream preserves synchronous service failure without reserving ano
     bindings() { return []; }, sendToActor() { return 0; }
   };
   const stream = new framework.ZLinkManagedStream(
-    { send() { return true; }, disconnectPeer() {}, recv() { return undefined; } },
+    { send() { return true; }, async submit() {}, disconnectPeer() {}, recv() { return undefined; } },
     'session-rid',
     undefined,
     service,
@@ -450,8 +660,9 @@ test('managed stream treats an actor-destroy stale unbind as idempotent cleanup'
       sendTimeoutMs: 1000,
       sendHighWaterMark: 16,
       onSendReady() {},
-      send() { return true; },
-      disconnectPeer() {},
+    send() { return true; },
+    async submit() {},
+    disconnectPeer() {},
       recv() { return undefined; }
     },
     'session-rid',
@@ -566,8 +777,9 @@ test('managed stream skips native unbind after transport teardown', async () => 
       sendTimeoutMs: 1000,
       sendHighWaterMark: 16,
       onSendReady() {},
-      send() { return true; },
-      disconnectPeer() {},
+    send() { return true; },
+    async submit() {},
+    disconnectPeer() {},
       recv() { return undefined; }
     },
     'session-rid',
@@ -640,7 +852,7 @@ test('managed stream fences a native bind that completes after transport teardow
     }
   };
   const stream = new framework.ZLinkManagedStream(
-    { send() { return true; }, disconnectPeer() {}, recv() { return undefined; } },
+    { send() { return true; }, async submit() {}, disconnectPeer() {}, recv() { return undefined; } },
     'session-rid', undefined, service, completions
   );
 
@@ -733,8 +945,9 @@ test('managed stream accepts an internal unbind result after the exact delivery 
       sendTimeoutMs: 1000,
       sendHighWaterMark: 16,
       onSendReady() {},
-      send() { return true; },
-      disconnectPeer() {},
+    send() { return true; },
+    async submit() {},
+    disconnectPeer() {},
       recv() { return undefined; }
     },
     'session-rid',
@@ -1335,6 +1548,7 @@ test('initial managed stream remote bind deadline failure does not leave a provi
   let nativeActor;
   const socket = {
     send() { return true; },
+    async submit() {},
     disconnectPeer() {},
     recv() { return undefined; },
     async bindActor(_sessionRid, actor) {
@@ -4309,16 +4523,20 @@ test('relocation target binding republish delivers the post-Join bound-session p
     () => remoteSubmissions === 1,
     'OnJoinedActor public bound-session push arrival at its Session owner'
   );
+  const deliveredApplicationFrameCount = () => socket.sends.filter(
+    ([, message]) => decodeServerFrame(bytesOf(message)).header.kind !==
+      streamProtocol.ZLinkStreamMessageKind.Control
+  ).length;
   assert.equal(
-    socket.sends.length,
+    deliveredApplicationFrameCount(),
     checkpoints.get('afterCallbackSubmit').deliveryCount
   );
   assert.equal(
-    socket.sends.length,
+    deliveredApplicationFrameCount(),
     checkpoints.get('beforeSessionRouteConverged').deliveryCount
   );
   assert.equal(
-    socket.sends.length,
+    deliveredApplicationFrameCount(),
     boundSessionBehavior.invariants.deliveryBeforeRouteApply
   );
 
@@ -4363,11 +4581,12 @@ test('relocation target binding republish delivers the post-Join bound-session p
   await sessionHost.boundSessionRelay.boundSessions
     .receiveServiceWireSessionRelocationRoute(commit);
   await waitForCondition(
-    () => socket.sends.length === checkpoints.get('afterSessionRouteConverged').deliveryCount,
+    () => deliveredApplicationFrameCount() ===
+      checkpoints.get('afterSessionRouteConverged').deliveryCount,
     'OnJoinedActor retained bound-session delivery after Session route convergence'
   );
   assert.equal(
-    socket.sends.length,
+    deliveredApplicationFrameCount(),
     checkpoints.get('afterSessionRouteConverged').deliveryCount
   );
   assert.equal(
@@ -4375,15 +4594,15 @@ test('relocation target binding republish delivers the post-Join bound-session p
     true
   );
 
-  const deliveryBeforeDuplicate = socket.sends.length;
+  const deliveryBeforeDuplicate = deliveredApplicationFrameCount();
   await sessionHost.boundSessionRelay.boundSessions
     .receiveServiceWireSessionRelocationRoute(commit);
   assert.equal(
-    socket.sends.length,
+    deliveredApplicationFrameCount(),
     checkpoints.get('afterDuplicateRouteTerminal').deliveryCount
   );
   assert.equal(
-    socket.sends.length - deliveryBeforeDuplicate,
+    deliveredApplicationFrameCount() - deliveryBeforeDuplicate,
     boundSessionBehavior.invariants.duplicateRouteTerminalAdditionalDelivery
   );
 });
@@ -6387,10 +6606,14 @@ test('bound-session response keeps its stream route during an ownership refresh'
     new Map(),
     false
   ), true);
-  assert.equal(written.length, 1);
-  const frame = decodeFrame(written[0]);
+  assert.equal(written.length, 2);
+  const bound = decodeServerFrame(written[0]);
+  assert.equal(bound.header.name, '$zlink.actor.bound');
+  assert.deepEqual([...bound.payload.slice(0, 4)], [1, 0, 1, 7]);
+  const frame = decodeServerFrame(written[1]);
   assert.equal(frame.header.kind, connector.ZlinkStreamMessageKind.Response);
   assert.equal(frame.header.requestSeq, 7n);
+  assert.equal(frame.header.actorSlot, 1);
 
   releaseRefresh();
   await refreshing;
@@ -7426,6 +7649,36 @@ test('physical disconnect releases the binding lane before its lifecycle callbac
   assert.equal(await replacement.actors.find(actorRef.actorId), rebound);
 });
 
+test('physical disconnect notifies the Actor after its STREAM transport is closed', async () => {
+  const socket = new FakeStreamSocket();
+  let transportClosed = false;
+  socket.submit = async function submit(...args) {
+    if (transportClosed) throw new Error('STREAM transport is closed');
+    this.sends.push(args);
+  };
+  const callbacks = [];
+  const runtime = new framework.ZLinkStreamBindingRuntime({
+    async notifyDisconnected(actor) {
+      callbacks.push(actor.actorId);
+    }
+  });
+  const stream = new framework.ZLinkManagedStream(socket, 'closed-session-rid');
+  const context = runtime.createSessionContext(stream);
+  await context.actors.bind({
+    nodeRid: 'node-a',
+    actorId: 'actor-closed-disconnect',
+    generation: 1n
+  });
+
+  transportClosed = true;
+  stream.markTransportClosed();
+  await runtime.cleanup(context);
+
+  assert.deepEqual(callbacks, ['actor-closed-disconnect']);
+  assert.equal(socket.sends.length, 1);
+  assert.equal(await runtime.find('actor-closed-disconnect'), undefined);
+});
+
 test('stream binding runtime can remove actor binding during actor destroy cleanup', async () => {
   const runtime = new framework.ZLinkStreamBindingRuntime();
   const context = runtime.createSessionContext(fakeStream('session-destroy', 'rid-destroy'));
@@ -7664,6 +7917,7 @@ test('stream session actor changed-ref bind failure preserves the previous nativ
   let nativeRef;
   const socket = {
     send() { return true; },
+    async submit() {},
     disconnectPeer() {},
     recv() { return undefined; },
     async bindActor(_sessionRid, actor) {
@@ -7707,6 +7961,7 @@ test('stream session cross-context bind failure preserves the previous session t
   let boundSessionRid;
   const socket = {
     send() { return true; },
+    async submit() {},
     disconnectPeer() {},
     recv() { return undefined; },
     async bindActor(sessionRid) {
@@ -7743,6 +7998,7 @@ test('stream session actor reconnect atomically replaces the native session bind
   let boundSessionRid;
   const socket = {
     send() { return true; },
+    async submit() {},
     disconnectPeer() {},
     recv() { return undefined; },
     async bindActor(sessionRid) {
@@ -7773,6 +8029,7 @@ test('remote binding tombstone removes only the exact native and logical session
   const operations = [];
   const socket = {
     send() { return true; },
+    async submit() {},
     disconnectPeer() {},
     recv() { return undefined; },
     async bindActor(sessionRid) {
@@ -7807,6 +8064,7 @@ test('stream session replacement confirmation failure keeps the new binding curr
   let boundSessionRid;
   const socket = {
     send() { return true; },
+    async submit() {},
     disconnectPeer() {},
     recv() { return undefined; },
     async bindActor(sessionRid) {
@@ -7848,6 +8106,7 @@ test('stream session replacement confirmation failure keeps the new binding curr
 test('stream session replacement waits for the one-way remote binding submission', async () => {
   const socket = {
     send() { return true; },
+    async submit() {},
     disconnectPeer() {},
     recv() { return undefined; },
     async bindActor() {},
@@ -7890,6 +8149,7 @@ test('stream session replacement waits for the one-way remote binding submission
 test('stream session binding confirmation carries the accepted native binding generation', async () => {
   const socket = {
     send() { return true; },
+    async submit() {},
     disconnectPeer() {},
     recv() { return undefined; },
     async bindActor() {},
@@ -8626,6 +8886,14 @@ function decodeFrame(bytes) {
   const frame = protocolCodecs.ZlinkStreamFrameCodec.decode(bytes);
   return {
     header: protocolCodecs.ZlinkStreamHeaderCodec.decode(frame.header),
+    payload: frame.payload
+  };
+}
+
+function decodeServerFrame(bytes) {
+  const frame = streamProtocol.decodeStreamFrame(bytes);
+  return {
+    header: streamProtocol.decodeStreamHeader(frame.header),
     payload: frame.payload
   };
 }

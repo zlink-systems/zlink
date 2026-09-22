@@ -45,6 +45,8 @@ import { releaseApplicationJobPermitBeforeHandler } from '../application-jobs/ap
 export interface ZLinkSessionContextStream extends ZLinkStream {
   writeRaw(payload: Message, flags?: number): boolean;
   submitRaw(payload: Message, signal?: AbortSignal, timeoutMs?: number): Promise<ZLinkSubmitResult>;
+  enqueueActorBound?(actorSlot: number, actorId: string): Promise<void>;
+  enqueueActorUnbound?(actorSlot: number): Promise<void>;
 }
 
 interface ZLinkSessionContextRuntime {
@@ -344,8 +346,31 @@ export class DefaultZLinkSessionContext implements ZLinkSessionContext {
     return this.localActors.find(actorId);
   }
 
-  bindLocal(actor: DefaultZLinkSessionActor, token: string): void {
-    this.localActors.bind(actor, token);
+  actorForSlot(actorSlot: number | undefined): DefaultZLinkSessionActor | undefined {
+    if (actorSlot === undefined) return undefined;
+    return this.localActors.findBySlot(actorSlot);
+  }
+
+  get actorSlotControls():
+    | {
+        enqueueBound(actorSlot: number, actorId: string): Promise<void>;
+        enqueueUnbound(actorSlot: number): Promise<void>;
+      }
+    | undefined {
+    if (
+      this.stream.enqueueActorBound === undefined ||
+      this.stream.enqueueActorUnbound === undefined
+    ) {
+      return undefined;
+    }
+    return {
+      enqueueBound: (actorSlot, actorId) => this.stream.enqueueActorBound!(actorSlot, actorId),
+      enqueueUnbound: (actorSlot) => this.stream.enqueueActorUnbound!(actorSlot)
+    };
+  }
+
+  bindLocal(actor: DefaultZLinkSessionActor, token: string, actorSlot?: number): void {
+    this.localActors.bind(actor, token, actorSlot);
   }
 
   unbindLocal(actorId: string, token: string): void {
@@ -547,12 +572,14 @@ export class DefaultZLinkSessionActor implements ZLinkSessionActor {
 const SESSION_DISPATCH_HEADERS = new WeakMap<ZLinkSessionDispatchContext, ZLinkStreamFrameHeader>();
 
 export function createSessionDispatchContext(
-  header: ZLinkStreamFrameHeader
+  header: ZLinkStreamFrameHeader,
+  actor?: DefaultZLinkSessionActor
 ): ZLinkSessionDispatchContext {
   const dispatch: ZLinkSessionDispatchContext = {
     packetName: header.name,
     metadata: header.metadata,
-    canReply: header.requestSeq !== undefined
+    canReply: header.requestSeq !== undefined,
+    ...(actor === undefined ? {} : { actor })
   };
   SESSION_DISPATCH_HEADERS.set(dispatch, header);
   return dispatch;

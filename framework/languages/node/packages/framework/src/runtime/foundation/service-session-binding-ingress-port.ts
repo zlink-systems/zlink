@@ -19,6 +19,7 @@ export interface ServiceSessionBindingAdmissionClaim {
 export type ServiceSessionBindingAdmissionResult = 'passThrough' | 'retained' | 'rejected';
 
 export interface ServiceSessionBindingIngressPort {
+  actorSlot(actorId: string, sessionRid: string): Promise<number | undefined>;
   retainOutbound(
     claim: ServiceSessionBindingAdmissionClaim,
     delivery: ServiceSessionBindingRetainedDelivery

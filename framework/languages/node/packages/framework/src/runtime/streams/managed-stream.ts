@@ -33,6 +33,8 @@ import {
   type ZLinkMeshCompletionTable
 } from '../backend/mesh-completion-table';
 import {
+  encodeActorBoundFrame,
+  encodeActorUnboundFrame,
   encodeSessionClosingFrame,
   encodeStreamControlFrame,
   ZLinkStreamCloseReasonCode
@@ -51,18 +53,17 @@ export interface ZLinkNativeSessionRoute {
   readonly completions: ZLinkMeshCompletionTable;
 }
 
+interface ZLinkManagedActorBinding {
+  readonly actor: ZLinkBackendActorRef;
+  readonly bindingGeneration?: bigint;
+  readonly route?: ZLinkNativeSessionRoute;
+}
+
 export class ZLinkManagedStream implements ZLinkStream {
   private currentLocalAddr: string | undefined;
   private currentRemoteAddr: string | undefined;
   private transportClosed = false;
-  private readonly nativeActorBindings = new Map<
-    string,
-    {
-      readonly actor: ZLinkBackendActorRef;
-      readonly bindingGeneration: bigint;
-      readonly route?: ZLinkNativeSessionRoute;
-    }
-  >();
+  private readonly nativeActorBindings = new Map<string, ZLinkManagedActorBinding>();
 
   constructor(
     private readonly socket: ZLinkBackendStreamSocket,
@@ -195,12 +196,12 @@ export class ZLinkManagedStream implements ZLinkStream {
         `Stream session '${this.sessionId}' is disconnected.`
       );
     }
+    const nativeActor = toNativeActorRef(actor);
     const route = this.nativeRoute(actor.meshName);
     if (route !== undefined) {
       if (route.service.status().state === 1) {
         route.service.start();
       }
-      const nativeActor = toNativeActorRef(actor);
       await this.ensureNativeActorRoute(route, actor, timeoutMs, signal);
       if (this.isTransportClosed()) {
         throw createInternalFrameworkException(
@@ -278,6 +279,7 @@ export class ZLinkManagedStream implements ZLinkStream {
       timeoutMs,
       signal
     );
+    this.nativeActorBindings.set(actor.actorId, { actor: nativeActor });
   }
 
   private async ensureNativeActorRoute(
@@ -327,7 +329,7 @@ export class ZLinkManagedStream implements ZLinkStream {
     const binding = this.nativeActorBindings.get(actorId);
     if (binding?.route !== undefined) {
       const route = binding.route;
-      if (!this.hasNativeBinding(route, actorId, binding.bindingGeneration)) {
+      if (!this.hasNativeBinding(route, actorId, binding.bindingGeneration!)) {
         this.nativeActorBindings.delete(actorId);
         return;
       }
@@ -338,7 +340,7 @@ export class ZLinkManagedStream implements ZLinkStream {
               route.service.unbindActor(
                 this.backendRoutingId(),
                 binding.actor as never,
-                binding.bindingGeneration,
+                binding.bindingGeneration!,
                 timeoutMs
               ),
             signal
@@ -354,7 +356,7 @@ export class ZLinkManagedStream implements ZLinkStream {
         // tombstone. A transport teardown can therefore report an internal
         // completion after the exact binding is already gone. Treat only that
         // exact missing binding as stale cleanup; preserve other failures.
-        if (this.hasNativeBinding(route, actorId, binding.bindingGeneration)) {
+        if (this.hasNativeBinding(route, actorId, binding.bindingGeneration!)) {
           throw error;
         }
       }
@@ -364,6 +366,26 @@ export class ZLinkManagedStream implements ZLinkStream {
       return;
     }
     await this.socket.unbindActor(this.backendRoutingId(), actorId, timeoutMs, signal);
+    if (binding !== undefined && this.nativeActorBindings.get(actorId) === binding) {
+      this.nativeActorBindings.delete(actorId);
+    }
+  }
+
+  async enqueueActorBound(actorSlot: number, actorId: string): Promise<void> {
+    await this.submitActorBindingControl(encodeActorBoundFrame(actorSlot, actorId));
+  }
+
+  async enqueueActorUnbound(actorSlot: number): Promise<void> {
+    await this.submitActorBindingControl(encodeActorUnboundFrame(actorSlot));
+  }
+
+  private async submitActorBindingControl(frame: Uint8Array): Promise<void> {
+    const message = NativeMessage.from(frame);
+    try {
+      await this.socket.submit(this.backendRoutingId(), message);
+    } finally {
+      message.close();
+    }
   }
 
   async sendBoundActor(

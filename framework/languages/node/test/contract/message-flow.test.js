@@ -1081,7 +1081,7 @@ test('MFLOW-EXT-005/006 stream flow fields use mandatory marker and reject old o
 
   assert.throws(() => protocolCodecs.ZlinkStreamHeaderCodec.decode(encoded.subarray(1)), /format marker/i);
   const unknownFlag = Uint8Array.from(encoded);
-  unknownFlag[3] |= 0x20;
+  unknownFlag[3] |= 0x40;
   assert.throws(() => protocolCodecs.ZlinkStreamHeaderCodec.decode(unknownFlag), /unknown mandatory|unknown stream header flag/i);
 });
 

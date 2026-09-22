@@ -18,7 +18,11 @@ export interface ZLinkActorSessionBindingActor {
 
 export interface ZLinkActorSessionBindingContext<TActor extends ZLinkActorSessionBindingActor> {
   readonly routingId?: unknown;
-  bindLocal(actor: TActor, bindingToken: string): void;
+  readonly actorSlotControls?: {
+    enqueueBound(actorSlot: number, actorId: string): Promise<void>;
+    enqueueUnbound(actorSlot: number): Promise<void>;
+  };
+  bindLocal(actor: TActor, bindingToken: string, actorSlot?: number): void;
   unbindLocal(actorId: string, bindingToken: string): void;
 }
 
@@ -29,6 +33,7 @@ export interface ZLinkActorSessionRoute<
   readonly context: TContext;
   readonly actor: TActor;
   readonly bindingToken: string;
+  readonly actorSlot?: number;
   readonly sessionIdentity?: string;
   readonly activeFrames: ZLinkActorSessionActiveFrames;
   sealId?: string;
@@ -137,12 +142,18 @@ export interface ZLinkActorSessionAuthorityFence {
   readonly actorType?: string;
 }
 
+export enum ZLinkActorSessionBindingTermination {
+  BindingEnd,
+  PhysicalDisconnect
+}
+
 export class ZLinkActorSessionBindingRegistry<
   TContext extends ZLinkActorSessionBindingContext<TActor>,
   TActor extends ZLinkActorSessionBindingActor
 > {
   private readonly lane = new ZLinkStateLane();
   private readonly routes = new Map<string, ZLinkActorSessionRoute<TContext, TActor>>();
+  private readonly nextActorSlots = new WeakMap<TContext, number>();
   private readonly sealWaiters = new Map<
     string,
     Set<{
@@ -182,29 +193,88 @@ export class ZLinkActorSessionBindingRegistry<
     actor: TActor,
     bindingToken: string,
     authorityFence?: ZLinkActorSessionAuthorityFence,
-    sessionIdentity?: string
+    sessionIdentity?: string,
+    commitActor?: () => void
   ): Promise<void> {
     await this.lane.run(() =>
-      this.bindCore(context, actor, bindingToken, authorityFence, sessionIdentity)
+      this.commitCore(
+        undefined,
+        context,
+        actor,
+        bindingToken,
+        authorityFence,
+        sessionIdentity,
+        commitActor
+      )
     );
   }
 
-  private bindCore(
+  private async commitCore(
+    previous: ZLinkActorSessionRoute<TContext, TActor> | undefined,
     context: TContext,
     actor: TActor,
     bindingToken: string,
     authorityFence?: ZLinkActorSessionAuthorityFence,
-    sessionIdentity?: string
-  ): void {
+    sessionIdentity?: string,
+    commitActor?: () => void
+  ): Promise<void> {
+    const current = this.routes.get(actor.actorId);
+    if (current !== previous) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.ActorSessionNotBound,
+        `Actor '${actor.actorId}' session binding changed before route commit.`,
+        true
+      );
+    }
+
+    const sameBinding =
+      previous !== undefined &&
+      previous.context === context &&
+      previous.bindingToken === bindingToken;
+    const actorSlot = sameBinding ? previous.actorSlot : this.issueActorSlot(context);
+    commitActor?.();
+    context.bindLocal(actor, bindingToken, actorSlot);
+
+    try {
+      if (previous !== undefined && !sameBinding) {
+        this.routes.delete(actor.actorId);
+        previous.context.unbindLocal(actor.actorId, previous.bindingToken);
+        if (previous.actorSlot !== undefined) {
+          await previous.context.actorSlotControls?.enqueueUnbound(previous.actorSlot);
+        }
+      }
+
+      if (!sameBinding && actorSlot !== undefined) {
+        await context.actorSlotControls!.enqueueBound(actorSlot, actor.actorId);
+      }
+    } catch (error) {
+      context.unbindLocal(actor.actorId, bindingToken);
+      throw error;
+    }
+
     this.routes.set(actor.actorId, {
       context,
       actor,
       bindingToken,
+      actorSlot,
       sessionIdentity: sessionIdentity ?? sessionIdentityFromContext(context),
-      activeFrames: { count: 0, requests: new Set() },
-      authorityFence
+      activeFrames: previous?.activeFrames ?? { count: 0, requests: new Set() },
+      sealId: previous?.sealId,
+      authorityFence: authorityFence ?? previous?.authorityFence
     });
-    context.bindLocal(actor, bindingToken);
+  }
+
+  private issueActorSlot(context: TContext): number | undefined {
+    if (context.actorSlotControls === undefined) return undefined;
+    const actorSlot = this.nextActorSlots.get(context) ?? 1;
+    if (actorSlot > 0xffff) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.InvalidOperation,
+        `Stream session '${String(context.routingId)}' exhausted its Actor slots.`
+      );
+    }
+    this.nextActorSlots.set(context, actorSlot + 1);
+    return actorSlot;
   }
 
   async replace(
@@ -213,50 +283,20 @@ export class ZLinkActorSessionBindingRegistry<
     actor: TActor,
     bindingToken: string,
     authorityFence?: ZLinkActorSessionAuthorityFence,
-    sessionIdentity?: string
+    sessionIdentity?: string,
+    commitActor?: () => void
   ): Promise<void> {
     await this.lane.run(() =>
-      this.replaceCore(previous, context, actor, bindingToken, authorityFence, sessionIdentity)
+      this.commitCore(
+        previous,
+        context,
+        actor,
+        bindingToken,
+        authorityFence,
+        sessionIdentity,
+        commitActor
+      )
     );
-  }
-
-  private replaceCore(
-    previous: ZLinkActorSessionRoute<TContext, TActor>,
-    context: TContext,
-    actor: TActor,
-    bindingToken: string,
-    authorityFence?: ZLinkActorSessionAuthorityFence,
-    sessionIdentity?: string
-  ): void {
-    const current = this.routes.get(actor.actorId);
-    if (current !== previous) {
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.ActorSessionNotBound,
-        `Actor '${actor.actorId}' session binding changed before route replacement.`,
-        true
-      );
-    }
-
-    context.bindLocal(actor, bindingToken);
-    const sameLocalBinding = previous.context === context && previous.bindingToken === bindingToken;
-    if (!sameLocalBinding) {
-      try {
-        previous.context.unbindLocal(actor.actorId, previous.bindingToken);
-      } catch (error) {
-        context.unbindLocal(actor.actorId, bindingToken);
-        previous.context.bindLocal(previous.actor, previous.bindingToken);
-        throw error;
-      }
-    }
-    this.routes.set(actor.actorId, {
-      context,
-      actor,
-      bindingToken,
-      sessionIdentity: sessionIdentity ?? sessionIdentityFromContext(context),
-      activeFrames: previous.activeFrames,
-      sealId: previous.sealId,
-      authorityFence: authorityFence ?? previous.authorityFence
-    });
   }
 
   async replaceAndReleaseSeal(
@@ -266,7 +306,8 @@ export class ZLinkActorSessionBindingRegistry<
     bindingToken: string,
     sealId: string,
     authorityFence?: ZLinkActorSessionAuthorityFence,
-    sessionIdentity?: string
+    sessionIdentity?: string,
+    commitActor?: () => void
   ): Promise<void> {
     await this.lane.run(() =>
       this.replaceAndReleaseSealCore(
@@ -276,20 +317,22 @@ export class ZLinkActorSessionBindingRegistry<
         bindingToken,
         sealId,
         authorityFence,
-        sessionIdentity
+        sessionIdentity,
+        commitActor
       )
     );
   }
 
-  private replaceAndReleaseSealCore(
+  private async replaceAndReleaseSealCore(
     previous: ZLinkActorSessionRoute<TContext, TActor>,
     context: TContext,
     actor: TActor,
     bindingToken: string,
     sealId: string,
     authorityFence?: ZLinkActorSessionAuthorityFence,
-    sessionIdentity?: string
-  ): void {
+    sessionIdentity?: string,
+    commitActor?: () => void
+  ): Promise<void> {
     if (previous.sealId !== sealId) {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.ActorLocationStale,
@@ -300,7 +343,15 @@ export class ZLinkActorSessionBindingRegistry<
     // JavaScript cannot interleave another ingress turn between these two
     // synchronous mutations. The replacement preserves the seal, then the
     // exact release publishes the route to held ingress as one owner turn.
-    this.replaceCore(previous, context, actor, bindingToken, authorityFence, sessionIdentity);
+    await this.commitCore(
+      previous,
+      context,
+      actor,
+      bindingToken,
+      authorityFence,
+      sessionIdentity,
+      commitActor
+    );
     if (!this.abortSealCore(actor.actorId, sealId)) {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.ActorLocationStale,
@@ -348,11 +399,21 @@ export class ZLinkActorSessionBindingRegistry<
     return Object.freeze({ context: route.context });
   }
 
-  async unbind(actorId: string, context: TContext, bindingToken: string): Promise<void> {
-    await this.lane.run(() => this.unbindCore(actorId, context, bindingToken));
+  async unbind(
+    actorId: string,
+    context: TContext,
+    bindingToken: string,
+    termination = ZLinkActorSessionBindingTermination.BindingEnd
+  ): Promise<void> {
+    await this.lane.run(() => this.unbindCore(actorId, context, bindingToken, termination));
   }
 
-  private unbindCore(actorId: string, context: TContext, bindingToken: string): void {
+  private async unbindCore(
+    actorId: string,
+    context: TContext,
+    bindingToken: string,
+    termination: ZLinkActorSessionBindingTermination
+  ): Promise<void> {
     const route = this.routes.get(actorId);
     if (route === undefined || route.context !== context || route.bindingToken !== bindingToken) {
       return;
@@ -372,28 +433,44 @@ export class ZLinkActorSessionBindingRegistry<
       route,
       new Error(`Actor '${actorId}' session binding was removed.`)
     );
+    if (
+      termination === ZLinkActorSessionBindingTermination.BindingEnd &&
+      route.actorSlot !== undefined
+    ) {
+      await context.actorSlotControls?.enqueueUnbound(route.actorSlot);
+    }
   }
 
   async unbindActor(actorId: string): Promise<void> {
     await this.lane.run(() => this.unbindActorCore(actorId));
   }
 
-  private unbindActorCore(actorId: string): void {
+  private async unbindActorCore(actorId: string): Promise<void> {
     const route = this.routes.get(actorId);
     if (route === undefined) {
       return;
     }
-    this.unbindCore(actorId, route.context, route.bindingToken);
+    await this.unbindCore(
+      actorId,
+      route.context,
+      route.bindingToken,
+      ZLinkActorSessionBindingTermination.BindingEnd
+    );
   }
 
   async cleanup(context: TContext): Promise<void> {
     await this.lane.run(() => this.cleanupCore(context));
   }
 
-  private cleanupCore(context: TContext): void {
+  private async cleanupCore(context: TContext): Promise<void> {
     for (const route of [...this.routes.values()]) {
       if (route.context === context) {
-        this.unbindCore(route.actor.actorId, context, route.bindingToken);
+        await this.unbindCore(
+          route.actor.actorId,
+          context,
+          route.bindingToken,
+          ZLinkActorSessionBindingTermination.PhysicalDisconnect
+        );
       }
     }
   }
