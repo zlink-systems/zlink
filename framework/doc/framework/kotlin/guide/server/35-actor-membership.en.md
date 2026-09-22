@@ -21,7 +21,7 @@ View in another language — [C++](../../../cpp/guide/server/35-actor-membership
 !!! info "What you get from this chapter"
 
     You can move an Actor between Spots and let the receiving side accept or refuse that move.
-    The code in this chapter comes from the [TicTacToe sample in the per-language example repositories](https://github.com/zlink-systems/zlink-java-examples/tree/main/samples/TicTacToe).
+    The code in this chapter comes from the [TicTacToe sample in the per-language example repositories](https://github.com/zlink-systems/zlink-kotlin-examples/tree/main/samples/TicTacToe).
 
 An [Actor](22-actor.en.md) is always inside some Spot, and right after creation it is in an Entry
 Spot. This chapter covers **the procedure that moves it into a room** — who admits it, when it

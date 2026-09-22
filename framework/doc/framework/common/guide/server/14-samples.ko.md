@@ -44,14 +44,13 @@
 
 === "Kotlin"
 
-    [:material-github: **zlink-java-examples**](https://github.com/zlink-systems/zlink-java-examples){ .md-button .md-button--primary }
+    [:material-github: **zlink-kotlin-examples**](https://github.com/zlink-systems/zlink-kotlin-examples){ .md-button .md-button--primary }
 
     ```bash
-    git clone https://github.com/zlink-systems/zlink-java-examples.git
-    cd zlink-java-examples/samples
+    git clone https://github.com/zlink-systems/zlink-kotlin-examples.git
+    cd zlink-kotlin-examples/samples
     ```
 
-    Kotlin 샘플은 Java 샘플과 같은 Gradle project를 공유하므로 같은 repository를 사용한다.
 
 === "Node/TypeScript"
 

@@ -21,7 +21,7 @@ View in another language — [C++](../../../cpp/guide/server/01-overview.en.md) 
 !!! info "What you get from this chapter"
 
     You can distinguish the problems ZLink Framework solves from its main messaging surfaces.
-    The code in this chapter comes from the [language-specific example repositories](https://github.com/zlink-systems/zlink-java-examples).
+    The code in this chapter comes from the [language-specific example repositories](https://github.com/zlink-systems/zlink-kotlin-examples).
 
 > This document is the entry point of the Kotlin guide. The guide explains the concepts and usage of
 > ZLink Framework directly so a Kotlin developer can **read it and start writing code

@@ -22,7 +22,7 @@ View in another language — [C++](../../../cpp/guide/server/20-channel-messagin
 
     You can register and call the three arrangements servers use to call each
     other. The code in every section comes from the
-    [language-specific example repositories](https://github.com/zlink-systems/zlink-java-examples).
+    [language-specific example repositories](https://github.com/zlink-systems/zlink-kotlin-examples).
 
 When a server calls another server, it does not name the other side's address. The caller names
 only a **name**, and the Framework delivers it to the **node** that serves that name. A node is

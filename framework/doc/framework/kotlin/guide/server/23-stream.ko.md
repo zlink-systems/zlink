@@ -21,7 +21,7 @@ title: "STREAM · Kotlin"
 !!! info "이 장을 읽고 나면"
 
     mesh 밖의 프로그램이 연결 하나로 접속해 요청을 보내고 답을 받게 할 수 있다.
-    이 장의 코드는 [예제 저장소의 tutorial README](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.ko.md)에서 가져왔으며, README의 「내려받기와 설치」·「빌드」·「실행」 절을 따르면 아래 결과를 재현할 수 있다.
+    이 장의 코드는 [예제 저장소의 tutorial README](https://github.com/zlink-systems/zlink-kotlin-examples/blob/main/tutorial/README.ko.md)에서 가져왔으며, README의 「내려받기와 설치」·「빌드」·「실행」 절을 따르면 아래 결과를 재현할 수 있다.
 
 STREAM node에 연결하는 client는 언어별 stream connector를 사용한다. Unity·Unreal·browser·Node·.NET·Java·C++ client의 설치 범위는 [Client stream connector](../../../install.ko.md#client-stream-connector)에 있고, 사용하는 언어의 [stream connector 가이드](../stream-connector/README.ko.md)가 연결과 packet 처리 방법을 다룬다.
 
@@ -138,7 +138,7 @@ mesh 호출은 호출하는 쪽이 mesh의 구성원이다. 대상은 이름이�
 - 연결을 개체에 묶기 — [Session과 Actor 연결](24-actor-session.ko.md)
 - id로 호출하는 상태 객체 — [Spot](21-spot.ko.md) · [Actor](22-actor.ko.md)
 - session lifecycle과 옵션 전체 — [STREAM](23-stream.ko.md)
-- 이 장 코드의 실행본 — [예제 저장소의 tutorial README](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.ko.md)
+- 이 장 코드의 실행본 — [예제 저장소의 tutorial README](https://github.com/zlink-systems/zlink-kotlin-examples/blob/main/tutorial/README.ko.md)
 
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();

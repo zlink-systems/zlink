@@ -4,8 +4,7 @@
 Java로 옮긴 것이다. Actor·STREAM은 담지 않았다. 문서가 읽는 `--8<--` 마커 이름은 .NET
 쪽과 같게 두었다.
 
-Kotlin tutorial이 같은 Gradle build 안 `../kotlin/`에 있다. 두 언어는 subproject만
-나누어 쓰고 `settings.gradle.kts`·`gradle/libs.versions.toml`·wrapper는 함께 쓴다.
+이 tutorial은 Gradle root의 `settings.gradle.kts`·`gradle/libs.versions.toml`·wrapper를 함께 쓴다.
 
 ## 전제 조건
 

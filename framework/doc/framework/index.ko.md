@@ -439,7 +439,7 @@ sticky LB · WebSocket 서버 · pub/sub 경유 · 분산 락 · service discove
 | C++ | [서버](cpp/guide/server/README.ko.md) | [퀵스타트](cpp/quickstart.ko.md) | [Stream Connector](cpp/guide/stream-connector/README.ko.md) · [HTTP Client](cpp/guide/http-client/README.ko.md) | [examples](https://github.com/zlink-systems/zlink-cpp-examples) |
 | `.NET` | [서버](dotnet/guide/server/README.ko.md) | [퀵스타트](dotnet/quickstart.ko.md) | [Stream Connector](dotnet/guide/stream-connector/README.ko.md) · [HTTP Client](dotnet/guide/http-client/README.ko.md) | [examples](https://github.com/zlink-systems/zlink-dotnet-examples) |
 | Java | [서버](java/guide/server/README.ko.md) | [퀵스타트](java/quickstart.ko.md) | [Stream Connector](java/guide/stream-connector/README.ko.md) · [HTTP Client](java/guide/http-client/README.ko.md) | [examples](https://github.com/zlink-systems/zlink-java-examples) |
-| Kotlin | [서버](kotlin/guide/server/README.ko.md) | [퀵스타트](kotlin/quickstart.ko.md) | [Stream Connector](kotlin/guide/stream-connector/README.ko.md) · [HTTP Client](kotlin/guide/http-client/README.ko.md) | [examples](https://github.com/zlink-systems/zlink-java-examples) |
+| Kotlin | [서버](kotlin/guide/server/README.ko.md) | [퀵스타트](kotlin/quickstart.ko.md) | [Stream Connector](kotlin/guide/stream-connector/README.ko.md) · [HTTP Client](kotlin/guide/http-client/README.ko.md) | [examples](https://github.com/zlink-systems/zlink-kotlin-examples) |
 | Node.js | [서버](node/guide/server/README.ko.md) | [퀵스타트](node/quickstart.ko.md) | [Stream Connector](node/guide/stream-connector/README.ko.md) · [HTTP Client](node/guide/http-client/README.ko.md) | [examples](https://github.com/zlink-systems/zlink-node-examples) |
 
 **client 쪽 가이드 둘**은 서버 framework와 따로 배포되는 라이브러리를 다룬다.

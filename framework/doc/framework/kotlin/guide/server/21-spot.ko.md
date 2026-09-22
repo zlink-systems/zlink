@@ -21,7 +21,7 @@ title: "Spot · Kotlin"
 !!! info "이 장을 읽고 나면"
 
     id로 호출하는 상태 객체를 만들고, 그것에 메시지를 보내고 답을 받을 수 있다.
-    이 장의 코드는 [언어별 예제 저장소](https://github.com/zlink-systems/zlink-java-examples)의 tutorial에서 가져왔다.
+    이 장의 코드는 [언어별 예제 저장소](https://github.com/zlink-systems/zlink-kotlin-examples)의 tutorial에서 가져왔다.
 
 [Channel 메시징](20-channel-messaging.ko.md)의 호출은 이름을 맡은 node 중 하나가 받았다.
 받을 대상이 정해져 있으면 그 경로를 사용할 수 없다. **Spot은 id로 찾는 상태 객체**이고, 자기

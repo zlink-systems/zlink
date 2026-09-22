@@ -21,7 +21,7 @@ title: "1. 개요 · Kotlin"
 !!! info "이 장을 읽고 나면"
 
     ZLink Framework가 해결하는 문제와 주요 메시징 표면을 구분할 수 있다.
-    이 장의 코드는 [언어별 예제 저장소](https://github.com/zlink-systems/zlink-java-examples)에서 가져왔다.
+    이 장의 코드는 [언어별 예제 저장소](https://github.com/zlink-systems/zlink-kotlin-examples)에서 가져왔다.
 
 > 이 문서는 Kotlin 가이드의 진입점이다. 가이드는 Kotlin 개발자가
 > ZLink Framework의 기능을 **읽고 바로 따라 사용할 수 있도록** 개념과 사용법을

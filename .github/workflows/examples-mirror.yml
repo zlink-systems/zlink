@@ -65,7 +65,7 @@ on:
 
 # One run per ref and language. A single group for the whole workflow kept
 # only one *pending* run — GitHub cancels the older pending run in a group
-# when a newer one queues — so the four framework-<lang>/v0.20.0 tags pushed
+# when a newer one queues — so the five framework-<lang>/v0.20.0 tags pushed
 # back to back lost three of their runs. Per-language runs push to different
 # mirrors, so they never race; `main` runs touch the same mirrors but arrive
 # far apart. (In a called workflow `github.workflow` is the caller's name.)
@@ -116,18 +116,20 @@ jobs:
             fi
           }
           case "${ref}" in
-            framework/v*) languages='["cpp","dotnet","java","node"]' ;;
+            framework/v*) languages='["cpp","dotnet","java","kotlin","node"]' ;;
             framework-cpp/v*) languages='["cpp"]' ;;
             framework-dotnet/v*) languages='["dotnet"]' ;;
-            framework-java/v*) languages='["java"]' ;;
+            framework-java/v*) languages='["java","kotlin"]' ;;
             framework-node/v*) languages='["node"]' ;;
             main)
               # A language is mirrored from main only when the version its
               # VERSION file names is already released (tagged).
               languages="["
-              for lang in cpp dotnet java node; do
-                declared="$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' "framework/languages/${lang}/VERSION")"
-                if released "${lang}" "${declared}"; then
+              for lang in cpp dotnet java kotlin node; do
+                source_lang="${lang}"
+                [ "${lang}" = kotlin ] && source_lang=java
+                declared="$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' "framework/languages/${source_lang}/VERSION")"
+                if released "${source_lang}" "${declared}"; then
                   languages="${languages}\"${lang}\","
                 else
                   echo "::notice::${lang}: VERSION ${declared} is not tagged yet; skipped until the release tag mirrors it"
@@ -266,6 +268,7 @@ jobs:
           EXAMPLES_MIRROR_KEY_CPP: ${{ secrets.EXAMPLES_MIRROR_KEY_CPP }}
           EXAMPLES_MIRROR_KEY_DOTNET: ${{ secrets.EXAMPLES_MIRROR_KEY_DOTNET }}
           EXAMPLES_MIRROR_KEY_JAVA: ${{ secrets.EXAMPLES_MIRROR_KEY_JAVA }}
+          EXAMPLES_MIRROR_KEY_KOTLIN: ${{ secrets.EXAMPLES_MIRROR_KEY_KOTLIN }}
           EXAMPLES_MIRROR_KEY_NODE: ${{ secrets.EXAMPLES_MIRROR_KEY_NODE }}
           EXAMPLES_MIRROR_KEY_ENGINE_SERVER: ${{ secrets.EXAMPLES_MIRROR_KEY_ENGINE_SERVER }}
           EXAMPLES_MIRROR_KEY_UNITY: ${{ secrets.EXAMPLES_MIRROR_KEY_UNITY }}

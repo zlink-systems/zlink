@@ -22,7 +22,7 @@ View in another language — [C++](../../../cpp/guide/server/50-bingo.en.md) · 
 
     You can open the Bingo sample in an editor and follow a message from the client's
     authentication to the end of a game, through the code of each server it passes. The code in this
-    chapter comes from the [Bingo sample in the per-language example repositories](https://github.com/zlink-systems/zlink-java-examples/tree/main/samples/Bingo).
+    chapter comes from the [Bingo sample in the per-language example repositories](https://github.com/zlink-systems/zlink-kotlin-examples/tree/main/samples/Bingo).
 
 [Picking a Sample](14-samples.en.md#4-bingo--building-an-online-game-server) introduced what this
 sample demonstrates. This chapter is what you read after that introduction — the roles and where

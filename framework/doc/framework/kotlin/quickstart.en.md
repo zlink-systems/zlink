@@ -12,12 +12,12 @@ endpoint directly and exchange one request/reply.
 
 ## 0. Clone the examples repository
 
-This chapter's project is `quickstart/` in the `zlink-java-examples` repository; `tutorial/`,
+This chapter's project is `quickstart/` in the `zlink-kotlin-examples` repository; `tutorial/`,
 the program read by the feature guides, and `samples/` live beside it.
 
 ```bash
-git clone https://github.com/zlink-systems/zlink-java-examples.git
-cd zlink-java-examples/quickstart
+git clone https://github.com/zlink-systems/zlink-kotlin-examples.git
+cd zlink-kotlin-examples/quickstart
 ```
 
 `main` is the latest release plus the fixes merged since, with package versions pinned to that
@@ -87,7 +87,7 @@ without it the JVM exits right after the context refreshes.
 ## 5. Run
 
 ```bash
-cd zlink-java-examples/quickstart
+cd zlink-kotlin-examples/quickstart
 ./gradlew :kotlin:Server:installDist :kotlin:Client:installDist
 
 # Two terminals. Start the server first.

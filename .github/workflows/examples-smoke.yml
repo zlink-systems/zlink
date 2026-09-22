@@ -34,7 +34,7 @@ on:
       languages:
         description: 'JSON 배열. 이 언어의 lane만 돈다(미러가 push하는 언어; 다른 언어의 패키지는 아직 없을 수 있다)'
         required: false
-        default: '["cpp","dotnet","java","node"]'
+        default: '["cpp","dotnet","java","kotlin","node"]'
         type: string
   workflow_dispatch:
     inputs:
@@ -46,7 +46,7 @@ on:
       languages:
         description: 'JSON 배열. 돌릴 언어의 lane'
         required: false
-        default: '["cpp","dotnet","java","node"]'
+        default: '["cpp","dotnet","java","kotlin","node"]'
         type: string
   schedule:
     - cron: '30 2 * * *'
@@ -68,7 +68,20 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       ref: ${{ steps.pick.outputs.ref }}
+      # The JVM lanes are one matrix job; a job-level `if` cannot see `matrix`,
+      # so the matrix itself is the requested subset of java/kotlin.
+      jvm_languages: ${{ steps.jvm.outputs.languages }}
     steps:
+      - name: Pick the JVM lanes to run
+        id: jvm
+        env:
+          LANGUAGES: ${{ inputs.languages || '["cpp","dotnet","java","kotlin","node"]' }}
+        run: |
+          set -euo pipefail
+          jvm="$(printf '%s' "${LANGUAGES}" | python3 -c 'import json,sys; print(json.dumps([l for l in json.load(sys.stdin) if l in ("java","kotlin")]))')"
+          echo "languages=${jvm}" >> "$GITHUB_OUTPUT"
+          echo "jvm lanes: ${jvm}"
+
       - name: Pick the ref for this trigger
         id: pick
         env:
@@ -583,10 +596,14 @@ jobs:
         run: bash ../../run_readme_step.sh README.ko.md 검증 linux
 
   java-linux:
-    name: java / ubuntu-24.04 (no checkout)
-    needs: export
-    if: contains(fromJSON(inputs.languages || '["cpp","dotnet","java","node"]'), 'java')
+    name: ${{ matrix.lang }} / ubuntu-24.04 (no checkout)
+    needs: [resolve, export]
+    if: needs.resolve.outputs.jvm_languages != '[]'
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        lang: ${{ fromJSON(needs.resolve.outputs.jvm_languages) }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -611,16 +628,16 @@ jobs:
           distribution: temurin
           java-version: '25'
 
-      - name: Quickstart build (quickstart.ko.md §5, Java and Kotlin)
-        working-directory: examples/zlink-java-examples/quickstart
-        run: bash ./gradlew :java:Server:installDist :java:Client:installDist :kotlin:Server:installDist :kotlin:Client:installDist
+      - name: Quickstart build (quickstart.ko.md §5)
+        working-directory: examples/zlink-${{ matrix.lang }}-examples/quickstart
+        run: bash ../../run_readme_step.sh README.ko.md 빌드 linux
 
       - name: Tutorial install (README's own 내려받기와 설치/linux block)
-        working-directory: examples/zlink-java-examples/tutorial
+        working-directory: examples/zlink-${{ matrix.lang }}-examples/tutorial
         run: bash ../../run_readme_step.sh README.ko.md "내려받기와 설치" linux
 
       - name: Tutorial build (README's own 빌드/linux block)
-        working-directory: examples/zlink-java-examples/tutorial
+        working-directory: examples/zlink-${{ matrix.lang }}-examples/tutorial
         run: bash ../../run_readme_step.sh README.ko.md 빌드 linux
 
       - name: Start Redis for the tutorial (README — docker run -p 6379:6379 redis)
@@ -628,19 +645,19 @@ jobs:
           set -euo pipefail
           redis_name="zlink-redis-$$"
           docker run -d --rm --name "${redis_name}" -p 6379:6379 redis:7
-          printf '%s\n' "${redis_name}" > examples/zlink-java-examples/tutorial/redis.container
+          printf '%s\n' "${redis_name}" > examples/zlink-${{ matrix.lang }}-examples/tutorial/redis.container
 
       - name: Tutorial run (README's own 실행/linux block)
-        working-directory: examples/zlink-java-examples/tutorial
+        working-directory: examples/zlink-${{ matrix.lang }}-examples/tutorial
         run: bash ../../run_readme_step.sh README.ko.md 실행 linux
 
       - name: Tutorial verify (README's own 검증/linux block)
-        working-directory: examples/zlink-java-examples/tutorial
+        working-directory: examples/zlink-${{ matrix.lang }}-examples/tutorial
         run: bash ../../run_readme_step.sh README.ko.md 검증 linux
 
       - name: Tutorial logs (on failure)
         if: failure()
-        working-directory: examples/zlink-java-examples/tutorial
+        working-directory: examples/zlink-${{ matrix.lang }}-examples/tutorial
         run: |
           for f in server.log server.err.log client.log client.err.log; do
             if [ -f "$f" ]; then echo "::group::$f"; tail -n 200 "$f"; echo "::endgroup::"; fi
@@ -648,7 +665,7 @@ jobs:
 
       - name: Stop tutorial processes and Redis
         if: always()
-        working-directory: examples/zlink-java-examples/tutorial
+        working-directory: examples/zlink-${{ matrix.lang }}-examples/tutorial
         run: |
           bash ../../run_readme_step.sh README.ko.md 종료 linux
           if [ -f redis.container ]; then
@@ -658,41 +675,45 @@ jobs:
             esac
           fi
       - name: Sample install (README's own 내려받기와 설치/linux block)
-        working-directory: examples/zlink-java-examples/samples
+        working-directory: examples/zlink-${{ matrix.lang }}-examples/samples
         run: bash ../../run_readme_step.sh README.ko.md "내려받기와 설치" linux
 
       - name: Sample build (README's own 빌드/linux block)
-        working-directory: examples/zlink-java-examples/samples
+        working-directory: examples/zlink-${{ matrix.lang }}-examples/samples
         run: bash ../../run_readme_step.sh README.ko.md 빌드 linux
 
       - name: Prepare sample run artifact directory
         run: mkdir -p sample-run
 
       - name: Sample run (README's own 실행/linux block)
-        working-directory: examples/zlink-java-examples/samples
+        working-directory: examples/zlink-${{ matrix.lang }}-examples/samples
         env:
           ZLINK_SAMPLE_KEEP_RUN_DIR: '1'
           TMPDIR: ${{ github.workspace }}/sample-run
         run: bash ../../run_readme_step.sh README.ko.md 실행 linux
 
       - name: Sample verify (README's own 검증/linux block)
-        working-directory: examples/zlink-java-examples/samples
+        working-directory: examples/zlink-${{ matrix.lang }}-examples/samples
         run: bash ../../run_readme_step.sh README.ko.md 검증 linux
 
       - name: Upload sample run directory on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: sample-run-java-linux
+          name: sample-run-${{ matrix.lang }}-linux
           path: sample-run
           retention-days: 7
           if-no-files-found: warn
 
   java-windows:
-    name: java / windows-2022 (no checkout)
-    needs: export
-    if: contains(fromJSON(inputs.languages || '["cpp","dotnet","java","node"]'), 'java')
+    name: ${{ matrix.lang }} / windows-2022 (no checkout)
+    needs: [resolve, export]
+    if: needs.resolve.outputs.jvm_languages != '[]'
     runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        lang: ${{ fromJSON(needs.resolve.outputs.jvm_languages) }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -720,12 +741,12 @@ jobs:
           python-version: '3.x'
 
       - name: Tutorial install (README's own 내려받기와 설치/windows block)
-        working-directory: examples/zlink-java-examples/tutorial
+        working-directory: examples/zlink-${{ matrix.lang }}-examples/tutorial
         shell: bash
         run: bash ../../run_readme_step.sh README.ko.md "내려받기와 설치" windows
 
       - name: Tutorial build (README's own 빌드/windows block)
-        working-directory: examples/zlink-java-examples/tutorial
+        working-directory: examples/zlink-${{ matrix.lang }}-examples/tutorial
         shell: bash
         run: bash ../../run_readme_step.sh README.ko.md 빌드 windows
 
@@ -751,19 +772,19 @@ jobs:
 
       - name: Tutorial run (README's own 실행/windows block)
         if: steps.memurai.outcome == 'success'
-        working-directory: examples/zlink-java-examples/tutorial
+        working-directory: examples/zlink-${{ matrix.lang }}-examples/tutorial
         shell: bash
         run: bash ../../run_readme_step.sh README.ko.md 실행 windows
 
       - name: Tutorial verify (README's own 검증/windows block)
         if: steps.memurai.outcome == 'success'
-        working-directory: examples/zlink-java-examples/tutorial
+        working-directory: examples/zlink-${{ matrix.lang }}-examples/tutorial
         shell: bash
         run: bash ../../run_readme_step.sh README.ko.md 검증 windows
 
       - name: Tutorial logs (on failure)
         if: failure()
-        working-directory: examples/zlink-java-examples/tutorial
+        working-directory: examples/zlink-${{ matrix.lang }}-examples/tutorial
         shell: pwsh
         run: |
           foreach ($file in @('server.log', 'server.err.log', 'client.log', 'client.err.log')) {
@@ -772,18 +793,18 @@ jobs:
 
       - name: Stop tutorial processes
         if: always()
-        working-directory: examples/zlink-java-examples/tutorial
+        working-directory: examples/zlink-${{ matrix.lang }}-examples/tutorial
         shell: bash
         run: bash ../../run_readme_step.sh README.ko.md 종료 windows
       - name: Sample install (README's own 내려받기와 설치/windows block)
         if: steps.memurai.outcome == 'success'
-        working-directory: examples/zlink-java-examples/samples
+        working-directory: examples/zlink-${{ matrix.lang }}-examples/samples
         shell: bash
         run: bash ../../run_readme_step.sh README.ko.md "내려받기와 설치" windows
 
       - name: Sample build (README's own 빌드/windows block)
         if: steps.memurai.outcome == 'success'
-        working-directory: examples/zlink-java-examples/samples
+        working-directory: examples/zlink-${{ matrix.lang }}-examples/samples
         shell: bash
         run: bash ../../run_readme_step.sh README.ko.md 빌드 windows
 
@@ -797,7 +818,7 @@ jobs:
       # Windows sample cells are verified locally, not here. Install and build still run.
       - name: Sample run (README's own 실행/windows block)
         if: false
-        working-directory: examples/zlink-java-examples/samples
+        working-directory: examples/zlink-${{ matrix.lang }}-examples/samples
         shell: bash
         env:
           ZLINK_SAMPLE_KEEP_RUN_DIR: '1'
@@ -810,7 +831,7 @@ jobs:
       # Windows sample cells are verified locally, not here. Install and build still run.
       - name: Sample verify (README's own 검증/windows block)
         if: false
-        working-directory: examples/zlink-java-examples/samples
+        working-directory: examples/zlink-${{ matrix.lang }}-examples/samples
         shell: bash
         run: bash ../../run_readme_step.sh README.ko.md 검증 windows
 
@@ -818,7 +839,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: sample-run-java-windows
+          name: sample-run-${{ matrix.lang }}-windows
           path: sample-run
           retention-days: 7
           if-no-files-found: warn
