@@ -8,6 +8,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean
 import org.springframework.core.env.StandardEnvironment
 import systems.zlink.framework.codecs.protobuf.ZLinkProtobufCodec
+import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore
 import systems.zlink.framework.spring.EnableZLinkFramework
@@ -36,19 +37,15 @@ class MatchmakingServerApplication {
                         .setKeyPrefix(topology.redisKeyPrefix + "relocation:")
                 )
             )
-            // #895: configuration package scanning has no Kotlin form in the spec.
-            options.addHandlersFromPackageOf(MatchmakingServerApplication::class.java)
+            options.addHandlersFromPackageOf<MatchmakingServerApplication>()
             options
                 .addRouteMesh(SampleNames.MatchmakingMesh)
                 .setRoutingIdPrefix("matchmaking")
                 .listen(topology.matchmakingRouterEndpoint)
                 .objects()
                 .server()
-                .addInstanceSpotFactory(
-                    SampleNames.MatchmakerSpotType,
-                    BingoMatchmaker::class.java,
-                ) { factory ->
-                    factory.recreateOnRelocation()
+                .addInstanceSpotFactory<BingoMatchmaker>(SampleNames.MatchmakerSpotType) {
+                    recreateOnRelocation()
                 }
         }
 

@@ -1,3 +1,5 @@
+@file:Suppress("ForbiddenMethodCall") // Kotlin adapter owns the Java Class registration bridge.
+
 package systems.zlink.framework.kotlin
 
 import java.time.Duration

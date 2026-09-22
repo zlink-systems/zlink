@@ -3,6 +3,13 @@ plugins {
     idea
     id("org.jetbrains.kotlin.jvm") apply false
     id("org.jetbrains.kotlin.plugin.spring") apply false
+    id("dev.detekt") version "2.0.0-alpha.3" apply false
+}
+
+subprojects {
+    plugins.withId("org.jetbrains.kotlin.jvm") {
+        apply(from = rootProject.file("../gradle/kotlin-detekt.gradle"))
+    }
 }
 
 idea {

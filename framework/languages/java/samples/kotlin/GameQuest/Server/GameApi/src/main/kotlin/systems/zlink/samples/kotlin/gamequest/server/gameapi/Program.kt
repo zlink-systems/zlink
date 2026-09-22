@@ -26,6 +26,7 @@ import systems.zlink.framework.actors.ZLinkActorCreateResult
 import systems.zlink.framework.actors.ZLinkActorManager
 import systems.zlink.framework.channels.ZLinkRouteClient
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
+import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.kotlin.ZLinkSuspendingActorFactory
 import systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpot
 import systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpotActorSendHandler
@@ -118,8 +119,7 @@ class Program {
                 )
             )
             options.useCoroutineHandlers(Dispatchers.Default)
-            // #895: configuration package scanning has no Kotlin form in the spec.
-            options.addHandlersFromPackageOf(Program::class.java)
+            options.addHandlersFromPackageOf<Program>()
             options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 
             // --8<-- [start:doc-gq-api-register]
@@ -129,21 +129,17 @@ class Program {
                 .listen()
                 .objects()
                 .server()
-                // #895: entry-spot registration has no Kotlin form in the spec.
-                .addEntrySpot(GameQuestEntrySpot::class.java)
-                .addActorFactory(
-                    SampleNames.PlayerSessionActorType,
-                    GameQuestPlayerActor::class.java,
-                    GameQuestPlayerActorFactory::class.java,
-                ) { factory ->
-                    factory.recreateOnRelocation()
+                .addEntrySpot<GameQuestEntrySpot>()
+                .addActorFactory<GameQuestPlayerActor, GameQuestPlayerActorFactory>(
+                    SampleNames.PlayerSessionActorType
+                ) {
+                    recreateOnRelocation()
                 }
             options
                 .addStreamNode(SampleNames.StreamNode)
                 .bind(api.streamEndpoint)
                 .enableActorDispatch()
-                // #895: session registration has no Kotlin form in the spec.
-                .registerSession(GameQuestSession::class.java)
+                .registerSession<GameQuestSession>()
             // --8<-- [end:doc-gq-api-register]
         }
     }

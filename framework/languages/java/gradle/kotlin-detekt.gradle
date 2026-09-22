@@ -1,0 +1,25 @@
+plugins.withId('org.jetbrains.kotlin.jvm') {
+    apply plugin: 'dev.detekt'
+
+    def terminalConfigDir = rootProject.projectDir
+    def terminalConfig = null
+    while (terminalConfigDir != null && terminalConfig == null) {
+        def candidate = new File(terminalConfigDir, 'config/detekt/kotlin-java-terminals.yml')
+        if (candidate.isFile()) {
+            terminalConfig = candidate
+        }
+        terminalConfigDir = terminalConfigDir.parentFile
+    }
+    if (terminalConfig == null) {
+        throw new GradleException('Cannot find the shared Kotlin Detekt terminal configuration')
+    }
+
+    detekt {
+        config.setFrom(files(terminalConfig))
+    }
+
+    tasks.matching { it.name == 'detekt' }.configureEach {
+        dependsOn('detektMain')
+    }
+
+}

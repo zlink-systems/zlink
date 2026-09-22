@@ -51,7 +51,7 @@ class CourierSession(
             sessionContext.actors().find(decision.courierId).orElseThrow {
                 IllegalStateException("Courier actor is not bound: ${decision.courierId}")
             }
-        actor.relay(dispatch, payload).await()
+        actor.kotlin().relay(dispatch, payload).await()
     }
 
     // --8<-- [start:doc-dd-session-bind]
@@ -66,6 +66,7 @@ class CourierSession(
                 ?: sessionContext.actors().bind(actorRef).await()
         val snapshot = ActorRefSnapshot.from(actorRef)
         actor
+            .kotlin()
             .relay(
                 dispatch,
                 ZLinkMessage.of(
