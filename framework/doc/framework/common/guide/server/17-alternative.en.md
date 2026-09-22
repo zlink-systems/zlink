@@ -574,6 +574,72 @@ server in .NET or Java**, and message over the same channel/Spot contract.
 > **design goal** of ZLink — the call contract doesn't depend on the binding's
 > implementation language.
 
+### 3.2 How It Feels Compared with the Existing Approach
+
+The difference in the amount of code needed to wire up the same "inter-server
+request/response."
+
+**Directly with raw bindings (conceptual)** — not runnable code, but the list of work a
+direct implementation would require. Supported languages use the same list, so it isn't
+split into language tabs.
+
+```text
+Location-store lookup, connecting the endpoint, reconnect management,
+correlation id matching, serialization, receive loop ... dozens of lines of connection/setup code
+```
+
+**ZLink Framework** — the blocks below are the tutorial's real "profile" channel code
+(handler registration, server registration, client call). The only difference from a price
+lookup is that the target is a player profile lookup instead.
+
+=== "C#/.NET"
+
+    ```csharp
+    --8<-- "framework/languages/dotnet/tutorial/Server/Channel/GetPlayerProfileHandler.cs:channel-request-handler"
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:mesh-register"
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:channel-register"
+    --8<-- "framework/languages/dotnet/tutorial/Client/Program.cs:channel-request-call"
+    ```
+
+=== "C++"
+
+    ```cpp
+    --8<-- "framework/languages/cpp/tutorial/Server/channel/get_player_profile_handler.hpp:channel-request-handler"
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:mesh-register"
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:channel-register"
+    --8<-- "framework/languages/cpp/tutorial/Client/main.cpp:channel-request-call"
+    ```
+
+=== "Java"
+
+    ```java
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/channel/GetPlayerProfileHandler.java:channel-request-handler"
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:mesh-register"
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:channel-register"
+    --8<-- "framework/languages/java/tutorial/java/Client/src/main/java/systems/zlink/tutorial/client/ClientApplication.java:channel-request-call"
+    ```
+
+=== "Kotlin"
+
+    ```kotlin
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/channel/GetPlayerProfileHandler.kt:channel-request-handler"
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:mesh-register"
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:channel-register"
+    --8<-- "framework/languages/java/tutorial/kotlin/Client/src/main/kotlin/systems/zlink/tutorial/client/PlayerEndpoints.kt:channel-request-call"
+    ```
+
+=== "Node/TypeScript"
+
+    ```typescript
+    --8<-- "framework/languages/node/tutorial/Server/Channel/get-player-profile-handler.ts:channel-request-handler"
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:mesh-register"
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:channel-register"
+    --8<-- "framework/languages/node/tutorial/Client/main.ts:channel-request-call"
+    ```
+
+The connection/setup code disappears, leaving a handler and a few lines of channel
+registration.
+
 ## 4. Symptoms That Make ZLink a Candidate
 
 Judge by **symptoms**, not by technology names. If the following keep recurring, ZLink is a

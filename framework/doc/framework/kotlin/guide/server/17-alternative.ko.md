@@ -428,6 +428,31 @@ channel/spot 계약으로 메시징할 수 있다.
     언어 탭으로 나뉘며, 어느 탭을 보든 같은 계약을 설명한다. 호출 계약이 binding 구현 언어와
     무관하다는 것이 ZLink의 설계 목표다.
 
+### 3.2 기존 방식 대비 체감 난이도
+
+같은 "서버 간 요청/응답"을 붙이는 코드량 차이다.
+
+**raw 바인딩으로 직접 (개념적)** — 실행되는 코드가 아니라 직접 구성해야 할 작업
+목록이다. 지원 언어에서 같은 목록을 사용하므로 언어 탭으로 나누지 않는다.
+
+```text
+위치 저장소 조회, endpoint 연결, 재연결 관리,
+correlation id 매칭, 직렬화, 수신 루프 ... 수십 줄의 연결·설정 코드
+```
+
+**ZLink Framework** — 아래는 tutorial의 실제 "profile" channel 코드다(handler
+등록, 서버 등록, 클라이언트 호출). 대상이 가격 조회가 아니라 플레이어 프로필
+조회로 바뀐 것 말고는 같은 모양이다.
+
+```kotlin
+--8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/channel/GetPlayerProfileHandler.kt:channel-request-handler"
+--8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:mesh-register"
+--8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:channel-register"
+--8<-- "framework/languages/java/tutorial/kotlin/Client/src/main/kotlin/systems/zlink/tutorial/client/PlayerEndpoints.kt:channel-request-call"
+```
+
+연결·설정 코드가 사라지고 남는 것은 handler와 channel 등록 몇 줄이다.
+
 ## 4. ZLink 후보가 되는 증상
 
 기술명보다 **증상**으로 판단한다. 아래가 반복되면 ZLink가 후보다.
