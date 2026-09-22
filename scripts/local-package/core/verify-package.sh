@@ -2,13 +2,56 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(git -C "$script_dir" rev-parse --show-toplevel)"
+repo_root="$(cd "$script_dir/../../.." && pwd)"
 prefix=""
 allow_version_mismatch=0
+
+macos_rpaths() {
+  awk '
+    $1 == "cmd" && $2 == "LC_RPATH" {
+      if (getline <= 0 || $1 != "cmdsize") exit 2
+      if (getline <= 0 || $1 != "path") exit 2
+      rpath = $0
+      sub(/^[[:space:]]*path[[:space:]]+/, "", rpath)
+      sub(/[[:space:]]+\(offset [0-9]+\)$/, "", rpath)
+      print rpath
+    }
+  '
+}
+
+verify_relative_macos_rpaths() {
+  local binary=$1 rpath
+  while IFS= read -r rpath; do
+    [[ -n "$rpath" ]] || continue
+    case "$rpath" in
+      @loader_path|@loader_path/*|@executable_path|@executable_path/*) ;;
+      *)
+        echo "non-relocatable macOS LC_RPATH in $binary: $rpath" >&2
+        return 1
+        ;;
+    esac
+  done
+}
+
+test_macos_rpath_parser() {
+  local good_fixture bad_fixture
+  good_fixture=$'Load command 11\n          cmd LC_RPATH\n      cmdsize 48\n         path @loader_path (offset 12)\n'
+  bad_fixture=$'Load command 11\n          cmd LC_RPATH\n      cmdsize 96\n         path /Users/runner/work/zlink/zlink/core/build/macos-arm64/install/lib (offset 12)\n'
+
+  verify_relative_macos_rpaths fixture.dylib \
+    < <(printf '%s' "$good_fixture" | macos_rpaths) || return 1
+  if verify_relative_macos_rpaths fixture.dylib \
+      < <(printf '%s' "$bad_fixture" | macos_rpaths) 2>/dev/null; then
+    echo "macOS LC_RPATH parser accepted an absolute fixture" >&2
+    return 1
+  fi
+  echo "macOS LC_RPATH parser fixture verified"
+}
 
 usage() {
   cat <<'EOF'
 Usage: verify-package.sh --prefix ABSOLUTE_DIR [--allow-version-mismatch]
+       verify-package.sh --test-macos-rpath-parser
 
 Checks the installed Core package version, public headers, exact runtime,
 runtime ABI identity, and a clean C consumer. Linux verifies the SONAME and
@@ -20,6 +63,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --prefix) prefix="${2:-}"; shift 2 ;;
     --allow-version-mismatch) allow_version_mismatch=1; shift ;;
+    --test-macos-rpath-parser) test_macos_rpath_parser; exit $? ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -45,6 +89,8 @@ if [[ "$(uname -s)" == Darwin ]]; then
       echo "non-relocatable install name in $binary: $install_name (expected $expected_prefix)" >&2
       exit 1
     }
+    rpaths="$(otool -l "$binary" | macos_rpaths)"
+    verify_relative_macos_rpaths "$binary" <<< "$rpaths"
     while IFS= read -r dependency; do
       # otool -L lists a dylib's own install name first; it is not a dependency.
       [[ "$dependency" == "$install_name" ]] && continue
@@ -67,8 +113,7 @@ if [[ "$(uname -s)" == Darwin ]]; then
   done < <(find "$prefix/lib" -type f -name '*.dylib' -print)
 
   consumer_dir="$(mktemp -d "$prefix/.verify.XXXXXXXX")"
-  cleanup() { rm -rf "$consumer_dir"; }
-  trap cleanup EXIT
+  trap 'rm -rf "$consumer_dir"' EXIT
   cat >"$consumer_dir/main.c" <<'EOF'
 #include <stdio.h>
 #include <zlink.h>
