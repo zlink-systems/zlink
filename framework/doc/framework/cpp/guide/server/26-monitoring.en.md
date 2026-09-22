@@ -48,8 +48,7 @@ A lookup returns **one value as of the call**. Use it to answer an operational e
 something once.
 
 ```cpp
-auto snapshot = mesh_runtime.snapshot ("game.room");
-const bool ready = mesh_runtime.is_ready ("game.room");
+--8<-- "framework/languages/cpp/samples/ZoneWorld/Server/Ops/main.cpp:doc-zw-observe-peers"
 ```
 
 **Read the readiness and the state value together.** Readiness alone does not say what to do, and
@@ -65,11 +64,7 @@ A subscription gives **the complete value after each change**, not an event carr
 fields that changed. If a comparison with the previous value is needed, the subscriber keeps it.
 
 ```cpp
-// Callbacks arrive only while the observation object is alive. Dropping it ends the subscription.
-auto observation = mesh_runtime.observe (
-  "game.room", 64, [] (const mesh_node_snapshot_t &next) {
-      record (next);
-  });
+--8<-- "framework/languages/cpp/samples/ZoneWorld/Server/Ops/main.cpp:doc-zw-observe-peers"
 ```
 
 **Values can be missed.** A slow receiver skips intermediate values past the retention limit. The
@@ -91,10 +86,7 @@ lifetime, a cancellation signal.
 Where and how one message ended is what diagnostics record. The levels are as follows.
 
 ```cpp
-options.configure_dispatch ()
-  .message_flow (message_flow_log_mode_t::errors)
-  .trace_sample_rate (1.0)
-  .include_message_sizes (true);
+--8<-- "framework/languages/cpp/samples/TicTacToe/Server/Play/play_server_host_factory.hpp:doc-monitoring-flow"
 ```
 
 | Level | What it records |

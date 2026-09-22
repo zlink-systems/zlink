@@ -48,11 +48,7 @@ A lookup returns **one value as of the call**. Use it to answer an operational e
 something once.
 
 ```csharp
-var fanout = app.Services.GetRequiredService<IZLinkFanoutRuntime>();
-
-var status = fanout.GetStatus("user.events");
-if (!status.IsReady)
-    logger.LogWarning("fanout not ready: {Channel} {State}", status.ChannelName, status.State);
+--8<-- "framework/languages/dotnet/samples/ZoneWorld/Server/Ops/Infrastructure/ZLink/Monitoring/OpsEventHandlers.cs:doc-zw-observe-peers"
 ```
 
 **Read the readiness and the state value together.** Readiness alone does not say what to do, and
@@ -68,15 +64,7 @@ A subscription gives **the complete value after each change**, not an event carr
 fields that changed. If a comparison with the previous value is needed, the subscriber keeps it.
 
 ```csharp
-await foreach (var observed in fanout.ObserveAsync("user.events", cancellationToken: ct))
-{
-    var update = observed.Status;
-    logger.LogInformation("publishers={Count} state={State} seq={Seq}",
-        update.ReadyPublisherCount, update.State, update.Sequence);
-
-    if (observed.Loss.DiscardedTerminalCount > 0)
-        logger.LogWarning("lost terminal statuses: {Count}", observed.Loss.DiscardedTerminalCount);
-}
+--8<-- "framework/languages/dotnet/samples/ZoneWorld/Server/Ops/Infrastructure/ZLink/Monitoring/OpsEventHandlers.cs:doc-zw-observe-peers"
 ```
 
 **Values can be missed.** A slow receiver skips intermediate values past the retention limit. The
@@ -98,13 +86,7 @@ lifetime, a cancellation signal.
 Where and how one message ended is what diagnostics record. The levels are as follows.
 
 ```csharp
-builder.Services.AddZLinkFramework(options =>
-{
-    options.ConfigureDispatch().Diagnostics
-        .SetLevel(ZLinkDiagnosticsLevel.Normal)
-        .SetSampleRate(0.1)
-        .IncludeMessageSizes(false);
-});
+--8<-- "framework/languages/dotnet/samples/ZoneWorld/Server/ZoneNode/Program.cs:doc-monitoring-flow"
 ```
 
 | Level | What it records |

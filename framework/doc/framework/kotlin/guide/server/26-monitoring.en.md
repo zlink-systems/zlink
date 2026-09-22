@@ -48,8 +48,7 @@ A lookup returns **one value as of the call**. Use it to answer an operational e
 something once.
 
 ```kotlin
-val snapshot = meshRuntime.snapshot("game.room")
-val ready = meshRuntime.isReady("game.room")
+--8<-- "framework/languages/java/samples/kotlin/ZoneWorld/Server/src/main/kotlin/systems/zlink/samples/kotlin/zoneworld/server/ops/NodeLivenessObserver.kt:doc-zw-observe-peers"
 ```
 
 **Read the readiness and the state value together.** Readiness alone does not say what to do, and
@@ -65,9 +64,7 @@ A subscription gives **the complete value after each change**, not an event carr
 fields that changed. If a comparison with the previous value is needed, the subscriber keeps it.
 
 ```kotlin
-meshRuntime.observe("game.room", 64).asFlow().collect { observed ->
-    record(observed.status)
-}
+--8<-- "framework/languages/java/samples/kotlin/ZoneWorld/Server/src/main/kotlin/systems/zlink/samples/kotlin/zoneworld/server/ops/NodeLivenessObserver.kt:doc-zw-observe-peers"
 ```
 
 **Values can be missed.** A slow receiver skips intermediate values past the retention limit. The
@@ -89,11 +86,7 @@ lifetime, a cancellation signal.
 Where and how one message ended is what diagnostics record. The levels are as follows.
 
 ```kotlin
-options.configureDispatch {
-    messageFlow(ZLinkMessageFlowLogMode.ERRORS)
-    traceSampleRate(1.0)
-    includeMessageSizes(true)
-}
+--8<-- "framework/languages/java/samples/kotlin/ZoneWorld/Server/src/main/kotlin/systems/zlink/samples/kotlin/zoneworld/server/Program.kt:doc-monitoring-flow"
 ```
 
 | Level | What it records |

@@ -113,7 +113,9 @@ class Program {
         options.addRelocationStore(relocation)
         // #895: configuration package scanning has no Kotlin form in the spec.
         options.addHandlersFromPackageOf(Program::class.java)
+        // --8<-- [start:doc-monitoring-flow]
         options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+        // --8<-- [end:doc-monitoring-flow]
         if (topology.isRole("zone") && topology.isSubscriberOnly()) {
             options
                 .addFanoutChannel(ZoneWorldNames.BROADCAST_CHANNEL)

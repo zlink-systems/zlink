@@ -32,39 +32,31 @@ something once.
 === "C#/.NET"
 
     ```csharp
-    var fanout = app.Services.GetRequiredService<IZLinkFanoutRuntime>();
-
-    var status = fanout.GetStatus("user.events");
-    if (!status.IsReady)
-        logger.LogWarning("fanout not ready: {Channel} {State}", status.ChannelName, status.State);
+    --8<-- "framework/languages/dotnet/samples/ZoneWorld/Server/Ops/Infrastructure/ZLink/Monitoring/OpsEventHandlers.cs:doc-zw-observe-peers"
     ```
 
 === "C++"
 
     ```cpp
-    auto snapshot = mesh_runtime.snapshot ("game.room");
-    const bool ready = mesh_runtime.is_ready ("game.room");
+    --8<-- "framework/languages/cpp/samples/ZoneWorld/Server/Ops/main.cpp:doc-zw-observe-peers"
     ```
 
 === "Java"
 
     ```java
-    ZLinkMeshNodeSnapshot snapshot = meshRuntime.snapshot("game.room");
-    boolean ready = meshRuntime.isReady("game.room");
+    --8<-- "framework/languages/java/samples/java/ZoneWorld/Server/src/main/java/systems/zlink/samples/zoneworld/server/ops/NodeLivenessObserver.java:doc-zw-observe-peers"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    val snapshot = meshRuntime.snapshot("game.room")
-    val ready = meshRuntime.isReady("game.room")
+    --8<-- "framework/languages/java/samples/kotlin/ZoneWorld/Server/src/main/kotlin/systems/zlink/samples/kotlin/zoneworld/server/ops/NodeLivenessObserver.kt:doc-zw-observe-peers"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    const snapshot = this.meshRuntime.snapshot('game.room');
-    const ready = this.meshRuntime.isReady('game.room');
+    --8<-- "framework/languages/node/samples/ZoneWorld/Server/Ops/ops-runtime-events.ts:doc-zw-observe-peers"
     ```
 
 **Read the readiness and the state value together.** Readiness alone does not say what to do, and
@@ -82,49 +74,31 @@ fields that changed. If a comparison with the previous value is needed, the subs
 === "C#/.NET"
 
     ```csharp
-    await foreach (var observed in fanout.ObserveAsync("user.events", cancellationToken: ct))
-    {
-        var update = observed.Status;
-        logger.LogInformation("publishers={Count} state={State} seq={Seq}",
-            update.ReadyPublisherCount, update.State, update.Sequence);
-
-        if (observed.Loss.DiscardedTerminalCount > 0)
-            logger.LogWarning("lost terminal statuses: {Count}", observed.Loss.DiscardedTerminalCount);
-    }
+    --8<-- "framework/languages/dotnet/samples/ZoneWorld/Server/Ops/Infrastructure/ZLink/Monitoring/OpsEventHandlers.cs:doc-zw-observe-peers"
     ```
 
 === "C++"
 
     ```cpp
-    // Callbacks arrive only while the observation object is alive. Dropping it ends the subscription.
-    auto observation = mesh_runtime.observe (
-      "game.room", 64, [] (const mesh_node_snapshot_t &next) {
-          record (next);
-      });
+    --8<-- "framework/languages/cpp/samples/ZoneWorld/Server/Ops/main.cpp:doc-zw-observe-peers"
     ```
 
 === "Java"
 
     ```java
-    // Past the capacity, a slow subscriber skips intermediate values.
-    meshRuntime.observe("game.room", 64).subscribe(subscriber);
+    --8<-- "framework/languages/java/samples/java/ZoneWorld/Server/src/main/java/systems/zlink/samples/zoneworld/server/ops/NodeLivenessObserver.java:doc-zw-observe-peers"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    meshRuntime.observe("game.room", 64).asFlow().collect { observed ->
-        record(observed.status)
-    }
+    --8<-- "framework/languages/java/samples/kotlin/ZoneWorld/Server/src/main/kotlin/systems/zlink/samples/kotlin/zoneworld/server/ops/NodeLivenessObserver.kt:doc-zw-observe-peers"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    // Break the signal to end the subscription.
-    for await (const observed of this.meshRuntime.observe('game.room', 64, signal)) {
-      this.record(observed.status);
-    }
+    --8<-- "framework/languages/node/samples/ZoneWorld/Server/Ops/ops-runtime-events.ts:doc-zw-observe-peers"
     ```
 
 **Values can be missed.** A slow receiver skips intermediate values past the retention limit. The
@@ -148,48 +122,31 @@ Where and how one message ended is what diagnostics record. The levels are as fo
 === "C#/.NET"
 
     ```csharp
-    builder.Services.AddZLinkFramework(options =>
-    {
-        options.ConfigureDispatch().Diagnostics
-            .SetLevel(ZLinkDiagnosticsLevel.Normal)
-            .SetSampleRate(0.1)
-            .IncludeMessageSizes(false);
-    });
+    --8<-- "framework/languages/dotnet/samples/ZoneWorld/Server/ZoneNode/Program.cs:doc-monitoring-flow"
     ```
 
 === "C++"
 
     ```cpp
-    options.configure_dispatch ()
-      .message_flow (message_flow_log_mode_t::errors)
-      .trace_sample_rate (1.0)
-      .include_message_sizes (true);
+    --8<-- "framework/languages/cpp/samples/TicTacToe/Server/Play/play_server_host_factory.hpp:doc-monitoring-flow"
     ```
 
 === "Java"
 
     ```java
-    options.configureDispatch()
-        .messageFlow(ZLinkMessageFlowLogMode.ERRORS)
-        .traceSampleRate(1.0)
-        .includeMessageSizes(true);
+    --8<-- "framework/languages/java/samples/java/ZoneWorld/Server/src/main/java/systems/zlink/samples/zoneworld/server/Program.java:doc-monitoring-flow"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    options.configureDispatch {
-        messageFlow(ZLinkMessageFlowLogMode.ERRORS)
-        traceSampleRate(1.0)
-        includeMessageSizes(true)
-    }
+    --8<-- "framework/languages/java/samples/kotlin/ZoneWorld/Server/src/main/kotlin/systems/zlink/samples/kotlin/zoneworld/server/Program.kt:doc-monitoring-flow"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    builder.configureDispatch()
-      .messageFlow("errors");
+    --8<-- "framework/languages/node/samples/ZoneWorld/Server/ZoneNode/zone-node-module.ts:doc-monitoring-flow"
     ```
 
 | Level | What it records |

@@ -48,8 +48,7 @@ A lookup returns **one value as of the call**. Use it to answer an operational e
 something once.
 
 ```typescript
-const snapshot = this.meshRuntime.snapshot('game.room');
-const ready = this.meshRuntime.isReady('game.room');
+--8<-- "framework/languages/node/samples/ZoneWorld/Server/Ops/ops-runtime-events.ts:doc-zw-observe-peers"
 ```
 
 **Read the readiness and the state value together.** Readiness alone does not say what to do, and
@@ -65,10 +64,7 @@ A subscription gives **the complete value after each change**, not an event carr
 fields that changed. If a comparison with the previous value is needed, the subscriber keeps it.
 
 ```typescript
-// Break the signal to end the subscription.
-for await (const observed of this.meshRuntime.observe('game.room', 64, signal)) {
-  this.record(observed.status);
-}
+--8<-- "framework/languages/node/samples/ZoneWorld/Server/Ops/ops-runtime-events.ts:doc-zw-observe-peers"
 ```
 
 **Values can be missed.** A slow receiver skips intermediate values past the retention limit. The
@@ -90,8 +86,7 @@ lifetime, a cancellation signal.
 Where and how one message ended is what diagnostics record. The levels are as follows.
 
 ```typescript
-builder.configureDispatch()
-  .messageFlow("errors");
+--8<-- "framework/languages/node/samples/ZoneWorld/Server/ZoneNode/zone-node-module.ts:doc-monitoring-flow"
 ```
 
 | Level | What it records |

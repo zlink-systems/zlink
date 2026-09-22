@@ -48,8 +48,7 @@ A lookup returns **one value as of the call**. Use it to answer an operational e
 something once.
 
 ```java
-ZLinkMeshNodeSnapshot snapshot = meshRuntime.snapshot("game.room");
-boolean ready = meshRuntime.isReady("game.room");
+--8<-- "framework/languages/java/samples/java/ZoneWorld/Server/src/main/java/systems/zlink/samples/zoneworld/server/ops/NodeLivenessObserver.java:doc-zw-observe-peers"
 ```
 
 **Read the readiness and the state value together.** Readiness alone does not say what to do, and
@@ -65,8 +64,7 @@ A subscription gives **the complete value after each change**, not an event carr
 fields that changed. If a comparison with the previous value is needed, the subscriber keeps it.
 
 ```java
-// Past the capacity, a slow subscriber skips intermediate values.
-meshRuntime.observe("game.room", 64).subscribe(subscriber);
+--8<-- "framework/languages/java/samples/java/ZoneWorld/Server/src/main/java/systems/zlink/samples/zoneworld/server/ops/NodeLivenessObserver.java:doc-zw-observe-peers"
 ```
 
 **Values can be missed.** A slow receiver skips intermediate values past the retention limit. The
@@ -88,10 +86,7 @@ lifetime, a cancellation signal.
 Where and how one message ended is what diagnostics record. The levels are as follows.
 
 ```java
-options.configureDispatch()
-    .messageFlow(ZLinkMessageFlowLogMode.ERRORS)
-    .traceSampleRate(1.0)
-    .includeMessageSizes(true);
+--8<-- "framework/languages/java/samples/java/ZoneWorld/Server/src/main/java/systems/zlink/samples/zoneworld/server/Program.java:doc-monitoring-flow"
 ```
 
 | Level | What it records |

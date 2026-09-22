@@ -46,8 +46,7 @@ runtime의 사건을 handler로 받는 표면은 없다. 운영 endpoint에는 �
 확인할 때 사용한다.
 
 ```typescript
-const snapshot = this.meshRuntime.snapshot('game.room');
-const ready = this.meshRuntime.isReady('game.room');
+--8<-- "framework/languages/node/samples/ZoneWorld/Server/Ops/ops-runtime-events.ts:doc-zw-observe-peers"
 ```
 
 **준비 여부와 상태 값을 함께 읽는다.** 준비되지 않았다는 것만으로는 무엇을 할지 정할 수
@@ -63,10 +62,7 @@ socket 내부 상태는 공개 계약이 아니다.
 전체다. 이전 값과 비교할 일이 있으면 구독하는 쪽이 보관한다.
 
 ```typescript
-// 구독을 끝내려면 signal을 끊는다.
-for await (const observed of this.meshRuntime.observe('game.room', 64, signal)) {
-  this.record(observed.status);
-}
+--8<-- "framework/languages/node/samples/ZoneWorld/Server/Ops/ops-runtime-events.ts:doc-zw-observe-peers"
 ```
 
 **놓칠 수 있다.** 받는 쪽이 느리면 보관 한도를 넘는 중간 값을 건너뛴다. 놓친 개수는 항목마다
@@ -86,8 +82,7 @@ for await (const observed of this.meshRuntime.observe('game.room', 64, signal)) 
 message 하나가 어디서 어떻게 끝났는지는 진단이 남긴다. 수준은 다음과 같다.
 
 ```typescript
-builder.configureDispatch()
-  .messageFlow("errors");
+--8<-- "framework/languages/node/samples/ZoneWorld/Server/ZoneNode/zone-node-module.ts:doc-monitoring-flow"
 ```
 
 | 수준 | 남기는 것 |

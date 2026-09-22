@@ -37,7 +37,9 @@ class play_server_host_factory_t
     {
         app.logging ().use_file (flow_log_path (topology.log_dir, "play-" + topology.play_node));
         auto &options = app.add_zlink_framework ();
+        // --8<-- [start:doc-monitoring-flow]
         options.configure_dispatch ().message_flow (message_flow_log_mode_t::normal);
+        // --8<-- [end:doc-monitoring-flow]
         options.services ().add_singleton<sample_topology_t> (
           std::make_unique<sample_topology_t> (topology));
         options.services ().add_scoped<authenticate_play_session_handler_t, channel_client_t> ();
