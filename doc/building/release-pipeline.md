@@ -115,7 +115,7 @@ gh release view core/v0.17.5 --json assets -q '.assets[].name'
 | --- | --- | --- | --- | --- | --- |
 | linux-x64 | ✅ | ✅ | ✅ | ✅ | ubuntu-24.04, GCC 13; needs glibc ≥ 2.38 |
 | linux-arm64 | ✅ | ✅ | source build | Core archive | ubuntu-24.04-arm, GCC 13 |
-| macos-arm64 | ✅ | ✅ | source build | Core archive | macos-15, Xcode 16.4 / Apple Clang; the prebuilt requires a Core release whose macOS archive is relocatable (Core ≥ 1.2.2) |
+| macos-arm64 | ✅ | ✅ | source build | Core archive | macos-15, Xcode 16.4 / Apple Clang; the prebuilt requires a Core release whose macOS archive is relocatable (Core ≥ 1.3) |
 | windows-x64 | ✅ | ✅ | source build | Core archive | windows-2022, MSVC; the Core archive bundles the OpenSSL DLLs |
 | windows-arm64 | ❌ | ❌ | ❌ | ❌ | unsupported (decided 2026-09-14) |
 | macos-x64 (Intel) | ❌ | ❌ | ❌ | ❌ | unsupported from Core up (decided 2026-09-09) |

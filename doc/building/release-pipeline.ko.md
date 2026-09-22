@@ -128,7 +128,7 @@ gh release view core/v0.17.5 --json assets -q '.assets[].name'
 | --- | --- | --- | --- | --- | --- |
 | linux-x64 | ✅ | ✅ | ✅ | ✅ | ubuntu-24.04, GCC 13, glibc ≥ 2.38 필요 |
 | linux-arm64 | ✅ | ✅ | 소스 빌드 | Core 아카이브 | ubuntu-24.04-arm, GCC 13 |
-| macos-arm64 | ✅ | ✅ | 소스 빌드 | Core 아카이브 | macos-15, Xcode 16.4 / Apple Clang, 사전 빌드 패키지에는 macOS 아카이브가 재배치 가능한 Core 릴리스(Core ≥ 1.2.2) 필요 |
+| macos-arm64 | ✅ | ✅ | 소스 빌드 | Core 아카이브 | macos-15, Xcode 16.4 / Apple Clang, 사전 빌드 패키지에는 macOS 아카이브가 재배치 가능한 Core 릴리스(Core ≥ 1.3) 필요 |
 | windows-x64 | ✅ | ✅ | 소스 빌드 | Core 아카이브 | windows-2022, MSVC, Core 아카이브에 OpenSSL DLL 포함 |
 | windows-arm64 | ❌ | ❌ | ❌ | ❌ | 미지원(2026-09-14 결정) |
 | macos-x64 (Intel) | ❌ | ❌ | ❌ | ❌ | Core부터 미지원(2026-09-09 결정) |
