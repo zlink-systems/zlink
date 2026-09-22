@@ -182,7 +182,12 @@ Logical Multicast와 Classic fanout의 정상 publish·subscriber delivery는
 handler가 없으면 `surface=classic_fanout`, `message_kind=send`, `outcome=failed`,
 `reason=no_handler`, `action=drop`인 `zlink.dispatch_error`를 subscriber process의
 logger provider에 기록한다. 이 record에는 `channel_route_kind`를 넣지 않고
-publisher별 delivery 결과로 되돌리지 않는다.
+publisher별 delivery 결과로 되돌리지 않는다. Logical Multicast의 remote target 하나에
+대한 routed 제출이 실패하면 publisher process가 같은 방식으로 `surface=spot`,
+`message_kind=send`, `outcome=failed`, `action=drop`인 `zlink.dispatch_error`를
+`target_rid`·`topic`과 함께 기록한다 — `reason`은 target route가 없거나 준비되지 않았거나
+닫힌 경우 `stale_target`, 그 밖에는 `backpressure` 또는 `shutdown`이다. 이 record도 publish
+terminal이나 publisher별 delivery 결과로 되돌리지 않는다.
 
 ## 4. 기록 범위 설정 — level과 sampling
 
@@ -195,7 +200,8 @@ Application은 diagnostics level을 다음 네 값 중 하나로 설정한다.
 | `Normal` | Error와 §2.1의 주요 단계를 기록한다. |
 | `Detailed` | `Normal` 기록에 message byte 크기와 terminal 경과 시간을 추가할 수 있다. |
 
-기본값은 `Errors`다. Message size 설정은 payload 내용이 아니라 byte 크기만 추가한다.
+기본값은 `Errors`다. Message size 설정은 payload 내용이 아니라 byte 크기만 추가하며 기본값은
+꺼짐이다.
 Diagnostics level은 metric 기록을 끄지 않는다.
 
 Sampling rate는 정상 흐름 중 기록할 비율이며 `0.0..1.0` 범위다. 범위를 벗어난 값은
@@ -312,11 +318,17 @@ attribute key, diagnostics level·sampling rate 설정 interface)만으로 다�
 
 - 모든 언어가 같은 `event_id`, phase, surface, message kind, outcome, reason, action과
   attribute key를 사용한다.
+- 설정을 생략하면 diagnostics level은 `Errors`이고 message size 기록은 꺼져 있다. Level만
+  `Detailed`로 설정해도 `message_size_bytes`를 포함하지 않는다.
 - Payload와 application metadata 값이 trace나 structured log에 나타나지 않는다.
 - Logical Multicast와 Classic fanout이 message-flow trace를 만들지 않는다.
 - Classic fanout의 subscriber-local handler 누락이 `surface=classic_fanout`,
   `reason=no_handler`, `action=drop`인 dispatch error를 만들고 `channel_route_kind`를
   포함하지 않는다.
+- Logical Multicast의 remote target별 routed 제출 실패가 publisher process에서
+  `surface=spot`, `message_kind=send`, `outcome=failed`, `action=drop`, 해당
+  `target_rid`·`topic`과 분류된 `reason`을 가진 dispatch error를 만들고 publish
+  terminal이나 delivery 결과를 바꾸지 않는다.
 - 각 request surface가 terminal trace를 정확히 한 번 기록한다.
 - Instance Spot의 one-way 생성 실패를 `surface=instance_spot`, `phase=dropped`로
   정확히 한 번 기록하고, 숨은 request나 replay를 만들지 않는다.

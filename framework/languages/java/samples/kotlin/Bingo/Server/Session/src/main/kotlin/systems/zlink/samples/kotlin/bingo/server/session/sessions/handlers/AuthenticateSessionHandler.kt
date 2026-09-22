@@ -1,12 +1,13 @@
 package systems.zlink.samples.kotlin.bingo.server.session.sessions.handlers
 
-import kotlinx.coroutines.future.await
 import systems.zlink.framework.actors.ActorRef
 import systems.zlink.framework.actors.ZLinkActorCreateResult
 import systems.zlink.framework.actors.ZLinkActorManager
 import systems.zlink.framework.channels.ZLinkRouteClient
 import systems.zlink.framework.kotlin.ZLinkSuspendingTypedSessionPacketHandler
+import systems.zlink.framework.kotlin.await
 import systems.zlink.framework.kotlin.kotlin
+import systems.zlink.framework.kotlin.requestToChannel
 import systems.zlink.framework.streams.ZLinkSessionContext
 import systems.zlink.framework.streams.ZLinkSessionDispatchContext
 import systems.zlink.samples.kotlin.bingo.server.configuration.SampleNames
@@ -21,6 +22,8 @@ class AuthenticateSessionHandler(
     private val routes: ZLinkRouteClient,
     private val actors: ZLinkActorManager,
 ) : ZLinkSuspendingTypedSessionPacketHandler<ZLinkSessionContext, AuthenticateReq> {
+    private val kotlinRoutes = routes.kotlin()
+
     override fun packetName(): String = "AuthenticateReq"
 
     override fun messageType(): Class<AuthenticateReq> = AuthenticateReq::class.java
@@ -36,13 +39,12 @@ class AuthenticateSessionHandler(
 
         // --8<-- [start:doc-bingo-session-auth]
         val authenticated =
-            routes
-                .requestToChannel(
+            kotlinRoutes
+                .requestToChannel<AuthenticatePlayerRes>(
                     SampleNames.ApiChannel,
                     AuthenticatePlayerReq(request.accessToken),
                 )
                 .timeout(SampleTimings.RequestTimeout)
-                .submit(AuthenticatePlayerRes::class.java)
                 .await()
         if (
             !authenticated.accepted ||
@@ -62,8 +64,9 @@ class AuthenticateSessionHandler(
         context.actors().bind(requireActor(actor)).await()
         context
             .client()
+            .kotlin()
             .reply(AuthenticateRes(authenticated.actorId, authenticated.displayName))
-            .submit()
+            .await()
         // --8<-- [end:doc-bingo-session-bind]
     }
 

@@ -203,7 +203,14 @@ Classic fanout subscriber has no handler, the subscriber process records
 `zlink.dispatch_error` with `surface=classic_fanout`, `message_kind=send`,
 `outcome=failed`, `reason=no_handler`, and `action=drop` through its
 logger provider. That record has no `channel_route_kind` and isn't
-returned as a per-publisher delivery result.
+returned as a per-publisher delivery result. When the routed submission to
+one remote target of a Logical Multicast fails, the publisher process
+records, in the same way, `zlink.dispatch_error` with `surface=spot`,
+`message_kind=send`, `outcome=failed` and `action=drop`, together with
+`target_rid` and `topic` — `reason` is `stale_target` when the target
+route is missing, not ready or closed, and otherwise `backpressure` or
+`shutdown`. That record isn't returned as the publish terminal or a
+per-publisher delivery result either.
 
 ## 4. How the Application Sets the Recording Scope — Level and Sampling
 
@@ -217,7 +224,7 @@ The application sets the diagnostics level to one of four values.
 | `Detailed` | Can add message byte size and terminal elapsed time to `Normal` records. |
 
 The default is `Errors`. The message size setting only adds byte size,
-not payload content. Diagnostics level doesn't turn off metric recording.
+not payload content, and is off by default. Diagnostics level doesn't turn off metric recording.
 
 Sampling rate is the ratio of normal flows to record, in the range
 `0.0..1.0`. A value outside the range is treated as a startup or public
@@ -353,12 +360,20 @@ interface. Each item corresponds to one contract test.
 
 - Every language uses the same `event_id`, phase, surface, message kind,
   outcome, reason, action, and attribute keys.
+- With configuration omitted, the diagnostics level is `Errors` and
+  message-size recording is off. Setting only the level to `Detailed`
+  still does not include `message_size_bytes`.
 - Payload and application metadata values don't appear in trace or
   structured log.
 - Logical Multicast and Classic fanout don't build a message-flow trace.
 - A missing subscriber-local Classic fanout handler builds a dispatch
   error with `surface=classic_fanout`, `reason=no_handler`, and
   `action=drop`, without `channel_route_kind`.
+- A routed submission failure for each remote Logical Multicast target
+  builds a dispatch error in the publisher process with `surface=spot`,
+  `message_kind=send`, `outcome=failed`, `action=drop`, the corresponding
+  `target_rid` and `topic`, and the classified `reason`, without changing
+  the publish terminal or producing a delivery result.
 - Each request surface records the terminal trace exactly once.
 - An Instance Spot's one-way creation failure is recorded exactly once as
   `surface=instance_spot`, `phase=dropped`, without building a hidden

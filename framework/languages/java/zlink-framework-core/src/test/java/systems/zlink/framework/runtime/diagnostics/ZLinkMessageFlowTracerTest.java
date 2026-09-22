@@ -24,13 +24,18 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowResu
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkTraceEventId;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Handler;
 import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 // MFLOW-001/002/003/011: mode gating + runtime live toggle + structured output.
 class ZLinkMessageFlowTracerTest {
@@ -46,6 +51,10 @@ class ZLinkMessageFlowTracerTest {
     }
 
     private static ZLinkMessageFlowEvent flow(ZLinkMessageFlowOutcome phase) {
+        return flow(phase, null);
+    }
+
+    private static ZLinkMessageFlowEvent flow(ZLinkMessageFlowOutcome phase, Long messageSize) {
         return new ZLinkMessageFlowEvent(
                 phase,
                 ZLinkDispatchErrorSurface.CHANNEL,
@@ -57,7 +66,7 @@ class ZLinkMessageFlowTracerTest {
                 null,
                 null,
                 null,
-                null);
+                messageSize);
     }
 
     @Test
@@ -82,6 +91,45 @@ class ZLinkMessageFlowTracerTest {
         ZLinkMessageFlowTracer tracer = tracer(options(ZLinkMessageFlowLogMode.ERRORS));
         assertFalse(tracer.enabled(ZLinkMessageFlowOutcome.RECEIVED));
         assertTrue(tracer.enabled(ZLinkMessageFlowOutcome.DROPPED));
+    }
+
+    @Test
+    void omittedMessageSizeSettingIsOffAtDetailedLevel() {
+        ZLinkDispatchOptionsRegistration options = new ZLinkDispatchOptionsRegistration();
+        assertFalse(options.diagnostics().includeMessageSizes());
+        options.messageFlow(ZLinkMessageFlowLogMode.DETAILED);
+
+        Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
+        List<String> records = new ArrayList<>();
+        Handler handler =
+                new Handler() {
+                    @Override
+                    public void publish(LogRecord record) {
+                        records.add(record.getMessage());
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        boolean useParentHandlers = logger.getUseParentHandlers();
+        Level level = logger.getLevel();
+        logger.addHandler(handler);
+        logger.setUseParentHandlers(false);
+        logger.setLevel(Level.ALL);
+        try {
+            tracer(options).trace(flow(ZLinkMessageFlowOutcome.RECEIVED, 42L));
+
+            assertEquals(1, records.size());
+            assertFalse(records.getFirst().contains("message_size_bytes="));
+            assertFalse(records.getFirst().contains("size=42"));
+        } finally {
+            logger.removeHandler(handler);
+            logger.setUseParentHandlers(useParentHandlers);
+            logger.setLevel(level);
+        }
     }
 
     @Test

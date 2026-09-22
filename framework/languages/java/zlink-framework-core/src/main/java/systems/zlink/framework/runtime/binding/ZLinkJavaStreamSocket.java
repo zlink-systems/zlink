@@ -1,14 +1,12 @@
 package systems.zlink.framework.runtime.binding;
 
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.eventing.MonitorEventType;
 import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.StreamPacket;
 import systems.zlink.contracts.sockets.RecvFlags;
-import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.Socket;
 import systems.zlink.contracts.sockets.StreamRecvMode;
@@ -36,8 +34,6 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -46,7 +42,6 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
     private final ZLinkJavaRawMeshNode meshNode;
     private final BoundSessionSink boundSessionSink;
     private final BoundSessionLifecycle boundSessionLifecycle;
-    private final Runnable nativeClose;
     private final Map<BindingKey, SessionBinding> bindings = new ConcurrentHashMap<>();
     private final AtomicLong nextBoundSessionSequence = new AtomicLong(1);
     private final AtomicLong nextBoundSessionRequestSequence = new AtomicLong(1);
@@ -57,12 +52,12 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
     private volatile boolean sessionServiceStarted;
 
     ZLinkJavaStreamSocket(StreamSocket socket, ZLinkJavaRawMeshNode meshNode) {
-        this(socket, meshNode, null, null, null);
+        this(socket, meshNode, null, null);
     }
 
     ZLinkJavaStreamSocket(
             StreamSocket socket, ZLinkJavaRawMeshNode meshNode, BoundSessionSink boundSessionSink) {
-        this(socket, meshNode, boundSessionSink, null, null);
+        this(socket, meshNode, boundSessionSink, null);
     }
 
     ZLinkJavaStreamSocket(
@@ -70,22 +65,12 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
             ZLinkJavaRawMeshNode meshNode,
             BoundSessionSink boundSessionSink,
             BoundSessionLifecycle boundSessionLifecycle) {
-        this(socket, meshNode, boundSessionSink, boundSessionLifecycle, null);
-    }
-
-    ZLinkJavaStreamSocket(
-            StreamSocket socket,
-            ZLinkJavaRawMeshNode meshNode,
-            BoundSessionSink boundSessionSink,
-            BoundSessionLifecycle boundSessionLifecycle,
-            Runnable nativeClose) {
         this.socket = socket;
         this.socket.options().recvMode(StreamRecvMode.PACKET);
         this.meshNode = meshNode;
         this.boundSessionSink = boundSessionSink;
         this.boundSessionLifecycle = boundSessionLifecycle;
         this.receivePoller = new ZLinkJavaSocketReceivePoller(socket);
-        this.nativeClose = nativeClose == null ? socket::close : nativeClose;
     }
 
     private <T> T inStateLane(java.util.function.Supplier<T> work) {
@@ -609,87 +594,7 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
         }
         receivePoller.close();
         closeMonitor();
-        Throwable cleanupFailure = null;
-        if (meshNode != null) {
-            Map<BindingKey, SessionBinding> closingBindings = Map.copyOf(bindings);
-            List<CompletableFuture<Void>> cleanup = new ArrayList<>(closingBindings.size());
-            closingBindings.forEach(
-                    (key, binding) -> {
-                        try {
-                            cleanup.add(
-                                    unbindBinding(key.sessionRid(), binding, Duration.ofMillis(250))
-                                            .<Void>handle(
-                                                    (ignored, failure) -> {
-                                                        if (failure != null
-                                                                && !isStaleBinding(failure)
-                                                                && !isRemoteRouteUnavailable(
-                                                                        failure)) {
-                                                            Throwable cause =
-                                                                    unwrapFailure(failure);
-                                                            if (cause
-                                                                    instanceof
-                                                                    RuntimeException runtime) {
-                                                                throw runtime;
-                                                            }
-                                                            if (cause instanceof Error error) {
-                                                                throw error;
-                                                            }
-                                                            throw new CompletionException(cause);
-                                                        }
-                                                        return null;
-                                                    })
-                                            .toCompletableFuture());
-                        } catch (RuntimeException | Error failure) {
-                            cleanup.add(
-                                    isStaleBinding(failure) || isRemoteRouteUnavailable(failure)
-                                            ? CompletableFuture.completedFuture(null)
-                                            : CompletableFuture.failedFuture(failure));
-                        }
-                    });
-            try {
-                CompletableFuture.allOf(cleanup.toArray(CompletableFuture[]::new))
-                        .get(500, TimeUnit.MILLISECONDS);
-            } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
-                cleanupFailure = interrupted;
-            } catch (ExecutionException | TimeoutException failure) {
-                cleanupFailure =
-                        failure instanceof ExecutionException && failure.getCause() != null
-                                ? failure.getCause()
-                                : failure;
-            } finally {
-                closingBindings.forEach(
-                        (key, binding) ->
-                                rawSpotNode()
-                                        .discardStreamSession(
-                                                key.sessionRid(),
-                                                binding.actor(),
-                                                binding.generation(),
-                                                this));
-                bindings.clear();
-            }
-        }
-        Throwable nativeCloseFailure = null;
-        try {
-            nativeClose.run();
-        } catch (RuntimeException | Error failure) {
-            nativeCloseFailure = failure;
-        }
-        if (cleanupFailure != null) {
-            IllegalStateException failure =
-                    new IllegalStateException(
-                            "STREAM binding cleanup did not complete", cleanupFailure);
-            if (nativeCloseFailure != null) {
-                failure.addSuppressed(nativeCloseFailure);
-            }
-            throw failure;
-        }
-        if (nativeCloseFailure instanceof RuntimeException failure) {
-            throw failure;
-        }
-        if (nativeCloseFailure instanceof Error failure) {
-            throw failure;
-        }
+        socket.close();
     }
 
     private void closeMonitor() {
@@ -828,28 +733,6 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
                                 sessionRid, binding.actor(), binding.generation(), this, timeout)
                 : boundSessionLifecycle.unbind(
                         sessionRid, binding.actor(), binding.generation(), timeout);
-    }
-
-    private static boolean isStaleBinding(Throwable failure) {
-        Throwable current = unwrapFailure(failure);
-        return current instanceof IllegalStateException
-                && "STREAM session binding is stale".equals(current.getMessage());
-    }
-
-    private static boolean isRemoteRouteUnavailable(Throwable failure) {
-        Throwable current = unwrapFailure(failure);
-        if (current instanceof ZlinkRequestException request) {
-            return request.getResult() == RequestResult.NOT_CONNECTED
-                    || request.getResult() == RequestResult.NOT_FOUND
-                    || request.getResult() == RequestResult.TERMINATED;
-        }
-        if (current instanceof ZlinkSubmitException submit) {
-            return submit.getResult() == SubmitResult.NOT_CONNECTED
-                    || submit.getResult() == SubmitResult.NOT_FOUND
-                    || submit.getResult() == SubmitResult.TERMINATED
-                    || submit.getResult() == SubmitResult.NOT_ADMITTED;
-        }
-        return false;
     }
 
     private static Throwable unwrapFailure(Throwable failure) {

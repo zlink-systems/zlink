@@ -34,6 +34,7 @@ class SessionServerApplication {
     @Bean
     fun sessionFramework(topology: SampleTopology): ZLinkFrameworkConfigurer =
         ZLinkFrameworkConfigurer { options ->
+            // #895: configuration package scanning has no Kotlin form in the spec.
             options.addHandlersFromPackageOf(SessionServerApplication::class.java)
             options.useCoroutineHandlers(Dispatchers.Default)
             options.configureDispatch { messageFlow(ZLinkMessageFlowLogMode.NORMAL) }
@@ -50,6 +51,7 @@ class SessionServerApplication {
                 .addStreamNode(SampleNames.StreamNode)
                 .bind(topology.selectedStreamEndpoint())
                 .enableActorDispatch()
+                // #895: session registration has no Kotlin form in the spec.
                 .registerSession(BingoSession::class.java)
             // --8<-- [end:doc-bingo-session-register]
         }

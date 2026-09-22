@@ -8,6 +8,7 @@
 #include "runtime/configuration/service_scope.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/execution/serial_execution_queue.hpp"
+#include "runtime/diagnostics/dispatch_events.hpp"
 #include "runtime/execution/state_lane.hpp"
 #include "runtime/locations/location_lifecycle.hpp"
 #include "runtime/locations/spot_address_resolvers.hpp"
@@ -377,9 +378,10 @@ void drain_spot_node_executors (spot_node_builder_state_t &node);
 
 void report_logical_multicast_failure (const std::shared_ptr<spot_node_builder_state_t> &state,
                                        std::string_view channel_name,
+                                       std::string_view mesh_name,
                                        std::string_view topic,
-                                       std::string_view packet_name,
-                                       const framework_exception_t &error) noexcept;
+                                       std::string_view target_rid,
+                                       dispatch_error_reason_t reason) noexcept;
 
 /* actor_instance_index maintenance (caller runs on the node state lane). A record
  * replaces any prior address for the same actor, so a re-registered actor
@@ -2139,48 +2141,39 @@ class spot_node_runtime_t
             context_missing
         };
         entry_selection_t selection = entry_selection_t::context_missing;
-        std::shared_ptr<void> spot_instance;
-        serializer_registry_t *callback_serializers = nullptr;
-        serializer_registry_t *serializers = nullptr;
-        auto context =
-          _state->lane
-            .run ([&] () -> std::optional<spot_context_t> {
-                if (spot_node_rid.empty ()
-                    || spot_node_rid.value ()
-                         != detail::effective_spot_node_rid (_state->snapshot)) {
-                    selection = entry_selection_t::node_mismatch;
-                    return std::nullopt;
-                }
-                if (!_state->snapshot.entry_spot_name) {
-                    selection = entry_selection_t::not_registered;
-                    return std::nullopt;
-                }
-                const auto entry_id =
-                  _state->spot_ids_by_name.find (*_state->snapshot.entry_spot_name);
-                if (entry_id == _state->spot_ids_by_name.end ()) {
-                    selection = entry_selection_t::not_created;
-                    return std::nullopt;
-                }
-                auto selected = find_context_core (entry_id->second);
-                if (!selected) {
-                    selection = entry_selection_t::context_missing;
-                    return std::nullopt;
-                }
-                const auto &state = selected->_state;
-                if (state->node.get () != _state.get () || state->closed
-                    || state->close_reservation != 0 || !state->spot_instance) {
-                    selection = entry_selection_t::context_missing;
-                    return std::nullopt;
-                }
-                spot_instance = state->spot_instance;
-                callback_serializers =
-                  _state->channel_runtime ? _state->channel_runtime->serializers : nullptr;
-                serializers =
-                  state->channel_runtime ? state->channel_runtime->serializers : nullptr;
-                selection = entry_selection_t::selected;
-                return selected;
-            })
-            .get ();
+        auto context = _state->lane
+                         .run ([&] () -> std::optional<spot_context_t> {
+                             if (spot_node_rid.empty ()
+                                 || spot_node_rid.value ()
+                                      != detail::effective_spot_node_rid (_state->snapshot)) {
+                                 selection = entry_selection_t::node_mismatch;
+                                 return std::nullopt;
+                             }
+                             if (!_state->snapshot.entry_spot_name) {
+                                 selection = entry_selection_t::not_registered;
+                                 return std::nullopt;
+                             }
+                             const auto entry_id =
+                               _state->spot_ids_by_name.find (*_state->snapshot.entry_spot_name);
+                             if (entry_id == _state->spot_ids_by_name.end ()) {
+                                 selection = entry_selection_t::not_created;
+                                 return std::nullopt;
+                             }
+                             auto selected = find_context_core (entry_id->second);
+                             if (!selected) {
+                                 selection = entry_selection_t::context_missing;
+                                 return std::nullopt;
+                             }
+                             const auto &state = selected->_state;
+                             if (state->node.get () != _state.get () || state->closed
+                                 || state->close_reservation != 0 || !state->spot_instance) {
+                                 selection = entry_selection_t::context_missing;
+                                 return std::nullopt;
+                             }
+                             selection = entry_selection_t::selected;
+                             return selected;
+                         })
+                         .get ();
         if (selection == entry_selection_t::node_mismatch) {
             return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
                                                           "spot node rid does not match this node");
@@ -2196,21 +2189,6 @@ class spot_node_runtime_t
         if (!context) {
             return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
                                                           "entry spot context is not registered");
-        }
-
-        auto &spot = *static_cast<TEntrySpot *> (spot_instance.get ());
-        if constexpr (has_actor_join_callback<TEntrySpot>) {
-            const auto response = invoke_actor_join_callback (spot, actor_ref.actor_id ().value (),
-                                                              request, callback_serializers);
-            if (!response.accepted) {
-                return result_t<actor_join_reply_t>::success (
-                  actor_join_reply_t{1, actor_ref, actor_join_reply (response, *serializers)});
-            }
-
-            const auto committed =
-              commit_actor_to_context<TEntrySpot, TActor> (actor_ref, actor, *context, request);
-            return result_t<actor_join_reply_t>::success (
-              actor_join_reply_t{0, committed, actor_join_reply (response, *serializers)});
         }
 
         const auto committed =

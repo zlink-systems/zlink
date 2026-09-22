@@ -9,8 +9,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.ZLinkEncodedPayload;
@@ -208,6 +210,26 @@ final class ZLinkSessionActorBindingContractTest {
 
         assertThrows(CompletionException.class, () -> disconnected.toCompletableFuture().join());
         assertEquals(1, stream.disconnectNotifications);
+        assertTrue(runtime.bound().isEmpty());
+    }
+
+    @Test
+    void remoteTombstoneTimeoutStillRemovesLocalBindingAfterOneDisconnectCallback() {
+        FakeStream stream = new FakeStream();
+        ZLinkSessionActorsRuntime runtime = runtime(stream);
+        runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A)).toCompletableFuture().join();
+        stream.unbindFailure =
+                new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                        "remote binding route did not reply",
+                        new ZlinkRequestException(RequestResult.TIMED_OUT));
+
+        assertThrows(
+                CompletionException.class,
+                () -> runtime.notifyDisconnectedAll().toCompletableFuture().join());
+
+        assertEquals(1, stream.disconnectNotifications);
+        assertEquals(List.of("actor-1"), stream.unbinds);
         assertTrue(runtime.bound().isEmpty());
     }
 
@@ -718,6 +740,7 @@ final class ZLinkSessionActorBindingContractTest {
         private boolean deferBoundPushAdmission;
         private int disconnectNotifications;
         private RuntimeException disconnectSubmissionFailure;
+        private RuntimeException unbindFailure;
         private int disconnectedPeers;
         private long nextIngressSequence = 1;
         private boolean closed;
@@ -832,6 +855,9 @@ final class ZLinkSessionActorBindingContractTest {
                     return pending;
                 }
                 unbinds.add(actorId);
+                if (unbindFailure != null) {
+                    return CompletableFuture.failedFuture(unbindFailure);
+                }
                 return CompletableFuture.completedFuture(null);
             };
         }

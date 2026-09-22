@@ -87,6 +87,10 @@ export class ZLinkDispatchErrorReporter {
     });
   }
 
+  captureEnabled(): boolean {
+    return this.flow.enabled(ZLinkMessageFlowOutcome.Error);
+  }
+
   get reportedCount(): number {
     return this.reportedEvents;
   }

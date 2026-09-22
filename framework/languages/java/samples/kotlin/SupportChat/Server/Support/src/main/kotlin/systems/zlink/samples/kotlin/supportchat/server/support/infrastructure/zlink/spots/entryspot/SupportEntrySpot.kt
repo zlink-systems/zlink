@@ -3,6 +3,7 @@ package systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.z
 import systems.zlink.framework.actors.ZLinkActorManager
 import systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpot
 import systems.zlink.framework.kotlin.await
+import systems.zlink.framework.kotlin.decode
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.spots.ZLinkActorCreateResponse
 import systems.zlink.framework.spots.ZLinkEntrySpotContext
@@ -22,7 +23,7 @@ class SupportEntrySpot(
         actor: SupportUserActor,
         createRequest: ZLinkMessage,
     ): ZLinkActorCreateResponse {
-        val request = createRequest.decode(EnsureSupportUserActorReq::class.java)
+        val request = createRequest.decode<EnsureSupportUserActorReq>()
         actor.setIdentity(request.displayName, request.role, request.participantId)
         val actorRef =
             actorManager.find(actor.actorId).await().orElse(null)

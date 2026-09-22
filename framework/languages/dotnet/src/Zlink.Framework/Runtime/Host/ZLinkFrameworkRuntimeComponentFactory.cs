@@ -84,7 +84,8 @@ internal static class ZLinkFrameworkRuntimeComponentFactory
             runtime,
             registration,
             locationLifecycle,
-            services.GetService<ZLinkOwnerLeaseTracker>()
+            services.GetService<ZLinkOwnerLeaseTracker>(),
+            channelDispatchErrors
         );
         var stateFactory = new ZLinkFrameworkComponentStateFactory(
             runtime,

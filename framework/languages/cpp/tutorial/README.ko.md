@@ -595,8 +595,8 @@ C++ 쪽에서 알아 둘 것은 다음과 같다.
 
 - **Actor는 생성자로 생성하지 않는다.** `player_factory_t`가 생성하고 context를 설정한다.
 - **Entry Spot을 등록해야 한다.** 새로 생성된 player가 처음 들어가는 지점이다.
-- **C++의 entry spot에는 입장 승인 callback이 필수다.** `lobby_spot_t::on_actor_join`이
-  admission을 처리하며, 거절하면 Actor 생성 자체가 실패한다.
+- **Entry Spot의 최초 생성 admission은 `on_create_actor`가 맡는다.** User Spot에서 돌아올 때는
+  별도 admission 없이 commit한다.
 
 ### 10. Location — 위치 조회
 

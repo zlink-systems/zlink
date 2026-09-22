@@ -3479,6 +3479,16 @@ task_t<void> run_spot_publish_fanout (std::shared_ptr<service::spot_t> native,
     co_await native->publish_tail (parts, metadata);
     co_return;
 }
+
+task_t<void> run_spot_publish_fanout (
+  std::shared_ptr<service::spot_t> native,
+  std::vector<zlink::message_t> parts,
+  std::vector<std::uint8_t> metadata,
+  std::function<void (const zlink::routing_id_t &, zlink::submit_result_t)> failure_observer)
+{
+    co_await native->publish_tail (parts, metadata, std::move (failure_observer));
+    co_return;
+}
 } // namespace
 
 send_call_t spot_context_t::publish_erased (std::string topic,
@@ -3487,55 +3497,55 @@ send_call_t spot_context_t::publish_erased (std::string topic,
                                             zlink::message_t payload)
 {
     auto state = _state;
-    return send_call_t (
-      std::move (packet_name),
-      [state, topic = std::move (topic), content_type = std::move (content_type),
-       payload = std::move (payload)] (const std::string &submitted_packet_name,
-                                       const send_call_t::metadata_map_t &) {
-          if (!state) {
-              return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                              "spot context is not configured");
-          }
-          try {
-              state->ensure_relocation_turn_open ();
-          }
-          catch (const framework_exception_t &error) {
-              return detail::result_access_t::failure<void> (error);
-          }
-          struct publish_projection_t
-          {
-              std::shared_ptr<service::spot_t> native;
-              dispatch_options_t dispatch;
-              std::string mesh_name;
-              std::string discovery_channel_name;
-              std::shared_ptr<detail::channel_runtime_state_t> channel_runtime;
-          };
-          const auto projection =
-            state->node ? state->node->lane
-                            .run ([&] {
-                                return publish_projection_t{
-                                  .native = state->native_spot.lock (),
-                                  .dispatch = state->node->dispatch,
-                                  .mesh_name = state->node->snapshot.name,
-                                  .discovery_channel_name =
-                                    state->node->snapshot.discovery_channel_name.value_or (
-                                      state->node->snapshot.name),
-                                  .channel_runtime = state->node->channel_runtime};
-                            })
-                            .get ()
-                        : publish_projection_t{};
-          auto native = projection.native;
-          if (native) {
-              try {
-                  /* Fan-out wire envelope (flow-correlation §4.1, .NET
+    return send_call_t (std::move (packet_name), [state, topic = std::move (topic),
+                                                  content_type = std::move (content_type),
+                                                  payload = std::move (payload)] (
+                                                   const std::string &submitted_packet_name,
+                                                   const send_call_t::metadata_map_t &) {
+        if (!state) {
+            return result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                            "spot context is not configured");
+        }
+        try {
+            state->ensure_relocation_turn_open ();
+        }
+        catch (const framework_exception_t &error) {
+            return detail::result_access_t::failure<void> (error);
+        }
+        struct publish_projection_t
+        {
+            std::shared_ptr<service::spot_t> native;
+            dispatch_options_t dispatch;
+            std::string mesh_name;
+            std::string discovery_channel_name;
+            std::shared_ptr<detail::channel_runtime_state_t> channel_runtime;
+        };
+        const auto projection =
+          state->node ? state->node->lane
+                          .run ([&] {
+                              return publish_projection_t{
+                                .native = state->native_spot.lock (),
+                                .dispatch = state->node->dispatch,
+                                .mesh_name = state->node->snapshot.name,
+                                .discovery_channel_name =
+                                  state->node->snapshot.discovery_channel_name.value_or (
+                                    state->node->snapshot.name),
+                                .channel_runtime = state->node->channel_runtime};
+                          })
+                          .get ()
+                      : publish_projection_t{};
+        auto native = projection.native;
+        if (native) {
+            try {
+                /* Fan-out wire envelope (flow-correlation §4.1, .NET
                    * ZLinkSpotPublishEnvelope 동형): the header carries the
                    * ambient flow pair so every subscriber line shares one
                    * flow id across the tree. */
-                  const auto diagnostics_mode =
-                    detail::message_flow_tracer_t (projection.dispatch).mode ();
-                  auto flow_scope = runtime::flow_context_t::enter_current_or_create (
-                    flow_origin_t::application, diagnostics_mode);
-                  /* Self-delimited single frame: ['Z''L''F''E'][u32 BE
+                const auto diagnostics_mode =
+                  detail::message_flow_tracer_t (projection.dispatch).mode ();
+                auto flow_scope = runtime::flow_context_t::enter_current_or_create (
+                  flow_origin_t::application, diagnostics_mode);
+                /* Self-delimited single frame: ['Z''L''F''E'][u32 BE
                    * header_len][header JSON][body]. The node-attached fanout
                    * path does not keep multipart boundaries end to end, so
                    * the envelope frames itself; the decode side also accepts
@@ -3543,29 +3553,29 @@ send_call_t spot_context_t::publish_erased (std::string topic,
                    * parts. The magic makes the format discriminable from a
                    * legacy raw payload, so a validation failure after a
                    * magic match is definitively a corrupted framework frame. */
-                  auto frame_part = encode_spot_publish_frame (
-                    projection.mesh_name, submitted_packet_name, topic, content_type, payload);
-                  if (!projection.channel_runtime || !projection.channel_runtime->serializers) {
-                      return result_t<void>::failure (
-                        framework_error_kind_t::internal_failure,
-                        "spot publish serializer registry is unavailable");
-                  }
-                  runtime::messaging::client_call_codec_t route_codec;
-                  auto route_header = route_codec.create_envelope (
-                    runtime::messaging::message_kind_t::command, "spot",
-                    detail::spot_multicast_route_send_t::packet_name, std::chrono::seconds (30));
-                  const auto route =
-                    detail::spot_multicast_route_send_t{topic, frame_part.to_bytes ()};
-                  const auto encoded = route_codec.encode_envelope_parts (
-                    route_header, route, *projection.channel_runtime->serializers);
-                  const auto submitted =
-                    native->publish (projection.discovery_channel_name, topic, encoded.items ());
-                  if (submitted != zlink::submit_result_t::ok) {
-                      return result_t<void>::failure (
-                        runtime::messaging::map_submit_result_error_kind (submitted),
-                        "spot publish failed");
-                  }
-                  /* Spec 12 §1/§9 — a Logical Multicast publish is sent
+                auto frame_part = encode_spot_publish_frame (
+                  projection.mesh_name, submitted_packet_name, topic, content_type, payload);
+                if (!projection.channel_runtime || !projection.channel_runtime->serializers) {
+                    return result_t<void>::failure (
+                      framework_error_kind_t::internal_failure,
+                      "spot publish serializer registry is unavailable");
+                }
+                runtime::messaging::client_call_codec_t route_codec;
+                auto route_header = route_codec.create_envelope (
+                  runtime::messaging::message_kind_t::command, "spot",
+                  detail::spot_multicast_route_send_t::packet_name, std::chrono::seconds (30));
+                const auto route =
+                  detail::spot_multicast_route_send_t{topic, frame_part.to_bytes ()};
+                const auto encoded = route_codec.encode_envelope_parts (
+                  route_header, route, *projection.channel_runtime->serializers);
+                const auto submitted =
+                  native->publish (projection.discovery_channel_name, topic, encoded.items ());
+                if (submitted != zlink::submit_result_t::ok) {
+                    return result_t<void>::failure (
+                      runtime::messaging::map_submit_result_error_kind (submitted),
+                      "spot publish failed");
+                }
+                /* Spec 12 §1/§9 — a Logical Multicast publish is sent
                    * once per participating node and every node checks its
                    * own local subscriptions. The entry-spot publish() above
                    * owns only the LOCAL dequeue acceptance (its own
@@ -3575,34 +3585,36 @@ send_call_t spot_context_t::publish_erased (std::string topic,
                    * failures are reported through the standard
                    * logical-multicast failure path and never alter the
                    * accepted publish result. */
-                  {
-                      //  publish_tail takes its parts/metadata by reference
-                      //  and suspends; feed it through a coroutine whose
-                      //  PARAMETERS own copies for the frame's lifetime.
-                      auto tail = run_spot_publish_fanout (
-                        native, encoded.items (), detail::mesh_metadata_codec_t::encode ({}));
-                      detail::observe_task_completion (
-                        tail, [node = state->node, mesh_name = projection.mesh_name, topic,
-                               packet = submitted_packet_name] (const result_t<void> &fanout) {
-                            if (fanout || !node)
-                                return;
-                            detail::report_logical_multicast_failure (
-                              node, mesh_name, topic, packet,
-                              fanout.error () != nullptr
-                                ? framework_exception_t (fanout.error_kind (),
-                                                         fanout.error ()->what ())
-                                : framework_exception_t (framework_error_kind_t::internal_failure,
-                                                         "logical multicast fanout failed"));
-                        });
-                  }
-              }
-              catch (const std::exception &error) {
-                  return result_t<void>::failure (framework_error_kind_t::internal_failure,
-                                                  error.what ());
-              }
-          }
-          return result_t<void>::success ();
-      });
+                {
+                    //  publish_tail takes its parts/metadata by reference
+                    //  and suspends; feed it through a coroutine whose
+                    //  PARAMETERS own copies for the frame's lifetime.
+                    const auto node = state->node;
+                    const auto capture =
+                      node && detail::dispatch_error_reporter_t (node->dispatch).enabled ();
+                    auto tail =
+                      capture
+                        ? run_spot_publish_fanout (
+                            native, encoded.items (), detail::mesh_metadata_codec_t::encode ({}),
+                            [node, channel = projection.discovery_channel_name,
+                             mesh = projection.mesh_name, topic] (
+                              const zlink::routing_id_t &target, zlink::submit_result_t submitted) {
+                                detail::report_logical_multicast_failure (
+                                  node, channel, mesh, topic, target.to_string (),
+                                  detail::dispatch_reason_from_submit_result (submitted));
+                            })
+                        : run_spot_publish_fanout (native, encoded.items (),
+                                                   detail::mesh_metadata_codec_t::encode ({}));
+                    detail::observe_task_completion (tail, [] (const result_t<void> &) {});
+                }
+            }
+            catch (const std::exception &error) {
+                return result_t<void>::failure (framework_error_kind_t::internal_failure,
+                                                error.what ());
+            }
+        }
+        return result_t<void>::success ();
+    });
 }
 
 serializer_registry_t *spot_context_t::serializer_registry () const noexcept
@@ -4597,23 +4609,27 @@ namespace zlink::framework::detail
 
 void report_logical_multicast_failure (const std::shared_ptr<spot_node_builder_state_t> &state,
                                        std::string_view channel_name,
+                                       std::string_view mesh_name,
                                        std::string_view topic,
-                                       std::string_view packet_name,
-                                       const framework_exception_t &error) noexcept
+                                       std::string_view target_rid,
+                                       dispatch_error_reason_t reason) noexcept
 {
     if (!state)
         return;
     try {
         dispatch_error_reporter_t (state->dispatch).report_lazy ([&] {
-            return message_dispatch_error_event_t{.surface =
-                                                    dispatch_error_surface_t::route_mesh_channel,
-                                                  .message_kind = dispatch_message_kind_t::publish,
-                                                  .reason = dispatch_reason_from_error (&error),
-                                                  .action = dispatch_error_action_t::drop,
-                                                  .packet_name = std::string (packet_name),
-                                                  .channel_name = std::string (channel_name),
-                                                  .topic = std::string (topic),
-                                                  .exception = std::make_exception_ptr (error)};
+            return message_dispatch_error_event_t{
+              .surface = dispatch_error_surface_t::spot_route,
+              .message_kind = dispatch_message_kind_t::send,
+              .reason = reason,
+              .action = dispatch_error_action_t::drop,
+              .channel_name =
+                channel_name.empty () ? std::nullopt : std::optional<std::string> (channel_name),
+              .topic = std::string (topic),
+              .mesh_name =
+                mesh_name.empty () ? std::nullopt : std::optional<std::string> (mesh_name),
+              .target_rid =
+                target_rid.empty () ? std::nullopt : std::optional<std::string> (target_rid)};
         });
     }
     catch (...) {
@@ -4891,43 +4907,34 @@ publish_call_t spot_publisher_client_t::publish_raw (std::string channel_name,
        channel_name = std::move (channel_name), topic = std::move (topic),
        packet_name = std::move (packet_name), frame = std::move (frame),
        diagnostics_mode] (const publish_call_t::metadata_map_t &metadata) -> task_t<void> {
-          const auto fail = [&] (const framework_exception_t &error) {
-              detail::report_logical_multicast_failure (state, channel_name, topic, packet_name,
-                                                        error);
-          };
-          try {
-              auto flow_scope = runtime::flow_context_t::enter_current_or_create (
-                flow_origin_t::application, diagnostics_mode);
-              std::vector<zlink::message_t> parts{frame};
-              auto publisher = native_node->entry_spot ();
-              const auto encoded_metadata = detail::mesh_metadata_codec_t::encode (metadata);
-              const auto submitted = publisher.publish (
-                channel_name, topic, parts, zlink::send_flags_t::none, encoded_metadata);
-              if (submitted != zlink::submit_result_t::ok) {
-                  const framework_exception_t error (
-                    runtime::messaging::map_submit_result_error_kind (submitted),
-                    "logical multicast could not enter the source transport queue");
-                  throw error;
-              }
-              co_await publisher.publish_tail (parts, encoded_metadata);
-              co_return;
+          const auto capture = detail::dispatch_error_reporter_t (state->dispatch).enabled ();
+          auto flow_scope = runtime::flow_context_t::enter_current_or_create (
+            flow_origin_t::application, diagnostics_mode);
+          std::vector<zlink::message_t> parts{frame};
+          auto publisher = native_node->entry_spot ();
+          const auto encoded_metadata = detail::mesh_metadata_codec_t::encode (metadata);
+          const auto submitted = publisher.publish (channel_name, topic, parts,
+                                                    zlink::send_flags_t::none, encoded_metadata);
+          if (submitted != zlink::submit_result_t::ok) {
+              throw framework_exception_t (
+                runtime::messaging::map_submit_result_error_kind (submitted),
+                "logical multicast could not enter the source transport queue");
           }
-          catch (const framework_exception_t &error) {
-              fail (error);
-              throw;
+          auto native = std::make_shared<service::spot_t> (std::move (publisher));
+          if (capture) {
+              const auto mesh_name = state->lane.run ([&] { return state->snapshot.name; }).get ();
+              co_await run_spot_publish_fanout (
+                native, std::move (parts), encoded_metadata,
+                [state, channel_name, mesh_name, topic] (const zlink::routing_id_t &target,
+                                                         zlink::submit_result_t submitted) {
+                    detail::report_logical_multicast_failure (
+                      state, channel_name, mesh_name, topic, target.to_string (),
+                      detail::dispatch_reason_from_submit_result (submitted));
+                });
+          } else {
+              co_await run_spot_publish_fanout (native, std::move (parts), encoded_metadata);
           }
-          catch (const std::exception &error) {
-              const framework_exception_t failure (framework_error_kind_t::internal_failure,
-                                                   error.what ());
-              fail (failure);
-              throw failure;
-          }
-          catch (...) {
-              const framework_exception_t failure (framework_error_kind_t::internal_failure,
-                                                   "logical multicast failed after admission");
-              fail (failure);
-              throw failure;
-          }
+          co_return;
       });
 }
 
@@ -5229,7 +5236,7 @@ spot_node_runtime_t::actor_join_state_snapshot_t spot_node_runtime_t::actor_join
                       const auto admission =
                         context_state->actor_admissions.find (factory->second.actor_type);
                       if (admission != context_state->actor_admissions.end ()
-                          && admission->second.join) {
+                          && (context_state->is_entry_spot () || admission->second.join)) {
                           snapshot.admission.emplace (admission->second);
                       }
                   }
@@ -5282,7 +5289,8 @@ spot_node_runtime_t::actor_admission (spot_context_t &context,
               return;
           }
           const auto admission = context._state->actor_admissions.find (actor_type);
-          if (admission != context._state->actor_admissions.end () && admission->second.join)
+          if (admission != context._state->actor_admissions.end ()
+              && (context._state->is_entry_spot () || admission->second.join))
               selected.emplace (admission->second);
       })
       .get ();
@@ -5810,8 +5818,11 @@ result_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_spot_erased (
 
     auto &admission_callbacks = *join_snapshot.admission;
     auto &serializers = *join_snapshot.serializers;
-    const auto response = admission_callbacks.join (
-      join_snapshot.spot_instance.get (), actor_ref.actor_id ().value (), request, serializers);
+    const auto response =
+      context._state->is_entry_spot ()
+        ? spot_actor_join_result_t::accept ()
+        : admission_callbacks.join (join_snapshot.spot_instance.get (),
+                                    actor_ref.actor_id ().value (), request, serializers);
     if (!response.accepted) {
         return result_t<actor_join_reply_t>::success (
           actor_join_reply_t{1, actor_ref, framework_reply_or_empty (response.reply, serializers)});
@@ -5987,8 +5998,11 @@ spot_node_runtime_t::join_remote_actor_to_spot_erased (const actor_ref_t &actor_
 
     auto &admission_callbacks = *join_snapshot.admission;
     auto &serializers = *join_snapshot.serializers;
-    const auto response = admission_callbacks.join (
-      join_snapshot.spot_instance.get (), actor_ref.actor_id ().value (), request, serializers);
+    const auto response =
+      context._state->is_entry_spot ()
+        ? spot_actor_join_result_t::accept ()
+        : admission_callbacks.join (join_snapshot.spot_instance.get (),
+                                    actor_ref.actor_id ().value (), request, serializers);
     if (!response.accepted) {
         if (!registration.create_context_instance) {
             registration.configure_instance (actor_instance.get (), actor_ref, &actor_context);

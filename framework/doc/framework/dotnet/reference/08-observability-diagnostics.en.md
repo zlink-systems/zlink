@@ -32,7 +32,7 @@ services.AddZLinkFramework(options =>
 | --- | --- | --- |
 | `.SetLevel(ZLinkDiagnosticsLevel)` | no default stated in the exact interface (one of `Off`/`Errors`/`Normal`/`Detailed`) | how detailed the recording is |
 | `.SetSampleRate(double)` | no default stated in the exact interface | `0.0`..`1.0`. Out of range throws `ArgumentOutOfRangeException` |
-| `.IncludeMessageSizes(bool)` | no default stated in the exact interface | whether payload size distribution is included in telemetry. The payload content itself is never recorded |
+| `.IncludeMessageSizes(bool)` | off (`false`) — owned by [message-flow tracing §4](../../common/spec/server/06-observability/03-message-flow-tracing.en.md#4-how-the-application-sets-the-recording-scope--level-and-sampling) | whether payload size distribution is included in telemetry. The payload content itself is never recorded |
 
 Each modifier is a synchronous fluent call that returns `IZLinkDiagnosticsOptions` — not a
 registration with no return value.

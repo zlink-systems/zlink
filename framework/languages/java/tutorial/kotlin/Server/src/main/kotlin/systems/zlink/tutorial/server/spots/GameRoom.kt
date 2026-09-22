@@ -5,6 +5,7 @@ import systems.zlink.framework.kotlin.ZLinkSuspendingSpot
 import systems.zlink.framework.kotlin.ZLinkSuspendingSpotPacketHandler
 import systems.zlink.framework.kotlin.ZLinkSuspendingSpotRequestHandler
 import systems.zlink.framework.kotlin.addHandler
+import systems.zlink.framework.kotlin.decode
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.spots.ZLinkSpotActorJoinResult
 import systems.zlink.framework.spots.ZLinkSpotContext
@@ -40,7 +41,7 @@ class GameRoom(override val context: ZLinkSpotContext) : ZLinkSuspendingSpot<ZLi
     // Runs before the room accepts any message. Rejecting here means the create
     // call fails and no room exists. Omit this method to accept every request.
     override suspend fun onCreateSuspending(request: ZLinkMessage): ZLinkSpotCreateResponse {
-        val body = request.decode(OpenRoom::class.java)
+        val body = request.decode<OpenRoom>()
         title = body.title
         return ZLinkSpotCreateResponse.accept()
     }

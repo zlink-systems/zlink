@@ -29,6 +29,7 @@ class CourierSpotNodeApplication {
         options.useCoroutineHandlers(Dispatchers.Default)
         val node = SampleTopology.CourierNode
         val selected = NodeOptions.resolve(node)
+        // #895: configuration package scanning has no Kotlin form in the spec.
         options.addHandlersFromPackageOf(CourierSpotNodeApplication::class.java)
         options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 
@@ -47,6 +48,7 @@ class CourierSpotNodeApplication {
                     }
                 )
             )
+        // #895: entry-spot registration has no Kotlin form in the spec.
         spotNode.objects().server().addEntrySpot(CourierEntrySpot::class.java).addActorFactory(
             SampleNames.CourierActorType,
             CourierActor::class.java,
