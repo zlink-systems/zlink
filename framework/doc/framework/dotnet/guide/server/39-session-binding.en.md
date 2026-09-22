@@ -91,7 +91,7 @@ does not run the Spot's disconnect callback twice. Call the Actor directly only 
 is still up but the application protocol treats it as disconnected.
 
 ```csharp
-await actor.NotifyDisconnectedAsync(cancellationToken);
+--8<-- "framework/languages/dotnet/samples/TicTacToe/Server/Play/Infrastructure/ZLink/Sessions/PlaySession.cs:session-disconnect-notify"
 ```
 
 ## 4. When a Bind Fails or Becomes Void

@@ -91,7 +91,7 @@ does not run the Spot's disconnect callback twice. Call the Actor directly only 
 is still up but the application protocol treats it as disconnected.
 
 ```kotlin
-actor.notifyDisconnected().await()
+--8<-- "framework/languages/java/samples/kotlin/TicTacToe/Server/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/server/play/infrastructure/zlink/sessions/PlaySession.kt:session-disconnect-notify"
 ```
 
 ## 4. When a Bind Fails or Becomes Void

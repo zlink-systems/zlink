@@ -35,8 +35,10 @@ internal sealed class PlaySession(IZLinkSessionContext context, ILogger<PlaySess
             boundActors.Length
         );
 
+        // --8<-- [start:session-disconnect-notify]
         foreach (var actor in boundActors)
             await actor.NotifyDisconnectedAsync(cancellationToken);
+        // --8<-- [end:session-disconnect-notify]
     }
 
     public ValueTask OnErrorAsync(ZLinkStreamError error, CancellationToken cancellationToken)

@@ -18,8 +18,10 @@ class PlaySession implements ZLinkSession {
   }
 
   async onDisconnected(): Promise<void> {
+    // --8<-- [start:session-disconnect-notify]
     // Framework cleanup notifies the exact bound-actor snapshot. Re-submitting
     // actor.notifyDisconnected() here can race a later session binding.
+    // --8<-- [end:session-disconnect-notify]
   }
 }
 // --8<-- [end:doc-session]

@@ -16,7 +16,9 @@ class PlaySession(
     override fun context(): ZLinkSessionContext = context
 
     override suspend fun onDisconnectedSuspending() {
+        // --8<-- [start:session-disconnect-notify]
         context.actors().bound().forEach { actor -> actor.notifyDisconnected().await() }
+        // --8<-- [end:session-disconnect-notify]
     }
 
     override suspend fun onDispatchSuspending(

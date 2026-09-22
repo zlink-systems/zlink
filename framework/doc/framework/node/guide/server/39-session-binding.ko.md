@@ -88,7 +88,7 @@ Framework가 합치므로, 직접 호출한 직후에 연결이 끊겨도 Spot�
 연결은 유지하지만 application 규약상 끊겼다고 처리할 때만 Actor에 직접 알린다.
 
 ```typescript
-await actor.notifyDisconnected();
+--8<-- "framework/languages/node/samples/TicTacToe.Ts/Server/Play/Infrastructure/ZLink/Sessions/play-session.ts:session-disconnect-notify"
 ```
 
 ## 4. 묶기가 실패하거나 무효가 되는 경우
