@@ -285,7 +285,26 @@ try:
         committed = json.load(committed_file)
 except FileNotFoundError:
     raise SystemExit(1)
-raise SystemExit(0 if candidate == committed else 1)
+
+if candidate.get("version") != committed.get("version"):
+    raise SystemExit(1)
+candidate_packages = {
+    package["ref"]: package["package_id"]
+    for package in candidate.get("packages", [])
+}
+committed_packages = {
+    package["ref"]: {
+        package["package_id"],
+        *package.get("compatible_package_ids", []),
+    }
+    for package in committed.get("packages", [])
+}
+if candidate_packages.keys() != committed_packages.keys():
+    raise SystemExit(1)
+raise SystemExit(0 if all(
+    package_id in committed_packages[ref]
+    for ref, package_id in candidate_packages.items()
+) else 1)
 PY
   then
     echo "Conan packages file to commit: $package_lockfile" >&2

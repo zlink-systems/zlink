@@ -294,6 +294,12 @@ if(ZLINK_FRAMEWORK_CPP_SHARED AND WIN32)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
   set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 endif()
+if(ZLINK_FRAMEWORK_CPP_SHARED AND APPLE)
+  # Xcode 16.4's libc++ keeps C++20 stop_token behind this switch. Apply it
+  # before creating the object libraries and export it to archive consumers.
+  add_compile_options(-fexperimental-library)
+  add_link_options(-fexperimental-library)
+endif()
 
 function(zlink_framework_cpp_configure_shared_library target_name)
   if(NOT ZLINK_FRAMEWORK_CPP_SHARED)
@@ -446,6 +452,10 @@ add_library(zlink::framework ALIAS zlink_framework)
 set_target_properties(zlink_framework PROPERTIES EXPORT_NAME framework)
 zlink_framework_cpp_configure_shared_library(zlink_framework)
 target_compile_features(zlink_framework PUBLIC cxx_std_20)
+if(ZLINK_FRAMEWORK_CPP_SHARED AND APPLE)
+  target_compile_options(zlink_framework INTERFACE -fexperimental-library)
+  target_link_options(zlink_framework INTERFACE -fexperimental-library)
+endif()
 zlink_framework_cpp_configure_msvc_target(zlink_framework)
 if(MSVC)
   set_property(SOURCE framework/src/runtime/spots/spot_runtime.cpp APPEND PROPERTY
