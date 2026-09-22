@@ -204,7 +204,7 @@ interface ZLinkKotlinSpotSendCall {
  suspend fun await()
 }
 
-interface ZLinkKotlinSpotRequestCall<TReply> {
+interface ZLinkKotlinSpotRequestCall<TReply : Any> {
  fun metadata(key: String, value: String): ZLinkKotlinSpotRequestCall<TReply>
  fun instanceSpot(): ZLinkKotlinSpotRequestCall<TReply>
  fun instanceSpot(stableType: String): ZLinkKotlinSpotRequestCall<TReply>
@@ -235,9 +235,15 @@ fun ZLinkKotlinRouteClient.sendToSpot(
  message: Any,
 ): ZLinkKotlinSpotSendCall
 
-inline fun <reified TReply> ZLinkKotlinRouteClient.requestToSpot(
+inline fun <reified TReply : Any> ZLinkKotlinRouteClient.requestToSpot(
  spotId: String,
  request: Any,
+): ZLinkKotlinSpotRequestCall<TReply>
+
+fun <TReply : Any> ZLinkKotlinRouteClient.requestToSpot(
+ spotId: String,
+ request: Any,
+ replyType: KClass<TReply>,
 ): ZLinkKotlinSpotRequestCall<TReply>
 
 interface ZLinkKotlinSpotOutbound {
@@ -300,11 +306,11 @@ public final class systems.zlink.framework.kotlin.ZLinkSpotHandlerRegistryExtens
 }
 public interface systems.zlink.framework.kotlin.ZLinkSuspendingSpotPacketHandler<TSpot, TMessage> {
  public abstract java.lang.Object handle(TSpot, TMessage, kotlin.coroutines.Continuation<? super kotlin.Unit>);
- public abstract java.lang.Object handle(TSpot, TMessage, systems.zlink.framework.messaging.ZLinkMessageContext, kotlin.coroutines.Continuation<? super kotlin.Unit>);
+ public abstract java.lang.Object handle(TSpot, TMessage, systems.zlink.framework.ZLinkMessageContext, kotlin.coroutines.Continuation<? super kotlin.Unit>);
 }
 public interface systems.zlink.framework.kotlin.ZLinkSuspendingSpotRequestHandler<TSpot, TRequest, TReply> {
  public abstract java.lang.Object handle(TSpot, TRequest, kotlin.coroutines.Continuation<? super TReply>);
- public abstract java.lang.Object handle(TSpot, TRequest, systems.zlink.framework.messaging.ZLinkMessageContext, kotlin.coroutines.Continuation<? super TReply>);
+ public abstract java.lang.Object handle(TSpot, TRequest, systems.zlink.framework.ZLinkMessageContext, kotlin.coroutines.Continuation<? super TReply>);
 }
 public interface systems.zlink.framework.kotlin.ZLinkSuspendingSpotSubscriptionHandler<TSpot, TEvent> {
  public abstract java.lang.Object handle(TSpot, TEvent, kotlin.coroutines.Continuation<? super kotlin.Unit>);
@@ -347,6 +353,7 @@ public abstract class systems.zlink.framework.kotlin.ZLinkSuspendingInstanceSpot
 public final class systems.zlink.framework.kotlin.ZLinkOneWayCallsKt {
  public static final systems.zlink.framework.kotlin.ZLinkKotlinSpotSendCall sendToSpot(systems.zlink.framework.kotlin.ZLinkKotlinRouteClient, java.lang.String, java.lang.Object);
  public static final <TReply> systems.zlink.framework.kotlin.ZLinkKotlinSpotRequestCall<TReply> requestToSpot(systems.zlink.framework.kotlin.ZLinkKotlinRouteClient, java.lang.String, java.lang.Object);
+ public static final <TReply> systems.zlink.framework.kotlin.ZLinkKotlinSpotRequestCall<TReply> requestToSpot(systems.zlink.framework.kotlin.ZLinkKotlinRouteClient, java.lang.String, java.lang.Object, kotlin.reflect.KClass<TReply>);
  public static final systems.zlink.framework.kotlin.ZLinkKotlinSpotOutbound kotlin(systems.zlink.framework.spots.ZLinkSpotOutbound);
  public static final <TReply> systems.zlink.framework.kotlin.ZLinkKotlinSpotRequestCall<TReply> requestToSpot(systems.zlink.framework.kotlin.ZLinkKotlinSpotOutbound, java.lang.String, java.lang.Object);
  public static final <TReply> systems.zlink.framework.kotlin.ZLinkKotlinRequestCall<TReply> requestToChannel(systems.zlink.framework.kotlin.ZLinkKotlinSpotOutbound, java.lang.String, java.lang.Object);

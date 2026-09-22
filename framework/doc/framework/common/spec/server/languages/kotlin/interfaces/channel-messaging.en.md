@@ -72,7 +72,7 @@ interface ZLinkKotlinSubmissionCall {
  suspend fun await()
 }
 
-interface ZLinkKotlinRequestCall<TReply> {
+interface ZLinkKotlinRequestCall<TReply : Any> {
  fun metadata(key: String, value: String): ZLinkKotlinRequestCall<TReply>
  fun timeout(timeout: Duration): ZLinkKotlinRequestCall<TReply>
  suspend fun await(): TReply
