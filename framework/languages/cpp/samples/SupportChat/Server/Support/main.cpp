@@ -692,14 +692,6 @@ class support_entry_spot_t : public entry_spot_t<support_user_actor_t>
             open_conversation_req_t::packet_name);
     }
 
-    task_t<spot_actor_join_result_t>
-    on_actor_join (std::string_view actor_id, const zlink::framework::message_t &request) override
-    {
-        auto join = request.decode<ensure_support_user_actor_req_t> ();
-        _pending_profiles[std::string (actor_id)] = std::move (join);
-        co_return spot_actor_join_result_t::accept ();
-    }
-
     task_t<actor_create_response_t>
     on_create_actor (support_user_actor_t &actor,
                      const zlink::framework::message_t &request) override
@@ -711,20 +703,10 @@ class support_entry_spot_t : public entry_spot_t<support_user_actor_t>
     task_t<void> on_actor_joined (support_user_actor_t &actor) override
     {
         const std::string actor_joined_begin_line = std::format (
-          "supportchat support: actor_joined_begin actor={} role={} pending_profile={}\n",
-          actor.actor_id,
-          actor.role,
-          _pending_profiles.contains (actor.actor_id) ? "true" : "false");
+          "supportchat support: actor_joined_begin actor={} role={}\n", actor.actor_id, actor.role);
         std::cerr << actor_joined_begin_line;
-        const auto pending = _pending_profiles.find (actor.actor_id);
-        if (pending != _pending_profiles.end ()) {
-            auto profile = std::move (pending->second);
-            _pending_profiles.erase (pending);
-            apply_actor_profile (actor, std::move (profile));
-        } else {
-            _actors[actor.actor_id] = &actor;
-            _runtime.remember_live_actor (actor);
-        }
+        _actors[actor.actor_id] = &actor;
+        _runtime.remember_live_actor (actor);
         const std::string actor_joined_complete_line = std::format (
           "supportchat support: actor_joined_complete actor={} role={}\n",
           actor.actor_id,
@@ -829,7 +811,6 @@ class support_entry_spot_t : public entry_spot_t<support_user_actor_t>
     entry_spot_context_t _context;
     channel_client_t &_channels;
     std::map<std::string, support_user_actor_t *> _actors;
-    std::map<std::string, ensure_support_user_actor_req_t> _pending_profiles;
 };
 
 class ensure_support_user_actor_handler_t

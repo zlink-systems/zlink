@@ -121,8 +121,8 @@ ADL로 `to_json`/`from_json`을 찾으므로 bare struct는 직렬화되지 않�
 
 ## 4. 처리하는 쪽
 
-`object_role` 기본값이 `server`라 그대로 두면 location store를 요구한다. 이 구성에서는
-`none`으로 지정한다. `routing_id`는 필수다. `0.0.0.0`으로 bind하고 `advertise_host`를 생략하면 같은 address family의
+`object_role` 기본값은 `none`이다. 이 구성은 channel만 쓰는 node임을 드러내기 위해
+`none`을 명시한다. `routing_id`는 필수다. `0.0.0.0`으로 bind하고 `advertise_host`를 생략하면 같은 address family의
 loopback(`127.0.0.1`)을 광고한다. Container나 여러 host에서 remote process가 그 loopback으로 접속할
 수 없으면 접속 가능한 `advertise_host`를 지정한다.
 

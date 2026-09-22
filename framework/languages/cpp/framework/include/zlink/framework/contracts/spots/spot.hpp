@@ -1369,8 +1369,6 @@ template <typename TActor> class entry_spot_t
         (void) create_request;
         co_return actor_create_response_t::accept ();
     }
-    virtual task_t<spot_actor_join_result_t> on_actor_join (std::string_view actor_id,
-                                                            const message_t &request) = 0;
     virtual task_t<void> on_actor_joined (TActor &actor) = 0;
     virtual task_t<void> on_leave_actor (TActor &actor) = 0;
     virtual task_t<void> on_disconnect_actor (TActor &actor)
@@ -1611,13 +1609,17 @@ class spot_handler_registry_t
         static_assert (std::same_as<TActor, typename TSpot::actor_type>,
                        "SPOT actor handler type must match the Spot base actor_type");
         detail::spot_actor_admission_callbacks_t callbacks;
-        callbacks.join = [] (void *spot, std::string_view actor_id, const zlink::message_t &request,
-                             serializer_registry_t &serializers) {
-            auto &typed_spot = *static_cast<TSpot *> (spot);
-            return typed_spot.on_actor_join (actor_id, message_t::from_raw (request, &serializers))
-              .result ()
-              .value ();
-        };
+        if constexpr (!detail::entry_spot_type<TSpot>) {
+            callbacks.join = [] (void *spot, std::string_view actor_id,
+                                 const zlink::message_t &request,
+                                 serializer_registry_t &serializers) {
+                auto &typed_spot = *static_cast<TSpot *> (spot);
+                return typed_spot
+                  .on_actor_join (actor_id, message_t::from_raw (request, &serializers))
+                  .result ()
+                  .value ();
+            };
+        }
         callbacks.on_actor_joined = [] (void *spot, void *actor) {
             return static_cast<TSpot *> (spot)->on_actor_joined (*static_cast<TActor *> (actor));
         };

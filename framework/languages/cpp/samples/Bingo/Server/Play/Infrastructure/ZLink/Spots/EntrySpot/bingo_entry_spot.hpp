@@ -52,11 +52,6 @@ class bingo_entry_spot_t : public entry_spot_t<player_actor_t>
         co_return actor_create_response_t::accept ();
     }
 
-    task_t<spot_actor_join_result_t> on_actor_join (std::string_view, const message_t &) override
-    {
-        co_return spot_actor_join_result_t::accept ();
-    }
-
     // --8<-- [start:doc-bingo-entry-destroy]
     task_t<void> on_actor_joined (player_actor_t &actor) override
     {

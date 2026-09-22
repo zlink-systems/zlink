@@ -129,7 +129,7 @@ struct mesh_node_builder_state_t
     std::shared_ptr<handler_group_options_state_t> handler_groups;
     std::optional<zlink::routing_id_t> routing_id;
     std::optional<std::string> automatic_routing_id_prefix;
-    object_role_t object_role = object_role_t::server;
+    object_role_t object_role = object_role_t::none;
     bool has_node_direct_handler = false;
     int placement_weight = 100;
     std::int32_t actor_limit = 0;

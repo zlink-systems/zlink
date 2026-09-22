@@ -405,6 +405,7 @@ make_node (std::string endpoint, std::string routing_id)
     state->listen_endpoint = std::move (endpoint);
     state->listen_port.reset ();
     state->routing_id = zlink::routing_id_t::from (routing_id);
+    state->object_role = zlink::framework::object_role_t::server;
     state->channels.emplace (
       "work", zlink::framework::detail::mesh_channel_registration_t{100, {}, true, true});
     // The host admits object creation only for declared stable types.
@@ -420,11 +421,24 @@ make_named_node (std::string mesh_name, std::string routing_id)
     state->core_context = std::make_shared<zlink::context_t> ();
     state->listen_endpoint = "tcp://127.0.0.1:0";
     state->routing_id = zlink::routing_id_t::from (std::move (routing_id));
+    state->object_role = zlink::framework::object_role_t::server;
     state->channels.emplace (
       "work", zlink::framework::detail::mesh_channel_registration_t{100, {}, true, true});
     // The host admits object creation only for declared stable types.
     state->spot_state->snapshot.actor_types.emplace_back ("vertical.actor");
     return state;
+}
+
+void verify_unselected_object_role_defaults_to_none ()
+{
+    auto state = std::make_shared<zlink::framework::detail::mesh_node_builder_state_t> (
+      "unselected-object-role");
+    zlink::framework::detail::mesh_node_runtime_t runtime (state);
+
+    assert (state->object_role == zlink::framework::object_role_t::none);
+    assert (runtime.object_role () == zlink::framework::object_role_t::none);
+    assert (state->spot_state->spot_factories.empty ());
+    assert (!state->spot_state->snapshot.entry_spot_name.has_value ());
 }
 
 zlink::message_t make_route_multicast_frame (std::string_view packet_name,
@@ -1002,18 +1016,21 @@ void verify_local_node_submit_bridge ()
 // (raw_mesh_node_owner_t::request_with_header's `_topology.peer(...)` gate),
 // not fail with a blanket not_found merely because the target routing id is
 // absent from this node's own Location Store page. Route-only
-// (object_role=none) MeshNode peers are never published to the Location
-// Store, so classify_node_direct_target used to misclassify EVERY
-// direct-target send/request as not_found before the network call was ever
-// attempted, regardless of whether the target was actually admitted. This
-// node never admits any peer at all, so the correct (post-fix) outcome for
-// an unknown target is not_connected -- the real topology-backed answer.
+// (object_role=none) MeshNode peers are published for route/channel topology,
+// but their descriptors expose no object placement capability. The absent
+// entry below is therefore the unknown target, not this source node.
+// classify_node_direct_target used to misclassify every direct-target
+// send/request as not_found before the network call was attempted, regardless
+// of whether the target was actually admitted. This node never admits any
+// peer at all, so the correct (post-fix) outcome for an unknown target is
+// not_connected -- the real topology-backed answer.
 // Before the fix, classify_node_direct_target returned not_found here
 // unconditionally without ever consulting the transport layer, so this
 // assertion would have failed pre-fix and pins the fix now.
 void verify_direct_target_falls_through_absent_location_store_entry ()
 {
     auto registration = make_node ("tcp://127.0.0.1:0", "location-gate-node");
+    registration->object_role = zlink::framework::object_role_t::none;
 
     zlink::framework::serializer_registry_t serializers;
     zlink::framework::service_collection_t services;
@@ -1039,6 +1056,17 @@ void verify_direct_target_falls_through_absent_location_store_entry ()
                                                                  {}, application_jobs);
     service.start (provider);
     const auto node = service.nodes ().front ();
+
+    const auto descriptors = location_store.list_mesh_nodes ("vertical-mesh").result ().value ();
+    const auto source_descriptor =
+      std::find_if (descriptors.items.begin (), descriptors.items.end (), [&] (const auto &item) {
+          return item.rid.to_hex () == registration->routing_id->to_hex ();
+      });
+    assert (source_descriptor != descriptors.items.end ());
+    assert (source_descriptor->object_role == zlink::framework::object_role_t::none);
+    assert (source_descriptor->object_capabilities.empty ());
+    assert (!source_descriptor->entry_spot_id);
+    assert (source_descriptor->channel_weights.contains ("work"));
 
     const std::vector<zlink::message_t> parts{zlink::message_t::from (std::string ("direct"))};
     const auto target = zlink::routing_id_t::from (std::string ("never-admitted-target"));
@@ -1066,6 +1094,7 @@ void verify_direct_target_falls_through_absent_location_store_entry ()
 void verify_request_to_never_admitted_target_reports_not_found ()
 {
     auto registration = make_node ("tcp://127.0.0.1:0", "never-admitted-request-node");
+    registration->object_role = zlink::framework::object_role_t::none;
 
     zlink::framework::serializer_registry_t serializers;
     zlink::framework::service_collection_t services;
@@ -2105,6 +2134,7 @@ int main (int argc, char **argv)
         return run_cross_process_delivery ();
 #endif
     verify_local_join_timeout_releases_membership ();
+    verify_unselected_object_role_defaults_to_none ();
     verify_automatic_identity_and_port_builder ();
     verify_public_runtime_surface ();
     verify_slow_observer_does_not_block_stop ();
