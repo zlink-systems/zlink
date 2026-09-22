@@ -398,12 +398,12 @@ connector_runtime_t connector_runtime_t::from (const connector_t &connector)
     return connector_runtime_t (state_from (connector_internal_handle (connector)));
 }
 
-void enqueue_received_message (connector_state_t &state, packet_t packet)
+void enqueue_received_message (connector_state_t &state, dispatch_envelope_t envelope)
 {
     /* Precondition: the caller holds transport_mutex. dispatch_queue is a
      * std::deque shared with the read pump and with every synchronous
      * receive/wait caller, so an unguarded push_back is a data race. */
-    state.dispatch_queue.push_back (std::move (packet));
+    state.dispatch_queue.push_back (std::move (envelope));
     state.state_changed.notify_all ();
 }
 
@@ -415,18 +415,19 @@ void deliver_received_packet (connector_state_t &state, packet_t packet)
     /* Packets injected through connector_runtime_t::receive_packet never pass
      * a frame decode, so this is where they are counted (§10). */
     note_received_packet (state, packet);
+    dispatch_envelope_t envelope{std::move (packet), std::nullopt};
     /* This entry point is called with no connector lock held, unlike the frame
      * decode paths. Take transport_mutex for the queue mutation, and leave the
      * immediate-mode handlers outside it: a handler that calls back into the
      * connector surface would otherwise re-enter a non-recursive mutex. */
     if (state.options.dispatch_mode == dispatch_mode_t::immediate) {
-        dispatch_packet (state, packet);
+        dispatch_packet (state, envelope);
         std::lock_guard<std::mutex> lock (state.transport_mutex);
         state.state_changed.notify_all ();
         return;
     }
     std::lock_guard<std::mutex> lock (state.transport_mutex);
-    enqueue_received_message (state, std::move (packet));
+    enqueue_received_message (state, std::move (envelope));
 }
 
 void schedule_delivery (std::shared_ptr<connector_state_t> state, std::function<void ()> callback)
@@ -1697,7 +1698,28 @@ subscription_t connector_t::on_packet_erased (std::string packet_name,
     const auto id = state->next_subscription_id.fetch_add (1, std::memory_order_relaxed);
     {
         std::lock_guard<std::mutex> lock (state->lifecycle_mutex);
-        state->packet_handlers[std::move (packet_name)].push_back ({id, std::move (handler)});
+        state->packet_handlers[std::move (packet_name)].push_back (
+          {id, [handler = std::move (handler)] (const detail::dispatch_envelope_t &envelope) {
+               handler (envelope.packet);
+           }});
+    }
+    return subscription_t (_state, id);
+}
+
+subscription_t connector_t::on_actor_packet_erased (std::string packet_name,
+                                                    std::uint16_t actor_slot,
+                                                    std::function<void (const packet_t &)> handler)
+{
+    auto state = detail::state_from (_state);
+    const auto id = state->next_subscription_id.fetch_add (1, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock (state->lifecycle_mutex);
+        state->packet_handlers[std::move (packet_name)].push_back (
+          {id, [actor_slot,
+                handler = std::move (handler)] (const detail::dispatch_envelope_t &envelope) {
+               if (envelope.actor_slot == actor_slot)
+                   handler (envelope.packet);
+           }});
     }
     return subscription_t (_state, id);
 }

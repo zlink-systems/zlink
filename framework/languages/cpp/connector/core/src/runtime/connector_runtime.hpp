@@ -85,10 +85,16 @@ struct pending_request_t
 
 /* Handler registrations carry an id so a subscription_t can remove exactly its
  * own registration (stream-connector §7). */
+struct dispatch_envelope_t
+{
+    packet_t packet;
+    std::optional<std::uint16_t> actor_slot;
+};
+
 struct packet_handler_entry_t
 {
     std::uint64_t id = 0;
-    std::function<void (const packet_t &)> handler;
+    std::function<void (const dispatch_envelope_t &)> handler;
 };
 
 template <typename THandler> struct handler_entry_t
@@ -143,7 +149,7 @@ class connector_state_t : public std::enable_shared_from_this<connector_state_t>
     std::deque<pending_write_t> pending_writes;
     std::optional<pending_write_t> active_write;
     std::vector<std::uint8_t> inbound_buffer;
-    std::deque<packet_t> dispatch_queue;
+    std::deque<dispatch_envelope_t> dispatch_queue;
     /* Bumped whenever dispatch_queue is dropped wholesale (a new connection,
      * or close). A scan that evaluates user predicates outside transport_mutex
      * re-reads this before putting the packets it did not take back, so a
@@ -271,7 +277,7 @@ result_t<packet_t> wait_for_packet (std::shared_ptr<connector_state_t> state,
  * it, so the caller must hold no connector lock. */
 void deliver_received_packet (connector_state_t &state, packet_t packet);
 /* Appends to dispatch_queue. The caller must already hold transport_mutex. */
-void enqueue_received_message (connector_state_t &state, packet_t packet);
+void enqueue_received_message (connector_state_t &state, dispatch_envelope_t envelope);
 void schedule_delivery (std::shared_ptr<connector_state_t> state, std::function<void ()> callback);
 void schedule_lifecycle_delivery (std::shared_ptr<connector_state_t> state,
                                   std::function<void ()> callback);

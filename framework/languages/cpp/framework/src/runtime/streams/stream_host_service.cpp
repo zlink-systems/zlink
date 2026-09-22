@@ -1460,6 +1460,7 @@ class stream_host_service_t::listener_t
      * submitting context (pre-suspension throw), so it must only record
      * intent (request_core_peer_disconnect), never enter a close. */
     void send_core_error_frame (const zlink::routing_id_t &rid,
+                                const stream_t &stream,
                                 const stream_header_t &request_header,
                                 const result_t<void> &error,
                                 std::function<void ()> completed = {}) noexcept
@@ -1472,15 +1473,8 @@ class stream_host_service_t::listener_t
             return;
         }
 
-        stream_header_t error_header (stream_message_kind_t::error, stream_codec_t::json,
-                                      stream_header_flags_t::has_request_seq,
-                                      request_header.request_seq (), "", {});
-        if (auto correlation = request_header.correlation_id ()) {
-            error_header.with_correlation_id (std::string (*correlation));
-        }
-        if (auto actor_slot = request_header.actor_slot ()) {
-            error_header.with_actor_slot (*actor_slot);
-        }
+        auto error_header = detail::stream_runtime_t::make_terminal_header (
+          stream, stream_message_kind_t::error, request_header);
         auto send = send_core_frame (rid, error_header, stream_error_payload (error));
         detail::observe_task_completion (
           send, [this, rid, completed = std::move (completed)] (const result_t<void> &result) {
@@ -2461,7 +2455,7 @@ class stream_host_service_t::listener_t
                                    + (result.error () ? result.error ()->what () : "unknown")));
                       if (!result) {
                           report_packet_dispatch_error (header, result);
-                          send_core_error_frame (rid, header, result);
+                          send_core_error_frame (rid, current->stream, header, result);
                       }
                   },
                   [permit = std::move (application_permit)] () mutable {
@@ -2505,12 +2499,12 @@ class stream_host_service_t::listener_t
              * executes it outside every session lock, and
              * begin_core_session_close keeps the duplicate a no-op. */
             if (protocol_error) {
-                send_core_error_frame (rid, header, *rejected, [this, rid] {
+                send_core_error_frame (rid, current->stream, header, *rejected, [this, rid] {
                     request_core_peer_disconnect (rid, "protocol_error");
                 });
                 return false;
             }
-            send_core_error_frame (rid, header, *rejected);
+            send_core_error_frame (rid, current->stream, header, *rejected);
         }
         return true;
     }
@@ -3141,23 +3135,15 @@ class stream_host_service_t::listener_t
     template <typename TStream>
     void write_error_frame (const std::shared_ptr<tcp_connection_t> &owner,
                             const std::shared_ptr<TStream> &connection,
+                            const stream_t &stream,
                             const stream_header_t &request_header,
                             const result_t<void> &error)
     {
         if (!request_header.request_seq ()) {
             return;
         }
-        stream_header_t error_header (stream_message_kind_t::error, stream_codec_t::json,
-                                      stream_header_flags_t::has_request_seq,
-                                      request_header.request_seq (), "", {});
-        // Echo the request correlation id so a stream request FAILURE is traceable
-        // by the same corr as its inbound `received`.
-        if (auto correlation = request_header.correlation_id ()) {
-            error_header.with_correlation_id (std::string (*correlation));
-        }
-        if (auto actor_slot = request_header.actor_slot ()) {
-            error_header.with_actor_slot (*actor_slot);
-        }
+        auto error_header = detail::stream_runtime_t::make_terminal_header (
+          stream, stream_message_kind_t::error, request_header);
         write_frame (owner, connection, error_header, stream_error_payload (error));
     }
 
@@ -3348,7 +3334,7 @@ class stream_host_service_t::listener_t
                     trace_stream_host ("dispatch-submit", _stream, header);
                     auto dispatched = _runtime.dispatch_packet_async (
                       session, stream, header, received_frame.payload,
-                      [this, owner, connection, connection_state, header,
+                      [this, owner, connection, connection_state, header, stream,
                        liveness] (const result_t<void> &result) {
                           trace_stream_host ("dispatch-complete", _stream, header,
                                              std::string ("result=")
@@ -3357,7 +3343,7 @@ class stream_host_service_t::listener_t
                               report_packet_dispatch_error (header, result);
                               if (header.kind () == stream_message_kind_t::request) {
                                   try {
-                                      write_error_frame (owner, connection, header, result);
+                                      write_error_frame (owner, connection, stream, header, result);
                                   }
                                   catch (...) {
                                   }
@@ -3378,7 +3364,7 @@ class stream_host_service_t::listener_t
                         report_packet_dispatch_error (header, dispatched);
                         if (header.kind () == stream_message_kind_t::request) {
                             try {
-                                write_error_frame (owner, connection, header, dispatched);
+                                write_error_frame (owner, connection, stream, header, dispatched);
                             }
                             catch (...) {
                             }

@@ -315,6 +315,9 @@ class connector_t
     packet_t make_packet (std::type_index type, std::string packet_name) const;
     subscription_t on_packet_erased (std::string packet_name,
                                      std::function<void (const packet_t &)> handler);
+    subscription_t on_actor_packet_erased (std::string packet_name,
+                                           std::uint16_t actor_slot,
+                                           std::function<void (const packet_t &)> handler);
 
     std::shared_ptr<void> _state;
     codec_registry_t _codecs;
@@ -346,11 +349,9 @@ class actor_t
     {
         const auto actor_slot = _actor_slot;
         std::weak_ptr<void> weak_state = _connector._state;
-        return _connector.on_packet_erased (
-          std::move (packet_name),
-          [weak_state, actor_slot, callback = std::move (callback)] (const packet_t &packet) {
-              if (packet._actor_slot != actor_slot)
-                  return;
+        return _connector.on_actor_packet_erased (
+          std::move (packet_name), actor_slot,
+          [weak_state, callback = std::move (callback)] (const packet_t &packet) {
               auto message = detail::decode_message<TMessage> (weak_state.lock (), packet);
               if (message)
                   callback (message.value ());

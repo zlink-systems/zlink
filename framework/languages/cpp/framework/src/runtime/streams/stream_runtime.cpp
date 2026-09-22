@@ -835,18 +835,8 @@ stream_write_call_t stream_t::reply_packet (const zlink::message_t &payload)
         return stream_write_call_t (result_t<void>::failure (
           framework_error_kind_t::protocol_error, "STREAM reply requires request sequence"));
     }
-    stream_header_t reply_header (stream_message_kind_t::response, request_header->codec (),
-                                  stream_header_flags_t::has_request_seq,
-                                  request_header->request_seq (), "", {});
-    if (auto correlation = request_header->correlation_id ()) {
-        reply_header.with_correlation_id (std::string (*correlation));
-    }
-    if (auto actor_slot = request_header->actor_slot ()) {
-        if (auto *actors = _state->actors.load (std::memory_order_acquire);
-            actors && detail::session_actor_manager_access_t::find_slot (*actors, *actor_slot)) {
-            reply_header.with_actor_slot (*actor_slot);
-        }
-    }
+    auto reply_header = detail::stream_runtime_t::make_terminal_header (
+      *this, stream_message_kind_t::response, *request_header);
     auto call = write_packet_with_header (std::move (reply_header), payload);
     call._state->reply_submission (_reply_submission);
     return call;
@@ -1304,6 +1294,26 @@ stream_runtime_t::encode_frame (const stream_header_t &header,
     frame.insert (frame.end (), header_bytes.begin (), header_bytes.end ());
     frame.insert (frame.end (), payload_bytes.begin (), payload_bytes.end ());
     return result_t<std::vector<std::uint8_t>>::success (std::move (frame));
+}
+
+stream_header_t stream_runtime_t::make_terminal_header (const stream_t &stream,
+                                                        stream_message_kind_t kind,
+                                                        const stream_header_t &request_header)
+{
+    const auto codec =
+      kind == stream_message_kind_t::error ? stream_codec_t::json : request_header.codec ();
+    stream_header_t header (kind, codec, stream_header_flags_t::has_request_seq,
+                            request_header.request_seq (), "", {});
+    if (auto correlation = request_header.correlation_id ()) {
+        header.with_correlation_id (std::string (*correlation));
+    }
+    if (auto actor_slot = request_header.actor_slot ()) {
+        if (auto *actors = stream._state->actors.load (std::memory_order_acquire);
+            actors && session_actor_manager_access_t::find_slot (*actors, *actor_slot)) {
+            header.with_actor_slot (*actor_slot);
+        }
+    }
+    return header;
 }
 
 result_t<stream_header_t>

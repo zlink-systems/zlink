@@ -42,10 +42,6 @@ struct packet_t
     std::string flow_id;
     std::optional<flow_origin_t> flow_origin;
     std::optional<std::string> actor_id;
-    /* Connector-internal binding identity. Public receive surfaces project
-     * actor_id; handle-scoped subscriptions use the slot so a later binding
-     * of the same id cannot revive an old handle. */
-    std::optional<std::uint16_t> _actor_slot;
 };
 
 /// A received message: the decoded payload with everything the receiving code

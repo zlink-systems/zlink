@@ -972,6 +972,18 @@ int main ()
             || header_codec_t{}.encode (slotted_control)) {
             return 272;
         }
+        zlink::stream_connector::packet_t public_packet;
+        auto &[name, metadata, codec, compressed, payload, flow_id, flow_origin, actor_id] =
+          public_packet;
+        (void) name;
+        (void) metadata;
+        (void) codec;
+        (void) compressed;
+        (void) payload;
+        (void) flow_id;
+        (void) flow_origin;
+        (void) actor_id;
+
         using zlink::stream_connector::detail::actor_binding_control_codec_t;
         const std::vector<std::uint8_t> valid_bound{1, 0, 23, 5, 'a', 'c', 't', 'o', 'r'};
         const std::vector<std::uint8_t> invalid_bound{1, 0, 0, 5, 'a', 'c', 't', 'o', 'r'};
@@ -3063,8 +3075,10 @@ int main ()
             return 175;
         }
 
-        async_send_state->dispatch_queue.push_back (zlink::stream_connector::packet_t{
-          .name = "queued.receive", .payload = zlink::message_t::from ("queued")});
+        async_send_state->dispatch_queue.push_back (
+          {zlink::stream_connector::packet_t{.name = "queued.receive",
+                                             .payload = zlink::message_t::from ("queued")},
+           std::nullopt});
         const auto receive_queued = zlink::stream_connector::detail::receive_next (
           async_send_state, std::chrono::milliseconds (1));
         if (!receive_queued || receive_queued.value ().name != "queued.receive") {
@@ -3093,8 +3107,10 @@ int main ()
             return 169;
         }
 
-        async_send_state->dispatch_queue.push_back (zlink::stream_connector::packet_t{
-          .name = "queued.wait", .payload = zlink::message_t::from ("queued")});
+        async_send_state->dispatch_queue.push_back (
+          {zlink::stream_connector::packet_t{.name = "queued.wait",
+                                             .payload = zlink::message_t::from ("queued")},
+           std::nullopt});
         const auto wait_matched = zlink::stream_connector::detail::wait_for_packet (
           async_send_state, "queued.wait",
           [] (const zlink::stream_connector::packet_t &packet) {

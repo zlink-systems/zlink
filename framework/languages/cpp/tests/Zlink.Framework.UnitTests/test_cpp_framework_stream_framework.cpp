@@ -1266,6 +1266,12 @@ int main ()
         || !runtime.written_headers (stream)[0].packet_name ().empty ()) {
         return 15;
     }
+    const auto stale_error_header =
+      zlink::framework::detail::stream_runtime_t::make_terminal_header (
+        stream, stream_message_kind_t::error, request_header);
+    if (stale_error_header.actor_slot ()) {
+        return 321;
+    }
 
     /* Session Actor binding §5: the owner issues one stable slot, publishes
      * bound before the first slotted packet, resolves current ingress into the
@@ -1302,6 +1308,12 @@ int main ()
         || actor_written_headers[1].kind () != stream_message_kind_t::response
         || actor_written_headers[1].actor_slot () != 1) {
         return 299;
+    }
+    const auto actor_error_header =
+      zlink::framework::detail::stream_runtime_t::make_terminal_header (
+        actor_stream, stream_message_kind_t::error, actor_request_header);
+    if (actor_error_header.actor_slot () != 1) {
+        return 322;
     }
     bool hidden_until_bound = false;
     zlink::framework::detail::session_actor_manager_access_t::bind_native (

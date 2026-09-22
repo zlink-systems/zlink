@@ -85,6 +85,9 @@ class stream_runtime_t
                                                          std::uint64_t payload_size);
     result_t<std::vector<std::uint8_t>> encode_frame (const stream_header_t &header,
                                                       const zlink::message_t &payload) const;
+    static stream_header_t make_terminal_header (const stream_t &stream,
+                                                 stream_message_kind_t kind,
+                                                 const stream_header_t &request_header);
     /* Encodes the versioned session-closing control payload
      * (graceful-drain-handoff §7.1): u8 version=1, u8 reason, u16 diagnostic
      * length (network order, <=512), UTF-8 diagnostic bytes. */
