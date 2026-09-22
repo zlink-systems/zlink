@@ -18,7 +18,7 @@
 | Binding Node | `@zlink-systems/zlink` (linux-x64 prebuild 포함) | npm | `bindings-release.yml` | `node/v*` 태그 또는 dispatch | npm Trusted Publishing(OIDC, provenance) |
 | Binding Java | `systems.zlink:zlink`, `zlink-ext-netty` | Maven Central, GitHub Packages | `bindings-release.yml` | `java/v*` 태그 또는 dispatch | `MAVEN_CENTRAL_*`, `SIGNING_*`(GPG) |
 | Binding .NET | `Zlink` nupkg (+snupkg) | nuget.org | `release-dotnet.yml` (target `binding`) | `dotnet/v*` 태그 또는 dispatch | nuget Trusted Publishing(`NuGet/login`, 정책 `zlink-dotnet-release`) |
-| Framework C++ | source archive + sha256(`cmake -P framework/languages/cpp/cmake/prepare-source-archive.cmake`: `framework/languages/cpp` + `framework/runtime` + `framework/LICENSE`, generated protocol header를 `--check`로 검증) | GitHub Release `framework-cpp/vA.B.C` | `framework-release.yml` | `framework-cpp/v*` 태그 또는 `target=cpp` dispatch | `GITHUB_TOKEN` |
+| Framework C++ | source archive + sha256(`cmake -P framework/languages/cpp/cmake/prepare-source-archive.cmake`: `framework/languages/cpp` + `framework/runtime` + `framework/LICENSE`, generated protocol header를 `--check`로 검증), 4개 지원 플랫폼의 shared prebuilt archive + sha256(Framework shared library·header·CMake config와 해당 플랫폼의 Core prebuilt·C++ binding 포함) | GitHub Release `framework-cpp/vA.B.C` | `framework-release.yml` | `framework-cpp/v*` 태그 또는 `target=cpp` dispatch(`cpp_platform`으로 단일 플랫폼 재실행) | `GITHUB_TOKEN` |
 | Framework Node | `@zlink-systems/*` 8개 | npm | `framework-release.yml` | `framework-node/v*` 태그 또는 `target=node` dispatch | npm Trusted Publishing(패키지별 등록) |
 | Framework JVM | `systems.zlink:zlink-framework-*` 13개(Kotlin 포함) | Maven Central | `framework-release.yml` | `framework-java/v*` 태그 또는 `target=java` dispatch | `MAVEN_CENTRAL_*`, `SIGNING_*` |
 | Framework .NET | `Zlink.Framework*`, `Zlink.HttpClient`, `Zlink.Stream.Connector` 등 9개 | nuget.org | `release-dotnet.yml` (target `framework`) | `framework-dotnet/v*` 태그 또는 dispatch | nuget Trusted Publishing |
@@ -35,7 +35,7 @@ Python·Go·Rust binding은 `bindings-release.yml`에 job이 있으나 공개 �
 | Core | `scripts/build-core.sh dev\|release\|release-gate` (트리 `core/build-dev`, `core/build-release`). CMake 직접 빌드는 [빌드 가이드](./build-guide.ko.md)·[CMake 옵션](./cmake-options.ko.md) | `build.yml`의 플랫폼 job이 `core/`를 CMake로 빌드해 `core/dist/<platform>/`를 아카이브 | GitHub Release `core/vX.Y.Z` 자산 |
 | Core 로컬 prefix | `scripts/local-package/core/fetch-release.sh --version V --platform P` (릴리스 아카이브 → `~/.cache/zlink/core/<V>/<P>`), `scripts/gate/materialize-local-core-prefix.sh` (dev 빌드 → prefix) | 모든 binding·framework job이 같은 `fetch-release.sh`를 사용 | `~/.cache/zlink/core/`, CI는 `.artifacts/core-release/` |
 | Bindings 7언어 | `scripts/local-package/build-wsl.sh [cpp\|node\|java\|dotnet\|python\|go\|rust\|c]` (Windows `build-windows.ps1`); 언어별 테스트 `bindings/<lang>/tests/run_tests.sh` | `bindings-release.yml`·`release-dotnet.yml` 각 job의 "Build and test" 단계 | `.artifacts/wsl/{npm,nuget,maven,install}/` |
-| Framework C++ | `framework/languages/cpp/CMakePresets.json` preset, Windows `build-windows.ps1`; 샘플 `samples/<name>/run_sample.sh` | `framework-release.yml`은 source archive만 만든다 | GitHub Release `framework-cpp/vA.B.C` |
+| Framework C++ | `framework/languages/cpp/CMakePresets.json` preset, Windows `build-windows.ps1`; 샘플 `samples/<name>/run_sample.sh` | `framework-release.yml`이 source archive와 linux-x64·linux-arm64·macos-arm64·windows-x64 shared prebuilt archive를 만든다 | GitHub Release `framework-cpp/vA.B.C` |
 | Framework .NET | `dotnet build framework/languages/dotnet/Zlink.Framework.sln` (`ZLINK_LOCAL_PACKAGE_ROOT` 필요); 샘플 `samples/<name>/<name>.sln` | `framework-dotnet.yml`(검증), `release-dotnet.yml` target `framework`(pack·push) | nuget.org |
 | Framework JVM | `framework/languages/java/gradlew assemble` (테스트는 `test`); Central bundle `scripts/upload-central-bundle.sh` | `framework-release.yml` `release-java` | Maven Central |
 | Framework Node | `framework/languages/node`에서 `npm ci && npm run build`; http-client 로컬 tgz는 `scripts/local-package/http-client/build-wsl.sh node`; 게이트 `npm run verify:ci`, 릴리스 게이트 `verify:release` | `framework-node.yml`(검증), `framework-release.yml` `release-node`(pack·publish) | npm |
@@ -124,14 +124,14 @@ gh release view core/v0.17.5 --json assets -q '.assets[].name'
 
 ## 7. 지원 플랫폼과 런타임 요구
 
-| 플랫폼 | Core 릴리스 | Node prebuild | .NET runtimes | 비고 |
-| --- | --- | --- | --- | --- |
-| linux-x64 | ✅ | ✅ | ✅ | 릴리스 러너 ubuntu-24.04, glibc ≥ 2.38 필요 |
-| linux-arm64 | ✅ | 소스 빌드 | Core 아카이브 | |
-| macos-arm64 | ✅ | 소스 빌드 | Core 아카이브 | |
-| windows-x64 | ✅ | 소스 빌드 | Core 아카이브 | 아카이브에 OpenSSL DLL 포함 |
-| windows-arm64 | ❌ | ❌ | ❌ | 미지원(2026-09-14 결정) |
-| macos-x64 (Intel) | ❌ | ❌ | ❌ | Core부터 미지원(2026-09-09 결정) |
+| 플랫폼 | Core 릴리스 | Framework C++ prebuilt | Node prebuild | .NET runtimes | 비고 |
+| --- | --- | --- | --- | --- | --- |
+| linux-x64 | ✅ | ✅ | ✅ | ✅ | 릴리스 러너 ubuntu-24.04, glibc ≥ 2.38 필요 |
+| linux-arm64 | ✅ | ✅ | 소스 빌드 | Core 아카이브 | |
+| macos-arm64 | ✅ | ✅ | 소스 빌드 | Core 아카이브 | |
+| windows-x64 | ✅ | ✅ | 소스 빌드 | Core 아카이브 | Core 아카이브에 OpenSSL DLL 포함 |
+| windows-arm64 | ❌ | ❌ | ❌ | ❌ | 미지원(2026-09-14 결정) |
+| macos-x64 (Intel) | ❌ | ❌ | ❌ | ❌ | Core부터 미지원(2026-09-09 결정) |
 
 "소스 빌드"는 패키지 설치 시 `ZLINK_CORE_SOURCE=release`와 `ZLINK_CORE_PACKAGE_PREFIX`로 가리킨 Core
 릴리스 아카이브에 대해 addon을 컴파일한다는 뜻이다.

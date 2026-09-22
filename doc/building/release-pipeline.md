@@ -18,7 +18,7 @@ Every release runs in GitHub Actions; nothing is published from a local machine.
 | Binding Node | `@zlink-systems/zlink` (with linux-x64 prebuild) | npm | `bindings-release.yml` | `node/v*` tag or dispatch | npm Trusted Publishing (OIDC, provenance) |
 | Binding Java | `systems.zlink:zlink`, `zlink-ext-netty` | Maven Central, GitHub Packages | `bindings-release.yml` | `java/v*` tag or dispatch | `MAVEN_CENTRAL_*`, `SIGNING_*` (GPG) |
 | Binding .NET | `Zlink` nupkg (+snupkg) | nuget.org | `release-dotnet.yml` (target `binding`) | `dotnet/v*` tag or dispatch | nuget Trusted Publishing (`NuGet/login`, policy `zlink-dotnet-release`) |
-| Framework C++ | source archive + sha256 (`cmake -P framework/languages/cpp/cmake/prepare-source-archive.cmake`: `framework/languages/cpp` + `framework/runtime` + `framework/LICENSE`, generated protocol headers verified with `--check`) | GitHub Release `framework-cpp/vA.B.C` | `framework-release.yml` | `framework-cpp/v*` tag or `target=cpp` dispatch | `GITHUB_TOKEN` |
+| Framework C++ | source archive + sha256 (`cmake -P framework/languages/cpp/cmake/prepare-source-archive.cmake`: `framework/languages/cpp` + `framework/runtime` + `framework/LICENSE`, generated protocol headers verified with `--check`), plus shared prebuilt archives + sha256 for the four supported platforms (Framework shared libraries, headers, and CMake config with that platform's Core prebuilt and C++ binding) | GitHub Release `framework-cpp/vA.B.C` | `framework-release.yml` | `framework-cpp/v*` tag or `target=cpp` dispatch (`cpp_platform` reruns one platform) | `GITHUB_TOKEN` |
 | Framework Node | 8 `@zlink-systems/*` packages | npm | `framework-release.yml` | `framework-node/v*` tag or `target=node` dispatch | npm Trusted Publishing (registered per package) |
 | Framework JVM | 13 `systems.zlink:zlink-framework-*` artifacts (incl. Kotlin) | Maven Central | `framework-release.yml` | `framework-java/v*` tag or `target=java` dispatch | `MAVEN_CENTRAL_*`, `SIGNING_*` |
 | Framework .NET | 9 packages (`Zlink.Framework*`, `Zlink.HttpClient`, `Zlink.Stream.Connector`, ...) | nuget.org | `release-dotnet.yml` (target `framework`) | `framework-dotnet/v*` tag or dispatch | nuget Trusted Publishing |
@@ -35,7 +35,7 @@ scope. `core-conan-release.yml` is a legacy workflow for a private Conan remote 
 | Core | `scripts/build-core.sh dev\|release\|release-gate` (trees `core/build-dev`, `core/build-release`). Direct CMake: [build guide](./build-guide.md), [CMake options](./cmake-options.md) | the platform jobs of `build.yml` build `core/` with CMake and archive `core/dist/<platform>/` | GitHub Release `core/vX.Y.Z` assets |
 | Core local prefix | `scripts/local-package/core/fetch-release.sh --version V --platform P` (release archive → `~/.cache/zlink/core/<V>/<P>`), `scripts/gate/materialize-local-core-prefix.sh` (dev build → prefix) | every binding and framework job uses the same `fetch-release.sh` | `~/.cache/zlink/core/`; CI uses `.artifacts/core-release/` |
 | Bindings (7 languages) | `scripts/local-package/build-wsl.sh [cpp\|node\|java\|dotnet\|python\|go\|rust\|c]` (Windows: `build-windows.ps1`); per-language tests `bindings/<lang>/tests/run_tests.sh` | the "Build and test" step of each `bindings-release.yml` / `release-dotnet.yml` job | `.artifacts/wsl/{npm,nuget,maven,install}/` |
-| Framework C++ | presets in `framework/languages/cpp/CMakePresets.json`, Windows `build-windows.ps1`; samples `samples/<name>/run_sample.sh` | `framework-release.yml` only produces the source archive | GitHub Release `framework-cpp/vA.B.C` |
+| Framework C++ | presets in `framework/languages/cpp/CMakePresets.json`, Windows `build-windows.ps1`; samples `samples/<name>/run_sample.sh` | `framework-release.yml` produces the source archive and shared prebuilt archives for linux-x64, linux-arm64, macos-arm64, and windows-x64 | GitHub Release `framework-cpp/vA.B.C` |
 | Framework .NET | `dotnet build framework/languages/dotnet/Zlink.Framework.sln` (needs `ZLINK_LOCAL_PACKAGE_ROOT`); samples `samples/<name>/<name>.sln` | `framework-dotnet.yml` (verification), `release-dotnet.yml` target `framework` (pack and push) | nuget.org |
 | Framework JVM | `framework/languages/java/gradlew assemble` (`test` for tests); Central bundle via `scripts/upload-central-bundle.sh` | `framework-release.yml` `release-java` | Maven Central |
 | Framework Node | `npm ci && npm run build` in `framework/languages/node`; the http-client local tarball via `scripts/local-package/http-client/build-wsl.sh node`; gate `npm run verify:ci`, release gate `verify:release` | `framework-node.yml` (verification), `framework-release.yml` `release-node` (pack and publish) | npm |
@@ -111,14 +111,14 @@ gh release view core/v0.17.5 --json assets -q '.assets[].name'
 
 ## 7. Supported platforms and runtime requirements
 
-| Platform | Core release | Node prebuild | .NET runtimes | Notes |
-| --- | --- | --- | --- | --- |
-| linux-x64 | ✅ | ✅ | ✅ | release runner ubuntu-24.04, needs glibc ≥ 2.38 |
-| linux-arm64 | ✅ | source build | Core archive | |
-| macos-arm64 | ✅ | source build | Core archive | |
-| windows-x64 | ✅ | source build | Core archive | archive bundles the OpenSSL DLLs |
-| windows-arm64 | ❌ | ❌ | ❌ | Unsupported (decided 2026-09-14) |
-| macos-x64 (Intel) | ❌ | ❌ | ❌ | unsupported from Core up (decided 2026-09-09) |
+| Platform | Core release | Framework C++ prebuilt | Node prebuild | .NET runtimes | Notes |
+| --- | --- | --- | --- | --- | --- |
+| linux-x64 | ✅ | ✅ | ✅ | ✅ | release runner ubuntu-24.04, needs glibc ≥ 2.38 |
+| linux-arm64 | ✅ | ✅ | source build | Core archive | |
+| macos-arm64 | ✅ | ✅ | source build | Core archive | |
+| windows-x64 | ✅ | ✅ | source build | Core archive | the Core archive bundles the OpenSSL DLLs |
+| windows-arm64 | ❌ | ❌ | ❌ | ❌ | unsupported (decided 2026-09-14) |
+| macos-x64 (Intel) | ❌ | ❌ | ❌ | ❌ | unsupported from Core up (decided 2026-09-09) |
 
 "Source build" means the addon is compiled at install time against the Core release archive named by
 `ZLINK_CORE_SOURCE=release` and `ZLINK_CORE_PACKAGE_PREFIX`.
