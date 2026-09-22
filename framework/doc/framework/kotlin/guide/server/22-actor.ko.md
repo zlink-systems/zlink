@@ -151,12 +151,15 @@ actor id만 준다. 그 Actor가 지금 어느 Spot 안에 있는지는 Framewor
 --8<-- "framework/languages/java/tutorial/kotlin/Client/src/main/kotlin/systems/zlink/tutorial/client/PlayerActorEndpoints.kt:actor-request-call"
 ```
 
-!!! note "만들기가 돌려주는 참조"
+### 3.3 참조의 generation
 
-    만들기 호출은 actor id와 함께 **그때의 세대와 조회 당시 owner 경로**를 담은 참조를 돌려준다.
-    이 참조를 사용하는 자리는 [Session과 Actor 연결](24-actor-session.ko.md)과
-    [활성화와 수명](34-activation-lifetime.ko.md#32-actor의-생성과-소멸은-entry-spot에서-진행된다)이 다룬다.
-    평소의 Actor 호출에는 actor id만 있으면 된다.
+`ActorRef`·`SpotRef`의 **generation**은 같은 id의 몇 번째 instance인지를 세는 값이다. Location
+Store가 object를 만들 때 발급하며 join·relocation·`RecreateOnRelocation`으로 바뀌지 않는다. 같은
+id를 없앤 뒤 다시 만들면 새 generation을 받는다.
+
+일반 message는 generation을 보지 않고 지금 존재하는 object로 간다. 반면 참조를 통한 닫기·지우기·
+이동 같은 lifecycle 호출은 그 참조의 generation이 현재 generation과 같을 때만 효력이 있다. 그래서
+낡은 참조는 같은 id로 새로 만든 instance를 건드릴 수 없다.
 
 ## 4. 실행 결과
 

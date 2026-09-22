@@ -29,7 +29,7 @@ resent authentication, uses the find-or-bind call instead.
 ## 2. Binding and Spot Membership — Independent of Each Other
 
 Binding is separate from the Actor's Spot membership. Even when the Actor moves to another Spot or
-another node, the actor id and the incarnation value are kept and the framework refreshes the
+another node, the actor id and [generation](22-actor.en.md#33-generation-in-a-reference) are kept and the framework refreshes the
 binding's route — [Actor Membership](35-actor-membership.en.md) and
 [Relocation](37-relocation.en.md) cover those moves.
 
@@ -62,7 +62,7 @@ does not run the Spot's disconnect callback twice.
 | Situation | Result |
 | --- | --- |
 | The Actor does not exist, or is not in a state to receive | The bind ends with a typed error |
-| The reference's incarnation value differs | A stale reference is not bound to another incarnation |
+| The reference's [generation](22-actor.en.md#33-generation-in-a-reference) differs | A stale reference is not bound to another generation |
 | The Actor is moving | It ends as a moving error and is not retried silently |
 | The Actor moved after the bind | The framework refreshes the route; the session is not bound again |
 | The session dropped | The Actor and its Spot membership are kept |

@@ -158,12 +158,16 @@ When you need an answer, send a request.
 --8<-- "framework/languages/java/tutorial/java/Client/src/main/java/systems/zlink/tutorial/client/ClientApplication.java:actor-request-call"
 ```
 
-!!! note "The reference creation returns"
+### 3.3 Generation in a Reference
 
-    Besides the actor id, the creation call returns a reference carrying **the exact incarnation at
-    that moment and the owner route as looked up**. That reference is used when binding one
-    connection to the Actor and when destroying that one incarnation specifically. An ordinary Actor
-    call needs only the actor id.
+The **generation** in an `ActorRef` or `SpotRef` counts which instance of the same id this is. The
+Location Store issues it when the object is created; it does not change on join, relocation, or
+`RecreateOnRelocation`. Destroying and creating the same id again receives a new generation.
+
+Ordinary messages do not look at generation: they go to the object that exists now. Lifecycle calls
+such as close, delete, and move through a reference take effect only while that reference's
+generation equals the current generation. That is why a stale reference cannot touch the new
+instance under the same id.
 
 ## 4. What You See When You Run It
 

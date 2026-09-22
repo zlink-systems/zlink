@@ -33,7 +33,7 @@ title: "Relocation · Node/TypeScript"
 
 | 유지되는 것 | 뜻 |
 | --- | --- |
-| spot id · actor id와 세대 값 | 호출하는 쪽이 사용하던 논리 id가 그대로다 |
+| spot id · actor id와 [generation](22-actor.ko.md#33-참조의-generation) | 호출하는 쪽이 사용하던 논리 id가 그대로다 |
 | 아직 실행하지 않은 message와 받아들인 기록 | 차단 시점에 queue에 남아 있던 작업을 도착 쪽에서 이어서 실행한다 |
 | timer 등록과 대기 중인 tick | 이름·주기·옵션·커서를 함께 옮기므로 도착 쪽에서 다시 등록하지 않는다 |
 | 묶인 STREAM session의 경로 | client 연결은 그대로 두고 경로가 새 owner를 가리키도록 바꾼다 |

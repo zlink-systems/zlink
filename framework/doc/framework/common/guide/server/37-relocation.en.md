@@ -17,7 +17,7 @@ Nothing the calling side was using changes.
 
 | What survives | Meaning |
 | --- | --- |
-| Spot id, actor id and the generation value | The logical id the caller was using is unchanged. No address has to be announced again |
+| Spot id, actor id, and [generation](22-actor.en.md#33-generation-in-a-reference) | The logical id the caller was using is unchanged. No address has to be announced again |
 | Messages not yet run and the accepted journal | Work still in the queue at the seal is resumed at the destination |
 | Timer registrations and pending ticks | Names, periods, options and the cursor move together, so nothing is registered again at the destination |
 | The route of a bound STREAM session | The client connection stays and the route is pointed at the new owner |

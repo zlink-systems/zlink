@@ -463,13 +463,13 @@ Fanout subscriber는 **automatic discovery와 manual endpoint를 함께 지정�
 
 ### 6.5 store에서 찾았다고 바로 보내지 않는다
 
-client는 등록 정보에서 endpoint를 얻은 뒤 **실제 연결에서 신원과 실행 세대를 다시 확인**하고
+client는 등록 정보에서 endpoint를 얻은 뒤 **실제 연결에서 신원과 lifecycle generation을 다시 확인**하고
 나서야 그 대상을 사용한다. 수동 연결도 같은 확인을 거친다. 그래서 store에 row가 있는데도 호출이 대상
 없음으로 끝날 수 있다 — 그때는 store가 아니라 **연결이 맺어졌는지**를 본다.
 
-**server를 재시작하면 실행 세대가 바뀐다.** endpoint가 같아도 이전 세대의 연결은 새 대상으로
-사용하지 않고, client가 새 세대를 준비한 뒤 이전 연결을 해제한다. 세대 값은 숫자 크기로 순서를
-판단하지 않는다.
+**server를 재시작하면 lifecycle generation이 바뀐다.** 이는 node가 몇 번째 실행 중인지를 나타내는
+값이다. endpoint가 같아도 이전 lifecycle generation의 연결은 새 대상으로 사용하지 않고, client가
+새 값을 준비한 뒤 이전 연결을 해제한다. lifecycle generation 값은 숫자 크기로 순서를 판단하지 않는다.
 
 늦게 도착한 reply는 **원래 요청이 아직 기다리고 있으면 그 결과가 된다** — 이전 세대에서 온
 것이어도 그렇다. 반대로 timeout·취소·client 재시작으로 그 요청이 사라졌으면 버리고, **나중에

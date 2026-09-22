@@ -83,14 +83,14 @@ curl -X POST http://127.0.0.1:5080/rooms \
 # "5ce8339b-ec20-42d8-a117-a74677ad9af0"
 
 curl http://127.0.0.1:5080/locations/rooms/5ce8339b-ec20-42d8-a117-a74677ad9af0
-# {"spotId":"5ce8339b-ec20-42d8-a117-a74677ad9af0","node":"game-server-1"}
+# {"spotId":"5ce8339b-ec20-42d8-a117-a74677ad9af0","generation":1,"node":"game-server-1"}
 
 curl -X POST http://127.0.0.1:5080/players/p7 \
   -H 'Content-Type: application/json' -d '{"nickname":"rookie"}'
 # "created"
 
 curl http://127.0.0.1:5080/locations/players/p7
-# {"actorId":"p7","node":"game-server-1"}
+# {"actorId":"p7","generation":1,"node":"game-server-1"}
 
 curl http://127.0.0.1:5080/locations/players/ghost
 # 404
@@ -106,8 +106,9 @@ curl http://127.0.0.1:5080/locations/players/ghost
 [node를 직접 호출하기](20-channel-messaging.ko.md#36-node를-직접-호출하기)로 보내면 그 따라가기를
 잃는다.
 
-참조를 그대로 넘기는 자리는 따로 있다. 닫거나 지우는 호출은 **그 참조가 가리키는 세대**만
-대상으로 삼으며, 같은 id로 다시 만들어진 대상은 그대로 둔다.
+참조를 그대로 넘기는 자리는 따로 있다. 닫거나 지우는 호출은 **그 참조가 가리키는
+[generation](22-actor.ko.md#33-참조의-generation)**만 대상으로 삼으며, 같은 id로 다시 만들어진
+대상은 그대로 둔다.
 
 ## 6. 관련 문서
 

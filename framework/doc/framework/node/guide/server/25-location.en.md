@@ -78,14 +78,14 @@ curl -X POST http://127.0.0.1:5080/rooms \
 # "5ce8339b-ec20-42d8-a117-a74677ad9af0"
 
 curl http://127.0.0.1:5080/locations/rooms/5ce8339b-ec20-42d8-a117-a74677ad9af0
-# {"spotId":"5ce8339b-ec20-42d8-a117-a74677ad9af0","node":"game-server-1"}
+# {"spotId":"5ce8339b-ec20-42d8-a117-a74677ad9af0","generation":1,"node":"game-server-1"}
 
 curl -X POST http://127.0.0.1:5080/players/p7 \
   -H 'Content-Type: application/json' -d '{"nickname":"rookie"}'
 # "created"
 
 curl http://127.0.0.1:5080/locations/players/p7
-# {"actorId":"p7","node":"game-server-1"}
+# {"actorId":"p7","generation":1,"node":"game-server-1"}
 
 curl http://127.0.0.1:5080/locations/players/ghost
 # 404
@@ -104,8 +104,8 @@ after the lookup is still reached. Take the node name and send through
 following is lost.
 
 There is a place where the reference itself is passed on. A call that closes or destroys takes
-**the generation that reference points at** and leaves a target recreated under the same id
-untouched.
+only the [generation that reference points at](22-actor.en.md#33-generation-in-a-reference) and
+leaves a target recreated under the same id untouched.
 
 ## 6. Related Documents
 

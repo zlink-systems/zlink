@@ -45,8 +45,8 @@ title: "Session 묶음의 동작 원리 · C#/.NET"
 
 ## 2. 묶음과 Spot membership — 서로 독립이다
 
-묶음은 Actor의 Spot membership과 별개다. Actor가 다른 Spot이나 node로 옮겨 가도 actor id와 세대
-값은 유지되고, Framework가 묶음의 경로를 갱신한다 —
+묶음은 Actor의 Spot membership과 별개다. Actor가 다른 Spot이나 node로 옮겨 가도 actor id와
+[generation](22-actor.ko.md#33-참조의-generation)은 유지되고, Framework가 묶음의 경로를 갱신한다 —
 [Actor membership](35-actor-membership.ko.md)과 [Relocation](37-relocation.ko.md)이 그 이동을
 다룬다.
 
@@ -77,7 +77,7 @@ Framework가 합치므로, 직접 호출한 직후에 연결이 끊겨도 Spot�
 | 상황 | 결과 |
 | --- | --- |
 | Actor가 없거나 받을 수 있는 상태가 아니다 | 묶기가 typed 오류로 끝난다 |
-| 참조의 세대 값이 다르다 | 낡은 참조를 다른 세대에 묶지 않는다 |
+| 참조의 [generation](22-actor.ko.md#33-참조의-generation)이 다르다 | 낡은 참조를 다른 generation에 묶지 않는다 |
 | Actor가 옮겨 가는 중이다 | 옮기는 중이라는 오류로 끝나며 몰래 재시도하지 않는다 |
 | 묶은 뒤 Actor가 옮겨 갔다 | Framework가 경로를 갱신하며 session을 다시 묶지 않는다 |
 | session이 끊겼다 | Actor와 Spot membership은 유지한다 |

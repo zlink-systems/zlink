@@ -708,15 +708,15 @@ Registering both is refused at startup.
 
 ### 6.5 Finding It in the Store Is Not Yet Sending to It
 
-After obtaining an endpoint from the registration, a client **re-confirms identity and execution
+After obtaining an endpoint from the registration, a client **re-confirms identity and lifecycle
 generation on the actual connection** before it uses that target. A manual connection goes through
 the same confirmation. So a call can end with no target even though the row is in the store — at
 that point, look at **whether the connection was established**, not at the store.
 
-**Restarting a server changes the execution generation.** Even with the same endpoint, a
-connection from the previous generation is not used as a new target; the client prepares the new
-generation and then removes the previous connection. Generation values are not ordered by
-numerical size.
+**Restarting a server changes the lifecycle generation**, which says which run of the node this is.
+Even with the same endpoint, a connection from the previous lifecycle generation is not used as a
+new target; the client prepares the new value and then removes the previous connection. Lifecycle
+generation values are not ordered by numerical size.
 
 A reply that arrives late **becomes the result if the original request is still waiting** — even
 when it came from a previous generation. Conversely, if that request is gone through timeout,
