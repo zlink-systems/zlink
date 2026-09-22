@@ -18,13 +18,11 @@ View in another language — [C++](../../../cpp/guide/server/20-channel-messagin
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-This chapter quotes code from the tutorial's [`Shared`, `Server`, and `Client` directories and its Run section](https://github.com/zlink-systems/zlink-dotnet-examples/blob/main/tutorial/README.md#run); bootstrapping and building that tree reproduces the results below.
-
 !!! info "What you get from this chapter"
 
     You can register and call the three arrangements servers use to call each
-    other. The code in every section runs as it stands in
-    `framework/languages/dotnet/tutorial`.
+    other. The code in every section comes from the
+    [language-specific example repositories](https://github.com/zlink-systems/zlink-dotnet-examples).
 
 When a server calls another server, it does not name the other side's address. The caller names
 only a **name**, and the Framework delivers it to the **node** that serves that name. A node is
@@ -447,5 +445,5 @@ The next two chapters go deeper.
 - A running version of this chapter's code — `framework/languages/dotnet/tutorial`
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

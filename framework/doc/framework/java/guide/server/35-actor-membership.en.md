@@ -18,12 +18,10 @@ View in another language — [C++](../../../cpp/guide/server/35-actor-membership
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-This chapter quotes code from the `TicTacToe` sample's `Server` directory. Bootstrap and build that language's sample tree to inspect the Actor membership examples below in running code.
-
 !!! info "What you get from this chapter"
 
-    You can move an Actor between Spots and let the receiving side accept or refuse that move. The
-    code in this chapter comes from the samples in the repository.
+    You can move an Actor between Spots and let the receiving side accept or refuse that move.
+    The code in this chapter comes from the [TicTacToe sample in the per-language example repositories](https://github.com/zlink-systems/zlink-java-examples/tree/main/samples/TicTacToe).
 
 An [Actor](22-actor.en.md) is always inside some Spot, and right after creation it is in an Entry
 Spot. This chapter covers **the procedure that moves it into a room** — who admits it, when it
@@ -46,17 +44,22 @@ notified.
 The way back to the Entry Spot has no admission step, because that is the default membership —
 [Activation and Lifetime](34-activation-lifetime.en.md) covers the callbacks per kind.
 
-<iframe class="zlink-diagram" src="/common/diagrams/35-actor-join-en.html" title="A join is a reservation; it runs after the handler ends" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/35-actor-join-en.html" title="A reservation is the Defer() call; the join starts after the handler ends" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/35-actor-join-en.html" target="_blank">↗ View larger</a></p>
+
+This order means that a callback receives the join result after the current handler ends rather than that handler awaiting it.
 
 ## 2. Reserving a Join — It Runs After the Handler Ends
 
 A join call has no form that awaits the result on the spot. **It only reserves, and the handler
-ends.** The reservation runs after the handler completes normally.
+ends.** `defer()` registers "start this join when this handler ends" — that is why this chapter
+calls it a reservation. The reservation runs after the handler completes normally.
 
 ```java
 --8<-- "framework/languages/java/samples/java/TicTacToe/Server/src/main/java/systems/zlink/samples/tictactoe/server/play/infrastructure/zlink/spots/entryspot/handlers/PlayActorJoinGameHandler.java:doc-join-defer"
 ```
+
+This registration starts the join only after the current handler completes normally.
 
 ### 2.1 Why No Awaiting Form Is Offered
 
@@ -100,8 +103,14 @@ no admission, join or leave callback.
 
 ### 2.3 Where the Result Arrives
 
-The result arrives on the Actor's join-completion callback. **Which Actor runs that callback is
-decided by the result.**
+The result arrives on the Actor's join-completion callback (`onJoinCompleted`). The
+per-language spelling is what the code in each tab shows.
+
+```java
+--8<-- "framework/languages/java/samples/java/TicTacToe/Server/src/main/java/systems/zlink/samples/tictactoe/server/play/infrastructure/zlink/actors/PlayActor.java:doc-join-completed"
+```
+
+**Which Actor runs that callback is decided by the result.**
 
 | Result | The Actor that runs it |
 | --- | --- |
@@ -109,29 +118,22 @@ decided by the result.**
 | Rejected, or failed before the commit | The **origin** Actor, which stayed put |
 
 When a join to a Spot on another node succeeds, the completion goes to the Actor on the destination
-node. That is why receiving the result inside the handler that reserved the join is not a shape that
-holds — the Actor that handler ran on is being torn down by then.
+node. That is why receiving the result inside the handler run where the application registered the
+join is not a shape that holds — the Actor that handler ran on is being torn down by then.
 
 Once a reservation is active, ordinary messages that arrive afterwards do not run ahead of the
 completion callback. Ordinary processing for that Actor waits until the join finishes.
 
-The completion callback also carries an id that distinguishes a retried result. Handle it so that a
-callback with the same id is safe to run again.
+The completion callback also carries an id that distinguishes a retried result.
 
 Returning from a User Spot to the Entry Spot works the same way.
 
-## 3. How Much One Handler May Reserve
+## 3. The Join Timeout
 
-| What | Limit |
-| --- | --- |
-| Join reservations per handler | 64 |
-| Encoded size of one join request | 1 MiB |
-| Total request size reserved by one handler | 8 MiB |
-| The reply of a join that crosses to another node | 1 MiB |
-| Default timeout | 5 seconds. When given it has to be a finite positive value |
-
-**Exceeding a limit ends in an error right there.** No state is left in which some are registered
-and the rest are missing. The request and reply limits are independent and are not summed.
+The default timeout is 5 seconds; a given value has to be finite and positive. A value out of
+that range ends in an error at the registration. A join request and reply have no size limit of
+their own — a request and reply that cross to another node follow the same wire limit as any
+other message.
 
 ## 4. The Limit on Requests to a Reserved Actor
 
@@ -184,7 +186,7 @@ application does not track node identifiers.
 **A request sent during the move also completes at the original caller.** The reply the destination
 produces is correlated back to the original caller, the timeout follows the caller's existing path,
 and a late reply is dropped. The number of requests awaiting a reply during a move is observed
-through a runtime metric — [Operations and Lifecycle](12-operations.en.md#1-runtime-metrics) is that
+through a runtime metric — [Operations and Lifecycle](12-operations.en.md#2-runtime-metrics) is that
 place.
 
 ## 7. Related Documents
@@ -195,5 +197,5 @@ place.
 - The other procedure that moves the execution site — [Relocation](37-relocation.en.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

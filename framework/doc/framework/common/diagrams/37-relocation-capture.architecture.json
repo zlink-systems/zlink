@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "이동 요청에서 상태를 담는 시점",
+    "subtitle": "기본은 다음 turn 전에, 신호 모드는 라운드를 닫는 turn 뒤에 담는다",
+    "output": "37-relocation-capture.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [40, 130], "cols": 5, "gapX": 65, "gapY": 90, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "default-request", "type": "external", "label": "이동 요청 도착", "sublabel": "현재 turn 실행 중", "row": 1, "col": 0 },
+    { "id": "default-end", "type": "backend", "label": "현재 turn 끝", "sublabel": "다음 turn 전", "row": 1, "col": 1 },
+    { "id": "default-capture", "type": "database", "label": "adapter가 담음", "sublabel": "온전한 채팅 상태", "row": 1, "col": 2 },
+    { "id": "signal-request", "type": "external", "label": "이동 요청 도착", "sublabel": "라운드 진행 중", "row": 3, "col": 0 },
+    { "id": "signal-turns", "type": "messagebus", "label": "새 turn 계속 실행", "sublabel": "입력과 상태 변경", "row": 3, "col": 1 },
+    { "id": "signal-ready", "type": "backend", "label": "정산 turn 끝", "sublabel": "RelocationReady", "row": 3, "col": 2 },
+    { "id": "signal-capture", "type": "database", "label": "adapter가 담음", "sublabel": "완성된 라운드", "row": 3, "col": 3 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Framework가 정함 (기본)", "wraps": ["default-request", "default-end", "default-capture"] },
+    { "kind": "region", "label": "application이 신호함", "wraps": ["signal-request", "signal-turns", "signal-ready", "signal-capture"] }
+  ],
+  "connections": [
+    { "from": "default-request", "to": "default-end", "label": "끝나기를 기다림", "variant": "default", "labelDy": -24 },
+    { "from": "default-end", "to": "default-capture", "label": "이 틈에 담음", "variant": "emphasis", "labelDy": -24 },
+    { "from": "signal-request", "to": "signal-turns", "label": "계속 실행", "variant": "dashed", "labelDy": -24 },
+    { "from": "signal-turns", "to": "signal-ready", "label": "단위를 닫음", "variant": "default", "labelDy": -24 },
+    { "from": "signal-ready", "to": "signal-capture", "label": "Defer 뒤 담음", "variant": "emphasis", "labelDy": -24 }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "기본 모드", "items": ["이동 요청 뒤 현재 turn이 끝나는 순간 adapter를 부른다.", "message 하나가 상태 변경 하나인 채팅방에는 이 틈이 온전하다."] },
+    { "dot": "emerald", "title": "application 신호 모드", "items": ["FPS 라운드처럼 여러 turn이 한 단위면 application이 경계를 고른다.", "RelocationReady().Defer()는 이 turn이 끝나면 담아도 된다는 신호다."] }
+  ]
+}

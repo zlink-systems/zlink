@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.actors.ZLinkActorClient;
 import systems.zlink.framework.actors.ZLinkActorCreateResult;
 import systems.zlink.framework.actors.ZLinkActorManager;
@@ -19,6 +20,7 @@ import systems.zlink.framework.channels.ZLinkRouteClient;
 import systems.zlink.framework.configuration.ZLinkMeshNodeBuilder;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
+import systems.zlink.framework.spots.SpotRef;
 import systems.zlink.framework.spots.ZLinkSpotManager;
 import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
@@ -26,6 +28,7 @@ import systems.zlink.tutorial.shared.Contracts;
 
 import java.time.Duration;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletionStage;
 
 @EnableZLinkFramework
@@ -229,35 +232,35 @@ class TutorialController {
     // and only while it is ready to receive. Nothing is sent to the object.
     @GetMapping("/locations/rooms/{roomId}")
     CompletionStage<ResponseEntity<Map<String, String>>> findRoom(@PathVariable String roomId) {
-        return rooms.find(roomId)
-                .thenApply(
-                        found ->
-                                found.map(
-                                                room ->
-                                                        ResponseEntity.ok(
-                                                                Map.of(
-                                                                        "spotId", room.spotId(),
-                                                                        "node",
-                                                                                room.nodeRid()
-                                                                                        .toString())))
-                                        .orElseGet(() -> ResponseEntity.notFound().build()));
+        return rooms.find(roomId).thenApply(TutorialController::roomLocation);
     }
 
     @GetMapping("/locations/players/{playerId}")
     CompletionStage<ResponseEntity<Map<String, String>>> findPlayer(@PathVariable String playerId) {
-        return playerManager
-                .find(playerId)
-                .thenApply(
-                        found ->
-                                found.map(
-                                                player ->
-                                                        ResponseEntity.ok(
-                                                                Map.of(
-                                                                        "actorId", player.actorId(),
-                                                                        "node",
-                                                                                player.nodeRid()
-                                                                                        .toString())))
-                                        .orElseGet(() -> ResponseEntity.notFound().build()));
+        return playerManager.find(playerId).thenApply(TutorialController::playerLocation);
+    }
+
+    private static ResponseEntity<Map<String, String>> roomLocation(Optional<SpotRef> room) {
+        return room.map(TutorialController::roomLocation).orElseGet(TutorialController::notFound);
+    }
+
+    private static ResponseEntity<Map<String, String>> roomLocation(SpotRef room) {
+        return ResponseEntity.ok(
+                Map.of("spotId", room.spotId(), "node", room.nodeRid().toString()));
+    }
+
+    private static ResponseEntity<Map<String, String>> playerLocation(Optional<ActorRef> player) {
+        return player.map(TutorialController::playerLocation)
+                .orElseGet(TutorialController::notFound);
+    }
+
+    private static ResponseEntity<Map<String, String>> playerLocation(ActorRef player) {
+        return ResponseEntity.ok(
+                Map.of("actorId", player.actorId(), "node", player.nodeRid().toString()));
+    }
+
+    private static ResponseEntity<Map<String, String>> notFound() {
+        return ResponseEntity.notFound().build();
     }
 
     // --8<-- [end:location-find]

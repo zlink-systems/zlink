@@ -23,7 +23,7 @@ View in another language — [C++](../../../cpp/guide/server/16-options.en.md) �
     You learn what you can set, what value applies when you do not set it, and which values can
     still be changed after the host has started.
 
-Option names and defaults are the same in all five languages. What differs is the spelling and
+Option names and defaults are the same across supported languages. What differs is the spelling and
 the way you set them, and the tabs in each section show that. **Most options work without being
 set.** Check the default on the line that matters when you have a reason to change it, and use
 it as it is until then.
@@ -76,20 +76,19 @@ startup.**
   local interface. `advertiseHost` is the address peers actually dial and the Location Store publishes. Use
   `127.0.0.1` for a wildcard bind in a single-machine example. For multiple hosts, containers,
   NAT, or Kubernetes, set a reachable IP address or DNS name for that node, using a Pod IP or
-  per-Pod DNS in Kubernetes. When omitted,
-  [Network Listener Identity §2.1](../../../common/spec/server/02-channel-transport/04-network-listener-identity.en.md#21-defaults)
-  advertises a non-wildcard bind host or the same-family loopback for a wildcard; an advertised
+  per-Pod DNS in Kubernetes. When omitted, `advertiseHost` advertises a non-wildcard bind host or
+  the same-family loopback for a wildcard; an advertised
   host cannot be a wildcard. [Channel Messaging](20-channel-messaging.en.md#32-the-receiving-side--the-node-serving-the-channel)
   shows each language's actual option surface in its mesh registration block.
 - **STREAM compression starts enabled.** Turn it off explicitly in the compression settings.
-- **The CPU worker pool has no queue limit.** The Application job queue is what limits intake
-  (§3). `defaultRequestTimeout` rejects values of `0` or below.
+- **The CPU worker pool has no queue limit.** [Core HWM and Application Job Queue Limits](#3-core-hwm-and-application-job-queue-limits)
+  limits intake. `defaultRequestTimeout` rejects values of `0` or below.
 
 ## 3. Core HWM and Application Job Queue Limits
 
 Core HWM limits the bytes held by the ordinary queues, and the Application job queue limits the
 number of jobs waiting for a handler to start across the whole host. How both behave is covered
-by [Backpressure](33-backpressure.en.md#1-core-hwm-and-the-application-job-queue).
+by [Backpressure](33-backpressure.en.md#2-core-hwm-and-the-application-job-queue).
 
 | Option | What it sets | Default |
 | --- | --- | --- |
@@ -121,12 +120,6 @@ cannot be chosen for a send or a publish because they have no reply path. This s
 exist in C++, where only the default behavior applies. What each level records is covered by
 [Monitoring](26-monitoring.en.md#4-setting-the-diagnostics-level).
 
-!!! warning "The default for message size recording differs only on the JVM"
-
-    Java and Kotlin start with `includeMessageSizes` enabled, while the other languages start
-    with it disabled. State the value explicitly to keep the volume of records aligned across a
-    mixed-language deployment.
-
 ## 5. MeshNode Options
 
 | Option | What it sets | Default |
@@ -134,7 +127,7 @@ exist in C++, where only the default behavior applies. What each level records i
 | `listen` | This node's own address for peers to connect to | Must be set |
 | `bindHost` · `advertiseHost` | Bind and advertised address for this node alone | The root value |
 | `RoutingId` · `routingIdPrefix` | This node's identifier | Generated |
-| `objectRole` | Whether the node takes part in placement | See the note below |
+| `objectRole` | Whether the node takes part in placement | `None` |
 | `placementWeight` | Share of new placements, ranging over `0..10000` | 100 |
 | `ActorLimit` · `spotLimit` | How many this node may hold at once | `0` — no limit |
 | `ActivationConcurrency` | Cold activations that may proceed at once | 128 |
@@ -145,12 +138,6 @@ exist in C++, where only the default behavior applies. What each level records i
 For both limits, `0` means no limit and a positive value ranges over `1..2,147,483,647`.
 `ActivationConcurrency` rejects `0` instead, because it limits the activations in progress
 rather than the number of objects.
-
-!!! warning "The placement default differs only in C++"
-
-    C++ starts as a `Server` that receives placements when `objectRole` is left unset, while the
-    other languages take no part in placement. State the role explicitly in C++ for a node that
-    is to hold no Spot or Actor.
 
 ## 6. Send Waiting and Socket Limits
 
@@ -234,7 +221,7 @@ runtimeOptions.channel("room").weight(0)
 Both values range over `0..10000` and default to 100. Setting `0` **stops new assignments only**
 — existing objects and connections are kept. In a zero-downtime rollout, use it to keep new
 traffic away from this node before starting a relocation
-([Operations and Lifecycle](12-operations.en.md#4-wiring-operational-calls-and-readiness)).
+([Operations and Lifecycle](12-operations.en.md#5-wiring-operational-calls-and-readiness)).
 
 ## 10. Values That Must Be Set
 

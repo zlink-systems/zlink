@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "One Yield request continues in a new turn",
+    "subtitle": "the turn that sends the request gives back the gate; the reply continuation starts again at the queue tail",
+    "output": "32-yield-sequence-en.html",
+    "column_fit": "spread",
+    "viewBox": [1040, 650],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "Turn", "type": "backend", "label": "current turn" },
+    { "id": "Gate", "type": "messagebus", "label": "SpotWide gate" },
+    { "id": "Remote", "type": "external", "label": "remote work" },
+    { "id": "Queue", "type": "backend", "label": "same Spot queue" }
+  ],
+  "messages": [
+    { "from": "Turn", "to": "Remote", "y": 160, "label": "submit request with Yield", "variant": "default" },
+    { "from": "Turn", "to": "Gate", "y": 220, "label": "end turn · give back gate", "variant": "return" },
+    { "from": "Gate", "to": "Queue", "y": 280, "label": "run another waiting turn", "variant": "default" },
+    { "from": "Remote", "to": "Queue", "y": 350, "label": "reply arrives · append resume record", "variant": "return" },
+    { "from": "Queue", "to": "Gate", "y": 420, "label": "new turn gets gate", "variant": "default" },
+    { "from": "Gate", "to": "Turn", "y": 480, "label": "resume continuation", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "Give back and resume",
+      "items": ["The current turn ends after submitting the request.", "The reply does not revive it; it makes a new turn at the tail."]
+    },
+    {
+      "dot": "slate",
+      "title": "Check state",
+      "items": ["Another turn may run before the reply.", "The continuation checks state again before changing it."]
+    }
+  ]
+}

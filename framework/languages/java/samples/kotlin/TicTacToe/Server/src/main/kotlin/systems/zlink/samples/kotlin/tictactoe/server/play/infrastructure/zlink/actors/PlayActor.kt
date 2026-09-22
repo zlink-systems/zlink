@@ -49,6 +49,7 @@ class PlayActor(val actorId: String, override val context: ZLinkActorContext) :
         pendingRoomId = roomId
     }
 
+    // --8<-- [start:doc-join-completed]
     override suspend fun onJoinCompletedSuspending(completion: ZLinkActorJoinCompletion) {
         val operationId =
             when (completion) {
@@ -86,6 +87,7 @@ class PlayActor(val actorId: String, override val context: ZLinkActorContext) :
                     .await()
         }
     }
+    // --8<-- [end:doc-join-completed]
 
     fun requireJoinedGame(): String =
         joinedRoomId ?: throw IllegalStateException("actor has not joined a game")

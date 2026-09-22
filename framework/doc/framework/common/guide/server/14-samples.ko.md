@@ -1,17 +1,17 @@
 # 14. 샘플 고르기 — 내 문제에 가까운 예제부터
 
-> **이 장에는 계약을 소유하는 스펙 문서가 없다.** 어떤 샘플부터 보면 좋은지 고르는
-> 안내이기 때문이다. 각 샘플의 언어 중립 시나리오, 메시지 계약과 검증 기준은
-> [공통 sample 문서](../../../common/sample/README.ko.md)가 정의한다. 이 문서는 그중
-> **어떤 샘플을 먼저 보면 도움이 되는지**와 실행하는 방법을 정리한다.
+!!! info "이 장을 읽고 나면"
+
+    만들려는 시스템에 가장 가까운 sample을 고르고 실행할 수 있다.
+    각 sample 실행 명령은 언어별 예제 저장소를 사용한다.
 
 샘플은 서로 다른 기능 묶음을 맡도록 나뉘어 있다. 전부 읽을 필요는 없고, 만들려는
 것에 가장 가까운 하나를 골라 그 안에서 등록 코드와 handler를 따라가는 편이 빠르다.
 
-**어디서 시작할지 모르겠다면 [Bingo](#3-bingo--온라인-게임-서버-구축)를 본다.** framework
+**어디서 시작할지 모르겠다면 [Bingo](#4-bingo--온라인-게임-서버-구축)를 본다.** framework
 기능이 가장 많이 등장하고, 구성 자체가 일반적인 온라인 게임 서버 그대로다.
 
-## 0. 샘플 예제 저장소
+## 1. 샘플 예제 저장소
 
 샘플은 아래 저장소를 clone하고 `samples/`에서 실행한다.
 
@@ -65,17 +65,17 @@
 이전 릴리스는 tag `vA.B.C`로 받는다(`git checkout vA.B.C`). 이슈와 PR은 `zlink-systems/zlink`로
 보낸다.
 
-## 1. 무엇을 만드는지로 고르기
+## 2. 무엇을 만드는지로 고르기
 
 | 만들려는 시스템 | 샘플 | 이 샘플이 맡은 주제 |
 | --- | --- | --- |
 | 실시간 대전 게임 서버 | [TicTacToe](#2-tictactoe--실시간-대전-게임-서버-구축) | 자동 연결과 자동 등록을 걷어낸 가장 작은 구성 |
-| 온라인 게임 서버 전체 — framework 기능도 가장 많이 나온다 | [Bingo](#3-bingo--온라인-게임-서버-구축) | 접속 gateway·인증/매칭·룸 서버로 나눈 통상적인 게임 서버 구성 |
-| 라이브 채팅 상담 시스템 | [SupportChat](#4-supportchat--라이브-채팅-상담-시스템-구축) | 상담원 한 명이 여러 대화를 동시에 처리하는 actor·라우팅 구성 |
-| 배차 시스템 | [DeliveryDispatch](#5-deliverydispatch--배차-시스템-구축) | 요청 생성 → 수행자 선택 → 무응답 시 재배정 → 당사자에게 전달 |
-| 주문 처리 시스템 | [ShoppingMall](#6-shoppingmall--주문-처리-시스템-구축) | 조율 계층 없이 순차 코드로 사용하는 무손실 event sourcing |
-| 퀘스트·미션 진행 시스템 | [GameQuest](#7-gamequest--퀘스트-진행-시스템-구축) | 유실을 허용하는 대신 실시간성을 얻는 owner 처리 |
-| zone 분할 MMORPG와 운영 관제 | [ZoneWorld](#8-zoneworld--zone-분할-mmorpg와-운영-관제-구축) — 모든 언어의 공통 목표 sample | 여러 node에 무언가를 할 때 어떤 표면을 고르는가 |
+| 온라인 게임 서버 전체 — framework 기능도 가장 많이 나온다 | [Bingo](#4-bingo--온라인-게임-서버-구축) | 접속 gateway·인증/매칭·룸 서버로 나눈 통상적인 게임 서버 구성 |
+| 라이브 채팅 상담 시스템 | [SupportChat](#5-supportchat--라이브-채팅-상담-시스템-구축) | 상담원 한 명이 여러 대화를 동시에 처리하는 actor·라우팅 구성 |
+| 배차 시스템 | [DeliveryDispatch](#6-deliverydispatch--배차-시스템-구축) | 요청 생성 → 수행자 선택 → 무응답 시 재배정 → 당사자에게 전달 |
+| 주문 처리 시스템 | [ShoppingMall](#7-shoppingmall--주문-처리-시스템-구축) | 조율 계층 없이 순차 코드로 사용하는 무손실 event sourcing |
+| 퀘스트·미션 진행 시스템 | [GameQuest](#8-gamequest--퀘스트-진행-시스템-구축) | 유실을 허용하는 대신 실시간성을 얻는 owner 처리 |
+| zone 분할 MMORPG와 운영 관제 | [ZoneWorld](#9-zoneworld--zone-분할-mmorpg와-운영-관제-구축) — 모든 언어의 공통 목표 sample | 여러 node에 무언가를 할 때 어떤 표면을 고르는가 |
 
 기능 쪽에서 거꾸로 고르려면 `01. Overview` 장의 도입 순서를
 먼저 본다.
@@ -88,7 +88,7 @@
 - **ShoppingMall ↔ GameQuest** — 같은 owner Spot·event sourcing을 무손실이 필요한 도메인과
   유실을 허용하고 보정하는 도메인으로 나눠 보여 준다.
 
-## 2. TicTacToe — 실시간 대전 게임 서버 구축
+## 3. TicTacToe — 실시간 대전 게임 서버 구축
 
 `Api` 2개와 `Play` 2개로 2인 대국을 처리하는 **가장 작은 실시간 게임 서버 구성**이다.
 **peer 연결을 location store에 맡기지 않고 endpoint를 직접 적는 유일한 샘플**이기도 하다. 다만 room과 actor가 지금 어느 node에 있는지는
@@ -109,7 +109,7 @@ Entry Spot에 등록된 observer handler가 그것을 받아 관전 client로 pu
 - 시나리오: [TicTacToe](../../../common/sample/tictactoe/README.ko.md) · payload JSON
 - 따라 읽기: [TicTacToe 따라 읽기](51-tictactoe.ko.md) — 이 샘플의 코드를 흐름 순서로 읽는다
 
-## 3. Bingo — 온라인 게임 서버 구축
+## 4. Bingo — 온라인 게임 서버 구축
 
 **하나만 고른다면 이 샘플이다.** 인증·매칭·게임 진행·실시간 push까지 온라인 게임 서버에
 필요한 구성이 모두 들어 있고, 그 과정에서 framework 기능이 가장 많이 등장한다.
@@ -146,7 +146,7 @@ payload는 이 샘플만 Protobuf다. 역할과 계약 수가 많은 gateway형 
 - 06과 07의 등록 코드 예시가 이 샘플에서 나온다.
 - 따라 읽기: [Bingo 따라 읽기](50-bingo.ko.md) — 이 샘플의 코드를 흐름 순서로 읽는다
 
-## 4. SupportChat — 라이브 채팅 상담 시스템 구축
+## 5. SupportChat — 라이브 채팅 상담 시스템 구축
 
 고객이 상담을 요청하면 상담원이 배정되어 실시간으로 대화하는 시스템이다. 대화 한 건이
 conversation Spot에 대응하고, 참여자·메시지 순서·typing 상태·종료 상태를 그 Spot이 소유한다.
@@ -187,7 +187,7 @@ session이 bind되어 대화 상태가 그대로 이어지고, 일정 시간 메
 - 시나리오: [SupportChat](../../../common/sample/supportchat/README.ko.md) · payload JSON
 - 따라 읽기: [SupportChat 따라 읽기](52-supportchat.ko.md) — 이 샘플의 코드를 흐름 순서로 읽는다
 
-## 5. DeliveryDispatch — 배차 시스템 구축
+## 6. DeliveryDispatch — 배차 시스템 구축
 
 배송을 만들고, 배송원에게 제안하고, 정해진 시간 안에 응답이 없으면 다시 배정하고,
 고객에게 상태를 전달한다. 이 샘플의 목적은 배송 업무 규칙이 아니라 **"요청을 만들고,
@@ -208,7 +208,7 @@ actor route가 맡는다. client 시나리오는 정상 배차와 timeout 재배
 - 시나리오: [DeliveryDispatch](../../../common/sample/deliverydispatch/README.ko.md) · payload JSON
 - 따라 읽기: [DeliveryDispatch 따라 읽기](53-deliverydispatch.ko.md) — 이 샘플의 코드를 흐름 순서로 읽는다
 
-## 6. ShoppingMall — 주문 처리 시스템 구축
+## 7. ShoppingMall — 주문 처리 시스템 구축
 
 주문 하나를 `OrderWorkflow` owner Spot이 소유하고, 재고 예약 → 결제 승인 → 확정을
 진행하며 실패하면 보상한다. 바깥 HTTP는 `CommerceApi`가 종단하고 주문 상태는 직접 바꾸지
@@ -229,7 +229,7 @@ saga 오케스트레이터·조율 상태·스케줄러·outbox 같은 별도 �
 - event sourcing 자체는 framework 기능이 아니라 application이 Spot 위에 올린 구성이다.
 - 따라 읽기: [ShoppingMall 따라 읽기](54-shoppingmall.ko.md) — 이 샘플의 코드를 흐름 순서로 읽는다
 
-## 7. GameQuest — 퀘스트 진행 시스템 구축
+## 8. GameQuest — 퀘스트 진행 시스템 구축
 
 게임에서 발생하는 player별 플레이 이벤트를 모아 퀘스트 진행과 완료를 **서버가** 판정한다.
 client가 "퀘스트를 깼으니 보상을 달라"고 말하게 두면 조작되기 때문에, 판정과 보상 결정은
@@ -249,7 +249,7 @@ ShoppingMall과 나란히 놓으면 선택 기준이 드러난다. 게임 진행
 - 시나리오: [GameQuest](../../../common/sample/event/gamequest.ko.md) · payload JSON
 - 따라 읽기: [GameQuest 따라 읽기](55-gamequest.ko.md) — 이 샘플의 코드를 흐름 순서로 읽는다
 
-## 8. ZoneWorld — zone 분할 MMORPG와 운영 관제 구축
+## 9. ZoneWorld — zone 분할 MMORPG와 운영 관제 구축
 
 > ZoneWorld는 다섯 framework 언어에 모두 구현된 공통 sample이다. 각 구현은 이 장과 공통
 > 시나리오가 정한 topology, actor relocation, 운영 fanout과 browser 검증 기준을 따른다.
@@ -280,11 +280,11 @@ join하고, owner가 다르면 relocation이 일어나지만 client 연결은 �
 - 짝이 되는 장: [Relocation](37-relocation.ko.md),
   `11. Monitoring` 장, [12-operations](12-operations.ko.md)
 - 시나리오: [ZoneWorld](../../../common/sample/zoneworld/README.ko.md) · payload JSON
-- server와 runner는 다섯 언어에 제공되며 업무 동작과 검증 기준을 공유한다. .NET과 Node.js의
+- server와 runner는 지원 언어에 제공되며 업무 동작과 검증 기준을 공유한다. .NET과 Node.js의
   browser smoke는 같은 TypeScript client를 사용한다.
 - 따라 읽기: [ZoneWorld 따라 읽기](56-zoneworld.ko.md) — 이 샘플의 코드를 흐름 순서로 읽는다
 
-## 9. 실행
+## 10. 실행
 
 각 샘플 디렉터리의 runner 하나가 서버 여러 개와 client 시나리오를 함께 띄우고
 검증까지 수행한다. Location store가 필요한 샘플은 runner가 Redis 컨테이너를 직접
@@ -302,7 +302,7 @@ join하고, owner가 다르면 relocation이 일어나지만 client 연결은 �
 
     ```bash
     # clone한 zlink-cpp-examples/samples/ 에서. bootstrap.cmake가 공개 패키지로 framework를
-    # 설치하고 일곱 샘플을 build/ 에 구성한다 (저장소 안이라면 framework/languages/cpp/samples/ 에서).
+    # 설치하고 sample을 build/ 에 구성한다 (저장소 안이라면 framework/languages/cpp/samples/ 에서).
     cmake -P bootstrap.cmake
     cmake --build build --parallel
 
@@ -335,12 +335,12 @@ join하고, owner가 다르면 relocation이 일어나지만 client 연결은 �
 
     ```
 
-샘플은 하나씩 실행한다. 일곱 개를 모두 확인하려면 일곱 번 호출한다. 브라우저 UI를 포함한
+sample은 하나씩 실행하며, 각 sample의 실행 script를 해당 언어 sample root에서 호출한다. 브라우저 UI를 포함한
 ZoneWorld도 같은 방식이며 해당 언어의 sample root에서 `ZoneWorld/run_sample.sh`를 호출한다.
 여러 sample을 한 번에 도는 runner를 두지 않는 까닭은
 [공통 sample](../../../common/sample/README.ko.md)이 정한다.
 
-## 10. 관련 문서
+## 11. 관련 문서
 
 - 샘플의 언어 중립 시나리오와 검증 기준: [공통 sample](../../../common/sample/README.ko.md)
 - 언어별 샘플 디렉터리 구성: 각 언어 샘플 루트의 `README`
@@ -348,5 +348,5 @@ ZoneWorld도 같은 방식이며 해당 언어의 sample root에서 `ZoneWorld/r
   [12-operations](12-operations.ko.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

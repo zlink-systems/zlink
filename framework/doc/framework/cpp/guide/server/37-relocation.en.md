@@ -35,7 +35,7 @@ Nothing the calling side was using changes.
 
 | What survives | Meaning |
 | --- | --- |
-| Spot id, actor id and the generation value | The logical id the caller was using is unchanged. No address has to be announced again |
+| Spot id, actor id, and [generation](22-actor.en.md#33-generation-in-a-reference) | The logical id the caller was using is unchanged. No address has to be announced again |
 | Messages not yet run and the accepted journal | Work still in the queue at the seal is resumed at the destination |
 | Timer registrations and pending ticks | Names, periods, options and the cursor move together, so nothing is registered again at the destination |
 | The route of a bound STREAM session | The client connection stays and the route is pointed at the new owner |
@@ -47,10 +47,21 @@ destination node directly over the mesh connection.
 <iframe class="zlink-diagram" src="/common/diagrams/37-relocation-move-en.html" title="The logical id stays; only the execution site moves" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/37-relocation-move-en.html" target="_blank">↗ View larger</a></p>
 
+Because the logical id remains the same, callers do not need to acquire the target address again after relocation.
+
 ## 2. The Application's Part — the Adapter
 
-An adapter captures and restores **application state only**, as bytes. Location authority, queues,
-timers, the accepted journal and session routes are handled by the Framework.
+To move an Actor or Spot to another node, the application state held by its instance (fields on the
+user class) must be serialized to bytes, sent, and restored into a new instance at the destination.
+The Framework does not know the state of a user class, so the application provides that serialization
+and restoration as a relocation adapter. Implement a class that captures state to bytes and restores
+bytes into a new instance, then choose it with
+[`preserveStateWith`](21-spot.en.md#33-registration) when registering the factory. Location
+authority, queued messages, timers, the accepted journal, and session routes move with the Framework,
+not in the adapter.
+
+**What goes in it.** Keep only state needed to restore the new instance; leave out values derived
+from it and caches that can be rebuilt.
 
 ```cpp
 --8<-- "framework/languages/cpp/samples/TicTacToe/Server/Play/Infrastructure/ZLink/Actors/player_actor_relocation_adapter.hpp:doc-relocation-adapter"
@@ -70,31 +81,41 @@ an Actor joins a Spot on another node and when a node is drained in operations.
 | Recreate | Builds a new instance under the same logical id. Pending messages and timers are kept; application state is not restored |
 | Preserve state with an adapter | Restores the bytes the adapter captured into the new instance. The queue and the timers are kept as well |
 
-The registration call is named per language — the registration in [Spot](21-spot.en.md) is that
-place.
+The registration call is named per language — [the Spot registration that chooses
+`preserveStateWith`](21-spot.en.md#33-registration) is that place.
 
 ## 3. When State Is Captured — the Factory Registration Decides
 
-The Framework stops accepting new turns on the departing node, captures state through the adapter,
-restores it on the destination node and then hands authority over. **Who decides the moment of
-capture** is chosen at factory registration.
+One handler invocation or one tick is a [turn](32-execution-model.en.md#1-the-queues-work-waits-in),
+and the next turn starts only when that turn ends. The Framework never interrupts a running turn,
+so it can capture state only between turns. **Who decides the moment of capture** is chosen at
+factory registration.
 
 | Mode | Who decides | Where it is used |
 | --- | --- | --- |
-| Framework-managed (default) | The Framework — between a finished turn and the next | Most Spots |
-| Application-signaled | The application — at the end of the turn that signaled | A Spot whose unit of consistency spans several turns |
+| Framework-managed (default) | The instant the current turn ends after a move request | A Spot where one message is one state change (a chat room) |
+| Application-signaled | The instant the turn that called `RelocationReady().Defer()` ends | A Spot whose unit spans several turns (an FPS round) |
 
-**When the default mode holds.** The Framework never interrupts a running turn. A handler or a tick
-is captured only after it finishes, so when a state change completes within one turn, state
-captured at a turn boundary is always consistent.
+**Default mode.** When a move request arrives, the Framework calls the adapter immediately after
+the current turn ends. For a Spot where one message is one state change, such as a chat room, the
+state in that gap is always whole.
 
-**When it does not hold.** If the unit of consistency spans several turns, state captured at a turn
-boundary may be incomplete. A round in a shooter is such a case — a start tick, many input packets
-and a settlement tick, where restoring the intermediate state cannot continue the round.
-**The Framework knows turn boundaries but not the unit of consistency the application defined.**
+**Application-signaled mode.** An FPS round may consist of a start tick, many input packets, and a
+settlement tick, so its state between those turns is a half-finished round. Choose this mode when
+registering the factory, then call `RelocationReady().Defer()` in the handler that closes the unit.
+It says, "after this turn ends, it is safe to capture." New turns keep running, and state keeps
+changing, until the signalled turn ends.
 
-Register the application-signaled mode and the Framework does not capture on its own; it waits for
-the signaled moment. The mode is available in a `SpotWide` User Spot only —
+<iframe class="zlink-diagram" src="/common/diagrams/37-relocation-capture-en.html" title="When state is captured after a move request" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/37-relocation-capture-en.html" target="_blank">↗ View larger</a></p>
+
+Bingo sends this signal in the turn that ends a round.
+
+```cpp
+--8<-- "framework/languages/cpp/samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/Handlers/bingo_room_draw_timer_handler.hpp:doc-relocation-ready"
+```
+
+The application-signaled mode is available in a `SpotWide` User Spot only —
 [The Execution Model](32-execution-model.en.md) covers that boundary.
 
 ## 4. The Unit the Execution Mode Decides
@@ -137,5 +158,5 @@ deadline ends it as force-stopped.
 - The call operations makes — [12-operations](12-operations.en.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

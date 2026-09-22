@@ -18,24 +18,21 @@ View in another language — [C++](../../../cpp/guide/server/24-actor-session.en
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-This chapter quotes code from the tutorial's [`Server` and `StreamClient` directories and its Run section](https://github.com/zlink-systems/zlink-kotlin-examples/blob/main/tutorial/README.md#run); bootstrapping and building that tree reproduces the results below.
-
 !!! info "What you get from this chapter"
 
     You can bind one external client's connection to one Actor, and have that Actor push a
-    notification back over the same connection. The code in this chapter runs as it stands in
-    `framework/languages/java/tutorial/kotlin`.
+    notification back over the same connection. The code comes from the [tutorial README in the examples repository](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.md); follow its Download, Build, and Run sections to reproduce the results below.
 
 A [STREAM](23-stream.en.md) session ends when its connection drops. A player's state has to
 outlive that, and what holds it is an [Actor](22-actor.en.md). **This chapter binds the two** —
 once bound, packets the session does not handle reach that Actor, and the Actor can push over
 that connection.
 
-## 1. The Problem Binding Solves
+## 1. The Role of Binding an Actor and a Session
 
-A connection and an entity have different lifetimes. When the same player drops and returns the
-connection is a new one and the entity is the one that was already there. So **the connection is
-made to point at its entity**, and packets after that are received by the entity.
+Binding connects a connection and an entity whose lifetimes differ. When the same player drops and
+returns, the connection is a new one and the entity is the one that was already there. So **the
+connection is made to point at its entity**, and packets after that are received by the entity.
 
 <iframe class="zlink-diagram" src="/common/diagrams/24-actor-session-binding-en.html" title="Binding one connection to one entity" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/24-actor-session-binding-en.html" target="_blank">↗ View larger</a></p>
@@ -139,8 +136,8 @@ connection, and what happens while the Actor moves to another node are covered b
 - Where the connection is accepted — [STREAM](23-stream.en.md)
 - The entity that gets bound — [Actor](22-actor.en.md)
 - Disconnect notices and relocation — [Session and Actor](24-actor-session.en.md)
-- A running version of this chapter's code — `framework/languages/java/tutorial/kotlin`
+- A running version of this chapter's code — [the tutorial README in the examples repository](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>
