@@ -41,7 +41,7 @@ discovery, 시작 단계 검증, 그리고 실패했을 때 호출한 쪽이 보
 | 연결 | mesh peer 연결 하나를 여러 channel이 공유 | server가 공개한 endpoint로 client가 연결 | publisher PUB endpoint마다 subscriber SUB socket |
 | 보내는 node 자신이 Server일 때 | **후보가 아니다** | 다른 server와 같은 후보다 | 해당 없음 |
 | 후보가 없을 때 | 즉시 대상 없음으로 실패 | 잠깐 기다린 뒤 실패 | 받는 node 없이 성공 |
-| 손실 | 없다 | 없다 | **느린 구독자 몫을 버린다**(현재 설정 불가 — [#442](https://github.com/zlink-systems/zlink/issues/442)) |
+| 손실 | 없다 | 없다 | **느린 구독자 몫을 버린다**(NoDrop이면 오류로 끝난다) |
 
 호출 코드는 RouteMesh와 ClientServer가 같다. `sendToChannel`·`requestToChannel`은 ChannelName
 하나로 process-local 송신 경로를 고르며, 그 경로가 RouteMesh인지 ClientServer인지는 등록이
@@ -190,11 +190,10 @@ ClientServer를 사용한다.
 — 그쪽은 routing id로 대상을 적었는데 그 id를 아는 node가 없을 때의 결과다. framework
 0.16.0이 정한 값이다.
 
-!!! warning "C++의 one-way send만 아직 다르다"
+!!! warning "C++의 one-way send는 `Unavailable`과 다르다"
 
     0.16.0에서 .NET·Java·Kotlin·Node는 `request`와 `send` 모두 `Unavailable`을 낸다. **C++만
-    `send`가 `NotFound`를 낸다** — [#498](https://github.com/zlink-systems/zlink/issues/498)이
-    고친 자리를 RouteMesh channel의 one-way 경로가 지나지 않는다. `request`는 C++에서도
+    `send`가 `NotFound`를 낸다. `request`는 C++에서도
     `Unavailable`이다.
 
 남은 대상 사이의 분배는 **weight가 정한다.** weight는 `0..10000` 범위이고 기본값은 `100`이다.
@@ -282,7 +281,7 @@ MeshNode에 해당 ChannelName이 없어도 된다** — 같은 process에 그 �
 | 소켓 | 이미 연결된 mesh 소켓을 그대로 사용한다 | 독립 PUB/SUB 소켓 쌍을 연다 |
 | 받는 대상 | 그 channel에서 같은 topic을 구독한 **Spot** | 연결된 **구독자 전원** |
 | mesh 구성과의 관계 | 그 mesh 안으로 한정된다 | 무관하다 |
-| 손실 | 해당 없음 | **허용한다**(현재 설정 불가) |
+| 손실 | 해당 없음 | **허용한다**(NoDrop이면 오류로 끝난다) |
 | filter | 실행되지 않는다 | 실행된다 |
 | 등록 위치 | Spot이 시작할 때 | fanout channel builder |
 
@@ -317,42 +316,36 @@ fanout channel은 그 자체로 독립된 PUB/SUB 소켓 쌍을 연다. Spot이�
 닿으면 **그 구독자 몫을 버리고 발행은 성공으로 끝난다.** 나머지 구독자는 영향을 받지 않고,
 발행자는 느린 구독자 하나 때문에 멈추지 않는다.
 
-!!! warning "지금은 이 동작을 바꿀 수 없다"
+**느린 구독자 몫도 버리지 않으려면 NoDrop을 켠다.** 그러면 느린 구독자의 backpressure가
+발행을 기다리게 하고, deadline 안에 비워지지 않으면 발행은 오류로 끝난다.
 
-    PUB socket에는 back-pressure에서 버리는 대신 오류로 끝내는 `NODROP` 설정이 있지만,
-    현재 fanout channel builder는 그 값을 노출하지 않는다. 그래서 응용이 고를 수 있는 것은
-    `sendHighWaterMark`를 키워 버려지는 지점을 늦추는 것까지다. 표면 추가는
-    [#442](https://github.com/zlink-systems/zlink/issues/442)에서 다룬다.
+```java
+options.addFanoutChannel("events")
+    .enablePublisher("tcp://*:7400")
+    .setNoDrop(true);
+```
 
-    **손실을 허용할 수 없는 전달은 지금은 fanout channel로 구성하지 않는다.** Logical
-    Multicast는 PUB/SUB 소켓을 사용하지 않고 mesh 연결로 전달하므로 이 규칙의 대상이 아니다.
-    둘 다 저장·재전송·ack는 제공하지 않는다.
+NoDrop은 publisher capability가 있는 channel에서만 설정한다. Logical Multicast도 저장·재전송·ack는 제공하지 않는다.
 
-### 5.3 Topic — Logical Multicast에서만 수신 대상을 고른다
+### 5.3 Topic — 두 형태 모두 수신 대상을 고른다
 
-topic은 두 형태에서 하는 일이 다르다. **한쪽은 받을 대상을 정하고, 다른 쪽은 정하지 않는다.**
+topic은 두 형태에서 모두 수신 대상을 고른다. Logical Multicast는 Spot을 고르고, Classic fanout은 subscriber socket을 고른다.
 
 | | Logical Multicast | Classic fanout |
 | --- | --- | --- |
-| 구독 등록 | ChannelName + **topic** | ChannelName + packet 이름 |
-| topic이 전달을 거르는가 | **거른다.** 같은 topic을 구독한 Spot만 받는다 | **거르지 않는다.** 그 channel의 모든 event를 받는다 |
+| 구독 등록 | ChannelName + **topic** | ChannelName + **topic** |
+| topic이 전달을 거르는가 | **거른다.** 같은 topic을 구독한 Spot만 받는다 | **거른다.** 같은 topic을 구독한 subscriber만 받는다 |
 | 받은 뒤 | 해당 Spot의 구독 handler가 처리한다 | packet 이름으로 handler를 찾고, 없으면 버린다 |
 
-Classic fanout subscriber는 socket을 **모든 topic**에 연결한다. 그래서 같은 channel에 붙은
-subscriber는 발행된 event를 전부 받고, 자기에게 handler가 있는 것만 처리한 뒤 나머지는 그 자리에서
-버린다.
+Classic fanout subscriber는 받을 topic을 `subscribe(topic)`으로 등록한다. 같은 topic에 발행한 event만 그 subscriber까지 전달된다.
 
-**받은 뒤에는 topic을 볼 수 있다.** handler가 함께 받는 publish context가 그 event가 도착한
-topic을 담고 있다. 네트워크에서 대상을 줄이지는 못해도, 한 handler가 여러 topic을 받아 갈라
-처리하는 것은 된다.
+```java
+options.addFanoutChannel("events")
+    .enableSubscriber()
+    .subscribe("order.created");
+```
 
-!!! warning "지금은 Classic fanout에서 topic으로 골라 받을 수 없다"
-
-    구독 등록 표면에 topic 인자가 없다 — `AddHandler<THandler, TEvent>(packetName)`뿐이다.
-    한 channel에 성격이 다른 event를 섞어 발행하면 모든 subscriber가 그것을 **네트워크로 모두
-    받는다.** 받은 뒤 걸러 내도 그 전송은 이미 일어난 뒤다. 지금 전송량을 줄이는 방법은
-    **channel을 나누는 것**뿐이다. 구독 topic 지정은
-    [#445](https://github.com/zlink-systems/zlink/issues/445)에서 다룬다.
+handler가 함께 받는 publish context에는 도착한 topic도 들어 있으므로, 하나의 handler가 여러 topic을 등록해 나누어 처리할 수도 있다.
 
 ### 5.4 발행할 때 topic을 정하는 방법
 

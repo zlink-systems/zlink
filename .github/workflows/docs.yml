@@ -68,6 +68,9 @@ jobs:
       - name: Check framework language tabs and snippets
         run: python3 doc/site/scripts/check_doc_tabs.py framework
 
+      - name: Check common guide issue references
+        run: python3 doc/site/scripts/check_guide_issue_refs.py
+
       - name: Check guide example identifiers
         run: python3 doc/site/scripts/check_guide_identifiers.py
 
