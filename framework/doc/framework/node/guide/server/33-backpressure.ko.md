@@ -140,9 +140,7 @@ reply가 Application 연결의 message를 앞지를 수 있으므로, handler는
 send는 응답을 기다리지 않지만, 기다려야 하는 대상이 하나 있다 — **보낼 자리**다.
 
 ```typescript
-await client.sendToChannel('orders', cancelOrder('order-1042')).submit();
-// 이 await가 끝났다는 것은 "내 runtime이 제출을 받아들였다"까지다.
-// 상대가 받았거나 handler가 끝났다는 뜻이 아니다.
+--8<-- "framework/languages/node/tutorial/Client/main.ts:channel-send-call"
 ```
 
 Framework는 binding operation 하나만 시작한다. 자리가 없으면 Core가 그 같은 operation의 HWM
@@ -153,16 +151,7 @@ Framework는 binding operation 하나만 시작한다. 자리가 없으면 Core�
 operation으로 재시도할지, 버릴지, 사용자에게 실패를 알릴지는 application이 정한다.
 
 ```typescript
-try {
-  await client.sendToChannel('orders', command).submit();
-} catch (ex) {
-  if (!(ex instanceof ZLinkFrameworkException)) throw ex;
-  if (ex.kind !== ZLinkFrameworkErrorKind.DeadlineExceeded) throw ex;
-  // 이 operation이 DeadlineExceeded로 끝났다는 것만 확실하다. 상대 상태는 알 수 없다.
-  // canSafelyRetry는 command 중복을 허용하는지 확인하는 application 소유 predicate다.
-  if (!canSafelyRetry(command)) throw ex;
-  pending.push(command);
-}
+--8<-- "framework/languages/node/tutorial/Client/main.ts:channel-request-call"
 ```
 
 다시 보내도 되는지는 application이 업무 규칙에 따라 판단한다. **같은 명령이 두 번 도착해도
@@ -195,16 +184,7 @@ request는 보낼 자리와 상대의 reply를 모두 기다리므로, 정체가
 유한한 timeout을 반드시 지정한다.**
 
 ```typescript
-async handle(request: PlaceOrder, context: ZLinkMessageContext): Promise<PlaceOrderReply> {
-  // handler가 reply를 기다리는 동안 이 handler의 실행 자리는 계속 점유된다.
-  // 양쪽 node의 처리가 동시에 지연되면 유한한 timeout이 회복을 시작하는 유일한 지점이다.
-  const reserved = await this.client
-    .requestToChannel('inventory', reserveStock(request.sku, request.quantity))
-    .timeout(3000)
-    .submit<StockReserved>();
-
-  return placeOrderReply(request.orderId, reserved.reservationId);
-}
+--8<-- "framework/languages/node/tutorial/Server/main.ts:mesh-register"
 ```
 
 timeout은 backpressure를 조절하는 수단이 아니라 **더 기다리지 않는 경계**다. 호출자가
@@ -343,9 +323,7 @@ STREAM에는 이 pressure 상태를 적용하지 않는다.
 ## 6. 정체 발생 확인 방법
 
 ```typescript
-// Node는 수준을 message flow log mode로 지정한다.
-// 기본값 — error와 backpressure를 기록한다.
-builder.configureDispatch().messageFlow("errors");
+--8<-- "framework/languages/node/samples/ZoneWorld/Server/ZoneNode/zone-node-module.ts:doc-monitoring-flow"
 ```
 
 message flow 기록에 `backpressured`가 남았다면 보낼 자리를 기다리는 일이 실제로 일어났다는

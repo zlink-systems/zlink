@@ -124,42 +124,31 @@ send는 응답을 기다리지 않지만, 기다려야 하는 대상이 하나 �
 === "C#/.NET"
 
     ```csharp
-    await client.SendToChannel("orders", new CancelOrder("order-1042")).Async(ct);
-    // 이 await가 끝났다는 것은 "내 runtime이 제출을 받아들였다"까지다.
-    // 상대가 받았거나 handler가 끝났다는 뜻이 아니다.
+    --8<-- "framework/languages/dotnet/tutorial/Client/Program.cs:channel-send-call"
     ```
 
 === "C++"
 
     ```cpp
-    co_await client.send_to_channel ("orders", cancel_order_t{"order-1042"}).async ();
-    // 이 co_await가 끝났다는 것은 "내 runtime이 제출을 받아들였다"까지다.
-    // 상대가 받았거나 handler가 끝났다는 뜻이 아니다.
+    --8<-- "framework/languages/cpp/tutorial/Client/main.cpp:channel-send-call"
     ```
 
 === "Java"
 
     ```java
-    client.sendToChannel("orders", new CancelOrder("order-1042")).submit().toCompletableFuture().join();
-    // 이 완료는 "내 runtime이 제출을 받아들였다"까지다.
-    // 상대가 받았거나 handler가 끝났다는 뜻이 아니다.
+    --8<-- "framework/languages/java/tutorial/java/Client/src/main/java/systems/zlink/tutorial/client/ClientApplication.java:channel-send-call"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    val kotlinClient = client.kotlin()
-    kotlinClient.sendToChannel("orders", CancelOrder("order-1042")).await()
-    // 이 await가 끝났다는 것은 "내 runtime이 제출을 받아들였다"까지다.
-    // 상대가 받았거나 handler가 끝났다는 뜻이 아니다.
+    --8<-- "framework/languages/java/tutorial/kotlin/Client/src/main/kotlin/systems/zlink/tutorial/client/PlayerEndpoints.kt:channel-send-call"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    await client.sendToChannel('orders', cancelOrder('order-1042')).submit();
-    // 이 await가 끝났다는 것은 "내 runtime이 제출을 받아들였다"까지다.
-    // 상대가 받았거나 handler가 끝났다는 뜻이 아니다.
+    --8<-- "framework/languages/node/tutorial/Client/main.ts:channel-send-call"
     ```
 
 
@@ -173,83 +162,31 @@ operation으로 재시도할지, 버릴지, 사용자에게 실패를 알릴지�
 === "C#/.NET"
 
     ```csharp
-    try
-    {
-        await client.SendToChannel("orders", command).Async(ct);
-    }
-    catch (ZLinkFrameworkException ex)
-        when (ex.Kind == ZLinkFrameworkErrorKind.DeadlineExceeded)
-    {
-        // 이 operation이 DeadlineExceeded로 끝났다는 것만 확실하다. 상대 상태는 알 수 없다.
-        // CanSafelyRetry는 command 중복을 허용하는지 확인하는 application 소유 predicate다.
-        if (!CanSafelyRetry(command))
-            throw;
-        _pending.Enqueue(command);
-    }
+    --8<-- "framework/languages/dotnet/tutorial/Client/Program.cs:channel-request-call"
     ```
 
 === "C++"
 
     ```cpp
-    try {
-        co_await client.send_to_channel ("orders", command).async ();
-    } catch (const framework_exception_t &ex) {
-        if (ex.kind () != framework_error_kind_t::deadline_exceeded)
-            throw;
-        // 이 operation이 DeadlineExceeded로 끝났다는 것만 확실하다. 상대 상태는 알 수 없다.
-        // can_safely_retry는 command 중복을 허용하는지 확인하는 application 소유 predicate다.
-        if (!can_safely_retry (command))
-            throw;
-        _pending.push_back (command);
-    }
+    --8<-- "framework/languages/cpp/tutorial/Client/main.cpp:channel-request-call"
     ```
 
 === "Java"
 
     ```java
-    try {
-        client.sendToChannel("orders", command).submit().toCompletableFuture().join();
-    } catch (ZLinkFrameworkException ex) {
-        if (ex.kind() != ZLinkFrameworkErrorKind.DeadlineExceeded) {
-            throw ex;
-        }
-        // 이 operation이 DeadlineExceeded로 끝났다는 것만 확실하다. 상대 상태는 알 수 없다.
-        // canSafelyRetry는 command 중복을 허용하는지 확인하는 application 소유 predicate다.
-        if (!canSafelyRetry(command)) {
-            throw ex;
-        }
-        pending.add(command);
-    }
+    --8<-- "framework/languages/java/tutorial/java/Client/src/main/java/systems/zlink/tutorial/client/ClientApplication.java:channel-request-call"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    val kotlinClient = client.kotlin()
-    try {
-        kotlinClient.sendToChannel("orders", command).await()
-    } catch (ex: ZLinkFrameworkException) {
-        if (ex.kind() != ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED) throw ex
-        // 이 operation이 DeadlineExceeded로 끝났다는 것만 확실하다. 상대 상태는 알 수 없다.
-        // canSafelyRetry는 command 중복을 허용하는지 확인하는 application 소유 predicate다.
-        if (!canSafelyRetry(command)) throw ex
-        pending += command
-    }
+    --8<-- "framework/languages/java/tutorial/kotlin/Client/src/main/kotlin/systems/zlink/tutorial/client/PlayerEndpoints.kt:channel-request-call"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    try {
-      await client.sendToChannel('orders', command).submit();
-    } catch (ex) {
-      if (!(ex instanceof ZLinkFrameworkException)) throw ex;
-      if (ex.kind !== ZLinkFrameworkErrorKind.DeadlineExceeded) throw ex;
-      // 이 operation이 DeadlineExceeded로 끝났다는 것만 확실하다. 상대 상태는 알 수 없다.
-      // canSafelyRetry는 command 중복을 허용하는지 확인하는 application 소유 predicate다.
-      if (!canSafelyRetry(command)) throw ex;
-      pending.push(command);
-    }
+    --8<-- "framework/languages/node/tutorial/Client/main.ts:channel-request-call"
     ```
 
 
@@ -285,79 +222,31 @@ request는 보낼 자리와 상대의 reply를 모두 기다리므로, 정체가
 === "C#/.NET"
 
     ```csharp
-    public async ValueTask<PlaceOrderReply> HandleAsync(
-        PlaceOrder request, IZLinkMessageContext context, CancellationToken ct)
-    {
-        // handler가 reply를 기다리는 동안 이 handler의 실행 자리는 계속 점유된다.
-        // 양쪽 node의 처리가 동시에 지연되면 유한한 timeout이 회복을 시작하는 유일한 지점이다.
-        var reserved = await _client
-            .RequestToChannel("inventory", new ReserveStock(request.Sku, request.Quantity))
-            .Timeout(TimeSpan.FromSeconds(3))
-            .Async<StockReserved>(ct);
-
-        return new PlaceOrderReply(request.OrderId, reserved.ReservationId);
-    }
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:mesh-register"
     ```
 
 === "C++"
 
     ```cpp
-    task_t<place_order_reply_t> handle (const place_order_t &request)
-    {
-        // handler가 reply를 기다리는 동안 이 handler의 실행 자리는 계속 점유된다.
-        // 양쪽 node의 처리가 동시에 지연되면 유한한 timeout이 회복을 시작하는 유일한 지점이다.
-        auto reserved = co_await _client
-                          .request_to_channel ("inventory",
-                                               reserve_stock_t{request.sku, request.quantity})
-                          .timeout (std::chrono::seconds (3))
-                          .async<stock_reserved_t> ();
-
-        co_return place_order_reply_t{request.order_id, reserved.reservation_id};
-    }
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:mesh-register"
     ```
 
 === "Java"
 
     ```java
-    public CompletionStage<PlaceOrderReply> handle(PlaceOrder request, ZLinkMessageContext context) {
-        // handler가 reply를 기다리는 동안 이 handler의 실행 자리는 계속 점유된다.
-        // 양쪽 node의 처리가 동시에 지연되면 유한한 timeout이 회복을 시작하는 유일한 지점이다.
-        return client
-            .requestToChannel("inventory", new ReserveStock(request.sku(), request.quantity()))
-            .timeout(Duration.ofSeconds(3))
-            .submit(StockReserved.class)
-            .thenApply(reserved -> new PlaceOrderReply(request.orderId(), reserved.reservationId()));
-    }
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:mesh-register"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    suspend fun handle(request: PlaceOrder, context: ZLinkMessageContext): PlaceOrderReply {
-        // handler가 reply를 기다리는 동안 이 handler의 실행 자리는 계속 점유된다.
-        // 양쪽 node의 처리가 동시에 지연되면 유한한 timeout이 회복을 시작하는 유일한 지점이다.
-        val reserved = client.kotlin()
-            .requestToChannel<StockReserved>("inventory", ReserveStock(request.sku, request.quantity))
-            .timeout(Duration.ofSeconds(3))
-            .await()
-
-        return PlaceOrderReply(request.orderId, reserved.reservationId)
-    }
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:mesh-register"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    async handle(request: PlaceOrder, context: ZLinkMessageContext): Promise<PlaceOrderReply> {
-      // handler가 reply를 기다리는 동안 이 handler의 실행 자리는 계속 점유된다.
-      // 양쪽 node의 처리가 동시에 지연되면 유한한 timeout이 회복을 시작하는 유일한 지점이다.
-      const reserved = await this.client
-        .requestToChannel('inventory', reserveStock(request.sku, request.quantity))
-        .timeout(3000)
-        .submit<StockReserved>();
-
-      return placeOrderReply(request.orderId, reserved.reservationId);
-    }
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:mesh-register"
     ```
 
 
@@ -499,40 +388,31 @@ STREAM에는 이 pressure 상태를 적용하지 않는다.
 === "C#/.NET"
 
     ```csharp
-    options.ConfigureDispatch().Diagnostics
-        .SetLevel(ZLinkDiagnosticsLevel.Errors); // 기본값 — error와 backpressure를 기록한다.
+    --8<-- "framework/languages/dotnet/samples/ZoneWorld/Server/ZoneNode/Program.cs:doc-monitoring-flow"
     ```
 
 === "C++"
 
     ```cpp
-    // C++은 수준을 message flow log mode로 지정한다.
-    // 기본값 — error와 backpressure를 기록한다.
-    options.configure_dispatch ().message_flow (message_flow_log_mode_t::errors);
+    --8<-- "framework/languages/cpp/samples/TicTacToe/Server/Play/play_server_host_factory.hpp:doc-monitoring-flow"
     ```
 
 === "Java"
 
     ```java
-    // Java는 수준을 message flow log mode로 지정한다.
-    // 기본값 — error와 backpressure를 기록한다.
-    options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.ERRORS);
+    --8<-- "framework/languages/java/samples/java/ZoneWorld/Server/src/main/java/systems/zlink/samples/zoneworld/server/Program.java:doc-monitoring-flow"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    // Kotlin은 Java 표면을 그대로 쓴다.
-    // 기본값 — error와 backpressure를 기록한다.
-    options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.ERRORS)
+    --8<-- "framework/languages/java/samples/kotlin/ZoneWorld/Server/src/main/kotlin/systems/zlink/samples/kotlin/zoneworld/server/Program.kt:doc-monitoring-flow"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    // Node는 수준을 message flow log mode로 지정한다.
-    // 기본값 — error와 backpressure를 기록한다.
-    builder.configureDispatch().messageFlow("errors");
+    --8<-- "framework/languages/node/samples/ZoneWorld/Server/ZoneNode/zone-node-module.ts:doc-monitoring-flow"
     ```
 
 
