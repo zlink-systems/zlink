@@ -102,6 +102,44 @@ final class ZLinkStreamHeaderCodecTest {
     }
 
     @Test
+    void actorSlotRoundTripsAfterFlowTrailerAndControlRejectsIt() {
+        ZLinkStreamHeader header =
+                new ZLinkStreamHeader(
+                                ZLinkStreamMessageKind.SEND,
+                                ZLinkStreamCodec.JSON,
+                                EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                                Optional.empty(),
+                                "ActorPush",
+                                Map.of())
+                        .withActorSlot(513);
+
+        byte[] encoded = ZLinkStreamHeaderCodec.encode(header);
+        ZLinkStreamHeader decoded = ZLinkStreamHeaderCodec.decodeOrPlain(encoded);
+
+        assertEquals(Optional.of(513), decoded.actorSlot());
+        assertTrue(decoded.flags().contains(ZLinkStreamHeaderFlag.HAS_ACTOR_SLOT));
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        new ZLinkStreamHeader(
+                                ZLinkStreamMessageKind.CONTROL,
+                                ZLinkStreamCodec.RAW,
+                                EnumSet.of(ZLinkStreamHeaderFlag.HAS_ACTOR_SLOT),
+                                Optional.empty(),
+                                "$zlink.actor.bound",
+                                Map.of(),
+                                Optional.empty(),
+                                Optional.empty(),
+                                Optional.empty(),
+                                Optional.of(1)));
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        ZLinkStreamHeaderCodec.decodeOrPlain(
+                                hex("f2 01 01 20 09 41 63 74 6f 72 50 75 73 68 00 00")));
+    }
+
+    @Test
     void createResponseEchoesRequestSequenceAndCorrelationId() {
         ZLinkStreamHeader request =
                 new ZLinkStreamHeader(

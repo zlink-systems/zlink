@@ -25,13 +25,15 @@ final class ZLinkStreamWireProtocol {
     static final int FLAG_PAYLOAD_COMPRESSED = 0x04;
     static final int FLAG_HAS_CORRELATION_ID = 0x08;
     static final int FLAG_HAS_FLOW_ID = 0x10;
+    static final int FLAG_HAS_ACTOR_SLOT = 0x20;
 
     private static final int KNOWN_FLAGS =
             FLAG_HAS_REQUEST_SEQ
                     | FLAG_HAS_METADATA
                     | FLAG_PAYLOAD_COMPRESSED
                     | FLAG_HAS_CORRELATION_ID
-                    | FLAG_HAS_FLOW_ID;
+                    | FLAG_HAS_FLOW_ID
+                    | FLAG_HAS_ACTOR_SLOT;
     private static final int MAX_PACKET_NAME_BYTES = 255;
     private static final int MAX_METADATA_BYTES = 1024;
 
@@ -67,6 +69,8 @@ final class ZLinkStreamWireProtocol {
                         : flags & ~FLAG_HAS_CORRELATION_ID;
         boolean hasFlow = header.flowId() != null;
         flags = hasFlow ? flags | FLAG_HAS_FLOW_ID : flags & ~FLAG_HAS_FLOW_ID;
+        boolean hasActorSlot = header.actorSlot() != null;
+        flags = hasActorSlot ? flags | FLAG_HAS_ACTOR_SLOT : flags & ~FLAG_HAS_ACTOR_SLOT;
 
         int size =
                 4
@@ -75,7 +79,8 @@ final class ZLinkStreamWireProtocol {
                         + name.length
                         + (metadata.length == 0 ? 0 : 2 + metadata.length)
                         + (hasCorrelationId ? 1 + correlation.length : 0)
-                        + (hasFlow ? 37 : 0);
+                        + (hasFlow ? 37 : 0)
+                        + (hasActorSlot ? Short.BYTES : 0);
         ByteBuffer buffer = ByteBuffer.allocate(size);
         buffer.put((byte) FORMAT_MARKER);
         buffer.put((byte) header.kind());
@@ -97,6 +102,9 @@ final class ZLinkStreamWireProtocol {
         if (hasFlow) {
             buffer.put(header.flowId().getBytes(StandardCharsets.US_ASCII));
             buffer.put((byte) header.flowOrigin());
+        }
+        if (hasActorSlot) {
+            buffer.putShort((short) header.actorSlot().intValue());
         }
         return buffer.array();
     }
@@ -165,6 +173,14 @@ final class ZLinkStreamWireProtocol {
             flowId = new String(flowBytes, StandardCharsets.US_ASCII);
             flowOrigin = Byte.toUnsignedInt(buffer.get());
         }
+        Integer actorSlot = null;
+        if ((flags & FLAG_HAS_ACTOR_SLOT) != 0) {
+            requireRemaining(buffer, Short.BYTES, "actor slot");
+            actorSlot = Short.toUnsignedInt(buffer.getShort());
+            if (actorSlot == 0) {
+                throw new IllegalArgumentException("actor slot must not be zero");
+            }
+        }
         if (buffer.hasRemaining()) {
             throw new IllegalArgumentException("stream header contains trailing bytes");
         }
@@ -178,7 +194,8 @@ final class ZLinkStreamWireProtocol {
                         metadata,
                         correlationId,
                         flowId,
-                        flowOrigin);
+                        flowOrigin,
+                        actorSlot);
         validateHeader(decoded, decoded.name(), validateFlow);
         return decoded;
     }
@@ -345,12 +362,17 @@ final class ZLinkStreamWireProtocol {
         } else if (header.flowOrigin() != 0) {
             throw new IllegalArgumentException("flow id and origin must be present together");
         }
+        boolean hasActorSlot = header.actorSlot() != null;
+        if (hasActorSlot && (header.actorSlot() <= 0 || header.actorSlot() > 0xffff)) {
+            throw new IllegalArgumentException("actor slot is invalid");
+        }
         if (header.kind() == KIND_CONTROL
                 && (header.flags() != 0
                         || hasRequestSeq
                         || hasMetadata
                         || hasCorrelationId
                         || hasFlow
+                        || hasActorSlot
                         || header.codec() != CODEC_RAW)) {
             throw new IllegalArgumentException(
                     "control packet must use raw codec and must not contain flags");
@@ -388,7 +410,8 @@ final class ZLinkStreamWireProtocol {
             Map<String, String> metadata,
             String correlationId,
             String flowId,
-            int flowOrigin) {
+            int flowOrigin,
+            Integer actorSlot) {
         Header {
             metadata = Collections.unmodifiableMap(new LinkedHashMap<>(metadata));
         }
@@ -402,6 +425,29 @@ final class ZLinkStreamWireProtocol {
                 Map<String, String> metadata,
                 String correlationId) {
             this(kind, codec, flags, requestSeq, name, metadata, correlationId, null, 0);
+        }
+
+        Header(
+                int kind,
+                int codec,
+                int flags,
+                Long requestSeq,
+                String name,
+                Map<String, String> metadata,
+                String correlationId,
+                String flowId,
+                int flowOrigin) {
+            this(
+                    kind,
+                    codec,
+                    flags,
+                    requestSeq,
+                    name,
+                    metadata,
+                    correlationId,
+                    flowId,
+                    flowOrigin,
+                    null);
         }
     }
 

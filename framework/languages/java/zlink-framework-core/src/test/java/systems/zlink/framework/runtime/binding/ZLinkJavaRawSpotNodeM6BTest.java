@@ -45,13 +45,16 @@ import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
+import systems.zlink.framework.runtime.streams.ZLinkStreamFrameCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
+import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -2186,10 +2189,15 @@ final class ZLinkJavaRawSpotNodeM6BTest {
 
             stream.startSessionService();
             long firstBindingGeneration = node.bindingGenerationSeed();
-            stream.bindActor(sessionRid, actor)
+            stream.bindActor(sessionRid, actor, 1)
                     .submit(Duration.ofSeconds(1))
                     .toCompletableFuture()
                     .get(1, TimeUnit.SECONDS);
+            assertFalse(
+                    ((ZLinkJavaRawSpotNode) node.spotNode()).hasLocalActorBoundSessionRoute(actor));
+            stream.publishBoundActor(sessionRid, actor.actorId());
+            assertTrue(
+                    ((ZLinkJavaRawSpotNode) node.spotNode()).hasLocalActorBoundSessionRoute(actor));
             try (Message message = Message.from("stream-ingress")) {
                 assertTrue(
                         stream.sendBoundActor(
@@ -2200,10 +2208,11 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             }
             assertEquals(sessionRid, delivered.get(1, TimeUnit.SECONDS));
 
-            stream.bindActor(sessionRid, actor)
+            stream.bindActor(sessionRid, actor, 2)
                     .submit(Duration.ofSeconds(1))
                     .toCompletableFuture()
                     .get(1, TimeUnit.SECONDS);
+            stream.publishBoundActor(sessionRid, actor.actorId());
             try (Message stale = Message.from("stale-local-ingress")) {
                 assertFalse(
                         ((ZLinkJavaRawSpotNode) node.spotNode())
@@ -2265,6 +2274,44 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                             7,
                             new ZLinkServiceM6BWireCodec.BoundSessionBind(
                                     2, route, inactive.sessionRid(), true, 3)));
+        }
+    }
+
+    @Test
+    void remoteBindingIsPublishedOnlyAfterCommandReplySubmission() throws Exception {
+        try (var context = Zlink.createContext();
+                var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            RoutingId nodeRid = RoutingId.from("jvm-m6b-linearized-node");
+            RoutingId sourceRid = RoutingId.from("jvm-m6b-linearized-source");
+            node.setRoutingId(nodeRid);
+            node.setBind("inproc://jvm-m6b-linearized-" + System.nanoTime());
+            node.start();
+
+            ZLinkJavaRawSpotNode target = (ZLinkJavaRawSpotNode) node.spotNode();
+            ZLinkBackendActorRef actor;
+            try (Message create = Message.from("create")) {
+                actor = target.createActor("linearized-actor", create);
+            }
+            target.rememberActorAuthority(actor, 41, 1);
+            var route =
+                    new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                            actor, node.lifecycleGeneration(), 41, 1);
+            var command =
+                    new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                            1, route, RoutingId.from("jvm-m6b-linearized-session"), true, 3);
+
+            assertTrue(
+                    target.acceptRemoteStreamBinding(
+                            sourceRid,
+                            7,
+                            sourceRid.toString(),
+                            1,
+                            command,
+                            accepted -> {
+                                assertTrue(accepted);
+                                assertFalse(target.hasRemoteActorBoundSessionRoute(actor));
+                            }));
+            assertTrue(target.hasRemoteActorBoundSessionRoute(actor));
         }
     }
 
@@ -2410,7 +2457,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 var actor =
                         new ZLinkBackendActorRef(
                                 RoutingId.from("ended-actor-node"), "ended-actor", 1);
-                stream.bindActor(session, actor)
+                stream.bindActor(session, actor, 1)
                         .submit(Duration.ofSeconds(1))
                         .toCompletableFuture()
                         .get(1, TimeUnit.SECONDS);
@@ -2476,7 +2523,8 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                     .ZLinkBackendActorRef(
                                     RoutingId.from("disconnected-close-actor-node"),
                                     "disconnected-close-actor",
-                                    1))
+                                    1),
+                            1)
                     .submit(Duration.ofSeconds(1))
                     .toCompletableFuture()
                     .get(1, TimeUnit.SECONDS);
@@ -2556,6 +2604,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
         RoutingId sessionNodeRid = RoutingId.from("jvm-m6b-bound-session-node");
         RoutingId sessionRid = RoutingId.from("jvm-m6b-bound-session");
         CopyOnWriteArrayList<String> pushed = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<Integer> pushedSlots = new CopyOnWriteArrayList<>();
         AtomicInteger boundPushCalls = new AtomicInteger();
         CompletableFuture<Boolean> firstBoundPushSettlement = new CompletableFuture<>();
         try (var context = Zlink.createContext();
@@ -2567,7 +2616,15 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                 sessionNode,
                                 (rid, parts, flags) -> {
                                     assertEquals(sessionRid, rid);
-                                    pushed.add(parts.getLast().toUtf8String());
+                                    ZLinkStreamFrameCodec.DecodedFrame decoded =
+                                            ZLinkStreamFrameCodec.tryDecode(
+                                                            parts.getLast().toByteArray())
+                                                    .orElseThrow();
+                                    pushedSlots.add(
+                                            ZLinkStreamHeaderCodec.decodeOrPlain(decoded.header())
+                                                    .actorSlot()
+                                                    .orElseThrow());
+                                    pushed.add(new String(decoded.body(), StandardCharsets.UTF_8));
                                     return true;
                                 })) {
             actorNode.setRoutingId(actorNodeRid);
@@ -2618,6 +2675,14 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                         if (method.getName().equals("requestBoundActor")) {
                                             return CompletableFuture.completedFuture(List.of());
                                         }
+                                        if ((method.getName().equals("sendAsync")
+                                                        || method.getName()
+                                                                .equals("admitSessionControl"))
+                                                && arguments[1] instanceof ZLinkStreamHeader header
+                                                && header.kind()
+                                                        == ZLinkStreamMessageKind.CONTROL) {
+                                            return CompletableFuture.completedFuture(null);
+                                        }
                                         try {
                                             return method.invoke(stream, arguments);
                                         } catch (InvocationTargetException failure) {
@@ -2667,14 +2732,28 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             assertEquals(sessionRid, ingress.get(1, TimeUnit.SECONDS));
 
             sessionNode.spotNode().rememberActorAuthority(actor, 74, 1);
-            try (Message push = Message.from("push-one")) {
+            try (Message push =
+                    Message.from(
+                            ZLinkStreamFrameCodec.encode(
+                                    ZLinkStreamMessageKind.SEND,
+                                    ZLinkStreamCodec.RAW,
+                                    Optional.empty(),
+                                    "Push",
+                                    "push-one".getBytes(StandardCharsets.UTF_8)))) {
                 actorNode
                         .spotNode()
                         .sendRemoteActorBoundSession(actor, List.of(push))
                         .toCompletableFuture()
                         .get(1, TimeUnit.SECONDS);
             }
-            try (Message push = Message.from("push-after-unsettled")) {
+            try (Message push =
+                    Message.from(
+                            ZLinkStreamFrameCodec.encode(
+                                    ZLinkStreamMessageKind.SEND,
+                                    ZLinkStreamCodec.RAW,
+                                    Optional.empty(),
+                                    "Push",
+                                    "push-after-unsettled".getBytes(StandardCharsets.UTF_8)))) {
                 actorNode
                         .spotNode()
                         .sendRemoteActorBoundSession(actor, List.of(push))
@@ -2693,6 +2772,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 Thread.sleep(1);
             }
             assertEquals(List.of("push-one", "push-after-unsettled"), pushed);
+            assertEquals(List.of(1, 1), pushedSlots);
             sessionNode.spotNode().rememberActorAuthority(actor, 73, 1);
 
             sessionOwner
@@ -2706,22 +2786,28 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             var currentRoute =
                     new ZLinkServiceM6BWireCodec.ActorRouteFence(
                             actor, actorNode.lifecycleGeneration(), 73, 1);
-            try (Message packet = Message.from("message");
-                    Message payload = Message.from("stale")) {
-                assertFalse(
+            try (Message packet =
+                    Message.from(
+                            ZLinkStreamFrameCodec.encode(
+                                    ZLinkStreamMessageKind.SEND,
+                                    ZLinkStreamCodec.RAW,
+                                    Optional.empty(),
+                                    "Push",
+                                    "current".getBytes(StandardCharsets.UTF_8)))) {
+                assertTrue(
                         source.acceptBoundSessionPush(
                                 actorNodeRid,
                                 actorNode.lifecycleGeneration(),
                                 new ZLinkServiceM6BWireCodec.BoundSessionSend(
                                         currentRoute, firstBindingGeneration),
-                                List.of(packet, payload)));
+                                List.of(packet)));
                 assertFalse(
                         source.acceptBoundSessionPush(
                                 actorNodeRid,
                                 actorNode.lifecycleGeneration() + 1,
                                 new ZLinkServiceM6BWireCodec.BoundSessionSend(
                                         currentRoute, firstBindingGeneration + 1),
-                                List.of(packet, payload)));
+                                List.of(packet)));
                 assertFalse(
                         source.acceptBoundSessionPush(
                                 actorNodeRid,
@@ -2737,7 +2823,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                                 73,
                                                 1),
                                         firstBindingGeneration + 1),
-                                List.of(packet, payload)));
+                                List.of(packet)));
                 assertFalse(
                         source.acceptBoundSessionPush(
                                 actorNodeRid,
@@ -2746,15 +2832,17 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                         new ZLinkServiceM6BWireCodec.ActorRouteFence(
                                                 actor, actorNode.lifecycleGeneration(), 74, 1),
                                         firstBindingGeneration + 1),
-                                List.of(packet, payload)));
+                                List.of(packet)));
             }
+            assertEquals(List.of("push-one", "push-after-unsettled", "current"), pushed);
+            assertEquals(List.of(1, 1, 1), pushedSlots);
 
             int boundFlags =
                     systems.zlink.framework.runtime.protocol.ServiceWireConstants.FLAG_BOUND_SESSION
                             | systems.zlink.framework.runtime.protocol.ServiceWireConstants
                                     .FLAG_SOURCE_SPOT_ID;
-            try (Message payload = Message.from("stale-ingress")) {
-                assertFalse(
+            try (Message payload = Message.from("current-ingress")) {
+                assertTrue(
                         target.enqueueRemoteActor(
                                 sessionNodeRid,
                                 sessionNode.lifecycleGeneration(),
@@ -2790,17 +2878,26 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                             sessionNode.lifecycleGeneration(),
                             new ZLinkServiceM6BWireCodec.BoundSessionBind(
                                     999, currentRoute, sessionRid, false, firstBindingGeneration)));
-            try (Message push = Message.from("push-two")) {
+            try (Message push =
+                    Message.from(
+                            ZLinkStreamFrameCodec.encode(
+                                    ZLinkStreamMessageKind.SEND,
+                                    ZLinkStreamCodec.RAW,
+                                    Optional.empty(),
+                                    "Push",
+                                    "push-two".getBytes(StandardCharsets.UTF_8)))) {
                 actorNode
                         .spotNode()
                         .sendRemoteActorBoundSession(actor, List.of(push))
                         .toCompletableFuture()
                         .get(1, TimeUnit.SECONDS);
             }
-            while (pushed.size() < 3 && System.nanoTime() < deadline) {
+            while (pushed.size() < 4 && System.nanoTime() < deadline) {
                 Thread.sleep(1);
             }
-            assertEquals(List.of("push-one", "push-after-unsettled", "push-two"), pushed);
+            assertEquals(
+                    List.of("push-one", "push-after-unsettled", "current", "push-two"), pushed);
+            assertEquals(List.of(1, 1, 1, 1), pushedSlots);
 
             stream.unbindActor(sessionRid, actor.actorId())
                     .submit(Duration.ofSeconds(1))
@@ -2820,7 +2917,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                         SubmitResult.NOT_FOUND,
                         ((ZlinkSubmitException) lateFailure.getCause()).getResult());
             }
-            assertEquals(3, pushed.size());
+            assertEquals(4, pushed.size());
         }
     }
 

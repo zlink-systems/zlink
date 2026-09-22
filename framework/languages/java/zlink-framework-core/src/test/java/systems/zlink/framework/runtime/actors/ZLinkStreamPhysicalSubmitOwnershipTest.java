@@ -634,7 +634,17 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
                 Proxy.newProxyInstance(
                         ZLinkBackendStreamSocket.class.getClassLoader(),
                         new Class<?>[] {ZLinkBackendStreamSocket.class},
-                        (proxy, method, arguments) -> invocation.invoke(method, arguments));
+                        (proxy, method, arguments) -> {
+                            if ((method.getName().equals("sendAsync")
+                                            || method.getName().equals("admitSessionControl"))
+                                    && arguments != null
+                                    && arguments.length >= 2
+                                    && arguments[1] instanceof ZLinkStreamHeader header
+                                    && header.kind() == ZLinkStreamMessageKind.CONTROL) {
+                                return CompletableFuture.completedFuture(null);
+                            }
+                            return invocation.invoke(method, arguments);
+                        });
     }
 
     private static Object defaultValue(Class<?> type) {
