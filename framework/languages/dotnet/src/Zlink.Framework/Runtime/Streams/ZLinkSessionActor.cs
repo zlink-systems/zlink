@@ -9,19 +9,22 @@ internal sealed class ZLinkSessionActor : IZLinkSessionActor
     internal RoutingId SessionRid { get; }
 
     internal string BindingToken { get; }
+    internal ushort Slot { get; }
     public string ActorId { get; }
 
     internal ZLinkSessionActor(
         ZLinkSessionContext context,
         string actorId,
         RoutingId sessionRid,
-        string bindingToken
+        string bindingToken,
+        ushort slot = 1
     )
     {
         Context = context;
         ActorId = actorId;
         SessionRid = sessionRid;
         BindingToken = bindingToken;
+        Slot = slot;
         _disconnectTask = new Lazy<Task>(
             () => Context.NotifyActorRefDisconnectedAsync(this, CancellationToken.None).AsTask(),
             LazyThreadSafetyMode.ExecutionAndPublication

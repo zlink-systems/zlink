@@ -13,7 +13,8 @@ internal sealed class ZlinkStreamHeaderCodec
         | ZlinkStreamHeaderFlags.HasMetadata
         | ZlinkStreamHeaderFlags.PayloadCompressed
         | ZlinkStreamHeaderFlags.HasCorrelationId
-        | ZlinkStreamHeaderFlags.HasFlowId;
+        | ZlinkStreamHeaderFlags.HasFlowId
+        | ZlinkStreamHeaderFlags.HasActorSlot;
 
     public ReadOnlyMemory<byte> Encode(ZlinkStreamHeader header) =>
         Encode(header, header.CorrelationId.AsSpan());
@@ -49,6 +50,12 @@ internal sealed class ZlinkStreamHeaderCodec
                 ZlinkStreamErrorCode.ValidationFailed,
                 "Flow origin is invalid."
             );
+        var hasActorSlot = header.ActorSlot is not null;
+        if (header.ActorSlot == 0)
+            throw ZlinkStreamConnector.Error(
+                ZlinkStreamErrorCode.ValidationFailed,
+                "Actor slot must not be zero."
+            );
 
         var flags = header.Flags;
         ValidateHeaderSemantics(
@@ -58,7 +65,8 @@ internal sealed class ZlinkStreamHeaderCodec
             hasRequestSeq,
             hasMetadata,
             hasCorrelationId,
-            hasFlowId
+            hasFlowId,
+            hasActorSlot
         );
 
         flags = hasRequestSeq
@@ -73,6 +81,9 @@ internal sealed class ZlinkStreamHeaderCodec
         flags = hasFlowId
             ? flags | ZlinkStreamHeaderFlags.HasFlowId
             : flags & ~ZlinkStreamHeaderFlags.HasFlowId;
+        flags = hasActorSlot
+            ? flags | ZlinkStreamHeaderFlags.HasActorSlot
+            : flags & ~ZlinkStreamHeaderFlags.HasActorSlot;
 
         var metadataSize = hasMetadata
             ? ZlinkStreamMetadataCodec.GetPayloadSize(header.Metadata)
@@ -90,7 +101,8 @@ internal sealed class ZlinkStreamHeaderCodec
             + nameLength
             + (hasMetadata ? 2 + metadataSize : 0)
             + (hasCorrelationId ? 1 + correlationLength : 0)
-            + (hasFlowId ? ZlinkStreamFlowId.EncodedLength + 1 : 0);
+            + (hasFlowId ? ZlinkStreamFlowId.EncodedLength + 1 : 0)
+            + (hasActorSlot ? 2 : 0);
         var buffer = new byte[size];
         var offset = 0;
         buffer[offset++] = ZlinkStreamFlowId.FormatMarker;
@@ -143,6 +155,15 @@ internal sealed class ZlinkStreamHeaderCodec
             );
             offset += ZlinkStreamFlowId.EncodedLength;
             buffer[offset++] = FlowOriginToWire(header.FlowOrigin!.Value)!.Value;
+        }
+
+        if (hasActorSlot)
+        {
+            BinaryPrimitives.WriteUInt16BigEndian(
+                buffer.AsSpan(offset, 2),
+                header.ActorSlot!.Value
+            );
+            offset += 2;
         }
 
         return buffer;
@@ -276,6 +297,23 @@ internal sealed class ZlinkStreamHeaderCodec
             }
         }
 
+        ushort? actorSlot = null;
+        if (flags.HasFlag(ZlinkStreamHeaderFlags.HasActorSlot))
+        {
+            if (span.Length - offset < 2)
+                throw ZlinkStreamConnector.Error(
+                    ZlinkStreamErrorCode.FrameDecodeFailed,
+                    "Actor slot field is truncated."
+                );
+            actorSlot = BinaryPrimitives.ReadUInt16BigEndian(span.Slice(offset, 2));
+            offset += 2;
+            if (actorSlot == 0)
+                throw ZlinkStreamConnector.Error(
+                    ZlinkStreamErrorCode.FrameDecodeFailed,
+                    "Actor slot must not be zero."
+                );
+        }
+
         if (offset != span.Length)
             throw ZlinkStreamConnector.Error(
                 ZlinkStreamErrorCode.FrameDecodeFailed,
@@ -295,7 +333,8 @@ internal sealed class ZlinkStreamHeaderCodec
             requestSeq is not null,
             metadata.Count > 0,
             correlationId is not null,
-            flags.HasFlag(ZlinkStreamHeaderFlags.HasFlowId)
+            flags.HasFlag(ZlinkStreamHeaderFlags.HasFlowId),
+            actorSlot is not null
         );
         return new ZlinkStreamHeader(
             kind,
@@ -306,7 +345,8 @@ internal sealed class ZlinkStreamHeaderCodec
             metadata,
             correlationId,
             flowId,
-            flowOrigin
+            flowOrigin,
+            actorSlot
         );
     }
 
@@ -387,7 +427,8 @@ internal sealed class ZlinkStreamHeaderCodec
         bool hasRequestSeq,
         bool hasMetadata,
         bool hasCorrelationId,
-        bool hasFlowId
+        bool hasFlowId,
+        bool hasActorSlot
     )
     {
         if (kind == ZlinkStreamMessageKind.Send && hasRequestSeq)
@@ -447,6 +488,12 @@ internal sealed class ZlinkStreamHeaderCodec
                 throw ZlinkStreamConnector.Error(
                     ZlinkStreamErrorCode.FrameDecodeFailed,
                     "Control packet must not contain flow fields."
+                );
+
+            if (hasActorSlot)
+                throw ZlinkStreamConnector.Error(
+                    ZlinkStreamErrorCode.FrameDecodeFailed,
+                    "Control packet must not contain an actor slot."
                 );
         }
     }

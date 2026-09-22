@@ -155,6 +155,21 @@ public sealed class StreamWireInteropTests
     }
 
     [Fact]
+    public void CoreAndConnectorHeaderCodecs_RoundTripActorSlot()
+    {
+        var header = CreateHeader() with { ActorSlot = 41 };
+
+        var core = CoreHeaderCodec.Decode(CoreHeaderCodec.Encode(header));
+        var connector = new ConnectorHeaderCodec().Decode(
+            new ConnectorHeaderCodec().Encode(header)
+        );
+
+        Assert.Equal((ushort)41, core.ActorSlot);
+        Assert.Equal((ushort)41, connector.ActorSlot);
+        Assert.True(core.Flags.HasFlag(ZlinkStreamHeaderFlags.HasActorSlot));
+    }
+
+    [Fact]
     public void CoreHeaderCodec_RoundTripsEmptyMetadataValue()
     {
         var header = CreateHeader();

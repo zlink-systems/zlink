@@ -8,6 +8,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
     internal const string HeartbeatPingName = "$zlink.heartbeat.ping";
     internal const string HeartbeatPongName = "$zlink.heartbeat.pong";
     private readonly ZlinkStreamConnectorCallbacks _callbacks;
+    private readonly ZlinkStreamActors _actors;
     private readonly IZlinkStreamCompressionCodec? _compressionCodec;
     private readonly ZlinkStreamFrameSender _frameSender;
     private readonly ZlinkStreamHeaderCodec _headerCodec;
@@ -45,6 +46,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
             options.MaxPendingDispatchCallbacks,
             options
         );
+        _actors = new ZlinkStreamActors(this, _callbacks);
         _headerCodec = new ZlinkStreamHeaderCodec();
         _compressionCodec = CreateCompressionCodec(options);
 
@@ -56,7 +58,11 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
             _callbacks,
             connectTransport,
             _receivedMessages.ResetForConnection,
-            _receivedMessages.ConnectionEnded
+            () =>
+            {
+                _actors.ConnectionEnded();
+                _receivedMessages.ConnectionEnded();
+            }
         );
         _frameSender = new ZlinkStreamFrameSender(
             options,
@@ -79,6 +85,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
             _receivedMessages,
             _frameSender,
             _callbacks,
+            _actors,
             _lifecycle.HandleServerCloseAsync
         );
         _receiveLoop = new ZlinkStreamReceiveLoop(
@@ -128,6 +135,28 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
     public ZlinkStreamDiagnosticsLevel DiagnosticsLevel => Options.DiagnosticsLevel;
 
     public int PendingDispatchCount => _callbacks.PendingDispatchCount;
+
+    public IReadOnlyList<IZlinkStreamActor> Actors => _actors.Snapshot();
+
+    public IZlinkStreamActor? Actor(string actorId)
+    {
+        ThrowIfDisposed();
+        return _actors.Find(actorId);
+    }
+
+    public IDisposable OnActorBound(Func<IZlinkStreamActor, CancellationToken, ValueTask> handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        ThrowIfDisposed();
+        return _actors.OnBound(handler);
+    }
+
+    public IDisposable OnActorUnbound(Func<IZlinkStreamActor, CancellationToken, ValueTask> handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        ThrowIfDisposed();
+        return _actors.OnUnbound(handler);
+    }
 
     public IZlinkStreamLifecycleCall Connect { get; }
 
@@ -224,10 +253,19 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         string name,
         ZlinkStreamEncodedPayload payload,
         ZlinkStreamMetadata metadata,
-        bool compress
+        bool compress,
+        ushort? actorSlot
     )
     {
-        var frame = _frameSender.BuildOutboundFrame(kind, name, payload, metadata, compress, null);
+        var frame = _frameSender.BuildOutboundFrame(
+            kind,
+            name,
+            payload,
+            metadata,
+            compress,
+            null,
+            actorSlot
+        );
         _frameSender.ValidateSendReady(frame.HeaderBytes, frame.PayloadBytes);
         return frame;
     }
@@ -267,6 +305,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         ZlinkStreamMetadata metadata,
         bool compress,
         TimeSpan timeout,
+        ushort? actorSlot,
         CancellationToken cancellationToken
     )
     {
@@ -276,6 +315,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
                 metadata,
                 compress,
                 timeout,
+                actorSlot,
                 cancellationToken
             )
             .ConfigureAwait(false);
@@ -290,6 +330,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         ZlinkStreamMetadata metadata,
         bool compress,
         TimeSpan timeout,
+        ushort? actorSlot,
         Action<ZlinkStreamResult> callback
     )
     {
@@ -302,6 +343,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
                     metadata,
                     compress,
                     timeout,
+                    actorSlot,
                     CancellationToken.None
                 ),
             reply => ZlinkStreamResult.Success(),
@@ -316,6 +358,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         ZlinkStreamMetadata metadata,
         bool compress,
         TimeSpan timeout,
+        ushort? actorSlot,
         Action<ZlinkStreamResult<ZlinkStreamEncodedPayload>> callback
     )
     {
@@ -328,6 +371,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
                     metadata,
                     compress,
                     timeout,
+                    actorSlot,
                     CancellationToken.None
                 ),
             ZlinkStreamResult<ZlinkStreamEncodedPayload>.Success,
@@ -415,6 +459,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         ZlinkStreamMetadata metadata,
         bool compress,
         TimeSpan timeout,
+        ushort? actorSlot,
         CancellationToken cancellationToken
     )
     {
@@ -425,7 +470,8 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
             payload,
             metadata,
             compress,
-            pending.RequestSeq
+            pending.RequestSeq,
+            actorSlot
         );
 
         try

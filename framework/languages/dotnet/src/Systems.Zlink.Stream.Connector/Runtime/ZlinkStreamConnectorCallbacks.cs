@@ -170,6 +170,11 @@ internal sealed class ZlinkStreamConnectorCallbacks(
         EnqueueDroppable(callback, reportErrors);
     }
 
+    internal ValueTask InvokeUserCallbackInlineAsync(
+        Func<CancellationToken, ValueTask> callback,
+        CancellationToken cancellationToken
+    ) => InvokeUserCallbackAsync(callback, cancellationToken, reportErrors: true);
+
     public async ValueTask DispatchAsync(CancellationToken cancellationToken)
     {
         while (true)

@@ -1552,7 +1552,8 @@ assembly Zlink.Framework
     property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> Values { get; } [nullability=read:not-null,write:unknown]
     method System.String? Find(System.String key [nullability=read:not-null,write:not-null]) [return=read:nullable,write:nullable]
   type sealed-class Zlink.Framework.Contracts.Streams.ZLinkSessionDispatchContext
-    ctor ZLinkSessionDispatchContext(System.String packetName [nullability=read:not-null,write:not-null], Zlink.Framework.Contracts.Streams.ZLinkMessageMetadata? metadata = null [nullability=read:nullable,write:nullable], System.Boolean canReply = false [nullability=read:not-null,write:not-null])
+    ctor ZLinkSessionDispatchContext(System.String packetName [nullability=read:not-null,write:not-null], Zlink.Framework.Contracts.Streams.ZLinkMessageMetadata? metadata = null [nullability=read:nullable,write:nullable], System.Boolean canReply = false [nullability=read:not-null,write:not-null], Zlink.Framework.Contracts.Streams.IZLinkSessionActor? actor = null [nullability=read:nullable,write:nullable])
+    property Zlink.Framework.Contracts.Streams.IZLinkSessionActor? Actor { get; } [nullability=read:nullable,write:unknown]
     property System.Boolean CanReply { get; } [nullability=read:not-null,write:unknown]
     property Zlink.Framework.Contracts.Streams.ZLinkMessageMetadata Metadata { get; } [nullability=read:not-null,write:unknown]
     property System.String PacketName { get; } [nullability=read:not-null,write:unknown]

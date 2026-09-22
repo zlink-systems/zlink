@@ -301,24 +301,17 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         byte[] frame
     )
     {
-        var entry = AwaitStateLane(
-            _sessionBindings.GetBindingAsync(actorId, expected.BindingToken)
+        var admission = AwaitStateLane(
+            _sessionBindings.DeliverReplyAsync(actorId, expected, frame)
         );
-        if (entry is null)
-            return AwaitStateLane(_sessionBindings.GetContextByActorIdAsync(actorId)) is not null
-                ? RemotePushDelivery.WrongSession
-                : RemotePushDelivery.NoBinding;
-        if (
-            entry.ObjectGeneration != expected.ObjectGeneration
-            || entry.BindingGeneration != expected.BindingGeneration
-            || entry.Context.RoutingId != expected.Context.RoutingId
-        )
-            return RemotePushDelivery.WrongSession;
-
-        using var message = Message.From(frame);
-        return entry.Context.Write(message)
-            ? RemotePushDelivery.Delivered
-            : RemotePushDelivery.Backpressured;
+        return admission.Kind switch
+        {
+            ZLinkSessionOutboundAdmissionKind.Immediate => MapOutboundDelivery(
+                admission.Capability!.Settle(deliver: true)
+            ),
+            ZLinkSessionOutboundAdmissionKind.NoBinding => RemotePushDelivery.NoBinding,
+            _ => RemotePushDelivery.WrongSession,
+        };
     }
 
     public ulong NextBindingGeneration() =>
@@ -334,7 +327,8 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         ulong sessionOwnerNodeGeneration,
         RoutingId sessionOwnerNodeRid = default,
         string sessionOwnerId = "",
-        ulong sessionOwnerLeaseGeneration = 0
+        ulong sessionOwnerLeaseGeneration = 0,
+        Action<IReadOnlyList<ZLinkSessionBindingEntry>>? beforePublish = null
     )
     {
         var actorKey = ZLinkActorId.FromBoundary(actorId, nameof(actorId));
@@ -349,7 +343,8 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                 sessionOwnerNodeGeneration,
                 sessionOwnerNodeRid,
                 sessionOwnerId,
-                sessionOwnerLeaseGeneration
+                sessionOwnerLeaseGeneration,
+                beforePublish
             )
         );
         CompleteReplacedBindingRequests(actorId, replaced);
@@ -638,7 +633,14 @@ internal sealed class ZLinkActorBoundSessionCoordinator
 
     public void UnbindSessionActor(string actorId, ZLinkSessionContext context, string bindingToken)
     {
-        AwaitStateLane(_sessionBindings.UnbindAsync(actorId, context, bindingToken));
+        AwaitStateLane(
+            _sessionBindings.UnbindAsync(
+                actorId,
+                context,
+                bindingToken,
+                existing => context.SendActorUnbound(existing.ActorRef.Slot)
+            )
+        );
     }
 
     public ZLinkSessionContext? GetSessionActorContext(string actorId, string bindingToken) =>
