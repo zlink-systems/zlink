@@ -11,8 +11,8 @@ usage() {
 Usage: verify-package.sh --prefix ABSOLUTE_DIR [--allow-version-mismatch]
 
 Checks the installed Core package version, public headers, exact runtime,
-runtime ABI SONAME, and a clean C consumer. The expected release comes from
-the repository VERSION file; the SONAME is libzlink.so.0.
+runtime ABI identity, and a clean C consumer. Linux verifies the SONAME and
+provenance; macOS verifies the complete @loader_path closure and signatures.
 EOF
 }
 
@@ -26,7 +26,67 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ "$prefix" = /* ]] || { echo "--prefix must be absolute" >&2; exit 2; }
-prefix="$(readlink -f "$prefix")"
+[[ -d "$prefix" ]] || { echo "Core prefix does not exist: $prefix" >&2; exit 1; }
+prefix="$(cd "$prefix" && pwd -P)"
+
+if [[ "$(uname -s)" == Darwin ]]; then
+  core_version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
+  runtime="$prefix/lib/libzlink.$core_version.dylib"
+  [[ -f "$runtime" ]] || { echo "exact Core runtime is missing: $runtime" >&2; exit 1; }
+  [[ -f "$prefix/include/zlink.h" ]] || { echo "Core public header is missing" >&2; exit 1; }
+
+  while IFS= read -r binary; do
+    install_name="$(otool -D "$binary" | tail -n +2 | head -n1)"
+    [[ "$install_name" == @loader_path/* ]] || {
+      echo "non-relocatable install name in $binary: $install_name" >&2
+      exit 1
+    }
+    while IFS= read -r dependency; do
+      case "$dependency" in
+        /usr/lib/*|/System/Library/*) ;;
+        @loader_path/*)
+          resolved="$prefix/lib/${dependency#@loader_path/}"
+          [[ -e "$resolved" ]] || {
+            echo "unresolved macOS runtime dependency in $binary: $dependency" >&2
+            exit 1
+          }
+          ;;
+        *)
+          echo "non-relocatable macOS runtime dependency in $binary: $dependency" >&2
+          exit 1
+          ;;
+      esac
+    done < <(otool -L "$binary" | tail -n +2 | sed 's/^[[:space:]]*//' | cut -d' ' -f1)
+    codesign --verify --deep --strict "$binary"
+  done < <(find "$prefix/lib" -type f -name '*.dylib' -print)
+
+  consumer_dir="$(mktemp -d "$prefix/.verify.XXXXXXXX")"
+  cleanup() { rm -rf "$consumer_dir"; }
+  trap cleanup EXIT
+  cat >"$consumer_dir/main.c" <<'EOF'
+#include <stdio.h>
+#include <zlink.h>
+
+int main(void) {
+  int major = 0;
+  int minor = 0;
+  int patch = 0;
+  zlink_version(&major, &minor, &patch);
+  printf("%d.%d.%d\n", major, minor, patch);
+  return 0;
+}
+EOF
+  cc -std=c11 -I"$prefix/include" "$consumer_dir/main.c" \
+    -L"$prefix/lib" -Wl,-rpath,@executable_path/../lib -lzlink \
+    -o "$consumer_dir/consumer"
+  [[ "$("$consumer_dir/consumer")" = "$core_version" ]] || {
+    echo "Core clean consumer reported an unexpected version" >&2
+    exit 1
+  }
+  echo "Core macOS package verified: version=$core_version abi=0 prefix=$prefix"
+  exit 0
+fi
+
 manifest="$prefix/share/zlink/core-package-provenance.json"
 [[ -f "$manifest" ]] || { echo "Core provenance is missing: $manifest" >&2; exit 1; }
 
