@@ -92,10 +92,53 @@ endif()
 # MSVC cannot link a Debug consumer against Release objects.
 set(ZLINK_CONFIG Release)
 if(CMAKE_HOST_WIN32)
-  set(ZLINK_GENERATOR -G "Visual Studio 17 2022" -A x64)
+  # The generator and the Conan profile both describe the Visual Studio that is
+  # actually installed: vswhere names the newest one with the C++ tools (2022 =
+  # generator "Visual Studio 17 2022", 2026 = "Visual Studio 18 2026"), and its
+  # default toolset file names the MSVC toolset, which is Conan's msvc setting
+  # (14.3x -> 193, 14.4x -> 194, 14.5x -> 195). A profile that pins a toolset
+  # the machine does not have makes Conan build OpenSSL from source with a
+  # vcvars toolset that does not exist (#888): a fresh VS 2022 17.10+ install
+  # carries 14.4x only.
+  set(_zlink_vswhere "$ENV{ProgramFiles}/Microsoft Visual Studio/Installer/vswhere.exe")
+  if(NOT EXISTS "${_zlink_vswhere}")
+    # vswhere is a 32-bit installer component; on x64 it lives under Program Files (x86).
+    set(_zlink_vswhere "$ENV{SystemDrive}/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe")
+  endif()
+  if(NOT EXISTS "${_zlink_vswhere}")
+    zlink_fail("could not find vswhere.exe; install Visual Studio 2022 or 2026 with the 'Desktop development with C++' workload")
+  endif()
+  execute_process(COMMAND "${_zlink_vswhere}" -latest -products * -version "[17.0,19.0)"
+    -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64
+    -property installationPath OUTPUT_VARIABLE ZLINK_VS_ROOT OUTPUT_STRIP_TRAILING_WHITESPACE)
+  execute_process(COMMAND "${_zlink_vswhere}" -latest -products * -version "[17.0,19.0)"
+    -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64
+    -property installationVersion OUTPUT_VARIABLE _zlink_vs_version OUTPUT_STRIP_TRAILING_WHITESPACE)
+  if(NOT ZLINK_VS_ROOT OR NOT _zlink_vs_version MATCHES "^(17|18)\\.")
+    zlink_fail("could not find Visual Studio 2022 or 2026 with the C++ tools (vswhere found none); install the 'Desktop development with C++' workload")
+  endif()
+  if(CMAKE_MATCH_1 STREQUAL "18")
+    set(ZLINK_GENERATOR -G "Visual Studio 18 2026" -A x64)
+  else()
+    set(ZLINK_GENERATOR -G "Visual Studio 17 2022" -A x64)
+  endif()
+  set(_zlink_vc_toolset_file "${ZLINK_VS_ROOT}/VC/Auxiliary/Build/Microsoft.VCToolsVersion.default.txt")
+  if(NOT EXISTS "${_zlink_vc_toolset_file}")
+    zlink_fail("${ZLINK_VS_ROOT} has no default MSVC toolset (${_zlink_vc_toolset_file}); install the 'Desktop development with C++' workload")
+  endif()
+  file(READ "${_zlink_vc_toolset_file}" _zlink_vc_toolset)
+  string(STRIP "${_zlink_vc_toolset}" _zlink_vc_toolset)
+  if(NOT _zlink_vc_toolset MATCHES "^14\\.([0-9])[0-9]\\.")
+    zlink_fail("unsupported MSVC toolset '${_zlink_vc_toolset}' in ${_zlink_vc_toolset_file}")
+  endif()
+  math(EXPR ZLINK_MSVC_VERSION "190 + ${CMAKE_MATCH_1}")
+  message(STATUS "Visual Studio ${_zlink_vs_version} at ${ZLINK_VS_ROOT}: toolset ${_zlink_vc_toolset} (Conan msvc ${ZLINK_MSVC_VERSION})")
+  # CMP0091 NEW: the Conan toolchain sets CMAKE_MSVC_RUNTIME_LIBRARY and refuses
+  # a project whose cmake_minimum_required predates that policy (the binding's).
   set(ZLINK_COMPILER_FLAGS
     "-DCMAKE_CXX_FLAGS=/EHsc /utf-8 /bigobj /DNOMINMAX /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0A00"
-    "-DCMAKE_CXX_FLAGS_RELEASE=/MD /Od /DNDEBUG")
+    "-DCMAKE_CXX_FLAGS_RELEASE=/MD /Od /DNDEBUG"
+    -DCMAKE_POLICY_DEFAULT_CMP0091=NEW)
   set(ZLINK_BUILD_CONFIG --config ${ZLINK_CONFIG})
 else()
   find_program(_zlink_ninja ninja)
@@ -282,9 +325,8 @@ if(ZLINK_PACKAGE_MANAGER STREQUAL "conan")
   file(WRITE "${ZLINK_CONAN_DIR}/conanfile.py" "${_zlink_conanfile}")
 
   if(CMAKE_HOST_WIN32)
-    # MSVC 19.3x is Conan's msvc 193 setting. /MD matches the Release flags
-    # below and keeps all C++ objects on the dynamic CRT.
-    set(_zlink_conan_settings "os=Windows\narch=x86_64\nbuild_type=Release\ncompiler=msvc\ncompiler.version=193\ncompiler.runtime=dynamic\ncompiler.cppstd=20")
+    # /MD matches the Release flags below and keeps all C++ objects on the dynamic CRT.
+    set(_zlink_conan_settings "os=Windows\narch=x86_64\nbuild_type=Release\ncompiler=msvc\ncompiler.version=${ZLINK_MSVC_VERSION}\ncompiler.runtime=dynamic\ncompiler.cppstd=20")
     set(_zlink_dep_cppstd "17")
     set(_zlink_consumer_cppstd "20")
   elseif(CMAKE_HOST_APPLE)
