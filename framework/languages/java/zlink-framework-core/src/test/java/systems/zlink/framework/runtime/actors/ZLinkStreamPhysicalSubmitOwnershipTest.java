@@ -635,7 +635,8 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
                         ZLinkBackendStreamSocket.class.getClassLoader(),
                         new Class<?>[] {ZLinkBackendStreamSocket.class},
                         (proxy, method, arguments) -> {
-                            if (method.getName().equals("sendAsync")
+                            if ((method.getName().equals("sendAsync")
+                                            || method.getName().equals("admitSessionControl"))
                                     && arguments != null
                                     && arguments.length >= 2
                                     && arguments[1] instanceof ZLinkStreamHeader header

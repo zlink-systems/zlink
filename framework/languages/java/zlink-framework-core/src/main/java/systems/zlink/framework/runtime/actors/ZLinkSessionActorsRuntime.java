@@ -711,19 +711,16 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         return created.thenCompose(
                 actor -> {
                     previous.forEach(this::removeBinding);
-                    installBinding(actor);
-                    return announceBound(actor)
-                            .thenApply(
-                                    ignored -> {
+                    BindingPublication publication =
+                            inStateLane(
+                                    () -> {
+                                        BindingCleanup cleanup = installBindingOnLane(actor);
+                                        CompletionStage<Void> physical = announceBound(actor);
                                         stream.publishBoundActor(sessionRid, actor.actorId());
-                                        return actor;
-                                    })
-                            .whenComplete(
-                                    (ignored, failure) -> {
-                                        if (failure != null) {
-                                            removeBinding(actor);
-                                        }
+                                        return new BindingPublication(cleanup, physical);
                                     });
+                    finishBindingInstall(actor, publication.cleanup());
+                    return publication.physical().thenApply(ignored -> actor);
                 });
     }
 
@@ -740,7 +737,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     }
 
     private CompletionStage<Void> announceBound(ZLinkBoundActor actor) {
-        return sendActorControl(
+        return admitActorControl(
                 ZLinkStreamActorControl.BOUND,
                 ZLinkStreamActorControl.bound(actor.actorSlot(), actor.actorId()));
     }
@@ -752,6 +749,15 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     }
 
     private CompletionStage<Void> sendActorControl(String name, byte[] payload) {
+        return submitActorControl(name, payload, false);
+    }
+
+    private CompletionStage<Void> admitActorControl(String name, byte[] payload) {
+        return submitActorControl(name, payload, true);
+    }
+
+    private CompletionStage<Void> submitActorControl(
+            String name, byte[] payload, boolean synchronousAdmission) {
         ZLinkStreamHeader header =
                 new ZLinkStreamHeader(
                         ZLinkStreamMessageKind.CONTROL,
@@ -762,8 +768,11 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                         Map.of());
         Message body = Message.from(payload);
         try {
-            return stream.sendAsync(sessionRid, header, List.of(body))
-                    .whenComplete((ignored, failure) -> body.close());
+            CompletionStage<Void> submission =
+                    synchronousAdmission
+                            ? stream.admitSessionControl(sessionRid, header, List.of(body))
+                            : stream.sendAsync(sessionRid, header, List.of(body));
+            return submission.whenComplete((ignored, failure) -> body.close());
         } catch (RuntimeException failure) {
             body.close();
             return CompletableFuture.failedFuture(failure);
@@ -786,6 +795,12 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     }
 
     private ZLinkBoundActor installBinding(ZLinkBoundActor actor) {
+        BindingCleanup cleanup = inStateLane(() -> installBindingOnLane(actor));
+        finishBindingInstall(actor, cleanup);
+        return actor;
+    }
+
+    private BindingCleanup installBindingOnLane(ZLinkBoundActor actor) {
         ActorRef current = actor.ref();
         ZLinkBackendActorRef backendRef =
                 new ZLinkBackendActorRef(
@@ -796,57 +811,54 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         long ownerLeaseGeneration =
                 spotNode == null ? 0L : spotNode.actorAuthorityOwnerLeaseGeneration(backendRef);
         long bindingGeneration = actor.bindingGeneration();
-        BindingCleanup cleanup =
-                inStateLane(
-                        () -> {
-                            List<HeldIngress> abandoned = List.of();
-                            SealTerminal abandonedSeal = null;
-                            if (relocationStopped) {
-                                throw new ZLinkConfigurationException(
-                                        "Session is closed while installing an Actor binding");
-                            }
-                            bound.add(actor);
-                            TargetOutboundBinding previousOutbound =
-                                    targetOutboundBindings.remove(actor.actorId());
-                            if (previousOutbound != null) {
-                                previousOutbound.stop(TargetOutboundSettlement.SHUTDOWN);
-                            }
-                            bindingRoutes.put(
-                                    actor.actorId(),
-                                    new StoredBindingRoute(
-                                            current.actorId(),
-                                            current.objectGeneration(),
-                                            current.meshName(),
-                                            current.nodeRid(),
-                                            nodeGeneration,
-                                            authorityGeneration,
-                                            ownerLeaseGeneration,
-                                            bindingGeneration,
-                                            0));
-                            IngressGate previous =
-                                    ingressGates.put(
-                                            actor.actorId(),
-                                            new IngressGate(
-                                                    current.objectGeneration(), bindingGeneration));
-                            if (previous != null) {
-                                abandoned = previous.detachHeld();
-                                if (previous.seal != null) {
-                                    SessionRelocationKey previousKey =
-                                            new SessionRelocationKey(
-                                                    previous.seal,
-                                                    actor.actorId(),
-                                                    previous.objectGeneration,
-                                                    sessionRid,
-                                                    previous.bindingGeneration);
-                                    SealTerminal terminal = sealTerminals.get(previousKey);
-                                    if (terminal != null && !terminal.consumed()) {
-                                        terminal.consume();
-                                        abandonedSeal = terminal;
-                                    }
-                                }
-                            }
-                            return new BindingCleanup(abandoned, abandonedSeal);
-                        });
+        List<HeldIngress> abandoned = List.of();
+        SealTerminal abandonedSeal = null;
+        if (relocationStopped) {
+            throw new ZLinkConfigurationException(
+                    "Session is closed while installing an Actor binding");
+        }
+        bound.add(actor);
+        TargetOutboundBinding previousOutbound = targetOutboundBindings.remove(actor.actorId());
+        if (previousOutbound != null) {
+            previousOutbound.stop(TargetOutboundSettlement.SHUTDOWN);
+        }
+        bindingRoutes.put(
+                actor.actorId(),
+                new StoredBindingRoute(
+                        current.actorId(),
+                        current.objectGeneration(),
+                        current.meshName(),
+                        current.nodeRid(),
+                        nodeGeneration,
+                        authorityGeneration,
+                        ownerLeaseGeneration,
+                        bindingGeneration,
+                        0));
+        IngressGate previous =
+                ingressGates.put(
+                        actor.actorId(),
+                        new IngressGate(current.objectGeneration(), bindingGeneration));
+        if (previous != null) {
+            abandoned = previous.detachHeld();
+            if (previous.seal != null) {
+                SessionRelocationKey previousKey =
+                        new SessionRelocationKey(
+                                previous.seal,
+                                actor.actorId(),
+                                previous.objectGeneration,
+                                sessionRid,
+                                previous.bindingGeneration);
+                SealTerminal terminal = sealTerminals.get(previousKey);
+                if (terminal != null && !terminal.consumed()) {
+                    terminal.consume();
+                    abandonedSeal = terminal;
+                }
+            }
+        }
+        return new BindingCleanup(abandoned, abandonedSeal);
+    }
+
+    private void finishBindingInstall(ZLinkBoundActor actor, BindingCleanup cleanup) {
         failHeld(
                 cleanup.held(),
                 new ZLinkConfigurationException(
@@ -859,7 +871,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                     "Session binding changed before relocation seal drained: "
                                             + actor.actorId()));
         }
-        return actor;
     }
 
     private void removeBinding(ZLinkSessionActor actor) {
@@ -924,6 +935,8 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     }
 
     private record BindingCleanup(List<HeldIngress> held, SealTerminal seal) {}
+
+    private record BindingPublication(BindingCleanup cleanup, CompletionStage<Void> physical) {}
 
     /**
      * Accepts one Session-to-Actor ingress record or holds it behind the relocation seal. This

@@ -2675,7 +2675,9 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                         if (method.getName().equals("requestBoundActor")) {
                                             return CompletableFuture.completedFuture(List.of());
                                         }
-                                        if (method.getName().equals("sendAsync")
+                                        if ((method.getName().equals("sendAsync")
+                                                        || method.getName()
+                                                                .equals("admitSessionControl"))
                                                 && arguments[1] instanceof ZLinkStreamHeader header
                                                 && header.kind()
                                                         == ZLinkStreamMessageKind.CONTROL) {

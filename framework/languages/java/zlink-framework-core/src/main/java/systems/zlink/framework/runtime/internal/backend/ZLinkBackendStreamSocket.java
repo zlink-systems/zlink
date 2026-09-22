@@ -111,6 +111,12 @@ public interface ZLinkBackendStreamSocket extends ZLinkBackendSocket, ZLinkBacke
         return sendAsync(routingId, header, parts);
     }
 
+    /** Admits an ordered Session control synchronously and returns its physical terminal. */
+    default CompletionStage<Void> admitSessionControl(
+            RoutingId routingId, ZLinkStreamHeader header, List<Message> parts) {
+        return sendAsync(routingId, header, parts);
+    }
+
     boolean reply(
             RoutingId routingId,
             long requestSeq,

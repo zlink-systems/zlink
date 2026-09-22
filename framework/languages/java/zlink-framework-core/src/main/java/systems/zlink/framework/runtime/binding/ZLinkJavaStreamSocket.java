@@ -320,6 +320,31 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
     }
 
     @Override
+    public CompletionStage<Void> admitSessionControl(
+            RoutingId routingId, ZLinkStreamHeader header, List<Message> parts) {
+        Message frame;
+        try {
+            frame = ZLinkJavaStreamFraming.frame(header, parts);
+        } catch (RuntimeException failure) {
+            return CompletableFuture.failedFuture(failure);
+        }
+        try {
+            return inStateLane(
+                    () -> {
+                        try {
+                            return FrameworkStreamOperations.send(
+                                    socket, routingId, List.of(frame), admissionTimeoutOnLane());
+                        } finally {
+                            frame.close();
+                        }
+                    });
+        } catch (RuntimeException | Error failure) {
+            frame.close();
+            throw failure;
+        }
+    }
+
+    @Override
     public boolean reply(
             RoutingId routingId,
             long requestSeq,

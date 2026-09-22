@@ -28,6 +28,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamErrorH
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
@@ -151,7 +152,7 @@ final class ZLinkSessionActorBindingContractTest {
     }
 
     @Test
-    void failedBoundControlSubmissionRollsBackTheCommittedFrameworkBinding() {
+    void failedBoundControlPhysicalTerminalKeepsTheAdmittedBindingPublished() {
         FakeStream stream = new FakeStream();
         ZLinkSessionActorsRuntime runtime = runtime(stream);
         stream.controlAvailable = false;
@@ -163,8 +164,23 @@ final class ZLinkSessionActorBindingContractTest {
                                 .toCompletableFuture()
                                 .join());
 
-        assertTrue(runtime.bound().isEmpty());
-        assertTrue(runtime.findBySlot(1).isEmpty());
+        assertEquals("actor-1", runtime.bound().getFirst().actorId());
+        assertEquals("actor-1", runtime.findBySlot(1).orElseThrow().actorId());
+        assertTrue(stream.nativePublished.contains("actor-1"));
+    }
+
+    @Test
+    void command36QueuedAtBoundAdmissionSeesThePublishedBinding() {
+        FakeStream stream = new FakeStream();
+        ZLinkSessionActorsRuntime runtime =
+                runtime(stream, authoritySpotNode(Map.of(NODE_A, new ActorAuthority(3, 9, 4))));
+        stream.observeCommand36DuringBoundAdmission = true;
+
+        runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A)).toCompletableFuture().join();
+        Command36Observation observation = stream.command36Observation.join();
+
+        assertTrue(observation.accepted());
+        assertTrue(observation.nativePublished());
     }
 
     @Test
@@ -831,6 +847,9 @@ final class ZLinkSessionActorBindingContractTest {
                 new java.util.concurrent.CopyOnWriteArrayList<>();
         private boolean deferBoundPushAdmission;
         private boolean controlAvailable = true;
+        private boolean observeCommand36DuringBoundAdmission;
+        private final Set<String> nativePublished = ConcurrentHashMap.newKeySet();
+        private CompletableFuture<Command36Observation> command36Observation;
         private int disconnectNotifications;
         private RuntimeException disconnectSubmissionFailure;
         private RuntimeException unbindFailure;
@@ -902,6 +921,38 @@ final class ZLinkSessionActorBindingContractTest {
         }
 
         @Override
+        public CompletionStage<Void> admitSessionControl(
+                RoutingId routingId, ZLinkStreamHeader header, List<Message> parts) {
+            CompletionStage<Void> admission =
+                    ZLinkBackendStreamSocket.super.admitSessionControl(routingId, header, parts);
+            if (observeCommand36DuringBoundAdmission
+                    && header.packetName().equals("$zlink.actor.bound")) {
+                var payload = outboundPayload("queued-command-36");
+                CompletionStage<Boolean> queuedCommand =
+                        CompletableFuture.supplyAsync(
+                                        () ->
+                                                runtime.acceptBoundSessionSendAsync(
+                                                        NODE_A,
+                                                        3,
+                                                        boundSend(NODE_A, 3, 9, 4),
+                                                        payload))
+                                .join();
+                command36Observation =
+                        queuedCommand
+                                .thenApply(
+                                        accepted ->
+                                                new Command36Observation(
+                                                        accepted,
+                                                        nativePublished.contains("actor-1")))
+                                .toCompletableFuture();
+                if (ZLinkStateLane.current() == null) {
+                    command36Observation.join();
+                }
+            }
+            return admission;
+        }
+
+        @Override
         public boolean send(
                 RoutingId routingId,
                 ZLinkStreamHeader header,
@@ -967,6 +1018,7 @@ final class ZLinkSessionActorBindingContractTest {
                 bindingEvents.add("publish-missing:" + actorId);
             }
             bindingEvents.add("publish:" + actorId);
+            nativePublished.add(actorId);
         }
 
         @Override
@@ -1114,6 +1166,8 @@ final class ZLinkSessionActorBindingContractTest {
             return CompletableFuture.completedFuture(List.of(Message.from(new byte[0])));
         }
     }
+
+    private record Command36Observation(boolean accepted, boolean nativePublished) {}
 
     private record ControlFrame(String name, byte[] payload) {}
 }
