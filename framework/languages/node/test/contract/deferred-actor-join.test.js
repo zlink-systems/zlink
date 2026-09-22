@@ -27,18 +27,23 @@ const {
   ServiceStatefulRuntime
 } = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
 
-function actorHarness(events, completionResult = { accepted: true }) {
-  const state = new ZLinkActorRuntimeState('alice');
+function actorHarness(events, completionResult = { accepted: true }, options = {}) {
+  const actorId = options.actorId ?? 'alice';
+  const state = new ZLinkActorRuntimeState(actorId);
   const actorRef = {
     nodeRid: 'node-a',
-    actorId: 'alice',
+    actorId,
     generation: 7n
   };
   const coordinator = {
     async joinSpot(actor, runtimeState, spotId, request, timeoutMs) {
-      events.push(
-        `join:${actor.actorId}:${runtimeState.actorId}:${spotId}:${request.data()}:${timeoutMs}`
-      );
+      if (options.observeJoin === undefined) {
+        events.push(
+          `join:${actor.actorId}:${runtimeState.actorId}:${spotId}:${request.data()}:${timeoutMs}`
+        );
+      } else {
+        options.observeJoin(actor, runtimeState, spotId, request, timeoutMs);
+      }
       return {
         ...completionResult,
         actor: actorRef,
@@ -58,7 +63,7 @@ function actorHarness(events, completionResult = { accepted: true }) {
     undefined
   );
   const actor = {
-    actorId: 'alice',
+    actorId,
     context,
     async onJoinCompleted(completion) {
       events.push(`completion:${completion.status}:${completion.actor?.generation ?? '-'}`);
@@ -67,6 +72,41 @@ function actorHarness(events, completionResult = { accepted: true }) {
   state.bindActor(actor, context);
   return { actor, context, state };
 }
+
+test('one handler completes 65 deferred Actor Joins whose requests total more than 8 MiB', async () => {
+  const events = [];
+  const request = 'x'.repeat(129 * 1024);
+  let joinCount = 0;
+  let requestBytes = 0;
+  const contexts = Array.from(
+    { length: 65 },
+    (_, index) =>
+      actorHarness(
+        events,
+        { accepted: true },
+        {
+          actorId: `actor-${index}`,
+          observeJoin(actor, runtimeState, spotId, encodedRequest) {
+            assert.equal(actor.actorId, `actor-${index}`);
+            assert.equal(runtimeState.actorId, `actor-${index}`);
+            assert.equal(spotId, `room-${index}`);
+            joinCount += 1;
+            requestBytes += encodedRequest.data().byteLength;
+          }
+        }
+      ).context
+  );
+
+  await runActorHandlerWithDeferredJoins(() => {
+    for (let index = 0; index < contexts.length; index += 1) {
+      contexts[index].joinSpot(`room-${index}`, request).defer();
+    }
+  });
+
+  assert.equal(joinCount, 65);
+  assert.ok(requestBytes > 8 * 1024 * 1024);
+  assert.equal(events.length, 65);
+});
 
 async function waitForEvents(events, count) {
   for (let attempt = 0; attempt < 20 && events.length < count; attempt += 1) {
