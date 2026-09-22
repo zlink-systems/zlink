@@ -649,12 +649,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     channelName: string,
     parts: MessageLike | readonly MessageLike[]
   ): Promise<SubmitResultValue> {
-    return (await this.requireRuntime().sendToChannel(
-      channelName,
-      encodeMultipartApplicationFrame(parts)
-    ))
-      ? SubmitResult.Ok
-      : SubmitResult.NotConnected;
+    return this.requireRuntime().sendToChannel(channelName, encodeMultipartApplicationFrame(parts));
   }
 
   requestToChannel(
@@ -667,9 +662,6 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       encodeMultipartApplicationFrame(parts),
       options?.timeoutMs ?? 30_000
     );
-    if (pending === undefined) {
-      return this.enqueueImmediateFailure(OperationKind.ChannelRequest, RequestResult.NotFound);
-    }
     return this.observeCompletion(pending.id, OperationKind.ChannelRequest, pending.promise);
   }
 

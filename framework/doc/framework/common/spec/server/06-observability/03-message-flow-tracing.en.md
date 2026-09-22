@@ -217,7 +217,7 @@ The application sets the diagnostics level to one of four values.
 | `Detailed` | Can add message byte size and terminal elapsed time to `Normal` records. |
 
 The default is `Errors`. The message size setting only adds byte size,
-not payload content. Diagnostics level doesn't turn off metric recording.
+not payload content, and is off by default. Diagnostics level doesn't turn off metric recording.
 
 Sampling rate is the ratio of normal flows to record, in the range
 `0.0..1.0`. A value outside the range is treated as a startup or public
@@ -353,6 +353,9 @@ interface. Each item corresponds to one contract test.
 
 - Every language uses the same `event_id`, phase, surface, message kind,
   outcome, reason, action, and attribute keys.
+- With configuration omitted, the diagnostics level is `Errors` and
+  message-size recording is off. Setting only the level to `Detailed`
+  still does not include `message_size_bytes`.
 - Payload and application metadata values don't appear in trace or
   structured log.
 - Logical Multicast and Classic fanout don't build a message-flow trace.

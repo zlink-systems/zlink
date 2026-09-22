@@ -1,8 +1,10 @@
 package systems.zlink.samples.kotlin.shoppingmall.server.commerceapi
 
-import kotlinx.coroutines.future.await
 import org.springframework.stereotype.Component
 import systems.zlink.framework.channels.ZLinkRouteClient
+import systems.zlink.framework.kotlin.await
+import systems.zlink.framework.kotlin.kotlin
+import systems.zlink.framework.kotlin.requestToSpot
 import systems.zlink.samples.kotlin.shoppingmall.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.shoppingmall.server.configuration.SampleTimings
 import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.ContinueOrderWorkflowReq
@@ -21,38 +23,32 @@ import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.StartOrderWork
  */
 @Component
 class OrderWorkflowRouter(private val routes: ZLinkRouteClient) {
+    private val kotlinRoutes = routes.kotlin()
+
     suspend fun startWorkflow(command: StartOrderWorkflowReq): OrderState =
-        request(command.orderId, command, StartOrderWorkflowRes::class.java).state
+        request<StartOrderWorkflowRes>(command.orderId, command).state
 
     suspend fun prepareInventoryReserved(
         command: StartOrderWorkflowReq
     ): PrepareInventoryReservedRes =
-        request(
-            command.orderId,
-            PrepareInventoryReservedReq(command),
-            PrepareInventoryReservedRes::class.java,
-        )
+        request<PrepareInventoryReservedRes>(command.orderId, PrepareInventoryReservedReq(command))
 
     suspend fun continueWorkflow(orderId: String): OrderState =
-        request(orderId, ContinueOrderWorkflowReq(orderId), ContinueOrderWorkflowRes::class.java)
-            .state
+        request<ContinueOrderWorkflowRes>(orderId, ContinueOrderWorkflowReq(orderId)).state
 
     suspend fun rebuildProjection(orderId: String): OrderState =
-        request(orderId, RebuildOrderProjectionReq(orderId), RebuildOrderProjectionRes::class.java)
-            .state
+        request<RebuildOrderProjectionRes>(orderId, RebuildOrderProjectionReq(orderId)).state
 
     // --8<-- [start:doc-sm-api-request]
-    private suspend fun <TReply> request(
+    private suspend inline fun <reified TReply : Any> request(
         orderId: String,
         payload: Any,
-        replyType: Class<TReply>,
     ): TReply {
-        return routes
-            .requestToSpot(orderId, payload)
+        return kotlinRoutes
+            .requestToSpot<TReply>(orderId, payload)
             .instanceSpot(SampleNames.OrderWorkflowSpotType)
             .inMesh(SampleNames.OrderWorkflowMesh)
             .timeout(SampleTimings.WorkflowTimeout)
-            .submit(replyType)
             .await()
     }
     // --8<-- [end:doc-sm-api-request]

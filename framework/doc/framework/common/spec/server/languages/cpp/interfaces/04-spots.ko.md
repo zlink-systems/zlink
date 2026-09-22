@@ -168,9 +168,6 @@ public:
     virtual task_t<actor_create_response_t> on_create_actor(
       TActor &actor,
       const message_t &create_request);
-    virtual task_t<spot_actor_join_result_t> on_actor_join(
-      std::string_view actor_id,
-      const message_t &request) = 0;
     virtual task_t<void> on_actor_joined(TActor &actor) = 0;
     virtual task_t<void> on_leave_actor(TActor &actor) = 0;
     virtual task_t<void> on_disconnect_actor(TActor &actor);
@@ -472,8 +469,9 @@ scope에서 resolve한다. Spot close와 source relocation에서는 handler와
 scope를 정리한다. Target activation에서는 새 handler와 scope를 만든다. Application이 timer
 handler를 singleton·scoped·transient service로 따로 등록하거나 lifetime을 선택하지 않는다.
 Public handler lifetime option은 제공하지 않는다.
-User Spot과 Entry
-Spot은 actor ID와 join request를 받는 `on_actor_join(...)`에서 accept 또는 reject를 반환한다. Commit 이후
+User Spot은 actor ID와 join request를 받는 `on_actor_join(...)`에서 accept 또는 reject를 반환한다.
+Entry Spot에는 이 callback이 없다 — 최초 생성의 admission은 `on_create_actor(...)`가 승인하거나
+거절하고, 복귀는 admission 없이 commit한다. Commit 이후
 callback은 해당 factory가 만든 concrete Actor reference를 직접 받는다. 따라서 별도 membership DTO를
 lifecycle callback에 끼워 넣지 않는다. Joined, leave와 disconnect callback은 `task_t<void>`를 반환하며
 task가 완료되어야
@@ -629,8 +627,9 @@ authority·Entry membership을 commit한 뒤 Actor message 처리를 시작한�
 Infrastructure relocation은
 target joined, source leave 또는 별도 relocation callback을 호출하지 않는다.
 
-일반 same-node·remote User·Entry Spot join만 기존 `on_actor_join(...)`,
-`on_actor_joined(...)`와 source `on_leave_actor(...)` 계약을 사용한다. `SpotWide`
+일반 same-node·remote User Spot join은 `on_actor_join(...)`, `on_actor_joined(...)`와 source
+`on_leave_actor(...)` 계약을 사용한다. Entry Spot 복귀는 `on_actor_join(...)` 없이 commit한 뒤
+target `on_actor_joined(...)`와 source `on_leave_actor(...)`를 사용한다. `SpotWide`
 User Spot aggregate와 `PerActor` User Spot의 Actor relocation에서는 member Actor의
 membership callback을 호출하지 않는다. `PerActor` Spot policy는 `RecreateOnRelocation`만
 허용하고 Spot adapter를 등록하지 않는다. Spot field와 Spot-level schedule은

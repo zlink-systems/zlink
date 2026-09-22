@@ -122,8 +122,8 @@ Message types need `NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE`. The default JSON serial
 
 ## 4. The handling side
 
-`object_role` defaults to `server`, which requires a location store; this configuration sets
-it to `none`. A `routing_id` is required. Binding to `0.0.0.0` without `advertise_host` advertises the loopback of the same address
+`object_role` defaults to `none`; this configuration states it explicitly because it is a
+channel-only node. A `routing_id` is required. Binding to `0.0.0.0` without `advertise_host` advertises the loopback of the same address
 family (`127.0.0.1`). In containers or multi-host deployments where remote
 processes cannot use that loopback, set `advertise_host` to a reachable address.
 

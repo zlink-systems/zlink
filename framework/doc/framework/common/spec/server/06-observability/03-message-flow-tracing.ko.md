@@ -195,7 +195,8 @@ Application은 diagnostics level을 다음 네 값 중 하나로 설정한다.
 | `Normal` | Error와 §2.1의 주요 단계를 기록한다. |
 | `Detailed` | `Normal` 기록에 message byte 크기와 terminal 경과 시간을 추가할 수 있다. |
 
-기본값은 `Errors`다. Message size 설정은 payload 내용이 아니라 byte 크기만 추가한다.
+기본값은 `Errors`다. Message size 설정은 payload 내용이 아니라 byte 크기만 추가하며 기본값은
+꺼짐이다.
 Diagnostics level은 metric 기록을 끄지 않는다.
 
 Sampling rate는 정상 흐름 중 기록할 비율이며 `0.0..1.0` 범위다. 범위를 벗어난 값은
@@ -312,6 +313,8 @@ attribute key, diagnostics level·sampling rate 설정 interface)만으로 다�
 
 - 모든 언어가 같은 `event_id`, phase, surface, message kind, outcome, reason, action과
   attribute key를 사용한다.
+- 설정을 생략하면 diagnostics level은 `Errors`이고 message size 기록은 꺼져 있다. Level만
+  `Detailed`로 설정해도 `message_size_bytes`를 포함하지 않는다.
 - Payload와 application metadata 값이 trace나 structured log에 나타나지 않는다.
 - Logical Multicast와 Classic fanout이 message-flow trace를 만들지 않는다.
 - Classic fanout의 subscriber-local handler 누락이 `surface=classic_fanout`,

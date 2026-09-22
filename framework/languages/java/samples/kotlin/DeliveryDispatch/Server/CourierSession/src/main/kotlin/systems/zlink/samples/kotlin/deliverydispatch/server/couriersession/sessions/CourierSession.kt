@@ -6,6 +6,7 @@ import systems.zlink.framework.actors.ZLinkActorCreateResult
 import systems.zlink.framework.actors.ZLinkActorManager
 import systems.zlink.framework.kotlin.ZLinkSuspendingSession
 import systems.zlink.framework.kotlin.await
+import systems.zlink.framework.kotlin.decode
 import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.streams.ZLinkSessionContext
@@ -45,7 +46,7 @@ class CourierSession(
         if (handled) {
             return
         }
-        val decision = payload.decode(CourierDecisionMsg::class.java)
+        val decision = payload.decode<CourierDecisionMsg>()
         val actor =
             sessionContext.actors().find(decision.courierId).orElseThrow {
                 IllegalStateException("Courier actor is not bound: ${decision.courierId}")
@@ -58,7 +59,7 @@ class CourierSession(
         dispatch: ZLinkSessionDispatchContext,
         payload: ZLinkMessage,
     ) {
-        val request = payload.decode(BindCourierSessionReq::class.java)
+        val request = payload.decode<BindCourierSessionReq>()
         val actorRef = findOrEnsureActor(request.courierId)
         val actor =
             sessionContext.actors().find(actorRef.actorId).orElse(null)
@@ -78,8 +79,9 @@ class CourierSession(
             .await()
         sessionContext
             .client()
+            .kotlin()
             .reply(BindCourierSessionRes(request.courierId, snapshot, sessionContext.sessionId()))
-            .submit()
+            .await()
         println("deliverydispatch-courier bound courier=${request.courierId}")
     }
 

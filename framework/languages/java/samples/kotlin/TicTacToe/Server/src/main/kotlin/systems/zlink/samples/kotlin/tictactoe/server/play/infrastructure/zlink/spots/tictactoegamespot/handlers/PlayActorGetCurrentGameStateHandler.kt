@@ -1,9 +1,10 @@
 package systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.spots.tictactoegamespot.handlers
 
-import kotlinx.coroutines.future.await
 import systems.zlink.framework.ZLinkMessageContext
 import systems.zlink.framework.handlers.ZLinkHandlerGroup
 import systems.zlink.framework.handlers.ZLinkSpotActorSend
+import systems.zlink.framework.kotlin.await
+import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.samples.kotlin.tictactoe.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.actors.PlayActor
 import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.spots.tictactoegamespot.TicTacToeGame
@@ -22,8 +23,8 @@ class PlayActorGetCurrentGameStateHandler {
         actor
             .context()
             .boundSession()
+            .kotlin()
             .send(JoinGameNotify(spot.currentState(actor, request.roomId)))
-            .submit()
             .await()
     }
 }

@@ -43,6 +43,7 @@ object PlayServer {
             node
                 .objects()
                 .server()
+                // #895: entry-spot registration has no Kotlin form in the spec.
                 .addEntrySpot(PlayEntrySpot::class.java)
                 .addSpotFactory("tictactoe.game", TicTacToeGame::class.java) { factory ->
                     factory.disableRelocation()
@@ -52,14 +53,17 @@ object PlayServer {
                     PlayActor::class.java,
                     PlayActorFactory::class.java,
                 ) { factory ->
+                    // #895: state preservation configuration has no Kotlin form in the spec.
                     factory.preserveStateWith(PlayActorRelocationAdapter::class.java)
                 }
             options
                 .addStreamNode(SampleNames.PlayStream)
                 .bind(settings.playEndpoint)
                 .enableActorDispatch()
+                // #895: session registration has no Kotlin form in the spec.
                 .registerSession(PlaySession::class.java)
                 // request: STREAM AuthenticateReq를 처리하고 AuthenticateRes를 reply한다.
+                // #895: session packet registration has no Kotlin form in the spec.
                 .addSessionPacketHandler(AuthenticatePlaySessionHandler::class.java)
             // --8<-- [end:doc-ttt-play-register]
         }

@@ -7,6 +7,8 @@ import java.net.InetSocketAddress
 import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.time.Duration
+import kotlinx.coroutines.runBlocking
+import systems.zlink.framework.kotlin.await
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationMode
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationOptions
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime
@@ -38,7 +40,8 @@ private fun startHttp(topology: SampleTopology, runtime: ZLinkFrameworkRuntime):
             exchange.writeJson(json, 405, mapOf("error" to "method not allowed"))
         } else {
             try {
-                val result =
+                // This HTTP application thread may block; it does not own a Framework turn.
+                val result = runBlocking {
                     runtime
                         .relocate(
                             ZLinkFrameworkRelocationOptions(
@@ -47,8 +50,8 @@ private fun startHttp(topology: SampleTopology, runtime: ZLinkFrameworkRuntime):
                                 Duration.ofSeconds(30),
                             )
                         )
-                        .toCompletableFuture()
-                        .join()
+                        .await()
+                }
                 exchange.writeJson(json, 200, mapOf("outcome" to result.outcome().name))
             } catch (error: Throwable) {
                 exchange.writeJson(

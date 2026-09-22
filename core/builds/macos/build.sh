@@ -124,20 +124,45 @@ echo ""
 echo "Step 4b: Merging install prefix into output directory..."
 cp -a install/. "$REPO_ROOT/$OUTPUT_DIR/"
 
-# Copy .dylib to output
-DYLIB_FILE=$(find install/lib -name "libzlink.[0-9]*.dylib" 2>/dev/null | head -n 1)
-if [ -z "$DYLIB_FILE" ]; then
-    DYLIB_FILE=$(find lib -name "libzlink.[0-9]*.dylib" 2>/dev/null | head -n 1)
+# The macOS release owns its complete runtime closure. Keep the versioned Core
+# dylib and its relative symlinks together, bundle Homebrew OpenSSL, rewrite
+# every non-system load command to the sibling in lib/, then re-sign every
+# modified Mach-O file.
+PACKAGE_LIB="$REPO_ROOT/$OUTPUT_DIR/lib"
+DYLIB_FILE=$(find "$PACKAGE_LIB" -type f -name "libzlink.[0-9]*.dylib" | head -n 1)
+OPENSSL_SSL="$OPENSSL_ROOT_DIR/lib/libssl.3.dylib"
+OPENSSL_CRYPTO="$OPENSSL_ROOT_DIR/lib/libcrypto.3.dylib"
+
+if [ ! -f "$OPENSSL_SSL" ] || [ ! -f "$OPENSSL_CRYPTO" ]; then
+    echo "Error: OpenSSL runtime closure is missing under $OPENSSL_ROOT_DIR/lib" >&2
+    exit 1
 fi
+cp -a "$OPENSSL_SSL" "$OPENSSL_CRYPTO" "$PACKAGE_LIB/"
 
 if [ -n "$DYLIB_FILE" ]; then
     TARGET_DYLIB="$REPO_ROOT/$OUTPUT_DIR/libzlink.dylib"
-    cp "$DYLIB_FILE" "$TARGET_DYLIB"
+    # The Core dylib keeps an @rpath install name: a consumer links it through its
+    # own rpath (lib/), while the OpenSSL siblings inside lib/ resolve via @loader_path.
+    install_name_tool -id "@rpath/libzlink.0.dylib" "$DYLIB_FILE"
 
-    # Update install name for better portability
-    install_name_tool -id "@rpath/libzlink.dylib" "$TARGET_DYLIB"
+    for binary in "$DYLIB_FILE" "$PACKAGE_LIB/libssl.3.dylib" "$PACKAGE_LIB/libcrypto.3.dylib"; do
+        while IFS= read -r dependency; do
+            case "$(basename "$dependency")" in
+                libssl.3.dylib|libcrypto.3.dylib)
+                    install_name_tool -change "$dependency" \
+                        "@loader_path/$(basename "$dependency")" "$binary"
+                    ;;
+            esac
+        done < <(otool -L "$binary" | tail -n +2 | sed 's/^[[:space:]]*//' | cut -d' ' -f1)
+    done
+    install_name_tool -id "@loader_path/libssl.3.dylib" "$PACKAGE_LIB/libssl.3.dylib"
+    install_name_tool -id "@loader_path/libcrypto.3.dylib" "$PACKAGE_LIB/libcrypto.3.dylib"
+    codesign --force --sign - "$PACKAGE_LIB/libcrypto.3.dylib"
+    codesign --force --sign - "$PACKAGE_LIB/libssl.3.dylib"
+    codesign --force --sign - "$DYLIB_FILE"
 
-    echo "Copied: $DYLIB_FILE -> $TARGET_DYLIB"
+    ln -sfn "lib/libzlink.0.dylib" "$TARGET_DYLIB"
+    echo "Packaged relocatable runtime closure in: $PACKAGE_LIB"
 else
     echo "Error: libzlink.dylib not found!"
     exit 1
@@ -196,6 +221,9 @@ if [ -f "$FINAL_DYLIB" ]; then
     # Verify architecture
     echo "Architecture verification:"
     lipo -info "$FINAL_DYLIB"
+
+    bash scripts/local-package/core/verify-package.sh \
+        --prefix "$REPO_ROOT/$OUTPUT_DIR"
 
     echo ""
     echo "==================================="

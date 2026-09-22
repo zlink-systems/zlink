@@ -144,11 +144,8 @@ For both limits, `0` means no limit and a positive value ranges over `1..2,147,4
 `ActivationConcurrency` rejects `0` instead, because it limits the activations in progress
 rather than the number of objects.
 
-!!! warning "The placement default differs only in C++"
-
-    C++ starts as a `Server` that receives placements when `object_role` is left unset, while the
-    other languages take no part in placement. State the role explicitly in C++ for a node that
-    is to hold no Spot or Actor.
+When `object_role` is left unset, C++ uses `none`, so the node takes no part in placement. State
+the role explicitly whenever the node is intended to host or discover Objects.
 
 ## 6. Send Waiting and Socket Limits
 

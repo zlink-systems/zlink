@@ -254,10 +254,9 @@ class MarkNumberHandler : ZLinkSpotRequestHandler<BingoRoomSpot, MarkNumber, Mar
 
 ```kotlin
 // 길드 가입 신청 — 길드 id로 바로 요청한다. 사전 락도, 사전 생성도 없다.
-spots.requestToSpot(guildId, JoinGuildReq(userId))
+spots.kotlin().requestToSpot<JoinGuildRes>(guildId, JoinGuildReq(userId))
     .instanceSpot("guild")
     .inMesh("social")
-    .submit(JoinGuildRes::class.java)
     .await()
 ```
 
@@ -318,14 +317,13 @@ sticky LB · pub/sub 브로커 · 분산 락 — 이 인프라 구성 요소가 
 // 첫 요청이 OrderId 기준 spot을 cold-activate하고, 이후 요청은 이미 만들어진
 // 같은 spot에 도착해 항상 한 곳에서 순서대로 처리된다(분산 락 없음).
 // request는 이미 StartOrderWorkflowReq 바디다.
-spots.requestToSpot(request.orderId, request)
+spots.kotlin().requestToSpot<StartOrderWorkflowRes>(request.orderId, request)
     .instanceSpot("order-workflow")
     .inMesh("commerce")
-    .submit(StartOrderWorkflowRes::class.java)
     .await()
 
 // actor handler 안 — 재접속해도 같은 actor로 이어진 client에 push(sticky LB 없음).
-actor.context().boundSession().send(OrderStatusChanged(orderId, status)).submit().await()
+actor.context().boundSession().kotlin().send(OrderStatusChanged(orderId, status)).await()
 ```
 
 실행되는 근거 샘플: [SupportChat](../../../common/sample/supportchat/README.ko.md) ·

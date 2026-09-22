@@ -1,17 +1,18 @@
 package systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.actors
 
-import java.util.concurrent.CompletableFuture
-import java.util.concurrent.CompletionStage
-import systems.zlink.framework.actors.ZLinkActor
 import systems.zlink.framework.actors.ZLinkActorContext
 import systems.zlink.framework.actors.ZLinkActorJoinCompletion
 import systems.zlink.framework.actors.ZLinkActorJoinOperationId
+import systems.zlink.framework.kotlin.ZLinkSuspendingActor
+import systems.zlink.framework.kotlin.decode
+import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.samples.kotlin.tictactoe.shared.contracts.JoinGameFailedNotify
 import systems.zlink.samples.kotlin.tictactoe.shared.contracts.JoinGameNotify
 import systems.zlink.samples.kotlin.tictactoe.shared.contracts.PlayerInfo
 import systems.zlink.samples.kotlin.tictactoe.shared.contracts.TicTacToeGameJoinRes
 
-class PlayActor(val actorId: String, private val context: ZLinkActorContext) : ZLinkActor {
+class PlayActor(val actorId: String, override val context: ZLinkActorContext) :
+    ZLinkSuspendingActor() {
     private var joinedRoomId: String? = null
     private var pendingRoomId: String? = null
     private val completedJoinOperations = mutableSetOf<ZLinkActorJoinOperationId>()
@@ -21,8 +22,6 @@ class PlayActor(val actorId: String, private val context: ZLinkActorContext) : Z
 
     var disconnected: Boolean = false
         private set
-
-    override fun context(): ZLinkActorContext = context
 
     fun applyPlayer(player: PlayerInfo) {
         require(player.actorId == actorId) { "player actor id does not match actor" }
@@ -51,7 +50,7 @@ class PlayActor(val actorId: String, private val context: ZLinkActorContext) : Z
     }
 
     // --8<-- [start:doc-join-completed]
-    override fun onJoinCompleted(completion: ZLinkActorJoinCompletion): CompletionStage<Void> {
+    override suspend fun onJoinCompletedSuspending(completion: ZLinkActorJoinCompletion) {
         val operationId =
             when (completion) {
                 is ZLinkActorJoinCompletion.Accepted -> completion.operationId()
@@ -59,31 +58,33 @@ class PlayActor(val actorId: String, private val context: ZLinkActorContext) : Z
                 is ZLinkActorJoinCompletion.Failed -> completion.operationId()
             }
         if (!completedJoinOperations.add(operationId)) {
-            return CompletableFuture.completedFuture(null)
+            return
         }
 
         var roomId = pendingRoomId
         pendingRoomId = null
-        return when (completion) {
+        when (completion) {
             is ZLinkActorJoinCompletion.Accepted -> {
-                val reply = completion.reply().decode(TicTacToeGameJoinRes::class.java)
+                val reply = completion.reply().decode<TicTacToeGameJoinRes>()
                 if (roomId.isNullOrBlank()) {
                     // The relocated Actor reconstructs the room from the durable accepted reply.
                     roomId = reply.state.roomId
                 }
                 joinGame(roomId.orEmpty())
-                context.boundSession().send(JoinGameNotify(reply.state)).submit()
+                context.boundSession().kotlin().send(JoinGameNotify(reply.state)).await()
             }
             is ZLinkActorJoinCompletion.Rejected ->
                 context
                     .boundSession()
+                    .kotlin()
                     .send(JoinGameFailedNotify(roomId.orEmpty(), "Rejected"))
-                    .submit()
+                    .await()
             is ZLinkActorJoinCompletion.Failed ->
                 context
                     .boundSession()
+                    .kotlin()
                     .send(JoinGameFailedNotify(roomId.orEmpty(), completion.kind().name))
-                    .submit()
+                    .await()
         }
     }
     // --8<-- [end:doc-join-completed]

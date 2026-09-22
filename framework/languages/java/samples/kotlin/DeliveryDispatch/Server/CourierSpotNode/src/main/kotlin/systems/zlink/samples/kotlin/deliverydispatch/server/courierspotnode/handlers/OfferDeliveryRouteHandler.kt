@@ -16,6 +16,7 @@ import systems.zlink.samples.kotlin.deliverydispatch.shared.contracts.OfferDeliv
  * The suspending packet handler is bound to `ZLinkSpot`, and this one hangs off the entry spot, so
  * it implements the framework interface directly.
  */
+// #895: the spec has no Kotlin handler form for an entry-spot packet handler.
 class OfferDeliveryRouteHandler(
     private val actors: ZLinkActorManager,
     private val actorClient: ZLinkActorClient,
@@ -26,6 +27,7 @@ class OfferDeliveryRouteHandler(
                 found.orElseThrow {
                     IllegalStateException("Courier actor is not bound: ${message.courierId}")
                 }
+            // #895: this entry-spot packet handler has no Kotlin form in the spec.
             actorClient.sendToActor(actorRef.actorId, message).submit()
         }
 }

@@ -1327,6 +1327,7 @@ descriptor_owner_lease_result_t run_descriptor_owner_lease_selection (
         options.add_location_store (public_store);
         options.add_relocation_store (relocation_store);
         options.add_route_mesh ("lease-target-mesh")
+          .set_object_role (zlink::framework::object_role_t::server)
           .set_routing_id (zlink::routing_id_t::from ("zzz-live-target"))
           .set_placement_weight (1)
           .listen (endpoint)
@@ -2753,7 +2754,8 @@ TEST (ZLinkFrameworkStoreLocationResolvers, PublicSpotManagerUsesLocationReserva
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
         options.add_location_store (store);
         auto node = options.add_route_mesh ("spot-mesh");
-        node.set_routing_id (zlink::routing_id_t::from ("spot-local-node"))
+        node.set_object_role (zlink::framework::object_role_t::server)
+          .set_routing_id (zlink::routing_id_t::from ("spot-local-node"))
           .listen (endpoint)
           .add_spot_factory<local_user_spot_t> (
             "room",
@@ -2783,6 +2785,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers, SuccessiveUserSpotAcceptsItsCurrentA
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
         options.add_location_store (store);
         options.add_route_mesh ("spot-fence-mesh")
+          .set_object_role (zlink::framework::object_role_t::server)
           .set_routing_id (zlink::routing_id_t::from ("spot-fence-node"))
           .listen (endpoint)
           .add_spot_factory<local_user_spot_t> (
@@ -2868,7 +2871,8 @@ TEST (ZLinkFrameworkStoreLocationResolvers, ContextOnlySpotFactoryReceivesExactF
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
         options.add_location_store (store);
         auto node = options.add_route_mesh ("context-mesh");
-        node.set_routing_id (zlink::routing_id_t::from ("context-node"))
+        node.set_object_role (zlink::framework::object_role_t::server)
+          .set_routing_id (zlink::routing_id_t::from ("context-node"))
           .listen (endpoint)
           .add_spot_factory<context_owned_user_spot_t> (
             "room",
@@ -2915,7 +2919,8 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
         options.add_location_store (public_store);
         auto node = options.add_route_mesh ("spot-collision-mesh");
-        node.set_routing_id (zlink::routing_id_t::from ("spot-collision-node"))
+        node.set_object_role (zlink::framework::object_role_t::server)
+          .set_routing_id (zlink::routing_id_t::from ("spot-collision-node"))
           .listen (endpoint)
           .add_spot_factory<occupied_user_spot_t> (
             "occupied",
@@ -2957,7 +2962,8 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
         options.add_location_store (public_store);
         auto node = options.add_route_mesh ("source-cleanup-mesh");
-        node.set_routing_id (zlink::routing_id_t::from ("source-cleanup-node"))
+        node.set_object_role (zlink::framework::object_role_t::server)
+          .set_routing_id (zlink::routing_id_t::from ("source-cleanup-node"))
           .listen (endpoint)
           .add_spot_factory<failing_user_spot_t> (
             "failing",

@@ -111,6 +111,7 @@ class Program {
         options.configureLocations()
         options.addLocationStore(locations)
         options.addRelocationStore(relocation)
+        // #895: configuration package scanning has no Kotlin form in the spec.
         options.addHandlersFromPackageOf(Program::class.java)
         options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
         if (topology.isRole("zone") && topology.isSubscriberOnly()) {
@@ -138,6 +139,7 @@ class Program {
                     .addStreamNode(ZoneWorldNames.GATEWAY_STREAM)
                     .bind(topology.streamValue())
                     .enableActorDispatch()
+                    // #895: session registration has no Kotlin form in the spec.
                     .registerSession(GameSession::class.java)
             }
             "zone" -> {
@@ -152,6 +154,7 @@ class Program {
                 mesh
                     .objects()
                     .server()
+                    // #895: entry-spot registration has no Kotlin form in the spec.
                     .addEntrySpot(ZoneEntrySpot::class.java)
                     .addSpotFactory(ZoneWorldNames.ZONE_SPOT_TYPE, ZoneSpot::class.java) {
                         it.stableTypeLimit(2).disableRelocation()
@@ -161,6 +164,7 @@ class Program {
                         PlayerActor::class.java,
                         PlayerActorFactory::class.java,
                     ) {
+                        // #895: state preservation configuration has no Kotlin form in the spec.
                         it.preserveStateWith(PlayerActorRelocationAdapter::class.java)
                     }
                 // --8<-- [end:doc-zw-node-register]
@@ -187,6 +191,7 @@ class Program {
                     .addStreamNode(ZoneWorldNames.OPS_STREAM)
                     .bind(topology.streamValue())
                     .enableActorDispatch()
+                    // #895: session registration has no Kotlin form in the spec.
                     .registerSession(OpsSession::class.java)
             }
         }

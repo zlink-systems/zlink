@@ -5229,7 +5229,7 @@ spot_node_runtime_t::actor_join_state_snapshot_t spot_node_runtime_t::actor_join
                       const auto admission =
                         context_state->actor_admissions.find (factory->second.actor_type);
                       if (admission != context_state->actor_admissions.end ()
-                          && admission->second.join) {
+                          && (context_state->is_entry_spot () || admission->second.join)) {
                           snapshot.admission.emplace (admission->second);
                       }
                   }
@@ -5282,7 +5282,8 @@ spot_node_runtime_t::actor_admission (spot_context_t &context,
               return;
           }
           const auto admission = context._state->actor_admissions.find (actor_type);
-          if (admission != context._state->actor_admissions.end () && admission->second.join)
+          if (admission != context._state->actor_admissions.end ()
+              && (context._state->is_entry_spot () || admission->second.join))
               selected.emplace (admission->second);
       })
       .get ();
@@ -5810,8 +5811,11 @@ result_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_spot_erased (
 
     auto &admission_callbacks = *join_snapshot.admission;
     auto &serializers = *join_snapshot.serializers;
-    const auto response = admission_callbacks.join (
-      join_snapshot.spot_instance.get (), actor_ref.actor_id ().value (), request, serializers);
+    const auto response =
+      context._state->is_entry_spot ()
+        ? spot_actor_join_result_t::accept ()
+        : admission_callbacks.join (join_snapshot.spot_instance.get (),
+                                    actor_ref.actor_id ().value (), request, serializers);
     if (!response.accepted) {
         return result_t<actor_join_reply_t>::success (
           actor_join_reply_t{1, actor_ref, framework_reply_or_empty (response.reply, serializers)});
@@ -5987,8 +5991,11 @@ spot_node_runtime_t::join_remote_actor_to_spot_erased (const actor_ref_t &actor_
 
     auto &admission_callbacks = *join_snapshot.admission;
     auto &serializers = *join_snapshot.serializers;
-    const auto response = admission_callbacks.join (
-      join_snapshot.spot_instance.get (), actor_ref.actor_id ().value (), request, serializers);
+    const auto response =
+      context._state->is_entry_spot ()
+        ? spot_actor_join_result_t::accept ()
+        : admission_callbacks.join (join_snapshot.spot_instance.get (),
+                                    actor_ref.actor_id ().value (), request, serializers);
     if (!response.accepted) {
         if (!registration.create_context_instance) {
             registration.configure_instance (actor_instance.get (), actor_ref, &actor_context);

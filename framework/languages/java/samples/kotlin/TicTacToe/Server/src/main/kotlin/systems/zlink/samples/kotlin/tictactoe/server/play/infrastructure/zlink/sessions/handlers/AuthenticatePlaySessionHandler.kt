@@ -1,13 +1,14 @@
 package systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.sessions.handlers
 
-import kotlinx.coroutines.future.await
 import org.slf4j.LoggerFactory
 import systems.zlink.framework.actors.ActorRef
 import systems.zlink.framework.actors.ZLinkActorCreateResult
 import systems.zlink.framework.actors.ZLinkActorManager
 import systems.zlink.framework.channels.ZLinkClient
 import systems.zlink.framework.kotlin.ZLinkSuspendingTypedSessionPacketHandler
+import systems.zlink.framework.kotlin.await
 import systems.zlink.framework.kotlin.kotlin
+import systems.zlink.framework.kotlin.requestToChannel
 import systems.zlink.framework.streams.ZLinkSessionContext
 import systems.zlink.framework.streams.ZLinkSessionDispatchContext
 import systems.zlink.samples.kotlin.tictactoe.server.configuration.SampleNames
@@ -22,6 +23,8 @@ class AuthenticatePlaySessionHandler(
     private val actors: ZLinkActorManager,
     private val channels: ZLinkClient,
 ) : ZLinkSuspendingTypedSessionPacketHandler<ZLinkSessionContext, AuthenticateReq> {
+    private val kotlinChannels = channels.kotlin()
+
     override fun packetName(): String = "AuthenticateReq"
 
     override fun messageType(): Class<AuthenticateReq> = AuthenticateReq::class.java
@@ -33,13 +36,12 @@ class AuthenticatePlaySessionHandler(
     ) {
         require(request.accessToken.isNotBlank()) { "access token is required" }
         val authenticated =
-            channels
-                .requestToChannel(
+            kotlinChannels
+                .requestToChannel<AuthenticatePlayerRes>(
                     SampleNames.ApiChannel,
                     AuthenticatePlayerReq(request.accessToken),
                 )
                 .timeout(SampleNames.RequestTimeout)
-                .submit(AuthenticatePlayerRes::class.java)
                 .await()
         // --8<-- [start:doc-ttt-session-bind]
         val playActor =
@@ -57,7 +59,7 @@ class AuthenticatePlaySessionHandler(
         if (playActor is ZLinkActorCreateResult.Existing) {
             logger.info("tictactoe-lifecycle actor-bound actor={}", boundActor.actorId())
         }
-        context.client().reply(AuthenticateRes(authenticated.player)).submit().await()
+        context.client().kotlin().reply(AuthenticateRes(authenticated.player)).await()
     }
 
     private fun requireActor(result: ZLinkActorCreateResult): ActorRef =

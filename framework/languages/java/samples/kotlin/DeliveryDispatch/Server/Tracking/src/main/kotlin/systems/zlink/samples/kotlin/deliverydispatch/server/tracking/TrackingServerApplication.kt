@@ -29,6 +29,7 @@ class TrackingServerApplication {
         options.useCoroutineHandlers(Dispatchers.Default)
         options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 
+        // #895: configuration package scanning has no Kotlin form in the spec.
         options.addHandlersFromPackageOf(TrackingServerApplication::class.java)
         val trackingSpot =
             options
