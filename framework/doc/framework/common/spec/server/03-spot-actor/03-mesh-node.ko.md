@@ -115,7 +115,7 @@ mode와 fixed RID를 함께 설정하면 startup configuration error다.
 
 ## 4. Object role과 등록할 수 있는 기능
 
-MeshNode마다 object role을 한 번 선택한다.
+MeshNode마다 object role을 최대 한 번 선택할 수 있다. 선택하지 않으면 `None`이다.
 
 | Object role | Logical object operation | Local [factory](../00-foundation/02-glossary.ko.md#factory)와 Entry Spot | 새 object를 배치할 target |
 |---|---|---|---|
@@ -464,6 +464,8 @@ runtime snapshot과 event)만으로 다음을 확인한다.
 
 - 같은 process의 중복 `MeshName`과 잘못된 object role 구성이 startup에서 실패한다.
 - `None`, `Client`, `Server`가 manager, factory와 placement capability를 계약대로 제한한다.
+- Object role을 선택하지 않은 MeshNode는 `None`으로 시작하며 object manager, factory, Entry Spot과
+  placement capability를 만들지 않는다.
 - Object role과 Location Store, automatic discovery와 fixed RID의 잘못된 조합이 startup에서 실패한다.
 - Automatic RID가 prefix와 lowercase canonical UUID v4 형식을 따르고 active conflict에서 두 번째 claim
   없이 startup configuration error로 실패한다.
