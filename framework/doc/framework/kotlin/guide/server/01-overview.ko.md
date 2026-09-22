@@ -18,7 +18,7 @@ title: "1. 개요 · Kotlin"
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-이 장은 [tutorial의 `Server`·`Client` 디렉터리와 「실행」 절](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.ko.md#실행)에서 코드를 인용하며, 그 tree를 bootstrap하고 build하면 뒤의 장에서 설명하는 실행 결과를 재현할 수 있다.
+이 장은 [tutorial의 `Server`·`Client` 디렉터리와 「실행」 절](https://github.com/zlink-systems/zlink-kotlin-examples/blob/main/tutorial/README.ko.md#실행)에서 코드를 인용하며, 그 tree를 bootstrap하고 build하면 뒤의 장에서 설명하는 실행 결과를 재현할 수 있다.
 
 > 이 문서는 Kotlin 가이드의 진입점이다. 가이드는 Kotlin 개발자가
 > ZLink Framework의 기능을 **읽고 바로 따라 사용할 수 있도록** 개념과 사용법을

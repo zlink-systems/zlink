@@ -18,7 +18,7 @@ title: "Location · Kotlin"
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-이 장은 [tutorial의 `Client` 디렉터리와 「실행」 절](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.ko.md#실행)에서 코드를 인용하며, 그 tree를 bootstrap하고 build하면 아래 실행 결과를 재현할 수 있다.
+이 장은 [tutorial의 `Client` 디렉터리와 「실행」 절](https://github.com/zlink-systems/zlink-kotlin-examples/blob/main/tutorial/README.ko.md#실행)에서 코드를 인용하며, 그 tree를 bootstrap하고 build하면 아래 실행 결과를 재현할 수 있다.
 
 !!! info "이 장을 읽고 나면"
 

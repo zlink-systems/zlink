@@ -214,7 +214,7 @@ EXAMPLE_REPOSITORIES = {
     "dotnet": "zlink-dotnet-examples",
     "cpp": "zlink-cpp-examples",
     "java": "zlink-java-examples",
-    "kotlin": "zlink-java-examples",
+    "kotlin": "zlink-kotlin-examples",
     "node": "zlink-node-examples",
 }
 PLACEHOLDER_RE = re.compile(

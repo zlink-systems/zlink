@@ -18,7 +18,7 @@ View in another language — [C++](../../../cpp/guide/server/23-stream.en.md) ·
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-This chapter quotes code from the tutorial's [`Server` and `StreamClient` directories and its Run section](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.md#run); bootstrapping and building that tree reproduces the results below.
+This chapter quotes code from the tutorial's [`Server` and `StreamClient` directories and its Run section](https://github.com/zlink-systems/zlink-kotlin-examples/blob/main/tutorial/README.md#run); bootstrapping and building that tree reproduces the results below.
 
 A client that reaches a STREAM node uses its language's stream connector. [Client stream connector](../../../install.en.md#client-stream-connector) covers installation for Unity, Unreal, browser, Node, .NET, Java, and C++ clients, and the [stream connector guide](../stream-connector/README.en.md) for that language covers connection and packet handling.
 

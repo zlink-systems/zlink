@@ -18,7 +18,7 @@ View in another language — [C++](../../../cpp/guide/server/24-actor-session.en
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-This chapter quotes code from the tutorial's [`Server` and `StreamClient` directories and its Run section](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.md#run); bootstrapping and building that tree reproduces the results below.
+This chapter quotes code from the tutorial's [`Server` and `StreamClient` directories and its Run section](https://github.com/zlink-systems/zlink-kotlin-examples/blob/main/tutorial/README.md#run); bootstrapping and building that tree reproduces the results below.
 
 !!! info "What you get from this chapter"
 

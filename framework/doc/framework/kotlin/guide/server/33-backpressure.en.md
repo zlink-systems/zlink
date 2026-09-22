@@ -18,7 +18,7 @@ View in another language — [C++](../../../cpp/guide/server/33-backpressure.en.
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-This chapter quotes no tutorial code; it explains the limits and outcomes observable when load reaches tutorial `Server` and `Client` processes that have been bootstrapped and built using the [README Run section](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.md#run).
+This chapter quotes no tutorial code; it explains the limits and outcomes observable when load reaches tutorial `Server` and `Client` processes that have been bootstrapped and built using the [README Run section](https://github.com/zlink-systems/zlink-kotlin-examples/blob/main/tutorial/README.md#run).
 
 > **The documents that own this chapter's contract** — covered by the
 > [Async Execution Policy](../../../common/spec/server/01-execution/README.en.md),

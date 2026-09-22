@@ -18,7 +18,7 @@ title: "STREAM · Kotlin"
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-이 장은 [tutorial의 `Server`·`StreamClient` 디렉터리와 「실행」 절](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.ko.md#실행)에서 코드를 인용하며, 그 tree를 bootstrap하고 build하면 아래 실행 결과를 재현할 수 있다.
+이 장은 [tutorial의 `Server`·`StreamClient` 디렉터리와 「실행」 절](https://github.com/zlink-systems/zlink-kotlin-examples/blob/main/tutorial/README.ko.md#실행)에서 코드를 인용하며, 그 tree를 bootstrap하고 build하면 아래 실행 결과를 재현할 수 있다.
 
 STREAM node에 연결하는 client는 언어별 stream connector를 사용한다. Unity·Unreal·browser·Node·.NET·Java·C++ client의 설치 범위는 [Client stream connector](../../../install.ko.md#client-stream-connector)에 있고, 사용하는 언어의 [stream connector 가이드](../stream-connector/README.ko.md)가 연결과 packet 처리 방법을 다룬다.
 

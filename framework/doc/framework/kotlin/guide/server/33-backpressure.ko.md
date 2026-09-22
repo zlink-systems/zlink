@@ -18,7 +18,7 @@ title: "Backpressure — 처리보다 도착이 빠를 때 · Kotlin"
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-이 장은 tutorial code를 인용하지 않고, [tutorial의 `Server`·`Client`와 「실행」 절](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.ko.md#실행)에서 bootstrap·build한 process에 부하를 줄 때 관찰할 제한과 결과를 설명한다.
+이 장은 tutorial code를 인용하지 않고, [tutorial의 `Server`·`Client`와 「실행」 절](https://github.com/zlink-systems/zlink-kotlin-examples/blob/main/tutorial/README.ko.md#실행)에서 bootstrap·build한 process에 부하를 줄 때 관찰할 제한과 결과를 설명한다.
 
 > **이 장의 계약 소유 문서** — [비동기 실행 정책](../../../common/spec/server/01-execution/README.ko.md)과
 > [Framework API](../../../common/spec/server/00-foundation/06-framework-api.ko.md),
