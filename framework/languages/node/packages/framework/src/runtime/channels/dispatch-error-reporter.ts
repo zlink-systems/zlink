@@ -13,6 +13,7 @@ import {
   type ZLinkDiagnosticsContext
 } from '../diagnostics';
 import type { ZLinkDispatchErrorSink } from '../diagnostics/dispatch-error-port';
+import { dispatchErrorDetails } from '../diagnostics/dispatch-error-details';
 
 export type { ZLinkDispatchErrorSink } from '../diagnostics/dispatch-error-port';
 
@@ -46,7 +47,6 @@ export class ZLinkDispatchErrorReporter {
 
   report(event: ZLinkRuntimeDispatchFailure): void {
     const normalized = normalizeDispatchFailure(event);
-    const tracePoint = this.flow.begin(ZLinkMessageFlowOutcome.Error);
     const dropReason = channelDropReason(normalized);
     if (dropReason !== undefined) {
       this.metrics?.count('zlink.mesh_node.messages.dropped', 1, {
@@ -55,8 +55,9 @@ export class ZLinkDispatchErrorReporter {
         reason: dropReason
       });
     }
+    const tracePoint = this.flow.begin(ZLinkMessageFlowOutcome.Error);
     if (tracePoint === undefined) return;
-    const errorInfo = dispatchErrorInfo(normalized);
+    const errorInfo = dispatchErrorDetails(normalized.error);
     this.reportedEvents += 1;
     tracePoint.trace({
       outcome: ZLinkMessageFlowOutcome.Error,
@@ -126,47 +127,4 @@ function channelDropReason(event: ZLinkRuntimeDispatchFailure): string | undefin
     default:
       return undefined;
   }
-}
-
-function dispatchErrorInfo(event: ZLinkRuntimeDispatchFailure): {
-  readonly errorType?: string;
-  readonly errorMessage?: string;
-  readonly errorCauseType?: string;
-  readonly errorCauseMessage?: string;
-} {
-  if (event.errorType !== undefined || event.errorMessage !== undefined) {
-    return {
-      errorType: event.errorType,
-      errorMessage: event.errorMessage,
-      errorCauseType: event.errorCauseType,
-      errorCauseMessage: event.errorCauseMessage
-    };
-  }
-  if (event.error === undefined) {
-    return {};
-  }
-  if (event.error instanceof Error) {
-    const cause = deepestErrorCause(event.error);
-    return {
-      errorType: event.error.name,
-      errorMessage: event.error.message,
-      ...(cause === event.error
-        ? {}
-        : {
-            errorCauseType: cause instanceof Error ? cause.name : typeof cause,
-            errorCauseMessage: cause instanceof Error ? cause.message : String(cause)
-          })
-    };
-  }
-  return { errorType: typeof event.error, errorMessage: String(event.error) };
-}
-
-function deepestErrorCause(error: Error): unknown {
-  let current: unknown = error;
-  const seen = new Set<unknown>();
-  while (current instanceof Error && current.cause !== undefined && !seen.has(current)) {
-    seen.add(current);
-    current = current.cause;
-  }
-  return current;
 }

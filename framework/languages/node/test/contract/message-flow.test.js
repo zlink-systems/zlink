@@ -236,6 +236,66 @@ test('dispatch errors record service-wire command and deepest handler cause', ()
   );
 });
 
+test('dispatch trace and log share bounded redacted handler details', () => {
+  const errorMessage = `Authorization: Bearer auth Bearer standalone password=p token=t ${'x'.repeat(513)}\n at Secret.Handler`;
+  const expectedMessage =
+    `Authorization: <redacted> Bearer <redacted> password=<redacted> token=<redacted> ${'x'.repeat(513)}`.slice(
+      0,
+      512
+    );
+  const error = new Error(errorMessage);
+  error.stack = 'Error: stack trace must not be recorded';
+  const reporter = new ZLinkDispatchErrorReporter(undefined, undefined, silentSink(), {
+    diagnostics: diagnostics('errors'),
+    liveMode: { mode: 'errors' }
+  });
+  reporter.report({
+    surface: 'routeMeshChannel',
+    messageKind: 'send',
+    reason: 'handler_exception',
+    action: 'drop',
+    channelName: 'play',
+    commandId: 34,
+    error
+  });
+
+  assert.equal(telemetryRecords.length, 1);
+  const record = telemetryRecords[0];
+  const attributes = traceRecords[0].attributes;
+  assert.equal(attributes.command_id, 34);
+  assert.equal(attributes.error_type, 'Error');
+  assert.equal(attributes.error_message, expectedMessage);
+  assert.equal(record.attributes.error_type, 'Error');
+  assert.equal(record.attributes.error_message, expectedMessage);
+  assert.match(record.body, /error_type=Error/);
+  assert.match(record.body, new RegExp(`error_message=${expectedMessage}`));
+  assert.doesNotMatch(record.body, /Bearer auth/);
+  assert.doesNotMatch(record.body, /Bearer standalone/);
+  assert.doesNotMatch(record.body, /password=p/);
+  assert.doesNotMatch(record.body, /token=t/);
+  assert.doesNotMatch(record.body, /Secret\.Handler/);
+});
+
+test('dispatch trace and log keep an empty error message', () => {
+  const reporter = new ZLinkDispatchErrorReporter(undefined, undefined, silentSink(), {
+    diagnostics: diagnostics('errors'),
+    liveMode: { mode: 'errors' }
+  });
+  reporter.report({
+    surface: 'routeMeshChannel',
+    messageKind: 'send',
+    reason: 'handler_exception',
+    action: 'drop',
+    error: new Error('')
+  });
+
+  assert.equal(traceRecords[0].attributes.error_type, 'Error');
+  assert.equal(traceRecords[0].attributes.error_message, '');
+  assert.equal(telemetryRecords[0].attributes.error_type, 'Error');
+  assert.equal(telemetryRecords[0].attributes.error_message, '');
+  assert.match(telemetryRecords[0].body, /error_message=(?: |$)/);
+});
+
 test('MFLOW-009 live-mode cell toggles every reader without rebuilding the tracer', () => {
   const { tracer, cell } = makeTracer(diagnostics('off'));
   assert.equal(tracer.enabled(ZLinkMessageFlowOutcome.Received), false);
