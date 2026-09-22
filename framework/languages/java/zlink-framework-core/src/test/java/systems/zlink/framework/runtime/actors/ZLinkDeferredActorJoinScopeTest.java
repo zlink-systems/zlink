@@ -17,10 +17,45 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 final class ZLinkDeferredActorJoinScopeTest {
+    @Test
+    void oneHandlerCompletes65DeferredActorJoinsWhoseRequestsTotalMoreThan8MiB() {
+        int requestSize = 129 * 1024;
+        List<byte[]> requests = new ArrayList<>();
+        AtomicInteger completed = new AtomicInteger();
+        AtomicInteger completedBytes = new AtomicInteger();
+
+        ZLinkDeferredActorJoinHandlerScope.run(
+                        actorId -> actorId.startsWith("actor-"),
+                        () -> {
+                            for (int index = 0; index < 65; index++) {
+                                String actorId = "actor-" + index;
+                                byte[] request = new byte[requestSize];
+                                request[0] = (byte) index;
+                                requests.add(request);
+                                ZLinkDeferredActorJoinScope.register(
+                                        actorId,
+                                        Long.MAX_VALUE,
+                                        () -> {
+                                            completed.incrementAndGet();
+                                            completedBytes.addAndGet(request.length);
+                                            return CompletableFuture.completedFuture(null);
+                                        });
+                            }
+                            return CompletableFuture.completedFuture(null);
+                        })
+                .toCompletableFuture()
+                .join();
+
+        assertEquals(65, completed.get());
+        assertEquals(65, requests.size());
+        assertTrue(completedBytes.get() > 8 * 1024 * 1024);
+    }
+
     @Test
     void deferredJoinUsesOnlyTheTimeLeftAfterItsHandlerBarrier() {
         long deadline = System.nanoTime() + Duration.ofSeconds(1).toNanos();
