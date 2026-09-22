@@ -34,6 +34,10 @@ it returns it as a close failure, and cleans up local binding and
 session transport regardless of success or failure. No additional
 public member is provided for this behavior.
 
+`ZLinkSessionDispatchContext`'s `actor()` component and accessor are
+nullable: they are `null` when the packet has no Actor slot or the slot
+isn't a current binding. The Kotlin projection is `ZLinkSessionActor?`.
+
 After bind, relay/request relay and `notifyDisconnected()` use the
 per-Actor stored route and don't query the Location Store per message. A
 physical disconnect has the framework perform an automatic all-settled
@@ -164,13 +168,14 @@ admission or replay. The reply call doesn't provide this modifier.
 
 ```java
 public final class systems.zlink.framework.streams.ZLinkSessionDispatchContext extends java.lang.Record {
- public systems.zlink.framework.streams.ZLinkSessionDispatchContext(java.lang.String, java.util.Map<java.lang.String, java.lang.String>, boolean);
+ public systems.zlink.framework.streams.ZLinkSessionDispatchContext(java.lang.String, java.util.Map<java.lang.String, java.lang.String>, boolean, systems.zlink.framework.streams.ZLinkSessionActor);
  public final java.lang.String toString();
  public final int hashCode();
  public final boolean equals(java.lang.Object);
  public java.lang.String packetName();
  public java.util.Map<java.lang.String, java.lang.String> metadata();
  public boolean canReply();
+ public systems.zlink.framework.streams.ZLinkSessionActor actor();
 }
 public final class systems.zlink.framework.streams.ZLinkStreamCodec extends java.lang.Enum<systems.zlink.framework.streams.ZLinkStreamCodec> {
  public static final systems.zlink.framework.streams.ZLinkStreamCodec RAW;

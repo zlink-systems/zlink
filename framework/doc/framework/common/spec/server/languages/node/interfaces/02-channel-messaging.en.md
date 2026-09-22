@@ -458,6 +458,7 @@ export interface ZLinkSessionDispatchContext {
  readonly packetName: string;
  readonly metadata: ZLinkMessageMetadata;
  readonly canReply: boolean;
+ readonly actor?: ZLinkSessionActor; // the current binding the packet's Actor slot points at; undefined when there is none
 }
 
 export interface ZLinkSessionFactory<TSession extends ZLinkSession = ZLinkSession> {

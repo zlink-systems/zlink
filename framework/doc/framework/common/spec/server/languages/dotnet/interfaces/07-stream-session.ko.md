@@ -125,10 +125,12 @@ public sealed class ZLinkSessionDispatchContext
  public ZLinkSessionDispatchContext(
  string packetName,
  ZLinkMessageMetadata? metadata = null,
- bool canReply = false) { }
+ bool canReply = false,
+ IZLinkSessionActor? actor = null) { }
  public string PacketName { get; }
  public ZLinkMessageMetadata Metadata { get; }
  public bool CanReply { get; }
+ public IZLinkSessionActor? Actor { get; } // packet의 Actor slot이 가리키는 현재 binding. 없으면 null
 }
 ```
 

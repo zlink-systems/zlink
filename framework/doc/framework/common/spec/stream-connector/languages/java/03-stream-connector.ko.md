@@ -97,6 +97,33 @@ public interface ZLinkStreamConnector {
     AutoCloseable onErrorReceived(ZLinkStreamErrorHandler handler);
     AutoCloseable onDisconnected(ZLinkStreamDisconnectedHandler handler);
     AutoCloseable onConnectionStateChanged(ZLinkStreamConnectionStateHandler handler);
+
+    // 지금 bind되어 있는 Actor handle(공통 스펙 §5.6). application이 만들지 않는다.
+    List<ZLinkStreamActor> actors();
+    Optional<ZLinkStreamActor> actor(String actorId);
+    AutoCloseable onActorBound(ZLinkStreamActorHandler handler);
+    AutoCloseable onActorUnbound(ZLinkStreamActorHandler handler);
+}
+
+public interface ZLinkStreamActor {
+    String actorId();
+    boolean isBound();                          // unbound 통지 뒤 false
+
+    ZLinkStreamSendCall send(ZLinkStreamEncodedPayload payload);      // 이 Actor의 slot을 싣는다
+    ZLinkStreamRequestCall request(ZLinkStreamEncodedPayload payload);
+    ZLinkTypedStreamSendCall send(Object payload);
+    ZLinkTypedStreamRequestCall request(Object payload);
+    AutoCloseable on(String name, ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload> handler); // 이 Actor가 상대인 message만
+    <TPayload> AutoCloseable on(Class<TPayload> payloadType, ZLinkStreamMessageHandler<TPayload> handler);
+    <TPayload> AutoCloseable on(
+        String name,
+        Class<TPayload> payloadType,
+        ZLinkStreamMessageHandler<TPayload> handler);
+}
+
+@FunctionalInterface
+public interface ZLinkStreamActorHandler {
+    CompletionStage<Void> handle(ZLinkStreamActor actor);
 }
 
 public interface ZLinkStreamLifecycleCall {
@@ -267,7 +294,8 @@ public record ZLinkStreamMessage<TPayload>(
     TPayload payload,
     Map<String, String> metadata,
     String flowId,                // diagnostics level이 OFF이면 null(§4.1)
-    ZLinkFlowOrigin flowOrigin) implements ZLinkStreamFlow {
+    ZLinkFlowOrigin flowOrigin,
+    String actorId) implements ZLinkStreamFlow { // 상대 bound Actor. slot 없는 frame은 null(공통 스펙 §5.6)
 }
 ```
 

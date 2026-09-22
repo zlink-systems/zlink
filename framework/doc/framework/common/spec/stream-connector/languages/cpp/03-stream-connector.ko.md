@@ -77,6 +77,7 @@ struct message_t {
     metadata_t metadata;
     std::string flow_id;                       // diagnostics level이 off이면 비어 있다(§6)
     std::optional<flow_origin_t> flow_origin;  // 같은 조건에서 빈 값이다
+    std::optional<std::string> actor_id;       // 상대 bound Actor. slot 없는 frame은 빈 값(공통 스펙 §5.6)
 };
 ```
 
@@ -108,6 +109,30 @@ subscription_t on_error(std::function<void(const error_t&)> callback);
 subscription_t on_disconnected(std::function<void(std::optional<stream_close_reason_t>)> callback);
 subscription_t on_connection_state_changed(
     std::function<void(const connection_state_changed_t&)> callback);
+
+// 지금 bind되어 있는 Actor handle(공통 스펙 §5.6). application이 만들지 않는다.
+std::vector<std::shared_ptr<actor_t>> actors() const;
+std::shared_ptr<actor_t> actor(std::string_view actor_id) const;   // 없으면 nullptr
+subscription_t on_actor_bound(std::function<void(const std::shared_ptr<actor_t>&)> callback);
+subscription_t on_actor_unbound(std::function<void(const std::shared_ptr<actor_t>&)> callback);
+```
+
+```cpp
+class actor_t {                 // bind된 Actor 하나. connector가 소유하고 unbound 통지에서 닫는다
+public:
+    const std::string& actor_id() const noexcept;
+    bool is_bound() const noexcept;            // unbound 통지 뒤 false
+
+    template <typename TMessage>
+    send_call_t send(const TMessage& message);       // 이 Actor의 slot을 싣는다
+    template <typename TRequest>
+    request_call_t request(const TRequest& request);
+    template <typename TMessage>
+    subscription_t on(std::function<void(const message_t<TMessage>&)> callback);   // 이 Actor가 상대인 message만
+    template <typename TMessage>
+    subscription_t on(std::string packet_name,
+                      std::function<void(const message_t<TMessage>&)> callback);
+};
 ```
 
 해제한 handler는 그 뒤의 `dispatch()`에서 실행하지 않는다.

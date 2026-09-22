@@ -112,6 +112,8 @@ STREAM frame의 앞쪽 2바이트는 `header_size`다.
 +----------------+---------+----------+----------+------------------+
 | name u8+n | meta u16+n? | corr u8+n? | flow_id 36B + origin u8?   |
 +-----------+-------------+------------+----------------------------+
+| actor_slot u16? |
++-----------------+
 ```
 
 - **header의 첫 바이트는 `format_marker = 0xF2`다.** 값이 다르면 decode error다.
@@ -123,6 +125,8 @@ STREAM frame의 앞쪽 2바이트는 `header_size`다.
 - metadata는 `u16 meta_len + metadata bytes`, correlation id는 `u8 len + bytes`로 이어진다.
 - flow 필드는 **36바이트 `flow_id`와 1바이트 `flow_origin`이 항상 함께** 존재하거나 함께 없다.
   의미는 [메시지 흐름 상관관계 §3](../server/06-observability/04-flow-correlation.ko.md#3-형식과-소유권)이 소유한다.
+- `actor_slot`은 이 packet의 서버 쪽 상대가 그 session에 bind된 Actor일 때 그 binding의
+  [Actor slot](#56-bound-actor)이다. 값 `0`은 쓰지 않는다.
 - **모든 multi-byte 정수는 network byte order**다.
 
 application code는 이 header를 직접 만들거나 수정하지 않는다. connector runtime이 소유한다.
@@ -136,6 +140,7 @@ application code는 이 header를 직접 만들거나 수정하지 않는다. co
 | payload compressed | `0x04` | payload가 압축되어 있다 |
 | has correlation id | `0x08` | correlation id 필드가 있다 |
 | has flow id | `0x10` | `flow_id`·`flow_origin` 필드가 있다 |
+| has actor slot | `0x20` | `actor_slot` 필드가 있다 |
 
 `Control` packet에는 `has flow id`를 세우지 않는다
 ([flow-correlation §3](../server/06-observability/04-flow-correlation.ko.md#3-형식과-소유권)).
@@ -173,7 +178,7 @@ metadata는 trace id·locale·tenant id처럼 **작은 값만** 싣는다.
 다음은 모두 decode error다.
 
 - 알 수 없는 `kind`·`codec`·flag bit
-- `has request seq`·`has metadata` flag와 실제 필드 존재 여부의 불일치
+- `has request seq`·`has metadata`·`has actor slot` flag와 실제 필드 존재 여부의 불일치
 - `Response` 또는 `Error`의 `name_len`이 `0`이 아닌 경우
 
 ### 4.6 control frame
@@ -186,7 +191,8 @@ prefix를 사용할 수 없다.**
 dispatch가 섞이지 않는다. 다만 혼동을 피하기 위해 application packet에 `session-closing`을
 사용하지 않는다. 신규 control packet은 `$zlink.` prefix를 사용한다.
 
-control frame은 `Raw` codec, request sequence 없음, metadata 없음, flow flag 없음이다.
+control frame은 `Raw` codec이며 request sequence, metadata, flow field와 flag, Actor slot field와
+flag가 없다. `$zlink.actor.bound`와 `$zlink.actor.unbound`의 slot도 control payload 안에만 있다.
 **payload는 control packet마다 다르다.**
 
 | control packet | payload |
@@ -194,6 +200,8 @@ control frame은 `Raw` codec, request sequence 없음, metadata 없음, flow fla
 | `$zlink.heartbeat.ping` | **비어 있다** |
 | `$zlink.heartbeat.pong` | **비어 있다** |
 | `session-closing` | **비어 있지 않다** — 아래 참조 |
+| `$zlink.actor.bound` | **비어 있지 않다** — 아래 참조 |
+| `$zlink.actor.unbound` | **비어 있지 않다** — 아래 참조 |
 
 `session-closing`은 서버가 세션을 닫기 직전에 보내는 control packet이며, client는 이를 읽어
 `closeReason`을 확정한다
@@ -217,6 +225,28 @@ control frame은 `Raw` codec, request sequence 없음, metadata 없음, flow fla
 
 알 수 없는 version·reason, 또는 `diag_len`이 512를 넘거나 실제 payload 길이와 어긋나면
 decode error다.
+
+`$zlink.actor.bound`는 서버가 Actor를 이 session에 bind했을 때, `$zlink.actor.unbound`는 그
+binding이 끝났을 때 보내는 control packet이다. 의미는 §5.6이, 보내는 시점과 순서는
+[Session과 Actor binding §5](../server/04-session/02-session-actor-binding.ko.md#5-bind와-relay)가
+소유한다.
+
+```text
+$zlink.actor.bound
++------------+---------------+--------------+-------------------+
+| version u8 | actor_slot u16| id_len u8    | actor_id bytes    |
+| = 1        | 1..65535      | 1..255       | UTF-8             |
++------------+---------------+--------------+-------------------+
+
+$zlink.actor.unbound
++------------+---------------+
+| version u8 | actor_slot u16|
+| = 1        | 1..65535      |
++------------+---------------+
+```
+
+알 수 없는 version, `actor_slot = 0`, `id_len = 0`, 또는 실제 payload 길이와 어긋나면 decode
+error다.
 
 ### 4.7 payload 크기 한도
 
@@ -343,6 +373,38 @@ handler가 수신 message를 처리하는 동안 시작한 send와 request는 **
   요구를 connector에 적용한 것이다.** 브라우저 JavaScript에는 `AsyncLocalStorage`에 해당하는 표면이
   없어 실행 문맥에 값을 보관할 수 없다(§2.2). 같은 문서가 금지하는 대로 process 전역 변수나
   connector의 변경 가능한 field로 현재 flow를 추정하지 않는다.
+
+### 5.6 bound Actor
+
+서버는 STREAM session 하나에 Actor 여러 개를 bind할 수 있다
+([Session과 Actor binding §4](../server/04-session/02-session-actor-binding.ko.md#4-binding이-잇는-값과-보관하는-정보)).
+**connector는 packet의 서버 쪽 상대가 어느 Actor인지 Framework가 준 값으로 구분한다** —
+application이 payload에 식별자를 넣어 구분하지 않는다.
+
+- connector는 [Session과 Actor binding §5](../server/04-session/02-session-actor-binding.ko.md#5-bind와-relay)가
+  정한 `$zlink.actor.bound`·`$zlink.actor.unbound` 통지를 받아 `actor_slot ↔ actor_id` 대응표를
+  유지한다. 이미 열린 slot의 bound, 다른 열린 slot이 이미 쓰는 `actor_id`의 bound, 표에 없는
+  slot의 unbound와 표에 없는 `actor_slot`을 실은 packet은 모두 `FrameDecodeFailed`이며 §9에 따라
+  연결을 끝낸다.
+- **수신 message는 `actor_id`를 노출한다.** `has actor slot`이 선 frame은 표에서 찾은 `actor_id`를
+  싣고, 서지 않은 frame은 비어 있다.
+- **Actor handle**은 bind된 Actor 하나를 나타내는 connector 객체다. handle의 상태는 connector가
+  소유하고, application은 닫힌 뒤에도 reference와 `actor_id`를 읽는다. 열린 handle 목록은 호출
+  시점의 read-only snapshot이다.
+- connector는 bound control을 처리할 때 대응표와 목록을 먼저 갱신하고 bound callback을 queue에
+  넣는다. 같은 연결에서 뒤따르는 그 Actor의 packet callback은 bound callback 뒤에 queue된다.
+  unbound control은 표에서 지우고 handle을 닫은 뒤 unbound callback을 queue에 넣으며, 그 뒤로는
+  그 handle의 수신 handler를 실행하지 않는다. 연결이 끊기면 열린 handle을 발급 순서대로 닫고
+  unbound callback을 queue에 넣은 뒤 connection state와 disconnected callback을 queue에 넣는다.
+- handle의 send·request는 그 Actor의 `actor_slot`을 실어 보내고, handle의 수신 등록에는 그 Actor가
+  상대인 message만 전달된다. 닫힌 handle의 send·request는 `ValidationFailed`이며, 그 밖의
+  timeout·cancellation·backpressure 의미는 connector 수준 builder와 같다. Actor lifecycle callback과
+  handle의 수신 등록은 §7의 dispatch mode, 등록 순서, 등록 해제, callback 실패와 "완료를 기다리지
+  않는다" 규칙을 그대로 따른다.
+- connector 수준의 send·request·수신 등록은 slot 없이 동작하며 Actor를 하나만 bind하는 application은
+  handle 없이 지금과 같이 사용한다. 호출마다 Actor 식별자를 문자열로 넘기는 표면은 두지 않는다 —
+  Actor의 주소는 handle이 보존한다
+  ([공개 계약 거버넌스 §7](../server/00-foundation/01-public-contract-governance.ko.md#7-설계-검토-기준)).
 
 ## 6. 연결 생명주기
 
@@ -518,8 +580,8 @@ disconnect 이벤트가 사유를 인자로 함께 전달하는 것은 이 읽�
 
 `waitFor`·`expectNone`·`waitForSequence` 계열은 등록된 callback이 아니다. 이 표면은 두 dispatch
 mode 모두에서 수신 메시지 큐의 아직 소비하지 않은 packet을 직접 관측하고 소비하므로 `Manual`에서도
-별도의 dispatch pump가 필요하지 않다. `dispatch`는 등록된 push handler, error·disconnect handler와
-request callback만 실행한다.
+별도의 dispatch pump가 필요하지 않다. `dispatch`는 등록된 push handler, error·disconnect handler, request callback과
+Actor lifecycle callback(§5.6)만 실행한다.
 
 **handler 등록은 등록을 해제할 수 있는 값을 돌려준다.** push handler와 error·disconnect·connection
 state handler 모두 같다. connector를 닫아야만 등록을 없앨 수 있으면, 화면 하나의 수명에 맞춰
@@ -532,7 +594,7 @@ state handler 모두 같다. connector를 닫아야만 등록을 없앨 수 있�
 문서가 소유한다.
 
 **connector는 handler의 완료를 기다리지 않는다.** 등록된 handler — push handler, error handler,
-끊김 handler, 연결 상태 handler와 request callback — 를 실행하는 것은 connector의 일이지만 그
+끊김 handler, 연결 상태 handler, request callback과 Actor lifecycle callback — 를 실행하는 것은 connector의 일이지만 그
 handler가 끝나기를 기다리는 것은 아니다. 종류에 따른 예외는 없다. `close`는 연결 상태 handler와
 끊김 handler를 **실행한 뒤** 돌아오며 그 handler가 끝났는지는 보지 않는다. 재연결 시도가 소진되어
 끊길 때와 transport 오류로 끊길 때도 같다(§6).
@@ -760,6 +822,12 @@ Unity WebGL UPM package는 새 wire runtime을 만들지 않는다. npm package 
 | **등록 해제** | **push·error·disconnect·connection state 네 등록이 모두 해제할 수 있는 값을 돌려주고, 해제한 handler는 그 뒤의 dispatch에서 실행되지 않는다(§7)** |
 | **수신 개수** | **`receivedCount(name)`가 받은 개수를 세고 소비해도 줄지 않으며, dispatch mode와 무관하다. 연결이 성립할 때 0에서 다시 시작한다(§10)** |
 | **대기 표면** | **이름을 명시하는 길과 payload type에서 결정하는 길이 모두 있고, 술어와 반환이 message이며, 관측 조건 위반은 `ValidationFailed`·연결 종료는 `Disconnected`다(§10.1)** |
+| **Actor slot wire** | **`actor_slot` flag와 field를 양방향으로 encode·decode하고, control header에는 slot이 없으며, flag와 field 존재가 어긋나면 decode error다(§4.2, §4.5, §4.6)** |
+| **Actor lifecycle control** | **잘못된 bound·unbound payload, 이미 열린 slot의 bound, 이미 쓰는 `actor_id`의 bound, 표에 없는 slot의 unbound가 모두 `FrameDecodeFailed`로 연결을 끝낸다(§4.6, §5.6, §9)** |
+| **Actor 대응표** | **`$zlink.actor.bound`가 그 slot을 싣는 첫 packet보다 먼저 도착하고, 수신 message의 `actor_id`가 표로 해석되며, slot이 없는 frame은 `actor_id`가 비어 있다(§5.6)** |
+| **Actor handle** | **목록과 조회가 bound·unbound에 따라 갱신되고, bound callback이 그 Actor의 첫 packet callback보다 먼저 실행되며, 등록을 해제할 수 있고, 연결이 끊기면 열린 handle이 모두 닫히며 unbound callback이 disconnect callback보다 먼저 실행된다(§5.6, §7)** |
+| **Actor handle 송수신** | **handle의 send·request가 그 slot을 싣고, handle 수신 등록이 그 Actor의 message만 받으며, 닫힌 handle의 send·request는 `ValidationFailed`다(§5.6)** |
+| **Actor 언어 투영** | **.NET typed 확장, Java named typed overload, C++ template과 subscription, TypeScript Disposable, Unity WebGL JSON 경계 왕복을 public 표면으로 관찰한다(§5.6, 언어 문서)** |
 | **flow 노출과 전파** | **수신 message가 flow 식별자와 출처를 노출하고, ambient 문맥이 없는 런타임은 명시 전달 수단을 제공한다(§5.5)** |
 | **handler와 종료** | **push·error·끊김·연결 상태 handler와 request callback 다섯 종류 모두, 끝나지 않는 handler가 있어도 connector가 그 완료를 기다리지 않는다. `close`는 연결 상태 handler와 끊김 handler를 실행한 뒤 돌아온다. 재연결 소진과 transport 오류로 끊길 때도 같은 순서로 실행하고 기다리지 않는다(§7)** |
 | **종료 사유 읽기** | **끊긴 뒤 이벤트를 받지 않은 코드도 같은 값을 읽는다. 첫 connect 실패에도 사유가 남고, 재연결해도 지워지지 않는다(§6.2)** |

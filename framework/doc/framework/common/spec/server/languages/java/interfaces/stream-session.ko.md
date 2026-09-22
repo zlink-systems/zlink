@@ -21,6 +21,9 @@ Session close는 remote unbind completion을 bounded lifecycle deadline 안에�
 terminal failure를 무시하지 않고 close failure로 반환하며, 성공·실패와 관계없이 local binding과 session
 transport를 정리한다. 이 동작을 위한 추가 public member는 제공하지 않는다.
 
+`ZLinkSessionDispatchContext`의 `actor()` component와 accessor는 nullable이다 — packet에 Actor slot이
+없거나 현재 binding이 아니면 `null`이다. Kotlin projection은 `ZLinkSessionActor?`다.
+
 Bind 뒤 relay·request relay와 `notifyDisconnected()`는 Actor별 저장 route를 사용하며 message마다 Location
 Store를 조회하지 않는다. Physical disconnect는 Framework가 current binding 전체에 automatic all-settled
 통지를 수행하고 지정한 binding identity마다 Spot callback을 최대 한 번 실행한다.
@@ -145,13 +148,14 @@ timeout을 사용하고 지정하면 두 값 중 짧은 값을 사용하므로 s
 
 ```java
 public final class systems.zlink.framework.streams.ZLinkSessionDispatchContext extends java.lang.Record {
- public systems.zlink.framework.streams.ZLinkSessionDispatchContext(java.lang.String, java.util.Map<java.lang.String, java.lang.String>, boolean);
+ public systems.zlink.framework.streams.ZLinkSessionDispatchContext(java.lang.String, java.util.Map<java.lang.String, java.lang.String>, boolean, systems.zlink.framework.streams.ZLinkSessionActor);
  public final java.lang.String toString();
  public final int hashCode();
  public final boolean equals(java.lang.Object);
  public java.lang.String packetName();
  public java.util.Map<java.lang.String, java.lang.String> metadata();
  public boolean canReply();
+ public systems.zlink.framework.streams.ZLinkSessionActor actor();
 }
 public final class systems.zlink.framework.streams.ZLinkStreamCodec extends java.lang.Enum<systems.zlink.framework.streams.ZLinkStreamCodec> {
  public static final systems.zlink.framework.streams.ZLinkStreamCodec RAW;

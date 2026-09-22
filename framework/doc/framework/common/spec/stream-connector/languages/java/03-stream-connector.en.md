@@ -109,6 +109,33 @@ public interface ZLinkStreamConnector {
     AutoCloseable onErrorReceived(ZLinkStreamErrorHandler handler);
     AutoCloseable onDisconnected(ZLinkStreamDisconnectedHandler handler);
     AutoCloseable onConnectionStateChanged(ZLinkStreamConnectionStateHandler handler);
+
+    // The Actor handles bound right now (common spec §5.6). The application never creates one.
+    List<ZLinkStreamActor> actors();
+    Optional<ZLinkStreamActor> actor(String actorId);
+    AutoCloseable onActorBound(ZLinkStreamActorHandler handler);
+    AutoCloseable onActorUnbound(ZLinkStreamActorHandler handler);
+}
+
+public interface ZLinkStreamActor {
+    String actorId();
+    boolean isBound();                          // false after the unbound announcement
+
+    ZLinkStreamSendCall send(ZLinkStreamEncodedPayload payload);      // carries this Actor's slot
+    ZLinkStreamRequestCall request(ZLinkStreamEncodedPayload payload);
+    ZLinkTypedStreamSendCall send(Object payload);
+    ZLinkTypedStreamRequestCall request(Object payload);
+    AutoCloseable on(String name, ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload> handler); // only messages whose counterpart is this Actor
+    <TPayload> AutoCloseable on(Class<TPayload> payloadType, ZLinkStreamMessageHandler<TPayload> handler);
+    <TPayload> AutoCloseable on(
+        String name,
+        Class<TPayload> payloadType,
+        ZLinkStreamMessageHandler<TPayload> handler);
+}
+
+@FunctionalInterface
+public interface ZLinkStreamActorHandler {
+    CompletionStage<Void> handle(ZLinkStreamActor actor);
 }
 
 public interface ZLinkStreamLifecycleCall {
@@ -309,7 +336,8 @@ public record ZLinkStreamMessage<TPayload>(
     TPayload payload,
     Map<String, String> metadata,
     String flowId,                // null when the diagnostics level is OFF (§4.1)
-    ZLinkFlowOrigin flowOrigin) implements ZLinkStreamFlow {
+    ZLinkFlowOrigin flowOrigin,
+    String actorId) implements ZLinkStreamFlow { // the counterpart bound Actor; null for a frame without a slot (common spec §5.6)
 }
 ```
 
