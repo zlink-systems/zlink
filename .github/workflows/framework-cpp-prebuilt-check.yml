@@ -1,11 +1,20 @@
 name: Prebuilt C++ framework check
 
 # Builds the four prebuilt archives from the current branch (no tag, no
-# release upload) so a change to the packaging can be verified on the
-# native runners before it ships (#855). The release path is the
-# `prebuilt-cpp` job of framework-release.yml, which this mirrors.
+# release upload) so a change to the packaging is verified on the native
+# runners before it ships (#855): every pull request that touches the
+# packaging inputs runs it, and it can be dispatched by hand. The release
+# path is the `prebuilt-cpp` job of framework-release.yml, which this mirrors.
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'framework/languages/cpp/scripts/package-prebuilt.sh'
+      - 'framework/languages/cpp/cmake/**'
+      - 'framework/languages/cpp/packaging/conan/**'
+      - 'framework/languages/cpp/CMakeLists.txt'
+      - '.github/workflows/framework-cpp-prebuilt-check.yml'
 
 permissions:
   contents: read
