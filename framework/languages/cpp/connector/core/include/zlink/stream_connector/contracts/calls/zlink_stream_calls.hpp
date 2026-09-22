@@ -53,6 +53,7 @@ result_t<message_t<TMessage>> decode_message (const std::shared_ptr<void> &state
     message.metadata = packet.metadata;
     message.flow_id = packet.flow_id;
     message.flow_origin = packet.flow_origin;
+    message.actor_id = packet.actor_id;
     if constexpr (std::is_same_v<TMessage, packet_t>) {
         message.payload = std::move (packet);
     } else {
@@ -121,6 +122,7 @@ class send_call_t
 
   private:
     friend class connector_t;
+    friend class actor_t;
     send_call_t (std::shared_ptr<void> state, packet_t packet);
 
     std::shared_ptr<void> _state;
@@ -207,6 +209,7 @@ class request_call_t
 
   private:
     friend class connector_t;
+    friend class actor_t;
 
     class erased_result_t
     {

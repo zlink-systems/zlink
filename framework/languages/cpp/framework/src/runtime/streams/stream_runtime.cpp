@@ -180,6 +180,9 @@ class stream_write_call_state_t
         if (auto correlation = _header->correlation_id ()) {
             header.with_correlation_id (std::string (*correlation));
         }
+        if (auto actor_slot = _header->actor_slot ()) {
+            header.with_actor_slot (*actor_slot);
+        }
         co_await _submit (header, payload, _timeout);
         co_return;
     }
@@ -690,6 +693,17 @@ stream_header_t &stream_header_t::with_flow (std::string flow_id, flow_origin_t 
     return *this;
 }
 
+std::optional<std::uint16_t> stream_header_t::actor_slot () const noexcept
+{
+    return _actor_slot;
+}
+
+stream_header_t &stream_header_t::with_actor_slot (std::uint16_t actor_slot)
+{
+    _actor_slot = actor_slot;
+    return *this;
+}
+
 std::optional<std::string_view> stream_header_t::content_type () const
 {
     return metadata ("content_type");
@@ -826,6 +840,9 @@ stream_write_call_t stream_t::reply_packet (const zlink::message_t &payload)
                                   request_header->request_seq (), "", {});
     if (auto correlation = request_header->correlation_id ()) {
         reply_header.with_correlation_id (std::string (*correlation));
+    }
+    if (auto actor_slot = request_header->actor_slot ()) {
+        reply_header.with_actor_slot (*actor_slot);
     }
     auto call = write_packet_with_header (std::move (reply_header), payload);
     call._state->reply_submission (_reply_submission);
@@ -1070,7 +1087,8 @@ result_t<void> stream_runtime_t::validate_header (const stream_header_t &header)
       | static_cast<std::uint8_t> (stream_header_flags_t::has_metadata)
       | static_cast<std::uint8_t> (stream_header_flags_t::payload_compressed)
       | static_cast<std::uint8_t> (stream_header_flags_t::has_correlation_id)
-      | static_cast<std::uint8_t> (stream_header_flags_t::has_flow_id);
+      | static_cast<std::uint8_t> (stream_header_flags_t::has_flow_id)
+      | static_cast<std::uint8_t> (stream_header_flags_t::has_actor_slot);
     if ((raw_flags & ~known_flags) != 0) {
         return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                         "STREAM header contains unknown flags");
@@ -1094,6 +1112,10 @@ result_t<void> stream_runtime_t::validate_header (const stream_header_t &header)
             return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                             "STREAM control packet must not carry flow fields");
         }
+    }
+    if (header.actor_slot () && *header.actor_slot () == 0) {
+        return result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                        "STREAM actor slot must not be zero");
     }
 
     const bool is_reply = header.kind () == stream_message_kind_t::response
@@ -1129,7 +1151,7 @@ result_t<void> stream_runtime_t::validate_header (const stream_header_t &header)
     }
     if (header.kind () == stream_message_kind_t::control) {
         if (header.flags () != stream_header_flags_t::none || header.codec () != stream_codec_t::raw
-            || has_request_seq || has_metadata) {
+            || has_request_seq || has_metadata || header.actor_slot ()) {
             return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                             "STREAM control packet must be raw and flagless");
         }
@@ -1170,6 +1192,9 @@ stream_runtime_t::encode_header (const stream_header_t &header) const
     const auto flow = header.flow_id ();
     if (flow) {
         flags = flags | stream_header_flags_t::has_flow_id;
+    }
+    if (header.actor_slot ()) {
+        flags = flags | stream_header_flags_t::has_actor_slot;
     }
 
     std::vector<std::uint8_t> bytes;
@@ -1215,6 +1240,9 @@ stream_runtime_t::encode_header (const stream_header_t &header) const
     if (flow) {
         bytes.insert (bytes.end (), flow->begin (), flow->end ());
         bytes.push_back (static_cast<std::uint8_t> (*header.flow_origin ()));
+    }
+    if (header.actor_slot ()) {
+        append_u16 (bytes, *header.actor_slot ());
     }
     if (bytes.size () > std::numeric_limits<std::uint16_t>::max ()) {
         return result_t<std::vector<std::uint8_t>>::failure (
@@ -1398,6 +1426,14 @@ stream_runtime_t::decode_header (const std::vector<std::uint8_t> &bytes) const
             offset += runtime::flow_id_t::encoded_length + 1;
         }
     }
+    std::optional<std::uint16_t> actor_slot;
+    if (has_flag (flags, stream_header_flags_t::has_actor_slot)) {
+        if (bytes.size () - offset < 2) {
+            return result_t<stream_header_t>::failure (framework_error_kind_t::protocol_error,
+                                                       "STREAM actor slot is incomplete");
+        }
+        actor_slot = read_u16 (bytes, offset);
+    }
     if (offset != bytes.size ()) {
         return result_t<stream_header_t>::failure (framework_error_kind_t::protocol_error,
                                                    "STREAM header has trailing bytes");
@@ -1410,6 +1446,9 @@ stream_runtime_t::decode_header (const std::vector<std::uint8_t> &bytes) const
     }
     if (!flow_id.empty () && flow_origin) {
         header.with_flow (std::move (flow_id), *flow_origin);
+    }
+    if (actor_slot) {
+        header.with_actor_slot (*actor_slot);
     }
     if (auto valid = validate_header (header); !valid) {
         return result_t<stream_header_t>::failure (framework_error_kind_t::protocol_error,
@@ -1433,6 +1472,62 @@ stream_runtime_t::encode_session_closing_payload (stream_close_reason_t reason,
     bytes.push_back (static_cast<std::uint8_t> (diagnostic.size () & 0xff));
     bytes.insert (bytes.end (), diagnostic.begin (), diagnostic.end ());
     return bytes;
+}
+
+std::vector<std::uint8_t> stream_runtime_t::encode_actor_bound_payload (std::uint16_t actor_slot,
+                                                                        std::string_view actor_id)
+{
+    if (actor_slot == 0 || actor_id.empty ()
+        || actor_id.size () > std::numeric_limits<std::uint8_t>::max ()) {
+        throw framework_exception_t (framework_error_kind_t::invalid_operation,
+                                     "STREAM Actor binding control is invalid");
+    }
+    std::vector<std::uint8_t> bytes;
+    bytes.reserve (4 + actor_id.size ());
+    bytes.push_back (1);
+    append_u16 (bytes, actor_slot);
+    bytes.push_back (static_cast<std::uint8_t> (actor_id.size ()));
+    bytes.insert (bytes.end (), actor_id.begin (), actor_id.end ());
+    return bytes;
+}
+
+std::vector<std::uint8_t> stream_runtime_t::encode_actor_unbound_payload (std::uint16_t actor_slot)
+{
+    if (actor_slot == 0) {
+        throw framework_exception_t (framework_error_kind_t::invalid_operation,
+                                     "STREAM Actor slot must not be zero");
+    }
+    std::vector<std::uint8_t> bytes{1};
+    append_u16 (bytes, actor_slot);
+    return bytes;
+}
+
+void stream_runtime_t::send_actor_bound (stream_t &stream,
+                                         std::uint16_t actor_slot,
+                                         std::string_view actor_id) const
+{
+    const auto payload = encode_actor_bound_payload (actor_slot, actor_id);
+    stream_header_t header (stream_message_kind_t::control, stream_codec_t::raw,
+                            stream_header_flags_t::none, std::nullopt, "$zlink.actor.bound", {});
+    stream
+      .write_packet_with_header (
+        std::move (header), zlink::message_t::from (std::string (payload.begin (), payload.end ())))
+      .async ()
+      .result ()
+      .value ();
+}
+
+void stream_runtime_t::send_actor_unbound (stream_t &stream, std::uint16_t actor_slot) const
+{
+    const auto payload = encode_actor_unbound_payload (actor_slot);
+    stream_header_t header (stream_message_kind_t::control, stream_codec_t::raw,
+                            stream_header_flags_t::none, std::nullopt, "$zlink.actor.unbound", {});
+    stream
+      .write_packet_with_header (
+        std::move (header), zlink::message_t::from (std::string (payload.begin (), payload.end ())))
+      .async ()
+      .result ()
+      .value ();
 }
 
 void stream_runtime_t::send_session_closing (stream_t &stream,
@@ -1656,6 +1751,14 @@ result_t<void> stream_runtime_t::dispatch_packet (packet_stream_session_t &sessi
     dispatch_context->packet_name = std::string (header.packet_name ());
     dispatch_context->metadata = message_metadata_t (header.metadata ().values ());
     dispatch_context->can_reply = header.request_seq ().has_value ();
+    if (auto actor_slot = header.actor_slot ()) {
+        if (auto *actors = stream._state->actors.load (std::memory_order_acquire)) {
+            if (auto actor =
+                  detail::session_actor_manager_access_t::find_slot (*actors, *actor_slot)) {
+                dispatch_context->actor = std::make_shared<session_actor_t> (std::move (*actor));
+            }
+        }
+    }
     auto dispatch_payload = std::make_shared<zlink::message_t> (std::move (handler_payload));
     return dispatch_application (
       stream, "packet:" + std::string (header.packet_name ()),
@@ -1737,6 +1840,14 @@ result_t<void> stream_runtime_t::dispatch_packet_async (packet_stream_session_t 
     dispatch_context->packet_name = std::string (header.packet_name ());
     dispatch_context->metadata = message_metadata_t (header.metadata ().values ());
     dispatch_context->can_reply = header.request_seq ().has_value ();
+    if (auto actor_slot = header.actor_slot ()) {
+        if (auto *actors = stream._state->actors.load (std::memory_order_acquire)) {
+            if (auto actor =
+                  detail::session_actor_manager_access_t::find_slot (*actors, *actor_slot)) {
+                dispatch_context->actor = std::make_shared<session_actor_t> (std::move (*actor));
+            }
+        }
+    }
     auto dispatch_payload = std::make_shared<zlink::message_t> (std::move (handler_payload));
     return dispatch_application_async (
       stream, "packet:" + std::string (header.packet_name ()),

@@ -62,7 +62,8 @@ enum class header_flags_t : std::uint8_t
     has_metadata = 0x02,
     payload_compressed = 0x04,
     has_correlation_id = 0x08,
-    has_flow_id = 0x10
+    has_flow_id = 0x10,
+    has_actor_slot = 0x20
 };
 
 /* Root origin of a message flow (flow-correlation §3.2 wire values). */

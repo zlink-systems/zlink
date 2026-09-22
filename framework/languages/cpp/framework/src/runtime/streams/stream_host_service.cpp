@@ -1478,6 +1478,9 @@ class stream_host_service_t::listener_t
         if (auto correlation = request_header.correlation_id ()) {
             error_header.with_correlation_id (std::string (*correlation));
         }
+        if (auto actor_slot = request_header.actor_slot ()) {
+            error_header.with_actor_slot (*actor_slot);
+        }
         auto send = send_core_frame (rid, error_header, stream_error_payload (error));
         detail::observe_task_completion (
           send, [this, rid, completed = std::move (completed)] (const result_t<void> &result) {
@@ -1763,6 +1766,7 @@ class stream_host_service_t::listener_t
       actor_ref_t actor,
       std::shared_ptr<replacement_session_state_t> replacement,
       std::uint64_t binding_generation,
+      std::function<void ()> publish_client_binding,
       detail::application_actor_session_bind_attempt_t bind_attempt =
         detail::application_actor_session_bind_attempt_t::initial,
       std::optional<std::chrono::steady_clock::time_point> retry_deadline = std::nullopt)
@@ -1828,6 +1832,7 @@ class stream_host_service_t::listener_t
                     co_await detail::delay (std::min (remaining, std::chrono::milliseconds (10)));
                     co_await bind_actor_session (
                       transport_connection, session_rid, actor, replacement, binding_generation,
+                      publish_client_binding,
                       detail::application_actor_session_bind_attempt_t::retry, binding_deadline);
                     co_return;
                 }
@@ -1969,6 +1974,19 @@ class stream_host_service_t::listener_t
                                                                   binding.binding_generation);
         }
         if (recorded) {
+            try {
+                if (publish_client_binding)
+                    publish_client_binding ();
+            }
+            catch (const framework_exception_t &error) {
+                recorded = detail::result_access_t::failure<void> (error);
+            }
+            catch (const std::exception &error) {
+                recorded =
+                  result_t<void>::failure (framework_error_kind_t::unavailable, error.what ());
+            }
+        }
+        if (recorded) {
             if (replacement) {
                 const std::lock_guard lock (replacement->gate);
                 replacement->actor_bindings.insert_or_assign (
@@ -2034,9 +2052,10 @@ class stream_host_service_t::listener_t
                 (void) _mesh_node->refresh_application_actor_route (actor, *actor_route);
                 co_await detail::delay (std::min (remaining, std::chrono::milliseconds (10)));
             }
-            co_await bind_actor_session (
-              transport_connection, session_rid, actor, replacement, binding_generation,
-              detail::application_actor_session_bind_attempt_t::retry, binding_deadline);
+            co_await bind_actor_session (transport_connection, session_rid, actor, replacement,
+                                         binding_generation, publish_client_binding,
+                                         detail::application_actor_session_bind_attempt_t::retry,
+                                         binding_deadline);
             co_return;
         }
         throw recorded.error () ? *recorded.error ()
@@ -2153,10 +2172,17 @@ class stream_host_service_t::listener_t
         created->replacement = replacement;
         detail::session_actor_manager_access_t::bind_native (
           actors,
-          [this, transport_connection = created->transport_connection, rid,
-           replacement] (actor_ref_t actor, std::uint64_t binding_generation) -> task_t<void> {
+          [this, transport_connection = created->transport_connection, rid, replacement,
+           weak = std::weak_ptr<core_session_t> (created)] (
+            actor_ref_t actor, std::uint64_t binding_generation,
+            std::uint16_t actor_slot) -> task_t<void> {
+              const auto actor_id = std::string (actor.actor_id ().value ());
               return bind_actor_session (transport_connection, rid, actor, replacement,
-                                         binding_generation);
+                                         binding_generation, [this, weak, actor_slot, actor_id] {
+                                             if (const auto current = weak.lock ())
+                                                 _runtime.send_actor_bound (current->stream,
+                                                                            actor_slot, actor_id);
+                                         });
           });
         _runtime.attach_transport_writer (
           created->stream,
@@ -3129,6 +3155,9 @@ class stream_host_service_t::listener_t
         if (auto correlation = request_header.correlation_id ()) {
             error_header.with_correlation_id (std::string (*correlation));
         }
+        if (auto actor_slot = request_header.actor_slot ()) {
+            error_header.with_actor_slot (*actor_slot);
+        }
         write_frame (owner, connection, error_header, stream_error_payload (error));
     }
 
@@ -3211,10 +3240,17 @@ class stream_host_service_t::listener_t
             connection_state->replacement = replacement;
             detail::session_actor_manager_access_t::bind_native (
               session_actors,
-              [this, connection = *connection_state->transport_connection, session_rid,
-               replacement] (actor_ref_t actor, std::uint64_t binding_generation) -> task_t<void> {
-                  return bind_actor_session (connection, session_rid, actor, replacement,
-                                             binding_generation);
+              [this, connection = *connection_state->transport_connection, session_rid, replacement,
+               weak = std::weak_ptr<stream_connection_state_t> (connection_state)] (
+                actor_ref_t actor, std::uint64_t binding_generation,
+                std::uint16_t actor_slot) -> task_t<void> {
+                  const auto actor_id = std::string (actor.actor_id ().value ());
+                  return bind_actor_session (
+                    connection, session_rid, actor, replacement, binding_generation,
+                    [this, weak, actor_slot, actor_id] {
+                        if (const auto current = weak.lock ())
+                            _runtime.send_actor_bound (current->stream, actor_slot, actor_id);
+                    });
               });
         }
         if (attach_immediate_writer) {

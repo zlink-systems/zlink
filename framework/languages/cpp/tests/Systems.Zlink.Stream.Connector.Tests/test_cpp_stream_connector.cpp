@@ -858,7 +858,8 @@ zlink::message_t make_server_frame (zlink::stream_connector::message_kind_t kind
                                     std::uint64_t seq,
                                     std::string name,
                                     std::string payload,
-                                    bool compressed = false)
+                                    bool compressed = false,
+                                    std::optional<std::uint16_t> actor_slot = std::nullopt)
 {
     const bool legacy_named_reply = (kind == zlink::stream_connector::message_kind_t::response
                                      || kind == zlink::stream_connector::message_kind_t::error)
@@ -876,6 +877,7 @@ zlink::message_t make_server_frame (zlink::stream_connector::message_kind_t kind
                            ? std::optional<std::uint64_t>{seq}
                            : std::optional<std::uint64_t>{};
     header.name = legacy_named_reply ? std::string{} : name;
+    header.actor_slot = actor_slot;
     auto header_bytes = zlink::stream_connector::detail::header_codec_t{}.encode (header);
     if (legacy_named_reply) {
         auto &bytes = header_bytes.value ();
@@ -934,6 +936,50 @@ int main ()
         reply.name = "forbidden.reply.name";
         if (header_codec_t{}.encode (reply)) {
             return 201;
+        }
+    }
+
+    /* stream-connector §4.2/§4.5/§4.6: the slot is an optional u16 tail,
+     * zero and truncated values are decode errors, and controls stay slotless. */
+    {
+        stream_header_t slotted;
+        slotted.kind = message_kind_t::send;
+        slotted.codec = codec_t::raw;
+        slotted.name = "actor.packet";
+        slotted.actor_slot = 23;
+        auto encoded_slot = header_codec_t{}.encode (slotted);
+        auto decoded_slot =
+          encoded_slot
+            ? header_codec_t{}.decode (encoded_slot.value ())
+            : zlink::stream_connector::result_t<stream_header_t>::failure (
+                zlink::stream_connector::error_code_t::frame_decode_failed, "slot encode failed");
+        if (!decoded_slot || decoded_slot.value ().actor_slot != 23
+            || (static_cast<std::uint8_t> (decoded_slot.value ().flags)
+                & static_cast<std::uint8_t> (header_flags_t::has_actor_slot))
+                 == 0) {
+            return 271;
+        }
+        auto truncated_slot = encoded_slot.value ();
+        truncated_slot.pop_back ();
+        slotted.actor_slot = 0;
+        stream_header_t slotted_control;
+        slotted_control.kind = message_kind_t::control;
+        slotted_control.codec = codec_t::raw;
+        slotted_control.name = "$zlink.actor.bound";
+        slotted_control.actor_slot = 1;
+        if (header_codec_t{}.decode (truncated_slot) || header_codec_t{}.encode (slotted)
+            || header_codec_t{}.encode (slotted_control)) {
+            return 272;
+        }
+        using zlink::stream_connector::detail::actor_binding_control_codec_t;
+        const std::vector<std::uint8_t> valid_bound{1, 0, 23, 5, 'a', 'c', 't', 'o', 'r'};
+        const std::vector<std::uint8_t> invalid_bound{1, 0, 0, 5, 'a', 'c', 't', 'o', 'r'};
+        const std::vector<std::uint8_t> invalid_unbound{1, 0, 0};
+        const auto bound = actor_binding_control_codec_t::decode_bound (valid_bound);
+        if (!bound || bound.value ().actor_slot != 23 || bound.value ().actor_id != "actor"
+            || actor_binding_control_codec_t::decode_bound (invalid_bound)
+            || actor_binding_control_codec_t::decode_unbound (invalid_unbound)) {
+            return 273;
         }
     }
 
@@ -5030,6 +5076,180 @@ int main ()
             }
             concurrent.close ();
         }
+    }
+
+    /* stream-connector §5.6: Actor controls update the table before callbacks,
+     * a slotted packet exposes actor_id, handle handlers are scoped to that
+     * Actor, and an explicit unbound closes the handle before its callback. */
+    {
+        using zlink::stream_connector::actor_t;
+        using zlink::stream_connector::connector_factory_t;
+        using zlink::stream_connector::connector_options_t;
+        using zlink::stream_connector::dispatch_mode_t;
+        using zlink::stream_connector::packet_t;
+
+        boost::asio::io_context actor_io;
+        boost::asio::ip::tcp::acceptor actor_acceptor (
+          actor_io, {boost::asio::ip::make_address ("127.0.0.1"), 0});
+        const auto actor_endpoint = std::string ("tcp://127.0.0.1:")
+                                    + std::to_string (actor_acceptor.local_endpoint ().port ());
+        callback_latch_t actor_bound_sent;
+        callback_latch_t actor_packets_allowed;
+        callback_latch_t actor_server_release;
+        joining_thread_t actor_server ([&] {
+            boost::asio::ip::tcp::socket socket (actor_acceptor.get_executor ());
+            actor_acceptor.accept (socket);
+            std::string bound_payload{static_cast<char> (1), static_cast<char> (0),
+                                      static_cast<char> (7), static_cast<char> (5)};
+            bound_payload += "actor";
+            const auto bound =
+              make_server_frame (message_kind_t::control, 0, "$zlink.actor.bound", bound_payload);
+            boost::asio::write (socket, boost::asio::buffer (bound.to_string ()));
+            actor_bound_sent.signal ();
+            if (!actor_packets_allowed.wait_for (std::chrono::seconds (2)))
+                return;
+            const auto packet = make_server_frame (message_kind_t::send, 0, "actor.push", "payload",
+                                                   false, std::uint16_t{7});
+            boost::asio::write (socket, boost::asio::buffer (packet.to_string ()));
+            const std::string unbound_payload{static_cast<char> (1), static_cast<char> (0),
+                                              static_cast<char> (7)};
+            const auto unbound = make_server_frame (message_kind_t::control, 0,
+                                                    "$zlink.actor.unbound", unbound_payload);
+            boost::asio::write (socket, boost::asio::buffer (unbound.to_string ()));
+            actor_server_release.wait_for (std::chrono::seconds (2));
+        });
+
+        connector_options_t actor_options;
+        actor_options.endpoint = actor_endpoint;
+        actor_options.dispatch_mode = dispatch_mode_t::manual;
+        actor_options.reconnect.enabled = false;
+        auto actor_connector = connector_factory_t::create (actor_options);
+        std::vector<std::string> actor_events;
+        std::optional<std::string> received_actor_id;
+        auto bound_subscription =
+          actor_connector.on_actor_bound ([&] (const std::shared_ptr<actor_t> &actor) {
+              actor_events.push_back ("bound:" + actor->actor_id ());
+          });
+        auto unbound_subscription =
+          actor_connector.on_actor_unbound ([&] (const std::shared_ptr<actor_t> &actor) {
+              actor_events.push_back ("unbound:" + actor->actor_id ());
+          });
+        auto packet_subscription =
+          actor_connector.on<packet_t> ("actor.push", [&] (const packet_message_t &message) {
+              received_actor_id = message.actor_id;
+              actor_events.push_back ("packet");
+          });
+        if (!actor_connector.connect () || !actor_bound_sent.wait_for (std::chrono::seconds (1))) {
+            actor_packets_allowed.signal ();
+            actor_server_release.signal ();
+            return 263;
+        }
+        std::shared_ptr<actor_t> actor_handle;
+        const auto actor_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (1);
+        while (!(actor_handle = actor_connector.actor ("actor"))
+               && std::chrono::steady_clock::now () < actor_deadline) {
+            std::this_thread::sleep_for (std::chrono::milliseconds (1));
+        }
+        if (!actor_handle || actor_connector.actors ().size () != 1 || !actor_handle->is_bound ()) {
+            actor_packets_allowed.signal ();
+            actor_server_release.signal ();
+            return 264;
+        }
+        auto actor_packet_subscription =
+          actor_handle->on<packet_t> ("actor.push", [&] (const packet_message_t &) {
+              actor_events.push_back ("actor-packet");
+          });
+        actor_packets_allowed.signal ();
+        const auto unbound_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (1);
+        while (actor_connector.actor ("actor")
+               && std::chrono::steady_clock::now () < unbound_deadline) {
+            std::this_thread::sleep_for (std::chrono::milliseconds (1));
+        }
+        while (actor_connector.pending_dispatch_count () != 0) {
+            if (!actor_connector.dispatch ()) {
+                actor_server_release.signal ();
+                return 265;
+            }
+        }
+        const std::vector<std::string> expected_actor_events{"bound:actor", "packet",
+                                                             "actor-packet", "unbound:actor"};
+        if (actor_connector.actor ("actor") || actor_handle->is_bound ()
+            || received_actor_id != "actor" || actor_events != expected_actor_events) {
+            actor_server_release.signal ();
+            return 266;
+        }
+        std::optional<zlink::stream_connector::error_code_t> closed_actor_error;
+        auto closed_actor_error_subscription = actor_connector.on_error (
+          [&] (const zlink::stream_connector::error_t &error) { closed_actor_error = error.code; });
+        actor_handle
+          ->send (packet_t{.name = "closed.actor", .payload = zlink::message_t::from ("payload")})
+          .submit ();
+        while (actor_connector.pending_dispatch_count () != 0) {
+            if (!actor_connector.dispatch ()) {
+                actor_server_release.signal ();
+                return 267;
+            }
+        }
+        if (closed_actor_error != zlink::stream_connector::error_code_t::validation_failed) {
+            actor_server_release.signal ();
+            return 267;
+        }
+        actor_server_release.signal ();
+        actor_server.join ();
+        actor_connector.close ();
+    }
+
+    /* A packet that names a slot before its bound control is a decode failure,
+     * not an unscoped application packet. */
+    {
+        boost::asio::io_context bad_actor_io;
+        boost::asio::ip::tcp::acceptor bad_actor_acceptor (
+          bad_actor_io, {boost::asio::ip::make_address ("127.0.0.1"), 0});
+        const auto bad_actor_endpoint =
+          std::string ("tcp://127.0.0.1:")
+          + std::to_string (bad_actor_acceptor.local_endpoint ().port ());
+        callback_latch_t bad_actor_release;
+        joining_thread_t bad_actor_server ([&] {
+            boost::asio::ip::tcp::socket socket (bad_actor_acceptor.get_executor ());
+            bad_actor_acceptor.accept (socket);
+            const auto packet = make_server_frame (message_kind_t::send, 0, "unknown.actor",
+                                                   "payload", false, std::uint16_t{11});
+            boost::asio::write (socket, boost::asio::buffer (packet.to_string ()));
+            bad_actor_release.wait_for (std::chrono::seconds (2));
+        });
+        zlink::stream_connector::connector_options_t bad_actor_options;
+        bad_actor_options.endpoint = bad_actor_endpoint;
+        bad_actor_options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::manual;
+        bad_actor_options.reconnect.enabled = false;
+        auto bad_actor_connector =
+          zlink::stream_connector::connector_factory_t::create (bad_actor_options);
+        std::optional<zlink::stream_connector::error_code_t> actor_decode_error;
+        auto error_subscription = bad_actor_connector.on_error (
+          [&] (const zlink::stream_connector::error_t &error) { actor_decode_error = error.code; });
+        if (!bad_actor_connector.connect ()) {
+            bad_actor_release.signal ();
+            return 268;
+        }
+        const auto disconnected_deadline =
+          std::chrono::steady_clock::now () + std::chrono::seconds (1);
+        while (bad_actor_connector.state ()
+                 != zlink::stream_connector::connection_state_t::disconnected
+               && std::chrono::steady_clock::now () < disconnected_deadline) {
+            std::this_thread::sleep_for (std::chrono::milliseconds (1));
+        }
+        while (bad_actor_connector.pending_dispatch_count () != 0) {
+            if (!bad_actor_connector.dispatch ()) {
+                bad_actor_release.signal ();
+                return 269;
+            }
+        }
+        if (actor_decode_error != zlink::stream_connector::error_code_t::frame_decode_failed) {
+            bad_actor_release.signal ();
+            return 270;
+        }
+        bad_actor_release.signal ();
+        bad_actor_server.join ();
+        bad_actor_connector.close ();
     }
 
     /* stream-connector §6: the wait between attempts lands between 50% and 100%

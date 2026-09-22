@@ -8,6 +8,8 @@
 #include <zlink/stream_connector/contracts/zlink_stream_subscription.hpp>
 
 #include <chrono>
+#include <atomic>
+#include <cstdint>
 #include <functional>
 #include <cstddef>
 #include <memory>
@@ -18,9 +20,15 @@
 #include <typeindex>
 #include <typeinfo>
 #include <utility>
+#include <vector>
 
 namespace zlink::stream_connector
 {
+
+namespace detail
+{
+class actor_access_t;
+}
 
 class connector_t
 {
@@ -200,6 +208,13 @@ class connector_t
     [[nodiscard]] subscription_t
     on_disconnected (std::function<void (std::optional<close_reason_t>)> handler);
 
+    std::vector<std::shared_ptr<actor_t>> actors () const;
+    std::shared_ptr<actor_t> actor (std::string_view actor_id) const;
+    [[nodiscard]] subscription_t
+    on_actor_bound (std::function<void (const std::shared_ptr<actor_t> &)> handler);
+    [[nodiscard]] subscription_t
+    on_actor_unbound (std::function<void (const std::shared_ptr<actor_t> &)> handler);
+
     /// Starts a typed send call by copying the payload into a packet.
     template <typename TMessage> send_call_t send (const TMessage &message)
     {
@@ -270,9 +285,12 @@ class connector_t
 
   private:
     friend class connector_factory_t;
+    friend class actor_t;
+    friend class detail::actor_access_t;
     friend std::shared_ptr<void> connector_internal_handle (const connector_t &connector);
 
     explicit connector_t (connector_options_t options);
+    explicit connector_t (std::shared_ptr<void> state);
 
     /* stream-connector §5: a name declared on the payload type wins, a
      * configured name resolver comes next, and the type's simple name is the
@@ -300,6 +318,65 @@ class connector_t
 
     std::shared_ptr<void> _state;
     codec_registry_t _codecs;
+};
+
+class actor_t
+{
+  public:
+    const std::string &actor_id () const noexcept { return _actor_id; }
+    bool is_bound () const noexcept { return _bound->load (std::memory_order_acquire); }
+
+    template <typename TMessage> send_call_t send (const TMessage &message)
+    {
+        auto call = _connector.send (message);
+        call._packet.actor_id = _actor_id;
+        return call;
+    }
+
+    template <typename TRequest> request_call_t request (const TRequest &request)
+    {
+        auto call = _connector.request (request);
+        call._packet.actor_id = _actor_id;
+        return call;
+    }
+
+    template <typename TMessage>
+    [[nodiscard]] subscription_t on (std::string packet_name,
+                                     std::function<void (const message_t<TMessage> &)> callback)
+    {
+        const auto actor_id = _actor_id;
+        return _connector.on<TMessage> (
+          std::move (packet_name),
+          [actor_id, callback = std::move (callback)] (const message_t<TMessage> &message) {
+              if (message.actor_id == actor_id)
+                  callback (message);
+          });
+    }
+
+    template <typename TMessage>
+    [[nodiscard]] subscription_t on (std::function<void (const message_t<TMessage> &)> callback)
+    {
+        return on<TMessage> (_connector.template resolve_packet_name<TMessage> (),
+                             std::move (callback));
+    }
+
+  private:
+    friend class detail::actor_access_t;
+    actor_t (connector_t connector,
+             std::string actor_id,
+             std::uint16_t actor_slot,
+             std::shared_ptr<std::atomic_bool> bound) :
+        _connector (std::move (connector)),
+        _actor_id (std::move (actor_id)),
+        _actor_slot (actor_slot),
+        _bound (std::move (bound))
+    {
+    }
+
+    connector_t _connector;
+    std::string _actor_id;
+    std::uint16_t _actor_slot = 0;
+    std::shared_ptr<std::atomic_bool> _bound;
 };
 
 } // namespace zlink::stream_connector

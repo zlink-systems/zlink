@@ -90,6 +90,12 @@ class stream_runtime_t
      * length (network order, <=512), UTF-8 diagnostic bytes. */
     static std::vector<std::uint8_t> encode_session_closing_payload (stream_close_reason_t reason,
                                                                      std::string_view diagnostic);
+    static std::vector<std::uint8_t> encode_actor_bound_payload (std::uint16_t actor_slot,
+                                                                 std::string_view actor_id);
+    static std::vector<std::uint8_t> encode_actor_unbound_payload (std::uint16_t actor_slot);
+    void
+    send_actor_bound (stream_t &stream, std::uint16_t actor_slot, std::string_view actor_id) const;
+    void send_actor_unbound (stream_t &stream, std::uint16_t actor_slot) const;
 
     result_t<void> validate_header (const stream_header_t &header) const;
 

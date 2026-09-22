@@ -20,7 +20,8 @@ constexpr std::uint8_t known_flags =
   | static_cast<std::uint8_t> (header_flags_t::has_metadata)
   | static_cast<std::uint8_t> (header_flags_t::payload_compressed)
   | static_cast<std::uint8_t> (header_flags_t::has_correlation_id)
-  | static_cast<std::uint8_t> (header_flags_t::has_flow_id);
+  | static_cast<std::uint8_t> (header_flags_t::has_flow_id)
+  | static_cast<std::uint8_t> (header_flags_t::has_actor_slot);
 
 bool has_flag (header_flags_t flags, header_flags_t flag)
 {
@@ -118,10 +119,14 @@ result_t<void> validate_header (const stream_header_t &header, bool validate_flo
     }
     if (header.kind == message_kind_t::control) {
         if (header.flags != header_flags_t::none || header.codec != codec_t::raw || has_request_seq
-            || has_metadata) {
+            || has_metadata || header.actor_slot) {
             return result_t<void>::failure (error_code_t::frame_decode_failed,
                                             "Control packet must use raw codec and no flags.");
         }
+    }
+    if (header.actor_slot && *header.actor_slot == 0) {
+        return result_t<void>::failure (error_code_t::frame_decode_failed,
+                                        "Actor slot must not be zero.");
     }
     const bool is_reply =
       header.kind == message_kind_t::response || header.kind == message_kind_t::error;
@@ -197,6 +202,11 @@ result_t<std::vector<std::uint8_t>> header_codec_t::encode (const stream_header_
     } else {
         clear_flag (header.flags, header_flags_t::has_flow_id);
     }
+    if (header.actor_slot) {
+        set_flag (header.flags, header_flags_t::has_actor_slot);
+    } else {
+        clear_flag (header.flags, header_flags_t::has_actor_slot);
+    }
     if (header.correlation_id.size () > std::numeric_limits<std::uint8_t>::max ()) {
         return result_t<std::vector<std::uint8_t>>::failure (error_code_t::validation_failed,
                                                              "Correlation id is too large.");
@@ -239,6 +249,9 @@ result_t<std::vector<std::uint8_t>> header_codec_t::encode (const stream_header_
     if (!header.flow_id.empty ()) {
         bytes.insert (bytes.end (), header.flow_id.begin (), header.flow_id.end ());
         bytes.push_back (static_cast<std::uint8_t> (*header.flow_origin));
+    }
+    if (header.actor_slot) {
+        write_u16 (bytes, *header.actor_slot);
     }
     return result_t<std::vector<std::uint8_t>>::success (std::move (bytes));
 }
@@ -327,6 +340,13 @@ result_t<stream_header_t> header_codec_t::decode (const std::vector<std::uint8_t
         offset += flow_id_codec_t::encoded_length;
         header.flow_origin = static_cast<flow_origin_t> (bytes[offset++]);
     }
+    if (has_flag (header.flags, header_flags_t::has_actor_slot)) {
+        if (bytes.size () - offset < 2) {
+            return result_t<stream_header_t>::failure (error_code_t::frame_decode_failed,
+                                                       "Helper header actor slot is incomplete.");
+        }
+        header.actor_slot = read_u16 (bytes, offset);
+    }
     if (offset != bytes.size ()) {
         return result_t<stream_header_t>::failure (error_code_t::frame_decode_failed,
                                                    "Helper header contains trailing bytes.");
@@ -336,6 +356,41 @@ result_t<stream_header_t> header_codec_t::decode (const std::vector<std::uint8_t
                                                    validation.error ()->message);
     }
     return result_t<stream_header_t>::success (std::move (header));
+}
+
+result_t<actor_bound_t>
+actor_binding_control_codec_t::decode_bound (const std::vector<std::uint8_t> &payload)
+{
+    if (payload.size () < 4 || payload[0] != 1) {
+        return result_t<actor_bound_t>::failure (error_code_t::frame_decode_failed,
+                                                 "Actor bound control is invalid.");
+    }
+    std::size_t offset = 1;
+    const auto actor_slot = read_u16 (payload, offset);
+    const auto actor_id_size = payload[offset++];
+    if (actor_slot == 0 || actor_id_size == 0 || payload.size () - offset != actor_id_size) {
+        return result_t<actor_bound_t>::failure (error_code_t::frame_decode_failed,
+                                                 "Actor bound control payload is invalid.");
+    }
+    return result_t<actor_bound_t>::success (actor_bound_t{
+      actor_slot,
+      std::string (payload.begin () + static_cast<std::ptrdiff_t> (offset), payload.end ())});
+}
+
+result_t<std::uint16_t>
+actor_binding_control_codec_t::decode_unbound (const std::vector<std::uint8_t> &payload)
+{
+    if (payload.size () != 3 || payload[0] != 1) {
+        return result_t<std::uint16_t>::failure (error_code_t::frame_decode_failed,
+                                                 "Actor unbound control is invalid.");
+    }
+    std::size_t offset = 1;
+    const auto actor_slot = read_u16 (payload, offset);
+    if (actor_slot == 0) {
+        return result_t<std::uint16_t>::failure (error_code_t::frame_decode_failed,
+                                                 "Actor unbound slot is invalid.");
+    }
+    return result_t<std::uint16_t>::success (actor_slot);
 }
 
 result_t<std::vector<std::uint8_t>>

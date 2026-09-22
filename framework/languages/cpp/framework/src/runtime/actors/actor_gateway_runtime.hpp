@@ -135,6 +135,8 @@ struct actor_record_t
     std::uint64_t source_binding_generation = 0;
     std::optional<zlink::routing_id_t> source_session_rid;
     std::uint64_t next_session_relay_sequence = 1;
+    std::uint16_t actor_slot = 0;
+    std::optional<stream_t> bound_stream;
 };
 
 struct actor_session_binding_snapshot_t
@@ -154,7 +156,8 @@ class session_actor_binding_context_t
     std::map<std::string, std::uint64_t> actor_tokens;
     std::set<std::string> ready_actors;
     std::map<std::string, std::weak_ptr<stream_state_t>> actor_streams;
-    std::function<task_t<void> (actor_ref_t, std::uint64_t)> native_binder;
+    std::function<task_t<void> (actor_ref_t, std::uint64_t, std::uint16_t)> native_binder;
+    std::uint32_t next_actor_slot = 1;
 };
 
 class session_actor_manager_access_t
@@ -162,8 +165,13 @@ class session_actor_manager_access_t
   public:
     static void attach (session_actor_manager_t &manager, stream_t stream);
     static void set_codec (session_actor_manager_t &manager, stream_codec_t codec);
+    static void
+    bind_native (session_actor_manager_t &manager,
+                 std::function<task_t<void> (actor_ref_t, std::uint64_t, std::uint16_t)> binder);
     static void bind_native (session_actor_manager_t &manager,
                              std::function<task_t<void> (actor_ref_t, std::uint64_t)> binder);
+    static std::optional<session_actor_t> find_slot (session_actor_manager_t &manager,
+                                                     std::uint16_t actor_slot);
     static void disconnect (session_actor_manager_t &manager) noexcept;
 };
 
@@ -284,7 +292,8 @@ class actor_gateway_runtime_t
                          stream_codec_t codec = stream_codec_t::message_pack,
                          std::string session_id = {},
                          std::uint64_t binding_token = 0,
-                         std::optional<actor_ref_t> actor_ref = std::nullopt);
+                         std::optional<actor_ref_t> actor_ref = std::nullopt,
+                         std::uint16_t actor_slot = 0);
     result_t<void>
     bind_session_route (actor_ref_t actor_ref,
                         route_client_t route_client,

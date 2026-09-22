@@ -1642,7 +1642,7 @@ task_t<session_actor_t> session_actor_manager_t::bind_current_session (actor_ref
         publish_without_stream ();
         co_return session_actor_t (state, actor_ref, 0);
     }
-    if (reuse_current) {
+    {
         const auto current = binding_context->actor_tokens.find (actor_id);
         const auto bound_stream = binding_context->actor_streams.find (actor_id);
         if (current != binding_context->actor_tokens.end ()
@@ -1668,6 +1668,12 @@ task_t<session_actor_t> session_actor_manager_t::bind_current_session (actor_ref
             }
         }
     }
+    (void) reuse_current;
+    if (binding_context->next_actor_slot > std::numeric_limits<std::uint16_t>::max ()) {
+        throw framework_exception_t (framework_error_kind_t::invalid_operation,
+                                     "Session Actor slots are exhausted");
+    }
+    const auto actor_slot = static_cast<std::uint16_t> (binding_context->next_actor_slot++);
     std::uint64_t token;
     token = state->sync ([&] {
         if (state->next_binding_token == 0
@@ -1693,11 +1699,24 @@ task_t<session_actor_t> session_actor_manager_t::bind_current_session (actor_ref
     try {
         previous = detail::actor_gateway_runtime_t (state).bind_session_stream (
           actor_id, *binding_context->stream, binding_context->codec, binding_context->session_id,
-          token, actor_ref);
+          token, actor_ref, actor_slot);
         auto native_binder = binding_context->native_binder;
         binding_lock.unlock ();
-        if (native_binder)
-            co_await native_binder (actor_ref, token);
+        if (native_binder) {
+            co_await native_binder (actor_ref, token, actor_slot);
+        } else {
+            const auto payload =
+              detail::stream_runtime_t::encode_actor_bound_payload (actor_slot, actor_id);
+            stream_header_t header (stream_message_kind_t::control, stream_codec_t::raw,
+                                    stream_header_flags_t::none, std::nullopt, "$zlink.actor.bound",
+                                    {});
+            binding_context->stream
+              ->write_packet_with_header (std::move (header), zlink::message_t::from (std::string (
+                                                                payload.begin (), payload.end ())))
+              .async ()
+              .result ()
+              .value ();
+        }
         binding_lock.lock ();
         const auto current = binding_context->actor_tokens.find (actor_id);
         if (current != binding_context->actor_tokens.end () && current->second == token) {
@@ -1753,10 +1772,42 @@ void detail::session_actor_manager_access_t::set_codec (session_actor_manager_t 
 }
 
 void detail::session_actor_manager_access_t::bind_native (
-  session_actor_manager_t &manager, std::function<task_t<void> (actor_ref_t, std::uint64_t)> binder)
+  session_actor_manager_t &manager,
+  std::function<task_t<void> (actor_ref_t, std::uint64_t, std::uint16_t)> binder)
 {
     const std::lock_guard lock (manager._binding_context->mutex);
     manager._binding_context->native_binder = std::move (binder);
+}
+
+void detail::session_actor_manager_access_t::bind_native (
+  session_actor_manager_t &manager, std::function<task_t<void> (actor_ref_t, std::uint64_t)> binder)
+{
+    bind_native (manager, [binder = std::move (binder)] (
+                            actor_ref_t actor, std::uint64_t generation, std::uint16_t) mutable {
+        return binder (std::move (actor), generation);
+    });
+}
+
+std::optional<session_actor_t>
+detail::session_actor_manager_access_t::find_slot (session_actor_manager_t &manager,
+                                                   std::uint16_t actor_slot)
+{
+    if (actor_slot == 0 || !manager._binding_context)
+        return std::nullopt;
+    std::string session_id;
+    {
+        const std::lock_guard lock (manager._binding_context->mutex);
+        session_id = manager._binding_context->session_id;
+    }
+    return manager._state->sync ([&] () -> std::optional<session_actor_t> {
+        for (const auto &[_, actor] : manager._state->actors_by_id) {
+            if (actor.bound && !actor.disconnected && actor.binding_session_id == session_id
+                && actor.actor_slot == actor_slot) {
+                return session_actor_t (manager._state, actor.ref, actor.binding_token);
+            }
+        }
+        return std::nullopt;
+    });
 }
 
 void detail::session_actor_manager_access_t::disconnect (session_actor_manager_t &manager) noexcept
@@ -2302,7 +2353,8 @@ actor_gateway_runtime_t::bind_session_stream (std::string actor_id,
                                               stream_codec_t codec,
                                               std::string session_id,
                                               std::uint64_t binding_token,
-                                              std::optional<actor_ref_t> actor_ref)
+                                              std::optional<actor_ref_t> actor_ref,
+                                              std::uint16_t actor_slot)
 {
     actor_session_binding_snapshot_t previous;
     std::optional<actor_ref_t> registered_actor;
@@ -2345,12 +2397,17 @@ actor_gateway_runtime_t::bind_session_stream (std::string actor_id,
         found->second.binding_session_id = session_id;
         found->second.binding_token = binding_token;
         found->second.next_session_relay_sequence = 1;
+        found->second.actor_slot = actor_slot;
+        found->second.bound_stream = stream;
         _state->bound_session_sinks[actor_id] = std::make_shared<detail::bound_session_sink_t> (
-          [stream = std::move (stream)] (std::string packet_name, stream_codec_t payload_codec,
-                                         const zlink::message_t &payload) mutable {
+          [stream = std::move (stream), actor_slot] (std::string packet_name,
+                                                     stream_codec_t payload_codec,
+                                                     const zlink::message_t &payload) mutable {
               stream_header_t header (stream_message_kind_t::send, payload_codec,
                                       stream_header_flags_t::none, std::nullopt,
                                       std::move (packet_name));
+              if (actor_slot != 0)
+                  header.with_actor_slot (actor_slot);
               try {
                   stream.write_packet_with_header (std::move (header), payload)
                     .async ()
@@ -2955,6 +3012,8 @@ void actor_gateway_runtime_t::unbind_session_stream (std::string actor_id,
                                                      std::string session_id,
                                                      std::uint64_t binding_token)
 {
+    std::optional<stream_t> stream;
+    std::uint16_t actor_slot = 0;
     _state->sync ([&] {
         auto found = _state->actors_by_id.find (actor_id);
         if (found != _state->actors_by_id.end ()) {
@@ -2963,15 +3022,31 @@ void actor_gateway_runtime_t::unbind_session_stream (std::string actor_id,
                     || (!session_id.empty () && found->second.binding_session_id != session_id))) {
                 return;
             }
+            stream = found->second.bound_stream;
+            actor_slot = found->second.actor_slot;
             found->second.bound_session_stream_sink = false;
             found->second.bound_session_route.reset ();
             found->second.binding_session_id.clear ();
             found->second.binding_token = 0;
+            found->second.actor_slot = 0;
+            found->second.bound_stream.reset ();
             found->second.bound = false;
             found->second.disconnected = true;
         }
         _state->bound_session_sinks.erase (actor_id);
     });
+    if (stream && actor_slot != 0 && !stream->_state->closed.load (std::memory_order_acquire)) {
+        const auto payload = stream_runtime_t::encode_actor_unbound_payload (actor_slot);
+        stream_header_t header (stream_message_kind_t::control, stream_codec_t::raw,
+                                stream_header_flags_t::none, std::nullopt, "$zlink.actor.unbound",
+                                {});
+        stream
+          ->write_packet_with_header (std::move (header), zlink::message_t::from (std::string (
+                                                            payload.begin (), payload.end ())))
+          .async ()
+          .result ()
+          .value ();
+    }
 }
 
 void actor_gateway_runtime_t::restore_session_stream (std::string actor_id,

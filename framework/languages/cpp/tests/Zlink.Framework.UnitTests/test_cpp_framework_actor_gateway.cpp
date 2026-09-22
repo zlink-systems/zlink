@@ -607,13 +607,15 @@ int direct_rebind_publication_is_atomic_and_old_disconnect_is_fenced ()
     });
     if (!committed_token.second)
         return 6;
+    std::atomic_bool repeated_binder_called{false};
     session_actor_manager_access_t::bind_native (
-      new_session, [] (const actor_ref_t &, std::uint64_t) {
+      new_session, [&] (const actor_ref_t &, std::uint64_t) {
+          repeated_binder_called.store (true, std::memory_order_release);
           return task_t<void> (result_t<void>::failure (framework_error_kind_t::unavailable,
                                                         "deterministic native binding rejection"));
       });
-    const auto rejected = new_session.bind (actor).async ().result ();
-    if (rejected || rejected.error_kind () != framework_error_kind_t::unavailable
+    const auto repeated = new_session.bind (actor).async ().result ();
+    if (!repeated || repeated_binder_called.load (std::memory_order_acquire)
         || !new_session.find ("direct-rebind-actor")) {
         return 7;
     }
@@ -780,12 +782,14 @@ int session_disconnect_is_all_settled_and_token_fenced ()
 
     auto state = std::make_shared<actor_gateway_state_t> ();
     actor_gateway_runtime_t gateway (state);
-    auto manager = gateway.manager ();
-    session_actor_manager_access_t::attach (manager, stream_t{});
+    auto stale_manager = gateway.manager ();
+    session_actor_manager_access_t::attach (stale_manager, stream_t{});
     const actor_ref_t first = test_actor_ref ("actor-node", "player", "actor-a", 1);
     const actor_ref_t second = test_actor_ref ("actor-node", "player", "actor-b", 1);
 
-    auto stale = manager.bind (first).async ().result ().value ();
+    auto stale = stale_manager.bind (first).async ().result ().value ();
+    auto manager = gateway.manager ();
+    session_actor_manager_access_t::attach (manager, stream_t{});
     auto current = manager.bind (first).async ().result ().value ();
     (void) manager.bind (second).async ().result ().value ();
     if (stale.notify_disconnected ().result ().error_kind ()

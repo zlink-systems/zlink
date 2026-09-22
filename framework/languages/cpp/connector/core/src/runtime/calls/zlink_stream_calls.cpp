@@ -238,8 +238,83 @@ result_t<packet_t> decode_packet (connector_state_t &state,
         }
         state.pending_close_reason = closing.value ().reason;
     }
+    if (header.kind == message_kind_t::control
+        && header.name == actor_binding_control_codec_t::bound_name) {
+        auto bound = actor_binding_control_codec_t::decode_bound (message_to_bytes (payload));
+        if (!bound)
+            return result_t<packet_t>::failure (bound.error ()->code, bound.error ()->message);
+        std::shared_ptr<actor_t> actor;
+        std::vector<handler_entry_t<std::function<void (const std::shared_ptr<actor_t> &)>>>
+          handlers;
+        {
+            std::lock_guard<std::mutex> lock (state.lifecycle_mutex);
+            if (state.actors_by_slot.contains (bound.value ().actor_slot)
+                || state.actors_by_id.contains (bound.value ().actor_id)) {
+                return result_t<packet_t>::failure (error_code_t::frame_decode_failed,
+                                                    "Actor bound control is duplicated.");
+            }
+            actor = actor_access_t::create (state.shared_from_this (), bound.value ().actor_id,
+                                            bound.value ().actor_slot);
+            state.actors_by_slot.emplace (bound.value ().actor_slot, actor);
+            state.actors_by_id.emplace (bound.value ().actor_id, actor);
+            handlers = state.actor_bound_handlers;
+        }
+        auto delivery = [handlers = std::move (handlers), actor] {
+            for (const auto &entry : handlers)
+                entry.handler (actor);
+        };
+        if (state.options.dispatch_mode == dispatch_mode_t::immediate) {
+            schedule_delivery (state.shared_from_this (), std::move (delivery));
+        } else {
+            std::lock_guard<std::mutex> lock (state.delivery_mutex);
+            state.actor_lifecycle_delivery_queue.push_back ({true, std::move (delivery)});
+            state.state_changed.notify_all ();
+        }
+    }
+    if (header.kind == message_kind_t::control
+        && header.name == actor_binding_control_codec_t::unbound_name) {
+        auto slot = actor_binding_control_codec_t::decode_unbound (message_to_bytes (payload));
+        if (!slot)
+            return result_t<packet_t>::failure (slot.error ()->code, slot.error ()->message);
+        std::shared_ptr<actor_t> actor;
+        std::vector<handler_entry_t<std::function<void (const std::shared_ptr<actor_t> &)>>>
+          handlers;
+        {
+            std::lock_guard<std::mutex> lock (state.lifecycle_mutex);
+            const auto found = state.actors_by_slot.find (slot.value ());
+            if (found == state.actors_by_slot.end ()) {
+                return result_t<packet_t>::failure (error_code_t::frame_decode_failed,
+                                                    "Actor unbound slot is not registered.");
+            }
+            actor = found->second;
+            actor_access_t::close (actor);
+            state.actors_by_id.erase (actor->actor_id ());
+            state.actors_by_slot.erase (found);
+            handlers = state.actor_unbound_handlers;
+        }
+        auto delivery = [handlers = std::move (handlers), actor] {
+            for (const auto &entry : handlers)
+                entry.handler (actor);
+        };
+        if (state.options.dispatch_mode == dispatch_mode_t::immediate) {
+            schedule_delivery (state.shared_from_this (), std::move (delivery));
+        } else {
+            std::lock_guard<std::mutex> lock (state.delivery_mutex);
+            state.actor_lifecycle_delivery_queue.push_back ({false, std::move (delivery)});
+            state.state_changed.notify_all ();
+        }
+    }
     packet_t packet{header.name, header.metadata, header.codec,      compressed,
                     payload,     header.flow_id,  header.flow_origin};
+    if (header.actor_slot) {
+        std::lock_guard<std::mutex> lock (state.lifecycle_mutex);
+        const auto actor = state.actors_by_slot.find (*header.actor_slot);
+        if (actor == state.actors_by_slot.end ()) {
+            return result_t<packet_t>::failure (error_code_t::frame_decode_failed,
+                                                "Packet Actor slot is not registered.");
+        }
+        packet.actor_id = actor->second->actor_id ();
+    }
     if (header.kind == message_kind_t::send) {
         note_received_packet (state, packet);
     }
@@ -329,6 +404,15 @@ result_t<std::vector<std::uint8_t>> encode_packet_frame (connector_state_t &stat
     header_codec_t header_codec;
     stream_header_t header_data{kind,        packet.codec, flags,
                                 request_seq, packet.name,  packet.metadata};
+    if (packet.actor_id) {
+        std::lock_guard<std::mutex> lock (state.lifecycle_mutex);
+        const auto actor = state.actors_by_id.find (*packet.actor_id);
+        if (actor == state.actors_by_id.end () || !actor->second->is_bound ()) {
+            return result_t<std::vector<std::uint8_t>>::failure (error_code_t::validation_failed,
+                                                                 "Actor handle is not bound.");
+        }
+        header_data.actor_slot = actor_access_t::slot (actor->second);
+    }
     if (kind == message_kind_t::request) {
         /* correlation_id links a request to its terminal reply and is protocol
          * information kept at every diagnostics level (flow-correlation §4).
@@ -1319,6 +1403,7 @@ take_pending_waits_locked (connector_state_t &state)
  * (§10). */
 void connection_ended (const std::shared_ptr<connector_state_t> &state, const error_t &error)
 {
+    close_bound_actors (state);
     publish_error (*state, error);
     change_state (state, connection_state_t::disconnected, error);
     std::vector<std::function<void (result_t<packet_t>)>> callbacks;
@@ -1739,6 +1824,8 @@ result_t<void> dispatch_pending (std::shared_ptr<connector_state_t> state)
 {
     std::deque<std::function<void ()>> deliveries;
     std::deque<std::function<void ()>> packet_deliveries;
+    std::deque<std::function<void ()>> actor_unbound_deliveries;
+    std::deque<actor_lifecycle_delivery_t> actor_lifecycle_deliveries;
     std::optional<error_t> inbound_error;
     std::shared_ptr<stream_connection_t> inbound_error_connection;
     std::shared_ptr<stream_connection_t> sync_connection;
@@ -1796,10 +1883,21 @@ result_t<void> dispatch_pending (std::shared_ptr<connector_state_t> state)
     {
         std::lock_guard<std::mutex> lock (state->delivery_mutex);
         deliveries.swap (state->delivery_queue);
+        actor_lifecycle_deliveries.swap (state->actor_lifecycle_delivery_queue);
+    }
+    for (auto &delivery : actor_lifecycle_deliveries) {
+        if (delivery.bound)
+            deliveries.push_back (std::move (delivery.callback));
+        else
+            actor_unbound_deliveries.push_back (std::move (delivery.callback));
     }
     while (!packet_deliveries.empty ()) {
         deliveries.push_back (std::move (packet_deliveries.front ()));
         packet_deliveries.pop_front ();
+    }
+    while (!actor_unbound_deliveries.empty ()) {
+        deliveries.push_back (std::move (actor_unbound_deliveries.front ()));
+        actor_unbound_deliveries.pop_front ();
     }
     while (!deliveries.empty ()) {
         auto delivery = std::move (deliveries.front ());
