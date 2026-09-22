@@ -25,7 +25,7 @@ View in another language — [C++](../../../cpp/guide/server/15-e2e-testing.en.m
 > [per-language Stream Connector public contract](../../../common/spec/stream-connector/README.en.md).
 > This chapter covers **how to build E2E tests in your own system.**
 
-## 0. Where E2E Testing Is Needed
+## 1. Where E2E Testing Is Needed
 
 No matter how tightly you write handler unit tests, some things stay unverified: whether
 registration actually took effect, whether routing between two nodes is correct, whether a
@@ -63,7 +63,7 @@ routing, push, and lifecycle — **items that only surface when multiple process
 together.** Branches or calculations inside a handler are far faster and more precise to
 verify with a unit test, so they don't belong in E2E.
 
-## 1. The Libraries Used for Verification
+## 2. The Libraries Used for Verification
 
 The two libraries used for verification don't overlap in role.
 
@@ -106,7 +106,7 @@ Each library's guide covers its full usage.
 - The Stream Connector guide — per-runtime integration (Unity, Godot). Server-side STREAM
   registration is covered by [STREAM](23-stream.en.md).
 
-## 2. Verification Functions and Usage
+## 3. Verification Functions and Usage
 
 Most scenarios are expressed with the verification functions the connector provides.
 
@@ -125,7 +125,7 @@ Java/Node use `submit`, and Kotlin uses `await`
 Value comparison uses `Ensure(condition, message)`. The message is required, and on
 failure the scenario ends with an exception carrying that message.
 
-### Confirming a Push Arrives
+### 3.1 Confirming a Push Arrives
 
 Specify a condition with `where(...)` to **wait for the first message matching that
 condition.** Other, nonmatching pushes may arrive without affecting the scenario.
@@ -137,7 +137,7 @@ val joined = client1.kotlin().waitFor<PlayerJoinedNotify>()
 ZLinkStreamAssert.ensure(joined.payload().mark == TicTacToeMarks.O, "joined mark mismatch.")
 ```
 
-### Confirming a Push Doesn't Arrive
+### 3.2 Confirming a Push Doesn't Arrive
 
 You can't confirm something never arrives without an observation window, so `within(...)`
 must be specified. Omitting it is an error.
@@ -149,7 +149,7 @@ client2.kotlin().expectNone<PlayerJoinedNotify>()
     .await()
 ```
 
-### Confirming Push Order
+### 3.3 Confirming Push Order
 
 In a flow where state changes in stages, the contract isn't whether something arrives but
 its **order.**
@@ -164,7 +164,7 @@ val statusSequence = customer.kotlin().waitForSequence<DeliveryStatusNotify>()
     .await()
 ```
 
-### Confirming a Request Fails
+### 3.4 Confirming a Request Fails
 
 Whether a request with no permission or an out-of-order request **gets rejected** is also
 part of the contract. Verifying only the success path leaves this path unverified.
@@ -177,7 +177,7 @@ ZLinkKotlinStreamAssert.expectFailure(ZLinkStreamErrorCode.REMOTE_ERROR.name) {
 }
 ```
 
-## 3. How to Handle Waiting for a Message
+## 4. How to Handle Waiting for a Message
 
 Most E2E flakiness has the same cause. **You act first, then start waiting**, and miss a
 push that arrived in between.
@@ -222,7 +222,7 @@ Don't use `Sleep` to line up timing. Express every wait through the timeout on
 `waitFor`/`expectNone`/`waitForSequence`. `Sleep` fails on slow hardware and wastes time on
 fast hardware.
 
-## 4. A Complete Scenario Example
+## 5. A Complete Scenario Example
 
 The `TicTacToe` sample is the shortest. Create a room over HTTP → both players connect and
 authenticate → confirm the join push → make a move → confirm the opponent observes that
@@ -246,7 +246,7 @@ suspend fun run(options: TicTacToeClientOptions) {
     val kotlinClient2 = client2.kotlin()
     kotlinClient1.connect().await()
     kotlinClient1.request(AuthenticateReq(options.xActorId)).awaitReply<AuthenticateRes>()
-    // Register wait -> send -> receive (see §3)
+    // Register the message wait, then send and receive.
     val join1 = joinGame(client1, room.roomId)
     ZLinkStreamAssert.ensure(
         join1.state.status == TicTacToeGameStatuses.WaitingForPlayers,
@@ -278,7 +278,7 @@ suspend fun run(options: TicTacToeClientOptions) {
 also check *whether another client observes the same fact.* Making **the result that
 actually reaches the user**, not server-internal state, the contract, is the point of E2E.
 
-## 5. Verifying with Multiple Clients
+## 6. Verifying with Multiple Clients
 
 A single scenario can create several clients. Splitting roles verifies contracts a single
 client can't confirm.
@@ -305,7 +305,7 @@ private suspend fun joinGame(connector: ZLinkStreamConnector, roomId: String): J
 The `Bingo` sample uses this composition as-is — it brings together two players and one
 spectator, and even confirms the win notification is delivered only to the spectator.
 
-## 6. Run Scripts and Success Criteria
+## 7. Run Scripts and Success Criteria
 
 The run script is responsible for **starting the server, running the client, and cleaning
 up afterward.**
@@ -336,10 +336,10 @@ if grep -R -q "dispatch-error" "${LOG_DIR}"; then
 fi
 ```
 
-## 7. Common Problems
+## 8. Common Problems
 
 - **A push isn't received, causing intermittent failure** → check that the wait was
-  registered before the action ([§3](#3-how-to-handle-waiting-for-a-message)). Starting
+  registered before the action ([How to Handle Waiting for a Message](#4-how-to-handle-waiting-for-a-message)). Starting
   the wait afterward misses a push that arrived in between.
 - **`expectNone` ends in an error** → `within(...)` wasn't specified. You can't confirm
   something never arrives without an observation window, so the window is required
@@ -349,11 +349,11 @@ fi
 - **It passes locally but fails only in CI** → check for remaining timing dependencies
   implemented with `sleep`. Express every wait through a wait function with an explicit timeout.
 - **The client passes but the server log has an error** → the script doesn't check server
-  logs for errors ([§6](#6-run-scripts-and-success-criteria)).
+  logs for errors ([Run Scripts and Success Criteria](#7-run-scripts-and-success-criteria)).
 - **It connects but the push never arrives** → in an environment that needs manual
   pumping, like engine integration, `dispatch` wasn't run (see the Stream Connector guide).
 
-## 8. Related Documents
+## 9. Related Documents
 
 - Which sample to look at first: [14-samples](14-samples.en.md)
 - Server-side STREAM registration and sessions: [STREAM](23-stream.en.md)

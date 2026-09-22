@@ -245,7 +245,7 @@ application does not track node identifiers.
 **A request sent during the move also completes at the original caller.** The reply the destination
 produces is correlated back to the original caller, the timeout follows the caller's existing path,
 and a late reply is dropped. The number of requests awaiting a reply during a move is observed
-through a runtime metric — [Operations and Lifecycle](12-operations.en.md#1-runtime-metrics) is that
+through a runtime metric — [Operations and Lifecycle](12-operations.en.md#2-runtime-metrics) is that
 place.
 
 ## 7. Related Documents
@@ -256,5 +256,5 @@ place.
 - The other procedure that moves the execution site — [Relocation](37-relocation.en.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

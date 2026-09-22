@@ -18,13 +18,10 @@ View in another language — [C++](../../../cpp/guide/server/30-channel-patterns
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-The code in this chapter comes from the [tutorial README](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.md) and the [`TicTacToe`](https://github.com/zlink-systems/zlink-java-examples/blob/main/samples/TicTacToe/README.md) and [`ZoneWorld`](https://github.com/zlink-systems/zlink-java-examples/blob/main/samples/ZoneWorld/README.md) sample READMEs. Download the [examples repository](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.md) and follow each README's Download, Build and Run sections to reproduce the results below.
-
 !!! info "What you get from this chapter"
 
     You learn which connection each of the three arrangements opens, who it picks
-    as a target, and when it refuses. This chapter's code comes from the
-    repository's samples and tutorials.
+    as a target, and when it refuses. The code comes from the [tutorial](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.md) and the [`TicTacToe`](https://github.com/zlink-systems/zlink-java-examples/blob/main/samples/TicTacToe/README.md) and [`ZoneWorld`](https://github.com/zlink-systems/zlink-java-examples/blob/main/samples/ZoneWorld/README.md) sample READMEs in the examples repository; follow each README's Download, Build, and Run sections to reproduce the connection and target selection.
 
 [Channel Messaging](20-channel-messaging.en.md) covered how to register and how to call. This
 chapter covers **why it behaves that way and how far it goes**: the differences between the
@@ -412,7 +409,7 @@ directly, it works without one.
 
 The registration code is in [Spot](21-spot.en.md#2-the-location-store--a-prerequisite-for-registering-a-spot),
 and the operational queries are in
-[Operations and Lifecycle](12-operations.en.md#5-location-readiness-and-operational-queries).
+[Operations and Lifecycle](12-operations.en.md#6-location-readiness-and-operational-queries).
 
 **There are two stores.** The Location Store handles the atomic changes to small location records;
 the Relocation Store holds what remains after a move — the record of an Instance Spot's first
@@ -531,5 +528,5 @@ structured record ([Monitoring](26-monitoring.en.md)).
 - A running version of this chapter's code — `framework/languages/dotnet/tutorial`
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

@@ -23,7 +23,7 @@ title: "옵션과 기본값 · C#/.NET"
     무엇을 정할 수 있는지, 정하지 않으면 어떤 값으로 동작하는지, 시작한 뒤에 바꿀 수 있는
     값이 무엇인지 안다.
 
-옵션의 이름과 기본값은 다섯 언어가 같다. 언어마다 다른 것은 표기와 지정 방법이며 각 절의
+옵션의 이름과 기본값은 지원되는 언어에서 같다. 언어마다 다른 것은 표기와 지정 방법이며 각 절의
 탭이 그것을 보여준다. **대부분의 옵션은 지정하지 않아도 동작한다.** 바꿀 이유가 생겼을 때
 해당 줄의 기본값을 확인하고, 그전에는 그대로 사용한다.
 
@@ -86,7 +86,7 @@ host가 시작된 뒤에 builder를 다시 호출하는 표면은 없다. 잘못
 
 Core HWM은 ordinary queue가 보유한 byte를, Application job queue는 handler 시작을 기다리는 job
 수를 host 전체에서 제한한다. 두 상한의 동작은
-[Backpressure](33-backpressure.ko.md#1-core-hwm과-application-job-queue)가 다룬다.
+[Backpressure](33-backpressure.ko.md#2-core-hwm과-application-job-queue)가 다룬다.
 
 | 옵션 | 무엇을 정하나 | 기본값 |
 | --- | --- | --- |
@@ -210,7 +210,7 @@ runtime.Channel("room").Weight = 0;
 
 두 값의 범위는 `0..10000`이고 기본값은 100이다. `0`으로 두면 **새 배정만 멈춘다** — 이미 있는
 object와 연결은 유지된다. 무중단 배포에서 이 node로 새 트래픽이 가지 않게 한 뒤 relocation을
-시작하는 순서로 사용한다([운영과 lifecycle](12-operations.ko.md#4-운영-호출과-readiness-연결)).
+시작하는 순서로 사용한다([운영과 lifecycle](12-operations.ko.md#5-운영-호출과-readiness-연결)).
 
 ## 10. 반드시 지정하는 값
 

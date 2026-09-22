@@ -27,7 +27,7 @@ title: "Backpressure — 처리보다 도착이 빠를 때 · Node/TypeScript"
 > 다룬다. 이 챕터는 그 동작을 개념과 원리로 설명하고 어떤 옵션이 영향을 주는지 다룬다.
 > 옵션의 정확한 이름·기본값과 변경 시점은 언어별 [16. Options](16-options.ko.md)과 exact interface가 소유한다.
 
-## 0. 처리 능력을 넘는 유입이 발생할 때의 선택지
+## 1. 처리 능력을 넘는 유입이 발생할 때의 선택지
 
 다음 중 하나가 일어난다.
 
@@ -40,7 +40,7 @@ ZLink는 세 번째 방식을 사용한다. 이렇게 **받는 쪽의 처리 지
 이유로 버리지 않는다. 따라서 부하가 걸린 상태에서 application에 나타나는 증상은
 "message가 사라졌다"가 아니라 "`send`가 느려졌다" 또는 "`DeadlineExceeded`가 발생했다"다.
 
-## 1. Core HWM과 Application job queue
+## 2. Core HWM과 Application job queue
 
 Framework host의 backpressure는 서로 다른 두 자원을 제한한다. Core HWM은 일반 send·receive
 queue에 남아 있는 byte를 보낸 곳마다 제한한다. Framework의 Application job queue는 handler 실행을
@@ -65,9 +65,9 @@ Application job queue 상한에 도달하면, 받기 전에 최종 reply·error�
 버리거나 capacity error로 바꾸지 않는다. Core 일반 receive queue가 차면 보낸 곳별 byte HWM이
 압력을 sender까지 전달한다.
 
-## 2. 동작 원리
+## 3. 동작 원리
 
-### 2.1 송신 잠금 판단 기준
+### 3.1 송신 잠금 판단 기준
 
 보내기를 멈출지 여부는 **자기 process 안의 값 하나**로 판단한다. 상대에게 얼마나 보내도
 되는지 묻지 않고, 아직 상대가 가져가지 않은 message의 byte 합이 송신 queue의 상한에 닿으면
@@ -79,7 +79,7 @@ Application job queue 상한에 도달하면, 받기 전에 최종 reply·error�
 - 받는 쪽이 처리하지 못해 전송 경로가 막혔다.
 - 연결이 끊겨 재연결하는 동안 내보낼 곳이 없다.
 
-### 2.2 수신 지연이 송신으로 전파되는 경로
+### 3.2 수신 지연이 송신으로 전파되는 경로
 
 세 단계를 거친다. 앞 두 단계는 받는 쪽 Framework와 Core가 처리하고, 마지막 단계에서 보내는
 application이 대기를 겪는다.
@@ -102,12 +102,12 @@ operation의 HWM 대기를 처리한다. Framework는 기다리는 operation을 
   → 보내는 쪽 송신 queue도 못 비워 send가 기다림
 ```
 
-조절할 수 있는 두 상한은 [영향을 주는 옵션](#4-영향을-주는-옵션)에 있다. 관찰할 수 있는 것은 `send`가
+조절할 수 있는 두 상한은 [영향을 주는 옵션](#5-영향을-주는-옵션)에 있다. 관찰할 수 있는 것은 `send`가
 기다리다가 deadline에서 끝난다는 사실뿐이며, timeout만으로 어디에서 막혔는지는 알 수 없으므로
-[정체 발생 확인 방법](#5-정체-발생-확인-방법)에서 양쪽 상태를 함께 확인한다. Framework는 message를
+[정체 발생 확인 방법](#6-정체-발생-확인-방법)에서 양쪽 상태를 함께 확인한다. Framework는 message를
 버리지도, 재시도하지도, 다른 대상으로 바꾸지도 않는다.
 
-### 2.3 왜 답장은 막히지 않나
+### 3.3 왜 답장은 막히지 않나
 
 처리 상한은 handler가 시작하는 순간 하나 비워지고 handler가 기다리는 동안 다시 잡지 않는다.
 이미 보낸 요청의 답장과 오류는 다른 줄로 오므로 유입이 막혀도 계속 돌아온다.
@@ -130,9 +130,9 @@ request가 정상적으로 끝나고, 다음 job이 실행을 시작하면서 ba
 reply가 Application 연결의 message를 앞지를 수 있으므로, handler는 도착 순서로 선후 관계를
 판단하지 않는다.
 
-## 3. API에 드러나는 backpressure
+## 4. API에 드러나는 backpressure
 
-### 3.1 send가 `async`인 이유
+### 4.1 send가 `async`인 이유
 
 send는 응답을 기다리지 않지만, 기다려야 하는 대상이 하나 있다 — **보낼 자리**다.
 
@@ -185,7 +185,7 @@ ID로 보내는 호출은 지정한 exact target을 사용하고, channel 이름
 기다리고 재시도하는 동안에는 어느 호출도 target을 다시 선택하지 않는다.** 이후 시작한 새 channel
 operation은 그때 바뀐 후보를 고를 수 있다.
 
-### 3.2 request의 timeout 경계
+### 4.2 request의 timeout 경계
 
 request는 보낼 자리와 상대의 reply를 모두 기다리므로, 정체가 일어난 구간에서는
 `timeout(...)`이 실질적인 상한이다. 특히 **handler 안에서 다시 request를 보내는 흐름에는
@@ -207,7 +207,7 @@ async handle(request: PlaceOrder, context: ZLinkMessageContext): Promise<PlaceOr
 timeout은 backpressure를 조절하는 수단이 아니라 **더 기다리지 않는 경계**다. 호출자가
 timeout으로 끝나도 이미 시작된 remote handler의 실행은 취소되거나 되돌려지지 않는다.
 
-## 4. 영향을 주는 옵션
+## 5. 영향을 주는 옵션
 
 | 옵션 | 무엇을 정하나 | 설정 자리 |
 | --- | --- | --- |
@@ -255,7 +255,7 @@ Manual socket HWM을 지정하지 않아도 Framework가 connection 수 구간�
 Framework root는 Core memory 설정을 같은 Core context에 전달하고, Core가 physical queue census와
 방향별 HWM을 계산한다. Application job queue는 이 byte 계산과 별도로 job 수를 제한한다.
 
-### 4.1 Core HWM — Core가 소유하는 byte budget
+### 5.1 Core HWM — Core가 소유하는 byte budget
 
 Root inbound-dispatch 설정에서 다음 값을 지정한다. 정확한 언어별 표기는 `16. Options`와
 exact interface에서 확인한다.
@@ -276,7 +276,7 @@ snapshot의 current·peak byte, blocked ratio, throughput, latency와 process me
 측정한다. 측정 절차는 [perf §23](../../../common/perf/README.ko.md#23-core-hwm과-application-job-queue-운영값-측정)이
 다룬다.
 
-### 4.2 HWM을 직접 지정할 때
+### 5.2 HWM을 직접 지정할 때
 
 `sendHighWaterMark`나 `receiveHighWaterMark`는 socket 방향별 manual HWM이다. Core context의
 `coreHwmBudgetBytes`와 단위는 byte로 같지만 owner와 적용 범위가 다르다. Manual socket HWM은
@@ -288,7 +288,7 @@ snapshot의 current·peak byte, blocked ratio, throughput, latency와 process me
 - **Reply lane에는 적용하지 않는다.** Receive 전에 최종 reply·error임을 식별할 수
   있는 진행 경로에는 public send·receive HWM을 복사하지 않는다.
 
-### 4.3 Application Job Queue HWM — host 전체 job 상한
+### 5.3 Application Job Queue HWM — host 전체 job 상한
 
 Application Job Queue HWM은 handler 시작을 기다리는 job 수를 Framework host instance 전체에서
 제한한다. Core HWM과 함께 backpressure를 만들지만 byte나 memory 비율을 세지 않는다.
@@ -337,7 +337,7 @@ STREAM에는 이 pressure 상태를 적용하지 않는다.
 1:N local dispatch도 확보한 처리 자리보다 많은 handler job을 먼저 만들지 않는다. Receive 전에 식별할 수
 있는 최종 reply·error는 이 처리 자리를 사용하지 않는다.
 
-## 5. 정체 발생 확인 방법
+## 6. 정체 발생 확인 방법
 
 ```typescript
 // Node는 수준을 message flow log mode로 지정한다.
@@ -360,7 +360,7 @@ gauge를 유지하고 peak를 current로 재기준화하며 현재 epoch의 coun
 `zlink.mesh_node.messages.dropped`는 backpressure 지표가 아니다. 이 값이 오르면 부하가
 아니라 별도의 확인된 사유로 message가 버려진 것이므로 `reason` attribute를 먼저 본다.
 
-## 6. Framework runtime 적용 범위
+## 7. Framework runtime 적용 범위
 
 이 공통 가이드는 언어별 구현 차이를 열거하지 않는다. 공통 동작은
 [Framework API §2.1](../../../common/spec/server/00-foundation/06-framework-api.ko.md#3-core-memory-budget과-application-job-queue-설정),
@@ -370,7 +370,7 @@ status와 reset 의미는 [runtime monitoring](../../../common/spec/server/06-ob
 각 언어에서 실제로 사용하는 이름과 호출 형태는 해당 언어의 `16. Options`, `11. Monitoring`과
 [exact interface](../../../common/spec/server/languages/README.ko.md)에서 확인한다.
 
-## 7. 자주 발생하는 문제
+## 8. 자주 발생하는 문제
 
 - **`send`가 `DeadlineExceeded`로 끝난다** → 보낼 자리가 끝까지 생기지 않았다. 상한을 올리기
   전에 받는 쪽의 Core `blocked_ratio`, Application job queue waiter와 handler 실행 시간을 확인한다.
@@ -398,7 +398,7 @@ status와 reset 의미는 [runtime monitoring](../../../common/spec/server/06-ob
   안에서 기다리면 그 handler의 실행 자리도 함께 점유된다. 응답이 느린 대상으로 보내는
   호출은 같은 handler에 함께 두지 않는다.
 
-## 8. 관련 문서
+## 9. 관련 문서
 
 - 옵션 기본값과 변경 시점: [16. Options](16-options.ko.md) §3
 - one-way submit과 완료 경계의 정식 계약:
@@ -413,5 +413,5 @@ status와 reset 의미는 [runtime monitoring](../../../common/spec/server/06-ob
 - 다음 축: [Channel 메시징](20-channel-messaging.ko.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

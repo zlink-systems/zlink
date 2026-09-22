@@ -25,7 +25,7 @@ View in another language — [C++](../../../cpp/guide/server/55-gamequest.en.md)
     pushes, and through the reconciliation of lost progress. The code in this chapter runs as it
     stands in `framework/languages/java/samples/java/GameQuest`.
 
-[Picking a Sample](14-samples.en.md#7-gamequest--building-a-quest-progression-system) introduced what
+[Picking a Sample](14-samples.en.md#8-gamequest--building-a-quest-progression-system) introduced what
 this sample demonstrates. This chapter is what you read after that introduction — the roles and where
 their code lives, the message flow of the main scenarios, and, for each flow, the framework feature it
 uses and the chapter that explains it, in the order the source is laid out. This chapter has no spec
@@ -240,5 +240,5 @@ reconnecting and the reconciliation result. The checks and the exact log strings
   [Reading Along: ShoppingMall](54-shoppingmall.en.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

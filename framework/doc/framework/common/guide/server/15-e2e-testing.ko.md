@@ -6,7 +6,7 @@
 > [언어별 Stream Connector 공개 계약](../../../common/spec/stream-connector/README.ko.md)이
 > 소유한다. 이 챕터는 **자기 시스템에 E2E 테스트를 만드는 방법**을 다룬다.
 
-## 0. E2E 테스트가 필요한 지점
+## 1. E2E 테스트가 필요한 지점
 
 handler 단위 테스트를 아무리 촘촘히 작성해도 확인되지 않는 항목이 남는다. 등록이 실제로
 적용되었는지, 두 node 사이 라우팅이 맞는지, 방에 있는 다른 참가자에게 push가 전달되는지다.
@@ -94,7 +94,7 @@ handler 단위 테스트를 아무리 촘촘히 작성해도 확인되지 않는
 함께 동작해야 드러나는 항목**을 확인한다. handler 안의 분기나 계산은 단위 테스트가 훨씬
 빠르고 정확하므로 E2E에 포함하지 않는다.
 
-## 1. 검증에 사용되는 library
+## 2. 검증에 사용되는 library
 
 검증에 사용하는 library는 역할이 겹치지 않는다.
 
@@ -229,7 +229,7 @@ Stream Connector 가이드가 다룬다.
 - Stream Connector 가이드 — 실행 환경별 통합(Unity,
   Godot). 서버 쪽 STREAM 등록은 [STREAM](23-stream.ko.md)이 다룬다.
 
-## 2. 검증 함수와 사용법
+## 3. 검증 함수와 사용법
 
 connector가 제공하는 검증 함수로 대부분의 시나리오를 표현한다.
 
@@ -247,7 +247,7 @@ connector가 제공하는 검증 함수로 대부분의 시나리오를 표현�
 값 비교는 `Ensure(조건, 메시지)`를 사용한다. 메시지는 필수이며, 실패하면 그
 메시지를 담은 예외로 시나리오가 끝난다.
 
-### push 도착 확인
+### 3.1 push 도착 확인
 
 `Where(...)`로 조건을 지정하면 **조건에 맞는 첫 message까지 기다린다.** 관심 대상이 아닌
 push가 섞여 들어와도 시나리오가 영향을 받지 않는다.
@@ -300,7 +300,7 @@ push가 섞여 들어와도 시나리오가 영향을 받지 않는다.
     ```
 
 
-### push 미도착 확인
+### 3.2 push 미도착 확인
 
 도착하지 않는다는 사실은 관찰 구간 없이 확정할 수 없으므로 `Within(...)`으로 구간을 반드시
 지정한다. 지정하지 않으면 오류다.
@@ -352,7 +352,7 @@ push가 섞여 들어와도 시나리오가 영향을 받지 않는다.
     ```
 
 
-### push 순서 확인
+### 3.3 push 순서 확인
 
 상태가 단계적으로 바뀌는 흐름에서는 도착 여부가 아니라 **순서**가 계약이다.
 
@@ -439,7 +439,7 @@ push가 섞여 들어와도 시나리오가 영향을 받지 않는다.
     ```
 
 
-### 요청 실패 확인
+### 3.4 요청 실패 확인
 
 권한이 없거나 순서가 맞지 않는 요청이 **거절되는지**도 계약이다. 성공 경로만 검증하면 이
 경로가 검증되지 않은 채 남는다.
@@ -499,7 +499,7 @@ push가 섞여 들어와도 시나리오가 영향을 받지 않는다.
     ```
 
 
-## 3. 메시지 대기 처리 방법
+## 4. 메시지 대기 처리 방법
 
 E2E는 대부분 같은 원인으로 간헐 실패한다. **행동을 먼저 하고 그다음에 대기를
 시작하여**, 그 사이에 도착한 push를 받지 못하는 것이다.
@@ -672,7 +672,7 @@ E2E는 대부분 같은 원인으로 간헐 실패한다. **행동을 먼저 하
 `Sleep`으로 시점을 맞추지 않는다. 대기는 전부 `WaitFor`·`ExpectNone`·`WaitForSequence`의
 timeout으로 표현한다. `Sleep`은 느린 장비에서 실패하고 빠른 장비에서는 시간을 낭비한다.
 
-## 4. 전체 시나리오 예제
+## 5. 전체 시나리오 예제
 
 `TicTacToe` 샘플이 가장 짧다. HTTP로 방을 만들고 → 두 player가 접속·인증하고 → 입장 push를
 확인하고 → 수를 두고 → 상대가 그 수를 관찰하는지 확인하는 순서다.
@@ -700,7 +700,7 @@ timeout으로 표현한다. `Sleep`은 느린 장비에서 실패하고 빠른 �
         var auth1 = await client1.Request(new AuthenticateReq(options.XActorId)).Async<AuthenticateRes>(ct);
         ZlinkStreamAssert.Ensure(auth1.Player.ActorId == options.XActorId, "player x actor id mismatch.");
 
-        // 대기 등록 → send → 수신(§3)
+        // 메시지 대기를 등록한 뒤 send하고 수신한다.
         var join1 = await JoinGameAsync(client1, room.RoomId, ct);
         ZlinkStreamAssert.Ensure(join1.State.Status == TicTacToeGameStatuses.WaitingForPlayers,
             "room should wait for the second player.");
@@ -764,7 +764,7 @@ timeout으로 표현한다. `Sleep`은 느린 장비에서 실패하고 빠른 �
         // 3. 먼저 접속한 쪽이 인증하고 빈 방에 들어간다.
         co_await client1.connect ().async ();
         co_await client1.request (authenticate_req_t{options.x_actor_id}).async<authenticate_res_t> ();
-        // 대기 등록 → send → 수신(§3)
+        // 메시지 대기를 등록한 뒤 send하고 수신한다.
         auto join1 = co_await join_game (client1, room.room_id);
         ensure (join1.state.status == tictactoe_status_t::waiting_for_players);
 
@@ -807,7 +807,7 @@ timeout으로 표현한다. `Sleep`은 느린 장비에서 실패하고 빠른 �
         client1.connect().submit().toCompletableFuture().join();
         client1.request(new AuthenticateReq(options.xActorId()))
             .submit(AuthenticateRes.class).toCompletableFuture().join();
-        // 대기 등록 → send → 수신(§3)
+        // 메시지 대기를 등록한 뒤 send하고 수신한다.
         JoinGameNotify join1 = joinGame(client1, room.roomId());
         ZLinkStreamAssert.ensure(
             join1.state().status() == TicTacToeGameStatuses.WaitingForPlayers,
@@ -857,7 +857,7 @@ timeout으로 표현한다. `Sleep`은 느린 장비에서 실패하고 빠른 �
         val kotlinClient2 = client2.kotlin()
         kotlinClient1.connect().await()
         kotlinClient1.request(AuthenticateReq(options.xActorId)).awaitReply<AuthenticateRes>()
-        // 대기 등록 → send → 수신(§3)
+        // 메시지 대기를 등록한 뒤 send하고 수신한다.
         val join1 = joinGame(client1, room.roomId)
         ZLinkStreamAssert.ensure(
             join1.state.status == TicTacToeGameStatuses.WaitingForPlayers,
@@ -903,7 +903,7 @@ timeout으로 표현한다. `Sleep`은 느린 장비에서 실패하고 빠른 �
       // 3. 먼저 접속한 쪽이 인증하고 빈 방에 들어간다.
       await client1.connect(signal);
       await client1.request(authenticateReq(options.xActorId)).submit<AuthenticateRes>(signal);
-      // 대기 등록 → send → 수신(§3)
+      // 메시지 대기를 등록한 뒤 send하고 수신한다.
       const join1 = await joinGame(client1, room.roomId, signal);
       zlinkStreamAssert.ensure(
         join1.state.status === TicTacToeGameStatuses.WaitingForPlayers,
@@ -933,7 +933,7 @@ timeout으로 표현한다. `Sleep`은 느린 장비에서 실패하고 빠른 �
 사실을 관찰하는지*까지 확인한다. 서버 내부 상태가 아니라 **사용자에게 실제로 도달하는
 결과**를 계약으로 삼는 것이 E2E의 목적이다.
 
-## 5. 다중 client 검증
+## 6. 다중 client 검증
 
 한 시나리오 안에서 client를 여럿 생성할 수 있다. 역할을 나누면 client 하나로는 확인할 수
 없는 계약까지 확인한다.
@@ -1004,7 +1004,7 @@ timeout으로 표현한다. `Sleep`은 느린 장비에서 실패하고 빠른 �
 `Bingo` 샘플이 이 구성을 그대로 사용한다 — player 둘과 관전자 하나를 함께 두고, 승리
 알림이 관전자에게만 전달되는 것까지 확인한다.
 
-## 6. 실행 스크립트와 성공 판정
+## 7. 실행 스크립트와 성공 판정
 
 실행 script는 **server 기동, client 실행, 실행 뒤 정리**를 담당한다.
 
@@ -1093,10 +1093,10 @@ if grep -R -q "dispatch-error" "${LOG_DIR}"; then
 fi
 ```
 
-## 7. 자주 발생하는 문제
+## 8. 자주 발생하는 문제
 
 - **push를 받지 못해 간헐적으로 실패한다** → 행동보다 대기를 먼저 등록했는지 확인한다
-  ([§3](#3-메시지-대기-처리-방법)). 대기를 나중에 시작하면 그 사이에
+  ([메시지 대기 처리 방법](#4-메시지-대기-처리-방법)). 대기를 나중에 시작하면 그 사이에
   도착한 push를 받지 못한다.
 - **`ExpectNone`이 오류로 끝난다** → `Within(...)`을 지정하지 않은 경우다. 관찰 구간 없이
   도착하지 않는다는 사실을 확정할 수 없으므로 구간을 명시적으로 요구한다.
@@ -1105,11 +1105,11 @@ fi
 - **로컬에서는 통과하고 CI에서만 실패한다** → `sleep`으로 맞춘 시점이 남아 있는지 확인한다.
   대기는 전부 timeout이 지정된 대기 함수로 표현한다.
 - **client는 통과했는데 서버 로그에 오류가 남는다** → 서버 로그 오류 검사를 script에
-  추가하지 않은 경우다([§6](#6-실행-스크립트와-성공-판정)).
+  추가하지 않은 경우다([실행 script와 성공 판정](#7-실행-스크립트와-성공-판정)).
 - **연결은 되지만 push가 도착하지 않는다** → 엔진 통합처럼 수동 펌프가 필요한 환경에서
   `Dispatch`를 실행하지 않은 경우다(Stream Connector 가이드).
 
-## 8. 관련 문서
+## 9. 관련 문서
 
 - 어떤 샘플을 먼저 볼지: [14-samples](14-samples.ko.md)
 - 서버 쪽 STREAM 등록과 session: [STREAM](23-stream.ko.md)

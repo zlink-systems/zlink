@@ -11,7 +11,7 @@ This chapter quotes no tutorial code; it explains the limits and outcomes observ
 > affect it. Exact option names, defaults, and mutability are owned by each language's
 > `16. Options` chapter and exact interface.
 
-## 0. Options When Inflow Exceeds Processing Capacity
+## 1. Options When Inflow Exceeds Processing Capacity
 
 One of the following happens.
 
@@ -27,7 +27,7 @@ back to the sender by making it wait is called backpressure.** An application me
 already been accepted is never dropped because of load. So under load, the application-visible
 symptom isn't "the message vanished" — it's "`send` got slow" or "`DeadlineExceeded` happened."
 
-## 1. Core HWM and the Application Job Queue
+## 2. Core HWM and the Application Job Queue
 
 Framework host backpressure limits two different resources. Core HWM limits accounted bytes
 held by ordinary send/receive queues per origin. The framework's application job queue limits
@@ -54,9 +54,9 @@ before a new receive/claim.
 Load does not turn an accepted message into a drop or capacity error. As Core ordinary receive
 queues fill, their per-origin byte HWMs propagate pressure back to the sender.
 
-## 2. How It Works
+## 3. How It Works
 
-### 2.1 The Basis for Locking Sends
+### 3.1 The Basis for Locking Sends
 
 The decision to stop sending is based on **one value inside your own process.** It doesn't ask
 the peer how much it's OK to send — once the byte sum of messages the peer hasn't yet taken
@@ -69,7 +69,7 @@ ceiling gets reached.
 - The receiver can't keep up processing, so the send path is blocked.
 - The connection dropped and there's nowhere to send while reconnecting.
 
-### 2.2 How Receive-Side Delay Propagates to Sends
+### 3.2 How Receive-Side Delay Propagates to Sends
 
 It passes through three stages. The receiving framework and Core handle the first two; the
 sending application encounters a wait only at the last stage.
@@ -103,7 +103,7 @@ distinguish a remote handler delay, network delay, or local Core queue pressure,
 Core HWM and application job queue status on both sides
 ([12-operations](12-operations.en.md) §1).
 
-### 2.3 Permit Return and Wait Resumption
+### 3.3 Permit Return and Wait Resumption
 
 An application job queue permit is returned immediately before the user's callback's first
 instruction, not when a queue publishes a job or an executor task is created. A returned
@@ -120,7 +120,7 @@ immediately after being classified as creating no handler job.
 This separation allows terminal completion of an already-started request to progress while
 ordinary traffic is saturated.
 
-### 2.4 Splitting the Application Connection and Completion Connection
+### 3.4 Splitting the Application Connection and Completion Connection
 
 Connecting to one peer creates two paths.
 
@@ -141,9 +141,9 @@ There's no shared arrival order between the two paths. Even from the same peer, 
 on the Completion connection can overtake a message on the Application connection, so a handler
 never infers ordering from arrival order.
 
-## 3. Backpressure Visible in the API
+## 4. Backpressure Visible in the API
 
-### 3.1 Why send Is `async`
+### 4.1 Why send Is `async`
 
 `send` doesn't wait for a response, but there's one thing it does have to wait for — **a
 slot to send into.**
@@ -306,7 +306,7 @@ candidate immediately before starting the operation. **After the operation start
 reselects its target while Core performs the HWM wait and retry.** A later, new channel operation
 can observe and select a candidate that has changed by then.
 
-### 3.2 request's Timeout Boundary
+### 4.2 request's Timeout Boundary
 
 A request waits for both a slot to send into and the peer's reply, so in a congested
 stretch, `Timeout(...)` is the real ceiling. In particular, **always give a finite timeout
@@ -395,7 +395,7 @@ A timeout isn't a knob to tune backpressure — it's **the boundary where you st
 Even when the caller ends on a timeout, the remote handler's execution, if already started,
 is neither cancelled nor rolled back.
 
-## 4. Options That Affect This
+## 5. Options That Affect This
 
 | Option | What it sets | Where it's configured |
 | --- | --- | --- |
@@ -451,7 +451,7 @@ bucket table. The framework root forwards Core memory settings to the same Core 
 Core computes its physical-queue census and directional HWMs. The application job queue
 limits job count independently of that byte calculation.
 
-### 4.1 Core HWM — The Byte Budget Owned by Core
+### 5.1 Core HWM — The Byte Budget Owned by Core
 
 Set the following values through the root inbound-dispatch configuration. See `16. Options` and the
 exact interface for each language's precise spelling.
@@ -473,7 +473,7 @@ throughput, latency, and process memory under production-like payload distributi
 connection count. [Perf §23](../../../common/perf/README.en.md#23-measuring-production-values-for-core-hwm-and-the-application-job-queue)
 defines the measurement procedure.
 
-### 4.2 Setting an HWM Directly
+### 5.2 Setting an HWM Directly
 
 `SendHighWaterMark` and `ReceiveHighWaterMark` are per-socket-direction manual HWMs. They use
 bytes like `CoreHwmBudgetBytes`, but have a different owner and scope. A manual socket HWM
@@ -487,7 +487,7 @@ budget.
 - **It does not apply to the completion lane.** Public send/receive HWMs are not copied to
   progress identifiable before receive as terminal reply/error completion.
 
-### 4.3 Application Job Queue HWM — The Host-Wide Job Limit
+### 5.3 Application Job Queue HWM — The Host-Wide Job Limit
 
 The application job queue HWM limits the number of jobs waiting for handler start across a
 framework host instance. It participates in backpressure alongside Core HWM, but does not
@@ -540,7 +540,7 @@ and 1:N local dispatch do not create more handler jobs than the permits already 
 Terminal reply/error completion identifiable before receive does not use this permit, and
 `MaxMessageSize` remains an independent single-message cap.
 
-## 5. How to Confirm Congestion Is Happening
+## 6. How to Confirm Congestion Is Happening
 
 === "C#/.NET"
 
@@ -601,7 +601,7 @@ and clears only the current epoch's counts and duration.
 message was dropped for another confirmed reason, not load, so check the `reason`
 attribute first.
 
-## 6. Framework Runtime Coverage
+## 7. Framework Runtime Coverage
 
 This common guide does not list per-language implementation differences. Common behavior is
 owned by [Framework API §2.1](../../../common/spec/server/00-foundation/06-framework-api.en.md),
@@ -612,7 +612,7 @@ See the language's `16. Options`, `11. Monitoring`, and
 [exact interface](../../../common/spec/server/languages/README.en.md) for its spelling and
 call form.
 
-## 7. Common Problems
+## 8. Common Problems
 
 - **`send` ends in `DeadlineExceeded`** → a send slot never opened up. Before raising the
   ceiling, inspect the receiver's Core `blocked_ratio`, application job queue waiters, and
@@ -646,7 +646,7 @@ call form.
   waiting inside the same handler also occupies that handler's execution slot the whole
   time. Don't put a call to a slow-responding target in the same handler as other calls.
 
-## 8. Related Documents
+## 9. Related Documents
 
 - Option defaults and when they can change: `16. Options` chapter §3
 - The formal contract for one-way submit and the completion boundary:
@@ -662,5 +662,5 @@ call form.
 - Next axis: [Channel Messaging](20-channel-messaging.en.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

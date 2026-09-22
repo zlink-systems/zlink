@@ -139,8 +139,8 @@ RouteMesh·Spot·Instance Spot 조합으로 구현한다. 방식이 바뀌어도
 runtime이 없다.
 
 > 트위치 FPS의 **초저지연 snapshot netcode**는 유실을 허용하는 비신뢰 전송을 사용한다.
-> 현재 STREAM이 제공하는 transport는 TCP/TLS/WS/WSS이며, **비신뢰 전송(QUIC
-> datagram·WebTransport)은 지원 예정**이다. 다만 그런 게임에서도 매칭·로비·메타·
+> STREAM은 TCP/TLS/WS/WSS를 transport로 제공한다. **QUIC datagram과 WebTransport는
+> STREAM transport가 아니다.** 다만 그런 게임에서도 매칭·로비·메타·
 > 소셜은 이 방식들로 처리된다. 어디까지 되고 안 되는지는
 > [ZLink의 경계](#5-zlink의-경계--다루지-않는-요구)가 다룬다.
 
@@ -688,5 +688,5 @@ v4.3.5에서 출발했기 때문이다. `http-client`는 각 플랫폼의 통상
 - [Akka License Change의 영향 (Coralogix)](https://coralogix.com/blog/akka-license-change/)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

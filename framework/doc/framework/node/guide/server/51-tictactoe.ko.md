@@ -24,7 +24,7 @@ title: "TicTacToe 따라 읽기 · Node/TypeScript"
     정리되는 곳까지 코드를 따라갈 수 있다. 이 장의 코드는
     `framework/languages/node/samples/TicTacToe.Ts`에서 그대로 실행된다.
 
-[샘플 고르기](14-samples.ko.md#2-tictactoe--실시간-대전-게임-서버-구축)가 이 샘플이 무엇을 보여
+[샘플 고르기](14-samples.ko.md#3-tictactoe--실시간-대전-게임-서버-구축)가 이 샘플이 무엇을 보여
 주는지 소개했다. 이 장은 그 소개 다음에 읽는 자리다 — 역할과 코드 위치, 주요 시나리오의 메시지
 흐름, 각 흐름에 등장하는 framework 기능과 그것을 설명하는 장을 소스가 놓인 순서대로 따라간다.
 이 장에는 계약을 소유하는 스펙 문서가 없다. 요구사항, 메시지 계약과 검증 기준은
@@ -276,5 +276,5 @@ assertion으로 확인한다. runner는 서버 로그에서 각 Actor의 room le
 - 같은 게임을 자동 연결·자동 등록과 별도 Session 서버로 만든 구성: [Bingo 따라 읽기](50-bingo.ko.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

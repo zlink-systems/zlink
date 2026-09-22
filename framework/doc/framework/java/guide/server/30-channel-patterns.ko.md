@@ -18,12 +18,10 @@ title: "Channel 동작 원리 · Java"
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-이 장의 코드는 [tutorial README](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.ko.md)와 [`TicTacToe`](https://github.com/zlink-systems/zlink-java-examples/blob/main/samples/TicTacToe/README.ko.md)·[`ZoneWorld`](https://github.com/zlink-systems/zlink-java-examples/blob/main/samples/ZoneWorld/README.ko.md) 샘플 README에서 가져왔다. [예제 저장소](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.ko.md)를 내려받아 각 README의 「내려받기와 설치」·「빌드」·「실행」 절을 따라 실행하면 설명한 연결과 대상 선택을 재현할 수 있다.
-
 !!! info "이 장을 읽고 나면"
 
     각 구성이 어떤 연결을 열고, 누구를 대상으로 고르고, 언제 거부되는지 알 수 있다.
-    이 장의 코드는 저장소의 샘플과 튜토리얼에서 가져왔다.
+    이 장의 코드는 [예제 저장소의 tutorial](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.ko.md)과 [`TicTacToe`](https://github.com/zlink-systems/zlink-java-examples/blob/main/samples/TicTacToe/README.ko.md)·[`ZoneWorld`](https://github.com/zlink-systems/zlink-java-examples/blob/main/samples/ZoneWorld/README.ko.md) 샘플 README에서 가져왔으며, 각 README의 「내려받기와 설치」·「빌드」·「실행」 절을 따르면 연결과 대상 선택을 재현할 수 있다.
 
 [Channel 메시징](20-channel-messaging.ko.md)이 등록하고 호출하는 방법을 다뤘다면, 이 장은
 **왜 그렇게 되는지와 어디까지 되는지**를 다룬다. 패턴 사이의 차이, 대상 선택 규칙, 연결과
@@ -388,7 +386,7 @@ Store에서 읽어 결정하기 때문이다. channel 메시징만 사용하고 
 동작한다.
 
 등록 코드는 [Spot](21-spot.ko.md#2-location-store--spot-등록의-선행-조건)에, 운영 조회는
-[운영과 lifecycle](12-operations.ko.md#5-location-readiness와-운영-조회)에 있다.
+[운영과 lifecycle](12-operations.ko.md#6-location-readiness와-운영-조회)에 있다.
 
 **Location Store와 Relocation Store는 맡는 기록이 다르다.** Location Store는 작은 위치 기록의 원자적 변경을 맡고, Relocation Store는
 옮기고 난 뒤에 남는 기록 — Instance Spot을 처음 깨운 기록과 이동 뒤에 완료되는 요청의 종결
@@ -497,5 +495,5 @@ record로 남는다([모니터링](26-monitoring.ko.md)).
 - 이 장 코드의 실행본 — `framework/languages/dotnet/tutorial`
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

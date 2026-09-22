@@ -154,8 +154,8 @@ are implemented with the same RouteMesh/Spot/Instance Spot combination. Switchin
 means no new runtime to learn.
 
 > A Twitch-scale FPS's **ultra-low-latency snapshot netcode** uses unreliable transport that
-> tolerates loss. STREAM currently provides TCP/TLS/WS/WSS as transport, and **unreliable
-> transport (QUIC datagram/WebTransport) is planned.** Even for that kind of game, though,
+> tolerates loss. STREAM provides TCP/TLS/WS/WSS as transport; **QUIC datagram and WebTransport
+> are not STREAM transports.** Even for that kind of game, though,
 > matching/lobby/meta/social are handled by these approaches today. Exactly
 > where the line falls is covered in [Chapter 17](17-alternative.en.md) §4.
 
@@ -751,5 +751,5 @@ background is documented in
 - [The impact of the Akka License Change (Coralogix)](https://coralogix.com/blog/akka-license-change/)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

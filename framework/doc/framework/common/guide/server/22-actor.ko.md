@@ -1,11 +1,9 @@
 # Actor
 
-이 장의 코드는 [tutorial README](https://github.com/zlink-systems/zlink-<언어>-examples/blob/main/tutorial/README.ko.md)에서 가져왔다. [예제 저장소](https://github.com/zlink-systems/zlink-<언어>-examples/blob/main/tutorial/README.ko.md)를 내려받아 README의 「내려받기와 설치」·「빌드」·「실행」 절을 따라 실행하면 아래 실행 결과를 재현할 수 있다.
-
 !!! info "이 장을 읽고 나면"
 
     개체 하나를 id로 만들고, 그것에 메시지를 보내고 답을 받을 수 있다.
-    이 장의 코드는 `framework/languages/<언어>/tutorial`에서 그대로 실행된다.
+    이 장의 코드는 [예제 저장소의 tutorial README](https://github.com/zlink-systems/zlink-<언어>-examples/blob/main/tutorial/README.ko.md)에서 가져왔으며, README의 「내려받기와 설치」·「빌드」·「실행」 절을 따르면 아래 결과를 재현할 수 있다.
 
 [Spot](21-spot.ko.md)이 방·queue처럼 **여럿이 함께 사용하는 자리**를 다뤘다면, Actor는 플레이어
 하나, 세션 하나처럼 **개체 단위 상태**를 맡는다. 둘 다 id로 호출하고 한 번에 하나씩 처리하는
@@ -251,10 +249,9 @@ Entry Spot과 Actor factory를 같은 Object Server에 등록한다. actor type�
 Spot과 달리 **id를 호출하는 쪽이 정한다.** 플레이어 id처럼 이미 있는 값을 그대로 쓰기
 때문이다. 같은 id로 다시 호출하면 만들지 않고 있던 것을 돌려준다.
 
-tutorial의 `Server`는 `game` route mesh를 먼저 정의한다. mesh 이름은 Actor가 배치될 수 있는
-node 집합의 이름이고, `InMesh`는 만들 때 그 집합을 고른다. 등록 코드는
-[Channel 메시징의 받는 쪽](20-channel-messaging.ko.md#32-받는-쪽--channel을-담당하는-node)에 있고, 선택 규칙은
-[Location runtime §7](../../../common/spec/server/05-location-relocation/01-location-runtime.ko.md#7-actor와-user-spot을-만든다)이 정한다.
+tutorial의 `Server`는 `game` route mesh를 먼저 정의한다. mesh 이름은 Actor를 호스팅할 수 있는
+node 집합의 이름이고, Actor를 만들 때 `InMesh`에 지정한 mesh 안에서 호스팅할 node를 고른다. 등록 코드는
+[Channel 메시징의 받는 쪽](20-channel-messaging.ko.md#32-받는-쪽--channel을-담당하는-node)에 있다.
 
 === "C#/.NET"
 
@@ -436,8 +433,8 @@ curl http://127.0.0.1:5080/players/p7
 - 여럿이 함께 사용하는 자리 — [Spot](21-spot.ko.md)
 - 이름으로 호출하는 경로 — [Channel 메시징](20-channel-messaging.ko.md)
 - 이동과 membership — [Actor membership](35-actor-membership.ko.md)
-- 이 장 코드의 실행본 — `framework/languages/<언어>/tutorial`
+- 이 장 코드의 실행본 — [예제 저장소의 tutorial README](https://github.com/zlink-systems/zlink-<언어>-examples/blob/main/tutorial/README.ko.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

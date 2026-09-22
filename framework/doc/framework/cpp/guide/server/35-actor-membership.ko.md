@@ -178,7 +178,7 @@ message를 받은 이전 owner가 새 owner에게 대신 전달한다** — 보�
 **옮겨 가는 중에 보낸 요청도 원래 보낸 쪽에서 완료된다.** 도착 쪽이 만든 응답은 원래 보낸 쪽으로
 연결되고, timeout은 보낸 쪽의 기존 경로를 그대로 따르며, 늦게 도착한 응답은 버린다. 이동 중에
 응답을 기다리는 요청 수는 runtime metric으로 관측한다 —
-[운영과 lifecycle](12-operations.ko.md#1-런타임-메트릭)이 그 자리다.
+[운영과 lifecycle](12-operations.ko.md#2-런타임-메트릭)이 그 자리다.
 
 ## 7. 관련 문서
 
@@ -188,5 +188,5 @@ message를 받은 이전 owner가 새 owner에게 대신 전달한다** — 보�
 - 실행 위치를 옮기는 또 다른 절차 — [Relocation](37-relocation.ko.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

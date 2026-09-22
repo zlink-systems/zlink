@@ -23,7 +23,7 @@ View in another language — [C++](../../../cpp/guide/server/16-options.en.md) �
     You learn what you can set, what value applies when you do not set it, and which values can
     still be changed after the host has started.
 
-Option names and defaults are the same in all five languages. What differs is the spelling and
+Option names and defaults are the same across supported languages. What differs is the spelling and
 the way you set them, and the tabs in each section show that. **Most options work without being
 set.** Check the default on the line that matters when you have a reason to change it, and use
 it as it is until then.
@@ -87,7 +87,7 @@ startup.**
 
 Core HWM limits the bytes held by the ordinary queues, and the Application job queue limits the
 number of jobs waiting for a handler to start across the whole host. How both behave is covered
-by [Backpressure](33-backpressure.en.md#1-core-hwm-and-the-application-job-queue).
+by [Backpressure](33-backpressure.en.md#2-core-hwm-and-the-application-job-queue).
 
 | Option | What it sets | Default |
 | --- | --- | --- |
@@ -220,7 +220,7 @@ runtimeOptions.channel("room").weight(0);
 Both values range over `0..10000` and default to 100. Setting `0` **stops new assignments only**
 — existing objects and connections are kept. In a zero-downtime rollout, use it to keep new
 traffic away from this node before starting a relocation
-([Operations and Lifecycle](12-operations.en.md#4-wiring-operational-calls-and-readiness)).
+([Operations and Lifecycle](12-operations.en.md#5-wiring-operational-calls-and-readiness)).
 
 ## 10. Values That Must Be Set
 

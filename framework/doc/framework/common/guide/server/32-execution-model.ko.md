@@ -1,11 +1,10 @@
 # 실행 모델
 
-이 장의 코드는 [`Bingo` 샘플 README](https://github.com/zlink-systems/zlink-<언어>-examples/blob/main/samples/Bingo/README.ko.md)에서 가져왔다. [예제 저장소](https://github.com/zlink-systems/zlink-<언어>-examples/blob/main/samples/Bingo/README.ko.md)를 내려받아 README의 「내려받기와 설치」·「빌드」·「실행」 절을 따라 실행하면 아래 실행 모델 예제를 재현할 수 있다.
-
 !!! info "이 장을 읽고 나면"
 
     한 Spot 안에서 무엇이 함께 실행되고 무엇이 줄을 서는지, 그 경계를 무엇이 정하는지 알 수
-    있다. 이 장의 코드는 Bingo 샘플에서 가져왔다.
+    있다.
+    이 장의 코드는 [예제 저장소의 Bingo 샘플 README](https://github.com/zlink-systems/zlink-<언어>-examples/blob/main/samples/Bingo/README.ko.md)에서 가져왔으며, README의 「내려받기와 설치」·「빌드」·「실행」 절을 따르면 실행 모델 예제를 재현할 수 있다.
 
 [Spot](21-spot.ko.md)과 [Actor](22-actor.ko.md)는 "자기 앞으로 온 일을 한 번에 하나씩
 처리한다"로 요약했다. 이 장은 그 문장이 어디까지 참인지 다룬다 — 어떤 작업이 같은 줄에 서고,
@@ -185,5 +184,5 @@ request·worker와 같은 call에서는 언어별 terminator 이름이 다음과
 - 도착이 처리보다 빠를 때 — [Backpressure](33-backpressure.ko.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

@@ -267,7 +267,7 @@ chapter.
 **Completion has two consistent forms.** A send-family call finishes with
 no return value once **the send slot accepts it**, and a request-family call finishes with
 one of **reply · timeout · route error**. This holds no matter which surface you use
-([33-backpressure §3](33-backpressure.en.md#3-backpressure-visible-in-the-api)).
+([33-backpressure §3](33-backpressure.en.md#4-backpressure-visible-in-the-api)).
 
 ## 8. Naming Convention
 
@@ -325,5 +325,5 @@ Policy for an edge exposed directly to the internet is owned by whatever sits in
 - Runnable sample code: [14-samples](14-samples.en.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

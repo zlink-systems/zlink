@@ -114,7 +114,7 @@ them, a team picks its genre's pattern and rebuilds that structure from the sock
 
 | Difficulty | ZLink feature | Details |
 | --- | --- | --- |
-| Building a genre's topology from raw sockets | **Declare topology by combining channels** — 1:N request/response, fan-out, a node-addressed route mesh, a room-scoped spot mesh, all composed in a few lines of registration; the location store keeps connections up automatically | [§3 Architecture](#33-layering-and-registration-points) · [05](20-channel-messaging.en.md)·[06](21-spot.en.md)·[10](25-location.en.md) |
+| Building a genre's topology from raw sockets | **Declare topology by combining channels** — 1:N request/response, fan-out, a node-addressed route mesh, a room-scoped spot mesh, all composed in a few lines of registration; the location store keeps connections up automatically | [Layering and Registration Points](#33-layering-and-registration-points) · [05](20-channel-messaging.en.md)·[06](21-spot.en.md)·[10](25-location.en.md) |
 | Locks/contention on in-memory state | **SPOT serial execution** — every message for one room enters its Spot queue and runs in order. Locks disappear from business logic | The code below · [06](21-spot.en.md) |
 | Implementing socket framing/session lifetime directly | **STREAM** — the framework owns connection lifetime, framing, and packet codec (TCP/TLS/WS/WSS) | [09](23-stream.en.md) |
 | Tracking a reconnected user's location | **Actor binding** — a new connection after reconnect picks up the same actor | [08](24-actor-session.en.md) |
@@ -154,8 +154,8 @@ are implemented with the same RouteMesh/Spot/Instance Spot combination. Switchin
 means no new runtime to learn.
 
 > A Twitch-scale FPS's **ultra-low-latency snapshot netcode** uses unreliable transport that
-> tolerates loss. STREAM currently provides TCP/TLS/WS/WSS as transport, and **unreliable
-> transport (QUIC datagram/WebTransport) is planned.** Even for that kind of game, though,
+> tolerates loss. STREAM provides TCP/TLS/WS/WSS as transport; **QUIC datagram and WebTransport
+> are not STREAM transports.** Even for that kind of game, though,
 > matching/lobby/meta/social are handled just fine today by these four approaches. Exactly
 > where the line falls is covered in [Chapter 17](17-alternative.en.md) §4.
 
@@ -479,7 +479,7 @@ The difference in the amount of code needed to wire up the same "inter-server
 request/response."
 
 **Directly with raw bindings (conceptual)** — not runnable code, but the list of work a
-direct implementation would require. All five languages face the same list, so it isn't
+direct implementation would require. Every supported language faces the same list, so it isn't
 split into language tabs.
 
 ```text
@@ -673,5 +673,5 @@ The guide uses the following notation consistently throughout.
 ---
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

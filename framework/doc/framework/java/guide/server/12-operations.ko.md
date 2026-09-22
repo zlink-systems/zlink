@@ -27,7 +27,7 @@ title: "12. 운영 — 런타임 메트릭 · graceful drain · readiness · Jav
 > 소유한다.
 > 이 챕터는 운영 환경에서 실제로 무엇을 붙이고 무엇을 선언하는지 사용법 중심으로 다룬다.
 
-## 0. 제공하는 기능
+## 1. 제공하는 기능
 
 서비스를 운영에 올리면 `11. Monitoring` 장의 이벤트 관측 외에 다음 항목이
 더 필요하다.
@@ -49,7 +49,7 @@ framework는 메트릭 계기와 host 종료 시의 drain 절차를 제공한다
 | Shutdown | 새 relocation 없이 local resource를 bounded cleanup하는 operation |
 | readiness probe | "새 요청을 받아도 되는가"를 묻는 배포 인프라의 상태 확인 |
 
-## 1. 런타임 메트릭
+## 2. 런타임 메트릭
 
 framework는 `"zlink.framework"` 하나를 정식 meter 이름으로 삼아
 모든 계기를 방출한다. application은 이 정식 meter 이름을 수집 파이프라인에 등록한다.
@@ -122,7 +122,7 @@ Metrics.addRegistry(prometheusRegistry);
 | `zlink.host.shutdown.duration` | Host `shutdown` 시작부터 terminal result까지의 시간 |
 | `zlink.host.shutdown.forced` | Bounded teardown으로 끝난 host `shutdown` 수 |
 
-### 1.1 capacity snapshot과 measurement reset
+### 2.1 capacity snapshot과 measurement reset
 
 Host runtime의 capacity snapshot은 Core HWM과 Application Job Queue 상태를 함께 제공한다.
 시작 시 고정한 구성·유효 limit과 현재·peak accounted byte, 예약·대기·사용 중 permit,
@@ -139,7 +139,7 @@ fixture 안에서만 기록한다. 정확한 snapshot·reset 규칙은
 metric 이름·단위·label은
 [runtime 메트릭](../../../common/spec/server/06-observability/02-runtime-metrics.ko.md)이 소유한다.
 
-## 2. Relocate — 상태를 유지한 채 다른 host로 옮기기
+## 3. Relocate — 상태를 유지한 채 다른 host로 옮기기
 
 `relocate(...)`는 이 host에서 살아 있는 User Spot·Instance Spot·Actor를 다른 Serving node로
 옮긴다. Host 전체를 대상으로 하는 operation이며, 이 호출 자체가 host를 종료하지는 않는다.
@@ -154,7 +154,7 @@ factory에 등록한 adapter가 담아 옮긴다. 무엇이 남고 절차가 어
 **호출할 수 없는 경우.** 받을 수 있는 대상이 없으면 이 host의 상태를 바꾸지 않고 막힘으로
 끝난다. 이미 옮기는 중이거나 종료 중이면 새 호출을 받지 않는다.
 
-### 2.1 옮기는 단위
+### 3.1 옮기는 단위
 
 무엇을 하나로 묶어 옮기는지는 Spot 종류와 execution mode가 정한다 —
 [Relocation](37-relocation.ko.md#4-execution-mode가-정하는-이동-단위)이 그 구분을 다룬다.
@@ -166,7 +166,7 @@ factory에 등록한 adapter가 담아 옮긴다. 무엇이 남고 절차가 어
 Actor를 각각 옮기는 User Spot은 Spot 자체가 옮길 상태를 갖지 않으므로, 그 factory는
 도착 쪽에서 새로 만드는 정책만 사용할 수 있다. 소속 Actor의 정책은 각 Actor factory가 따로 정한다.
 
-### 2.2 이동 state 전송 설정
+### 3.2 이동 state 전송 설정
 
 이동 state는 source–target mesh 연결로 chunk 단위로 전송되며, 같은 연결의 일반
 message 전송이 지연되지 않도록 다음 server 설정으로 조정한다. 기본값으로 시작해도
@@ -184,7 +184,7 @@ Actor·Spot은 message를 정상적으로 처리한다 — 예산 때문에 시�
 크기는 없다. Chunk 형식·검증 규약 같은 내부 protocol은
 [Relocation Flow](../../../common/spec/server/05-location-relocation/04-relocation-flow.ko.md)가 다룬다.
 
-### 2.3 SafeToShutdown — 종료해도 안전한 시점
+### 3.3 SafeToShutdown — 종료해도 안전한 시점
 
 `Relocated`는 source가 cutover 전송을 마쳤다는 뜻이지, 이전 route를 cache한 호출자가
 모두 새 owner를 향하게 됐다는 뜻이 아니다. Source runtime은 모든 unit의 Message Follow를
@@ -201,9 +201,9 @@ Message Follow route를 제거할 수 있을 때까지). Cutover를 기다리다
 fallback 횟수는 `cutover_timeout` counter로 게시된다. 지표 이름·단위·label은
 [runtime 메트릭](../../../common/spec/server/06-observability/02-runtime-metrics.ko.md)이 소유한다.
 
-## 3. Shutdown — 옮기지 않고 종료하기
+## 4. Shutdown — 옮기지 않고 종료하기
 
-`shutdown(...)`는 이 host를 종료한다. [Relocate](#2-relocate--상태를-유지한-채-다른-host로-옮기기)와 달리 **상태를 다른 node로 옮기지 않는다.**
+`shutdown(...)`는 이 host를 종료한다. [Relocate](#3-relocate--상태를-유지한-채-다른-host로-옮기기)와 달리 **상태를 다른 node로 옮기지 않는다.**
 
 호출하면 새 relocation을 시작하지 않고, 진행 중인 작업을 주어진 deadline 안에서 끝내거나
 실패로 확정한다. 그다음 Entry·User·Instance Spot에 `onClosing`를 `HostShutdown` reason으로
@@ -212,19 +212,19 @@ fallback 횟수는 `cutover_timeout` counter로 게시된다. 지표 이름·단
 
 여기서 정리되는 Spot의 state는 남지 않는다. 배포 자동화가 상태를 살려서 내려야 한다면 종료
 전에 `relocate(...)`를 먼저 호출하고 그 결과가 `Relocated`인지 확인한 뒤 이 호출로
-넘어간다([운영 호출과 readiness 연결](#4-운영-호출과-readiness-연결)의 예제). 가능하면 `safeToShutdown` 게시까지 확인한다([SafeToShutdown](#23-safetoshutdown--종료해도-안전한-시점)).
+넘어간다([운영 호출과 readiness 연결](#5-운영-호출과-readiness-연결)의 예제). 가능하면 `safeToShutdown` 게시까지 확인한다([SafeToShutdown](#24-safetoshutdown--종료해도-안전한-시점)).
 
 Spot의 수명은 request와 무관하다. 일반 request가 끝났다는 이유만으로 User·Instance Spot을 닫지
 않는다. 없는 Instance Spot을 준비시키는 것도 마찬가지로 별도 address나 manager create가 아니라,
 SpotId direct 호출에 Instance intent를 붙였을 때만 시작한다([Spot](21-spot.ko.md)).
 
-## 4. 운영 호출과 readiness 연결
+## 5. 운영 호출과 readiness 연결
 
 앞의 두 operation은 자동으로 일어나지 않는다. Application이 framework runtime으로 직접
 호출한다. 이 interface는 host maintenance를 소유하는 DI singleton이다.
 
 배포에서 사용하는 순서는 "먼저 옮기고, 성공했으면 종료한다"다. `Relocated`를 확인한 뒤
-`safeToShutdown` 게시([SafeToShutdown](#23-safetoshutdown--종료해도-안전한-시점))까지 관찰하고 종료하면 이전 route를 cache한 호출자의 실패를
+`safeToShutdown` 게시([SafeToShutdown](#24-safetoshutdown--종료해도-안전한-시점))까지 관찰하고 종료하면 이전 route를 cache한 호출자의 실패를
 피할 수 있다.
 
 ```java
@@ -263,7 +263,7 @@ Kubernetes 배포에 연결하면 다음 개념이 된다.
 # preStop hook + terminationGracePeriodSeconds ≥ drain deadline — 자동 drain이 끝날 시간을 확보
 ```
 
-### 4.1 다시 부르거나 겹쳐 불렀을 때
+### 5.1 다시 부르거나 겹쳐 불렀을 때
 
 배포 자동화는 실패하면 재시도한다. 그래서 **같은 호출을 두 번 하면 어떻게 되는지**가
 계약으로 정해져 있다.
@@ -288,7 +288,7 @@ Kubernetes 배포에 연결하면 다음 개념이 된다.
 `shutdown`이 deadline 안에 끝나지 않으면 제한된 정리만 하고 강제 종료 결과로 끝난다.
 deadline 초과와 callback 실패는 서로 다른 결과값으로 구분된다.
 
-### 4.2 전이 중에도 살아 있는 것
+### 5.2 전이 중에도 살아 있는 것
 
 `Relocating` · `Relocated` · `Draining`은 "아무것도 안 받는 상태"가 아니다. **새로
 시작하는 것만 막고 이미 수락한 것은 끝까지 처리한다.**
@@ -304,7 +304,7 @@ deadline 초과와 callback 실패는 서로 다른 결과값으로 구분된다
 **monitoring이나 observer callback은 종료를 붙잡지 않는다.** 상태를 관찰하는 코드가
 오래 돌아도 maintenance가 그것을 기다리지 않는다.
 
-## 5. Location readiness와 운영 조회
+## 6. Location readiness와 운영 조회
 
 운영 코드는 location readiness 표면으로 필요한 peer가 Ready인지 확인한다. 전체 상태와 paged
 topology는 location runtime query로 조회한다.
@@ -327,7 +327,7 @@ boolean objectPeerReady = readiness
 relocation record는 Framework 내부 정보이므로 반환하지 않는다. `NodeRid`는 실제 transport node를
 운영 정보와 대응할 때만 사용한다.
 
-## 6. MeshNode runtime 제어와 관측
+## 7. MeshNode runtime 제어와 관측
 
 RouteMesh로 등록한 MeshNode는 runtime 옵션과 상태 조회 표면으로 운영한다 — 등록 호출과 주입 이름은 언어를 따른다.
 
@@ -357,7 +357,7 @@ boolean ready = meshRuntime.isReady("game.room");
 meshRuntime.observe("game.room", 64).subscribe(subscriber);
 ```
 
-## 7. Host lifecycle
+## 8. Host lifecycle
 
 Framework runtime은 host의 **수명주기 서비스**로 시작·종료에 묶인다.
 channel·SPOT·STREAM runtime은 startup에서 등록한 역할을 보고 생성되어 shutdown에서
@@ -372,7 +372,7 @@ channel·SPOT·STREAM runtime은 startup에서 등록한 역할을 보고 생성
   runtime 정리 순으로 내려간다.
 - 백그라운드 작업은 host의 표준 수명주기 서비스로 같은 수명주기에 편입시킨다.
 
-### 7.1 상태 관측
+### 8.1 상태 관측
 
 Host `relocate`·`shutdown` 상태 전이는 framework runtime의 bounded status stream에서 관측한다. MeshName별
 runtime은 component snapshot을 제공하지만 별도 termination authority나 partial drain operation을 만들지 않는다.
@@ -390,11 +390,11 @@ runtime.observe().subscribe(new Flow.Subscriber<ZLinkObservedStatus<ZLinkFramewo
 });
 ```
 
-host lifecycle 상태 일곱(preparing · serving · relocating · relocated · draining ·
+host lifecycle 상태(preparing · serving · relocating · relocated · draining ·
 stopped · error)을 그대로 관측한다. 표기는 언어를 따른다. Status의 relocation·termination 결과는 해당 operation의 terminal 결과와 같아야 한다.
-수치로 보려면 [런타임 메트릭](#1-런타임-메트릭)의 `zlink.host.*` 계기를 사용한다.
+수치로 보려면 [런타임 메트릭](#2-런타임-메트릭)의 `zlink.host.*` 계기를 사용한다.
 
-## 8. 관련 문서
+## 9. 관련 문서
 
 - 이 챕터 계약의 실행 검증 예문: [주요 타입 사용 색인](13-interface-catalog.ko.md) — 검증 클래스 `FrameworkRuntimeContracts`
 - 정식 계약: [Host relocation 전체 흐름](../../../common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md) · [Runtime Metrics](../../../common/spec/server/06-observability/02-runtime-metrics.ko.md)
@@ -402,5 +402,5 @@ stopped · error)을 그대로 관측한다. 표기는 언어를 따른다. Stat
 - relocation 경계를 application이 정하는 Spot: [상태를 담는 시점](37-relocation.ko.md#3-상태를-담는-시점--factory-등록이-정한다)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

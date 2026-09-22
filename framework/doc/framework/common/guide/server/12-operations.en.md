@@ -9,7 +9,7 @@
 > This chapter focuses on usage — what you actually wire up and declare in an operational
 > environment.
 
-## 0. What It Provides
+## 1. What It Provides
 
 Once a service is in production, you need the following in addition to the event observation
 covered in the `11. Monitoring` chapter.
@@ -34,7 +34,7 @@ Terms that appear for the first time:
 | Shutdown | The operation that performs bounded cleanup of local resources with no new relocation |
 | Readiness probe | The deployment infrastructure's status check asking "is it OK to accept new requests" |
 
-## 1. Runtime Metrics
+## 2. Runtime Metrics
 
 The framework emits every instrument through one `System.Diagnostics.Metrics.Meter` named
 `"zlink.framework"`. The app registers this canonical meter name in its collection pipeline.
@@ -151,7 +151,7 @@ instruments by
 | `zlink.host.shutdown.duration` | Time from starting Host `Shutdown` to the terminal result |
 | `zlink.host.shutdown.forced` | Count of host `Shutdown` calls that ended via bounded teardown |
 
-### 1.1 Capacity Snapshot and Measurement Reset
+### 2.1 Capacity Snapshot and Measurement Reset
 
 The host runtime's capacity snapshot exposes the Core HWM and Application Job Queue status
 together. Use it to correlate the fixed startup configuration and effective limits with
@@ -171,7 +171,7 @@ reset rules are in
 and the metric names, units, and labels are in
 [Runtime metrics](../../../common/spec/server/06-observability/02-runtime-metrics.en.md).
 
-## 2. Relocate — Moving to Another Host While Keeping State
+## 3. Relocate — Moving to Another Host While Keeping State
 
 `Relocate(...)` moves every User Spot, Instance Spot, and Actor alive on this host to another
 Serving node. It's an operation that targets the whole host, and the call itself doesn't
@@ -188,7 +188,7 @@ is safe to terminate.
 **When it cannot be called.** With no eligible destination it ends as blocked without changing this
 host's state. While a move or a shutdown is already under way, a new call is not accepted.
 
-### 2.1 The Unit That Moves
+### 3.1 The Unit That Moves
 
 What is bundled into one unit is decided by the Spot kind and the execution mode —
 [Relocation](37-relocation.en.md#4-the-unit-the-execution-mode-decides) covers that split. For
@@ -202,7 +202,7 @@ A User Spot whose Actors move individually is a shell that carries no state itse
 can only use the policy that creates it fresh on the destination. Each member Actor's factory
 decides its own policy separately.
 
-### 2.2 Moving-State Transfer Settings
+### 3.2 Moving-State Transfer Settings
 
 The moving state travels over the source–target mesh connection in chunks, and four server
 settings keep it from crowding out ordinary messages on the same connection. The defaults
@@ -222,7 +222,7 @@ start because of the budget. Internal protocol details such as the chunk format 
 verification rules are covered by
 [Relocation Flow](../../../common/spec/server/05-location-relocation/04-relocation-flow.en.md).
 
-### 2.3 SafeToShutdown — When It's Safe to Terminate
+### 3.3 SafeToShutdown — When It's Safe to Terminate
 
 `Relocated` means the source finished sending its cutovers, not that every caller caching
 the old route now points at the new owner. The source runtime publishes the
@@ -241,7 +241,7 @@ be removed). The number of fallbacks that proceeded unverified after waiting for
 is published as the `cutover_timeout` counter. Metric names, units, and labels are owned by
 [Runtime Metrics](../../../common/spec/server/06-observability/02-runtime-metrics.en.md).
 
-## 3. Shutdown — Terminating Without Moving
+## 4. Shutdown — Terminating Without Moving
 
 `Shutdown(...)` terminates this host. Unlike §2, **it doesn't move state to another node.**
 
@@ -260,7 +260,7 @@ because an ordinary request finished. Likewise, preparing a nonexistent Instance
 starts from a separate address or manager create — only from attaching Instance intent to a
 SpotId direct call ([Spot](21-spot.en.md) §5).
 
-## 4. Wiring Operational Calls and Readiness
+## 5. Wiring Operational Calls and Readiness
 
 The two operations above don't happen automatically. The application calls them directly on
 the framework runtime. This interface is a DI singleton that owns host maintenance.
@@ -417,7 +417,7 @@ In a Kubernetes deployment, the setup looks like this.
 # preStop hook + terminationGracePeriodSeconds >= drain deadline — allows time for auto-drain to finish
 ```
 
-### 4.1 Calling It Again or Overlapping Calls
+### 5.1 Calling It Again or Overlapping Calls
 
 Deployment automation retries on failure. So **what happens when you make the same call
 twice** is defined by contract.
@@ -444,7 +444,7 @@ If `Shutdown` doesn't finish within its deadline, it performs only bounded clean
 in a forced-termination result. A deadline overrun and a callback failure are distinguished
 by different result values.
 
-### 4.2 What Stays Alive During a Transition
+### 5.2 What Stays Alive During a Transition
 
 `Relocating`, `Relocated`, and `Draining` aren't "accepting nothing" states. **Only starting
 something new is blocked — what's already accepted is processed through to completion.**
@@ -460,7 +460,7 @@ something new is blocked — what's already accepted is processed through to com
 **Monitoring or observer callbacks never hold up termination.** Even if code observing
 status runs for a long time, maintenance never waits for it.
 
-## 5. Location Readiness and Operational Queries
+## 6. Location Readiness and Operational Queries
 
 Operational code uses the location readiness API to check whether a needed peer is Ready.
 It uses the location runtime query for overall status and paged topology.
@@ -556,7 +556,7 @@ authority versions, owner tokens, and relocation records are internal Framework 
 and aren't returned. `NodeRid` is used only to map operational info back to the actual
 transport node.
 
-## 6. MeshNode Runtime Control and Observation
+## 7. MeshNode Runtime Control and Observation
 
 A MeshNode registered with `AddRouteMesh` is operated through two DI singletons.
 
@@ -688,7 +688,7 @@ component event stream for one mesh. Host termination is owned by the framework 
     ```
 
 
-## 7. Host Lifecycle
+## 8. Host Lifecycle
 
 The Framework runtime is tied to the host's start/stop as its **lifecycle service.** The
 channel/SPOT/STREAM runtime is created based on the roles registered at startup, and cleaned
@@ -703,7 +703,7 @@ up at shutdown.
   service `stop()` → channel/SPOT/STREAM runtime cleanup.
 - Fold background work into the same lifecycle using the host's standard lifecycle service.
 
-### 7.1 Observing Status
+### 8.1 Observing Status
 
 Host `Relocate`/`Shutdown` state transitions are observed through the framework runtime's
 bounded status stream. The per-MeshName runtime provides a component snapshot, but doesn't
@@ -776,12 +776,12 @@ create a separate termination authority or partial-drain operation.
     ```
 
 
-Observe the seven host lifecycle states as-is (preparing, serving, relocating, relocated,
+Observe the host lifecycle states as-is (preparing, serving, relocating, relocated,
 draining, stopped, error). The notation follows the language. The status's relocation/
 termination results must match that operation's terminal result. To view it as numbers, use
 the `zlink.host.*` instruments from §1.
 
-## 8. Related Documents
+## 9. Related Documents
 
 - Runnable verification examples for this chapter's contract: `13. Interface Catalog`
   chapter §7 — the verification class `FrameworkRuntimeContracts`
@@ -793,5 +793,5 @@ the `zlink.host.*` instruments from §1.
   [06-spot §7](37-relocation.en.md#3-when-state-is-captured--the-factory-registration-decides)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

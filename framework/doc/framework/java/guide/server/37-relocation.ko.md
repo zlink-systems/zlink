@@ -91,12 +91,12 @@ handler 한 번·tick 한 번은 각각 하나의 [turn](32-execution-model.ko.m
 | Framework가 정함(기본) | 이동 요청 뒤 지금 turn이 끝난 순간 | message 하나가 상태 변경 하나인 Spot(채팅방) |
 | application이 신호함 | `RelocationReady().Defer()`를 부른 turn이 끝난 순간 | 여러 turn이 한 단위인 Spot(FPS 라운드) |
 
-**기본 모드.** 이동 요청이 오면 Framework는 지금 turn이 끝나기를 기다렸다가 그 틈에 adapter를
-부른다. message 하나가 상태 변경 하나인 Spot, 예를 들어 채팅방에서는 그 틈의 상태가 항상 온전하다.
+**기본 모드.** 이동 요청이 오면 Framework는 현재 turn 처리가 끝난 직후 adapter를 호출한다. message
+하나가 상태 변경 하나인 Spot, 예를 들어 채팅방에서는 그 틈의 상태가 항상 온전하다.
 
 **application 신호 모드.** FPS 라운드처럼 시작 tick·여러 입력 packet·정산 tick이 한 단위이면, 그
 사이 turn 경계의 상태는 반쯤 진행된 라운드다. factory 등록에서 이 모드를 고르고 단위를 닫는 handler
-안에서 `RelocationReady().Defer()`를 부른다. 이는 "이 turn이 끝나면 담아도 된다"는 신호다. 신호한
+안에서 `RelocationReady().Defer()`를 호출한다. 이는 "이 turn이 끝나면 담아도 된다"는 신호다. 신호한
 turn이 끝날 때까지 새 turn은 계속 실행되고 상태도 바뀐다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/37-relocation-capture.html" title="이동 요청에서 상태를 담는 시점" loading="lazy" style="width:100%;border:0"></iframe>
@@ -145,5 +145,5 @@ application이 신호하는 모드는 `SpotWide` User Spot에서만 사용할 �
 - 운영에서 호출하는 API — [운영과 lifecycle](12-operations.ko.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

@@ -102,9 +102,9 @@ factory registration.
 | Framework-managed (default) | The instant the current turn ends after a move request | A Spot where one message is one state change (a chat room) |
 | Application-signaled | The instant the turn that called `RelocationReady().Defer()` ends | A Spot whose unit spans several turns (an FPS round) |
 
-**Default mode.** When a move request arrives, the Framework waits for the current turn to end and
-calls the adapter in that gap. For a Spot where one message is one state change, such as a chat
-room, the state in that gap is always whole.
+**Default mode.** When a move request arrives, the Framework calls the adapter immediately after
+the current turn ends. For a Spot where one message is one state change, such as a chat room, the
+state in that gap is always whole.
 
 **Application-signaled mode.** An FPS round may consist of a start tick, many input packets, and a
 settlement tick, so its state between those turns is a half-finished round. Choose this mode when
@@ -190,5 +190,5 @@ deadline ends it as force-stopped.
 - The call operations makes — [12-operations](12-operations.en.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

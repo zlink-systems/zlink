@@ -25,7 +25,7 @@ View in another language — **C++** · [C#/.NET](../../../dotnet/guide/server/5
     and through compensation when a step fails. The code in this chapter runs as it stands in
     `framework/languages/cpp/samples/ShoppingMall`.
 
-[Picking a Sample](14-samples.en.md#6-shoppingmall--building-an-order-processing-system) introduced
+[Picking a Sample](14-samples.en.md#7-shoppingmall--building-an-order-processing-system) introduced
 what this sample demonstrates. This chapter is what you read after that introduction — the roles and
 where their code lives, the message flow of the main scenarios, and, for each flow, the framework
 feature it uses and the chapter that explains it, in the order the source is laid out. This chapter
@@ -242,5 +242,5 @@ projection rebuild. The checks and the exact log strings are set by the
   [Reading Along: GameQuest](55-gamequest.en.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

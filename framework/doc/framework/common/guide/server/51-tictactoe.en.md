@@ -6,7 +6,7 @@
     creates a room to the point where both players leave and their Actors are destroyed. The code
     in this chapter runs as it stands in `framework/languages/<language>/samples/TicTacToe`.
 
-[Picking a Sample](14-samples.en.md#2-tictactoe--building-a-real-time-head-to-head-game-server)
+[Picking a Sample](14-samples.en.md#3-tictactoe--building-a-real-time-head-to-head-game-server)
 introduced what this sample demonstrates. This chapter is what you read after that introduction —
 the roles and where their code lives, the message flow of the main scenarios, and, for each flow, the
 framework feature it uses and the chapter that explains it, in the order the source is laid out.
@@ -811,5 +811,5 @@ Actor's room leave and Entry Spot destroy. The checks and the exact log strings 
   server: [Reading Along: Bingo](50-bingo.en.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>
