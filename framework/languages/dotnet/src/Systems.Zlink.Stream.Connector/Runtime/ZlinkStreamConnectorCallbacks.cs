@@ -23,9 +23,10 @@ internal sealed class ZlinkStreamConnectorCallbacks(
     > _errorReceived = new();
 
     private bool _accepting = true;
+    private int _admittedDispatchCount;
     private int _boundedDispatchCount;
     private int _pendingDispatchCount;
-    private TaskCompletionSource _dispatchSpaceAvailable = NewDispatchSpaceSignal();
+    private int _waitingBoundedDispatchCount;
 
     public int PendingDispatchCount => Volatile.Read(ref _pendingDispatchCount);
 
@@ -38,10 +39,13 @@ internal sealed class ZlinkStreamConnectorCallbacks(
         lock (_dispatchGate)
         {
             _accepting = false;
+            foreach (var queued in _dispatchQueue)
+                queued.StopWaiting();
             _dispatchQueue.Clear();
+            _admittedDispatchCount = 0;
             _boundedDispatchCount = 0;
+            _waitingBoundedDispatchCount = 0;
             Volatile.Write(ref _pendingDispatchCount, 0);
-            SignalDispatchSpaceLocked();
         }
 
         _connectionStateChanged.Clear();
@@ -188,13 +192,19 @@ internal sealed class ZlinkStreamConnectorCallbacks(
                 if (_dispatchQueue.First is not { } first)
                     return;
                 queued = first.Value;
+                if (!queued.IsAdmitted)
+                    throw new InvalidOperationException(
+                        "The first dispatch callback must be admitted."
+                    );
                 _dispatchQueue.RemoveFirst();
+                queued.Node = null;
+                _admittedDispatchCount--;
                 if (queued.CountsAgainstLimit)
                 {
                     _boundedDispatchCount--;
-                    SignalDispatchSpaceLocked();
+                    AdmitNextWaitingCallbackLocked();
                 }
-                Volatile.Write(ref _pendingDispatchCount, _dispatchQueue.Count);
+                Volatile.Write(ref _pendingDispatchCount, _admittedDispatchCount);
             }
             await InvokeUserCallbackAsync(queued.Callback, cancellationToken, queued.ReportErrors)
                 .ConfigureAwait(false);
@@ -272,7 +282,14 @@ internal sealed class ZlinkStreamConnectorCallbacks(
         }
         catch (Exception ex) when (reportErrors)
         {
-            await ReportUserCallbackErrorAsync(ex, cancellationToken).ConfigureAwait(false);
+            var report = ReportUserCallbackErrorAsync(ex, cancellationToken);
+            if (dispatchMode == ZlinkStreamDispatchMode.Immediate)
+            {
+                await report.ConfigureAwait(false);
+                return;
+            }
+            if (!report.IsCompletedSuccessfully)
+                _ = report.AsTask();
         }
         catch { }
     }
@@ -316,8 +333,10 @@ internal sealed class ZlinkStreamConnectorCallbacks(
         {
             if (!_accepting)
                 return;
-            _dispatchQueue.AddLast(new QueuedCallback(callback, true, false));
-            Volatile.Write(ref _pendingDispatchCount, _dispatchQueue.Count);
+            var queued = new QueuedCallback(callback, true, false, isAdmitted: true);
+            queued.Node = _dispatchQueue.AddLast(queued);
+            _admittedDispatchCount++;
+            Volatile.Write(ref _pendingDispatchCount, _admittedDispatchCount);
         }
     }
 
@@ -327,42 +346,94 @@ internal sealed class ZlinkStreamConnectorCallbacks(
         CancellationToken cancellationToken
     )
     {
-        while (true)
+        QueuedCallback queued;
+        lock (_dispatchGate)
         {
-            Task waitForSpace;
+            if (!_accepting)
+                return;
+            var admitNow =
+                _boundedDispatchCount < maxPendingDispatchCallbacks
+                && _waitingBoundedDispatchCount == 0;
+            queued = new QueuedCallback(callback, reportErrors, true, admitNow);
+            queued.Node = _dispatchQueue.AddLast(queued);
+            if (admitNow)
+            {
+                _boundedDispatchCount++;
+                _admittedDispatchCount++;
+            }
+            else
+                _waitingBoundedDispatchCount++;
+            Volatile.Write(ref _pendingDispatchCount, _admittedDispatchCount);
+        }
+
+        if (queued.IsAdmitted)
+            return;
+
+        try
+        {
+            await queued.Admission.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
             lock (_dispatchGate)
             {
-                if (!_accepting)
+                if (queued.IsAdmitted)
                     return;
-                if (_boundedDispatchCount < maxPendingDispatchCallbacks)
+                if (queued.Node?.List is not null)
                 {
-                    _dispatchQueue.AddLast(new QueuedCallback(callback, reportErrors, true));
-                    _boundedDispatchCount++;
-                    Volatile.Write(ref _pendingDispatchCount, _dispatchQueue.Count);
-                    return;
+                    _dispatchQueue.Remove(queued.Node);
+                    queued.Node = null;
+                    _waitingBoundedDispatchCount--;
                 }
-                waitForSpace = _dispatchSpaceAvailable.Task;
             }
-
-            await waitForSpace.WaitAsync(cancellationToken).ConfigureAwait(false);
+            throw;
         }
     }
 
-    private void SignalDispatchSpaceLocked()
+    private void AdmitNextWaitingCallbackLocked()
     {
-        var signal = _dispatchSpaceAvailable;
-        _dispatchSpaceAvailable = NewDispatchSpaceSignal();
-        signal.TrySetResult();
+        if (_waitingBoundedDispatchCount == 0)
+            return;
+        for (var node = _dispatchQueue.First; node is not null; node = node.Next)
+        {
+            var queued = node.Value;
+            if (queued.IsAdmitted || !queued.CountsAgainstLimit)
+                continue;
+            _waitingBoundedDispatchCount--;
+            _boundedDispatchCount++;
+            _admittedDispatchCount++;
+            queued.Admit();
+            return;
+        }
+        throw new InvalidOperationException("A waiting dispatch callback is missing.");
     }
 
-    private static TaskCompletionSource NewDispatchSpaceSignal() =>
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private sealed class QueuedCallback(
+        Func<CancellationToken, ValueTask> callback,
+        bool reportErrors,
+        bool countsAgainstLimit,
+        bool isAdmitted
+    )
+    {
+        private readonly TaskCompletionSource _admission = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
 
-    private readonly record struct QueuedCallback(
-        Func<CancellationToken, ValueTask> Callback,
-        bool ReportErrors,
-        bool CountsAgainstLimit
-    );
+        internal Func<CancellationToken, ValueTask> Callback { get; } = callback;
+        internal bool ReportErrors { get; } = reportErrors;
+        internal bool CountsAgainstLimit { get; } = countsAgainstLimit;
+        internal bool IsAdmitted { get; private set; } = isAdmitted;
+        internal Task Admission => _admission.Task;
+        internal LinkedListNode<QueuedCallback>? Node { get; set; }
+
+        internal void Admit()
+        {
+            IsAdmitted = true;
+            _admission.TrySetResult();
+        }
+
+        internal void StopWaiting() => _admission.TrySetResult();
+    }
 }
 
 /// <summary>

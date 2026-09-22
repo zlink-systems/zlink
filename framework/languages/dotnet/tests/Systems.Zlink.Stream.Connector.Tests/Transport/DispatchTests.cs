@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using Systems.Zlink.Stream.Connector.Contracts;
+using Systems.Zlink.Stream.Connector.Runtime;
 using Xunit;
 
 public sealed partial class StreamConnectorTests
@@ -406,6 +407,58 @@ public sealed partial class StreamConnectorTests
 
         Assert.Equal([1, 2, 3], handled);
         Assert.Equal(0, connector.PendingDispatchCount);
+    }
+
+    [Fact]
+    public async Task ManualDispatchCallbackFailureDoesNotBlockTheOnlyQueueConsumer()
+    {
+        using var shutdown = new CancellationTokenSource();
+        var taskRunner = new ZlinkStreamTaskRunner(shutdown.Token);
+        var callbacks = new ZlinkStreamConnectorCallbacks(
+            taskRunner,
+            ZlinkStreamDispatchMode.Manual,
+            1,
+            new ZlinkStreamConnectorOptions { Endpoint = new Uri("tcp://127.0.0.1:1") }
+        );
+        var order = new List<string>();
+        Task? secondAdmission = null;
+        _ = callbacks.AddErrorReceived(
+            (_, _) =>
+            {
+                order.Add("error");
+                return ValueTask.CompletedTask;
+            }
+        );
+
+        await callbacks.DispatchUserCallbackAsync(
+            async _ =>
+            {
+                await secondAdmission!;
+                throw new InvalidOperationException("callback failed");
+            },
+            CancellationToken.None
+        );
+        secondAdmission = callbacks
+            .DispatchUserCallbackAsync(
+                _ =>
+                {
+                    order.Add("second");
+                    return ValueTask.CompletedTask;
+                },
+                CancellationToken.None
+            )
+            .AsTask();
+
+        await callbacks
+            .DispatchAsync(CancellationToken.None)
+            .AsTask()
+            .WaitAsync(TimeSpan.FromSeconds(5));
+        await secondAdmission;
+
+        Assert.Equal(["second", "error"], order);
+        callbacks.Complete();
+        shutdown.Cancel();
+        await taskRunner.StopAndDrainAsync();
     }
 
     [Fact]

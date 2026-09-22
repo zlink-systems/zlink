@@ -89,21 +89,29 @@ public sealed class SessionActorCoordinatorTests
     }
 
     [Fact]
-    public async Task FailedBindingDoesNotConsumeActorSlot()
+    public async Task InvalidActorRefBindingDoesNotConsumeActorSlot()
     {
         var runtime = CreateRuntime();
         var stream = new TestStream(RoutingId.From("session-slot-failure"));
         var context = CreateSessionContext(runtime, stream);
-        using var canceled = new CancellationTokenSource();
-        canceled.Cancel();
+        var validShape = new ActorRef(
+            "actor-invalid",
+            1,
+            "actors",
+            RoutingId.From("actor-invalid")
+        );
+        object malformed = validShape;
+        typeof(ActorRef)
+            .GetField(
+                "_objectGeneration",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic
+            )!
+            .SetValue(malformed, 0UL);
+        var invalidActor = (ActorRef)malformed;
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+        var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
             context
-                .ActorCoordinator.BindActorAsync(
-                    context,
-                    new ActorRef("actor-canceled", 1, "actors", RoutingId.From("actor-canceled")),
-                    canceled.Token
-                )
+                .ActorCoordinator.BindActorAsync(context, invalidActor, CancellationToken.None)
                 .AsTask()
         );
         var committed = await context.ActorCoordinator.BindActorAsync(
@@ -112,6 +120,7 @@ public sealed class SessionActorCoordinatorTests
             CancellationToken.None
         );
 
+        Assert.Equal(ZLinkFrameworkErrorKind.NotFound, failure.Kind);
         Assert.Equal((ushort)1, Assert.IsType<ZLinkSessionActor>(committed).Slot);
     }
 
