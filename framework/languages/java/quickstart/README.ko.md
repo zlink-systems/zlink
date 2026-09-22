@@ -2,16 +2,16 @@
 
 # ZLink Java/Kotlin quickstart
 
-가장 작은 project다. location store 없이 각 client가 server endpoint를 직접 지정하고, 두
-process가 channel로 한 번 호출한다. 사이트 페이지 `framework/doc/framework/java/quickstart.ko.md`와
-`framework/doc/framework/kotlin/quickstart.ko.md`가 이 파일들에서 코드 블록을 읽어 간다.
+가장 단순한 프로젝트다. Location Store 없이 각 client가 server endpoint를 직접 지정하고, 두
+process가 channel로 한 번 호출한다. 사이트의 `framework/doc/framework/java/quickstart.ko.md`와
+`framework/doc/framework/kotlin/quickstart.ko.md` 페이지는 이 파일에서 코드 블록을 읽는다.
 이 디렉터리는 `zlink-java-examples` 저장소의 `quickstart/`이며, 하나의 Gradle build 안에
 `java/`와 `kotlin/` subproject가 있다.
 
 | | 목적 |
 |---|---|
-| **quickstart** (여기) | 패키지를 설치하고 기능을 더하지 않은 상태로 첫 응답까지 확인한다 |
-| tutorial (`tutorial/`) | 기능을 차례로 추가한다. 기능별 guide가 이 코드를 읽는다 |
+| **quickstart** (여기) | package 설치와 첫 응답 확인. 기능을 추가하지 않는다 |
+| tutorial (`tutorial/`) | 기능을 단계별로 추가한다. 기능별 guide가 이 코드를 읽는다 |
 | samples (`samples/`) | 완결된 업무 흐름을 보이는 application을 제공한다 |
 
 ## 전제 조건
@@ -69,7 +69,7 @@ if ($LASTEXITCODE -ne 0) { throw 'quickstart did not come up' }
 $answer
 ```
 
-Kotlin pair는 두 process를 끝낸 뒤 같은 명령을 `kotlin/` 경로로 실행한다
+Kotlin pair는 Java process를 종료한 뒤 같은 명령을 `kotlin/` 경로에서 실행한다
 (`./kotlin/Server/build/install/Server/bin/Server`, `.../Client`).
 
 ## 검증
@@ -92,7 +92,7 @@ Java와 Kotlin pair 모두 endpoint가 HTTP 상태 코드 200과 `hello, world`�
 
 | 증상 | 원인과 조치 |
 |---|---|
-| 7101, 7102, 5080이 이미 사용 중이다 | 다른 언어 pair를 실행하기 전에 이전 pair를 종료한다 |
+| 7101, 7102, 5080이 이미 사용 중이다 | 다른 언어 pair를 실행하기 전에 실행 중인 pair를 종료한다 |
 | curl 요청이 연결되지 않는다 | Server를 먼저 실행한 뒤 Client를 실행하고 process 출력을 확인한다 |
 | 요청에 대상이 없다 | client의 `peerConnections().connect` endpoint와 server의 `listen` endpoint를 같게 둔다 |
 | Server가 시작 직후 종료된다 | 각 비웹 Server entry point에 `setKeepAlive(true)`를 유지한다 |
@@ -119,5 +119,5 @@ Java와 Kotlin pair 모두 endpoint가 HTTP 상태 코드 200과 `hello, world`�
   process의 `setKeepAlive(true)`를 담은 Server `ZLinkFrameworkConfigurer` 블록.
 - `channelName(...).client()`, `peerConnections().connect(...)`,
   `ZLinkRouteClient` 호출부를 담은 Client 블록.
-- 실제 service에서는 수동 peer connection을 Redis와 같은 location store로 바꾸는 것이
-  일반적이다. 이 quickstart는 해당 service 의존성을 넣지 않는다.
+- 실제 서비스에서는 수동 peer connection 대신 Redis와 같은 Location Store를 주로 사용한다.
+  이 quickstart는 해당 서비스 의존성을 사용하지 않는다.

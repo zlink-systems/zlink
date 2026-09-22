@@ -1,7 +1,7 @@
 # .NET Tutorial
 
-기능별 가이드가 코드를 읽어 가는 프로그램이다. 장을 하나씩 따라가면 이 프로그램이 그
-순서대로 커진다.
+기능별 guide가 코드를 읽는 프로그램이다. 각 장은 이전 단계에 기능을 추가한다.
+
 
 이 문서는 `zlink-dotnet-examples` 저장소의 `tutorial/`에서 실행한다. 영어 대응 문서는
 [README.md](README.md)다.
@@ -9,8 +9,8 @@
 ## 전제 조건
 
 - **.NET SDK 8.0 이상** — `dotnet --version`이 `8.0.x` 이상 SDK를 보고해야 한다.
-- **Docker Desktop**(또는 다른 Docker Engine) — 방·큐·플레이어는 위치를 기록할
-  Location Store가 있어야 동작한다. Channel 메시징까지는 필요 없다.
+- **Docker Desktop**(또는 다른 Docker Engine) — 방·queue·player는 위치를 기록할
+  Location Store가 있어야 동작한다. Channel 메시징에는 필요 없다.
 
 ```bash title="linux"
 docker run --rm -d -p 6379:6379 --name zlink-tutorial-dotnet-redis redis:7.2-alpine
@@ -29,9 +29,9 @@ tutorial은 공개된 `Zlink.Framework` NuGet 패키지만 참조한다. `zlink-
 
 ## 빌드
 
-문서가 보여주는 코드와 독자가 nuget.org에서 받는 라이브러리를 같은 것으로 유지한다.
-저장소 안에서 빌드해도 `Zlink.Framework` 패키지를 참조하며, 이 디렉터리만 복사해 나가도
-그대로 빌드된다.
+문서의 코드와 nuget.org에서 받는 라이브러리는 같은 package를 사용한다.
+저장소에서 빌드해도 `Zlink.Framework` package를 참조하며, 이 디렉터리만 복사해도
+빌드할 수 있다.
 
 ```bash title="linux"
 dotnet build Tutorial.sln -c Release
@@ -52,8 +52,8 @@ dotnet build Tutorial.sln -c Release -p:ZLinkTutorialUseLocalSource=true
 
 ## 실행
 
-Server를 먼저 백그라운드로 띄우고, Client가 그 위에 HTTP를 연다. 둘 다 준비되면
-요청 하나로 서로 연결됐는지 확인하고, 그 결과를 다음 절이 읽을 파일에 남긴다.
+Server를 백그라운드 process로 먼저 실행하고, Client가 HTTP를 제공한다. 연결이 준비되면
+요청으로 상태를 확인하고 결과를 다음 절에서 읽을 파일에 기록한다.
 
 ```bash title="linux"
 dotnet run --project Server/Server.csproj -c Release --no-build > server.log 2>&1 &
@@ -83,8 +83,8 @@ Invoke-RestMethod -Uri "http://127.0.0.1:5080/players/p1/profile" | ConvertTo-Js
 
 ## 검증
 
-`/players/p1/profile` 응답에 `"playerId":"p1"`이 있으면 Server와 Client가 서로 연결된
-것이다("실행" 절이 부른 것과 같은 요청이다). 확인이 끝나면 두 process를 내린다.
+`/players/p1/profile` 응답에 `"playerId":"p1"`이 있으면 Server와 Client 연결이 준비된
+상태다("실행" 절과 같은 요청이다). 확인 후 두 process를 종료한다.
 
 ```bash title="linux"
 curl -sf http://127.0.0.1:5080/players/p1/profile | grep -q '"playerId":"p1"'
@@ -97,21 +97,21 @@ if ($profile.playerId -ne 'p1') { throw "tutorial verify failed: $($profile | Co
 Get-Content client.pid, server.pid | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
 ```
 
-"## 단계" 아래 각 기능의 curl 명령도 각자 적힌 응답을 그대로 내야 그 기능이
-동작하는 것이다. 전체를 자동으로 확인하려면
+"## 단계" 아래 각 기능의 curl 명령도 적힌 응답을 반환해야 한다. 전체를 자동으로 확인하려면
 [`.github/workflows/framework-tutorial.yml`](https://github.com/zlink-systems/zlink/blob/main/.github/workflows/framework-tutorial.yml)의
 순서를 그대로 따라간다 — 모든 단계를 통과하면 마지막 줄이 `all tutorial steps
 passed`다.
 
+
 ## 문제 해결
 
 - **Docker가 실행 중이 아니다 / Redis에 연결할 수 없다** — Docker Desktop(또는
-  Docker Engine)을 띄우고 위 "전제 조건"의 `docker run` 명령으로 Redis를 다시
-  띄운다.
+  Docker Engine)을 시작하고 위 "전제 조건"의 `docker run` 명령으로 Redis를 다시
+  실행한다.
 - **6379 포트가 이미 쓰이고 있다** — 이전 실행의 Redis 컨테이너가 아직 떠 있는지
   `docker ps`로 확인한다. 이 tutorial은 샘플과 달리 고정된 `redis://127.0.0.1:6379`를
-  쓰므로 컨테이너를 하나만 띄워 재사용한다(`docker rm -f zlink-tutorial-dotnet-redis`로
-  지우고 다시 띄우면 깨끗한 상태로 돌아간다).
+  사용하므로 container를 재사용한다(`docker rm -f zlink-tutorial-dotnet-redis`로
+  제거한 뒤 다시 실행하면 깨끗한 상태로 시작한다).
 - **`dotnet`이 호환되는 SDK가 없다고 한다** — .NET 8.0 이상 SDK를 설치한다.
 - **RID 등록이 `RejectedConflict`로 거부된다** — 이전 실행이 남긴 오래된 키가 같은
   Redis에 남아 있을 때 나타난다. 이 tutorial이 쓰는 키만 골라 지운다(다른 곳에
@@ -125,9 +125,9 @@ passed`다.
 
 | 프로젝트 | 역할 |
 |---|---|
-| `Shared` | 두 쪽이 함께 쓰는 message 계약 |
-| `Server` | channel handler, 방·큐, 플레이어, client session을 실행한다 |
-| `Client` | HTTP를 받아 mesh로 호출한다. 방과 플레이어를 만들고 부른다 |
+| `Shared` | 양쪽 process가 함께 사용하는 message 계약 |
+| `Server` | channel handler, 방·queue, player, client session을 실행한다 |
+| `Client` | HTTP 요청을 받아 mesh로 호출한다. 방과 player를 생성하고 호출한다 |
 | `StreamClient` | 외부 TCP client. framework 없이 connector만 참조한다 |
 | `HttpClient` | 외부 HTTP client. framework 없이 http-client만 참조한다 |
 
@@ -135,15 +135,15 @@ passed`다.
 
 | | 목적 |
 |---|---|
-| [`../quickstart/`](../quickstart/) | 설치부터 첫 응답까지. 기능을 더하지 않는다 |
-| **`tutorial/`** (여기) | 기능을 차례로 쌓는다. 기능별 가이드가 이 코드를 읽는다 |
+| [`../quickstart/`](../quickstart/) | 설치와 첫 응답 확인. 기능을 추가하지 않는다 |
+| **`tutorial/`** (여기) | 기능을 단계별로 추가한다. 기능별 guide가 이 코드를 읽는다 |
 | [`../samples/`](../samples/) | 완결된 업무 흐름을 보이는 application |
 
-tutorial은 기능마다 최소한만 담는다. 도메인 로직을 넣기 시작하면 샘플의 축소판이 된다.
+tutorial은 기능마다 필요한 최소 구성만 담는다. 도메인 로직을 추가하면 sample의 축소판이 된다.
 
 ## 단계
 
-각 기능은 따로 읽어도 된다. 앞 단계를 하지 않아도 그다음 단계가 동작한다.
+각 기능은 독립적으로 읽을 수 있다. 앞 단계를 실행하지 않아도 다음 단계가 동작한다.
 
 ### 1. Channel 메시징 — RouteMesh
 
@@ -175,14 +175,14 @@ curl -i http://127.0.0.1:5080/ops/nodes/no-such-node/status
 # channel 호출과 달리 후보를 고르지 않으므로 그대로 실패한다.
 ```
 
-`channelName`이 비어 있는 것이 요점이다. channel이 관여하지 않았다는 뜻이다. `calledBy`는
-부른 쪽 node의 routing id이고, 나머지 값은 답한 process 하나의 것이다.
+`channelName`이 비어 있으면 channel이 관여하지 않았음을 나타낸다. `calledBy`는
+호출한 node의 routing id이고, 나머지 값은 응답한 process의 값이다.
 
-이 호출에는 등록 쪽 조건이 하나 있다. 받는 node가 `SetRoutingId`로 id를 고정해야 한다. 고정하지
-않으면 Framework가 만든 id가 붙어 부르는 쪽이 URL에 적을 수 없다.
+이 호출에서는 받는 node가 `SetRoutingId`로 id를 고정해야 한다. 고정하지
+않으면 Framework가 만든 id가 붙어 호출하는 쪽이 URL에 지정할 수 없다.
 
-부르는 쪽은 그 node와 peer로 연결되어 있기만 하면 된다. `Connect(RoutingId, endpoint)`로 기대하는
-id를 함께 적을 수 있는데, 연결을 그 node 하나로 묶는 것이지 node 직접 호출의 조건은 아니다.
+호출하는 쪽은 해당 node와 peer로 연결되어 있어야 한다. `Connect(RoutingId, endpoint)`로 기대하는
+id를 함께 지정할 수 있지만, 이는 연결을 해당 node로 제한할 뿐 node 직접 호출의 조건은 아니다.
 
 ### 3. Channel 메시징 — ClientServer
 
@@ -205,7 +205,7 @@ curl -X POST http://127.0.0.1:5080/notices \
 
 ### 5. User Spot — 만들어서 쓰는 방
 
-방을 만들고 id를 받는다. 이후로는 그 id만으로 부른다.
+방을 생성하고 id를 받는다. 이후에는 그 id로 호출한다.
 
 ```bash
 ROOM=$(curl -s -X POST http://127.0.0.1:5080/rooms \
@@ -218,7 +218,7 @@ curl http://127.0.0.1:5080/rooms/$ROOM
 # {"title":"bronze-1","chat":["p1: hello"]}
 ```
 
-호출 두 번 사이에 방이 상태를 들고 있다.
+방은 호출 사이에 상태를 유지한다.
 
 ### 6. Instance Spot — 첫 메시지가 만드는 큐
 
@@ -234,8 +234,8 @@ curl -X POST http://127.0.0.1:5080/match-queues/ranked \
 # {"waiting":2}
 ```
 
-큐는 넣은 것을 계속 들고 있다. 같은 id로 또 호출하면 숫자가 이어진다. 처음부터 다시 보려면
-다른 id를 쓴다.
+queue는 값을 유지한다. 같은 id로 다시 호출하면 숫자가 이어진다. 처음부터 확인하려면
+다른 id를 사용한다.
 
 ### 7. Actor — id로 부르는 플레이어
 
@@ -266,8 +266,8 @@ bound player: p1          # 연결을 player에 묶는다
 pushed: speedy            # player가 그 연결로 밀어 준다
 ```
 
-`pushed`가 핵심이다. client는 nickname 변경만 보냈고, 응답이 아니라 **player가 스스로 민 알림**을
-받았다.
+`pushed`는 client가 nickname 변경 요청의 응답이 아닌 **player가 연결로 보낸 알림**을 받았음을
+나타낸다.
 
 ### 9. HTTP client
 
@@ -287,7 +287,7 @@ dotnet build Tutorial.sln -c Release
 dotnet run --project HttpClient/HttpClient.csproj -c Release --no-build
 ```
 
-실행 결과:
+실행 결과는 다음과 같다.
 
 ```
 first request: p1 rookie
@@ -302,7 +302,7 @@ upload stream: imported 3
 error kinds: bad request InternalFailure connection refused Unavailable
 ```
 
-운영 route는 다음과 같이 확인한다. admin route는 Basic auth가 없으면 401과
+운영 route는 다음 명령으로 확인한다. admin route는 Basic auth가 없으면 401과
 `WWW-Authenticate: Basic realm="tutorial-admin"`을 반환하고, 올바른 자격 증명이 있으면 weight를
 변경한다.
 
@@ -341,15 +341,15 @@ curl http://127.0.0.1:5080/status
 
 ## 문서가 읽는 방식
 
-문서는 코드를 손으로 옮겨 적지 않고 이 파일들에서 구간을 읽는다. 구간은 소스의
+문서는 코드를 직접 옮겨 적지 않고 이 파일에서 구간을 읽는다. 구간은 소스의
 `--8<--` 마커가 정한다.
 
 ```
 --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:channel-register"
 ```
 
-마커 이름을 바꾸면 그 구간을 읽는 문서가 조용히 빈 코드 블록을 낸다. 이름을 바꿀 때는
-문서를 함께 고친다. CI가 아래 표와 소스를 대조한다.
+마커 이름을 바꾸면 해당 구간을 읽는 문서가 빈 코드 블록을 출력한다. 이름을 바꿀 때는
+문서도 함께 수정한다. CI는 아래 표와 소스를 대조한다.
 
 | 마커 | 자리 |
 |---|---|

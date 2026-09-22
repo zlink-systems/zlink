@@ -2,15 +2,15 @@
 
 # ZLink .NET quickstart
 
-가장 작은 project다. location store 없이 client가 server endpoint를 직접 지정하고, 두
-process가 channel로 한 번 호출한다. 사이트 페이지 `framework/doc/framework/dotnet/quickstart.ko.md`가
-이 파일들에서 코드 블록을 읽어 간다. 이 디렉터리는 `zlink-dotnet-examples` 저장소의
+가장 단순한 프로젝트다. Location Store 없이 client가 server endpoint를 직접 지정하고, 두
+process가 channel로 한 번 호출한다. 사이트의 `framework/doc/framework/dotnet/quickstart.ko.md` 페이지는
+이 파일에서 코드 블록을 읽는다. 이 디렉터리는 `zlink-dotnet-examples` 저장소의
 `quickstart/`다.
 
 | | 목적 |
 |---|---|
-| **quickstart** (여기) | 패키지를 설치하고 기능을 더하지 않은 상태로 첫 응답까지 확인한다 |
-| tutorial (`tutorial/`) | 기능을 차례로 추가한다. 기능별 guide가 이 코드를 읽는다 |
+| **quickstart** (여기) | package 설치와 첫 응답 확인. 기능을 추가하지 않는다 |
+| tutorial (`tutorial/`) | 기능을 단계별로 추가한다. 기능별 guide가 이 코드를 읽는다 |
 | samples (`samples/`) | 완결된 업무 흐름을 보이는 application을 제공한다 |
 
 ## 전제 조건
@@ -39,7 +39,7 @@ dotnet build
 
 ## 실행
 
-서버를 먼저 실행하고 별도 terminal에서 client를 실행한다. server는 `tcp://0.0.0.0:7101`에서
+server를 먼저 실행하고 별도 terminal에서 client를 실행한다. server는 `tcp://0.0.0.0:7101`에서
 듣고 `greeting` channel을 처리한다. client는 `tcp://0.0.0.0:7102`에서 듣고
 `tcp://127.0.0.1:7101`에 연결하며, `http://127.0.0.1:5080`에서 `GET /hello/{name}`을
 제공한다.
@@ -79,7 +79,7 @@ endpoint는 HTTP 상태 코드 200과 `"hello, world"`를 반환한다.
 
 | 증상 | 원인과 조치 |
 |---|---|
-| 7101, 7102, 5080이 이미 사용 중이다 | 이전 Server 또는 Client process를 종료한 뒤 pair를 다시 실행한다 |
+| 7101, 7102, 5080이 이미 사용 중이다 | 이전 Server 또는 Client process를 종료한 뒤 다시 실행한다 |
 | curl 요청이 연결되지 않는다 | Server를 먼저 실행한 뒤 Client를 실행하고 process 출력을 확인한다 |
 | 요청에 대상이 없다 | client의 `PeerConnections.Connect` endpoint와 server의 `Listen` endpoint를 같게 둔다 |
 | handler가 호출되지 않는다 | `greeting` channel에 `HelloHandler`를 명시적으로 등록한다 |
@@ -105,5 +105,5 @@ endpoint는 HTTP 상태 코드 200과 `"hello, world"`를 반환한다.
 - `Channel("greeting").Client()`, `PeerConnections.Connect`,
   `RequestToChannel(...).Async<Greeting>()` 호출을 담은 `Client/Program.cs`의
   `AddZLinkFramework` 블록.
-- 실제 service에서는 수동 peer connection을 Redis와 같은 location store로 바꾸는 것이
-  일반적이다. 이 quickstart는 해당 service 의존성을 넣지 않는다.
+- 실제 서비스에서는 수동 peer connection 대신 Redis와 같은 Location Store를 주로 사용한다.
+  이 quickstart는 해당 서비스 의존성을 사용하지 않는다.

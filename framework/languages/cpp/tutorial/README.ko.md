@@ -2,18 +2,18 @@
 
 # C++ Tutorial
 
-기능별 가이드가 코드를 읽어 가는 프로그램이다. 장을 하나씩 따라가면 이 프로그램이 그
-순서대로 커진다. `.NET Tutorial`을 C++로 옮긴 것이며, Channel 메시징 네 가지(RouteMesh
-요청·단방향, node 직접 호출, ClientServer, Fanout), handler filter, runtime weight 변경, Spot,
-Actor, Location, STREAM, HTTP client를 담는다.
+기능별 guide가 코드를 읽는 프로그램이다. 각 장은 이전 단계에 기능을 추가한다. `.NET Tutorial`의
+C++ 구현이며, Channel 메시징(RouteMesh 요청·단방향, node 직접 호출, ClientServer, Fanout), handler
+filter, runtime weight 변경, Spot, Actor, Location, STREAM,
+HTTP client를 다룬다.
 
 이 디렉터리는 `zlink-cpp-examples` 저장소의 `tutorial/`이다. 아래 절차는 GitHub Release에
 공개된 Core·binding·framework 패키지와 Conan을 사용한다.
 
 | | 목적 |
 |---|---|
-| quickstart (저장소 `framework/languages/cpp/quickstart/`) | 설치부터 첫 응답까지. 기능을 더하지 않는다 |
-| **tutorial** (여기) | 기능을 차례로 쌓는다. 기능별 가이드가 이 코드를 읽는다 |
+| quickstart (저장소 `framework/languages/cpp/quickstart/`) | 설치와 첫 응답 확인. 기능을 추가하지 않는다 |
+| **tutorial** (여기) | 기능을 단계별로 추가한다. 기능별 guide가 이 코드를 읽는다 |
 | samples (`zlink-cpp-examples` 저장소의 `samples/`) | 완결된 업무 흐름을 보이는 application |
 
 ## 차례
@@ -41,11 +41,11 @@ Actor, Location, STREAM, HTTP client를 담는다.
 | CMake | 3.24 이상 (Visual Studio가 설치하는 3.31로 확인) | 3.24 이상 (3.28로 확인) |
 | Ninja | 필요 없음 | 권장. 없으면 Makefile로 빌드한다 |
 | Conan 2 | `pipx install conan` (`py -m pip install --user conan`도 가능) | `pipx install conan` (`python3 -m pip install --user conan`도 가능) |
-| Docker Desktop | Redis 하나를 컨테이너로 띄운다. 설치되어 실행 중이어야 한다 | 같다 (WSL integration 또는 Linux의 Docker Engine) |
+| Docker Desktop | Redis container를 실행한다. 설치되어 실행 중이어야 한다 | 같다 (WSL integration 또는 Linux의 Docker Engine) |
 
 이 밖에는 아무것도 필요 없다. zlink 저장소, Node.js, 시스템 패키지의 Boost는 쓰지 않는다.
-Conan은 pipx(또는 pip)로 설치하며 ConanCenter의 세 번째 파티 바이너리를 받는다. 지원 컴파일러에서
-**첫 설치는 약 3분**이며, 맞는 바이너리가 없는 패키지만 Conan이 소스에서 빌드한다. 두 번째부터는
+Conan은 pipx(또는 pip)로 설치하며 ConanCenter의 서드파티 바이너리를 받는다. 지원 컴파일러에서
+**첫 설치에는 약 3분이 걸리며**, 맞는 바이너리가 없는 package만 Conan이 소스에서 빌드한다. 이후에는
 로컬 캐시를 재사용한다.
 
 ## 내려받기와 설치
@@ -53,13 +53,13 @@ Conan은 pipx(또는 pip)로 설치하며 ConanCenter의 세 번째 파티 바�
 [`zlink-cpp-examples`](https://github.com/zlink-systems/zlink-cpp-examples) 저장소를 clone한다.
 아래 명령은 모두 그 저장소의 `tutorial/` 안에서 실행한다.
 
-설치는 `bootstrap.cmake` 하나가 한다 — [빌드](#빌드) 블록의 첫 줄이다. 이 스크립트는 GitHub
-Release에서 세 아카이브 — 이 플랫폼의 Core prebuilt(`core/v1.2.0`), C++ binding
+설치는 [빌드](#빌드) 블록 첫 줄의 `bootstrap.cmake`로 처리한다. 이 script는 GitHub
+Release에서 이 플랫폼의 Core prebuilt(`core/v1.2.0`), C++ binding
 소스(`cpp/v1.2.0`), framework 소스(`framework-cpp/v0.18.0`) — 를 받아 binding과 framework를
 빌드해 `.zlink/install/`에 설치하고, 이 프로젝트를 `build/`에 구성한다. framework 버전만
-스크립트에 적혀 있고, Core·binding 버전과 세 번째 파티 목록은 framework 아카이브가 정한다.
-기본 package manager는 Conan이며 vcpkg fallback은 `-DZLINK_PACKAGE_MANAGER=vcpkg`로 고른다.
-두 번째 실행부터는 받은 것과 지은 것을 그대로 쓴다.
+script에 적혀 있고, Core·binding 버전과 서드파티 목록은 framework 아카이브가 정한다.
+기본 package manager는 Conan이며 vcpkg fallback은 `-DZLINK_PACKAGE_MANAGER=vcpkg`로 선택한다.
+이후 실행에서는 받은 파일과 빌드 결과를 그대로 사용한다.
 
 병렬도는 논리 코어 수가 기본이며 `cmake -DZLINK_JOBS=4 -P bootstrap.cmake`처럼 `-P` 앞에
 두어 줄인다. 다시 처음부터 하려면 `.zlink/`와 `build/`를 지운다.
@@ -76,15 +76,15 @@ cmake -P bootstrap.cmake
 cmake --build build --config Release --parallel
 ```
 
-실행 파일 셋이 나온다 — Windows는 `build\Release\`, Linux는 `build/` 아래다. Windows에서는
-Core `zlink.dll`과 세 번째 파티 DLL이 실행 파일 옆에 함께 복사된다(Windows에는 RPATH가
+실행 파일은 Windows의 `build\Release\`, Linux의 `build/` 아래에 생성된다. Windows에서는
+Core `zlink.dll`과 서드파티 DLL이 실행 파일 옆에 함께 복사된다(Windows에는 RPATH가
 없어 loader가 실행 파일 옆만 본다).
 
 ## 실행
 
-Redis가 `127.0.0.1:6379`에 있어야 한다. Spot·Actor·Location 단계가 Location Store로 쓴다.
-아래 블록은 Redis를 Docker로 띄우고 Server, Client를 차례로 띄운 뒤 첫 요청으로 두 process가
-mesh로 연결됐는지 확인한다. handler와 filter의 로그는 **stderr**로 나간다.
+Redis가 `127.0.0.1:6379`에서 실행 중이어야 한다. Spot·Actor·Location 단계는 이를 Location Store로 사용한다.
+아래 블록은 Redis를 Docker로 실행하고 Server, Client를 차례로 시작한 뒤 첫 요청으로 두 process의
+mesh 연결을 확인한다. handler와 filter의 로그는 **stderr**로 기록된다.
 
 ```bash title="linux"
 docker run -d --rm --name zlink-tutorial-redis -p 127.0.0.1:6379:6379 redis:7-alpine && until docker exec zlink-tutorial-redis redis-cli ping 2>/dev/null | grep -q PONG; do sleep 0.2; done
@@ -114,10 +114,10 @@ curl.exe -X POST http://127.0.0.1:5180/rooms -H 'Content-Type: application/json'
 curl -X POST http://127.0.0.1:5180/rooms -H 'Content-Type: application/json' -d '{"title":"lobby"}'
 ```
 
-STREAM 단계의 외부 client는 세 번째 실행 파일이다. HTTP client 단계의 외부 client는 네 번째
-실행 파일이다. 두 프로그램은 Server와 Client가 떠 있는 상태에서 자기 검증을 마치고 종료한다.
+STREAM 단계의 외부 client는 `tutorial_stream_client`이고 HTTP client 단계의 외부 client는
+`tutorial_http_client`다. 두 프로그램은 Server와 Client가 실행 중일 때 자체 검증을 마친 뒤 종료한다.
 
-정리는 process 둘과 Redis 컨테이너를 내리는 것이다.
+정리할 때는 Server·Client process와 Redis container를 종료한다.
 
 ```powershell
 Stop-Process -Name tutorial_server,tutorial_client
@@ -147,11 +147,11 @@ docker stop zlink-tutorial-redis
 | 단계 | 성공의 증거 |
 |---|---|
 | `cmake -P bootstrap.cmake` | 마지막 줄 `-- bootstrap done. Next: cmake --build ...`. `.zlink/install/lib/cmake/zlink_framework/zlink_frameworkConfig.cmake`가 있다 |
-| 빌드 | `tutorial_server`·`tutorial_client`·`tutorial_stream_client`·`tutorial_http_client` 네 실행 파일이 있다 |
+| 빌드 | `tutorial_server`·`tutorial_client`·`tutorial_stream_client`·`tutorial_http_client` 실행 파일이 생성된다 |
 | 첫 요청 | `curl http://127.0.0.1:5180/players/p1/profile`이 `{"level":1,"nickname":"rookie","playerId":"p1"}`를 낸다 |
 | Spot (Redis) | 방을 여는 요청이 방 id 문자열(`"9e78fd70-…"`)을 낸다 |
 | Instance Spot | 같은 대기열 id로 두 번 요청하면 `waiting`이 1, 2로 이어진다 |
-| STREAM | `tutorial_stream_client`가 `connected: true` … `pushed: speedy` 네 줄을 찍고 0으로 종료한다 |
+| STREAM | `tutorial_stream_client`가 `connected: true` … `pushed: speedy`를 기록하고 0으로 종료한다 |
 
 아래 블록은 [실행](#실행) 블록이 띄운 상태에서 첫 요청의 응답과 STREAM client의 종료 코드로
 이를 확인한다.
@@ -172,7 +172,7 @@ if ($LASTEXITCODE -ne 0) { throw 'tutorial-stream failed' }
 Write-Output 'tutorial-stream=ok'
 ```
 
-[단계별 확인](#단계별-확인)에 열한 단계의 요청과 기대 출력이 전부 있다.
+[단계별 확인](#단계별-확인)에 각 단계의 요청과 기대 출력이 있다.
 
 ## 문제 해결
 
@@ -180,14 +180,14 @@ Write-Output 'tutorial-stream=ok'
 |---|---|
 | `bootstrap: could not find Conan` | `pipx install conan`(또는 `python3 -m pip install --user conan`)으로 Conan 2를 설치하고 실행 파일 경로를 `PATH`에 넣는다 |
 | `ERROR: Invalid setting ...` | 선택한 컴파일러가 ConanCenter의 지원 바이너리 구성과 다르다. 표의 컴파일러 버전을 쓰거나 `-DZLINK_PACKAGE_MANAGER=vcpkg`를 지정한다 |
-| `bootstrap: download failed: https://github.com/...` | GitHub Release에 닿지 못했다. 프록시·방화벽을 확인한다. 다시 실행하면 처음부터 다시 받는다 |
+| `bootstrap: download failed: https://github.com/...` | GitHub Release에 연결하지 못했다. proxy·방화벽을 확인한다. 다시 실행하면 처음부터 다시 받는다 |
 | `CMake Error ... No CMAKE_CXX_COMPILER could be found` / `Visual Studio 17 2022 could not find any instance` | 컴파일러가 없다. Windows는 **Desktop development with C++** 워크로드, Linux는 `g++`를 설치한다 |
 | `error LNK2038: mismatch detected for 'RuntimeLibrary'` | `.zlink/`가 다른 옵션으로 빌드된 잔재다. `.zlink/build`·`.zlink/cpp`·`.zlink/install`·`build`를 지우고 bootstrap부터 다시 한다 |
 | Windows에서 실행 파일이 아무 출력 없이 즉시 끝난다 (종료 코드 `-1073741515`, `STATUS_DLL_NOT_FOUND`) | `zlink.dll`이 실행 파일 옆에 없다. `cmake --build build --config Release`를 다시 실행하면 post-build 단계가 `build\Release\`에 복사한다 |
-| `docker: error during connect` / `Cannot connect to the Docker daemon` | Docker Desktop이 실행 중이 아니다. 띄운 뒤 `docker run ...`을 다시 한다 |
+| `docker: error during connect` / `Cannot connect to the Docker daemon` | Docker Desktop이 실행 중이 아니다. 시작한 뒤 `docker run ...`을 다시 실행한다 |
 | `docker: Error response from daemon: ... port is already allocated` / `Bind for 127.0.0.1:6379 failed` | 6379를 다른 Redis가 쓰고 있다. 그 Redis를 그대로 써도 된다 — tutorial은 `127.0.0.1:6379`만 본다 |
 | Server 로그에 `Location Store` 연결 실패 | Redis가 없다. Channel 단계까지는 그대로 돌지만 Spot·Actor·Location 단계는 실패한다 |
-| `bind: Address already in use` / `Only one usage of each socket address` | 위 표의 port를 다른 process가 쓴다. 이전 실행의 `tutorial_server`·`tutorial_client`가 남아 있는지 확인한다 |
+| `bind: Address already in use` / `Only one usage of each socket address` | 위 표의 port를 다른 process가 사용 중이다. 이전 실행의 `tutorial_server`·`tutorial_client`가 아직 실행 중인지 확인한다 |
 | `curl: (7) Failed to connect to 127.0.0.1 port 5180` | Client가 아직 뜨지 않았거나 죽었다. Client의 stderr를 본다 |
 
 ## 프로젝트 구성
@@ -195,7 +195,7 @@ Write-Output 'tutorial-stream=ok'
 | 프로젝트 | 역할 |
 |---|---|
 | `Shared` | 두 쪽이 함께 쓰는 message 계약 |
-| `Server` | channel handler와 node 직접 호출 handler를 실행하고, filter를 건다. 운영 endpoint 하나를 위해 HTTP도 연다 |
+| `Server` | channel handler와 node 직접 호출 handler를 실행하고 filter를 적용한다. 운영 endpoint를 위해 HTTP도 제공한다 |
 | `Client` | HTTP를 받아 mesh로 호출한다 |
 | `StreamClient` | mesh 밖의 client. framework가 아니라 connector만 링크한다 |
 | `HttpClient` | mesh 밖의 client. framework가 아니라 http-client package만 링크한다 |
@@ -207,8 +207,8 @@ Write-Output 'tutorial-stream=ok'
 
 ## 단계별 확인
 
-각 기능은 따로 읽어도 된다. 앞 단계를 하지 않아도 그다음 단계가 동작한다.
-아래 출력은 모두 실제로 찍어 본 것이다.
+각 기능은 독립적으로 읽을 수 있다. 앞 단계를 실행하지 않아도 다음 단계가 동작한다.
+아래 출력은 실제 실행에서 확인한 결과다.
 
 ### 1. Channel 메시징 — RouteMesh
 
@@ -252,13 +252,13 @@ HTTP/1.1 404 Not Found
 부른 쪽 node의 routing id이고, `uptime`은 답한 process 하나의 것이다. channel 호출과 달리
 후보를 고르지 않으므로, 없는 node를 적으면 그대로 실패한다.
 
-이 호출에는 등록 쪽 조건이 둘 더 있다. 받는 node가 `set_routing_id`로 id를 고정해야 하고
+이 호출에는 등록 조건이 더 있다. 받는 node는 `set_routing_id`로 id를 고정해야 하고
 (고정하지 않으면 생성된 id라 부르는 쪽이 적을 수 없다), 부르는 쪽이
 `peer_connections().connect(routing_id, endpoint)`로 어느 id가 그 endpoint에 있는지 알려야
 한다. `connect(endpoint)`만 쓰면 channel 호출은 되지만 node 직접 호출은 대상을 모른다.
 
-handler가 `route_message_context_t`를 함께 받아야 위 세 값이 손에 들어온다. 인자를 하나만
-선언한 handler도 유효하며, 그때는 context가 오지 않는다.
+handler가 `route_message_context_t`를 함께 받으면 위 값을 사용할 수 있다. 인자를 하나만
+선언한 handler도 유효하며, 이때는 context를 받지 않는다.
 
 ### 3. Channel 메시징 — ClientServer
 
@@ -315,8 +315,8 @@ fanout channel 'broadcast' cannot combine automatic discovery with manual subscr
 
 ### 5. Handler filter
 
-위 네 호출의 Server 로그에 한 쌍씩 찍힌 `dispatch start` / `dispatch done`이 filter다.
-handler마다 같은 로그를 적지 않아도 되도록 dispatch를 감싼다.
+앞서 실행한 호출의 Server 로그에 기록된 `dispatch start` / `dispatch done`은 filter가 남긴다.
+handler마다 같은 로그를 기록하지 않아도 되도록 dispatch를 감싼다.
 
 ```
 info class call_log_filter_t - dispatch start: GetPlayerProfile
@@ -333,15 +333,15 @@ info class call_log_filter_t - dispatch start: GetNodeStatus
 info class call_log_filter_t - dispatch done: GetNodeStatus in 0ms
 ```
 
-Channel 요청·단방향, ClientServer, Fanout, node 직접 호출 네 경로 모두 filter를 지난다.
+Channel 요청·단방향, ClientServer, Fanout, node 직접 호출은 모두 filter를 지난다.
 
 로그의 category가 `class call_log_filter_t`인 것은 `logger_t<T>`의 기본 category가
 `typeid(T).name()`이기 때문이다. MSVC의 그 값이 `class `로 시작한다.
 
 ### 6. Runtime weight 변경
 
-지금까지의 값은 모두 startup에 정해졌다. weight는 다르다. process를 돌린 채로 바꿀 수 있는
-유일한 값이다. 0으로 두면 socket은 열린 채 남고 처리 중인 호출도 끝까지 가지만, 다른 node가
+지금까지의 값은 모두 startup에 정해졌다. weight는 process를 실행 중인 상태에서 바꿀 수 있다.
+0으로 두면 socket은 열린 채 남고 처리 중인 호출도 끝까지 가지만, 다른 node가
 새 호출의 대상으로 이 node를 고르지 않는다. 평상시 값은 100이다.
 
 바꾸는 창구는 `route_mesh_runtime_options_t`다. builder가 아니라 **돌고 있는 mesh**를 가리키는
@@ -351,8 +351,8 @@ Channel 요청·단방향, ClientServer, Fanout, node 직접 호출 네 경로 �
 explicit channel_weight_handler_t (fw::route_mesh_runtime_options_t &mesh) : _mesh (mesh) {}
 ```
 
-앞의 다섯 호출과 달리 이 endpoint는 Server가 직접 받는다. Server는 여기서 처음으로 HTTP를
-열며, port는 Client의 5180과 겹치지 않게 5181을 쓴다.
+이 endpoint는 Server가 직접 처리한다. Server는 여기서 HTTP를 제공하며, port는 Client의 5180과
+겹치지 않도록 5181을 사용한다.
 
 ```console
 $ curl -u ops:tutorial-admin -i -X POST 'http://127.0.0.1:5181/admin/channels/profile/weight?value=0'
@@ -372,12 +372,12 @@ Content-Length: 34
 {"channel":"profile","weight":100}
 ```
 
-응답의 `weight`는 요청 값을 그대로 돌려준 것이 아니라 `weight(value)` 뒤에 `weight()`로 다시
-읽은 값이다. 쓰기가 실제로 반영되었다는 뜻이다.
+응답의 `weight`는 요청 값을 그대로 반환한 값이 아니라 `weight(value)` 뒤에 `weight()`로 다시
+읽은 값이다. 쓰기가 실제로 반영되었음을 나타낸다.
 
-weight가 0인 동안 `profile` channel을 부르는 두 호출은 실패한다. 이 tutorial에는 그 channel을
-담당하는 node가 하나뿐이고, 그 하나가 후보에서 빠지면 고를 대상이 남지 않는다. 요청과 단방향
-호출의 응답이 서로 다르다.
+weight가 0인 동안 `profile` channel 호출은 실패한다. 이 tutorial에서 해당 channel을
+담당하는 node가 후보에서 제외되면 선택할 대상이 없다. 요청과 단방향 호출은
+서로 다른 응답을 반환한다.
 
 ```console
 $ curl -i http://127.0.0.1:5180/players/p1/profile
@@ -389,14 +389,14 @@ HTTP/1.1 404 Not Found
 {"correlationId":"http-8","error":"not_found","message":"RouteMesh channel send target was not found"}
 ```
 
-Server의 stderr에는 이 두 호출의 `dispatch start`가 찍히지 않는다. 부르는 쪽이 대상을 고르는
-단계에서 멈추므로 message가 Server에 닿지 않는다.
+Server의 stderr에는 해당 호출의 `dispatch start`가 기록되지 않는다. 호출하는 쪽이 대상 선택
+단계에서 실패하므로 message가 Server에 도달하지 않는다.
 
-나머지 세 호출은 weight가 0이어도 그대로 답한다. ClientServer(`/players/p1/tickets`)와
+다른 호출은 weight가 0이어도 응답한다. ClientServer(`/players/p1/tickets`)와
 fanout(`/notices`)은 RouteMesh channel이 아니고, node 직접 호출(`/ops/nodes/...`)은 후보를
-고르지 않고 routing id로 대상을 적기 때문이다.
+선택하지 않고 routing id로 대상을 지정하기 때문이다.
 
-위 블록의 두 번째 명령으로 weight를 100으로 되돌리면 두 호출 모두 원래대로 답한다.
+위 블록의 명령으로 weight를 100으로 되돌리면 호출은 다시 정상 응답을 반환한다.
 
 ```console
 $ curl http://127.0.0.1:5180/players/p1/profile
@@ -440,20 +440,20 @@ HTTP/1.1 400 Bad Request
 {"correlationId":"http-5","error":"protocol_error","message":"channel weight must be in range 0..10000"}
 ```
 
-첫 번째는 handler가 직접 낸 응답이다. C++에는 query string을 `int` 인자로 묶어 주는 model
-binding이 없어 `query_values`에서 손으로 꺼내며, 없는 경우를 handler가 답하지 않으면 500
-`invalid map<K, T> key`가 나간다. 뒤의 둘은 runtime이 낸 것이다. 등록하지 않은 channel 이름과
+첫 번째는 handler가 직접 반환한 응답이다. C++에는 query string을 `int` 인자로 binding하는 model
+binding이 없어 `query_values`에서 직접 읽으며, 없는 경우에 handler가 응답하지 않으면 500
+`invalid map<K, T> key`가 발생한다. 나머지는 runtime이 반환한다. 등록하지 않은 channel 이름과
 범위 밖의 값은 `route_mesh_runtime_options_t`가 받아 주지 않는다.
 
-이 호출에는 Server의 stderr에 `dispatch start` / `dispatch done`이 찍히지 않는다. filter가 감싸는
-것은 이 node가 **받은 message**의 dispatch이고, 이 endpoint는 message가 아니라 이 process 안의
+이 호출에는 Server의 stderr에 `dispatch start` / `dispatch done`이 기록되지 않는다. filter는 이
+node가 **받은 message**의 dispatch를 감싸며, 이 endpoint는 message가 아닌 process 내부의
 HTTP 호출이기 때문이다.
 
 ### 7. Spot — id로 부르기
 
-지금까지의 호출은 모두 대상을 이름으로 골랐다. channel 이름을 주면 Framework가 그 channel을
-맡은 node 중 하나를 고르고, routing id를 주면 그 node가 답했다. Spot은 다르다. **id 하나를
-주면 그 id의 방이 지금 있는 node로 간다.**
+지금까지의 호출은 모두 이름으로 대상을 선택했다. channel 이름을 주면 Framework가 해당 channel을
+담당하는 node를 선택하고, routing id를 주면 그 node가 응답한다. Spot은 다르다. **id를
+주면 해당 id의 방이 있는 node로 호출을 보낸다.**
 
 방을 먼저 연다. 응답은 그 방의 id다.
 
@@ -462,7 +462,7 @@ $ curl -X POST http://127.0.0.1:5180/rooms     -H 'Content-Type: application/jso
 "9e78fd70-edee-47b4-8433-d1539862917f"
 ```
 
-id는 Framework가 만든다. 그 뒤로는 이 값 하나로 방을 부른다.
+id는 Framework가 만든다. 이후에는 이 id로 방을 호출한다.
 
 ```console
 $ curl -i -X POST http://127.0.0.1:5180/rooms/9e78fd70-edee-47b4-8433-d1539862917f/chat     -H 'Content-Type: application/json' -d '{"playerId":"p1","text":"hello"}'
@@ -502,13 +502,13 @@ curl -X POST http://127.0.0.1:5180/match-queues/ranked \
 # {"waiting":2}
 ```
 
-대기열은 넣은 값을 계속 들고 있다. 같은 id로 다시 호출하면 숫자가 이어진다. 처음부터 다시
-보려면 다른 id를 쓴다.
+대기열은 값을 유지한다. 같은 id로 다시 호출하면 숫자가 이어진다. 처음부터 확인하려면
+다른 id를 사용한다.
 
 ### 9. Actor — id로 부르는 플레이어
 
-방이 여럿이 함께 쓰는 자리라면 Actor는 개체 하나다. id를 **부르는 쪽이 정하고**, 같은 id로
-다시 만들면 있던 것을 돌려준다.
+방이 여러 사용자가 공유하는 공간이라면 Actor는 개별 객체다. **호출하는 쪽이** id를 정하며, 같은 id로
+다시 만들면 기존 객체를 반환한다.
 
 ```console
 $ curl -X POST http://127.0.0.1:5180/players/p7 -H 'Content-Type: application/json' -d '{"nickname":"rookie"}'
@@ -529,10 +529,10 @@ $ curl http://127.0.0.1:5180/players/p7
 
 C++ 쪽에서 알아 둘 것은 다음과 같다.
 
-- **Actor는 생성자로 만들어지지 않는다.** `player_factory_t`가 만들고 context를 심는다.
-- **Entry Spot을 하나 등록해야 한다.** 새로 만들어진 player가 처음 들어가는 자리다.
-- **C++의 entry spot만 입장 승인 callback이 필수다.** `lobby_spot_t::on_actor_join`이
-  그 관문이고, 거절하도록 두면 Actor 생성 자체가 실패한다.
+- **Actor는 생성자로 생성하지 않는다.** `player_factory_t`가 생성하고 context를 설정한다.
+- **Entry Spot을 등록해야 한다.** 새로 생성된 player가 처음 들어가는 지점이다.
+- **C++의 entry spot에는 입장 승인 callback이 필수다.** `lobby_spot_t::on_actor_join`이
+  admission을 처리하며, 거절하면 Actor 생성 자체가 실패한다.
 
 ### 10. Location — 위치 조회
 
@@ -550,8 +550,8 @@ $ curl -i http://127.0.0.1:5180/locations/players/ghost
 HTTP/1.1 404 Not Found
 ```
 
-조회는 Location Store만 읽고 대상에게는 아무것도 보내지 않는다. 지금 메시지를 받을 수 있는
-대상만 답하므로, 만들어지는 중이거나 옮겨 가는 중이면 빈 값이 온다.
+조회는 Location Store만 읽고 대상에게는 아무 message도 보내지 않는다. 지금 message를 받을 수 있는
+대상만 응답하므로, 생성 중이거나 이동 중이면 빈 값을 반환한다.
 
 ### 11. STREAM과 Session-Actor 연결
 
@@ -565,17 +565,17 @@ bound player: p1         # 연결을 player에 묶는다
 pushed: speedy           # player가 그 연결로 밀어 준다
 ```
 
-`pushed`가 핵심이다. client는 nickname 변경만 보냈고, 응답이 아니라 **player가 스스로 민
-알림**을 받았다.
+`pushed`는 client가 nickname 변경 요청의 응답이 아닌 **player가 연결로 보낸 알림**을
+받았음을 나타낸다.
 
 C++ 쪽에서 알아 둘 것은 다음과 같다.
 
-- **session handler 등록 표면이 없다.** 모든 packet이 `on_packet` 하나로 오고, 이 tutorial은
-  packet 이름으로 갈래를 나눈다. .NET·Java·Kotlin·Node는 handler를 따로 등록한다.
+- **session handler 등록 API가 없다.** 모든 packet은 `on_packet`으로 오고, 이 tutorial은
+  packet 이름으로 처리 경로를 구분한다. .NET·Java·Kotlin·Node는 handler를 별도로 등록한다.
 - **`reply_packet`은 Request에만 답한다.** 기다리는 요청이 없는 client에 밀 때는 actor 쪽에서
   `bound_session().send(...)`를 쓴다.
-- **connector는 manual dispatch로 열었다.** 그래야 wait를 걸기 전에 도착한 push가 버려지지
-  않고 큐에 남는다.
+- **connector는 manual dispatch로 시작한다.** wait를 등록하기 전에 도착한 push가 버려지지
+  않고 queue에 남기 위해서다.
 
 ### 12. HTTP client
 

@@ -1,23 +1,23 @@
 # Node/TypeScript Tutorial
 
-기능별 가이드가 코드를 읽어 가는 프로그램이다. 이 디렉터리는
-[`../../dotnet/tutorial/`](../../dotnet/tutorial/)의 **Channel 메시징과 id로 부르는 Spot
-하나**를 옮긴 것이다. Actor·STREAM은 담지 않는다.
+기능별 guide가 코드를 읽는 프로그램이다. 이 디렉터리는
+[`../../dotnet/tutorial/`](../../dotnet/tutorial/)의 **Channel 메시징과 id로 호출하는 Spot**을
+Node로 구현한다. Actor·STREAM은 다루지 않는다.
 
 ## quickstart·샘플과 나눠 두는 이유
 
 | | 목적 |
 |---|---|
-| [`../quickstart/`](../quickstart/) | 설치부터 첫 응답까지. 기능을 더하지 않는다 |
-| **`tutorial/`** (여기) | 기능을 차례로 쌓는다. 기능별 가이드가 이 코드를 읽는다 |
+| [`../quickstart/`](../quickstart/) | 설치와 첫 응답 확인. 기능을 추가하지 않는다 |
+| **`tutorial/`** (여기) | 기능을 단계별로 추가한다. 기능별 guide가 이 코드를 읽는다 |
 | [`../samples/`](../samples/) | 완결된 업무 흐름을 보이는 application |
 
 ## 전제 조건
 
 - **Node.js 22 이상.** `@zlink-systems/zlink`가 `"engines": { "node": ">=22" }`를 선언한다.
   `node --version`으로 확인한다.
-- **Docker Desktop(또는 Docker Engine)이 떠 있어야 한다.** Redis 하나를 그 안에서 띄운다(아래
-  「실행」). 그 외 설치할 것은 없다.
+- **Docker Desktop(또는 Docker Engine)이 실행 중이어야 한다.** Redis container를 실행한다(아래
+  「실행」). 추가 설치 항목은 없다.
 - **framework 0.18.1부터 Windows에서도 네이티브 빌드 없이 설치된다.** `@zlink-systems/zlink`
   1.2.1은 `prebuilds/linux-x64/`와 `prebuilds/win32-x64/`를 함께 싣는다(#656).
   `@zlink-systems/framework`가 그 버전을 정확히 고정하는 것은 0.18.1부터다 — 그 전 버전을
@@ -48,8 +48,8 @@ npm install
 | `reflect-metadata` | `0.2.2` | `@zlink-systems/nestjs@0.18.0`의 `^0.2.2` 범위를 만족한다 |
 | `@zlink-systems/zlink` | 고정하지 않는다 | `@zlink-systems/framework`가 정확히 고정한다. 0.18.0은 `1.2.0`, 0.18.1부터는 win32-x64 prebuild(#656)가 있는 `1.2.1`이다. 전이 해석에 맡긴다 |
 
-세 `@zlink-systems` 패키지 버전은 저장소의 `scripts/local-package/sync-version.py`가
-`framework/languages/node/VERSION`에 맞춰 갱신한다(저장소 안에서만 해당). 손으로 고치지 않는다.
+`@zlink-systems` package 버전은 저장소의 `scripts/local-package/sync-version.py`가
+`framework/languages/node/VERSION`에 맞춰 갱신한다(저장소 안에서만 해당). 직접 수정하지 않는다.
 
 ## 빌드
 
@@ -78,10 +78,10 @@ npm run build:http-client
 
 ## 실행
 
-Redis가 필요하다(Spot 단계가 쓴다). runner가 따로 없으므로 이 tutorial에서는 직접 하나
-띄운다 — 끝나면 직접 정리한다. 터미널을 두 개 열어 두고 따라가는 경우 Server를 먼저
-`npm run server`, Client를 `npm run client`로 각각 그대로 실행해도 된다. 아래 블록은 같은
-일을 자동으로 하도록 백그라운드로 띄우고 PID를 파일에 남긴다.
+Redis가 필요하다(Spot 단계가 사용한다). runner가 없으므로 이 tutorial에서는 Redis container를 직접
+실행하고 종료 시 정리한다. 별도 terminal에서 실행할 때는 Server를 먼저
+`npm run server`, Client를 `npm run client`로 실행할 수 있다. 아래 블록은 같은
+절차를 백그라운드 process로 실행하고 PID를 파일에 기록한다.
 
 ```bash title="linux"
 docker run -d --rm --name zlink-tutorial-node-redis -p 127.0.0.1:6379:6379 redis:7.2-alpine && until docker exec zlink-tutorial-node-redis redis-cli ping 2>/dev/null | grep -q PONG; do sleep 0.2; done
@@ -99,11 +99,11 @@ $clientProc = Start-Process -PassThru -NoNewWindow npm.cmd -ArgumentList 'run','
 Set-Content -Path client.pid -Value $clientProc.Id
 ```
 
-전체 기능은 아래 "단계"에서 하나씩 확인한다.
+전체 기능은 아래 "단계"에서 순서대로 확인한다.
 
 ## 검증
 
-Server와 Client가 각각 아래 줄을 찍으면 정상 기동이다.
+Server와 Client가 각각 아래 줄을 기록하면 정상적으로 시작한 상태다.
 
 ```
 server listening on tcp://0.0.0.0:7701 (mesh "game", routing id "game-server-1")
@@ -114,10 +114,10 @@ server admin listening on http://127.0.0.1:5481
 client listening on http://127.0.0.1:5480
 ```
 
-기동에는 최대 45초까지 걸릴 수 있다(`/mnt/d` 같은 WSL 9p mount 위라면 특히 — 아래
-「문제 해결」 참고). 그래서 확인 호출을 고정된 대기 대신 최대 60초 재시도 loop로
-넣는다. 성공 여부와 무관하게 항상 두 프로세스와 Redis container를 정리하고, 확인이
-끝내 실패했을 때만 0이 아닌 상태로 끝낸다.
+시작에는 최대 45초가 걸릴 수 있다(`/mnt/d` 같은 WSL 9p mount 위라면 특히 — 아래
+「문제 해결」 참고). 확인 호출은 고정된 대기 대신 최대 60초 retry loop로 실행한다. 성공 여부와
+관계없이 두 process와 Redis container를 정리하며, 확인에 실패한 경우에만 0이 아닌
+상태로 끝난다.
 
 ```bash title="linux"
 ready=""
@@ -152,26 +152,26 @@ docker rm -f zlink-tutorial-node-redis
 if (-not $ready) { exit 1 }
 ```
 
-성공하면 아래 값을 돌려준다.
+성공하면 아래 값을 반환한다.
 
 ```json
 {"playerId":"p1","nickname":"rookie","level":1}
 ```
 
-이 값이 오면 mesh·channel 등록과 RouteMesh 호출 경로가 모두 정상이라는 뜻이다. 각 단계의
+이 값은 mesh·channel 등록과 RouteMesh 호출 경로가 정상임을 나타낸다. 각 단계의
 기대 응답은 아래 "단계"와 "실제 출력"에 있다.
 
 ## 문제 해결
 
 | 증상 | 원인과 조치 |
 |---|---|
-| `docker: Cannot connect to the Docker daemon` | Docker Desktop(또는 dockerd)이 꺼져 있다. 띄운 뒤 다시 실행한다 |
-| `curl`이 `Connection refused`를 돌려준다 | Server(`npm run server`)가 아직 뜨지 않았거나 죽었다. 그 터미널의 로그를 먼저 본다 |
+| `docker: Cannot connect to the Docker daemon` | Docker Desktop(또는 dockerd)이 실행 중이 아니다. 시작한 뒤 다시 실행한다 |
+| `curl`이 `Connection refused`를 반환한다 | Server(`npm run server`)가 아직 시작하지 않았거나 종료됐다. 해당 터미널의 로그를 확인한다 |
 | `EADDRINUSE`(포트 충돌) | 아래 「포트」 표의 포트 중 하나를 다른 프로세스가 이미 쓰고 있다. 그 프로세스를 종료하거나 이 tutorial의 다른 실행 중인 인스턴스를 먼저 정리한다 |
 | `npm error gyp ERR! ... ZLINK_CORE_INSTALL_PREFIX must name an absolute installed Core ... package prefix`(Windows) | 이전 framework release가 고정한 `@zlink-systems/framework`가 아직 0.18.1 미만이라 `zlink@1.2.0`만 받는다 — win32-x64 prebuild(#656)는 framework 0.18.1(`zlink@1.2.1`)부터다. 그 버전으로 다시 받거나 WSL에서 실행한다 |
 | 위와 같은 오류(macOS) | `@zlink-systems/zlink@1.2.1`에도 아직 `darwin-*` prebuild가 없다. Linux(x64)나 Windows(0.18.1부터)에서 실행한다 |
 | `EBADENGINE`(Node 버전 경고) | Node.js 22 미만이다. 위 「전제 조건」대로 22 이상으로 올린다 |
-| `server listening`이 뜨는 데 20~45초가 걸린다 | 프로젝트가 `/mnt/d` 같은 WSL의 9p mount 위에 있으면 모듈 적재만으로 이만큼 걸린다. Linux 파일 시스템(`~/` 등)으로 옮기면 줄어든다 |
+| `server listening`이 표시되기까지 20~45초가 걸린다 | 프로젝트가 `/mnt/d` 같은 WSL의 9p mount 위에 있으면 module load에 이 시간이 걸린다. Linux 파일 시스템(`~/` 등)으로 옮기면 줄어든다 |
 
 ## 포트
 
@@ -189,18 +189,18 @@ if (-not $ready) { exit 1 }
 
 | 자리 | 역할 |
 |---|---|
-| `Shared/contracts.ts` | 두 쪽이 함께 쓰는 message 계약, packet 이름, mesh·channel 이름 |
-| `Server/main.ts` | mesh·channel·node 직접·ClientServer·Fanout 등록. runtime weight 한 자리만 HTTP로 연다 |
+| `Shared/contracts.ts` | 양쪽 process가 함께 쓰는 message 계약, packet 이름, mesh·channel 이름 |
+| `Server/main.ts` | mesh·channel·node 직접·ClientServer·Fanout 등록. runtime weight endpoint를 HTTP로 제공한다 |
 | `Server/Channel/` | channel·ClientServer·Fanout handler |
 | `Server/Ops/` | node 직접 호출 handler |
-| `Server/Spots/game-room.ts` | id로 불리는 Spot 하나와 그 handler 둘 |
-| `Server/Spots/match-queue.ts` | 첫 메시지가 만드는 Instance Spot 하나와 그 handler 하나 |
+| `Server/Spots/game-room.ts` | id로 호출하는 Spot과 handler |
+| `Server/Spots/match-queue.ts` | 첫 message가 생성하는 Instance Spot과 handler |
 | `Server/Dispatch/` | 모든 handler를 감싸는 filter |
 | `Client/main.ts` | HTTP를 받아 mesh·ClientServer·Fanout으로 호출한다 |
 | `Client/zlink-error-response.ts` | Framework 예외의 error kind를 HTTP 상태코드와 본문으로 옮긴다 |
-| `Server/Actors/player.ts` | id로 불리는 Actor 하나와 그 handler 둘 |
-| `Server/Spots/lobby-spot.ts` | 새로 만들어진 player가 처음 들어가는 Entry Spot |
-| `Server/Sessions/` | 외부 client 연결 하나를 맡는 session과 그 handler 둘 |
+| `Server/Actors/player.ts` | id로 호출하는 Actor와 handler |
+| `Server/Spots/lobby-spot.ts` | 새로 생성된 player가 처음 들어가는 Entry Spot |
+| `Server/Sessions/` | 외부 client 연결을 담당하는 session과 handler |
 | `StreamClient/` | mesh 밖의 client. framework가 아니라 connector만 참조하는 **별도 프로젝트**다 |
 | `HttpClient/` | mesh 밖의 HTTP client. http-client 패키지만 참조하는 **별도 프로젝트**다 |
 
@@ -235,14 +235,14 @@ curl -i http://127.0.0.1:5480/ops/nodes/no-such-node/status
 # channel 호출과 달리 후보를 고르지 않으므로 그대로 실패한다.
 ```
 
-`channelName`이 비어 있는 것이 요점이다. channel이 관여하지 않았다는 뜻이다. `calledBy`는
-부른 쪽 node의 routing id다. Client는 routing id를 고정하지 않으므로 Framework가 만든
+`channelName`이 비어 있으면 channel이 관여하지 않았음을 나타낸다. `calledBy`는
+호출한 node의 routing id다. Client는 routing id를 고정하지 않으므로 Framework가 만든
 `game-<uuid>` 꼴이 그대로 보인다. 받는 node가 `routingId('game-server-1')`로 id를 고정하는
 이유가 이것이다.
 
 ### 3. Channel 메시징 — ClientServer
 
-호출 코드는 위와 거의 같다. 다른 것은 **누가 받느냐**다. 부르는 쪽이 연결한 서버가 받는다.
+호출 코드는 위와 거의 같다. 다른 점은 **수신자**다. 호출하는 쪽이 연결한 server가 받는다.
 
 ```bash
 curl -X POST http://127.0.0.1:5480/players/p1/tickets
@@ -261,8 +261,8 @@ curl -X POST http://127.0.0.1:5480/notices \
 
 ### 5. Filter
 
-`Server/Dispatch/call-log-filter.ts` 하나가 위 네 경로를 모두 감싼다. 위 호출을 차례로 넣으면
-Server 로그가 이렇게 된다.
+`Server/Dispatch/call-log-filter.ts`가 앞서 설명한 경로를 모두 감싼다. 호출하면
+Server 로그가 다음과 같이 기록된다.
 
 ```
 LOG [CallLogFilter] dispatch start: GetPlayerProfile
@@ -283,12 +283,12 @@ Fanout 구독 handler(`MaintenanceNotice`)까지 filter가 감싼다.
 
 ### 6. 실행 중 weight 변경
 
-channel weight는 이 node가 도는 동안 바꿀 수 있는 값이다. 0으로 두면 socket은 열려 있고
-처리 중인 호출도 끝나지만, 다른 node가 새 호출의 대상으로 이 node를 고르지 않는다. 100이
-보통 값이다.
+channel weight는 node가 실행 중일 때 바꿀 수 있다. 0으로 두면 socket은 열려 있고
+처리 중인 호출도 끝나지만, 다른 node는 새 호출의 대상으로 이 node를 선택하지 않는다.
+기본값은 100이다.
 
-Server는 이 한 자리를 위해 `127.0.0.1:5481`에 HTTP를 연다. body가 없는 호출이므로 새 값은
-query string으로 준다.
+Server는 runtime weight endpoint를 위해 `127.0.0.1:5481`에서 HTTP를 제공한다. body가 없는
+호출이므로 새 값은 query string으로 지정한다.
 
 ```bash
 curl -u ops:tutorial-admin -X POST 'http://127.0.0.1:5481/admin/channels/profile/weight?value=0'
@@ -298,17 +298,17 @@ curl -u ops:tutorial-admin -X POST 'http://127.0.0.1:5481/admin/channels/profile
 # {"channel":"profile","weight":100}
 ```
 
-weight를 0으로 둔 동안 무엇이 멈추는지가 요점이다. `profile` channel을 거치는 1번과 2번만
-대상을 찾지 못하고, node 직접 호출·ClientServer·Fanout은 그대로 200과 202를 받는다. 셋은
-channel 후보 선택을 거치지 않기 때문이다. 아래 "실제 출력"에 세 벌을 모두 실었다.
+weight가 0인 동안 `profile` channel 호출은 대상을 찾지 못한다. node 직접 호출·ClientServer·Fanout은
+그대로 200과 202를 받는다. channel 후보 선택을 거치지 않기 때문이다. 아래 "실제 출력"에
+결과를 실었다.
 
-실패한 두 호출은 모두 `Unavailable`로 끝나고 503을 받는다. 상태코드를 정하는 것은
-`Client/zlink-error-response.ts`다. Framework가 던지는 `ZLinkFrameworkException`의 error
-kind를 HTTP 상태코드로 옮기는 자리이고, 이것이 없으면 둘 다 500이 되어 부르는 쪽이 "지금 받을
-node가 없다"와 "서버에 결함이 있다"를 구분하지 못한다.
+실패한 호출은 `Unavailable`로 끝나고 503을 받는다. `Client/zlink-error-response.ts`는
+Framework가 던지는 `ZLinkFrameworkException`의 error kind를 HTTP 상태 코드로 변환한다.
+이 mapping이 없으면 모두 500이 되어 호출하는 쪽이 "지금 받을 node가 없다"와 "server에 결함이 있다"를 구분하지 못한다.
 
-등록하지 않은 channel 이름은 `ZLinkConfigurationException`이 되고, 이 route는 그것을 400으로
-돌려준다.
+등록하지 않은 channel 이름은 `ZLinkConfigurationException`이 되고, 이 route는
+그 값을 400으로 반환한다.
+
 
 ```bash
 curl -u ops:tutorial-admin -X POST 'http://127.0.0.1:5481/admin/channels/no-such-channel/weight?value=50'
@@ -353,9 +353,9 @@ printf '%s\n' '{"playerId":"p1","text":"imported"}' \
 
 ### 7. Spot — id로 부르기
 
-지금까지의 호출은 모두 대상을 이름으로 골랐다. channel 이름을 주면 Framework가 그 channel을
-맡은 node 중 하나를 고르고, routing id를 주면 그 node가 답했다. Spot은 다르다. **id 하나를
-주면 그 id의 방이 지금 있는 node로 간다.**
+지금까지의 호출은 모두 이름으로 대상을 선택했다. channel 이름을 주면 Framework가 해당 channel을
+담당하는 node를 선택하고, routing id를 주면 해당 node가 응답한다. Spot은 다르다. **id를
+주면 해당 id의 방이 있는 node로 호출을 보낸다.**
 
 ```bash
 curl -X POST http://127.0.0.1:5480/rooms   -H 'Content-Type: application/json' -d '{"title":"lobby"}'
@@ -368,18 +368,18 @@ curl http://127.0.0.1:5480/rooms/9d36f685-7057-42ad-a341-f7ef080df496
 # {"title":"lobby","chat":["p1: hello"]}
 ```
 
-id는 Framework가 만든다. 첫 호출은 응답을 기다리지 않는 단방향이고, 두 번째는 방이 만든 답을
-받는다. 방은 두 호출 사이에 상태를 들고 있었다.
+id는 Framework가 만든다. 첫 호출은 응답을 기다리지 않는 단방향이고, 다음 호출은 방이 만든 응답을
+받는다. 방은 호출 사이에 상태를 유지한다.
 
 Node 쪽에서 알아 둘 것은 다음과 같다.
 
-- **Spot 하나를 등록하는 순간 Location Store와 Relocation Store가 모두 필요하다.** 등록
+- **Spot을 등록하면 Location Store와 Relocation Store가 모두 필요하다.** 등록
   자체가 조건이라 relocation을 꺼도 Relocation Store를 요구한다.
-- **부르는 쪽 client가 channel과 다르다.** channel은 `ZLINK_ROUTE_CLIENT`, Spot 호출은
+- **호출하는 쪽의 client가 channel과 다르다.** channel은 `ZLINK_ROUTE_CLIENT`, Spot 호출은
   `ZLINK_SPOT_OUTBOUND`, 방을 만드는 것은 `ZLINK_SPOT_MANAGER`다. .NET의
   `IZLinkSpotClient`·`IZLinkSpotManager`에 각각 대응한다.
-- **Node user Spot은 admit할 actor 타입을 언제나 이름 짓는다.** 이 방은 actor를 받지 않으므로
-  기본 타입을 쓰고 join을 모두 거절한다. .NET의 `IZLinkSpot`에는 그 타입 인자가 없다.
+- **Node user Spot은 admission 대상 actor type을 지정한다.** 이 방은 actor를 받지 않으므로
+  기본 type을 사용하고 join을 모두 거절한다. .NET의 `IZLinkSpot`에는 해당 type 인자가 없다.
 
 ### 8. Instance Spot — 첫 메시지가 만드는 큐
 
@@ -395,22 +395,22 @@ curl -X POST http://127.0.0.1:5480/match-queues/ranked \
 # {"waiting":2}
 ```
 
-큐는 넣은 것을 계속 들고 있다. 같은 id로 또 호출하면 숫자가 이어진다. 처음부터 다시 보려면
-다른 id를 쓴다.
+queue는 값을 유지한다. 같은 id로 다시 호출하면 숫자가 이어진다. 처음부터 확인하려면
+다른 id를 사용한다.
 
 Node 쪽에서 알아 둘 것은 다음과 같다.
 
-- **Instance Spot은 `ZLinkInstanceSpot`을 구현하고 actor 타입을 이름 짓지 않는다.** 방과 달리
-  create·join callback이 없다. handler는 방과 같은 `zlinkSpotPacketHandler` decorator로 큐
-  타입과 packet 이름을 적고, Spot과 handler 모두 module의 `providers`에 올린다.
-- **부르는 쪽은 `requestToSpot(...)`에 `.instanceSpot(...).inMesh(...)`를 더한다.** 아직 없는
-  큐를 어느 mesh에 어떤 stable type으로 만들지 이 두 호출이 정한다. 방을 부를 때는 id만으로
-  충분했다.
+- **Instance Spot은 `ZLinkInstanceSpot`을 구현하며 actor type을 지정하지 않는다.** 방과 달리
+  create·join callback이 없다. handler는 방과 같은 `zlinkSpotPacketHandler` decorator로 queue
+  type과 packet 이름을 지정하고, Spot과 handler를 module의 `providers`에 등록한다.
+- **호출하는 쪽은 `requestToSpot(...)`에 `.instanceSpot(...).inMesh(...)`를 추가한다.** 아직 없는
+  queue를 어느 mesh에 어떤 stable type으로 만들지 이 호출이 정한다. 방을 호출할 때는 id만으로
+  충분하다.
 
 ### 9. Actor — id로 부르는 플레이어
 
-방이 여럿이 함께 쓰는 자리라면 Actor는 개체 하나다. id를 **부르는 쪽이 정하고**, 같은 id로
-다시 만들면 있던 것을 돌려준다.
+방이 여러 사용자가 공유하는 공간이라면 Actor는 개별 객체다. **호출하는 쪽이** id를 정하고, 같은 id로
+다시 만들면 기존 객체를 반환한다.
 
 ```bash
 curl -X POST http://127.0.0.1:5480/players/p7   -H 'Content-Type: application/json' -d '{"nickname":"rookie"}'
@@ -451,12 +451,12 @@ curl -i http://127.0.0.1:5480/locations/players/ghost
 # 404
 ```
 
-조회는 Location Store만 읽고 대상에게는 아무것도 보내지 않는다. 지금 메시지를 받을 수 있는
-대상만 답하므로, 만들어지는 중이거나 옮겨 가는 중이면 빈 값이 온다.
+조회는 Location Store만 읽고 대상에게는 아무 message도 보내지 않는다. 지금 message를 받을 수 있는
+대상만 응답하므로, 생성 중이거나 이동 중이면 빈 값을 반환한다.
 
 ### 11. STREAM과 Session-Actor 연결
 
-외부 client가 붙는다. framework가 아니라 connector만 참조한다.
+외부 client가 연결한다. framework가 아니라 connector만 참조한다.
 
 ```bash
 cd StreamClient
@@ -472,15 +472,15 @@ bound player: p1         # 연결을 player에 묶는다
 pushed: speedy           # player가 그 연결로 밀어 준다
 ```
 
-`pushed`가 핵심이다. client는 nickname 변경만 보냈고, 응답이 아니라 **player가 스스로 민
-알림**을 받았다.
+`pushed`는 client가 nickname 변경 요청의 응답이 아닌 **player가 연결로 보낸 알림**을 받았음을 나타낸다.
 
 ### 12. HTTP client
 
-`HttpClient`는 tutorial Client와 Server가 제공하는 HTTP 표면을
+`HttpClient`는 tutorial Client와 Server가 제공하는 HTTP API를
 `@zlink-systems/http-client`의 공개 API로 호출한다. typed·raw·body-only 응답, 요청별
-timeout과 header, gzip·redirect·Basic 인증, download/upload stream, 예외 kind를 한 실행에서
-차례로 확인한다.
+timeout과 header, gzip·redirect·Basic 인증, download/upload stream, 예외 kind를
+순서대로 확인한다.
+
 
 ```bash title="linux"
 cd HttpClient
@@ -579,8 +579,8 @@ $ curl -s -w '\nHTTP_STATUS:%{http_code}\n' http://127.0.0.1:5480/ops/nodes/no-s
 HTTP_STATUS:404
 ```
 
-weight를 0으로 내리고 같은 다섯 호출을 다시 넣은 뒤 100으로 되돌린 것이 아래다. 위 여섯
-호출과 같은 실행에서 이어 받았다.
+아래는 weight를 0으로 설정하고 호출한 뒤 100으로 되돌린 같은 실행의
+출력이다.
 
 ```
 $ curl -s -X POST -w '\nHTTP_STATUS:%{http_code}\n' \
@@ -647,26 +647,26 @@ $ curl -s -X POST -w '\nHTTP_STATUS:%{http_code}\n' \
 HTTP_STATUS:400
 ```
 
-weight가 0인 동안 1번은 `errno 0`으로, 2번은 `One-way send route is not connected.`로 끝난다.
-이름이 없는 node를 부른 위의 `errno 14`와 값이 다르다. 3·4·5번은 같은 구간에서 그대로
-200·202·200을 받았다.
+weight가 0인 동안 `profile` request는 `errno 0`으로, one-way send는 `One-way send route is not connected.`로 끝난다.
+이름이 없는 node 호출의 `errno 14`와 값이 다르다. ClientServer·Fanout·node 직접 호출은 같은 구간에서
+200·202·200을 반환한다.
 
-**weight를 0으로 둔 두 실패는 error kind가 같다** — 둘 다 `Unavailable`이라서 503이다. 후보를
-고르는 단계에서 남은 member가 없다는 뜻이고, 송신 경로와 연결은 그대로 있으므로 `NotFound`가
-아니다. framework 0.16.0이 request와 one-way를 이 하나로 맞췄다([#498]). 그 전까지 request는
+**weight를 0으로 둔 실패의 error kind는 같다** — 모두 `Unavailable`이라서 503이다. 후보를
+선택하는 단계에서 남은 member가 없다는 뜻이고, 송신 경로와 연결은 그대로 있으므로 `NotFound`가
+아니다. framework 0.16.0이 request와 one-way의 error kind를 일치시켰다([#498]). 그 전까지 request는
 `ProtocolError`라서 400이었다.
 
-이름이 없는 node를 부른 호출만 `NotFound`라서 404다. 후보를 고르지 않고 routing id로 대상을
-적는 경로이고, 그 id를 아는 node가 없다는 뜻이기 때문이다. 이 자리들을 500 하나로 뭉뚱그리지
-않는 것이 `Client/zlink-error-response.ts`를 둔 이유다.
+이름이 없는 node 호출만 `NotFound`라서 404다. 후보를 선택하지 않고 routing id로 대상을
+지정하는 경로이며, 해당 id를 아는 node가 없기 때문이다. `Client/zlink-error-response.ts`는
+이 상황을 500 하나로 변환하지 않기 위해 사용한다.
 
 [#498]: https://github.com/zlink-systems/zlink/issues/498
 
-`calledBy`·`uptime`·`processId`는 실행할 때마다 달라진다. 위 값은 한 번의 실행에서 받은 것이다.
+`calledBy`·`uptime`·`processId`는 실행할 때마다 달라진다. 위 값은 한 번의 실행에서 얻은 값이다.
 
 ## 문서가 읽는 방식
 
-문서는 코드를 손으로 옮겨 적지 않고 이 파일들에서 구간을 읽는다. 구간은 소스의
+문서는 코드를 직접 옮겨 적지 않고 이 파일에서 구간을 읽는다. 구간은 소스의
 `--8<--` 마커가 정한다. 마커 이름은 .NET tutorial과 같다.
 
 | 마커 | 자리 |

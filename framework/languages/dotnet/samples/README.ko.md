@@ -1,7 +1,7 @@
 # ZLink Framework .NET 샘플
 
-.NET 샘플은 `Directory.Packages.props`가 고정한 버전의 배포 패키지 `Zlink.Framework`를
-여러 server 역할 process와 실행 가능한 client 시나리오로 보인다. 도메인 흐름과
+.NET 샘플은 `Directory.Packages.props`가 고정한 버전의 배포 package `Zlink.Framework`를
+여러 server 역할 process와 실행 가능한 client 시나리오로 보여 준다. 도메인 흐름과
 검증 규칙은
 [공용 sample 시나리오](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/sample/README.ko.md)를
 따른다.
@@ -21,7 +21,7 @@
   PowerShell 7 모두에서 동작한다.
 - ZoneWorld의 `--browser-smoke` 플래그는 추가로 Node.js와 npm이
   필요하고 저장소 전체 checkout에서만 동작한다([ZoneWorld](ZoneWorld) 참고).
-  기본값이 꺼짐이고 아래 7개 샘플 확인에는 필요 없다.
+  기본값은 꺼져 있으며 아래 sample 확인에는 필요 없다.
 
 ## 내려받기와 설치
 
@@ -34,7 +34,7 @@
 ## 빌드
 
 `run_sample.sh`/`run_sample.ps1` 각각이 실행 전에 그 샘플을 스스로 빌드하므로
-따로 밟을 빌드 단계는 없다. 샘플 하나만 손으로 빌드해 컴파일만 확인하려면:
+별도의 빌드 단계는 없다. sample 하나만 직접 빌드하여 컴파일만 확인하려면 다음 명령을 사용한다.
 
 ```bash title="linux"
 dotnet build TicTacToe/TicTacToe.sln
@@ -47,7 +47,7 @@ dotnet build TicTacToe\TicTacToe.sln
 ## 실행
 
 각 샘플 root가 `run_sample.sh`와 `run_sample.ps1`을 하나씩 갖고, 한 번 실행하면
-샘플 하나가 돈다.
+sample 하나가 실행된다.
 [공용 sample 문서](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/sample/README.ko.md)의
 "The Sample Run Script And Redis Isolation Standard" 절이 이 규칙을 소유하며,
 아래는 이 언어의 명령만 적는다. 이 `samples` 디렉터리(저장소 checkout이면
@@ -65,9 +65,9 @@ set -o pipefail
 if ($LASTEXITCODE -ne 0) { throw "run_sample.ps1 failed with exit $LASTEXITCODE" }
 ```
 
-.NET 샘플은 7개이므로 모두 확인하려면 7번 실행한다. `Bingo`, `DeliveryDispatch`,
-`GameQuest`, `ShoppingMall`, `SupportChat`, `TicTacToe`, `ZoneWorld`를(그리고 각자
-아래 완료 마커도) 하나씩 바꿔 가며 돌린다.
+모든 sample을 확인하려면 `Bingo`, `DeliveryDispatch`, `GameQuest`,
+`ShoppingMall`, `SupportChat`, `TicTacToe`, `ZoneWorld`를 각각 실행하고 아래 완료
+marker를 확인한다.
 
 러너는 역할별 설정 파일을 만들고, 각 역할을 별도 process로 시작하고, 준비될 때까지
 기다리고, probe나 client self-check를 실행한 뒤, 자신이 만든 process와 Redis
@@ -75,8 +75,8 @@ if ($LASTEXITCODE -ne 0) { throw "run_sample.ps1 failed with exit $LASTEXITCODE"
 
 ## 검증
 
-성공한 실행은 빌드하고 모든 시나리오를 돌리고 모든 역할을 깨끗이 종료한 뒤, 종료
-직전 마지막 줄로 그 샘플의 완료 마커를 찍고 exit code `0`으로 끝난다.
+성공한 실행은 빌드와 모든 시나리오를 마치고 모든 역할을 정상 종료한다. 마지막 줄에는 해당
+sample의 완료 마커를 기록하고 종료 코드 `0`으로 끝난다.
 
 | 샘플 | 마커 |
 |---|---|
@@ -88,8 +88,8 @@ if ($LASTEXITCODE -ne 0) { throw "run_sample.ps1 failed with exit $LASTEXITCODE"
 | GameQuest | `gamequest-placement=completed` |
 | ZoneWorld | `zoneworld=completed` |
 
-TicTacToe라면 위 "실행"에서 만든 `tictactoe-run.log`가
-`tictactoe-placement=completed`로 끝나는지 본다.
+TicTacToe는 위 "실행"에서 만든 `tictactoe-run.log`의 마지막 줄이
+`tictactoe-placement=completed`인지 확인한다.
 
 ```bash title="linux"
 grep -q 'tictactoe-placement=completed' tictactoe-run.log
@@ -111,9 +111,9 @@ Redis 컨테이너를 정리한다.
   필요하다는 메시지와 함께 즉시 종료한다. Docker Desktop(또는 Docker Engine)을
   띄우고 다시 실행한다.
 - **`Could not find N free ports` / 어떤 역할이 자기 endpoint에 bind하지 못한다** —
-  이 머신의 다른 무언가가 샘플의 임시 포트 범위(그 실행의 Redis 컨테이너용
-  22000–22099, 역할 endpoint용 22100–23999) 중 하나를 이미 쓰고 있다. 그것을
-  닫거나 그냥 다시 실행한다 — 러너는 실행마다 새로 무작위 포트 조합을 고른다.
+  다른 process가 sample의 임시 포트 범위(그 실행의 Redis container용
+  22000–22099, 역할 endpoint용 22100–23999)를 이미 사용 중이다. 해당 process를
+  종료하거나 다시 실행한다 — runner는 실행마다 새 임의 포트 조합을 선택한다.
 - **`dotnet`이 호환되는 SDK가 없다고 한다** — .NET 8.0 SDK를 설치한다. 더 최신
   major SDK만으로는 그것이 `8.0.x` 런타임을 함께 담고 있지 않으면 부족하다.
 - 실행이 중간에 끊겨(Ctrl-C, 셸 강제 종료) 자기 정리가 돌지 못한 컨테이너나
@@ -124,7 +124,7 @@ Redis 컨테이너를 정리한다.
 
 | 샘플 | 목적 | Peer topology |
 |---|---|---|
-| [TicTacToe](TicTacToe) | API 역할 둘과 Play 역할 둘로 방 조회, Actor 턴, 실시간 게임 메시지를 보인다. | 수동 MeshNode peer; Redis 방 route store |
+| [TicTacToe](TicTacToe) | API 역할과 Play 역할로 방 조회, Actor 턴, 실시간 게임 메시지를 보인다. | 수동 MeshNode peer; Redis 방 route store |
 | [Bingo](Bingo) | 세션 admission, Entry·room Spot, Actor binding, 타이머 추첨, bound-session 알림을 보인다. | Redis location store |
 | [SupportChat](SupportChat) | API·Support·Session 역할로 대화 소유권, 재연결, idle timeout, 종료 알림을 보인다. | Redis location store |
 | [ShoppingMall](ShoppingMall) | Commerce API와 order workflow 역할로 event-sourced 주문, projection, fanout event를 보인다. | Redis location store |
@@ -132,13 +132,13 @@ Redis 컨테이너를 정리한다.
 | [GameQuest](GameQuest) | Session과 player quest owner 역할로 event-sourced quest 진행과 projection을 보인다. | Redis location store |
 | [ZoneWorld](ZoneWorld) | Gateway·ZoneNode·Ops 역할로 Actor 이동, zone Logical Multicast, Node 직접 호출, runtime event, 브라우저 시각화를 보인다. | Redis location store |
 
-TicTacToe만 MeshNode peer를 수동으로 설정한다. 나머지 샘플은 모두 Redis
-location store로 Spot·Actor 위치를 찾고 MeshNode peer를 맺는다.
+TicTacToe만 MeshNode peer를 수동으로 설정한다. 나머지 sample은 Redis
+Location Store로 Spot·Actor 위치를 찾고 MeshNode peer를 구성한다.
 
 ## MeshNode와 Channel 이름
 
-물리 mesh는 process당 하나의 MeshNode를 갖는다. `ChannelName(...)`은 그
-MeshNode에 논리적 서비스 소속을 추가할 뿐 다른 ROUTER endpoint를 만들지 않는다.
+물리 mesh는 process마다 MeshNode 하나를 둔다. `ChannelName(...)`은 MeshNode에 논리적
+서비스 소속을 추가할 뿐 별도 ROUTER endpoint를 만들지 않는다.
 Node 직접 호출, ChannelName select-one, Spot, Actor, Logical Multicast 연산은
 모두 같은 MeshNode를 공유한다. Classic fanout만 별도의 PUB/SUB channel이다.
 
@@ -155,15 +155,15 @@ options.AddFanoutChannel("events")
 ## 설정과 계약
 
 Framework host는 endpoint, Redis, routing ID, timeout, logging 설정을 역할별
-설정 파일에서 읽어 `AddZLinkFramework(...)`에 타입 있는 설정으로 넘긴다.
-Application 코드는 그 값을 환경 변수에서 직접 읽지 않는다. 독립 client는 알아야
-할 외부 endpoint와 시나리오 옵션만 검증된 명령줄 인자나 자기 설정 파일로 받는다.
+설정 파일에서 읽어 `AddZLinkFramework(...)`에 타입 있는 설정으로 전달한다.
+Application 코드는 값을 환경 변수에서 직접 읽지 않는다. 독립 client는 필요한
+외부 endpoint와 시나리오 옵션만 검증된 명령줄 인자나 설정 파일로 받는다.
 
-Shared project는 client와 server 역할이 함께 직렬화하는 message 계약만 담는다.
+Shared 프로젝트는 client와 server 역할이 함께 직렬화하는 message 계약만 둔다.
 Server topology와 framework 설정은 `Server/Configuration` 아래에, client와
-probe 설정은 각자의 project에 속한다.
+probe 설정은 각 프로젝트에 둔다.
 
-TicTacToe를 손으로 실행하려면 역할마다 자기 설정 파일을 준다.
+TicTacToe를 직접 실행할 때는 역할마다 설정 파일을 지정한다.
 
 ```bash
 dotnet run --project TicTacToe/Server.Play -- --config ./appsettings.play-a.json
