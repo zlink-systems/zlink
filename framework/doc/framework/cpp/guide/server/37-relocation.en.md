@@ -84,26 +84,36 @@ The registration call is named per language — [the Spot registration that choo
 
 ## 3. When State Is Captured — the Factory Registration Decides
 
-The Framework stops accepting new turns on the departing node, captures state through the adapter,
-restores it on the destination node and then hands authority over. **Who decides the moment of
-capture** is chosen at factory registration.
+One handler invocation or one tick is a [turn](32-execution-model.en.md#1-the-queues-work-waits-in),
+and the next turn starts only when that turn ends. The Framework never interrupts a running turn,
+so it can capture state only between turns. **Who decides the moment of capture** is chosen at
+factory registration.
 
 | Mode | Who decides | Where it is used |
 | --- | --- | --- |
-| Framework-managed (default) | The Framework — between a finished turn and the next | Most Spots |
-| Application-signaled | The application — at the end of the turn that signaled | A Spot whose unit of consistency spans several turns |
+| Framework-managed (default) | The instant the current turn ends after a move request | A Spot where one message is one state change (a chat room) |
+| Application-signaled | The instant the turn that called `RelocationReady().Defer()` ends | A Spot whose unit spans several turns (an FPS round) |
 
-**When the default mode holds.** The Framework never interrupts a running turn. A handler or a tick
-is captured only after it finishes, so when a state change completes within one turn, state
-captured at a turn boundary is always consistent.
+**Default mode.** When a move request arrives, the Framework waits for the current turn to end and
+calls the adapter in that gap. For a Spot where one message is one state change, such as a chat
+room, the state in that gap is always whole.
 
-**When it does not hold.** If the unit of consistency spans several turns, state captured at a turn
-boundary may be incomplete. A round in a shooter is such a case — a start tick, many input packets
-and a settlement tick, where restoring the intermediate state cannot continue the round.
-**The Framework knows turn boundaries but not the unit of consistency the application defined.**
+**Application-signaled mode.** An FPS round may consist of a start tick, many input packets, and a
+settlement tick, so its state between those turns is a half-finished round. Choose this mode when
+registering the factory, then call `RelocationReady().Defer()` in the handler that closes the unit.
+It says, "after this turn ends, it is safe to capture." New turns keep running, and state keeps
+changing, until the signalled turn ends.
 
-Register the application-signaled mode and the Framework does not capture on its own; it waits for
-the signaled moment. The mode is available in a `SpotWide` User Spot only —
+<iframe class="zlink-diagram" src="/common/diagrams/37-relocation-capture-en.html" title="When state is captured after a move request" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/37-relocation-capture-en.html" target="_blank">↗ View larger</a></p>
+
+Bingo sends this signal in the turn that ends a round.
+
+```cpp
+--8<-- "framework/languages/cpp/samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/Handlers/bingo_room_draw_timer_handler.hpp:doc-relocation-ready"
+```
+
+The application-signaled mode is available in a `SpotWide` User Spot only —
 [The Execution Model](32-execution-model.en.md) covers that boundary.
 
 ## 4. The Unit the Execution Mode Decides

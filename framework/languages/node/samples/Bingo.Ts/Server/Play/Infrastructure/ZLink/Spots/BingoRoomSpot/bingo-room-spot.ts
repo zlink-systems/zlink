@@ -272,9 +272,11 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
       );
       await this.publishReward(state);
       await this.leaveFinishedActors();
+      // --8<-- [start:doc-relocation-ready]
       // §7.6: the completed round is the safe application boundary. This is
       // deliberately the final Framework operation in this turn.
       this.context.relocationReady().defer();
+      // --8<-- [end:doc-relocation-ready]
     }
     return state;
   }

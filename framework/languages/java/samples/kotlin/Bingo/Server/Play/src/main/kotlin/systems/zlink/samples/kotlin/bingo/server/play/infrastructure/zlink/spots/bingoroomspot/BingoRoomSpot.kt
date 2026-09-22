@@ -232,9 +232,11 @@ class BingoRoomSpot(
         publishEvents(change.events, actors::get)
         publishWinner(change)
         leaveFinishedActors(change)
+        // --8<-- [start:doc-relocation-ready]
         if (change.state.status == BingoRoomGame.Finished) {
             context.relocationReady().defer()
         }
+        // --8<-- [end:doc-relocation-ready]
     }
 
     // --8<-- [end:doc-bingo-draw-timer]

@@ -82,25 +82,33 @@ join할 때와 운영에서 node를 비울 때 모두 이 정책을 따른다.
 
 ## 3. 상태를 담는 시점 — factory 등록이 정한다
 
-Framework는 떠나는 node에서 새 turn 받기를 닫고, adapter로 상태를 담고, 도착 node에서 푼 뒤
-권한을 넘긴다. **상태를 담는 그 시점**을 누가 정하는지는 factory 등록에서 고른다.
+handler 한 번·tick 한 번은 각각 하나의 [turn](32-execution-model.ko.md#1-작업이-대기하는-queue)이고,
+한 turn이 끝나야 다음 turn이 시작한다. Framework는 실행 중인 turn을 중단하지 않으므로 상태를 담을
+수 있는 순간은 turn 사이뿐이다. **상태를 담는 그 시점**을 누가 정하는지는 factory 등록에서 고른다.
 
 | 모드 | 시점을 정하는 쪽 | 사용하는 자리 |
 | --- | --- | --- |
-| Framework가 정함(기본) | Framework — 끝난 turn과 다음 turn 사이 | 대부분의 Spot |
-| application이 신호함 | application — 신호한 turn의 끝 | 상태의 일관성 단위가 여러 turn에 걸치는 Spot |
+| Framework가 정함(기본) | 이동 요청 뒤 지금 turn이 끝난 순간 | message 하나가 상태 변경 하나인 Spot(채팅방) |
+| application이 신호함 | `RelocationReady().Defer()`를 부른 turn이 끝난 순간 | 여러 turn이 한 단위인 Spot(FPS 라운드) |
 
-**기본 모드가 성립하는 조건.** Framework는 실행 중인 turn을 중단하지 않는다. handler 하나와 tick
-하나는 끝난 뒤에야 상태를 담으므로, 상태 변경이 한 turn 안에서 끝나면 turn 경계에서 담은 상태는
-언제나 일관된다.
+**기본 모드.** 이동 요청이 오면 Framework는 지금 turn이 끝나기를 기다렸다가 그 틈에 adapter를
+부른다. message 하나가 상태 변경 하나인 Spot, 예를 들어 채팅방에서는 그 틈의 상태가 항상 온전하다.
 
-**기본 모드가 성립하지 않는 조건.** 일관성 단위가 여러 turn에 걸쳐 있으면 turn 경계에서 담은
-상태가 불완전할 수 있다. FPS 라운드가 그런 예다 — 시작 tick, 여러 입력 packet, 정산 tick으로
-이뤄지고 그 중간 상태는 복원해도 라운드를 이어서 진행할 수 없다. **Framework는 turn 경계는 알지만
-application이 정의한 일관성 단위는 알지 못한다.**
+**application 신호 모드.** FPS 라운드처럼 시작 tick·여러 입력 packet·정산 tick이 한 단위이면, 그
+사이 turn 경계의 상태는 반쯤 진행된 라운드다. factory 등록에서 이 모드를 고르고 단위를 닫는 handler
+안에서 `RelocationReady().Defer()`를 부른다. 이는 "이 turn이 끝나면 담아도 된다"는 신호다. 신호한
+turn이 끝날 때까지 새 turn은 계속 실행되고 상태도 바뀐다.
 
-application이 신호하는 모드를 등록하면 Framework는 상태를 스스로 담지 않고 신호한 시점까지
-기다린다. 이 모드는 `SpotWide` User Spot에서만 사용할 수 있다 —
+<iframe class="zlink-diagram" src="/common/diagrams/37-relocation-capture.html" title="이동 요청에서 상태를 담는 시점" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/37-relocation-capture.html" target="_blank">↗ 크게 보기</a></p>
+
+Bingo는 라운드를 끝내는 turn에서 이 신호를 낸다.
+
+```java
+--8<-- "framework/languages/java/samples/java/Bingo/Server/Play/src/main/java/systems/zlink/samples/bingo/server/play/infrastructure/zlink/spots/bingoroomspot/BingoRoomSpot.java:doc-relocation-ready"
+```
+
+application이 신호하는 모드는 `SpotWide` User Spot에서만 사용할 수 있다 —
 [실행 모델](32-execution-model.ko.md)이 그 경계를 다룬다.
 
 ## 4. execution mode가 정하는 이동 단위
