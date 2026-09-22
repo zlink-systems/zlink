@@ -60,7 +60,7 @@ startup.**
 | --- | --- | --- |
 | Codec registration | Payload serialization format | Built-in JSON |
 | `bindHost` | The address a listener binds | `127.0.0.1` |
-| `advertiseHost` | The address given to peers | Not set — the bind address is used |
+| `advertiseHost` | The address given to peers | Not set — the non-wildcard bind address or wildcard loopback |
 | `defaultRequestTimeout` | How long a request waits for its reply | 30 seconds |
 | `sessionReplacementCallbackTimeout` | How long a session replacement callback may run | 30 seconds |
 | Stream compression | STREAM payload compression | LZ4 in use |
@@ -72,6 +72,15 @@ startup.**
 
 - **The bind address defaults to loopback.** Set the bind address and the advertised address
   separately when a node or client on another host has to connect.
+- The `listen` host is where the current process binds its socket, and `0.0.0.0` accepts on every
+  local interface. `advertiseHost` is the address peers actually dial and the Location Store publishes. Use
+  `127.0.0.1` for a wildcard bind in a single-machine example. For multiple hosts, containers,
+  NAT, or Kubernetes, set a reachable IP address or DNS name for that node, using a Pod IP or
+  per-Pod DNS in Kubernetes. When omitted,
+  [Network Listener Identity §2.1](../../../common/spec/server/02-channel-transport/04-network-listener-identity.en.md#21-defaults)
+  advertises a non-wildcard bind host or the same-family loopback for a wildcard; an advertised
+  host cannot be a wildcard. [Channel Messaging](20-channel-messaging.en.md#32-the-receiving-side--the-node-serving-the-channel)
+  shows each language's actual option surface in its mesh registration block.
 - **STREAM compression starts enabled.** Turn it off explicitly in the compression settings.
 - **The CPU worker pool has no queue limit.** The Application job queue is what limits intake
   (§3). `defaultRequestTimeout` rejects values of `0` or below.

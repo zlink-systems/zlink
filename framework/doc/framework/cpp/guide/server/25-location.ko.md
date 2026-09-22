@@ -18,6 +18,8 @@ title: "Location · C++"
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
+이 장은 [tutorial의 `Client` 디렉터리와 「실행」 절](https://github.com/zlink-systems/zlink-cpp-examples/blob/main/tutorial/README.ko.md#실행)에서 코드를 인용하며, 그 tree를 bootstrap하고 build하면 아래 실행 결과를 재현할 수 있다.
+
 !!! info "이 장을 읽고 나면"
 
     id만 가지고 그 Spot·Actor가 지금 어느 node에 있는지 물어볼 수 있다.
@@ -65,7 +67,7 @@ Spot은 spot manager에, Actor는 actor manager에 조회한다. 둘 다 id 하�
 
 ## 4. 실행 결과
 
-아래 명령은 tutorial(`framework/languages/cpp/tutorial`)의 Server와 Client를 그 README의 「실행」 절대로 띄운 상태에서 실행한다. 주소는 Client의 HTTP 표면이다.
+tutorial README의 「실행」 절대로 Server와 Client를 실행한 상태에서 Client의 HTTP 표면에 아래 `curl` 요청을 보내면, 각 HTTP 응답은 `curl` stdout에 나오고 생성·조회 handler 기록은 Server process의 stdout 또는 `server.log`에 나온다.
 
 ```bash
 curl -X POST http://127.0.0.1:5080/rooms \

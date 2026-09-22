@@ -184,7 +184,7 @@ channel·Spot·Actor 계약을 사용하므로, 한 mesh 안에서 언어가 달
     코드에서 직접 시작한다. 런타임은 Node.js 22 이상이 필요하며, 첫 실행까지의 절차는
     [퀵스타트](node/quickstart.ko.md)가 다룬다.
 
-## :material-gamepad-variant: Client stream connector { .zlink-band .band-client }
+## :material-gamepad-variant: Client stream connector {#client-stream-connector .zlink-band .band-client}
 
 어느 connector를 설치하는지는 언어가 아니라 **엔진과 빌드 타깃**이 정한다. 규칙 하나로
 줄이면 — **웹(브라우저·WASM)으로 빌드하는 순간 언어와 무관하게 TypeScript connector를

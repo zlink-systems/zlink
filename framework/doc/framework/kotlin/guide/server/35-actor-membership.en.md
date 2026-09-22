@@ -18,6 +18,8 @@ View in another language — [C++](../../../cpp/guide/server/35-actor-membership
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
+This chapter quotes code from the `TicTacToe` sample's `Server` directory. Bootstrap and build that language's sample tree to inspect the Actor membership examples below in running code.
+
 !!! info "What you get from this chapter"
 
     You can move an Actor between Spots and let the receiving side accept or refuse that move. The
