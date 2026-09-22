@@ -43,6 +43,14 @@ import zipfile
 #  `settings.gradle.kts`와 wrapper가 한쪽에만 들어가 다른 쪽이 빌드되지 않는다.
 LANGUAGES = ("cpp", "dotnet", "java", "node")
 
+#  Engine examples are repositories by product rather than by language. Each source subtree
+#  becomes the mirror root without an extra Server/, Unity/, or Unreal/ directory.
+ENGINE_EXPORTS = {
+    "Server": "zlink-engine-server",
+    "Unity": "zlink-unity-examples",
+    "Unreal": "zlink-unreal-examples",
+}
+
 #  미러 루트에 놓이는 디렉터리. 저장소 경로 `framework/languages/<lang>/<section>`과 같다.
 SECTIONS = ("quickstart", "tutorial", "samples")
 
@@ -78,7 +86,8 @@ EXECUTABLE_SUFFIXES = (".sh",)
 TEXT_SUFFIXES = (
     ".bat", ".cmd", ".ps1", ".sh", ".cs", ".csproj", ".props", ".targets", ".sln",
     ".java", ".kt", ".kts", ".ts", ".js", ".json", ".toml", ".properties",
-    ".cpp", ".hpp", ".h", ".txt", ".md", ".yml", ".yaml", ".xml", ".gitignore",
+    ".cpp", ".hpp", ".h", ".txt", ".md", ".yml", ".yaml", ".xml", ".config",
+    ".meta", ".unity", ".asset", ".gitignore",
 )
 
 #  미러 루트에 그대로 복사하는 저장소 루트 파일. 빌드 산출물 무시 규칙과 줄바꿈 규칙의
@@ -196,6 +205,39 @@ def export_root_files(lang: str, ref: str, root: pathlib.Path) -> None:
     write(root / "README.md", README_EN.format(title=title, lang=lang).encode(), 0o644)
 
 
+def export_engine(source_name: str, mirror_name: str, ref: str, out_dir: pathlib.Path) -> int | None:
+    src = "framework/languages/engines/%s" % source_name
+    listing = subprocess.run(
+        ["git", "ls-tree", "-r", "--name-only", ref, src],
+        capture_output=True, text=True)
+    if listing.returncode != 0 or not listing.stdout.strip():
+        return None
+
+    root = out_dir / mirror_name
+    if root.exists():
+        shutil.rmtree(root)
+    raw = run(["git", "-c", "core.autocrlf=false", "archive", "--format=zip",
+               "%s:%s" % (ref, src)])
+
+    count = 0
+    with zipfile.ZipFile(io.BytesIO(raw)) as source:
+        for item in source.infolist():
+            if item.is_dir():
+                continue
+            data = normalize(item.filename, source.read(item))
+            mode = 0o755 if executable(item.filename) else 0o644
+            write(root / item.filename, data, mode)
+            count += 1
+
+    for name in ROOT_FILES:
+        target = root / name
+        if target.exists():
+            continue
+        data = run(["git", "-c", "core.autocrlf=false", "show", "%s:%s" % (ref, name)])
+        write(target, normalize(name, data), 0o644)
+    return count
+
+
 def export(lang: str, ref: str, out_dir: pathlib.Path) -> dict[str, int | None]:
     root = out_dir / ("zlink-%s-examples" % lang)
     if root.exists():
@@ -223,8 +265,15 @@ def main() -> int:
                 continue
             print("%-8s %-11s %6d  %s" % (lang, section, count, root / section))
 
+    for source_name, mirror_name in ENGINE_EXPORTS.items():
+        count = export_engine(source_name, mirror_name, ref, out_dir)
+        if count is None:
+            print("%-8s %-11s %6s  (이 ref에는 engine tree 없음)" % ("engines", source_name, "-"))
+            continue
+        print("%-8s %-11s %6d  %s" % ("engines", source_name, count, out_dir / mirror_name))
+
     print()
-    print("각 zlink-<언어>-examples/ 가 미러 저장소의 루트가 된다.")
+    print("각 zlink-<언어>-examples/ 와 engine mapping의 산출물이 미러 저장소의 루트가 된다.")
     return 1 if missing else 0
 
 
