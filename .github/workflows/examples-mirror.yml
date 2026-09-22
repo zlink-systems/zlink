@@ -49,6 +49,7 @@ on:
       - 'framework/languages/*/quickstart/**'
       - 'framework/languages/*/tutorial/**'
       - 'framework/languages/*/samples/**'
+      - 'framework/languages/engines/**'
       - 'scripts/tutorial/export_examples.py'
       - '.gitignore'
       - '.gitattributes'
@@ -99,6 +100,19 @@ jobs:
           set -euo pipefail
           ref="${DISPATCH_REF:-${GITHUB_REF_NAME}}"
           version=""
+          released() {
+            local lang="$1"
+            local declared="$2"
+            git rev-parse -q --verify "refs/tags/framework-${lang}/v${declared}" >/dev/null \
+              || git rev-parse -q --verify "refs/tags/framework/v${declared}" >/dev/null
+          }
+          append_target() {
+            if [ "${languages}" = '[]' ]; then
+              languages="[\"$1\"]"
+            else
+              languages="${languages%]},\"$1\"]"
+            fi
+          }
           case "${ref}" in
             framework/v*) languages='["cpp","dotnet","java","node"]' ;;
             framework-cpp/v*) languages='["cpp"]' ;;
@@ -111,8 +125,7 @@ jobs:
               languages="["
               for lang in cpp dotnet java node; do
                 declared="$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' "framework/languages/${lang}/VERSION")"
-                if git rev-parse -q --verify "refs/tags/framework-${lang}/v${declared}" >/dev/null \
-                   || git rev-parse -q --verify "refs/tags/framework/v${declared}" >/dev/null; then
+                if released "${lang}" "${declared}"; then
                   languages="${languages}\"${lang}\","
                 else
                   echo "::notice::${lang}: VERSION ${declared} is not tagged yet; skipped until the release tag mirrors it"
@@ -122,6 +135,19 @@ jobs:
               ;;
             *) echo "::error::not a framework tag or main: ${ref}"; exit 1 ;;
           esac
+          if [[ "${ref}" == main || "${ref}" == framework/v* ]]; then
+            dotnet_version="$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' framework/languages/dotnet/VERSION)"
+            node_version="$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' framework/languages/node/VERSION)"
+            if [ -d framework/languages/engines/Server ] \
+               && released dotnet "${dotnet_version}"; then
+              append_target engine-server
+            fi
+            if [ -d framework/languages/engines/Unity ] \
+               && released dotnet "${dotnet_version}" \
+               && released node "${node_version}"; then
+              append_target unity
+            fi
+          fi
           # A release call mirrors the one language the caller published; the
           # other languages' packages for the same version may not exist yet.
           if [ -n "${CALL_LANGUAGE}" ]; then
@@ -137,9 +163,11 @@ jobs:
             fi
           fi
           echo "ref=${ref}, version=${version:-none}, languages=${languages}"
-          echo "ref=${ref}" >> "$GITHUB_OUTPUT"
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "languages=${languages}" >> "$GITHUB_OUTPUT"
+          {
+            echo "ref=${ref}"
+            echo "version=${version}"
+            echo "languages=${languages}"
+          } >> "$GITHUB_OUTPUT"
 
   # Same trees, built and run from their READMEs in jobs without a checkout.
   # Only the languages this run mirrors are smoked: a mirror is pushed on its
@@ -155,7 +183,7 @@ jobs:
       languages: ${{ needs.resolve.outputs.languages }}
 
   push:
-    name: Push zlink-${{ matrix.lang }}-examples
+    name: Push ${{ matrix.lang }} mirror
     needs: [resolve, smoke]
     if: needs.resolve.outputs.languages != '[]'
     runs-on: ubuntu-24.04
@@ -163,9 +191,6 @@ jobs:
       fail-fast: false
       matrix:
         lang: ${{ fromJSON(needs.resolve.outputs.languages) }}
-    env:
-      MIRROR: zlink-systems/zlink-${{ matrix.lang }}-examples
-      TREE: .artifacts/examples/zlink-${{ matrix.lang }}-examples
     steps:
       - uses: actions/checkout@v5
         with:
@@ -178,6 +203,27 @@ jobs:
       - name: Export the tree at the ref
         run: python3 scripts/tutorial/export_examples.py .artifacts/examples HEAD
 
+      - name: Resolve the mirror repository and export tree
+        run: |
+          set -euo pipefail
+          case "${{ matrix.lang }}" in
+            engine-server)
+              echo "MIRROR=zlink-systems/zlink-engine-server" >> "$GITHUB_ENV"
+              echo "TREE=.artifacts/examples/zlink-engine-server" >> "$GITHUB_ENV"
+              echo "SOURCE_PATH=framework/languages/engines/Server" >> "$GITHUB_ENV"
+              ;;
+            unity)
+              echo "MIRROR=zlink-systems/zlink-unity-examples" >> "$GITHUB_ENV"
+              echo "TREE=.artifacts/examples/zlink-unity-examples" >> "$GITHUB_ENV"
+              echo "SOURCE_PATH=framework/languages/engines/Unity" >> "$GITHUB_ENV"
+              ;;
+            *)
+              echo "MIRROR=zlink-systems/zlink-${{ matrix.lang }}-examples" >> "$GITHUB_ENV"
+              echo "TREE=.artifacts/examples/zlink-${{ matrix.lang }}-examples" >> "$GITHUB_ENV"
+              echo "SOURCE_PATH=framework/languages/${{ matrix.lang }}" >> "$GITHUB_ENV"
+              ;;
+          esac
+
       # One secret per mirror, named after the language; the shell picks it so
       # the matrix stays a plain list (a matrix `include` with an unmatched
       # `lang` would add that language to the run instead of annotating it).
@@ -187,9 +233,15 @@ jobs:
           EXAMPLES_MIRROR_KEY_DOTNET: ${{ secrets.EXAMPLES_MIRROR_KEY_DOTNET }}
           EXAMPLES_MIRROR_KEY_JAVA: ${{ secrets.EXAMPLES_MIRROR_KEY_JAVA }}
           EXAMPLES_MIRROR_KEY_NODE: ${{ secrets.EXAMPLES_MIRROR_KEY_NODE }}
+          EXAMPLES_MIRROR_KEY_ENGINE_SERVER: ${{ secrets.EXAMPLES_MIRROR_KEY_ENGINE_SERVER }}
+          EXAMPLES_MIRROR_KEY_UNITY: ${{ secrets.EXAMPLES_MIRROR_KEY_UNITY }}
         run: |
           set -euo pipefail
-          name="EXAMPLES_MIRROR_KEY_${{ matrix.lang }}"
+          case "${{ matrix.lang }}" in
+            engine-server) name="EXAMPLES_MIRROR_KEY_ENGINE_SERVER" ;;
+            unity) name="EXAMPLES_MIRROR_KEY_UNITY" ;;
+            *) name="EXAMPLES_MIRROR_KEY_${{ matrix.lang }}" ;;
+          esac
           name="${name^^}"
           DEPLOY_KEY="${!name:-}"
           if [ -z "${DEPLOY_KEY}" ]; then
@@ -235,7 +287,7 @@ jobs:
             echo "tree unchanged since $(git rev-parse --short HEAD)"
           else
             git commit -q -m "${REF} — zlink@${source}" \
-              -m "Exported from https://github.com/${GITHUB_REPOSITORY}/tree/${source}/framework/languages/${{ matrix.lang }}"
+              -m "Exported from https://github.com/${GITHUB_REPOSITORY}/tree/${source}/${SOURCE_PATH}"
           fi
           if [ -n "${VERSION}" ]; then
             git tag -f "v${VERSION}"
