@@ -141,13 +141,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     // historical always-on behavior.
     private volatile Func<bool>? _flowCaptureEnabled;
 
-    private volatile Action<
-        string,
-        string,
-        RoutingId,
-        ZLinkDispatchErrorReason,
-        Exception?
-    >? _logicalMulticastFailureObserver;
+    private volatile ZLinkDispatchErrorReporter? _logicalMulticastDispatchErrors;
+    private string? _logicalMulticastMeshName;
 
     // Spec 30 §14 step 1: the host's shutdown admission seal, consulted before
     // this node starts or accepts peer admission (Hello). The host drain gate owns the
@@ -281,12 +276,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         _flowCaptureEnabled = flowCaptureEnabled;
     }
 
-    internal void SetLogicalMulticastFailureObserver(
-        Action<string, string, RoutingId, ZLinkDispatchErrorReason, Exception?> observer
+    internal void SetLogicalMulticastDispatchErrors(
+        ZLinkDispatchErrorReporter reporter,
+        string meshName
     )
     {
-        ArgumentNullException.ThrowIfNull(observer);
-        _logicalMulticastFailureObserver = observer;
+        ArgumentNullException.ThrowIfNull(reporter);
+        ArgumentException.ThrowIfNullOrWhiteSpace(meshName);
+        _logicalMulticastDispatchErrors = reporter;
+        _logicalMulticastMeshName = meshName;
     }
 
     internal void SetPeerAdmissionSealGate(Func<bool> sealedForShutdown)
@@ -2945,20 +2943,22 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             if (!metadata.IsEmpty)
                 wireParts.Add(metadata);
             wireParts.Add(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts));
-            if (
-                !TryScheduleRoutedSend(
-                    peer.PhysicalRoutingId,
-                    wireParts,
-                    error =>
-                        ObserveLogicalMulticastFailure(
-                            channelName,
-                            topic,
-                            target.RoutingId,
-                            ClassifyLogicalMulticastFailure(error),
-                            error
-                        )
-                )
-            )
+            var reporter = _logicalMulticastDispatchErrors;
+            var scheduled =
+                reporter?.Enabled == true
+                    ? TryScheduleRoutedSend(
+                        peer.PhysicalRoutingId,
+                        wireParts,
+                        error =>
+                            ObserveLogicalMulticastFailure(
+                                channelName,
+                                topic,
+                                target.RoutingId,
+                                ClassifyLogicalMulticastFailure(error)
+                            )
+                    )
+                    : TryScheduleRoutedSend(peer.PhysicalRoutingId, wireParts);
+            if (!scheduled)
             {
                 ObserveLogicalMulticastFailure(
                     channelName,
@@ -2976,9 +2976,26 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         string channelName,
         string topic,
         RoutingId targetRid,
-        ZLinkDispatchErrorReason reason,
-        Exception? exception = null
-    ) => _logicalMulticastFailureObserver?.Invoke(channelName, topic, targetRid, reason, exception);
+        ZLinkDispatchErrorReason reason
+    )
+    {
+        var reporter = _logicalMulticastDispatchErrors;
+        if (reporter?.Enabled != true)
+            return;
+        reporter.Report(
+            new ZLinkDispatchFailure(
+                ZLinkDispatchErrorSurface.SpotRoute,
+                ZLinkDispatchMessageKind.Send,
+                reason,
+                ZLinkDispatchErrorAction.Drop,
+                PacketName: null,
+                ChannelName: channelName,
+                Topic: topic,
+                MeshName: _logicalMulticastMeshName,
+                TargetRid: targetRid.ToString()
+            )
+        );
+    }
 
     private static ZLinkDispatchErrorReason ClassifyLogicalMulticastFailure(Exception error) =>
         error switch

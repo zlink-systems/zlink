@@ -1,8 +1,4 @@
-using System.Diagnostics;
 using System.Reflection;
-using Zlink.Framework.Runtime.Diagnostics;
-using Zlink.Framework.Runtime.Dispatch;
-using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.UnitTests;
@@ -85,85 +81,6 @@ public sealed class MeshChannelSelectionHotPathTests
     }
 
     [Fact]
-    public async Task LogicalMulticastNotReadyTargetReportsStaleTargetWithoutChangingTerminal()
-    {
-        var activities = new List<Activity>();
-        using var listener = new ActivityListener
-        {
-            ShouldListenTo = source => source.Name == ZLinkTelemetry.ActivitySourceName,
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
-                ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = activities.Add,
-        };
-        ActivitySource.AddActivityListener(listener);
-
-        var options = new ZLinkDispatchOptionsModel();
-        options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Errors);
-        options.Diagnostics.SetSampleRate(0);
-        var tracer = new ZLinkMessageFlowTracer(options);
-
-        await using var context = Systems.Zlink.Zlink.CreateContext();
-        await using var node = new ZLinkManagedMeshNode(context, "selection");
-        var peer = AddReadyPeer(node);
-        peer.Admitted = false;
-        node.SetLogicalMulticastFailureObserver(
-            (channel, topic, targetRid, reason, exception) =>
-                tracer.TraceDispatchError(
-                    new ZLinkDispatchFailure(
-                        ZLinkDispatchErrorSurface.SpotRoute,
-                        ZLinkDispatchMessageKind.Send,
-                        reason,
-                        ZLinkDispatchErrorAction.Drop,
-                        PacketName: null,
-                        ChannelName: channel,
-                        Topic: topic,
-                        MeshName: "selection",
-                        TargetRid: targetRid.ToString(),
-                        Exception: exception
-                    )
-                )
-        );
-
-        await using var pool = new ZLinkWorkerPool(0, 1, TimeSpan.FromSeconds(30));
-        var released = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var payload = Message.From("payload");
-        var result = await ZLinkLogicalMulticastSubmitter.SubmitAsync(
-            pool,
-            () =>
-                node.Publish(
-                    "publisher",
-                    "worker",
-                    "topic",
-                    [payload],
-                    SendFlags.None,
-                    ReadOnlyMemory<byte>.Empty
-                ),
-            CancellationToken.None,
-            CancellationToken.None,
-            TimeSpan.FromSeconds(1),
-            () => released.TrySetResult(),
-            new NoopRuntimeFailureReporter()
-        );
-
-        Assert.Equal(SubmitResult.Ok, result);
-        await released.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        var activity = Assert.Single(
-            activities.Where(candidate => candidate.OperationName == "zlink.dispatch_error")
-        );
-        Assert.Equal("zlink.dispatch_error", activity.GetTagItem("event_id"));
-        Assert.Null(activity.GetTagItem("phase"));
-        Assert.Equal("spot", activity.GetTagItem("surface"));
-        Assert.Equal("send", activity.GetTagItem("message_kind"));
-        Assert.Equal("failed", activity.GetTagItem("outcome"));
-        Assert.Equal("drop", activity.GetTagItem("action"));
-        Assert.Equal("stale_target", activity.GetTagItem("reason"));
-        Assert.Equal("selection", activity.GetTagItem("mesh_name"));
-        Assert.Equal("worker", activity.GetTagItem("channel_name"));
-        Assert.Equal("topic", activity.GetTagItem("topic"));
-        Assert.Equal("logical-peer", activity.GetTagItem("target_rid"));
-    }
-
-    [Fact]
     public async Task UnresolvedFirstAdmissionPreservesCancellationAndDeadlineErrors()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
@@ -215,13 +132,4 @@ public sealed class MeshChannelSelectionHotPathTests
             typeof(ZLinkManagedMeshNode)
                 .GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!
                 .GetValue(node)!;
-
-    private sealed class NoopRuntimeFailureReporter : IZLinkRuntimeFailureReporter
-    {
-        public void ReportHandlerException(Exception exception) { }
-
-        public void ReportUnhandledCallbackException(Exception exception) { }
-
-        public void ReportRuntimeTaskException(string taskName, Exception exception) { }
-    }
 }

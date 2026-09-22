@@ -15,6 +15,8 @@ using Zlink.Framework.Runtime;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Backend.DotNet;
+using Zlink.Framework.Runtime.Diagnostics;
+using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Identifiers;
@@ -5491,6 +5493,69 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public async Task Logical_Multicast_Gone_Target_Uses_Production_Dispatch_Error_Wiring()
+    {
+        var activities = new ConcurrentQueue<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == ZLinkTelemetry.ActivitySourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = activities.Enqueue,
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        var node = new CapturingSpotNode { FailLogicalMulticastTarget = true };
+        var (runtime, _) = await CreateStartedRuntimeAsync(
+            node,
+            includeEntryChannelMembership: true
+        );
+        runtime.Registration.DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+
+        try
+        {
+            var activation = Assert.IsType<ZLinkEntrySpotActivation>(
+                runtime.GetSpotNodeRuntime("entry").EntrySpotActivation
+            );
+            await activation
+                .Outbound.Publish("entry", "orders", new ProbeRouteMessage("published"))
+                .Async();
+
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                        activities.Any(candidate =>
+                            candidate.OperationName == "zlink.dispatch_error"
+                        ),
+                    TimeSpan.FromSeconds(5)
+                )
+            );
+            var activity = Assert.Single(
+                activities.Where(candidate => candidate.OperationName == "zlink.dispatch_error")
+            );
+            Assert.Equal("zlink.dispatch_error", activity.GetTagItem("event_id"));
+            Assert.Equal("spot", activity.GetTagItem("surface"));
+            Assert.Equal("send", activity.GetTagItem("message_kind"));
+            Assert.Equal("failed", activity.GetTagItem("outcome"));
+            Assert.Equal("drop", activity.GetTagItem("action"));
+            Assert.Equal("stale_target", activity.GetTagItem("reason"));
+            Assert.Equal("gone-peer", activity.GetTagItem("target_rid"));
+            Assert.Equal("orders", activity.GetTagItem("topic"));
+            Assert.Equal("entry", activity.GetTagItem("channel_name"));
+            Assert.Equal("entry", activity.GetTagItem("mesh_name"));
+            Assert.Null(activity.GetTagItem("phase"));
+            Assert.Null(activity.GetTagItem("source_rid"));
+            Assert.Null(activity.GetTagItem("packet_name"));
+            Assert.Null(activity.GetTagItem("error_type"));
+            Assert.Null(activity.GetTagItem("error_message"));
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task External_Spot_Publish_Emits_Internal_Publisher_Rid_Without_Correlation()
     {
         var root = Path.Combine(Path.GetTempPath(), $"zlink-external-publish-{Guid.NewGuid():N}");
@@ -10743,6 +10808,12 @@ public sealed partial class EntrySpotActorDispatchTests
         public TaskCompletionSource PublishCompleted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        public ZLinkDispatchErrorReporter? LogicalMulticastDispatchErrors { get; set; }
+
+        public string? LogicalMulticastMeshName { get; set; }
+
+        public bool FailLogicalMulticastTarget { get; set; }
+
         public int? ActorJoinResultCode { get; private set; }
 
         public ZLinkEnvelopeHeader? ActorJoinReplyHeader { get; private set; }
@@ -10905,6 +10976,7 @@ public sealed partial class EntrySpotActorDispatchTests
             _ = topic;
             _ = flags;
             PublishedHeader = ZLinkEnvelopeCodec.DecodeHeader(message);
+            ReportLogicalMulticastFailure(channelName, topic);
             PublishCompleted.TrySetResult();
         }
 
@@ -10919,7 +10991,27 @@ public sealed partial class EntrySpotActorDispatchTests
             _ = topic;
             _ = flags;
             PublishedHeader = ZLinkEnvelopeCodec.DecodeHeader(parts);
+            ReportLogicalMulticastFailure(channelName, topic);
             PublishCompleted.TrySetResult();
+        }
+
+        private void ReportLogicalMulticastFailure(string channelName, string topic)
+        {
+            if (!FailLogicalMulticastTarget)
+                return;
+            LogicalMulticastDispatchErrors?.Report(
+                new ZLinkDispatchFailure(
+                    ZLinkDispatchErrorSurface.SpotRoute,
+                    ZLinkDispatchMessageKind.Send,
+                    ZLinkDispatchErrorReason.StaleTarget,
+                    ZLinkDispatchErrorAction.Drop,
+                    PacketName: null,
+                    ChannelName: channelName,
+                    Topic: topic,
+                    MeshName: LogicalMulticastMeshName,
+                    TargetRid: "gone-peer"
+                )
+            );
         }
 
         public SubmitResult SendToSpot(
@@ -11317,6 +11409,21 @@ public sealed partial class EntrySpotActorDispatchTests
         public TimeSpan? LastActorRequestTimeout { get; private set; }
 
         public CapturingSpot EntrySpotBackend => _entrySpot;
+
+        public bool FailLogicalMulticastTarget
+        {
+            get => _entrySpot.FailLogicalMulticastTarget;
+            init => _entrySpot.FailLogicalMulticastTarget = value;
+        }
+
+        public void SetLogicalMulticastDispatchErrors(
+            ZLinkDispatchErrorReporter reporter,
+            string meshName
+        )
+        {
+            _entrySpot.LogicalMulticastDispatchErrors = reporter;
+            _entrySpot.LogicalMulticastMeshName = meshName;
+        }
 
         public List<CapturingSpot> CreatedSpots { get; } = [];
 
