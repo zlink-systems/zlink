@@ -13,7 +13,6 @@ rootProject.name = "zlink-kotlin-sample-deliverydispatch"
 
 include("Client")
 include("Server:Configuration")
-include("Server:Registry")
 include("Server:Dispatch")
 include("Server:CourierSession")
 include("Server:CourierSpotNode")
