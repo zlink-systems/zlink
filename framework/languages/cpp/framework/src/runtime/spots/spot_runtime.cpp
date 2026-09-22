@@ -5229,7 +5229,7 @@ spot_node_runtime_t::actor_join_state_snapshot_t spot_node_runtime_t::actor_join
                       const auto admission =
                         context_state->actor_admissions.find (factory->second.actor_type);
                       if (admission != context_state->actor_admissions.end ()
-                          && admission->second.join) {
+                          && (context_state->is_entry_spot () || admission->second.join)) {
                           snapshot.admission.emplace (admission->second);
                       }
                   }

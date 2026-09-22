@@ -743,6 +743,126 @@ void test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test_cont
     }
 }
 
+void test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callbacks (
+  test_context_t &test)
+{
+    namespace detail = zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+    using zlink::framework::node_rid_t;
+    using zlink::framework::serializer_registry_t;
+    using zlink::framework::spot_id_t;
+    using zlink::framework::user_spot_execution_mode_t;
+
+    struct returning_actor_t
+    {
+    };
+
+    const auto run_case = [&] (bool remote) {
+        const std::string case_name = remote ? "remote" : "same-node";
+        const auto node =
+          std::make_shared<detail::spot_node_builder_state_t> ("entry-return-" + case_name);
+        const auto local_node_name = "entry-return-target-" + case_name;
+        const auto local_node_rid = node_rid_t::from_string (local_node_name);
+        const auto source_id = spot_id_t ("source-spot-" + case_name);
+        const auto entry_id = spot_id_t ("entry-spot-" + case_name);
+        node->snapshot.routing_id = zlink::routing_id_t::from (local_node_name);
+        node->snapshot.entry_spot_name = "entry";
+        node->spot_ids_by_name.emplace ("entry", entry_id);
+        node->spot_names_by_id.emplace (source_id, "source");
+        node->spot_names_by_id.emplace (entry_id, "entry");
+
+        serializer_registry_t serializers;
+        auto channel_runtime = std::make_shared<detail::channel_runtime_state_t> ();
+        channel_runtime->serializers = &serializers;
+        const auto make_state = [&] (spot_id_t spot_id, std::string spot_name, bool entry_spot) {
+            auto state = std::make_shared<detail::spot_context_state_t> ();
+            state->node = node;
+            state->node_rid = local_node_rid;
+            state->spot_id = std::move (spot_id);
+            state->spot_name = std::move (spot_name);
+            state->lifecycle_domain = entry_spot ? detail::spot_lifecycle_domain_t::entry ()
+                                                 : detail::spot_lifecycle_domain_t::user ();
+            state->execution_mode = user_spot_execution_mode_t::spot_wide;
+            state->serial_executor =
+              std::make_shared<runtime::offload_executor_t> (2, "entry-return-" + case_name);
+            state->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
+              *state->serial_executor, runtime::serial_execution_queue_options_t{},
+              runtime::serial_execution_queue_t::error_handler_t{},
+              runtime::serial_lane_policy_t::spot_wide ());
+            state->spot_instance = std::make_shared<int> (1);
+            state->channel_runtime = channel_runtime;
+            return state;
+        };
+
+        const auto source = make_state (source_id, "source", false);
+        const auto entry = make_state (entry_id, "entry", true);
+        std::atomic_int leave_callbacks{0};
+        std::atomic_int joined_callbacks{0};
+        detail::spot_actor_admission_callbacks_t source_callbacks;
+        source_callbacks.on_leave_actor = [&] (void *, void *) {
+            leave_callbacks.fetch_add (1, std::memory_order_acq_rel);
+            return zlink::framework::task_t<void> (zlink::framework::result_t<void>::success ());
+        };
+        detail::spot_actor_admission_callbacks_t entry_callbacks;
+        entry_callbacks.on_actor_joined = [&] (void *, void *) {
+            joined_callbacks.fetch_add (1, std::memory_order_acq_rel);
+            return zlink::framework::task_t<void> (zlink::framework::result_t<void>::success ());
+        };
+        const auto actor_type = std::type_index (typeid (returning_actor_t));
+        source->actor_admissions.emplace (actor_type, std::move (source_callbacks));
+        entry->actor_admissions.emplace (actor_type, std::move (entry_callbacks));
+        node->spot_contexts_by_id.emplace (source_id,
+                                           detail::spot_context_access_t::create (source));
+        node->spot_contexts_by_id.emplace (entry_id, detail::spot_context_access_t::create (entry));
+
+        detail::spot_node_builder_state_t::actor_factory_registration_t registration;
+        registration.actor_type = actor_type;
+        registration.create_instance = [] (std::string) {
+            return std::make_shared<returning_actor_t> ();
+        };
+        registration.configure_instance = [] (void *, const auto &, void *) {};
+        node->actor_factories.emplace ("returning-actor", std::move (registration));
+
+        const auto source_node_rid =
+          remote ? node_rid_t::from_string ("entry-return-source-remote") : local_node_rid;
+        const auto actor_ref =
+          detail::actor_ref_access_t::make (source_node_rid, "returning-actor", "actor-1", 1);
+        const std::string key = "returning-actor:actor-1";
+        auto actor = std::make_shared<returning_actor_t> ();
+        node->actor_instances.emplace (key, actor);
+        node->actor_instance_index.emplace (actor.get (),
+                                            std::make_pair ("returning-actor", "actor-1"));
+        node->actor_spot_ids.emplace (key, source_id);
+        node->actor_generations.emplace (key, 1);
+        node->actor_created_keys.emplace (key);
+        source->actor_count = 1;
+
+        detail::spot_node_runtime_t spot_runtime (node);
+        const auto joined =
+          remote ? spot_runtime.join_remote_actor_to_spot_erased (actor_ref, entry_id,
+                                                                  zlink::message_t{})
+                 : spot_runtime.join_actor_to_spot_erased (actor_ref, entry_id, zlink::message_t{});
+        const auto current = node->actor_spot_ids.find (key);
+        test.require (joined && joined.value ().result_code == 0
+                        && current != node->actor_spot_ids.end () && current->second == entry_id
+                        && source->actor_count == 0 && entry->actor_count == 1
+                        && joined_callbacks.load (std::memory_order_acquire) == 1
+                        && leave_callbacks.load (std::memory_order_acquire) == 1,
+                      remote ? "remote User Spot to Entry Spot return must commit without "
+                               "admission and run target joined/source leave exactly once"
+                             : "same-node User Spot to Entry Spot return must commit without "
+                               "admission and run target joined/source leave exactly once");
+
+        spot_runtime.request_stop ();
+        spot_runtime.cancel_pending_dispatch ();
+        spot_runtime.cancel_pending_work ();
+        spot_runtime.release_native_handles ();
+    };
+
+    run_case (false);
+    run_case (true);
+}
+
 void test_temporary_channel_request_yield_owns_call_state (test_context_t &test)
 {
     namespace detail = zlink::framework::detail;
@@ -4858,6 +4978,7 @@ int main ()
     test_generation_barrier_quiesces_yield_spot_and_timer (test);
     test_relocation_ready_completion_runs_once_on_spot_turn (test);
     test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test);
+    test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callbacks (test);
     test_temporary_channel_request_yield_owns_call_state (test);
     test_accepted_message_payload_is_deserialized_once (test);
     test_close_barrier_waits_and_abort_restores_ingress (test);
