@@ -87,7 +87,7 @@ host가 시작된 뒤에 builder를 다시 호출하는 표면은 없다. 잘못
 | --- | --- | --- |
 | codec 등록 | payload 직렬화 형식 | 내장 JSON |
 | `BindHost` | listener가 bind할 주소 | `127.0.0.1` |
-| `AdvertiseHost` | 상대에게 알릴 주소 | 지정 안 함 — bind 주소를 사용 |
+| `AdvertiseHost` | 상대에게 알릴 주소 | 지정 안 함 — non-wildcard bind 주소 또는 wildcard의 loopback |
 | `DefaultRequestTimeout` | request가 응답을 기다리는 상한 | 30초 |
 | `SessionReplacementCallbackTimeout` | session 교체 callback이 끝나기를 기다리는 상한 | 30초 |
 | stream compression | STREAM payload 압축 | LZ4 사용 |
@@ -99,6 +99,15 @@ host가 시작된 뒤에 builder를 다시 호출하는 표면은 없다. 잘못
 
 - **bind 주소의 기본값은 loopback이다.** 다른 host의 node나 client가 접속해야 한다면 bind
   주소와 광고 주소를 각각 지정한다.
+- `listen` host는 현재 process가 socket을 bind할 주소이고 `0.0.0.0`은 모든 local interface에서
+  연결을 받는다. `AdvertiseHost`는
+  peer가 실제로 dial하고 Location Store에 게시할 주소다. wildcard bind에서는 단일 machine 예제처럼
+  `127.0.0.1`을 지정한다. 여러 host, container, NAT, Kubernetes에서는 그 node에 도달 가능한 IP 또는
+  DNS를 지정하며, Kubernetes에서는 Pod IP 또는 pod별 DNS를 사용한다. 생략하면
+  [Network listener identity §2.1](../../../common/spec/server/02-channel-transport/04-network-listener-identity.ko.md#21-기본값)의
+  규칙대로 non-wildcard bind host 또는 wildcard의 같은 address family loopback을 광고한다. advertised
+  host에는 wildcard를 지정할 수 없다. [Channel 메시징](20-channel-messaging.ko.md#32-받는-쪽--channel을-담당하는-node)의
+  언어별 mesh 등록 code block은 각 언어의 실제 option 표면을 보인다.
 - **STREAM 압축은 켜진 상태로 시작한다.** 끄려면 압축 설정에서 명시적으로 끈다.
 - **CPU worker 풀에는 대기열 상한이 없다.** 유입을 제한하는 것은 Application job queue다(§3).
   `DefaultRequestTimeout`은 `0` 이하를 거부한다.

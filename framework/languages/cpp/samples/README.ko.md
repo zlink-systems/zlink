@@ -30,19 +30,22 @@ container를 정리한다. 샘플 코드가 다른 서버 역할을 같은 프�
 
 ## 전제 조건
 
+bash 블록은 Linux·macOS·WSL에서, PowerShell 블록은 Windows PowerShell 7에서 실행한다. `cmd`는 지원하지 않는다.
+
 | 도구 | Windows | Linux · WSL |
 |---|---|---|
-| C++20 컴파일러 | Visual Studio 2022 17.4 이상, **Desktop development with C++** 워크로드 (MSVC 19.44로 확인) | GCC 13 이상 (13.3으로 확인) |
+| C++20 컴파일러 | Visual Studio 2022 17.4 이상 또는 Visual Studio 2026, **Desktop development with C++** 워크로드. 2026-09 현재 2026의 msvc 195에는 ConanCenter 바이너리가 없어 첫 bootstrap이 서드파티 library를 source에서 빌드하므로 약 20분 걸린다. 2022는 바이너리를 내려받아 약 7분 걸린다 (2022는 MSVC 19.44로 확인) | GCC 13 이상 (13.3으로 확인) |
 | CMake | 3.24 이상 (Visual Studio가 설치하는 3.31로 확인) | 3.24 이상 (3.28로 확인) |
 | Ninja | 필요 없음 | 권장. 없으면 Makefile로 빌드한다 |
-| Conan 2 | `pipx install conan` (`py -m pip install --user conan`도 가능) | `pipx install conan` (`python3 -m pip install --user conan`도 가능) |
+| Conan 2 | `pipx install conan` 뒤 `pipx ensurepath`를 실행하고 새 terminal을 연다. `py -m pip install --user conan`을 썼으면 Python `Scripts` directory를 PATH에 넣는다. `conan --version`으로 확인한다 | `pipx install conan` 뒤 `pipx ensurepath`를 실행하고 새 terminal을 연다. `python3 -m pip install --user conan`을 썼으면 Python user `bin` directory를 PATH에 넣는다. `conan --version`으로 확인한다 |
 | Docker Desktop | runner가 샘플마다 Redis container를 하나 띄운다. 설치되어 실행 중이어야 한다 | 같다 (WSL integration 또는 Linux의 Docker Engine) |
 | `curl` | Windows 10 이상에 들어 있다 | 배포판 패키지 |
 
 이 밖에는 아무것도 필요 없다. zlink 저장소, Node.js는 쓰지 않는다. ZoneWorld의 ZW-B8 장애
 proxy까지 C++로 샘플과 함께 빌드된다. Conan은 pipx(또는 pip)로 설치하며 ConanCenter의 세 번째
-파티 바이너리를 받으므로 지원 컴파일러에서 **첫 설치에는 약 3분이 걸린다**. 이후에는 로컬 캐시를
-재사용한다.
+파티 바이너리를 받는다. Visual Studio 2022에서는 **첫 bootstrap에 약 7분**, 2026의 msvc 195처럼
+바이너리가 없는 toolset에서는 서드파티를 source에서 빌드하므로 **약 20분** 걸린다. 이후에는
+로컬 캐시를 재사용한다.
 
 ## 내려받기와 설치
 
@@ -61,10 +64,14 @@ vcpkg fallback은 `-DZLINK_PACKAGE_MANAGER=vcpkg`로 선택한다. 이후 실행
 
 ## 빌드
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 cmake -P bootstrap.cmake
 cmake --build build --parallel
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 cmake -P bootstrap.cmake
@@ -83,6 +90,8 @@ cmake --build build --config Release --parallel
 20000–20099 중 빈 port)를 실행이 끝날 때 제거한다. Redis를 미리 시작할 필요는 없다. 아래 블록은
 각 sample을 차례로 실행한다.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 ./Bingo/run_sample.sh
 ./DeliveryDispatch/run_sample.sh
@@ -92,6 +101,8 @@ cmake --build build --config Release --parallel
 ./TicTacToe/run_sample.sh
 ./ZoneWorld/run_sample.sh
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 .\Bingo\run_sample.ps1
@@ -111,6 +122,8 @@ client self-check와 정리를 순서대로 수행한다. application 포트는 
 
 ## 검증
 
+examples-smoke는 이 블록을 그대로 실행한다.
+
 Runner의 마지막 줄이 아래 표의 표식이고 종료 코드가 0이면 그 샘플은 통과다. 표식 앞에는
 client self-check가 확인한 항목들이 `<샘플>-…=verified` 꼴로 찍힌다.
 
@@ -126,14 +139,20 @@ client self-check가 확인한 항목들이 `<샘플>-…=verified` 꼴로 찍�
 
 아래 블록은 TicTacToe 하나로 이를 확인한다.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 ./TicTacToe/run_sample.sh | tee tictactoe.log | tail -n 1 | grep -x 'tictactoe-placement=completed'
+echo "tictactoe=ok"
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 $lines = @(& .\TicTacToe\run_sample.ps1 *>&1 | ForEach-Object { "$_" })
 if ($lines[-1] -ne 'tictactoe-placement=completed') { throw ('TicTacToe failed: ' + $lines[-1]) }
 Write-Output $lines[-1]
+Write-Output 'tictactoe=ok'
 ```
 
 실패한 실행은 역할별 stdout·stderr 로그가 든 run 디렉터리를 남기고 그 경로를
@@ -141,11 +160,30 @@ Write-Output $lines[-1]
 `framework tests: skipped (package tree; no framework test targets)`로 표시한다 — 그 테스트는
 저장소 트리에만 있다.
 
+## IDE에서 실행
+
+`bootstrap.cmake`는 이 폴더를 구성한 인자 그대로를 `CMakeUserPresets.json`의 preset `zlink`로 남긴다.
+Visual Studio·Rider·CLion은 폴더를 열 때 이 preset을 읽으므로, bootstrap을 한 번 실행한 뒤에는
+IDE가 같은 `build/`를 이어서 쓴다. 이 파일은 bootstrap이 매번 다시 쓰며 손으로 고치지 않는다.
+
+샘플은 process 여럿과 Redis를 `run_sample.sh`가 조율한다(port 선택, 설정 파일 생성, 종료 순서).
+그래서 IDE에서는 **빌드와 코드 탐색·디버깅**까지 하고, 실행과 검증은 [실행](#실행) 절의 runner로
+한다.
+
+1. 터미널에서 [빌드](#빌드) 절의 `cmake -P bootstrap.cmake`를 한 번 실행한다(IDE는 `-P` script를
+   실행하지 못한다).
+2. **Visual Studio 2022·2026**: 파일 › 열기 › 폴더로 이 디렉터리를 열고 CMake 설정에서 preset
+   `zlink`를 고른다. **Rider·CLion**: 이 디렉터리의 `CMakeLists.txt`를 프로젝트로 열고 Settings ›
+   Build, Execution, Deployment › CMake에서 preset `zlink`를 활성화한다. 샘플 target들이 빌드
+   대상으로 나타난다.
+3. 디버깅은 runner가 띄운 process에 IDE의 "process에 attach"로 붙는다. IDE에서 빌드한 실행 파일은
+   runner가 같은 `build/`에서 찾는다.
+
 ## 문제 해결
 
 | 증상 | 원인과 조치 |
 |---|---|
-| `bootstrap: could not find Conan` | `pipx install conan`(또는 `python3 -m pip install --user conan`)으로 Conan 2를 설치하고 실행 파일 경로를 `PATH`에 넣는다 |
+| `bootstrap: could not find Conan` | `pipx install conan` 뒤 `pipx ensurepath`를 실행하고 새 terminal을 연다. `pip --user` 설치라면 Python `Scripts`/user `bin` directory를 PATH에 넣고 `conan --version`으로 확인한다 |
 | `ERROR: Invalid setting ...` | 선택한 컴파일러가 ConanCenter의 지원 바이너리 구성과 다르다. 표의 컴파일러 버전을 쓰거나 `-DZLINK_PACKAGE_MANAGER=vcpkg`를 지정한다 |
 | `bootstrap: download failed: https://github.com/...` | GitHub Release에 닿지 못했다. 프록시·방화벽을 확인하고 다시 실행한다 |
 | `CMake Error ... No CMAKE_CXX_COMPILER could be found` / `Visual Studio 17 2022 could not find any instance` | 컴파일러가 없다. Windows는 **Desktop development with C++** 워크로드, Linux는 `g++`를 설치한다 |

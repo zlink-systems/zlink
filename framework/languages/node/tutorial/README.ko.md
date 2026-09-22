@@ -14,6 +14,8 @@ Node로 구현한다. Actor·STREAM은 다루지 않는다.
 
 ## 전제 조건
 
+bash 블록은 Linux·macOS·WSL에서, PowerShell 블록은 Windows PowerShell 7에서 실행한다. `cmd`는 지원하지 않는다.
+
 - **Node.js 22 이상.** `@zlink-systems/zlink`가 `"engines": { "node": ">=22" }`를 선언한다.
   `node --version`으로 확인한다.
 - **Docker Desktop(또는 Docker Engine)이 실행 중이어야 한다.** Redis container를 실행한다(아래
@@ -31,9 +33,13 @@ Node로 구현한다. Actor·STREAM은 다루지 않는다.
 `zlink-node-examples` 저장소를 clone하고 `tutorial/`에서 실행한다. 이 tutorial은
 quickstart와 같이 npm registry의 패키지만 참조한다.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 npm install
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 npm install
@@ -53,9 +59,13 @@ npm install
 
 ## 빌드
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 npm run build
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 npm run build
@@ -68,9 +78,13 @@ Session-Actor 연결" 참고).
 `HttpClient`도 자기 `package.json`을 가진 별도 프로젝트다. CommonJS로 빌드할 수 있지만
 가이드가 참조하는 `@zlink-systems/http-client` 패키지만 의존하도록 분리한다.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 npm run build:http-client
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 npm run build:http-client
@@ -78,10 +92,12 @@ npm run build:http-client
 
 ## 실행
 
-Redis가 필요하다(Spot 단계가 사용한다). runner가 없으므로 이 tutorial에서는 Redis container를 직접
+[빌드](#빌드) 절을 먼저 마친다. Redis가 필요하다(Spot 단계가 사용한다). runner가 없으므로 이 tutorial에서는 Redis container를 직접
 실행하고 종료 시 정리한다. 별도 terminal에서 실행할 때는 Server를 먼저
 `npm run server`, Client를 `npm run client`로 실행할 수 있다. 아래 블록은 같은
 절차를 백그라운드 process로 실행하고 PID를 파일에 기록한다.
+
+**Linux · macOS · WSL — bash**
 
 ```bash title="linux"
 docker run -d --rm --name zlink-tutorial-node-redis -p 127.0.0.1:6379:6379 redis:7.2-alpine && until docker exec zlink-tutorial-node-redis redis-cli ping 2>/dev/null | grep -q PONG; do sleep 0.2; done
@@ -89,7 +105,10 @@ npm run server > server.log 2>&1 &
 echo $! > server.pid
 npm run client > client.log 2>&1 &
 echo $! > client.pid
+for i in $(seq 1 60); do curl -sf http://127.0.0.1:5480/players/p1/profile > /dev/null && break; sleep 1; done
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 docker run -d --rm --name zlink-tutorial-node-redis -p 127.0.0.1:6379:6379 redis:7.2-alpine | Out-Null; if ($LASTEXITCODE -eq 0) { while (-not ((docker exec zlink-tutorial-node-redis redis-cli ping 2>$null) -match 'PONG')) { Start-Sleep -Milliseconds 200 } }
@@ -97,11 +116,14 @@ $serverProc = Start-Process -PassThru -NoNewWindow npm.cmd -ArgumentList 'run','
 Set-Content -Path server.pid -Value $serverProc.Id
 $clientProc = Start-Process -PassThru -NoNewWindow npm.cmd -ArgumentList 'run','client' -RedirectStandardOutput client.log -RedirectStandardError client.err.log
 Set-Content -Path client.pid -Value $clientProc.Id
+foreach ($i in 1..60) { try { Invoke-RestMethod -Uri 'http://127.0.0.1:5480/players/p1/profile' -TimeoutSec 2 | Out-Null; break } catch { Start-Sleep -Seconds 1 } }
 ```
 
 전체 기능은 아래 "단계"에서 순서대로 확인한다.
 
 ## 검증
+
+examples-smoke는 이 블록을 그대로 실행한다.
 
 Server와 Client가 각각 아래 줄을 기록하면 정상적으로 시작한 상태다.
 
@@ -115,41 +137,22 @@ client listening on http://127.0.0.1:5480
 ```
 
 시작에는 최대 45초가 걸릴 수 있다(`/mnt/d` 같은 WSL 9p mount 위라면 특히 — 아래
-「문제 해결」 참고). 확인 호출은 고정된 대기 대신 최대 60초 retry loop로 실행한다. 성공 여부와
-관계없이 두 process와 Redis container를 정리하며, 확인에 실패한 경우에만 0이 아닌
-상태로 끝난다.
+「문제 해결」 참고). 실행 절은 고정된 대기 대신 최대 60초 동안 준비를 기다리고, 검증과
+정리는 다음 두 절이 각각 소유한다.
+
+**Linux · macOS · WSL — bash**
 
 ```bash title="linux"
-ready=""
-for _ in $(seq 1 60); do
-  if curl -sf http://127.0.0.1:5480/players/p1/profile > response.json 2>/dev/null; then
-    ready=1
-    break
-  fi
-  sleep 1
-done
-[ -n "$ready" ] && cat response.json
-kill "$(cat client.pid)" "$(cat server.pid)" 2>/dev/null
-docker rm -f zlink-tutorial-node-redis
-[ -n "$ready" ]
+curl -sf http://127.0.0.1:5480/players/p1/profile | grep -q '"playerId":"p1"'
+echo "tutorial-http=ok"
 ```
 
+**Windows — PowerShell 7**
+
 ```powershell title="windows"
-$ready = $false
-for ($i = 0; $i -lt 60; $i++) {
-    try {
-        $response = Invoke-RestMethod http://127.0.0.1:5480/players/p1/profile -ErrorAction Stop
-        $ready = $true
-        break
-    } catch {
-        Start-Sleep -Seconds 1
-    }
-}
-if ($ready) { $response | ConvertTo-Json -Compress }
-taskkill /F /T /PID $(Get-Content client.pid) 2>$null
-taskkill /F /T /PID $(Get-Content server.pid) 2>$null
-docker rm -f zlink-tutorial-node-redis
-if (-not $ready) { exit 1 }
+$profile = Invoke-RestMethod -Uri 'http://127.0.0.1:5480/players/p1/profile'
+if ($profile.playerId -ne 'p1') { throw "tutorial verify failed: $($profile | ConvertTo-Json -Compress)" }
+Write-Output 'tutorial-http=ok'
 ```
 
 성공하면 아래 값을 반환한다.
@@ -160,6 +163,37 @@ if (-not $ready) { exit 1 }
 
 이 값은 mesh·channel 등록과 RouteMesh 호출 경로가 정상임을 나타낸다. 각 단계의
 기대 응답은 아래 "단계"와 "실제 출력"에 있다.
+
+## 종료
+
+실행 절에서 시작한 process와 Redis 컨테이너를 종료한다.
+
+**Linux · macOS · WSL — bash**
+
+```bash title="linux"
+for pid in "$(cat client.pid)" "$(cat server.pid)"; do
+  pkill -TERM -P "$pid" 2>/dev/null || true
+  kill "$pid" 2>/dev/null || true
+done
+docker rm -f zlink-tutorial-node-redis 2>/dev/null || true
+```
+
+**Windows — PowerShell 7**
+
+```powershell title="windows"
+Get-Content client.pid, server.pid | ForEach-Object {
+  if ($_ -match '^\d+$') { taskkill /PID $_ /T /F 2>$null | Out-Null }
+}
+Get-Job | Stop-Job -ErrorAction SilentlyContinue
+docker rm -f zlink-tutorial-node-redis 2>$null | Out-Null
+```
+
+## IDE에서 실행
+
+WebStorm에서 `tutorial/` project를 연다. npm tool window 또는 각 script의 gutter ▶에서
+`build` → `server` → `client` 순서로 실행한다. 디버깅할 때는 Node.js run configuration을
+만들어 Working directory를 project directory, JavaScript file을 `dist/Server/main.js`로
+지정하고 Before launch에 npm `build`를 둔다. 종료는 ■ Stop 버튼으로 한다.
 
 ## 문제 해결
 
@@ -482,12 +516,16 @@ timeout과 header, gzip·redirect·Basic 인증, download/upload stream, 예외 
 순서대로 확인한다.
 
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 cd HttpClient
 npm install
 npm run build
 npm start
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 cd HttpClient

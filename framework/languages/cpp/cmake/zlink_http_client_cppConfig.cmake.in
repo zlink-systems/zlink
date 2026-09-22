@@ -1,10 +1,12 @@
 @PACKAGE_INIT@
 include(CMakeFindDependencyMacro)
+if(@ZLINK_FRAMEWORK_CPP_SHARED@)
+  set(zlink_cpp_DIR "${PACKAGE_PREFIX_DIR}/lib/cmake/zlink_cpp")
+endif()
 find_dependency(zlink @ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION@ EXACT CONFIG)
 find_dependency(zlink_cpp @ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION@ EXACT CONFIG)
 find_dependency(Threads)
 find_dependency(nlohmann_json CONFIG)
-find_dependency(Boost)
-@ZLINK_HTTP_CLIENT_EXPORT_OPENSSL_DEPENDENCY@
+@ZLINK_HTTP_CLIENT_CONFIG_IMPLEMENTATION_DEPENDENCIES@
 find_dependency(zlink_framework_cpp CONFIG)
 include("${CMAKE_CURRENT_LIST_DIR}/zlink_http_client_cppTargets.cmake")

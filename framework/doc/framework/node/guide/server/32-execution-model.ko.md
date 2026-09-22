@@ -18,6 +18,8 @@ title: "실행 모델 · Node/TypeScript"
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
+이 장은 `Bingo` 샘플의 `Server` 디렉터리에서 코드를 인용한다. 해당 언어 sample tree를 bootstrap하고 build하면 아래 실행 모델 예제를 실제 코드에서 확인할 수 있다.
+
 !!! info "이 장을 읽고 나면"
 
     한 Spot 안에서 무엇이 함께 실행되고 무엇이 줄을 서는지, 그 경계를 무엇이 정하는지 알 수

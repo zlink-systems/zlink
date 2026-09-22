@@ -35,18 +35,20 @@ The command blocks of `Build`, `Run` and `Verify` are marked `title="linux"` (ba
 
 ## Prerequisites
 
+Bash blocks run on Linux, macOS, and WSL; PowerShell blocks run on Windows PowerShell 7. `cmd` is not supported.
+
 | Tool | Windows | Linux / WSL |
 |---|---|---|
-| C++20 compiler | Visual Studio 2022 17.4 or later with the **Desktop development with C++** workload (verified with MSVC 19.44) | GCC 13 or later (verified with 13.3) |
+| C++20 compiler | Visual Studio 2022 17.4 or later or Visual Studio 2026 with the **Desktop development with C++** workload. As of 2026-09, 2026's msvc 195 has no ConanCenter binary, so the first bootstrap builds third-party libraries from source and takes about 20 minutes. 2022 downloads binaries and takes about 7 minutes (verified with MSVC 19.44) | GCC 13 or later (verified with 13.3) |
 | CMake | 3.24 or later (the 3.31 Visual Studio installs was used) | 3.24 or later (3.28 was used) |
 | Ninja | not needed | recommended; Makefiles are used when it is absent |
-| Conan 2 | `pipx install conan` (or `py -m pip install --user conan`) | `pipx install conan` (or `python3 -m pip install --user conan`) |
+| Conan 2 | Run `pipx install conan`, then `pipx ensurepath` and open a new terminal. If you used `py -m pip install --user conan`, put Python's `Scripts` directory on `PATH`. Check with `conan --version` | Run `pipx install conan`, then `pipx ensurepath` and open a new terminal. If you used `python3 -m pip install --user conan`, put Python's user `bin` directory on `PATH`. Check with `conan --version` |
 | Docker Desktop | runs one Redis container. Must be installed and running | same (WSL integration, or Docker Engine on Linux) |
 
 Nothing else is needed: no zlink repository, no Node.js, no distribution Boost. Conan is installed
-by pipx (or pip) and downloads ConanCenter binaries for the third-party libraries. **The first
-install takes about 3 minutes** on a supported compiler; Conan builds only packages without a
-matching binary. Later installs reuse its local cache.
+by pipx (or pip) and downloads ConanCenter binaries for the third-party libraries. Visual Studio 2022
+takes **about 7 minutes for the first bootstrap**; a toolset without binaries, such as 2026's msvc 195,
+builds third-party libraries from source and takes **about 20 minutes**. Later installs reuse its local cache.
 
 ## Download and install
 
@@ -67,10 +69,14 @@ bootstrap.cmake`. To start over, delete `.zlink/` and `build/`.
 
 ## Build
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 cmake -P bootstrap.cmake
 cmake --build build --parallel
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 cmake -P bootstrap.cmake
@@ -88,21 +94,27 @@ Store. The block below starts Redis with Docker, then the Server and the Client,
 with the first request that the two processes are connected over the mesh. Handler and filter
 logs go to **stderr**.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 docker run -d --rm --name zlink-tutorial-redis -p 127.0.0.1:6379:6379 redis:7-alpine && until docker exec zlink-tutorial-redis redis-cli ping 2>/dev/null | grep -q PONG; do sleep 0.2; done
 ./build/tutorial_server > server.log 2>&1 &
+echo $! > server.pid
 ./build/tutorial_client > client.log 2>&1 &
+echo $! > client.pid
 for i in $(seq 1 60); do curl -sf http://127.0.0.1:5180/players/p1/profile > /dev/null && break; sleep 1; done
-curl -sf http://127.0.0.1:5180/players/p1/profile
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 docker run -d --rm --name zlink-tutorial-redis -p 127.0.0.1:6379:6379 redis:7-alpine | Out-Null; if ($LASTEXITCODE -eq 0) { while (-not ((docker exec zlink-tutorial-redis redis-cli ping 2>$null) -match 'PONG')) { Start-Sleep -Milliseconds 200 } }
-Start-Process -NoNewWindow .\build\Release\tutorial_server.exe -RedirectStandardOutput server.out -RedirectStandardError server.log
-Start-Process -NoNewWindow .\build\Release\tutorial_client.exe -RedirectStandardOutput client.out -RedirectStandardError client.log
+$server = Start-Process -NoNewWindow .\build\Release\tutorial_server.exe -RedirectStandardOutput server.out -RedirectStandardError server.log -PassThru
+$server.Id | Set-Content server.pid
+$client = Start-Process -NoNewWindow .\build\Release\tutorial_client.exe -RedirectStandardOutput client.out -RedirectStandardError client.log -PassThru
+$client.Id | Set-Content client.pid
 foreach ($i in 1..60) { $answer = curl.exe -s http://127.0.0.1:5180/players/p1/profile; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds 1 }
 if ($LASTEXITCODE -ne 0) { throw 'tutorial-http did not come up' }
-$answer
 ```
 
 In PowerShell `curl` is an alias of `Invoke-WebRequest`, so use `curl.exe` and escape the double
@@ -122,12 +134,17 @@ executable. Run both while the Server and Client are up; each completes its own 
 Cleanup stops the two processes and the Redis container.
 
 ```powershell
-Stop-Process -Name tutorial_server,tutorial_client
+Get-Content client.pid, server.pid | ForEach-Object {
+  if ($_ -match '^\d+$') { taskkill /PID $_ /T /F 2>$null | Out-Null }
+}
 docker stop zlink-tutorial-redis
 ```
 
 ```bash
-pkill -f build/tutorial_server; pkill -f build/tutorial_client
+for pid in "$(cat client.pid)" "$(cat server.pid)"; do
+  pkill -TERM -P "$pid" 2>/dev/null || true
+  kill "$pid" 2>/dev/null || true
+done
 docker stop zlink-tutorial-redis
 ```
 
@@ -145,6 +162,8 @@ The ports differ from the .NET tutorial so both can run on one machine.
 
 ## Verify
 
+Examples smoke runs this block exactly as written.
+
 | Step | Evidence of success |
 |---|---|
 | `cmake -P bootstrap.cmake` | last line `-- bootstrap done. Next: cmake --build ...`; `.zlink/install/lib/cmake/zlink_framework/zlink_frameworkConfig.cmake` exists |
@@ -157,6 +176,8 @@ The ports differ from the .NET tutorial so both can run on one machine.
 The block below checks this against the processes the [Run](#run) block started: the first
 request's answer and the STREAM client's exit code.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 set -e
 curl -sf http://127.0.0.1:5180/players/p1/profile | grep -q '"playerId":"p1"'
@@ -164,6 +185,8 @@ echo "tutorial-http=ok"
 ./build/tutorial_stream_client
 echo "tutorial-stream=ok"
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 if ((curl.exe -s http://127.0.0.1:5180/players/p1/profile) -notmatch '"playerId":"p1"') { throw 'tutorial-http failed' }
@@ -175,11 +198,53 @@ Write-Output 'tutorial-stream=ok'
 
 [Step by step](#step-by-step) lists the request and expected output of all eleven steps.
 
+## Stop
+
+Stop the processes started by the Run section.
+
+**Linux · macOS · WSL — bash**
+
+```bash title="linux"
+for pid in "$(cat client.pid)" "$(cat server.pid)"; do
+  pkill -TERM -P "$pid" 2>/dev/null || true
+  kill "$pid" 2>/dev/null || true
+done
+docker rm -f zlink-tutorial-redis 2>/dev/null || true
+```
+
+**Windows — PowerShell 7**
+
+```powershell title="windows"
+Get-Content client.pid, server.pid | ForEach-Object {
+  if ($_ -match '^\d+$') { taskkill /PID $_ /T /F 2>$null | Out-Null }
+}
+Get-Job | Stop-Job -ErrorAction SilentlyContinue
+docker rm -f zlink-tutorial-redis 2>$null | Out-Null
+```
+
+## Running from an IDE
+
+`bootstrap.cmake` records the exact arguments it configured this folder with as the preset `zlink`
+in `CMakeUserPresets.json`. Visual Studio, Rider and CLion read that preset when they open the
+folder, so after one bootstrap the IDE continues in the same `build/`. The bootstrap rewrites the
+file every time; it is not edited by hand.
+
+1. Run `cmake -P bootstrap.cmake` from the [Build](#build) section once in a terminal (an IDE cannot
+   run a `-P` script).
+2. **Visual Studio 2022 or 2026**: File › Open › Folder on this directory. Pick the preset `zlink`
+   in the CMake settings; configuration completes and the startup item list shows `tutorial_server` and `tutorial_client`. Start the
+   server first, then the client.
+3. **Rider or CLion**: open this directory's `CMakeLists.txt` as the project. Enable the preset
+   `zlink` under Settings › Build, Execution, Deployment › CMake; configuration completes and run
+   configurations for `tutorial_server` and `tutorial_client` appear.
+4. Stop with the IDE's Stop button; the IDE ends the process tree, so the [Stop](#stop) section's
+   commands are not needed.
+
 ## Troubleshooting
 
 | Symptom | Cause and fix |
 |---|---|
-| `bootstrap: could not find Conan` | Install Conan 2 with `pipx install conan` (or `python3 -m pip install --user conan`) and ensure its bin directory is on `PATH` |
+| `bootstrap: could not find Conan` | Run `pipx install conan`, then `pipx ensurepath` and open a new terminal. For a `pip --user` install, put Python's `Scripts`/user `bin` directory on `PATH`, then check with `conan --version` |
 | `ERROR: Invalid setting ...` | The selected compiler is not a supported ConanCenter binary configuration. Use the listed compiler version, or pass `-DZLINK_PACKAGE_MANAGER=vcpkg` |
 | `bootstrap: download failed: https://github.com/...` | GitHub Releases is unreachable; check proxy and firewall. The next run downloads it again from the start |
 | `CMake Error ... No CMAKE_CXX_COMPILER could be found` / `Visual Studio 17 2022 could not find any instance` | No compiler. Install the **Desktop development with C++** workload on Windows, `g++` on Linux |
@@ -422,9 +487,13 @@ dispatch so a push arriving before `wait` is queued rather than dropped.
 the asynchronous `async<T>()`, `async_raw()`, `fetch<T>()`, and `download()` terminators. Run it
 while the Server and Client are up:
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 ./build/tutorial_http_client
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 & .\build\Release\tutorial_http_client.exe

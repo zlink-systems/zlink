@@ -188,7 +188,7 @@ need them.
     `@zlink-systems/framework` and starts the host in code. The runtime requires Node.js 22 or
     later, and the path to a first run is covered by the [quickstart](node/quickstart.en.md).
 
-## :material-gamepad-variant: Client stream connector { .zlink-band .band-client }
+## :material-gamepad-variant: Client stream connector {#client-stream-connector .zlink-band .band-client}
 
 Which connector to install is decided by the **engine and build target**, not by the language.
 As a single rule — **anything built for the web (browser or WASM) uses the TypeScript

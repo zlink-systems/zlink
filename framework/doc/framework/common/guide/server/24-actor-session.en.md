@@ -1,5 +1,7 @@
 # Session and Actor
 
+This chapter quotes code from the tutorial's [`Server` and `StreamClient` directories and its Run section](https://github.com/zlink-systems/zlink-<language>-examples/blob/main/tutorial/README.md#run); bootstrapping and building that tree reproduces the results below.
+
 !!! info "What you get from this chapter"
 
     You can bind one external client's connection to one Actor, and have that Actor push a
@@ -222,7 +224,7 @@ answer, yet a value arrives after it — that is the notification the Actor push
 
 ## 5. What You See When You Run It
 
-The command below runs the tutorial (`framework/languages/<language>/tutorial`) StreamClient with its Server started as described in the README's "Run" section; StreamClient connects to the Server's stream endpoint.
+With the tutorial Server running as the README's Run section specifies, start StreamClient with the command below: its bind request and received Actor notification appear on the StreamClient process's stdout, while session and Actor handler records appear on the Server process's stdout or in `server.log`.
 
 ```bash
 dotnet run --project StreamClient/StreamClient.csproj

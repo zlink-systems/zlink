@@ -15,6 +15,8 @@ This directory is `quickstart/` in the `zlink-dotnet-examples` repository.
 
 ## Prerequisites
 
+Bash blocks run on Linux, macOS, and WSL; PowerShell blocks run on Windows PowerShell 7. `cmd` is not supported.
+
 - .NET SDK 8.0 or newer. The project targets `net8.0`.
 - Internet access to `nuget.org`. `nuget.config` uses that feed.
 - No Redis or other external service.
@@ -29,9 +31,13 @@ The `Zlink` binding is not listed there; it resolves transitively from `Zlink.Fr
 
 ## Build
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 dotnet build
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 dotnet build
@@ -44,28 +50,40 @@ Start the server first and the client second in separate terminals. The server l
 `tcp://0.0.0.0:7102`, connects to `tcp://127.0.0.1:7101`, and serves
 `GET /hello/{name}` on `http://127.0.0.1:5080`.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 dotnet run --project Server/Server.csproj > server.log 2>&1 &
+echo $! > server.pid
 dotnet run --project Client/Client.csproj > client.log 2>&1 &
+echo $! > client.pid
 for i in $(seq 1 60); do curl -sf http://127.0.0.1:5080/hello/world > /dev/null && break; sleep 1; done
-curl -sf http://127.0.0.1:5080/hello/world
 ```
 
+**Windows — PowerShell 7**
+
 ```powershell title="windows"
-Start-Process -NoNewWindow dotnet -ArgumentList 'run','--project','Server/Server.csproj' -RedirectStandardOutput server.log -RedirectStandardError server.err.log
-Start-Process -NoNewWindow dotnet -ArgumentList 'run','--project','Client/Client.csproj' -RedirectStandardOutput client.log -RedirectStandardError client.err.log
+$server = Start-Process -NoNewWindow dotnet -ArgumentList 'run','--project','Server/Server.csproj' -RedirectStandardOutput server.log -RedirectStandardError server.err.log -PassThru
+$server.Id | Set-Content server.pid
+$client = Start-Process -NoNewWindow dotnet -ArgumentList 'run','--project','Client/Client.csproj' -RedirectStandardOutput client.log -RedirectStandardError client.err.log -PassThru
+$client.Id | Set-Content client.pid
 foreach ($i in 1..60) { $answer = curl.exe -s http://127.0.0.1:5080/hello/world; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds 1 }
 if ($LASTEXITCODE -ne 0) { throw 'quickstart did not come up' }
-$answer
 ```
 
 ## Verify
+
+Examples smoke runs this block exactly as written.
+
+**Linux · macOS · WSL — bash**
 
 ```bash title="linux"
 set -e
 curl -sf http://127.0.0.1:5080/hello/world | grep -q '"hello, world"'
 echo "quickstart=ok"
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 $answer = curl.exe -sf http://127.0.0.1:5080/hello/world
@@ -74,6 +92,34 @@ Write-Output 'quickstart=ok'
 ```
 
 The endpoint returns `"hello, world"` with HTTP status 200.
+
+## Stop
+
+Stop the processes started by the Run section.
+
+**Linux · macOS · WSL — bash**
+
+```bash title="linux"
+for pid in "$(cat client.pid)" "$(cat server.pid)"; do
+  pkill -TERM -P "$pid" 2>/dev/null || true
+  kill "$pid" 2>/dev/null || true
+done
+```
+
+**Windows — PowerShell 7**
+
+```powershell title="windows"
+Get-Content client.pid, server.pid | ForEach-Object {
+  if ($_ -match '^\d+$') { taskkill /PID $_ /T /F 2>$null | Out-Null }
+}
+Get-Job | Stop-Job -ErrorAction SilentlyContinue
+```
+
+## Running from an IDE
+
+Open `QuickStart.sln` in Rider or Visual Studio. Use a `Multiple startup projects` configuration
+with `Server` first and `Client` second, or run the projects individually in that order. Stop with
+the IDE's Stop button.
 
 ## Troubleshooting
 

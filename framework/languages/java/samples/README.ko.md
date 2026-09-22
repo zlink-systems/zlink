@@ -7,6 +7,8 @@ English: [`README.md`](./README.md)
 
 ## 전제 조건
 
+bash 블록은 Linux·macOS·WSL에서, PowerShell 블록은 Windows PowerShell 7에서 실행한다. `cmd`는 지원하지 않는다.
+
 - **JDK 25.** Gradle toolchain이 25로 고정돼 있다(`gradle/zlink-jvm-baseline.settings.gradle.kts`).
   자동으로 JDK를 내려받는 toolchain resolver(예:
   `org.gradle.toolchains.foojay-resolver-convention`)는 없다 — 실행 script들이 스스로
@@ -36,10 +38,14 @@ program(`java <file>.java ...`)으로 돌아 위 JDK 25만 있으면 된다.
 CI에서 실행 없이 빌드만 확인하려면, clone한 examples repository의 `samples/` 안에서
 다음을 쓴다.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 ./gradlew projects
 ./gradlew buildAllSamples
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 .\gradlew.bat projects
@@ -54,6 +60,8 @@ CI에서 실행 없이 빌드만 확인하려면, clone한 examples repository�
 clone한 examples repository의 `samples/` 안에서 실행한다.
 
 Linux·WSL:
+
+**Linux · macOS · WSL — bash**
 
 ```bash title="linux"
 ./java/Bingo/run_sample.sh
@@ -74,6 +82,8 @@ Linux·WSL:
 
 Windows:
 
+**Windows — PowerShell 7**
+
 ```powershell title="windows"
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\java\Bingo\run_sample.ps1
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\java\DeliveryDispatch\run_sample.ps1
@@ -92,6 +102,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\kotlin\ZoneWorld\run_sample.ps1
 ```
 
 ## 검증
+
+examples-smoke는 이 블록을 그대로 실행한다.
 
 각 runner는 역할별 process를 실행하고 준비를 기다린 뒤 probe·client 시나리오를 실행한다. 종료 시 자신이
 시작한 process와 Redis container를 제거한다. `ZLINK_FRAMEWORK_READY`에 도달한 Framework

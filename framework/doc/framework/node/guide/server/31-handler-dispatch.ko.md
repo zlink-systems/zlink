@@ -18,6 +18,8 @@ title: "Handler와 메시지 처리 · Node/TypeScript"
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
+이 장은 tutorial의 `Server`·`Client`와 `Bingo`·`DeliveryDispatch`·`TicTacToe`·`ZoneWorld` 샘플 디렉터리에서 코드를 인용한다. 각 언어의 해당 tree를 bootstrap하고 build하면 아래 handler 등록과 dispatch 예제를 재현할 수 있다.
+
 !!! info "이 장을 읽고 나면"
 
     여러 handler에 공통으로 적용되는 것을 다룰 수 있다 — packet 이름, filter, codec.

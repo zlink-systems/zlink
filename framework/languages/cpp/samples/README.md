@@ -32,19 +32,22 @@ The command blocks of `Build`, `Run` and `Verify` are marked `title="linux"` (ba
 
 ## Prerequisites
 
+Bash blocks run on Linux, macOS, and WSL; PowerShell blocks run on Windows PowerShell 7. `cmd` is not supported.
+
 | Tool | Windows | Linux / WSL |
 |---|---|---|
-| C++20 compiler | Visual Studio 2022 17.4 or later with the **Desktop development with C++** workload (verified with MSVC 19.44) | GCC 13 or later (verified with 13.3) |
+| C++20 compiler | Visual Studio 2022 17.4 or later or Visual Studio 2026 with the **Desktop development with C++** workload. As of 2026-09, 2026's msvc 195 has no ConanCenter binary, so the first bootstrap builds third-party libraries from source and takes about 20 minutes. 2022 downloads binaries and takes about 7 minutes (verified with MSVC 19.44) | GCC 13 or later (verified with 13.3) |
 | CMake | 3.24 or later (the 3.31 Visual Studio installs was used) | 3.24 or later (3.28 was used) |
 | Ninja | not needed | recommended; Makefiles are used when it is absent |
-| Conan 2 | `pipx install conan` (or `py -m pip install --user conan`) | `pipx install conan` (or `python3 -m pip install --user conan`) |
+| Conan 2 | Run `pipx install conan`, then `pipx ensurepath` and open a new terminal. If you used `py -m pip install --user conan`, put Python's `Scripts` directory on `PATH`. Check with `conan --version` | Run `pipx install conan`, then `pipx ensurepath` and open a new terminal. If you used `python3 -m pip install --user conan`, put Python's user `bin` directory on `PATH`. Check with `conan --version` |
 | Docker Desktop | each runner starts one Redis container. Must be installed and running | same (WSL integration, or Docker Engine on Linux) |
 | `curl` | included since Windows 10 | distribution package |
 
 Nothing else is needed: no zlink repository or Node.js. Even ZoneWorld's ZW-B8 fault proxy is C++
 built with the sample. Conan is installed by pipx (or pip) and downloads ConanCenter binaries for
-the third-party libraries, so **the first install takes about 3 minutes** on a supported compiler;
-later installs reuse its local cache.
+the third-party libraries. Visual Studio 2022 takes **about 7 minutes for the first bootstrap**; a
+toolset without binaries, such as 2026's msvc 195, builds third-party libraries from source and
+takes **about 20 minutes**. Later installs reuse its local cache.
 
 ## Download and install
 
@@ -64,10 +67,14 @@ bootstrap.cmake`. To start over, delete `.zlink/` and `build/`.
 
 ## Build
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 cmake -P bootstrap.cmake
 cmake --build build --parallel
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 cmake -P bootstrap.cmake
@@ -86,6 +93,8 @@ Every sample has a `run_sample.ps1` and a `run_sample.sh`; one invocation runs o
 20000-20099 on `127.0.0.1`) and removes it at the end. Nothing has to be started beforehand.
 The block below runs the seven in turn.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 ./Bingo/run_sample.sh
 ./DeliveryDispatch/run_sample.sh
@@ -95,6 +104,8 @@ The block below runs the seven in turn.
 ./TicTacToe/run_sample.sh
 ./ZoneWorld/run_sample.sh
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 .\Bingo\run_sample.ps1
@@ -114,6 +125,8 @@ Set `ZLINK_CPP_BUILD_DIR` to use the executables of another build tree instead o
 
 ## Verify
 
+Examples smoke runs this block exactly as written.
+
 A sample passes when the runner's last line is the marker below and its exit code is 0. The
 items the client self-check confirmed precede it as `<sample>-...=verified` lines.
 
@@ -129,14 +142,20 @@ items the client self-check confirmed precede it as `<sample>-...=verified` line
 
 The block below checks this with TicTacToe alone.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 ./TicTacToe/run_sample.sh | tee tictactoe.log | tail -n 1 | grep -x 'tictactoe-placement=completed'
+echo "tictactoe=ok"
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 $lines = @(& .\TicTacToe\run_sample.ps1 *>&1 | ForEach-Object { "$_" })
 if ($lines[-1] -ne 'tictactoe-placement=completed') { throw ('TicTacToe failed: ' + $lines[-1]) }
 Write-Output $lines[-1]
+Write-Output 'tictactoe=ok'
 ```
 
 A failed run keeps its run directory with the per-role stdout/stderr logs and prints its path as
@@ -144,11 +163,31 @@ A failed run keeps its run directory with the per-role stdout/stderr logs and pr
 as `framework tests: skipped (package tree; no framework test targets)` -- those tests exist
 only in the repository tree.
 
+## Running from an IDE
+
+`bootstrap.cmake` records the exact arguments it configured this folder with as the preset `zlink`
+in `CMakeUserPresets.json`. Visual Studio, Rider and CLion read that preset when they open the
+folder, so after one bootstrap the IDE continues in the same `build/`. The bootstrap rewrites the
+file every time; it is not edited by hand.
+
+A sample is several processes plus Redis, orchestrated by `run_sample.sh` (port choice, generated
+configuration files, shutdown order). In the IDE you therefore **build, browse and debug**; running
+and verifying stay with the runner in the [Run](#run) section.
+
+1. Run `cmake -P bootstrap.cmake` from the [Build](#build) section once in a terminal (an IDE cannot
+   run a `-P` script).
+2. **Visual Studio 2022 or 2026**: File › Open › Folder on this directory and pick the preset `zlink`
+   in the CMake settings. **Rider or CLion**: open this directory's `CMakeLists.txt` as the project
+   and enable the preset `zlink` under Settings › Build, Execution, Deployment › CMake. The sample
+   targets appear as build targets.
+3. Debug by attaching the IDE to a process the runner started; the runner finds the executables the
+   IDE built in the same `build/`.
+
 ## Troubleshooting
 
 | Symptom | Cause and fix |
 |---|---|
-| `bootstrap: could not find Conan` | Install Conan 2 with `pipx install conan` (or `python3 -m pip install --user conan`) and ensure its bin directory is on `PATH` |
+| `bootstrap: could not find Conan` | Run `pipx install conan`, then `pipx ensurepath` and open a new terminal. For a `pip --user` install, put Python's `Scripts`/user `bin` directory on `PATH`, then check with `conan --version` |
 | `ERROR: Invalid setting ...` | The selected compiler is not a supported ConanCenter binary configuration. Use the listed compiler version, or pass `-DZLINK_PACKAGE_MANAGER=vcpkg` |
 | `bootstrap: download failed: https://github.com/...` | GitHub Releases is unreachable; check proxy and firewall, then rerun |
 | `CMake Error ... No CMAKE_CXX_COMPILER could be found` / `Visual Studio 17 2022 could not find any instance` | No compiler. Install the **Desktop development with C++** workload on Windows, `g++` on Linux |

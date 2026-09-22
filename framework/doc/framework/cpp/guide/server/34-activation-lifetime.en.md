@@ -18,6 +18,8 @@ View in another language — **C++** · [C#/.NET](../../../dotnet/guide/server/3
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
+This chapter quotes code from the `TicTacToe` sample's `Server` directory. Bootstrap and build that language's sample tree to inspect the activation and lifetime examples below in running code.
+
 !!! info "What you get from this chapter"
 
     You can tell when each of the three kinds of Spot is created, which callbacks it receives, and

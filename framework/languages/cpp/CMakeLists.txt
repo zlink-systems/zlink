@@ -5,15 +5,28 @@ project(zlink_framework_cpp VERSION 0.22.0 LANGUAGES C CXX)
 # folders via the FOLDER target property instead of leaving them flat.
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
+option(ZLINK_FRAMEWORK_CPP_SHARED
+  "Build the distributable Framework C++ libraries as shared libraries" OFF)
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-  add_compile_options(
-    $<$<COMPILE_LANGUAGE:CXX>:-fvisibility=hidden>
-    $<$<COMPILE_LANGUAGE:CXX>:-fvisibility-inlines-hidden>
-    $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:GNU>>:-fno-gnu-unique>)
-  if(UNIX AND NOT APPLE)
+  # Source builds retain their historical hidden-by-default executable policy.
+  # The prebuilt shared libraries deliberately keep Framework-owned symbols at
+  # default visibility; their ELF export surface is restricted per target below.
+  if(NOT ZLINK_FRAMEWORK_CPP_SHARED)
+    add_compile_options(
+      $<$<COMPILE_LANGUAGE:CXX>:-fvisibility=hidden>
+      $<$<COMPILE_LANGUAGE:CXX>:-fvisibility-inlines-hidden>)
+  else()
+    # Keep out-of-line Framework definitions default-visible for the shared
+    # package, but do not accidentally publish third-party header templates.
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-fvisibility-inlines-hidden>)
+  endif()
+  add_compile_options($<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:GNU>>:-fno-gnu-unique>)
+  if(UNIX AND NOT APPLE AND NOT ZLINK_FRAMEWORK_CPP_SHARED)
     add_link_options($<$<LINK_LANGUAGE:CXX>:-Wl,--exclude-libs,ALL>)
   endif()
-  if(UNIX AND NOT APPLE AND EXISTS "${CMAKE_CURRENT_LIST_DIR}/cmake/hide-executable-symbols.map")
+  if(UNIX AND NOT APPLE AND NOT ZLINK_FRAMEWORK_CPP_SHARED
+      AND EXISTS "${CMAKE_CURRENT_LIST_DIR}/cmake/hide-executable-symbols.map")
     add_link_options(
       $<$<LINK_LANGUAGE:CXX>:-Wl,--version-script=${CMAKE_CURRENT_LIST_DIR}/cmake/hide-executable-symbols.map>)
   endif()
@@ -271,6 +284,35 @@ function(zlink_framework_cpp_configure_msvc_target target_name)
   endif()
 endfunction()
 
+if(ZLINK_FRAMEWORK_CPP_SHARED)
+  set(ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE SHARED)
+  set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+else()
+  set(ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE STATIC)
+endif()
+
+function(zlink_framework_cpp_configure_shared_library target_name)
+  if(NOT ZLINK_FRAMEWORK_CPP_SHARED)
+    return()
+  endif()
+
+  set_target_properties(${target_name} PROPERTIES
+    VERSION ${PROJECT_VERSION}
+    SOVERSION ${PROJECT_VERSION_MAJOR}
+    POSITION_INDEPENDENT_CODE ON
+    # Keep the linker input independent of its temporary build directory so
+    # GNU's content-derived build ID remains reproducible after installation.
+    BUILD_WITH_INSTALL_RPATH ON)
+  if(UNIX AND NOT APPLE)
+    set_property(TARGET ${target_name} PROPERTY INSTALL_RPATH "$ORIGIN")
+    target_link_options(${target_name} PRIVATE
+      "-Wl,--exclude-libs,ALL"
+      "-Wl,--version-script=${CMAKE_CURRENT_LIST_DIR}/cmake/zlink-framework-shared-symbols.map")
+  elseif(APPLE)
+    set_property(TARGET ${target_name} PROPERTY INSTALL_RPATH "@loader_path")
+  endif()
+endfunction()
+
 function(zlink_framework_cpp_configure_m6_objects target_name)
   target_compile_features(${target_name} PUBLIC cxx_std_20)
   target_include_directories(${target_name} PRIVATE
@@ -320,7 +362,7 @@ target_link_libraries(zlink_framework_m6c_runtime PUBLIC
   zlink_framework_m6b_runtime
   Threads::Threads)
 
-add_library(zlink_framework STATIC
+add_library(zlink_framework ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
   $<TARGET_OBJECTS:zlink_framework_m6a_objects>
   $<TARGET_OBJECTS:zlink_framework_m6b_objects>
   $<TARGET_OBJECTS:zlink_framework_m6c_objects>
@@ -372,6 +414,7 @@ add_library(zlink_framework STATIC
   framework/src/runtime/transport/endpoint.cpp)
 add_library(zlink::framework ALIAS zlink_framework)
 set_target_properties(zlink_framework PROPERTIES EXPORT_NAME framework)
+zlink_framework_cpp_configure_shared_library(zlink_framework)
 target_compile_features(zlink_framework PUBLIC cxx_std_20)
 zlink_framework_cpp_configure_msvc_target(zlink_framework)
 if(MSVC)
@@ -386,7 +429,14 @@ target_include_directories(zlink_framework PUBLIC
 target_include_directories(zlink_framework PRIVATE
   ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
   ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
-target_link_libraries(zlink_framework PUBLIC zlink::cpp opentelemetry-cpp::api)
+target_link_libraries(zlink_framework PUBLIC zlink::cpp)
+if(ZLINK_FRAMEWORK_CPP_SHARED)
+  # C++ exports metrics through runtime.status(), not an OpenTelemetry provider API.
+  # Adding a provider-injection boundary would therefore be a spec change.
+  target_link_libraries(zlink_framework PRIVATE opentelemetry-cpp::api)
+else()
+  target_link_libraries(zlink_framework PUBLIC opentelemetry-cpp::api)
+endif()
 if(WIN32)
   target_link_libraries(zlink_framework PUBLIC bcrypt)
 endif()
@@ -464,7 +514,7 @@ if(OpenSSL_FOUND)
   target_link_libraries(zlink_framework PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 endif()
 
-add_library(zlink_http_client STATIC
+add_library(zlink_http_client ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
   http-client/src/client.cpp
   http-client/src/runtime/compression.cpp
   http-client/src/runtime/connection_opener.cpp
@@ -479,6 +529,7 @@ add_library(zlink_http_client STATIC
   http-client/src/runtime/url.cpp)
 add_library(zlink::http_client ALIAS zlink_http_client)
 set_target_properties(zlink_http_client PROPERTIES EXPORT_NAME http_client)
+zlink_framework_cpp_configure_shared_library(zlink_http_client)
 target_compile_features(zlink_http_client PUBLIC cxx_std_20)
 zlink_framework_cpp_configure_msvc_target(zlink_http_client)
 target_include_directories(zlink_http_client PUBLIC
@@ -561,7 +612,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   endif()
 endif()
 
-add_library(zlink_stream_connector STATIC
+add_library(zlink_stream_connector ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
   connector/core/src/runtime/calls/zlink_stream_calls.cpp
   connector/core/src/runtime/connector_runtime.cpp
   connector/core/src/runtime/protocol/compression/lz4_compression_codec.cpp
@@ -576,6 +627,7 @@ add_library(zlink_stream_connector STATIC
 add_library(zlink::stream_connector ALIAS zlink_stream_connector)
 set_target_properties(zlink_stream_connector PROPERTIES
   EXPORT_NAME stream_connector)
+zlink_framework_cpp_configure_shared_library(zlink_stream_connector)
 target_compile_features(zlink_stream_connector PUBLIC cxx_std_20)
 zlink_framework_cpp_configure_msvc_target(zlink_stream_connector)
 target_include_directories(zlink_stream_connector PUBLIC
@@ -805,13 +857,28 @@ endif()
 set(ZLINK_FRAMEWORK_REDIS_EXPORT_DEPENDENCIES "")
 set(ZLINK_FRAMEWORK_REDIS_EXPORTS_REDIS_PLUS_PLUS OFF)
 set(ZLINK_FRAMEWORK_REDIS_EXPORTS_LIBUV OFF)
-if(TARGET redis++::redis++ OR TARGET redis++::redis++_static)
+set(ZLINK_FRAMEWORK_REDIS_EXPORT_REDIS_TARGET "")
+set(ZLINK_FRAMEWORK_REDIS_EXPORT_LIBUV_TARGET "")
+if(TARGET redis++::redis++)
   set(ZLINK_FRAMEWORK_REDIS_EXPORTS_REDIS_PLUS_PLUS ON)
+  set(ZLINK_FRAMEWORK_REDIS_EXPORT_REDIS_TARGET "redis++::redis++")
+  string(APPEND ZLINK_FRAMEWORK_REDIS_EXPORT_DEPENDENCIES
+    "find_dependency(redis++ CONFIG)\n")
+elseif(TARGET redis++::redis++_static)
+  set(ZLINK_FRAMEWORK_REDIS_EXPORTS_REDIS_PLUS_PLUS ON)
+  set(ZLINK_FRAMEWORK_REDIS_EXPORT_REDIS_TARGET "redis++::redis++_static")
   string(APPEND ZLINK_FRAMEWORK_REDIS_EXPORT_DEPENDENCIES
     "find_dependency(redis++ CONFIG)\n")
 endif()
-if(TARGET libuv::uv_a OR TARGET libuv::uv)
+
+if(TARGET libuv::uv_a)
   set(ZLINK_FRAMEWORK_REDIS_EXPORTS_LIBUV ON)
+  set(ZLINK_FRAMEWORK_REDIS_EXPORT_LIBUV_TARGET "libuv::uv_a")
+  string(APPEND ZLINK_FRAMEWORK_REDIS_EXPORT_DEPENDENCIES
+    "find_dependency(libuv CONFIG)\n")
+elseif(TARGET libuv::uv)
+  set(ZLINK_FRAMEWORK_REDIS_EXPORTS_LIBUV ON)
+  set(ZLINK_FRAMEWORK_REDIS_EXPORT_LIBUV_TARGET "libuv::uv")
   string(APPEND ZLINK_FRAMEWORK_REDIS_EXPORT_DEPENDENCIES
     "find_dependency(libuv CONFIG)\n")
 endif()
@@ -834,10 +901,16 @@ if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
   install(TARGETS
     zlink_framework
     zlink_framework_provider_abstractions
-    zlink_framework_codec_protobuf
     zlink_framework_codec_messagepack
-    zlink_framework_locations_redis
     EXPORT zlink_framework_cppTargets
+    COMPONENT Framework)
+  install(TARGETS
+    zlink_framework_codec_protobuf
+    EXPORT zlink_framework_cppCodecProtobufTargets
+    COMPONENT Framework)
+  install(TARGETS
+    zlink_framework_locations_redis
+    EXPORT zlink_framework_cppLocationsRedisTargets
     COMPONENT Framework)
   install(TARGETS
     zlink_http_client
@@ -1107,6 +1180,16 @@ if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
     NAMESPACE zlink::
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlink_framework_cpp
     COMPONENT Framework)
+  install(EXPORT zlink_framework_cppCodecProtobufTargets
+    NAMESPACE zlink::
+    FILE zlink_framework_cppCodecProtobufTargets.cmake
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlink_framework_cpp
+    COMPONENT Framework)
+  install(EXPORT zlink_framework_cppLocationsRedisTargets
+    NAMESPACE zlink::
+    FILE zlink_framework_cppLocationsRedisTargets.cmake
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlink_framework_cpp
+    COMPONENT Framework)
   install(EXPORT zlink_http_client_cppTargets
     NAMESPACE zlink::
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlink_http_client_cpp
@@ -1116,6 +1199,46 @@ install(EXPORT zlink_stream_connector_cppTargets
   NAMESPACE zlink::
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlink_stream_connector_cpp
   COMPONENT StreamConnector)
+
+set(ZLINK_FRAMEWORK_CPP_CONFIG_IMPLEMENTATION_DEPENDENCIES "")
+set(ZLINK_HTTP_CLIENT_CONFIG_IMPLEMENTATION_DEPENDENCIES "")
+set(ZLINK_STREAM_CONNECTOR_CONFIG_IMPLEMENTATION_DEPENDENCIES "")
+set(ZLINK_FRAMEWORK_CONFIG_IMPLEMENTATION_DEPENDENCIES "")
+if(NOT ZLINK_FRAMEWORK_CPP_SHARED)
+  string(CONCAT ZLINK_FRAMEWORK_CPP_CONFIG_IMPLEMENTATION_DEPENDENCIES
+    "find_dependency(opentelemetry-cpp CONFIG COMPONENTS api)\n"
+    "find_dependency(Boost)\n"
+    "find_package(protobuf CONFIG QUIET)\n"
+    "if(NOT protobuf_FOUND)\n"
+    "  find_dependency(Protobuf MODULE)\n"
+    "endif()\n"
+    "${ZLINK_HTTP_CLIENT_EXPORT_OPENSSL_DEPENDENCY}\n"
+    "${ZLINK_FRAMEWORK_REDIS_EXPORT_DEPENDENCIES}"
+    "set(_zlink_saved_module_path \"\${CMAKE_MODULE_PATH}\")\n"
+    "list(APPEND CMAKE_MODULE_PATH \"\${CMAKE_CURRENT_LIST_DIR}\")\n"
+    "${ZLINK_FRAMEWORK_EXPORT_LZ4_DEPENDENCY}\n"
+    "set(CMAKE_MODULE_PATH \"\${_zlink_saved_module_path}\")\n"
+    "unset(_zlink_saved_module_path)")
+  string(CONCAT ZLINK_HTTP_CLIENT_CONFIG_IMPLEMENTATION_DEPENDENCIES
+    "find_dependency(Boost)\n"
+    "${ZLINK_HTTP_CLIENT_EXPORT_OPENSSL_DEPENDENCY}")
+  string(CONCAT ZLINK_STREAM_CONNECTOR_CONFIG_IMPLEMENTATION_DEPENDENCIES
+    "find_dependency(Boost)\n"
+    "${ZLINK_STREAM_CONNECTOR_EXPORT_OPENSSL_DEPENDENCY}\n"
+    "set(_zlink_saved_module_path \"\${CMAKE_MODULE_PATH}\")\n"
+    "list(APPEND CMAKE_MODULE_PATH \"\${CMAKE_CURRENT_LIST_DIR}\")\n"
+    "${ZLINK_STREAM_CONNECTOR_EXPORT_LZ4_DEPENDENCY}\n"
+    "set(CMAKE_MODULE_PATH \"\${_zlink_saved_module_path}\")\n"
+    "unset(_zlink_saved_module_path)")
+  string(CONCAT ZLINK_FRAMEWORK_CONFIG_IMPLEMENTATION_DEPENDENCIES
+    "find_package(protobuf CONFIG QUIET)\n"
+    "if(NOT protobuf_FOUND)\n"
+    "  find_dependency(Protobuf)\n"
+    "endif()\n"
+    "find_dependency(Boost)")
+else()
+  set(ZLINK_STREAM_CONNECTOR_EXPORT_OPENSSL_DEPENDENCY "")
+endif()
 
 foreach(_package zlink_framework_cpp zlink_stream_connector_cpp)
   if(_package STREQUAL "zlink_framework_cpp" AND NOT ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)

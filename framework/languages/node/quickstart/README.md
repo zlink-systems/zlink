@@ -15,6 +15,8 @@ This directory is `quickstart/` in the `zlink-node-examples` repository.
 
 ## Prerequisites
 
+Bash blocks run on Linux, macOS, and WSL; PowerShell blocks run on Windows PowerShell 7. `cmd` is not supported.
+
 - Node.js 22 or newer. The published `@zlink-systems/zlink` binding used by the framework
   requires that runtime version.
 - Internet access to `registry.npmjs.org`.
@@ -33,10 +35,14 @@ transitively.
 
 ## Build
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 npm install
 npm run build
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 npm install
@@ -45,33 +51,45 @@ npm run build
 
 ## Run
 
-Start the server first and the client second in separate terminals. The server listens on
+[Complete the [Build](#build) section first. Start the server first and the client second in separate terminals. The server listens on
 `tcp://0.0.0.0:7101` and handles the `greeting` channel. The client listens on
 `tcp://0.0.0.0:7102`, connects to `tcp://127.0.0.1:7101`, and serves
 `GET /hello/{name}` on `http://127.0.0.1:5080`.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 npm run server > server.log 2>&1 &
+echo $! > server.pid
 npm run client > client.log 2>&1 &
+echo $! > client.pid
 for i in $(seq 1 60); do curl -sf http://127.0.0.1:5080/hello/world > /dev/null && break; sleep 1; done
-curl -sf http://127.0.0.1:5080/hello/world
 ```
 
+**Windows — PowerShell 7**
+
 ```powershell title="windows"
-Start-Process -NoNewWindow npm.cmd -ArgumentList 'run','server' -RedirectStandardOutput server.log -RedirectStandardError server.err.log
-Start-Process -NoNewWindow npm.cmd -ArgumentList 'run','client' -RedirectStandardOutput client.log -RedirectStandardError client.err.log
+$server = Start-Process -NoNewWindow npm.cmd -ArgumentList 'run','server' -RedirectStandardOutput server.log -RedirectStandardError server.err.log -PassThru
+$server.Id | Set-Content server.pid
+$client = Start-Process -NoNewWindow npm.cmd -ArgumentList 'run','client' -RedirectStandardOutput client.log -RedirectStandardError client.err.log -PassThru
+$client.Id | Set-Content client.pid
 foreach ($i in 1..60) { $answer = curl.exe -s http://127.0.0.1:5080/hello/world; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds 1 }
 if ($LASTEXITCODE -ne 0) { throw 'quickstart did not come up' }
-$answer
 ```
 
 ## Verify
+
+Examples smoke runs this block exactly as written.
+
+**Linux · macOS · WSL — bash**
 
 ```bash title="linux"
 set -e
 curl -sf http://127.0.0.1:5080/hello/world | grep -q '"hello, world"'
 echo "quickstart=ok"
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 $answer = curl.exe -sf http://127.0.0.1:5080/hello/world
@@ -80,6 +98,35 @@ Write-Output 'quickstart=ok'
 ```
 
 The endpoint returns `"hello, world"` with HTTP status 200.
+
+## Stop
+
+Stop the processes started by the Run section.
+
+**Linux · macOS · WSL — bash**
+
+```bash title="linux"
+for pid in "$(cat client.pid)" "$(cat server.pid)"; do
+  pkill -TERM -P "$pid" 2>/dev/null || true
+  kill "$pid" 2>/dev/null || true
+done
+```
+
+**Windows — PowerShell 7**
+
+```powershell title="windows"
+Get-Content client.pid, server.pid | ForEach-Object {
+  if ($_ -match '^\d+$') { taskkill /PID $_ /T /F 2>$null | Out-Null }
+}
+Get-Job | Stop-Job -ErrorAction SilentlyContinue
+```
+
+## Running from an IDE
+
+Open the `quickstart/` project in WebStorm. In the npm tool window or with each script's gutter ▶,
+run `build` → `server` → `client`. For debugging, create a Node.js run configuration with Working
+directory set to the project directory, JavaScript file `dist/Server/main.js`, and Before launch set
+to npm `build`. Stop with the ■ Stop button.
 
 ## Troubleshooting
 

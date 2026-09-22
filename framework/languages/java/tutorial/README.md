@@ -9,6 +9,8 @@ subprojects of the same Gradle build, sharing `settings.gradle.kts`,
 
 ## Prerequisites
 
+Bash blocks run on Linux, macOS, and WSL; PowerShell blocks run on Windows PowerShell 7. `cmd` is not supported.
+
 - **JDK 25.** No auto-download toolchain resolver — install it yourself and
   point `JAVA_HOME` at it. Details and exact error text:
   [`java/README.md`](./java/README.md#prerequisites).
@@ -28,10 +30,14 @@ directory.
 
 ## Build
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 ./gradlew :java:Server:installDist :java:Client:installDist
 ./gradlew :kotlin:Server:installDist :kotlin:Client:installDist
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 .\gradlew.bat :java:Server:installDist :java:Client:installDist
@@ -47,31 +53,80 @@ Running them in the foreground in two terminals is described in each language RE
 - Java: [`java/README.md`](./java/README.md#run)
 - Kotlin: [`kotlin/README.md`](./kotlin/README.md#run)
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 ./java/Server/build/install/Server/bin/Server > server.log 2>&1 &
+echo $! > server.pid
 ./java/Client/build/install/Client/bin/Client > client.log 2>&1 &
+echo $! > client.pid
 for i in $(seq 1 60); do curl -sf http://127.0.0.1:5280/players/p1/profile >/dev/null && break; sleep 1; done
 ```
 
+**Windows — PowerShell 7**
+
 ```powershell title="windows"
-Start-Process -FilePath (Resolve-Path '.\java\Server\build\install\Server\bin\Server.bat') -WindowStyle Hidden -RedirectStandardOutput server.log -RedirectStandardError server.err.log
-Start-Process -FilePath (Resolve-Path '.\java\Client\build\install\Client\bin\Client.bat') -WindowStyle Hidden -RedirectStandardOutput client.log -RedirectStandardError client.err.log
+$server = Start-Process -FilePath (Resolve-Path '.\java\Server\build\install\Server\bin\Server.bat') -WindowStyle Hidden -RedirectStandardOutput server.log -RedirectStandardError server.err.log -PassThru
+$server.Id | Set-Content server.pid
+$client = Start-Process -FilePath (Resolve-Path '.\java\Client\build\install\Client\bin\Client.bat') -WindowStyle Hidden -RedirectStandardOutput client.log -RedirectStandardError client.err.log -PassThru
+$client.Id | Set-Content client.pid
 foreach ($i in 1..60) { try { Invoke-RestMethod -Uri 'http://127.0.0.1:5280/players/p1/profile' -TimeoutSec 2 | Out-Null; break } catch { Start-Sleep -Seconds 1 } }
 ```
 
 ## Verify
 
+Examples smoke runs this block exactly as written.
+
 Once the two processes accept each other, the `PEER_READY` log line described in each
 language README's "Verify" appears, and the call below returns `200` with the profile.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 curl -sf http://127.0.0.1:5280/players/p1/profile | grep -q '"playerId":"p1"'
+echo "tutorial-http=ok"
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 $profile = Invoke-RestMethod -Uri 'http://127.0.0.1:5280/players/p1/profile'
 if ($profile.playerId -ne 'p1') { throw "unexpected profile: $($profile | ConvertTo-Json -Compress)" }
+Write-Output 'tutorial-http=ok'
 ```
+
+## Stop
+
+Stop the processes started by the Run section.
+
+**Linux · macOS · WSL — bash**
+
+```bash title="linux"
+for pid in "$(cat client.pid)" "$(cat server.pid)"; do
+  pkill -TERM -P "$pid" 2>/dev/null || true
+  kill "$pid" 2>/dev/null || true
+done
+```
+
+**Windows — PowerShell 7**
+
+```powershell title="windows"
+Get-Content client.pid, server.pid | ForEach-Object {
+  if ($_ -match '^\d+$') { taskkill /PID $_ /T /F 2>$null | Out-Null }
+}
+Get-Job | Stop-Job -ErrorAction SilentlyContinue
+```
+
+## Running from an IDE
+
+Open `tutorial/` as a Gradle project in IntelliJ. In the Gradle tool window, run Java's
+`:java:Server:installDist` and `:java:Client:installDist`, or Kotlin's
+`:kotlin:Server:installDist` and `:kotlin:Client:installDist`. Use Application configurations to
+run Server first and Client second. The Java main classes are
+`systems.zlink.tutorial.server.ServerApplication` and
+`systems.zlink.tutorial.client.ClientApplication`; Kotlin uses
+`systems.zlink.tutorial.server.ServerApplicationKt` and
+`systems.zlink.tutorial.client.ClientApplicationKt`. Stop with the IDE's Stop button.
 
 ## Troubleshooting
 

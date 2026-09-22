@@ -18,17 +18,20 @@ binding and framework source archives from GitHub Releases plus Conan.
 
 ## Prerequisites
 
+Bash blocks run on Linux, macOS, and WSL; PowerShell blocks run on Windows PowerShell 7. `cmd` is not supported.
+
 The same as the tutorial's, minus Docker (this project uses no Redis):
 
 | Tool | Windows | Linux / WSL |
 |---|---|---|
-| C++20 compiler | Visual Studio 2022 17.4 or later with the **Desktop development with C++** workload | GCC 13 or later |
+| C++20 compiler | Visual Studio 2022 17.4 or later or Visual Studio 2026 with the **Desktop development with C++** workload. As of 2026-09, 2026's msvc 195 has no ConanCenter binary, so the first bootstrap builds third-party libraries from source and takes about 20 minutes. 2022 downloads binaries and takes about 7 minutes | GCC 13 or later |
 | CMake | 3.24 or later | 3.24 or later |
 | Ninja | not needed | recommended; Makefiles are used when it is absent |
-| Conan 2 | `pipx install conan` (or `py -m pip install --user conan`) | `pipx install conan` (or `python3 -m pip install --user conan`) |
+| Conan 2 | Run `pipx install conan`, then `pipx ensurepath` and open a new terminal. If you used `py -m pip install --user conan`, put Python's `Scripts` directory on `PATH`. Check with `conan --version` | Run `pipx install conan`, then `pipx ensurepath` and open a new terminal. If you used `python3 -m pip install --user conan`, put Python's user `bin` directory on `PATH`. Check with `conan --version` |
 
-Conan downloads ConanCenter binaries for the third-party libraries, so **the first install takes
-about 3 minutes** on a supported compiler. If `tutorial/` or `samples/` was bootstrapped already,
+Conan downloads ConanCenter binaries for the third-party libraries. Visual Studio 2022 takes **about
+7 minutes for the first bootstrap**; a toolset without binaries, such as 2026's msvc 195, builds
+third-party libraries from source and takes **about 20 minutes**. If `tutorial/` or `samples/` was bootstrapped already,
 reuse its tree instead of building again: `cmake -DZLINK_ROOT=../tutorial/.zlink -P bootstrap.cmake`.
 
 ## Download and install
@@ -46,10 +49,14 @@ downloaded and built. To start over, delete `.zlink/` and `build/`.
 
 ## Build
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 cmake -P bootstrap.cmake
 cmake --build build --parallel
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 cmake -P bootstrap.cmake
@@ -63,22 +70,32 @@ Two executables come out — under `build\Release\` on Windows, `build/` on Linu
 The server listens on `tcp://0.0.0.0:7301`; the client listens on `7302`, connects to the
 server, and serves `GET /hello/{name}` on `http://127.0.0.1:5083`.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 ./build/quickstart_server > server.log 2>&1 &
+echo $! > server.pid
 ./build/quickstart_client > client.log 2>&1 &
+echo $! > client.pid
 for i in $(seq 1 60); do curl -sf http://127.0.0.1:5083/hello/world > /dev/null && break; sleep 1; done
-curl -sf http://127.0.0.1:5083/hello/world
 ```
 
+**Windows — PowerShell 7**
+
 ```powershell title="windows"
-Start-Process -NoNewWindow .\build\Release\quickstart_server.exe -RedirectStandardOutput server.out -RedirectStandardError server.log
-Start-Process -NoNewWindow .\build\Release\quickstart_client.exe -RedirectStandardOutput client.out -RedirectStandardError client.log
+$server = Start-Process -NoNewWindow .\build\Release\quickstart_server.exe -RedirectStandardOutput server.out -RedirectStandardError server.log -PassThru
+$server.Id | Set-Content server.pid
+$client = Start-Process -NoNewWindow .\build\Release\quickstart_client.exe -RedirectStandardOutput client.out -RedirectStandardError client.log -PassThru
+$client.Id | Set-Content client.pid
 foreach ($i in 1..60) { $answer = curl.exe -s http://127.0.0.1:5083/hello/world; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds 1 }
 if ($LASTEXITCODE -ne 0) { throw 'quickstart did not come up' }
-$answer
 ```
 
 ## Verify
+
+Examples smoke runs this block exactly as written.
+
+**Linux · macOS · WSL — bash**
 
 ```bash title="linux"
 set -e
@@ -86,12 +103,54 @@ curl -sf http://127.0.0.1:5083/hello/world | grep -q '"hello, world"'
 echo "quickstart=ok"
 ```
 
+**Windows — PowerShell 7**
+
 ```powershell title="windows"
 if ((curl.exe -s http://127.0.0.1:5083/hello/world) -notmatch '"hello, world"') { throw 'quickstart failed' }
 Write-Output 'quickstart=ok'
 ```
 
 The answer is `"hello, world"` with status 200.
+
+## Stop
+
+Stop the processes started by the Run section.
+
+**Linux · macOS · WSL — bash**
+
+```bash title="linux"
+for pid in "$(cat client.pid)" "$(cat server.pid)"; do
+  pkill -TERM -P "$pid" 2>/dev/null || true
+  kill "$pid" 2>/dev/null || true
+done
+```
+
+**Windows — PowerShell 7**
+
+```powershell title="windows"
+Get-Content client.pid, server.pid | ForEach-Object {
+  if ($_ -match '^\d+$') { taskkill /PID $_ /T /F 2>$null | Out-Null }
+}
+Get-Job | Stop-Job -ErrorAction SilentlyContinue
+```
+
+## Running from an IDE
+
+`bootstrap.cmake` records the exact arguments it configured this folder with as the preset `zlink`
+in `CMakeUserPresets.json`. Visual Studio, Rider and CLion read that preset when they open the
+folder, so after one bootstrap the IDE continues in the same `build/`. The bootstrap rewrites the
+file every time; it is not edited by hand.
+
+1. Run `cmake -P bootstrap.cmake` from the [Build](#build) section once in a terminal (an IDE cannot
+   run a `-P` script).
+2. **Visual Studio 2022 or 2026**: File › Open › Folder on this directory. Pick the preset `zlink`
+   in the CMake settings; configuration completes and the startup item list shows `quickstart_server` and `quickstart_client`. Start the
+   server first, then the client.
+3. **Rider or CLion**: open this directory's `CMakeLists.txt` as the project. Enable the preset
+   `zlink` under Settings › Build, Execution, Deployment › CMake; configuration completes and run
+   configurations for `quickstart_server` and `quickstart_client` appear.
+4. Stop with the IDE's Stop button; the IDE ends the process tree, so the [Stop](#stop) section's
+   commands are not needed.
 
 ## Troubleshooting
 
@@ -101,6 +160,7 @@ README. Specific to this project:
 
 | Symptom | Cause and fix |
 |---|---|
+| `bootstrap: could not find Conan` | Run `pipx install conan`, then `pipx ensurepath` and open a new terminal. For a `pip --user` install, put Python's `Scripts`/user `bin` directory on `PATH`, then check with `conan --version` |
 | `bind: Address already in use` / `Only one usage of each socket address` | Another process holds 7301, 7302 or 5083 — a `quickstart_server` or `quickstart_client` left from an earlier run |
 | `curl: (7) Failed to connect to 127.0.0.1 port 5083` | The client is not up yet, or died. Read `client.log` |
 | The call ends with no target | The server is not up, or the client's `peer_connections().connect(...)` names a different endpoint than the server's `listen(...)` |
@@ -113,7 +173,7 @@ README. Specific to this project:
 | `Server/` | Registers the `greeting` channel handler and listens on `7301` |
 | `Client/` | Connects to the server, exposes `GET /hello/{name}`, calls `greeting` |
 | `bootstrap.cmake` | The install script; identical to the tutorial's and the samples' |
-| `CMakePresets.json` | IDE presets (Visual Studio, Rider, CLion) pointing at the `.zlink/` the bootstrap made |
+| `CMakeUserPresets.json` | the IDE preset `zlink` the bootstrap writes (git-ignored). [Running from an IDE](#running-from-an-ide) |
 
 ## What to carry into your own project
 

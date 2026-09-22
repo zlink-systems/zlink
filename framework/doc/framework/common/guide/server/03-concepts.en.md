@@ -1,5 +1,7 @@
 # 3. Core Concepts
 
+This chapter quotes code from the tutorial's [`Server` and `Client` directories and its Run section](https://github.com/zlink-systems/zlink-<language>-examples/blob/main/tutorial/README.md#run); bootstrapping and building that tree reproduces the results explained in later chapters.
+
 !!! info "What you get from this chapter"
 
     You can tell what a channel, a Spot, an Actor, STREAM and Location each are, and when to

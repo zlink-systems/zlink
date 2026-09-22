@@ -12,20 +12,43 @@ include(CMakeFindDependencyMacro)
 # already performs the equivalent zlink/Core lookup and Core-target link
 # for zlink::cpp itself, so there is nothing left to duplicate here.
 find_dependency(zlink @ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION@ EXACT CONFIG)
+if(@ZLINK_FRAMEWORK_CPP_SHARED@)
+  set(zlink_cpp_DIR "${PACKAGE_PREFIX_DIR}/lib/cmake/zlink_cpp")
+endif()
 find_dependency(zlink_cpp @ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION@ EXACT CONFIG)
 find_dependency(Threads)
-find_dependency(opentelemetry-cpp CONFIG COMPONENTS api)
 find_dependency(nlohmann_json CONFIG)
-find_dependency(Boost)
-find_package(protobuf CONFIG QUIET)
-if(NOT protobuf_FOUND)
-  find_dependency(Protobuf MODULE)
-endif()
-@ZLINK_HTTP_CLIENT_EXPORT_OPENSSL_DEPENDENCY@
-@ZLINK_FRAMEWORK_REDIS_EXPORT_DEPENDENCIES@
-set(_zlink_saved_module_path "${CMAKE_MODULE_PATH}")
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}")
-@ZLINK_FRAMEWORK_EXPORT_LZ4_DEPENDENCY@
-set(CMAKE_MODULE_PATH "${_zlink_saved_module_path}")
-unset(_zlink_saved_module_path)
+@ZLINK_FRAMEWORK_CPP_CONFIG_IMPLEMENTATION_DEPENDENCIES@
+
 include("${CMAKE_CURRENT_LIST_DIR}/zlink_framework_cppTargets.cmake")
+if(@ZLINK_FRAMEWORK_CPP_SHARED@)
+  find_package(protobuf CONFIG QUIET)
+  if(NOT TARGET protobuf::libprotobuf)
+    find_package(Protobuf MODULE QUIET)
+  endif()
+  if(TARGET protobuf::libprotobuf)
+    include("${CMAKE_CURRENT_LIST_DIR}/zlink_framework_cppCodecProtobufTargets.cmake")
+  else()
+    message(STATUS
+      "zlink_framework_cpp: codec_protobuf is unavailable; install libprotobuf-dev or add its prefix to CMAKE_PREFIX_PATH.")
+  endif()
+
+  find_package(redis++ CONFIG QUIET)
+  find_package(libuv CONFIG QUIET)
+  set(_zlink_framework_cpp_redis_target "@ZLINK_FRAMEWORK_REDIS_EXPORT_REDIS_TARGET@")
+  set(_zlink_framework_cpp_libuv_target "@ZLINK_FRAMEWORK_REDIS_EXPORT_LIBUV_TARGET@")
+  if(_zlink_framework_cpp_redis_target
+      AND _zlink_framework_cpp_libuv_target
+      AND TARGET "${_zlink_framework_cpp_redis_target}"
+      AND TARGET "${_zlink_framework_cpp_libuv_target}")
+    include("${CMAKE_CURRENT_LIST_DIR}/zlink_framework_cppLocationsRedisTargets.cmake")
+  else()
+    message(STATUS
+      "zlink_framework_cpp: locations_redis is unavailable; install redis++ and libuv development files or add their prefixes to CMAKE_PREFIX_PATH.")
+  endif()
+  unset(_zlink_framework_cpp_redis_target)
+  unset(_zlink_framework_cpp_libuv_target)
+else()
+  include("${CMAKE_CURRENT_LIST_DIR}/zlink_framework_cppCodecProtobufTargets.cmake")
+  include("${CMAKE_CURRENT_LIST_DIR}/zlink_framework_cppLocationsRedisTargets.cmake")
+endif()

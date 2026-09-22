@@ -1,0 +1,11 @@
+{
+  global:
+    extern "C++" {
+      zlink::*;
+      "vtable for zlink::*";
+      "typeinfo for zlink::*";
+      "typeinfo name for zlink::*";
+    };
+  local:
+    *;
+};

@@ -18,6 +18,8 @@ title: "Spot · C#/.NET"
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
+이 장은 [tutorial의 `Server`·`Client` 디렉터리와 「실행」 절](https://github.com/zlink-systems/zlink-dotnet-examples/blob/main/tutorial/README.ko.md#실행)에서 코드를 인용하며, 그 tree를 bootstrap하고 build하면 아래 실행 결과를 재현할 수 있다.
+
 !!! info "이 장을 읽고 나면"
 
     id로 호출하는 상태 객체를 만들고, 그것에 메시지를 보내고 답을 받을 수 있다.
@@ -124,6 +126,17 @@ client 역할을 고르고, 위치를 읽을 Location Store를 같은 prefix로 
 
 stable type을 지정해 만든다. 응답으로 오는 id가 그 뒤 모든 호출의 주소다.
 
+먼저 tutorial의 `Server`가 `game` route mesh를 정의한다. mesh 이름은 Spot이 배치될 수 있는
+node 집합의 이름이고, `InMesh`는 그 집합 하나를 고른다. route mesh를 등록하는 방법은
+[Channel 메시징의 받는 쪽](20-channel-messaging.ko.md#32-받는-쪽--channel을-담당하는-node)에 있고, 선택 규칙은
+[Location runtime §7](../../../common/spec/server/05-location-relocation/01-location-runtime.ko.md#7-actor와-user-spot을-만든다)이 정한다.
+
+```csharp
+--8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:mesh-register"
+```
+
+그 mesh 안에 Spot을 만드는 호출은 다음과 같다.
+
 ```csharp
 --8<-- "framework/languages/dotnet/tutorial/Client/Program.cs:spot-create-call"
 ```
@@ -144,7 +157,7 @@ stable type을 지정해 만든다. 응답으로 오는 id가 그 뒤 모든 호
 
 ## 5. 실행 결과
 
-아래 명령은 tutorial(`framework/languages/dotnet/tutorial`)의 Server와 Client를 그 README의 「실행」 절대로 띄운 상태에서 실행한다. 주소는 Client의 HTTP 표면이다.
+tutorial README의 「실행」 절대로 Server와 Client를 실행한 상태에서 Client의 HTTP 표면에 아래 `curl` 요청을 보내면, 각 HTTP 응답은 `curl` stdout에 나오고 handler 기록은 Server process의 stdout 또는 `server.log`에 나온다.
 
 ```bash
 curl -X POST http://127.0.0.1:5080/rooms \

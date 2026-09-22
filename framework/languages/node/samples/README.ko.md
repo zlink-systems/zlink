@@ -24,6 +24,8 @@ TicTacToe만 MeshNode peer endpoint를 수동으로 설정한다. 다른 sample�
 
 ## 전제 조건
 
+bash 블록은 Linux·macOS·WSL에서, PowerShell 블록은 Windows PowerShell 7에서 실행한다. `cmd`는 지원하지 않는다.
+
 - **Node.js 22 이상.** `@zlink-systems/zlink`가 `"engines": { "node": ">=22" }`를 선언한다.
   `node --version`으로 확인한다. `@zlink-systems/framework` 0.18.1부터는 Windows용
   prebuild(#656)가 있는 `zlink@1.2.1`을 고정한다 — 그 전 framework release는 아직
@@ -43,11 +45,15 @@ TicTacToe만 MeshNode peer endpoint를 수동으로 설정한다. 다른 sample�
 `@zlink-systems/*`를 그 샘플이 고정한 버전으로 npm registry에서 받는다. workspace가 아니므로
 샘플마다 따로 설치한다.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 cd Bingo.Ts
 npm install
 npm run browser:install   # Chromium을 쓰는 샘플만(ShoppingMall.Ts 제외)
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 Set-Location Bingo.Ts
@@ -74,6 +80,8 @@ npm run browser:install
 `npm run build`를 자동으로 호출한다. Windows에서 여러 샘플을 미리 한꺼번에 빌드해 두려면
 `build_samples.ps1`을 쓴다.
 
+**Windows — PowerShell 7**
+
 ```powershell title="windows"
 ./build_samples.ps1 Bingo.Ts TicTacToe.Ts
 # 인자를 생략하면 일곱 샘플을 모두 빌드한다.
@@ -87,9 +95,13 @@ Linux·WSL에는 별도 빌드 단계가 없다 — 아래 「실행」의 `run_
 샘플마다 `run_sample.sh`(Linux·WSL)와 `run_sample.ps1`(Windows)이 있고, 한 번의 호출은 샘플
 하나를 실행한다. 이 디렉터리에서 그대로 호출한다.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 ./Bingo.Ts/run_sample.sh
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 ./Bingo.Ts/run_sample.ps1
@@ -107,6 +119,8 @@ self-check와 정리를 모두 담당한다 — Redis를 미리 실행할 필요
 확인할 수 있다.
 
 ## 검증
+
+examples-smoke는 이 블록을 그대로 실행한다.
 
 각 runner는 성공하면 표준 출력 마지막 줄에 `PASS <Sample>`을 기록하고 종료 코드 `0`으로 끝난다.
 

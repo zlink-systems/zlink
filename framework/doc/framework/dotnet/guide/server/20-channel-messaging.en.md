@@ -18,6 +18,8 @@ View in another language — [C++](../../../cpp/guide/server/20-channel-messagin
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
+This chapter quotes code from the tutorial's [`Shared`, `Server`, and `Client` directories and its Run section](https://github.com/zlink-systems/zlink-dotnet-examples/blob/main/tutorial/README.md#run); bootstrapping and building that tree reproduces the results below.
+
 !!! info "What you get from this chapter"
 
     You can register and call the three arrangements servers use to call each
@@ -150,6 +152,18 @@ Both nodes have to name the mesh identically. And only a handler exposed with `S
 called by another node — being in the same assembly is not enough; without registration it is not
 a call target.
 
+The `listen` host is the address where the current process binds its socket; `0.0.0.0` accepts
+connections on every local interface. `AdvertiseHost` is the address peers actually dial and the Location Store
+publishes in the MeshNode descriptor. A wildcard bind is not an address remote processes can dial,
+so the single-machine tutorial uses `127.0.0.1`. In a multi-host, container, NAT, or Kubernetes
+deployment, set a reachable IP address or DNS name for that node, using a Pod IP or per-Pod DNS in
+Kubernetes. One Service address cannot represent several Pods when each node endpoint must be
+distinguished. When `AdvertiseHost` is omitted,
+[Network Listener Identity §2.1](../../../common/spec/server/02-channel-transport/04-network-listener-identity.en.md#21-defaults)
+uses a non-wildcard bind host, or the same-family loopback (`127.0.0.1` for `0.0.0.0`, `::1` for
+`::`) for a wildcard bind; a wildcard is not allowed as an advertised host. Each language's mesh
+registration block shows that language's actual option surface.
+
 ```csharp
 --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:mesh-register"
 
@@ -182,6 +196,8 @@ A call names only the channel name. It does not name which node will receive it.
 ```
 
 ### 3.5 What You See When You Run It
+
+With the tutorial Server and Client running as the README's Run section specifies, send these `curl` requests to the Client's HTTP surface: responses appear on `curl` stdout, and the login record appears on the Server process's stdout or in `server.log`.
 
 ```bash
 curl http://127.0.0.1:5080/players/p1/profile
@@ -253,6 +269,8 @@ The call takes the mesh name and the target id together.
 ```
 
 #### What You See When You Run It
+
+With the tutorial Server and Client running as the README's Run section specifies, send these `curl` requests to the Client's HTTP surface: HTTP responses appear on `curl` stdout, and the node-direct handler record appears on the Server process's stdout or in `server.log`.
 
 ```bash
 curl http://127.0.0.1:5080/ops/nodes/game-server-1/status
@@ -344,6 +362,8 @@ RouteMesh.
 
 ### 4.4 What You See When You Run It
 
+With the ClientServer Server and Client running as the tutorial README's Run section specifies, send these `curl` requests to the Client's HTTP surface: responses appear on `curl` stdout, and handler records appear on the Server process's stdout or in `server.log`.
+
 ```bash
 curl -X POST http://127.0.0.1:5080/players/p1/tickets
 # "ticket-p1"
@@ -402,6 +422,8 @@ recipients.
 ```
 
 ### 5.4 What You See When You Run It
+
+With the Server and Client containing the fanout publisher and subscriber running as the tutorial README's Run section specifies, send these `curl` requests to the Client's HTTP surface: HTTP responses appear on `curl` stdout, and received records appear on the subscriber process's stdout or in `server.log`.
 
 ```bash
 curl -X POST http://127.0.0.1:5080/notices \

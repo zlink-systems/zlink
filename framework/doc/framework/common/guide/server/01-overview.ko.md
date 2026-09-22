@@ -1,5 +1,7 @@
 # 1. 개요
 
+이 장은 [tutorial의 `Server`·`Client` 디렉터리와 「실행」 절](https://github.com/zlink-systems/zlink-<언어>-examples/blob/main/tutorial/README.ko.md#실행)에서 코드를 인용하며, 그 tree를 bootstrap하고 build하면 뒤의 장에서 설명하는 실행 결과를 재현할 수 있다.
+
 === "C#/.NET"
 
     > 이 문서는 `.NET` 가이드의 진입점이다. 가이드는 `ASP.NET Core` 개발자가
