@@ -195,7 +195,7 @@ final class ZLinkJavaStreamSocketAsyncTerminalTest {
                 actor = node.spotNode().createActor("async-stream-actor", create);
             }
             stream.startSessionService();
-            stream.bindActor(sessionRid, actor)
+            stream.bindActor(sessionRid, actor, 1)
                     .submit(Duration.ofSeconds(1))
                     .toCompletableFuture()
                     .get(1, TimeUnit.SECONDS);
@@ -249,7 +249,7 @@ final class ZLinkJavaStreamSocketAsyncTerminalTest {
                 actor = node.spotNode().createActor("explicit-sequence-actor", create);
             }
             stream.startSessionService();
-            stream.bindActor(sessionRid, actor)
+            stream.bindActor(sessionRid, actor, 1)
                     .submit(Duration.ofSeconds(1))
                     .toCompletableFuture()
                     .get(1, TimeUnit.SECONDS);

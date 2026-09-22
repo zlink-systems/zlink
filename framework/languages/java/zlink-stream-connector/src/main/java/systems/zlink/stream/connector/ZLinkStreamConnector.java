@@ -1,5 +1,6 @@
 package systems.zlink.stream.connector;
 
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletionStage;
@@ -123,7 +124,8 @@ public interface ZLinkStreamConnector {
                                         codec.decode(message.payload(), payloadType),
                                         message.metadata(),
                                         message.flowId(),
-                                        message.flowOrigin())));
+                                        message.flowOrigin(),
+                                        message.actorId())));
     }
 
     AutoCloseable onErrorReceived(ZLinkStreamErrorHandler handler);
@@ -131,6 +133,14 @@ public interface ZLinkStreamConnector {
     AutoCloseable onDisconnected(ZLinkStreamDisconnectedHandler handler);
 
     AutoCloseable onConnectionStateChanged(ZLinkStreamConnectionStateHandler handler);
+
+    List<ZLinkStreamActor> actors();
+
+    Optional<ZLinkStreamActor> actor(String actorId);
+
+    AutoCloseable onActorBound(ZLinkStreamActorHandler handler);
+
+    AutoCloseable onActorUnbound(ZLinkStreamActorHandler handler);
 
     private ZLinkStreamTypedCodec requireTypedCodec() {
         ZLinkStreamTypedCodec codec = options().typedCodec();

@@ -16,16 +16,21 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.streams.ZLinkStreamActorControl;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
+import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
 import systems.zlink.framework.streams.ZLinkSessionActor;
 import systems.zlink.framework.streams.ZLinkSessionActors;
 import systems.zlink.framework.streams.ZLinkSessionDispatchContext;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
+import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -86,6 +91,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     private final AtomicLong bindingGenerations = new AtomicLong();
     private final java.util.HashMap<String, IngressGate> ingressGates = new java.util.HashMap<>();
     private long nextFallbackIngressSequence = 1;
+    private int nextActorSlot = 1;
     private ZLinkRelayMetadataPolicy metadataPolicy = ZLinkRelayMetadataPolicy.EMPTY;
     private boolean relocationStopped;
     private boolean relocationSealTimedOut;
@@ -308,6 +314,11 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
 
     @Override
     public CompletionStage<ZLinkSessionActor> bind(ActorRef actor) {
+        Optional<ZLinkSessionActor> existing =
+                bound.stream().filter(boundActor -> sameRef(boundActor.ref(), actor)).findFirst();
+        if (existing.isPresent()) {
+            return CompletableFuture.completedFuture(existing.orElseThrow());
+        }
         ZLinkBackendActorRef ref =
                 new ZLinkBackendActorRef(
                         actor.nodeRid(), actor.actorId(), actor.objectGeneration());
@@ -328,6 +339,14 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     @Override
     public Optional<ZLinkSessionActor> find(String actorId) {
         return bound.stream().filter(actor -> actor.actorId().equals(actorId)).findFirst();
+    }
+
+    public Optional<ZLinkSessionActor> findBySlot(int actorSlot) {
+        return bound.stream()
+                .map(ZLinkBoundActor.class::cast)
+                .filter(actor -> actor.actorSlot() == actorSlot)
+                .map(ZLinkSessionActor.class::cast)
+                .findFirst();
     }
 
     public CompletionStage<Void> notifyDisconnectedAll() {
@@ -451,15 +470,21 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                                 awaitRouteReady(ref)
                                                         .thenCompose(
                                                                 routeReadyIgnored -> {
+                                                                    int actorSlot =
+                                                                            allocateActorSlot();
                                                                     return ZLinkBoundSessionRuntime
                                                                             .bindActorWithRetry(
                                                                                     stream,
                                                                                     sessionRid,
                                                                                     ref,
-                                                                                    RELAY_SUBMIT_TIMEOUT);
+                                                                                    actorSlot,
+                                                                                    RELAY_SUBMIT_TIMEOUT)
+                                                                            .thenApply(
+                                                                                    bindIgnored ->
+                                                                                            actorSlot);
                                                                 })
                                                         .thenApply(
-                                                                bindIgnored -> {
+                                                                actorSlot -> {
                                                                     AtomicReference<ZLinkBoundActor>
                                                                             binding =
                                                                                     new AtomicReference<>();
@@ -478,6 +503,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                                                                     serializer,
                                                                                     0,
                                                                                     bindingGeneration,
+                                                                                    actorSlot,
                                                                                     routeReady,
                                                                                     null,
                                                                                     true,
@@ -530,9 +556,22 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                             "managed actor binding requires an actor runtime"));
         }
         ZLinkBackendActorRef ref = actors.refFor(actor);
+        Optional<ZLinkSessionActor> existing =
+                bound.stream()
+                        .filter(
+                                boundActor ->
+                                        boundActor.actorId().equals(ref.actorId())
+                                                && boundActor.ref().nodeRid().equals(ref.nodeRid())
+                                                && boundActor.ref().objectGeneration()
+                                                        == ref.generation())
+                        .findFirst();
+        if (existing.isPresent()) {
+            return CompletableFuture.completedFuture(existing.orElseThrow());
+        }
         return replaceBinding(
                         actor.context().actorId(),
                         () -> {
+                            int actorSlot = allocateActorSlot();
                             CompletionStage<Void> nativeBinding =
                                     nativeSessionRelayAttached
                                             ? awaitRouteReady(ref)
@@ -543,6 +582,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                                                                     stream,
                                                                                     sessionRid,
                                                                                     ref,
+                                                                                    actorSlot,
                                                                                     RELAY_SUBMIT_TIMEOUT))
                                             : CompletableFuture.completedFuture(null);
                             return nativeBinding.thenApply(
@@ -576,6 +616,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                                         bindingGeneration,
                                                         0);
                                         boundSession.setBindingToken(bindingToken);
+                                        boundSession.setActorSlot(actorSlot);
                                         AtomicReference<ZLinkBoundActor> binding =
                                                 new AtomicReference<>();
                                         ZLinkBoundActor boundActor =
@@ -589,6 +630,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                                         serializer,
                                                         bindingToken,
                                                         bindingGeneration,
+                                                        actorSlot,
                                                         routeReady,
                                                         localActorDispatcher,
                                                         nativeSessionRelayAttached,
@@ -668,15 +710,57 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         }
         return created.thenCompose(
                 actor -> {
-                    installBinding(actor);
-                    if (!previous.isEmpty()) {
-                        previous.forEach(bound::remove);
-                    }
-                    // The old binding cleanup is deliberately not part of bind
-                    // completion. The session owner receives command 51 and owns the
-                    // callback/close lifecycle for the retired physical session.
-                    return CompletableFuture.completedFuture(actor);
+                    previous.forEach(this::removeBinding);
+                    return announceBound(actor)
+                            .thenApply(
+                                    ignored -> {
+                                        installBinding(actor);
+                                        return actor;
+                                    });
                 });
+    }
+
+    private int allocateActorSlot() {
+        return inStateLane(
+                () -> {
+                    if (nextActorSlot > 0xffff) {
+                        throw new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                                "Session Actor slots are exhausted");
+                    }
+                    return nextActorSlot++;
+                });
+    }
+
+    private CompletionStage<Void> announceBound(ZLinkBoundActor actor) {
+        return sendActorControl(
+                ZLinkStreamActorControl.BOUND,
+                ZLinkStreamActorControl.bound(actor.actorSlot(), actor.actorId()));
+    }
+
+    private void announceUnbound(ZLinkBoundActor actor) {
+        sendActorControl(
+                ZLinkStreamActorControl.UNBOUND,
+                ZLinkStreamActorControl.unbound(actor.actorSlot()));
+    }
+
+    private CompletionStage<Void> sendActorControl(String name, byte[] payload) {
+        ZLinkStreamHeader header =
+                new ZLinkStreamHeader(
+                        ZLinkStreamMessageKind.CONTROL,
+                        ZLinkStreamCodec.RAW,
+                        EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                        Optional.empty(),
+                        name,
+                        Map.of());
+        Message body = Message.from(payload);
+        try {
+            return stream.sendAsync(sessionRid, header, List.of(body))
+                    .whenComplete((ignored, failure) -> body.close());
+        } catch (RuntimeException failure) {
+            body.close();
+            return CompletableFuture.failedFuture(failure);
+        }
     }
 
     private long currentBindingGeneration(String actorId) {
@@ -816,6 +900,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                             return new BindingCleanup(abandoned, abandonedSeal);
                         });
         if (cleanup != null) {
+            announceUnbound((ZLinkBoundActor) actor);
             failHeld(
                     cleanup.held(),
                     new ZLinkConfigurationException(
@@ -1159,7 +1244,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                             return new CurrentOutboundAdmission(null, null, false);
                         });
         if (admission.current()) {
-            return deliverCurrentBoundSessionSendLocked(payload);
+            return deliverCurrentBoundSessionSendLocked(command.actor().actor().actorId(), payload);
         }
         if (admission.admission() == null || !admission.admission().admitted()) {
             return false;
@@ -1190,7 +1275,9 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                             } else if (matchesCurrentBoundSessionSendLocked(
                                     sourceNodeRid, sourceNodeGeneration, command)) {
                                 return new AsyncBoundSessionAdmission(
-                                        deliverCurrentBoundSessionSendAsync(payload), null);
+                                        deliverCurrentBoundSessionSendAsync(
+                                                command.actor().actor().actorId(), payload),
+                                        null);
                             }
                             return new AsyncBoundSessionAdmission(
                                     CompletableFuture.completedFuture(false), null);
@@ -1311,25 +1398,39 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     }
 
     private boolean deliverCurrentBoundSessionSendLocked(
-            ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
+            String actorId, ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
         List<Message> parts = ZLinkServiceM6AWireCodec.decodeFrameworkMultipart(payload);
         try {
-            return stream.sendBoundSessionPush(sessionRid, parts, SendFlags.DONT_WAIT);
+            return stream.sendBoundSessionPush(
+                    sessionRid, actorSlotFor(actorId), parts, SendFlags.DONT_WAIT);
         } finally {
             parts.forEach(Message::close);
         }
     }
 
     private CompletionStage<Boolean> deliverCurrentBoundSessionSendAsync(
-            ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
+            String actorId, ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
         List<Message> parts = ZLinkServiceM6AWireCodec.decodeFrameworkMultipart(payload);
         try {
-            return stream.sendBoundSessionPushAsync(sessionRid, parts).thenApply(ignored -> true);
+            return stream.sendBoundSessionPushAsync(sessionRid, actorSlotFor(actorId), parts)
+                    .thenApply(ignored -> true);
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
         } finally {
             parts.forEach(Message::close);
         }
+    }
+
+    private int actorSlotFor(String actorId) {
+        return bound.stream()
+                .map(ZLinkBoundActor.class::cast)
+                .filter(actor -> actor.actorId().equals(actorId))
+                .findFirst()
+                .orElseThrow(
+                        () ->
+                                new ZLinkConfigurationException(
+                                        "bound Actor is unavailable: " + actorId))
+                .actorSlot();
     }
 
     private void startTargetOutboundDrain(TargetOutboundBinding owner) {
@@ -1352,7 +1453,11 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         List<Message> parts = List.of();
         try {
             parts = ZLinkServiceM6AWireCodec.decodeFrameworkMultipart(pending.payload());
-            submission = stream.sendBoundSessionPushAsync(sessionRid, parts);
+            submission =
+                    stream.sendBoundSessionPushAsync(
+                            sessionRid,
+                            actorSlotFor(pending.command.actor().actor().actorId()),
+                            parts);
         } catch (RuntimeException failure) {
             submission = CompletableFuture.failedFuture(failure);
         } finally {

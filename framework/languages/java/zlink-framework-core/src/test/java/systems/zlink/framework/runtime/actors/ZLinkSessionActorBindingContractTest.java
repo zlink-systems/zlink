@@ -38,6 +38,7 @@ import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -84,6 +85,56 @@ final class ZLinkSessionActorBindingContractTest {
 
         assertEquals(List.of("actor-1"), stream.binds);
         assertEquals(1, stream.relays.size());
+    }
+
+    @Test
+    void bindingIssuesStableNonReusableSlotsAndOrdersLifecycleControls() {
+        FakeStream stream = new FakeStream();
+        ZLinkSessionActorsRuntime runtime = runtime(stream);
+
+        ZLinkSessionActor first =
+                runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A)).toCompletableFuture().join();
+        ZLinkSessionActor same =
+                runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A)).toCompletableFuture().join();
+        runtime.bind(new ActorRef("actor-2", 8, MESH, NODE_B)).toCompletableFuture().join();
+
+        assertSame(first, same);
+        assertEquals(List.of("$zlink.actor.bound", "$zlink.actor.bound"), stream.controlNames());
+        assertEquals(1, stream.controlSlot(0));
+        assertEquals(2, stream.controlSlot(1));
+
+        first.notifyDisconnected().toCompletableFuture().join();
+
+        assertEquals(
+                List.of("$zlink.actor.bound", "$zlink.actor.bound", "$zlink.actor.unbound"),
+                stream.controlNames());
+        assertEquals(1, stream.controlSlot(2));
+        assertTrue(runtime.findBySlot(1).isEmpty());
+        assertEquals("actor-2", runtime.findBySlot(2).orElseThrow().actorId());
+    }
+
+    @Test
+    void exhaustedActorSlotsRejectOnlyTheNewBinding() throws Exception {
+        FakeStream stream = new FakeStream();
+        ZLinkSessionActorsRuntime runtime = runtime(stream);
+        ZLinkSessionActor existing =
+                runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A)).toCompletableFuture().join();
+        Field slots = ZLinkSessionActorsRuntime.class.getDeclaredField("nextActorSlot");
+        slots.setAccessible(true);
+        slots.setInt(runtime, 0x10000);
+
+        CompletionException failure =
+                assertThrows(
+                        CompletionException.class,
+                        () ->
+                                runtime.bind(new ActorRef("actor-2", 8, MESH, NODE_B))
+                                        .toCompletableFuture()
+                                        .join());
+
+        assertEquals(
+                ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                ((ZLinkFrameworkException) failure.getCause()).kind());
+        assertEquals(List.of(existing), runtime.bound());
     }
 
     @Test
@@ -717,6 +768,7 @@ final class ZLinkSessionActorBindingContractTest {
 
     private static final class FakeStream implements ZLinkBackendStreamSocket {
         private final List<String> binds = new ArrayList<>();
+        private final List<ControlFrame> controls = new ArrayList<>();
         //  `unbindActor` is submitted from a pool thread (ZLinkBoundActor
         //  hops off the completing thread on purpose), so the recording list
         //  is read by the test thread while a pool thread appends to it.
@@ -813,7 +865,19 @@ final class ZLinkSessionActorBindingContractTest {
                 ZLinkStreamHeader header,
                 List<Message> parts,
                 SendFlags flags) {
+            if (header.kind() == ZLinkStreamMessageKind.CONTROL) {
+                controls.add(new ControlFrame(header.packetName(), parts.getFirst().toByteArray()));
+            }
             return true;
+        }
+
+        private List<String> controlNames() {
+            return controls.stream().map(ControlFrame::name).toList();
+        }
+
+        private int controlSlot(int index) {
+            byte[] payload = controls.get(index).payload();
+            return Short.toUnsignedInt(ByteBuffer.wrap(payload, 1, Short.BYTES).getShort());
         }
 
         @Override
@@ -987,4 +1051,6 @@ final class ZLinkSessionActorBindingContractTest {
             return CompletableFuture.completedFuture(List.of(Message.from(new byte[0])));
         }
     }
+
+    private record ControlFrame(String name, byte[] payload) {}
 }

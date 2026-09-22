@@ -56,6 +56,11 @@ public interface ZLinkBackendStreamSocket extends ZLinkBackendSocket, ZLinkBacke
         return send(routingId, parts, flags);
     }
 
+    default boolean sendBoundSessionPush(
+            RoutingId routingId, int actorSlot, List<Message> parts, SendFlags flags) {
+        return sendBoundSessionPush(routingId, parts, flags);
+    }
+
     /**
      * Completes when one already-framed Actor-to-Session record is physically accepted. Native
      * backends own any backpressure wait.
@@ -70,6 +75,11 @@ public interface ZLinkBackendStreamSocket extends ZLinkBackendSocket, ZLinkBacke
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
         }
+    }
+
+    default CompletionStage<Void> sendBoundSessionPushAsync(
+            RoutingId routingId, int actorSlot, List<Message> parts) {
+        return sendBoundSessionPushAsync(routingId, parts);
     }
 
     boolean send(RoutingId routingId, String packetName, List<Message> parts, SendFlags flags);
@@ -125,6 +135,11 @@ public interface ZLinkBackendStreamSocket extends ZLinkBackendSocket, ZLinkBacke
     }
 
     ZLinkBackendActorBindOperation bindActor(RoutingId sessionRid, ZLinkBackendActorRef actor);
+
+    default ZLinkBackendActorBindOperation bindActor(
+            RoutingId sessionRid, ZLinkBackendActorRef actor, int actorSlot) {
+        return bindActor(sessionRid, actor);
+    }
 
     ZLinkBackendActorUnbindOperation unbindActor(RoutingId sessionRid, String actorId);
 
