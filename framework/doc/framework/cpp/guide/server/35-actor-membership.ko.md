@@ -45,13 +45,14 @@ Actor가 User Spot에 들어간다는 것은 **그 Actor의 callback이 실행�
 Entry Spot으로 돌아가는 길에는 승인 절차가 없다. 기본 membership이기 때문이다 —
 [활성화와 수명](34-activation-lifetime.ko.md)이 종류별 callback을 다룬다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/35-actor-join.html" title="join은 예약이고, 실행은 handler가 끝난 뒤다" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/35-actor-join.html" title="예약은 Defer() 호출이고, join은 handler가 끝난 뒤 시작한다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/35-actor-join.html" target="_blank">↗ 크게 보기</a></p>
 
 ## 2. 예약 등록 — handler가 끝난 뒤에 실행된다
 
 join 호출에는 결과를 그 자리에서 기다리는 형태가 없다. **예약만 하고 지금 handler를
-끝낸다.** 예약은 handler가 정상적으로 끝난 뒤에 실행된다.
+끝낸다.** `defer()`는 "이 handler가 끝나면 이 join을 시작하라"는 등록이다 — 그래서 이 장은
+이를 예약이라고 부른다. 예약은 handler가 정상적으로 끝난 뒤에 실행된다.
 
 ```cpp
 --8<-- "framework/languages/cpp/samples/TicTacToe/Server/Play/Infrastructure/ZLink/Spots/EntrySpot/Handlers/play_actor_join_game_handler.hpp:doc-join-defer"
@@ -96,38 +97,41 @@ handler와 분리해 실행하는 background 작업에서 호출하면 `InvalidO
 
 ### 2.3 결과를 받는 자리
 
-결과는 Actor의 join 완료 callback으로 온다. **어느 Actor가 그 callback을 실행하는지는 결과가
-정한다.**
+결과는 Actor의 join 완료 callback으로 온다. 탭의 callback 이름은 C#/.NET의
+`OnJoinCompletedAsync`, C++의 `on_join_completed`, Java·Kotlin·Node/TypeScript의
+`onJoinCompleted`다.
+
+```cpp
+--8<-- "framework/languages/cpp/samples/TicTacToe/Server/Play/Infrastructure/ZLink/Actors/player_actor.hpp:doc-join-completed"
+```
+
+**어느 Actor가 그 callback을 실행하는지는 결과가 정한다.**
 
 | 결과 | 실행하는 Actor |
 | --- | --- |
 | 받아들여짐 | 위치 변경을 확정한 **간 쪽** Actor |
 | 거절됨, 확정 전 실패 | 그대로 남은 **떠난 쪽** Actor |
 
-다른 node의 Spot으로 가는 join이 성공하면 완료를 받는 것은 도착 node의 Actor다. 그래서 join을
-예약한 handler 안에서 결과를 받는 형태가 성립하지 않는다 — 그 handler가 있던 Actor는 그 시점에
-이미 정리 중이다.
+다른 node의 Spot으로 가는 join이 성공하면 완료를 받는 것은 도착 node의 Actor다. 그래서
+application이 join을 등록한 handler 실행 안에서 결과를 받는 형태가 성립하지 않는다 — 그 handler가
+있던 Actor는 그 시점에 이미 정리 중이다.
 
 예약이 활성화된 뒤에 도착한 일반 message는 완료 callback보다 먼저 실행되지 않는다. join이
 끝날 때까지 그 Actor의 일반 처리는 대기한다.
 
-완료 callback은 재시도된 결과인지 구분하는 id를 함께 받는다. 같은 id의 callback이 다시 실행되어도
-안전하도록 처리한다.
+완료 callback은 재시도된 결과를 구분하는 id를 함께 받는다.
 
 User Spot에서 Entry Spot으로 돌아갈 때도 같은 방식이다.
 
-## 3. 한 handler가 예약할 수 있는 양
+## 3. join 요청·응답의 크기와 timeout
 
 | 무엇 | 상한 |
 | --- | --- |
-| 한 handler의 join 예약 수 | 64개 |
 | join 요청 하나의 인코딩 크기 | 1 MiB |
-| 한 handler가 예약한 요청 크기의 합 | 8 MiB |
 | 다른 node로 가는 join의 응답 | 1 MiB |
 | timeout 기본값 | 5초. 지정하면 유한한 양수여야 한다 |
 
-**상한을 넘기면 그 자리에서 오류로 끝난다.** 일부만 등록되고 나머지가 빠지는 상태는 만들지
-않는다. 요청과 응답의 상한은 서로 독립이라 하나로 합쳐 계산하지 않는다.
+상한을 넘기면 그 자리에서 오류로 끝난다. 요청과 응답의 상한은 서로 독립이다.
 
 ## 4. 예약한 Actor에 대한 요청 제한
 

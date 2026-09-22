@@ -46,13 +46,14 @@ notified.
 The way back to the Entry Spot has no admission step, because that is the default membership —
 [Activation and Lifetime](34-activation-lifetime.en.md) covers the callbacks per kind.
 
-<iframe class="zlink-diagram" src="/common/diagrams/35-actor-join-en.html" title="A join is a reservation; it runs after the handler ends" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/35-actor-join-en.html" title="A reservation is the Defer() call; the join starts after the handler ends" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/35-actor-join-en.html" target="_blank">↗ View larger</a></p>
 
 ## 2. Reserving a Join — It Runs After the Handler Ends
 
 A join call has no form that awaits the result on the spot. **It only reserves, and the handler
-ends.** The reservation runs after the handler completes normally.
+ends.** `defer()` registers "start this join when this handler ends" — that is why this chapter
+calls it a reservation. The reservation runs after the handler completes normally.
 
 ```kotlin
 --8<-- "framework/languages/java/samples/kotlin/TicTacToe/Server/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/server/play/infrastructure/zlink/spots/entryspot/handlers/PlayActorJoinGameHandler.kt:doc-join-defer"
@@ -100,8 +101,15 @@ no admission, join or leave callback.
 
 ### 2.3 Where the Result Arrives
 
-The result arrives on the Actor's join-completion callback. **Which Actor runs that callback is
-decided by the result.**
+The result arrives on the Actor's join-completion callback. Its name in the tabs is
+`OnJoinCompletedAsync` for C#/.NET, `on_join_completed` for C++, and `onJoinCompleted` for Java,
+Kotlin, and Node/TypeScript.
+
+```kotlin
+--8<-- "framework/languages/java/samples/kotlin/TicTacToe/Server/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/server/play/infrastructure/zlink/actors/PlayActor.kt:doc-join-completed"
+```
+
+**Which Actor runs that callback is decided by the result.**
 
 | Result | The Actor that runs it |
 | --- | --- |
@@ -109,29 +117,25 @@ decided by the result.**
 | Rejected, or failed before the commit | The **origin** Actor, which stayed put |
 
 When a join to a Spot on another node succeeds, the completion goes to the Actor on the destination
-node. That is why receiving the result inside the handler that reserved the join is not a shape that
-holds — the Actor that handler ran on is being torn down by then.
+node. That is why receiving the result inside the handler run where the application registered the
+join is not a shape that holds — the Actor that handler ran on is being torn down by then.
 
 Once a reservation is active, ordinary messages that arrive afterwards do not run ahead of the
 completion callback. Ordinary processing for that Actor waits until the join finishes.
 
-The completion callback also carries an id that distinguishes a retried result. Handle it so that a
-callback with the same id is safe to run again.
+The completion callback also carries an id that distinguishes a retried result.
 
 Returning from a User Spot to the Entry Spot works the same way.
 
-## 3. How Much One Handler May Reserve
+## 3. Join Request and Reply Size, and Timeout
 
 | What | Limit |
 | --- | --- |
-| Join reservations per handler | 64 |
 | Encoded size of one join request | 1 MiB |
-| Total request size reserved by one handler | 8 MiB |
 | The reply of a join that crosses to another node | 1 MiB |
 | Default timeout | 5 seconds. When given it has to be a finite positive value |
 
-**Exceeding a limit ends in an error right there.** No state is left in which some are registered
-and the rest are missing. The request and reply limits are independent and are not summed.
+Exceeding a limit ends in an error right there. The request and reply limits are independent.
 
 ## 4. The Limit on Requests to a Reserved Actor
 

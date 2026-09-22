@@ -50,6 +50,7 @@ class PlayActor(val actorId: String, private val context: ZLinkActorContext) : Z
         pendingRoomId = roomId
     }
 
+    // --8<-- [start:doc-join-completed]
     override fun onJoinCompleted(completion: ZLinkActorJoinCompletion): CompletionStage<Void> {
         val operationId =
             when (completion) {
@@ -85,6 +86,7 @@ class PlayActor(val actorId: String, private val context: ZLinkActorContext) : Z
                     .submit()
         }
     }
+    // --8<-- [end:doc-join-completed]
 
     fun requireJoinedGame(): String =
         joinedRoomId ?: throw IllegalStateException("actor has not joined a game")

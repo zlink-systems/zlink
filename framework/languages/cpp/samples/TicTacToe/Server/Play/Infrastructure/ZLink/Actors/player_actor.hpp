@@ -87,6 +87,7 @@ struct player_actor_t : framework::actor_t
         pending_join_rooms.push_back (std::move (room_id));
     }
 
+    // --8<-- [start:doc-join-completed]
     task_t<void> on_join_completed (const actor_join_completion_t &completion) override
     {
         const auto operation = std::visit (
@@ -117,6 +118,7 @@ struct player_actor_t : framework::actor_t
             pending_join_rooms.pop_front ();
         co_return;
     }
+    // --8<-- [end:doc-join-completed]
 
     template <typename TNotify> void push (const TNotify &notify) const
     {
