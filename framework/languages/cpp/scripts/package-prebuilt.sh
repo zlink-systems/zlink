@@ -404,11 +404,54 @@ case "$platform" in
     done
     ;;
   macos-arm64)
+    verify_macos_relative_reference() {
+      local binary="$1"
+      local reference_kind="$2"
+      local reference="$3"
+      local dependency_path
+      local rpath
+      local rpath_found=0
+
+      case "$reference" in
+        @loader_path/*)
+          dependency_path="$(normalize_path "$(dirname "$binary")/${reference#@loader_path/}")"
+          ;;
+        @rpath/*)
+          while IFS= read -r rpath; do
+            rpath_found=1
+            case "$rpath" in
+              @loader_path|@loader_path/*) ;;
+              *)
+                echo "non-loader-relative LC_RPATH in $(basename "$binary"): $rpath" >&2
+                exit 1
+                ;;
+            esac
+          done < <(otool -l "$binary" | awk '
+            $1 == "cmd" && $2 == "LC_RPATH" { in_rpath = 1; next }
+            in_rpath && $1 == "path" { print $2; in_rpath = 0 }
+          ')
+          ((rpath_found)) || {
+            echo "missing LC_RPATH for $reference_kind in $(basename "$binary"): $reference" >&2
+            exit 1
+          }
+          dependency_path="$prefix/lib/${reference#@rpath/}"
+          ;;
+        *)
+          echo "non-relocatable $reference_kind in $(basename "$binary"): $reference" >&2
+          exit 1
+          ;;
+      esac
+
+      [[ -e "$dependency_path" ]] || {
+        echo "unresolved $reference_kind in clean prefix: $(basename "$binary") -> $reference" >&2
+        exit 1
+      }
+    }
     for library in "${libraries[@]}"; do
       binary="$(find "$prefix/lib" -maxdepth 1 -type f -name "lib${library}*.dylib" | head -n1)"
       [[ -n "$binary" ]] || { echo "missing shared library: lib${library}.dylib" >&2; exit 1; }
       install_name="$(otool -D "$binary" | tail -n +2 | head -n1)"
-      [[ "$install_name" == @loader_path/* ]] || { echo "non-relocatable install name: $install_name" >&2; exit 1; }
+      verify_macos_relative_reference "$binary" "install name" "$install_name"
       exports="$(nm -gU "$binary")"
       grep -Eq ' (__ZN5zlink|__ZTVN5zlink|__ZTIN5zlink|__ZTSN5zlink)' <<<"$exports" || {
         echo "no zlink C++ exports found in $library" >&2; exit 1;
@@ -419,24 +462,11 @@ case "$platform" in
     done
     while IFS= read -r binary; do
       install_name="$(otool -D "$binary" | tail -n +2 | head -n1)"
-      [[ "$install_name" == @loader_path/* ]] || {
-        echo "non-relocatable install name in $(basename "$binary"): $install_name" >&2
-        exit 1
-      }
+      verify_macos_relative_reference "$binary" "install name" "$install_name"
       while IFS= read -r dependency; do
         case "$dependency" in
           /usr/lib/*|/System/Library/*) ;;
-          @loader_path/*)
-            dependency_path="$prefix/lib/${dependency#@loader_path/}"
-            [[ -e "$dependency_path" ]] || {
-              echo "unresolved dependency in clean prefix: $(basename "$binary") -> $dependency" >&2
-              exit 1
-            }
-            ;;
-          *)
-            echo "non-relocatable dependency in $(basename "$binary"): $dependency" >&2
-            exit 1
-            ;;
+          *) verify_macos_relative_reference "$binary" "dependency" "$dependency" ;;
         esac
       done < <(otool -L "$binary" | tail -n +2 | sed 's/^[[:space:]]*//' | cut -d ' ' -f1)
     done < <(find "$prefix/lib" -maxdepth 1 -type f -name '*.dylib' -print)
