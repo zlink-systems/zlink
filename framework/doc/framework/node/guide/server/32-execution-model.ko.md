@@ -34,7 +34,7 @@ title: "실행 모델 · Node/TypeScript"
 Spot으로 들어오는 작업은 다음 queue로 나뉘어 대기한다. Spot 자신에게 온 packet과 timer는
 **Spot queue**에, 그 Spot에 속한 Actor 앞으로 온 payload는 **Actor queue**에 들어간다.
 
-**Actor 앞으로 온 업무 message는 Spot queue를 거치지 않는다.** Spot의 callback이 그 message를
+**Actor 앞으로 온 message는 Spot queue를 거치지 않는다.** Spot의 callback이 그 message를
 받아 Actor에게 넘겨주는 구조가 아니라, 처음부터 Actor queue로 들어간다.
 
 | queue | 들어간다 | 들어가지 않는다 |

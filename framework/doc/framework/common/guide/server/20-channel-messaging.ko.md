@@ -320,7 +320,7 @@ Service 하나로 여러 Pod를 나타내면 각 node endpoint를 구별할 수 
 
 ### 3.5 실행 결과
 
-tutorial README의 「실행」 절대로 Server와 Client를 실행한 상태에서 Client의 HTTP 표면에 아래 `curl` 요청을 보내면, 첫 응답은 `curl` stdout에 나오고 login 기록은 Server process의 stdout 또는 `server.log`에 나온다.
+tutorial README의 「실행」 절을 따라 띄운 상태에서 Server와 Client를 실행한 상태에서 Client의 HTTP 표면에 아래 `curl` 요청을 보내면, 첫 응답은 `curl` stdout에 나오고 login 기록은 Server process의 stdout 또는 `server.log`에 나온다.
 
 ```bash
 curl http://127.0.0.1:5080/players/p1/profile
@@ -496,7 +496,7 @@ channel 호출에 사용한 것과 같은 등록이다.
 
 #### 실행 결과
 
-tutorial README의 「실행」 절대로 Server와 Client를 실행한 상태에서 Client의 HTTP 표면에 아래 `curl` 요청을 보내면, HTTP 응답은 `curl` stdout에 나오고 node-direct handler의 기록은 Server process의 stdout 또는 `server.log`에 나온다.
+tutorial README의 「실행」 절을 따라 띄운 상태에서 Server와 Client를 실행한 상태에서 Client의 HTTP 표면에 아래 `curl` 요청을 보내면, HTTP 응답은 `curl` stdout에 나오고 node-direct handler의 기록은 Server process의 stdout 또는 `server.log`에 나온다.
 
 ```bash
 curl http://127.0.0.1:5080/ops/nodes/game-server-1/status
@@ -690,7 +690,7 @@ mesh와 별개로 자신의 포트를 열고 밖에서 접근할 주소를 따�
 
 ### 4.4 실행 결과
 
-tutorial README의 「실행」 절대로 ClientServer Server와 Client를 실행한 상태에서 Client의 HTTP 표면에 아래 `curl` 요청을 보내면, 응답은 `curl` stdout에 나오고 handler 기록은 Server process의 stdout 또는 `server.log`에 나온다.
+tutorial README의 「실행」 절을 따라 띄운 상태에서 ClientServer Server와 Client를 실행한 상태에서 Client의 HTTP 표면에 아래 `curl` 요청을 보내면, 응답은 `curl` stdout에 나오고 handler 기록은 Server process의 stdout 또는 `server.log`에 나온다.
 
 ```bash
 curl -X POST http://127.0.0.1:5080/players/p1/tickets
@@ -800,7 +800,7 @@ curl -X POST http://127.0.0.1:5080/players/p1/tickets
 
 ### 5.4 실행 결과
 
-tutorial README의 「실행」 절대로 fanout publisher와 subscriber가 포함된 Server·Client를 실행한 상태에서 Client의 HTTP 표면에 아래 `curl` 요청을 보내면, HTTP 응답은 `curl` stdout에 나오고 수신 기록은 subscriber process의 stdout 또는 `server.log`에 나온다.
+tutorial README의 「실행」 절을 따라 띄운 상태에서 fanout publisher와 subscriber가 포함된 Server·Client를 실행한 상태에서 Client의 HTTP 표면에 아래 `curl` 요청을 보내면, HTTP 응답은 `curl` stdout에 나오고 수신 기록은 subscriber process의 stdout 또는 `server.log`에 나온다.
 
 ```bash
 curl -X POST http://127.0.0.1:5080/notices \

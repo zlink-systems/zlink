@@ -17,7 +17,7 @@ Work arriving at a Spot waits in two queues. Packets addressed to the Spot itsel
 into the **Spot queue**; payloads addressed to an Actor that belongs to the Spot go into the
 **Actor queue**.
 
-**A business message addressed to an Actor does not pass through the Spot queue.** No Spot
+**A message addressed to an Actor does not pass through the Spot queue.** No Spot
 callback receives it and hands it on; it enters the Actor queue from the start.
 
 | Queue | Goes in | Does not go in |

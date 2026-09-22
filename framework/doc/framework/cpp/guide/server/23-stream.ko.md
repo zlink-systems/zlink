@@ -115,7 +115,7 @@ stream node는 포트를 열고 session type 하나를 받는다. mesh node와�
 
 ## 5. 실행 결과
 
-tutorial README의 「실행」 절대로 Server를 실행한 상태에서 아래 명령으로 StreamClient를 시작하면, StreamClient가 Server의 stream endpoint에 보낸 request와 받은 응답은 StreamClient process의 stdout에 나오고 연결·handler 기록은 Server process의 stdout 또는 `server.log`에 나온다.
+tutorial README의 「실행」 절을 따라 띄운 상태에서 Server를 실행한 상태에서 아래 명령으로 StreamClient를 시작하면, StreamClient가 Server의 stream endpoint에 보낸 request와 받은 응답은 StreamClient process의 stdout에 나오고 연결·handler 기록은 Server process의 stdout 또는 `server.log`에 나온다.
 
 ```bash
 dotnet run --project StreamClient/StreamClient.csproj
