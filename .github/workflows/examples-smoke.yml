@@ -241,7 +241,7 @@ jobs:
         if: always()
         working-directory: examples/zlink-dotnet-examples/tutorial
         run: |
-          bash ../../run_readme_step.sh README.md Stop linux
+          bash ../../run_readme_step.sh README.ko.md 종료 linux
           if [ -f redis.container ]; then
             redis_name="$(cat redis.container)"
             case "${redis_name}" in
@@ -358,7 +358,7 @@ jobs:
         if: always()
         working-directory: examples/zlink-dotnet-examples/tutorial
         shell: bash
-        run: bash ../../run_readme_step.sh README.md Stop windows
+        run: bash ../../run_readme_step.sh README.ko.md 종료 windows
       - name: Sample install (README's own 내려받기와 설치/windows block)
         if: steps.memurai.outcome == 'success'
         working-directory: examples/zlink-dotnet-examples/samples
@@ -448,7 +448,7 @@ jobs:
       - name: Stop tutorial processes and Redis
         if: always()
         working-directory: examples/zlink-node-examples/tutorial
-        run: bash ../../run_readme_step.sh README.md Stop linux
+        run: bash ../../run_readme_step.sh README.ko.md 종료 linux
       - name: Sample install (README's own 내려받기와 설치/linux block)
         working-directory: examples/zlink-node-examples/samples
         run: bash ../../run_readme_step.sh README.ko.md "내려받기와 설치" linux
@@ -533,7 +533,7 @@ jobs:
         if: always()
         working-directory: examples/zlink-java-examples/tutorial
         run: |
-          bash ../../run_readme_step.sh README.md Stop linux
+          bash ../../run_readme_step.sh README.ko.md 종료 linux
           if [ -f redis.container ]; then
             redis_name="$(cat redis.container)"
             case "${redis_name}" in
@@ -657,7 +657,7 @@ jobs:
         if: always()
         working-directory: examples/zlink-java-examples/tutorial
         shell: bash
-        run: bash ../../run_readme_step.sh README.md Stop windows
+        run: bash ../../run_readme_step.sh README.ko.md 종료 windows
       - name: Sample install (README's own 내려받기와 설치/windows block)
         if: steps.memurai.outcome == 'success'
         working-directory: examples/zlink-java-examples/samples
@@ -778,7 +778,7 @@ jobs:
       - name: Stop tutorial processes and Redis
         if: always()
         working-directory: examples/zlink-cpp-examples/tutorial
-        run: bash ../../run_readme_step.sh README.md Stop linux
+        run: bash ../../run_readme_step.sh README.ko.md 종료 linux
 
       # The quickstart README's own build block bootstraps into its own .zlink/;
       # here the tutorial's tree is reused through the documented ZLINK_ROOT
@@ -810,7 +810,7 @@ jobs:
       - name: Stop quickstart processes
         if: always()
         working-directory: examples/zlink-cpp-examples/quickstart
-        run: bash ../../run_readme_step.sh README.md Stop linux
+        run: bash ../../run_readme_step.sh README.ko.md 종료 linux
       - name: Sample install (README's own 내려받기와 설치/linux block)
         working-directory: examples/zlink-cpp-examples/samples
         run: bash ../../run_readme_step.sh README.ko.md "내려받기와 설치" linux
