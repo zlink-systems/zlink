@@ -69,14 +69,6 @@ class lobby_spot_t : public fw::entry_spot_t<player_t>
         co_return fw::actor_create_response_t::accept ();
     }
 
-    // The lobby is where every player belongs by default, so it admits each one.
-    // A room would inspect the request here and reject the ones it will not take.
-    fw::task_t<fw::spot_actor_join_result_t> on_actor_join (std::string_view,
-                                                            const fw::message_t &) override
-    {
-        co_return fw::spot_actor_join_result_t::accept ();
-    }
-
     fw::task_t<void> on_actor_joined (player_t &) override { co_return; }
 
     fw::task_t<void> on_leave_actor (player_t &) override { co_return; }

@@ -3593,11 +3593,6 @@ class entry_relocation_test_entry_spot_t final
         co_return;
     }
 
-    zlink::framework::task_t<zlink::framework::spot_actor_join_result_t>
-    on_actor_join (std::string_view, const zlink::framework::message_t &) override
-    {
-        co_return zlink::framework::spot_actor_join_result_t::reject ();
-    }
     zlink::framework::task_t<void> on_actor_joined (entry_relocation_test_actor_t &actor) override
     {
         ++joined_count;
