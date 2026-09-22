@@ -50,6 +50,20 @@ dotnet build TicTacToe/TicTacToe.sln
 dotnet build TicTacToe\TicTacToe.sln
 ```
 
+## IDE에서 열기
+
+Rider 또는 Visual Studio 2022·2026에서 `Samples.sln`을 열면 샘플 일곱 개의 project가 솔루션 폴더
+하나씩으로 나뉘어 열린다. 샘플 하나만 열 때는 `<Sample>/<Sample>.sln`을 연다. 두 솔루션은 같은
+project 파일을 가리키므로 어느 쪽에서 빌드해도 결과가 같다.
+
+샘플 시나리오의 실행은 IDE의 시작 project가 아니라 `run_sample.sh`·`run_sample.ps1`로 한다.
+러너가 그 실행 전용 Redis 컨테이너를 만들고, 각 server role의 설정 파일과 endpoint를 만들어
+같은 project를 여러 instance로 띄우며, client 시나리오를 끝까지 돌린 뒤 모두 정리한다 — 이
+값들은 IDE의 `Multiple startup projects`로는 만들 수 없다. IDE에서는 코드를 읽고 고치고 빌드하며,
+role 하나를 디버그하려면 러너를 실행한 뒤 그 role의 process에 attach한다(Rider **Run → Attach to
+Process**, Visual Studio **디버그 → 프로세스에 연결**; process 이름은 role의 project 이름이다).
+종료는 러너가 하며, attach한 디버거는 IDE의 Stop 버튼으로 뗀다.
+
 ## 실행
 
 각 샘플 root가 `run_sample.sh`와 `run_sample.ps1`을 하나씩 갖고, 한 번 실행하면

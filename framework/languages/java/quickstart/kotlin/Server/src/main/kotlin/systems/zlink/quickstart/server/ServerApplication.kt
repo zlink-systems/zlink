@@ -19,6 +19,7 @@ class ServerApplication {
     @Bean
     fun zlink(): ZLinkFrameworkConfigurer = ZLinkFrameworkConfigurer { options ->
         // Discovers handler types.
+        // #895: configuration package scanning has no Kotlin form in the spec.
         options.addHandlersFromPackageOf(ServerApplication::class.java)
 
         // Names the mesh.

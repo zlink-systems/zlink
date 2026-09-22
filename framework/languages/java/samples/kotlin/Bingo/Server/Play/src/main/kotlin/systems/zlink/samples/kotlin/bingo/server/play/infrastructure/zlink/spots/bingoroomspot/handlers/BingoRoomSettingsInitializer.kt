@@ -1,5 +1,6 @@
 package systems.zlink.samples.kotlin.bingo.server.play.infrastructure.zlink.spots.bingoroomspot.handlers
 
+import systems.zlink.framework.kotlin.decode
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.samples.kotlin.bingo.server.configuration.SampleTimings
 import systems.zlink.samples.kotlin.bingo.server.play.domain.bingo.BingoRoomSettings
@@ -15,7 +16,7 @@ class BingoRoomSettingsInitializer {
         if (request.isEmpty()) {
             return BingoRoomSettings.create("two-player", 0, SampleTimings.DrawPeriod.toMillis())
         }
-        val settings = request.decode(BingoRoomCreateReq::class.java).settings
+        val settings = request.decode<BingoRoomCreateReq>().settings
         return BingoRoomSettings(
             roomName = settings.roomName,
             mode = settings.mode,

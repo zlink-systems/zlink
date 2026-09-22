@@ -42,7 +42,7 @@ class SubscribeDeliverySessionHandler(
             println("deliverydispatch-customer bound customer=$CustomerId")
         }
         customers.subscribe(CustomerId, message.deliveryId)
-        context.client().reply(SubscribeDeliveryRes(message.deliveryId)).submit()
+        context.client().kotlin().reply(SubscribeDeliveryRes(message.deliveryId)).await()
     }
 
     private companion object {

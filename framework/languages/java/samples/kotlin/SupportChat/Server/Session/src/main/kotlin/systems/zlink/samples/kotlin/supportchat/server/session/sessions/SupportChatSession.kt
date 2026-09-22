@@ -1,10 +1,13 @@
 package systems.zlink.samples.kotlin.supportchat.server.session.sessions
 
-import kotlinx.coroutines.future.await
 import org.slf4j.LoggerFactory
 import systems.zlink.framework.channels.ZLinkClient
 import systems.zlink.framework.kotlin.ZLinkSuspendingSession
+import systems.zlink.framework.kotlin.await
 import systems.zlink.framework.kotlin.bindOrGetActor
+import systems.zlink.framework.kotlin.decode
+import systems.zlink.framework.kotlin.kotlin
+import systems.zlink.framework.kotlin.requestToChannel
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.streams.ZLinkSessionActor
 import systems.zlink.framework.streams.ZLinkSessionContext
@@ -27,6 +30,7 @@ class SupportChatSession(
     private val context: ZLinkSessionContext,
     private val channels: ZLinkClient,
 ) : ZLinkSuspendingSession() {
+    private val kotlinChannels = channels.kotlin()
     private val conversationActors = linkedMapOf<String, ZLinkSessionActor>()
     private var identityActor: ZLinkSessionActor? = null
     private var identityActorId: String = ""
@@ -49,7 +53,7 @@ class SupportChatSession(
         payload: ZLinkMessage,
     ) {
         when (dispatch.packetName()) {
-            "AuthenticateReq" -> authenticate(payload.decode(AuthenticateReq::class.java))
+            "AuthenticateReq" -> authenticate(payload.decode<AuthenticateReq>())
             "JoinConversationReq" -> joinConversation(dispatch, payload)
             else -> relayConversationPacket(dispatch, payload)
         }
@@ -59,10 +63,12 @@ class SupportChatSession(
 
     private suspend fun authenticate(request: AuthenticateReq) {
         val authenticated =
-            channels
-                .requestToChannel(SampleNames.ApiChannel, AuthenticateUserReq(request.accessToken))
+            kotlinChannels
+                .requestToChannel<AuthenticateUserRes>(
+                    SampleNames.ApiChannel,
+                    AuthenticateUserReq(request.accessToken),
+                )
                 .timeout(SampleTimings.RequestTimeout)
-                .submit(AuthenticateUserRes::class.java)
                 .await()
         if (
             !authenticated.accepted ||
@@ -90,8 +96,8 @@ class SupportChatSession(
 
         // --8<-- [start:doc-sc-session-auth]
         val ensured =
-            channels
-                .requestToChannel(
+            kotlinChannels
+                .requestToChannel<EnsureSupportUserActorRes>(
                     SampleNames.SupportChannel,
                     EnsureSupportUserActorReq(
                         actorId = actorId,
@@ -101,7 +107,6 @@ class SupportChatSession(
                     ),
                 )
                 .timeout(SampleTimings.RequestTimeout)
-                .submit(EnsureSupportUserActorRes::class.java)
                 .await()
 
         identityActor = context.actors().bindOrGetActor(ensured.actor.toActorRef())
@@ -109,7 +114,7 @@ class SupportChatSession(
         identityDisplayName = displayName
         identityRole = role
         // --8<-- [end:doc-sc-session-auth]
-        context.client().reply(AuthenticateRes(actorId, displayName, role)).submit()
+        context.client().kotlin().reply(AuthenticateRes(actorId, displayName, role)).await()
     }
 
     private suspend fun joinConversation(
@@ -130,13 +135,12 @@ class SupportChatSession(
 
         // --8<-- [start:doc-sc-agent-join]
         val ensured =
-            channels
-                .requestToChannel(
+            kotlinChannels
+                .requestToChannel<EnsureAgentConversationRes>(
                     SampleNames.SupportChannel,
                     EnsureAgentConversationReq(identityActorId, identityDisplayName, conversationId),
                 )
                 .timeout(SampleTimings.RequestTimeout)
-                .submit(EnsureAgentConversationRes::class.java)
                 .await()
 
         conversationActors[conversationId] =
@@ -146,7 +150,11 @@ class SupportChatSession(
             identityActorId,
             conversationId,
         )
-        context.client().reply(JoinConversationRes(ensured.scheduled, ensured.state)).submit()
+        context
+            .client()
+            .kotlin()
+            .reply(JoinConversationRes(ensured.scheduled, ensured.state))
+            .await()
         // --8<-- [end:doc-sc-agent-join]
     }
 

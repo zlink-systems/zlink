@@ -1,11 +1,13 @@
 package systems.zlink.tutorial.server.sessions
 
 import java.time.Duration
-import kotlinx.coroutines.future.await
 import systems.zlink.framework.actors.ActorRef
 import systems.zlink.framework.actors.ZLinkActorCreateResult
 import systems.zlink.framework.actors.ZLinkActorManager
 import systems.zlink.framework.kotlin.ZLinkSuspendingTypedSessionPacketHandler
+import systems.zlink.framework.kotlin.await
+import systems.zlink.framework.kotlin.bindOrGetActor
+import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.framework.streams.ZLinkSessionContext
 import systems.zlink.framework.streams.ZLinkSessionDispatchContext
 import systems.zlink.tutorial.shared.Authenticate
@@ -31,7 +33,7 @@ class PingHandler : ZLinkSuspendingTypedSessionPacketHandler<ZLinkSessionContext
     ) {
         // reply answers a request. To push to a client that is not waiting for
         // one, use client().send instead.
-        context.client().reply(Pong(message.sentAtUnixMs)).submit().await()
+        context.client().kotlin().reply(Pong(message.sentAtUnixMs)).await()
     }
 }
 
@@ -40,8 +42,10 @@ class PingHandler : ZLinkSuspendingTypedSessionPacketHandler<ZLinkSessionContext
 // --8<-- [start:session-actor-bind]
 // Ties this connection to one player. After this, packets without a session
 // handler reach that player, and the player can push to this connection.
-class AuthenticateHandler(private val players: ZLinkActorManager) :
+class AuthenticateHandler(players: ZLinkActorManager) :
     ZLinkSuspendingTypedSessionPacketHandler<ZLinkSessionContext, Authenticate> {
+
+    private val players = players.kotlin()
 
     override fun packetName(): String = "Authenticate"
 
@@ -59,12 +63,11 @@ class AuthenticateHandler(private val players: ZLinkActorManager) :
                 .inMesh("game")
                 .request(CreatePlayer(message.playerId))
                 .timeout(Duration.ofSeconds(10))
-                .submit()
                 .await()
 
-        val bound = context.actors().bindOrGet(resolve(result)).await()
+        val bound = context.actors().bindOrGetActor(resolve(result))
 
-        context.client().reply(Authenticated(bound.actorId())).submit().await()
+        context.client().kotlin().reply(Authenticated(bound.actorId())).await()
     }
 
     private fun resolve(result: ZLinkActorCreateResult): ActorRef =

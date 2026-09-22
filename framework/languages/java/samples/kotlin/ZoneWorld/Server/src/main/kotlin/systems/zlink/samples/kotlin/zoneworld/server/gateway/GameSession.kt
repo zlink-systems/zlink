@@ -1,12 +1,14 @@
 package systems.zlink.samples.kotlin.zoneworld.server.gateway
 
-import java.util.concurrent.CompletableFuture
-import java.util.concurrent.CompletionStage
 import systems.zlink.framework.actors.ZLinkActorClient
 import systems.zlink.framework.actors.ZLinkActorCreateResult
 import systems.zlink.framework.actors.ZLinkActorManager
+import systems.zlink.framework.kotlin.ZLinkSuspendingSession
+import systems.zlink.framework.kotlin.await
+import systems.zlink.framework.kotlin.decode
+import systems.zlink.framework.kotlin.kotlin
+import systems.zlink.framework.kotlin.requestToActor
 import systems.zlink.framework.messaging.ZLinkMessage
-import systems.zlink.framework.streams.ZLinkSession
 import systems.zlink.framework.streams.ZLinkSessionContext
 import systems.zlink.framework.streams.ZLinkSessionDispatchContext
 import systems.zlink.framework.streams.ZLinkStreamError
@@ -18,80 +20,81 @@ class GameSession(
     private val actors: ZLinkActorManager,
     private val actorClient: ZLinkActorClient,
     private val probes: RelocationProbeService,
-) : ZLinkSession {
+) : ZLinkSuspendingSession() {
+    private val kotlinActors = actors.kotlin()
+    private val kotlinActorClient = actorClient.kotlin()
+
     override fun context() = sessionContext
 
-    override fun onConnected(): CompletionStage<Void> =
-        CompletableFuture.completedFuture<Void>(null)
+    override suspend fun onConnectedSuspending() {}
 
-    override fun onDisconnected(): CompletionStage<Void> = CompletableFuture.completedFuture(null)
+    override suspend fun onDisconnectedSuspending() {}
 
-    override fun onError(error: ZLinkStreamError): CompletionStage<Void> =
-        CompletableFuture.completedFuture<Void>(null)
+    override suspend fun onErrorSuspending(error: ZLinkStreamError) {}
 
-    override fun onDispatch(
+    override suspend fun onDispatchSuspending(
         dispatch: ZLinkSessionDispatchContext,
         payload: ZLinkMessage,
-    ): CompletionStage<Void> {
-        if (dispatch.packetName() == "RelocationPairReq")
-            return probes.selectPair().thenCompose { sessionContext.client().reply(it).submit() }
+    ) {
+        if (dispatch.packetName() == "RelocationPairReq") {
+            sessionContext.client().kotlin().reply(probes.selectPair().await()).await()
+            return
+        }
         if (dispatch.packetName() == "ActorLocationProbeReq") {
-            val request = payload.decode(Messages.ActorLocationProbeReq::class.java)
-            return probes.findActor(request.actorId).thenCompose {
-                sessionContext.client().reply(it).submit()
-            }
+            val request = payload.decode<Messages.ActorLocationProbeReq>()
+            sessionContext
+                .client()
+                .kotlin()
+                .reply(probes.findActor(request.actorId).await())
+                .await()
+            return
         }
         if (dispatch.packetName() == "FreshActorProbeReq") {
-            val request = payload.decode(Messages.FreshActorProbeReq::class.java)
-            return probes.createFresh(request.actorId).thenCompose {
-                sessionContext.client().reply(it).submit()
-            }
+            val request = payload.decode<Messages.FreshActorProbeReq>()
+            sessionContext.client().kotlin().reply(probes.createFresh(request.actorId)).await()
+            return
         }
         if (dispatch.packetName() == "MessageFollowProbeReq") {
-            val request = payload.decode(Messages.MessageFollowProbeReq::class.java)
-            return actorClient
-                .requestToActor(request.actorId, request)
-                .submit(Messages.MessageFollowProbeRes::class.java)
-                .thenCompose { sessionContext.client().reply(it).submit() }
+            val request = payload.decode<Messages.MessageFollowProbeReq>()
+            val response =
+                kotlinActorClient
+                    .requestToActor<Messages.MessageFollowProbeRes>(request.actorId, request)
+                    .await()
+            sessionContext.client().kotlin().reply(response).await()
+            return
         }
         if (dispatch.packetName() == "MessageFollowProbeMsg") {
-            val message = payload.decode(Messages.MessageFollowProbeMsg::class.java)
-            return actorClient.sendToActor(message.actorId, message).submit()
+            val message = payload.decode<Messages.MessageFollowProbeMsg>()
+            kotlinActorClient.sendToActor(message.actorId, message).await()
+            return
         }
-        if (dispatch.packetName() == "JoinWorldMsg") return join(dispatch, payload)
+        if (dispatch.packetName() == "JoinWorldMsg") {
+            join(dispatch, payload)
+            return
+        }
         require(sessionContext.actors().bound().size == 1) {
             "JoinWorldMsg must bind an actor first"
         }
-        return sessionContext.actors().bound().single().relay(dispatch, payload)
+        sessionContext.actors().bound().single().relay(dispatch, payload).await()
     }
 
-    private fun join(
-        dispatch: ZLinkSessionDispatchContext,
-        payload: ZLinkMessage,
-    ): CompletionStage<Void> {
-        val request = payload.decode(Messages.JoinWorldMsg::class.java)
+    private suspend fun join(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage) {
+        val request = payload.decode<Messages.JoinWorldMsg>()
         // --8<-- [start:doc-zw-session-bind]
-        return actors
-            .getOrCreate(request.playerId, ZoneWorldNames.PLAYER_ACTOR_TYPE)
-            .inMesh(ZoneWorldNames.MESH)
-            .request(ZLinkMessage.empty())
-            .submit()
-            .thenCompose { result ->
-                if (result is ZLinkActorCreateResult.Rejected) {
-                    return@thenCompose CompletableFuture.failedFuture<Void>(
-                        IllegalStateException("actor creation rejected")
-                    )
-                }
-                val actor =
-                    when (result) {
-                        is ZLinkActorCreateResult.Created -> result.actor()
-                        is ZLinkActorCreateResult.Existing -> result.actor()
-                        is ZLinkActorCreateResult.Rejected -> error("unreachable")
-                    }
-                sessionContext.actors().bindOrGet(actor).thenCompose { bound ->
-                    bound.relay(dispatch, payload)
-                }
+        val result =
+            kotlinActors
+                .getOrCreate(request.playerId, ZoneWorldNames.PLAYER_ACTOR_TYPE)
+                .inMesh(ZoneWorldNames.MESH)
+                .request(ZLinkMessage.empty())
+                .await()
+        if (result is ZLinkActorCreateResult.Rejected) error("actor creation rejected")
+        val actor =
+            when (result) {
+                is ZLinkActorCreateResult.Created -> result.actor
+                is ZLinkActorCreateResult.Existing -> result.actor
+                is ZLinkActorCreateResult.Rejected -> error("unreachable")
             }
+        sessionContext.actors().bindOrGet(actor).await().relay(dispatch, payload).await()
         // --8<-- [end:doc-zw-session-bind]
     }
 }

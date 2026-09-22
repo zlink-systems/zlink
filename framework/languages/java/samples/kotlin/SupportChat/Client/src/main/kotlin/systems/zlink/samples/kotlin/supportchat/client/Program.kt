@@ -2,11 +2,11 @@ package systems.zlink.samples.kotlin.supportchat.client
 
 import java.net.URI
 import java.time.Duration
-import kotlinx.coroutines.future.await
 import kotlinx.coroutines.runBlocking
+import systems.zlink.framework.kotlin.ZLinkKotlinStreamConnector
+import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleTimings
-import systems.zlink.stream.connector.ZLinkStreamConnector
 import systems.zlink.stream.connector.ZLinkStreamConnectorFactory
 import systems.zlink.stream.connector.ZLinkStreamConnectorOptions
 import systems.zlink.stream.connector.ZLinkStreamDispatchMode
@@ -26,28 +26,29 @@ fun main(args: Array<String>) = runBlocking {
             )
         println(SampleNames.ClientMarker)
     } finally {
-        clients.forEach { client -> runCatching { client.close().submit().await() } }
+        clients.forEach { client -> client.close().await() }
     }
 }
 
-private fun createClient(options: ClientOptions): ZLinkStreamConnector =
+private fun createClient(options: ClientOptions): ZLinkKotlinStreamConnector =
     ZLinkStreamConnectorFactory.create(
-        ZLinkStreamConnectorOptions(
-            options.streamEndpoint,
-            ZLinkStreamDispatchMode.IMMEDIATE,
-            SampleTimings.RequestTimeout,
-            2,
-            SampleTimings.ConnectTimeout,
-            64 * 1024,
-            true,
-            Duration.ofSeconds(1),
-            SampleTimings.RequestTimeout.plusSeconds(5),
-            true,
-            Duration.ofMillis(250),
-            Duration.ofSeconds(5),
-            2.0,
+            ZLinkStreamConnectorOptions(
+                options.streamEndpoint,
+                ZLinkStreamDispatchMode.IMMEDIATE,
+                SampleTimings.RequestTimeout,
+                2,
+                SampleTimings.ConnectTimeout,
+                64 * 1024,
+                true,
+                Duration.ofSeconds(1),
+                SampleTimings.RequestTimeout.plusSeconds(5),
+                true,
+                Duration.ofMillis(250),
+                Duration.ofSeconds(5),
+                2.0,
+            )
         )
-    )
+        .kotlin()
 
 private data class ClientOptions(val streamEndpoint: URI) {
     companion object {

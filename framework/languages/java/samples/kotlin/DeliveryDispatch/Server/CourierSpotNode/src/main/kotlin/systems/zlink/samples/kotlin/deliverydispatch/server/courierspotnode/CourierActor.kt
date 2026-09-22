@@ -2,6 +2,7 @@ package systems.zlink.samples.kotlin.deliverydispatch.server.courierspotnode
 
 import systems.zlink.framework.actors.ZLinkActor
 import systems.zlink.framework.actors.ZLinkActorContext
+import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.samples.kotlin.deliverydispatch.shared.contracts.OfferDeliveryMsg
 import systems.zlink.samples.kotlin.deliverydispatch.shared.contracts.OfferDeliveryNotify
 
@@ -22,10 +23,11 @@ class CourierActor(private val id: String, private val actorContext: ZLinkActorC
 
     // --8<-- [start:doc-dd-offer-push]
     /** Pushes the offer and returns. The courier takes as long as it takes. */
-    fun offer(offer: OfferDeliveryMsg) {
+    suspend fun offer(offer: OfferDeliveryMsg) {
         synchronized(offeredAttempts) { offeredAttempts[offer.deliveryId] = offer.attempt }
         actorContext
             .boundSession()
+            .kotlin()
             .send(
                 OfferDeliveryNotify(
                     courierId = offer.courierId,
@@ -34,7 +36,7 @@ class CourierActor(private val id: String, private val actorContext: ZLinkActorC
                     dropoffAddress = offer.dropoffAddress,
                 )
             )
-            .submit()
+            .await()
     }
 
     // --8<-- [end:doc-dd-offer-push]

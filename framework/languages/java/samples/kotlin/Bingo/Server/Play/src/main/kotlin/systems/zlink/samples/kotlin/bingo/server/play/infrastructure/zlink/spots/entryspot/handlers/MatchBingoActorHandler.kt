@@ -1,8 +1,10 @@
 package systems.zlink.samples.kotlin.bingo.server.play.infrastructure.zlink.spots.entryspot.handlers
 
-import kotlinx.coroutines.future.await
 import systems.zlink.framework.ZLinkMessageContext
+import systems.zlink.framework.channels.ZLinkRouteClient
 import systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpotActorRequestHandler
+import systems.zlink.framework.kotlin.kotlin
+import systems.zlink.framework.kotlin.requestToChannel
 import systems.zlink.samples.kotlin.bingo.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.bingo.server.configuration.SampleTimings
 import systems.zlink.samples.kotlin.bingo.server.play.infrastructure.zlink.actors.PlayerActor
@@ -15,13 +17,15 @@ import systems.zlink.samples.kotlin.bingo.shared.contracts.MatchBingoApiRes
 import systems.zlink.samples.kotlin.bingo.shared.contracts.MatchBingoReq
 import systems.zlink.samples.kotlin.bingo.shared.contracts.MatchBingoRes
 
-class MatchBingoActorHandler :
+class MatchBingoActorHandler(routes: ZLinkRouteClient) :
     ZLinkSuspendingEntrySpotActorRequestHandler<
         BingoEntrySpot,
         PlayerActor,
         MatchBingoReq,
         MatchBingoRes,
     > {
+    private val kotlinRoutes = routes.kotlin()
+
     override suspend fun handle(
         entrySpot: BingoEntrySpot,
         actor: PlayerActor,
@@ -30,15 +34,12 @@ class MatchBingoActorHandler :
     ): MatchBingoRes {
         // --8<-- [start:doc-bingo-match-actor]
         val matched =
-            entrySpot
-                .context()
-                .outbound()
-                .requestToChannel(
+            kotlinRoutes
+                .requestToChannel<MatchBingoApiRes>(
                     SampleNames.ApiChannel,
                     MatchBingoApiReq(actor.actorId(), actor.displayName, message.mode),
                 )
                 .timeout(SampleTimings.RequestTimeout)
-                .submit(MatchBingoApiRes::class.java)
                 .await()
         actor.trackDeferredJoin(matched.roomId)
         actor
