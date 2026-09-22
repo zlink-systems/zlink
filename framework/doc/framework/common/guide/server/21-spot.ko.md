@@ -225,7 +225,9 @@ mesh node가 Object Server 역할을 한 번 고르고, 그 위에 Spot factory�
 
 등록할 때 주는 이름이 **stable type**이다. 호출하는 쪽은 Spot을 만들 때 그 이름을 지정한다.
 같은 이름을 등록한 node가 후보가 된다. Spot factory를 등록할 때 이동 정책을 하나 지정하며,
-이 장의 코드는 이동을 끈 정책을 지정한다.
+이 장의 코드는 이동을 끈 정책을 지정한다. adapter로 상태를 보존하려면 이 등록에서
+`preserveStateWith`를 지정한다 — [Relocation의 adapter](37-relocation.ko.md#2-application이-맡는-부분--adapter)가
+그 상태를 담고 푸는 코드를 보인다.
 
 ## 4. 호출하는 쪽 — Spot을 호출하는 node
 

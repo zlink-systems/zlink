@@ -228,7 +228,9 @@ The mesh node picks the Object Server role once, and the Spot factory is registe
 
 The name given at registration is the **stable type**. The calling side names it when opening a
 room, and the nodes that registered the same name become the candidates. Exactly one relocation
-policy is required; this chapter turns it off.
+policy is required; this chapter turns it off. To preserve state through an adapter, choose
+`preserveStateWith` at this registration — [Relocation's adapter](37-relocation.en.md#2-the-applications-part--the-adapter)
+shows the code that captures and restores that state.
 
 ## 4. The Calling Side — the Node That Calls a Spot
 

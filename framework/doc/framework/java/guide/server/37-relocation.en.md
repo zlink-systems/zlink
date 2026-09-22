@@ -49,8 +49,17 @@ destination node directly over the mesh connection.
 
 ## 2. The Application's Part — the Adapter
 
-An adapter captures and restores **application state only**, as bytes. Location authority, queues,
-timers, the accepted journal and session routes are handled by the Framework.
+To move an Actor or Spot to another node, the application state held by its instance (fields on the
+user class) must be serialized to bytes, sent, and restored into a new instance at the destination.
+The Framework does not know the state of a user class, so the application provides that serialization
+and restoration as a relocation adapter. Implement a class that captures state to bytes and restores
+bytes into a new instance, then choose it with
+[`preserveStateWith`](21-spot.en.md#33-registration) when registering the factory. Location
+authority, queued messages, timers, the accepted journal, and session routes move with the Framework,
+not in the adapter.
+
+**What goes in it.** Keep only state needed to restore the new instance; leave out values derived
+from it and caches that can be rebuilt.
 
 ```java
 --8<-- "framework/languages/java/samples/java/TicTacToe/Server/src/main/java/systems/zlink/samples/tictactoe/server/play/infrastructure/zlink/actors/PlayActorRelocationAdapter.java:doc-relocation-adapter"
@@ -70,8 +79,8 @@ an Actor joins a Spot on another node and when a node is drained in operations.
 | Recreate | Builds a new instance under the same logical id. Pending messages and timers are kept; application state is not restored |
 | Preserve state with an adapter | Restores the bytes the adapter captured into the new instance. The queue and the timers are kept as well |
 
-The registration call is named per language — the registration in [Spot](21-spot.en.md) is that
-place.
+The registration call is named per language — [the Spot registration that chooses
+`preserveStateWith`](21-spot.en.md#33-registration) is that place.
 
 ## 3. When State Is Captured — the Factory Registration Decides
 

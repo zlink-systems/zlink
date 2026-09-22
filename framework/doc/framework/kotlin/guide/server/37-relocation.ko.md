@@ -49,8 +49,15 @@ title: "Relocation · Kotlin"
 
 ## 2. application이 맡는 부분 — adapter
 
-Adapter는 **application 상태만** 바이트로 담고 푼다. 위치 권한, queue, timer, 받아들인 기록,
-session 경로는 Framework가 처리한다.
+Actor·Spot을 다른 node로 옮기려면 instance가 들고 있는 application 상태(사용자 클래스의 필드)를
+바이트로 직렬화해 보내고, 도착 쪽 새 instance에 복원해야 한다. Framework는 사용자 클래스의 상태를
+알지 못하므로 그 직렬화·복원 방법을 application이 relocation adapter로 제공한다. `capture`(상태 →
+바이트)·`restore`(바이트 → 새 instance)를 구현한 클래스를 factory 등록 때
+[`preserveStateWith`](21-spot.ko.md#33-등록)로 지정한다. 위치 권한·queue의 message·timer·받아들인
+기록·session 경로는 Framework가 옮기므로 adapter에 넣지 않는다.
+
+**무엇을 담나.** 새 instance를 복원하는 데 필요한 상태만 담고, 거기서 다시 만들 수 있는 파생값과
+cache는 제외한다.
 
 ```kotlin
 --8<-- "framework/languages/java/samples/kotlin/TicTacToe/Server/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/server/play/infrastructure/zlink/actors/PlayActorRelocationAdapter.kt:doc-relocation-adapter"
@@ -70,7 +77,8 @@ join할 때와 운영에서 node를 비울 때 모두 이 정책을 따른다.
 | 새로 만듦 | 같은 논리 id로 새 instance를 만든다. 대기하던 message와 timer는 유지하고 application 상태는 복원하지 않는다 |
 | adapter로 상태 보존 | adapter가 담은 바이트를 새 instance에 푼다. queue와 timer도 함께 유지한다 |
 
-등록 호출의 이름은 언어를 따른다 — [Spot](21-spot.ko.md)의 등록이 그 자리다.
+등록 호출의 이름은 언어를 따른다 — [`preserveStateWith`를 지정하는 Spot 등록](21-spot.ko.md#33-등록)이
+그 자리다.
 
 ## 3. 상태를 담는 시점 — factory 등록이 정한다
 
