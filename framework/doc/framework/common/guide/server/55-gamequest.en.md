@@ -4,8 +4,7 @@
 
     You can open the GameQuest sample in an editor and follow the code from a client's gameplay
     action, through the decision in the per-player owner Spot, to the progress and completion
-    pushes, and through the reconciliation of lost progress. The code in this chapter runs as it
-    stands in `framework/languages/<language>/samples/GameQuest`.
+    pushes, and through the reconciliation of lost progress. The code in this chapter comes from the [GameQuest sample in the per-language example repositories](https://github.com/zlink-systems/zlink-<language>-examples/tree/main/samples/GameQuest).
 
 [Picking a Sample](14-samples.en.md#7-gamequest--building-a-quest-progression-system) introduced what
 this sample demonstrates. This chapter is what you read after that introduction — the roles and where
