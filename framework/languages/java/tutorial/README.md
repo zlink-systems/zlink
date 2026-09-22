@@ -1,19 +1,29 @@
-# ZLink Java/Kotlin Tutorial
-
-A step-by-step program that layers Channel messaging and one id-addressed
-Spot. Both Java and Kotlin are included, as `java/` and `kotlin/`
-subprojects of the same Gradle build, sharing `settings.gradle.kts`,
-`gradle/libs.versions.toml`, and the wrapper.
-
 한국어: [`README.ko.md`](./README.ko.md)
+
+<!-- zlink-lang: java -->
+# ZLink Java Tutorial
+
+Contains Java subprojects and the shared Gradle root files.
+<!-- zlink-lang: end -->
+<!-- zlink-lang: kotlin -->
+# ZLink Kotlin Tutorial
+
+Contains Kotlin subprojects and the shared Gradle root files.
+<!-- zlink-lang: end -->
+
+A step-by-step program that layers Channel messaging and one id-addressed Spot.
 
 ## Prerequisites
 
 Bash blocks run on Linux, macOS, and WSL; PowerShell blocks run on Windows PowerShell 7. `cmd` is not supported.
 
-- **JDK 25.** No auto-download toolchain resolver — install it yourself and
-  point `JAVA_HOME` at it. Details and exact error text:
-  [`java/README.md`](./java/README.md#prerequisites).
+- **JDK 25.** No auto-download toolchain resolver — install it yourself and point `JAVA_HOME` at it.
+<!-- zlink-lang: java -->
+  Details and exact error text: [`java/README.md`](./java/README.md#prerequisites).
+<!-- zlink-lang: end -->
+<!-- zlink-lang: kotlin -->
+  Details and exact error text: [`kotlin/README.md`](./kotlin/README.md#prerequisites).
+<!-- zlink-lang: end -->
 - **Docker Desktop.** Runs Redis as one container.
 
   ```bash
@@ -22,38 +32,48 @@ Bash blocks run on Linux, macOS, and WSL; PowerShell blocks run on Windows Power
 
 ## Download and install
 
-Run from `tutorial/` in the `zlink-java-examples` repository. Build against the
-`systems.zlink:zlink-framework-*` packages from Maven Central.
-
-Clone the `zlink-java-examples` repository and run all commands below from its `tutorial/`
-directory.
+<!-- zlink-lang: java -->
+Run from `tutorial/` in `zlink-java-examples`.
+<!-- zlink-lang: end -->
+<!-- zlink-lang: kotlin -->
+Run from `tutorial/` in `zlink-kotlin-examples`.
+<!-- zlink-lang: end -->
+Build against the `systems.zlink:zlink-framework-*` packages from Maven Central.
 
 ## Build
 
 **Linux · macOS · WSL — bash**
 
+<!-- zlink-lang: java -->
 ```bash title="linux"
 ./gradlew :java:Server:installDist :java:Client:installDist
+```
+<!-- zlink-lang: end -->
+<!-- zlink-lang: kotlin -->
+```bash title="linux"
 ./gradlew :kotlin:Server:installDist :kotlin:Client:installDist
 ```
+<!-- zlink-lang: end -->
 
 **Windows — PowerShell 7**
 
+<!-- zlink-lang: java -->
 ```powershell title="windows"
 .\gradlew.bat :java:Server:installDist :java:Client:installDist
+```
+<!-- zlink-lang: end -->
+<!-- zlink-lang: kotlin -->
+```powershell title="windows"
 .\gradlew.bat :kotlin:Server:installDist :kotlin:Client:installDist
 ```
+<!-- zlink-lang: end -->
 
 ## Run
 
-Split by language. Both start the Server first. The blocks below start Java in the
-background from one terminal (for Kotlin, replace `java` in the paths with `kotlin`).
-Running them in the foreground in two terminals is described in each language README.
+Start Server first. The language README describes the foreground two-terminal procedure.
 
-- Java: [`java/README.md`](./java/README.md#run)
-- Kotlin: [`kotlin/README.md`](./kotlin/README.md#run)
-
-**Linux · macOS · WSL — bash**
+<!-- zlink-lang: java -->
+[`java/README.md`](./java/README.md#run)
 
 ```bash title="linux"
 ./java/Server/build/install/Server/bin/Server > server.log 2>&1 &
@@ -63,8 +83,6 @@ echo $! > client.pid
 for i in $(seq 1 60); do curl -sf http://127.0.0.1:5280/players/p1/profile >/dev/null && break; sleep 1; done
 ```
 
-**Windows — PowerShell 7**
-
 ```powershell title="windows"
 $server = Start-Process -FilePath (Resolve-Path '.\java\Server\build\install\Server\bin\Server.bat') -WindowStyle Hidden -RedirectStandardOutput server.log -RedirectStandardError server.err.log -PassThru
 $server.Id | Set-Content server.pid
@@ -72,22 +90,35 @@ $client = Start-Process -FilePath (Resolve-Path '.\java\Client\build\install\Cli
 $client.Id | Set-Content client.pid
 foreach ($i in 1..60) { try { Invoke-RestMethod -Uri 'http://127.0.0.1:5280/players/p1/profile' -TimeoutSec 2 | Out-Null; break } catch { Start-Sleep -Seconds 1 } }
 ```
+<!-- zlink-lang: end -->
+<!-- zlink-lang: kotlin -->
+[`kotlin/README.md`](./kotlin/README.md#run)
+
+```bash title="linux"
+./kotlin/Server/build/install/Server/bin/Server > server.log 2>&1 &
+echo $! > server.pid
+./kotlin/Client/build/install/Client/bin/Client > client.log 2>&1 &
+echo $! > client.pid
+for i in $(seq 1 60); do curl -sf http://127.0.0.1:5280/players/p1/profile >/dev/null && break; sleep 1; done
+```
+
+```powershell title="windows"
+$server = Start-Process -FilePath (Resolve-Path '.\kotlin\Server\build\install\Server\bin\Server.bat') -WindowStyle Hidden -RedirectStandardOutput server.log -RedirectStandardError server.err.log -PassThru
+$server.Id | Set-Content server.pid
+$client = Start-Process -FilePath (Resolve-Path '.\kotlin\Client\build\install\Client\bin\Client.bat') -WindowStyle Hidden -RedirectStandardOutput client.log -RedirectStandardError client.err.log -PassThru
+$client.Id | Set-Content client.pid
+foreach ($i in 1..60) { try { Invoke-RestMethod -Uri 'http://127.0.0.1:5280/players/p1/profile' -TimeoutSec 2 | Out-Null; break } catch { Start-Sleep -Seconds 1 } }
+```
+<!-- zlink-lang: end -->
 
 ## Verify
 
-Examples smoke runs this block exactly as written.
-
-Once the two processes accept each other, the `PEER_READY` log line described in each
-language README's "Verify" appears, and the call below returns `200` with the profile.
-
-**Linux · macOS · WSL — bash**
+Examples smoke runs this block exactly as written. Once the processes connect, `PEER_READY` is recorded and the call returns `200` with the profile.
 
 ```bash title="linux"
 curl -sf http://127.0.0.1:5280/players/p1/profile | grep -q '"playerId":"p1"'
 echo "tutorial-http=ok"
 ```
-
-**Windows — PowerShell 7**
 
 ```powershell title="windows"
 $profile = Invoke-RestMethod -Uri 'http://127.0.0.1:5280/players/p1/profile'
@@ -97,18 +128,12 @@ Write-Output 'tutorial-http=ok'
 
 ## Stop
 
-Stop the processes started by the Run section.
-
-**Linux · macOS · WSL — bash**
-
 ```bash title="linux"
 for pid in "$(cat client.pid)" "$(cat server.pid)"; do
   pkill -TERM -P "$pid" 2>/dev/null || true
   kill "$pid" 2>/dev/null || true
 done
 ```
-
-**Windows — PowerShell 7**
 
 ```powershell title="windows"
 Get-Content client.pid, server.pid | ForEach-Object {
@@ -119,8 +144,11 @@ Get-Job | Stop-Job -ErrorAction SilentlyContinue
 
 ## Troubleshooting
 
-Ports and key prefixes differ per language, so this is split too. Docker/Redis
-and JDK errors (connection refused, `UnsupportedClassVersionError`,
-`No matching toolchain found`) and stale-Redis-key cleanup are each in
-[`java/README.md`](./java/README.md#troubleshooting) and
-[`kotlin/README.md`](./kotlin/README.md#troubleshooting).
+Docker/Redis, JDK, and stale-key troubleshooting:
+
+<!-- zlink-lang: java -->
+[`java/README.md`](./java/README.md#troubleshooting)
+<!-- zlink-lang: end -->
+<!-- zlink-lang: kotlin -->
+[`kotlin/README.md`](./kotlin/README.md#troubleshooting)
+<!-- zlink-lang: end -->

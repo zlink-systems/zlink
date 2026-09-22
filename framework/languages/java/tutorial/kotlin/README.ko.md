@@ -3,9 +3,8 @@
 기능별 가이드가 코드를 읽어 가는 프로그램이다. 지금은 **Channel 메시징과 id로 부르는 Spot
 하나**까지 담았다. Actor·STREAM은 아직 없다.
 
-Kotlin은 이 저장소에 자기 디렉터리가 없다. Java 소스 옆
-`framework/languages/java/` 아래에 산다. [`../../quickstart/`](../../quickstart/)가
-`quickstart/{java,kotlin}`으로 나눠 둔 것과 같은 배치다.
+Kotlin source는 이 Gradle project의 language subdirectory에 있다. [`../../quickstart/`](../../quickstart/)도
+같은 방식으로 language subproject를 나눈다.
 
 ## quickstart·샘플과 나눠 두는 이유
 

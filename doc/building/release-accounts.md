@@ -10,7 +10,7 @@ public zlink releases. The Python, Go, and Rust bindings are outside this releas
 | Channel | Account or namespace | Distribution method |
 | --- | --- | --- |
 | GitHub | `zlink-systems` organization, `zlink-systems/zlink` repository | Language tags and GitHub Release assets |
-| GitHub (examples mirrors) | `zlink-systems/zlink-{cpp,dotnet,java,node}-examples` — read-only, issues and wiki disabled, no PRs accepted | the release workflows call `examples-mirror.yml` after each language is published and verified ([release-pipeline](release-pipeline.md) §1) |
+| GitHub (examples mirrors) | `zlink-systems/zlink-{cpp,dotnet,java,kotlin,node}-examples` — read-only, issues and wiki disabled, no PRs accepted | the release workflows call `examples-mirror.yml` after each language is published and verified ([release-pipeline](release-pipeline.md) §1) |
 | Maven Central | Verified `systems.zlink` namespace | Sonatype Central Portal bundle upload |
 | nuget.org | Personal account `zlink` | Trusted Publishing (OIDC), no API key |
 | npm | Personal account `zlink-systems`, `@zlink-systems` scope, 2FA | Trusted Publishing (OIDC) with provenance; the binding is registered to `bindings-release.yml`, the 8 framework packages to `framework-release.yml` (done 2026-09-09) |
@@ -43,7 +43,7 @@ their values, in documentation and logs.
 | `MAVEN_CENTRAL_PASSWORD` | Sonatype Central Portal token password |
 | `SIGNING_KEY` | Base64-encoded armored GPG private key |
 | `SIGNING_PASSPHRASE` | GPG private-key passphrase |
-| `EXAMPLES_MIRROR_KEY_CPP` · `_DOTNET` · `_JAVA` · `_NODE` | Private half of the write deploy key (ed25519) registered on each examples mirror repository. Each can push to one mirror only, and a deploy key attaches to a single repository, hence four. Rotate with `ssh-keygen` → `gh repo deploy-key add --allow-write` → `gh secret set`, and delete the private-key file right after registering it |
+| `EXAMPLES_MIRROR_KEY_CPP` · `_DOTNET` · `_JAVA` · `_KOTLIN` · `_NODE` | Private half of the write deploy key (ed25519) registered on each examples mirror repository. Each can push to one mirror only, and a deploy key attaches to a single repository, hence five. Rotate with `ssh-keygen` → `gh repo deploy-key add --allow-write` → `gh secret set`, and delete the private-key file right after registering it |
 
 Use the existing signing key. Do not generate a new key or token. `GITHUB_TOKEN` cannot push to
 another repository, so the mirrors are the only place a deploy key is used.

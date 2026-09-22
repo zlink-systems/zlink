@@ -34,20 +34,24 @@ from __future__ import annotations
 import io
 import os
 import pathlib
+import posixpath
+import re
 import shutil
 import subprocess
 import sys
 import zipfile
 
-#  Java와 Kotlin은 gradle 프로젝트 하나를 공유하므로 함께 묶는다. 둘을 나누면
-#  `settings.gradle.kts`와 wrapper가 한쪽에만 들어가 다른 쪽이 빌드되지 않는다.
-LANGUAGES = ("cpp", "dotnet", "java", "node")
+# Java와 Kotlin은 원본 Gradle project를 공유한다. export는 공통 root 파일을 각각 넣고,
+# 한 규칙으로 source tree와 settings의 include를 언어별로 걸러 독립 Gradle project를 만든다.
+LANGUAGES = ("cpp", "dotnet", "java", "kotlin", "node")
 
 #  미러 루트에 놓이는 디렉터리. 저장소 경로 `framework/languages/<lang>/<section>`과 같다.
 SECTIONS = ("quickstart", "tutorial", "samples")
 
 #  README에 적는 언어 이름.
-LANGUAGE_TITLES = {"cpp": "C++", "dotnet": ".NET", "java": "Java · Kotlin", "node": "Node"}
+LANGUAGE_TITLES = {
+    "cpp": "C++", "dotnet": ".NET", "java": "Java", "kotlin": "Kotlin", "node": "Node",
+}
 
 #  저장소 안에서만 의미가 있고 미러 밖에서는 쓰이지 않거나 오히려 방해가 되는 파일.
 #  (section, lang, git ls-tree 기준 subtree 상대 경로) 튜플이며, 항목마다 근거를 남긴다.
@@ -81,6 +85,12 @@ TEXT_SUFFIXES = (
     ".cpp", ".hpp", ".h", ".txt", ".md", ".yml", ".yaml", ".xml", ".gitignore",
 )
 
+LANGUAGE_REGION_RE = re.compile(r"^<!-- zlink-lang: (java|kotlin|end) -->\s*$")
+README_LINK_RE = re.compile(r"(?<!!)\[[^\]]*\]\(([^)\s]+)")
+# A README must never mention the other language's source directory. Keep this
+# list explicit if a future code identifier genuinely needs that spelling.
+OTHER_LANGUAGE_IDENTIFIER_EXCEPTIONS: frozenset[str] = frozenset()
+
 #  미러 루트에 그대로 복사하는 저장소 루트 파일. 빌드 산출물 무시 규칙과 줄바꿈 규칙의
 #  소유자는 이 둘이고, 미러에 두 번째 사본을 손으로 관리하지 않는다.
 ROOT_FILES = (".gitignore", ".gitattributes")
@@ -90,7 +100,7 @@ README_KO = """[English](./README.md) | **한국어**
 # ZLink {title} examples
 
 이 저장소는 [zlink-systems/zlink](https://github.com/zlink-systems/zlink)의
-`framework/languages/{lang}/` 아래 예제 코드를 그대로 내보낸 읽기 전용 저장소다. 코드는
+framework 예제 코드를 그대로 내보낸 읽기 전용 저장소다. 코드는
 원본 저장소에서만 고치고, 그 결과가 이곳에 자동으로 실린다. `main`에는 가장 최근 릴리스와
 그 뒤 원본에 합쳐진 수정이 들어 있고, 릴리스마다 framework 버전과 같은 이름의 태그
 `vA.B.C`가 붙는다. 이슈와 pull request는 원본 저장소에 낸다. 이 저장소는 pull request를
@@ -110,8 +120,8 @@ README_EN = """**English** | [한국어](./README.ko.md)
 
 # ZLink {title} examples
 
-A read-only mirror of `framework/languages/{lang}/` in
-[zlink-systems/zlink](https://github.com/zlink-systems/zlink). `main` is the latest release
+A read-only mirror of framework examples in [zlink-systems/zlink](https://github.com/zlink-systems/zlink).
+`main` is the latest release
 plus the fixes merged since; each release is the tag `vA.B.C` (the framework version). Send
 issues and pull requests to the source repository — this one accepts no PRs.
 
@@ -152,7 +162,10 @@ def executable(name: str) -> bool:
 
 
 def excluded(section: str, lang: str, name: str) -> bool:
-    return (section, lang, name) in EXCLUDED_ENTRIES
+    # Kotlin sources live in the Java source tree, so its repository-only exclusions
+    # are owned by the same source-language entry rather than copied into a second list.
+    source_lang = "java" if lang == "kotlin" else lang
+    return (section, source_lang, name) in EXCLUDED_ENTRIES
 
 
 def write(target: pathlib.Path, data: bytes, mode: int) -> None:
@@ -162,8 +175,105 @@ def write(target: pathlib.Path, data: bytes, mode: int) -> None:
         target.chmod(mode)
 
 
+def source_language(lang: str) -> str:
+    return "java" if lang == "kotlin" else lang
+
+
+def language_entry(name: str, lang: str) -> bool:
+    """Whether a Java/Kotlin shared-project entry belongs in this language mirror."""
+    parts = pathlib.PurePosixPath(name).parts
+    if not parts or parts[0] not in ("java", "kotlin"):
+        return True
+    return parts[0] == lang
+
+
+def filter_settings(data: bytes, lang: str) -> bytes:
+    """Keep only one language's Gradle include entries in a shared settings file."""
+    if lang not in ("java", "kotlin"):
+        return data
+    other = "kotlin" if lang == "java" else "java"
+    kept = []
+    for line in data.decode().splitlines(keepends=True):
+        # Includes are the source of truth for exported subprojects. Match both
+        # include("java:…") and include(":java:…") forms used by the three trees.
+        if f'"{other}:' in line or f'":{other}:' in line:
+            continue
+        kept.append(line)
+    return "".join(kept).encode()
+
+
+def filter_readme(data: bytes, lang: str) -> bytes:
+    """Keep the explicit language regions of a shared Java/Kotlin README."""
+    if lang not in ("java", "kotlin"):
+        return data
+    region: str | None = None
+    result = []
+    for line in data.decode().splitlines(keepends=True):
+        marker = LANGUAGE_REGION_RE.match(line.rstrip("\n"))
+        if marker is None:
+            if region in (None, lang):
+                result.append(line)
+            continue
+        value = marker.group(1)
+        if value == "end":
+            if region is None:
+                raise ValueError("zlink-lang end marker without an open region")
+            region = None
+        else:
+            if region is not None:
+                raise ValueError("nested zlink-lang region")
+            region = value
+    if region is not None:
+        raise ValueError("unterminated zlink-lang region")
+    return "".join(result).encode()
+
+
+def externalize_readme_links(data: bytes, source: str, section: str, name: str, lang: str) -> bytes:
+    """Keep exported README links local, or make monorepo-only links explicit GitHub links."""
+    text = data.decode()
+
+    def replace(match: re.Match[str]) -> str:
+        destination = match.group(1)
+        raw_path, separator, anchor = destination.partition("#")
+        if not raw_path or raw_path.startswith(("https://", "http://", "mailto:")):
+            return match.group(0)
+        relative = posixpath.normpath(posixpath.join(section, posixpath.dirname(name), raw_path))
+        if not relative.startswith("../") and relative != ".." and language_entry(relative, lang):
+            return match.group(0)
+        monorepo_path = posixpath.normpath(posixpath.join(source, posixpath.dirname(name), raw_path))
+        url = "https://github.com/zlink-systems/zlink/blob/main/" + monorepo_path
+        return match.group(0).replace(destination, url + (separator + anchor if separator else ""))
+
+    return README_LINK_RE.sub(replace, text).encode()
+
+
+def validate_exported_readmes(root: pathlib.Path, lang: str) -> None:
+    """Reject escaped links and stale sibling-language directory references."""
+    root = root.resolve()
+    other = "kotlin" if lang == "java" else "java"
+    errors = []
+    for readme in root.rglob("README*.md"):
+        text = readme.read_text(encoding="utf-8")
+        for match in README_LINK_RE.finditer(text):
+            destination = match.group(1).strip("<>")
+            if destination.startswith(("#", "https://", "http://", "mailto:")):
+                continue
+            path = destination.split("#", 1)[0]
+            if not path:
+                continue
+            target = (readme.parent / path).resolve()
+            if not target.is_relative_to(root) or not target.exists():
+                errors.append(f"{readme.relative_to(root)}: unresolved relative link {destination}")
+        reference = f"{other}/"
+        for number, line in enumerate(text.splitlines(), start=1):
+            if reference in line and not any(item in line for item in OTHER_LANGUAGE_IDENTIFIER_EXCEPTIONS):
+                errors.append(f"{readme.relative_to(root)}:{number}: sibling directory {reference}")
+    if errors:
+        raise ValueError("exported README validation failed:\n" + "\n".join(errors))
+
+
 def export_section(lang: str, section: str, ref: str, root: pathlib.Path) -> int | None:
-    src = "framework/languages/%s/%s" % (lang, section)
+    src = "framework/languages/%s/%s" % (source_language(lang), section)
     listing = subprocess.run(
         ["git", "ls-tree", "-r", "--name-only", ref, src],
         capture_output=True, text=True)
@@ -178,9 +288,14 @@ def export_section(lang: str, section: str, ref: str, root: pathlib.Path) -> int
     count = 0
     with zipfile.ZipFile(io.BytesIO(raw)) as source:
         for item in source.infolist():
-            if item.is_dir() or excluded(section, lang, item.filename):
+            if item.is_dir() or not language_entry(item.filename, lang) or excluded(section, lang, item.filename):
                 continue
             data = normalize(item.filename, source.read(item))
+            if item.filename == "settings.gradle.kts":
+                data = filter_settings(data, lang)
+            elif pathlib.PurePosixPath(item.filename).name in ("README.md", "README.ko.md"):
+                data = filter_readme(data, lang)
+                data = externalize_readme_links(data, src, section, item.filename, lang)
             mode = 0o755 if executable(item.filename) else 0o644
             write(root / section / item.filename, data, mode)
             count += 1
@@ -192,8 +307,8 @@ def export_root_files(lang: str, ref: str, root: pathlib.Path) -> None:
         data = run(["git", "-c", "core.autocrlf=false", "show", "%s:%s" % (ref, name)])
         write(root / name, normalize(name, data), 0o644)
     title = LANGUAGE_TITLES[lang]
-    write(root / "README.ko.md", README_KO.format(title=title, lang=lang).encode(), 0o644)
-    write(root / "README.md", README_EN.format(title=title, lang=lang).encode(), 0o644)
+    write(root / "README.ko.md", README_KO.format(title=title).encode(), 0o644)
+    write(root / "README.md", README_EN.format(title=title).encode(), 0o644)
 
 
 def export(lang: str, ref: str, out_dir: pathlib.Path) -> dict[str, int | None]:
@@ -202,6 +317,7 @@ def export(lang: str, ref: str, out_dir: pathlib.Path) -> dict[str, int | None]:
         shutil.rmtree(root)
     counts = {section: export_section(lang, section, ref, root) for section in SECTIONS}
     export_root_files(lang, ref, root)
+    validate_exported_readmes(root, lang)
     return counts
 
 
