@@ -68,7 +68,20 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       ref: ${{ steps.pick.outputs.ref }}
+      # The JVM lanes are one matrix job; a job-level `if` cannot see `matrix`,
+      # so the matrix itself is the requested subset of java/kotlin.
+      jvm_languages: ${{ steps.jvm.outputs.languages }}
     steps:
+      - name: Pick the JVM lanes to run
+        id: jvm
+        env:
+          LANGUAGES: ${{ inputs.languages || '["cpp","dotnet","java","kotlin","node"]' }}
+        run: |
+          set -euo pipefail
+          jvm="$(printf '%s' "${LANGUAGES}" | python3 -c 'import json,sys; print(json.dumps([l for l in json.load(sys.stdin) if l in ("java","kotlin")]))')"
+          echo "languages=${jvm}" >> "$GITHUB_OUTPUT"
+          echo "jvm lanes: ${jvm}"
+
       - name: Pick the ref for this trigger
         id: pick
         env:
@@ -467,13 +480,13 @@ jobs:
 
   java-linux:
     name: ${{ matrix.lang }} / ubuntu-24.04 (no checkout)
-    needs: export
-    if: contains(fromJSON(inputs.languages || '["cpp","dotnet","java","kotlin","node"]'), matrix.lang)
+    needs: [resolve, export]
+    if: needs.resolve.outputs.jvm_languages != '[]'
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        lang: [java, kotlin]
+        lang: ${{ fromJSON(needs.resolve.outputs.jvm_languages) }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -577,13 +590,13 @@ jobs:
 
   java-windows:
     name: ${{ matrix.lang }} / windows-2022 (no checkout)
-    needs: export
-    if: contains(fromJSON(inputs.languages || '["cpp","dotnet","java","kotlin","node"]'), matrix.lang)
+    needs: [resolve, export]
+    if: needs.resolve.outputs.jvm_languages != '[]'
     runs-on: windows-2022
     strategy:
       fail-fast: false
       matrix:
-        lang: [java, kotlin]
+        lang: ${{ fromJSON(needs.resolve.outputs.jvm_languages) }}
     steps:
       - uses: actions/download-artifact@v4
         with:
