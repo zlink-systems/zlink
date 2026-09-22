@@ -46,6 +46,8 @@ if [[ "$(uname -s)" == Darwin ]]; then
       exit 1
     }
     while IFS= read -r dependency; do
+      # otool -L lists a dylib's own install name first; it is not a dependency.
+      [[ "$dependency" == "$install_name" ]] && continue
       case "$dependency" in
         /usr/lib/*|/System/Library/*) ;;
         @loader_path/*)
