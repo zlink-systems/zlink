@@ -438,6 +438,11 @@ class DefaultZLinkNestFanoutChannelBuilder
     return this;
   }
 
+  setNoDrop(noDrop?: boolean): this {
+    this.channelOptions.noDrop = noDrop;
+    return this;
+  }
+
   enableSubscriber(endpoint?: string | readonly string[]): this {
     const mode = endpoint === undefined ? 'automatic' : 'manual';
     if (this.subscriberMode !== undefined && this.subscriberMode !== mode) {
@@ -448,6 +453,11 @@ class DefaultZLinkNestFanoutChannelBuilder
     this.subscriberMode = mode;
     this.channelOptions.subscriber =
       endpoint === undefined ? {} : { manualConnections: endpointList(endpoint) };
+    return this;
+  }
+
+  subscribe(topic: string): this {
+    this.channelOptions.subscriptions = [...(this.channelOptions.subscriptions ?? []), topic];
     return this;
   }
 

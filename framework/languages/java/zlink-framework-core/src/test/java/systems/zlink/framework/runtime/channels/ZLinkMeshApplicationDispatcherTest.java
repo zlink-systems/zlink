@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkMessageContext;
+import systems.zlink.framework.channels.ZLinkRequestHandler;
 import systems.zlink.framework.channels.ZLinkRouteMessageContext;
 import systems.zlink.framework.channels.ZLinkRouteRequestHandler;
 import systems.zlink.framework.channels.ZLinkRouteSendHandler;
@@ -17,6 +18,7 @@ import systems.zlink.framework.channels.ZLinkSendHandler;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.handlers.ZLinkHandlerGroup;
+import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshDispatchRecord;
@@ -24,10 +26,12 @@ import systems.zlink.framework.runtime.internal.binding.spot.OwnerKind;
 import systems.zlink.framework.runtime.internal.binding.spot.ReadyRecord;
 import systems.zlink.framework.runtime.internal.binding.spot.ReceiveRecord;
 import systems.zlink.framework.runtime.internal.binding.spot.RecordKind;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.drain.ZLinkMeshDrainCoordinator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
+import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
 import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 
@@ -46,6 +50,8 @@ import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 final class ZLinkMeshApplicationDispatcherTest {
+    private static final String FLOW_ID = "018f0000-0000-7000-8000-000000000001";
+
     @Test
     void recordsMissingHandlerDropsWithDefaultDiagnostics() throws Exception {
         var events = new java.util.concurrent.LinkedBlockingQueue<Map<String, String>>();
@@ -146,6 +152,7 @@ final class ZLinkMeshApplicationDispatcherTest {
         GatedNodeHandler.completed = new CompletableFuture<>();
         GatedNodeHandler.threeCompleted = new CompletableFuture<>();
         ProtocolRequestHandler.received = new CompletableFuture<>();
+        FlowChannelRequestHandler.received = new CompletableFuture<>();
     }
 
     @Test
@@ -309,6 +316,111 @@ final class ZLinkMeshApplicationDispatcherTest {
             logger.removeHandler(traceHandler);
             logger.setLevel(previousLevel);
         }
+    }
+
+    @Test
+    void routeMeshRequestPreservesInboundFlowAcrossServerTraces() throws Exception {
+        List<String> traces = new CopyOnWriteArrayList<>();
+        CompletableFuture<String> repliedTrace = new CompletableFuture<>();
+        Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
+        Level previousLevel = logger.getLevel();
+        Handler traceHandler =
+                new Handler() {
+                    @Override
+                    public void publish(LogRecord record) {
+                        String message = record.getMessage();
+                        if (!message.contains("channel=flow-profile")) {
+                            return;
+                        }
+                        traces.add(message);
+                        if (message.contains("phase=replied")) {
+                            repliedTrace.complete(message);
+                        }
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        logger.setLevel(Level.ALL);
+        logger.addHandler(traceHandler);
+        try {
+            MeshNodeRegistration mesh = new MeshNodeRegistration("game");
+            mesh.listen("inproc://mesh-flow-profile");
+            mesh.channelName("flow-profile")
+                    .server()
+                    .addRequestHandler(FlowChannelRequestHandler.class, String.class, String.class);
+            ZLinkFrameworkRegistration framework = new ZLinkFrameworkRegistration();
+            framework.dispatchOptions().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+            ZLinkMeshApplicationDispatcher dispatcher =
+                    new ZLinkMeshApplicationDispatcher(
+                            mesh,
+                            new ZLinkStringMessageSerializer(),
+                            framework,
+                            ZLinkHandlerActivator.reflection(),
+                            (token, parts) -> {});
+
+            dispatcher.accept(recordWithFlow());
+
+            repliedTrace.get(2, TimeUnit.SECONDS);
+            for (String phase : List.of("received", "dispatched", "replied")) {
+                assertTrue(
+                        traces.stream()
+                                .anyMatch(
+                                        line ->
+                                                line.contains("phase=" + phase)
+                                                        && line.contains("flow=" + FLOW_ID)
+                                                        && line.contains("origin=application")),
+                        () -> "missing inbound flow on " + phase + ": " + traces);
+            }
+        } finally {
+            logger.removeHandler(traceHandler);
+            logger.setLevel(previousLevel);
+        }
+    }
+
+    @Test
+    void routeMeshRequestRejectsMalformedInboundFlowAsCorrelatedProtocolError() throws Exception {
+        MeshNodeRegistration mesh = new MeshNodeRegistration("game");
+        mesh.listen("inproc://mesh-malformed-flow-profile");
+        mesh.channelName("flow-profile")
+                .server()
+                .addRequestHandler(FlowChannelRequestHandler.class, String.class, String.class);
+        ZLinkFrameworkRegistration framework = new ZLinkFrameworkRegistration();
+        framework.dispatchOptions().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+        ZLinkMeshApplicationDispatcher dispatcher =
+                new ZLinkMeshApplicationDispatcher(
+                        mesh,
+                        new ZLinkStringMessageSerializer(),
+                        framework,
+                        ZLinkHandlerActivator.reflection(),
+                        (token, parts) -> {});
+
+        for (MalformedFlow malformed :
+                List.of(
+                        new MalformedFlow("not-a-uuid", 3, "0123456789abcdeffedcba9876543201"),
+                        new MalformedFlow(FLOW_ID, 99, "0123456789abcdeffedcba9876543202"))) {
+            CompletableFuture<ErrorReply> reply = new CompletableFuture<>();
+
+            dispatcher.accept(
+                    recordWithMalformedFlow(
+                            malformed,
+                            parts -> {
+                                ZLinkChannelEnvelope.Header header =
+                                        ZLinkChannelEnvelope.decodeHeader(parts.get(0), false);
+                                reply.complete(
+                                        new ErrorReply(
+                                                ZLinkFrameworkErrorReply.kind(parts),
+                                                header.correlationId()));
+                            }));
+
+            assertEquals(
+                    new ErrorReply(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, malformed.correlationId),
+                    reply.get(2, TimeUnit.SECONDS));
+        }
+        assertFalse(FlowChannelRequestHandler.received.isDone());
     }
 
     @Test
@@ -571,6 +683,90 @@ final class ZLinkMeshApplicationDispatcherTest {
                 null);
     }
 
+    private static ZLinkMeshDispatchRecord recordWithFlow() {
+        RoutingId source = RoutingId.from("source-node");
+        ReadyRecord owner = new ReadyRecord(OwnerKind.NODE, 1, null, null);
+        ReceiveRecord receive =
+                new ReceiveRecord(
+                        RecordKind.CHANNEL_REQUEST,
+                        1,
+                        source,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        "flow-profile",
+                        null,
+                        "application/json",
+                        ZLinkApplicationMetadata.copyOf(Map.of()).encode(),
+                        0,
+                        0,
+                        0,
+                        2);
+        ZLinkChannelEnvelope.Header header =
+                ZLinkChannelEnvelope.create(
+                        ZLinkChannelEnvelope.KIND_REQUEST,
+                        "flow-profile",
+                        "String",
+                        "application/json",
+                        null,
+                        Map.of(),
+                        new ZLinkFlowContext.State(FLOW_ID, ZLinkFlowOrigin.APPLICATION));
+        return new ZLinkMeshDispatchRecord(
+                owner,
+                receive,
+                List.of(
+                        ZLinkChannelEnvelope.encodeHeader(header),
+                        Message.from("request".getBytes(StandardCharsets.UTF_8))),
+                ignored -> {});
+    }
+
+    private static ZLinkMeshDispatchRecord recordWithMalformedFlow(
+            MalformedFlow malformed, Consumer<List<Message>> reply) {
+        RoutingId source = RoutingId.from("source-node");
+        ReadyRecord owner = new ReadyRecord(OwnerKind.NODE, 1, null, null);
+        ReceiveRecord receive =
+                new ReceiveRecord(
+                        RecordKind.CHANNEL_REQUEST,
+                        1,
+                        source,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        "flow-profile",
+                        null,
+                        "application/json",
+                        ZLinkApplicationMetadata.copyOf(Map.of()).encode(),
+                        0,
+                        0,
+                        0,
+                        2);
+        String header =
+                "{\"formatMarker\":242,\"flowId\":\""
+                        + malformed.flowId
+                        + "\",\"flowOrigin\":"
+                        + malformed.flowOrigin
+                        + ",\"kind\":1,\"channelName\":\"flow-profile\","
+                        + "\"messageName\":\"String\",\"contentType\":\"application/json\","
+                        + "\"correlationId\":\""
+                        + malformed.correlationId
+                        + "\",\"metadata\":{}}";
+        return new ZLinkMeshDispatchRecord(
+                owner,
+                receive,
+                List.of(
+                        Message.from(header.getBytes(StandardCharsets.UTF_8)),
+                        Message.from("request".getBytes(StandardCharsets.UTF_8))),
+                reply);
+    }
+
+    private record MalformedFlow(String flowId, int flowOrigin, String correlationId) {}
+
+    private record ErrorReply(ZLinkFrameworkErrorKind kind, String correlationId) {}
+
     public static final class NodeHandler implements ZLinkRouteSendHandler<String> {
         private static CompletableFuture<String> received;
         private static CompletableFuture<Map<String, String>> metadata;
@@ -593,6 +789,17 @@ final class ZLinkMeshApplicationDispatcherTest {
 
         @Override
         public CompletionStage<String> handle(String message, ZLinkRouteMessageContext context) {
+            received.complete(message);
+            return CompletableFuture.completedFuture("reply");
+        }
+    }
+
+    public static final class FlowChannelRequestHandler
+            implements ZLinkRequestHandler<String, String> {
+        private static CompletableFuture<String> received;
+
+        @Override
+        public CompletionStage<String> handle(String message, ZLinkMessageContext context) {
             received.complete(message);
             return CompletableFuture.completedFuture("reply");
         }

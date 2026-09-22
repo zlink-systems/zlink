@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.internal.backend;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
+import systems.zlink.framework.runtime.diagnostics.ZLinkDispatchErrorReporter;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeMonitor;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeStatus;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
@@ -26,6 +27,11 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 
 public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
+    /** Installs the host-owned dispatch-error sink used by transport completion observers. */
+    default void setDispatchErrorReporter(ZLinkDispatchErrorReporter reporter) {
+        // Alternate backends may report transport failures through their own diagnostics path.
+    }
+
     default void setApplicationJobQueue(ZLinkApplicationJobQueue value) {
         // Alternate backends may provide their own ordinary-claim boundary.
     }

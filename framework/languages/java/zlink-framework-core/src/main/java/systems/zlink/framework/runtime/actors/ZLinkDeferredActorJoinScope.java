@@ -18,10 +18,6 @@ import java.util.function.Supplier;
 
 /** Handler-local registration scope for deferred Actor membership transitions. */
 final class ZLinkDeferredActorJoinScope {
-    static final int MAX_JOIN_COUNT = 64;
-    static final int MAX_REQUEST_BYTES = 1024 * 1024;
-    static final int MAX_TOTAL_REQUEST_BYTES = 8 * 1024 * 1024;
-
     private static final Object LEGACY_RUNTIME_SCOPE = new Object();
     private static final ConcurrentMap<ActorScopeKey, State> ACTIVE_ACTOR_SCOPES =
             new ConcurrentHashMap<>();
@@ -97,24 +93,12 @@ final class ZLinkDeferredActorJoinScope {
     }
 
     static void register(
-            String actorId,
-            int requestBytes,
-            long deadlineNanos,
-            Supplier<CompletionStage<Void>> operation) {
-        register(
-                LEGACY_RUNTIME_SCOPE,
-                actorId,
-                actorId,
-                requestBytes,
-                deadlineNanos,
-                operation,
-                null,
-                () -> {});
+            String actorId, long deadlineNanos, Supplier<CompletionStage<Void>> operation) {
+        register(LEGACY_RUNTIME_SCOPE, actorId, actorId, deadlineNanos, operation, null, () -> {});
     }
 
     static void registerWithActorBarrier(
             String actorId,
-            int requestBytes,
             long deadlineNanos,
             Supplier<CompletionStage<Void>> operation,
             Function<Supplier<CompletionStage<Void>>, CompletionStage<Void>> actorMailbox) {
@@ -122,7 +106,6 @@ final class ZLinkDeferredActorJoinScope {
                 LEGACY_RUNTIME_SCOPE,
                 actorId,
                 actorId,
-                requestBytes,
                 deadlineNanos,
                 operation,
                 actorMailbox,
@@ -133,7 +116,6 @@ final class ZLinkDeferredActorJoinScope {
             Object runtimeScope,
             Object actorIncarnation,
             String actorId,
-            int requestBytes,
             long deadlineNanos,
             Supplier<CompletionStage<Void>> operation,
             Function<Supplier<CompletionStage<Void>>, CompletionStage<Void>> actorMailbox,
@@ -142,7 +124,6 @@ final class ZLinkDeferredActorJoinScope {
                 runtimeScope,
                 actorIncarnation,
                 actorId,
-                requestBytes,
                 deadlineNanos,
                 operation,
                 Objects.requireNonNull(actorMailbox, "actorMailbox"),
@@ -153,7 +134,6 @@ final class ZLinkDeferredActorJoinScope {
             Object runtimeScope,
             Object actorIncarnation,
             String actorId,
-            int requestBytes,
             long deadlineNanos,
             Supplier<CompletionStage<Void>> operation,
             Function<Supplier<CompletionStage<Void>>, CompletionStage<Void>> actorMailbox,
@@ -202,17 +182,6 @@ final class ZLinkDeferredActorJoinScope {
                         "Actor join defer must target a local Actor allowed by the current"
                                 + " handler");
             }
-            if (requestBytes < 0 || requestBytes > MAX_REQUEST_BYTES) {
-                throw failure(
-                        ZLinkFrameworkErrorKind.NOT_CONFIGURED,
-                        "Actor join request exceeds the 1 MiB encoded limit");
-            }
-            if (state.intents.size() >= MAX_JOIN_COUNT
-                    || state.requestBytes + requestBytes > MAX_TOTAL_REQUEST_BYTES) {
-                throw failure(
-                        ZLinkFrameworkErrorKind.NOT_CONFIGURED,
-                        "Actor join registrations exceed the handler limit");
-            }
             if (state.claimedActorIds.contains(actorId)) {
                 throw failure(
                         ZLinkFrameworkErrorKind.UNAVAILABLE,
@@ -220,7 +189,6 @@ final class ZLinkDeferredActorJoinScope {
             }
             state.claimedActorIds.add(actorId);
             state.claimReleases.add(releaseClaim);
-            state.requestBytes += requestBytes;
             if (actorMailbox == null) {
                 state.intents.add(new Intent(deadlineNanos, operation, () -> {}));
                 return;
@@ -241,7 +209,6 @@ final class ZLinkDeferredActorJoinScope {
                 int claimIndex = state.claimedActorIds.lastIndexOf(actorId);
                 state.claimedActorIds.remove(claimIndex);
                 Runnable removedRelease = state.claimReleases.remove(claimIndex);
-                state.requestBytes -= requestBytes;
                 removedRelease.run();
                 throw error;
             }
@@ -386,7 +353,6 @@ final class ZLinkDeferredActorJoinScope {
         private final List<Intent> intents = new ArrayList<>();
         private final List<String> claimedActorIds = new ArrayList<>();
         private final List<Runnable> claimReleases = new ArrayList<>();
-        private int requestBytes;
         private volatile boolean sealed;
         private boolean finishStarted;
 

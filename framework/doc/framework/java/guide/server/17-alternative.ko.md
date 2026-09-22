@@ -106,7 +106,7 @@ framework가 없다. 우연이 아니라 이유가 있다.
 | 어려움 | ZLink 기능 | 자세히 |
 | --- | --- | --- |
 | 장르별 토폴로지를 소켓부터 직접 만듦 | **channel 조합으로 토폴로지 선언** — 1:N 요청/응답, fan-out, node 지목 route mesh, room 단위 spot mesh를 등록 몇 줄로 조합, 연결은 location store가 자동 유지 | [계층 구조와 등록 지점](01-overview.ko.md#33-계층-구조와-등록-지점) · [Channel 메시징](20-channel-messaging.ko.md) · [Spot](21-spot.ko.md) · [Location](25-location.ko.md) |
-| in-memory 상태의 lock·경합 | **SPOT 직렬 실행** — 한 room의 모든 메시지를 하나의 실행 줄로 세워 순서대로 실행. lock이 업무 로직에서 사라진다 | 아래 코드 · [Spot](21-spot.ko.md) |
+| in-memory 상태의 lock·경합 | **SPOT 직렬 실행** — 한 room의 모든 message가 Spot queue에 들어가 순서대로 실행된다. lock이 업무 로직에서 사라진다 | 아래 코드 · [Spot](21-spot.ko.md) |
 | 소켓 framing·세션 수명 직접 구현 | **STREAM** — 연결 수명·framing·packet codec을 framework가 소유(TCP/TLS/WS/WSS) | [STREAM](23-stream.ko.md) |
 | 재접속 유저 위치 추적 | **actor binding** — 재접속한 새 연결이 같은 actor로 이어진다 | [Session과 Actor 연결](24-actor-session.ko.md) |
 | 배포 때 유저 연결 끊김 | **graceful drain** — 신규 차단, actor handoff, 진행 중 마무리 후 종료. application 코드 0줄 | [운영과 lifecycle](12-operations.ko.md) |
@@ -139,8 +139,7 @@ RouteMesh·Spot·Instance Spot 조합으로 구현한다. 방식이 바뀌어도
 runtime이 없다.
 
 > 트위치 FPS의 **초저지연 snapshot netcode**는 유실을 허용하는 비신뢰 전송을 사용한다.
-> 현재 STREAM이 제공하는 transport는 TCP/TLS/WS/WSS이며, **비신뢰 전송(QUIC
-> datagram·WebTransport)은 지원 예정**이다. 다만 그런 게임에서도 매칭·로비·메타·
+> STREAM은 TCP, TLS, WebSocket 기반 transport를 제공한다. 다만 그런 게임에서도 매칭·로비·메타·
 > 소셜은 이 방식들로 처리된다. 어디까지 되고 안 되는지는
 > [ZLink의 경계](#5-zlink의-경계--다루지-않는-요구)가 다룬다.
 
@@ -205,8 +204,8 @@ public final class MarkNumberHandler
 
 여러 플레이어가 동시에 요청을 보내고 timer가 도는 room인데 `lock`도,
 `Interlocked`도, Redis 분산 락도 없다. framework가 한 room의 모든 메시지(요청,
-구독 이벤트, timer tick, actor packet)를 **하나의 실행 줄에 세워 순서대로**
-실행하기 때문이다. 여기서 직렬은 codec 직렬화가 아니라 **실행 순서의
+구독 이벤트, timer tick, actor packet)가 **Spot queue에 들어가 순서대로**
+실행되기 때문이다. 여기서 직렬은 codec 직렬화가 아니라 **실행 순서의
 직렬화**다([실행 모델](32-execution-model.ko.md)).
 
 실행되는 근거 샘플: [TicTacToe](../../../common/sample/tictactoe/README.ko.md) ·
@@ -652,8 +651,7 @@ ZLink가 대체 후보다. Actor·Spot lifecycle과 relocation timer 복원은 F
 | `framework` — 이 가이드가 다루는 Spot/actor·channel messaging·STREAM·drain | [Functional Source License 1.1, ALv2 Future License](../../../../../LICENSE) |
 | 각 언어의 `http-client` 패키지 | Apache License 2.0 |
 
-FSL-1.1-ALv2는 ZLink와 경쟁하는 제품으로 파는 것만 막는다. ZLink와 경쟁하는 제품으로 파는 것만 막고, 나머지는 다
-허용하며, 각 릴리스는 공개 2년 뒤 Apache-2.0이 된다.
+FSL-1.1-ALv2는 ZLink와 경쟁하는 제품 판매만 제한하고, 나머지 사용을 허용한다. 각 릴리스는 공개 2년 뒤 Apache-2.0이 된다.
 
 | | |
 | --- | --- |
@@ -676,7 +674,7 @@ v4.3.5에서 출발했기 때문이다. `http-client`는 각 플랫폼의 통상
 
 - 공통 업무 시나리오: [Framework Common Sample Scenarios](../../../common/sample/README.ko.md)
 - 사용 방법: [Channel Messaging](20-channel-messaging.ko.md)
-- 표면 매핑: [Channel 메시징](20-channel-messaging.ko.md) §0, [13. Interface 카탈로그](13-interface-catalog.ko.md) §1.6
+- 표면 매핑: [Channel 메시징](20-channel-messaging.ko.md), [주요 타입 사용 색인](13-interface-catalog.ko.md)
 - 실행 코드로 보는 샘플: [14-samples](14-samples.ko.md)
 
 ### 9.1 참고 자료
@@ -690,5 +688,5 @@ v4.3.5에서 출발했기 때문이다. `http-client`는 각 플랫폼의 통상
 - [Akka License Change의 영향 (Coralogix)](https://coralogix.com/blog/akka-license-change/)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

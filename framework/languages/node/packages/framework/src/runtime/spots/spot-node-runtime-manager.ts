@@ -272,6 +272,9 @@ export class ZLinkSpotNodeRuntimeManager {
         applicationJobReceiveFlowFailureSink: this.options.applicationJobReceiveFlowFailureSink,
         peerAdmissionSealed: () => this.options.peerAdmissionSealed?.(spotNodeName) ?? false
       });
+      if (this.options.dispatchErrors !== undefined) {
+        node.setDispatchErrorReporter?.(this.options.dispatchErrors, spotNodeName);
+      }
       node.setMailboxRecordDroppedHandler?.((record) =>
         this.options.dispatchErrors?.report({
           surface: ZLinkDispatchErrorSurface.RouteMeshChannel,
@@ -1183,7 +1186,8 @@ export class ZLinkSpotNodeRuntimeManager {
         )
     );
     try {
-      publisher.publish(channelName, topic, parts, { flags });
+      const processing = publisher.publish(channelName, topic, parts, { flags });
+      void Promise.resolve(processing).catch(() => undefined);
       return { status: ZLinkSubmitStatus.Submitted };
     } catch (error) {
       if (isZLinkBackendResultError(error) && error.operation === 'submit') {

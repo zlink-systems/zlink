@@ -3,10 +3,20 @@
 [Interface table of contents](README.en.md) · [Java Configuration](../../java/interfaces/configuration-host.en.md) ·
 [MeshNode Common Contract](../../../03-spot-actor/03-mesh-node.en.md)
 
-A Kotlin application directly uses the Java builder. The Kotlin DSL is
-only provided when a receiver and reified type genuinely reduce
-duplication, and doesn't create a role, factory default, or allocation
-provider that isn't in the Java contract. So ClientServer's Client-only
+A Kotlin application directly uses the Java builder. There is one rule:
+**every Java registration member that takes an application type as a
+`Class` argument has a reified inline extension of the same name, and the
+Kotlin application uses that extension.** The extension moves the `Class`
+argument into a type parameter, keeps the other arguments as they are,
+and passes that `T::class.java` to the same Java member — nothing more.
+Validation, defaults and errors are owned by the Java contract; Kotlin
+adds none. This document declares the extensions of the host
+configuration members, [Channel Messaging](channel-messaging.en.md) those
+of the Channel Server builders, and the [Spot Interface](spots.en.md)
+those of the Spot registries and contexts. Any other Kotlin DSL is only
+provided when a receiver and reified type genuinely reduce duplication,
+and doesn't create a role, factory default, or allocation provider that
+isn't in the Java contract. So ClientServer's Client-only
 connect and the intent merging per Server RID/lifecycle generation, and
 fanout's Subscriber-only connect and the ban on mixing automatic/manual
 subscriber, apply the same contract as
@@ -216,13 +226,55 @@ fun ZLinkFrameworkOptions.configureStreamCompression(
  configure: ZLinkStreamCompressionBuilder.() -> Unit,
 ): ZLinkFrameworkOptions
 
-inline fun <reified TActor, reified TFactory>
- ZLinkMeshObjectServerBuilder.actorFactory(
+inline fun <reified TMarker : Any> ZLinkFrameworkOptions.addHandlersFromPackageOf()
+
+inline fun <reified TFilter : ZLinkHandlerFilter> ZLinkFrameworkOptions.useFilter()
+
+inline fun <reified TEntrySpot : ZLinkEntrySpot<*>>
+ ZLinkMeshObjectServerBuilder.addEntrySpot(): ZLinkMeshObjectServerBuilder
+
+inline fun <reified TSpot : ZLinkSpot<*>> ZLinkMeshObjectServerBuilder.addSpotFactory(
+ stableType: String,
+ noinline configure: ZLinkUserSpotFactoryBuilder<TSpot>.() -> Unit,
+): ZLinkMeshObjectServerBuilder
+
+inline fun <reified TSpot : ZLinkInstanceSpot> ZLinkMeshObjectServerBuilder.addInstanceSpotFactory(
+ stableType: String,
+ noinline configure: ZLinkInstanceSpotFactoryBuilder<TSpot>.() -> Unit,
+): ZLinkMeshObjectServerBuilder
+
+inline fun <reified TActor : ZLinkActor, reified TFactory : ZLinkActorFactory>
+ ZLinkMeshObjectServerBuilder.addActorFactory(
  actorType: String,
  noinline configure: ZLinkActorFactoryBuilder<TActor>.() -> Unit,
- ): ZLinkMeshObjectServerBuilder
- where TActor : ZLinkActor,
- TFactory : ZLinkActorFactory
+): ZLinkMeshObjectServerBuilder
+
+inline fun <TActor : ZLinkActor, reified TAdapter : ZLinkActorRelocationAdapter<TActor>>
+ ZLinkActorFactoryBuilder<TActor>.preserveStateWith()
+
+inline fun <TSpot : ZLinkSpot<*>, reified TAdapter : ZLinkSpotRelocationAdapter<TSpot>>
+ ZLinkUserSpotFactoryBuilder<TSpot>.preserveStateWith()
+
+inline fun <TSpot : ZLinkInstanceSpot, reified TAdapter : ZLinkSpotRelocationAdapter<TSpot>>
+ ZLinkInstanceSpotFactoryBuilder<TSpot>.preserveStateWith()
+
+@JvmName("addPublishHandlerForMessage")
+inline fun <reified THandler : Any, reified TMessage : Any> FanoutChannelBuilder.addPublishHandler()
+
+@JvmName("addPublishHandlerForMessageAndPacketName")
+inline fun <reified THandler : Any, reified TMessage : Any>
+ FanoutChannelBuilder.addPublishHandler(packetName: String)
+
+inline fun <reified THandler : Any> FanoutChannelBuilder.addPublishHandler(): FanoutChannelBuilder
+
+inline fun <reified THandler : Any>
+ FanoutChannelBuilder.addPublishHandler(packetName: String): FanoutChannelBuilder
+
+inline fun <reified TSession : ZLinkSession>
+ ZLinkStreamNodeBuilder.registerSession(): ZLinkStreamNodeBuilder
+
+inline fun <reified THandler : Any>
+ ZLinkStreamNodeBuilder.addSessionPacketHandler(): ZLinkStreamNodeBuilder
 ```
 
 The factory configure callback has no default. The Actor factory
@@ -293,7 +345,21 @@ public final class systems.zlink.framework.kotlin.ZLinkDispatchOptionsExtensions
  public static final systems.zlink.framework.configuration.ZLinkDispatchOptions configureDispatch(systems.zlink.framework.configuration.ZLinkFrameworkOptions, kotlin.jvm.functions.Function1<? super systems.zlink.framework.configuration.ZLinkDispatchOptions, kotlin.Unit>);
 }
 public final class systems.zlink.framework.kotlin.ZLinkFrameworkExtensionsKt {
- public static final <TActor extends systems.zlink.framework.actors.ZLinkActor, TFactory extends systems.zlink.framework.actors.ZLinkActorFactory> systems.zlink.framework.configuration.ZLinkMeshObjectServerBuilder actorFactory(systems.zlink.framework.configuration.ZLinkMeshObjectServerBuilder, java.lang.String, kotlin.jvm.functions.Function1<? super systems.zlink.framework.configuration.ZLinkActorFactoryBuilder<TActor>, kotlin.Unit>);
  public static final systems.zlink.framework.configuration.ZLinkFrameworkOptions configureStreamCompression(systems.zlink.framework.configuration.ZLinkFrameworkOptions, kotlin.jvm.functions.Function1<? super systems.zlink.framework.configuration.ZLinkStreamCompressionBuilder, kotlin.Unit>);
+ public static final <TMarker> void addHandlersFromPackageOf(systems.zlink.framework.configuration.ZLinkFrameworkOptions);
+ public static final <TFilter extends systems.zlink.framework.ZLinkHandlerFilter> void useFilter(systems.zlink.framework.configuration.ZLinkFrameworkOptions);
+ public static final <TEntrySpot extends systems.zlink.framework.spots.ZLinkEntrySpot<?>> systems.zlink.framework.configuration.ZLinkMeshObjectServerBuilder addEntrySpot(systems.zlink.framework.configuration.ZLinkMeshObjectServerBuilder);
+ public static final <TSpot extends systems.zlink.framework.spots.ZLinkSpot<?>> systems.zlink.framework.configuration.ZLinkMeshObjectServerBuilder addSpotFactory(systems.zlink.framework.configuration.ZLinkMeshObjectServerBuilder, java.lang.String, kotlin.jvm.functions.Function1<? super systems.zlink.framework.configuration.ZLinkUserSpotFactoryBuilder<TSpot>, kotlin.Unit>);
+ public static final <TSpot extends systems.zlink.framework.spots.ZLinkInstanceSpot> systems.zlink.framework.configuration.ZLinkMeshObjectServerBuilder addInstanceSpotFactory(systems.zlink.framework.configuration.ZLinkMeshObjectServerBuilder, java.lang.String, kotlin.jvm.functions.Function1<? super systems.zlink.framework.configuration.ZLinkInstanceSpotFactoryBuilder<TSpot>, kotlin.Unit>);
+ public static final <TActor extends systems.zlink.framework.actors.ZLinkActor, TFactory extends systems.zlink.framework.actors.ZLinkActorFactory> systems.zlink.framework.configuration.ZLinkMeshObjectServerBuilder addActorFactory(systems.zlink.framework.configuration.ZLinkMeshObjectServerBuilder, java.lang.String, kotlin.jvm.functions.Function1<? super systems.zlink.framework.configuration.ZLinkActorFactoryBuilder<TActor>, kotlin.Unit>);
+ public static final <TActor extends systems.zlink.framework.actors.ZLinkActor, TAdapter extends systems.zlink.framework.actors.ZLinkActorRelocationAdapter<TActor>> void preserveStateWith(systems.zlink.framework.configuration.ZLinkActorFactoryBuilder<TActor>);
+ public static final <TSpot extends systems.zlink.framework.spots.ZLinkSpot<?>, TAdapter extends systems.zlink.framework.spots.ZLinkSpotRelocationAdapter<TSpot>> void preserveStateWith(systems.zlink.framework.configuration.ZLinkUserSpotFactoryBuilder<TSpot>);
+ public static final <TSpot extends systems.zlink.framework.spots.ZLinkInstanceSpot, TAdapter extends systems.zlink.framework.spots.ZLinkSpotRelocationAdapter<TSpot>> void preserveStateWith(systems.zlink.framework.configuration.ZLinkInstanceSpotFactoryBuilder<TSpot>);
+ public static final <THandler, TMessage> void addPublishHandlerForMessage(systems.zlink.framework.configuration.FanoutChannelBuilder);
+ public static final <THandler, TMessage> void addPublishHandlerForMessageAndPacketName(systems.zlink.framework.configuration.FanoutChannelBuilder, java.lang.String);
+ public static final <THandler> systems.zlink.framework.configuration.FanoutChannelBuilder addPublishHandler(systems.zlink.framework.configuration.FanoutChannelBuilder);
+ public static final <THandler> systems.zlink.framework.configuration.FanoutChannelBuilder addPublishHandler(systems.zlink.framework.configuration.FanoutChannelBuilder, java.lang.String);
+ public static final <TSession extends systems.zlink.framework.streams.ZLinkSession> systems.zlink.framework.configuration.ZLinkStreamNodeBuilder registerSession(systems.zlink.framework.configuration.ZLinkStreamNodeBuilder);
+ public static final <THandler> systems.zlink.framework.configuration.ZLinkStreamNodeBuilder addSessionPacketHandler(systems.zlink.framework.configuration.ZLinkStreamNodeBuilder);
 }
 ```

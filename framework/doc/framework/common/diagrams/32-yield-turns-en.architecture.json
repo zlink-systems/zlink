@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Two ways to wait in one SpotWide Spot",
+    "subtitle": "Async keeps the turn; Yield gives execution to the next turn in the same Spot",
+    "output": "32-yield-turns-en.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [40, 130], "cols": 5, "gapX": 70, "gapY": 70, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "async-turn", "type": "backend", "label": "turn A", "sublabel": "request with Async", "row": 1, "col": 0 },
+    { "id": "async-wait", "type": "backend", "label": "turn A waits", "sublabel": "holds the gate", "row": 1, "col": 1 },
+    { "id": "async-next", "type": "messagebus", "label": "turn B", "sublabel": "waits in queue", "row": 1, "col": 2 },
+    { "id": "yield-turn", "type": "backend", "label": "turn A", "sublabel": "request with Yield", "row": 3, "col": 0 },
+    { "id": "yield-next", "type": "messagebus", "label": "turn B", "sublabel": "runs with the gate", "row": 3, "col": 1 },
+    { "id": "yield-resume", "type": "backend", "label": "turn A resumes", "sublabel": "new turn at tail", "row": 3, "col": 2 },
+    { "id": "remote", "type": "external", "label": "remote work", "sublabel": "returns a result later", "row": 2, "col": 4 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Async — keeps the gate", "wraps": ["async-turn", "async-wait", "async-next"] },
+    { "kind": "region", "label": "Yield — gives back the gate", "wraps": ["yield-turn", "yield-next", "yield-resume"] }
+  ],
+  "connections": [
+    { "from": "async-turn", "to": "async-wait", "label": "submit request", "variant": "emphasis", "labelAt": [195, 334] },
+    { "from": "async-wait", "to": "async-next", "label": "next turn waits", "variant": "dashed", "labelDy": -20 },
+    { "from": "async-wait", "to": "remote", "label": "wait for result", "variant": "default" },
+    { "from": "remote", "to": "async-wait", "label": "reply → same turn", "variant": "default", "labelDy": -18 },
+    { "from": "yield-turn", "to": "yield-next", "label": "give back gate", "variant": "emphasis", "labelAt": [195, 594] },
+    { "from": "yield-next", "to": "yield-resume", "label": "tail after completion", "variant": "default", "labelAt": [385, 594] },
+    { "from": "yield-turn", "to": "remote", "label": "submit request", "variant": "default" },
+    { "from": "remote", "to": "yield-resume", "label": "reply → new turn", "variant": "default", "labelDy": 20 }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Async",
+      "items": ["await frees the thread but leaves the SpotWide gate held.", "So turn B cannot start until the reply arrives."]
+    },
+    {
+      "dot": "emerald",
+      "title": "Yield",
+      "items": ["turn A ends and gives back the gate, so turn B runs.", "The reply continuation re-enters after turn B as a new turn."]
+    }
+  ]
+}

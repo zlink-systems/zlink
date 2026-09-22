@@ -85,9 +85,11 @@ class TicTacToeGame(
         players.removeIf { it.actor.actorId == actor.actorId }
     }
 
+    // --8<-- [start:doc-disconnect-actor]
     override suspend fun onDisconnectActorSuspending(actor: PlayActor) {
         actor.markDisconnected()
     }
+    // --8<-- [end:doc-disconnect-actor]
 
     // --8<-- [start:doc-ttt-timer-register]
     override suspend fun onInitializeSuspending() {

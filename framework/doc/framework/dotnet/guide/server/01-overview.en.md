@@ -18,7 +18,10 @@ View in another language — [C++](../../../cpp/guide/server/01-overview.en.md) 
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-This chapter quotes code from the tutorial's [`Server` and `Client` directories and its Run section](https://github.com/zlink-systems/zlink-dotnet-examples/blob/main/tutorial/README.md#run); bootstrapping and building that tree reproduces the results explained in later chapters.
+!!! info "What you get from this chapter"
+
+    You can distinguish the problems ZLink Framework solves from its main messaging surfaces.
+    The code in this chapter comes from the [language-specific example repositories](https://github.com/zlink-systems/zlink-dotnet-examples).
 
 > This document is the entry point of the `.NET` guide. The guide explains the concepts and usage of
 > ZLink Framework directly so an `ASP.NET Core` developer can **read it and start writing
@@ -115,7 +118,7 @@ them, a team picks its genre's pattern and rebuilds that structure from the sock
 | Difficulty | ZLink feature | Details |
 | --- | --- | --- |
 | Building a genre's topology from raw sockets | **Declare topology by combining channels** — 1:N request/response, fan-out, a node-addressed route mesh, a room-scoped spot mesh, all composed in a few lines of registration; the location store keeps connections up automatically | [§3 Architecture](#33-layering-and-registration-points) · [05](20-channel-messaging.en.md)·[06](21-spot.en.md)·[10](25-location.en.md) |
-| Locks/contention on in-memory state | **SPOT serial execution** — every message for one room lines up on a single execution line and runs in order. Locks disappear from business logic | The code below · [06](21-spot.en.md) |
+| Locks/contention on in-memory state | **SPOT serial execution** — every message for one room enters its Spot queue and runs in order. Locks disappear from business logic | The code below · [06](21-spot.en.md) |
 | Implementing socket framing/session lifetime directly | **STREAM** — the framework owns connection lifetime, framing, and packet codec (TCP/TLS/WS/WSS) | [09](23-stream.en.md) |
 | Tracking a reconnected user's location | **Actor binding** — a new connection after reconnect picks up the same actor | [08](24-actor-session.en.md) |
 | Users dropped during deployment | **Graceful drain** — blocks new admission, hands off actors, finishes in-progress work, then shuts down. 0 lines of app code | [12](12-operations.en.md) |
@@ -154,8 +157,7 @@ are implemented with the same RouteMesh/Spot/Instance Spot combination. Switchin
 means no new runtime to learn.
 
 > A Twitch-scale FPS's **ultra-low-latency snapshot netcode** uses unreliable transport that
-> tolerates loss. STREAM currently provides TCP/TLS/WS/WSS as transport, and **unreliable
-> transport (QUIC datagram/WebTransport) is planned.** Even for that kind of game, though,
+> tolerates loss. STREAM provides TCP, TLS, and WebSocket transports. Even for that kind of game, though,
 > matching/lobby/meta/social are handled just fine today by these four approaches. Exactly
 > where the line falls is covered in [Chapter 17](17-alternative.en.md) §4.
 
@@ -210,9 +212,9 @@ section's "Bingo room."
 
 Several players send chat messages and query state in this room at the same time, yet
 there's no `lock`, no `Interlocked`, no Redis distributed lock. That's because the framework
-lines up every message for one room (requests, subscription events, timer ticks, actor
-packets) on **a single execution line and runs them in order** — timer ticks and actor
-packets join that same queue too, but this tutorial code only handles chat messages and
+puts every message for one room (requests, subscription events, timer ticks, actor
+packets) into **the Spot queue and runs them in order** — timer ticks and actor
+packets enter that same Spot queue too, but this tutorial code only handles chat messages and
 state queries. Here, "serial" isn't codec serialization — it's **serialization of
 execution order** ([06 §3](21-spot.en.md)).
 
@@ -479,7 +481,7 @@ The difference in the amount of code needed to wire up the same "inter-server
 request/response."
 
 **Directly with raw bindings (conceptual)** — not runnable code, but the list of work a
-direct implementation would require. All five languages face the same list, so it isn't
+direct implementation would require. Supported languages use the same list, so it isn't
 split into language tabs.
 
 ```text
@@ -683,5 +685,5 @@ The guide uses the following notation consistently throughout.
 ---
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

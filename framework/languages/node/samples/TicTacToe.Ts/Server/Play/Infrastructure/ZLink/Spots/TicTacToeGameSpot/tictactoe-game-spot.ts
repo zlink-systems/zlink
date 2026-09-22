@@ -159,7 +159,11 @@ class TicTacToeGameSpot implements ZLinkSpot<PlayActor> {
     }
   }
 
-  async onDisconnectActor(_actor: PlayActor): Promise<void> {}
+  // --8<-- [start:doc-disconnect-actor]
+  async onDisconnectActor(actor: PlayActor): Promise<void> {
+    actor.markDisconnected();
+  }
+  // --8<-- [end:doc-disconnect-actor]
 
   async placeMark(actorId: string, cell: number): Promise<PlaceMarkRes> {
     const match = this.requireMatch();

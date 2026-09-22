@@ -183,7 +183,12 @@ Logical Multicast와 Classic fanout의 정상 publish·subscriber delivery는
 handler가 없으면 `surface=classic_fanout`, `message_kind=send`, `outcome=failed`,
 `reason=no_handler`, `action=drop`인 `zlink.dispatch_error`를 subscriber process의
 logger provider에 기록한다. 이 record에는 `channel_route_kind`를 넣지 않고
-publisher별 delivery 결과로 되돌리지 않는다.
+publisher별 delivery 결과로 되돌리지 않는다. Logical Multicast의 remote target 하나에
+대한 routed 제출이 실패하면 publisher process가 같은 방식으로 `surface=spot`,
+`message_kind=send`, `outcome=failed`, `action=drop`인 `zlink.dispatch_error`를
+`target_rid`·`topic`과 함께 기록한다 — `reason`은 target route가 없거나 준비되지 않았거나
+닫힌 경우 `stale_target`, 그 밖에는 `backpressure` 또는 `shutdown`이다. 이 record도 publish
+terminal이나 publisher별 delivery 결과로 되돌리지 않는다.
 
 ## 4. 기록 범위 설정 — level과 sampling
 
@@ -324,6 +329,10 @@ attribute key, diagnostics level·sampling rate 설정 interface)만으로 다�
 - Handler 예외로 만든 dispatch error가 trace와 structured log 양쪽에 `error_type`과
   `error_message`를 함께 남기고, `error_message`가 구현의 최대 길이를 넘지 않으며
   secret과 stack trace를 담지 않는다.
+- Logical Multicast의 remote target별 routed 제출 실패가 publisher process에서
+  `surface=spot`, `message_kind=send`, `outcome=failed`, `action=drop`, 해당
+  `target_rid`·`topic`과 분류된 `reason`을 가진 dispatch error를 만들고 publish
+  terminal이나 delivery 결과를 바꾸지 않는다.
 - 각 request surface가 terminal trace를 정확히 한 번 기록한다.
 - Instance Spot의 one-way 생성 실패를 `surface=instance_spot`, `phase=dropped`로
   정확히 한 번 기록하고, 숨은 request나 replay를 만들지 않는다.

@@ -5,6 +5,7 @@ import systems.zlink.framework.runtime.configuration.ZLinkDispatchOptionsRegistr
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchFailure;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
@@ -76,7 +77,73 @@ public final class ZLinkDispatchErrorReporter {
         if (tracePoint == null) {
             return;
         }
-        ErrorDetails errorDetails = errorDetails(error);
+        report(
+                tracePoint,
+                surface,
+                messageKind,
+                reason,
+                action,
+                packetName,
+                channelName,
+                topic,
+                sourceRid == null ? null : sourceRid.toString(),
+                correlationId instanceof Long value
+                        ? Long.toUnsignedString(value.longValue())
+                        : correlationId == null ? null : correlationId.toString(),
+                spotId == null ? null : spotId.toString(),
+                actorId,
+                null,
+                null,
+                errorDetails(error));
+    }
+
+    public boolean captureEnabled() {
+        return flow.captureEnabled();
+    }
+
+    public void report(ZLinkDispatchFailure error) {
+        ZLinkMessageFlowTracer.TracePoint tracePoint = flow.beginDispatchError();
+        if (tracePoint == null) {
+            return;
+        }
+        ErrorDetails details =
+                error.failure() == null
+                        ? new ErrorDetails(error.errorType(), error.errorMessage())
+                        : errorDetails(error.failure());
+        report(
+                tracePoint,
+                error.surface(),
+                error.messageKind(),
+                error.reason(),
+                error.action(),
+                error.packetName(),
+                error.channelName(),
+                error.topic(),
+                error.sourceRid(),
+                error.correlationId(),
+                error.spotId(),
+                error.actorId(),
+                error.meshName(),
+                error.targetRid(),
+                details);
+    }
+
+    private void report(
+            ZLinkMessageFlowTracer.TracePoint tracePoint,
+            ZLinkDispatchErrorSurface surface,
+            ZLinkDispatchMessageKind messageKind,
+            ZLinkDispatchErrorReason reason,
+            ZLinkDispatchErrorAction action,
+            String packetName,
+            String channelName,
+            String topic,
+            String sourceRid,
+            String correlationId,
+            String spotId,
+            String actorId,
+            String meshName,
+            String targetRid,
+            ErrorDetails errorDetails) {
         reportedCount.incrementAndGet();
         tracePoint.trace(
                 ZLinkMessageFlowEvent.dispatchError(
@@ -85,12 +152,12 @@ public final class ZLinkDispatchErrorReporter {
                         packetName,
                         channelName,
                         topic,
-                        correlationId instanceof Long value
-                                ? Long.toUnsignedString(value.longValue())
-                                : correlationId == null ? null : correlationId.toString(),
-                        sourceRid == null ? null : sourceRid.toString(),
-                        spotId == null ? null : spotId.toString(),
+                        correlationId,
+                        sourceRid,
+                        spotId,
                         actorId,
+                        meshName,
+                        targetRid,
                         reason,
                         action,
                         errorDetails.type(),

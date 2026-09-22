@@ -8,6 +8,7 @@ import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
 import systems.zlink.framework.runtime.diagnostics.ZLinkDispatchErrorReporter;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
@@ -26,7 +27,9 @@ import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchFailure;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
@@ -175,52 +178,114 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
             return;
         }
 
+        boolean captureFlow = flow.captureEnabled();
         systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header envelope;
         try {
             envelope =
                     systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
-                            .decodeDispatchHeader(record.parts(), false);
+                            .decodeDispatchHeader(record.parts(), captureFlow);
         } catch (systems.zlink.framework.errors.ZLinkFrameworkException invalidEnvelope) {
             //  A JSON-object first frame that is not a valid shared envelope
             //  is a protocol error (C++ decode parity).
             recordDrop(record, "decode_error");
-            reject(record, invalidEnvelope.getMessage(), claim);
+            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header rejectedEnvelope;
+            try {
+                rejectedEnvelope =
+                        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
+                                .decodeDispatchHeader(record.parts(), false);
+            } catch (systems.zlink.framework.errors.ZLinkFrameworkException unreadableEnvelope) {
+                rejectedEnvelope = null;
+            }
+            boolean request = kind == RecordKind.NODE_REQUEST || kind == RecordKind.CHANNEL_REQUEST;
+            boolean canReply =
+                    request
+                            && (record.receive().replyToken() != null || record.canReply())
+                            && rejectedEnvelope != null
+                            && rejectedEnvelope.correlationId() != null;
+            dispatchErrors.report(
+                    new ZLinkDispatchFailure(
+                            kind == RecordKind.NODE_REQUEST || kind == RecordKind.NODE_SEND
+                                    ? ZLinkDispatchErrorSurface.NODE
+                                    : ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
+                            request
+                                    ? ZLinkDispatchMessageKind.REQUEST
+                                    : ZLinkDispatchMessageKind.SEND,
+                            ZLinkDispatchErrorReason.INVALID_FRAME,
+                            canReply
+                                    ? ZLinkDispatchErrorAction.REPLY_ERROR
+                                    : ZLinkDispatchErrorAction.DROP,
+                            rejectedEnvelope == null ? null : rejectedEnvelope.messageName(),
+                            record.receive().channelName(),
+                            null,
+                            null,
+                            null,
+                            record.receive().sourceNodeRid() == null
+                                    ? null
+                                    : record.receive().sourceNodeRid().toString(),
+                            rejectedEnvelope == null ? null : rejectedEnvelope.correlationId(),
+                            null,
+                            null,
+                            null,
+                            null,
+                            invalidEnvelope));
+            if (canReply) {
+                reject(
+                        record,
+                        rejectedEnvelope,
+                        invalidEnvelope.kind(),
+                        invalidEnvelope.getMessage(),
+                        claim);
+            } else {
+                closeRecord(record, claim);
+            }
             return;
         }
-        String packetName =
-                envelope != null ? envelope.messageName() : record.parts().get(0).toUtf8String();
-        String contentType =
-                envelope != null
-                        ? envelope.contentType()
-                        : record.receive().contentType() != null
-                                ? record.receive().contentType()
-                                : ZLinkChannelContentTypeFrame.decode(record.parts());
-        Map<String, String> metadata;
-        try {
-            metadata =
-                    envelope != null && !envelope.metadata().isEmpty()
-                            ? envelope.metadata()
-                            : ZLinkApplicationMetadata.decode(
-                                    record.receive().applicationMetadata());
-        } catch (IllegalArgumentException error) {
-            recordDrop(record, "decode_error");
-            reject(record, error.getMessage(), claim);
-            return;
-        }
-        switch (kind) {
-            case NODE_SEND, CHANNEL_SEND ->
-                    dispatchSend(record, namespace, packetName, metadata, contentType, claim);
-            case NODE_REQUEST, CHANNEL_REQUEST ->
-                    dispatchRequest(
-                            record,
-                            namespace,
-                            envelope,
-                            packetName,
-                            record.parts().get(1),
-                            metadata,
-                            contentType,
-                            claim);
-            default -> closeRecord(record, claim);
+        ZLinkFlowContext.State inboundFlow =
+                captureFlow && envelope != null
+                        ? ZLinkChannelFlowFrame.fromEnvelopeHeader(envelope)
+                        : null;
+        var flowScope =
+                captureFlow
+                        ? ZLinkFlowContext.enterOrCreate(inboundFlow, ZLinkFlowOrigin.INBOUND)
+                        : ZLinkFlowContext.suppress();
+        try (flowScope) {
+            String packetName =
+                    envelope != null
+                            ? envelope.messageName()
+                            : record.parts().get(0).toUtf8String();
+            String contentType =
+                    envelope != null
+                            ? envelope.contentType()
+                            : record.receive().contentType() != null
+                                    ? record.receive().contentType()
+                                    : ZLinkChannelContentTypeFrame.decode(record.parts());
+            Map<String, String> metadata;
+            try {
+                metadata =
+                        envelope != null && !envelope.metadata().isEmpty()
+                                ? envelope.metadata()
+                                : ZLinkApplicationMetadata.decode(
+                                        record.receive().applicationMetadata());
+            } catch (IllegalArgumentException error) {
+                recordDrop(record, "decode_error");
+                reject(record, error.getMessage(), claim);
+                return;
+            }
+            switch (kind) {
+                case NODE_SEND, CHANNEL_SEND ->
+                        dispatchSend(record, namespace, packetName, metadata, contentType, claim);
+                case NODE_REQUEST, CHANNEL_REQUEST ->
+                        dispatchRequest(
+                                record,
+                                namespace,
+                                envelope,
+                                packetName,
+                                record.parts().get(1),
+                                metadata,
+                                contentType,
+                                claim);
+                default -> closeRecord(record, claim);
+            }
         }
     }
 

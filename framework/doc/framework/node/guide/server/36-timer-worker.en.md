@@ -20,12 +20,12 @@ View in another language — [C++](../../../cpp/guide/server/36-timer-worker.en.
 
 !!! info "What you get from this chapter"
 
-    You can run periodic work inside a Spot and move long-running work out of the Spot's line. The
+    You can run periodic work inside a Spot and move long-running work out of its Spot queue. The
     code in this chapter comes from the samples in the repository.
 
-[The Execution Model](32-execution-model.en.md) covered how the callbacks of one Spot run in a
-single line. There are two more ways to use that line — **a timer puts work into it periodically,
-and a worker runs long work outside it.**
+[The Execution Model](32-execution-model.en.md#1-the-queues-work-waits-in)
+covers how a Spot queue runs one Spot's work in order. **A timer puts work into the Spot queue on
+each period; a worker runs long work in an execution context outside the Spot queue.**
 
 ## 1. Timers — Periodic Execution
 
@@ -39,6 +39,8 @@ registration.
 ```typescript
 --8<-- "framework/languages/node/samples/TicTacToe.Ts/Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/Handlers/tictactoe-game-timer-handler.ts:doc-timer-handler"
 ```
+
+This handler processes a tick on the Spot queue, so it uses that Spot's state and ordering directly.
 
 ### 1.1 Ticks Past Their Scheduled Time
 
@@ -69,17 +71,20 @@ skipped as fields.
 | Skipped ticks | How many ticks were dropped immediately before this one |
 | Period | The period registered |
 
-A growing delay is the signal that the Spot's line is backing up. A handler that reads the value
+A growing delay is the signal that the Spot queue is backing up. A handler that reads the value
 and reports the load gives operations a place to look for the cause.
 
-<iframe class="zlink-diagram" src="/common/diagrams/36-timer-worker-en.html" title="A timer joins the line; a worker runs outside it" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/36-timer-worker-en.html" title="A timer enters the Spot queue; a worker uses another execution context" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/36-timer-worker-en.html" target="_blank">↗ View larger</a></p>
 
-## 2. Workers — Running Outside the Line
+Because the execution contexts differ, a worker does not touch Spot state directly and copies needed values before its call.
 
-A Spot's execution queue runs one item at a time. Awaiting a heavy computation or external I/O
+## 2. Workers — Running Outside the Spot Queue
+
+A Spot queue runs one item at a time. Awaiting a heavy computation or external I/O
 inside a handler **stops every other piece of work in that Spot meanwhile.** Such work is handed
-to a worker call.
+to a worker call. A worker job bypasses the Spot queue and runs in another execution context, so it
+does not occupy the Spot's turn.
 
 Which call to use depends on whether the work is **synchronous code that occupies a thread** or
 **asynchronous code that awaits completion.**
@@ -102,23 +107,17 @@ Which terminator closes a worker call decides **whether the Spot's turn is held 
 | `Async` | **Held** while waiting | When the work is short and Spot state must not change meanwhile |
 | `Submit` | Returns at once | When the result is not awaited and the work is only submitted |
 
-**Other work in the same Spot runs while `Yield` has given the turn back.** Write the code
-assuming Spot state may have changed across a `Yield`. Copy the values the worker needs inside the
-turn first.
-
-!!! warning "`Yield` is available only in certain places"
-
-    It can be used in a `SpotWide` User Spot and in an Instance Spot. An Entry Spot and a
-    `PerActor` User Spot share no Spot turn, so there is no turn to give back —
-    [The Execution Model](32-execution-model.en.md) covers that boundary.
+For the difference between `Yield` and `Async`, checking state after a `Yield`, copying values
+before it, and the Spots where it is available, see
+[The Execution Model §5](32-execution-model.en.md#5-serial-execution-and-thread-occupancy).
 
 ## 4. Related Documents
 
-- What shares one line — [The Execution Model](32-execution-model.en.md)
+- What runs in order in a Spot queue — [The Execution Model](32-execution-model.en.md)
 - When arrival outpaces processing — [Backpressure](33-backpressure.en.md)
 - What happens to a timer during relocation — [Relocation](37-relocation.en.md)
 - The exact option names and defaults — the [16. Options](16-options.en.md) for your language
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

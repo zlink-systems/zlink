@@ -9,6 +9,12 @@ import {
   translateWireReplyDecodeError
 } from '../framework-errors-internal';
 import { RequestResult, SubmitResult, isZLinkBackendResultError } from '../backend/runtime-values';
+import type { ZLinkDispatchErrorReporter } from '../channels/dispatch-error-reporter';
+import {
+  ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
+  ZLinkDispatchErrorSurface,
+  ZLinkDispatchMessageKind
+} from '../../contracts/Dispatch/ZLinkDispatchOptions';
 import type {
   RawServiceIngressRecord,
   RawServiceMeshRuntime,
@@ -401,6 +407,8 @@ export class ServiceStatefulRuntime {
     readonly kind: 'spot_multicast' | 'actor_control' | 'actor_binding';
     readonly owner: string;
   }) => void;
+  private dispatchErrors?: ZLinkDispatchErrorReporter;
+  private dispatchErrorMeshName?: string;
   private readonly admittedUserSpotOperations = new Map<
     string,
     {
@@ -436,6 +444,11 @@ export class ServiceStatefulRuntime {
     }) => void
   ): void {
     this.mailboxDropHandler = handler;
+  }
+
+  setDispatchErrorReporter(reporter: ZLinkDispatchErrorReporter, meshName: string): void {
+    this.dispatchErrors = reporter;
+    this.dispatchErrorMeshName = meshName;
   }
 
   createSpot(
@@ -1229,17 +1242,41 @@ export class ServiceStatefulRuntime {
     await this.enqueueLogicalMulticast(channelName, topic, sourceSpotId, payload);
     const targets = this.raw.topology
       .peers()
-      .filter((peer) =>
-        peer.descriptor.channels.some(
-          (channel) => channel.name === channelName && channel.weight > 0
-        )
+      .filter(
+        (peer) =>
+          peer.descriptor.channels.some(
+            (channel) => channel.name === channelName && channel.weight > 0
+          ) && this.raw.isPeerRouteReady(peer.descriptor.nodeRoutingId)
       );
     const header = encodeLogicalMulticastHeader(channelName, topic, sourceSpotId);
     const payloadFrame = encodeApplicationPayload(payload);
+    const reporter = this.dispatchErrors;
+    const captureFailures = reporter?.captureEnabled() === true;
     for (const target of targets) {
       // Remote admission ends at the source outbound transport queue. The
       // receiver's Spot queue and handler completion are not publish results.
-      await this.raw.sendService(target.descriptor.nodeRoutingId, [header, payloadFrame]);
+      const accepted = await this.raw.sendService(target.descriptor.nodeRoutingId, [
+        header,
+        payloadFrame
+      ]);
+      if (!accepted) {
+        if (captureFailures) {
+          reporter.report({
+            surface: ZLinkDispatchErrorSurface.SpotRoute,
+            messageKind: ZLinkDispatchMessageKind.Send,
+            reason: serviceSpotPublishFailureReason(
+              undefined,
+              this.raw.isPeerRouteReady(target.descriptor.nodeRoutingId),
+              this.closed
+            ),
+            action: ZLinkDispatchErrorAction.Drop,
+            meshName: this.dispatchErrorMeshName,
+            channelName,
+            topic,
+            targetRid: target.descriptor.nodeRoutingId
+          });
+        }
+      }
     }
   }
 
@@ -5248,6 +5285,28 @@ export class ServiceStatefulRuntime {
 
   private requireOpen(): void {
     if (this.closed) throw new Error('Stateful runtime is closed.');
+  }
+}
+
+function serviceSpotPublishFailureReason(
+  result: number | undefined,
+  routeReady: boolean,
+  closed: boolean
+): 'stale_target' | 'backpressure' | 'shutdown' {
+  if (closed || result === SubmitResult.Terminated) return 'shutdown';
+  switch (result) {
+    case SubmitResult.Backpressured:
+      return 'backpressure';
+    case SubmitResult.NotAdmitted:
+    case SubmitResult.NotConnected:
+    case SubmitResult.NotFound:
+    case SubmitResult.InvalidHandle:
+      return 'stale_target';
+    default:
+      // RawServiceMeshRuntime exposes failed Core submissions as false. A
+      // ready route therefore identifies queue admission failure; a route
+      // that became unready after selection is a stale target.
+      return routeReady ? 'backpressure' : 'stale_target';
   }
 }
 

@@ -1738,6 +1738,26 @@ test('ZLinkModule.forRoot validates channel capability endpoints and peer acquis
     .build()));
 });
 
+test('Nest fanout builder forwards NoDrop and subscriptions unchanged to framework registration', async () => {
+  const builder = nestjs.zlinkFramework();
+  builder
+    .addFanoutChannel('events')
+    .setNoDrop(false)
+    .enablePublisher('tcp://127.0.0.1:9412')
+    .enableSubscriber('tcp://127.0.0.1:9412')
+    .addPublishHandler('NoopEvent', NoopPublishHandler)
+    .subscribe('orders.created');
+  const built = builder.build();
+
+  assert.equal(built.fanoutChannels.events.noDrop, false);
+  assert.deepEqual(built.fanoutChannels.events.subscriptions, ['orders.created']);
+
+  const registration = await resolveFrameworkRegistration(nestjs.ZLinkModule.forRoot(built));
+  const channel = registration.channels.get('events');
+  assert.equal(channel.noDrop, false);
+  assert.deepEqual(channel.subscriptions, ['orders.created']);
+});
+
 test('Nest builders preserve process listener identity and global Actor dispatch enablement', async () => {
   class GatewaySession {}
   const builder = nestjs.zlinkFramework();

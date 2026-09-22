@@ -60,6 +60,10 @@ export type ZLinkBackendObjectPlacement =
   | { readonly kind: 'unavailable' };
 
 export interface ZLinkBackendMeshNode {
+  setDispatchErrorReporter?(
+    reporter: import('../../channels/dispatch-error-reporter').ZLinkDispatchErrorReporter,
+    meshName: string
+  ): void;
   setRoutingId(routingId: unknown): void;
   setBind(endpoint: string): void;
   setAdvertiseHost(host: string): void;

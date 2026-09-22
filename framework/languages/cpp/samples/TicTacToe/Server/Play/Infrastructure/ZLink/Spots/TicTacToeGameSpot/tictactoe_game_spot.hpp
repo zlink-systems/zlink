@@ -140,11 +140,13 @@ class tictactoe_game_spot_t : public spot_t<player_actor_t>
         co_return;
     }
 
+    // --8<-- [start:doc-disconnect-actor]
     task_t<void> on_disconnect_actor (player_actor_t &actor) override
     {
         actor.mark_disconnected ();
         co_return;
     }
+    // --8<-- [end:doc-disconnect-actor]
 
   private:
     friend class tictactoe_game_timer_handler_t;

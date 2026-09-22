@@ -1,8 +1,9 @@
 # ZLink Framework
 
-**ZLink is a real-time TCP messaging framework for game servers and other applications built
-with `ASP.NET Core`, Spring Boot, NestJS, and C++, without requiring a separate game server
-engine.** Existing frameworks designed for HTTP request-response don't handle TCP-based
+**ZLink is a real-time messaging framework for game servers. Inside your `ASP.NET Core`, Spring
+Boot, NestJS or C++ application it takes on the game server engine's job — rooms, sessions and
+player state spread across servers and delivered in real time — so no separate game server engine
+is needed.** Existing frameworks designed for HTTP request-response don't handle TCP-based
 real-time messaging. ZLink provides that layer fully integrated with each host — the way
 Spring MVC sits on top of Spring. There's no need to move to a separate runtime.
 
@@ -454,7 +455,7 @@ switch line at the top of each chapter lets you view the same chapter in another
 | C++ | [Server](cpp/guide/server/README.en.md) | [Quickstart](cpp/quickstart.en.md) | [Stream Connector](cpp/guide/stream-connector/README.en.md) · [HTTP Client](cpp/guide/http-client/README.en.md) | [examples](https://github.com/zlink-systems/zlink-cpp-examples) |
 | `.NET` | [Server](dotnet/guide/server/README.en.md) | [Quickstart](dotnet/quickstart.en.md) | [Stream Connector](dotnet/guide/stream-connector/README.en.md) · [HTTP Client](dotnet/guide/http-client/README.en.md) | [examples](https://github.com/zlink-systems/zlink-dotnet-examples) |
 | Java | [Server](java/guide/server/README.en.md) | [Quickstart](java/quickstart.en.md) | [Stream Connector](java/guide/stream-connector/README.en.md) · [HTTP Client](java/guide/http-client/README.en.md) | [examples](https://github.com/zlink-systems/zlink-java-examples) |
-| Kotlin | [Server](kotlin/guide/server/README.en.md) | [Quickstart](kotlin/quickstart.en.md) | [Stream Connector](kotlin/guide/stream-connector/README.en.md) · [HTTP Client](kotlin/guide/http-client/README.en.md) | [examples](https://github.com/zlink-systems/zlink-java-examples) |
+| Kotlin | [Server](kotlin/guide/server/README.en.md) | [Quickstart](kotlin/quickstart.en.md) | [Stream Connector](kotlin/guide/stream-connector/README.en.md) · [HTTP Client](kotlin/guide/http-client/README.en.md) | [examples](https://github.com/zlink-systems/zlink-kotlin-examples) |
 | Node.js | [Server](node/guide/server/README.en.md) | [Quickstart](node/quickstart.en.md) | [Stream Connector](node/guide/stream-connector/README.en.md) · [HTTP Client](node/guide/http-client/README.en.md) | [examples](https://github.com/zlink-systems/zlink-node-examples) |
 
 **The two client-side guides** cover libraries deployed separately from the server

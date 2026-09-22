@@ -4,6 +4,8 @@
 #include <zlink/framework/contracts/dispatch/execution.hpp>
 #include <zlink/framework/contracts/errors/error.hpp>
 
+#include <zlink/Contracts/Sockets/results.hpp>
+
 #include "runtime/diagnostics/diagnostic_event_sink.hpp"
 #include "runtime/diagnostics/dispatch_diagnostics_names.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
@@ -27,6 +29,14 @@ class dispatch_error_reporter_t
 {
   public:
     explicit dispatch_error_reporter_t (const dispatch_options_t &options) : _options (&options) {}
+
+    bool enabled () const noexcept
+    {
+        return dispatch_options_access_t::effective_message_flow (*_options)
+                 != message_flow_log_mode_t::off
+               && (dispatch_options_access_t::logger (*_options)
+                   || dispatch_options_access_t::has_dispatch_error_observer (*_options));
+    }
 
     void report (message_dispatch_error_event_t event) const noexcept
     {
@@ -261,6 +271,18 @@ inline dispatch_error_reason_t dispatch_reason_from_error (framework_error_kind_
         default:
             return dispatch_error_reason_t::handler_exception;
     }
+}
+
+inline dispatch_error_reason_t
+dispatch_reason_from_submit_result (zlink::submit_result_t result) noexcept
+{
+    if (result == zlink::submit_result_t::terminated) {
+        return dispatch_error_reason_t::shutdown;
+    }
+    if (result == zlink::submit_result_t::backpressured) {
+        return dispatch_error_reason_t::backpressure;
+    }
+    return dispatch_error_reason_t::stale_target;
 }
 
 inline dispatch_error_reason_t

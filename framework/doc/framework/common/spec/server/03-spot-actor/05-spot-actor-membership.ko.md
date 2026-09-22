@@ -189,7 +189,7 @@ Actor queue로 직접 전달하며 Entry Spot이나 User Spot callback을 경유
 
 Actor payload를 Actor queue에 넣는 위치와 handler 실행 권한을 결정하는 gate는
 서로 다른 계약이다. Entry Spot Actor·User Spot Actor의 execution gate 배정,
-`Yield` 허용 범위와 Actor Join `Defer()`의 등록 규칙·개수·크기·timeout 제한은
+`Yield` 허용 범위와 Actor Join `Defer()`의 등록 규칙·timeout 제한은
 [Actor 모델 §3](04-actor-model.ko.md#3-actor-queue)이 소유하며 membership 상태와
 관계없이 그대로 적용된다.
 
@@ -869,8 +869,8 @@ Session owner 쪽 검증·처리 절차를 소유한다 — 이 문서는 그 �
 - `Defer()`가 target 조회나 Store I/O 없이 현재 handler에 Join 등록과 비활성 barrier만 남기고,
   handler의 마지막 continuation이 정상 종료한 뒤 실행한다.
 - Handler가 실패하면 해당 handler가 등록한 barrier를 모두 폐기한다.
-- Handler당 Join 64개, request 하나당 1 MiB, request 합계 8 MiB 제한을 적용하고
-  초과한 registration이 partial record 없이 동기 실패한다.
+- Cross-node Join request와 reply의 크기는 service wire의 application payload 규칙을 따르며,
+  범위 밖 timeout의 registration이 partial record 없이 동기 실패한다.
 - Timeout 생략 시 5초를 사용하고 `Defer()` 시점에 monotonic absolute deadline을
   고정한다.
 - Registration scope가 닫힌 뒤 `Defer()`를 거부하며 detached task의 호출을

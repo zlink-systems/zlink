@@ -46,17 +46,17 @@ export class ZLinkDispatchErrorReporter {
   }
 
   report(event: ZLinkRuntimeDispatchFailure): void {
-    const dropReason = channelDropReason(event);
+    const normalized = normalizeDispatchFailure(event);
+    const dropReason = channelDropReason(normalized);
     if (dropReason !== undefined) {
       this.metrics?.count('zlink.mesh_node.messages.dropped', 1, {
-        surface: event.surface,
-        message_kind: event.messageKind,
+        surface: normalized.surface,
+        message_kind: normalized.messageKind,
         reason: dropReason
       });
     }
     const tracePoint = this.flow.begin(ZLinkMessageFlowOutcome.Error);
     if (tracePoint === undefined) return;
-    const normalized = normalizeDispatchFailure(event);
     const errorInfo = dispatchErrorDetails(normalized.error);
     this.reportedEvents += 1;
     tracePoint.trace({
@@ -82,8 +82,14 @@ export class ZLinkDispatchErrorReporter {
       errorReason: normalized.reason,
       errorAction: normalized.action,
       errorType: errorInfo.errorType,
-      errorMessage: errorInfo.errorMessage
+      errorMessage: errorInfo.errorMessage,
+      errorCauseType: errorInfo.errorCauseType,
+      errorCauseMessage: errorInfo.errorCauseMessage
     });
+  }
+
+  captureEnabled(): boolean {
+    return this.flow.enabled(ZLinkMessageFlowOutcome.Error);
   }
 
   get reportedCount(): number {

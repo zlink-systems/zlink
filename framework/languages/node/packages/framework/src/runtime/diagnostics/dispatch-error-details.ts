@@ -10,12 +10,23 @@ const CREDENTIAL_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
 export function dispatchErrorDetails(error: unknown): {
   readonly errorType?: string;
   readonly errorMessage?: string;
+  readonly errorCauseType?: string;
+  readonly errorCauseMessage?: string;
 } {
   if (error === undefined || error === null) return {};
   if (error instanceof Error) {
+    const cause = deepestErrorCause(error);
     return {
       errorType: error.name,
-      errorMessage: sanitizeErrorMessage(error.message)
+      errorMessage: sanitizeErrorMessage(error.message),
+      ...(cause === error
+        ? {}
+        : {
+            errorCauseType: cause instanceof Error ? cause.name : typeof cause,
+            errorCauseMessage: sanitizeErrorMessage(
+              cause instanceof Error ? cause.message : String(cause)
+            )
+          })
     };
   }
   const errorType = typeof error === 'object' ? error.constructor.name : typeof error;
@@ -27,6 +38,16 @@ export function dispatchErrorDetails(error: unknown): {
       ? `${error}`
       : Object.prototype.toString.call(error);
   return { errorType, errorMessage: sanitizeErrorMessage(message) };
+}
+
+function deepestErrorCause(error: Error): unknown {
+  let current: unknown = error;
+  const seen = new Set<unknown>();
+  while (current instanceof Error && current.cause !== undefined && !seen.has(current)) {
+    seen.add(current);
+    current = current.cause;
+  }
+  return current;
 }
 
 function sanitizeErrorMessage(message: string): string {

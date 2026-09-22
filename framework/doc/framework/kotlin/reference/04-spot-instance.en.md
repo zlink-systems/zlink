@@ -132,17 +132,17 @@ on relocation is also identical.
 
 ---
 
-## Handler registration (`addHandler<T>()`, inside Spot code, `configure()`)
+## Handler registration (`addPacket<T>()`, inside Spot code, `configure()`)
 
 A reified extension function that registers a suspending handler type.
 
 ```kotlin
 override fun configure() {
-    context.handlers().addHandler<StartGameHandler>()
+    context.handlers().addPacket<StartGameHandler>()
 }
 ```
 
-**Options.** `ZLinkSpotHandlerRegistry.addHandler<THandler>()` internally delegates to Java's raw
+**Options.** `ZLinkInstanceSpotHandlerRegistry.addPacket<THandler>()` internally delegates to Java's raw
 `Class<?>`-based registration. The interface the handler implements
 (`ZLinkSuspendingSpotPacketHandler`, `ZLinkSuspendingSpotRequestHandler`,
 `ZLinkSuspendingSpotSubscriptionHandler`, `ZLinkSuspendingSpotActorSendHandler`,

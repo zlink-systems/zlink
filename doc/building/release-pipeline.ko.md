@@ -23,7 +23,7 @@
 | Framework JVM | `systems.zlink:zlink-framework-*` 13개(Kotlin 포함) | Maven Central | `framework-release.yml` | `framework-java/v*` 태그 또는 `target=java` dispatch | `MAVEN_CENTRAL_*`, `SIGNING_*` |
 | Framework .NET | `Zlink.Framework*`, `Zlink.HttpClient`, `Zlink.Stream.Connector` 등 9개 | nuget.org | `release-dotnet.yml` (target `framework`) | `framework-dotnet/v*` 태그 또는 dispatch | nuget Trusted Publishing |
 | 문서 사이트 | mkdocs 정적 사이트 | GitHub Pages | `docs.yml` | `main` push(문서 경로) | `GITHUB_TOKEN` |
-| Examples 미러 | `framework/languages/<lang>/{quickstart,tutorial,samples}`를 `scripts/tutorial/export_examples.py`로 내보낸 tree | 읽기 전용 저장소 `zlink-systems/zlink-<lang>-examples` 4개(java는 Kotlin 포함), `main` = 최신 릴리스 + 그 뒤의 수정, 태그 `vA.B.C` | `examples-mirror.yml` | 릴리스 워크플로(`framework-release.yml`·`release-dotnet.yml`)가 그 언어의 패키지 게시·tutorial 검증 뒤 `workflow_call`로 호출(미러에도 태그; 태그 push 자체는 이 워크플로를 돌리지 않는다 — 그 시점엔 패키지가 아직 없다, #884), 예제 경로를 건드린 `main` push(커밋만, `VERSION`이 이미 태그된 언어만), 또는 `ref` dispatch. push 전에 `examples-smoke.yml`이 같은 tree를 checkout 없이 그 언어 lane만 빌드·실행한다 | 미러별 write deploy key(`EXAMPLES_MIRROR_KEY_<LANG>`) |
+| Examples 미러 | `framework/languages/<lang>/{quickstart,tutorial,samples}`를 `scripts/tutorial/export_examples.py`로 내보낸 tree | 읽기 전용 저장소 `zlink-systems/zlink-<lang>-examples` 5개. Java와 Kotlin은 tree는 분리하지만 Java framework 릴리스를 함께 쓴다. `main` = 최신 릴리스 + 그 뒤의 수정, 태그 `vA.B.C` | `examples-mirror.yml` | 릴리스 워크플로(`framework-release.yml`·`release-dotnet.yml`)가 그 언어의 패키지 게시·tutorial 검증 뒤 `workflow_call`로 호출(미러에도 태그; 태그 push 자체는 이 워크플로를 돌리지 않는다 — 그 시점엔 패키지가 아직 없다, #884), 예제 경로를 건드린 `main` push(커밋만, `VERSION`이 이미 태그된 언어만), 또는 `ref` dispatch. push 전에 `examples-smoke.yml`이 같은 tree를 checkout 없이 그 언어 lane만 빌드·실행한다 | 미러별 write deploy key(`EXAMPLES_MIRROR_KEY_<LANG>`) |
 
 Python·Go·Rust binding은 `bindings-release.yml`에 job이 있으나 공개 배포 범위 밖이다.
 `core-conan-release.yml`은 사내 Conan remote용 legacy 워크플로우로, secret이 없어 동작하지 않는다.
@@ -153,7 +153,7 @@ TicTacToe·ZoneWorld)도 framework 빌드·CI·배포에 포함하지 않는다.
 | `pr-verify.yml` | Core ctest와 binding smoke, Java framework unit·contract 테스트, Windows x64 정적 계약 | ubuntu-24.04, Windows 정적 계약만 windows-2022 |
 | `build.yml` | Core 빌드·검증(릴리스 겸용) | 4 플랫폼 |
 | `framework-tutorial.yml` | tutorial·quickstart를 **publish된 패키지로, publish 뒤에** 검증한다. `framework-release.yml`·`release-dotnet.yml`이 registry index(npm view / Maven Central pom / nuget flatcontainer / GitHub Release asset, 최대 30분 대기)를 확인한 뒤 `workflow_call(language)`로 호출한다. PR·main push는 tutorial 소스가 바뀔 때만 돌고 버전 pin 파일만 바뀐 커밋(`sync-version`)에는 돌지 않는다(#862) | ubuntu-24.04 4언어 |
-| `examples-smoke.yml` | 내보낸 examples tree를 checkout 없는 job에서 README 명령만으로 빌드·실행(quickstart 빌드, tutorial 기동·검증, 샘플 하나 완주). `examples-mirror.yml`이 push 전에 호출하고, 매일 최신 framework 태그로 다시 돈다 | ubuntu-24.04 4언어, windows-2022는 dotnet·java |
+| `examples-smoke.yml` | 내보낸 examples tree를 checkout 없는 job에서 README 명령만으로 빌드·실행(quickstart 빌드, tutorial 기동·검증, 샘플 하나 완주). `examples-mirror.yml`이 push 전에 호출하고, 매일 최신 framework 태그로 다시 돈다 | ubuntu-24.04 5언어, windows-2022는 dotnet·java·kotlin |
 | `docs.yml` | 문서 사이트 빌드·배포 | ubuntu |
 
 Windows에서 실제로 빌드·테스트가 도는 것은 `framework-dotnet.yml`과 `framework-node.yml` 둘이다.

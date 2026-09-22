@@ -18,12 +18,10 @@ title: "Actor · C#/.NET"
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-이 장은 [tutorial의 `Server`·`Client` 디렉터리와 「실행」 절](https://github.com/zlink-systems/zlink-dotnet-examples/blob/main/tutorial/README.ko.md#실행)에서 코드를 인용하며, 그 tree를 bootstrap하고 build하면 아래 실행 결과를 재현할 수 있다.
-
 !!! info "이 장을 읽고 나면"
 
     개체 하나를 id로 만들고, 그것에 메시지를 보내고 답을 받을 수 있다.
-    이 장의 코드는 `framework/languages/dotnet/tutorial`에서 그대로 실행된다.
+    이 장의 코드는 [예제 저장소의 tutorial README](https://github.com/zlink-systems/zlink-dotnet-examples/blob/main/tutorial/README.ko.md)에서 가져왔으며, README의 「내려받기와 설치」·「빌드」·「실행」 절을 따르면 아래 결과를 재현할 수 있다.
 
 [Spot](21-spot.ko.md)이 방·queue처럼 **여럿이 함께 사용하는 자리**를 다뤘다면, Actor는 플레이어
 하나, 세션 하나처럼 **개체 단위 상태**를 맡는다. 둘 다 id로 호출하고 한 번에 하나씩 처리하는
@@ -75,12 +73,6 @@ Actor가 처음 들어갈 자리다. Entry Spot은 application이 만들지 않�
 --8<-- "framework/languages/dotnet/tutorial/Server/Spots/LobbySpot.cs:entry-spot"
 ```
 
-!!! warning "C++만 입장 승인 callback이 필수다"
-
-    C++의 entry spot은 `on_actor_join`을 반드시 구현하며, **Actor 생성 처리가 이 callback에서
-    시작한다.** 거절하도록 두면 Actor 생성 자체가 실패한다. 나머지 네 언어의 entry spot에는 그 callback이 없고, 생성
-    승인은 `onCreateActor`(기본값은 수락)가 맡는다.
-
 ### 2.3 handler 작성
 
 handler는 **Spot과 Actor를 함께** 첫 두 인자로 받는다. 값을 돌려주지 않는 handler는 `send`로
@@ -119,10 +111,9 @@ Entry Spot과 Actor factory를 같은 Object Server에 등록한다. actor type�
 Spot과 달리 **id를 호출하는 쪽이 정한다.** 플레이어 id처럼 이미 있는 값을 그대로 쓰기
 때문이다. 같은 id로 다시 호출하면 만들지 않고 있던 것을 돌려준다.
 
-tutorial의 `Server`는 `game` route mesh를 먼저 정의한다. mesh 이름은 Actor가 배치될 수 있는
-node 집합의 이름이고, `InMesh`는 만들 때 그 집합을 고른다. 등록 코드는
-[Channel 메시징의 받는 쪽](20-channel-messaging.ko.md#32-받는-쪽--channel을-담당하는-node)에 있고, 선택 규칙은
-[Location runtime §7](../../../common/spec/server/05-location-relocation/01-location-runtime.ko.md#7-actor와-user-spot을-만든다)이 정한다.
+tutorial의 `Server`는 `game` route mesh를 먼저 정의한다. mesh 이름은 Actor를 호스팅할 수 있는
+node 집합의 이름이고, Actor를 만들 때 `InMesh`에 지정한 mesh 안에서 호스팅할 node를 고른다. 등록 코드는
+[Channel 메시징의 받는 쪽](20-channel-messaging.ko.md#32-받는-쪽--channel을-담당하는-node)에 있다.
 
 ```csharp
 --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:mesh-register"
@@ -151,16 +142,19 @@ actor id만 준다. 그 Actor가 지금 어느 Spot 안에 있는지는 Framewor
 --8<-- "framework/languages/dotnet/tutorial/Client/Program.cs:actor-request-call"
 ```
 
-!!! note "만들기가 돌려주는 참조"
+### 3.3 참조의 generation
 
-    만들기 호출은 actor id와 함께 **그때의 세대와 조회 당시 owner 경로**를 담은 참조를 돌려준다.
-    이 참조를 사용하는 자리는 [Session과 Actor 연결](24-actor-session.ko.md)과
-    [활성화와 수명](34-activation-lifetime.ko.md#32-actor를-없애는-자리)이 다룬다.
-    평소의 Actor 호출에는 actor id만 있으면 된다.
+`ActorRef`·`SpotRef`의 **generation**은 같은 id의 몇 번째 instance인지를 세는 값이다. Location
+Store가 object를 만들 때 발급하며 join·relocation·`RecreateOnRelocation`으로 바뀌지 않는다. 같은
+id를 없앤 뒤 다시 만들면 새 generation을 받는다.
+
+일반 message는 generation을 보지 않고 지금 존재하는 object로 간다. 반면 참조를 통한 닫기·지우기·
+이동 같은 lifecycle 호출은 그 참조의 generation이 현재 generation과 같을 때만 효력이 있다. 그래서
+낡은 참조는 같은 id로 새로 만든 instance를 건드릴 수 없다.
 
 ## 4. 실행 결과
 
-tutorial README의 「실행」 절대로 Server와 Client를 실행한 상태에서 Client의 HTTP 표면에 아래 `curl` 요청을 보내면, 각 HTTP 응답은 `curl` stdout에 나오고 handler 기록은 Server process의 stdout 또는 `server.log`에 나온다.
+tutorial README의 「실행」 절을 따라 띄운 상태에서 Server와 Client를 실행한 상태에서 Client의 HTTP 표면에 아래 `curl` 요청을 보내면, 각 HTTP 응답은 `curl` stdout에 나오고 handler 기록은 Server process의 stdout 또는 `server.log`에 나온다.
 
 ```bash
 curl -X POST http://127.0.0.1:5080/players/p7 \
@@ -197,8 +191,8 @@ curl http://127.0.0.1:5080/players/p7
 - 여럿이 함께 사용하는 자리 — [Spot](21-spot.ko.md)
 - 이름으로 호출하는 경로 — [Channel 메시징](20-channel-messaging.ko.md)
 - 이동과 membership — [Actor membership](35-actor-membership.ko.md)
-- 이 장 코드의 실행본 — `framework/languages/dotnet/tutorial`
+- 이 장 코드의 실행본 — [예제 저장소의 tutorial README](https://github.com/zlink-systems/zlink-dotnet-examples/blob/main/tutorial/README.ko.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

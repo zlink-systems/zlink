@@ -18,12 +18,10 @@ title: "Actor membership · Node/TypeScript"
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-이 장은 `TicTacToe` 샘플의 `Server` 디렉터리에서 코드를 인용한다. 해당 언어 sample tree를 bootstrap하고 build하면 아래 Actor membership 예제를 실제 코드에서 확인할 수 있다.
-
 !!! info "이 장을 읽고 나면"
 
     Actor를 Spot 사이로 옮기고, 그 이동을 받는 쪽에서 승인하거나 거절할 수 있다.
-    이 장의 코드는 TicTacToe 샘플에서 가져왔다.
+    이 장의 코드는 [언어별 예제 저장소의 TicTacToe 샘플](https://github.com/zlink-systems/zlink-node-examples/tree/main/samples/TicTacToe)에서 가져온다.
 
 [Actor](22-actor.ko.md)는 언제나 어떤 Spot 안에 있고, 만들어진 직후에는 Entry Spot에 있다.
 이 장은 **그 Actor를 User Spot으로 옮기는 절차**를 다룬다 — 게임 방이 그 예다 — 누가 승인하고, 언제 실행되며, 무엇이
@@ -45,17 +43,22 @@ Actor가 User Spot에 들어간다는 것은 **그 Actor의 callback이 실행�
 Entry Spot으로 돌아가는 길에는 승인 절차가 없다. 기본 membership이기 때문이다 —
 [활성화와 수명](34-activation-lifetime.ko.md)이 종류별 callback을 다룬다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/35-actor-join.html" title="join은 예약이고, 실행은 handler가 끝난 뒤다" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/35-actor-join.html" title="예약은 Defer() 호출이고, join은 handler가 끝난 뒤 시작한다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/35-actor-join.html" target="_blank">↗ 크게 보기</a></p>
+
+이 순서 때문에 join 결과는 현재 handler에서 기다리지 않고 handler가 끝난 뒤 callback으로 받는다.
 
 ## 2. 예약 등록 — handler가 끝난 뒤에 실행된다
 
 join 호출에는 결과를 그 자리에서 기다리는 형태가 없다. **예약만 하고 지금 handler를
-끝낸다.** 예약은 handler가 정상적으로 끝난 뒤에 실행된다.
+끝낸다.** `defer()`는 "이 handler가 끝나면 이 join을 시작하라"는 등록이다 — 그래서 이 장은
+이를 예약이라고 부른다. 예약은 handler가 정상적으로 끝난 뒤에 실행된다.
 
 ```typescript
 --8<-- "framework/languages/node/samples/TicTacToe.Ts/Server/Play/Infrastructure/ZLink/Spots/EntrySpot/Handlers/play-actor-join-game-handler.ts:doc-join-defer"
 ```
+
+이 등록은 현재 handler가 정상적으로 끝난 뒤에만 join을 시작하게 한다.
 
 ### 2.1 기다리는 형태를 제공하지 않는 이유
 
@@ -96,38 +99,36 @@ handler와 분리해 실행하는 background 작업에서 호출하면 `InvalidO
 
 ### 2.3 결과를 받는 자리
 
-결과는 Actor의 join 완료 callback으로 온다. **어느 Actor가 그 callback을 실행하는지는 결과가
-정한다.**
+결과는 Actor의 join 완료 callback(`onJoinCompleted`)으로 온다. 언어별 표기는 탭의 코드가
+보여 준다.
+
+```typescript
+--8<-- "framework/languages/node/samples/TicTacToe.Ts/Server/Play/Infrastructure/ZLink/Actors/play-actor.ts:doc-join-completed"
+```
+
+**어느 Actor가 그 callback을 실행하는지는 결과가 정한다.**
 
 | 결과 | 실행하는 Actor |
 | --- | --- |
 | 받아들여짐 | 위치 변경을 확정한 **간 쪽** Actor |
 | 거절됨, 확정 전 실패 | 그대로 남은 **떠난 쪽** Actor |
 
-다른 node의 Spot으로 가는 join이 성공하면 완료를 받는 것은 도착 node의 Actor다. 그래서 join을
-예약한 handler 안에서 결과를 받는 형태가 성립하지 않는다 — 그 handler가 있던 Actor는 그 시점에
-이미 정리 중이다.
+다른 node의 Spot으로 가는 join이 성공하면 완료를 받는 것은 도착 node의 Actor다. 그래서
+application이 join을 등록한 handler 실행 안에서 결과를 받는 형태가 성립하지 않는다 — 그 handler가
+있던 Actor는 그 시점에 이미 정리 중이다.
 
 예약이 활성화된 뒤에 도착한 일반 message는 완료 callback보다 먼저 실행되지 않는다. join이
 끝날 때까지 그 Actor의 일반 처리는 대기한다.
 
-완료 callback은 재시도된 결과인지 구분하는 id를 함께 받는다. 같은 id의 callback이 다시 실행되어도
-안전하도록 처리한다.
+완료 callback은 재시도된 결과를 구분하는 id를 함께 받는다.
 
 User Spot에서 Entry Spot으로 돌아갈 때도 같은 방식이다.
 
-## 3. 한 handler가 예약할 수 있는 양
+## 3. join의 timeout
 
-| 무엇 | 상한 |
-| --- | --- |
-| 한 handler의 join 예약 수 | 64개 |
-| join 요청 하나의 인코딩 크기 | 1 MiB |
-| 한 handler가 예약한 요청 크기의 합 | 8 MiB |
-| 다른 node로 가는 join의 응답 | 1 MiB |
-| timeout 기본값 | 5초. 지정하면 유한한 양수여야 한다 |
-
-**상한을 넘기면 그 자리에서 오류로 끝난다.** 일부만 등록되고 나머지가 빠지는 상태는 만들지
-않는다. 요청과 응답의 상한은 서로 독립이라 하나로 합쳐 계산하지 않는다.
+timeout 기본값은 5초이고, 지정하면 유한한 양수여야 한다. 범위 밖의 값은 등록하는 자리에서
+오류로 끝난다. join 요청과 응답의 크기에는 별도 상한이 없다 — 다른 node로 가는 요청과 응답은
+다른 message와 같은 wire 상한을 따른다.
 
 ## 4. 예약한 Actor에 대한 요청 제한
 
@@ -178,7 +179,7 @@ message를 받은 이전 owner가 새 owner에게 대신 전달한다** — 보�
 **옮겨 가는 중에 보낸 요청도 원래 보낸 쪽에서 완료된다.** 도착 쪽이 만든 응답은 원래 보낸 쪽으로
 연결되고, timeout은 보낸 쪽의 기존 경로를 그대로 따르며, 늦게 도착한 응답은 버린다. 이동 중에
 응답을 기다리는 요청 수는 runtime metric으로 관측한다 —
-[운영과 lifecycle](12-operations.ko.md#1-런타임-메트릭)이 그 자리다.
+[운영과 lifecycle](12-operations.ko.md#2-런타임-메트릭)이 그 자리다.
 
 ## 7. 관련 문서
 
@@ -188,5 +189,5 @@ message를 받은 이전 owner가 새 owner에게 대신 전달한다** — 보�
 - 실행 위치를 옮기는 또 다른 절차 — [Relocation](37-relocation.ko.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>
