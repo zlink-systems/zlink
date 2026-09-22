@@ -226,7 +226,7 @@ enum ZlinkStreamDispatchMode { Manual = 'manual', Immediate = 'immediate' }
 enum ZlinkStreamMessageKind { Send = 1, Request = 2, Response = 3, Error = 4, Control = 5 }
 enum ZlinkStreamHeaderFlags {
   None = 0, HasRequestSeq = 0x01, HasMetadata = 0x02,
-  PayloadCompressed = 0x04, HasCorrelationId = 0x08, HasFlowId = 0x10
+  PayloadCompressed = 0x04, HasCorrelationId = 0x08, HasFlowId = 0x10, HasActorSlot = 0x20
 }
 enum ZlinkStreamConnectionState {
   Created = 'created', Connecting = 'connecting', Connected = 'connected',
