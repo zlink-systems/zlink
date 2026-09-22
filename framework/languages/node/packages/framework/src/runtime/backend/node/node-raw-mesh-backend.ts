@@ -662,9 +662,6 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       encodeMultipartApplicationFrame(parts),
       options?.timeoutMs ?? 30_000
     );
-    if (pending === undefined) {
-      return this.enqueueImmediateFailure(OperationKind.ChannelRequest, RequestResult.NotFound);
-    }
     return this.observeCompletion(pending.id, OperationKind.ChannelRequest, pending.promise);
   }
 

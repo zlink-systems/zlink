@@ -63,6 +63,19 @@ export interface RawServiceRequestResult {
   readonly payload?: ServiceApplicationPayload;
 }
 
+type RawServiceChannelTargetSelection =
+  | { readonly kind: 'selected'; readonly peer: AdmittedServicePeer }
+  | {
+      readonly kind: 'noMember';
+      readonly submitResult: typeof SubmitResult.NotFound;
+      readonly requestResult: RawServiceRequestResult;
+    }
+  | {
+      readonly kind: 'knownButNotReady';
+      readonly submitResult: typeof SubmitResult.NotConnected;
+      readonly requestResult: RawServiceRequestResult;
+    };
+
 /** An M6A application frame already owned by the Framework runtime. */
 type ServiceApplicationPayloadInput = ServiceApplicationPayload | Buffer;
 
@@ -464,10 +477,9 @@ export class RawServiceMeshRuntime {
     channelName: string,
     payload: ServiceApplicationPayloadInput
   ): Promise<SubmitResult> {
-    const selected = this.topology.selectChannel(channelName, (peer) =>
-      this.isLocalOrReadyPeer(peer.descriptor.nodeRoutingId)
-    );
-    if (selected === undefined) return SubmitResult.NotFound;
+    const selection = this.selectChannelTarget(channelName);
+    if (selection.kind !== 'selected') return selection.submitResult;
+    const selected = selection.peer;
     const applicationFrame = this.applicationFrame(payload);
     if (selected.descriptor.nodeRoutingId === this.descriptor.nodeRoutingId) {
       const applicationJobOwner = await this.reserveLocalIngress();
@@ -506,13 +518,40 @@ export class RawServiceMeshRuntime {
     channelName: string,
     payload: ServiceApplicationPayloadInput,
     timeoutMs: number
-  ): PendingOperation<RawServiceRequestResult> | undefined {
+  ): PendingOperation<RawServiceRequestResult> {
+    const selection = this.selectChannelTarget(channelName);
+    if (selection.kind !== 'selected') {
+      const pending = this.operations.register(timeoutMs);
+      this.operations.complete(pending.id, selection.requestResult);
+      return pending;
+    }
+    return this.requestToTarget(
+      selection.peer.descriptor.nodeRoutingId,
+      payload,
+      timeoutMs,
+      channelName
+    );
+  }
+
+  private selectChannelTarget(channelName: string): RawServiceChannelTargetSelection {
     const selected = this.topology.selectChannel(channelName, (peer) =>
       this.isLocalOrReadyPeer(peer.descriptor.nodeRoutingId)
     );
-    return selected === undefined
-      ? undefined
-      : this.requestToTarget(selected.descriptor.nodeRoutingId, payload, timeoutMs, channelName);
+    if (selected !== undefined) return { kind: 'selected', peer: selected };
+    return this.topology.hasKnownChannelTarget(channelName)
+      ? {
+          kind: 'knownButNotReady',
+          submitResult: SubmitResult.NotConnected,
+          requestResult: { terminalResult: RequestResult.NotConnected, failureCode: 0 }
+        }
+      : {
+          kind: 'noMember',
+          submitResult: SubmitResult.NotFound,
+          requestResult: {
+            terminalResult: RequestResult.NotFound,
+            failureCode: REQUEST_TARGET_NOT_FOUND_FAILURE_CODE
+          }
+        };
   }
 
   private isLocalOrReadyPeer(nodeRoutingId: string): boolean {

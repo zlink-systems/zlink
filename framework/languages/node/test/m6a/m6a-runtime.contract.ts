@@ -22,7 +22,10 @@ import type {
   ZLinkRawRouterPort
 } from '../../packages/framework/src/runtime/backend/raw-binding-port';
 import { ZLinkNodeRawMeshBackend } from '../../packages/framework/src/runtime/backend/node/node-raw-mesh-backend';
-import { SubmitResult } from '../../packages/framework/src/runtime/backend/runtime-values';
+import {
+  RequestResult,
+  SubmitResult
+} from '../../packages/framework/src/runtime/backend/runtime-values';
 import { ServiceDiscoveryRegistry } from '../../packages/framework/src/runtime/foundation/service-discovery-registry';
 import { ServiceLivenessRegistry } from '../../packages/framework/src/runtime/foundation/service-liveness-registry';
 import {
@@ -2266,33 +2269,69 @@ test('local channel requests preserve successful and failed terminal results', a
   }
 });
 
-test('channel send distinguishes selection, transport, and mailbox rejection', async () => {
+test('channel send and request report no advertised member as NotFound', async () => {
   const payload = {
     packetName: 'ChannelNotice',
     contentType: 'application/json',
     payload: Buffer.from('notice')
   };
-  const noTarget = rawServiceRuntime({
+  const runtime = rawServiceRuntime({
     descriptor: { ...descriptor('m6a-no-target'), state: 'serving', channels: [] }
-  });
-  const transportFailure = rawServiceRuntime({
-    descriptor: { ...descriptor('m6a-transport-source'), state: 'serving', channels: [] }
-  });
-  const mailboxRejection = rawServiceRuntime({
-    descriptor: { ...descriptor('m6a-mailbox-local'), state: 'serving' }
   });
 
   try {
-    assert.equal(await noTarget.sendToChannel('alpha', payload), SubmitResult.NotFound);
+    assert.equal(await runtime.sendToChannel('alpha', payload), SubmitResult.NotFound);
+    const request = await runtime.requestToChannel('alpha', payload, 2_000).promise;
+    assert.equal(request.terminalResult, RequestResult.NotFound);
+    assert.equal(request.failureCode, 14);
+  } finally {
+    runtime.close();
+  }
+});
 
+test('channel send and request report a known disconnected member as NotConnected', async () => {
+  const runtime = rawServiceRuntime({
+    descriptor: { ...descriptor('m6a-disconnected-source'), state: 'serving', channels: [] }
+  });
+  const target = {
+    ...descriptor('m6a-disconnected-target'),
+    state: 'serving' as const
+  };
+
+  try {
+    assert.equal(runtime.topology.admit(target, 'disconnected-connection'), 'admitted');
+    assert.equal(
+      runtime.topology.disconnect(target.nodeRoutingId, 'disconnected-connection'),
+      true
+    );
+    const payload = {
+      packetName: 'ChannelNotice',
+      contentType: 'application/json',
+      payload: Buffer.from('notice')
+    };
+    assert.equal(await runtime.sendToChannel('alpha', payload), SubmitResult.NotConnected);
+    const request = await runtime.requestToChannel('alpha', payload, 2_000).promise;
+    assert.equal(request.terminalResult, RequestResult.NotConnected);
+    assert.equal(request.failureCode, 0);
+  } finally {
+    runtime.close();
+  }
+});
+
+test('channel send reports a selected target submit failure as NotConnected', async () => {
+  const runtime = rawServiceRuntime({
+    descriptor: { ...descriptor('m6a-transport-source'), state: 'serving', channels: [] }
+  });
+
+  try {
     const target = {
       descriptor: { ...descriptor('m6a-transport-target'), state: 'serving' as const },
       connectionId: 'transport-target-connection',
       connectionDiscriminator: 'transport-target-discriminator'
     };
-    transportFailure.topology.selectChannel = () => target;
+    runtime.topology.selectChannel = () => target;
     (
-      transportFailure as unknown as {
+      runtime as unknown as {
         router: Pick<ZLinkRawRouterPort, 'send'>;
       }
     ).router = {
@@ -2300,14 +2339,36 @@ test('channel send distinguishes selection, transport, and mailbox rejection', a
         throw new Error('injected transport send failure');
       }
     };
-    assert.equal(await transportFailure.sendToChannel('alpha', payload), SubmitResult.NotConnected);
-
-    mailboxRejection.mailbox.close();
-    assert.equal(await mailboxRejection.sendToChannel('alpha', payload), SubmitResult.NotAdmitted);
+    assert.equal(
+      await runtime.sendToChannel('alpha', {
+        packetName: 'ChannelNotice',
+        contentType: 'application/json',
+        payload: Buffer.from('notice')
+      }),
+      SubmitResult.NotConnected
+    );
   } finally {
-    noTarget.close();
-    transportFailure.close();
-    mailboxRejection.close();
+    runtime.close();
+  }
+});
+
+test('channel send preserves local mailbox rejection as NotAdmitted', async () => {
+  const runtime = rawServiceRuntime({
+    descriptor: { ...descriptor('m6a-mailbox-local'), state: 'serving' }
+  });
+
+  try {
+    runtime.mailbox.close();
+    assert.equal(
+      await runtime.sendToChannel('alpha', {
+        packetName: 'ChannelNotice',
+        contentType: 'application/json',
+        payload: Buffer.from('notice')
+      }),
+      SubmitResult.NotAdmitted
+    );
+  } finally {
+    runtime.close();
   }
 });
 
@@ -2345,13 +2406,9 @@ async function awaitWithin<T>(promise: Promise<T>, timeoutMs: number, message: s
   }
 }
 
-test('a channel request with no eligible member ends as unavailable, not a protocol error', () => {
-  // 102 NotFound with errno 0 is the selection coming back empty: eligibility
-  // and drain left no member to pick, while the send path and its connection
-  // are still there. 06-framework-api names that Unavailable. A named target
-  // that does not exist arrives with an errno and stays NotFound.
+test('a channel request NotFound result remains NotFound with or without a failure code', () => {
   const empty = meshRequestFailure('game', 102, 0);
-  assert.equal(empty.kind, ZLinkFrameworkErrorKind.Unavailable);
+  assert.equal(empty.kind, ZLinkFrameworkErrorKind.NotFound);
 
   const namedMissing = meshRequestFailure('game', 102, 14);
   assert.equal(namedMissing.kind, ZLinkFrameworkErrorKind.NotFound);

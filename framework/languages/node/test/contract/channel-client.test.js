@@ -907,6 +907,10 @@ test('RouteMesh channel send with no selectable target reports NotFound', async 
       () => client.sendToChannel(channelName, typedPacket('Notice', { id: 1 })).submit(),
       notFound
     );
+    await assert.rejects(
+      () => client.requestToChannel(channelName, typedPacket('Question', { id: 2 })).submit(),
+      notFound
+    );
   } finally {
     await runtime.stop();
   }
