@@ -68,6 +68,26 @@ interface ZLinkKotlinRouteClient {
     ): ZLinkKotlinRequestCall<TReply>
 }
 
+interface ZLinkKotlinSpotOutbound {
+    fun sendToSpot(spotId: String, message: Any): ZLinkKotlinSpotSendCall
+
+    fun <TReply : Any> requestToSpot(
+        spotId: String,
+        request: Any,
+        replyType: KClass<TReply>,
+    ): ZLinkKotlinSpotRequestCall<TReply>
+
+    fun publish(channelName: String, topic: String, message: Any): ZLinkKotlinSubmissionCall
+
+    fun sendToChannel(channelName: String, message: Any): ZLinkKotlinMessageSendCall
+
+    fun <TReply : Any> requestToChannel(
+        channelName: String,
+        request: Any,
+        replyType: KClass<TReply>,
+    ): ZLinkKotlinRequestCall<TReply>
+}
+
 interface ZLinkKotlinActorClient {
     fun sendToActor(actorId: String, message: Any): ZLinkKotlinMessageSendCall
 

@@ -35,6 +35,7 @@ class KotlinPublicSurfaceContractTest {
                 "ZLinkFrameworkExtensionsKt",
                 "ZLinkLocationExtensionsKt",
                 "ZLinkMessageExtensionsKt",
+                "ZLinkOneWayCallsKt",
                 "ZLinkSpotHandlerRegistryExtensionsKt",
             )
             .map { Class.forName("systems.zlink.framework.kotlin.$it") }
@@ -297,6 +298,7 @@ class KotlinPublicSurfaceContractTest {
                 "ZLinkKotlinSendCall",
                 "ZLinkKotlinActorCreateCall",
                 "ZLinkKotlinActorManager",
+                "ZLinkKotlinSpotOutbound",
                 "ZLinkKotlinSpotCreateCall",
                 "ZLinkKotlinSpotManager",
                 "ZLinkKotlinStreamConnector",
@@ -312,9 +314,22 @@ class KotlinPublicSurfaceContractTest {
                 .toSet()
         val expectedFunctionNames =
             setOf(
-                "actorFactory",
-                "actorRef",
+                "addActorFactory",
+                "addEntrySpot",
                 "addHandler",
+                "addHandlersFromPackageOf",
+                "addInstanceSpotFactory",
+                "addPacket",
+                "addPublishHandler",
+                "addPublishHandlerForMessage",
+                "addPublishHandlerForMessageAndPacketName",
+                "addRequestHandler",
+                "addRouteRequestHandler",
+                "addRouteSendHandler",
+                "addSendHandler",
+                "addSessionPacketHandler",
+                "addSpotFactory",
+                "actorRef",
                 "asFlow",
                 "await",
                 "awaitReply",
@@ -334,11 +349,15 @@ class KotlinPublicSurfaceContractTest {
                 "publishToTopic",
                 "request",
                 "requestToActorAwait",
+                "requestToChannel",
+                "requestToSpot",
+                "registerSession",
                 "send",
                 "snapshot",
                 "status",
                 "topology",
                 "useCoroutineHandlers",
+                "useFilter",
                 "waitFor",
                 "withDefaultStreamCompression",
                 "withLz4StreamCompression",
@@ -405,6 +424,9 @@ class KotlinPublicSurfaceContractTest {
         val timerSpotBound =
             ZLinkSuspendingSpotTimerHandler::class.java.typeParameters.single().bounds.single()
         assertEquals(Any::class.java, timerSpotBound)
+        val packetSpotBound =
+            ZLinkSuspendingSpotPacketHandler::class.java.typeParameters.first().bounds.single()
+        assertEquals(Any::class.java, packetSpotBound)
     }
 
     private fun assertSuspendingSpotLifecycle(type: Class<*>, contextType: Class<*>) {
@@ -482,7 +504,22 @@ class KotlinPublicSurfaceContractTest {
                 "requestToSpotAwait" to 1,
                 "publishToTopic" to 1,
                 "configureStreamCompression" to 1,
-                "actorFactory" to 1,
+                "addHandlersFromPackageOf" to 1,
+                "useFilter" to 1,
+                "addEntrySpot" to 1,
+                "addSpotFactory" to 1,
+                "addInstanceSpotFactory" to 1,
+                "addActorFactory" to 1,
+                "preserveStateWith" to 3,
+                "addPublishHandlerForMessage" to 1,
+                "addPublishHandlerForMessageAndPacketName" to 1,
+                "addPublishHandler" to 2,
+                "registerSession" to 1,
+                "addSessionPacketHandler" to 1,
+                "addRouteSendHandler" to 2,
+                "addRouteRequestHandler" to 1,
+                "addSendHandler" to 2,
+                "addRequestHandler" to 2,
             ),
         )
         assertFacadeMethodCounts(
@@ -501,7 +538,18 @@ class KotlinPublicSurfaceContractTest {
         assertFacadeMethodCounts("ZLinkMessageExtensionsKt", mapOf("messageOf" to 2, "decode" to 1))
         assertFacadeMethodCounts(
             "ZLinkSpotHandlerRegistryExtensionsKt",
-            mapOf("addHandler" to 2, "addTypedHandler" to 1),
+            mapOf("addHandler" to 1, "addPacket" to 1, "addTimer" to 3),
+        )
+        assertFacadeMethodCounts(
+            "ZLinkOneWayCallsKt",
+            mapOf(
+                "kotlin" to 11,
+                "requestToActor" to 1,
+                "requestToChannel" to 3,
+                "requestToNode" to 1,
+                "requestToSpot" to 3,
+                "sendToSpot" to 1,
+            ),
         )
     }
 
@@ -632,13 +680,13 @@ class KotlinPublicSurfaceContractTest {
                 "ZLinkDispatchOptionsExtensionsKt" to
                     "2638e59c7f57be05d687be9f366dda0c5421d8ee59fa4105a82e52d7f13fa110",
                 "ZLinkFrameworkExtensionsKt" to
-                    "269802638a1b53095e969d738fbf4789b295cc3e388e03729f82f7523e5b5bfb",
+                    "82da35ac68af4bf2f7444bcf1052149bc339d88670688baa5f66ae7e8404b609",
                 "ZLinkLocationExtensionsKt" to
                     "6b50002598f83c1e5d7a0054b758dc3ad5711645fcc64cd46c67807d13f08563",
                 "ZLinkMessageExtensionsKt" to
                     "77ec5d78879dc243678140f1f99b9046f58b035ebf72a838f1f691e15c8673a7",
                 "ZLinkSpotHandlerRegistryExtensionsKt" to
-                    "6a6300a0e8b2591d92c9192e8cae9e17dcfee43cdda3f5188ac60173175754ea",
+                    "d92110bc3d42d0dc2c3a5056e52992567df4604cdad2d2c02cb0fec4777abdd7",
                 //  Updated for 0a66674a91, which removed observeInbound from the connector:
                 //  the Stream Connector uses each runtime own socket, so the Core STREAM
                 //  backpressure contract never applied and common spec 32 §10 now says the

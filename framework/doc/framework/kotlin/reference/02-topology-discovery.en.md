@@ -80,7 +80,7 @@ A DSL that wraps `ZLinkMeshObjectServerBuilder.addActorFactory(...)` with a reif
 parameter.
 
 ```kotlin
-serverBuilder.actorFactory<PlayerActor, PlayerActorFactory>("player") {
+serverBuilder.addActorFactory<PlayerActor, PlayerActorFactory>("player") {
     preserveStateWith(PlayerRelocationAdapter::class.java)
 }
 ```

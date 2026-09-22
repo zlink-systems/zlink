@@ -50,7 +50,7 @@ interface ZLinkSuspendingRouteSendHandler<TMessage> {
     suspend fun handle(message: TMessage, context: ZLinkRouteMessageContext)
 }
 
-interface ZLinkSuspendingSpotPacketHandler<TSpot : ZLinkSpot<*>, TMessage> {
+interface ZLinkSuspendingSpotPacketHandler<TSpot : Any, TMessage> {
     suspend fun handle(spot: TSpot, message: TMessage)
 
     suspend fun handle(spot: TSpot, message: TMessage, context: ZLinkMessageContext) =
