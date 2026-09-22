@@ -197,11 +197,12 @@ test('MFLOW-004 provider failures do not change the message operation', () => {
   assert.equal(tracer.providerFailureCount, 1);
 });
 
-test('dispatch errors record service-wire command and deepest handler cause', () => {
-  const errorMessage = 'x'.repeat(513);
-  const error = new Error(errorMessage, {
-    cause: new TypeError('Location authority relocation envelope is missing.')
-  });
+test('dispatch trace and log share bounded redacted handler details', () => {
+  const errorMessage =
+    `Authorization: Bearer auth Bearer standalone password=p token=t ${'x'.repeat(513)}\n at Secret.Handler`;
+  const expectedMessage =
+    `Authorization: <redacted> Bearer <redacted> password=<redacted> token=<redacted> ${'x'.repeat(513)}`.slice(0, 512);
+  const error = new Error(errorMessage);
   error.stack = 'Error: stack trace must not be recorded';
   const reporter = new ZLinkDispatchErrorReporter(
     undefined,
@@ -227,18 +228,16 @@ test('dispatch errors record service-wire command and deepest handler cause', ()
   const attributes = traceRecords[0].attributes;
   assert.equal(attributes.command_id, 34);
   assert.equal(attributes.error_type, 'Error');
-  assert.equal(attributes.error_message, errorMessage.slice(0, 512));
+  assert.equal(attributes.error_message, expectedMessage);
   assert.equal(record.attributes.error_type, 'Error');
-  assert.equal(record.attributes.error_message, errorMessage.slice(0, 512));
+  assert.equal(record.attributes.error_message, expectedMessage);
   assert.match(record.body, /error_type=Error/);
-  assert.match(record.body, new RegExp(`error_message=${errorMessage.slice(0, 512)}`));
-  assert.doesNotMatch(record.body, /stack trace must not be recorded/);
-  assert.doesNotMatch(record.body, new RegExp(errorMessage));
-  assert.equal(attributes.error_cause_type, 'TypeError');
-  assert.equal(
-    attributes.error_cause_message,
-    'Location authority relocation envelope is missing.'
-  );
+  assert.match(record.body, new RegExp(`error_message=${expectedMessage}`));
+  assert.doesNotMatch(record.body, /Bearer auth/);
+  assert.doesNotMatch(record.body, /Bearer standalone/);
+  assert.doesNotMatch(record.body, /password=p/);
+  assert.doesNotMatch(record.body, /token=t/);
+  assert.doesNotMatch(record.body, /Secret\.Handler/);
 });
 
 test('MFLOW-009 live-mode cell toggles every reader without rebuilding the tracer', () => {

@@ -385,7 +385,7 @@ function toTelemetryRecord(
     messageSizeBytes,
     durationSeconds,
     errorType: flow.errorType,
-    errorMessage: boundedText(flow.errorMessage),
+    errorMessage: flow.errorMessage,
     errorCauseType: flow.errorCauseType,
     errorCauseMessage: boundedText(flow.errorCauseMessage)
   };

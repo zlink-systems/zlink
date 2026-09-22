@@ -214,6 +214,14 @@ public sealed class MessageFlowTracerTests
     {
         const int errorMessageMaxLength = 512;
         var activities = CaptureActivities(out var listener);
+        var message =
+            "Authorization: Bearer auth Bearer standalone password=p token=t "
+            + new string('x', errorMessageMaxLength + 1)
+            + "\n   at Secret.Handler()";
+        var expectedMessage = (
+            "Authorization: <redacted> Bearer <redacted> password=<redacted> token=<redacted> "
+            + new string('x', errorMessageMaxLength + 1)
+        )[..errorMessageMaxLength];
         using (listener)
         {
             var options = new ZLinkDispatchOptionsModel();
@@ -221,7 +229,6 @@ public sealed class MessageFlowTracerTests
             options.Diagnostics.SetSampleRate(0);
             var logger = new CapturingLogger();
             var reporter = new ZLinkDispatchErrorReporter(options, logger);
-            var message = new string('x', errorMessageMaxLength + 1);
             InvalidOperationException exception;
             try
             {
@@ -251,11 +258,13 @@ public sealed class MessageFlowTracerTests
             );
             Assert.Contains(
                 logger.Fields,
-                field =>
-                    field.Key == "error_message"
-                    && (string?)field.Value == message[..errorMessageMaxLength]
+                field => field.Key == "error_message" && (string?)field.Value == expectedMessage
             );
-            Assert.DoesNotContain(exception.StackTrace!, logger.Message);
+            Assert.DoesNotContain("Bearer auth", logger.Message);
+            Assert.DoesNotContain("Bearer standalone", logger.Message);
+            Assert.DoesNotContain("password=p", logger.Message);
+            Assert.DoesNotContain("token=t", logger.Message);
+            Assert.DoesNotContain("Secret.Handler", logger.Message);
         }
 
         var activity = Assert.Single(activities);
@@ -267,7 +276,7 @@ public sealed class MessageFlowTracerTests
         Assert.Equal("handler_exception", activity.GetTagItem("reason"));
         Assert.Equal("drop", activity.GetTagItem("action"));
         Assert.Equal("InvalidOperationException", activity.GetTagItem("error_type"));
-        Assert.Equal(errorMessageMaxLength, ((string)activity.GetTagItem("error_message")!).Length);
+        Assert.Equal(expectedMessage, activity.GetTagItem("error_message"));
         Assert.Null(activity.GetTagItem("channel_route_kind"));
     }
 

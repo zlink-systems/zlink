@@ -26,7 +26,6 @@ import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
-import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchFailure;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
@@ -706,24 +705,20 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
             ZLinkMeshDispatchRecord record, String packetName, RuntimeException replyFailure) {
         ReceiveRecord receive = record.receive();
         dispatchErrors.report(
-                new ZLinkDispatchFailure(
-                        receive.kind() == RecordKind.NODE_REQUEST
-                                ? ZLinkDispatchErrorSurface.NODE
-                                : ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
-                        ZLinkDispatchMessageKind.REQUEST,
-                        ZLinkDispatchErrorReason.REPLY_PATH_MISSING,
-                        ZLinkDispatchErrorAction.DROP,
-                        packetName,
-                        receive.channelName(),
-                        null,
-                        null,
-                        null,
-                        receive.sourceNodeRid() == null ? null : receive.sourceNodeRid().toString(),
-                        receive.applicationCorrelation() == null
-                                ? null
-                                : Long.toUnsignedString(receive.applicationCorrelation()),
-                        replyFailure.getClass().getName(),
-                        replyFailure.getMessage()));
+                receive.kind() == RecordKind.NODE_REQUEST
+                        ? ZLinkDispatchErrorSurface.NODE
+                        : ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
+                ZLinkDispatchMessageKind.REQUEST,
+                ZLinkDispatchErrorReason.REPLY_PATH_MISSING,
+                ZLinkDispatchErrorAction.DROP,
+                packetName,
+                receive.channelName(),
+                null,
+                null,
+                null,
+                receive.sourceNodeRid(),
+                receive.applicationCorrelation(),
+                replyFailure);
     }
 
     private void traceLocalNodeSend(

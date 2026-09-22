@@ -61,6 +61,7 @@ internal static class ZLinkTelemetry
 
     public static void TraceDispatchError(
         ZLinkDispatchFailure error,
+        ZLinkDispatchErrorDetails errorDetails,
         string? flowId,
         ZLinkFlowOrigin? flowOrigin
     )
@@ -81,8 +82,8 @@ internal static class ZLinkTelemetry
         activity.SetTag("message_kind", ZLinkTraceFormat.MessageKindKey(error.MessageKind));
         activity.SetTag("reason", ZLinkTraceFormat.DispatchReasonKey(error.Reason));
         activity.SetTag("action", ZLinkTraceFormat.DispatchActionKey(error.Action));
-        activity.SetTag("error_type", ZLinkTraceFormat.ErrorType(error.Exception));
-        activity.SetTag("error_message", ZLinkTraceFormat.ErrorMessage(error.Exception));
+        activity.SetTag("error_type", errorDetails.Type);
+        activity.SetTag("error_message", errorDetails.Message);
         activity.SetTag("packet_name", error.PacketName);
         activity.SetTag("channel_name", error.ChannelName);
         activity.SetTag(

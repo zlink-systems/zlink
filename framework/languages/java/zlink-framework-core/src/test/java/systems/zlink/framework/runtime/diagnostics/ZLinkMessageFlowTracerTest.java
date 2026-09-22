@@ -450,8 +450,17 @@ class ZLinkMessageFlowTracerTest {
     }
 
     @Test
-    void dispatchErrorFormatterBoundsHandlerMessageWithoutStackTrace() {
-        String message = "x".repeat(513);
+    void dispatchErrorTraceAndLogShareSanitizedHandlerDetails() {
+        String message =
+                "Authorization: Bearer auth Bearer standalone password=p token=t "
+                        + "x".repeat(513)
+                        + "\n at Secret.Handler";
+        String expected =
+                ("Authorization: <redacted> Bearer <redacted> password=<redacted> token=<redacted> "
+                                + "x".repeat(513))
+                        .substring(0, 512);
+        ZLinkDispatchErrorReporter.ErrorDetails details =
+                ZLinkDispatchErrorReporter.errorDetails(new IllegalStateException(message));
         ZLinkMessageFlowEvent dispatchError =
                 ZLinkMessageFlowEvent.dispatchError(
                         ZLinkDispatchErrorSurface.CHANNEL,
@@ -465,15 +474,20 @@ class ZLinkMessageFlowTracerTest {
                         null,
                         ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
                         ZLinkDispatchErrorAction.DROP,
-                        IllegalStateException.class.getSimpleName(),
-                        message);
+                        details.type(),
+                        details.message());
 
         String line = ZLinkTraceFormat.flowLine(dispatchError, null);
 
+        assertEquals("IllegalStateException", dispatchError.errorType());
+        assertEquals(expected, dispatchError.errorMessage());
         assertTrue(line.contains("error_type=IllegalStateException"));
-        assertTrue(line.contains("error_message=" + message.substring(0, 512)));
-        assertFalse(line.contains(message));
-        assertFalse(line.contains("at systems.zlink"));
+        assertTrue(line.contains("error_message=" + expected));
+        assertFalse(line.contains("Bearer auth"));
+        assertFalse(line.contains("Bearer standalone"));
+        assertFalse(line.contains("password=p"));
+        assertFalse(line.contains("token=t"));
+        assertFalse(line.contains("Secret.Handler"));
     }
 
     @Test

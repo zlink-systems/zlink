@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Text;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -117,8 +118,9 @@ internal sealed class ZLinkMessageFlowTracer
 
         try
         {
-            LogDefault(error, flowId, flowOrigin);
-            ZLinkTelemetry.TraceDispatchError(error, flowId, flowOrigin);
+            var errorDetails = ZLinkTraceFormat.DispatchErrorDetails(error.Exception);
+            LogDefault(error, errorDetails, flowId, flowOrigin);
+            ZLinkTelemetry.TraceDispatchError(error, errorDetails, flowId, flowOrigin);
         }
         catch (Exception ex)
         {
@@ -210,7 +212,12 @@ internal sealed class ZLinkMessageFlowTracer
         );
     }
 
-    private void LogDefault(ZLinkDispatchFailure error, string? flowId, ZLinkFlowOrigin? flowOrigin)
+    private void LogDefault(
+        ZLinkDispatchFailure error,
+        ZLinkDispatchErrorDetails errorDetails,
+        string? flowId,
+        ZLinkFlowOrigin? flowOrigin
+    )
     {
         var level =
             error.Reason == ZLinkDispatchErrorReason.HandlerException
@@ -218,7 +225,7 @@ internal sealed class ZLinkMessageFlowTracer
                 : LogLevel.Warning;
         if (!_logger.IsEnabled(level))
             return;
-        var fields = ZLinkTraceFormat.StructuredFields(error, flowId, flowOrigin);
+        var fields = ZLinkTraceFormat.StructuredFields(error, errorDetails, flowId, flowOrigin);
         _logger.Log(
             level,
             default,
@@ -241,6 +248,16 @@ internal sealed class ZLinkMessageFlowTracer
 internal static class ZLinkTraceFormat
 {
     internal const int ErrorMessageMaxLength = 512;
+    private static readonly (Regex Pattern, string Replacement)[] CredentialPatterns =
+    [
+        (
+            new(@"Authorization\s*:\s*(?:(?:Bearer|Basic)\s+)?[^\s,;]+", RegexOptions.IgnoreCase),
+            "Authorization: <redacted>"
+        ),
+        (new(@"Bearer\s+[^\s,;]+", RegexOptions.IgnoreCase), "Bearer <redacted>"),
+        (new(@"password\s*=\s*[^\s,;]+", RegexOptions.IgnoreCase), "password=<redacted>"),
+        (new(@"token\s*=\s*[^\s,;]+", RegexOptions.IgnoreCase), "token=<redacted>"),
+    ];
 
     public static LogLevel ResolveLogLevel(ZLinkMessageFlowEvent flow)
     {
@@ -425,6 +442,7 @@ internal static class ZLinkTraceFormat
 
     public static IReadOnlyList<KeyValuePair<string, object?>> StructuredFields(
         ZLinkDispatchFailure error,
+        ZLinkDispatchErrorDetails errorDetails,
         string? flowId,
         ZLinkFlowOrigin? flowOrigin
     )
@@ -457,18 +475,29 @@ internal static class ZLinkTraceFormat
         Add(fields, "outcome", "failed");
         Add(fields, "reason", DispatchReasonKey(error.Reason));
         Add(fields, "action", DispatchActionKey(error.Action));
-        Add(fields, "error_type", ErrorType(error.Exception));
-        Add(fields, "error_message", ErrorMessage(error.Exception));
+        Add(fields, "error_type", errorDetails.Type);
+        Add(fields, "error_message", errorDetails.Message);
         return fields;
     }
 
-    public static string? ErrorType(Exception? error) => error?.GetType().Name;
-
-    public static string? ErrorMessage(Exception? error)
+    public static ZLinkDispatchErrorDetails DispatchErrorDetails(Exception? error)
     {
-        if (string.IsNullOrEmpty(error?.Message))
-            return null;
-        return error.Message[..Math.Min(error.Message.Length, ErrorMessageMaxLength)];
+        if (error is null)
+            return default;
+
+        var message = error.Message;
+        if (!string.IsNullOrEmpty(message))
+        {
+            var lineEnd = message.IndexOfAny(['\r', '\n']);
+            if (lineEnd >= 0)
+                message = message[..lineEnd];
+            foreach (var (pattern, replacement) in CredentialPatterns)
+                message = pattern.Replace(message, replacement);
+            if (message.Length > ErrorMessageMaxLength)
+                message = message[..ErrorMessageMaxLength];
+        }
+
+        return new ZLinkDispatchErrorDetails(error.GetType().Name, message);
     }
 
     private static void Add(
@@ -481,6 +510,8 @@ internal static class ZLinkTraceFormat
             fields.Add(new KeyValuePair<string, object?>(key, value));
     }
 }
+
+internal readonly record struct ZLinkDispatchErrorDetails(string? Type, string? Message);
 
 internal sealed class ZLinkStructuredLogState(IReadOnlyList<KeyValuePair<string, object?>> fields)
     : IReadOnlyList<KeyValuePair<string, object?>>

@@ -258,23 +258,36 @@ int main ()
         }
     }
 
-    // Handler exceptions project their runtime type and bounded diagnostic message
-    // without serializing the exception's stack trace.
+    // Handler exceptions project one sanitized pair to both the trace observer and log.
     {
-        const std::string message (513, 'x');
+        const auto message =
+          std::string ("Authorization: Bearer auth Bearer standalone password=p token=t ")
+          + std::string (513, 'x') + "\n at Secret.Handler";
+        const auto expected =
+          (std::string (
+             "Authorization: <redacted> Bearer <redacted> password=<redacted> token=<redacted> ")
+           + std::string (513, 'x'))
+            .substr (0, 512);
+        auto options = options_with_mode (message_flow_log_mode_t::errors);
+        std::optional<message_dispatch_error_event_t> observed;
+        zlink::framework::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+          options, [&] (const message_dispatch_error_event_t &event) { observed = event; });
         const auto out = capture_logs ([&] {
-            dispatch_error_reporter_t (options_with_mode (message_flow_log_mode_t::errors))
-              .report (message_dispatch_error_event_t{
-                .surface = dispatch_error_surface_t::channel,
-                .message_kind = dispatch_message_kind_t::send,
-                .reason = dispatch_error_reason_t::handler_exception,
-                .action = dispatch_error_action_t::drop,
-                .exception = std::make_exception_ptr (std::runtime_error (message))});
+            dispatch_error_reporter_t (options).report (message_dispatch_error_event_t{
+              .surface = dispatch_error_surface_t::channel,
+              .message_kind = dispatch_message_kind_t::send,
+              .reason = dispatch_error_reason_t::handler_exception,
+              .action = dispatch_error_action_t::drop,
+              .exception = std::make_exception_ptr (std::runtime_error (message))});
         });
-        if (!contains (out, "error_type=" + std::string (typeid (std::runtime_error).name ())))
+        const auto type = std::string (typeid (std::runtime_error).name ());
+        if (!observed || observed->exception || observed->error_type != type
+            || observed->error_message != expected)
             return 40;
-        if (!contains (out, "error_message=" + message.substr (0, 512)) || contains (out, message)
-            || contains (out, "stack trace")) {
+        if (!contains (out, "error_type=" + type) || !contains (out, "error_message=" + expected)
+            || contains (out, "Bearer auth") || contains (out, "Bearer standalone")
+            || contains (out, "password=p") || contains (out, "token=t")
+            || contains (out, "Secret.Handler")) {
             return 41;
         }
     }

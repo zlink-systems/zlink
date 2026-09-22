@@ -39,6 +39,7 @@ import {
 import { createRandomOperationIdentity } from '../foundation/operation-identity';
 import { deferActorJoin } from './actor-join-deferred-scope';
 import { captureZLinkSpotSerialTurn } from '../execution';
+import { dispatchErrorDetails } from '../diagnostics/dispatch-error-details';
 
 export const ZLINK_ACTOR_JOIN_ENTRY_SPOT_RUNTIME = Symbol('zlink.actor.join-entry-spot-runtime');
 
@@ -588,6 +589,7 @@ async function notifyJoinFailure(
   //  The completion carries only an error kind, so trace the cause on the
   //  message flow under the same flow id as the Join that produced it.
   const tracePoint = coordinator?.messageFlow?.()?.begin(ZLinkMessageFlowOutcome.Error);
+  const errorDetails = tracePoint === undefined ? undefined : dispatchErrorDetails(error);
   tracePoint?.trace({
     outcome: ZLinkMessageFlowOutcome.Error,
     surface: ZLinkDispatchErrorSurface.SpotActor,
@@ -596,8 +598,8 @@ async function notifyJoinFailure(
     actorId: actor.context.actorId,
     errorReason: ZLinkDispatchErrorReason.HandlerException,
     errorAction: ZLinkDispatchErrorAction.ReplyError,
-    errorType: String(frameworkError.kind),
-    errorMessage: String(error)
+    errorType: errorDetails?.errorType,
+    errorMessage: errorDetails?.errorMessage
   });
   await actor.onJoinCompleted?.({
     status: 'failed',
