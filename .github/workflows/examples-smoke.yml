@@ -31,12 +31,22 @@ on:
         description: 'examples-mirror.yml이 미러에 push하려는 framework 태그'
         required: true
         type: string
+      languages:
+        description: 'JSON 배열. 이 언어의 lane만 돈다(미러가 push하는 언어; 다른 언어의 패키지는 아직 없을 수 있다)'
+        required: false
+        default: '["cpp","dotnet","java","node"]'
+        type: string
   workflow_dispatch:
     inputs:
       ref:
         description: 'tree를 내보낼 git ref (branch/tag/sha). release가 아니면 package pin이 아직 없을 수 있다'
         required: true
         default: main
+        type: string
+      languages:
+        description: 'JSON 배열. 돌릴 언어의 lane'
+        required: false
+        default: '["cpp","dotnet","java","node"]'
         type: string
   schedule:
     - cron: '30 2 * * *'
@@ -167,6 +177,7 @@ jobs:
   dotnet-linux:
     name: dotnet / ubuntu-24.04 (no checkout)
     needs: export
+    if: contains(fromJSON(inputs.languages || '["cpp","dotnet","java","node"]'), 'dotnet')
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4
@@ -264,6 +275,7 @@ jobs:
   dotnet-windows:
     name: dotnet / windows-2022 (no checkout)
     needs: export
+    if: contains(fromJSON(inputs.languages || '["cpp","dotnet","java","node"]'), 'dotnet')
     runs-on: windows-2022
     steps:
       - uses: actions/download-artifact@v4
@@ -397,6 +409,7 @@ jobs:
   node-linux:
     name: node / ubuntu-24.04 (no checkout)
     needs: export
+    if: contains(fromJSON(inputs.languages || '["cpp","dotnet","java","node"]'), 'node')
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4
@@ -481,6 +494,7 @@ jobs:
   java-linux:
     name: java / ubuntu-24.04 (no checkout)
     needs: export
+    if: contains(fromJSON(inputs.languages || '["cpp","dotnet","java","node"]'), 'java')
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4
@@ -594,6 +608,7 @@ jobs:
   java-windows:
     name: java / windows-2022 (no checkout)
     needs: export
+    if: contains(fromJSON(inputs.languages || '["cpp","dotnet","java","node"]'), 'java')
     runs-on: windows-2022
     steps:
       - uses: actions/download-artifact@v4
@@ -737,6 +752,7 @@ jobs:
   cpp-linux:
     name: cpp / ubuntu-24.04 (no checkout)
     needs: export
+    if: contains(fromJSON(inputs.languages || '["cpp","dotnet","java","node"]'), 'cpp')
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4

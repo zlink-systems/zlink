@@ -251,6 +251,19 @@ jobs:
     with:
       language: node
 
+  # The public examples mirror follows the verified release (#884): the trees
+  # pin the packages this run published, so the mirror runs only after they
+  # are served and the tutorial passed against them.
+  mirror-node:
+    if: needs.tutorial-node.result == 'success'
+    name: Mirror zlink-node-examples
+    needs: [resolve, tutorial-node]
+    uses: ./.github/workflows/examples-mirror.yml
+    secrets: inherit
+    with:
+      ref: ${{ github.event_name == 'push' && github.ref_name || format('framework-node/v{0}', needs.resolve.outputs.node_version) }}
+      language: node
+
   # Separate from release-node on purpose. That job carries the npm Trusted
   # Publishing credential (id-token: write); adding contents: write there would put
   # repository write access in the same context as the publishing credential for
@@ -403,6 +416,16 @@ jobs:
     with:
       language: java
 
+  mirror-java:
+    if: needs.tutorial-java.result == 'success'
+    name: Mirror zlink-java-examples
+    needs: [resolve, tutorial-java]
+    uses: ./.github/workflows/examples-mirror.yml
+    secrets: inherit
+    with:
+      ref: ${{ github.event_name == 'push' && github.ref_name || format('framework-java/v{0}', needs.resolve.outputs.java_version) }}
+      language: java
+
   release-cpp:
     if: needs.resolve.outputs.target == 'cpp' || needs.resolve.outputs.target == 'all'
     name: Package C++ framework sources
@@ -486,6 +509,16 @@ jobs:
     needs: wait-tutorial-cpp
     uses: ./.github/workflows/framework-tutorial.yml
     with:
+      language: cpp
+
+  mirror-cpp:
+    if: needs.tutorial-cpp.result == 'success'
+    name: Mirror zlink-cpp-examples
+    needs: [resolve, tutorial-cpp]
+    uses: ./.github/workflows/examples-mirror.yml
+    secrets: inherit
+    with:
+      ref: ${{ github.event_name == 'push' && github.ref_name || format('framework-cpp/v{0}', needs.resolve.outputs.cpp_version) }}
       language: cpp
 
   sync-recipes:

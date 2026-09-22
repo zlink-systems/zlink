@@ -10,7 +10,7 @@
 | 채널 | 계정·namespace | 배포 방식 |
 | --- | --- | --- |
 | GitHub | 조직 `zlink-systems`, 저장소 `zlink-systems/zlink` | 언어별 태그와 GitHub Release 자산 |
-| GitHub (examples 미러) | `zlink-systems/zlink-{cpp,dotnet,java,node}-examples` — 읽기 전용, issue·wiki 비활성, PR을 받지 않는다 | `examples-mirror.yml`이 framework 태그마다 push([release-pipeline](release-pipeline.ko.md) §1) |
+| GitHub (examples 미러) | `zlink-systems/zlink-{cpp,dotnet,java,node}-examples` — 읽기 전용, issue·wiki 비활성, PR을 받지 않는다 | 릴리스 워크플로가 언어별 게시·검증 뒤 `examples-mirror.yml`을 불러 push([release-pipeline](release-pipeline.ko.md) §1) |
 | Maven Central | namespace `systems.zlink` 검증 완료 | Sonatype Central Portal bundle 업로드 |
 | nuget.org | 개인 계정 `zlink` | Trusted Publishing(OIDC), API key 없음 |
 | npm | 개인 계정 `zlink-systems`, scope `@zlink-systems`, 2FA | Trusted Publishing(OIDC)+provenance. binding은 `bindings-release.yml`, framework 8개는 `framework-release.yml`로 패키지별 등록(2026-09-09 완료) |

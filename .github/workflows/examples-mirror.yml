@@ -10,11 +10,16 @@ name: Mirror examples repositories
 # framework-tutorial.yml builds it against the runtime in the same PR).
 #
 # Two triggers, one rule:
-# - a framework release tag mirrors that tree and tags it `vA.B.C`;
+# - a framework release calls this workflow (workflow_call from
+#   framework-release.yml / release-dotnet.yml) for one language after that
+#   language's packages are published and its tutorial verified; the run
+#   mirrors that tree and tags it `vA.B.C`. A tag push itself does not run
+#   this workflow: at tag time the packages are not on the registry yet, so
+#   the smoke would fail for every language and nothing would be pushed (#884);
 # - a push to `main` that touches an examples path mirrors the tree as a plain
 #   commit — but only for a language whose `framework/languages/<lang>/VERSION`
 #   is already tagged. Between the version-bump PR and the tag, main's pins
-#   name unpublished packages, so that language is skipped (the tag run
+#   name unpublished packages, so that language is skipped (the release run
 #   mirrors it). The trees reference published packages only, so anything
 #   else on main builds for a reader today.
 #
@@ -28,13 +33,17 @@ name: Mirror examples repositories
 # (EXAMPLES_MIRROR_KEY_<LANG> secrets, doc/building/release-accounts.ko.md).
 # GITHUB_TOKEN cannot push to another repository.
 on:
+  workflow_call:
+    inputs:
+      ref:
+        description: 'The framework tag to mirror (framework/vA.B.C or framework-<lang>/vA.B.C)'
+        required: true
+        type: string
+      language:
+        description: 'The one language whose packages the caller has published and verified'
+        required: true
+        type: string
   push:
-    tags:
-      - 'framework/v*'
-      - 'framework-cpp/v*'
-      - 'framework-dotnet/v*'
-      - 'framework-java/v*'
-      - 'framework-node/v*'
     branches: [main]
     paths:
       - 'framework/languages/*/quickstart/**'
@@ -53,14 +62,14 @@ on:
         default: main
         type: string
 
-# One run per ref. A single group for the whole workflow kept only one
-# *pending* run — GitHub cancels the older pending run in a group when a
-# newer one queues — so the four framework-<lang>/v0.20.0 tags pushed back
-# to back lost three of their runs. Per-language tags push to different
-# mirrors, so they never race; `framework/v*` and `main` runs touch the same
-# mirrors but arrive far apart.
+# One run per ref and language. A single group for the whole workflow kept
+# only one *pending* run — GitHub cancels the older pending run in a group
+# when a newer one queues — so the four framework-<lang>/v0.20.0 tags pushed
+# back to back lost three of their runs. Per-language runs push to different
+# mirrors, so they never race; `main` runs touch the same mirrors but arrive
+# far apart. (In a called workflow `github.workflow` is the caller's name.)
 concurrency:
-  group: ${{ github.workflow }}-${{ inputs.ref || github.ref }}
+  group: examples-mirror-${{ inputs.ref || github.ref }}-${{ inputs.language || 'all' }}
   cancel-in-progress: false
 
 permissions:
@@ -85,6 +94,7 @@ jobs:
       - id: pick
         env:
           DISPATCH_REF: ${{ inputs.ref }}
+          CALL_LANGUAGE: ${{ inputs.language }}
         run: |
           set -euo pipefail
           ref="${DISPATCH_REF:-${GITHUB_REF_NAME}}"
@@ -112,6 +122,14 @@ jobs:
               ;;
             *) echo "::error::not a framework tag or main: ${ref}"; exit 1 ;;
           esac
+          # A release call mirrors the one language the caller published; the
+          # other languages' packages for the same version may not exist yet.
+          if [ -n "${CALL_LANGUAGE}" ]; then
+            case "${languages}" in
+              *"\"${CALL_LANGUAGE}\""*) languages="[\"${CALL_LANGUAGE}\"]" ;;
+              *) echo "::error::${ref} does not release ${CALL_LANGUAGE}"; exit 1 ;;
+            esac
+          fi
           if [ "${ref}" != main ]; then
             version="${ref##*/v}"
             if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -124,8 +142,9 @@ jobs:
           echo "languages=${languages}" >> "$GITHUB_OUTPUT"
 
   # Same trees, built and run from their READMEs in jobs without a checkout.
-  # Every language runs (the export always produces all four trees; the
-  # smoke is the guard for the trees as a whole, not per tag).
+  # Only the languages this run mirrors are smoked: a mirror is pushed on its
+  # own language's proof, so another language's unpublished packages cannot
+  # block it.
   smoke:
     name: Smoke the exported trees
     needs: resolve
@@ -133,6 +152,7 @@ jobs:
     uses: ./.github/workflows/examples-smoke.yml
     with:
       ref: ${{ needs.resolve.outputs.ref }}
+      languages: ${{ needs.resolve.outputs.languages }}
 
   push:
     name: Push zlink-${{ matrix.lang }}-examples
