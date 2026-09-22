@@ -2406,10 +2406,13 @@ async function awaitWithin<T>(promise: Promise<T>, timeoutMs: number, message: s
   }
 }
 
-test('a channel request NotFound result remains NotFound with or without a failure code', () => {
+test('a channel request validates NotFound wire pairs after handling local no-member', () => {
   const empty = meshRequestFailure('game', 102, 0);
   assert.equal(empty.kind, ZLinkFrameworkErrorKind.NotFound);
 
   const namedMissing = meshRequestFailure('game', 102, 14);
   assert.equal(namedMissing.kind, ZLinkFrameworkErrorKind.NotFound);
+
+  const invalid = meshRequestFailure('game', 102, 18);
+  assert.equal(invalid.kind, ZLinkFrameworkErrorKind.ProtocolError);
 });

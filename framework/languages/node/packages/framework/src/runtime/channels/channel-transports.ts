@@ -1140,11 +1140,13 @@ export function meshRequestFailure(
   const wireKind = canonical
     ? internalFrameworkErrorKindFromWireReply(result, nativeErrno)
     : undefined;
-  const kind: ZLinkFrameworkInternalErrorKindType =
-    result === RequestResult.NotFound
-      ? ZLinkFrameworkInternalErrorKind.RequestTargetNotFound
-      : !canonical
-        ? ZLinkFrameworkInternalErrorKind.RequestProtocolError
+  const localNoMember = result === RequestResult.NotFound && nativeErrno === 0;
+  const kind: ZLinkFrameworkInternalErrorKindType = localNoMember
+    ? ZLinkFrameworkInternalErrorKind.RequestTargetNotFound
+    : !canonical
+      ? ZLinkFrameworkInternalErrorKind.RequestProtocolError
+      : result === RequestResult.NotFound
+        ? ZLinkFrameworkInternalErrorKind.RequestTargetNotFound
         : result === RequestResult.TimedOut
           ? ZLinkFrameworkInternalErrorKind.DeadlineExceeded
           : result === RequestResult.Terminated
