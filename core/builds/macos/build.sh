@@ -4,7 +4,7 @@
 # Supports both x86_64 and arm64 architectures
 # Requires: Xcode Command Line Tools, cmake
 #
-set -e
+set -euo pipefail
 
 # Get script directory and repo root early (before any cd commands)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,6 +16,42 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
     exit 2
 }
 LIBZLINK_VERSION=$(grep '^LIBZLINK_VERSION=' "$REPO_ROOT/VERSION" | cut -d'=' -f2)
+
+macos_rpaths() {
+    awk '
+        $1 == "cmd" && $2 == "LC_RPATH" {
+            if (getline <= 0 || $1 != "cmdsize") exit 2
+            if (getline <= 0 || $1 != "path") exit 2
+            rpath = $0
+            sub(/^[[:space:]]*path[[:space:]]+/, "", rpath)
+            sub(/[[:space:]]+\(offset [0-9]+\)$/, "", rpath)
+            print rpath
+        }
+    '
+}
+
+verify_built_macos_rpath() {
+    local binary="$1"
+    local rpaths rpath
+    local count=0
+
+    if ! rpaths="$(otool -l "$binary" | macos_rpaths)"; then
+        echo "Error: failed to inspect LC_RPATH in $binary" >&2
+        exit 1
+    fi
+    while IFS= read -r rpath; do
+        [ -n "$rpath" ] || continue
+        count=$((count + 1))
+        if [ "$rpath" != "@loader_path" ]; then
+            echo "Error: unexpected LC_RPATH in $binary: $rpath" >&2
+            exit 1
+        fi
+    done <<< "$rpaths"
+    if [ "$count" -ne 1 ]; then
+        echo "Error: expected exactly one @loader_path LC_RPATH in $binary, found $count" >&2
+        exit 1
+    fi
+}
 
 # Parse arguments: ARCH RUN_TESTS
 ARCH="${1:-$(uname -m)}"
@@ -64,7 +100,7 @@ cd "$BUILD_DIR"
 LIBZLINK_SRC_ABS="$REPO_ROOT/core"
 
 # Set architecture-specific CMake flags
-CMAKE_ARCH_FLAGS="-DCMAKE_OSX_ARCHITECTURES=$ARCH"
+CMAKE_ARCH_FLAGS=("-DCMAKE_OSX_ARCHITECTURES=$ARCH")
 
 # Determine BUILD_TESTS flag
 BUILD_TESTS_FLAG="OFF"
@@ -79,21 +115,26 @@ fi
 BUILD_STATIC_FLAG="ON"
 
 # Configure build
+OPENSSL_ROOT_DIR="${OPENSSL_ROOT_DIR:-}"
 if [ -z "$OPENSSL_ROOT_DIR" ]; then
     if command -v brew >/dev/null 2>&1; then
         OPENSSL_ROOT_DIR=$(brew --prefix openssl@3 2>/dev/null || brew --prefix openssl 2>/dev/null)
     fi
 fi
 
-CMAKE_OPENSSL_ARGS=""
+CMAKE_OPENSSL_ARGS=()
 if [ -n "$OPENSSL_ROOT_DIR" ]; then
     echo "Using OpenSSL from: $OPENSSL_ROOT_DIR"
-    CMAKE_OPENSSL_ARGS="-DOPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR -DOPENSSL_LIBRARIES=$OPENSSL_ROOT_DIR/lib/libssl.dylib;$OPENSSL_ROOT_DIR/lib/libcrypto.dylib -DOPENSSL_INCLUDE_DIR=$OPENSSL_ROOT_DIR/include"
+    CMAKE_OPENSSL_ARGS=(
+        "-DOPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR"
+        "-DOPENSSL_LIBRARIES=$OPENSSL_ROOT_DIR/lib/libssl.dylib;$OPENSSL_ROOT_DIR/lib/libcrypto.dylib"
+        "-DOPENSSL_INCLUDE_DIR=$OPENSSL_ROOT_DIR/include"
+    )
 fi
 
 cmake "$LIBZLINK_SRC_ABS" \
-    $CMAKE_ARCH_FLAGS \
-    $CMAKE_OPENSSL_ARGS \
+    "${CMAKE_ARCH_FLAGS[@]}" \
+    "${CMAKE_OPENSSL_ARGS[@]}" \
     -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
     -DBUILD_SHARED=ON \
@@ -107,7 +148,7 @@ cmake "$LIBZLINK_SRC_ABS" \
 # Step 3: Build libzlink
 echo ""
 echo "Step 3: Building libzlink for ${ARCH}..."
-make -j$(sysctl -n hw.ncpu)
+make -j"$(sysctl -n hw.ncpu)"
 
 # Step 4: Install
 echo ""
@@ -157,6 +198,23 @@ if [ -n "$DYLIB_FILE" ]; then
     done
     install_name_tool -id "@loader_path/libssl.3.dylib" "$PACKAGE_LIB/libssl.3.dylib"
     install_name_tool -id "@loader_path/libcrypto.3.dylib" "$PACKAGE_LIB/libcrypto.3.dylib"
+
+    # CMake records its absolute install directory as LC_RPATH. The archive has
+    # no fixed install prefix, so every packaged dylib resolves its siblings
+    # from the loader's directory instead.
+    for binary in "$DYLIB_FILE" "$PACKAGE_LIB/libssl.3.dylib" "$PACKAGE_LIB/libcrypto.3.dylib"; do
+        rpaths="$(otool -l "$binary" | macos_rpaths)"
+        while IFS= read -r rpath; do
+            [ -n "$rpath" ] || continue
+            install_name_tool -delete_rpath "$rpath" "$binary"
+        done <<< "$rpaths"
+        install_name_tool -add_rpath "@loader_path" "$binary"
+    done
+
+    for binary in "$DYLIB_FILE" "$PACKAGE_LIB/libssl.3.dylib" "$PACKAGE_LIB/libcrypto.3.dylib"; do
+        verify_built_macos_rpath "$binary"
+    done
+
     codesign --force --sign - "$PACKAGE_LIB/libcrypto.3.dylib"
     codesign --force --sign - "$PACKAGE_LIB/libssl.3.dylib"
     codesign --force --sign - "$DYLIB_FILE"
@@ -187,7 +245,7 @@ if [ "$RUN_TESTS" = "ON" ]; then
     cd "$BUILD_DIR"
 
     # Build test executables
-    make -j$(sysctl -n hw.ncpu)
+    make -j"$(sysctl -n hw.ncpu)"
 
     # Run tests with ctest. Tests labelled "serial" are run one at a time
     # (they share ports and timing budgets); the rest run in parallel. Any
