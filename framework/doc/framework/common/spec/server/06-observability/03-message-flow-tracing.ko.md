@@ -149,6 +149,7 @@ lease fencing은 `target_closed`로 기록한다.
 | `surface`, `message_kind`, `outcome` | 모든 message-flow 기록에 포함한다. |
 | `reason` | 실패, backpressure 또는 drop 원인이 있을 때 포함한다. |
 | `action` | `zlink.dispatch_error`에 포함한다. |
+| `error_type`, `error_message` | 실패 원인이 error 객체일 때 두 값을 함께 포함한다. |
 | `channel_name` | 논리 Channel 주소가 있을 때 포함한다. |
 | `channel_route_kind` | `surface=channel`에만 포함한다. `classic_fanout`에는 포함하지 않는다. |
 | `mesh_name` | Node direct 또는 RouteMesh 범위가 있을 때 포함한다. |
@@ -175,7 +176,8 @@ Structured log를 대신 제공하는 구현은 `zlink flow:` prefix와 다음 k
 
 `event`, `phase`, `surface`, `kind`, `mesh`, `channel`, `channel_route`, `source_rid`,
 `target_rid`, `server_rid`, `packet`, `topic`, `spot`, `instance_type`,
-`activation_state`, `actor`, `corr`, `flow`, `origin`, `outcome`, `reason`, `size`.
+`activation_state`, `actor`, `corr`, `flow`, `origin`, `outcome`, `reason`,
+`error_type`, `error_message`, `size`.
 
 Logical Multicast와 Classic fanout의 정상 publish·subscriber delivery는
 `zlink.message_flow`를 만들지 않는다. Classic fanout subscriber의 local dispatch에서
@@ -320,6 +322,8 @@ attribute key, diagnostics level·sampling rate 설정 interface)만으로 다�
 - Classic fanout의 subscriber-local handler 누락이 `surface=classic_fanout`,
   `reason=no_handler`, `action=drop`인 dispatch error를 만들고 `channel_route_kind`를
   포함하지 않는다.
+- Handler 예외로 만든 dispatch error가 trace와 structured log 양쪽에 `error_type`과
+  `error_message`를 함께 남기고, 값에 stack trace가 없다.
 - 각 request surface가 terminal trace를 정확히 한 번 기록한다.
 - Instance Spot의 one-way 생성 실패를 `surface=instance_spot`, `phase=dropped`로
   정확히 한 번 기록하고, 숨은 request나 replay를 만들지 않는다.

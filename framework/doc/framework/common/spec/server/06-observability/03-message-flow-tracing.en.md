@@ -167,6 +167,7 @@ the following values.
 | `surface`, `message_kind`, `outcome` | Included in every message-flow record. |
 | `reason` | Included when there's a failure, backpressure, or drop cause. |
 | `action` | Included in `zlink.dispatch_error`. |
+| `error_type`, `error_message` | Both included together when the failure cause is an error object. |
 | `channel_name` | Included when a logical Channel address exists. |
 | `channel_route_kind` | Included only when `surface=channel`; not included for `classic_fanout`. |
 | `mesh_name` | Included when there's a Node direct or RouteMesh scope. |
@@ -195,7 +196,7 @@ An implementation providing a structured log as a substitute uses the
 `event`, `phase`, `surface`, `kind`, `mesh`, `channel`, `channel_route`,
 `source_rid`, `target_rid`, `server_rid`, `packet`, `topic`, `spot`,
 `instance_type`, `activation_state`, `actor`, `corr`, `flow`, `origin`,
-`outcome`, `reason`, `size`.
+`outcome`, `reason`, `error_type`, `error_message`, `size`.
 
 Normal publish and subscriber delivery for Logical Multicast and Classic
 fanout don't build a `zlink.message_flow` record. If local dispatch at a
@@ -362,6 +363,9 @@ interface. Each item corresponds to one contract test.
 - A missing subscriber-local Classic fanout handler builds a dispatch
   error with `surface=classic_fanout`, `reason=no_handler`, and
   `action=drop`, without `channel_route_kind`.
+- A dispatch error from a handler exception leaves `error_type` and
+  `error_message` together in both the trace and the structured log, and the
+  values contain no stack trace.
 - Each request surface records the terminal trace exactly once.
 - An Instance Spot's one-way creation failure is recorded exactly once as
   `surface=instance_spot`, `phase=dropped`, without building a hidden
