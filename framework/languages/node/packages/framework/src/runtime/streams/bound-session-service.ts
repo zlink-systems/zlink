@@ -456,9 +456,7 @@ export class ZLinkBoundSessionService {
   }
 
   private actorSlot(route: ZLinkStreamActorSessionRoute): number | undefined {
-    return route.context.stream instanceof ZLinkManagedStream
-      ? route.context.stream.actorSlot(route.actor.actorId)
-      : undefined;
+    return route.actorSlot;
   }
 }
 

@@ -40,7 +40,6 @@ import {
   ZLinkStreamCloseReasonCode
 } from './protocol';
 import type { ZLinkActorSessionAuthorityFence } from './actor-session-binding-registry';
-import { routingIdsEqual } from '../routing-id';
 
 const ZLINK_SEND_DONT_WAIT = 1;
 const NO_ACCEPTED_TERMINAL_RESULTS: ReadonlySet<number> = new Set();
@@ -57,7 +56,6 @@ export interface ZLinkNativeSessionRoute {
 interface ZLinkManagedActorBinding {
   readonly actor: ZLinkBackendActorRef;
   readonly bindingGeneration?: bigint;
-  readonly actorSlot: number;
   readonly route?: ZLinkNativeSessionRoute;
 }
 
@@ -66,7 +64,6 @@ export class ZLinkManagedStream implements ZLinkStream {
   private currentRemoteAddr: string | undefined;
   private transportClosed = false;
   private readonly nativeActorBindings = new Map<string, ZLinkManagedActorBinding>();
-  private nextActorSlot = 1;
 
   constructor(
     private readonly socket: ZLinkBackendStreamSocket,
@@ -94,17 +91,6 @@ export class ZLinkManagedStream implements ZLinkStream {
 
   actorBindingGeneration(actorId: string): bigint | undefined {
     return this.nativeActorBindings.get(actorId)?.bindingGeneration;
-  }
-
-  actorSlot(actorId: string): number | undefined {
-    return this.nativeActorBindings.get(actorId)?.actorSlot;
-  }
-
-  actorIdForSlot(actorSlot: number): string | undefined {
-    for (const [actorId, binding] of this.nativeActorBindings) {
-      if (binding.actorSlot === actorSlot) return actorId;
-    }
-    return undefined;
   }
 
   private isTransportClosed(): boolean {
@@ -211,17 +197,6 @@ export class ZLinkManagedStream implements ZLinkStream {
       );
     }
     const nativeActor = toNativeActorRef(actor);
-    const currentBinding = this.nativeActorBindings.get(actor.actorId);
-    const keepActorSlot =
-      currentBinding !== undefined &&
-      routingIdsEqual(currentBinding.actor.nodeRid, nativeActor.nodeRid) &&
-      currentBinding.actor.generation === nativeActor.generation;
-    if (!keepActorSlot && this.nextActorSlot > 0xffff) {
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.InvalidOperation,
-        `Stream session '${this.sessionId}' exhausted its Actor slots.`
-      );
-    }
     const route = this.nativeRoute(actor.meshName);
     if (route !== undefined) {
       if (route.service.status().state === 1) {
@@ -291,14 +266,11 @@ export class ZLinkManagedStream implements ZLinkStream {
           `Stream session '${this.sessionId}' is disconnected.`
         );
       }
-      await this.publishActorBinding(
-        actor.actorId,
-        nativeActor,
-        binding.bindingGeneration,
-        route,
-        currentBinding,
-        keepActorSlot
-      );
+      this.nativeActorBindings.set(actor.actorId, {
+        actor: nativeActor,
+        bindingGeneration: binding.bindingGeneration,
+        route
+      });
       return;
     }
     await this.socket.bindActor(
@@ -307,14 +279,7 @@ export class ZLinkManagedStream implements ZLinkStream {
       timeoutMs,
       signal
     );
-    await this.publishActorBinding(
-      actor.actorId,
-      nativeActor,
-      undefined,
-      undefined,
-      currentBinding,
-      keepActorSlot
-    );
+    this.nativeActorBindings.set(actor.actorId, { actor: nativeActor });
   }
 
   private async ensureNativeActorRoute(
@@ -365,7 +330,7 @@ export class ZLinkManagedStream implements ZLinkStream {
     if (binding?.route !== undefined) {
       const route = binding.route;
       if (!this.hasNativeBinding(route, actorId, binding.bindingGeneration!)) {
-        await this.retireActorBinding(actorId, binding);
+        this.nativeActorBindings.delete(actorId);
         return;
       }
       try {
@@ -395,51 +360,23 @@ export class ZLinkManagedStream implements ZLinkStream {
           throw error;
         }
       }
-      await this.retireActorBinding(actorId, binding);
+      if (this.nativeActorBindings.get(actorId) === binding) {
+        this.nativeActorBindings.delete(actorId);
+      }
       return;
     }
     await this.socket.unbindActor(this.backendRoutingId(), actorId, timeoutMs, signal);
-    if (binding !== undefined) await this.retireActorBinding(actorId, binding);
-  }
-
-  private async publishActorBinding(
-    actorId: string,
-    actor: ZLinkBackendActorRef,
-    bindingGeneration: bigint | undefined,
-    route: ZLinkNativeSessionRoute | undefined,
-    previous: ZLinkManagedActorBinding | undefined,
-    keepActorSlot: boolean
-  ): Promise<void> {
-    if (keepActorSlot && previous !== undefined) {
-      this.nativeActorBindings.set(actorId, {
-        actor,
-        actorSlot: previous.actorSlot,
-        ...(bindingGeneration === undefined ? {} : { bindingGeneration }),
-        ...(route === undefined ? {} : { route })
-      });
-      return;
-    }
-    if (previous !== undefined) {
+    if (binding !== undefined && this.nativeActorBindings.get(actorId) === binding) {
       this.nativeActorBindings.delete(actorId);
-      await this.submitActorBindingControl(encodeActorUnboundFrame(previous.actorSlot));
     }
-    const actorSlot = this.nextActorSlot++;
-    await this.submitActorBindingControl(encodeActorBoundFrame(actorSlot, actorId));
-    this.nativeActorBindings.set(actorId, {
-      actor,
-      actorSlot,
-      ...(bindingGeneration === undefined ? {} : { bindingGeneration }),
-      ...(route === undefined ? {} : { route })
-    });
   }
 
-  private async retireActorBinding(
-    actorId: string,
-    binding: ZLinkManagedActorBinding
-  ): Promise<void> {
-    if (this.nativeActorBindings.get(actorId) !== binding) return;
-    this.nativeActorBindings.delete(actorId);
-    await this.submitActorBindingControl(encodeActorUnboundFrame(binding.actorSlot));
+  async enqueueActorBound(actorSlot: number, actorId: string): Promise<void> {
+    await this.submitActorBindingControl(encodeActorBoundFrame(actorSlot, actorId));
+  }
+
+  async enqueueActorUnbound(actorSlot: number): Promise<void> {
+    await this.submitActorBindingControl(encodeActorUnboundFrame(actorSlot));
   }
 
   private async submitActorBindingControl(frame: Uint8Array): Promise<void> {

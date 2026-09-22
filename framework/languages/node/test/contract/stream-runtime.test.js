@@ -167,19 +167,123 @@ test('managed STREAM binding orders lifecycle controls around slotted Actor pack
   assert.deepEqual([...rebound.payload.slice(0, 4)], [1, 0, 2, 12]);
 });
 
-test('managed STREAM rejects a new binding after its Actor slot space is exhausted', async () => {
+test('managed STREAM does not expose a binding delivery path before bound control enqueue', async () => {
+  const socket = new FakeStreamSocket();
+  let releaseBound;
+  const boundCanFinish = new Promise((resolve) => { releaseBound = resolve; });
+  let boundStarted;
+  const boundDidStart = new Promise((resolve) => { boundStarted = resolve; });
+  socket.submit = async function submit(...args) {
+    this.sends.push(args);
+    if (decodeServerFrame(bytesOf(args[1])).header.name === '$zlink.actor.bound') {
+      boundStarted();
+      await boundCanFinish;
+    }
+  };
+  const runtime = new framework.ZLinkStreamBindingRuntime({
+    messageFactory: binaryMessageFactory()
+  });
+  const context = runtime.createSessionContext(
+    new framework.ZLinkManagedStream(socket, 'backend-rid', 'public-session')
+  );
+
+  const binding = context.actors.bind({
+    nodeRid: 'node-a',
+    actorId: 'actor-racing-push',
+    generation: 1n
+  });
+  await boundDidStart;
+  let deliverySettled = false;
+  const delivery = runtime
+    .sendLocalBoundSession('actor-racing-push', { ready: true }, 'ActorReady', new Map())
+    .then((result) => {
+      deliverySettled = true;
+      return result;
+    });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(deliverySettled, false);
+
+  releaseBound();
+  await binding;
+  assert.equal(await delivery, true);
+  assert.deepEqual(
+    socket.sends.map(([, message]) => decodeServerFrame(bytesOf(message)).header.name),
+    ['$zlink.actor.bound', 'ActorReady']
+  );
+  assert.equal(decodeServerFrame(bytesOf(socket.sends[1][1])).header.actorSlot, 1);
+});
+
+test('managed STREAM relocation preserves the Actor slot and emits no lifecycle controls', async () => {
+  const socket = new FakeStreamSocket();
+  const runtime = new framework.ZLinkStreamBindingRuntime({
+    messageFactory: binaryMessageFactory()
+  });
+  const context = runtime.createSessionContext(
+    new framework.ZLinkManagedStream(socket, 'backend-rid', 'public-session')
+  );
+  const actor = await context.actors.bind({
+    nodeRid: 'node-a',
+    actorId: 'actor-relocated-slot',
+    generation: 7n
+  });
+
+  await runtime.refreshActor({
+    nodeRid: 'node-b',
+    actorId: 'actor-relocated-slot',
+    generation: 7n
+  });
+  assert.equal((await context.actors.find(actor.actorId)).ref.nodeRid, 'node-b');
+  assert.equal(socket.sends.length, 1);
+  assert.equal(decodeServerFrame(bytesOf(socket.sends[0][1])).header.name, '$zlink.actor.bound');
+
+  assert.equal(
+    await runtime.sendLocalBoundSession(actor.actorId, { moved: true }, 'Relocated', new Map()),
+    true
+  );
+  assert.equal(decodeServerFrame(bytesOf(socket.sends[1][1])).header.actorSlot, 1);
+});
+
+test('managed STREAM serializes concurrent Actor slot exhaustion at binding commit', async () => {
   const socket = new FakeStreamSocket();
   const stream = new framework.ZLinkManagedStream(socket, 'backend-rid', 'public-session');
-  stream.nextActorSlot = 0x10000;
+  stream.nextActorSlot = 0xffff;
   const runtime = new framework.ZLinkStreamBindingRuntime();
   const context = runtime.createSessionContext(stream);
+  runtime.routes.nextActorSlots?.set(context, 0xffff);
+  let releaseBinds;
+  const bindsCanFinish = new Promise((resolve) => { releaseBinds = resolve; });
+  let bindCount = 0;
+  let bothStarted;
+  const bothDidStart = new Promise((resolve) => { bothStarted = resolve; });
+  socket.bindActor = async function bindActor(sessionRid, actor, timeoutMs) {
+    this.boundActors.push({ sessionRid, actor, timeoutMs });
+    bindCount += 1;
+    if (bindCount === 2) bothStarted();
+    await bindsCanFinish;
+  };
 
-  await assert.rejects(
-    () => context.actors.bind({ nodeRid: 'node-a', actorId: 'actor-exhausted', generation: 1n }),
-    (error) => error?.kind === framework.ZLinkFrameworkErrorKind.InvalidOperation
+  const first = context.actors.bind({
+    nodeRid: 'node-a',
+    actorId: 'actor-last-slot',
+    generation: 1n
+  });
+  const second = context.actors.bind({
+    nodeRid: 'node-a',
+    actorId: 'actor-overflow',
+    generation: 1n
+  });
+  await bothDidStart;
+  releaseBinds();
+  const outcomes = await Promise.allSettled([first, second]);
+
+  assert.equal(outcomes.filter(({ status }) => status === 'fulfilled').length, 1);
+  const rejected = outcomes.find(({ status }) => status === 'rejected');
+  assert.equal(rejected?.reason?.kind, framework.ZLinkFrameworkErrorKind.InvalidOperation);
+  assert.equal(socket.sends.length, 1);
+  assert.deepEqual(
+    [...decodeServerFrame(bytesOf(socket.sends[0][1])).payload.slice(0, 3)],
+    [1, 0xff, 0xff]
   );
-  assert.equal(socket.boundActors.length, 0);
-  assert.equal(socket.sends.length, 0);
 });
 
 test('managed stream synchronous writes preserve blocking defaults and explicit DontWait', () => {

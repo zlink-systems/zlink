@@ -444,9 +444,8 @@ export class ZLinkStreamBindingRuntime {
     registerActorSessionBindingRuntimeOwner(this, {
       actorSlot: async (actorId, sessionRid) => {
         const route = await this.routes.route(actorId);
-        if (!(route?.context.stream instanceof ZLinkManagedStream)) return undefined;
-        return String(route.context.stream.actorBindingRoutingId) === sessionRid
-          ? route.context.stream.actorSlot(actorId)
+        return route !== undefined && route.sessionIdentity === sessionRid
+          ? route.actorSlot
           : undefined;
       },
       sealRelocation: (claim, expected, signal) =>

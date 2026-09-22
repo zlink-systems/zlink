@@ -45,7 +45,8 @@ import { releaseApplicationJobPermitBeforeHandler } from '../application-jobs/ap
 export interface ZLinkSessionContextStream extends ZLinkStream {
   writeRaw(payload: Message, flags?: number): boolean;
   submitRaw(payload: Message, signal?: AbortSignal, timeoutMs?: number): Promise<ZLinkSubmitResult>;
-  actorIdForSlot?(actorSlot: number): string | undefined;
+  enqueueActorBound?(actorSlot: number, actorId: string): Promise<void>;
+  enqueueActorUnbound?(actorSlot: number): Promise<void>;
 }
 
 interface ZLinkSessionContextRuntime {
@@ -347,12 +348,29 @@ export class DefaultZLinkSessionContext implements ZLinkSessionContext {
 
   actorForSlot(actorSlot: number | undefined): DefaultZLinkSessionActor | undefined {
     if (actorSlot === undefined) return undefined;
-    const actorId = this.stream.actorIdForSlot?.(actorSlot);
-    return actorId === undefined ? undefined : this.localActors.find(actorId);
+    return this.localActors.findBySlot(actorSlot);
   }
 
-  bindLocal(actor: DefaultZLinkSessionActor, token: string): void {
-    this.localActors.bind(actor, token);
+  get actorSlotControls():
+    | {
+        enqueueBound(actorSlot: number, actorId: string): Promise<void>;
+        enqueueUnbound(actorSlot: number): Promise<void>;
+      }
+    | undefined {
+    if (
+      this.stream.enqueueActorBound === undefined ||
+      this.stream.enqueueActorUnbound === undefined
+    ) {
+      return undefined;
+    }
+    return {
+      enqueueBound: (actorSlot, actorId) => this.stream.enqueueActorBound!(actorSlot, actorId),
+      enqueueUnbound: (actorSlot) => this.stream.enqueueActorUnbound!(actorSlot)
+    };
+  }
+
+  bindLocal(actor: DefaultZLinkSessionActor, token: string, actorSlot?: number): void {
+    this.localActors.bind(actor, token, actorSlot);
   }
 
   unbindLocal(actorId: string, token: string): void {
