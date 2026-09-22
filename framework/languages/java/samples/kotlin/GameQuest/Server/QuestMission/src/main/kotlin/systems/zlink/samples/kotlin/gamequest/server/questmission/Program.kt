@@ -22,6 +22,10 @@ import systems.zlink.contracts.core.RoutingId
 import systems.zlink.framework.actors.ZLinkActorClient
 import systems.zlink.framework.channels.ZLinkRouteClient
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
+import systems.zlink.framework.kotlin.*
+import systems.zlink.framework.kotlin.ZLinkSuspendingSpotPacketHandler
+import systems.zlink.framework.kotlin.await
+import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.framework.kotlin.useCoroutineHandlers
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore
@@ -91,8 +95,7 @@ class Program {
                 )
             )
             options.useCoroutineHandlers(Dispatchers.Default)
-            // #895: configuration package scanning has no Kotlin form in the spec.
-            options.addHandlersFromPackageOf(Program::class.java)
+            options.addHandlersFromPackageOf<Program>()
             options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 
             // --8<-- [start:doc-gq-mission-register]
@@ -102,11 +105,8 @@ class Program {
                 .listen(mission.channelEndpoint)
                 .objects()
                 .server()
-                .addInstanceSpotFactory(
-                    SampleNames.PlayerQuestSpotType,
-                    PlayerQuestSpot::class.java,
-                ) { factory ->
-                    factory.recreateOnRelocation()
+                .addInstanceSpotFactory<PlayerQuestSpot>(SampleNames.PlayerQuestSpotType) {
+                    recreateOnRelocation()
                 }
             // --8<-- [end:doc-gq-mission-register]
         }
@@ -211,10 +211,9 @@ class PlayerQuestSpot(
 }
 
 // --8<-- [start:doc-gq-apply-handler]
-// #895: the spec has no Kotlin handler form for an entry/instance Spot packet handler.
 class GameplayMsgRouteHandler(private val actors: ZLinkActorClient) :
-    ZLinkSpotPacketHandler<PlayerQuestSpot, GameplayMsg> {
-    override fun handle(spot: PlayerQuestSpot, request: GameplayMsg): CompletionStage<Void> {
+    ZLinkSuspendingSpotPacketHandler<PlayerQuestSpot, GameplayMsg> {
+    override suspend fun handle(spot: PlayerQuestSpot, request: GameplayMsg) {
         val processed = spot.apply(request)
         // --8<-- [start:doc-gq-notify-actor]
         processed.projection.firstOrNull()?.let { progress ->
@@ -222,10 +221,8 @@ class GameplayMsgRouteHandler(private val actors: ZLinkActorClient) :
                 "gamequest-mission processed player=${request.playerId} quest=${progress.questId}"
             )
         }
-        // #895: this entry/instance Spot packet handler has no Kotlin form in the spec.
-        actors.sendToActor(request.playerId, processed).submit()
+        actors.kotlin().sendToActor(request.playerId, processed).await()
         // --8<-- [end:doc-gq-notify-actor]
-        return CompletableFuture.completedFuture(null)
     }
 }
 

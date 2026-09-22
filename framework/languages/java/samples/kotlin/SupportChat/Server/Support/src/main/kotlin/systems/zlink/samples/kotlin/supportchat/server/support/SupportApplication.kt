@@ -12,6 +12,7 @@ import org.springframework.context.ConfigurableApplicationContext
 import org.springframework.context.annotation.Bean
 import org.springframework.core.env.StandardEnvironment
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
+import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.kotlin.configureDispatch
 import systems.zlink.framework.kotlin.useCoroutineHandlers
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
@@ -48,8 +49,7 @@ class SupportApplication {
         ZLinkFrameworkConfigurer { options ->
             val support = topology.support()
             val channelEndpoint = URI.create(support.channelEndpoint)
-            // #895: configuration package scanning has no Kotlin form in the spec.
-            options.addHandlersFromPackageOf(SupportApplication::class.java)
+            options.addHandlersFromPackageOf<SupportApplication>()
             options.useCoroutineHandlers(Dispatchers.Default)
             options.configureLocations()
             options.addRelocationStore(
@@ -74,19 +74,14 @@ class SupportApplication {
             node
                 .objects()
                 .server()
-                // #895: entry-spot registration has no Kotlin form in the spec.
-                .addEntrySpot(SupportEntrySpot::class.java)
-                .addActorFactory(
-                    SampleNames.SupportActorType,
-                    SupportUserActor::class.java,
-                    SupportUserActorFactory::class.java,
-                ) { factory ->
-                    // #895: state preservation configuration has no Kotlin form in the spec.
-                    factory.preserveStateWith(SupportUserActorRelocationAdapter::class.java)
+                .addEntrySpot<SupportEntrySpot>()
+                .addActorFactory<SupportUserActor, SupportUserActorFactory>(
+                    SampleNames.SupportActorType
+                ) {
+                    preserveStateWith<SupportUserActor, SupportUserActorRelocationAdapter>()
                 }
-                .addSpotFactory(SampleNames.ConversationSpotType, ConversationSpot::class.java) {
-                    factory ->
-                    factory.disableRelocation()
+                .addSpotFactory<ConversationSpot>(SampleNames.ConversationSpotType) {
+                    disableRelocation()
                 }
             // --8<-- [end:doc-sc-support-register]
         }

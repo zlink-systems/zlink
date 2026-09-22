@@ -24,6 +24,7 @@ import systems.zlink.framework.channels.ZLinkRouteClient
 import systems.zlink.framework.handlers.ZLinkHandlerGroup
 import systems.zlink.framework.handlers.ZLinkSpotActorRequest
 import systems.zlink.framework.handlers.ZLinkSpotActorSend
+import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.kotlin.ZLinkSuspendingActor
 import systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpotActorRequestHandler
 import systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpotActorSendHandler
@@ -468,18 +469,24 @@ class ZoneSpot(
     override suspend fun onInitializeSuspending() {
         census.hostZone(context.spotId())
         val tick =
-            context.addTimer(
+            context.addTimer<ZoneTickHandler>(
                 "zone-tick",
                 Duration.ofMillis(ZoneWorldSpec.TICK_PERIOD_MS),
-                ZoneTickHandler::class.java,
-                null,
+                systems.zlink.framework.spots.ZLinkTimerOptions(
+                    systems.zlink.framework.spots.ZLinkTimerOverrunPolicy.SKIP_LATE_TICKS,
+                    1,
+                    false,
+                ),
             )
         val bots =
-            context.addTimer(
+            context.addTimer<ZoneBotTickHandler>(
                 "zone-bot-tick",
                 Duration.ofMillis(ZoneWorldSpec.BOT_TICK_PERIOD_MS),
-                ZoneBotTickHandler::class.java,
-                null,
+                systems.zlink.framework.spots.ZLinkTimerOptions(
+                    systems.zlink.framework.spots.ZLinkTimerOverrunPolicy.SKIP_LATE_TICKS,
+                    1,
+                    false,
+                ),
             )
         tickTimer = tick.await()
         botTimer = bots.await()
@@ -542,12 +549,12 @@ class ZoneSpot(
             actor.updatePosition(targetX, targetY)
             context
                 .outbound()
+                .kotlin()
                 .sendToSpot(
                     context.spotId(),
                     Messages.UpdatePositionMsg(actor.actorId, targetX, targetY, actor.isBot),
                 )
-                // #895: Spot outbound fanout has no Kotlin wrapper in the spec.
-                .submit()
+                .await()
             if (!actor.isBot)
                 kotlinActors
                     .sendToActor(
@@ -655,13 +662,13 @@ class ZoneSpot(
                     .sortedWith(compareBy(ZoneWorldSpec.utf8Order) { it.playerId })
             context
                 .outbound()
+                .kotlin()
                 .publish(
                     ZoneWorldNames.ZONE_CHANNEL,
                     ZoneWorldNames.borderTopic(context.spotId(), target),
                     Messages.ZoneBorderEvent(context.spotId(), target, tickValue, players),
                 )
-                // #895: Spot outbound fanout has no Kotlin wrapper in the spec.
-                .submit()
+                .await()
         }
     }
     // --8<-- [end:doc-zw-border-publish]

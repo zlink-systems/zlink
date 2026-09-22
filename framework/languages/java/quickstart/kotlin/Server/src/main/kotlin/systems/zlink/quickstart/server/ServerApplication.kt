@@ -7,6 +7,8 @@ import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.context.annotation.Bean
 import systems.zlink.framework.ZLinkMessageContext
 import systems.zlink.framework.channels.ZLinkRequestHandler
+import systems.zlink.framework.kotlin.addHandlersFromPackageOf
+import systems.zlink.framework.kotlin.addRequestHandler
 import systems.zlink.framework.spring.EnableZLinkFramework
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
 import systems.zlink.quickstart.shared.Greeting
@@ -19,8 +21,7 @@ class ServerApplication {
     @Bean
     fun zlink(): ZLinkFrameworkConfigurer = ZLinkFrameworkConfigurer { options ->
         // Discovers handler types.
-        // #895: configuration package scanning has no Kotlin form in the spec.
-        options.addHandlersFromPackageOf(ServerApplication::class.java)
+        options.addHandlersFromPackageOf<ServerApplication>()
 
         // Names the mesh.
         val mesh =
@@ -29,10 +30,7 @@ class ServerApplication {
                 // This process's own endpoint, for peers to connect to.
                 .listen("tcp://0.0.0.0:7101")
         // This process handles the "greeting" channel.
-        mesh
-            .channelName("greeting")
-            .server()
-            .addRequestHandler(HelloHandler::class.java, Hello::class.java, Greeting::class.java)
+        mesh.channelName("greeting").server().addRequestHandler<HelloHandler, Hello, Greeting>()
     }
 }
 

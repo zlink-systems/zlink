@@ -1,3 +1,5 @@
+@file:Suppress("ForbiddenMethodCall") // Kotlin adapter owns the Java terminal bridge.
+
 package systems.zlink.framework.kotlin
 
 import systems.zlink.contracts.core.RoutingId

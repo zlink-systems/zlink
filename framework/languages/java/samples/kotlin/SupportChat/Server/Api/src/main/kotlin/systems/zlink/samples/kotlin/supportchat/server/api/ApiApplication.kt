@@ -15,6 +15,7 @@ import org.springframework.context.ConfigurableApplicationContext
 import org.springframework.context.annotation.Bean
 import org.springframework.core.env.StandardEnvironment
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
+import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.kotlin.configureDispatch
 import systems.zlink.framework.kotlin.useCoroutineHandlers
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
@@ -36,8 +37,7 @@ class ApiApplication {
             val api = topology.api()
             val channelEndpoint = URI.create(api.channelEndpoint)
             options.configureLocations()
-            // #895: configuration package scanning has no Kotlin form in the spec.
-            options.addHandlersFromPackageOf(ApiApplication::class.java)
+            options.addHandlersFromPackageOf<ApiApplication>()
             options.useCoroutineHandlers(Dispatchers.Default)
             options.configureDispatch { messageFlow(ZLinkMessageFlowLogMode.NORMAL) }
             options

@@ -12,6 +12,7 @@ import org.springframework.context.annotation.Bean
 import org.springframework.core.env.StandardEnvironment
 import systems.zlink.contracts.core.RoutingId
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
+import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.kotlin.configureDispatch
 import systems.zlink.framework.kotlin.useCoroutineHandlers
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions
@@ -50,7 +51,7 @@ class OrderWorkflowApplication {
             configurer.useCoroutineHandlers(Dispatchers.Default)
             configurer.configureDispatch { messageFlow(ZLinkMessageFlowLogMode.NORMAL) }
             // #895: configuration package scanning has no Kotlin form in the spec.
-            configurer.addHandlersFromPackageOf(OrderWorkflowApplication::class.java)
+            configurer.addHandlersFromPackageOf<OrderWorkflowApplication>()
             // --8<-- [start:doc-sm-workflow-register]
             configurer
                 .addRouteMesh(SampleNames.OrderWorkflowMesh)
@@ -58,11 +59,8 @@ class OrderWorkflowApplication {
                 .listen(role.channelEndpoint)
                 .objects()
                 .server()
-                .addInstanceSpotFactory(
-                    SampleNames.OrderWorkflowSpotType,
-                    OrderWorkflowSpot::class.java,
-                ) { factory ->
-                    factory.recreateOnRelocation()
+                .addInstanceSpotFactory<OrderWorkflowSpot>(SampleNames.OrderWorkflowSpotType) {
+                    recreateOnRelocation()
                 }
             // --8<-- [end:doc-sm-workflow-register]
         }
