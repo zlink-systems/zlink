@@ -21,15 +21,13 @@ title: "SupportChat 따라 읽기 · Java"
 !!! info "이 장을 읽고 나면"
 
     SupportChat 샘플을 편집기에 열고, 고객의 상담 요청이 상담원에게 배정되고 대화가 닫히기까지
-    메시지가 어느 서버의 어느 코드를 지나는지 따라갈 수 있다. 이 장의 코드는
-    `framework/languages/java/samples/java/SupportChat`에서 그대로 실행된다.
+    메시지가 어느 서버의 어느 코드를 지나는지 따라갈 수 있다. 이 장의 코드는 [언어별 예제 저장소의 SupportChat 샘플](https://github.com/zlink-systems/zlink-java-examples/tree/main/samples/SupportChat)에서 가져온다.
 
 [샘플 고르기](14-samples.ko.md#5-supportchat--라이브-채팅-상담-시스템-구축)가 이 샘플이 무엇을
 보여 주는지 소개했다. 이 장은 그 소개 다음에 읽는 자리다 — 역할과 코드 위치, 주요 시나리오의
 메시지 흐름, 각 흐름에 등장하는 framework 기능과 그것을 설명하는 장을 소스가 놓인 순서대로
-따라간다. 이 장에는 계약을 소유하는 스펙 문서가 없다. 요구사항, 메시지 계약과 검증 기준은
-[SupportChat 시나리오](../../../common/sample/supportchat/README.ko.md)가 소유하며, 이 장은
-그것을 다시 적지 않는다.
+따라간다. 이 장은 SupportChat 샘플의 역할과 코드 위치, 주요 메시지 흐름, 실행 검증을 소스 순서대로
+설명한다. 요구사항, 메시지 계약과 검증 기준은 [SupportChat 시나리오](../../../common/sample/supportchat/README.ko.md)에서 참고한다.
 
 ## 1. 이 샘플이 보여 주는 것
 
@@ -86,6 +84,8 @@ packet을 나눈다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-auth-join.html" title="인증, 상담 생성과 agent join" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-supportchat-auth-join.html" target="_blank">↗ 크게 보기</a></p>
+
+인증 뒤에는 identity Actor를 session에 묶어 이후 packet을 identity 또는 conversation Actor로 relay한다.
 
 `Server/Session/src/main/java/systems/zlink/samples/supportchat/server/session/sessions/SupportChatSession.java`
 
@@ -169,6 +169,8 @@ User Spot 생성은 [Spot](21-spot.ko.md#4-호출하는-쪽--spot을-호출하�
 <iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-chat-typing.html" title="채팅과 typing" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-supportchat-chat-typing.html" target="_blank">↗ 크게 보기</a></p>
 
+`ConversationId` metadata가 상담원의 여러 conversation Actor 중 하나를 고르므로 payload를 해석하지 않아도 relay 대상이 정해진다.
+
 `Server/Session/src/main/java/systems/zlink/samples/supportchat/server/session/sessions/SupportChatSession.java`
 
 ```java
@@ -194,6 +196,8 @@ notify를 push한다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-idle-close.html" title="idle, close와 reconnect" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-supportchat-idle-close.html" target="_blank">↗ 크게 보기</a></p>
+
+idle timer는 대화 state를 바꾸고, 연결 끊김은 availability만 바꾸므로 두 경로는 서로 다른 상태를 다룬다.
 
 `Server/Support/src/main/java/systems/zlink/samples/supportchat/server/support/spots/conversationspot/ConversationIdleTimerHandler.java`
 

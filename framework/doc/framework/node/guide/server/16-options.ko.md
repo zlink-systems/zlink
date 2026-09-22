@@ -83,7 +83,7 @@ host가 시작된 뒤에 builder를 다시 호출하는 표면은 없다. 잘못
 
 Core HWM은 ordinary queue가 보유한 byte를, Application job queue는 handler 시작을 기다리는 job
 수를 host 전체에서 제한한다. 두 상한의 동작은
-[Backpressure](33-backpressure.ko.md#1-core-hwm과-application-job-queue)가 다룬다.
+[Backpressure — Core HWM과 Application job queue](33-backpressure.ko.md#2-core-hwm과-application-job-queue)가 다룬다.
 
 | 옵션 | 무엇을 정하나 | 기본값 |
 | --- | --- | --- |

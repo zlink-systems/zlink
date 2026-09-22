@@ -18,12 +18,10 @@ title: "Actor membership · Node/TypeScript"
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-이 장의 코드는 [`TicTacToe` 샘플 README](https://github.com/zlink-systems/zlink-node-examples/blob/main/samples/TicTacToe/README.ko.md)에서 가져왔다. [예제 저장소](https://github.com/zlink-systems/zlink-node-examples/blob/main/samples/TicTacToe/README.ko.md)를 내려받아 README의 「내려받기와 설치」·「빌드」·「실행」 절을 따라 실행하면 아래 Actor membership 예제를 재현할 수 있다.
-
 !!! info "이 장을 읽고 나면"
 
     Actor를 Spot 사이로 옮기고, 그 이동을 받는 쪽에서 승인하거나 거절할 수 있다.
-    이 장의 코드는 TicTacToe 샘플에서 가져왔다.
+    이 장의 코드는 [언어별 예제 저장소의 TicTacToe 샘플](https://github.com/zlink-systems/zlink-node-examples/tree/main/samples/TicTacToe)에서 가져온다.
 
 [Actor](22-actor.ko.md)는 언제나 어떤 Spot 안에 있고, 만들어진 직후에는 Entry Spot에 있다.
 이 장은 **그 Actor를 User Spot으로 옮기는 절차**를 다룬다 — 게임 방이 그 예다 — 누가 승인하고, 언제 실행되며, 무엇이
@@ -48,6 +46,8 @@ Entry Spot으로 돌아가는 길에는 승인 절차가 없다. 기본 membersh
 <iframe class="zlink-diagram" src="/common/diagrams/35-actor-join.html" title="예약은 Defer() 호출이고, join은 handler가 끝난 뒤 시작한다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/35-actor-join.html" target="_blank">↗ 크게 보기</a></p>
 
+이 순서 때문에 join 결과는 현재 handler에서 기다리지 않고 handler가 끝난 뒤 callback으로 받는다.
+
 ## 2. 예약 등록 — handler가 끝난 뒤에 실행된다
 
 join 호출에는 결과를 그 자리에서 기다리는 형태가 없다. **예약만 하고 지금 handler를
@@ -57,6 +57,8 @@ join 호출에는 결과를 그 자리에서 기다리는 형태가 없다. **�
 ```typescript
 --8<-- "framework/languages/node/samples/TicTacToe.Ts/Server/Play/Infrastructure/ZLink/Spots/EntrySpot/Handlers/play-actor-join-game-handler.ts:doc-join-defer"
 ```
+
+이 등록은 현재 handler가 정상적으로 끝난 뒤에만 join을 시작하게 한다.
 
 ### 2.1 기다리는 형태를 제공하지 않는 이유
 

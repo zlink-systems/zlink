@@ -18,16 +18,14 @@ View in another language — [C++](../../../cpp/guide/server/33-backpressure.en.
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-This chapter quotes no tutorial code; it explains the limits and outcomes observable when load reaches tutorial `Server` and `Client` processes that have been bootstrapped and built using the [README Run section](https://github.com/zlink-systems/zlink-dotnet-examples/blob/main/tutorial/README.md#run).
+!!! info "What you get from this chapter"
 
-> **The documents that own this chapter's contract** — covered by the
-> [Async Execution Policy](../../../common/spec/server/01-execution/README.en.md),
-> [Framework API](../../../common/spec/server/00-foundation/06-framework-api.en.md),
-> [Runtime Monitoring](../../../common/spec/server/06-observability/01-runtime-monitoring.en.md), and the
-> [per-language topology public contract](../../../common/spec/server/languages/README.en.md).
-> This chapter explains that behavior as concepts and principles, and covers which options
-> affect it. Exact option names, defaults, and mutability are owned by each language's
-> [16. Options](16-options.en.md) and exact interface.
+    You can distinguish the paths through which Core HWM and the application job queue create
+    backpressure, and the metrics that show them.
+    The code in this chapter comes from the [per-language example repositories](https://github.com/zlink-systems/zlink-dotnet-examples).
+
+Core HWM limits bytes in Core queues, and the application job queue limits jobs waiting to start a
+handler. This chapter explains how those limits become sender waits and observable metrics.
 
 ## 1. Options When Inflow Exceeds Processing Capacity
 
@@ -419,48 +417,26 @@ attribute first.
 
 ## 7. Framework Runtime Coverage
 
-This common guide does not list per-language implementation differences. Common behavior is
-owned by [Framework API §2.1](../../../common/spec/server/00-foundation/06-framework-api.en.md),
-and status/reset semantics are owned by
-[Runtime Monitoring](../../../common/spec/server/06-observability/01-runtime-monitoring.en.md).
-
-See the language's `16. Options`, `11. Monitoring`, and
-[exact interface](../../../common/spec/server/languages/README.en.md) for its spelling and
-call form.
+Common behavior is the same in every language; per-language guides differ only in the spelling and
+call form of their options and monitoring APIs. See [Framework API](../../../common/spec/server/00-foundation/06-framework-api.en.md)
+and [Runtime Monitoring](../../../common/spec/server/06-observability/01-runtime-monitoring.en.md) for
+settings and status/reset semantics.
 
 ## 8. Common Problems
 
-- **`send` ends in `DeadlineExceeded`** → a send slot never opened up. Before raising the
-  ceiling, inspect the receiver's Core `blocked_ratio`, application job queue waiters, and
-  handler execution time.
-- **Core-accounted bytes are low, but receiving waits** → application job queue permits may
-  be full. Inspect `reserved`, `queued`, `in_use`, and capacity waiters.
-- **Application job queue `queued` is low, but the limit is reached** → `in_use` also counts
-  the short pre-receive `reserved` permits. Size a manual limit from `reserved + queued`.
-- **A handler appears scheduled, but the job count has not dropped** → permit release occurs
-  at the user's actual first callback instruction, not executor task publication. Check the
-  handler-start gate.
-- **`MaxQueuedApplicationJobs = 0` fails startup** → `0` is not unlimited. Omit the manual
-  value to select Auto.
-- **Using the same profile label does not move byte and job limits by the same ratio** →
-  `CoreHwmProfile` and `ApplicationJobQueueProfile` share labels only; their units and
-  calculations are independent.
-- **Replies still complete while the application job queue is full** → terminal reply/error
-  completion identifiable before receive bypasses the shared permit and ordinary Core HWM, so
-  this is expected.
-- **Raising the ceiling made the symptom show up later** → this is normal. Once congestion
-  is absorbed into memory, the failure surfaces later. To fail fast and switch to a
-  different path, lower the ceiling and shrink `DefaultSocketSendTimeout`.
-- **`Publish` completed normally, but the subscriber never received it** → publish's
-  completion means only that it was ready to send and the runtime accepted the submission.
-  Delivery, resend, and ack aren't provided
-  ([Channel Messaging](30-channel-patterns.en.md#7-what-it-means-for-a-call-to-be-finished)).
-- **A request inside a handler hangs for a long time** → if both sides' processing is
-  delayed at the same time, a finite timeout is where recovery starts. Give a nested request
-  a `Timeout(...)`.
-- **One slow node is also delaying other calls** → the send queue is separate per peer, but
-  waiting inside the same handler also occupies that handler's execution slot the whole
-  time. Don't put a call to a slow-responding target in the same handler as other calls.
+| Symptom | Cause and what to inspect |
+| --- | --- |
+| `send` ends in `DeadlineExceeded` | A send slot never opened up. Before raising the ceiling, inspect the receiver's Core `blocked_ratio`, application job queue waiters, and handler execution time. |
+| Core-accounted bytes are low, but receiving waits | Application job queue permits may be full. Inspect `reserved`, `queued`, `in_use`, and capacity waiters. |
+| Application job queue `queued` is low, but the limit is reached | `in_use` also counts the short pre-receive `reserved` permits. Size a manual limit from `reserved + queued`. |
+| A handler appears scheduled, but the job count has not dropped | Permit release occurs at the user's actual first callback instruction, not executor task publication. Check the handler-start gate. |
+| `MaxQueuedApplicationJobs = 0` fails startup | `0` is not unlimited. Omit the manual value to select Auto. |
+| The same profile label does not move byte and job limits by the same ratio | `CoreHwmProfile` and `ApplicationJobQueueProfile` share labels only; their units and calculations are independent. |
+| Replies still complete while the application job queue is full | Terminal reply/error completion identifiable before receive bypasses the shared permit and ordinary Core HWM, so this is expected. |
+| Raising the ceiling made the symptom show up later | Congestion absorbed into memory surfaces the failure later. To fail fast and switch to a different path, lower the ceiling and shrink `DefaultSocketSendTimeout`. |
+| `Publish` completed normally, but the subscriber never received it | Publish completion means only that it was ready to send and the runtime accepted the submission. Delivery, resend, and ack aren't provided ([Channel Messaging](30-channel-patterns.en.md#7-what-it-means-for-a-call-to-be-finished)). |
+| A request inside a handler hangs for a long time | If both sides' processing is delayed at the same time, a finite timeout is where recovery starts. Give a nested request a `Timeout(...)`. |
+| One slow node is also delaying other calls | The send queue is separate per peer, but waiting inside the same handler also occupies that handler's execution slot. Do not put a call to a slow-responding target in the same handler as other calls. |
 
 ## 9. Related Documents
 

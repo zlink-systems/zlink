@@ -40,6 +40,8 @@ registration.
 --8<-- "framework/languages/java/samples/java/TicTacToe/Server/src/main/java/systems/zlink/samples/tictactoe/server/play/infrastructure/zlink/spots/tictactoegamespot/handlers/TicTacToeGameTimerHandler.java:doc-timer-handler"
 ```
 
+This handler processes a tick on the Spot queue, so it uses that Spot's state and ordering directly.
+
 ### 1.1 Ticks Past Their Scheduled Time
 
 When work piles up in the Spot queue or a handler runs long, a tick runs later than scheduled. The
@@ -74,6 +76,8 @@ and reports the load gives operations a place to look for the cause.
 
 <iframe class="zlink-diagram" src="/common/diagrams/36-timer-worker-en.html" title="A timer enters the Spot queue; a worker uses another execution context" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/36-timer-worker-en.html" target="_blank">↗ View larger</a></p>
+
+Because the execution contexts differ, a worker does not touch Spot state directly and copies needed values before its call.
 
 ## 2. Workers — Running Outside the Spot Queue
 

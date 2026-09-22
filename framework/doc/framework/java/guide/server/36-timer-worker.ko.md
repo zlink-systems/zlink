@@ -38,6 +38,8 @@ Timer는 이름·주기·handler를 Spot context에 등록한다. tick은 그 Sp
 --8<-- "framework/languages/java/samples/java/TicTacToe/Server/src/main/java/systems/zlink/samples/tictactoe/server/play/infrastructure/zlink/spots/tictactoegamespot/handlers/TicTacToeGameTimerHandler.java:doc-timer-handler"
 ```
 
+이 handler는 tick을 Spot queue에서 처리하므로 같은 Spot의 상태와 순서를 그대로 사용한다.
+
 ### 1.1 예정 시각을 지난 tick
 
 Spot queue에 작업이 쌓이거나 handler 실행이 길어지면 tick이 예정 시각보다 늦게 실행된다. 지나간
@@ -72,6 +74,8 @@ timer handler가 받는 tick은 예정 대비 지연과 건너뛴 tick 수를 �
 
 <iframe class="zlink-diagram" src="/common/diagrams/36-timer-worker.html" title="timer는 Spot queue에 들어가고, worker는 별도 실행 문맥에서 실행된다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/36-timer-worker.html" target="_blank">↗ 크게 보기</a></p>
+
+이 실행 문맥의 차이 때문에 worker에서는 Spot 상태를 직접 다루지 않고 필요한 값을 호출 전에 복사한다.
 
 ## 2. Worker — Spot queue 밖에서 실행하기
 

@@ -21,16 +21,16 @@ View in another language — [C++](../../../cpp/guide/server/50-bingo.en.md) · 
 !!! info "What you get from this chapter"
 
     You can open the Bingo sample in an editor and follow a message from the client's
-    authentication to the end of a game, through the code of each server it passes. The code in
-    this chapter runs as it stands in `framework/languages/java/samples/java/Bingo`.
+    authentication to the end of a game, through the code of each server it passes. The code in this
+    chapter comes from the [Bingo sample in the per-language example repositories](https://github.com/zlink-systems/zlink-java-examples/tree/main/samples/Bingo).
 
 [Picking a Sample](14-samples.en.md#4-bingo--building-an-online-game-server) introduced what this
 sample demonstrates. This chapter is what you read after that introduction — the roles and where
 their code lives, the message flow of the main scenarios, and, for each flow, the framework feature
-it uses and the chapter that explains it, in the order the source is laid out. This chapter has no
-spec document that owns a contract. The requirements, message contract and verification criteria
-are owned by the [Bingo scenario](../../../common/sample/bingo/README.en.md), and this chapter does
-not restate them.
+it uses and the chapter that explains it, in the order the source is laid out. This chapter explains
+the Bingo sample's roles and code locations, its main message flows, and its run verification in
+source order. See the [Bingo scenario](../../../common/sample/bingo/README.en.md) for requirements,
+message contracts, and verification criteria.
 
 ## 1. What This Sample Demonstrates
 

@@ -21,17 +21,16 @@ View in another language — [C++](../../../cpp/guide/server/51-tictactoe.en.md)
 !!! info "What you get from this chapter"
 
     You can open the TicTacToe sample in an editor and follow the code from the HTTP call that
-    creates a room to the point where both players leave and their Actors are destroyed. The code
-    in this chapter runs as it stands in `framework/languages/node/samples/TicTacToe.Ts`.
+    creates a room to the point where both players leave and their Actors are destroyed. The code in
+    this chapter comes from the [TicTacToe sample in the per-language example repositories](https://github.com/zlink-systems/zlink-node-examples/tree/main/samples/TicTacToe).
 
 [Picking a Sample](14-samples.en.md#3-tictactoe--building-a-real-time-head-to-head-game-server)
 introduced what this sample demonstrates. This chapter is what you read after that introduction —
 the roles and where their code lives, the message flow of the main scenarios, and, for each flow, the
 framework feature it uses and the chapter that explains it, in the order the source is laid out.
-This chapter has no spec document that owns a contract. The requirements, message contract and
-verification criteria are owned by the
-[TicTacToe scenario](../../../common/sample/tictactoe/README.en.md), and this chapter does not
-restate them.
+This chapter explains the TicTacToe sample's roles and code locations, its main message flows, and
+its run verification in source order. See the [TicTacToe scenario](../../../common/sample/tictactoe/README.en.md)
+for requirements, message contracts, and verification criteria.
 
 ## 1. What This Sample Demonstrates
 

@@ -47,6 +47,8 @@ destination node directly over the mesh connection.
 <iframe class="zlink-diagram" src="/common/diagrams/37-relocation-move-en.html" title="The logical id stays; only the execution site moves" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/37-relocation-move-en.html" target="_blank">↗ View larger</a></p>
 
+Because the logical id remains the same, callers do not need to acquire the target address again after relocation.
+
 ## 2. The Application's Part — the Adapter
 
 To move an Actor or Spot to another node, the application state held by its instance (fields on the

@@ -18,13 +18,11 @@ View in another language — **C++** · [C#/.NET](../../../dotnet/guide/server/3
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-The code in this chapter comes from the [`TicTacToe` sample README](https://github.com/zlink-systems/zlink-cpp-examples/blob/main/samples/TicTacToe/README.md). Download the [examples repository](https://github.com/zlink-systems/zlink-cpp-examples/blob/main/samples/TicTacToe/README.md) and follow its README's Download, Build and Run sections to reproduce the results below.
-
 !!! info "What you get from this chapter"
 
     You can tell when each of the three kinds of Spot is created, which callbacks it receives, and
-    how long a service injected into it lives. The code in this chapter comes from the samples in
-    the repository.
+    how long a service injected into it lives.
+    The code in this chapter comes from the [TicTacToe sample in the per-language example repositories](https://github.com/zlink-systems/zlink-cpp-examples/tree/main/samples/TicTacToe).
 
 What [Spot](21-spot.en.md) created was **the Spot an application creates explicitly**. This chapter
 covers how the other two kinds differ, which lifecycle callbacks each kind receives, and the
@@ -90,6 +88,8 @@ lifecycle of Actors arriving and leaving.
 --8<-- "framework/languages/cpp/samples/TicTacToe/Server/Play/Infrastructure/ZLink/Spots/EntrySpot/tictactoe_entry_spot.hpp:doc-entry-spot"
 ```
 
+This code shows that the Entry Spot provides the lifecycle callbacks needed to admit and destroy Actors.
+
 ### 3.1 What an Entry Spot Does Not Hold
 
 **Keep no per-Actor state in an Entry Spot.** An Actor's state belongs to the Actor, and the Entry
@@ -113,6 +113,8 @@ call. Refuse in the create callback and the call fails, leaving no Spot behind.
 ```cpp
 --8<-- "framework/languages/cpp/samples/TicTacToe/Server/Api/Handlers/create_game_http_handler.hpp:doc-create"
 ```
+
+The id returned by this call is the address for later calls to the User Spot.
 
 ## 5. The Lifetime of an Injected Service
 

@@ -21,15 +21,13 @@ title: "ShoppingMall 따라 읽기 · Node/TypeScript"
 !!! info "이 장을 읽고 나면"
 
     ShoppingMall 샘플을 편집기에 열고, HTTP로 접수된 주문이 owner Spot에서 재고 예약 → 결제 승인 →
-    확정으로 진행되고 실패하면 보상되기까지 코드를 따라갈 수 있다. 이 장의 코드는
-    `framework/languages/node/samples/ShoppingMall.Ts`에서 그대로 실행된다.
+    확정으로 진행되고 실패하면 보상되기까지 코드를 따라갈 수 있다. 이 장의 코드는 [언어별 예제 저장소의 ShoppingMall 샘플](https://github.com/zlink-systems/zlink-node-examples/tree/main/samples/ShoppingMall)에서 가져온다.
 
 [샘플 고르기](14-samples.ko.md#7-shoppingmall--주문-처리-시스템-구축)가 이 샘플이 무엇을 보여 주는지
 소개했다. 이 장은 그 소개 다음에 읽는 자리다 — 역할과 코드 위치, 주요 시나리오의 메시지 흐름,
-각 흐름에 등장하는 framework 기능과 그것을 설명하는 장을 소스가 놓인 순서대로 따라간다.
-이 장에는 계약을 소유하는 스펙 문서가 없다. 요구사항, 메시지 계약과 검증 기준은
-[ShoppingMall 시나리오](../../../common/sample/event/shoppingmall.ko.md)가 소유하며, 이 장은 그것을
-다시 적지 않는다.
+각 흐름에 등장하는 framework 기능과 그것을 설명하는 장을 소스가 놓인 순서대로 따라간다. 이 장은
+ShoppingMall 샘플의 역할과 코드 위치, 주요 메시지 흐름, 실행 검증을 소스 순서대로 설명한다.
+요구사항, 메시지 계약과 검증 기준은 [ShoppingMall 시나리오](../../../common/sample/event/shoppingmall.ko.md)에서 참고한다.
 
 ## 1. 이 샘플이 보여 주는 것
 
@@ -89,6 +87,8 @@ model을 돌려주고, 아니면 mapping을 예약한 뒤 workflow에 Start를 �
 
 <iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-start-success.html" title="주문 시작과 성공 처리 흐름" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-shoppingmall-start-success.html" target="_blank">↗ 크게 보기</a></p>
+
+idempotency key가 같은 시작 요청을 같은 주문으로 연결하므로 중복 요청이 새 workflow를 만들지 않는다.
 
 `Server/Shared/Store/order-store.ts`
 
@@ -152,6 +152,8 @@ continuation의 한 회전은 event stream을 읽어 aggregate를 복원하는 �
 <iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-failure-compensation.html" title="재고 실패와 결제 실패 보상" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-shoppingmall-failure-compensation.html" target="_blank">↗ 크게 보기</a></p>
 
+실패한 단계는 다음 단계를 시작하지 않고 이미 기록한 상태에 맞는 보상만 실행한다.
+
 `Server/Shared/Store/order-store.ts`
 
 ```typescript
@@ -203,6 +205,8 @@ terminal 상태를 그대로 돌려준다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-lifecycle.html" title="Lifecycle과 실패 경계" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-shoppingmall-lifecycle.html" target="_blank">↗ 크게 보기</a></p>
+
+terminal 상태의 Spot을 닫아도 같은 `OrderId`의 다음 요청은 event stream을 replay해 현재 상태를 복원한다.
 
 `Server/OrderWorkflow/Infrastructure/ZLink/Spots/OrderWorkflowSpot/Handlers/continue-workflow-handler.ts`
 

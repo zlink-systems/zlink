@@ -47,6 +47,8 @@ title: "Relocation · C++"
 <iframe class="zlink-diagram" src="/common/diagrams/37-relocation-move.html" title="논리 id는 그대로, 실행 위치만 옮긴다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/37-relocation-move.html" target="_blank">↗ 크게 보기</a></p>
 
+논리 id가 유지되므로 호출하는 쪽은 relocation 뒤에도 target 주소를 다시 얻을 필요가 없다.
+
 ## 2. application이 맡는 부분 — adapter
 
 Actor·Spot을 다른 node로 옮기려면 instance가 들고 있는 application 상태(사용자 클래스의 필드)를

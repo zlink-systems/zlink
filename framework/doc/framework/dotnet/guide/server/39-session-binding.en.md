@@ -72,6 +72,8 @@ game Spot marks the disconnected Actor but leaves the room and match state in pl
 --8<-- "framework/languages/dotnet/samples/TicTacToe/Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/TicTacToeGame.cs:doc-disconnect-actor"
 ```
 
+This call is used only to report an application-level disconnection while the physical connection remains open.
+
 **Run result.** On 2026-09-22, running .NET TicTacToe's `run_sample.sh` and closing the host
 client left this real record for the connection that held one bound Actor in `play-a.log`.
 

@@ -4,16 +4,15 @@
 
     You can open the ShoppingMall sample in an editor and follow the code from an order accepted over
     HTTP, through inventory reservation → payment authorization → confirmation inside the owner Spot,
-    and through compensation when a step fails. The code in this chapter runs as it stands in
-    `framework/languages/<language>/samples/ShoppingMall`.
+    and through compensation when a step fails. The code in this chapter comes from the [ShoppingMall sample in the per-language example repositories](https://github.com/zlink-systems/zlink-<language>-examples/tree/main/samples/ShoppingMall).
 
 [Picking a Sample](14-samples.en.md#7-shoppingmall--building-an-order-processing-system) introduced
 what this sample demonstrates. This chapter is what you read after that introduction — the roles and
 where their code lives, the message flow of the main scenarios, and, for each flow, the framework
 feature it uses and the chapter that explains it, in the order the source is laid out. This chapter
-has no spec document that owns a contract. The requirements, message contract and verification
-criteria are owned by the [ShoppingMall scenario](../../../common/sample/event/shoppingmall.en.md),
-and this chapter does not restate them.
+explains the ShoppingMall sample's roles and code locations, its main message flows, and its run
+verification in source order. See the [ShoppingMall scenario](../../../common/sample/event/shoppingmall.en.md)
+for requirements, message contracts, and verification criteria.
 
 ## 1. What This Sample Demonstrates
 

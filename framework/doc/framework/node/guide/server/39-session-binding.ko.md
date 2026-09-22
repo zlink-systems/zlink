@@ -70,6 +70,8 @@ application이 다시 묶지 않는다.
 --8<-- "framework/languages/node/samples/TicTacToe.Ts/Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/tictactoe-game-spot.ts:doc-disconnect-actor"
 ```
 
+이 호출은 물리 연결이 유지된 채 application 규약상 끊김을 알릴 때만 사용한다.
+
 **실행 결과.** 2026-09-22에 .NET TicTacToe의 `run_sample.sh`를 실행하고 host client가 연결을
 닫았을 때 `play-a.log`에는 묶인 Actor 하나가 있던 연결의 실제 기록이 남았다.
 
