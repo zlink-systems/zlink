@@ -222,6 +222,24 @@ Get-Job | Stop-Job -ErrorAction SilentlyContinue
 docker rm -f zlink-tutorial-redis 2>$null | Out-Null
 ```
 
+## Running from an IDE
+
+`bootstrap.cmake` records the exact arguments it configured this folder with as the preset `zlink`
+in `CMakeUserPresets.json`. Visual Studio, Rider and CLion read that preset when they open the
+folder, so after one bootstrap the IDE continues in the same `build/`. The bootstrap rewrites the
+file every time; it is not edited by hand.
+
+1. Run `cmake -P bootstrap.cmake` from the [Build](#build) section once in a terminal (an IDE cannot
+   run a `-P` script).
+2. **Visual Studio 2022 or 2026**: File › Open › Folder on this directory. Pick the preset `zlink`
+   in the CMake settings; configuration completes and the startup item list shows `tutorial_server` and `tutorial_client`. Start the
+   server first, then the client.
+3. **Rider or CLion**: open this directory's `CMakeLists.txt` as the project. Enable the preset
+   `zlink` under Settings › Build, Execution, Deployment › CMake; configuration completes and run
+   configurations for `tutorial_server` and `tutorial_client` appear.
+4. Stop with the IDE's Stop button; the IDE ends the process tree, so the [Stop](#stop) section's
+   commands are not needed.
+
 ## Troubleshooting
 
 | Symptom | Cause and fix |
