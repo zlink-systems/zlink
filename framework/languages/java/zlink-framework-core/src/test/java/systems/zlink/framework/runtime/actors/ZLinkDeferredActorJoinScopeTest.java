@@ -47,7 +47,6 @@ final class ZLinkDeferredActorJoinScopeTest {
                                             new Object(),
                                             incarnation,
                                             "actor-a",
-                                            0,
                                             Long.MAX_VALUE,
                                             () -> CompletableFuture.completedFuture(null),
                                             operation -> operation.get(),
@@ -62,7 +61,6 @@ final class ZLinkDeferredActorJoinScopeTest {
                                             runtime,
                                             new Object(),
                                             "actor-a",
-                                            0,
                                             Long.MAX_VALUE,
                                             () -> CompletableFuture.completedFuture(null),
                                             operation -> operation.get(),
@@ -89,7 +87,6 @@ final class ZLinkDeferredActorJoinScopeTest {
                                                                     new Object(),
                                                                     new Object(),
                                                                     "actor-a",
-                                                                    0,
                                                                     Long.MAX_VALUE,
                                                                     () ->
                                                                             CompletableFuture
@@ -116,7 +113,6 @@ final class ZLinkDeferredActorJoinScopeTest {
                             order.add("handler");
                             ZLinkDeferredActorJoinScope.register(
                                     "actor-a",
-                                    4,
                                     Long.MAX_VALUE,
                                     () -> {
                                         order.add("join");
@@ -146,7 +142,6 @@ final class ZLinkDeferredActorJoinScopeTest {
                                                     order.add("continuation");
                                                     ZLinkDeferredActorJoinScope.register(
                                                             "actor-a",
-                                                            0,
                                                             Long.MAX_VALUE,
                                                             () -> {
                                                                 order.add("join");
@@ -176,7 +171,6 @@ final class ZLinkDeferredActorJoinScopeTest {
                                                 () -> {
                                                     ZLinkDeferredActorJoinScope.register(
                                                             "actor-a",
-                                                            4,
                                                             Long.MAX_VALUE,
                                                             () -> {
                                                                 order.add("join");
@@ -198,7 +192,6 @@ final class ZLinkDeferredActorJoinScopeTest {
                         () -> {
                             ZLinkDeferredActorJoinScope.register(
                                     "actor-a",
-                                    0,
                                     Long.MAX_VALUE,
                                     () -> CompletableFuture.completedFuture(null));
                             return CompletableFuture.completedFuture(null);
@@ -208,14 +201,13 @@ final class ZLinkDeferredActorJoinScopeTest {
     }
 
     @Test
-    void rejectsDetachedWrongActorOversizedAndDuplicateClaims() {
+    void rejectsDetachedWrongActorAndDuplicateClaims() {
         ZLinkFrameworkException detached =
                 assertThrows(
                         ZLinkFrameworkException.class,
                         () ->
                                 ZLinkDeferredActorJoinScope.register(
                                         "actor-a",
-                                        0,
                                         Long.MAX_VALUE,
                                         () -> CompletableFuture.completedFuture(null)));
         assertEquals(ZLinkFrameworkErrorKind.NOT_CONFIGURED, detached.kind());
@@ -228,31 +220,18 @@ final class ZLinkDeferredActorJoinScopeTest {
                             () ->
                                     ZLinkDeferredActorJoinScope.register(
                                             "actor-b",
-                                            0,
                                             Long.MAX_VALUE,
                                             () -> CompletableFuture.completedFuture(null)));
             assertEquals(ZLinkFrameworkErrorKind.NOT_CONFIGURED, wrongActor.kind());
 
-            ZLinkFrameworkException oversized =
-                    assertThrows(
-                            ZLinkFrameworkException.class,
-                            () ->
-                                    ZLinkDeferredActorJoinScope.register(
-                                            "actor-a",
-                                            ZLinkDeferredActorJoinScope.MAX_REQUEST_BYTES + 1,
-                                            Long.MAX_VALUE,
-                                            () -> CompletableFuture.completedFuture(null)));
-            assertEquals(ZLinkFrameworkErrorKind.NOT_CONFIGURED, oversized.kind());
-
             ZLinkDeferredActorJoinScope.register(
-                    "actor-a", 0, Long.MAX_VALUE, () -> CompletableFuture.completedFuture(null));
+                    "actor-a", Long.MAX_VALUE, () -> CompletableFuture.completedFuture(null));
             ZLinkFrameworkException moving =
                     assertThrows(
                             ZLinkFrameworkException.class,
                             () ->
                                     ZLinkDeferredActorJoinScope.register(
                                             "actor-a",
-                                            0,
                                             Long.MAX_VALUE,
                                             () -> CompletableFuture.completedFuture(null)));
             assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, moving.kind());
@@ -271,7 +250,6 @@ final class ZLinkDeferredActorJoinScopeTest {
                         () -> {
                             ZLinkDeferredActorJoinScope.register(
                                     "actor-a",
-                                    2,
                                     Long.MAX_VALUE,
                                     () -> {
                                         order.add("actor-a");
@@ -279,7 +257,6 @@ final class ZLinkDeferredActorJoinScopeTest {
                                     });
                             ZLinkDeferredActorJoinScope.register(
                                     "actor-b",
-                                    2,
                                     Long.MAX_VALUE,
                                     () -> {
                                         order.add("actor-b");
@@ -305,7 +282,6 @@ final class ZLinkDeferredActorJoinScopeTest {
                                                 () -> {
                                                     ZLinkDeferredActorJoinScope.register(
                                                             "actor-b",
-                                                            0,
                                                             Long.MAX_VALUE,
                                                             () ->
                                                                     CompletableFuture
@@ -332,7 +308,6 @@ final class ZLinkDeferredActorJoinScopeTest {
                         () -> {
                             ZLinkDeferredActorJoinScope.registerWithActorBarrier(
                                     "actor-a",
-                                    0,
                                     Long.MAX_VALUE,
                                     () -> {
                                         order.add("join");
@@ -363,7 +338,6 @@ final class ZLinkDeferredActorJoinScopeTest {
                         () -> {
                             ZLinkDeferredActorJoinScope.register(
                                     "actor-a",
-                                    0,
                                     Long.MAX_VALUE,
                                     () -> {
                                         order.add("join-a");
@@ -372,7 +346,6 @@ final class ZLinkDeferredActorJoinScopeTest {
                                     });
                             ZLinkDeferredActorJoinScope.register(
                                     "actor-b",
-                                    0,
                                     Long.MAX_VALUE,
                                     () -> {
                                         order.add("join-b");
@@ -400,7 +373,6 @@ final class ZLinkDeferredActorJoinScopeTest {
                         () -> {
                             ZLinkDeferredActorJoinScope.registerWithActorBarrier(
                                     "actor-a",
-                                    0,
                                     Long.MAX_VALUE,
                                     () -> {
                                         order.add("join-a");
@@ -411,7 +383,6 @@ final class ZLinkDeferredActorJoinScopeTest {
                                     operation -> serials.enqueueBarrier("actor-a", operation));
                             ZLinkDeferredActorJoinScope.registerWithActorBarrier(
                                     "actor-b",
-                                    0,
                                     Long.MAX_VALUE,
                                     () -> {
                                         order.add("join-b");
@@ -457,7 +428,6 @@ final class ZLinkDeferredActorJoinScopeTest {
                         () -> {
                             ZLinkDeferredActorJoinScope.registerWithActorBarrier(
                                     "actor-a",
-                                    0,
                                     Long.MAX_VALUE,
                                     () -> {
                                         order.add("join");

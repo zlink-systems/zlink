@@ -34,7 +34,6 @@ public final class ZLinkActorJoinRecoveryCodec {
             "application/vnd.zlink.actor-relocation.snapshot";
 
     private static final int MAXIMUM_METADATA_BYTES = 256 * 1024;
-    private static final int MAXIMUM_MESSAGE_BYTES = 1024 * 1024;
     private static final long FRAMEWORK_METADATA_RESERVATION_BYTES = 64L * 1024;
     private static final long ACCEPTED_JOURNAL_RESERVATION_BYTES = 16L * 1024 * 1024;
     private static final long SNAPSHOT_STATE_RESERVATION_BYTES = 64L * 1024 * 1024;
@@ -103,9 +102,6 @@ public final class ZLinkActorJoinRecoveryCodec {
         validate(value);
         byte[] request = value.request();
         byte[] reply = value.reply();
-        if (request.length > MAXIMUM_MESSAGE_BYTES || reply.length > MAXIMUM_MESSAGE_BYTES) {
-            throw new IllegalArgumentException("Actor Join recovery message exceeds 1 MiB");
-        }
         byte[] metadata = encodeMetadata(value);
         if (metadata.length > MAXIMUM_METADATA_BYTES) {
             throw new IllegalArgumentException("Actor Join recovery metadata exceeds 256 KiB");
