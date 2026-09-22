@@ -22,6 +22,7 @@ import type {
   ZLinkRawRouterPort
 } from '../../packages/framework/src/runtime/backend/raw-binding-port';
 import { ZLinkNodeRawMeshBackend } from '../../packages/framework/src/runtime/backend/node/node-raw-mesh-backend';
+import { SubmitResult } from '../../packages/framework/src/runtime/backend/runtime-values';
 import { ServiceDiscoveryRegistry } from '../../packages/framework/src/runtime/foundation/service-discovery-registry';
 import { ServiceLivenessRegistry } from '../../packages/framework/src/runtime/foundation/service-liveness-registry';
 import {
@@ -1726,7 +1727,7 @@ test('raw runtime admits peers and completes node/channel requests once', async 
         contentType: 'application/json',
         payload: Buffer.from('notice')
       }),
-      true
+      SubmitResult.Ok
     );
     let observedSourceRoutingId: string | undefined;
     let observedByteCount = 0;
@@ -2262,6 +2263,51 @@ test('local channel requests preserve successful and failed terminal results', a
     assert.equal(failureResult.payload, undefined);
   } finally {
     local.close();
+  }
+});
+
+test('channel send distinguishes selection, transport, and mailbox rejection', async () => {
+  const payload = {
+    packetName: 'ChannelNotice',
+    contentType: 'application/json',
+    payload: Buffer.from('notice')
+  };
+  const noTarget = rawServiceRuntime({
+    descriptor: { ...descriptor('m6a-no-target'), state: 'serving', channels: [] }
+  });
+  const transportFailure = rawServiceRuntime({
+    descriptor: { ...descriptor('m6a-transport-source'), state: 'serving', channels: [] }
+  });
+  const mailboxRejection = rawServiceRuntime({
+    descriptor: { ...descriptor('m6a-mailbox-local'), state: 'serving' }
+  });
+
+  try {
+    assert.equal(await noTarget.sendToChannel('alpha', payload), SubmitResult.NotFound);
+
+    const target = {
+      descriptor: { ...descriptor('m6a-transport-target'), state: 'serving' as const },
+      connectionId: 'transport-target-connection',
+      connectionDiscriminator: 'transport-target-discriminator'
+    };
+    transportFailure.topology.selectChannel = () => target;
+    (
+      transportFailure as unknown as {
+        router: Pick<ZLinkRawRouterPort, 'send'>;
+      }
+    ).router = {
+      async send(): Promise<void> {
+        throw new Error('injected transport send failure');
+      }
+    };
+    assert.equal(await transportFailure.sendToChannel('alpha', payload), SubmitResult.NotConnected);
+
+    mailboxRejection.mailbox.close();
+    assert.equal(await mailboxRejection.sendToChannel('alpha', payload), SubmitResult.NotAdmitted);
+  } finally {
+    noTarget.close();
+    transportFailure.close();
+    mailboxRejection.close();
   }
 });
 

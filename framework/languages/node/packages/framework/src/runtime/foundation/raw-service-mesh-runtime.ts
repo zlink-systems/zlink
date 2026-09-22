@@ -7,7 +7,7 @@ import type {
   ZLinkRawReceivedRecord,
   ZLinkRawRouterPort
 } from '../backend/raw-binding-port';
-import { RequestResult } from '../backend/runtime-values';
+import { RequestResult, SubmitResult } from '../backend/runtime-values';
 import type {
   ApplicationJobPermitPort,
   ApplicationJobQueuePort
@@ -463,11 +463,11 @@ export class RawServiceMeshRuntime {
   async sendToChannel(
     channelName: string,
     payload: ServiceApplicationPayloadInput
-  ): Promise<boolean> {
+  ): Promise<SubmitResult> {
     const selected = this.topology.selectChannel(channelName, (peer) =>
       this.isLocalOrReadyPeer(peer.descriptor.nodeRoutingId)
     );
-    if (selected === undefined) return false;
+    if (selected === undefined) return SubmitResult.NotFound;
     const applicationFrame = this.applicationFrame(payload);
     if (selected.descriptor.nodeRoutingId === this.descriptor.nodeRoutingId) {
       const applicationJobOwner = await this.reserveLocalIngress();
@@ -481,15 +481,17 @@ export class RawServiceMeshRuntime {
           applicationJob
         });
         if (!accepted) applicationJob.close();
-        return accepted;
+        return accepted ? SubmitResult.Ok : SubmitResult.NotAdmitted;
       } finally {
         applicationJobOwner.close();
       }
     }
-    return this.send(selected.descriptor.nodeRoutingId, [
+    return (await this.send(selected.descriptor.nodeRoutingId, [
       encodeChannelSendHeader(channelName),
       applicationFrame
-    ]);
+    ]))
+      ? SubmitResult.Ok
+      : SubmitResult.NotConnected;
   }
 
   requestToNode(
