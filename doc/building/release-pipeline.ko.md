@@ -141,6 +141,9 @@ gh release view core/v0.17.5 --json assets -q '.assets[].name'
 양쪽에 `-fexperimental-library`를 전파한다. CMake target을 사용하지 않는 소비자는 컴파일·링크 명령
 양쪽에 `-fexperimental-library`를 직접 추가해야 한다.
 
+Conan pin은 커밋된 lockfile의 recipe revision과 플랫폼 파일의 package ID를 고정하며, runner에서
+소스로 빌드한 binary는 실행마다 byte 단위로 동일하지 않다.
+
 ## 8. CI(검증) 워크플로우
 
 배포와 별개로 도는 검증이다. **모두 `workflow_dispatch` 전용이며 push·PR로 자동 실행되지 않는다.**

@@ -128,6 +128,9 @@ target propagates `-fexperimental-library` to both consumer compile and link lin
 headers use `std::stop_token`. A non-CMake consumer must add `-fexperimental-library` to both its
 compile and link commands.
 
+The Conan pin fixes recipe revisions in the committed lockfile and package IDs in the platform file;
+binaries built from source on the runner are not byte-identical between runs.
+
 ## 8. CI (verification) workflows
 
 Verification runs separately from releases. **All of them are `workflow_dispatch` only; none starts

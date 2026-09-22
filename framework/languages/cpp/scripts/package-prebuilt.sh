@@ -259,22 +259,18 @@ import sys
 with open(sys.argv[1], encoding="utf-8") as graph_file:
     nodes = json.load(graph_file)["graph"]["nodes"].values()
 packages = sorted({
-    (node["ref"], node["package_id"], node.get("prev"))
+    (node["ref"], node["package_id"])
     for node in nodes
     if node.get("ref") and node.get("package_id")
     and node.get("binary") != "Skip"
     and not node["ref"].startswith("zlink-bootstrap/")
 })
 if not packages:
-    raise SystemExit("Conan graph did not resolve package revisions")
-missing_revisions = [ref for ref, package_id, prev in packages if not prev]
-if missing_revisions:
-    raise SystemExit("Conan graph has packages without revisions: " +
-                     ", ".join(missing_revisions))
+    raise SystemExit("Conan graph did not resolve binary packages")
 with open(sys.argv[2], "w", encoding="utf-8", newline="\n") as output_file:
     json.dump({"version": 1, "packages": [
-        {"ref": ref, "package_id": package_id, "prev": prev}
-        for ref, package_id, prev in packages
+        {"ref": ref, "package_id": package_id}
+        for ref, package_id in packages
     ]}, output_file, indent=2)
     output_file.write("\n")
 PY
@@ -293,7 +289,26 @@ if ((update_lock)); then
   echo "updated $lockfile and $package_lockfile"
   exit 0
 fi
-if [[ ! -f "$package_lockfile" ]] || ! cmp -s "$candidate_package_lockfile" "$package_lockfile"; then
+if [[ ! -f "$package_lockfile" ]] || ! "$python_command" - "$candidate_package_lockfile" "$package_lockfile" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as candidate_file:
+    candidate = json.load(candidate_file)
+with open(sys.argv[2], encoding="utf-8") as committed_file:
+    committed = json.load(committed_file)
+
+def package_set(document):
+    return {
+        (package["ref"], package["package_id"])
+        for package in document.get("packages", [])
+    }
+
+matches = (candidate.get("version") == committed.get("version") and
+           package_set(candidate) == package_set(committed))
+raise SystemExit(0 if matches else 1)
+PY
+then
   echo "Conan packages file to commit: $package_lockfile" >&2
   echo "----- BEGIN $package_lockfile -----" >&2
   cat "$candidate_package_lockfile" >&2
