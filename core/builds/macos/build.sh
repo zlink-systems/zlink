@@ -4,7 +4,7 @@
 # Supports both x86_64 and arm64 architectures
 # Requires: Xcode Command Line Tools, cmake
 #
-set -e
+set -euo pipefail
 
 # Get script directory and repo root early (before any cd commands)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,6 +28,29 @@ macos_rpaths() {
             print rpath
         }
     '
+}
+
+verify_built_macos_rpath() {
+    local binary="$1"
+    local rpaths rpath
+    local count=0
+
+    if ! rpaths="$(otool -l "$binary" | macos_rpaths)"; then
+        echo "Error: failed to inspect LC_RPATH in $binary" >&2
+        exit 1
+    fi
+    while IFS= read -r rpath; do
+        [ -n "$rpath" ] || continue
+        count=$((count + 1))
+        if [ "$rpath" != "@loader_path" ]; then
+            echo "Error: unexpected LC_RPATH in $binary: $rpath" >&2
+            exit 1
+        fi
+    done <<< "$rpaths"
+    if [ "$count" -ne 1 ]; then
+        echo "Error: expected exactly one @loader_path LC_RPATH in $binary, found $count" >&2
+        exit 1
+    fi
 }
 
 # Parse arguments: ARCH RUN_TESTS
@@ -92,6 +115,7 @@ fi
 BUILD_STATIC_FLAG="ON"
 
 # Configure build
+OPENSSL_ROOT_DIR="${OPENSSL_ROOT_DIR:-}"
 if [ -z "$OPENSSL_ROOT_DIR" ]; then
     if command -v brew >/dev/null 2>&1; then
         OPENSSL_ROOT_DIR=$(brew --prefix openssl@3 2>/dev/null || brew --prefix openssl 2>/dev/null)
@@ -188,16 +212,7 @@ if [ -n "$DYLIB_FILE" ]; then
     done
 
     for binary in "$DYLIB_FILE" "$PACKAGE_LIB/libssl.3.dylib" "$PACKAGE_LIB/libcrypto.3.dylib"; do
-        rpaths="$(otool -l "$binary" | macos_rpaths)"
-        while IFS= read -r rpath; do
-            case "$rpath" in
-                @loader_path|@loader_path/*|@executable_path|@executable_path/*) ;;
-                *)
-                    echo "Error: non-relocatable LC_RPATH in $binary: $rpath" >&2
-                    exit 1
-                    ;;
-            esac
-        done <<< "$rpaths"
+        verify_built_macos_rpath "$binary"
     done
 
     codesign --force --sign - "$PACKAGE_LIB/libcrypto.3.dylib"
