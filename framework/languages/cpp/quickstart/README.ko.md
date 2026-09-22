@@ -24,12 +24,13 @@ tutorial과 같지만 Docker는 필요 없다(이 프로젝트는 Redis를 쓰�
 
 | 도구 | Windows | Linux / WSL |
 |---|---|---|
-| C++20 컴파일러 | Visual Studio 2022 17.4 이상, **C++를 사용한 데스크톱 개발** 워크로드 | GCC 13 이상 |
+| C++20 컴파일러 | Visual Studio 2022 17.4 이상 또는 Visual Studio 2026, **C++를 사용한 데스크톱 개발** 워크로드. 2026-09 현재 2026의 msvc 195에는 ConanCenter 바이너리가 없어 첫 bootstrap이 서드파티 library를 source에서 빌드하므로 약 20분 걸린다. 2022는 바이너리를 내려받아 약 7분 걸린다 | GCC 13 이상 |
 | CMake | 3.24 이상 | 3.24 이상 |
 | Ninja | 필요 없음 | 권장. 없으면 Makefile을 쓴다 |
-| Conan 2 | `pipx install conan` (`py -m pip install --user conan`도 가능) | `pipx install conan` (`python3 -m pip install --user conan`도 가능) |
+| Conan 2 | `pipx install conan` 뒤 `pipx ensurepath`를 실행하고 새 terminal을 연다. `py -m pip install --user conan`을 썼으면 Python `Scripts` directory를 PATH에 넣는다. `conan --version`으로 확인한다 | `pipx install conan` 뒤 `pipx ensurepath`를 실행하고 새 terminal을 연다. `python3 -m pip install --user conan`을 썼으면 Python user `bin` directory를 PATH에 넣는다. `conan --version`으로 확인한다 |
 
-Conan이 ConanCenter의 서드파티 바이너리를 받으므로 지원 컴파일러에서 **첫 설치에는 약 3분이 걸린다**.
+Conan은 ConanCenter의 서드파티 바이너리를 받는다. Visual Studio 2022에서는 **첫 bootstrap에 약 7분**,
+2026의 msvc 195처럼 바이너리가 없는 toolset에서는 서드파티를 source에서 빌드하므로 **약 20분** 걸린다.
 `tutorial/`이나 `samples/`에서 bootstrap을 이미 실행했으면 다시 빌드하지 말고 해당 tree를 재사용한다:
 `cmake -DZLINK_ROOT=../tutorial/.zlink -P bootstrap.cmake`.
 
@@ -140,6 +141,7 @@ Get-Job | Stop-Job -ErrorAction SilentlyContinue
 
 | 증상 | 원인과 조치 |
 |---|---|
+| `bootstrap: could not find Conan` | `pipx install conan` 뒤 `pipx ensurepath`를 실행하고 새 terminal을 연다. `pip --user` 설치라면 Python `Scripts`/user `bin` directory를 PATH에 넣고 `conan --version`으로 확인한다 |
 | `bind: Address already in use` / `Only one usage of each socket address` | 7301·7302·5083을 다른 process가 사용 중이다 — 이전 실행의 `quickstart_server`·`quickstart_client`가 아직 실행 중일 수 있다 |
 | `curl: (7) Failed to connect to 127.0.0.1 port 5083` | client가 아직 뜨지 않았거나 죽었다. `client.log`를 본다 |
 | 호출이 대상 없음으로 끝난다 | server가 안 떠 있거나, client의 `peer_connections().connect(...)`가 server의 `listen(...)`과 다른 endpoint를 적었다 |

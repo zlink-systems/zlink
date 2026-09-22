@@ -92,7 +92,7 @@ npm run build:http-client
 
 ## 실행
 
-Redis가 필요하다(Spot 단계가 사용한다). runner가 없으므로 이 tutorial에서는 Redis container를 직접
+[빌드](#빌드) 절을 먼저 마친다. Redis가 필요하다(Spot 단계가 사용한다). runner가 없으므로 이 tutorial에서는 Redis container를 직접
 실행하고 종료 시 정리한다. 별도 terminal에서 실행할 때는 Server를 먼저
 `npm run server`, Client를 `npm run client`로 실행할 수 있다. 아래 블록은 같은
 절차를 백그라운드 process로 실행하고 PID를 파일에 기록한다.
@@ -187,6 +187,13 @@ Get-Content client.pid, server.pid | ForEach-Object {
 Get-Job | Stop-Job -ErrorAction SilentlyContinue
 docker rm -f zlink-tutorial-node-redis 2>$null | Out-Null
 ```
+
+## IDE에서 실행
+
+WebStorm에서 `tutorial/` project를 연다. npm tool window 또는 각 script의 gutter ▶에서
+`build` → `server` → `client` 순서로 실행한다. 디버깅할 때는 Node.js run configuration을
+만들어 Working directory를 project directory, JavaScript file을 `dist/Server/main.js`로
+지정하고 Before launch에 npm `build`를 둔다. 종료는 ■ Stop 버튼으로 한다.
 
 ## 문제 해결
 

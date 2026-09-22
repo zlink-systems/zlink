@@ -128,6 +128,17 @@ Get-Content client.pid, server.pid | ForEach-Object {
 Get-Job | Stop-Job -ErrorAction SilentlyContinue
 ```
 
+## IDE에서 실행
+
+IntelliJ에서 `quickstart/`를 Gradle project로 연다. Gradle tool window에서 Java의
+`:java:Server:installDist`와 `:java:Client:installDist`, 또는 Kotlin의
+`:kotlin:Server:installDist`와 `:kotlin:Client:installDist`를 실행한다. Application 구성에서
+Server를 먼저, Client를 다음으로 실행한다. Java main class는
+`systems.zlink.quickstart.server.ServerApplication`과
+`systems.zlink.quickstart.client.ClientApplication`이고, Kotlin은 각각
+`systems.zlink.quickstart.server.ServerApplicationKt`와
+`systems.zlink.quickstart.client.ClientApplicationKt`이다. 종료는 IDE의 Stop 버튼으로 한다.
+
 ## 문제 해결
 
 | 증상 | 원인과 조치 |

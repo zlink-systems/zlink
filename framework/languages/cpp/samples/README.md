@@ -36,17 +36,18 @@ Bash blocks run on Linux, macOS, and WSL; PowerShell blocks run on Windows Power
 
 | Tool | Windows | Linux / WSL |
 |---|---|---|
-| C++20 compiler | Visual Studio 2022 17.4 or later with the **Desktop development with C++** workload (verified with MSVC 19.44) | GCC 13 or later (verified with 13.3) |
+| C++20 compiler | Visual Studio 2022 17.4 or later or Visual Studio 2026 with the **Desktop development with C++** workload. As of 2026-09, 2026's msvc 195 has no ConanCenter binary, so the first bootstrap builds third-party libraries from source and takes about 20 minutes. 2022 downloads binaries and takes about 7 minutes (verified with MSVC 19.44) | GCC 13 or later (verified with 13.3) |
 | CMake | 3.24 or later (the 3.31 Visual Studio installs was used) | 3.24 or later (3.28 was used) |
 | Ninja | not needed | recommended; Makefiles are used when it is absent |
-| Conan 2 | `pipx install conan` (or `py -m pip install --user conan`) | `pipx install conan` (or `python3 -m pip install --user conan`) |
+| Conan 2 | Run `pipx install conan`, then `pipx ensurepath` and open a new terminal. If you used `py -m pip install --user conan`, put Python's `Scripts` directory on `PATH`. Check with `conan --version` | Run `pipx install conan`, then `pipx ensurepath` and open a new terminal. If you used `python3 -m pip install --user conan`, put Python's user `bin` directory on `PATH`. Check with `conan --version` |
 | Docker Desktop | each runner starts one Redis container. Must be installed and running | same (WSL integration, or Docker Engine on Linux) |
 | `curl` | included since Windows 10 | distribution package |
 
 Nothing else is needed: no zlink repository or Node.js. Even ZoneWorld's ZW-B8 fault proxy is C++
 built with the sample. Conan is installed by pipx (or pip) and downloads ConanCenter binaries for
-the third-party libraries, so **the first install takes about 3 minutes** on a supported compiler;
-later installs reuse its local cache.
+the third-party libraries. Visual Studio 2022 takes **about 7 minutes for the first bootstrap**; a
+toolset without binaries, such as 2026's msvc 195, builds third-party libraries from source and
+takes **about 20 minutes**. Later installs reuse its local cache.
 
 ## Download and install
 
@@ -166,7 +167,7 @@ only in the repository tree.
 
 | Symptom | Cause and fix |
 |---|---|
-| `bootstrap: could not find Conan` | Install Conan 2 with `pipx install conan` (or `python3 -m pip install --user conan`) and ensure its bin directory is on `PATH` |
+| `bootstrap: could not find Conan` | Run `pipx install conan`, then `pipx ensurepath` and open a new terminal. For a `pip --user` install, put Python's `Scripts`/user `bin` directory on `PATH`, then check with `conan --version` |
 | `ERROR: Invalid setting ...` | The selected compiler is not a supported ConanCenter binary configuration. Use the listed compiler version, or pass `-DZLINK_PACKAGE_MANAGER=vcpkg` |
 | `bootstrap: download failed: https://github.com/...` | GitHub Releases is unreachable; check proxy and firewall, then rerun |
 | `CMake Error ... No CMAKE_CXX_COMPILER could be found` / `Visual Studio 17 2022 could not find any instance` | No compiler. Install the **Desktop development with C++** workload on Windows, `g++` on Linux |

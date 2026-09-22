@@ -156,6 +156,12 @@ Get-Job | Stop-Job -ErrorAction SilentlyContinue
 docker rm -f zlink-tutorial-dotnet-redis 2>$null | Out-Null
 ```
 
+## Running from an IDE
+
+Open `Tutorial.sln` in Rider or Visual Studio. Use a `Multiple startup projects` configuration with
+`Server` first and `Client` second, or run the projects individually in that order. Stop with the
+IDE's Stop button.
+
 ## Troubleshooting
 
 - **Docker is not running / cannot connect to Redis** -- start Docker Desktop

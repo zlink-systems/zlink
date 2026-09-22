@@ -94,7 +94,7 @@ npm run build:http-client
 
 ## Run
 
-Redis is required (the Spot stage uses it). There is no runner here, so this tutorial starts one
+[Complete the [Build](#build) section first. Redis is required (the Spot stage uses it). There is no runner here, so this tutorial starts one
 itself — and you clean it up yourself when done. Following along in two terminals, you can just
 run `npm run server` then `npm run client` directly. The block below does the same thing
 unattended, backgrounding both and leaving their PID in a file.
@@ -189,6 +189,13 @@ Get-Content client.pid, server.pid | ForEach-Object {
 Get-Job | Stop-Job -ErrorAction SilentlyContinue
 docker rm -f zlink-tutorial-node-redis 2>$null | Out-Null
 ```
+
+## Running from an IDE
+
+Open the `tutorial/` project in WebStorm. In the npm tool window or with each script's gutter ▶,
+run `build` → `server` → `client`. For debugging, create a Node.js run configuration with Working
+directory set to the project directory, JavaScript file `dist/Server/main.js`, and Before launch set
+to npm `build`. Stop with the ■ Stop button.
 
 ## Troubleshooting
 

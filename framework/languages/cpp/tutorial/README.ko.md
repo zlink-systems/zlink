@@ -39,15 +39,16 @@ bash 블록은 Linux·macOS·WSL에서, PowerShell 블록은 Windows PowerShell 
 
 | 도구 | Windows | Linux · WSL |
 |---|---|---|
-| C++20 컴파일러 | Visual Studio 2022 17.4 이상, **Desktop development with C++** 워크로드 (MSVC 19.44로 확인) | GCC 13 이상 (13.3으로 확인) |
+| C++20 컴파일러 | Visual Studio 2022 17.4 이상 또는 Visual Studio 2026, **Desktop development with C++** 워크로드. 2026-09 현재 2026의 msvc 195에는 ConanCenter 바이너리가 없어 첫 bootstrap이 서드파티 library를 source에서 빌드하므로 약 20분 걸린다. 2022는 바이너리를 내려받아 약 7분 걸린다 (2022는 MSVC 19.44로 확인) | GCC 13 이상 (13.3으로 확인) |
 | CMake | 3.24 이상 (Visual Studio가 설치하는 3.31로 확인) | 3.24 이상 (3.28로 확인) |
 | Ninja | 필요 없음 | 권장. 없으면 Makefile로 빌드한다 |
-| Conan 2 | `pipx install conan` (`py -m pip install --user conan`도 가능) | `pipx install conan` (`python3 -m pip install --user conan`도 가능) |
+| Conan 2 | `pipx install conan` 뒤 `pipx ensurepath`를 실행하고 새 terminal을 연다. `py -m pip install --user conan`을 썼으면 Python `Scripts` directory를 PATH에 넣는다. `conan --version`으로 확인한다 | `pipx install conan` 뒤 `pipx ensurepath`를 실행하고 새 terminal을 연다. `python3 -m pip install --user conan`을 썼으면 Python user `bin` directory를 PATH에 넣는다. `conan --version`으로 확인한다 |
 | Docker Desktop | Redis container를 실행한다. 설치되어 실행 중이어야 한다 | 같다 (WSL integration 또는 Linux의 Docker Engine) |
 
 이 밖에는 아무것도 필요 없다. zlink 저장소, Node.js, 시스템 패키지의 Boost는 쓰지 않는다.
-Conan은 pipx(또는 pip)로 설치하며 ConanCenter의 서드파티 바이너리를 받는다. 지원 컴파일러에서
-**첫 설치에는 약 3분이 걸리며**, 맞는 바이너리가 없는 package만 Conan이 소스에서 빌드한다. 이후에는
+Conan은 pipx(또는 pip)로 설치하며 ConanCenter의 서드파티 바이너리를 받는다. Visual Studio 2022에서는
+**첫 bootstrap에 약 7분**, 2026의 msvc 195처럼 바이너리가 없는 toolset에서는 서드파티를 source에서
+빌드하므로 **약 20분** 걸린다. 이후에는
 로컬 캐시를 재사용한다.
 
 ## 내려받기와 설치
@@ -225,7 +226,7 @@ docker rm -f zlink-tutorial-redis 2>$null | Out-Null
 
 | 증상 | 원인과 조치 |
 |---|---|
-| `bootstrap: could not find Conan` | `pipx install conan`(또는 `python3 -m pip install --user conan`)으로 Conan 2를 설치하고 실행 파일 경로를 `PATH`에 넣는다 |
+| `bootstrap: could not find Conan` | `pipx install conan` 뒤 `pipx ensurepath`를 실행하고 새 terminal을 연다. `pip --user` 설치라면 Python `Scripts`/user `bin` directory를 PATH에 넣고 `conan --version`으로 확인한다 |
 | `ERROR: Invalid setting ...` | 선택한 컴파일러가 ConanCenter의 지원 바이너리 구성과 다르다. 표의 컴파일러 버전을 쓰거나 `-DZLINK_PACKAGE_MANAGER=vcpkg`를 지정한다 |
 | `bootstrap: download failed: https://github.com/...` | GitHub Release에 연결하지 못했다. proxy·방화벽을 확인한다. 다시 실행하면 처음부터 다시 받는다 |
 | `CMake Error ... No CMAKE_CXX_COMPILER could be found` / `Visual Studio 17 2022 could not find any instance` | 컴파일러가 없다. Windows는 **Desktop development with C++** 워크로드, Linux는 `g++`를 설치한다 |

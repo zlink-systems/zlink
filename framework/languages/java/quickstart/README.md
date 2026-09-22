@@ -129,6 +129,17 @@ Get-Content client.pid, server.pid | ForEach-Object {
 Get-Job | Stop-Job -ErrorAction SilentlyContinue
 ```
 
+## Running from an IDE
+
+Open `quickstart/` as a Gradle project in IntelliJ. In the Gradle tool window, run Java's
+`:java:Server:installDist` and `:java:Client:installDist`, or Kotlin's
+`:kotlin:Server:installDist` and `:kotlin:Client:installDist`. Use Application configurations to
+run Server first and Client second. The Java main classes are
+`systems.zlink.quickstart.server.ServerApplication` and
+`systems.zlink.quickstart.client.ClientApplication`; Kotlin uses
+`systems.zlink.quickstart.server.ServerApplicationKt` and
+`systems.zlink.quickstart.client.ClientApplicationKt`. Stop with the IDE's Stop button.
+
 ## Troubleshooting
 
 | Symptom | Cause and fix |

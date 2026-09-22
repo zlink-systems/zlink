@@ -24,13 +24,14 @@ The same as the tutorial's, minus Docker (this project uses no Redis):
 
 | Tool | Windows | Linux / WSL |
 |---|---|---|
-| C++20 compiler | Visual Studio 2022 17.4 or later with the **Desktop development with C++** workload | GCC 13 or later |
+| C++20 compiler | Visual Studio 2022 17.4 or later or Visual Studio 2026 with the **Desktop development with C++** workload. As of 2026-09, 2026's msvc 195 has no ConanCenter binary, so the first bootstrap builds third-party libraries from source and takes about 20 minutes. 2022 downloads binaries and takes about 7 minutes | GCC 13 or later |
 | CMake | 3.24 or later | 3.24 or later |
 | Ninja | not needed | recommended; Makefiles are used when it is absent |
-| Conan 2 | `pipx install conan` (or `py -m pip install --user conan`) | `pipx install conan` (or `python3 -m pip install --user conan`) |
+| Conan 2 | Run `pipx install conan`, then `pipx ensurepath` and open a new terminal. If you used `py -m pip install --user conan`, put Python's `Scripts` directory on `PATH`. Check with `conan --version` | Run `pipx install conan`, then `pipx ensurepath` and open a new terminal. If you used `python3 -m pip install --user conan`, put Python's user `bin` directory on `PATH`. Check with `conan --version` |
 
-Conan downloads ConanCenter binaries for the third-party libraries, so **the first install takes
-about 3 minutes** on a supported compiler. If `tutorial/` or `samples/` was bootstrapped already,
+Conan downloads ConanCenter binaries for the third-party libraries. Visual Studio 2022 takes **about
+7 minutes for the first bootstrap**; a toolset without binaries, such as 2026's msvc 195, builds
+third-party libraries from source and takes **about 20 minutes**. If `tutorial/` or `samples/` was bootstrapped already,
 reuse its tree instead of building again: `cmake -DZLINK_ROOT=../tutorial/.zlink -P bootstrap.cmake`.
 
 ## Download and install
@@ -141,6 +142,7 @@ README. Specific to this project:
 
 | Symptom | Cause and fix |
 |---|---|
+| `bootstrap: could not find Conan` | Run `pipx install conan`, then `pipx ensurepath` and open a new terminal. For a `pip --user` install, put Python's `Scripts`/user `bin` directory on `PATH`, then check with `conan --version` |
 | `bind: Address already in use` / `Only one usage of each socket address` | Another process holds 7301, 7302 or 5083 — a `quickstart_server` or `quickstart_client` left from an earlier run |
 | `curl: (7) Failed to connect to 127.0.0.1 port 5083` | The client is not up yet, or died. Read `client.log` |
 | The call ends with no target | The server is not up, or the client's `peer_connections().connect(...)` names a different endpoint than the server's `listen(...)` |
