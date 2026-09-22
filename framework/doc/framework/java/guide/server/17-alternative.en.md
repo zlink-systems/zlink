@@ -196,27 +196,11 @@ even if they're replaced later — this backend boundary is explained separately
 **As code.** Declare one room, and write that room's progression logic.
 
 ```java
-// Registration — one room mesh and a room type
-ZLinkMeshNodeBuilder node = options.addRouteMesh("game.room");
-node.listen("tcp://0.0.0.0:9001");
-// A mesh has at least 1 logical membership
-node.channelName("game.room").server();
-node.objects().server().addSpotFactory("room", BingoRoomSpot.class, factory -> factory.recreateOnRelocation());
+--8<-- "framework/languages/java/samples/java/Bingo/Server/Play/src/main/java/systems/zlink/samples/bingo/server/play/PlayServerApplication.java:doc-bingo-play-register"
 ```
 
 ```java
-// Bingo room progression code — no concurrency exists inside this.
-public final class MarkNumberHandler
-    implements ZLinkSpotRequestHandler<BingoRoomSpot, MarkNumber, MarkResult> {
-
-    @Override
-    public CompletionStage<MarkResult> handle(BingoRoomSpot room, MarkNumber request) {
-        // No lock
-        room.board().mark(request.number());
-        room.setLastActivity(Instant.now());
-        return CompletableFuture.completedFuture(new MarkResult(room.board().hasBingo()));
-    }
-}
+--8<-- "framework/languages/java/samples/java/Bingo/Server/Play/src/main/java/systems/zlink/samples/bingo/server/play/infrastructure/zlink/spots/bingoroomspot/BingoRoomSpot.java:doc-bingo-room-join"
 ```
 
 Several players send requests at the same time and a timer runs in this room, yet there's no
@@ -272,11 +256,7 @@ same time in the first place.
 **As code.** Where lock acquire/release used to sit, one call remains.
 
 ```java
-// Applying to join a guild — request directly by guild id. No prior lock, no prior creation.
-spots.requestToSpot(guildId, new JoinGuildReq(userId))
-    .instanceSpot("guild")
-    .inMesh("social")
-    .submit(JoinGuildRes.class);
+--8<-- "framework/languages/java/samples/java/ShoppingMall/Server/CommerceApi/src/main/java/systems/zlink/samples/shoppingmall/server/commerceapi/CommerceApiService.java:doc-sm-api-request"
 ```
 
 There's no runnable reference sample for this scenario yet — the code above applies the same
@@ -340,17 +320,7 @@ inter-server delivery. The **location store is the only new infrastructure.**
 remains.
 
 ```java
-// Inside an HTTP handler — route an order event to that order's workflow Spot.
-// The first request cold-activates the spot keyed on OrderId, and later requests arrive
-// at the same already-created spot, always processed serially in one place (no distributed lock).
-// request is already a StartOrderWorkflowReq body.
-spots.requestToSpot(request.orderId(), request)
-    .instanceSpot("order-workflow")
-    .inMesh("commerce")
-    .submit(StartOrderWorkflowRes.class);
-
-// Inside an actor handler — push to a client that's still tied to the same actor after reconnect (no sticky LB).
-actor.context().boundSession().send(new OrderStatusChanged(orderId, status)).submit();
+--8<-- "framework/languages/java/samples/java/ShoppingMall/Server/CommerceApi/src/main/java/systems/zlink/samples/shoppingmall/server/commerceapi/CommerceApiService.java:doc-sm-api-request"
 ```
 
 Runnable reference samples: [SupportChat](../../../common/sample/supportchat/README.en.md) ·
@@ -448,18 +418,7 @@ pipeline.
 **As code.** Where the partition consumer used to sit, an owner Spot handler comes instead.
 
 ```java
-// Processing for the same OrderId always executes serially inside this Spot —
-// no partition, no offset, no distributed lock, no idempotency retry policy to assemble.
-public final class StartOrderWorkflowHandler
-    implements ZLinkSpotRequestHandler<OrderWorkflowSpot, StartOrderWorkflowReq, StartOrderWorkflowRes> {
-
-    @Override
-    public CompletionStage<StartOrderWorkflowRes> handle(
-        OrderWorkflowSpot spot, StartOrderWorkflowReq request) {
-        // Accesses spot state without a lock
-        return workflow.startInSpot(spot, request);
-    }
-}
+--8<-- "framework/languages/java/samples/java/ShoppingMall/Server/OrderWorkflow/src/main/java/systems/zlink/samples/shoppingmall/server/orderworkflow/spots/handlers/StartOrderWorkflowSpotHandler.java:doc-sm-spot-start"
 ```
 
 Runnable reference sample: [ShoppingMall](../../../common/sample/event/shoppingmall.en.md) —

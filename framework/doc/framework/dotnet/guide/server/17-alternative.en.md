@@ -196,28 +196,11 @@ even if they're replaced later — this backend boundary is explained separately
 **As code.** Declare one room, and write that room's progression logic.
 
 ```csharp
-// Registration — one room mesh and a room type
-var node = options.AddRouteMesh("game.room");
-node.Listen("tcp://0.0.0.0:9001");
-// A mesh has at least 1 logical membership
-node.Channel("game.room").Server();
-node.Objects().Server().AddSpotFactory<BingoRoomSpot>("room", factory => factory.RecreateOnRelocation());
+--8<-- "framework/languages/dotnet/samples/Bingo/Server/Play/PlayServerHostFactory.cs:doc-bingo-play-register"
 ```
 
 ```csharp
-// Bingo room progression code — no concurrency exists inside this.
-public sealed class MarkNumberHandler
-    : IZLinkSpotRequestHandler<BingoRoomSpot, MarkNumber, MarkResult>
-{
-    public ValueTask<MarkResult> HandleAsync(
-        BingoRoomSpot room, MarkNumber request, CancellationToken ct)
-    {
-        // No lock
-        room.Board.Mark(request.Number);
-        room.LastActivity = DateTimeOffset.UtcNow;
-        return ValueTask.FromResult(new MarkResult(room.Board.HasBingo()));
-    }
-}
+--8<-- "framework/languages/dotnet/samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/BingoRoom.cs:doc-bingo-room-join"
 ```
 
 Several players send requests at the same time and a timer runs in this room, yet there's no
@@ -273,11 +256,7 @@ same time in the first place.
 **As code.** Where lock acquire/release used to sit, one call remains.
 
 ```csharp
-// Applying to join a guild — request directly by guild id. No prior lock, no prior creation.
-await spots.RequestToSpot(guildId, new JoinGuildReq(userId))
-    .InstanceSpot("guild")
-    .InMesh("social")
-    .Async<JoinGuildRes>(ct);
+--8<-- "framework/languages/dotnet/samples/ShoppingMall/Server/CommerceApi/Infrastructure/ZLink/ZLinkOrderWorkflowRouter.cs:doc-sm-api-request"
 ```
 
 There's no runnable reference sample for this scenario yet — the code above applies the same
@@ -341,17 +320,7 @@ inter-server delivery. The **location store is the only new infrastructure.**
 remains.
 
 ```csharp
-// Inside an HTTP handler — route an order event to that order's workflow Spot.
-// The first request cold-activates the spot keyed on OrderId, and later requests arrive
-// at the same already-created spot, always processed serially in one place (no distributed lock).
-// request is already a StartOrderWorkflowReq body.
-await spots.RequestToSpot(request.OrderId, request)
-    .InstanceSpot("order-workflow")
-    .InMesh("commerce")
-    .Async<StartOrderWorkflowRes>(ct);
-
-// Inside an actor handler — push to a client that's still tied to the same actor after reconnect (no sticky LB).
-await actor.Context.BoundSession.Send(new OrderStatusChanged(orderId, status)).Async(ct);
+--8<-- "framework/languages/dotnet/samples/ShoppingMall/Server/CommerceApi/Infrastructure/ZLink/ZLinkOrderWorkflowRouter.cs:doc-sm-api-request"
 ```
 
 Runnable reference samples: [SupportChat](../../../common/sample/supportchat/README.en.md) ·
@@ -449,16 +418,7 @@ pipeline.
 **As code.** Where the partition consumer used to sit, an owner Spot handler comes instead.
 
 ```csharp
-// Processing for the same OrderId always executes serially inside this Spot —
-// no partition, no offset, no distributed lock, no idempotency retry policy to assemble.
-public sealed class StartOrderWorkflowHandler :
-    IZLinkSpotRequestHandler<OrderWorkflowSpot, StartOrderWorkflowReq, StartOrderWorkflowRes>
-{
-    public ValueTask<StartOrderWorkflowRes> HandleAsync(
-        OrderWorkflowSpot spot, StartOrderWorkflowReq request, CancellationToken ct)
-        // Accesses spot state without a lock
-        => spot.StartOrderWorkflowAsync(request, ct);
-}
+--8<-- "framework/languages/dotnet/samples/ShoppingMall/Server/OrderWorkflow/Infrastructure/ZLink/Spots/OrderWorkflowSpot/OrderWorkflowSpot.cs:doc-sm-spot-start"
 ```
 
 Runnable reference sample: [ShoppingMall](../../../common/sample/event/shoppingmall.en.md) —

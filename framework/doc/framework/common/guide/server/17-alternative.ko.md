@@ -163,132 +163,51 @@ application 코드는 바뀌지 않는다 — 이 backend 경계는
 === "C#/.NET"
 
     ```csharp
-    // 등록 — room mesh 하나와 room 타입
-    var node = options.AddRouteMesh("game.room");
-    node.Listen("tcp://0.0.0.0:9001");
-    // mesh는 최소 1개 logical membership을 갖는다
-    node.Channel("game.room").Server();
-    node.Objects().Server().AddSpotFactory<BingoRoomSpot>("room", factory => factory.RecreateOnRelocation());
+    --8<-- "framework/languages/dotnet/samples/Bingo/Server/Play/PlayServerHostFactory.cs:doc-bingo-play-register"
     ```
 
     ```csharp
-    // bingo room의 진행 코드 — 이 안에서 동시성은 존재하지 않는다.
-    public sealed class MarkNumberHandler
-        : IZLinkSpotRequestHandler<BingoRoomSpot, MarkNumber, MarkResult>
-    {
-        public ValueTask<MarkResult> HandleAsync(
-            BingoRoomSpot room, MarkNumber request, CancellationToken ct)
-        {
-            // lock 없음
-            room.Board.Mark(request.Number);
-            room.LastActivity = DateTimeOffset.UtcNow;
-            return ValueTask.FromResult(new MarkResult(room.Board.HasBingo()));
-        }
-    }
+    --8<-- "framework/languages/dotnet/samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/BingoRoom.cs:doc-bingo-room-join"
     ```
 
 === "C++"
 
     ```cpp
-    // 등록 — room mesh 하나와 room 타입
-    auto node = options.add_route_mesh ("game.room");
-    node.listen ("tcp://0.0.0.0:9001");
-    // mesh는 최소 1개 logical membership을 갖는다
-    node.channel_name ("game.room").server ();
-    node.add_spot_factory<bingo_room_spot_t> (
-      "room",
-      [] (spot_context_t context) { return std::make_shared<bingo_room_spot_t> (std::move (context)); },
-      [] (auto &factory) { factory.recreate_on_relocation (); });
+    --8<-- "framework/languages/cpp/samples/Bingo/Server/Play/play_server_host_factory.hpp:doc-bingo-play-register"
     ```
 
     ```cpp
-    // bingo room의 진행 코드 — 이 안에서 동시성은 존재하지 않는다.
-    // C++ Spot handler는 Spot member 함수다. Spot은 this로 받는다.
-    task_t<mark_result_t> bingo_room_spot_t::mark_number (const mark_number_t &request)
-    {
-        // lock 없음
-        _board.mark (request.number);
-        _last_activity = std::chrono::system_clock::now ();
-        co_return mark_result_t{_board.has_bingo ()};
-    }
+    --8<-- "framework/languages/cpp/samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/bingo_room_spot.hpp:doc-bingo-room-join"
     ```
 
 === "Java"
 
     ```java
-    // 등록 — room mesh 하나와 room 타입
-    ZLinkMeshNodeBuilder node = options.addRouteMesh("game.room");
-    node.listen("tcp://0.0.0.0:9001");
-    // mesh는 최소 1개 logical membership을 갖는다
-    node.channelName("game.room").server();
-    node.objects().server().addSpotFactory("room", BingoRoomSpot.class, factory -> factory.recreateOnRelocation());
+    --8<-- "framework/languages/java/samples/java/Bingo/Server/Play/src/main/java/systems/zlink/samples/bingo/server/play/PlayServerApplication.java:doc-bingo-play-register"
     ```
 
     ```java
-    // bingo room의 진행 코드 — 이 안에서 동시성은 존재하지 않는다.
-    public final class MarkNumberHandler
-        implements ZLinkSpotRequestHandler<BingoRoomSpot, MarkNumber, MarkResult> {
-
-        @Override
-        public CompletionStage<MarkResult> handle(BingoRoomSpot room, MarkNumber request) {
-            // lock 없음
-            room.board().mark(request.number());
-            room.setLastActivity(Instant.now());
-            return CompletableFuture.completedFuture(new MarkResult(room.board().hasBingo()));
-        }
-    }
+    --8<-- "framework/languages/java/samples/java/Bingo/Server/Play/src/main/java/systems/zlink/samples/bingo/server/play/infrastructure/zlink/spots/bingoroomspot/BingoRoomSpot.java:doc-bingo-room-join"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    // 등록 — room mesh 하나와 room 타입
-    val node = options.addRouteMesh("game.room")
-    node.listen("tcp://0.0.0.0:9001")
-    // mesh는 최소 1개 logical membership을 갖는다
-    node.channelName("game.room").server()
-    node.objects().server()
-        .addSpotFactory("room", BingoRoomSpot::class.java) { factory ->
-            factory.recreateOnRelocation()
-        }
+    --8<-- "framework/languages/java/samples/kotlin/Bingo/Server/Play/src/main/kotlin/systems/zlink/samples/kotlin/bingo/server/play/PlayServerApplication.kt:doc-bingo-play-register"
     ```
 
     ```kotlin
-    // bingo room의 진행 코드 — 이 안에서 동시성은 존재하지 않는다.
-    class MarkNumberHandler : ZLinkSpotRequestHandler<BingoRoomSpot, MarkNumber, MarkResult> {
-
-        override suspend fun handle(room: BingoRoomSpot, request: MarkNumber): MarkResult {
-            // lock 없음
-            room.board.mark(request.number)
-            room.lastActivity = Instant.now()
-            return MarkResult(room.board.hasBingo())
-        }
-    }
+    --8<-- "framework/languages/java/samples/kotlin/Bingo/Server/Play/src/main/kotlin/systems/zlink/samples/kotlin/bingo/server/play/infrastructure/zlink/spots/bingoroomspot/BingoRoomSpot.kt:doc-bingo-room-join"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    // 등록 — room mesh 하나와 room 타입
-    const node = builder.addRouteMesh('game.room');
-    node.listen('tcp://0.0.0.0:9001');
-    // mesh는 최소 1개 logical membership을 갖는다
-    node.channel('game.room').server();
-    node.objects().server().addSpotFactory('room', BingoRoomSpot, factory => factory.recreateOnRelocation());
+    --8<-- "framework/languages/node/samples/Bingo.Ts/Server/Play/bingo-play-module.ts:doc-bingo-play-register"
     ```
 
     ```typescript
-    // bingo room의 진행 코드 — 이 안에서 동시성은 존재하지 않는다.
-    export class MarkNumberHandler
-      implements ZLinkSpotRequestHandler<BingoRoomSpot, MarkNumber, MarkResult> {
-
-      async handle(room: BingoRoomSpot, request: MarkNumber): Promise<MarkResult> {
-        // lock 없음
-        room.board.mark(request.number);
-        room.lastActivity = new Date();
-        return { bingo: room.board.hasBingo() };
-      }
-    }
+    --8<-- "framework/languages/node/samples/Bingo.Ts/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/bingo-room-spot.ts:doc-bingo-room-join"
     ```
 
 여러 플레이어가 동시에 요청을 보내고 timer가 도는 room인데 `lock`도,
@@ -342,51 +261,31 @@ application 코드는 바뀌지 않는다 — 이 backend 경계는
 === "C#/.NET"
 
     ```csharp
-    // 길드 가입 신청 — 길드 id로 바로 요청한다. 사전 락도, 사전 생성도 없다.
-    await spots.RequestToSpot(guildId, new JoinGuildReq(userId))
-        .InstanceSpot("guild")
-        .InMesh("social")
-        .Async<JoinGuildRes>(ct);
+    --8<-- "framework/languages/dotnet/samples/ShoppingMall/Server/CommerceApi/Infrastructure/ZLink/ZLinkOrderWorkflowRouter.cs:doc-sm-api-request"
     ```
 
 === "C++"
 
     ```cpp
-    // 길드 가입 신청 — 길드 id로 바로 요청한다. 사전 락도, 사전 생성도 없다.
-    co_await spots.request_to_spot (guild_id, join_guild_req_t{user_id})
-      .instance_spot ("guild")
-      .in_mesh ("social")
-      .async<join_guild_res_t> ();
+    --8<-- "framework/languages/cpp/samples/ShoppingMall/Server/CommerceApi/main.cpp:doc-sm-api-request"
     ```
 
 === "Java"
 
     ```java
-    // 길드 가입 신청 — 길드 id로 바로 요청한다. 사전 락도, 사전 생성도 없다.
-    spots.requestToSpot(guildId, new JoinGuildReq(userId))
-        .instanceSpot("guild")
-        .inMesh("social")
-        .submit(JoinGuildRes.class);
+    --8<-- "framework/languages/java/samples/java/ShoppingMall/Server/CommerceApi/src/main/java/systems/zlink/samples/shoppingmall/server/commerceapi/CommerceApiService.java:doc-sm-api-request"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    // 길드 가입 신청 — 길드 id로 바로 요청한다. 사전 락도, 사전 생성도 없다.
-    spots.kotlin().requestToSpot<JoinGuildRes>(guildId, JoinGuildReq(userId))
-        .instanceSpot("guild")
-        .inMesh("social")
-        .await()
+    --8<-- "framework/languages/java/samples/kotlin/ShoppingMall/Server/CommerceApi/src/main/kotlin/systems/zlink/samples/kotlin/shoppingmall/server/commerceapi/OrderWorkflowRouter.kt:doc-sm-api-request"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    // 길드 가입 신청 — 길드 id로 바로 요청한다. 사전 락도, 사전 생성도 없다.
-    await spots.requestToSpot(guildId, joinGuildReq(userId))
-      .instanceSpot('guild')
-      .inMesh('social')
-      .submit<JoinGuildRes>();
+    --8<-- "framework/languages/node/samples/ShoppingMall.Ts/Server/CommerceApi/Infrastructure/ZLink/zlink-order-workflow-router.ts:doc-sm-api-request"
     ```
 
 이 시나리오는 아직 실행 가능한 기준 샘플이 없다 — 위 코드는 GameQuest의
@@ -444,81 +343,31 @@ sticky LB · pub/sub 브로커 · 분산 락 — 이 인프라 구성 요소가 
 === "C#/.NET"
 
     ```csharp
-    // HTTP handler 안 — 주문 이벤트를 그 주문의 workflow Spot으로.
-    // 첫 요청이 OrderId 기준 spot을 cold-activate하고, 이후 요청은 이미 만들어진
-    // 같은 spot에 도착해 항상 한 곳에서 순서대로 처리된다(분산 락 없음).
-    // request는 이미 StartOrderWorkflowReq 바디다.
-    await spots.RequestToSpot(request.OrderId, request)
-        .InstanceSpot("order-workflow")
-        .InMesh("commerce")
-        .Async<StartOrderWorkflowRes>(ct);
-
-    // actor handler 안 — 재접속해도 같은 actor로 이어진 client에 push(sticky LB 없음).
-    await actor.Context.BoundSession.Send(new OrderStatusChanged(orderId, status)).Async(ct);
+    --8<-- "framework/languages/dotnet/samples/ShoppingMall/Server/CommerceApi/Infrastructure/ZLink/ZLinkOrderWorkflowRouter.cs:doc-sm-api-request"
     ```
 
 === "C++"
 
     ```cpp
-    // HTTP handler 안 — 주문 이벤트를 그 주문의 workflow Spot으로.
-    // 첫 요청이 order_id 기준 spot을 cold-activate하고, 이후 요청은 이미 만들어진
-    // 같은 spot에 도착해 항상 한 곳에서 순서대로 처리된다(분산 락 없음).
-    // request는 이미 start_order_workflow_req_t 바디다.
-    co_await spots.request_to_spot (request.order_id, request)
-      .instance_spot ("order-workflow")
-      .in_mesh ("commerce")
-      .async<start_order_workflow_res_t> ();
-
-    // actor handler 안 — 재접속해도 같은 actor로 이어진 client에 push(sticky LB 없음).
-    co_await actor.context ().bound_session ().send (order_status_changed_t{order_id, status}).async ();
+    --8<-- "framework/languages/cpp/samples/ShoppingMall/Server/CommerceApi/main.cpp:doc-sm-api-request"
     ```
 
 === "Java"
 
     ```java
-    // HTTP handler 안 — 주문 이벤트를 그 주문의 workflow Spot으로.
-    // 첫 요청이 OrderId 기준 spot을 cold-activate하고, 이후 요청은 이미 만들어진
-    // 같은 spot에 도착해 항상 한 곳에서 순서대로 처리된다(분산 락 없음).
-    // request는 이미 StartOrderWorkflowReq 바디다.
-    spots.requestToSpot(request.orderId(), request)
-        .instanceSpot("order-workflow")
-        .inMesh("commerce")
-        .submit(StartOrderWorkflowRes.class);
-
-    // actor handler 안 — 재접속해도 같은 actor로 이어진 client에 push(sticky LB 없음).
-    actor.context().boundSession().send(new OrderStatusChanged(orderId, status)).submit();
+    --8<-- "framework/languages/java/samples/java/ShoppingMall/Server/CommerceApi/src/main/java/systems/zlink/samples/shoppingmall/server/commerceapi/CommerceApiService.java:doc-sm-api-request"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    // HTTP handler 안 — 주문 이벤트를 그 주문의 workflow Spot으로.
-    // 첫 요청이 OrderId 기준 spot을 cold-activate하고, 이후 요청은 이미 만들어진
-    // 같은 spot에 도착해 항상 한 곳에서 순서대로 처리된다(분산 락 없음).
-    // request는 이미 StartOrderWorkflowReq 바디다.
-    spots.kotlin().requestToSpot<StartOrderWorkflowRes>(request.orderId, request)
-        .instanceSpot("order-workflow")
-        .inMesh("commerce")
-        .await()
-
-    // actor handler 안 — 재접속해도 같은 actor로 이어진 client에 push(sticky LB 없음).
-    actor.context().boundSession().kotlin().send(OrderStatusChanged(orderId, status)).await()
+    --8<-- "framework/languages/java/samples/kotlin/ShoppingMall/Server/CommerceApi/src/main/kotlin/systems/zlink/samples/kotlin/shoppingmall/server/commerceapi/OrderWorkflowRouter.kt:doc-sm-api-request"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    // HTTP handler 안 — 주문 이벤트를 그 주문의 workflow Spot으로.
-    // 첫 요청이 orderId 기준 spot을 cold-activate하고, 이후 요청은 이미 만들어진
-    // 같은 spot에 도착해 항상 한 곳에서 순서대로 처리된다(분산 락 없음).
-    // request는 이미 StartOrderWorkflowReq 바디다.
-    await spots.requestToSpot(request.orderId, request)
-      .instanceSpot('order-workflow')
-      .inMesh('commerce')
-      .submit<StartOrderWorkflowRes>();
-
-    // actor handler 안 — 재접속해도 같은 actor로 이어진 client에 push(sticky LB 없음).
-    await actor.context.boundSession.send(orderStatusChanged(orderId, status)).submit();
+    --8<-- "framework/languages/node/samples/ShoppingMall.Ts/Server/CommerceApi/Infrastructure/ZLink/zlink-order-workflow-router.ts:doc-sm-api-request"
     ```
 
 실행되는 근거 샘플: [SupportChat](../../../common/sample/supportchat/README.ko.md) ·
@@ -608,78 +457,31 @@ ZLink가 줄이는 것은 "엔티티 단위 순서 처리"만을 위해 log 파�
 === "C#/.NET"
 
     ```csharp
-    // 같은 OrderId의 처리는 항상 이 Spot 안에서 순서대로 실행된다 —
-    // partition도, offset도, 분산 락도, 멱등성 재시도 정책도 직접 갖추지 않는다.
-    public sealed class StartOrderWorkflowHandler :
-        IZLinkSpotRequestHandler<OrderWorkflowSpot, StartOrderWorkflowReq, StartOrderWorkflowRes>
-    {
-        public ValueTask<StartOrderWorkflowRes> HandleAsync(
-            OrderWorkflowSpot spot, StartOrderWorkflowReq request, CancellationToken ct)
-            // spot 상태에 lock 없이 접근
-            => spot.StartOrderWorkflowAsync(request, ct);
-    }
+    --8<-- "framework/languages/dotnet/samples/ShoppingMall/Server/OrderWorkflow/Infrastructure/ZLink/Spots/OrderWorkflowSpot/OrderWorkflowSpot.cs:doc-sm-spot-start"
     ```
 
 === "C++"
 
     ```cpp
-    // 같은 order_id의 처리는 항상 이 Spot 안에서 순서대로 실행된다 —
-    // partition도, offset도, 분산 락도, 멱등성 재시도 정책도 직접 갖추지 않는다.
-    // C++ Spot handler는 Spot member 함수다.
-    task_t<start_order_workflow_res_t>
-    order_workflow_spot_t::start_order_workflow (const start_order_workflow_req_t &request)
-    {
-        // spot 상태에 lock 없이 접근
-        co_return co_await start_workflow (request);
-    }
+    --8<-- "framework/languages/cpp/samples/ShoppingMall/Server/OrderWorkflow/main.cpp:doc-sm-spot-start"
     ```
 
 === "Java"
 
     ```java
-    // 같은 OrderId의 처리는 항상 이 Spot 안에서 순서대로 실행된다 —
-    // partition도, offset도, 분산 락도, 멱등성 재시도 정책도 직접 갖추지 않는다.
-    public final class StartOrderWorkflowHandler
-        implements ZLinkSpotRequestHandler<OrderWorkflowSpot, StartOrderWorkflowReq, StartOrderWorkflowRes> {
-
-        @Override
-        public CompletionStage<StartOrderWorkflowRes> handle(
-            OrderWorkflowSpot spot, StartOrderWorkflowReq request) {
-            // spot 상태에 lock 없이 접근
-            return workflow.startInSpot(spot, request);
-        }
-    }
+    --8<-- "framework/languages/java/samples/java/ShoppingMall/Server/OrderWorkflow/src/main/java/systems/zlink/samples/shoppingmall/server/orderworkflow/spots/handlers/StartOrderWorkflowSpotHandler.java:doc-sm-spot-start"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    // 같은 OrderId의 처리는 항상 이 Spot 안에서 순서대로 실행된다 —
-    // partition도, offset도, 분산 락도, 멱등성 재시도 정책도 직접 갖추지 않는다.
-    class StartOrderWorkflowHandler :
-        ZLinkSpotRequestHandler<OrderWorkflowSpot, StartOrderWorkflowReq, StartOrderWorkflowRes> {
-
-        override suspend fun handle(
-            spot: OrderWorkflowSpot, request: StartOrderWorkflowReq): StartOrderWorkflowRes =
-            // spot 상태에 lock 없이 접근
-            workflow.startInSpot(spot, request)
-    }
+    --8<-- "framework/languages/java/samples/kotlin/ShoppingMall/Server/OrderWorkflow/src/main/kotlin/systems/zlink/samples/kotlin/shoppingmall/server/orderworkflow/handlers/StartOrderWorkflowHandler.kt:doc-sm-spot-start"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    // 같은 orderId의 처리는 항상 이 Spot 안에서 순서대로 실행된다 —
-    // partition도, offset도, 분산 락도, 멱등성 재시도 정책도 직접 갖추지 않는다.
-    export class StartOrderWorkflowHandler
-      implements ZLinkSpotRequestHandler<OrderWorkflowSpot, StartOrderWorkflowReq, StartOrderWorkflowRes> {
-
-      async handle(
-        spot: OrderWorkflowSpot, request: StartOrderWorkflowReq): Promise<StartOrderWorkflowRes> {
-        // spot 상태에 lock 없이 접근
-        return spot.start(request);
-      }
-    }
+    --8<-- "framework/languages/node/samples/ShoppingMall.Ts/Server/OrderWorkflow/Infrastructure/ZLink/Spots/OrderWorkflowSpot/Handlers/start-order-workflow-handler.ts:doc-sm-spot-start"
     ```
 
 실행되는 근거 샘플: [ShoppingMall](../../../common/sample/event/shoppingmall.ko.md) — 실시간 push

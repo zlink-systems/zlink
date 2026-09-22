@@ -196,27 +196,11 @@ even if they're replaced later — this backend boundary is explained separately
 **As code.** Declare one room, and write that room's progression logic.
 
 ```cpp
-// Registration — one room mesh and a room type
-auto node = options.add_route_mesh ("game.room");
-node.listen ("tcp://0.0.0.0:9001");
-// A mesh has at least 1 logical membership
-node.channel_name ("game.room").server ();
-node.add_spot_factory<bingo_room_spot_t> (
-  "room",
-  [] (spot_context_t context) { return std::make_shared<bingo_room_spot_t> (std::move (context)); },
-  [] (auto &factory) { factory.recreate_on_relocation (); });
+--8<-- "framework/languages/cpp/samples/Bingo/Server/Play/play_server_host_factory.hpp:doc-bingo-play-register"
 ```
 
 ```cpp
-// Bingo room progression code — no concurrency exists inside this.
-// A C++ Spot handler is a Spot member function. The Spot arrives as `this`.
-task_t<mark_result_t> bingo_room_spot_t::mark_number (const mark_number_t &request)
-{
-    // No lock
-    _board.mark (request.number);
-    _last_activity = std::chrono::system_clock::now ();
-    co_return mark_result_t{_board.has_bingo ()};
-}
+--8<-- "framework/languages/cpp/samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/bingo_room_spot.hpp:doc-bingo-room-join"
 ```
 
 Several players send requests at the same time and a timer runs in this room, yet there's no
@@ -272,11 +256,7 @@ same time in the first place.
 **As code.** Where lock acquire/release used to sit, one call remains.
 
 ```cpp
-// Applying to join a guild — request directly by guild id. No prior lock, no prior creation.
-co_await spots.request_to_spot (guild_id, join_guild_req_t{user_id})
-  .instance_spot ("guild")
-  .in_mesh ("social")
-  .async<join_guild_res_t> ();
+--8<-- "framework/languages/cpp/samples/ShoppingMall/Server/CommerceApi/main.cpp:doc-sm-api-request"
 ```
 
 There's no runnable reference sample for this scenario yet — the code above applies the same
@@ -340,17 +320,7 @@ inter-server delivery. The **location store is the only new infrastructure.**
 remains.
 
 ```cpp
-// Inside an HTTP handler — route an order event to that order's workflow Spot.
-// The first request cold-activates the spot keyed on order_id, and later requests arrive
-// at the same already-created spot, always processed serially in one place (no distributed lock).
-// request is already a start_order_workflow_req_t body.
-co_await spots.request_to_spot (request.order_id, request)
-  .instance_spot ("order-workflow")
-  .in_mesh ("commerce")
-  .async<start_order_workflow_res_t> ();
-
-// Inside an actor handler — push to a client that's still tied to the same actor after reconnect (no sticky LB).
-co_await actor.context ().bound_session ().send (order_status_changed_t{order_id, status}).async ();
+--8<-- "framework/languages/cpp/samples/ShoppingMall/Server/CommerceApi/main.cpp:doc-sm-api-request"
 ```
 
 Runnable reference samples: [SupportChat](../../../common/sample/supportchat/README.en.md) ·
@@ -448,15 +418,7 @@ pipeline.
 **As code.** Where the partition consumer used to sit, an owner Spot handler comes instead.
 
 ```cpp
-// Processing for the same order_id always executes serially inside this Spot —
-// no partition, no offset, no distributed lock, no idempotency retry policy to assemble.
-// A C++ Spot handler is a Spot member function.
-task_t<start_order_workflow_res_t>
-order_workflow_spot_t::start_order_workflow (const start_order_workflow_req_t &request)
-{
-    // Accesses spot state without a lock
-    co_return co_await start_workflow (request);
-}
+--8<-- "framework/languages/cpp/samples/ShoppingMall/Server/OrderWorkflow/main.cpp:doc-sm-spot-start"
 ```
 
 Runnable reference sample: [ShoppingMall](../../../common/sample/event/shoppingmall.en.md) —

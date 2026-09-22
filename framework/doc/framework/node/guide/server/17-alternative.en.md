@@ -196,26 +196,11 @@ even if they're replaced later — this backend boundary is explained separately
 **As code.** Declare one room, and write that room's progression logic.
 
 ```typescript
-// Registration — one room mesh and a room type
-const node = builder.addRouteMesh('game.room');
-node.listen('tcp://0.0.0.0:9001');
-// A mesh has at least 1 logical membership
-node.channel('game.room').server();
-node.objects().server().addSpotFactory('room', BingoRoomSpot, factory => factory.recreateOnRelocation());
+--8<-- "framework/languages/node/samples/Bingo.Ts/Server/Play/bingo-play-module.ts:doc-bingo-play-register"
 ```
 
 ```typescript
-// Bingo room progression code — no concurrency exists inside this.
-export class MarkNumberHandler
-  implements ZLinkSpotRequestHandler<BingoRoomSpot, MarkNumber, MarkResult> {
-
-  async handle(room: BingoRoomSpot, request: MarkNumber): Promise<MarkResult> {
-    // No lock
-    room.board.mark(request.number);
-    room.lastActivity = new Date();
-    return { bingo: room.board.hasBingo() };
-  }
-}
+--8<-- "framework/languages/node/samples/Bingo.Ts/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/bingo-room-spot.ts:doc-bingo-room-join"
 ```
 
 Several players send requests at the same time and a timer runs in this room, yet there's no
@@ -271,11 +256,7 @@ same time in the first place.
 **As code.** Where lock acquire/release used to sit, one call remains.
 
 ```typescript
-// Applying to join a guild — request directly by guild id. No prior lock, no prior creation.
-await spots.requestToSpot(guildId, joinGuildReq(userId))
-  .instanceSpot('guild')
-  .inMesh('social')
-  .submit<JoinGuildRes>();
+--8<-- "framework/languages/node/samples/ShoppingMall.Ts/Server/CommerceApi/Infrastructure/ZLink/zlink-order-workflow-router.ts:doc-sm-api-request"
 ```
 
 There's no runnable reference sample for this scenario yet — the code above applies the same
@@ -339,17 +320,7 @@ inter-server delivery. The **location store is the only new infrastructure.**
 remains.
 
 ```typescript
-// Inside an HTTP handler — route an order event to that order's workflow Spot.
-// The first request cold-activates the spot keyed on orderId, and later requests arrive
-// at the same already-created spot, always processed serially in one place (no distributed lock).
-// request is already a StartOrderWorkflowReq body.
-await spots.requestToSpot(request.orderId, request)
-  .instanceSpot('order-workflow')
-  .inMesh('commerce')
-  .submit<StartOrderWorkflowRes>();
-
-// Inside an actor handler — push to a client that's still tied to the same actor after reconnect (no sticky LB).
-await actor.context.boundSession.send(orderStatusChanged(orderId, status)).submit();
+--8<-- "framework/languages/node/samples/ShoppingMall.Ts/Server/CommerceApi/Infrastructure/ZLink/zlink-order-workflow-router.ts:doc-sm-api-request"
 ```
 
 Runnable reference samples: [SupportChat](../../../common/sample/supportchat/README.en.md) ·
@@ -447,17 +418,7 @@ pipeline.
 **As code.** Where the partition consumer used to sit, an owner Spot handler comes instead.
 
 ```typescript
-// Processing for the same orderId always executes serially inside this Spot —
-// no partition, no offset, no distributed lock, no idempotency retry policy to assemble.
-export class StartOrderWorkflowHandler
-  implements ZLinkSpotRequestHandler<OrderWorkflowSpot, StartOrderWorkflowReq, StartOrderWorkflowRes> {
-
-  async handle(
-    spot: OrderWorkflowSpot, request: StartOrderWorkflowReq): Promise<StartOrderWorkflowRes> {
-    // Accesses spot state without a lock
-    return spot.start(request);
-  }
-}
+--8<-- "framework/languages/node/samples/ShoppingMall.Ts/Server/OrderWorkflow/Infrastructure/ZLink/Spots/OrderWorkflowSpot/Handlers/start-order-workflow-handler.ts:doc-sm-spot-start"
 ```
 
 Runnable reference sample: [ShoppingMall](../../../common/sample/event/shoppingmall.en.md) —

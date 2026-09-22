@@ -179,26 +179,11 @@ application 코드는 바뀌지 않는다 — 이 backend 경계는
 **코드로 보면.** room 하나를 선언하고, 그 room의 진행 로직을 사용한다.
 
 ```typescript
-// 등록 — room mesh 하나와 room 타입
-const node = builder.addRouteMesh('game.room');
-node.listen('tcp://0.0.0.0:9001');
-// mesh는 최소 1개 logical membership을 갖는다
-node.channel('game.room').server();
-node.objects().server().addSpotFactory('room', BingoRoomSpot, factory => factory.recreateOnRelocation());
+--8<-- "framework/languages/node/samples/Bingo.Ts/Server/Play/bingo-play-module.ts:doc-bingo-play-register"
 ```
 
 ```typescript
-// bingo room의 진행 코드 — 이 안에서 동시성은 존재하지 않는다.
-export class MarkNumberHandler
-  implements ZLinkSpotRequestHandler<BingoRoomSpot, MarkNumber, MarkResult> {
-
-  async handle(room: BingoRoomSpot, request: MarkNumber): Promise<MarkResult> {
-    // lock 없음
-    room.board.mark(request.number);
-    room.lastActivity = new Date();
-    return { bingo: room.board.hasBingo() };
-  }
-}
+--8<-- "framework/languages/node/samples/Bingo.Ts/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/bingo-room-spot.ts:doc-bingo-room-join"
 ```
 
 여러 플레이어가 동시에 요청을 보내고 timer가 도는 room인데 `lock`도,
@@ -250,11 +235,7 @@ export class MarkNumberHandler
 **코드로 보면.** 락 획득·해제가 있던 자리에 한 호출이 남는다.
 
 ```typescript
-// 길드 가입 신청 — 길드 id로 바로 요청한다. 사전 락도, 사전 생성도 없다.
-await spots.requestToSpot(guildId, joinGuildReq(userId))
-  .instanceSpot('guild')
-  .inMesh('social')
-  .submit<JoinGuildRes>();
+--8<-- "framework/languages/node/samples/ShoppingMall.Ts/Server/CommerceApi/Infrastructure/ZLink/zlink-order-workflow-router.ts:doc-sm-api-request"
 ```
 
 이 시나리오는 아직 실행 가능한 기준 샘플이 없다 — 위 코드는 GameQuest의
@@ -310,17 +291,7 @@ sticky LB · pub/sub 브로커 · 분산 락 — 이 인프라 구성 요소가 
 **코드로 보면.** 분산 락과 sticky 라우팅이 있던 자리에 다음 코드가 남는다.
 
 ```typescript
-// HTTP handler 안 — 주문 이벤트를 그 주문의 workflow Spot으로.
-// 첫 요청이 orderId 기준 spot을 cold-activate하고, 이후 요청은 이미 만들어진
-// 같은 spot에 도착해 항상 한 곳에서 순서대로 처리된다(분산 락 없음).
-// request는 이미 StartOrderWorkflowReq 바디다.
-await spots.requestToSpot(request.orderId, request)
-  .instanceSpot('order-workflow')
-  .inMesh('commerce')
-  .submit<StartOrderWorkflowRes>();
-
-// actor handler 안 — 재접속해도 같은 actor로 이어진 client에 push(sticky LB 없음).
-await actor.context.boundSession.send(orderStatusChanged(orderId, status)).submit();
+--8<-- "framework/languages/node/samples/ShoppingMall.Ts/Server/CommerceApi/Infrastructure/ZLink/zlink-order-workflow-router.ts:doc-sm-api-request"
 ```
 
 실행되는 근거 샘플: [SupportChat](../../../common/sample/supportchat/README.ko.md) ·
@@ -408,17 +379,7 @@ ZLink가 줄이는 것은 "엔티티 단위 순서 처리"만을 위해 log 파�
 **코드로 보면.** partition 소비자 자리에 owner Spot handler가 온다.
 
 ```typescript
-// 같은 orderId의 처리는 항상 이 Spot 안에서 순서대로 실행된다 —
-// partition도, offset도, 분산 락도, 멱등성 재시도 정책도 직접 갖추지 않는다.
-export class StartOrderWorkflowHandler
-  implements ZLinkSpotRequestHandler<OrderWorkflowSpot, StartOrderWorkflowReq, StartOrderWorkflowRes> {
-
-  async handle(
-    spot: OrderWorkflowSpot, request: StartOrderWorkflowReq): Promise<StartOrderWorkflowRes> {
-    // spot 상태에 lock 없이 접근
-    return spot.start(request);
-  }
-}
+--8<-- "framework/languages/node/samples/ShoppingMall.Ts/Server/OrderWorkflow/Infrastructure/ZLink/Spots/OrderWorkflowSpot/Handlers/start-order-workflow-handler.ts:doc-sm-spot-start"
 ```
 
 실행되는 근거 샘플: [ShoppingMall](../../../common/sample/event/shoppingmall.ko.md) — 실시간 push

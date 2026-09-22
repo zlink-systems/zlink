@@ -179,28 +179,11 @@ application 코드는 바뀌지 않는다 — 이 backend 경계는
 **코드로 보면.** room 하나를 선언하고, 그 room의 진행 로직을 사용한다.
 
 ```csharp
-// 등록 — room mesh 하나와 room 타입
-var node = options.AddRouteMesh("game.room");
-node.Listen("tcp://0.0.0.0:9001");
-// mesh는 최소 1개 logical membership을 갖는다
-node.Channel("game.room").Server();
-node.Objects().Server().AddSpotFactory<BingoRoomSpot>("room", factory => factory.RecreateOnRelocation());
+--8<-- "framework/languages/dotnet/samples/Bingo/Server/Play/PlayServerHostFactory.cs:doc-bingo-play-register"
 ```
 
 ```csharp
-// bingo room의 진행 코드 — 이 안에서 동시성은 존재하지 않는다.
-public sealed class MarkNumberHandler
-    : IZLinkSpotRequestHandler<BingoRoomSpot, MarkNumber, MarkResult>
-{
-    public ValueTask<MarkResult> HandleAsync(
-        BingoRoomSpot room, MarkNumber request, CancellationToken ct)
-    {
-        // lock 없음
-        room.Board.Mark(request.Number);
-        room.LastActivity = DateTimeOffset.UtcNow;
-        return ValueTask.FromResult(new MarkResult(room.Board.HasBingo()));
-    }
-}
+--8<-- "framework/languages/dotnet/samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/BingoRoom.cs:doc-bingo-room-join"
 ```
 
 여러 플레이어가 동시에 요청을 보내고 timer가 도는 room인데 `lock`도,
@@ -252,11 +235,7 @@ public sealed class MarkNumberHandler
 **코드로 보면.** 락 획득·해제가 있던 자리에 한 호출이 남는다.
 
 ```csharp
-// 길드 가입 신청 — 길드 id로 바로 요청한다. 사전 락도, 사전 생성도 없다.
-await spots.RequestToSpot(guildId, new JoinGuildReq(userId))
-    .InstanceSpot("guild")
-    .InMesh("social")
-    .Async<JoinGuildRes>(ct);
+--8<-- "framework/languages/dotnet/samples/ShoppingMall/Server/CommerceApi/Infrastructure/ZLink/ZLinkOrderWorkflowRouter.cs:doc-sm-api-request"
 ```
 
 이 시나리오는 아직 실행 가능한 기준 샘플이 없다 — 위 코드는 GameQuest의
@@ -312,17 +291,7 @@ sticky LB · pub/sub 브로커 · 분산 락 — 이 인프라 구성 요소가 
 **코드로 보면.** 분산 락과 sticky 라우팅이 있던 자리에 다음 코드가 남는다.
 
 ```csharp
-// HTTP handler 안 — 주문 이벤트를 그 주문의 workflow Spot으로.
-// 첫 요청이 OrderId 기준 spot을 cold-activate하고, 이후 요청은 이미 만들어진
-// 같은 spot에 도착해 항상 한 곳에서 순서대로 처리된다(분산 락 없음).
-// request는 이미 StartOrderWorkflowReq 바디다.
-await spots.RequestToSpot(request.OrderId, request)
-    .InstanceSpot("order-workflow")
-    .InMesh("commerce")
-    .Async<StartOrderWorkflowRes>(ct);
-
-// actor handler 안 — 재접속해도 같은 actor로 이어진 client에 push(sticky LB 없음).
-await actor.Context.BoundSession.Send(new OrderStatusChanged(orderId, status)).Async(ct);
+--8<-- "framework/languages/dotnet/samples/ShoppingMall/Server/CommerceApi/Infrastructure/ZLink/ZLinkOrderWorkflowRouter.cs:doc-sm-api-request"
 ```
 
 실행되는 근거 샘플: [SupportChat](../../../common/sample/supportchat/README.ko.md) ·
@@ -410,16 +379,7 @@ ZLink가 줄이는 것은 "엔티티 단위 순서 처리"만을 위해 log 파�
 **코드로 보면.** partition 소비자 자리에 owner Spot handler가 온다.
 
 ```csharp
-// 같은 OrderId의 처리는 항상 이 Spot 안에서 순서대로 실행된다 —
-// partition도, offset도, 분산 락도, 멱등성 재시도 정책도 직접 갖추지 않는다.
-public sealed class StartOrderWorkflowHandler :
-    IZLinkSpotRequestHandler<OrderWorkflowSpot, StartOrderWorkflowReq, StartOrderWorkflowRes>
-{
-    public ValueTask<StartOrderWorkflowRes> HandleAsync(
-        OrderWorkflowSpot spot, StartOrderWorkflowReq request, CancellationToken ct)
-        // spot 상태에 lock 없이 접근
-        => spot.StartOrderWorkflowAsync(request, ct);
-}
+--8<-- "framework/languages/dotnet/samples/ShoppingMall/Server/OrderWorkflow/Infrastructure/ZLink/Spots/OrderWorkflowSpot/OrderWorkflowSpot.cs:doc-sm-spot-start"
 ```
 
 실행되는 근거 샘플: [ShoppingMall](../../../common/sample/event/shoppingmall.ko.md) — 실시간 push

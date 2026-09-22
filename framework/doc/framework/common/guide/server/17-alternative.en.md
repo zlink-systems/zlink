@@ -180,132 +180,51 @@ even if they're replaced later — this backend boundary is explained separately
 === "C#/.NET"
 
     ```csharp
-    // Registration — one room mesh and a room type
-    var node = options.AddRouteMesh("game.room");
-    node.Listen("tcp://0.0.0.0:9001");
-    // A mesh has at least 1 logical membership
-    node.Channel("game.room").Server();
-    node.Objects().Server().AddSpotFactory<BingoRoomSpot>("room", factory => factory.RecreateOnRelocation());
+    --8<-- "framework/languages/dotnet/samples/Bingo/Server/Play/PlayServerHostFactory.cs:doc-bingo-play-register"
     ```
 
     ```csharp
-    // Bingo room progression code — no concurrency exists inside this.
-    public sealed class MarkNumberHandler
-        : IZLinkSpotRequestHandler<BingoRoomSpot, MarkNumber, MarkResult>
-    {
-        public ValueTask<MarkResult> HandleAsync(
-            BingoRoomSpot room, MarkNumber request, CancellationToken ct)
-        {
-            // No lock
-            room.Board.Mark(request.Number);
-            room.LastActivity = DateTimeOffset.UtcNow;
-            return ValueTask.FromResult(new MarkResult(room.Board.HasBingo()));
-        }
-    }
+    --8<-- "framework/languages/dotnet/samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/BingoRoom.cs:doc-bingo-room-join"
     ```
 
 === "C++"
 
     ```cpp
-    // Registration — one room mesh and a room type
-    auto node = options.add_route_mesh ("game.room");
-    node.listen ("tcp://0.0.0.0:9001");
-    // A mesh has at least 1 logical membership
-    node.channel_name ("game.room").server ();
-    node.add_spot_factory<bingo_room_spot_t> (
-      "room",
-      [] (spot_context_t context) { return std::make_shared<bingo_room_spot_t> (std::move (context)); },
-      [] (auto &factory) { factory.recreate_on_relocation (); });
+    --8<-- "framework/languages/cpp/samples/Bingo/Server/Play/play_server_host_factory.hpp:doc-bingo-play-register"
     ```
 
     ```cpp
-    // Bingo room progression code — no concurrency exists inside this.
-    // A C++ Spot handler is a Spot member function. The Spot arrives as `this`.
-    task_t<mark_result_t> bingo_room_spot_t::mark_number (const mark_number_t &request)
-    {
-        // No lock
-        _board.mark (request.number);
-        _last_activity = std::chrono::system_clock::now ();
-        co_return mark_result_t{_board.has_bingo ()};
-    }
+    --8<-- "framework/languages/cpp/samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/bingo_room_spot.hpp:doc-bingo-room-join"
     ```
 
 === "Java"
 
     ```java
-    // Registration — one room mesh and a room type
-    ZLinkMeshNodeBuilder node = options.addRouteMesh("game.room");
-    node.listen("tcp://0.0.0.0:9001");
-    // A mesh has at least 1 logical membership
-    node.channelName("game.room").server();
-    node.objects().server().addSpotFactory("room", BingoRoomSpot.class, factory -> factory.recreateOnRelocation());
+    --8<-- "framework/languages/java/samples/java/Bingo/Server/Play/src/main/java/systems/zlink/samples/bingo/server/play/PlayServerApplication.java:doc-bingo-play-register"
     ```
 
     ```java
-    // Bingo room progression code — no concurrency exists inside this.
-    public final class MarkNumberHandler
-        implements ZLinkSpotRequestHandler<BingoRoomSpot, MarkNumber, MarkResult> {
-
-        @Override
-        public CompletionStage<MarkResult> handle(BingoRoomSpot room, MarkNumber request) {
-            // No lock
-            room.board().mark(request.number());
-            room.setLastActivity(Instant.now());
-            return CompletableFuture.completedFuture(new MarkResult(room.board().hasBingo()));
-        }
-    }
+    --8<-- "framework/languages/java/samples/java/Bingo/Server/Play/src/main/java/systems/zlink/samples/bingo/server/play/infrastructure/zlink/spots/bingoroomspot/BingoRoomSpot.java:doc-bingo-room-join"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    // Registration — one room mesh and a room type
-    val node = options.addRouteMesh("game.room")
-    node.listen("tcp://0.0.0.0:9001")
-    // A mesh has at least 1 logical membership
-    node.channelName("game.room").server()
-    node.objects().server()
-        .addSpotFactory("room", BingoRoomSpot::class.java) { factory ->
-            factory.recreateOnRelocation()
-        }
+    --8<-- "framework/languages/java/samples/kotlin/Bingo/Server/Play/src/main/kotlin/systems/zlink/samples/kotlin/bingo/server/play/PlayServerApplication.kt:doc-bingo-play-register"
     ```
 
     ```kotlin
-    // Bingo room progression code — no concurrency exists inside this.
-    class MarkNumberHandler : ZLinkSpotRequestHandler<BingoRoomSpot, MarkNumber, MarkResult> {
-
-        override suspend fun handle(room: BingoRoomSpot, request: MarkNumber): MarkResult {
-            // No lock
-            room.board.mark(request.number)
-            room.lastActivity = Instant.now()
-            return MarkResult(room.board.hasBingo())
-        }
-    }
+    --8<-- "framework/languages/java/samples/kotlin/Bingo/Server/Play/src/main/kotlin/systems/zlink/samples/kotlin/bingo/server/play/infrastructure/zlink/spots/bingoroomspot/BingoRoomSpot.kt:doc-bingo-room-join"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    // Registration — one room mesh and a room type
-    const node = builder.addRouteMesh('game.room');
-    node.listen('tcp://0.0.0.0:9001');
-    // A mesh has at least 1 logical membership
-    node.channel('game.room').server();
-    node.objects().server().addSpotFactory('room', BingoRoomSpot, factory => factory.recreateOnRelocation());
+    --8<-- "framework/languages/node/samples/Bingo.Ts/Server/Play/bingo-play-module.ts:doc-bingo-play-register"
     ```
 
     ```typescript
-    // Bingo room progression code — no concurrency exists inside this.
-    export class MarkNumberHandler
-      implements ZLinkSpotRequestHandler<BingoRoomSpot, MarkNumber, MarkResult> {
-
-      async handle(room: BingoRoomSpot, request: MarkNumber): Promise<MarkResult> {
-        // No lock
-        room.board.mark(request.number);
-        room.lastActivity = new Date();
-        return { bingo: room.board.hasBingo() };
-      }
-    }
+    --8<-- "framework/languages/node/samples/Bingo.Ts/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/bingo-room-spot.ts:doc-bingo-room-join"
     ```
 
 Several players send requests at the same time and a timer runs in this room, yet there's no
@@ -363,51 +282,31 @@ same time in the first place.
 === "C#/.NET"
 
     ```csharp
-    // Applying to join a guild — request directly by guild id. No prior lock, no prior creation.
-    await spots.RequestToSpot(guildId, new JoinGuildReq(userId))
-        .InstanceSpot("guild")
-        .InMesh("social")
-        .Async<JoinGuildRes>(ct);
+    --8<-- "framework/languages/dotnet/samples/ShoppingMall/Server/CommerceApi/Infrastructure/ZLink/ZLinkOrderWorkflowRouter.cs:doc-sm-api-request"
     ```
 
 === "C++"
 
     ```cpp
-    // Applying to join a guild — request directly by guild id. No prior lock, no prior creation.
-    co_await spots.request_to_spot (guild_id, join_guild_req_t{user_id})
-      .instance_spot ("guild")
-      .in_mesh ("social")
-      .async<join_guild_res_t> ();
+    --8<-- "framework/languages/cpp/samples/ShoppingMall/Server/CommerceApi/main.cpp:doc-sm-api-request"
     ```
 
 === "Java"
 
     ```java
-    // Applying to join a guild — request directly by guild id. No prior lock, no prior creation.
-    spots.requestToSpot(guildId, new JoinGuildReq(userId))
-        .instanceSpot("guild")
-        .inMesh("social")
-        .submit(JoinGuildRes.class);
+    --8<-- "framework/languages/java/samples/java/ShoppingMall/Server/CommerceApi/src/main/java/systems/zlink/samples/shoppingmall/server/commerceapi/CommerceApiService.java:doc-sm-api-request"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    // Applying to join a guild — request directly by guild id. No prior lock, no prior creation.
-    spots.kotlin().requestToSpot<JoinGuildRes>(guildId, JoinGuildReq(userId))
-        .instanceSpot("guild")
-        .inMesh("social")
-        .await()
+    --8<-- "framework/languages/java/samples/kotlin/ShoppingMall/Server/CommerceApi/src/main/kotlin/systems/zlink/samples/kotlin/shoppingmall/server/commerceapi/OrderWorkflowRouter.kt:doc-sm-api-request"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    // Applying to join a guild — request directly by guild id. No prior lock, no prior creation.
-    await spots.requestToSpot(guildId, joinGuildReq(userId))
-      .instanceSpot('guild')
-      .inMesh('social')
-      .submit<JoinGuildRes>();
+    --8<-- "framework/languages/node/samples/ShoppingMall.Ts/Server/CommerceApi/Infrastructure/ZLink/zlink-order-workflow-router.ts:doc-sm-api-request"
     ```
 
 There's no runnable reference sample for this scenario yet — the code above applies the same
@@ -473,81 +372,31 @@ remains.
 === "C#/.NET"
 
     ```csharp
-    // Inside an HTTP handler — route an order event to that order's workflow Spot.
-    // The first request cold-activates the spot keyed on OrderId, and later requests arrive
-    // at the same already-created spot, always processed serially in one place (no distributed lock).
-    // request is already a StartOrderWorkflowReq body.
-    await spots.RequestToSpot(request.OrderId, request)
-        .InstanceSpot("order-workflow")
-        .InMesh("commerce")
-        .Async<StartOrderWorkflowRes>(ct);
-
-    // Inside an actor handler — push to a client that's still tied to the same actor after reconnect (no sticky LB).
-    await actor.Context.BoundSession.Send(new OrderStatusChanged(orderId, status)).Async(ct);
+    --8<-- "framework/languages/dotnet/samples/ShoppingMall/Server/CommerceApi/Infrastructure/ZLink/ZLinkOrderWorkflowRouter.cs:doc-sm-api-request"
     ```
 
 === "C++"
 
     ```cpp
-    // Inside an HTTP handler — route an order event to that order's workflow Spot.
-    // The first request cold-activates the spot keyed on order_id, and later requests arrive
-    // at the same already-created spot, always processed serially in one place (no distributed lock).
-    // request is already a start_order_workflow_req_t body.
-    co_await spots.request_to_spot (request.order_id, request)
-      .instance_spot ("order-workflow")
-      .in_mesh ("commerce")
-      .async<start_order_workflow_res_t> ();
-
-    // Inside an actor handler — push to a client that's still tied to the same actor after reconnect (no sticky LB).
-    co_await actor.context ().bound_session ().send (order_status_changed_t{order_id, status}).async ();
+    --8<-- "framework/languages/cpp/samples/ShoppingMall/Server/CommerceApi/main.cpp:doc-sm-api-request"
     ```
 
 === "Java"
 
     ```java
-    // Inside an HTTP handler — route an order event to that order's workflow Spot.
-    // The first request cold-activates the spot keyed on OrderId, and later requests arrive
-    // at the same already-created spot, always processed serially in one place (no distributed lock).
-    // request is already a StartOrderWorkflowReq body.
-    spots.requestToSpot(request.orderId(), request)
-        .instanceSpot("order-workflow")
-        .inMesh("commerce")
-        .submit(StartOrderWorkflowRes.class);
-
-    // Inside an actor handler — push to a client that's still tied to the same actor after reconnect (no sticky LB).
-    actor.context().boundSession().send(new OrderStatusChanged(orderId, status)).submit();
+    --8<-- "framework/languages/java/samples/java/ShoppingMall/Server/CommerceApi/src/main/java/systems/zlink/samples/shoppingmall/server/commerceapi/CommerceApiService.java:doc-sm-api-request"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    // Inside an HTTP handler — route an order event to that order's workflow Spot.
-    // The first request cold-activates the spot keyed on OrderId, and later requests arrive
-    // at the same already-created spot, always processed serially in one place (no distributed lock).
-    // request is already a StartOrderWorkflowReq body.
-    spots.kotlin().requestToSpot<StartOrderWorkflowRes>(request.orderId, request)
-        .instanceSpot("order-workflow")
-        .inMesh("commerce")
-        .await()
-
-    // Inside an actor handler — push to a client that's still tied to the same actor after reconnect (no sticky LB).
-    actor.context().boundSession().kotlin().send(OrderStatusChanged(orderId, status)).await()
+    --8<-- "framework/languages/java/samples/kotlin/ShoppingMall/Server/CommerceApi/src/main/kotlin/systems/zlink/samples/kotlin/shoppingmall/server/commerceapi/OrderWorkflowRouter.kt:doc-sm-api-request"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    // Inside an HTTP handler — route an order event to that order's workflow Spot.
-    // The first request cold-activates the spot keyed on orderId, and later requests arrive
-    // at the same already-created spot, always processed serially in one place (no distributed lock).
-    // request is already a StartOrderWorkflowReq body.
-    await spots.requestToSpot(request.orderId, request)
-      .instanceSpot('order-workflow')
-      .inMesh('commerce')
-      .submit<StartOrderWorkflowRes>();
-
-    // Inside an actor handler — push to a client that's still tied to the same actor after reconnect (no sticky LB).
-    await actor.context.boundSession.send(orderStatusChanged(orderId, status)).submit();
+    --8<-- "framework/languages/node/samples/ShoppingMall.Ts/Server/CommerceApi/Infrastructure/ZLink/zlink-order-workflow-router.ts:doc-sm-api-request"
     ```
 
 Runnable reference samples: [SupportChat](../../../common/sample/supportchat/README.en.md) ·
@@ -647,78 +496,31 @@ pipeline.
 === "C#/.NET"
 
     ```csharp
-    // Processing for the same OrderId always executes serially inside this Spot —
-    // no partition, no offset, no distributed lock, no idempotency retry policy to assemble.
-    public sealed class StartOrderWorkflowHandler :
-        IZLinkSpotRequestHandler<OrderWorkflowSpot, StartOrderWorkflowReq, StartOrderWorkflowRes>
-    {
-        public ValueTask<StartOrderWorkflowRes> HandleAsync(
-            OrderWorkflowSpot spot, StartOrderWorkflowReq request, CancellationToken ct)
-            // Accesses spot state without a lock
-            => spot.StartOrderWorkflowAsync(request, ct);
-    }
+    --8<-- "framework/languages/dotnet/samples/ShoppingMall/Server/OrderWorkflow/Infrastructure/ZLink/Spots/OrderWorkflowSpot/OrderWorkflowSpot.cs:doc-sm-spot-start"
     ```
 
 === "C++"
 
     ```cpp
-    // Processing for the same order_id always executes serially inside this Spot —
-    // no partition, no offset, no distributed lock, no idempotency retry policy to assemble.
-    // A C++ Spot handler is a Spot member function.
-    task_t<start_order_workflow_res_t>
-    order_workflow_spot_t::start_order_workflow (const start_order_workflow_req_t &request)
-    {
-        // Accesses spot state without a lock
-        co_return co_await start_workflow (request);
-    }
+    --8<-- "framework/languages/cpp/samples/ShoppingMall/Server/OrderWorkflow/main.cpp:doc-sm-spot-start"
     ```
 
 === "Java"
 
     ```java
-    // Processing for the same OrderId always executes serially inside this Spot —
-    // no partition, no offset, no distributed lock, no idempotency retry policy to assemble.
-    public final class StartOrderWorkflowHandler
-        implements ZLinkSpotRequestHandler<OrderWorkflowSpot, StartOrderWorkflowReq, StartOrderWorkflowRes> {
-
-        @Override
-        public CompletionStage<StartOrderWorkflowRes> handle(
-            OrderWorkflowSpot spot, StartOrderWorkflowReq request) {
-            // Accesses spot state without a lock
-            return workflow.startInSpot(spot, request);
-        }
-    }
+    --8<-- "framework/languages/java/samples/java/ShoppingMall/Server/OrderWorkflow/src/main/java/systems/zlink/samples/shoppingmall/server/orderworkflow/spots/handlers/StartOrderWorkflowSpotHandler.java:doc-sm-spot-start"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    // Processing for the same OrderId always executes serially inside this Spot —
-    // no partition, no offset, no distributed lock, no idempotency retry policy to assemble.
-    class StartOrderWorkflowHandler :
-        ZLinkSpotRequestHandler<OrderWorkflowSpot, StartOrderWorkflowReq, StartOrderWorkflowRes> {
-
-        override suspend fun handle(
-            spot: OrderWorkflowSpot, request: StartOrderWorkflowReq): StartOrderWorkflowRes =
-            // Accesses spot state without a lock
-            workflow.startInSpot(spot, request)
-    }
+    --8<-- "framework/languages/java/samples/kotlin/ShoppingMall/Server/OrderWorkflow/src/main/kotlin/systems/zlink/samples/kotlin/shoppingmall/server/orderworkflow/handlers/StartOrderWorkflowHandler.kt:doc-sm-spot-start"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    // Processing for the same orderId always executes serially inside this Spot —
-    // no partition, no offset, no distributed lock, no idempotency retry policy to assemble.
-    export class StartOrderWorkflowHandler
-      implements ZLinkSpotRequestHandler<OrderWorkflowSpot, StartOrderWorkflowReq, StartOrderWorkflowRes> {
-
-      async handle(
-        spot: OrderWorkflowSpot, request: StartOrderWorkflowReq): Promise<StartOrderWorkflowRes> {
-        // Accesses spot state without a lock
-        return spot.start(request);
-      }
-    }
+    --8<-- "framework/languages/node/samples/ShoppingMall.Ts/Server/OrderWorkflow/Infrastructure/ZLink/Spots/OrderWorkflowSpot/Handlers/start-order-workflow-handler.ts:doc-sm-spot-start"
     ```
 
 Runnable reference sample: [ShoppingMall](../../../common/sample/event/shoppingmall.en.md) —

@@ -196,28 +196,11 @@ even if they're replaced later — this backend boundary is explained separately
 **As code.** Declare one room, and write that room's progression logic.
 
 ```kotlin
-// Registration — one room mesh and a room type
-val node = options.addRouteMesh("game.room")
-node.listen("tcp://0.0.0.0:9001")
-// A mesh has at least 1 logical membership
-node.channelName("game.room").server()
-node.objects().server()
-    .addSpotFactory("room", BingoRoomSpot::class.java) { factory ->
-        factory.recreateOnRelocation()
-    }
+--8<-- "framework/languages/java/samples/kotlin/Bingo/Server/Play/src/main/kotlin/systems/zlink/samples/kotlin/bingo/server/play/PlayServerApplication.kt:doc-bingo-play-register"
 ```
 
 ```kotlin
-// Bingo room progression code — no concurrency exists inside this.
-class MarkNumberHandler : ZLinkSpotRequestHandler<BingoRoomSpot, MarkNumber, MarkResult> {
-
-    override suspend fun handle(room: BingoRoomSpot, request: MarkNumber): MarkResult {
-        // No lock
-        room.board.mark(request.number)
-        room.lastActivity = Instant.now()
-        return MarkResult(room.board.hasBingo())
-    }
-}
+--8<-- "framework/languages/java/samples/kotlin/Bingo/Server/Play/src/main/kotlin/systems/zlink/samples/kotlin/bingo/server/play/infrastructure/zlink/spots/bingoroomspot/BingoRoomSpot.kt:doc-bingo-room-join"
 ```
 
 Several players send requests at the same time and a timer runs in this room, yet there's no
@@ -273,11 +256,7 @@ same time in the first place.
 **As code.** Where lock acquire/release used to sit, one call remains.
 
 ```kotlin
-// Applying to join a guild — request directly by guild id. No prior lock, no prior creation.
-spots.kotlin().requestToSpot<JoinGuildRes>(guildId, JoinGuildReq(userId))
-    .instanceSpot("guild")
-    .inMesh("social")
-    .await()
+--8<-- "framework/languages/java/samples/kotlin/ShoppingMall/Server/CommerceApi/src/main/kotlin/systems/zlink/samples/kotlin/shoppingmall/server/commerceapi/OrderWorkflowRouter.kt:doc-sm-api-request"
 ```
 
 There's no runnable reference sample for this scenario yet — the code above applies the same
@@ -341,17 +320,7 @@ inter-server delivery. The **location store is the only new infrastructure.**
 remains.
 
 ```kotlin
-// Inside an HTTP handler — route an order event to that order's workflow Spot.
-// The first request cold-activates the spot keyed on OrderId, and later requests arrive
-// at the same already-created spot, always processed serially in one place (no distributed lock).
-// request is already a StartOrderWorkflowReq body.
-spots.kotlin().requestToSpot<StartOrderWorkflowRes>(request.orderId, request)
-    .instanceSpot("order-workflow")
-    .inMesh("commerce")
-    .await()
-
-// Inside an actor handler — push to a client that's still tied to the same actor after reconnect (no sticky LB).
-actor.context().boundSession().kotlin().send(OrderStatusChanged(orderId, status)).await()
+--8<-- "framework/languages/java/samples/kotlin/ShoppingMall/Server/CommerceApi/src/main/kotlin/systems/zlink/samples/kotlin/shoppingmall/server/commerceapi/OrderWorkflowRouter.kt:doc-sm-api-request"
 ```
 
 Runnable reference samples: [SupportChat](../../../common/sample/supportchat/README.en.md) ·
@@ -449,16 +418,7 @@ pipeline.
 **As code.** Where the partition consumer used to sit, an owner Spot handler comes instead.
 
 ```kotlin
-// Processing for the same OrderId always executes serially inside this Spot —
-// no partition, no offset, no distributed lock, no idempotency retry policy to assemble.
-class StartOrderWorkflowHandler :
-    ZLinkSpotRequestHandler<OrderWorkflowSpot, StartOrderWorkflowReq, StartOrderWorkflowRes> {
-
-    override suspend fun handle(
-        spot: OrderWorkflowSpot, request: StartOrderWorkflowReq): StartOrderWorkflowRes =
-        // Accesses spot state without a lock
-        workflow.startInSpot(spot, request)
-}
+--8<-- "framework/languages/java/samples/kotlin/ShoppingMall/Server/OrderWorkflow/src/main/kotlin/systems/zlink/samples/kotlin/shoppingmall/server/orderworkflow/handlers/StartOrderWorkflowHandler.kt:doc-sm-spot-start"
 ```
 
 Runnable reference sample: [ShoppingMall](../../../common/sample/event/shoppingmall.en.md) —
