@@ -331,7 +331,7 @@ backpressure then waits the publish, and the publish ends with an error if the q
 before its deadline.
 
 ```cpp
-options.add_fanout_channel ("events").enable_publisher ("tcp://*:7400").set_no_drop (true);
+--8<-- "framework/languages/cpp/tutorial/Client/main.cpp:fanout-publish-register"
 ```
 
 NoDrop is available only on a channel with the publisher capability. Logical Multicast provides no
@@ -352,7 +352,7 @@ A classic fanout subscriber registers each topic it receives with `subscribe(top
 published to a matching topic travel to that subscriber.
 
 ```cpp
-options.add_fanout_channel ("events").enable_subscriber ().subscribe ("order.created");
+--8<-- "framework/languages/cpp/tutorial/Server/main.cpp:fanout-subscribe"
 ```
 
 The publish context received by a handler also holds the arriving topic, so one handler can

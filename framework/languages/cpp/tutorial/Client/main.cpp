@@ -399,7 +399,9 @@ int main (int argc, char **argv)
         // The publisher keeps no subscriber list. Subscribers may come and go with
         // no change here. A concrete bind host is required: a wildcard one leaves
         // subscribers with no address to dial and is rejected at startup.
-        options.add_fanout_channel ("broadcast").enable_publisher ("tcp://127.0.0.1:7412");
+        options.add_fanout_channel ("broadcast")
+          .enable_publisher ("tcp://127.0.0.1:7412")
+          .set_no_drop (true);
         // --8<-- [end:fanout-publish-register]
 
         // --8<-- [start:spot-client-register]

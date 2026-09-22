@@ -331,7 +331,7 @@ backpressure then waits the publish, and the publish ends with an error if the q
 before its deadline.
 
 ```csharp
-options.AddFanoutChannel("events").EnablePublisher("tcp://*:7400").SetNoDrop(true);
+--8<-- "framework/languages/dotnet/tutorial/Client/Program.cs:fanout-publish-register"
 ```
 
 NoDrop is available only on a channel with the publisher capability. Logical Multicast provides no
@@ -352,7 +352,7 @@ A classic fanout subscriber registers each topic it receives with `subscribe(top
 published to a matching topic travel to that subscriber.
 
 ```csharp
-options.AddFanoutChannel("events").EnableSubscriber().Subscribe("order.created");
+--8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:fanout-subscribe"
 ```
 
 The publish context received by a handler also holds the arriving topic, so one handler can

@@ -331,7 +331,7 @@ backpressure then waits the publish, and the publish ends with an error if the q
 before its deadline.
 
 ```kotlin
-options.addFanoutChannel("events").enablePublisher("tcp://*:7400").setNoDrop(true)
+--8<-- "framework/languages/java/tutorial/kotlin/Client/src/main/kotlin/systems/zlink/tutorial/client/ClientApplication.kt:fanout-publish-register"
 ```
 
 NoDrop is available only on a channel with the publisher capability. Logical Multicast provides no
@@ -352,7 +352,7 @@ A classic fanout subscriber registers each topic it receives with `subscribe(top
 published to a matching topic travel to that subscriber.
 
 ```kotlin
-options.addFanoutChannel("events").enableSubscriber().subscribe("order.created")
+--8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:fanout-subscribe"
 ```
 
 The publish context received by a handler also holds the arriving topic, so one handler can

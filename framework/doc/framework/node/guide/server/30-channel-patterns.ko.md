@@ -310,9 +310,7 @@ fanout channel은 그 자체로 독립된 PUB/SUB 소켓 쌍을 연다. Spot이�
 발행을 기다리게 하고, deadline 안에 비워지지 않으면 발행은 오류로 끝난다.
 
 ```typescript
-builder.addFanoutChannel('events')
-  .enablePublisher('tcp://*:7400')
-  .setNoDrop(true);
+--8<-- "framework/languages/node/tutorial/Client/main.ts:fanout-publish-register"
 ```
 
 NoDrop은 publisher capability가 있는 channel에서만 설정한다. Logical Multicast도 저장·재전송·ack는 제공하지 않는다.
@@ -330,9 +328,7 @@ topic은 두 형태에서 모두 수신 대상을 고른다. Logical Multicast�
 Classic fanout subscriber는 받을 topic을 `subscribe(topic)`으로 등록한다. 같은 topic에 발행한 event만 그 subscriber까지 전달된다.
 
 ```typescript
-builder.addFanoutChannel('events')
-  .enableSubscriber()
-  .subscribe('order.created');
+--8<-- "framework/languages/node/tutorial/Server/main.ts:fanout-subscribe"
 ```
 
 handler가 함께 받는 publish context에는 도착한 topic도 들어 있으므로, 하나의 handler가 여러 topic을 등록해 나누어 처리할 수도 있다.

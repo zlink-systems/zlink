@@ -471,31 +471,31 @@ before its deadline.
 === "C#/.NET"
 
     ```csharp
-    options.AddFanoutChannel("events").EnablePublisher("tcp://*:7400").SetNoDrop(true);
+    --8<-- "framework/languages/dotnet/tutorial/Client/Program.cs:fanout-publish-register"
     ```
 
 === "C++"
 
     ```cpp
-    options.add_fanout_channel ("events").enable_publisher ("tcp://*:7400").set_no_drop (true);
+    --8<-- "framework/languages/cpp/tutorial/Client/main.cpp:fanout-publish-register"
     ```
 
 === "Java"
 
     ```java
-    options.addFanoutChannel("events").enablePublisher("tcp://*:7400").setNoDrop(true);
+    --8<-- "framework/languages/java/tutorial/java/Client/src/main/java/systems/zlink/tutorial/client/ClientApplication.java:fanout-publish-register"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    options.addFanoutChannel("events").enablePublisher("tcp://*:7400").setNoDrop(true)
+    --8<-- "framework/languages/java/tutorial/kotlin/Client/src/main/kotlin/systems/zlink/tutorial/client/ClientApplication.kt:fanout-publish-register"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    builder.addFanoutChannel('events').enablePublisher('tcp://*:7400').setNoDrop(true);
+    --8<-- "framework/languages/node/tutorial/Client/main.ts:fanout-publish-register"
     ```
 
 NoDrop is available only on a channel with the publisher capability. Logical Multicast provides no
@@ -518,31 +518,31 @@ published to a matching topic travel to that subscriber.
 === "C#/.NET"
 
     ```csharp
-    options.AddFanoutChannel("events").EnableSubscriber().Subscribe("order.created");
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:fanout-subscribe"
     ```
 
 === "C++"
 
     ```cpp
-    options.add_fanout_channel ("events").enable_subscriber ().subscribe ("order.created");
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:fanout-subscribe"
     ```
 
 === "Java"
 
     ```java
-    options.addFanoutChannel("events").enableSubscriber().subscribe("order.created");
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:fanout-subscribe"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    options.addFanoutChannel("events").enableSubscriber().subscribe("order.created")
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:fanout-subscribe"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    builder.addFanoutChannel('events').enableSubscriber().subscribe('order.created');
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:fanout-subscribe"
     ```
 
 The publish context received by a handler also holds the arriving topic, so one handler can

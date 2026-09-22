@@ -450,41 +450,31 @@ fanout channel은 그 자체로 독립된 PUB/SUB 소켓 쌍을 연다. Spot이�
 === "C#/.NET"
 
     ```csharp
-    options.AddFanoutChannel("events")
-        .EnablePublisher("tcp://*:7400")
-        .SetNoDrop(true);
+    --8<-- "framework/languages/dotnet/tutorial/Client/Program.cs:fanout-publish-register"
     ```
 
 === "C++"
 
     ```cpp
-    options.add_fanout_channel ("events")
-      .enable_publisher ("tcp://*:7400")
-      .set_no_drop (true);
+    --8<-- "framework/languages/cpp/tutorial/Client/main.cpp:fanout-publish-register"
     ```
 
 === "Java"
 
     ```java
-    options.addFanoutChannel("events")
-        .enablePublisher("tcp://*:7400")
-        .setNoDrop(true);
+    --8<-- "framework/languages/java/tutorial/java/Client/src/main/java/systems/zlink/tutorial/client/ClientApplication.java:fanout-publish-register"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    options.addFanoutChannel("events")
-        .enablePublisher("tcp://*:7400")
-        .setNoDrop(true)
+    --8<-- "framework/languages/java/tutorial/kotlin/Client/src/main/kotlin/systems/zlink/tutorial/client/ClientApplication.kt:fanout-publish-register"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    builder.addFanoutChannel('events')
-      .enablePublisher('tcp://*:7400')
-      .setNoDrop(true);
+    --8<-- "framework/languages/node/tutorial/Client/main.ts:fanout-publish-register"
     ```
 
 NoDrop은 publisher capability가 있는 channel에서만 설정한다. Logical Multicast도 저장·재전송·ack는 제공하지 않는다.
@@ -504,41 +494,31 @@ Classic fanout subscriber는 받을 topic을 `subscribe(topic)`으로 등록한�
 === "C#/.NET"
 
     ```csharp
-    options.AddFanoutChannel("events")
-        .EnableSubscriber()
-        .Subscribe("order.created");
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:fanout-subscribe"
     ```
 
 === "C++"
 
     ```cpp
-    options.add_fanout_channel ("events")
-      .enable_subscriber ()
-      .subscribe ("order.created");
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:fanout-subscribe"
     ```
 
 === "Java"
 
     ```java
-    options.addFanoutChannel("events")
-        .enableSubscriber()
-        .subscribe("order.created");
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:fanout-subscribe"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    options.addFanoutChannel("events")
-        .enableSubscriber()
-        .subscribe("order.created")
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:fanout-subscribe"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    builder.addFanoutChannel('events')
-      .enableSubscriber()
-      .subscribe('order.created');
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:fanout-subscribe"
     ```
 
 handler가 함께 받는 publish context에는 도착한 topic도 들어 있으므로, 하나의 handler가 여러 topic을 등록해 나누어 처리할 수도 있다.

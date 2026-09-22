@@ -102,7 +102,8 @@ import { withZLinkErrorResponse, type HttpResult } from './zlink-error-response'
         builder
           .addFanoutChannel(TutorialNames.broadcastChannel)
           .setRoutingIdPrefix('game-client-broadcast')
-          .enablePublisher('tcp://127.0.0.1:7712');
+          .enablePublisher('tcp://127.0.0.1:7712')
+          .setNoDrop(true);
         // --8<-- [end:fanout-publish-register]
 
         // --8<-- [start:spot-client-register]
