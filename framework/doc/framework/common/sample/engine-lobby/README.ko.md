@@ -8,7 +8,7 @@
 
 ## 1. 목적과 범위
 
-Engine Lobby는 Unity 같은 게임 엔진에서 사용하는 가장 작은 실시간 lobby 흐름을 보여 준다.
+Engine Lobby는 Unity와 Unreal 같은 게임 엔진에서 사용하는 가장 작은 실시간 lobby 흐름을 보여 준다.
 Client는 server에 연결해 왕복 상태를 확인하고, 이름으로 참가한 뒤 chat을 보낸다. Server는 연결마다
 Actor를 만들고 session에 bind하며, lobby에 현재 연결된 모든 Actor에게 chat 알림을 보낸다.
 
@@ -82,7 +82,7 @@ snapshot이며 이름의 두 번째 사본이 아니다. Session은 이름이나
 | Location Store | Object Server descriptor와 Actor의 current owner를 관리한다. |
 | Entry Spot | 새 Actor의 기본 membership이며 현재 lobby 참가자에게 push할 대상을 모은다. |
 | Actor와 session binding | chat state를 connection callback 밖에 두고 Actor가 현재 bound client에 push하게 한다. |
-| 기본 typed JSON codec | Server와 engine client가 같은 message declaration을 사용한다. Unity는 같은 JSON wire 의미를 구현하는 payload codec을 connector에 제공한다. |
+| 기본 typed JSON codec | Server와 engine client가 아래의 같은 JSON message 계약을 사용한다. 각 connector는 해당 언어의 public JSON surface로 이를 표현한다. |
 
 Actor factory는 `DisableRelocation`을 선택한다. Sample은 server 하나만 실행하고 Actor 이동을 다루지
 않으므로 relocation state adapter나 보상 경로를 추가하지 않는다.
@@ -104,6 +104,9 @@ Actor factory는 `DisableRelocation`을 선택한다. Sample은 server 하나만
 `sentAtUnixMs`는 64-bit 숫자를 JSON number로 해석하는 언어 차이를 피하기 위해 decimal string으로
 전달한다. `actorId`는 server가 session identity에서 만든 opaque application identity이며 client는
 형식을 parsing하지 않는다.
+
+Unity와 Unreal client는 이 표의 packet 이름, field와 방향을 그대로 사용한다. 엔진별 alias나
+추가 wire field를 만들지 않으며 두 client는 같은 .NET server endpoint에 연결한다.
 
 ## 7. 업무 흐름
 
@@ -154,14 +157,16 @@ sequenceDiagram
 |---|---|
 | `Server/` | .NET host, shared message declaration, session·Actor·Entry Spot 구현, probe와 runner |
 | `Unity/` | 한 scene의 Unity project, 공통 `ZLinkClient` MonoBehaviour와 UI |
+| `Unreal/` | Unreal Engine 5 C++ project, connector를 소유하는 Actor와 on-screen status UI |
 
 Server는 public `Zlink.Framework` package surface만 사용한다. Unity project는 native target에서
 `Zlink.Stream.Connector` NuGet assembly를 사용하고 WebGL target에서는
 `com.zlink.stream-connector.webgl` UPM package를 사용한다. 두 assembly가 같은 build에 함께
-들어오지 않도록 native assembly를 WebGL에서 제외한다.
+들어오지 않도록 native assembly를 WebGL에서 제외한다. Unreal project는 C++ connector의
+`ZLinkStreamConnector` plugin을 사용한다.
 
-가이드가 `ZLinkClient`의 connect, pump, handler와 lifecycle 구간을 `--8<--` marker로 발췌한다.
-가이드 안에 별도 사본의 예제 코드를 두지 않는다.
+가이드는 Unity `ZLinkClient`와 Unreal `EngineLobbyClientActor`의 connect, pump, handler와 lifecycle
+구간을 `--8<--` marker로 발췌한다. 가이드 안에 별도 사본의 예제 코드를 두지 않는다.
 
 ## 9. Client self-check
 
@@ -178,8 +183,9 @@ Self-check client 두 개는 다음 순서를 직접 검증한다.
 
 ## 10. Smoke 실행
 
-Linux와 Windows runner는 각 README의 `내려받기와 설치`, `빌드`, `실행`, `검증`, `종료` 구간을
-그 순서로 실행한다. Runner는 다음 작업을 소유한다.
+Linux runner는 server README의 `내려받기와 설치`, `빌드`, `실행`, `검증`, `종료` 구간을 그
+순서로 실행한다. Windows runner는 설치와 build를 확인하고 Redis 기반 실행과 검증은 Linux lane이
+소유한다. Server runner는 다음 작업을 소유한다.
 
 1. .NET sample을 build한다.
 2. 실행 전용 Docker Redis container와 key prefix를 만든다.
@@ -188,15 +194,18 @@ Linux와 Windows runner는 각 README의 `내려받기와 설치`, `빌드`, `�
 5. 두 connector를 사용하는 C# probe를 실행한다.
 6. 성공과 실패 모두에서 자신이 시작한 server PID와 Redis container ID만 정리한다.
 
-Unity Editor와 Unity player build는 Unity 설치와 license가 있는 runner에서 별도로 검증한다. 일반
-server smoke는 Unity가 없어도 같은 connector contract를 C# probe로 검증한다.
+Unity Editor/player build와 Unreal Editor/project build는 각 engine 설치와 license가 있는 runner에서
+별도로 검증한다. 일반 server smoke는 engine 설치가 없어도 같은 connector contract를 C# probe로
+검증한다.
 
 ## 11. 완료 기준
 
 - 공통 message 이름, field, 정상·실패 흐름과 상태 소유자가 한국어·영어 문서에서 같다.
 - .NET server가 public package만 사용해 build되고 전용 runner의 client self-check를 통과한다.
-- Linux와 Windows examples smoke가 README의 platform별 명령을 실행한다.
+- Linux examples smoke가 README의 전체 server 절차를 실행하고 Windows lane이 build를 확인한다.
 - Unity project가 지정 Unity version에서 native와 WebGL target을 각각 compile하고, 같은
   `ZLinkClient` source로 connect, pump, join, chat과 notification UI 갱신을 수행한다.
-- Exporter가 `Server/`를 `zlink-engine-server`, `Unity/`를 `zlink-unity-examples`의 root tree로
-  내보낸다.
+- Unreal project가 Unreal Engine 5에서 compile되고 C++ connector로 같은 packet contract의
+  connect, pump, ping, join, chat과 notification UI 갱신을 수행한다.
+- Exporter가 `Server/`, `Unity/`, `Unreal/`을 각각 `zlink-engine-server`,
+  `zlink-unity-examples`, `zlink-unreal-examples`의 root tree로 내보낸다.

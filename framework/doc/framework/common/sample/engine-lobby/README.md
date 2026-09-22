@@ -8,8 +8,9 @@
 
 ## 1. Purpose and scope
 
-Engine Lobby is the smallest real-time lobby flow intended for game engines such as Unity. A
-client connects, checks the round trip, joins with a name, and sends chat. The server creates one
+Engine Lobby is the smallest real-time lobby flow intended for game engines such as Unity and
+Unreal. A client connects, checks the round trip, joins with a name, and sends chat. The server
+creates one
 Actor per connection, binds it to the session, and pushes each chat to every currently bound Actor
 in the lobby.
 
@@ -81,7 +82,7 @@ lobby membership.
 | Location Store | Manage the Object Server descriptor and current Actor owner. |
 | Entry Spot | Provide the initial Actor membership and collect current lobby push targets. |
 | Actor and session binding | Keep chat state outside connection callbacks and let an Actor push to its currently bound client. |
-| Default typed JSON codec | Give the server and engine client the same message declarations. Unity supplies a payload codec with the same JSON wire meaning. |
+| Default typed JSON codec | Give the server and engine clients the same JSON message contract below. Each connector expresses it through its language's public JSON surface. |
 
 The Actor factory selects `DisableRelocation`. The sample runs one server and does not demonstrate
 Actor movement, so it adds no relocation-state adapter or compensation path.
@@ -103,6 +104,10 @@ required and does not accept `null`. Messages carry no transport identity or rou
 `sentAtUnixMs` is a decimal string to avoid language differences when decoding 64-bit JSON
 numbers. `actorId` is an opaque application identity derived by the server from the session
 identity; clients do not parse its format.
+
+The Unity and Unreal clients use the packet names, fields, and directions in this table verbatim.
+They define no engine-specific aliases or extra wire fields and connect to the same .NET server
+endpoint.
 
 ## 7. Business flow
 
@@ -154,14 +159,17 @@ Shared sources live under `framework/languages/engines/`.
 |---|---|
 | `Server/` | .NET host, shared message declarations, session/Actor/Entry Spot implementation, probe, and runner |
 | `Unity/` | One-scene Unity project with the shared `ZLinkClient` MonoBehaviour and UI |
+| `Unreal/` | Unreal Engine 5 C++ project with a connector-owning Actor and on-screen status UI |
 
 The server uses only public `Zlink.Framework` package surfaces. Native Unity targets use the
 `Zlink.Stream.Connector` NuGet assembly; WebGL uses the
 `com.zlink.stream-connector.webgl` UPM package. The native assembly is excluded from WebGL so both
-implementations never compile into one target.
+implementations never compile into one target. The Unreal project uses the C++ connector's
+`ZLinkStreamConnector` plugin.
 
-The guide reads the connect, pump, handler, and lifecycle regions from `ZLinkClient` through
-`--8<--` markers. It does not keep a copied code sample in the guide.
+The guide reads the connect, pump, handler, and lifecycle regions from Unity's `ZLinkClient` and
+Unreal's `EngineLobbyClientActor` through `--8<--` markers. It does not keep a copied code sample
+in the guide.
 
 ## 9. Client self-check
 
@@ -178,8 +186,9 @@ Two self-check clients verify this order directly:
 
 ## 10. Smoke execution
 
-Linux and Windows runners execute each README's `Download and install`, `Build`, `Run`, `Verify`,
-and `Stop` sections in that order. The runner owns these operations:
+The Linux runner executes the server README's `Download and install`, `Build`, `Run`, `Verify`, and
+`Stop` sections in that order. The Windows runner verifies installation and build; the Linux lane
+owns Redis-backed run and verification. The server runner owns these operations:
 
 1. Build the .NET sample.
 2. Create a dedicated Docker Redis container and key prefix for the run.
@@ -189,17 +198,20 @@ and `Stop` sections in that order. The runner owns these operations:
 5. Run the C# probe with two connectors.
 6. On success or failure, clean up only the server PID and Redis container ID it created.
 
-Unity Editor and player builds are verified separately on a runner with Unity and a license. The
-ordinary server smoke proves the same connector contract with a C# probe and needs no Unity
-installation.
+Unity Editor/player builds and Unreal Editor/project builds are verified separately on runners
+with the corresponding engine installation and license. The ordinary server smoke proves the
+same connector contract with a C# probe and needs no engine installation.
 
 ## 11. Completion criteria
 
 - Korean and English contracts have the same message names, fields, normal and failure flows, and
   state owners.
 - The .NET server builds from public packages and passes its dedicated runner's client self-check.
-- Linux and Windows examples smoke executes the README's platform-specific commands.
+- Linux examples smoke executes the complete server procedure, and the Windows lane verifies the
+  build.
 - At the documented Unity version, native and WebGL targets compile and use the same `ZLinkClient`
   source for connect, pump, join, chat, and notification UI updates.
-- The exporter maps `Server/` to the `zlink-engine-server` root and `Unity/` to the
-  `zlink-unity-examples` root.
+- The Unreal project compiles with Unreal Engine 5 and uses the C++ connector for the same packet
+  contract's connect, pump, ping, join, chat, and notification UI update flow.
+- The exporter maps `Server/`, `Unity/`, and `Unreal/` to the `zlink-engine-server`,
+  `zlink-unity-examples`, and `zlink-unreal-examples` roots, respectively.

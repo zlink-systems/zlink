@@ -44,10 +44,11 @@ import zipfile
 LANGUAGES = ("cpp", "dotnet", "java", "node")
 
 #  Engine examples are repositories by product rather than by language. Each source subtree
-#  becomes the mirror root without an extra Server/ or Unity/ directory.
+#  becomes the mirror root without an extra Server/, Unity/, or Unreal/ directory.
 ENGINE_EXPORTS = {
     "Server": "zlink-engine-server",
     "Unity": "zlink-unity-examples",
+    "Unreal": "zlink-unreal-examples",
 }
 
 #  미러 루트에 놓이는 디렉터리. 저장소 경로 `framework/languages/<lang>/<section>`과 같다.

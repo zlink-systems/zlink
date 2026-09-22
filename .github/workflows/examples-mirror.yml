@@ -137,6 +137,7 @@ jobs:
             *) echo "::error::not a framework tag or main: ${ref}"; exit 1 ;;
           esac
           if [[ "${ref}" == main || "${ref}" == framework/v* ]]; then
+            cpp_version="$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' framework/languages/cpp/VERSION)"
             dotnet_version="$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' framework/languages/dotnet/VERSION)"
             node_version="$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' framework/languages/node/VERSION)"
             if [ -d framework/languages/engines/Server ] \
@@ -147,6 +148,10 @@ jobs:
                && released dotnet "${dotnet_version}" \
                && released node "${node_version}"; then
               append_target unity
+            fi
+            if [ -d framework/languages/engines/Unreal ] \
+               && released cpp "${cpp_version}"; then
+              append_target unreal
             fi
           fi
           # A release call mirrors the one language the caller published; the
@@ -184,7 +189,11 @@ jobs:
               {id:"unity", mirror:"zlink-systems/zlink-unity-examples",
                tree:".artifacts/examples/zlink-unity-examples",
                source_path:"framework/languages/engines/Unity",
-               secret:"EXAMPLES_MIRROR_KEY_UNITY"}
+               secret:"EXAMPLES_MIRROR_KEY_UNITY"},
+              {id:"unreal", mirror:"zlink-systems/zlink-unreal-examples",
+               tree:".artifacts/examples/zlink-unreal-examples",
+               source_path:"framework/languages/engines/Unreal",
+               secret:"EXAMPLES_MIRROR_KEY_UNREAL"}
             ] | map(select(.id as $id | $enabled | index($id)))
           ')"
           echo "ref=${ref}, version=${version:-none}, languages=${languages}, targets=${targets}"
@@ -242,6 +251,7 @@ jobs:
           EXAMPLES_MIRROR_KEY_NODE: ${{ secrets.EXAMPLES_MIRROR_KEY_NODE }}
           EXAMPLES_MIRROR_KEY_ENGINE_SERVER: ${{ secrets.EXAMPLES_MIRROR_KEY_ENGINE_SERVER }}
           EXAMPLES_MIRROR_KEY_UNITY: ${{ secrets.EXAMPLES_MIRROR_KEY_UNITY }}
+          EXAMPLES_MIRROR_KEY_UNREAL: ${{ secrets.EXAMPLES_MIRROR_KEY_UNREAL }}
         run: |
           set -euo pipefail
           name="${{ matrix.target.secret }}"
