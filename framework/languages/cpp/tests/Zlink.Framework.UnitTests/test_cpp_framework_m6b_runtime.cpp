@@ -8,6 +8,7 @@
 #include "runtime/actors/actor_client.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/channels/channel_reply_writer.hpp"
+#include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/execution/actor_execution_context.hpp"
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
@@ -3521,7 +3522,6 @@ void verify_logical_multicast_continues_after_one_target_failure ()
     target_descriptor.channels = {{"framework.spot", 100}};
     auto target = std::make_shared<host::public_host_runtime_t> (
       host::host_options_t{mesh::raw_mesh_node_options_t{std::move (target_descriptor)}});
-    auto entry = source->entry_spot ();
     source->start ();
     target->start ();
 
@@ -3551,14 +3551,37 @@ void verify_logical_multicast_continues_after_one_target_failure ()
     assert (fanout_targets.size () >= 2);
     assert (fanout_targets.front ().descriptor.node_routing_id == bytes ("a-unavailable-target"));
 
-    bool tail_failed = false;
-    try {
-        await_task (entry.publish_tail ({zlink::message_t::from (std::string ("payload"))}));
+    auto publisher_state =
+      std::make_shared<zlink::framework::detail::spot_node_builder_state_t> ("m6b-mesh");
+    std::atomic_bool observed_failure{false};
+    zlink::framework::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+      publisher_state->dispatch,
+      [&] (const zlink::framework::message_dispatch_error_event_t &event) {
+          if (event.surface == zlink::framework::dispatch_error_surface_t::spot_route
+              && event.message_kind == zlink::framework::dispatch_message_kind_t::send
+              && event.reason == zlink::framework::dispatch_error_reason_t::stale_target
+              && event.action == zlink::framework::dispatch_error_action_t::drop
+              && event.channel_name.value_or ("") == "framework.spot"
+              && event.mesh_name.value_or ("") == "m6b-mesh"
+              && event.target_rid.value_or ("") == "a-unavailable-target"
+              && event.topic.value_or ("") == "reward") {
+              observed_failure.store (true, std::memory_order_release);
+          }
+      });
+    zlink::framework::detail::spot_node_runtime_t publisher_runtime (publisher_state);
+    publisher_runtime.attach_native_node (source);
+    zlink::framework::serializer_registry_t serializers;
+    zlink::framework::spot_publisher_client_t publisher (publisher_runtime.manager (), serializers);
+    const auto publish_terminal =
+      publisher.publish<std::string> ("framework.spot", "reward", "payload").async ().result ();
+    assert (publish_terminal);
+
+    const auto diagnostic_deadline = std::chrono::steady_clock::now () + 5s;
+    while (!observed_failure.load (std::memory_order_acquire)
+           && std::chrono::steady_clock::now () < diagnostic_deadline) {
+        std::this_thread::sleep_for (1ms);
     }
-    catch (const zlink::framework::framework_exception_t &) {
-        tail_failed = true;
-    }
-    assert (tail_failed);
+    assert (observed_failure.load (std::memory_order_acquire));
 
     const auto receive_deadline = mesh::service_liveness_registry_t::clock_t::now () + 5s;
     while (

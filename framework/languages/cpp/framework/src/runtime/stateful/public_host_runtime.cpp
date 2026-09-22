@@ -726,8 +726,10 @@ zlink::submit_result_t spot_handle_t::publish (const std::string &channel_name,
     return zlink::submit_result_t::ok;
 }
 
-task_t<void> spot_handle_t::publish_tail (const std::vector<zlink::message_t> &parts,
-                                          std::span<const std::uint8_t> metadata)
+task_t<void> spot_handle_t::publish_tail (
+  const std::vector<zlink::message_t> &parts,
+  std::span<const std::uint8_t> metadata,
+  std::function<void (const zlink::routing_id_t &, zlink::submit_result_t)> failure_observer)
 {
     if (!_host) {
         throw framework_exception_t (framework_error_kind_t::invalid_operation,
@@ -745,8 +747,30 @@ task_t<void> spot_handle_t::publish_tail (const std::vector<zlink::message_t> &p
                   runtime::messaging::map_submit_result_error_kind (submitted),
                   "logical multicast physical fanout was not admitted"));
             }
+            if (submitted != zlink::submit_result_t::ok && failure_observer) {
+                failure_observer (zlink::routing_id_t::from (target.descriptor.node_routing_id),
+                                  submitted);
+            }
         }
         catch (...) {
+            if (failure_observer) {
+                auto submitted = zlink::submit_result_t::not_connected;
+                try {
+                    throw;
+                }
+                catch (const framework_exception_t &error) {
+                    if (detail::boundary_state (error) == detail::boundary_error_t::shutdown) {
+                        submitted = zlink::submit_result_t::terminated;
+                    } else if (detail::boundary_state (error)
+                               == detail::boundary_error_t::timed_out) {
+                        submitted = zlink::submit_result_t::backpressured;
+                    }
+                }
+                catch (...) {
+                }
+                failure_observer (zlink::routing_id_t::from (target.descriptor.node_routing_id),
+                                  submitted);
+            }
             if (!first_failure)
                 first_failure = std::current_exception ();
         }

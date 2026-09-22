@@ -3472,11 +3472,13 @@ namespace
 //  Coroutine parameters are copied into the frame; publish_tail borrows its
 //  parts/metadata for the whole suspended fanout, so the owning copies must
 //  live in this frame rather than in the caller's synchronous scope.
-task_t<void> run_spot_publish_fanout (std::shared_ptr<service::spot_t> native,
-                                      std::vector<zlink::message_t> parts,
-                                      std::vector<std::uint8_t> metadata)
+task_t<void> run_spot_publish_fanout (
+  std::shared_ptr<service::spot_t> native,
+  std::vector<zlink::message_t> parts,
+  std::vector<std::uint8_t> metadata,
+  std::function<void (const zlink::routing_id_t &, zlink::submit_result_t)> failure_observer)
 {
-    co_await native->publish_tail (parts, metadata);
+    co_await native->publish_tail (parts, metadata, std::move (failure_observer));
     co_return;
 }
 } // namespace
@@ -3580,20 +3582,18 @@ send_call_t spot_context_t::publish_erased (std::string topic,
                       //  and suspends; feed it through a coroutine whose
                       //  PARAMETERS own copies for the frame's lifetime.
                       auto tail = run_spot_publish_fanout (
-                        native, encoded.items (), detail::mesh_metadata_codec_t::encode ({}));
-                      detail::observe_task_completion (
-                        tail, [node = state->node, mesh_name = projection.mesh_name, topic,
-                               packet = submitted_packet_name] (const result_t<void> &fanout) {
-                            if (fanout || !node)
-                                return;
+                        native, encoded.items (), detail::mesh_metadata_codec_t::encode ({}),
+                        [node = state->node, channel = projection.discovery_channel_name,
+                         mesh = projection.mesh_name, topic, packet = submitted_packet_name] (
+                          const zlink::routing_id_t &target, zlink::submit_result_t submitted) {
+                            const framework_exception_t error (
+                              runtime::messaging::map_submit_result_error_kind (submitted),
+                              "logical multicast physical fanout was not admitted");
                             detail::report_logical_multicast_failure (
-                              node, mesh_name, topic, packet,
-                              fanout.error () != nullptr
-                                ? framework_exception_t (fanout.error_kind (),
-                                                         fanout.error ()->what ())
-                                : framework_exception_t (framework_error_kind_t::internal_failure,
-                                                         "logical multicast fanout failed"));
+                              node, channel, mesh, topic, packet, target.to_string (),
+                              detail::dispatch_reason_from_submit_result (submitted), error);
                         });
+                      detail::observe_task_completion (tail, [] (const result_t<void> &) {});
                   }
               }
               catch (const std::exception &error) {
@@ -4597,23 +4597,31 @@ namespace zlink::framework::detail
 
 void report_logical_multicast_failure (const std::shared_ptr<spot_node_builder_state_t> &state,
                                        std::string_view channel_name,
+                                       std::string_view mesh_name,
                                        std::string_view topic,
                                        std::string_view packet_name,
+                                       std::string_view target_rid,
+                                       dispatch_error_reason_t reason,
                                        const framework_exception_t &error) noexcept
 {
     if (!state)
         return;
     try {
         dispatch_error_reporter_t (state->dispatch).report_lazy ([&] {
-            return message_dispatch_error_event_t{.surface =
-                                                    dispatch_error_surface_t::route_mesh_channel,
-                                                  .message_kind = dispatch_message_kind_t::publish,
-                                                  .reason = dispatch_reason_from_error (&error),
-                                                  .action = dispatch_error_action_t::drop,
-                                                  .packet_name = std::string (packet_name),
-                                                  .channel_name = std::string (channel_name),
-                                                  .topic = std::string (topic),
-                                                  .exception = std::make_exception_ptr (error)};
+            return message_dispatch_error_event_t{
+              .surface = dispatch_error_surface_t::spot_route,
+              .message_kind = dispatch_message_kind_t::send,
+              .reason = reason,
+              .action = dispatch_error_action_t::drop,
+              .packet_name = std::string (packet_name),
+              .channel_name =
+                channel_name.empty () ? std::nullopt : std::optional<std::string> (channel_name),
+              .topic = std::string (topic),
+              .exception = std::make_exception_ptr (error),
+              .mesh_name =
+                mesh_name.empty () ? std::nullopt : std::optional<std::string> (mesh_name),
+              .target_rid =
+                target_rid.empty () ? std::nullopt : std::optional<std::string> (target_rid)};
         });
     }
     catch (...) {
@@ -4884,51 +4892,66 @@ publish_call_t spot_publisher_client_t::publish_raw (std::string channel_name,
     }
 
     const auto diagnostics_mode = detail::message_flow_tracer_t (_manager._state->dispatch).mode ();
+    const auto mesh_name =
+      _manager._state->lane.run ([&] { return _manager._state->snapshot.name; }).get ();
     auto frame = encode_spot_publish_frame (channel_name, packet_name, topic,
                                             std::move (content_type), payload);
-    return publish_call_t (
-      [native_node = std::move (native_node), state = _manager._state,
-       channel_name = std::move (channel_name), topic = std::move (topic),
-       packet_name = std::move (packet_name), frame = std::move (frame),
-       diagnostics_mode] (const publish_call_t::metadata_map_t &metadata) -> task_t<void> {
-          const auto fail = [&] (const framework_exception_t &error) {
-              detail::report_logical_multicast_failure (state, channel_name, topic, packet_name,
-                                                        error);
-          };
-          try {
-              auto flow_scope = runtime::flow_context_t::enter_current_or_create (
-                flow_origin_t::application, diagnostics_mode);
-              std::vector<zlink::message_t> parts{frame};
-              auto publisher = native_node->entry_spot ();
-              const auto encoded_metadata = detail::mesh_metadata_codec_t::encode (metadata);
-              const auto submitted = publisher.publish (
-                channel_name, topic, parts, zlink::send_flags_t::none, encoded_metadata);
-              if (submitted != zlink::submit_result_t::ok) {
+    return publish_call_t ([native_node = std::move (native_node), state = _manager._state,
+                            channel_name = std::move (channel_name), topic = std::move (topic),
+                            packet_name = std::move (packet_name), frame = std::move (frame),
+                            diagnostics_mode, mesh_name] (
+                             const publish_call_t::metadata_map_t &metadata) -> task_t<void> {
+        const auto fail = [&] (const framework_exception_t &error) {
+            detail::report_logical_multicast_failure (
+              state, channel_name, mesh_name, topic, packet_name, {},
+              detail::dispatch_reason_from_error (&error), error);
+        };
+        try {
+            auto flow_scope = runtime::flow_context_t::enter_current_or_create (
+              flow_origin_t::application, diagnostics_mode);
+            std::vector<zlink::message_t> parts{frame};
+            auto publisher = native_node->entry_spot ();
+            const auto encoded_metadata = detail::mesh_metadata_codec_t::encode (metadata);
+            const auto submitted = publisher.publish (channel_name, topic, parts,
+                                                      zlink::send_flags_t::none, encoded_metadata);
+            if (submitted != zlink::submit_result_t::ok) {
+                const framework_exception_t error (
+                  runtime::messaging::map_submit_result_error_kind (submitted),
+                  "logical multicast could not enter the source transport queue");
+                throw error;
+            }
+            auto tail = run_spot_publish_fanout (
+              std::make_shared<service::spot_t> (std::move (publisher)), std::move (parts),
+              encoded_metadata,
+              [state, channel_name, mesh_name, topic,
+               packet_name] (const zlink::routing_id_t &target, zlink::submit_result_t submitted) {
                   const framework_exception_t error (
                     runtime::messaging::map_submit_result_error_kind (submitted),
-                    "logical multicast could not enter the source transport queue");
-                  throw error;
-              }
-              co_await publisher.publish_tail (parts, encoded_metadata);
-              co_return;
-          }
-          catch (const framework_exception_t &error) {
-              fail (error);
-              throw;
-          }
-          catch (const std::exception &error) {
-              const framework_exception_t failure (framework_error_kind_t::internal_failure,
-                                                   error.what ());
-              fail (failure);
-              throw failure;
-          }
-          catch (...) {
-              const framework_exception_t failure (framework_error_kind_t::internal_failure,
-                                                   "logical multicast failed after admission");
-              fail (failure);
-              throw failure;
-          }
-      });
+                    "logical multicast physical fanout was not admitted");
+                  detail::report_logical_multicast_failure (
+                    state, channel_name, mesh_name, topic, packet_name, target.to_string (),
+                    detail::dispatch_reason_from_submit_result (submitted), error);
+              });
+            detail::observe_task_completion (tail, [] (const result_t<void> &) {});
+            co_return;
+        }
+        catch (const framework_exception_t &error) {
+            fail (error);
+            throw;
+        }
+        catch (const std::exception &error) {
+            const framework_exception_t failure (framework_error_kind_t::internal_failure,
+                                                 error.what ());
+            fail (failure);
+            throw failure;
+        }
+        catch (...) {
+            const framework_exception_t failure (framework_error_kind_t::internal_failure,
+                                                 "logical multicast failed after admission");
+            fail (failure);
+            throw failure;
+        }
+    });
 }
 
 } // namespace zlink::framework

@@ -4,6 +4,8 @@
 #include <zlink/framework/contracts/dispatch/execution.hpp>
 #include <zlink/framework/contracts/errors/error.hpp>
 
+#include <zlink/Contracts/Sockets/results.hpp>
+
 #include "runtime/diagnostics/diagnostic_event_sink.hpp"
 #include "runtime/diagnostics/dispatch_diagnostics_names.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
@@ -222,11 +224,27 @@ inline dispatch_error_reason_t dispatch_reason_from_error (framework_error_kind_
             return dispatch_error_reason_t::handler_missing;
         case framework_error_kind_t::protocol_error:
             return dispatch_error_reason_t::invalid_frame;
+        case framework_error_kind_t::deadline_exceeded:
+            return dispatch_error_reason_t::backpressure;
+        case framework_error_kind_t::unavailable:
+            return dispatch_error_reason_t::stale_target;
         case framework_error_kind_t::shutting_down:
             return dispatch_error_reason_t::shutdown;
         default:
             return dispatch_error_reason_t::handler_exception;
     }
+}
+
+inline dispatch_error_reason_t
+dispatch_reason_from_submit_result (zlink::submit_result_t result) noexcept
+{
+    if (result == zlink::submit_result_t::terminated) {
+        return dispatch_error_reason_t::shutdown;
+    }
+    if (result == zlink::submit_result_t::backpressured) {
+        return dispatch_error_reason_t::backpressure;
+    }
+    return dispatch_error_reason_t::stale_target;
 }
 
 inline dispatch_error_reason_t

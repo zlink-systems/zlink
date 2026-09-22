@@ -445,7 +445,9 @@ class spot_handle_t
                                     zlink::send_flags_t flags = zlink::send_flags_t::none,
                                     std::span<const std::uint8_t> metadata = {});
     task_t<void> publish_tail (const std::vector<zlink::message_t> &parts,
-                               std::span<const std::uint8_t> metadata = {});
+                               std::span<const std::uint8_t> metadata = {},
+                               std::function<void (const zlink::routing_id_t &,
+                                                   zlink::submit_result_t)> failure_observer = {});
     void set_subscription (const std::string &channel_name, const std::string &topic);
     void unset_subscription (const std::string &channel_name, const std::string &topic);
     bool close () noexcept;
