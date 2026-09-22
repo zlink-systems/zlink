@@ -2,8 +2,8 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "A timer joins the line; a worker runs outside it",
-    "subtitle": "Only what is in the line may touch the state · a result from outside comes back into the line",
+    "title": "A timer enters the Spot queue; a worker uses another execution context",
+    "subtitle": "Only the Spot queue may touch state · a worker result returns to the Spot queue",
     "output": "36-timer-worker-en.html",
     "legend": {
       "mode": "hidden"
@@ -41,7 +41,7 @@
     {
       "id": "Q",
       "type": "backend",
-      "label": "the line",
+      "label": "Spot queue",
       "sublabel": "one at a time",
       "row": 1,
       "col": 1
@@ -50,7 +50,7 @@
       "id": "W",
       "type": "frontend",
       "label": "worker",
-      "sublabel": "runs outside the line",
+      "sublabel": "another execution context",
       "row": 1,
       "col": 2
     }
@@ -69,14 +69,18 @@
     {
       "from": "T",
       "to": "Q",
-      "label": "a tick joins the line too",
+      "label": "tick enters Spot queue",
       "variant": "default"
     },
     {
       "from": "M",
       "to": "Q",
-      "label": "messages take the same line",
-      "variant": "default"
+      "label": "messages enter the same Spot queue",
+      "variant": "default",
+      "labelAt": [
+        240,
+        370
+      ]
     },
     {
       "from": "Q",
@@ -87,7 +91,7 @@
     {
       "from": "W",
       "to": "Q",
-      "label": "the result returns to the line",
+      "label": "result returns to Spot queue",
       "variant": "dashed",
       "labelAt": [
         500,
@@ -98,10 +102,10 @@
   "cards": [
     {
       "dot": "cyan",
-      "title": "The state is not touched outside the line",
+      "title": "State is not touched outside the Spot queue",
       "items": [
-        "Because a tick joins the line, touching the state inside a timer does not interleave with other processing. That is why no lock is needed.",
-        "A worker runs outside the line, so it neither reads nor writes the Spot's state. The result is put back into the line and applied there."
+        "Because a tick enters the Spot queue, touching state inside a timer does not interleave with other processing. That is why no lock is needed.",
+        "A worker uses another execution context, so it neither reads nor writes the Spot's state. Its result returns to the Spot queue and is applied there."
       ]
     }
   ]

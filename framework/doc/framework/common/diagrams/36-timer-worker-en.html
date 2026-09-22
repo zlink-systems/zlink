@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="generator" content="archify 2.17.0-dev.1">
-  <title>A timer joins the line; a worker runs outside it Diagram</title>
+  <title>A timer enters the Spot queue; a worker uses another execution context Diagram</title>
   <script>
     // Resolve the theme before first paint so light-preference users don't
     // see a dark flash. The toolbar script below re-applies with UI state.
@@ -5081,9 +5081,9 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
            data-preset-badge-blueprint="BLUEPRINT / REV 01"
            data-preset-badge-editorial="EDITORIAL / FIELD NOTE">
         <div class="pulse-dot"></div>
-        <h1>A timer joins the line; a worker runs outside it</h1>
+        <h1>A timer enters the Spot queue; a worker uses another execution context</h1>
       </div>
-      <p class="subtitle">Only what is in the line may touch the state · a result from outside comes back into the line</p>
+      <p class="subtitle">Only the Spot queue may touch state · a worker result returns to the Spot queue</p>
     </div>
 
     <script id="archify-guided-views-data" type="application/json">[]</script>
@@ -5132,8 +5132,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
     <div class="diagram-container" data-detail-level="read"
          data-preset-badge-editorial-plate="ARCHIFY / PLATE 04">
       <svg viewBox="22 122 696 282" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="standard" data-quality-gates="advisory">
-        <title id="archify-diagram-title">A timer joins the line; a worker runs outside it</title>
-        <desc id="archify-diagram-description">Only what is in the line may touch the state · a result from outside comes back into the line</desc>
+        <title id="archify-diagram-title">A timer enters the Spot queue; a worker uses another execution context</title>
+        <desc id="archify-diagram-description">Only the Spot queue may touch state · a worker result returns to the Spot queue</desc>
         <!-- Definitions -->
         <defs>
           <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
@@ -5160,10 +5160,10 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="0" data-composition-frame-label="one Spot" x="278" y="264" width="184" height="112" rx="12" class="c-region" stroke-width="1"/>
 
         <!-- Connection paths (before components for correct z-order) -->
-        <path data-edge-from="T" data-edge-to="Q" data-edge-label="a tick joins the line too" data-edge-key="0" data-composition-points="170,180;240,180;240,319;310,319" d="M 170 180 L 232 180 Q 240 180 240 188 L 240 311 Q 240 319 248 319 L 310 319" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="M" data-edge-to="Q" data-edge-label="messages take the same line" data-edge-key="1" data-composition-points="170,333;310,333" d="M 170 333 L 310 333" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="T" data-edge-to="Q" data-edge-label="tick enters Spot queue" data-edge-key="0" data-composition-points="170,180;240,180;240,326;310,326" d="M 170 180 L 232 180 Q 240 180 240 188 L 240 318 Q 240 326 248 326 L 310 326" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="M" data-edge-to="Q" data-edge-label="messages enter the same Spot queue" data-edge-key="1" data-composition-points="170,326;310,326" d="M 170 326 L 310 326" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="Q" data-edge-to="W" data-edge-label="hands off the long work" data-edge-key="2" data-composition-points="430,326;570,326" d="M 430 326 L 570 326" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="W" data-edge-to="Q" data-edge-label="the result returns to the line" data-edge-key="3" data-composition-points="570,326;430,326" d="M 570 326 L 430 326" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="W" data-edge-to="Q" data-edge-label="result returns to Spot queue" data-edge-key="3" data-composition-points="570,326;430,326" d="M 570 326 L 430 326" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
 
         <!-- Components -->
         <g id="node-T" data-node-id="T" data-node-label="timer" tabindex="0" role="button" aria-label="Focus timer, ticks on its period, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="ticks on its period" data-node-context="Architecture component">
@@ -5192,19 +5192,19 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <text data-detail="context" x="110" y="340" class="t-muted" font-size="9" text-anchor="middle">comes from outside</text>
         </g>
 
-        <g id="node-Q" data-node-id="Q" data-node-label="the line" tabindex="0" role="button" aria-label="Focus the line, one at a time, one Spot" aria-pressed="false" data-node-kind="backend" data-node-sublabel="one at a time" data-node-context="one Spot">
-          <title>the line · one at a time · one Spot</title>
+        <g id="node-Q" data-node-id="Q" data-node-label="Spot queue" tabindex="0" role="button" aria-label="Focus Spot queue, one at a time, one Spot" aria-pressed="false" data-node-kind="backend" data-node-sublabel="one at a time" data-node-context="one Spot">
+          <title>Spot queue · one at a time · one Spot</title>
           <rect x="310" y="296" width="120" height="60" rx="6" class="c-mask"/>
           <rect x="310" y="296" width="120" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(316 302) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="370" y="324" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">the line</text>
+          <text data-node-label="" data-detail-anchor="" x="370" y="324" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Spot queue</text>
         <text data-detail="context" x="370" y="340" class="t-muted" font-size="9" text-anchor="middle">one at a time</text>
         </g>
 
-        <g id="node-W" data-node-id="W" data-node-label="worker" tabindex="0" role="button" aria-label="Focus worker, runs outside the line, Architecture component" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="runs outside the line" data-node-context="Architecture component">
-          <title>worker · runs outside the line · Architecture component</title>
+        <g id="node-W" data-node-id="W" data-node-label="worker" tabindex="0" role="button" aria-label="Focus worker, another execution context, Architecture component" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="another execution context" data-node-context="Architecture component">
+          <title>worker · another execution context · Architecture component</title>
           <rect x="570" y="296" width="120" height="60" rx="6" class="c-mask"/>
           <rect x="570" y="296" width="120" height="60" rx="6" class="c-frontend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(576 302) scale(0.6875)">
@@ -5214,25 +5214,25 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
             <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
           <text data-node-label="" data-detail-anchor="" x="630" y="324" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">worker</text>
-        <text data-detail="context" x="630" y="340" class="t-muted" font-size="8.8" text-anchor="middle">runs outside the line</text>
+        <text data-detail="context" x="630" y="340" class="t-muted" font-size="7.4" text-anchor="middle">another execution context</text>
         </g>
 
         <!-- Connection labels -->
-        <g data-detail="context" data-edge-from="T" data-edge-to="Q" data-edge-label="a tick joins the line too" data-edge-key="0">
-          <rect x="175" y="229.5" width="130" height="14" rx="3" class="c-mask"/>
-          <text x="240" y="239.5" class="t-muted" font-size="8" text-anchor="middle">a tick joins the line too</text>
+        <g data-detail="context" data-edge-from="T" data-edge-to="Q" data-edge-label="tick enters Spot queue" data-edge-key="0">
+          <rect x="182.2" y="233" width="115.6" height="14" rx="3" class="c-mask"/>
+          <text x="240" y="243" class="t-muted" font-size="8" text-anchor="middle">tick enters Spot queue</text>
         </g>
-        <g data-detail="context" data-edge-from="M" data-edge-to="Q" data-edge-label="messages take the same line" data-edge-key="1">
-          <rect x="170.2" y="313" width="139.6" height="14" rx="3" class="c-mask"/>
-          <text x="240" y="323" class="t-muted" font-size="8" text-anchor="middle">messages take the same line</text>
+        <g data-detail="context" data-edge-from="M" data-edge-to="Q" data-edge-label="messages enter the same Spot queue" data-edge-key="1">
+          <rect x="153.4" y="360" width="173.2" height="14" rx="3" class="c-mask"/>
+          <text x="240" y="370" class="t-muted" font-size="8" text-anchor="middle">messages enter the same Spot queue</text>
         </g>
         <g data-detail="context" data-edge-from="Q" data-edge-to="W" data-edge-label="hands off the long work" data-edge-key="2">
           <rect x="439.8" y="306" width="120.39999999999999" height="14" rx="3" class="c-mask"/>
           <text x="500" y="316" class="t-muted" font-size="8" text-anchor="middle">hands off the long work</text>
         </g>
-        <g data-detail="context" data-edge-from="W" data-edge-to="Q" data-edge-label="the result returns to the line" data-edge-key="3">
-          <rect x="423" y="360" width="154" height="14" rx="3" class="c-mask"/>
-          <text x="500" y="370" class="t-messagebus" font-size="8" text-anchor="middle">the result returns to the line</text>
+        <g data-detail="context" data-edge-from="W" data-edge-to="Q" data-edge-label="result returns to Spot queue" data-edge-key="3">
+          <rect x="427.8" y="360" width="144.4" height="14" rx="3" class="c-mask"/>
+          <text x="500" y="370" class="t-messagebus" font-size="8" text-anchor="middle">result returns to Spot queue</text>
         </g>
 
         <!-- Boundary labels (foreground masks keep routes out of titles) -->
@@ -5432,11 +5432,11 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
       <div class="card">
         <div class="card-header">
           <div class="card-dot cyan"></div>
-          <h3>The state is not touched outside the line</h3>
+          <h3>State is not touched outside the Spot queue</h3>
         </div>
         <ul>
-          <li>&bull; Because a tick joins the line, touching the state inside a timer does not interleave with other processing. That is why no lock is needed.</li>
-          <li>&bull; A worker runs outside the line, so it neither reads nor writes the Spot&#39;s state. The result is put back into the line and applied there.</li>
+          <li>&bull; Because a tick enters the Spot queue, touching state inside a timer does not interleave with other processing. That is why no lock is needed.</li>
+          <li>&bull; A worker uses another execution context, so it neither reads nor writes the Spot&#39;s state. Its result returns to the Spot queue and is applied there.</li>
         </ul>
       </div>
     </div>

@@ -115,7 +115,7 @@ them, a team picks its genre's pattern and rebuilds that structure from the sock
 | Difficulty | ZLink feature | Details |
 | --- | --- | --- |
 | Building a genre's topology from raw sockets | **Declare topology by combining channels** — 1:N request/response, fan-out, a node-addressed route mesh, a room-scoped spot mesh, all composed in a few lines of registration; the location store keeps connections up automatically | [Layering and registration points](01-overview.en.md#33-layering-and-registration-points) · [Channel Messaging](20-channel-messaging.en.md) · [Spot](21-spot.en.md) · [Location](25-location.en.md) |
-| Locks/contention on in-memory state | **SPOT serial execution** — every message for one room lines up on a single execution line and runs in order. Locks disappear from business logic | The code below · [Spot](21-spot.en.md) |
+| Locks/contention on in-memory state | **SPOT serial execution** — every message for one room enters its Spot queue and runs in order. Locks disappear from business logic | The code below · [Spot](21-spot.en.md) |
 | Implementing socket framing/session lifetime directly | **STREAM** — the framework owns connection lifetime, framing, and packet codec (TCP/TLS/WS/WSS) | [09](23-stream.en.md) |
 | Tracking a reconnected user's location | **Actor binding** — a new connection after reconnect picks up the same actor | [08](24-actor-session.en.md) |
 | Users dropped during deployment | **Graceful drain** — blocks new admission, hands off actors, finishes in-progress work, then shuts down. 0 lines of app code | [12](12-operations.en.md) |
@@ -221,9 +221,9 @@ public final class MarkNumberHandler
 ```
 
 Several players send requests at the same time and a timer runs in this room, yet there's no
-`lock`, no `Interlocked`, no Redis distributed lock. That's because the framework lines up
+`lock`, no `Interlocked`, no Redis distributed lock. That's because the framework puts
 every message for one room (requests, subscription events, timer ticks, actor packets) on
-**a single execution line and runs them in order.** Here, "serial" isn't codec serialization
+**them into the Spot queue and runs them in order.** Here, "serial" isn't codec serialization
 — it's **serialization of execution order** ([The Execution Model](32-execution-model.en.md)).
 
 Runnable reference samples: [TicTacToe](../../../common/sample/tictactoe/README.en.md) ·

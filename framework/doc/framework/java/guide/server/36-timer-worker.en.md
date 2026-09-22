@@ -20,12 +20,12 @@ View in another language — [C++](../../../cpp/guide/server/36-timer-worker.en.
 
 !!! info "What you get from this chapter"
 
-    You can run periodic work inside a Spot and move long-running work out of the Spot's line. The
+    You can run periodic work inside a Spot and move long-running work out of its Spot queue. The
     code in this chapter comes from the samples in the repository.
 
-[The Execution Model](32-execution-model.en.md) covered how the callbacks of one Spot run in a
-single line. There are two more ways to use that line — **a timer puts work into it periodically,
-and a worker runs long work outside it.**
+[The Execution Model](32-execution-model.en.md#1-the-queues-work-waits-in)
+covers how a Spot queue runs one Spot's work in order. **A timer puts work into the Spot queue on
+each period; a worker runs long work in an execution context outside the Spot queue.**
 
 ## 1. Timers — Periodic Execution
 
@@ -69,17 +69,18 @@ skipped as fields.
 | Skipped ticks | How many ticks were dropped immediately before this one |
 | Period | The period registered |
 
-A growing delay is the signal that the Spot's line is backing up. A handler that reads the value
+A growing delay is the signal that the Spot queue is backing up. A handler that reads the value
 and reports the load gives operations a place to look for the cause.
 
-<iframe class="zlink-diagram" src="/common/diagrams/36-timer-worker-en.html" title="A timer joins the line; a worker runs outside it" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/36-timer-worker-en.html" title="A timer enters the Spot queue; a worker uses another execution context" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/36-timer-worker-en.html" target="_blank">↗ View larger</a></p>
 
-## 2. Workers — Running Outside the Line
+## 2. Workers — Running Outside the Spot Queue
 
-A Spot's execution queue runs one item at a time. Awaiting a heavy computation or external I/O
+A Spot queue runs one item at a time. Awaiting a heavy computation or external I/O
 inside a handler **stops every other piece of work in that Spot meanwhile.** Such work is handed
-to a worker call.
+to a worker call. A worker job bypasses the Spot queue and runs in another execution context, so it
+does not occupy the Spot's turn.
 
 Which call to use depends on whether the work is **synchronous code that occupies a thread** or
 **asynchronous code that awaits completion.**
@@ -108,7 +109,7 @@ before it, and the Spots where it is available, see
 
 ## 4. Related Documents
 
-- What shares one line — [The Execution Model](32-execution-model.en.md)
+- What runs in order in a Spot queue — [The Execution Model](32-execution-model.en.md)
 - When arrival outpaces processing — [Backpressure](33-backpressure.en.md)
 - What happens to a timer during relocation — [Relocation](37-relocation.en.md)
 - The exact option names and defaults — the [16. Options](16-options.en.md) for your language

@@ -36,7 +36,7 @@ title: "DeliveryDispatch 따라 읽기 · Kotlin"
 고객은 HTTP로 배송을 만들고 STREAM으로 상태를 받는다. 배송원은 STREAM으로 제안을 받고 결정을
 보낸다. 그 사이의 서버는 session map이나 socket registry를 두지 않는다 — 배송원과 고객은 각각
 id를 가진 Actor이고, 제안과 상태는 그 Actor에 묶인 session으로 push된다. 배송원의 응답을 기다리는
-동안 어떤 handler도 실행 줄을 점유하지 않으며, 제안의 deadline은 Dispatch가 기록으로 관리한다.
+동안 어떤 handler도 Spot의 turn을 점유하지 않으며, 제안의 deadline은 Dispatch가 기록으로 관리한다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/14-delivery.html" title="DeliveryDispatch 샘플 토폴로지" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/14-delivery.html" target="_blank">↗ 크게 보기</a></p>

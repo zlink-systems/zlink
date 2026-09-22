@@ -105,7 +105,7 @@ correlation은 framework가 처리한다.
 | 어려움 | ZLink 기능 | 자세히 |
 | --- | --- | --- |
 | 장르별 토폴로지를 소켓부터 직접 만듦 | **channel 조합으로 토폴로지 선언** — 1:N 요청/응답, fan-out, 노드 지목 route mesh, room 단위 spot mesh를 등록 몇 줄로 조합, 연결은 location store가 자동 유지 | [§3 아키텍처](#33-계층-구조와-등록-지점) · [05](20-channel-messaging.ko.md)·[06](21-spot.ko.md)·[10](25-location.ko.md) |
-| in-memory 상태의 lock·경합 | **SPOT 직렬 실행** — 한 room의 모든 메시지를 하나의 실행 줄로 세워 순서대로 실행. lock이 업무 로직에서 사라진다 | 아래 코드 · [06](21-spot.ko.md) |
+| in-memory 상태의 lock·경합 | **SPOT 직렬 실행** — 한 room의 모든 message가 Spot queue에 들어가 순서대로 실행된다. lock이 업무 로직에서 사라진다 | 아래 코드 · [06](21-spot.ko.md) |
 | 소켓 framing·세션 수명 직접 구현 | **STREAM** — 연결 수명·framing·packet codec을 framework가 소유(TCP/TLS/WS/WSS) | [09](23-stream.ko.md) |
 | 재접속 유저 위치 추적 | **actor binding** — 재접속한 새 연결이 같은 actor로 이어진다 | [08](24-actor-session.ko.md) |
 | 배포 때 유저 튕김 | **graceful drain** — 신규 차단, actor handoff, 진행 중 마무리 후 종료. 앱 코드 0줄 | [12](12-operations.ko.md) |
@@ -192,8 +192,8 @@ mesh 이름과 room 타입 이름은 이 장의 "빙고 room"이 아니라 tutor
 
 여러 플레이어가 동시에 채팅을 보내고 상태를 조회하는 room인데 `lock`도,
 `Interlocked`도, Redis 분산 락도 없다. framework가 한 room의 모든 메시지(요청,
-구독 이벤트, timer tick, actor packet)를 **하나의 실행 줄에 세워 순서대로**
-실행하기 때문이다 — timer와 actor packet도 같은 큐에 서지만, 이 tutorial 코드는
+구독 이벤트, timer tick, actor packet)가 **Spot queue에 들어가 순서대로**
+실행되기 때문이다 — timer와 actor packet도 같은 Spot queue에 들어가지만, 이 tutorial 코드는
 채팅 메시지와 상태 조회만 다룬다. 여기서 직렬은 codec 직렬화가 아니라 **실행
 순서의 직렬화**다([06 §3](21-spot.ko.md)).
 

@@ -106,7 +106,7 @@ framework가 없다. 우연이 아니라 이유가 있다.
 | 어려움 | ZLink 기능 | 자세히 |
 | --- | --- | --- |
 | 장르별 토폴로지를 소켓부터 직접 만듦 | **channel 조합으로 토폴로지 선언** — 1:N 요청/응답, fan-out, node 지목 route mesh, room 단위 spot mesh를 등록 몇 줄로 조합, 연결은 location store가 자동 유지 | [계층 구조와 등록 지점](01-overview.ko.md#33-계층-구조와-등록-지점) · [Channel 메시징](20-channel-messaging.ko.md) · [Spot](21-spot.ko.md) · [Location](25-location.ko.md) |
-| in-memory 상태의 lock·경합 | **SPOT 직렬 실행** — 한 room의 모든 메시지를 하나의 실행 줄로 세워 순서대로 실행. lock이 업무 로직에서 사라진다 | 아래 코드 · [Spot](21-spot.ko.md) |
+| in-memory 상태의 lock·경합 | **SPOT 직렬 실행** — 한 room의 모든 message가 Spot queue에 들어가 순서대로 실행된다. lock이 업무 로직에서 사라진다 | 아래 코드 · [Spot](21-spot.ko.md) |
 | 소켓 framing·세션 수명 직접 구현 | **STREAM** — 연결 수명·framing·packet codec을 framework가 소유(TCP/TLS/WS/WSS) | [STREAM](23-stream.ko.md) |
 | 재접속 유저 위치 추적 | **actor binding** — 재접속한 새 연결이 같은 actor로 이어진다 | [Session과 Actor 연결](24-actor-session.ko.md) |
 | 배포 때 유저 연결 끊김 | **graceful drain** — 신규 차단, actor handoff, 진행 중 마무리 후 종료. application 코드 0줄 | [운영과 lifecycle](12-operations.ko.md) |
@@ -205,8 +205,8 @@ task_t<mark_result_t> bingo_room_spot_t::mark_number (const mark_number_t &reque
 
 여러 플레이어가 동시에 요청을 보내고 timer가 도는 room인데 `lock`도,
 `Interlocked`도, Redis 분산 락도 없다. framework가 한 room의 모든 메시지(요청,
-구독 이벤트, timer tick, actor packet)를 **하나의 실행 줄에 세워 순서대로**
-실행하기 때문이다. 여기서 직렬은 codec 직렬화가 아니라 **실행 순서의
+구독 이벤트, timer tick, actor packet)가 **Spot queue에 들어가 순서대로**
+실행되기 때문이다. 여기서 직렬은 codec 직렬화가 아니라 **실행 순서의
 직렬화**다([실행 모델](32-execution-model.ko.md)).
 
 실행되는 근거 샘플: [TicTacToe](../../../common/sample/tictactoe/README.ko.md) ·

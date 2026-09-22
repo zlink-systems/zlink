@@ -115,7 +115,7 @@ them, a team picks its genre's pattern and rebuilds that structure from the sock
 | Difficulty | ZLink feature | Details |
 | --- | --- | --- |
 | Building a genre's topology from raw sockets | **Declare topology by combining channels** — 1:N request/response, fan-out, a node-addressed route mesh, a room-scoped spot mesh, all composed in a few lines of registration; the location store keeps connections up automatically | [§3 Architecture](#33-layering-and-registration-points) · [05](20-channel-messaging.en.md)·[06](21-spot.en.md)·[10](25-location.en.md) |
-| Locks/contention on in-memory state | **SPOT serial execution** — every message for one room lines up on a single execution line and runs in order. Locks disappear from business logic | The code below · [06](21-spot.en.md) |
+| Locks/contention on in-memory state | **SPOT serial execution** — every message for one room enters its Spot queue and runs in order. Locks disappear from business logic | The code below · [06](21-spot.en.md) |
 | Implementing socket framing/session lifetime directly | **STREAM** — the framework owns connection lifetime, framing, and packet codec (TCP/TLS/WS/WSS) | [09](23-stream.en.md) |
 | Tracking a reconnected user's location | **Actor binding** — a new connection after reconnect picks up the same actor | [08](24-actor-session.en.md) |
 | Users dropped during deployment | **Graceful drain** — blocks new admission, hands off actors, finishes in-progress work, then shuts down. 0 lines of app code | [12](12-operations.en.md) |
@@ -210,9 +210,9 @@ section's "Bingo room."
 
 Several players send chat messages and query state in this room at the same time, yet
 there's no `lock`, no `Interlocked`, no Redis distributed lock. That's because the framework
-lines up every message for one room (requests, subscription events, timer ticks, actor
-packets) on **a single execution line and runs them in order** — timer ticks and actor
-packets join that same queue too, but this tutorial code only handles chat messages and
+puts every message for one room (requests, subscription events, timer ticks, actor
+packets) into **the Spot queue and runs them in order** — timer ticks and actor
+packets enter that same Spot queue too, but this tutorial code only handles chat messages and
 state queries. Here, "serial" isn't codec serialization — it's **serialization of
 execution order** ([06 §3](21-spot.en.md)).
 
