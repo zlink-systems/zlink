@@ -2599,24 +2599,22 @@ void spot_context_state_t::defer_relocation_ready ()
                                      "relocation readiness can be deferred only from an "
                                      "application-signaled SpotWide User Spot turn");
     }
-    bool complete_without_relocation = false;
-    complete_without_relocation = state_sync ([this] {
-        if (relocation_ready_deferred) {
-            throw framework_exception_t (framework_error_kind_t::not_configured,
-                                         "relocation readiness is already deferred");
-        }
+    if (state_sync ([this] { return relocation_ready_deferred; })) {
+        throw framework_exception_t (framework_error_kind_t::not_configured,
+                                     "relocation readiness is already deferred");
+    }
+    auto reserved = serial_queue->reserve_barrier_next ("relocation-ready");
+    if (!reserved) {
+        throw framework_exception_t (reserved.error_kind (),
+                                     "relocation readiness barrier queue is closed");
+    }
+    const auto complete_without_relocation = state_sync ([this, barrier = reserved.value ()] {
         relocation_ready_deferred = true;
+        relocation_ready_barrier = barrier;
         return !relocation_boundary_active;
     });
-    if (complete_without_relocation
-        && !try_post_serial (
-          "relocation-ready-continued",
-          [this] { complete_relocation_ready (spot_relocation_ready_outcome_t::continued); },
-          runtime::serial_work_options_t{runtime::serial_work_lane_t::lifecycle})) {
-        state_sync ([this] { relocation_ready_deferred = false; });
-        throw framework_exception_t (framework_error_kind_t::shutting_down,
-                                     "relocation readiness completion queue is closed");
-    }
+    if (complete_without_relocation)
+        complete_relocation_ready (spot_relocation_ready_outcome_t::continued);
 }
 
 void spot_context_state_t::ensure_relocation_turn_open () const
@@ -2634,10 +2632,12 @@ void spot_context_state_t::ensure_relocation_turn_open () const
 
 void spot_context_state_t::complete_relocation_ready (spot_relocation_ready_outcome_t outcome)
 {
-    const auto pending = state_sync ([this] { return relocation_ready_deferred; });
-    if (!pending)
-        return;
-    (void) run_serial_sync ("relocation-ready-completed", [this, outcome] {
+    auto barrier = state_sync ([this] {
+        if (!relocation_ready_deferred)
+            return std::shared_ptr<deferred_barrier_t>{};
+        return std::exchange (relocation_ready_barrier, {});
+    });
+    const auto complete = [this, outcome] {
         std::shared_ptr<void> instance;
         std::function<void (void *, const spot_relocation_ready_completion_t &)> callback;
         std::tie (instance, callback) = state_sync ([this] {
@@ -2651,10 +2651,36 @@ void spot_context_state_t::complete_relocation_ready (spot_relocation_ready_outc
             current_callback = lifecycle.on_relocation_ready_completed;
             return std::make_pair (std::move (current_instance), std::move (current_callback));
         });
-        if (instance && callback) {
+        if (instance && callback)
             callback (instance.get (), spot_relocation_ready_completion_t{outcome});
+    };
+    if (barrier) {
+        const auto activated = barrier->activate_async (
+          [complete] (deferred_barrier_t::async_completion_t release) mutable {
+              try {
+                  complete ();
+                  release (result_t<void>::success ());
+              }
+              catch (const framework_exception_t &error) {
+                  release (detail::result_access_t::failure<void> (error));
+              }
+              catch (const std::exception &error) {
+                  release (result_t<void>::failure (framework_error_kind_t::internal_failure,
+                                                    error.what ()));
+              }
+              catch (...) {
+                  release (
+                    result_t<void>::failure (framework_error_kind_t::internal_failure,
+                                             "relocation readiness completion callback failed"));
+              }
+          });
+        if (!activated) {
+            throw framework_exception_t (activated.error_kind (),
+                                         "relocation readiness barrier is already terminal");
         }
-    });
+        return;
+    }
+    (void) run_serial_sync ("relocation-ready-completed", complete);
 }
 
 void spot_context_state_t::drain_serial ()
