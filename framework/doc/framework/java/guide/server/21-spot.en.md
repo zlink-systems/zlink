@@ -18,13 +18,10 @@ View in another language — [C++](../../../cpp/guide/server/21-spot.en.md) · [
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-The code in this chapter comes from the [tutorial README](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.md). Download the [examples repository](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.md) and follow its README's Download, Build and Run sections to reproduce the results below.
-
 !!! info "What you get from this chapter"
 
     You can create a stateful object addressed by id, send messages to it, and
-    receive answers. The code in this chapter runs as it stands in
-    `framework/languages/java/tutorial/java`.
+    receive answers. The code comes from the [tutorial README in the examples repository](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.md); follow its Download, Build, and Run sections to reproduce the results below.
 
 In [Channel Messaging](20-channel-messaging.en.md) a call was received by one of the nodes
 serving the name. That path does not work when the recipient is already decided. **A Spot is a
@@ -196,7 +193,7 @@ The differences between the kinds and the full lifecycle are covered by [Spot](2
 - The other unit addressed by id — [Actor](22-actor.en.md)
 - The path that calls by name — [Channel Messaging](20-channel-messaging.en.md)
 - What the Location Store records — [How Channels Work](30-channel-patterns.en.md#6-connection-and-discovery)
-- A running version of this chapter's code — `framework/languages/java/tutorial/java`
+- A running version of this chapter's code — [the tutorial README in the examples repository](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.md)
 
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();

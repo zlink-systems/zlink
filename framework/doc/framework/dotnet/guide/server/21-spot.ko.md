@@ -18,12 +18,10 @@ title: "Spot · C#/.NET"
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-이 장의 코드는 [tutorial README](https://github.com/zlink-systems/zlink-dotnet-examples/blob/main/tutorial/README.ko.md)에서 가져왔다. [예제 저장소](https://github.com/zlink-systems/zlink-dotnet-examples/blob/main/tutorial/README.ko.md)를 내려받아 README의 「내려받기와 설치」·「빌드」·「실행」 절을 따라 실행하면 아래 실행 결과를 재현할 수 있다.
-
 !!! info "이 장을 읽고 나면"
 
     id로 호출하는 상태 객체를 만들고, 그것에 메시지를 보내고 답을 받을 수 있다.
-    이 장의 코드는 `framework/languages/dotnet/tutorial`에서 그대로 실행된다.
+    이 장의 코드는 [예제 저장소의 tutorial README](https://github.com/zlink-systems/zlink-dotnet-examples/blob/main/tutorial/README.ko.md)에서 가져왔으며, README의 「내려받기와 설치」·「빌드」·「실행」 절을 따르면 아래 결과를 재현할 수 있다.
 
 [Channel 메시징](20-channel-messaging.ko.md)의 호출은 이름을 맡은 node 중 하나가 받았다.
 받을 대상이 정해져 있으면 그 경로를 사용할 수 없다. **Spot은 id로 찾는 상태 객체**이고, 자기
@@ -190,7 +188,7 @@ id는 Framework가 만든다. 두 번째 호출은 응답을 기다리지 않고
 - id로 호출하는 또 다른 단위 — [Actor](22-actor.ko.md)
 - 이름으로 호출하는 경로 — [Channel 메시징](20-channel-messaging.ko.md)
 - Location Store가 무엇을 적어 두는가 — [Channel 동작 원리](30-channel-patterns.ko.md#6-연결과-discovery)
-- 이 장 코드의 실행본 — `framework/languages/dotnet/tutorial`
+- 이 장 코드의 실행본 — [예제 저장소의 tutorial README](https://github.com/zlink-systems/zlink-dotnet-examples/blob/main/tutorial/README.ko.md)
 
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
