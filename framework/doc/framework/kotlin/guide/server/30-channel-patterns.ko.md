@@ -18,12 +18,10 @@ title: "Channel 동작 원리 · Kotlin"
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-이 장은 tutorial의 `Server`·`Client`와 `TicTacToe`·`ZoneWorld` 샘플 디렉터리에서 코드를 인용한다. 각 언어의 해당 tree를 bootstrap하고 build하면 설명한 연결과 대상 선택을 실제 코드에서 확인할 수 있다.
-
 !!! info "이 장을 읽고 나면"
 
     각 구성이 어떤 연결을 열고, 누구를 대상으로 고르고, 언제 거부되는지 알 수 있다.
-    이 장의 코드는 저장소의 샘플과 튜토리얼에서 가져왔다.
+    이 장의 코드는 [예제 저장소의 tutorial](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.ko.md)과 [`TicTacToe`](https://github.com/zlink-systems/zlink-java-examples/blob/main/samples/TicTacToe/README.ko.md)·[`ZoneWorld`](https://github.com/zlink-systems/zlink-java-examples/blob/main/samples/ZoneWorld/README.ko.md) 샘플 README에서 가져왔으며, 각 README의 「내려받기와 설치」·「빌드」·「실행」 절을 따르면 연결과 대상 선택을 재현할 수 있다.
 
 [Channel 메시징](20-channel-messaging.ko.md)이 등록하고 호출하는 방법을 다뤘다면, 이 장은
 **왜 그렇게 되는지와 어디까지 되는지**를 다룬다. 패턴 사이의 차이, 대상 선택 규칙, 연결과
@@ -41,7 +39,7 @@ discovery, 시작 단계 검증, 그리고 실패했을 때 호출한 쪽이 보
 | 연결 | mesh peer 연결 하나를 여러 channel이 공유 | server가 공개한 endpoint로 client가 연결 | publisher PUB endpoint마다 subscriber SUB socket |
 | 보내는 node 자신이 Server일 때 | **후보가 아니다** | 다른 server와 같은 후보다 | 해당 없음 |
 | 후보가 없을 때 | 즉시 대상 없음으로 실패 | 잠깐 기다린 뒤 실패 | 받는 node 없이 성공 |
-| 손실 | 없다 | 없다 | **느린 구독자 몫을 버린다**(현재 설정 불가 — [#442](https://github.com/zlink-systems/zlink/issues/442)) |
+| 손실 | 없다 | 없다 | **느린 구독자 몫을 버린다**(NoDrop이면 오류로 끝난다) |
 
 호출 코드는 RouteMesh와 ClientServer가 같다. `sendToChannel`·`requestToChannel`은 ChannelName
 하나로 process-local 송신 경로를 고르며, 그 경로가 RouteMesh인지 ClientServer인지는 등록이
@@ -185,17 +183,8 @@ ClientServer를 사용한다.
 | weight가 `0`인 target | membership은 유지하되 새 선택의 후보가 아니다 |
 | 안전 종료 절차에 들어간 target | 남은 요청을 처리하고 내려가는 중이다 |
 
-**위 대상을 뺀 뒤 남는 대상이 하나도 없으면 호출은 `Unavailable`로 끝난다.** `request`와 `send`가
-같은 결과를 낸다. 송신 경로와 연결은 그대로 있고 고를 대상만 없다는 뜻이라 `NotFound`가 아니다
-— 그쪽은 routing id로 대상을 적었는데 그 id를 아는 node가 없을 때의 결과다. framework
-0.16.0이 정한 값이다.
-
-!!! warning "C++의 one-way send만 아직 다르다"
-
-    0.16.0에서 .NET·Java·Kotlin·Node는 `request`와 `send` 모두 `Unavailable`을 낸다. **C++만
-    `send`가 `NotFound`를 낸다** — [#498](https://github.com/zlink-systems/zlink/issues/498)이
-    고친 자리를 RouteMesh channel의 one-way 경로가 지나지 않는다. `request`는 C++에서도
-    `Unavailable`이다.
+**위 대상을 뺀 뒤 남는 대상이 하나도 없으면 `request`와 one-way `send`는 모두 `NotFound`로
+끝난다.** 고를 대상이 없다는 결과는 두 호출에서 같다.
 
 남은 대상 사이의 분배는 **weight가 정한다.** weight는 `0..10000` 범위이고 기본값은 `100`이다.
 
@@ -282,7 +271,7 @@ MeshNode에 해당 ChannelName이 없어도 된다** — 같은 process에 그 �
 | 소켓 | 이미 연결된 mesh 소켓을 그대로 사용한다 | 독립 PUB/SUB 소켓 쌍을 연다 |
 | 받는 대상 | 그 channel에서 같은 topic을 구독한 **Spot** | 연결된 **구독자 전원** |
 | mesh 구성과의 관계 | 그 mesh 안으로 한정된다 | 무관하다 |
-| 손실 | 해당 없음 | **허용한다**(현재 설정 불가) |
+| 손실 | 해당 없음 | **허용한다**(NoDrop이면 오류로 끝난다) |
 | filter | 실행되지 않는다 | 실행된다 |
 | 등록 위치 | Spot이 시작할 때 | fanout channel builder |
 
@@ -317,42 +306,36 @@ fanout channel은 그 자체로 독립된 PUB/SUB 소켓 쌍을 연다. Spot이�
 닿으면 **그 구독자 몫을 버리고 발행은 성공으로 끝난다.** 나머지 구독자는 영향을 받지 않고,
 발행자는 느린 구독자 하나 때문에 멈추지 않는다.
 
-!!! warning "지금은 이 동작을 바꿀 수 없다"
+**느린 구독자 몫도 버리지 않으려면 NoDrop을 켠다.** 그러면 느린 구독자의 backpressure가
+발행을 기다리게 하고, deadline 안에 비워지지 않으면 발행은 오류로 끝난다.
 
-    PUB socket에는 back-pressure에서 버리는 대신 오류로 끝내는 `NODROP` 설정이 있지만,
-    현재 fanout channel builder는 그 값을 노출하지 않는다. 그래서 응용이 고를 수 있는 것은
-    `sendHighWaterMark`를 키워 버려지는 지점을 늦추는 것까지다. 표면 추가는
-    [#442](https://github.com/zlink-systems/zlink/issues/442)에서 다룬다.
+```kotlin
+options.addFanoutChannel("events")
+    .enablePublisher("tcp://*:7400")
+    .setNoDrop(true)
+```
 
-    **손실을 허용할 수 없는 전달은 지금은 fanout channel로 구성하지 않는다.** Logical
-    Multicast는 PUB/SUB 소켓을 사용하지 않고 mesh 연결로 전달하므로 이 규칙의 대상이 아니다.
-    둘 다 저장·재전송·ack는 제공하지 않는다.
+NoDrop은 publisher capability가 있는 channel에서만 설정한다. Logical Multicast도 저장·재전송·ack는 제공하지 않는다.
 
-### 5.3 Topic — Logical Multicast에서만 수신 대상을 고른다
+### 5.3 Topic — 두 형태 모두 수신 대상을 고른다
 
-topic은 두 형태에서 하는 일이 다르다. **한쪽은 받을 대상을 정하고, 다른 쪽은 정하지 않는다.**
+topic은 두 형태에서 모두 수신 대상을 고른다. Logical Multicast는 Spot을 고르고, Classic fanout은 subscriber socket을 고른다.
 
 | | Logical Multicast | Classic fanout |
 | --- | --- | --- |
-| 구독 등록 | ChannelName + **topic** | ChannelName + packet 이름 |
-| topic이 전달을 거르는가 | **거른다.** 같은 topic을 구독한 Spot만 받는다 | **거르지 않는다.** 그 channel의 모든 event를 받는다 |
+| 구독 등록 | ChannelName + **topic** | ChannelName + **topic** |
+| topic이 전달을 거르는가 | **거른다.** 같은 topic을 구독한 Spot만 받는다 | **거른다.** 같은 topic을 구독한 subscriber만 받는다 |
 | 받은 뒤 | 해당 Spot의 구독 handler가 처리한다 | packet 이름으로 handler를 찾고, 없으면 버린다 |
 
-Classic fanout subscriber는 socket을 **모든 topic**에 연결한다. 그래서 같은 channel에 붙은
-subscriber는 발행된 event를 전부 받고, 자기에게 handler가 있는 것만 처리한 뒤 나머지는 그 자리에서
-버린다.
+Classic fanout subscriber는 받을 topic을 `subscribe(topic)`으로 등록한다. 같은 topic에 발행한 event만 그 subscriber까지 전달된다.
 
-**받은 뒤에는 topic을 볼 수 있다.** handler가 함께 받는 publish context가 그 event가 도착한
-topic을 담고 있다. 네트워크에서 대상을 줄이지는 못해도, 한 handler가 여러 topic을 받아 갈라
-처리하는 것은 된다.
+```kotlin
+options.addFanoutChannel("events")
+    .enableSubscriber()
+    .subscribe("order.created")
+```
 
-!!! warning "지금은 Classic fanout에서 topic으로 골라 받을 수 없다"
-
-    구독 등록 표면에 topic 인자가 없다 — `AddHandler<THandler, TEvent>(packetName)`뿐이다.
-    한 channel에 성격이 다른 event를 섞어 발행하면 모든 subscriber가 그것을 **네트워크로 모두
-    받는다.** 받은 뒤 걸러 내도 그 전송은 이미 일어난 뒤다. 지금 전송량을 줄이는 방법은
-    **channel을 나누는 것**뿐이다. 구독 topic 지정은
-    [#445](https://github.com/zlink-systems/zlink/issues/445)에서 다룬다.
+handler가 함께 받는 publish context에는 도착한 topic도 들어 있으므로, 하나의 handler가 여러 topic을 등록해 나누어 처리할 수도 있다.
 
 ### 5.4 발행할 때 topic을 정하는 방법
 
@@ -403,7 +386,7 @@ Store에서 읽어 결정하기 때문이다. channel 메시징만 사용하고 
 동작한다.
 
 등록 코드는 [Spot](21-spot.ko.md#2-location-store--spot-등록의-선행-조건)에, 운영 조회는
-[운영과 lifecycle](12-operations.ko.md#5-location-readiness와-운영-조회)에 있다.
+[운영과 lifecycle](12-operations.ko.md#6-location-readiness와-운영-조회)에 있다.
 
 **Location Store와 Relocation Store는 맡는 기록이 다르다.** Location Store는 작은 위치 기록의 원자적 변경을 맡고, Relocation Store는
 옮기고 난 뒤에 남는 기록 — Instance Spot을 처음 깨운 기록과 이동 뒤에 완료되는 요청의 종결
@@ -470,13 +453,13 @@ Fanout subscriber는 **automatic discovery와 manual endpoint를 함께 지정�
 
 ### 6.5 store에서 찾았다고 바로 보내지 않는다
 
-client는 등록 정보에서 endpoint를 얻은 뒤 **실제 연결에서 신원과 실행 세대를 다시 확인**하고
+client는 등록 정보에서 endpoint를 얻은 뒤 **실제 연결에서 신원과 lifecycle generation을 다시 확인**하고
 나서야 그 대상을 사용한다. 수동 연결도 같은 확인을 거친다. 그래서 store에 row가 있는데도 호출이 대상
 없음으로 끝날 수 있다 — 그때는 store가 아니라 **연결이 맺어졌는지**를 본다.
 
-**server를 재시작하면 실행 세대가 바뀐다.** endpoint가 같아도 이전 세대의 연결은 새 대상으로
-사용하지 않고, client가 새 세대를 준비한 뒤 이전 연결을 해제한다. 세대 값은 숫자 크기로 순서를
-판단하지 않는다.
+**server를 재시작하면 lifecycle generation이 바뀐다.** 이는 node가 몇 번째 실행 중인지를 나타내는
+값이다. endpoint가 같아도 이전 lifecycle generation의 연결은 새 대상으로 사용하지 않고, client가
+새 값을 준비한 뒤 이전 연결을 해제한다. lifecycle generation 값은 숫자 크기로 순서를 판단하지 않는다.
 
 늦게 도착한 reply는 **원래 요청이 아직 기다리고 있으면 그 결과가 된다** — 이전 세대에서 온
 것이어도 그렇다. 반대로 timeout·취소·client 재시작으로 그 요청이 사라졌으면 버리고, **나중에
@@ -512,5 +495,5 @@ record로 남는다([모니터링](26-monitoring.ko.md)).
 - 이 장 코드의 실행본 — `framework/languages/dotnet/tutorial`
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

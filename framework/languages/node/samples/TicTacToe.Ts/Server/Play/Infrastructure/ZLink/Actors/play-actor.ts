@@ -58,6 +58,7 @@ class PlayActor implements ZLinkActor, TicTacToeActor {
   roomId?: string;
   pendingJoinRoomId?: string;
   destroyAfterEntrySpotJoin = false;
+  disconnected = false;
   private nextSeq: number;
 
   constructor(
@@ -86,6 +87,7 @@ class PlayActor implements ZLinkActor, TicTacToeActor {
     await this.context.boundSession.send(payload).metadata('seq', String(this.nextSeq)).submit();
   }
 
+  // --8<-- [start:doc-join-completed]
   async onJoinCompleted(completion: ZLinkActorJoinCompletion): Promise<void> {
     const roomId = this.pendingJoinRoomId ?? this.roomId ?? '';
     this.pendingJoinRoomId = undefined;
@@ -113,9 +115,14 @@ class PlayActor implements ZLinkActor, TicTacToeActor {
     this.roomId = joined.state.roomId;
     await this.push(joinGameNotify(joined.state));
   }
+  // --8<-- [end:doc-join-completed]
 
   markForDestroyAfterRoomLeave(): void {
     this.destroyAfterEntrySpotJoin = true;
+  }
+
+  markDisconnected(): void {
+    this.disconnected = true;
   }
 }
 

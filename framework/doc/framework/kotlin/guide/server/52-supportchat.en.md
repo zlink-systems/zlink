@@ -22,16 +22,15 @@ View in another language — [C++](../../../cpp/guide/server/52-supportchat.en.m
 
     You can open the SupportChat sample in an editor and follow a message from the customer's
     request to open a conversation, through agent assignment, to the conversation closing, through
-    the code of each server it passes. The code in this chapter runs as it stands in
-    `framework/languages/java/samples/kotlin/SupportChat`.
+    the code of each server it passes. The code in this chapter comes from the [SupportChat sample in the per-language example repositories](https://github.com/zlink-systems/zlink-java-examples/tree/main/samples/SupportChat).
 
-[Picking a Sample](14-samples.en.md#4-supportchat--building-a-live-chat-support-system) introduced
+[Picking a Sample](14-samples.en.md#5-supportchat--building-a-live-chat-support-system) introduced
 what this sample demonstrates. This chapter is what you read after that introduction — the roles and
 where their code lives, the message flow of the main scenarios, and, for each flow, the framework
 feature it uses and the chapter that explains it, in the order the source is laid out. This chapter
-has no spec document that owns a contract. The requirements, message contract and verification
-criteria are owned by the [SupportChat scenario](../../../common/sample/supportchat/README.en.md),
-and this chapter does not restate them.
+explains the SupportChat sample's roles and code locations, its main message flows, and its run
+verification in source order. See the [SupportChat scenario](../../../common/sample/supportchat/README.en.md)
+for requirements, message contracts, and verification criteria.
 
 ## 1. What This Sample Demonstrates
 
@@ -255,5 +254,5 @@ transitions and the state after reconnecting. The checks and the exact log strin
 - A layout that binds a single Actor per session: [Reading Along: Bingo](50-bingo.en.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

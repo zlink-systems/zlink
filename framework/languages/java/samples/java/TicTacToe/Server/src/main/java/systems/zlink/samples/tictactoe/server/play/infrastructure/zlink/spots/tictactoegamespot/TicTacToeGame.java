@@ -116,11 +116,13 @@ public final class TicTacToeGame implements ZLinkSpot<PlayActor> {
         return CompletableFuture.completedFuture(null);
     }
 
+    // --8<-- [start:doc-disconnect-actor]
     @Override
     public CompletionStage<Void> onDisconnectActor(PlayActor actor) {
         actor.markDisconnected();
         return CompletableFuture.completedFuture(null);
     }
+    // --8<-- [end:doc-disconnect-actor]
 
     // --8<-- [start:doc-ttt-timer-register]
     @Override

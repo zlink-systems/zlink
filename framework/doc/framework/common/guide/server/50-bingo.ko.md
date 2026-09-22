@@ -3,15 +3,13 @@
 !!! info "이 장을 읽고 나면"
 
     Bingo 샘플을 편집기에 열고, client의 인증부터 게임 종료까지 메시지가 어느 서버의 어느
-    코드를 지나는지 따라갈 수 있다. 이 장의 코드는 `framework/languages/<언어>/samples/Bingo`에서
-    그대로 실행된다.
+    코드를 지나는지 따라갈 수 있다. 이 장의 코드는 [언어별 예제 저장소의 Bingo 샘플](https://github.com/zlink-systems/zlink-<언어>-examples/tree/main/samples/Bingo)에서 가져온다.
 
-[샘플 고르기](14-samples.ko.md#3-bingo--온라인-게임-서버-구축)가 이 샘플이 무엇을 보여 주는지
+[샘플 고르기](14-samples.ko.md#4-bingo--온라인-게임-서버-구축)가 이 샘플이 무엇을 보여 주는지
 소개했다. 이 장은 그 소개 다음에 읽는 자리다 — 역할과 코드 위치, 주요 시나리오의 메시지 흐름,
-각 흐름에 등장하는 framework 기능과 그것을 설명하는 장을 소스가 놓인 순서대로 따라간다.
-이 장에는 계약을 소유하는 스펙 문서가 없다. 요구사항, 메시지 계약과 검증 기준은
-[Bingo 시나리오](../../../common/sample/bingo/README.ko.md)가 소유하며, 이 장은 그것을 다시
-적지 않는다.
+각 흐름에 등장하는 framework 기능과 그것을 설명하는 장을 소스가 놓인 순서대로 따라간다. 이 장은
+Bingo 샘플의 역할과 코드 위치, 주요 메시지 흐름, 실행 검증을 소스 순서대로 설명한다. 요구사항,
+메시지 계약과 검증 기준은 [Bingo 시나리오](../../../common/sample/bingo/README.ko.md)에서 참고한다.
 
 ## 1. 이 샘플이 보여 주는 것
 
@@ -291,6 +289,8 @@ API에 매칭을 요청하고, 받은 `RoomId`로 room join을 예약한 뒤 응
 <iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-matching-start.html" title="Matching과 game start" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-bingo-matching-start.html" target="_blank">↗ 크게 보기</a></p>
 
+이 흐름에서는 join이 handler 종료 뒤에 시작되므로 매칭 응답만으로 game start를 판단하지 않는다.
+
 === "C#/.NET"
 
     `Server/Play/Infrastructure/ZLink/Spots/EntrySpot/Handlers/MatchBingoActorHandler.cs`
@@ -473,11 +473,8 @@ record를 읽어야 하는데, 그 왕복 동안 room의 실행권을 반납하�
     --8<-- "framework/languages/node/samples/Bingo.Ts/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/bingo-room-spot.ts:doc-bingo-room-join"
     ```
 
-`Yield`는 응답을 기다리는 동안 실행권을 반납하고, 응답이 오면 새 turn에서 이어서 실행한다.
-그 사이에 room 상태가 바뀌었을 수 있으므로 재개된 코드는 pending join을 다시 확인한 뒤에만
-상태를 바꾼다. Node 구현은 이 요청을 `Yield` 없이 보내고 재확인도 하지 않는다. 종결자의 차이는
-[Timer와 worker](36-timer-worker.ko.md#3-실행권을-반납하는-종결자)가, 한 Spot의 직렬 실행
-범위는 [실행 모델](32-execution-model.ko.md)이 다룬다.
+이 요청에서 `Yield`가 turn을 반납하고 재개 뒤 pending join을 다시 확인하는 이유는
+[실행 모델 §5](32-execution-model.ko.md#5-직렬-실행과-thread-점유)가 다룬다.
 
 ## 7. card, 추첨 timer와 push
 
@@ -585,6 +582,8 @@ managed 언어는 channel 이름을 함께 적는다.
 <iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-reward-observe.html" title="Reward 관찰" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-bingo-reward-observe.html" target="_blank">↗ 크게 보기</a></p>
 
+publish 완료는 관전자의 처리 완료를 보장하지 않으므로 관전자 notify로 전달 결과를 확인한다.
+
 === "C#/.NET"
 
     `Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/BingoRoom.cs`
@@ -680,6 +679,8 @@ API에 결과를 기록하는 동안 `Yield`로 실행권을 반납하기 때문
 
 <iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-end-cleanup.html" title="종료 cleanup" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-bingo-end-cleanup.html" target="_blank">↗ 크게 보기</a></p>
+
+room은 Actor를 직접 destroy하지 않고 Entry Spot callback이 destroy를 시작하게 한다.
 
 === "C#/.NET"
 
@@ -952,5 +953,5 @@ client는 인증 결과, 매칭 state, push 순서와 reward notify를 assertion
 - 같은 게임을 수동 연결·수동 등록으로 만든 구성: [TicTacToe 따라 읽기](51-tictactoe.ko.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

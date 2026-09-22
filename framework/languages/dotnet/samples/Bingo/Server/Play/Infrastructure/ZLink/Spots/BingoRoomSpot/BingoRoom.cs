@@ -251,10 +251,12 @@ internal sealed class BingoRoom(
         return RequireGame().DrawNextNumber();
     }
 
+    // --8<-- [start:doc-relocation-ready]
     internal void DeferRelocationAtRoundBoundary()
     {
         Context.RelocationReady().Defer();
     }
+    // --8<-- [end:doc-relocation-ready]
 
     internal async ValueTask PublishAsync(
         BingoGameChange change,
