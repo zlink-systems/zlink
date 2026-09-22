@@ -132,6 +132,12 @@ of Channel Messaging](20-channel-messaging.en.md#32-the-receiving-side--the-node
 shows the registration code, and [Location Runtime §7](../../../common/spec/server/05-location-relocation/01-location-runtime.en.md#7-creating-an-actor-or-user-spot) defines the selection rule.
 
 ```kotlin
+--8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:mesh-register"
+```
+
+The call that creates the Actor in that mesh follows.
+
+```kotlin
 --8<-- "framework/languages/java/tutorial/kotlin/Client/src/main/kotlin/systems/zlink/tutorial/client/PlayerActorEndpoints.kt:actor-create-call"
 ```
 

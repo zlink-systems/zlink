@@ -320,6 +320,8 @@ how to register a route mesh, and [Location Runtime §7](../../../common/spec/se
     --8<-- "framework/languages/node/tutorial/Server/main.ts:mesh-register"
     ```
 
+The call that creates the Spot in that mesh follows.
+
 === "C#/.NET"
 
     ```csharp

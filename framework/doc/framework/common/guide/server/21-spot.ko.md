@@ -315,6 +315,8 @@ node 집합의 이름이고, `InMesh`는 그 집합 하나를 고른다. route m
     --8<-- "framework/languages/node/tutorial/Server/main.ts:mesh-register"
     ```
 
+그 mesh 안에 Spot을 만드는 호출은 다음과 같다.
+
 === "C#/.NET"
 
     ```csharp

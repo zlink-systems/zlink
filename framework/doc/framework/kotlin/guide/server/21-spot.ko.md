@@ -132,6 +132,12 @@ node 집합의 이름이고, `inMesh`는 그 집합 하나를 고른다. route m
 [Location runtime §7](../../../common/spec/server/05-location-relocation/01-location-runtime.ko.md#7-actor와-user-spot을-만든다)이 정한다.
 
 ```kotlin
+--8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:mesh-register"
+```
+
+그 mesh 안에 Spot을 만드는 호출은 다음과 같다.
+
+```kotlin
 --8<-- "framework/languages/java/tutorial/kotlin/Client/src/main/kotlin/systems/zlink/tutorial/client/RoomEndpoints.kt:spot-create-call"
 ```
 

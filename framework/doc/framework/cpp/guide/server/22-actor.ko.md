@@ -125,6 +125,12 @@ node 집합의 이름이고, `in_mesh`는 만들 때 그 집합을 고른다. �
 [Location runtime §7](../../../common/spec/server/05-location-relocation/01-location-runtime.ko.md#7-actor와-user-spot을-만든다)이 정한다.
 
 ```cpp
+--8<-- "framework/languages/cpp/tutorial/Server/main.cpp:mesh-register"
+```
+
+그 mesh 안에 Actor를 만드는 호출은 다음과 같다.
+
+```cpp
 --8<-- "framework/languages/cpp/tutorial/Client/main.cpp:actor-create-call"
 ```
 

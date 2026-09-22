@@ -132,6 +132,12 @@ node 집합의 이름이고, `in_mesh`는 그 집합 하나를 고른다. route 
 [Location runtime §7](../../../common/spec/server/05-location-relocation/01-location-runtime.ko.md#7-actor와-user-spot을-만든다)이 정한다.
 
 ```cpp
+--8<-- "framework/languages/cpp/tutorial/Server/main.cpp:mesh-register"
+```
+
+그 mesh 안에 Spot을 만드는 호출은 다음과 같다.
+
+```cpp
 --8<-- "framework/languages/cpp/tutorial/Client/main.cpp:spot-create-call"
 ```
 

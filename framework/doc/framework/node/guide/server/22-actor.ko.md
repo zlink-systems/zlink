@@ -125,6 +125,12 @@ node 집합의 이름이고, `inMesh`는 만들 때 그 집합을 고른다. 등
 [Location runtime §7](../../../common/spec/server/05-location-relocation/01-location-runtime.ko.md#7-actor와-user-spot을-만든다)이 정한다.
 
 ```typescript
+--8<-- "framework/languages/node/tutorial/Server/main.ts:mesh-register"
+```
+
+그 mesh 안에 Actor를 만드는 호출은 다음과 같다.
+
+```typescript
 --8<-- "framework/languages/node/tutorial/Client/main.ts:actor-create-call"
 ```
 

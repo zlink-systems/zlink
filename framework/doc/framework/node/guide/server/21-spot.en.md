@@ -137,6 +137,12 @@ Messaging](20-channel-messaging.en.md#32-the-receiving-side--the-node-serving-th
 how to register a route mesh, and [Location Runtime §7](../../../common/spec/server/05-location-relocation/01-location-runtime.en.md#7-creating-an-actor-or-user-spot) defines the selection rule.
 
 ```typescript
+--8<-- "framework/languages/node/tutorial/Server/main.ts:mesh-register"
+```
+
+The call that creates the Spot in that mesh follows.
+
+```typescript
 --8<-- "framework/languages/node/tutorial/Client/main.ts:spot-create-call"
 ```
 

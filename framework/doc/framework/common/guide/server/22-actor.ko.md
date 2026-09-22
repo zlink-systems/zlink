@@ -292,6 +292,8 @@ node 집합의 이름이고, `InMesh`는 만들 때 그 집합을 고른다. 등
     --8<-- "framework/languages/node/tutorial/Server/main.ts:mesh-register"
     ```
 
+그 mesh 안에 Actor를 만드는 호출은 다음과 같다.
+
 === "C#/.NET"
 
     ```csharp

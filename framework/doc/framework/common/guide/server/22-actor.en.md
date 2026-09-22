@@ -299,6 +299,8 @@ shows the registration code, and [Location Runtime §7](../../../common/spec/ser
     --8<-- "framework/languages/node/tutorial/Server/main.ts:mesh-register"
     ```
 
+The call that creates the Actor in that mesh follows.
+
 === "C#/.NET"
 
     ```csharp

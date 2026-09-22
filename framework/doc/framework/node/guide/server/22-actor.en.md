@@ -132,6 +132,12 @@ of Channel Messaging](20-channel-messaging.en.md#32-the-receiving-side--the-node
 shows the registration code, and [Location Runtime §7](../../../common/spec/server/05-location-relocation/01-location-runtime.en.md#7-creating-an-actor-or-user-spot) defines the selection rule.
 
 ```typescript
+--8<-- "framework/languages/node/tutorial/Server/main.ts:mesh-register"
+```
+
+The call that creates the Actor in that mesh follows.
+
+```typescript
 --8<-- "framework/languages/node/tutorial/Client/main.ts:actor-create-call"
 ```
 

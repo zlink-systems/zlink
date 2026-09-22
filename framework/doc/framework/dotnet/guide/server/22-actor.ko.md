@@ -125,6 +125,12 @@ node 집합의 이름이고, `InMesh`는 만들 때 그 집합을 고른다. 등
 [Location runtime §7](../../../common/spec/server/05-location-relocation/01-location-runtime.ko.md#7-actor와-user-spot을-만든다)이 정한다.
 
 ```csharp
+--8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:mesh-register"
+```
+
+그 mesh 안에 Actor를 만드는 호출은 다음과 같다.
+
+```csharp
 --8<-- "framework/languages/dotnet/tutorial/Client/Program.cs:actor-create-call"
 ```
 
