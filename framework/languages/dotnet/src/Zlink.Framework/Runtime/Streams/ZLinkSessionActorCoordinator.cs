@@ -304,7 +304,6 @@ internal sealed class ZLinkSessionActorCoordinator(
         CancellationToken cancellationToken
     )
     {
-        var slot = _bindings.ReserveSlot();
         ZLinkSessionBindingIdentity? confirmedIdentity = null;
         EnsureConcreteActorRef(actor);
         var actorRef = actor.ToBackend();
@@ -338,7 +337,6 @@ internal sealed class ZLinkSessionActorCoordinator(
                     identity.SessionOwnerNodeRid,
                     identity.SessionOwnerId,
                     identity.SessionOwnerLeaseGeneration,
-                    slot,
                     // Remote acknowledgement publishes the Actor owner's
                     // terminal binding. The source table must finish the
                     // matching local commit even if caller cancellation races

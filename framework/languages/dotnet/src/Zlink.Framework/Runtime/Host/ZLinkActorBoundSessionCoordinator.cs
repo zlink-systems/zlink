@@ -328,7 +328,8 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         RoutingId sessionOwnerNodeRid = default,
         string sessionOwnerId = "",
         ulong sessionOwnerLeaseGeneration = 0,
-        Action<IReadOnlyList<ZLinkSessionBindingEntry>>? beforePublish = null
+        Action<IReadOnlyList<ZLinkSessionBindingEntry>>? preparePublish = null,
+        Action<IReadOnlyList<ZLinkSessionBindingEntry>>? afterPublish = null
     )
     {
         var actorKey = ZLinkActorId.FromBoundary(actorId, nameof(actorId));
@@ -344,7 +345,8 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                 sessionOwnerNodeRid,
                 sessionOwnerId,
                 sessionOwnerLeaseGeneration,
-                beforePublish
+                preparePublish,
+                afterPublish
             )
         );
         CompleteReplacedBindingRequests(actorId, replaced);

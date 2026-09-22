@@ -37,7 +37,6 @@ internal sealed class ZLinkSessionActorBindingRegistry(ZLinkFrameworkRuntime run
         RoutingId sessionOwnerNodeRid,
         string sessionOwnerId,
         ulong sessionOwnerLeaseGeneration,
-        ushort slot,
         CancellationToken cancellationToken
     )
     {
@@ -63,7 +62,7 @@ internal sealed class ZLinkSessionActorBindingRegistry(ZLinkFrameworkRuntime run
             actorId,
             binding.SessionRid,
             binding.BindingToken,
-            slot
+            slot: 0
         );
 
         _context ??= context;
@@ -82,6 +81,7 @@ internal sealed class ZLinkSessionActorBindingRegistry(ZLinkFrameworkRuntime run
             sessionOwnerNodeRid,
             sessionOwnerId,
             sessionOwnerLeaseGeneration,
+            _ => actorRef.AssignSlot(ReserveSlot()),
             replaced =>
             {
                 foreach (var previous in replaced)

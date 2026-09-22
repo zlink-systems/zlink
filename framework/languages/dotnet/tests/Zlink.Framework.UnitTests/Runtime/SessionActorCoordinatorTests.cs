@@ -89,6 +89,33 @@ public sealed class SessionActorCoordinatorTests
     }
 
     [Fact]
+    public async Task FailedBindingDoesNotConsumeActorSlot()
+    {
+        var runtime = CreateRuntime();
+        var stream = new TestStream(RoutingId.From("session-slot-failure"));
+        var context = CreateSessionContext(runtime, stream);
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            context
+                .ActorCoordinator.BindActorAsync(
+                    context,
+                    new ActorRef("actor-canceled", 1, "actors", RoutingId.From("actor-canceled")),
+                    canceled.Token
+                )
+                .AsTask()
+        );
+        var committed = await context.ActorCoordinator.BindActorAsync(
+            context,
+            new ActorRef("actor-committed", 1, "actors", RoutingId.From("actor-committed")),
+            CancellationToken.None
+        );
+
+        Assert.Equal((ushort)1, Assert.IsType<ZLinkSessionActor>(committed).Slot);
+    }
+
+    [Fact]
     public async Task Session_Send_Submit_Reports_Terminal_Transport_Refusal()
     {
         var runtime = CreateRuntime();

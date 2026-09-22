@@ -352,7 +352,7 @@ public sealed partial class StreamConnectorTests
     }
 
     [Fact]
-    public async Task ManualDispatchCallbackQueueDropsOldestCallbacksAtConfiguredLimit()
+    public async Task ManualDispatchCallbackQueueWaitsForCapacityWithoutDroppingCallbacks()
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
@@ -404,12 +404,12 @@ public sealed partial class StreamConnectorTests
         await WaitUntilAsync(() => connector.PendingDispatchCount == 2, TimeSpan.FromSeconds(15));
         await connector.Dispatch.Async();
 
-        Assert.Equal([2, 3], handled);
+        Assert.Equal([1, 2, 3], handled);
         Assert.Equal(0, connector.PendingDispatchCount);
     }
 
     [Fact]
-    public async Task ManualRequestCallbackAdmission_Is_Bounded_And_Never_Falls_Back_To_A_Background_Thread()
+    public async Task ManualRequestCompletionsAreNotCountedByCallbackQueueLimit()
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
@@ -419,17 +419,20 @@ public sealed partial class StreamConnectorTests
         {
             using var tcp = await listener.AcceptTcpClientAsync();
             await using var stream = tcp.GetStream();
-            var request = await ReadPacketAsync(stream);
-            var requestHeader = headerCodec.Decode(request.Header);
-            var responseHeader = new ZlinkStreamHeader(
-                ZlinkStreamMessageKind.Response,
-                ZlinkStreamCodec.Raw,
-                ZlinkStreamHeaderFlags.HasRequestSeq,
-                requestHeader.RequestSeq,
-                string.Empty,
-                ZlinkStreamMetadata.Empty
-            );
-            await WritePacketAsync(stream, headerCodec.Encode(responseHeader).ToArray(), [1]);
+            for (var index = 0; index < 2; index++)
+            {
+                var request = await ReadPacketAsync(stream);
+                var requestHeader = headerCodec.Decode(request.Header);
+                var responseHeader = new ZlinkStreamHeader(
+                    ZlinkStreamMessageKind.Response,
+                    ZlinkStreamCodec.Raw,
+                    ZlinkStreamHeaderFlags.HasRequestSeq,
+                    requestHeader.RequestSeq,
+                    string.Empty,
+                    ZlinkStreamMetadata.Empty
+                );
+                await WritePacketAsync(stream, headerCodec.Encode(responseHeader).ToArray(), [1]);
+            }
         });
 
         await using var connector = ZlinkStreamConnectorFactory.Create(
@@ -441,6 +444,9 @@ public sealed partial class StreamConnectorTests
             }
         );
         var callbackThread = new TaskCompletionSource<int>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var secondCallbackThread = new TaskCompletionSource<int>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
         await connector.Connect.Async();
@@ -456,23 +462,30 @@ public sealed partial class StreamConnectorTests
                 }
             );
 
-        var full = Assert.Throws<ZlinkStreamException>(() =>
-            connector
-                .Request(new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, new byte[] { 2 }))
-                .PacketName("request.two")
-                .Submit((ZlinkStreamResult<ZlinkStreamEncodedPayload> _) => { })
-        );
-        Assert.Equal(ZlinkStreamErrorCode.SendFailed, full.Error.Code);
-        Assert.Contains("queue is full", full.Error.Message, StringComparison.Ordinal);
+        connector
+            .Request(new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, new byte[] { 2 }))
+            .PacketName("request.two")
+            .Submit(
+                (ZlinkStreamResult<ZlinkStreamEncodedPayload> result) =>
+                {
+                    Assert.True(result.IsSuccess);
+                    secondCallbackThread.SetResult(Environment.CurrentManagedThreadId);
+                }
+            );
 
         await server;
-        await WaitUntilAsync(() => connector.PendingDispatchCount == 1, TimeSpan.FromSeconds(15));
+        await WaitUntilAsync(() => connector.PendingDispatchCount == 2, TimeSpan.FromSeconds(15));
         Assert.False(callbackThread.Task.IsCompleted);
+        Assert.False(secondCallbackThread.Task.IsCompleted);
 
         var dispatchThread = Environment.CurrentManagedThreadId;
         await connector.Dispatch.Async();
 
         Assert.Equal(dispatchThread, await callbackThread.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(
+            dispatchThread,
+            await secondCallbackThread.Task.WaitAsync(TimeSpan.FromSeconds(5))
+        );
         Assert.Equal(0, connector.PendingDispatchCount);
     }
 

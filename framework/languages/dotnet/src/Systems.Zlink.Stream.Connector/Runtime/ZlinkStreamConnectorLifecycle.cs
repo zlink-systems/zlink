@@ -10,7 +10,7 @@ internal sealed class ZlinkStreamConnectorLifecycle(
     ZlinkStreamConnectorCallbacks callbacks,
     Func<CancellationToken, ValueTask<IZlinkStreamConnection>> connectTransport,
     Action<long> onConnectionEstablished,
-    Action onConnectionEnded
+    Func<ValueTask> onConnectionEnded
 ) : IDisposable
 {
     /// <summary>
@@ -215,7 +215,7 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         );
         // Spec §10.1.1: closing the connector ends the connection a wait was observing,
         // and the wait ends with it.
-        onConnectionEnded();
+        await onConnectionEnded().ConfigureAwait(false);
         await WaitBackgroundTaskAsync(snapshot.ReceiveTask).ConfigureAwait(false);
         await WaitBackgroundTaskAsync(snapshot.HeartbeatTask).ConfigureAwait(false);
         await WaitBackgroundTaskAsync(activeConnectTask).ConfigureAwait(false);
@@ -620,12 +620,12 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         }
 
         Capture(() => snapshot.SessionCts?.Dispose());
-        await CaptureAsync(() => NotifyStateChangedAsync(change, CancellationToken.None))
-            .ConfigureAwait(false);
         Capture(() => pending.FailAll(GetPendingDisconnectError(error)));
         // Spec §10.1.1: a wait is released when the connection it observed ends, here,
         // and not when the reconnect that may follow establishes the next one.
-        Capture(onConnectionEnded);
+        await CaptureAsync(onConnectionEnded).ConfigureAwait(false);
+        await CaptureAsync(() => NotifyStateChangedAsync(change, CancellationToken.None))
+            .ConfigureAwait(false);
         StartDisconnectNotification(explicitCloseReason ?? MapCloseReason(error));
         Capture(() => reconnectStart?.Start());
 

@@ -79,7 +79,7 @@ internal sealed class ZlinkStreamActors(
         );
     }
 
-    internal void ConnectionEnded()
+    internal async ValueTask ConnectionEndedAsync()
     {
         ZlinkStreamActor[] actors;
         lock (_gate)
@@ -92,15 +92,8 @@ internal sealed class ZlinkStreamActors(
         }
 
         foreach (var actor in actors)
-        {
-            var notification = DispatchLifecycleAsync(
-                _unboundHandlers,
-                actor,
-                CancellationToken.None
-            );
-            if (!notification.IsCompletedSuccessfully)
-                _ = notification.AsTask();
-        }
+            await DispatchLifecycleAsync(_unboundHandlers, actor, CancellationToken.None)
+                .ConfigureAwait(false);
     }
 
     private ZlinkStreamActor Bind(ReadOnlySpan<byte> payload)

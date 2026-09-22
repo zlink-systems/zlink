@@ -58,9 +58,9 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
             _callbacks,
             connectTransport,
             _receivedMessages.ResetForConnection,
-            () =>
+            async () =>
             {
-                _actors.ConnectionEnded();
+                await _actors.ConnectionEndedAsync().ConfigureAwait(false);
                 _receivedMessages.ConnectionEnded();
             }
         );

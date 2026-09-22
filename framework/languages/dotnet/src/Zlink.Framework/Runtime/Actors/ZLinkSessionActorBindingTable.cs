@@ -666,7 +666,8 @@ internal sealed class ZLinkSessionActorBindingTable
         RoutingId sessionOwnerNodeRid = default,
         string sessionOwnerId = "",
         ulong sessionOwnerLeaseGeneration = 0,
-        Action<IReadOnlyList<ZLinkSessionBindingEntry>>? beforePublish = null
+        Action<IReadOnlyList<ZLinkSessionBindingEntry>>? preparePublish = null,
+        Action<IReadOnlyList<ZLinkSessionBindingEntry>>? afterPublish = null
     )
     {
         if (!string.Equals(actorId.Value, route.Ref.ActorId, StringComparison.Ordinal))
@@ -697,6 +698,7 @@ internal sealed class ZLinkSessionActorBindingTable
                 .Where(entry => entry.Key.ActorId == key.ActorId)
                 .Select(entry => entry.Value)
                 .ToArray();
+            preparePublish?.Invoke(replaced);
             foreach (var entry in replaced)
             {
                 var replacedKey = new ZLinkSessionBindingKey(actorId, entry.BindingToken);
@@ -706,8 +708,6 @@ internal sealed class ZLinkSessionActorBindingTable
                 entry.DrainSignal?.TrySetResult();
                 entry.RouteAvailableSignal?.TrySetResult();
             }
-
-            beforePublish?.Invoke(replaced);
 
             _entries[key] = new ZLinkSessionBindingEntry(
                 context,
@@ -729,6 +729,7 @@ internal sealed class ZLinkSessionActorBindingTable
                     ? sessionOwnerNodeGeneration
                     : sessionOwnerLeaseGeneration
             );
+            afterPublish?.Invoke(replaced);
             return replaced;
         });
     }
