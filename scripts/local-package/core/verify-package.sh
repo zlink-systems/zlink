@@ -37,8 +37,12 @@ if [[ "$(uname -s)" == Darwin ]]; then
 
   while IFS= read -r binary; do
     install_name="$(otool -D "$binary" | tail -n +2 | head -n1)"
-    [[ "$install_name" == @loader_path/* ]] || {
-      echo "non-relocatable install name in $binary: $install_name" >&2
+    case "$(basename "$binary")" in
+      libzlink.*) expected_prefix="@rpath/" ;;
+      *) expected_prefix="@loader_path/" ;;
+    esac
+    [[ "$install_name" == "$expected_prefix"* ]] || {
+      echo "non-relocatable install name in $binary: $install_name (expected $expected_prefix)" >&2
       exit 1
     }
     while IFS= read -r dependency; do
