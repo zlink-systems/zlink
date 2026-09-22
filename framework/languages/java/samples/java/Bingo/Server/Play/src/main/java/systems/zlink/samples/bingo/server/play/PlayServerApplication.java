@@ -59,7 +59,6 @@ public final class PlayServerApplication {
                                     .setConnectionString(topology.redisEndpoint())
                                     .setKeyPrefix(topology.redisKeyPrefix() + "relocation:")));
             options.addHandlersFromPackageOf(PlayServerApplication.class);
-            // --8<-- [start:doc-bingo-play-register]
             ZLinkMeshNodeBuilder node = options.addRouteMesh(SampleNames.Mesh);
             node.listen(topology.selectedPlaySpotRouterEndpoint()).setRoutingIdPrefix("play");
             options.addClientServerChannel(SampleNames.ApiChannel).client();
@@ -70,6 +69,7 @@ public final class PlayServerApplication {
                     // --8<-- [start:doc-execution-mode]
                     // SPOT_WIDE is the default. Naming it here keeps the choice visible:
                     // every callback of this room runs through one gate.
+                    // --8<-- [start:doc-bingo-play-register]
                     .addSpotFactory(
                             SampleNames.RoomSpotType,
                             BingoRoomSpot.class,
@@ -79,6 +79,7 @@ public final class PlayServerApplication {
                                         ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED);
                                 factory.preserveStateWith(BingoRoomRelocationAdapter.class);
                             })
+                    // --8<-- [end:doc-bingo-play-register]
                     // --8<-- [end:doc-execution-mode]
                     .addActorFactory(
                             SampleNames.PlayerActorType,
@@ -86,7 +87,6 @@ public final class PlayServerApplication {
                             PlayerActorFactory.class,
                             factory ->
                                     factory.preserveStateWith(PlayerActorRelocationAdapter.class));
-            // --8<-- [end:doc-bingo-play-register]
         };
     }
 

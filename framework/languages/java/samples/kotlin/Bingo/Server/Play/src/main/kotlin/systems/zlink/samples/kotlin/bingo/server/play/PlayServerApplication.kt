@@ -60,7 +60,6 @@ class PlayServerApplication {
                         .setKeyPrefix(topology.redisKeyPrefix + "relocation:")
                 )
             )
-            // --8<-- [start:doc-bingo-play-register]
             val node = options.addRouteMesh(SampleNames.Mesh)
             node.listen(topology.selectedPlaySpotRouterEndpoint()).setRoutingIdPrefix("play")
             options.addClientServerChannel(SampleNames.ApiChannel).client()
@@ -73,6 +72,7 @@ class PlayServerApplication {
                 // --8<-- [start:doc-execution-mode]
                 // SPOT_WIDE is the default. Naming it here keeps the choice visible:
                 // every callback of this room runs through one gate.
+                // --8<-- [start:doc-bingo-play-register]
                 .addSpotFactory(SampleNames.RoomSpotType, BingoRoomSpot::class.java) { factory ->
                     factory.executionMode(ZLinkUserSpotExecutionMode.SPOT_WIDE)
                     factory.relocationCoordinationMode(
@@ -81,6 +81,7 @@ class PlayServerApplication {
                     // #895: state preservation configuration has no Kotlin form in the spec.
                     factory.preserveStateWith(BingoRoomRelocationAdapter::class.java)
                 }
+                // --8<-- [end:doc-bingo-play-register]
                 // --8<-- [end:doc-execution-mode]
                 .addActorFactory(
                     SampleNames.PlayerActorType,
@@ -90,7 +91,6 @@ class PlayServerApplication {
                     // #895: state preservation configuration has no Kotlin form in the spec.
                     factory.preserveStateWith(PlayerActorRelocationAdapter::class.java)
                 }
-            // --8<-- [end:doc-bingo-play-register]
         }
 
     @Bean

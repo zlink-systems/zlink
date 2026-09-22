@@ -90,7 +90,7 @@ them, a team picks its genre's pattern and rebuilds that structure from the sock
   splits this into Spot (an execution-isolation unit) and Actor (a domain entity). What's
   closer to Orleans's virtual actor/grain isn't ZLink's Actor — it's the **Instance Spot**
   this approach uses. The detailed comparison is covered in
-  [Chapter 17 §6](17-alternative.en.md).
+  [Comparison with distributed actor frameworks](#7-reference--comparison-with-distributed-actor-frameworks-orleansakka).
 
 **What ZLink provides.** A feature answers each difficulty, one by one.
 
@@ -138,7 +138,7 @@ means no new runtime to learn.
 > A Twitch-scale FPS's **ultra-low-latency snapshot netcode** uses unreliable transport that
 > tolerates loss. STREAM provides TCP, TLS, and WebSocket transports. Even for that kind of game, though,
 > matching/lobby/meta/social are handled by these approaches today. Exactly
-> where the line falls is covered in [Chapter 17](17-alternative.en.md) §4.
+> where the line falls is covered in [What ZLink Doesn't Do — the Boundary](#5-what-zlink-doesnt-do--the-boundary).
 
 **How is this different from a game server engine or service?** Alternatives to building
 everything yourself include engines and managed services. Comparing what each provides by
@@ -175,16 +175,12 @@ even if they're replaced later — this backend boundary is explained separately
 <iframe class="zlink-diagram" src="/common/diagrams/overview-stack-en.html" title="ZLink internal layers — a thin 3-layer stack for multi-language" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/overview-stack-en.html" target="_blank">↗ View larger</a></p>
 
-**As code.** Declare one room, and write that room's progression logic.
+**As code.** First register the room Spot factory.
 
 === "C#/.NET"
 
     ```csharp
     --8<-- "framework/languages/dotnet/samples/Bingo/Server/Play/PlayServerHostFactory.cs:doc-bingo-play-register"
-    ```
-
-    ```csharp
-    --8<-- "framework/languages/dotnet/samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/BingoRoom.cs:doc-bingo-room-join"
     ```
 
 === "C++"
@@ -193,18 +189,10 @@ even if they're replaced later — this backend boundary is explained separately
     --8<-- "framework/languages/cpp/samples/Bingo/Server/Play/play_server_host_factory.hpp:doc-bingo-play-register"
     ```
 
-    ```cpp
-    --8<-- "framework/languages/cpp/samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/bingo_room_spot.hpp:doc-bingo-room-join"
-    ```
-
 === "Java"
 
     ```java
     --8<-- "framework/languages/java/samples/java/Bingo/Server/Play/src/main/java/systems/zlink/samples/bingo/server/play/PlayServerApplication.java:doc-bingo-play-register"
-    ```
-
-    ```java
-    --8<-- "framework/languages/java/samples/java/Bingo/Server/Play/src/main/java/systems/zlink/samples/bingo/server/play/infrastructure/zlink/spots/bingoroomspot/BingoRoomSpot.java:doc-bingo-room-join"
     ```
 
 === "Kotlin"
@@ -213,15 +201,41 @@ even if they're replaced later — this backend boundary is explained separately
     --8<-- "framework/languages/java/samples/kotlin/Bingo/Server/Play/src/main/kotlin/systems/zlink/samples/kotlin/bingo/server/play/PlayServerApplication.kt:doc-bingo-play-register"
     ```
 
-    ```kotlin
-    --8<-- "framework/languages/java/samples/kotlin/Bingo/Server/Play/src/main/kotlin/systems/zlink/samples/kotlin/bingo/server/play/infrastructure/zlink/spots/bingoroomspot/BingoRoomSpot.kt:doc-bingo-room-join"
-    ```
-
 === "Node/TypeScript"
 
     ```typescript
     --8<-- "framework/languages/node/samples/Bingo.Ts/Server/Play/bingo-play-module.ts:doc-bingo-play-register"
     ```
+
+When a player enters, the Spot's progression logic reads the player's record through a
+channel. Because a new Spot turn begins after the external call, the sample then rechecks
+membership.
+
+=== "C#/.NET"
+
+    ```csharp
+    --8<-- "framework/languages/dotnet/samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/BingoRoom.cs:doc-bingo-room-join"
+    ```
+
+=== "C++"
+
+    ```cpp
+    --8<-- "framework/languages/cpp/samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/bingo_room_spot.hpp:doc-bingo-room-join"
+    ```
+
+=== "Java"
+
+    ```java
+    --8<-- "framework/languages/java/samples/java/Bingo/Server/Play/src/main/java/systems/zlink/samples/bingo/server/play/infrastructure/zlink/spots/bingoroomspot/BingoRoomSpot.java:doc-bingo-room-join"
+    ```
+
+=== "Kotlin"
+
+    ```kotlin
+    --8<-- "framework/languages/java/samples/kotlin/Bingo/Server/Play/src/main/kotlin/systems/zlink/samples/kotlin/bingo/server/play/infrastructure/zlink/spots/bingoroomspot/BingoRoomSpot.kt:doc-bingo-room-join"
+    ```
+
+=== "Node/TypeScript"
 
     ```typescript
     --8<-- "framework/languages/node/samples/Bingo.Ts/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/bingo-room-spot.ts:doc-bingo-room-join"
@@ -236,18 +250,16 @@ every message for one room (requests, subscription events, timer ticks, actor pa
 Runnable reference samples: [TicTacToe](../../../common/sample/tictactoe/README.en.md) ·
 [Bingo](../../../common/sample/bingo/README.en.md) · [GameQuest](../../../common/sample/event/gamequest.en.md)
 
-### 2.2 Concurrent Access to One Entity
+### 2.2 Concurrent Access to One Order
 
-**Why it's hard.** There are cases, like a guild, where **several different users need to
-modify the same entity at the same time.** Just like two users applying to join at the same
-time can exceed the roster cap, or two donations landing at once can lose one of them,
-several stateless API servers touching the same row at the same time creates a race
-condition.
+**Why it's hard.** Payment, cancellation, and dispatch can all **modify the same order at the
+same time.** If several stateless API servers read-modify-write the same order row, state
+transitions can reverse or one update can be lost.
 
-- **Concurrent modifications collide.** If several API instances read-modify-write the same
-  guild row at the same time, a lost update happens.
+- **Concurrent modifications collide.** Overlapping load-modify-store operations from
+  several API instances create lost updates.
 - **You have to assemble your own serialization mechanism.** A Redis distributed lock or DB
-  row lock has to build a per-guild critical section.
+  row lock has to build a per-order critical section.
 - **The lock itself is a new failure mode.** Lock acquisition failure, timeout, deadlock, and
   a stale write after lock expiry all land on the app to handle.
 
@@ -256,26 +268,14 @@ execution unit.
 
 | What you used to assemble | ZLink feature | Details |
 | --- | --- | --- |
-| A Redis distributed lock per guild id | **Instance Spot** — one spot, cold-activated by guild id, processes every request for that guild serially | [Spot](21-spot.en.md) |
+| A Redis distributed lock per order id | **Instance Spot** — one `OrderWorkflowSpot`, cold-activated by order id, processes every request for that order serially | [Spot](21-spot.en.md) |
 | Lock acquire/release/timeout handling | **Serial execution** — the lock concept disappears entirely; everything is always processed in spot queue order | [The Execution Model](32-execution-model.en.md) |
-| Inter-server calls/LB to find the guild spot | **channel name + location store** | [05](20-channel-messaging.en.md)·[10](25-location.en.md) |
-| Pre-provisioning a new guild | Cold-activated on the spot when the first request arrives — no separate preparation needed | |
+| Inter-server calls/LB to find the order owner | **channel name + location store** | [Channel Messaging](20-channel-messaging.en.md)·[Location](25-location.en.md) |
+| Pre-provisioning a new order | Cold-activated on the spot when the first request arrives — no separate preparation needed | |
 
-**The existing approach** — lock acquire/release makes a round trip on every request.
-
-<iframe class="zlink-diagram" src="/common/diagrams/01-guild-existing-en.html" title="Guild state change — existing approach" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/01-guild-existing-en.html" target="_blank">↗ View larger</a></p>
-
-**The ZLink approach** — the lock disappears, and the guild id itself becomes the spot
-address the request will arrive at.
-
-<iframe class="zlink-diagram" src="/common/diagrams/01-guild-zlink-en.html" title="Guild state change — ZLink approach" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/01-guild-zlink-en.html" target="_blank">↗ View larger</a></p>
-
-A request for the same guild always passes through the same GuildSpot's queue, so the second
-request is only processed once the first finishes — it's not that another request is blocked
-for as long as the lock is held; two requests can never touch the same state at the
-same time in the first place.
+In ShoppingMall, the `OrderId` is the owner Spot address. Requests for the same order always
+pass through the same `OrderWorkflowSpot` queue, so the second request runs only after the
+first one finishes.
 
 **As code.** Where lock acquire/release used to sit, one call remains.
 
@@ -309,8 +309,7 @@ same time in the first place.
     --8<-- "framework/languages/node/samples/ShoppingMall.Ts/Server/CommerceApi/Infrastructure/ZLink/zlink-order-workflow-router.ts:doc-sm-api-request"
     ```
 
-There's no runnable reference sample for this scenario yet — the code above applies the same
-API surface as GameQuest's `PlayerQuestSpot` registration/call approach to a guild.
+Runnable reference sample: [ShoppingMall](../../../common/sample/event/shoppingmall.en.md)
 
 ### 2.3 Adding Real-Time Features to an Existing Web Service
 
@@ -366,37 +365,38 @@ disappear. An **Instance Spot** preserves ordering, **Session servers** (STREAM)
 real-time connections instead of shell servers, and **direct runtime connections** handle
 inter-server delivery. The **location store is the only new infrastructure.**
 
-**As code.** Where the distributed lock and sticky routing used to sit, the following code
-remains.
+**As code.** DeliveryDispatch's status handler sends the notification through the customer
+Actor, and the Actor's bound session delivers it to the current client connection. The app
+does not query a sticky-routing table.
 
 === "C#/.NET"
 
     ```csharp
-    --8<-- "framework/languages/dotnet/samples/ShoppingMall/Server/CommerceApi/Infrastructure/ZLink/ZLinkOrderWorkflowRouter.cs:doc-sm-api-request"
+    --8<-- "framework/languages/dotnet/samples/DeliveryDispatch/Server/CustomerGateway/Spots/EntrySpot/Handlers/DeliveryStatusUpdatedHandler.cs:doc-dd-customer-push"
     ```
 
 === "C++"
 
     ```cpp
-    --8<-- "framework/languages/cpp/samples/ShoppingMall/Server/CommerceApi/main.cpp:doc-sm-api-request"
+    --8<-- "framework/languages/cpp/samples/DeliveryDispatch/Server/CustomerGateway/main.cpp:doc-dd-customer-push"
     ```
 
 === "Java"
 
     ```java
-    --8<-- "framework/languages/java/samples/java/ShoppingMall/Server/CommerceApi/src/main/java/systems/zlink/samples/shoppingmall/server/commerceapi/CommerceApiService.java:doc-sm-api-request"
+    --8<-- "framework/languages/java/samples/java/DeliveryDispatch/Server/CustomerGateway/src/main/java/systems/zlink/samples/deliverydispatch/server/customergateway/spots/handlers/DeliveryStatusUpdatedHandler.java:doc-dd-customer-push"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    --8<-- "framework/languages/java/samples/kotlin/ShoppingMall/Server/CommerceApi/src/main/kotlin/systems/zlink/samples/kotlin/shoppingmall/server/commerceapi/OrderWorkflowRouter.kt:doc-sm-api-request"
+    --8<-- "framework/languages/java/samples/kotlin/DeliveryDispatch/Server/CustomerGateway/src/main/kotlin/systems/zlink/samples/kotlin/deliverydispatch/server/customergateway/spots/handlers/DeliveryStatusUpdatedHandler.kt:doc-dd-customer-push"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    --8<-- "framework/languages/node/samples/ShoppingMall.Ts/Server/CommerceApi/Infrastructure/ZLink/zlink-order-workflow-router.ts:doc-sm-api-request"
+    --8<-- "framework/languages/node/samples/DeliveryDispatch.Ts/Server/Session/customer-status-handler.ts:doc-dd-customer-push"
     ```
 
 Runnable reference samples: [SupportChat](../../../common/sample/supportchat/README.en.md) ·
@@ -467,7 +467,7 @@ gone in the after picture.
 **What stays, stays.** Client HTTP ingress is still stateless, so an L7 LB/Ingress
 distributes to API servers as usual (gray), and order state is still stored in the DB.
 Unlike gRPC, this HTTP ingress path also doesn't **additionally** require an L7 distribution
-device (the reason is covered in [Chapter 17 §5.1](17-alternative.en.md)).
+device (the reason is covered in [The Limits of gRPC Alone](#61-the-limits-of-grpc-alone)).
 
 **What ZLink provides.** Solving "gather the same key in one place, in order" with **owner
 routing** instead of a log means most of the pieces above never need to be assembled.
@@ -486,7 +486,7 @@ event stream, and Redis stays as cache/persistence support. What ZLink cuts is t
 
 **The boundary stays where it is.** Where a durable log is genuinely needed — event replay,
 long-term retention, broad fan-out to independent systems — Kafka is the right fit and stays
-exactly there ([Chapter 17 §4](17-alternative.en.md)). What ZLink cuts is the case where a
+exactly there ([What ZLink Doesn't Do — the Boundary](#5-what-zlink-doesnt-do--the-boundary)). What ZLink cuts is the case where a
 log pipeline was assembled **only** for entity-scoped ordered processing. If order and
 consistency were the entire goal, owner routing achieves that goal directly, with no
 pipeline.

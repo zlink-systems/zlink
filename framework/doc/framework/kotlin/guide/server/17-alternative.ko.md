@@ -176,11 +176,14 @@ application 코드는 바뀌지 않는다 — 이 backend 경계는
 <iframe class="zlink-diagram" src="/common/diagrams/overview-stack.html" title="ZLink 계층 관계 — 다중 언어를 위한 얇은 3계층" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/overview-stack.html" target="_blank">↗ 크게 보기</a></p>
 
-**코드로 보면.** room 하나를 선언하고, 그 room의 진행 로직을 사용한다.
+**코드로 보면.** 먼저 room Spot factory를 등록한다.
 
 ```kotlin
 --8<-- "framework/languages/java/samples/kotlin/Bingo/Server/Play/src/main/kotlin/systems/zlink/samples/kotlin/bingo/server/play/PlayServerApplication.kt:doc-bingo-play-register"
 ```
+
+room에 플레이어가 들어오면 Spot의 진행 로직이 channel을 통해 플레이어 기록을 조회한다.
+외부 호출 뒤에는 새 Spot turn이 시작되므로, 샘플은 이어서 membership을 다시 확인한다.
 
 ```kotlin
 --8<-- "framework/languages/java/samples/kotlin/Bingo/Server/Play/src/main/kotlin/systems/zlink/samples/kotlin/bingo/server/play/infrastructure/zlink/spots/bingoroomspot/BingoRoomSpot.kt:doc-bingo-room-join"
@@ -195,42 +198,30 @@ application 코드는 바뀌지 않는다 — 이 backend 경계는
 실행되는 근거 샘플: [TicTacToe](../../../common/sample/tictactoe/README.ko.md) ·
 [Bingo](../../../common/sample/bingo/README.ko.md) · [GameQuest](../../../common/sample/event/gamequest.ko.md)
 
-### 2.2 하나의 엔티티에 대한 동시 접근
+### 2.2 주문 하나에 대한 동시 접근
 
-**왜 어려운가.** 길드처럼 **서로 다른 여러 유저가 같은 엔티티를 동시에 수정**해야
-하는 경우가 있다. 두 유저가 동시에 가입을 신청해 정원을 넘기거나, 두 기부가 동시에
-반영돼 하나가 유실되는 것처럼, stateless API 서버 여러 대가 같은 row를 동시에
-수정하면 race condition이 생긴다.
+**왜 어려운가.** 결제·취소·배송 시작처럼 **서로 다른 요청이 같은 주문을 동시에
+수정**할 수 있다. stateless API 서버 여러 대가 같은 주문 row를 읽고-고치고-저장하면
+상태 전이가 뒤집히거나 한 변경이 유실된다.
 
-- **동시 수정이 충돌한다.** 여러 API 인스턴스가 같은 길드 row를 동시에
-  읽고-고치고-사용하면 lost update가 생긴다.
-- **직렬화 장치를 직접 만들어야 한다.** Redis 분산 락이나 DB row lock으로 길드
-  단위 critical section을 만들어야 한다.
-- **락 자체가 새 실패 모드다.** 락 획득 실패·타임아웃·데드락·락 만료 후 stale
-  write 처리가 application의 책임으로 남는다.
+- **동시 수정이 충돌한다.** 여러 API 인스턴스의 load-modify-store가 겹치면 lost
+  update가 생긴다.
+- **직렬화 장치를 직접 만들어야 한다.** Redis 분산 락이나 DB row lock으로 주문 단위
+  critical section을 만들어야 한다.
+- **락 자체가 새 실패 모드다.** 락 획득 실패·타임아웃·데드락·락 만료 후 stale write
+  처리가 application의 책임으로 남는다.
 
 **ZLink가 제공하는 것.** 락을 직접 구성하는 대신 그 엔티티를 직렬 실행 단위로 만든다.
 
 | 직접 갖추던 것 | ZLink 기능 | 자세히 |
 | --- | --- | --- |
-| 길드 id별 Redis 분산 락 | **Instance Spot** — 길드 id로 cold activation되는 spot 하나가 그 길드의 모든 요청을 직렬 처리 | [Spot](21-spot.ko.md) |
+| 주문 id별 Redis 분산 락 | **Instance Spot** — 주문 id로 cold activation되는 `OrderWorkflowSpot` 하나가 그 주문의 모든 요청을 직렬 처리 | [Spot](21-spot.ko.md) |
 | 락 획득·해제·타임아웃 처리 | **직렬 실행** — 락 개념 자체가 없어지고, 항상 spot queue 순서대로 처리된다 | [실행 모델](32-execution-model.ko.md) |
-| 길드 spot을 찾는 서버 간 호출·LB | **channel name + location store** | [Channel 메시징](20-channel-messaging.ko.md)·[Location](25-location.ko.md) |
-| 새 길드의 사전 프로비저닝 | 첫 요청이 오면 그 자리에서 cold activation — 별도 준비 불필요 | |
+| 주문 owner를 찾는 서버 간 호출·LB | **channel name + location store** | [Channel 메시징](20-channel-messaging.ko.md)·[Location](25-location.ko.md) |
+| 새 주문의 사전 프로비저닝 | 첫 요청이 오면 그 자리에서 cold activation — 별도 준비 불필요 | |
 
-**기존 방식** — 락 획득·해제가 매 요청마다 왕복한다.
-
-<iframe class="zlink-diagram" src="/common/diagrams/01-guild-existing.html" title="길드 상태 변경 — 기존 방식" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/01-guild-existing.html" target="_blank">↗ 크게 보기</a></p>
-
-**ZLink 방식** — 락이 사라지고, 길드 id가 곧 그 요청이 도착할 spot 주소가 된다.
-
-<iframe class="zlink-diagram" src="/common/diagrams/01-guild-zlink.html" title="길드 상태 변경 — ZLink 방식" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/01-guild-zlink.html" target="_blank">↗ 크게 보기</a></p>
-
-같은 길드로 온 요청은 항상 같은 GuildSpot의 queue를 통과하므로, 두 번째 요청은 첫
-번째가 끝난 뒤에야 처리된다 — 락을 잡고 있는 시간만큼 다른 요청이 막히는 게 아니라,
-동시에 두 요청이 같은 상태를 만질 수 없다.
+ShoppingMall에서는 `OrderId`가 곧 owner Spot의 주소다. 같은 주문으로 온 요청은 항상
+같은 `OrderWorkflowSpot` queue를 통과하므로 두 번째 요청은 첫 번째가 끝난 뒤에 처리된다.
 
 **코드로 보면.** 락 획득·해제가 있던 자리에 한 호출이 남는다.
 
@@ -238,8 +229,7 @@ application 코드는 바뀌지 않는다 — 이 backend 경계는
 --8<-- "framework/languages/java/samples/kotlin/ShoppingMall/Server/CommerceApi/src/main/kotlin/systems/zlink/samples/kotlin/shoppingmall/server/commerceapi/OrderWorkflowRouter.kt:doc-sm-api-request"
 ```
 
-이 시나리오는 아직 실행 가능한 기준 샘플이 없다 — 위 코드는 GameQuest의
-`PlayerQuestSpot` 등록·호출 방식과 같은 API 표면을 길드에 적용한 것이다.
+실행되는 근거 샘플: [ShoppingMall](../../../common/sample/event/shoppingmall.ko.md)
 
 ### 2.3 기존 웹 서비스의 실시간 기능 추가
 
@@ -288,10 +278,12 @@ sticky LB · pub/sub 브로커 · 분산 락 — 이 인프라 구성 요소가 
 **Instance Spot**이, 실시간 연결은 shell 서버 대신 **Session 서버**(STREAM)가, 서버 간
 전달은 **runtime 직접 연결**이 맡는다. 새로 두는 인프라는 **location store 하나**뿐이다.
 
-**코드로 보면.** 분산 락과 sticky 라우팅이 있던 자리에 다음 코드가 남는다.
+**코드로 보면.** DeliveryDispatch의 상태 handler는 customer actor로 알림을 보내고,
+actor에 bound된 session이 현재 client 연결로 전달한다. application이 sticky routing
+테이블을 조회하지 않는다.
 
 ```kotlin
---8<-- "framework/languages/java/samples/kotlin/ShoppingMall/Server/CommerceApi/src/main/kotlin/systems/zlink/samples/kotlin/shoppingmall/server/commerceapi/OrderWorkflowRouter.kt:doc-sm-api-request"
+--8<-- "framework/languages/java/samples/kotlin/DeliveryDispatch/Server/CustomerGateway/src/main/kotlin/systems/zlink/samples/kotlin/deliverydispatch/server/customergateway/spots/handlers/DeliveryStatusUpdatedHandler.kt:doc-dd-customer-push"
 ```
 
 실행되는 근거 샘플: [SupportChat](../../../common/sample/supportchat/README.ko.md) ·

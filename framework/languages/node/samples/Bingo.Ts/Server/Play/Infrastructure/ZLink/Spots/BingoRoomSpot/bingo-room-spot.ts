@@ -171,13 +171,13 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
     // Actor's reference, so player pushes are wired here rather than during
     // admission, which observes identity only.
     this.playerIds.add(actorId);
-    // --8<-- [start:doc-bingo-room-join]
     const joined = this.pendingPlayerJoins.get(actorId);
     this.pendingPlayerJoins.delete(actorId);
     const player = this.game.players.find((candidate) => candidate.actor.actorId === actorId);
     if (player === undefined || joined === undefined) {
       throw new Error(`Accepted Bingo actor '${actorId}' has no pending room membership.`);
     }
+    // --8<-- [start:doc-bingo-room-join]
     const record = await this.channels
       .requestToChannel(SampleNames.apiChannel, new GetPlayerRecordReq({ actorId }))
       .yield<GetPlayerRecordRes>();
@@ -187,6 +187,7 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
     if (!this.playerIds.has(actorId) || this.snapshot().status === BingoRoomStatus.Finished) {
       return;
     }
+    // --8<-- [end:doc-bingo-room-join]
     this.game.setPlayerRecord(actorId, record.wins, record.losses);
     console.error(
       `bingo-record fetched actor=${actorId} wins=${record.wins} losses=${record.losses}`
@@ -204,7 +205,6 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
     if (joined.started) {
       await this.notifyGameStarted();
     }
-    // --8<-- [end:doc-bingo-room-join]
   }
 
   async onLeaveActor(actor: PlayerActor): Promise<void> {

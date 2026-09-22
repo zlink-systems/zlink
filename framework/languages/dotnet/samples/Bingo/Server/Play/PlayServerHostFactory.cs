@@ -61,7 +61,6 @@ public static class PlayServerHostFactory
             options.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
             options.AddHandlersFromAssemblyOf(typeof(PlayServerHostFactory));
             options.Codecs.Use(ZLinkProtobufCodec.Default);
-            // --8<-- [start:doc-bingo-play-register]
             var mesh = options
                 .AddRouteMesh(SampleNames.PlayMeshName)
                 .SetRoutingIdPrefix("play")
@@ -76,6 +75,7 @@ public static class PlayServerHostFactory
                 // --8<-- [start:doc-execution-mode]
                 // SpotWide is the default. Naming it here keeps the choice visible:
                 // every callback of this room runs through one gate.
+                // --8<-- [start:doc-bingo-play-register]
                 .AddSpotFactory<BingoRoom>(
                     SampleNames.RoomSpotType,
                     factory =>
@@ -86,9 +86,9 @@ public static class PlayServerHostFactory
                             )
                             .PreserveStateWith<BingoRoomRelocationAdapter>()
                 );
+            // --8<-- [end:doc-bingo-play-register]
             // --8<-- [end:doc-execution-mode]
             mesh.Channel(SampleNames.RoomChannel).Server();
-            // --8<-- [end:doc-bingo-play-register]
             options.AddClientServerChannel(SampleNames.ApiChannel).Client();
         });
         builder.Services.AddSingleton(
