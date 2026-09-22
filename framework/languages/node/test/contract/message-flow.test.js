@@ -240,6 +240,31 @@ test('dispatch trace and log share bounded redacted handler details', () => {
   assert.doesNotMatch(record.body, /Secret\.Handler/);
 });
 
+test('dispatch trace and log keep an empty error message', () => {
+  const reporter = new ZLinkDispatchErrorReporter(
+    undefined,
+    undefined,
+    silentSink(),
+    {
+      diagnostics: diagnostics('errors'),
+      liveMode: { mode: 'errors' }
+    }
+  );
+  reporter.report({
+    surface: 'routeMeshChannel',
+    messageKind: 'send',
+    reason: 'handler_exception',
+    action: 'drop',
+    error: new Error('')
+  });
+
+  assert.equal(traceRecords[0].attributes.error_type, 'Error');
+  assert.equal(traceRecords[0].attributes.error_message, '');
+  assert.equal(telemetryRecords[0].attributes.error_type, 'Error');
+  assert.equal(telemetryRecords[0].attributes.error_message, '');
+  assert.match(telemetryRecords[0].body, /error_message=(?: |$)/);
+});
+
 test('MFLOW-009 live-mode cell toggles every reader without rebuilding the tracer', () => {
   const { tracer, cell } = makeTracer(diagnostics('off'));
   assert.equal(tracer.enabled(ZLinkMessageFlowOutcome.Received), false);

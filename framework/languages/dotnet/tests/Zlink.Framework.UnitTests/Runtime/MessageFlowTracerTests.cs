@@ -281,6 +281,46 @@ public sealed class MessageFlowTracerTests
     }
 
     [Fact]
+    public void DispatchErrorKeepsEmptyMessageInTraceAndStructuredLog()
+    {
+        var activities = CaptureActivities(out var listener);
+        var logger = new CapturingLogger();
+        using (listener)
+        {
+            var options = new ZLinkDispatchOptionsModel();
+            options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Errors);
+            var reporter = new ZLinkDispatchErrorReporter(options, logger);
+
+            reporter.Report(
+                new ZLinkDispatchFailure(
+                    ZLinkDispatchErrorSurface.ClassicFanout,
+                    ZLinkDispatchMessageKind.Send,
+                    ZLinkDispatchErrorReason.HandlerException,
+                    ZLinkDispatchErrorAction.Drop,
+                    PacketName: null,
+                    ChannelName: null,
+                    Exception: new InvalidOperationException(string.Empty)
+                )
+            );
+        }
+
+        Assert.Contains(
+            logger.Fields,
+            field =>
+                field.Key == "error_type" && (string?)field.Value == "InvalidOperationException"
+        );
+        var logMessage = Assert.Single(logger.Fields, field => field.Key == "error_message");
+        Assert.Equal(string.Empty, (string?)logMessage.Value);
+        var activity = Assert.Single(activities);
+        Assert.Contains(
+            activity.TagObjects,
+            tag => tag.Key == "error_type" && (string?)tag.Value == "InvalidOperationException"
+        );
+        var traceMessage = Assert.Single(activity.TagObjects, tag => tag.Key == "error_message");
+        Assert.Equal(string.Empty, (string?)traceMessage.Value);
+    }
+
+    [Fact]
     public void FlowlessSamplingUsesGenerationAndLocalSequence()
     {
         var logger = new CapturingLogger();

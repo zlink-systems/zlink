@@ -29,8 +29,8 @@ export function dispatchErrorDetails(error: unknown): {
   return { errorType, errorMessage: sanitizeErrorMessage(message) };
 }
 
-function sanitizeErrorMessage(message: string | undefined): string | undefined {
-  if (message === undefined || message.length === 0) return undefined;
+function sanitizeErrorMessage(message: string): string {
+  if (message.length === 0) return '';
   const lineEnd = message.search(/[\r\n]/u);
   let sanitized = lineEnd < 0 ? message : message.slice(0, lineEnd);
   for (const [pattern, replacement] of CREDENTIAL_PATTERNS) {

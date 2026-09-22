@@ -475,8 +475,11 @@ internal static class ZLinkTraceFormat
         Add(fields, "outcome", "failed");
         Add(fields, "reason", DispatchReasonKey(error.Reason));
         Add(fields, "action", DispatchActionKey(error.Action));
-        Add(fields, "error_type", errorDetails.Type);
-        Add(fields, "error_message", errorDetails.Message);
+        if (errorDetails.Type is not null)
+        {
+            fields.Add(new KeyValuePair<string, object?>("error_type", errorDetails.Type));
+            fields.Add(new KeyValuePair<string, object?>("error_message", errorDetails.Message));
+        }
         return fields;
     }
 
@@ -497,7 +500,7 @@ internal static class ZLinkTraceFormat
                 message = message[..ErrorMessageMaxLength];
         }
 
-        return new ZLinkDispatchErrorDetails(error.GetType().Name, message);
+        return new ZLinkDispatchErrorDetails(error.GetType().Name, message ?? string.Empty);
     }
 
     private static void Add(

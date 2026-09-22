@@ -491,6 +491,34 @@ class ZLinkMessageFlowTracerTest {
     }
 
     @Test
+    void dispatchErrorTraceAndLogKeepEmptyMessage() {
+        ZLinkDispatchErrorReporter.ErrorDetails details =
+                ZLinkDispatchErrorReporter.errorDetails(new IllegalStateException());
+        ZLinkMessageFlowEvent dispatchError =
+                ZLinkMessageFlowEvent.dispatchError(
+                        ZLinkDispatchErrorSurface.CHANNEL,
+                        ZLinkDispatchMessageKind.SEND,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
+                        ZLinkDispatchErrorAction.DROP,
+                        details.type(),
+                        details.message());
+
+        String line = ZLinkTraceFormat.flowLine(dispatchError, null);
+
+        assertEquals("IllegalStateException", dispatchError.errorType());
+        assertEquals("", dispatchError.errorMessage());
+        assertTrue(line.contains("error_type=IllegalStateException"));
+        assertTrue(line.contains("error_message="));
+    }
+
+    @Test
     void samplingHashMatchesUtf8BytesWithoutAllocatingAnEncodingBuffer() {
         for (String value :
                 new String[] {"flow-1", "한국어-흐름", "emoji-🚀", "broken-\ud800-tail", "low-\udc00"}) {

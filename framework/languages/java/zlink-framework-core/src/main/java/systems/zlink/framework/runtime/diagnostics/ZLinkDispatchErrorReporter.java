@@ -118,7 +118,10 @@ public final class ZLinkDispatchErrorReporter {
             current = current.getCause();
         }
         String message = current.getMessage();
-        if (message != null && !message.isEmpty()) {
+        if (message == null) {
+            message = "";
+        }
+        if (!message.isEmpty()) {
             int carriageReturn = message.indexOf('\r');
             int lineFeed = message.indexOf('\n');
             int lineEnd =

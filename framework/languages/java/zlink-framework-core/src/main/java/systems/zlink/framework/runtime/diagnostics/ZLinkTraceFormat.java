@@ -37,7 +37,7 @@ final class ZLinkTraceFormat {
                 "action",
                 flow.errorAction() == null ? null : flow.errorAction().traceName());
         append(builder, "error_type", flow.errorType());
-        append(builder, "error_message", flow.errorMessage());
+        appendPresent(builder, "error_message", flow.errorMessage());
         if (size != null) {
             append(builder, "size", String.valueOf(size.longValue()));
         }
@@ -46,6 +46,12 @@ final class ZLinkTraceFormat {
 
     private static void append(StringBuilder builder, String key, String value) {
         if (value != null && !value.isEmpty()) {
+            builder.append(' ').append(key).append('=').append(value);
+        }
+    }
+
+    private static void appendPresent(StringBuilder builder, String key, String value) {
+        if (value != null) {
             builder.append(' ').append(key).append('=').append(value);
         }
     }
