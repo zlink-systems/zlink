@@ -36,7 +36,9 @@ function actorHarness(events, completionResult = { accepted: true }) {
   };
   const coordinator = {
     async joinSpot(actor, runtimeState, spotId, request, timeoutMs) {
-      events.push(`join:${actor.actorId}:${runtimeState.actorId}:${spotId}:${request.data()}:${timeoutMs}`);
+      events.push(
+        `join:${actor.actorId}:${runtimeState.actorId}:${spotId}:${request.data()}:${timeoutMs}`
+      );
       return {
         ...completionResult,
         actor: actorRef,
@@ -95,69 +97,77 @@ test('deferred Actor Join starts after the handler continuation and preserves it
 for (const targetKind of ['entry', 'user']) {
   test(`same-node ${targetKind} Spot Actor Join waits for the gated target lifecycle before public completion`, async () => {
     const queued = [];
-    const serviceRuntime = new ServiceStatefulRuntime({
-      observePeerConnectionIntentRemoved() { return () => {}; },
-      setServiceIngress() {},
-      async reserveLocalIngress() {
-        return {
-          takeInitial() {
-            return {
-              markApplicationQueued() {},
-              releaseBeforeHandler() {},
-              releaseAfterInternalProcessing() {},
-              close() {}
-            };
-          },
-          close() {}
-        };
-      },
-      mailbox: {
-        tryEnqueue(record) {
-          queued.push(record);
-          return true;
+    const serviceRuntime = new ServiceStatefulRuntime(
+      {
+        observePeerConnectionIntentRemoved() {
+          return () => {};
+        },
+        setServiceIngress() {},
+        async reserveLocalIngress() {
+          return {
+            takeInitial() {
+              return {
+                markApplicationQueued() {},
+                releaseBeforeHandler() {},
+                releaseAfterInternalProcessing() {},
+                close() {}
+              };
+            },
+            close() {}
+          };
+        },
+        mailbox: {
+          tryEnqueue(record) {
+            queued.push(record);
+            return true;
+          }
         }
-      }
-    }, 'node-a', 1n);
-    const sourceSpot = targetKind === 'entry'
-      ? serviceRuntime.createSpot('source-room', 'user', 'source-room')
-      : undefined;
-    const serviceActor = sourceSpot === undefined
-      ? serviceRuntime.createActor('alice', 'player')
-      : serviceRuntime.restoreActorAuthority(
-          'alice',
-          'player',
-          1n,
-          1n,
-          sourceSpot.ref.spotId,
-          sourceSpot.ref.generation,
-          1n
-        );
-    const targetSpot = targetKind === 'entry'
-      ? serviceRuntime.entrySpot()
-      : serviceRuntime.createSpot('room-a', 'user', 'room');
+      },
+      'node-a',
+      1n
+    );
+    const sourceSpot =
+      targetKind === 'entry'
+        ? serviceRuntime.createSpot('source-room', 'user', 'source-room')
+        : undefined;
+    const serviceActor =
+      sourceSpot === undefined
+        ? serviceRuntime.createActor('alice', 'player')
+        : serviceRuntime.restoreActorAuthority(
+            'alice',
+            'player',
+            1n,
+            1n,
+            sourceSpot.ref.spotId,
+            sourceSpot.ref.generation,
+            1n
+          );
+    const targetSpot =
+      targetKind === 'entry'
+        ? serviceRuntime.entrySpot()
+        : serviceRuntime.createSpot('room-a', 'user', 'room');
     const events = [];
     let signalJoinSubmitted;
     const joinSubmitted = new Promise((resolve) => {
       signalJoinSubmitted = resolve;
     });
     const submitJoin = async () => {
-      const pending = targetKind === 'entry'
-        ? serviceRuntime.joinActorEntrySpot(
-            serviceActor.ref,
-            'node-a',
-            undefined,
-            5_000
-          )
-        : serviceRuntime.joinActor(
-            serviceActor.ref,
-            'node-a',
-            targetSpot.ref,
-            targetSpot.ref.generation,
-            undefined,
-            5_000
-          );
-      while (!queued.some(record =>
-        record.stateful?.operationKind === framework.OperationKind.ActorJoin)) {
+      const pending =
+        targetKind === 'entry'
+          ? serviceRuntime.joinActorEntrySpot(serviceActor.ref, 'node-a', undefined, 5_000)
+          : serviceRuntime.joinActor(
+              serviceActor.ref,
+              'node-a',
+              targetSpot.ref,
+              targetSpot.ref.generation,
+              undefined,
+              5_000
+            );
+      while (
+        !queued.some(
+          (record) => record.stateful?.operationKind === framework.OperationKind.ActorJoin
+        )
+      ) {
         await new Promise((resolve) => setImmediate(resolve));
       }
       signalJoinSubmitted();
@@ -209,40 +219,42 @@ for (const targetKind of ['entry', 'user']) {
     });
     let lifecycleTask;
     const handlerTask = runActorHandlerWithDeferredJoins(() => {
-      const call = targetKind === 'entry'
-        ? context.joinEntrySpot()
-        : context.joinSpot(targetSpot.ref.spotId);
+      const call =
+        targetKind === 'entry' ? context.joinEntrySpot() : context.joinSpot(targetSpot.ref.spotId);
       call.defer();
     });
     try {
       await joinSubmitted;
       const joinRecord = queued.shift();
       assert.equal(joinRecord?.stateful?.operationKind, framework.OperationKind.ActorJoin);
-      assert.equal(joinRecord.stateful.reply(
-        0,
-        0,
-        undefined,
-        {
+      assert.equal(
+        joinRecord.stateful.reply(0, 0, undefined, {
           kind: 'actorJoin',
           joinResult: 0,
           spot: targetSpot.ref,
           membershipEpoch: 2n
-        }
-      ), true);
+        }),
+        true
+      );
       assert.equal(
         serviceRuntime.registry.actor('alice').spot.spotId,
         targetSpot.ref.spotId,
         'target membership must commit before lifecycle starts'
       );
 
-      let lifecycleRecord = targetKind === 'entry'
-        ? joinRecord
-        : queued.find((record) =>
-            record.stateful?.kindData?.lifecycleKind === framework.ActorLifecycleKind.Joined);
+      let lifecycleRecord =
+        targetKind === 'entry'
+          ? joinRecord
+          : queued.find(
+              (record) =>
+                record.stateful?.kindData?.lifecycleKind === framework.ActorLifecycleKind.Joined
+            );
       for (let attempt = 0; lifecycleRecord === undefined && attempt < 20; attempt += 1) {
         await new Promise((resolve) => setImmediate(resolve));
-        lifecycleRecord = queued.find((record) =>
-          record.stateful?.kindData?.lifecycleKind === framework.ActorLifecycleKind.Joined);
+        lifecycleRecord = queued.find(
+          (record) =>
+            record.stateful?.kindData?.lifecycleKind === framework.ActorLifecycleKind.Joined
+        );
       }
       assert.ok(lifecycleRecord, 'membership commit must publish the target lifecycle');
       lifecycleTask = (async () => {
@@ -304,15 +316,18 @@ test('deferred Actor Join starts admission before the original reply but complet
   };
   state.bindActor(actor, context);
 
-  const result = await runActorHandlerWithDeferredJoins(() => {
-    events.push('handler:start');
-    context.joinSpot('room-a').defer();
-    events.push('handler:end');
-    return 'handled';
-  }, (reply) => {
-    events.push(`reply:${reply}`);
-    return reply;
-  });
+  const result = await runActorHandlerWithDeferredJoins(
+    () => {
+      events.push('handler:start');
+      context.joinSpot('room-a').defer();
+      events.push('handler:end');
+      return 'handled';
+    },
+    (reply) => {
+      events.push(`reply:${reply}`);
+      return reply;
+    }
+  );
 
   assert.equal(result, 'handled');
   assert.deepEqual(events, [
@@ -329,38 +344,34 @@ test('deferred Actor Join barrier keeps the next Actor mailbox turn behind compl
   const events = [];
   const mailbox = new ZLinkActorSerialExecutor('alice', 'spot-a');
   let releaseJoin;
-  const joinGate = new Promise(resolve => {
+  const joinGate = new Promise((resolve) => {
     releaseJoin = resolve;
   });
 
-  const first = mailbox.execute(() => runActorHandlerWithDeferredJoins(() => {
-    events.push('handler:first');
-    deferActorJoin({
-      requestBytes: 0,
-      discard() {
-        events.push('join:discard');
-      },
-      async execute() {
-        events.push('join:start');
-        await joinGate;
-        events.push('join:completed');
-      }
-    });
-  }));
+  const first = mailbox.execute(() =>
+    runActorHandlerWithDeferredJoins(() => {
+      events.push('handler:first');
+      deferActorJoin({
+        discard() {
+          events.push('join:discard');
+        },
+        async execute() {
+          events.push('join:start');
+          await joinGate;
+          events.push('join:completed');
+        }
+      });
+    })
+  );
   const second = mailbox.execute(async () => {
     events.push('handler:second');
   });
 
-  await new Promise(resolve => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(events, ['handler:first', 'join:start']);
   releaseJoin();
   await Promise.all([first, second]);
-  assert.deepEqual(events, [
-    'handler:first',
-    'join:start',
-    'join:completed',
-    'handler:second'
-  ]);
+  assert.deepEqual(events, ['handler:first', 'join:start', 'join:completed', 'handler:second']);
 });
 
 test('deferred onJoinCompleted keeps Actor ownership and applies same-Spot wait policy', async () => {
@@ -378,8 +389,8 @@ test('deferred onJoinCompleted keeps Actor ownership and applies same-Spot wait 
   class SelfRequest {}
   class TargetRequest {}
   const invalidOperation = (error) =>
-    error instanceof framework.ZLinkFrameworkException
-    && error.kind === framework.ZLinkFrameworkErrorKind.InvalidOperation;
+    error instanceof framework.ZLinkFrameworkException &&
+    error.kind === framework.ZLinkFrameworkErrorKind.InvalidOperation;
   const client = new framework.DefaultZLinkActorClient({
     nodeProvider: () => undefined,
     completionTableProvider: () => undefined,
@@ -422,10 +433,12 @@ test('deferred onJoinCompleted keeps Actor ownership and applies same-Spot wait 
     handoffCapture: (_meshName, actorId) => {
       handoffCaptures += 1;
       return actorId === 'bob'
-        ? mailboxes.executeActor('bob', () => serial.execute(() => {
-            events.push('target:bob');
-            return 'pong';
-          }))
+        ? mailboxes.executeActor('bob', () =>
+            serial.execute(() => {
+              events.push('target:bob');
+              return 'pong';
+            })
+          )
         : undefined;
     }
   });
@@ -452,11 +465,14 @@ test('deferred onJoinCompleted keeps Actor ownership and applies same-Spot wait 
     events.push(`completion:resume:${reply}`);
   };
 
-  const first = mailboxes.executeActor('alice', () => serial.execute(() =>
-    runActorHandlerWithDeferredJoins(() => {
-      events.push('handler');
-      context.joinSpot('room-a').defer();
-    })));
+  const first = mailboxes.executeActor('alice', () =>
+    serial.execute(() =>
+      runActorHandlerWithDeferredJoins(() => {
+        events.push('handler');
+        context.joinSpot('room-a').defer();
+      })
+    )
+  );
   const next = mailboxes.executeActor('alice', () => {
     events.push('alice:next');
   });
@@ -492,10 +508,12 @@ test('rejected deferred Join yields its completion turn while source backlog rep
     events.push(`completion:${completion.status}`);
   };
 
-  const completed = serial.execute(() => runActorHandlerWithDeferredJoins(() => {
-    events.push('handler');
-    context.joinSpot('room-b').defer();
-  }));
+  const completed = serial.execute(() =>
+    runActorHandlerWithDeferredJoins(() => {
+      events.push('handler');
+      context.joinSpot('room-b').defer();
+    })
+  );
   await Promise.race([
     completed,
     new Promise((_, reject) => {
@@ -518,14 +536,20 @@ test('rejected deferred Join yields its completion turn while source backlog rep
 test('SpotWide deferred Actor Join yields the shared Spot gate while waiting for the target', async () => {
   const events = [];
   let signalJoinStarted;
-  const joinStarted = new Promise((resolve) => { signalJoinStarted = resolve; });
+  const joinStarted = new Promise((resolve) => {
+    signalJoinStarted = resolve;
+  });
   const releaseJoin = {};
-  const joinGate = new Promise((resolve) => { releaseJoin.resolve = resolve; });
+  const joinGate = new Promise((resolve) => {
+    releaseJoin.resolve = resolve;
+  });
   const state = new ZLinkActorRuntimeState('alice');
   const actorRef = { nodeRid: 'node-a', actorId: 'alice', generation: 7n };
   const coordinator = {
     async joinSpot(actor, runtimeState, spotId, request) {
-      events.push(`join:start:${actor.actorId}:${runtimeState.actorId}:${spotId}:${request.data()}`);
+      events.push(
+        `join:start:${actor.actorId}:${runtimeState.actorId}:${spotId}:${request.data()}`
+      );
       signalJoinStarted();
       await joinGate;
       events.push('join:target-complete');
@@ -553,11 +577,13 @@ test('SpotWide deferred Actor Join yields the shared Spot gate while waiting for
   state.bindActor(actor, context);
   const serial = new ZLinkSpotSerialTurnExecutor(true);
 
-  const first = serial.execute(() => runActorHandlerWithDeferredJoins(() => {
-    events.push('handler:first');
-    context.joinSpot('room-a', 'hello').timeout(100).defer();
-    events.push('handler:first-end');
-  }));
+  const first = serial.execute(() =>
+    runActorHandlerWithDeferredJoins(() => {
+      events.push('handler:first');
+      context.joinSpot('room-a', 'hello').timeout(100).defer();
+      events.push('handler:first-end');
+    })
+  );
   const second = serial.execute(() => {
     events.push('handler:second');
   });
@@ -594,7 +620,6 @@ test('Core-routed Actor request submits its reply before deferred Join completio
     async handle() {
       events.push('handler');
       deferActorJoin({
-        requestBytes: 0,
         discard() {},
         async execute() {
           events.push('completion:0123456789abcdef:fedcba9876543210');
@@ -618,29 +643,26 @@ test('Core-routed Actor request submits its reply before deferred Join completio
     onDisconnectActor: async () => {}
   });
   const parts = [
-    Message.from(Buffer.from(streamProtocol.encodeStreamHeader({
-      kind: streamProtocol.ZLinkStreamMessageKind.Request,
-      codec: streamProtocol.ZLinkStreamCodec.Json,
-      flags: streamProtocol.ZLinkStreamHeaderFlags.None,
-      requestSeq: 1n,
-      name: 'JoinRoom',
-      metadata: new Map()
-    }))),
+    Message.from(
+      Buffer.from(
+        streamProtocol.encodeStreamHeader({
+          kind: streamProtocol.ZLinkStreamMessageKind.Request,
+          codec: streamProtocol.ZLinkStreamCodec.Json,
+          flags: streamProtocol.ZLinkStreamHeaderFlags.None,
+          requestSeq: 1n,
+          name: 'JoinRoom',
+          metadata: new Map()
+        })
+      )
+    ),
     Message.from(Buffer.from('{}'))
   ];
   let replies = 0;
 
-  const result = await dispatch.dispatch(
-    'alice',
-    parts,
-    true,
-    undefined,
-    undefined,
-    (reply) => {
-      replies += 1;
-      events.push(`reply:${reply.accepted}`);
-    }
-  );
+  const result = await dispatch.dispatch('alice', parts, true, undefined, undefined, (reply) => {
+    replies += 1;
+    events.push(`reply:${reply.accepted}`);
+  });
 
   assert.equal(result, undefined);
   assert.equal(replies, 1);
@@ -658,7 +680,6 @@ test('deferred Join is discarded before target admission when reply encoding fai
     runActorHandlerWithDeferredJoins(
       () => {
         deferActorJoin({
-          requestBytes: 0,
           prepare() {
             events.push('join:prepare');
           },
@@ -692,7 +713,6 @@ test('deferred Join continues after reply transport fails once encoding succeede
     runActorHandlerWithDeferredJoins(
       () => {
         deferActorJoin({
-          requestBytes: 0,
           prepare() {
             events.push('join:prepare');
           },
@@ -716,12 +736,7 @@ test('deferred Join continues after reply transport fails once encoding succeede
     /reply transport failed/
   );
 
-  assert.deepEqual(events, [
-    'reply:encode',
-    'join:prepare',
-    'reply:transport',
-    'join:execute'
-  ]);
+  assert.deepEqual(events, ['reply:encode', 'join:prepare', 'reply:transport', 'join:execute']);
 });
 
 test('deferred Actor Join is discarded when request reply encoding fails', async () => {
@@ -734,7 +749,6 @@ test('deferred Actor Join is discarded when request reply encoding fails', async
   class JoinHandler {
     async handle() {
       deferActorJoin({
-        requestBytes: 0,
         discard() {
           events.push('discard');
         },
@@ -760,26 +774,25 @@ test('deferred Actor Join is discarded when request reply encoding fails', async
     onDisconnectActor: async () => {}
   });
   const parts = [
-    Message.from(Buffer.from(streamProtocol.encodeStreamHeader({
-      kind: streamProtocol.ZLinkStreamMessageKind.Request,
-      codec: streamProtocol.ZLinkStreamCodec.Json,
-      flags: streamProtocol.ZLinkStreamHeaderFlags.None,
-      requestSeq: 1n,
-      name: 'JoinRoom',
-      metadata: new Map()
-    }))),
+    Message.from(
+      Buffer.from(
+        streamProtocol.encodeStreamHeader({
+          kind: streamProtocol.ZLinkStreamMessageKind.Request,
+          codec: streamProtocol.ZLinkStreamCodec.Json,
+          flags: streamProtocol.ZLinkStreamHeaderFlags.None,
+          requestSeq: 1n,
+          name: 'JoinRoom',
+          metadata: new Map()
+        })
+      )
+    ),
     Message.from(Buffer.from('{}'))
   ];
 
   await assert.rejects(
-    dispatch.dispatch(
-      'alice',
-      parts,
-      true,
-      undefined,
-      undefined,
-      () => { throw new Error('reply encoding failed'); }
-    ),
+    dispatch.dispatch('alice', parts, true, undefined, undefined, () => {
+      throw new Error('reply encoding failed');
+    }),
     /reply encoding failed/
   );
   assert.deepEqual(events, ['discard']);
@@ -797,39 +810,6 @@ test('deferred Actor Join is discarded when the handler fails', async () => {
     /handler failed/
   );
   assert.deepEqual(events, []);
-});
-
-test('deferred Actor Join rejects a request over 1 MiB without retaining partial registrations', async () => {
-  const events = [];
-
-  await assert.rejects(
-    runActorHandlerWithDeferredJoins(() => {
-      deferActorJoin({
-        requestBytes: 1,
-        discard() {
-          events.push('first:discard');
-        },
-        async execute() {
-          events.push('first:execute');
-        }
-      });
-      deferActorJoin({
-        requestBytes: 1024 * 1024 + 1,
-        discard() {
-          events.push('oversized:discard');
-        },
-        async execute() {
-          events.push('oversized:execute');
-        }
-      });
-    }),
-    (error) => error.kind === framework.ZLinkFrameworkErrorKind.NotConfigured
-  );
-
-  assert.deepEqual(events, [
-    'oversized:discard',
-    'first:discard'
-  ]);
 });
 
 test('Actor Join defer rejects detached use, duplicate terminal, and a second pending transition', async () => {
@@ -850,8 +830,8 @@ test('Actor Join defer rejects detached use, duplicate terminal, and a second pe
     );
     assert.throws(
       () => state.beginMove(),
-      (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
-        && !('isRetriable' in error)
+      (error) =>
+        error.kind === framework.ZLinkFrameworkErrorKind.Unavailable && !('isRetriable' in error)
     );
   });
   await waitForEvents(events, 2);

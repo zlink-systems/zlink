@@ -44,7 +44,6 @@ import {
 const RETENTION_MS = 24 * 60 * 60 * 1_000;
 const ROOT_VERSION = 2;
 const ROOT_MAGIC = Buffer.from('ZLJR');
-const MAX_ROOT_BYTES = 1024 * 1024;
 const JOURNAL_INVENTORY_DOMAIN = Buffer.from('zlink-node-deferred-join-authority-v1\0', 'utf8');
 
 export type ZLinkDeferredJoinDeliveryCursor = 'prepared' | 'committed' | 'delivered';
@@ -695,17 +694,14 @@ function encodeRoot(
       'utf8'
     )
   ]);
-  if (encoded.byteLength > MAX_ROOT_BYTES) {
-    throw new Error('Deferred Join completion root exceeds 1 MiB.');
-  }
   return encoded;
 }
 
 function decodeRoot(
   payload: Uint8Array
 ): Omit<ZLinkDeferredJoinAcceptedRoot, 'authority' | 'reference' | 'checksumCrc32c'> {
-  if (payload.byteLength === 0 || payload.byteLength > MAX_ROOT_BYTES) {
-    throw new Error('Deferred Join completion root size is invalid.');
+  if (payload.byteLength === 0) {
+    throw new Error('Deferred Join completion root is empty.');
   }
   const bytes = Buffer.from(payload);
   const encoded = hasJournalRootMagic(bytes) ? bytes.subarray(ROOT_MAGIC.byteLength) : bytes;
