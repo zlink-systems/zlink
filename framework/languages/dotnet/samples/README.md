@@ -55,26 +55,18 @@ dotnet build TicTacToe\TicTacToe.sln
 
 ## Opening it in an IDE
 
-Open `Samples.sln` in Rider or Visual Studio 2022 or 2026 to open all samples. To open one sample,
-open `<Sample>/<Sample>.sln`. Set `Multiple startup projects` in this order:
+Opening `Samples.sln` in Rider or Visual Studio 2022 or 2026 opens the seven samples' projects,
+one solution folder each. To open one sample, open `<Sample>/<Sample>.sln`. Both solutions point
+at the same project files, so a build from either gives the same result.
 
-| Sample | Startup project order |
-|---|---|
-| Bingo | `Bingo.Server.Play` → `Bingo.Server.Matchmaking` → `Bingo.Server.Api` → `Bingo.Server.Session` → `Bingo.Client` |
-| DeliveryDispatch | `DeliveryDispatch.Server.Tracking` → `DeliveryDispatch.Server.CustomerGateway` → `DeliveryDispatch.Server.CourierActorNode` → `DeliveryDispatch.Server.CourierSession` → `DeliveryDispatch.Server.Dispatch` → `DeliveryDispatch.Client` |
-| GameQuest | `GameQuest.QuestMission` → `GameQuest.GameApi` → `GameQuest.Client` |
-| ShoppingMall | `ShoppingMall.OrderWorkflow` → `ShoppingMall.CommerceApi` → `ShoppingMall.Client` |
-| SupportChat | `SupportChat.Server.Support` → `SupportChat.Server.Api` → `SupportChat.Server.Session` → `SupportChat.Client` |
-| TicTacToe | `TicTacToe.Server.Play` → `TicTacToe.Server.Api` → `TicTacToe.Client` |
-| ZoneWorld | `ZoneWorld.Server.Ops` → `ZoneWorld.Server.ZoneNode` → `ZoneWorld.Server.Gateway` → `ZoneWorld.Client` |
-
-The runner can start multiple instances of the same server project for different roles. It creates the
-configuration and endpoints for those instances. Do not start a sample's Redis separately from the
-IDE. On Windows, run that sample's `run_sample.ps1`; on Linux, macOS, or WSL, run `run_sample.sh`.
-The PowerShell runner calls `Start-SampleRedisContainer` to create a temporary `redis:7.2-alpine`
-container, and the bash runner calls `zlink_redis_start_scoped_assign` from `redis-common.sh`. The
-runner puts the endpoint in the role configurations and removes the container at the end. There is
-no supported Redis-only command. Stop a process started by the IDE with the IDE's Stop button.
+A sample scenario is run by `run_sample.sh`/`run_sample.ps1`, not by the IDE's startup projects.
+The runner creates the Redis container for that run, writes each server role's configuration file
+and endpoint, starts the same project as several instances, drives the client scenario to the end
+and then cleans everything up — none of which `Multiple startup projects` can produce. The IDE is
+for reading, editing and building the code; to debug one role, start the runner and attach to that
+role's process (Rider **Run → Attach to Process**, Visual Studio **Debug → Attach to Process**;
+the process name is the role's project name). The runner stops the processes; the attached
+debugger is detached with the IDE's Stop button.
 
 ## Run
 

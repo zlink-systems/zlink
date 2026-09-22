@@ -52,27 +52,17 @@ dotnet build TicTacToe\TicTacToe.sln
 
 ## IDE에서 열기
 
-Rider 또는 Visual Studio 2022·2026에서 전체 샘플을 열 때는 `Samples.sln`을 연다. 샘플 하나만
-열 때는 해당 샘플의 `<Sample>/<Sample>.sln`을 연다. `Multiple startup projects`의 시작 순서는
-다음과 같다.
+Rider 또는 Visual Studio 2022·2026에서 `Samples.sln`을 열면 샘플 일곱 개의 project가 솔루션 폴더
+하나씩으로 나뉘어 열린다. 샘플 하나만 열 때는 `<Sample>/<Sample>.sln`을 연다. 두 솔루션은 같은
+project 파일을 가리키므로 어느 쪽에서 빌드해도 결과가 같다.
 
-| 샘플 | 시작 project 순서 |
-|---|---|
-| Bingo | `Bingo.Server.Play` → `Bingo.Server.Matchmaking` → `Bingo.Server.Api` → `Bingo.Server.Session` → `Bingo.Client` |
-| DeliveryDispatch | `DeliveryDispatch.Server.Tracking` → `DeliveryDispatch.Server.CustomerGateway` → `DeliveryDispatch.Server.CourierActorNode` → `DeliveryDispatch.Server.CourierSession` → `DeliveryDispatch.Server.Dispatch` → `DeliveryDispatch.Client` |
-| GameQuest | `GameQuest.QuestMission` → `GameQuest.GameApi` → `GameQuest.Client` |
-| ShoppingMall | `ShoppingMall.OrderWorkflow` → `ShoppingMall.CommerceApi` → `ShoppingMall.Client` |
-| SupportChat | `SupportChat.Server.Support` → `SupportChat.Server.Api` → `SupportChat.Server.Session` → `SupportChat.Client` |
-| TicTacToe | `TicTacToe.Server.Play` → `TicTacToe.Server.Api` → `TicTacToe.Client` |
-| ZoneWorld | `ZoneWorld.Server.Ops` → `ZoneWorld.Server.ZoneNode` → `ZoneWorld.Server.Gateway` → `ZoneWorld.Client` |
-
-runner는 같은 server project를 여러 role instance로 시작할 수 있다. 각 instance의 config와 endpoint는
-runner가 만든다. 샘플의 Redis는 IDE에서 별도로 시작하지 않는다. Windows에서는 해당 샘플의
-`run_sample.ps1`, Linux·macOS·WSL에서는 `run_sample.sh`를 실행한다. PowerShell runner는
-`Start-SampleRedisContainer`로 `redis:7.2-alpine` 임시 container를 만들고, bash runner는
-`redis-common.sh`의 `zlink_redis_start_scoped_assign`를 호출한다. runner가 생성한 endpoint를
-role config에 넣고 실행이 끝나면 container를 정리한다. Redis만 시작하는 별도 지원 명령은 없다.
-IDE에서 시작한 process의 종료는 IDE의 Stop 버튼으로 한다.
+샘플 시나리오의 실행은 IDE의 시작 project가 아니라 `run_sample.sh`·`run_sample.ps1`로 한다.
+러너가 그 실행 전용 Redis 컨테이너를 만들고, 각 server role의 설정 파일과 endpoint를 만들어
+같은 project를 여러 instance로 띄우며, client 시나리오를 끝까지 돌린 뒤 모두 정리한다 — 이
+값들은 IDE의 `Multiple startup projects`로는 만들 수 없다. IDE에서는 코드를 읽고 고치고 빌드하며,
+role 하나를 디버그하려면 러너를 실행한 뒤 그 role의 process에 attach한다(Rider **Run → Attach to
+Process**, Visual Studio **디버그 → 프로세스에 연결**; process 이름은 role의 project 이름이다).
+종료는 러너가 하며, attach한 디버거는 IDE의 Stop 버튼으로 뗀다.
 
 ## 실행
 
