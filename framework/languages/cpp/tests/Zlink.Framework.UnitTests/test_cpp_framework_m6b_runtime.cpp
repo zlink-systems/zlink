@@ -3554,6 +3554,8 @@ void verify_logical_multicast_continues_after_one_target_failure ()
     auto publisher_state =
       std::make_shared<zlink::framework::detail::spot_node_builder_state_t> ("m6b-mesh");
     std::atomic_bool observed_failure{false};
+    std::atomic_int dispatch_error_count{0};
+    std::atomic_int empty_target_count{0};
     zlink::framework::logging_builder_t logging;
     logging.use_provider (
       "logical-multicast-dispatch-error", [&] (const zlink::framework::log_record_t &record) {
@@ -3564,8 +3566,14 @@ void verify_logical_multicast_continues_after_one_target_failure ()
               }
               return std::nullopt;
           };
-          if (field ("event_id") == "zlink.dispatch_error" && field ("surface") == "spot"
-              && field ("kind") == "send" && field ("outcome") == "failed"
+          if (field ("event_id") != "zlink.dispatch_error" || field ("surface") != "spot"
+              || field ("topic") != "reward" || field ("channel") != "framework.spot"
+              || field ("mesh") != "m6b-mesh")
+              return;
+          dispatch_error_count.fetch_add (1, std::memory_order_relaxed);
+          if (!field ("target_rid") || field ("target_rid")->empty ())
+              empty_target_count.fetch_add (1, std::memory_order_relaxed);
+          if (field ("kind") == "send" && field ("outcome") == "failed"
               && field ("action") == "drop" && field ("reason") == "stale_target"
               && field ("target_rid") == "a-unavailable-target" && field ("topic") == "reward"
               && field ("channel") == "framework.spot" && field ("mesh") == "m6b-mesh"
@@ -3590,6 +3598,8 @@ void verify_logical_multicast_continues_after_one_target_failure ()
         std::this_thread::sleep_for (1ms);
     }
     assert (observed_failure.load (std::memory_order_acquire));
+    assert (dispatch_error_count.load (std::memory_order_acquire) == 1);
+    assert (empty_target_count.load (std::memory_order_acquire) == 0);
 
     const auto receive_deadline = mesh::service_liveness_registry_t::clock_t::now () + 5s;
     while (

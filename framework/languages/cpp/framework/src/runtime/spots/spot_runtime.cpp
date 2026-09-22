@@ -4908,65 +4908,33 @@ publish_call_t spot_publisher_client_t::publish_raw (std::string channel_name,
        packet_name = std::move (packet_name), frame = std::move (frame),
        diagnostics_mode] (const publish_call_t::metadata_map_t &metadata) -> task_t<void> {
           const auto capture = detail::dispatch_error_reporter_t (state->dispatch).enabled ();
-          const auto mesh_name =
-            capture ? state->lane.run ([&] { return state->snapshot.name; }).get () : std::string{};
-          try {
-              auto flow_scope = runtime::flow_context_t::enter_current_or_create (
-                flow_origin_t::application, diagnostics_mode);
-              std::vector<zlink::message_t> parts{frame};
-              auto publisher = native_node->entry_spot ();
-              const auto encoded_metadata = detail::mesh_metadata_codec_t::encode (metadata);
-              const auto submitted = publisher.publish (
-                channel_name, topic, parts, zlink::send_flags_t::none, encoded_metadata);
-              if (submitted != zlink::submit_result_t::ok) {
-                  const framework_exception_t error (
-                    runtime::messaging::map_submit_result_error_kind (submitted),
-                    "logical multicast could not enter the source transport queue");
-                  throw error;
-              }
-              auto native = std::make_shared<service::spot_t> (std::move (publisher));
-              if (capture) {
-                  co_await run_spot_publish_fanout (
-                    native, std::move (parts), encoded_metadata,
-                    [state, channel_name, mesh_name, topic] (const zlink::routing_id_t &target,
-                                                             zlink::submit_result_t submitted) {
-                        detail::report_logical_multicast_failure (
-                          state, channel_name, mesh_name, topic, target.to_string (),
-                          detail::dispatch_reason_from_submit_result (submitted));
-                    });
-              } else {
-                  co_await run_spot_publish_fanout (native, std::move (parts), encoded_metadata);
-              }
-              co_return;
+          auto flow_scope = runtime::flow_context_t::enter_current_or_create (
+            flow_origin_t::application, diagnostics_mode);
+          std::vector<zlink::message_t> parts{frame};
+          auto publisher = native_node->entry_spot ();
+          const auto encoded_metadata = detail::mesh_metadata_codec_t::encode (metadata);
+          const auto submitted = publisher.publish (channel_name, topic, parts,
+                                                    zlink::send_flags_t::none, encoded_metadata);
+          if (submitted != zlink::submit_result_t::ok) {
+              throw framework_exception_t (
+                runtime::messaging::map_submit_result_error_kind (submitted),
+                "logical multicast could not enter the source transport queue");
           }
-          catch (const framework_exception_t &error) {
-              if (capture) {
-                  detail::report_logical_multicast_failure (
-                    state, channel_name, mesh_name, topic, {},
-                    detail::dispatch_reason_from_logical_multicast_error (error.kind ()));
-              }
-              throw;
+          auto native = std::make_shared<service::spot_t> (std::move (publisher));
+          if (capture) {
+              const auto mesh_name = state->lane.run ([&] { return state->snapshot.name; }).get ();
+              co_await run_spot_publish_fanout (
+                native, std::move (parts), encoded_metadata,
+                [state, channel_name, mesh_name, topic] (const zlink::routing_id_t &target,
+                                                         zlink::submit_result_t submitted) {
+                    detail::report_logical_multicast_failure (
+                      state, channel_name, mesh_name, topic, target.to_string (),
+                      detail::dispatch_reason_from_submit_result (submitted));
+                });
+          } else {
+              co_await run_spot_publish_fanout (native, std::move (parts), encoded_metadata);
           }
-          catch (const std::exception &error) {
-              const framework_exception_t failure (framework_error_kind_t::internal_failure,
-                                                   error.what ());
-              if (capture) {
-                  detail::report_logical_multicast_failure (
-                    state, channel_name, mesh_name, topic, {},
-                    detail::dispatch_reason_from_logical_multicast_error (failure.kind ()));
-              }
-              throw failure;
-          }
-          catch (...) {
-              const framework_exception_t failure (framework_error_kind_t::internal_failure,
-                                                   "logical multicast failed after admission");
-              if (capture) {
-                  detail::report_logical_multicast_failure (
-                    state, channel_name, mesh_name, topic, {},
-                    detail::dispatch_reason_from_logical_multicast_error (failure.kind ()));
-              }
-              throw failure;
-          }
+          co_return;
       });
 }
 

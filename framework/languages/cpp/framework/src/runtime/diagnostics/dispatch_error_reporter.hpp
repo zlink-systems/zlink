@@ -240,20 +240,6 @@ inline dispatch_error_reason_t dispatch_reason_from_error (framework_error_kind_
 }
 
 inline dispatch_error_reason_t
-dispatch_reason_from_logical_multicast_error (framework_error_kind_t kind) noexcept
-{
-    switch (kind) {
-        case framework_error_kind_t::shutting_down:
-            return dispatch_error_reason_t::shutdown;
-        case framework_error_kind_t::deadline_exceeded:
-        case framework_error_kind_t::rejected:
-            return dispatch_error_reason_t::backpressure;
-        default:
-            return dispatch_error_reason_t::stale_target;
-    }
-}
-
-inline dispatch_error_reason_t
 dispatch_reason_from_submit_result (zlink::submit_result_t result) noexcept
 {
     if (result == zlink::submit_result_t::terminated) {
