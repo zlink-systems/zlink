@@ -78,13 +78,6 @@ registered per Object Server.
 --8<-- "framework/languages/cpp/tutorial/Server/spots/lobby_spot.hpp:entry-spot"
 ```
 
-!!! warning "Only C++ requires an admission callback"
-
-    A C++ entry spot has to implement `on_actor_join`, and **that is the creation gate.** Leave
-    it refusing and creating an Actor fails outright. The entry spot in the other four languages
-    has no such callback; approving creation belongs to `onCreateActor`, which accepts by
-    default.
-
 ### 2.3 Writing the Handlers
 
 A handler receives **both the Spot and the Actor** as its first two arguments. A handler that

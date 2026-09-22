@@ -75,12 +75,6 @@ Actor가 처음 들어갈 자리다. Entry Spot은 application이 만들지 않�
 --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/spots/LobbySpot.java:entry-spot"
 ```
 
-!!! warning "C++만 입장 승인 callback이 필수다"
-
-    C++의 entry spot은 `on_actor_join`을 반드시 구현하며, **Actor 생성 처리가 이 callback에서
-    시작한다.** 거절하도록 두면 Actor 생성 자체가 실패한다. 나머지 네 언어의 entry spot에는 그 callback이 없고, 생성
-    승인은 `onCreateActor`(기본값은 수락)가 맡는다.
-
 ### 2.3 handler 작성
 
 handler는 **Spot과 Actor를 함께** 첫 두 인자로 받는다. 값을 돌려주지 않는 handler는 `send`로

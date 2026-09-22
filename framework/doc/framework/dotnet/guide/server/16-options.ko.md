@@ -116,11 +116,6 @@ handler가 없는 packet이 도착했을 때의 동작도 같은 자리에서 �
 오류 응답 동작을 지정할 수 없다. 이 설정은 C++에 없으며 기본 동작만 적용된다. 수준별로
 무엇이 남는지는 [모니터링](26-monitoring.ko.md#4-진단-수준-정하기)이 다룬다.
 
-!!! warning "message 크기 기록의 기본값은 JVM에서만 다르다"
-
-    Java와 Kotlin은 `IncludeMessageSizes`가 켜진 상태로 시작하고 나머지 언어는 꺼진 상태로
-    시작한다. 언어를 섞은 구성에서 기록의 양을 맞추려면 값을 명시한다.
-
 ## 5. MeshNode 옵션
 
 | 옵션 | 무엇을 정하나 | 기본값 |
@@ -128,7 +123,7 @@ handler가 없는 packet이 도착했을 때의 동작도 같은 자리에서 �
 | `Listen` | 다른 node가 접속할 자기 주소 | 지정해야 한다 |
 | `BindHost` · `AdvertiseHost` | 이 node만의 bind · 광고 주소 | 루트 값 |
 | `RoutingId` · `RoutingIdPrefix` | 이 node의 식별자 | 자동 생성 |
-| `ObjectRole` | Spot · Actor 배치 참여 여부 | 아래 주의 |
+| `ObjectRole` | Spot · Actor 배치 참여 여부 | `None` |
 | `PlacementWeight` | 새 배치 대상으로 선택되는 비중. 범위는 `0..10000` | 100 |
 | `ActorLimit` · `SpotLimit` | 이 node가 동시에 담을 수 있는 상한 | `0` — 제한 없음 |
 | `ActivationConcurrency` | 동시에 진행할 cold activation 수 | 128 |
@@ -138,11 +133,6 @@ handler가 없는 packet이 도착했을 때의 동작도 같은 자리에서 �
 
 두 limit의 `0`은 제한 없음이고 양수는 `1..2,147,483,647`이다. `ActivationConcurrency`는 반대로
 `0`을 거부한다 — object 수가 아니라 동시에 진행되는 활성화를 제한하는 값이기 때문이다.
-
-!!! warning "배치 참여의 기본값은 C++만 다르다"
-
-    C++은 `ObjectRole`을 지정하지 않으면 배치를 받는 `Server`로 시작하고 나머지 언어는
-    배치에 참여하지 않는다. Spot과 Actor를 두지 않을 node라면 C++에서는 역할을 명시한다.
 
 ## 6. 송신 대기와 socket 상한
 

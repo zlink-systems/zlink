@@ -119,12 +119,6 @@ cannot be chosen for a send or a publish because they have no reply path. This s
 exist in C++, where only the default behavior applies. What each level records is covered by
 [Monitoring](26-monitoring.en.md#4-setting-the-diagnostics-level).
 
-!!! warning "The default for message size recording differs only on the JVM"
-
-    Java and Kotlin start with `include_message_sizes` enabled, while the other languages start
-    with it disabled. State the value explicitly to keep the volume of records aligned across a
-    mixed-language deployment.
-
 ## 5. MeshNode Options
 
 | Option | What it sets | Default |
@@ -132,7 +126,7 @@ exist in C++, where only the default behavior applies. What each level records i
 | `listen` | This node's own address for peers to connect to | Must be set |
 | `bind_host` · `advertise_host` | Bind and advertised address for this node alone | The root value |
 | `RoutingId` · `RoutingIdPrefix` | This node's identifier | Generated |
-| `object_role` | Whether the node takes part in placement | See the note below |
+| `object_role` | Whether the node takes part in placement | `None` |
 | `placement_weight` | Share of new placements, ranging over `0..10000` | 100 |
 | `actor_limit` · `spot_limit` | How many this node may hold at once | `0` — no limit |
 | `ActivationConcurrency` | Cold activations that may proceed at once | 128 |
@@ -143,9 +137,6 @@ exist in C++, where only the default behavior applies. What each level records i
 For both limits, `0` means no limit and a positive value ranges over `1..2,147,483,647`.
 `ActivationConcurrency` rejects `0` instead, because it limits the activations in progress
 rather than the number of objects.
-
-When `object_role` is left unset, C++ uses `none`, so the node takes no part in placement. State
-the role explicitly whenever the node is intended to host or discover Objects.
 
 ## 6. Send Waiting and Socket Limits
 

@@ -195,15 +195,8 @@ Some targets drop out of the candidate set first. This is the same in both arran
 | A target whose weight is `0` | Membership is kept, but it drops out of new selections |
 | A target that has begun a safe shutdown | It is finishing the requests it has and going down |
 
-**When removing those three leaves no target at all, the call ends as `Unavailable`.** `request`
-and `send` produce the same result. The send path and its connection are still there and only the
-target to pick is missing, which is why it is not `NotFound` — that is the result when you named a
-target by routing id and no node knows that id. This is the value framework 0.16.0 settled on.
-
-!!! warning "C++ one-way send differs from `Unavailable`"
-
-    In 0.16.0, .NET, Java, Kotlin, and Node all produce `Unavailable` for both `request` and
-    `send`. **Only C++ produces `NotFound` for `send`.** In C++ too, `request` is `Unavailable`.
+**When removing those three leaves no target at all, both `request` and one-way `send` end as
+`NotFound`.** No target produces the same result for the two calls.
 
 Distribution among the remaining targets is **decided by weight.** Weight ranges over `0..10000`
 and defaults to `100`.

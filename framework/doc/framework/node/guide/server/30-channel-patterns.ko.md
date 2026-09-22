@@ -185,16 +185,8 @@ ClientServer를 사용한다.
 | weight가 `0`인 target | membership은 유지하되 새 선택의 후보가 아니다 |
 | 안전 종료 절차에 들어간 target | 남은 요청을 처리하고 내려가는 중이다 |
 
-**위 대상을 뺀 뒤 남는 대상이 하나도 없으면 호출은 `Unavailable`로 끝난다.** `request`와 `send`가
-같은 결과를 낸다. 송신 경로와 연결은 그대로 있고 고를 대상만 없다는 뜻이라 `NotFound`가 아니다
-— 그쪽은 routing id로 대상을 적었는데 그 id를 아는 node가 없을 때의 결과다. framework
-0.16.0이 정한 값이다.
-
-!!! warning "C++의 one-way send는 `Unavailable`과 다르다"
-
-    0.16.0에서 .NET·Java·Kotlin·Node는 `request`와 `send` 모두 `Unavailable`을 낸다. **C++만
-    `send`가 `NotFound`를 낸다. `request`는 C++에서도
-    `Unavailable`이다.
+**위 대상을 뺀 뒤 남는 대상이 하나도 없으면 `request`와 one-way `send`는 모두 `NotFound`로
+끝난다.** 고를 대상이 없다는 결과는 두 호출에서 같다.
 
 남은 대상 사이의 분배는 **weight가 정한다.** weight는 `0..10000` 범위이고 기본값은 `100`이다.
 
