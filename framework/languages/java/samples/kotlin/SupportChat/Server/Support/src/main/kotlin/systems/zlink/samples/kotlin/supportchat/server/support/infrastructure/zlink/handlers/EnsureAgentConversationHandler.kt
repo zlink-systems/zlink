@@ -1,6 +1,5 @@
 package systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zlink.handlers
 
-import kotlinx.coroutines.future.await
 import org.slf4j.LoggerFactory
 import systems.zlink.framework.ZLinkMessageContext
 import systems.zlink.framework.actors.ActorRef
@@ -10,7 +9,9 @@ import systems.zlink.framework.actors.ZLinkActorCreateResult
 import systems.zlink.framework.actors.ZLinkActorManager
 import systems.zlink.framework.handlers.ZLinkHandlerGroup
 import systems.zlink.framework.kotlin.ZLinkSuspendingRequestHandler
+import systems.zlink.framework.kotlin.await
 import systems.zlink.framework.kotlin.kotlin
+import systems.zlink.framework.kotlin.requestToActor
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleTimings
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SupportChatRoles
@@ -25,6 +26,8 @@ class EnsureAgentConversationHandler(
     private val actorClient: ZLinkActorClient,
     private val actors: ZLinkActorManager,
 ) : ZLinkSuspendingRequestHandler<EnsureAgentConversationReq, EnsureAgentConversationRes> {
+    private val kotlinActorClient = actorClient.kotlin()
+
     override suspend fun handle(
         request: EnsureAgentConversationReq,
         context: ZLinkMessageContext,
@@ -49,8 +52,8 @@ class EnsureAgentConversationHandler(
         val actorRef: ActorRef = zlinkActorRef
 
         val joined =
-            actorClient
-                .requestToActor(
+            kotlinActorClient
+                .requestToActor<JoinConversationRes>(
                     actorRef.actorId(),
                     JoinConversationReq(
                         request.rosterActorId,
@@ -60,7 +63,6 @@ class EnsureAgentConversationHandler(
                 )
                 .metadata(SampleNames.ConversationIdMetadataKey, request.conversationId)
                 .timeout(SampleTimings.RequestTimeout)
-                .submit(JoinConversationRes::class.java)
                 .await()
 
         logger.info(

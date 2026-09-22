@@ -1,10 +1,10 @@
 package systems.zlink.samples.kotlin.zoneworld.server.zone
 
-import java.util.concurrent.CompletableFuture
-import java.util.concurrent.CompletionStage
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import org.springframework.boot.ApplicationArguments
 import org.springframework.boot.ApplicationRunner
 import org.springframework.context.SmartLifecycle
@@ -12,9 +12,11 @@ import systems.zlink.framework.ZLinkMessageContext
 import systems.zlink.framework.actors.ZLinkActorManager
 import systems.zlink.framework.channels.ZLinkRouteClient
 import systems.zlink.framework.channels.ZLinkRouteMessageContext
-import systems.zlink.framework.channels.ZLinkRouteSendHandler
-import systems.zlink.framework.channels.ZLinkSendHandler
 import systems.zlink.framework.handlers.ZLinkHandlerGroup
+import systems.zlink.framework.kotlin.ZLinkSuspendingRouteSendHandler
+import systems.zlink.framework.kotlin.ZLinkSuspendingSendHandler
+import systems.zlink.framework.kotlin.kotlin
+import systems.zlink.framework.kotlin.requestToActor
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.spots.ZLinkSpotCreateState
 import systems.zlink.framework.spots.ZLinkSpotManager
@@ -37,21 +39,25 @@ class ZoneBootstrap(
     private val census: NodeCensus,
     private val reporter: ZoneStatusReporter,
 ) : ApplicationRunner {
+    private val kotlinSpots = spots.kotlin()
+    private val kotlinActors = actors.kotlin()
+    private val kotlinActorClient = actorClient.kotlin()
+
     // Ops learns a node's zone set only from the node's own status report (README §2.2). The
     // report is sent once the zone set is settled and before topology=ready is printed, so the
     // report an observer gates on never carries the pre-claim census; the periodic report and
     // the maintenance-change report are the only other senders.
-    private fun ready() {
-        reporter.reportNow().exceptionally { null }.toCompletableFuture().join()
+    private suspend fun ready() {
+        reporter.reportNow()
         println(
             "topology=ready node=${topology.nodeValue()} zones=${census.zoneIds().joinToString(",")}"
         )
     }
 
-    override fun run(args: ApplicationArguments) {
+    override fun run(args: ApplicationArguments) = runBlocking {
         if (topology.isSubscriberOnly()) {
             println("topology=ready node=${topology.nodeValue()} zones=")
-            return
+            return@runBlocking
         }
         // Maintenance is desired state, not a message: a node that starts reads it back from
         // the store, so a restart cannot quietly reopen a node the operator closed.
@@ -67,7 +73,7 @@ class ZoneBootstrap(
         // the loop below could never leave. Only a cold start claims.
         if (topology.allowsEmptyZoneSet()) {
             ready()
-            return
+            return@runBlocking
         }
         var attempt = 0
         while (census.zoneIds().size != 2) {
@@ -89,12 +95,10 @@ class ZoneBootstrap(
                     break
                 }
                 val result = runCatching {
-                    spots
+                    kotlinSpots
                         .getOrCreate(zone, ZoneWorldNames.ZONE_SPOT_TYPE)
                         .inMesh(ZoneWorldNames.MESH)
-                        .submit()
-                        .toCompletableFuture()
-                        .join()
+                        .await()
                 }
                 if (
                     result.isFailure ||
@@ -111,12 +115,10 @@ class ZoneBootstrap(
                 for (zone in fallbackOrder) {
                     if (census.zoneIds() != claimed) break
                     runCatching {
-                        spots
+                        kotlinSpots
                             .getOrCreate(zone, ZoneWorldNames.ZONE_SPOT_TYPE)
                             .inMesh(ZoneWorldNames.MESH)
-                            .submit()
-                            .toCompletableFuture()
-                            .join()
+                            .await()
                     }
                     if (census.zoneIds() != claimed) break
                 }
@@ -124,33 +126,25 @@ class ZoneBootstrap(
             check(attempt++ < 119) {
                 "Zone Spot capacity did not settle. node=${topology.nodeValue()} zones=${census.zoneIds()}"
             }
-            CompletableFuture.runAsync(
-                    {},
-                    CompletableFuture.delayedExecutor(250, TimeUnit.MILLISECONDS),
-                )
-                .join()
+            delay(250)
         }
         if (!topology.botsDisabled()) {
             ZoneWorldSpec.bots()
                 .filter { ZoneWorldSpec.zoneOf(it.x, it.y) in census.zoneIds() }
                 .forEach { bot ->
                     val result =
-                        actors
+                        kotlinActors
                             .getOrCreate(bot.id, ZoneWorldNames.PLAYER_ACTOR_TYPE)
                             .inMesh(ZoneWorldNames.MESH)
                             .request(ZLinkMessage.empty())
-                            .submit()
-                            .toCompletableFuture()
-                            .join()
+                            .await()
                     if (result is systems.zlink.framework.actors.ZLinkActorCreateResult.Created) {
-                        actorClient
-                            .requestToActor(
+                        kotlinActorClient
+                            .requestToActor<Messages.EnterWorldRes>(
                                 result.actor().actorId,
                                 Messages.EnterWorldReq(bot.x, bot.y, true, bot.dirX, bot.dirY),
                             )
-                            .submit(Messages.EnterWorldRes::class.java)
-                            .toCompletableFuture()
-                            .join()
+                            .await()
                     }
                     println(
                         "bot spawned. bot=${bot.id}, zone=${ZoneWorldSpec.zoneOf(bot.x, bot.y)}, " +
@@ -171,6 +165,7 @@ class ZoneStatusReporter(
     private val lifecycleLock = Any()
     private var scheduler: ScheduledExecutorService? = null
     private var running = false
+    private val kotlinRoutes = routes.kotlin()
 
     override fun start() =
         synchronized(lifecycleLock) {
@@ -184,46 +179,35 @@ class ZoneStatusReporter(
             scheduler = createdScheduler
             running = true
             createdScheduler.scheduleAtFixedRate(
-                ::report,
+                { runBlocking { report() } },
                 ZoneWorldSpec.NODE_STATUS_REPORT_PERIOD_MS,
                 ZoneWorldSpec.NODE_STATUS_REPORT_PERIOD_MS,
                 TimeUnit.MILLISECONDS,
             )
         }
 
-    fun reportNow(): CompletionStage<Void> = report()
+    suspend fun reportNow() = report()
 
-    private fun report(): CompletionStage<Void> =
-        synchronized(lifecycleLock) {
-            if (!running) return@synchronized CompletableFuture.completedFuture(null)
-            try {
-                return@synchronized routes
-                    .sendToChannel(
-                        ZoneWorldNames.REPORT_CHANNEL,
-                        Messages.ReportNodeStatusMsg(
-                            topology.nodeValue(),
-                            census.zoneIds(),
-                            census.total(),
-                            maintenance.isUnderMaintenance(topology.nodeValue()),
-                        ),
-                    )
-                    .submit()
-                    .whenComplete { _, error ->
-                        if (error != null) {
-                            println(
-                                "report failed node=${topology.nodeValue()} detail=${error.message}"
-                            )
-                        } else {
-                            println("node status report submitted. node=${topology.nodeValue()}")
-                        }
-                    }
-            } catch (error: RuntimeException) {
-                // A fixed-rate task is cancelled when an invocation escapes. Ops
-                // can start after a Zone node, so retain the periodic retry.
-                println("report failed node=${topology.nodeValue()} detail=${error.message}")
-                return@synchronized CompletableFuture.completedFuture(null)
+    private suspend fun report() {
+        val message =
+            synchronized(lifecycleLock) {
+                if (!running) return
+                Messages.ReportNodeStatusMsg(
+                    topology.nodeValue(),
+                    census.zoneIds(),
+                    census.total(),
+                    maintenance.isUnderMaintenance(topology.nodeValue()),
+                )
             }
+        try {
+            kotlinRoutes.sendToChannel(ZoneWorldNames.REPORT_CHANNEL, message).await()
+            println("node status report submitted. node=${topology.nodeValue()}")
+        } catch (error: RuntimeException) {
+            // A fixed-rate task is cancelled when an invocation escapes. Ops can start after a
+            // Zone node, so retain the periodic retry.
+            println("report failed node=${topology.nodeValue()} detail=${error.message}")
         }
+    }
 
     override fun stop() =
         synchronized(lifecycleLock) {
@@ -249,24 +233,22 @@ class ZoneStatusReporter(
 
 @ZLinkHandlerGroup(ZoneWorldNames.OPS_HANDLER_GROUP)
 class ReportNodeStatusHandler(private val registry: NodeRegistry) :
-    ZLinkRouteSendHandler<Messages.ReportNodeStatusMsg> {
-    override fun handle(
+    ZLinkSuspendingRouteSendHandler<Messages.ReportNodeStatusMsg> {
+    override suspend fun handle(
         message: Messages.ReportNodeStatusMsg,
         context: ZLinkRouteMessageContext,
-    ): CompletionStage<Void> {
+    ) {
         registry.report(message, context.sourceNodeRid().toString())
-        return CompletableFuture.completedFuture(null)
     }
 }
 
 @ZLinkHandlerGroup(ZoneWorldNames.OPS_HANDLER_GROUP)
 class ReportSpotEventHandler(private val registry: NodeRegistry) :
-    ZLinkSendHandler<Messages.ReportSpotEventMsg> {
-    override fun handle(
+    ZLinkSuspendingSendHandler<Messages.ReportSpotEventMsg> {
+    override suspend fun handle(
         message: Messages.ReportSpotEventMsg,
         context: ZLinkMessageContext,
-    ): CompletionStage<Void> {
+    ) {
         registry.alert(message)
-        return CompletableFuture.completedFuture(null)
     }
 }

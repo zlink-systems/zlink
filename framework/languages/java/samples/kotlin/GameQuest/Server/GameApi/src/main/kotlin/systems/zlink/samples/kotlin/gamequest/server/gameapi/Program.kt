@@ -10,7 +10,6 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 import java.time.Instant
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.future.await
 import org.springframework.boot.WebApplicationType
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.builder.SpringApplicationBuilder
@@ -31,7 +30,11 @@ import systems.zlink.framework.kotlin.ZLinkSuspendingActorFactory
 import systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpot
 import systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpotActorSendHandler
 import systems.zlink.framework.kotlin.ZLinkSuspendingSession
+import systems.zlink.framework.kotlin.await
+import systems.zlink.framework.kotlin.decode
 import systems.zlink.framework.kotlin.kotlin
+import systems.zlink.framework.kotlin.requestToSpot
+import systems.zlink.framework.kotlin.sendToSpot
 import systems.zlink.framework.kotlin.useCoroutineHandlers
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore
@@ -115,6 +118,7 @@ class Program {
                 )
             )
             options.useCoroutineHandlers(Dispatchers.Default)
+            // #895: configuration package scanning has no Kotlin form in the spec.
             options.addHandlersFromPackageOf(Program::class.java)
             options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 
@@ -125,6 +129,7 @@ class Program {
                 .listen()
                 .objects()
                 .server()
+                // #895: entry-spot registration has no Kotlin form in the spec.
                 .addEntrySpot(GameQuestEntrySpot::class.java)
                 .addActorFactory(
                     SampleNames.PlayerSessionActorType,
@@ -137,6 +142,7 @@ class Program {
                 .addStreamNode(SampleNames.StreamNode)
                 .bind(api.streamEndpoint)
                 .enableActorDispatch()
+                // #895: session registration has no Kotlin form in the spec.
                 .registerSession(GameQuestSession::class.java)
             // --8<-- [end:doc-gq-api-register]
         }
@@ -195,11 +201,12 @@ class Program {
 
 class GameQuestSession(
     private val context: ZLinkSessionContext,
-    private val routes: ZLinkRouteClient,
+    routes: ZLinkRouteClient,
     private val store: GameQuestStore,
     private val topology: SampleTopology,
     private val actors: ZLinkActorManager,
 ) : ZLinkSuspendingSession() {
+    private val routes = routes.kotlin()
     private var playerId: String? = null
     private var playerActor: ZLinkSessionActor? = null
 
@@ -215,15 +222,14 @@ class GameQuestSession(
         payload: ZLinkMessage,
     ) {
         when (dispatch.packetName()) {
-            "JoinSessionReq" -> handleJoin(payload.decode(JoinSessionReq::class.java))
-            "GetQuestProgressReq" ->
-                handleGetProgress(payload.decode(GetQuestProgressReq::class.java))
-            "SyncQuestProgressReq" -> handleSync(payload.decode(SyncQuestProgressReq::class.java))
-            "KillMonsterReq" -> handleKill(payload.decode(KillMonsterReq::class.java))
-            "CollectItemMsg" -> handleCollect(payload.decode(CollectItemMsg::class.java))
-            "CompleteMissionReq" -> handleMission(payload.decode(CompleteMissionReq::class.java))
-            "EnterAreaMsg" -> handleArea(payload.decode(EnterAreaMsg::class.java))
-            "UnlockFeatureReq" -> handleFeature(payload.decode(UnlockFeatureReq::class.java))
+            "JoinSessionReq" -> handleJoin(payload.decode<JoinSessionReq>())
+            "GetQuestProgressReq" -> handleGetProgress(payload.decode<GetQuestProgressReq>())
+            "SyncQuestProgressReq" -> handleSync(payload.decode<SyncQuestProgressReq>())
+            "KillMonsterReq" -> handleKill(payload.decode<KillMonsterReq>())
+            "CollectItemMsg" -> handleCollect(payload.decode<CollectItemMsg>())
+            "CompleteMissionReq" -> handleMission(payload.decode<CompleteMissionReq>())
+            "EnterAreaMsg" -> handleArea(payload.decode<EnterAreaMsg>())
+            "UnlockFeatureReq" -> handleFeature(payload.decode<UnlockFeatureReq>())
             else -> error("Unknown GameQuest packet: ${dispatch.packetName()}")
         }
     }
@@ -239,40 +245,40 @@ class GameQuestSession(
         // --8<-- [end:doc-gq-join-bind]
         val ownerProjection =
             routes
-                .requestToSpot(request.playerId, GetQuestProgressReq(request.playerId))
+                .requestToSpot<GetQuestProgressRes>(
+                    request.playerId,
+                    GetQuestProgressReq(request.playerId),
+                )
                 .timeout(SampleTimings.RequestTimeout)
                 .instanceSpot(SampleNames.PlayerQuestSpotType)
                 .inMesh(SampleNames.PlayerQuestMesh)
-                .submit(GetQuestProgressRes::class.java)
                 .await()
         store.mergeProjection(request.playerId, ownerProjection.activeQuests)
-        context.client().reply(JoinSessionRes(ownerProjection.activeQuests)).submit()
+        context.client().kotlin().reply(JoinSessionRes(ownerProjection.activeQuests)).await()
     }
 
     private suspend fun handleGetProgress(request: GetQuestProgressReq) {
         val ownerProjection =
             routes
-                .requestToSpot(request.playerId, request)
+                .requestToSpot<GetQuestProgressRes>(request.playerId, request)
                 .timeout(SampleTimings.RequestTimeout)
                 .instanceSpot(SampleNames.PlayerQuestSpotType)
                 .inMesh(SampleNames.PlayerQuestMesh)
-                .submit(GetQuestProgressRes::class.java)
                 .await()
         store.mergeProjection(request.playerId, ownerProjection.activeQuests)
-        context.client().reply(ownerProjection).submit()
+        context.client().kotlin().reply(ownerProjection).await()
     }
 
     private suspend fun handleSync(request: SyncQuestProgressReq) {
         val response =
             routes
-                .requestToSpot(request.playerId, request)
+                .requestToSpot<SyncQuestProgressRes>(request.playerId, request)
                 .timeout(SampleTimings.RequestTimeout)
                 .instanceSpot(SampleNames.PlayerQuestSpotType)
                 .inMesh(SampleNames.PlayerQuestMesh)
-                .submit(SyncQuestProgressRes::class.java)
                 .await()
         store.mergeProjection(request.playerId, response.updatedQuests)
-        context.client().reply(response).submit()
+        context.client().kotlin().reply(response).await()
     }
 
     // --8<-- [start:doc-gq-action-handler]
@@ -289,7 +295,7 @@ class GameQuestSession(
                         true,
                     )
                 )
-            context.client().reply(KillMonsterRes(processed.eventId)).submit()
+            context.client().kotlin().reply(KillMonsterRes(processed.eventId)).await()
         } catch (failure: Exception) {
             println("gamequest-owner unavailable player=${request.playerId}")
             throw failure
@@ -323,7 +329,7 @@ class GameQuestSession(
                     true,
                 )
             )
-        context.client().reply(CompleteMissionRes(processed.eventId)).submit()
+        context.client().kotlin().reply(CompleteMissionRes(processed.eventId)).await()
     }
 
     private suspend fun handleArea(message: EnterAreaMsg) {
@@ -342,7 +348,7 @@ class GameQuestSession(
                     true,
                 )
             )
-        context.client().reply(UnlockFeatureRes(processed.eventId)).submit()
+        context.client().kotlin().reply(UnlockFeatureRes(processed.eventId)).await()
     }
 
     private suspend fun process(event: GameplayMsg): GameplayMsg {
@@ -353,7 +359,6 @@ class GameQuestSession(
             .sendToSpot(event.playerId, event)
             .instanceSpot(SampleNames.PlayerQuestSpotType)
             .inMesh(SampleNames.PlayerQuestMesh)
-            .submit()
             .await()
         // --8<-- [end:doc-gq-owner-send]
         println("gamequest-api event-routed player=${event.playerId}")
@@ -401,9 +406,21 @@ class GameQuestPlayerActor(private val id: String, private val actorContext: ZLi
     ZLinkActor {
     override fun context(): ZLinkActorContext = actorContext
 
-    fun push(message: QuestProcessingMsg) {
-        message.progressNotifications.forEach { actorContext.boundSession().send(it).submit() }
-        message.completedNotifications.forEach { actorContext.boundSession().send(it).submit() }
+    suspend fun push(message: QuestProcessingMsg) {
+        message.progressNotifications.forEach {
+            try {
+                actorContext.boundSession().kotlin().send(it).await()
+            } catch (_: RuntimeException) {
+                // A stale session cannot prevent later best-effort notifications.
+            }
+        }
+        message.completedNotifications.forEach {
+            try {
+                actorContext.boundSession().kotlin().send(it).await()
+            } catch (_: RuntimeException) {
+                // A stale session cannot prevent later best-effort notifications.
+            }
+        }
     }
 }
 
@@ -483,11 +500,14 @@ private fun handleProjection(
             val deleted =
                 kotlinx.coroutines.runBlocking {
                     Program.routes
-                        .requestToSpot(playerId, DeleteQuestProjectionReq(playerId, questId))
+                        .kotlin()
+                        .requestToSpot<DeleteQuestProjectionRes>(
+                            playerId,
+                            DeleteQuestProjectionReq(playerId, questId),
+                        )
                         .timeout(SampleTimings.RequestTimeout)
                         .instanceSpot(SampleNames.PlayerQuestSpotType)
                         .inMesh(SampleNames.PlayerQuestMesh)
-                        .submit(DeleteQuestProjectionRes::class.java)
                         .await()
                 }
             store.deleteProjection(playerId, questId)
@@ -497,11 +517,14 @@ private fun handleProjection(
             val rebuilt =
                 kotlinx.coroutines.runBlocking {
                     Program.routes
-                        .requestToSpot(playerId, RebuildQuestProjectionReq(playerId, questId, 0))
+                        .kotlin()
+                        .requestToSpot<QuestProgress>(
+                            playerId,
+                            RebuildQuestProjectionReq(playerId, questId, 0),
+                        )
                         .timeout(SampleTimings.RequestTimeout)
                         .instanceSpot(SampleNames.PlayerQuestSpotType)
                         .inMesh(SampleNames.PlayerQuestMesh)
-                        .submit(QuestProgress::class.java)
                         .await()
                 }
             store.mergeProjection(playerId, listOf(rebuilt))

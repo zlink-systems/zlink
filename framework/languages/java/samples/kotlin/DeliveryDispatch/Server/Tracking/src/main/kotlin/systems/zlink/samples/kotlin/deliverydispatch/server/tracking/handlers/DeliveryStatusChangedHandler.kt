@@ -6,6 +6,7 @@ import systems.zlink.framework.actors.ZLinkActorDirectory
 import systems.zlink.framework.handlers.ZLinkHandlerGroup
 import systems.zlink.framework.kotlin.ZLinkSuspendingRequestHandler
 import systems.zlink.framework.kotlin.await
+import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.samples.kotlin.deliverydispatch.server.configuration.DeliveryEvidenceStore
 import systems.zlink.samples.kotlin.deliverydispatch.shared.contracts.DeliveryStatusChangedReq
 import systems.zlink.samples.kotlin.deliverydispatch.shared.contracts.DeliveryStatusChangedRes
@@ -17,6 +18,8 @@ class DeliveryStatusChangedHandler(
     private val actors: ZLinkActorClient,
     private val actorRefs: ZLinkActorDirectory,
 ) : ZLinkSuspendingRequestHandler<DeliveryStatusChangedReq, DeliveryStatusChangedRes> {
+    private val kotlinActors = actors.kotlin()
+
     override suspend fun handle(
         request: DeliveryStatusChangedReq,
         context: ZLinkMessageContext,
@@ -30,7 +33,7 @@ class DeliveryStatusChangedHandler(
             actorRefs.find(request.customerId).await().orElseThrow {
                 IllegalStateException("customer actor not found: ${request.customerId}")
             }
-        actors
+        kotlinActors
             .sendToActor(
                 actorRef.actorId,
                 DeliveryStatusUpdatedMsg(
@@ -41,7 +44,7 @@ class DeliveryStatusChangedHandler(
                     occurredAt = request.occurredAt,
                 ),
             )
-            .submit()
+            .await()
         // --8<-- [end:doc-dd-tracking-forward]
         return DeliveryStatusChangedRes(request.deliveryId, request.status)
     }

@@ -1,7 +1,6 @@
 package systems.zlink.tutorial.client
 
 import java.time.Duration
-import kotlinx.coroutines.future.await
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
@@ -10,6 +9,8 @@ import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RestController
 import systems.zlink.framework.channels.ZLinkRouteClient
 import systems.zlink.framework.kotlin.kotlin
+import systems.zlink.framework.kotlin.requestToSpot
+import systems.zlink.framework.kotlin.sendToSpot
 import systems.zlink.framework.spots.ZLinkSpotManager
 import systems.zlink.tutorial.shared.GetRoomState
 import systems.zlink.tutorial.shared.OpenRoom
@@ -17,11 +18,12 @@ import systems.zlink.tutorial.shared.PostChat
 import systems.zlink.tutorial.shared.RoomState
 
 @RestController
-class RoomEndpoints(private val route: ZLinkRouteClient, rooms: ZLinkSpotManager) {
+class RoomEndpoints(route: ZLinkRouteClient, rooms: ZLinkSpotManager) {
 
     // The Java ZLinkSpotManager is what Spring injects. kotlin() wraps it in the
     // Kotlin manager, whose calls end in await() instead of submit().
     private val rooms = rooms.kotlin()
+    private val route = route.kotlin()
 
     // --8<-- [start:spot-create-call]
     @PostMapping("/rooms")
@@ -45,9 +47,7 @@ class RoomEndpoints(private val route: ZLinkRouteClient, rooms: ZLinkSpotManager
         @RequestBody message: PostChat,
     ): ResponseEntity<Void> {
         // The id is enough; the Framework resolves where the room currently runs.
-        // The Spot calls have no Kotlin wrapper of their own, so this is the Java
-        // call awaited with kotlinx.coroutines.future.await.
-        route.sendToSpot(roomId, message).submit().await()
+        route.sendToSpot(roomId, message).await()
 
         return ResponseEntity.accepted().build()
     }
@@ -58,9 +58,8 @@ class RoomEndpoints(private val route: ZLinkRouteClient, rooms: ZLinkSpotManager
     @GetMapping("/rooms/{roomId}")
     suspend fun roomState(@PathVariable roomId: String): RoomState =
         route
-            .requestToSpot(roomId, GetRoomState())
+            .requestToSpot<RoomState>(roomId, GetRoomState())
             .timeout(Duration.ofSeconds(3))
-            .submit(RoomState::class.java)
             .await()
     // --8<-- [end:spot-request-call]
     // --8<-- [end:spot-message-call]

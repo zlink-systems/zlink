@@ -2,6 +2,7 @@ package systems.zlink.samples.kotlin.deliverydispatch.server.customergateway
 
 import systems.zlink.framework.actors.ZLinkActor
 import systems.zlink.framework.actors.ZLinkActorContext
+import systems.zlink.framework.kotlin.kotlin
 
 class CustomerActor(private val id: String, private val actorContext: ZLinkActorContext) :
     ZLinkActor {
@@ -9,7 +10,11 @@ class CustomerActor(private val id: String, private val actorContext: ZLinkActor
 
     override fun context(): ZLinkActorContext = actorContext
 
-    fun push(message: Any) {
-        actorContext.boundSession().send(message).submit()
+    suspend fun push(message: Any) {
+        try {
+            actorContext.boundSession().kotlin().send(message).await()
+        } catch (_: RuntimeException) {
+            // Delivery notifications are best effort when the customer session is stale.
+        }
     }
 }

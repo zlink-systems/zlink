@@ -64,13 +64,17 @@ E2E test comes down to just this much code.
 
     ```kotlin
     // A real connection
-    client.connect().submit().await()
+    val kotlinClient = client.kotlin()
+    val kotlinOther = other.kotlin()
+    kotlinClient.connect().await()
     // A real request
-    val auth = client.request(AuthenticateReq(actorId))
-        .submit(AuthenticateRes::class.java).await()
+    val pushDeferred = async(start = CoroutineStart.UNDISPATCHED) {
+        kotlinOther.waitFor<PlayerJoinedNotify>().await()
+    }
+    val auth = kotlinClient.request(AuthenticateReq(actorId))
+        .awaitReply<AuthenticateRes>()
     // Confirms a real push arrived
-    val push = other.waitFor(PlayerJoinedNotify::class.java)
-        .submit(PlayerJoinedNotify::class.java).await()
+    val push = pushDeferred.await()
     ZLinkStreamAssert.ensure(
         push.payload().actorId == auth.player.actorId, "join push actor mismatch.")
     ```
@@ -291,9 +295,8 @@ condition.** Other, nonmatching pushes may arrive without affecting the scenario
 === "Kotlin"
 
     ```kotlin
-    val joined = client1.waitFor(PlayerJoinedNotify::class.java)
-        .where(PlayerJoinedNotify::class.java) { it.payload().actorId == options.oActorId }
-        .submit(PlayerJoinedNotify::class.java)
+    val joined = client1.kotlin().waitFor<PlayerJoinedNotify>()
+        .where { it.payload().actorId == options.oActorId }
         .await()
     ZLinkStreamAssert.ensure(joined.payload().mark == TicTacToeMarks.O, "joined mark mismatch.")
     ```
@@ -345,9 +348,8 @@ must be specified. Omitting it is an error.
 
     ```kotlin
     // The player who just joined shouldn't receive their own join notification.
-    client2.expectNone(PlayerJoinedNotify::class.java)
+    client2.kotlin().expectNone<PlayerJoinedNotify>()
         .within(Duration.ofMillis(250))
-        .submit()
         .await()
     ```
 
@@ -426,13 +428,12 @@ its **order.**
 === "Kotlin"
 
     ```kotlin
-    val statusSequence = customer.waitForSequence(DeliveryStatusNotify::class.java)
-        .expect(DeliveryStatusNotify::class.java) { matchesStatus(it, deliveryId, DeliveryStatus.Assigned) }
-        .expect(DeliveryStatusNotify::class.java) { matchesStatus(it, deliveryId, DeliveryStatus.Accepted) }
-        .expect(DeliveryStatusNotify::class.java) { matchesStatus(it, deliveryId, DeliveryStatus.PickedUp) }
-        .expect(DeliveryStatusNotify::class.java) { matchesStatus(it, deliveryId, DeliveryStatus.Delivered) }
+    val statusSequence = customer.kotlin().waitForSequence<DeliveryStatusNotify>()
+        .expect { matchesStatus(it, deliveryId, DeliveryStatus.Assigned) }
+        .expect { matchesStatus(it, deliveryId, DeliveryStatus.Accepted) }
+        .expect { matchesStatus(it, deliveryId, DeliveryStatus.PickedUp) }
+        .expect { matchesStatus(it, deliveryId, DeliveryStatus.Delivered) }
         .timeout(customer.options().waitTimeout)
-        .submit(DeliveryStatusNotify::class.java)
         .await()
     ```
 
@@ -492,10 +493,10 @@ part of the contract. Verifying only the success path leaves this path unverifie
 
     ```kotlin
     // Can't open a conversation before authenticating.
-    ZLinkStreamAssert.expectFailure(
-        { agent.request(OpenConversationReq("unauthenticated"))
-            .submit(OpenConversationRes::class.java) },
-        ZLinkStreamErrorCode.RemoteError)
+    ZLinkKotlinStreamAssert.expectFailure(ZLinkStreamErrorCode.REMOTE_ERROR.name) {
+        agent.kotlin().request(OpenConversationReq("unauthenticated"))
+            .awaitReply<OpenConversationRes>()
+    }
     ```
 
 === "Node/TypeScript"
@@ -581,10 +582,12 @@ Reverse the order. Register the wait first, then run the action that triggers th
 
     ```kotlin
     // Register the wait first -- don't await it yet.
-    val statusSequenceDeferred = customer.waitForSequence(DeliveryStatusNotify::class.java)
-        .expect(DeliveryStatusNotify::class.java) { matchesStatus(it, deliveryId, DeliveryStatus.Assigned) }
+    val statusSequenceDeferred = async(start = CoroutineStart.UNDISPATCHED) {
+        customer.kotlin().waitForSequence<DeliveryStatusNotify>()
+        .expect { matchesStatus(it, deliveryId, DeliveryStatus.Assigned) }
         .timeout(customer.options().waitTimeout)
-        .submit(DeliveryStatusNotify::class.java)
+        .await()
+    }
 
     // Then run the action that triggers the push.
     val created = http.post("/deliveries")
@@ -655,10 +658,12 @@ them together with `Task.WhenAll`.
 
     ```kotlin
     // Bingo -- once both players have joined the room starts, and both clients get the same push.
-    val client1Started = client1.waitFor(BingoGameStartedNotify::class.java)
-        .submit(BingoGameStartedNotify::class.java)
-    val client2Started = client2.waitFor(BingoGameStartedNotify::class.java)
-        .submit(BingoGameStartedNotify::class.java)
+    val client1Started = async(start = CoroutineStart.UNDISPATCHED) {
+        client1.kotlin().waitFor<BingoGameStartedNotify>().await()
+    }
+    val client2Started = async(start = CoroutineStart.UNDISPATCHED) {
+        client2.kotlin().waitFor<BingoGameStartedNotify>().await()
+    }
 
     client1Started.await()
     client2Started.await()
@@ -863,8 +868,10 @@ move, in that order.
         val client2 = createStreamClient(room.playEndpoints[1], options)
 
         // 3. Whoever connects first authenticates and enters the empty room.
-        client1.connect().submit().await()
-        client1.request(AuthenticateReq(options.xActorId)).submit(AuthenticateRes::class.java).await()
+        val kotlinClient1 = client1.kotlin()
+        val kotlinClient2 = client2.kotlin()
+        kotlinClient1.connect().await()
+        kotlinClient1.request(AuthenticateReq(options.xActorId)).awaitReply<AuthenticateRes>()
         // Register wait -> send -> receive (see §3)
         val join1 = joinGame(client1, room.roomId)
         ZLinkStreamAssert.ensure(
@@ -872,20 +879,23 @@ move, in that order.
             "room should wait for the second player.")
 
         // Being alone in the room, their own join notification shouldn't come back to them.
-        client1.expectNone(PlayerJoinedNotify::class.java).within(Duration.ofMillis(250)).submit().await()
+        client1.kotlin().expectNone<PlayerJoinedNotify>().within(Duration.ofMillis(250)).await()
 
         // 4. Once the second player joins, the room starts.
-        client2.connect().submit().await()
-        client2.request(AuthenticateReq(options.oActorId)).submit(AuthenticateRes::class.java).await()
+        kotlinClient2.connect().await()
+        kotlinClient2.request(AuthenticateReq(options.oActorId)).awaitReply<AuthenticateRes>()
         val join2 = joinGame(client2, room.roomId)
         ZLinkStreamAssert.ensure(
             join2.state.status == TicTacToeGameStatuses.InProgress, "room should start with two players.")
 
         // 5. Making a move -- the response and the push delivered to the opponent should point to the same state.
-        val move = client1.request(PlaceMarkReq(0)).submit(PlaceMarkRes::class.java).await()
-        val sawMove = client2.waitFor(GameStateNotify::class.java)
-            .where(GameStateNotify::class.java) { it.payload().state.lastMoveCell == 0 }
-            .submit(GameStateNotify::class.java).await()
+        val sawMoveDeferred = async(start = CoroutineStart.UNDISPATCHED) {
+            kotlinClient2.waitFor<GameStateNotify>()
+                .where { it.payload().state.lastMoveCell == 0 }
+                .await()
+        }
+        val move = kotlinClient1.request(PlaceMarkReq(0)).awaitReply<PlaceMarkRes>()
+        val sawMove = sawMoveDeferred.await()
         ZLinkStreamAssert.ensure(sawMove.payload().state.board == move.state.board, "board state mismatch.")
     }
     ```
@@ -986,8 +996,11 @@ client can't confirm.
     ```kotlin
     // The join completion arrives as a client push -- register the wait before the one-way send.
     private suspend fun joinGame(connector: ZLinkStreamConnector, roomId: String): JoinGameNotify {
-        val completion = connector.waitFor(JoinGameNotify::class.java).submit(JoinGameNotify::class.java)
-        connector.send(JoinGameMsg(roomId)).submit().await()
+        val kotlinConnector = connector.kotlin()
+        val completion = async(start = CoroutineStart.UNDISPATCHED) {
+            kotlinConnector.waitFor<JoinGameNotify>().await()
+        }
+        kotlinConnector.send(JoinGameMsg(roomId)).await()
         return completion.await().payload()
     }
     ```
