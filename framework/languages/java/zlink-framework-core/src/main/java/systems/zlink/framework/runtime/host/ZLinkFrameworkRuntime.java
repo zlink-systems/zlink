@@ -545,7 +545,6 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                                                         node.refreshLocalAuthorityFence()
                                                                                 .toCompletableFuture())
                                                         .toArray(CompletableFuture[]::new)))
-                .thenCompose(ignored -> connectManualObjectPeers())
                 .thenCompose(ignored -> spotSubsystem.startup())
                 .thenCompose(
                         ignored ->
@@ -577,80 +576,6 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                         .nodesByName()
                                         .values()
                                         .forEach(ZLinkInternalMeshNode::markServiceReady));
-    }
-
-    private CompletionStage<Void> connectManualObjectPeers() {
-        if (storeLocationResolvers == null) {
-            return CompletableFuture.completedFuture(null);
-        }
-        var tasks = new ArrayList<CompletableFuture<?>>();
-        for (var registration : this.registration.meshNodes()) {
-            var source = meshNodes.nodesByName().get(registration.meshName());
-            if (source == null || !registration.objectRoleEnabled()) {
-                continue;
-            }
-            var unresolved =
-                    registration.peers().stream()
-                            .filter(peer -> peer.expectedRoutingId() == null)
-                            .toList();
-            if (unresolved.isEmpty()) {
-                continue;
-            }
-            tasks.add(
-                    connectManualObjectPeers(
-                                    source,
-                                    unresolved,
-                                    registration.meshName(),
-                                    storeLocationResolvers)
-                            .toCompletableFuture());
-        }
-        return CompletableFuture.allOf(tasks.toArray(CompletableFuture[]::new));
-    }
-
-    static CompletionStage<Void> connectManualObjectPeers(
-            ZLinkInternalMeshNode source,
-            List<MeshNodeRegistration.Peer> unresolved,
-            String meshName,
-            ZLinkStoreLocationResolvers locationResolvers) {
-        return locationResolvers
-                .listLiveMeshNodes(meshName)
-                .thenAccept(
-                        descriptors -> {
-                            for (var peer : unresolved) {
-                                connectManualObjectPeer(source, peer, descriptors);
-                            }
-                        });
-    }
-
-    static boolean connectManualObjectPeer(
-            ZLinkInternalMeshNode source,
-            MeshNodeRegistration.Peer peer,
-            List<systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor>
-                    descriptors) {
-        if (peer.expectedRoutingId() != null) {
-            return false;
-        }
-        return descriptors.stream()
-                .filter(target -> target.endpoint().equals(peer.endpoint()))
-                .filter(target -> !target.rid().equals(source.status().routingId()))
-                .min(Comparator.comparing(target -> target.rid().toHex()))
-                .map(
-                        target -> {
-                            try {
-                                source.replacePeerConnection(
-                                        target.endpoint(),
-                                        target.rid(),
-                                        target.lifecycleGeneration(),
-                                        target.securityIdentity());
-                                return true;
-                            } catch (IllegalStateException previousConnectionStillOpen) {
-                                // The endpoint-only startup intent remains authoritative.
-                                // The Location auto-connect loop retries this descriptor
-                                // after the raw binding reports the liveness close.
-                                return false;
-                            }
-                        })
-                .orElse(false);
     }
 
     static ZLinkFrameworkRuntime start(
