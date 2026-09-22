@@ -23,7 +23,7 @@ class CustomerActorDirectory {
         synchronized(gate) { deliveryCustomers[deliveryId] = customerId }
     }
 
-    fun push(status: DeliveryStatusChangedReq) {
+    suspend fun push(status: DeliveryStatusChangedReq) {
         val actor =
             synchronized(gate) { deliveryCustomers[status.deliveryId]?.let { actors[it] } }
                 ?: return

@@ -257,6 +257,13 @@ export class ServiceTopologyRegistry {
     return descriptor === undefined ? undefined : cloneDescriptor(descriptor);
   }
 
+  hasKnownChannelTarget(channelName: string): boolean {
+    requireText(channelName, 'channelName');
+    return [this.local, ...this.knownByRid.values()].some(
+      (descriptor) => selectableChannel(descriptor, channelName) !== undefined
+    );
+  }
+
   private remember(descriptor: ServiceNodeDescriptor): void {
     const current = this.knownByRid.get(descriptor.nodeRoutingId);
     if (
@@ -285,7 +292,7 @@ export class ServiceTopologyRegistry {
         return [local, ...this.peersByRid.values()]
           .map((peer) => ({
             peer: clonePeer(peer),
-            channel: findChannel(peer.descriptor, channelName)
+            channel: selectableChannel(peer.descriptor, channelName)
           }))
           .filter(
             (
@@ -293,10 +300,7 @@ export class ServiceTopologyRegistry {
             ): value is {
               peer: AdmittedServicePeer;
               channel: ServiceChannelDescriptor;
-            } =>
-              value.channel !== undefined &&
-              value.peer.descriptor.state === 'serving' &&
-              value.channel.weight > 0
+            } => value.channel !== undefined
           );
       },
       (value) => value.channel.weight,
@@ -517,6 +521,15 @@ function findChannel(
   channelName: string
 ): ServiceChannelDescriptor | undefined {
   return descriptor.channels.find((channel) => channel.name === channelName);
+}
+
+function selectableChannel(
+  descriptor: ServiceNodeDescriptor,
+  channelName: string
+): ServiceChannelDescriptor | undefined {
+  if (descriptor.state !== 'serving') return undefined;
+  const channel = findChannel(descriptor, channelName);
+  return channel !== undefined && channel.weight > 0 ? channel : undefined;
 }
 
 function requireText(value: string, field: string): void {

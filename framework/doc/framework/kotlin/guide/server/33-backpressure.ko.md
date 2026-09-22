@@ -157,7 +157,8 @@ reply가 Application 연결의 message를 앞지를 수 있으므로, handler는
 send는 응답을 기다리지 않지만, 기다려야 하는 대상이 하나 있다 — **보낼 자리**다.
 
 ```kotlin
-client.sendToChannel("orders", CancelOrder("order-1042")).submit().await()
+val kotlinClient = client.kotlin()
+kotlinClient.sendToChannel("orders", CancelOrder("order-1042")).await()
 // 이 await가 끝났다는 것은 "내 runtime이 제출을 받아들였다"까지다.
 // 상대가 받았거나 handler가 끝났다는 뜻이 아니다.
 ```
@@ -170,8 +171,9 @@ Framework는 binding operation 하나만 시작한다. 자리가 없으면 Core�
 operation으로 재시도할지, 버릴지, 사용자에게 실패를 알릴지는 application이 정한다.
 
 ```kotlin
+val kotlinClient = client.kotlin()
 try {
-    client.sendToChannel("orders", command).submit().await()
+    kotlinClient.sendToChannel("orders", command).await()
 } catch (ex: ZLinkFrameworkException) {
     if (ex.kind() != ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED) throw ex
     // 이 operation이 DeadlineExceeded로 끝났다는 것만 확실하다. 상대 상태는 알 수 없다.
@@ -214,10 +216,9 @@ request는 보낼 자리와 상대의 reply를 모두 기다리므로, 정체가
 suspend fun handle(request: PlaceOrder, context: ZLinkMessageContext): PlaceOrderReply {
     // handler가 reply를 기다리는 동안 이 handler의 실행 자리는 계속 점유된다.
     // 양쪽 node의 처리가 동시에 지연되면 유한한 timeout이 회복을 시작하는 유일한 지점이다.
-    val reserved = client
-        .requestToChannel("inventory", ReserveStock(request.sku, request.quantity))
+    val reserved = client.kotlin()
+        .requestToChannel<StockReserved>("inventory", ReserveStock(request.sku, request.quantity))
         .timeout(Duration.ofSeconds(3))
-        .submit(StockReserved::class.java)
         .await()
 
     return PlaceOrderReply(request.orderId, reserved.reservationId)

@@ -879,6 +879,43 @@ test('ZLinkRouteClient applies RouteMesh request timeout before registration def
   ]);
 });
 
+test('RouteMesh channel send with no selectable target reports NotFound', async () => {
+  const meshName = `route-mesh-no-target-${process.pid}`;
+  const channelName = 'work';
+  const registration = framework.createFrameworkRegistrationWithBuilder((builder) => {
+    builder
+      .addRouteMesh(meshName)
+      .listen(`inproc://${meshName}`)
+      .routingId(`route-mesh-no-target-node-${process.pid}`)
+      .channel(channelName)
+      .client();
+  });
+  const runtime = new framework.ZLinkFrameworkRuntimeHost({ registration });
+  const client = new framework.DefaultZLinkRouteClient(
+    registration,
+    runtime.routeTransport,
+    runtime.spotRouterChannelIdForMesh
+  );
+
+  try {
+    await runtime.start();
+    const notFound = (error) =>
+      error instanceof framework.ZLinkFrameworkException &&
+      error.kind === framework.ZLinkFrameworkErrorKind.NotFound;
+
+    await assert.rejects(
+      () => client.sendToChannel(channelName, typedPacket('Notice', { id: 1 })).submit(),
+      notFound
+    );
+    await assert.rejects(
+      () => client.requestToChannel(channelName, typedPacket('Question', { id: 2 })).submit(),
+      notFound
+    );
+  } finally {
+    await runtime.stop();
+  }
+});
+
 test('ZLinkRouteClient applies route channel request timeout before registration default', async () => {
   const calls = [];
   const registration = framework.createFrameworkRegistration({

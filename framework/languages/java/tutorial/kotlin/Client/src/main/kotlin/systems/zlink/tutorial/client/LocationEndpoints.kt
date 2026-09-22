@@ -1,11 +1,11 @@
 package systems.zlink.tutorial.client
 
-import kotlinx.coroutines.future.await
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.RestController
 import systems.zlink.framework.actors.ZLinkActorManager
+import systems.zlink.framework.kotlin.await
 import systems.zlink.framework.spots.ZLinkSpotManager
 
 @RestController

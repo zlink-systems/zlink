@@ -592,7 +592,8 @@ callback이 비동기 작업을 기다리는 동안에도 진행해야 한다.
 Actor owner host의 Relocate는 §8의 barrier를 사용한다. Session owner host의 Relocate와
 Shutdown은 신규 session·binding을 거부하고 accepted callback·reply·cleanup을
 [deadline](../00-foundation/02-glossary.ko.md#deadline)까지 처리한 뒤 connection을 닫는다. Physical
-connection을 다른 process로 이동하지 않는다.
+connection을 다른 process로 이동하지 않는다. Shutdown이 닫는 connection의 bound Actor 정리는
+§7의 disconnect 통지와 같다 — shutdown 전용 unbind 경로나 remote terminal 요구는 두지 않는다.
 
 위 규칙의 내부 확인 조건 — 같은 연결의 두 session callback이 동시에 실행되지 않고, session
 callback을 실행하는 문맥에서 Actor handler가 실행되지 않는다 — 는 white-box 불변 조건으로

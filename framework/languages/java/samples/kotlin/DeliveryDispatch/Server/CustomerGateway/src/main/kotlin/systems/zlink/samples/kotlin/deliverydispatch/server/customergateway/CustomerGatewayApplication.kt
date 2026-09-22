@@ -27,6 +27,7 @@ class CustomerGatewayApplication {
     @Bean
     fun customerGatewayFramework(): ZLinkFrameworkConfigurer = ZLinkFrameworkConfigurer { options ->
         options.useCoroutineHandlers(Dispatchers.Default)
+        // #895: configuration package scanning has no Kotlin form in the spec.
         options.addHandlersFromPackageOf(CustomerGatewayApplication::class.java)
         options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 
@@ -34,6 +35,7 @@ class CustomerGatewayApplication {
         node
             .listen(SampleTopology.CustomerSpotRouterEndpoint)
             .setRoutingIdPrefix("delivery-customer")
+        // #895: entry-spot registration has no Kotlin form in the spec.
         node.objects().server().addEntrySpot(CustomerEntrySpot::class.java).addActorFactory(
             SampleNames.CustomerActorType,
             CustomerActor::class.java,
@@ -45,6 +47,7 @@ class CustomerGatewayApplication {
             .addStreamNode(SampleNames.CustomerStreamNode)
             .bind(SampleTopology.CustomerStreamEndpoint)
             .enableActorDispatch()
+            // #895: session registration has no Kotlin form in the spec.
             .registerSession(CustomerSession::class.java)
     }
 

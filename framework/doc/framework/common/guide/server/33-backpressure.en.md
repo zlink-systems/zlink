@@ -175,7 +175,8 @@ slot to send into.**
 === "Kotlin"
 
     ```kotlin
-    client.sendToChannel("orders", CancelOrder("order-1042")).submit().await()
+    val kotlinClient = client.kotlin()
+    kotlinClient.sendToChannel("orders", CancelOrder("order-1042")).await()
     // This await finishing means only "my runtime accepted the submission."
     // It doesn't mean the peer received it or the handler finished.
     ```
@@ -253,8 +254,9 @@ application.
 === "Kotlin"
 
     ```kotlin
+    val kotlinClient = client.kotlin()
     try {
-        client.sendToChannel("orders", command).submit().await()
+        kotlinClient.sendToChannel("orders", command).await()
     } catch (ex: ZLinkFrameworkException) {
         if (ex.kind() != ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED) throw ex
         // Only this operation's DeadlineExceeded terminal is certain. The peer's state is unknown.
@@ -364,10 +366,9 @@ to a flow that sends another request from inside a handler.**
     suspend fun handle(request: PlaceOrder, context: ZLinkMessageContext): PlaceOrderReply {
         // While the handler waits for the reply, this handler's execution slot stays occupied.
         // If both nodes' processing is delayed at the same time, a finite timeout is the only place recovery starts.
-        val reserved = client
-            .requestToChannel("inventory", ReserveStock(request.sku, request.quantity))
+        val reserved = client.kotlin()
+            .requestToChannel<StockReserved>("inventory", ReserveStock(request.sku, request.quantity))
             .timeout(Duration.ofSeconds(3))
-            .submit(StockReserved::class.java)
             .await()
 
         return PlaceOrderReply(request.orderId, reserved.reservationId)

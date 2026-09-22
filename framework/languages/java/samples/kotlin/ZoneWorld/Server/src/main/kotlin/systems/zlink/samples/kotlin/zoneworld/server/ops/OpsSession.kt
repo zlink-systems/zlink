@@ -1,12 +1,18 @@
 package systems.zlink.samples.kotlin.zoneworld.server.ops
 
 import java.util.UUID
-import java.util.concurrent.CompletableFuture
-import java.util.concurrent.CompletionStage
 import java.util.concurrent.CopyOnWriteArrayList
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import systems.zlink.framework.channels.ZLinkFanoutClient
+import systems.zlink.framework.kotlin.ZLinkSuspendingSession
+import systems.zlink.framework.kotlin.decode
+import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.framework.messaging.ZLinkMessage
-import systems.zlink.framework.streams.ZLinkSession
 import systems.zlink.framework.streams.ZLinkSessionContext
 import systems.zlink.framework.streams.ZLinkSessionDispatchContext
 import systems.zlink.framework.streams.ZLinkStreamError
@@ -21,82 +27,74 @@ class OpsSession(
     private val maintenance: MaintenanceStore,
     private val fanout: ZLinkFanoutClient,
     private val consoles: OpsConsoleRegistry,
-) : ZLinkSession {
+) : ZLinkSuspendingSession() {
+    private val kotlinFanout = fanout.kotlin()
+
     override fun context() = sessionContext
 
-    override fun onConnected(): CompletionStage<Void> {
+    override suspend fun onConnectedSuspending() {
         consoles.add(sessionContext)
-        return CompletableFuture.completedFuture(null)
     }
 
-    override fun onDisconnected(): CompletionStage<Void> {
+    override suspend fun onDisconnectedSuspending() {
         consoles.remove(sessionContext)
-        return CompletableFuture.completedFuture(null)
     }
 
-    override fun onError(error: ZLinkStreamError): CompletionStage<Void> =
-        CompletableFuture.completedFuture<Void>(null)
+    override suspend fun onErrorSuspending(error: ZLinkStreamError) {}
 
-    override fun onDispatch(
+    override suspend fun onDispatchSuspending(
         dispatch: ZLinkSessionDispatchContext,
         payload: ZLinkMessage,
-    ): CompletionStage<Void> =
+    ) {
         when (dispatch.packetName()) {
             "WatchNodesReq" -> watch()
-            "AnnounceWorldReq" -> announce(payload.decode(Messages.AnnounceWorldReq::class.java))
-            "SetMaintenanceReq" ->
-                setMaintenance(payload.decode(Messages.SetMaintenanceReq::class.java))
-            "NodeDiagnosticsReq" ->
-                diagnostics(payload.decode(Messages.NodeDiagnosticsReq::class.java))
+            "AnnounceWorldReq" -> announce(payload.decode<Messages.AnnounceWorldReq>())
+            "SetMaintenanceReq" -> setMaintenance(payload.decode<Messages.SetMaintenanceReq>())
+            "NodeDiagnosticsReq" -> diagnostics(payload.decode<Messages.NodeDiagnosticsReq>())
             else -> error("unknown ZoneWorld Ops packet ${dispatch.packetName()}")
-        }
-
-    private fun watch(): CompletionStage<Void> {
-        val nodes = registry.snapshot()
-        return reply(Messages.WatchNodesRes(nodes)).thenCompose {
-            consoles.replay(sessionContext, nodes)
         }
     }
 
-    private fun announce(request: Messages.AnnounceWorldReq): CompletionStage<Void> {
+    private suspend fun watch() {
+        val nodes = registry.snapshot()
+        reply(Messages.WatchNodesRes(nodes))
+        consoles.replay(sessionContext, nodes)
+    }
+
+    private suspend fun announce(request: Messages.AnnounceWorldReq) {
         val id = UUID.randomUUID().toString()
-        return fanout
+        kotlinFanout
             .publish(
                 ZoneWorldNames.BROADCAST_CHANNEL,
                 ZoneWorldNames.ANNOUNCE_TOPIC,
                 Messages.WorldAnnounceEvent(id, request.text),
             )
-            .submit()
-            .thenCompose { reply(Messages.AnnounceWorldRes(id)) }
+            .await()
+        reply(Messages.AnnounceWorldRes(id))
     }
 
-    private fun setMaintenance(request: Messages.SetMaintenanceReq): CompletionStage<Void> {
-        val node =
-            registry.find(request.nodeId)
-                ?: return reply(
-                    Messages.SetMaintenanceRes(request.nodeId, false, emptyList(), "UnknownNode")
-                )
-        // The desired state is committed to the store; what the console shows for the node
-        // stays whatever the node itself last reported, so an observed maintenance value is
-        // always the node's own and never the operator's intent echoed back.
+    private suspend fun setMaintenance(request: Messages.SetMaintenanceReq) {
+        val node = registry.find(request.nodeId)
+        if (node == null) {
+            reply(Messages.SetMaintenanceRes(request.nodeId, false, emptyList(), "UnknownNode"))
+            return
+        }
         maintenance.set(request.nodeId, request.enabled)
         // --8<-- [start:doc-zw-ops-publish]
-        return fanout
+        kotlinFanout
             .publish(
                 ZoneWorldNames.BROADCAST_CHANNEL,
                 ZoneWorldNames.MAINTENANCE_TOPIC,
                 Messages.NodeMaintenanceChangedEvent(request.nodeId, request.enabled),
             )
-            .submit()
-            .thenCompose {
-                reply(Messages.SetMaintenanceRes(request.nodeId, request.enabled, node.zones))
-            }
+            .await()
+        reply(Messages.SetMaintenanceRes(request.nodeId, request.enabled, node.zones))
         // --8<-- [end:doc-zw-ops-publish]
     }
 
-    private fun diagnostics(request: Messages.NodeDiagnosticsReq): CompletionStage<Void> {
+    private suspend fun diagnostics(request: Messages.NodeDiagnosticsReq) {
         val node = registry.find(request.nodeId)
-        return if (node == null)
+        if (node == null) {
             reply(
                 Messages.NodeDiagnosticsRes(
                     request.nodeId,
@@ -106,24 +104,21 @@ class OpsSession(
                     "UnknownNode",
                 )
             )
-        else
-            reply(
-                Messages.NodeDiagnosticsRes(
-                    node.nodeId,
-                    node.zones,
-                    node.playerCount,
-                    node.maintenance,
-                )
-            )
+            return
+        }
+        reply(
+            Messages.NodeDiagnosticsRes(node.nodeId, node.zones, node.playerCount, node.maintenance)
+        )
     }
 
-    private fun reply(message: Any): CompletionStage<Void> =
-        sessionContext.client().reply(message).submit()
+    private suspend fun reply(message: Any) =
+        sessionContext.client().kotlin().reply(message).await()
 }
 
-class OpsConsoleRegistry {
+class OpsConsoleRegistry : AutoCloseable {
     private val sessions = CopyOnWriteArrayList<ZLinkSessionContext>()
     private val alerts = CopyOnWriteArrayList<Messages.NodeAlertNotify>()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     fun add(context: ZLinkSessionContext) {
         sessions += context
@@ -139,41 +134,35 @@ class OpsConsoleRegistry {
 
     fun broadcast(message: Any) {
         sessions.toList().forEach { session ->
-            try {
-                session.client().send(message).submit().exceptionally { null }
-            } catch (_: RuntimeException) {
-                // A stale console cannot prevent later live consoles from receiving
-                // this best-effort status or alert notification.
+            scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                try {
+                    session.client().kotlin().send(message).await()
+                } catch (_: RuntimeException) {
+                    // A stale console cannot prevent later best-effort submissions.
+                }
             }
         }
     }
 
-    fun replay(
-        context: ZLinkSessionContext,
-        nodes: List<Messages.NodeView>,
-    ): CompletionStage<Void> {
-        var sends: CompletionStage<Void> = CompletableFuture.completedFuture(null)
+    override fun close() = scope.cancel()
+
+    suspend fun replay(context: ZLinkSessionContext, nodes: List<Messages.NodeView>) {
         nodes.toList().forEach { node ->
-            sends =
-                sends.thenCompose {
-                    context
-                        .client()
-                        .send(
-                            Messages.NodeStatusNotify(
-                                node.nodeId,
-                                node.registered,
-                                node.connected,
-                                node.maintenance,
-                                node.zones,
-                                node.playerCount,
-                            )
-                        )
-                        .submit()
-                }
+            context
+                .client()
+                .kotlin()
+                .send(
+                    Messages.NodeStatusNotify(
+                        node.nodeId,
+                        node.registered,
+                        node.connected,
+                        node.maintenance,
+                        node.zones,
+                        node.playerCount,
+                    )
+                )
+                .await()
         }
-        alerts.toList().forEach { alert ->
-            sends = sends.thenCompose { context.client().send(alert).submit() }
-        }
-        return sends
+        alerts.toList().forEach { alert -> context.client().kotlin().send(alert).await() }
     }
 }
