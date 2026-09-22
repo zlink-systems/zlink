@@ -115,11 +115,11 @@ Get-Content client.pid, server.pid | ForEach-Object {
 Get-Job | Stop-Job -ErrorAction SilentlyContinue
 ```
 
-## Running from an IDE
+## Opening it in an IDE
 
-Open `QuickStart.sln` in Rider or Visual Studio. Use a `Multiple startup projects` configuration
-with `Server` first and `Client` second, or run the projects individually in that order. Stop with
-the IDE's Stop button.
+Open `QuickStart.sln` in Rider or Visual Studio 2022 or 2026. Use a `Multiple startup projects`
+configuration with `Server` first and `Client` second, or run the projects individually in that
+order. Stop with the IDE's Stop button.
 
 ## Troubleshooting
 

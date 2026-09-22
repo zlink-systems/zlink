@@ -50,6 +50,30 @@ dotnet build TicTacToe/TicTacToe.sln
 dotnet build TicTacToe\TicTacToe.sln
 ```
 
+## IDE에서 열기
+
+Rider 또는 Visual Studio 2022·2026에서 전체 샘플을 열 때는 `Samples.sln`을 연다. 샘플 하나만
+열 때는 해당 샘플의 `<Sample>/<Sample>.sln`을 연다. `Multiple startup projects`의 시작 순서는
+다음과 같다.
+
+| 샘플 | 시작 project 순서 |
+|---|---|
+| Bingo | `Bingo.Server.Play` → `Bingo.Server.Matchmaking` → `Bingo.Server.Api` → `Bingo.Server.Session` → `Bingo.Client` |
+| DeliveryDispatch | `DeliveryDispatch.Server.Tracking` → `DeliveryDispatch.Server.CustomerGateway` → `DeliveryDispatch.Server.CourierActorNode` → `DeliveryDispatch.Server.CourierSession` → `DeliveryDispatch.Server.Dispatch` → `DeliveryDispatch.Client` |
+| GameQuest | `GameQuest.QuestMission` → `GameQuest.GameApi` → `GameQuest.Client` |
+| ShoppingMall | `ShoppingMall.OrderWorkflow` → `ShoppingMall.CommerceApi` → `ShoppingMall.Client` |
+| SupportChat | `SupportChat.Server.Support` → `SupportChat.Server.Api` → `SupportChat.Server.Session` → `SupportChat.Client` |
+| TicTacToe | `TicTacToe.Server.Play` → `TicTacToe.Server.Api` → `TicTacToe.Client` |
+| ZoneWorld | `ZoneWorld.Server.Ops` → `ZoneWorld.Server.ZoneNode` → `ZoneWorld.Server.Gateway` → `ZoneWorld.Client` |
+
+runner는 같은 server project를 여러 role instance로 시작할 수 있다. 각 instance의 config와 endpoint는
+runner가 만든다. 샘플의 Redis는 IDE에서 별도로 시작하지 않는다. Windows에서는 해당 샘플의
+`run_sample.ps1`, Linux·macOS·WSL에서는 `run_sample.sh`를 실행한다. PowerShell runner는
+`Start-SampleRedisContainer`로 `redis:7.2-alpine` 임시 container를 만들고, bash runner는
+`redis-common.sh`의 `zlink_redis_start_scoped_assign`를 호출한다. runner가 생성한 endpoint를
+role config에 넣고 실행이 끝나면 container를 정리한다. Redis만 시작하는 별도 지원 명령은 없다.
+IDE에서 시작한 process의 종료는 IDE의 Stop 버튼으로 한다.
+
 ## 실행
 
 각 샘플 root가 `run_sample.sh`와 `run_sample.ps1`을 하나씩 갖고, 한 번 실행하면

@@ -53,6 +53,29 @@ dotnet build TicTacToe/TicTacToe.sln
 dotnet build TicTacToe\TicTacToe.sln
 ```
 
+## Opening it in an IDE
+
+Open `Samples.sln` in Rider or Visual Studio 2022 or 2026 to open all samples. To open one sample,
+open `<Sample>/<Sample>.sln`. Set `Multiple startup projects` in this order:
+
+| Sample | Startup project order |
+|---|---|
+| Bingo | `Bingo.Server.Play` → `Bingo.Server.Matchmaking` → `Bingo.Server.Api` → `Bingo.Server.Session` → `Bingo.Client` |
+| DeliveryDispatch | `DeliveryDispatch.Server.Tracking` → `DeliveryDispatch.Server.CustomerGateway` → `DeliveryDispatch.Server.CourierActorNode` → `DeliveryDispatch.Server.CourierSession` → `DeliveryDispatch.Server.Dispatch` → `DeliveryDispatch.Client` |
+| GameQuest | `GameQuest.QuestMission` → `GameQuest.GameApi` → `GameQuest.Client` |
+| ShoppingMall | `ShoppingMall.OrderWorkflow` → `ShoppingMall.CommerceApi` → `ShoppingMall.Client` |
+| SupportChat | `SupportChat.Server.Support` → `SupportChat.Server.Api` → `SupportChat.Server.Session` → `SupportChat.Client` |
+| TicTacToe | `TicTacToe.Server.Play` → `TicTacToe.Server.Api` → `TicTacToe.Client` |
+| ZoneWorld | `ZoneWorld.Server.Ops` → `ZoneWorld.Server.ZoneNode` → `ZoneWorld.Server.Gateway` → `ZoneWorld.Client` |
+
+The runner can start multiple instances of the same server project for different roles. It creates the
+configuration and endpoints for those instances. Do not start a sample's Redis separately from the
+IDE. On Windows, run that sample's `run_sample.ps1`; on Linux, macOS, or WSL, run `run_sample.sh`.
+The PowerShell runner calls `Start-SampleRedisContainer` to create a temporary `redis:7.2-alpine`
+container, and the bash runner calls `zlink_redis_start_scoped_assign` from `redis-common.sh`. The
+runner puts the endpoint in the role configurations and removes the container at the end. There is
+no supported Redis-only command. Stop a process started by the IDE with the IDE's Stop button.
+
 ## Run
 
 Each sample root owns `run_sample.sh` and `run_sample.ps1`, and one invocation
