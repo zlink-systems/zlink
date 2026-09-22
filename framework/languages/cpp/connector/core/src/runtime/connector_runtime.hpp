@@ -41,6 +41,7 @@ struct pending_send_t
 {
     packet_t packet;
     std::function<void (result_t<void>)> callback;
+    std::optional<actor_binding_ref_t> actor_binding;
 };
 
 struct pending_write_t
@@ -88,12 +89,6 @@ struct packet_handler_entry_t
 {
     std::uint64_t id = 0;
     std::function<void (const packet_t &)> handler;
-};
-
-struct actor_lifecycle_delivery_t
-{
-    bool bound = false;
-    std::function<void ()> callback;
 };
 
 template <typename THandler> struct handler_entry_t
@@ -156,7 +151,6 @@ class connector_state_t : public std::enable_shared_from_this<connector_state_t>
      * (stream-connector §10). */
     std::uint64_t dispatch_queue_generation = 0;
     std::deque<std::function<void ()>> delivery_queue;
-    std::deque<actor_lifecycle_delivery_t> actor_lifecycle_delivery_queue;
     std::vector<packet_t> sent_packets;
     std::map<std::string, std::vector<packet_handler_entry_t>> packet_handlers;
     std::vector<handler_entry_t<std::function<void (const connection_state_changed_t &)>>>
@@ -251,10 +245,13 @@ class connector_runtime_t
     std::shared_ptr<connector_state_t> _state;
 };
 
-result_t<void> submit_send (std::shared_ptr<connector_state_t> state, packet_t packet);
+result_t<void> submit_send (std::shared_ptr<connector_state_t> state,
+                            packet_t packet,
+                            std::optional<actor_binding_ref_t> actor_binding = std::nullopt);
 void submit_send_async (std::shared_ptr<connector_state_t> state,
                         packet_t packet,
-                        std::function<void (result_t<void>)> callback);
+                        std::function<void (result_t<void>)> callback,
+                        std::optional<actor_binding_ref_t> actor_binding = std::nullopt);
 void start_read_loop (std::shared_ptr<connector_state_t> state);
 void start_heartbeat_monitor (std::shared_ptr<connector_state_t> state);
 void stop_heartbeat_monitor (std::shared_ptr<connector_state_t> state);

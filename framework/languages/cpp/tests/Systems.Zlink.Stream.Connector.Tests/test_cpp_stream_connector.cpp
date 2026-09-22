@@ -10,6 +10,7 @@
 #include "runtime/connector_runtime.hpp"
 #include "runtime/protocol/compression/lz4_compression_codec.hpp"
 #include "runtime/protocol/framing/frame_codec.hpp"
+#include "runtime/protocol/framing.hpp"
 #include "runtime/protocol/header_codec.hpp"
 #include "runtime/protocol/metadata_codec.hpp"
 #include "runtime/protocol/packet_name_resolver.hpp"
@@ -980,6 +981,41 @@ int main ()
             || actor_binding_control_codec_t::decode_bound (invalid_bound)
             || actor_binding_control_codec_t::decode_unbound (invalid_unbound)) {
             return 273;
+        }
+
+        zlink::stream_connector::connector_options_t decode_options;
+        decode_options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::manual;
+        auto decode_state =
+          std::make_shared<zlink::stream_connector::detail::connector_state_t> (decode_options);
+        stream_header_t bound_header;
+        bound_header.kind = message_kind_t::control;
+        bound_header.codec = codec_t::raw;
+        bound_header.name = "$zlink.actor.bound";
+        const std::vector<std::uint8_t> first_bound{1, 0, 7, 5, 'a', 'c', 't', 'o', 'r'};
+        const std::vector<std::uint8_t> duplicate_slot{1, 0, 7, 5, 'o', 't', 'h', 'e', 'r'};
+        const std::vector<std::uint8_t> duplicate_id{1, 0, 8, 5, 'a', 'c', 't', 'o', 'r'};
+        if (!zlink::stream_connector::detail::decode_inbound_packet (*decode_state, bound_header,
+                                                                     first_bound)
+            || zlink::stream_connector::detail::decode_inbound_packet (*decode_state, bound_header,
+                                                                       duplicate_slot)
+            || zlink::stream_connector::detail::decode_inbound_packet (*decode_state, bound_header,
+                                                                       duplicate_id)) {
+            return 274;
+        }
+        stream_header_t unbound_header = bound_header;
+        unbound_header.name = "$zlink.actor.unbound";
+        if (zlink::stream_connector::detail::decode_inbound_packet (
+              *decode_state, unbound_header, std::vector<std::uint8_t>{1, 0, 9})) {
+            return 275;
+        }
+        stream_header_t unknown_packet;
+        unknown_packet.kind = message_kind_t::send;
+        unknown_packet.codec = codec_t::raw;
+        unknown_packet.name = "actor.packet";
+        unknown_packet.actor_slot = 9;
+        if (zlink::stream_connector::detail::decode_inbound_packet (
+              *decode_state, unknown_packet, std::vector<std::uint8_t>{'x'})) {
+            return 276;
         }
     }
 
@@ -5095,6 +5131,8 @@ int main ()
                                     + std::to_string (actor_acceptor.local_endpoint ().port ());
         callback_latch_t actor_bound_sent;
         callback_latch_t actor_packets_allowed;
+        callback_latch_t actor_rebind_allowed;
+        callback_latch_t actor_rebound_sent;
         callback_latch_t actor_server_release;
         joining_thread_t actor_server ([&] {
             boost::asio::ip::tcp::socket socket (actor_acceptor.get_executor ());
@@ -5116,6 +5154,18 @@ int main ()
             const auto unbound = make_server_frame (message_kind_t::control, 0,
                                                     "$zlink.actor.unbound", unbound_payload);
             boost::asio::write (socket, boost::asio::buffer (unbound.to_string ()));
+            if (!actor_rebind_allowed.wait_for (std::chrono::seconds (2)))
+                return;
+            std::string rebound_payload{static_cast<char> (1), static_cast<char> (0),
+                                        static_cast<char> (8), static_cast<char> (5)};
+            rebound_payload += "actor";
+            const auto rebound =
+              make_server_frame (message_kind_t::control, 0, "$zlink.actor.bound", rebound_payload);
+            const auto rebound_packet = make_server_frame (message_kind_t::send, 0, "actor.push",
+                                                           "rebound", false, std::uint16_t{8});
+            boost::asio::write (socket, boost::asio::buffer (rebound.to_string ()));
+            boost::asio::write (socket, boost::asio::buffer (rebound_packet.to_string ()));
+            actor_rebound_sent.signal ();
             actor_server_release.wait_for (std::chrono::seconds (2));
         });
 
@@ -5126,6 +5176,13 @@ int main ()
         auto actor_connector = connector_factory_t::create (actor_options);
         std::vector<std::string> actor_events;
         std::optional<std::string> received_actor_id;
+        int canceled_bound_calls = 0;
+        auto throwing_bound_subscription =
+          actor_connector.on_actor_bound ([] (const std::shared_ptr<actor_t> &) {
+              throw std::runtime_error ("expected lifecycle callback failure");
+          });
+        auto canceled_bound_subscription = actor_connector.on_actor_bound (
+          [&] (const std::shared_ptr<actor_t> &) { ++canceled_bound_calls; });
         auto bound_subscription =
           actor_connector.on_actor_bound ([&] (const std::shared_ptr<actor_t> &actor) {
               actor_events.push_back ("bound:" + actor->actor_id ());
@@ -5155,6 +5212,7 @@ int main ()
             actor_server_release.signal ();
             return 264;
         }
+        canceled_bound_subscription.unsubscribe ();
         auto actor_packet_subscription =
           actor_handle->on<packet_t> ("actor.push", [&] (const packet_message_t &) {
               actor_events.push_back ("actor-packet");
@@ -5174,9 +5232,32 @@ int main ()
         const std::vector<std::string> expected_actor_events{"bound:actor", "packet",
                                                              "actor-packet", "unbound:actor"};
         if (actor_connector.actor ("actor") || actor_handle->is_bound ()
-            || received_actor_id != "actor" || actor_events != expected_actor_events) {
+            || received_actor_id != "actor" || actor_events != expected_actor_events
+            || canceled_bound_calls != 0) {
             actor_server_release.signal ();
             return 266;
+        }
+        actor_rebind_allowed.signal ();
+        if (!actor_rebound_sent.wait_for (std::chrono::seconds (1))) {
+            actor_server_release.signal ();
+            return 277;
+        }
+        const auto rebound_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (1);
+        std::shared_ptr<actor_t> rebound_handle;
+        while (!(rebound_handle = actor_connector.actor ("actor"))
+               && std::chrono::steady_clock::now () < rebound_deadline) {
+            std::this_thread::sleep_for (std::chrono::milliseconds (1));
+        }
+        while (actor_connector.pending_dispatch_count () != 0) {
+            if (!actor_connector.dispatch ()) {
+                actor_server_release.signal ();
+                return 278;
+            }
+        }
+        if (!rebound_handle || rebound_handle == actor_handle || actor_handle->is_bound ()
+            || std::count (actor_events.begin (), actor_events.end (), "actor-packet") != 1) {
+            actor_server_release.signal ();
+            return 279;
         }
         std::optional<zlink::stream_connector::error_code_t> closed_actor_error;
         auto closed_actor_error_subscription = actor_connector.on_error (

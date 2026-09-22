@@ -329,14 +329,14 @@ class actor_t
     template <typename TMessage> send_call_t send (const TMessage &message)
     {
         auto call = _connector.send (message);
-        call._packet.actor_id = _actor_id;
+        call._actor_binding = detail::actor_binding_ref_t{_actor_slot, _bound};
         return call;
     }
 
     template <typename TRequest> request_call_t request (const TRequest &request)
     {
         auto call = _connector.request (request);
-        call._packet.actor_id = _actor_id;
+        call._actor_binding = detail::actor_binding_ref_t{_actor_slot, _bound};
         return call;
     }
 
@@ -344,12 +344,16 @@ class actor_t
     [[nodiscard]] subscription_t on (std::string packet_name,
                                      std::function<void (const message_t<TMessage> &)> callback)
     {
-        const auto actor_id = _actor_id;
-        return _connector.on<TMessage> (
+        const auto actor_slot = _actor_slot;
+        std::weak_ptr<void> weak_state = _connector._state;
+        return _connector.on_packet_erased (
           std::move (packet_name),
-          [actor_id, callback = std::move (callback)] (const message_t<TMessage> &message) {
-              if (message.actor_id == actor_id)
-                  callback (message);
+          [weak_state, actor_slot, callback = std::move (callback)] (const packet_t &packet) {
+              if (packet._actor_slot != actor_slot)
+                  return;
+              auto message = detail::decode_message<TMessage> (weak_state.lock (), packet);
+              if (message)
+                  callback (message.value ());
           });
     }
 

@@ -1262,7 +1262,7 @@ int main ()
     /* stream connector §5.2: Response는 request의 packet name을 그대로 되돌린다. */
     if (runtime.written_headers (stream)[0].kind () != stream_message_kind_t::response
         || runtime.written_headers (stream)[0].request_seq () != 77
-        || runtime.written_headers (stream)[0].actor_slot () != 9
+        || runtime.written_headers (stream)[0].actor_slot ()
         || !runtime.written_headers (stream)[0].packet_name ().empty ()) {
         return 15;
     }
@@ -1303,6 +1303,33 @@ int main ()
         || actor_written_headers[1].actor_slot () != 1) {
         return 299;
     }
+    bool hidden_until_bound = false;
+    zlink::framework::detail::session_actor_manager_access_t::bind_native (
+      actor_manager, [&actor_manager, &hidden_until_bound] (zlink::framework::actor_ref_t actor,
+                                                            std::uint64_t, std::uint16_t slot) {
+          hidden_until_bound =
+            slot == 2
+            && !actor_manager.find (std::string (actor.actor_id ().value ())).has_value ();
+          return zlink::framework::task_t<void> (zlink::framework::result_t<void>::success ());
+      });
+    auto publish_actor = zlink::framework::detail::actor_ref_access_t::make (
+      zlink::framework::node_rid_t::from_string ("actor-node"), "PlayerActor",
+      "publish-after-bound", 1);
+    if (!actor_manager.bind (std::move (publish_actor)).async ().result () || !hidden_until_bound
+        || !actor_manager.find ("publish-after-bound"))
+        return 300;
+    for (std::uint32_t slot = 3; slot <= std::numeric_limits<std::uint16_t>::max (); ++slot) {
+        auto next_actor = zlink::framework::detail::actor_ref_access_t::make (
+          zlink::framework::node_rid_t::from_string ("actor-node"), "PlayerActor",
+          "slot-actor-" + std::to_string (slot), 1);
+        if (!actor_manager.bind (std::move (next_actor)).async ().result ())
+            return 301;
+    }
+    auto exhausted_actor = zlink::framework::detail::actor_ref_access_t::make (
+      zlink::framework::node_rid_t::from_string ("actor-node"), "PlayerActor", "slot-overflow", 1);
+    const auto exhausted = actor_manager.bind (std::move (exhausted_actor)).async ().result ();
+    if (exhausted || exhausted.error_kind () != framework_error_kind_t::invalid_operation)
+        return 302;
 
     auto push_codec_stream = runtime.open_session ("client-stream");
     sample_session_t push_codec_session;

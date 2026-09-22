@@ -1349,8 +1349,12 @@ void verify_bound_session_push_uses_session_registry_when_gateway_projection_rej
       binding.binding_generation, 0, 0));
 
     session_owner->configure_bound_session_operations (host::bound_session_operations_t{
-      .bind = [] (const protocol::bound_session_bind_t &, const zlink::routing_id_t &,
-                  std::uint64_t) { return host::bound_session_bind_operation_result_t{}; },
+      .bind =
+        [] (const protocol::bound_session_bind_t &, const zlink::routing_id_t &, std::uint64_t,
+            std::function<bool ()> submit_terminal_reply) {
+            (void) submit_terminal_reply ();
+            return host::bound_session_bind_operation_result_t{};
+        },
       .send = [] (const protocol::bound_session_send_t &,
                   std::vector<zlink::message_t>) { return stateful::stateful_error_t::conflict; },
       .replaced = [] (const protocol::bound_session_replaced_t &) {},

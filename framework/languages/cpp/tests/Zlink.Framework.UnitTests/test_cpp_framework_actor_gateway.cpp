@@ -5031,6 +5031,156 @@ int join_completion_waits_for_bound_session_delivery_terminal ()
     return next_succeeded && next_terminal_calls.load (std::memory_order_relaxed) == 1 ? 0 : 10;
 }
 
+int terminal_reply_precedes_session_route_publication ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    auto state = std::make_shared<actor_gateway_state_t> ();
+    actor_gateway_runtime_t gateway (state);
+    const auto actor = test_actor_ref ("actor-owner", "player", "reply-before-publish", 7);
+    const auto sink = [] (std::string, stream_codec_t, const zlink::message_t &) {
+        return task_t<void> (result_t<void>::success ());
+    };
+    const actor_bound_session_route_t old_route{zlink::routing_id_t::from ("owner"),
+                                                zlink::routing_id_t::from ("old"),
+                                                7,
+                                                11,
+                                                13,
+                                                17,
+                                                1,
+                                                1,
+                                                0};
+    const actor_bound_session_route_t next_route{zlink::routing_id_t::from ("owner"),
+                                                 zlink::routing_id_t::from ("next"),
+                                                 7,
+                                                 11,
+                                                 13,
+                                                 17,
+                                                 2,
+                                                 2,
+                                                 0};
+    if (!gateway.replace_session_route (actor, sink, old_route))
+        return 1;
+    bool terminal_submitted = false;
+    const auto replaced =
+      gateway.replace_session_route (actor, sink, next_route, stream_codec_t::message_pack, [&] {
+          terminal_submitted = true;
+          const auto &published = state->actors_by_id.at ("reply-before-publish");
+          return published.bound_session_route
+                 && published.bound_session_route->binding_generation == 1;
+      });
+    const auto published = gateway.resolve_bound_session_push_route (actor, next_route);
+    if (!replaced || !terminal_submitted || !published
+        || published->binding_generation != next_route.binding_generation)
+        return 2;
+    return 0;
+}
+
+int actor_unbound_waits_for_accepted_push_fifo ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    auto state = std::make_shared<actor_gateway_state_t> ();
+    serializer_registry_t serializers;
+    state->serializers = &serializers;
+    actor_gateway_runtime_t gateway (state);
+    zlink_builder_t builder;
+    builder.stream ("actor-unbound-fifo").bind ("tcp://127.0.0.1:0");
+    auto runtime = stream_runtime_t::from (builder);
+    auto stream = runtime.open_session ("actor-unbound-fifo");
+    auto push_terminal = std::make_shared<task_completion_source_t<void>> ();
+    std::mutex events_mutex;
+    std::vector<std::string> events;
+    runtime.attach_transport_writer (
+      stream, [push_terminal, &events_mutex, &events] (const stream_header_t &header,
+                                                       const zlink::message_t &,
+                                                       std::optional<std::chrono::milliseconds>) {
+          {
+              std::lock_guard lock (events_mutex);
+              events.emplace_back (header.packet_name ());
+          }
+          return header.packet_name () != "$zlink.actor.unbound"
+                   ? push_terminal->task ()
+                   : task_t<void> (result_t<void>::success ());
+      });
+    const auto actor = test_actor_ref ("actor-node", "player", "fifo-actor", 7);
+    gateway.bind_session_stream ("fifo-actor", stream, stream_codec_t::message_pack, "fifo-session",
+                                 23, actor, 1);
+    const auto accepted = gateway.actor_context (actor)
+                            .bound_session ()
+                            .send (std::string ("payload"))
+                            .async ()
+                            .result ();
+    if (!accepted)
+        return 1;
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        {
+            std::lock_guard lock (events_mutex);
+            if (!events.empty ())
+                break;
+        }
+        std::this_thread::sleep_for (std::chrono::milliseconds (1));
+    }
+    gateway.unbind_session_stream ("fifo-actor", "fifo-session", 23);
+    bool unbound_overtook_push = false;
+    {
+        std::lock_guard lock (events_mutex);
+        unbound_overtook_push = events.size () != 1 || events.front () == "$zlink.actor.unbound";
+    }
+    if (unbound_overtook_push) {
+        push_terminal->complete (result_t<void>::success ());
+        return 2;
+    }
+    push_terminal->complete (result_t<void>::success ());
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        {
+            std::lock_guard lock (events_mutex);
+            if (events.size () == 2)
+                break;
+        }
+        std::this_thread::sleep_for (std::chrono::milliseconds (1));
+    }
+    std::lock_guard lock (events_mutex);
+    return events.size () == 2 && events.back () == "$zlink.actor.unbound" ? 0 : 3;
+}
+
+int session_disconnect_uses_actor_slot_issue_order ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    auto state = std::make_shared<actor_gateway_state_t> ();
+    actor_gateway_runtime_t gateway (state);
+    auto manager = gateway.manager ();
+    zlink_builder_t builder;
+    builder.stream ("disconnect-slot-order").bind ("tcp://127.0.0.1:0");
+    auto runtime = stream_runtime_t::from (builder);
+    auto stream = runtime.open_session ("disconnect-slot-order");
+    runtime.attach_transport_writer (stream, [] (const stream_header_t &, const zlink::message_t &,
+                                                 std::optional<std::chrono::milliseconds>) {
+        return task_t<void> (result_t<void>::success ());
+    });
+    session_actor_manager_access_t::attach (manager, stream);
+    session_actor_manager_access_t::bind_native (
+      manager, [] (actor_ref_t, std::uint64_t, std::uint16_t) {
+          return task_t<void> (result_t<void>::success ());
+      });
+    std::vector<std::string> disconnected;
+    state->disconnect_dispatcher = [&disconnected] (const actor_ref_t &actor) {
+        disconnected.emplace_back (actor.actor_id ().value ());
+        return task_t<void> (result_t<void>::success ());
+    };
+    if (!manager.bind (test_actor_ref ("node", "player", "z-issued-first", 1)).async ().result ()
+        || !manager.bind (test_actor_ref ("node", "player", "a-issued-second", 1))
+              .async ()
+              .result ())
+        return 1;
+    session_actor_manager_access_t::disconnect (manager);
+    return disconnected == std::vector<std::string>{"z-issued-first", "a-issued-second"} ? 0 : 2;
+}
+
 int main (int argc, char **argv)
 {
     if (argc == 2) {
@@ -5045,6 +5195,12 @@ int main (int argc, char **argv)
             return reconcile_deadline_fast_fails_when_store_is_indeterminate ();
         return 1;
     }
+    if (const auto ordered = terminal_reply_precedes_session_route_publication (); ordered != 0)
+        return 430 + ordered;
+    if (const auto drained = actor_unbound_waits_for_accepted_push_fifo (); drained != 0)
+        return 435 + drained;
+    if (const auto ordered = session_disconnect_uses_actor_slot_issue_order (); ordered != 0)
+        return 440 + ordered;
     if (const auto protobuf_bound = generated_protobuf_bound_session_uses_typed_serializer_codec ();
         protobuf_bound != 0) {
         return 420 + protobuf_bound;

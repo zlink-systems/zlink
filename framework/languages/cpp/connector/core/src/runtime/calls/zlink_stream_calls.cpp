@@ -244,8 +244,7 @@ result_t<packet_t> decode_packet (connector_state_t &state,
         if (!bound)
             return result_t<packet_t>::failure (bound.error ()->code, bound.error ()->message);
         std::shared_ptr<actor_t> actor;
-        std::vector<handler_entry_t<std::function<void (const std::shared_ptr<actor_t> &)>>>
-          handlers;
+        std::vector<std::uint64_t> handler_ids;
         {
             std::lock_guard<std::mutex> lock (state.lifecycle_mutex);
             if (state.actors_by_slot.contains (bound.value ().actor_slot)
@@ -257,19 +256,31 @@ result_t<packet_t> decode_packet (connector_state_t &state,
                                             bound.value ().actor_slot);
             state.actors_by_slot.emplace (bound.value ().actor_slot, actor);
             state.actors_by_id.emplace (bound.value ().actor_id, actor);
-            handlers = state.actor_bound_handlers;
+            handler_ids.reserve (state.actor_bound_handlers.size ());
+            for (const auto &entry : state.actor_bound_handlers)
+                handler_ids.push_back (entry.id);
         }
-        auto delivery = [handlers = std::move (handlers), actor] {
-            for (const auto &entry : handlers)
-                entry.handler (actor);
-        };
-        if (state.options.dispatch_mode == dispatch_mode_t::immediate) {
-            schedule_delivery (state.shared_from_this (), std::move (delivery));
-        } else {
-            std::lock_guard<std::mutex> lock (state.delivery_mutex);
-            state.actor_lifecycle_delivery_queue.push_back ({true, std::move (delivery)});
-            state.state_changed.notify_all ();
-        }
+        auto connector_state = state.shared_from_this ();
+        schedule_delivery (
+          connector_state, [connector_state, handler_ids = std::move (handler_ids), actor] {
+              std::vector<handler_entry_t<std::function<void (const std::shared_ptr<actor_t> &)>>>
+                handlers;
+              {
+                  std::lock_guard<std::mutex> lock (connector_state->lifecycle_mutex);
+                  for (const auto &entry : connector_state->actor_bound_handlers) {
+                      if (std::find (handler_ids.begin (), handler_ids.end (), entry.id)
+                          != handler_ids.end ())
+                          handlers.push_back (entry);
+                  }
+              }
+              for (const auto &entry : handlers) {
+                  try {
+                      entry.handler (actor);
+                  }
+                  catch (...) {
+                  }
+              }
+          });
     }
     if (header.kind == message_kind_t::control
         && header.name == actor_binding_control_codec_t::unbound_name) {
@@ -277,8 +288,7 @@ result_t<packet_t> decode_packet (connector_state_t &state,
         if (!slot)
             return result_t<packet_t>::failure (slot.error ()->code, slot.error ()->message);
         std::shared_ptr<actor_t> actor;
-        std::vector<handler_entry_t<std::function<void (const std::shared_ptr<actor_t> &)>>>
-          handlers;
+        std::vector<std::uint64_t> handler_ids;
         {
             std::lock_guard<std::mutex> lock (state.lifecycle_mutex);
             const auto found = state.actors_by_slot.find (slot.value ());
@@ -290,19 +300,34 @@ result_t<packet_t> decode_packet (connector_state_t &state,
             actor_access_t::close (actor);
             state.actors_by_id.erase (actor->actor_id ());
             state.actors_by_slot.erase (found);
-            handlers = state.actor_unbound_handlers;
+            handler_ids.reserve (state.actor_unbound_handlers.size ());
+            for (const auto &entry : state.actor_unbound_handlers)
+                handler_ids.push_back (entry.id);
         }
-        auto delivery = [handlers = std::move (handlers), actor] {
-            for (const auto &entry : handlers)
-                entry.handler (actor);
+        auto connector_state = state.shared_from_this ();
+        auto delivery = [connector_state, handler_ids = std::move (handler_ids), actor] {
+            std::vector<handler_entry_t<std::function<void (const std::shared_ptr<actor_t> &)>>>
+              handlers;
+            {
+                std::lock_guard<std::mutex> lock (connector_state->lifecycle_mutex);
+                for (const auto &entry : connector_state->actor_unbound_handlers) {
+                    if (std::find (handler_ids.begin (), handler_ids.end (), entry.id)
+                        != handler_ids.end ())
+                        handlers.push_back (entry);
+                }
+            }
+            for (const auto &entry : handlers) {
+                try {
+                    entry.handler (actor);
+                }
+                catch (...) {
+                }
+            }
         };
-        if (state.options.dispatch_mode == dispatch_mode_t::immediate) {
-            schedule_delivery (state.shared_from_this (), std::move (delivery));
-        } else {
-            std::lock_guard<std::mutex> lock (state.delivery_mutex);
-            state.actor_lifecycle_delivery_queue.push_back ({false, std::move (delivery)});
-            state.state_changed.notify_all ();
-        }
+        schedule_delivery (connector_state,
+                           [connector_state, delivery = std::move (delivery)] () mutable {
+                               schedule_delivery (connector_state, std::move (delivery));
+                           });
     }
     packet_t packet{header.name, header.metadata, header.codec,      compressed,
                     payload,     header.flow_id,  header.flow_origin};
@@ -314,6 +339,7 @@ result_t<packet_t> decode_packet (connector_state_t &state,
                                                 "Packet Actor slot is not registered.");
         }
         packet.actor_id = actor->second->actor_id ();
+        packet._actor_slot = *header.actor_slot;
     }
     if (header.kind == message_kind_t::send) {
         note_received_packet (state, packet);
@@ -392,10 +418,12 @@ std::optional<error_t> take_inbound_error (connector_state_t &state)
  * (options, compression_codec) plus the atomic diagnostics cell, and mutates
  * nothing in connector_state_t. The packet it is handed must be owned by the
  * caller, not borrowed from a container the lock protects. */
-result_t<std::vector<std::uint8_t>> encode_packet_frame (connector_state_t &state,
-                                                         message_kind_t kind,
-                                                         const packet_t &packet,
-                                                         std::optional<std::uint64_t> request_seq)
+result_t<std::vector<std::uint8_t>>
+encode_packet_frame (connector_state_t &state,
+                     message_kind_t kind,
+                     const packet_t &packet,
+                     std::optional<std::uint64_t> request_seq,
+                     const std::optional<actor_binding_ref_t> &actor_binding = std::nullopt)
 {
     header_flags_t flags = header_flags_t::none;
     if (packet.compressed) {
@@ -404,14 +432,12 @@ result_t<std::vector<std::uint8_t>> encode_packet_frame (connector_state_t &stat
     header_codec_t header_codec;
     stream_header_t header_data{kind,        packet.codec, flags,
                                 request_seq, packet.name,  packet.metadata};
-    if (packet.actor_id) {
-        std::lock_guard<std::mutex> lock (state.lifecycle_mutex);
-        const auto actor = state.actors_by_id.find (*packet.actor_id);
-        if (actor == state.actors_by_id.end () || !actor->second->is_bound ()) {
+    if (actor_binding) {
+        if (!actor_binding->bound || !actor_binding->bound->load (std::memory_order_acquire)) {
             return result_t<std::vector<std::uint8_t>>::failure (error_code_t::validation_failed,
                                                                  "Actor handle is not bound.");
         }
-        header_data.actor_slot = actor_access_t::slot (actor->second);
+        header_data.actor_slot = actor_binding->slot;
     }
     if (kind == message_kind_t::request) {
         /* correlation_id links a request to its terminal reply and is protocol
@@ -533,7 +559,7 @@ result_t<inbound_frame_t> read_inbound_frame (std::shared_ptr<connector_state_t>
                                                    decoded.error ()->message);
     }
     auto header = decoded.value ();
-    auto packet = decode_packet (*state, header, std::move (payload_bytes.value ()));
+    auto packet = decode_inbound_packet (*state, header, std::move (payload_bytes.value ()));
     if (!packet) {
         return result_t<inbound_frame_t>::failure (packet.error ()->code, packet.error ()->message);
     }
@@ -764,7 +790,7 @@ std::optional<result_t<inbound_frame_t>> try_take_inbound_frame (connector_state
                                                    decoded.error ()->message);
     }
     auto header = decoded.value ();
-    auto packet = decode_packet (state, header, std::move (payload_bytes));
+    auto packet = decode_inbound_packet (state, header, std::move (payload_bytes));
     if (!packet) {
         return result_t<inbound_frame_t>::failure (packet.error ()->code, packet.error ()->message);
     }
@@ -1337,8 +1363,8 @@ void start_next_async_send (std::shared_ptr<connector_state_t> state)
     /* Encoding and LZ4 compression run outside transport_mutex. send.packet is
      * owned by this frame now, so no lock protects it. */
     if (!immediate_failure) {
-        if (auto encoded =
-              encode_packet_frame (*state, message_kind_t::send, send.packet, std::nullopt);
+        if (auto encoded = encode_packet_frame (*state, message_kind_t::send, send.packet,
+                                                std::nullopt, send.actor_binding);
             !encoded) {
             immediate_failure = result_t<void>::failure (
               encoded.error ()->code,
@@ -1374,6 +1400,13 @@ void start_next_async_send (std::shared_ptr<connector_state_t> state)
 }
 
 } // namespace
+
+result_t<packet_t> decode_inbound_packet (connector_state_t &state,
+                                          const stream_header_t &header,
+                                          std::vector<std::uint8_t> payload)
+{
+    return decode_packet (state, header, std::move (payload));
+}
 
 std::vector<std::function<void (result_t<packet_t>)>>
 take_pending_waits_locked (connector_state_t &state)
@@ -1484,9 +1517,12 @@ void submit_request_async (std::shared_ptr<void> state_handle,
                            packet_t packet,
                            std::chrono::milliseconds timeout,
                            std::function<void (result_t<request_reply_t>)> callback,
-                           bool deliver_direct);
+                           bool deliver_direct,
+                           std::optional<actor_binding_ref_t> actor_binding);
 
-result_t<void> submit_send (std::shared_ptr<connector_state_t> state, packet_t packet)
+result_t<void> submit_send (std::shared_ptr<connector_state_t> state,
+                            packet_t packet,
+                            std::optional<actor_binding_ref_t> actor_binding)
 {
     std::vector<std::uint8_t> frame;
     {
@@ -1508,7 +1544,8 @@ result_t<void> submit_send (std::shared_ptr<connector_state_t> state, packet_t p
     /* Encoding and LZ4 compression run outside transport_mutex: the packet is
      * this call's own argument, and a large payload would otherwise hold the
      * lock the read pump needs. */
-    auto encoded = encode_packet_frame (*state, message_kind_t::send, packet, std::nullopt);
+    auto encoded =
+      encode_packet_frame (*state, message_kind_t::send, packet, std::nullopt, actor_binding);
     if (!encoded) {
         publish_error (*state, *encoded.error ());
         return result_t<void>::failure (encoded.error ()->code, encoded.error ()->message);
@@ -1537,11 +1574,13 @@ result_t<void> submit_send (std::shared_ptr<connector_state_t> state, packet_t p
 
 void submit_send_async (std::shared_ptr<connector_state_t> state,
                         packet_t packet,
-                        std::function<void (result_t<void>)> callback)
+                        std::function<void (result_t<void>)> callback,
+                        std::optional<actor_binding_ref_t> actor_binding)
 {
     {
         std::lock_guard<std::mutex> lock (state->transport_mutex);
-        state->pending_sends.push_back (pending_send_t{std::move (packet), std::move (callback)});
+        state->pending_sends.push_back (
+          pending_send_t{std::move (packet), std::move (callback), std::move (actor_binding)});
     }
     start_next_async_send (std::move (state));
 }
@@ -1549,6 +1588,14 @@ void submit_send_async (std::shared_ptr<connector_state_t> state,
 result_t<request_reply_t> submit_request (std::shared_ptr<void> state_handle,
                                           packet_t packet,
                                           std::chrono::milliseconds timeout)
+{
+    return submit_request (std::move (state_handle), std::move (packet), timeout, std::nullopt);
+}
+
+result_t<request_reply_t> submit_request (std::shared_ptr<void> state_handle,
+                                          packet_t packet,
+                                          std::chrono::milliseconds timeout,
+                                          std::optional<actor_binding_ref_t> actor_binding)
 {
     auto state = std::static_pointer_cast<connector_state_t> (std::move (state_handle));
     bool use_async_request_pump = false;
@@ -1565,7 +1612,7 @@ result_t<request_reply_t> submit_request (std::shared_ptr<void> state_handle,
           [promise] (result_t<request_reply_t> result) mutable {
               promise->set_value (std::move (result));
           },
-          /*deliver_direct=*/true);
+          /*deliver_direct=*/true, actor_binding);
         return future.get ();
     }
     std::unique_lock<std::mutex> lock (state->transport_mutex);
@@ -1590,7 +1637,8 @@ result_t<request_reply_t> submit_request (std::shared_ptr<void> state_handle,
      * is this call's own argument and is not yet in pending_requests, so
      * nothing another thread can reach is touched while the lock is down. */
     lock.unlock ();
-    auto encoded = encode_packet_frame (*state, message_kind_t::request, packet, seq);
+    auto encoded =
+      encode_packet_frame (*state, message_kind_t::request, packet, seq, actor_binding);
     lock.lock ();
     const auto fail_request = [&] (error_code_t code, std::string message) {
         trace_request ("request-write-completion", seq, request_packet_name,
@@ -1690,7 +1738,8 @@ void submit_request_async (std::shared_ptr<void> state_handle,
                            packet_t packet,
                            std::chrono::milliseconds timeout,
                            std::function<void (result_t<request_reply_t>)> callback,
-                           bool deliver_direct)
+                           bool deliver_direct,
+                           std::optional<actor_binding_ref_t> actor_binding)
 {
     if (!state_handle) {
         if (callback) {
@@ -1737,7 +1786,8 @@ void submit_request_async (std::shared_ptr<void> state_handle,
              * `packet` is this call's own argument - pending_requests holds a
              * copy - so nothing another thread can reach is read unlocked. */
             lock.unlock ();
-            auto encoded = encode_packet_frame (*state, message_kind_t::request, packet, seq);
+            auto encoded =
+              encode_packet_frame (*state, message_kind_t::request, packet, seq, actor_binding);
             lock.lock ();
             if (!encoded) {
                 auto found = state->pending_requests.find (seq);
@@ -1824,8 +1874,6 @@ result_t<void> dispatch_pending (std::shared_ptr<connector_state_t> state)
 {
     std::deque<std::function<void ()>> deliveries;
     std::deque<std::function<void ()>> packet_deliveries;
-    std::deque<std::function<void ()>> actor_unbound_deliveries;
-    std::deque<actor_lifecycle_delivery_t> actor_lifecycle_deliveries;
     std::optional<error_t> inbound_error;
     std::shared_ptr<stream_connection_t> inbound_error_connection;
     std::shared_ptr<stream_connection_t> sync_connection;
@@ -1883,27 +1931,20 @@ result_t<void> dispatch_pending (std::shared_ptr<connector_state_t> state)
     {
         std::lock_guard<std::mutex> lock (state->delivery_mutex);
         deliveries.swap (state->delivery_queue);
-        actor_lifecycle_deliveries.swap (state->actor_lifecycle_delivery_queue);
-    }
-    for (auto &delivery : actor_lifecycle_deliveries) {
-        if (delivery.bound)
-            deliveries.push_back (std::move (delivery.callback));
-        else
-            actor_unbound_deliveries.push_back (std::move (delivery.callback));
     }
     while (!packet_deliveries.empty ()) {
         deliveries.push_back (std::move (packet_deliveries.front ()));
         packet_deliveries.pop_front ();
     }
-    while (!actor_unbound_deliveries.empty ()) {
-        deliveries.push_back (std::move (actor_unbound_deliveries.front ()));
-        actor_unbound_deliveries.pop_front ();
-    }
     while (!deliveries.empty ()) {
         auto delivery = std::move (deliveries.front ());
         deliveries.pop_front ();
         if (delivery) {
-            delivery ();
+            try {
+                delivery ();
+            }
+            catch (...) {
+            }
         }
     }
     return result_t<void>::success ();

@@ -262,8 +262,10 @@ struct bound_session_operations_t
 {
     using delivery_capability_t =
       std::function<stateful::stateful_error_t (std::vector<zlink::message_t>)>;
-    std::function<bound_session_bind_operation_result_t (
-      const protocol::bound_session_bind_t &, const zlink::routing_id_t &, std::uint64_t)>
+    std::function<bound_session_bind_operation_result_t (const protocol::bound_session_bind_t &,
+                                                         const zlink::routing_id_t &,
+                                                         std::uint64_t,
+                                                         std::function<bool ()>)>
       bind;
     std::function<stateful::stateful_error_t (const protocol::bound_session_send_t &,
                                               std::vector<zlink::message_t>)>

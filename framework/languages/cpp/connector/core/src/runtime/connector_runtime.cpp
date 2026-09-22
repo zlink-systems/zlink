@@ -478,7 +478,7 @@ void publish_error (connector_state_t &state, error_t error) noexcept
 void close_bound_actors (const std::shared_ptr<connector_state_t> &state)
 {
     std::vector<std::shared_ptr<actor_t>> actors;
-    std::vector<handler_entry_t<std::function<void (const std::shared_ptr<actor_t> &)>>> handlers;
+    std::vector<std::uint64_t> handler_ids;
     {
         std::lock_guard<std::mutex> lock (state->lifecycle_mutex);
         actors.reserve (state->actors_by_slot.size ());
@@ -488,12 +488,29 @@ void close_bound_actors (const std::shared_ptr<connector_state_t> &state)
         }
         state->actors_by_slot.clear ();
         state->actors_by_id.clear ();
-        handlers = state->actor_unbound_handlers;
+        handler_ids.reserve (state->actor_unbound_handlers.size ());
+        for (const auto &entry : state->actor_unbound_handlers)
+            handler_ids.push_back (entry.id);
     }
     for (const auto &actor : actors) {
-        schedule_delivery (state, [handlers, actor] {
-            for (const auto &entry : handlers)
-                entry.handler (actor);
+        schedule_delivery (state, [state, handler_ids, actor] {
+            std::vector<handler_entry_t<std::function<void (const std::shared_ptr<actor_t> &)>>>
+              handlers;
+            {
+                std::lock_guard<std::mutex> lock (state->lifecycle_mutex);
+                for (const auto &entry : state->actor_unbound_handlers) {
+                    if (std::find (handler_ids.begin (), handler_ids.end (), entry.id)
+                        != handler_ids.end ())
+                        handlers.push_back (entry);
+                }
+            }
+            for (const auto &entry : handlers) {
+                try {
+                    entry.handler (actor);
+                }
+                catch (...) {
+                }
+            }
         });
     }
 }
@@ -853,7 +870,7 @@ void send_call_t::submit ()
     if (!_state) {
         return;
     }
-    (void) detail::submit_send (detail::state_from (_state), std::move (_packet));
+    (void) detail::submit_send (detail::state_from (_state), std::move (_packet), _actor_binding);
 }
 
 connector_t::connector_t () : connector_t (connector_options_t{})
@@ -989,7 +1006,7 @@ std::size_t connector_t::pending_dispatch_count () const
         packets = state->dispatch_queue.size ();
     }
     std::lock_guard<std::mutex> lock (state->delivery_mutex);
-    return packets + state->delivery_queue.size () + state->actor_lifecycle_delivery_queue.size ();
+    return packets + state->delivery_queue.size ();
 }
 
 codec_registry_t &connector_t::codecs ()
@@ -1512,7 +1529,6 @@ result_t<void> close_state (std::shared_ptr<detail::connector_state_t> state)
             // transport_mutex. Lock order: transport -> delivery.
             std::lock_guard<std::mutex> delivery_lock (state->delivery_mutex);
             state->delivery_queue.clear ();
-            state->actor_lifecycle_delivery_queue.clear ();
         }
     }
     detail::close_bound_actors (state);

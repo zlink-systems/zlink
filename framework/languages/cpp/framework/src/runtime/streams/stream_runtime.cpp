@@ -842,7 +842,10 @@ stream_write_call_t stream_t::reply_packet (const zlink::message_t &payload)
         reply_header.with_correlation_id (std::string (*correlation));
     }
     if (auto actor_slot = request_header->actor_slot ()) {
-        reply_header.with_actor_slot (*actor_slot);
+        if (auto *actors = _state->actors.load (std::memory_order_acquire);
+            actors && detail::session_actor_manager_access_t::find_slot (*actors, *actor_slot)) {
+            reply_header.with_actor_slot (*actor_slot);
+        }
     }
     auto call = write_packet_with_header (std::move (reply_header), payload);
     call._state->reply_submission (_reply_submission);

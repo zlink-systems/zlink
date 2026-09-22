@@ -3935,28 +3935,37 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         + " local_actor=" + (actor ? "found" : "missing"));
                     bound_session_bind_operation_result_t operation_result{
                       stateful::stateful_error_t::conflict, std::nullopt};
+                    bool terminal_replied = false;
                     if (admission == bound_session_bind_admission_t::ready
                         && bound_session_operations.bind) {
                         operation_result = bound_session_operations.bind (
                           bind, zlink::routing_id_t::from (mailbox_record.source_routing_id),
-                          mailbox_record.source_node_generation);
+                          mailbox_record.source_node_generation,
+                          [this, &mailbox_record, &terminal_replied] {
+                              terminal_replied =
+                                _transport->reply_bound_session_bind (mailbox_record, 0u, 0u);
+                              return terminal_replied;
+                          });
                     }
-                    const auto replied = _transport->reply_bound_session_bind (
-                      mailbox_record,
-                      operation_result.error == stateful::stateful_error_t::none ? 0u
-                      : admission == bound_session_bind_admission_t::stale_route
-                        ? static_cast<std::uint32_t> (protocol::request_terminal_result::conflict)
-                      : admission == bound_session_bind_admission_t::actor_not_ready
-                        ? static_cast<std::uint32_t> (protocol::request_terminal_result::busy)
-                        : static_cast<std::uint32_t> (protocol::request_terminal_result::notFound),
-                      operation_result.error == stateful::stateful_error_t::none ? 0u
-                      : admission == bound_session_bind_admission_t::stale_route
-                        ? static_cast<std::uint32_t> (
-                            protocol::framework_error_code::actorLocationStale)
-                      : admission == bound_session_bind_admission_t::actor_not_ready
-                        ? 0u
-                        : static_cast<std::uint32_t> (
-                            protocol::framework_error_code::actorSessionNotBound));
+                    const auto replied =
+                      terminal_replied
+                      || _transport->reply_bound_session_bind (
+                        mailbox_record,
+                        operation_result.error == stateful::stateful_error_t::none ? 0u
+                        : admission == bound_session_bind_admission_t::stale_route
+                          ? static_cast<std::uint32_t> (protocol::request_terminal_result::conflict)
+                        : admission == bound_session_bind_admission_t::actor_not_ready
+                          ? static_cast<std::uint32_t> (protocol::request_terminal_result::busy)
+                          : static_cast<std::uint32_t> (
+                              protocol::request_terminal_result::notFound),
+                        operation_result.error == stateful::stateful_error_t::none ? 0u
+                        : admission == bound_session_bind_admission_t::stale_route
+                          ? static_cast<std::uint32_t> (
+                              protocol::framework_error_code::actorLocationStale)
+                        : admission == bound_session_bind_admission_t::actor_not_ready
+                          ? 0u
+                          : static_cast<std::uint32_t> (
+                              protocol::framework_error_code::actorSessionNotBound));
                     if (replied && operation_result.replacement) {
                         (void) co_await _transport->send_bound_session_replaced (
                           operation_result.replacement->retired_session

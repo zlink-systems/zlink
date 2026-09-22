@@ -317,7 +317,8 @@ class actor_gateway_runtime_t
     replace_session_route (actor_ref_t actor_ref,
                            bound_session_sink_t sink,
                            actor_bound_session_route_t route,
-                           stream_codec_t codec = stream_codec_t::message_pack);
+                           stream_codec_t codec = stream_codec_t::message_pack,
+                           std::function<bool ()> before_publish = {});
     result_t<void>
     record_bound_session_route (const actor_ref_t &actor_ref,
                                 zlink::routing_id_t node_rid,

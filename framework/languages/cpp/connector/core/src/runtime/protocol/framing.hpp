@@ -7,8 +7,12 @@
 
 namespace zlink::stream_connector::detail
 {
+struct stream_header_t;
 
 void dispatch_packet (connector_state_t &state, const packet_t &packet);
+result_t<packet_t> decode_inbound_packet (connector_state_t &state,
+                                          const stream_header_t &header,
+                                          std::vector<std::uint8_t> payload);
 result_t<std::vector<packet_t>>
 drain_available_pushes (connector_state_t &state,
                         const std::shared_ptr<stream_connection_t> &connection);

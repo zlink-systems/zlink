@@ -85,58 +85,13 @@ result_t<packet_t> read_stream_packet (connector_state_t &state,
     }
     auto header_bytes = std::move (header_result.value ());
     auto payload_bytes = std::move (payload_result.value ());
-    auto decoded = header_codec_t{}.decode (header_bytes);
+    const auto diagnostics_level = state.diagnostics_level_cell.load (std::memory_order_acquire);
+    auto decoded =
+      header_codec_t{}.decode (header_bytes, diagnostics_level != diagnostics_level_t::off);
     if (!decoded) {
         return result_t<packet_t>::failure (decoded.error ()->code, decoded.error ()->message);
     }
-    auto header = decoded.value ();
-    state.last_inbound_received = std::chrono::steady_clock::now ();
-    const bool compressed = has_flag (header.flags, header_flags_t::payload_compressed);
-    zlink::message_t payload;
-    try {
-        payload = message_from_bytes (payload_bytes);
-    }
-    catch (const std::exception &error) {
-        return result_t<packet_t>::failure (error_code_t::frame_decode_failed, error.what ());
-    }
-    if (compressed) {
-        if (!state.compression_codec) {
-            return result_t<packet_t>::failure (
-              error_code_t::decompression_failed,
-              "stream connector compression codec is not configured");
-        }
-        if (state.options.compression == compression_t::lz4 && !state.lz4_enabled) {
-            return result_t<packet_t>::failure (error_code_t::decompression_failed,
-                                                "LZ4 compression is not enabled");
-        }
-        try {
-            payload =
-              state.compression_codec->decompress (payload, state.options.max_receive_payload_size);
-            if (payload.size () > state.options.max_receive_payload_size) {
-                return result_t<packet_t>::failure (
-                  error_code_t::decompression_failed,
-                  "decompressed stream payload exceeds maximum stream payload size");
-            }
-        }
-        catch (const std::exception &error) {
-            return result_t<packet_t>::failure (error_code_t::decompression_failed, error.what ());
-        }
-    }
-    if (header.kind == message_kind_t::control && header.name == "$zlink.heartbeat.ping") {
-        state.heartbeat_pong_due = true;
-    }
-    packet_t packet;
-    packet.name = std::move (header.name);
-    packet.metadata = std::move (header.metadata);
-    packet.codec = header.codec;
-    packet.compressed = compressed;
-    packet.payload = std::move (payload);
-    packet.flow_id = std::move (header.flow_id);
-    packet.flow_origin = header.flow_origin;
-    if (header.kind == message_kind_t::send) {
-        note_received_packet (state, packet);
-    }
-    return result_t<packet_t>::success (std::move (packet));
+    return decode_inbound_packet (state, decoded.value (), std::move (payload_bytes));
 }
 
 } // namespace
@@ -156,7 +111,11 @@ void dispatch_packet (connector_state_t &state, const packet_t &packet)
      * continues the received message's flow. */
     flow_scope_t flow (packet);
     for (const auto &entry : handlers) {
-        entry.handler (packet);
+        try {
+            entry.handler (packet);
+        }
+        catch (...) {
+        }
     }
 }
 
