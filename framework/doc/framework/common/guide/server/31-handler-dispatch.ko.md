@@ -358,15 +358,15 @@ serializer는 하나만 두고, 타입 조건을 받는 serializer는 서로 겹
 
     | 받는 것 | 구현할 interface | 등록 |
     | --- | --- | --- |
-    | Spot 앞 one-way packet | `ZLinkSpotPacketHandler<TSpot, TMessage>` | `addHandler(THandler::class.java)` |
-    | Spot 앞 request | `ZLinkSpotRequestHandler<TSpot, TRequest, TReply>` | `addHandler(THandler::class.java)` |
-    | Logical Multicast 구독 이벤트 | `ZLinkSpotSubscriptionHandler<TSpot, TEvent>` | handler에 `@ZLinkSpotSubscription(topic)` + `addHandler(THandler::class.java)` |
-    | timer tick | `ZLinkSpotTimerHandler<TSpot>` | `context.addTimer(name, period, THandler::class.java, options)`([Timer와 worker](36-timer-worker.ko.md)) |
-    | member Actor 앞 one-way packet | `ZLinkSpotActorSendHandler<TSpot, TActor, TMessage>` | handler에 `@ZLinkSpotActorSend` + `addHandler(THandler::class.java)` |
-    | member Actor 앞 request | `ZLinkSpotActorRequestHandler<TSpot, TActor, TRequest, TReply>` | handler에 `@ZLinkSpotActorRequest` + `addHandler(THandler::class.java)` |
+    | Spot 앞 one-way packet | `ZLinkSpotPacketHandler<TSpot, TMessage>` | `addHandler<THandler>()` |
+    | Spot 앞 request | `ZLinkSpotRequestHandler<TSpot, TRequest, TReply>` | `addHandler<THandler>()` |
+    | Logical Multicast 구독 이벤트 | `ZLinkSpotSubscriptionHandler<TSpot, TEvent>` | handler에 `@ZLinkSpotSubscription(topic)` + `addHandler<THandler>()` |
+    | timer tick | `ZLinkSpotTimerHandler<TSpot>` | `context.addTimer<THandler>(name, period, options)`([Timer와 worker](36-timer-worker.ko.md)) |
+    | member Actor 앞 one-way packet | `ZLinkSpotActorSendHandler<TSpot, TActor, TMessage>` | handler에 `@ZLinkSpotActorSend` + `addHandler<THandler>()` |
+    | member Actor 앞 request | `ZLinkSpotActorRequestHandler<TSpot, TActor, TRequest, TReply>` | handler에 `@ZLinkSpotActorRequest` + `addHandler<THandler>()` |
 
-    **Java 표면을 그대로 사용한다.** 등록 method는 `addHandler` 하나이고, 무엇을 받는
-    handler인지는 구현한 interface와 annotation이 정한다.
+    **reified `addHandler<THandler>()`로 등록한다.** 무엇을 받는 handler인지는 구현한 interface와
+    annotation이 정한다.
 
 === "Node/TypeScript"
 
@@ -783,9 +783,9 @@ Actor 앞 request는 actor request handler이며
 
         override fun configure() {
             // Spot send handler를 등록한다.
-            spotContext.handlers().addHandler(ChatHandler::class.java)
+            spotContext.handlers().addHandler<ChatHandler>()
             // 구독 topic은 ScoreHandler에 붙인 @ZLinkSpotSubscription이 정한다.
-            spotContext.handlers().addHandler(ScoreHandler::class.java)
+            spotContext.handlers().addHandler<ScoreHandler>()
         }
 
         override suspend fun onCreate(request: ZLinkMessage): ZLinkSpotCreateResponse {
