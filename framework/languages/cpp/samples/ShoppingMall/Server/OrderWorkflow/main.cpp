@@ -315,6 +315,7 @@ class planned_relocation_workflow_spot_t final : public spot_t<actor_t>
             schedule_readiness_check ();
             return;
         }
+        (void) _readiness_timer.cancel ();
         _context.relocation_ready ().defer ();
     }
 
