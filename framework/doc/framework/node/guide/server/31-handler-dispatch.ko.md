@@ -225,42 +225,7 @@ handler는 대상 Spot instance를 첫 인자로 받는다. Spot 안에서 실�
 최소 형태로 보면 이렇다.
 
 ```typescript
-// Spot 앞 packet — 첫 인자가 대상 Spot instance다.
-export class ChatHandler implements ZLinkSpotPacketHandler<GameRoom, Chat> {
-  async handle(spot: GameRoom, message: Chat): Promise<void> {
-    // Spot 상태를 직접 만진다. 락은 필요 없다.
-    spot.appendChat(message.text);
-  }
-}
-
-// Spot 앞 request — 반환값이 reply다.
-export class GetRoomStateHandler
-  implements ZLinkSpotRequestHandler<GameRoom, GetRoomState, RoomState> {
-  async handle(spot: GameRoom, request: GetRoomState): Promise<RoomState> {
-    return spot.snapshot();
-  }
-}
-
-// 구독 이벤트 — addSubscribe로 등록한 channel·topic으로 들어온다.
-export class ScoreHandler implements ZLinkSpotSubscriptionHandler<GameRoom, ScoreChanged> {
-  async handle(spot: GameRoom, event: ScoreChanged): Promise<void> {
-    spot.applyScore(event);
-  }
-}
-
-// member Actor 앞 packet — Spot과 Actor를 함께 받는다.
-export class PlaceMarkHandler
-  implements ZLinkSpotActorSendHandler<GameRoom, PlayerActor, PlaceMark> {
-  async handle(
-    spot: GameRoom,
-    // 이 메시지를 받은 Actor다.
-    actor: PlayerActor,
-    messageContext: ZLinkMessageContext,
-    message: PlaceMark
-  ): Promise<void> {
-    spot.place(actor.actorId, message.cell);
-  }
-}
+--8<-- "framework/languages/node/samples/TicTacToe.Ts/Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/Handlers/play-actor-place-mark-handler.ts:doc-actor-packet-handler"
 ```
 
 Actor 앞 request는 actor request handler이며
@@ -269,34 +234,7 @@ Actor 앞 request는 actor request handler이며
 `configure()`에서 handler를 등록하고 lifecycle callback에서 초기화와 정리를 수행한다.
 
 ```typescript
-export class GameRoom implements ZLinkSpot {
-  readonly context!: ZLinkSpotContext;
-
-  configure(): void {
-    // Spot send handler를 등록한다.
-    this.context.handlers.addPacket(ChatHandler);
-    this.context.handlers.addSubscribe(
-      ScoreHandler,
-      'game-events',
-      // Logical Multicast 구독을 등록한다.
-      'score.changed');
-  }
-
-  async onCreate(request: ZLinkMessage): Promise<ZLinkSpotCreateResponse> {
-    const create = request.decode<CreateGame>(Object as never);
-    return create.mode === 'ranked' || create.mode === 'casual'
-      ? ZLinkSpotCreateResponse.accept(gameCreated(create.mode))
-      : ZLinkSpotCreateResponse.reject(invalidMode(create.mode));
-  }
-
-  async onInitialize(): Promise<void> {
-    // 생성 승인 뒤 메시지를 받기 전에 필요한 준비를 끝낸다.
-  }
-
-  async onClosing(closing: ZLinkSpotClosingContext): Promise<void> {
-    // Deadline까지 application resource를 정리한다.
-  }
-}
+--8<-- "framework/languages/node/samples/GameQuest.Ts/Server/QuestMission/Infrastructure/ZLink/Spots/PlayerQuestSpot/player-quest-spot.ts:doc-gq-spot-init"
 ```
 
 `onClosing`의 reason은 explicit close, host shutdown, relocation out을 구분한다.

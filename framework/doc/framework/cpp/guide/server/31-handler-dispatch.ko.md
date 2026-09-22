@@ -227,38 +227,7 @@ handler는 대상 Spot instance를 첫 인자로 받는다. Spot 안에서 실�
 최소 형태로 보면 이렇다.
 
 ```cpp
-// C++은 handler class 대신 Spot member 함수를 등록한다. 첫 인자가 대상 Spot이다.
-class game_room_t : public spot_t<player_actor_t>
-{
-  public:
-    // Spot 앞 packet.
-    task_t<void> chat (const chat_t &message)
-    {
-        // Spot 상태를 직접 만진다. 락은 필요 없다.
-        append_chat (message.text);
-        co_return;
-    }
-
-    // Spot 앞 request — 반환값이 reply다.
-    room_state_t get_room_state (const get_room_state_t &) { return snapshot (); }
-
-    // 구독 이벤트 — add_subscribe로 등록한 channel·topic으로 들어온다.
-    task_t<void> score (const score_changed_t &event)
-    {
-        apply_score (event);
-        co_return;
-    }
-
-    // member Actor 앞 packet — Spot과 Actor를 함께 받는다.
-    // 이 메시지를 받은 Actor다.
-    task_t<void> place_mark (player_actor_t &actor,
-                             message_context_t &,
-                             const place_mark_t &message)
-    {
-        place (actor.actor_id, message.cell);
-        co_return;
-    }
-};
+--8<-- "framework/languages/cpp/samples/TicTacToe/Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/Handlers/play_actor_place_mark_handler.hpp:doc-actor-packet-handler"
 ```
 
 Actor 앞 request는 actor request handler이며
@@ -267,43 +236,7 @@ Actor 앞 request는 actor request handler이며
 `configure()`에서 handler를 등록하고 lifecycle callback에서 초기화와 정리를 수행한다.
 
 ```cpp
-class game_room_t : public spot_t<player_actor_t>
-{
-  public:
-    spot_context_t &context () noexcept override { return _context; }
-
-    void configure () override
-    {
-        // Spot send handler를 등록한다.
-        _context.handlers ().add_handler<&game_room_t::chat> ();
-        _context.handlers ().add_subscribe<&game_room_t::score> (
-          // Logical Multicast 구독을 등록한다.
-          "game-events", "score.changed");
-    }
-
-    task_t<spot_create_response_t> on_create (const message_t &request) override
-    {
-        const auto create = request.decode<create_game_t> ();
-        co_return (create.mode == "ranked" || create.mode == "casual")
-                  ? spot_create_response_t::accept (game_created_t{create.mode})
-                  : spot_create_response_t::reject (invalid_mode_t{create.mode});
-    }
-
-    task_t<void> on_initialize () override
-    {
-        // 생성 승인 뒤 메시지를 받기 전에 필요한 준비를 끝낸다.
-        co_return;
-    }
-
-    task_t<void> on_closing (const spot_closing_context_t &) override
-    {
-        // Deadline까지 application resource를 정리한다.
-        co_return;
-    }
-
-  private:
-    spot_context_t _context;
-};
+--8<-- "framework/languages/cpp/samples/GameQuest/Server/QuestMission/main.cpp:doc-gq-spot-init"
 ```
 
 `on_closing`의 reason은 explicit close, host shutdown, relocation out을 구분한다.

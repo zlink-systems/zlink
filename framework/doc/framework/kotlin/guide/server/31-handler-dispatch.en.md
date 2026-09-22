@@ -242,38 +242,7 @@ it touches state directly, with no lock.
 The four branches in their minimal form look like this.
 
 ```kotlin
-// A packet addressed to the Spot -- the first argument is the target Spot instance.
-class ChatHandler : ZLinkSpotPacketHandler<GameRoom, Chat> {
-    override suspend fun handle(spot: GameRoom, message: Chat) {
-        // Touches Spot state directly. No lock needed.
-        spot.appendChat(message.text)
-    }
-}
-
-// A request addressed to the Spot -- the return value is the reply.
-class GetRoomStateHandler : ZLinkSpotRequestHandler<GameRoom, GetRoomState, RoomState> {
-    override suspend fun handle(spot: GameRoom, request: GetRoomState): RoomState = spot.snapshot()
-}
-
-// A subscription event -- arrives on the topic in @ZLinkSpotSubscription.
-class ScoreHandler : ZLinkSpotSubscriptionHandler<GameRoom, ScoreChanged> {
-    override suspend fun handle(spot: GameRoom, event: ScoreChanged) {
-        spot.applyScore(event)
-    }
-}
-
-// A packet addressed to a member Actor -- receives the Spot and the Actor together.
-class PlaceMarkHandler : ZLinkSpotActorSendHandler<GameRoom, PlayerActor, PlaceMark> {
-    override suspend fun handle(
-        spot: GameRoom,
-        // The Actor that received this message.
-        actor: PlayerActor,
-        messageContext: ZLinkMessageContext,
-        message: PlaceMark,
-    ) {
-        spot.place(actor.actorId(), message.cell)
-    }
-}
+--8<-- "framework/languages/java/samples/kotlin/TicTacToe/Server/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/server/play/infrastructure/zlink/spots/tictactoegamespot/handlers/PlayActorPlaceMarkHandler.kt:doc-actor-packet-handler"
 ```
 
 An Actor request handler takes the same arguments; the only difference is that its return
@@ -283,32 +252,7 @@ Register handlers in `configure()` and perform initialization and cleanup in lif
 callbacks.
 
 ```kotlin
-class GameRoom(private val spotContext: ZLinkSpotContext) : ZLinkSpot {
-
-    override fun context(): ZLinkSpotContext = spotContext
-
-    override fun configure() {
-        // Registers the Spot send handler.
-        spotContext.handlers().addHandler(ChatHandler::class.java)
-        // The subscription topic is set by @ZLinkSpotSubscription on ScoreHandler.
-        spotContext.handlers().addHandler(ScoreHandler::class.java)
-    }
-
-    override suspend fun onCreate(request: ZLinkMessage): ZLinkSpotCreateResponse {
-        val create = request.decode(CreateGame::class.java)
-        return if (create.mode in setOf("ranked", "casual"))
-            ZLinkSpotCreateResponse.accept(GameCreated(create.mode))
-        else ZLinkSpotCreateResponse.reject(InvalidMode(create.mode))
-    }
-
-    override suspend fun onInitialize() {
-        // Finishes whatever's needed after creation is approved, before receiving messages.
-    }
-
-    override suspend fun onClosing(closing: ZLinkSpotClosingContext) {
-        // Cleans up application resources by the deadline.
-    }
-}
+--8<-- "framework/languages/java/samples/kotlin/GameQuest/Server/QuestMission/src/main/kotlin/systems/zlink/samples/kotlin/gamequest/server/questmission/Program.kt:doc-gq-spot-init"
 ```
 
 `onClosing`'s reason distinguishes explicit close, host shutdown, and relocation out. The
