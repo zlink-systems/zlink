@@ -210,7 +210,9 @@ class SupportChatClientScenario {
         ensure(closed2Agent.conversationId == cid2)
         ensure(closed2Agent.state.status == ConversationStatuses.Closed)
 
+        // --8<-- [start:doc-e2e-failure]
         ZLinkKotlinStreamAssert.expectFailure { customerRoom2.close("again") }
+        // --8<-- [end:doc-e2e-failure]
 
         ensure(
             idle1ForCustomer.await().payload().state.status == ConversationStatuses.WaitingForClose

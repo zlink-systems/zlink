@@ -35,22 +35,7 @@ open a socket, assemble frames, and wait for a response for every scenario. ZLin
 that work. **The client library your real users use is itself the verification tool.** An
 E2E test comes down to just this much code.
 
-```kotlin
-// A real connection
-val kotlinClient = client.kotlin()
-val kotlinOther = other.kotlin()
-kotlinClient.connect().await()
-// A real request
-val pushDeferred = async(start = CoroutineStart.UNDISPATCHED) {
-    kotlinOther.waitFor<PlayerJoinedNotify>().await()
-}
-val auth = kotlinClient.request(AuthenticateReq(actorId))
-    .awaitReply<AuthenticateRes>()
-// Confirms a real push arrived
-val push = pushDeferred.await()
-ZLinkStreamAssert.ensure(
-    push.payload().actorId == auth.player.actorId, "join push actor mismatch.")
-```
+--8<-- "framework/languages/java/samples/kotlin/TicTacToe/Client/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/client/TicTacToeClientScenario.kt:doc-e2e-connect-request"
 
 Because **the connector itself provides the wait functions verification needs**, like
 `waitFor`, you don't implement a separate test harness. Every sample in this repository is
@@ -74,24 +59,7 @@ The two libraries used for verification don't overlap in role.
 Most scenarios chain the two together — create a target over HTTP, then connect to STREAM
 using the endpoint returned in that response.
 
-```kotlin
-// Step 1 -- create a room through the gateway API.
-val api = ZLinkHttpClient.create(options.apiUrl)
-    .timeout(options.httpTimeout)
-    .build()
-// fetch returns the deserialized body as-is.
-val room = api.post("/games")
-    .body(CreateGameHttpReq(options.gameName))
-    .fetch(CreateGameHttpRes::class.java)
-
-// Step 2 -- open a real-time connection to the endpoint the response gave us.
-val client = ZLinkStreamConnectorFactory.create(
-    ZLinkStreamConnectorOptions(
-        URI.create(room.playEndpoints[0]),
-        // Console scenarios use the automatic pump.
-        ZLinkStreamDispatchMode.IMMEDIATE,
-        options.streamTimeout))
-```
+--8<-- "framework/languages/java/samples/kotlin/TicTacToe/Client/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/client/TicTacToeClientScenario.kt:doc-e2e-create-room"
 
 When `dispatchMode` is `Immediate`, the connector handles receiving on its own, so the
 scenario code never runs a separate pump. Environments that must pump manually to match a
@@ -128,52 +96,28 @@ failure the scenario ends with an exception carrying that message.
 Specify a condition with `where(...)` to **wait for the first message matching that
 condition.** Other, nonmatching pushes may arrive without affecting the scenario.
 
-```kotlin
-val joined = client1.kotlin().waitFor<PlayerJoinedNotify>()
-    .where { it.payload().actorId == options.oActorId }
-    .await()
-ZLinkStreamAssert.ensure(joined.payload().mark == TicTacToeMarks.O, "joined mark mismatch.")
-```
+--8<-- "framework/languages/java/samples/kotlin/TicTacToe/Client/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/client/TicTacToeClientScenario.kt:doc-e2e-wait-filter"
 
 ### 3.2 Confirming a Push Doesn't Arrive
 
 You can't confirm something never arrives without an observation window, so `within(...)`
 must be specified. Omitting it is an error.
 
-```kotlin
-// The player who just joined shouldn't receive their own join notification.
-client2.kotlin().expectNone<PlayerJoinedNotify>()
-    .within(Duration.ofMillis(250))
-    .await()
-```
+--8<-- "framework/languages/java/samples/kotlin/TicTacToe/Client/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/client/TicTacToeClientScenario.kt:doc-e2e-expect-none"
 
 ### 3.3 Confirming Push Order
 
 In a flow where state changes in stages, the contract isn't whether something arrives but
 its **order.**
 
-```kotlin
-val statusSequence = customer.kotlin().waitForSequence<DeliveryStatusNotify>()
-    .expect { matchesStatus(it, deliveryId, DeliveryStatus.Assigned) }
-    .expect { matchesStatus(it, deliveryId, DeliveryStatus.Accepted) }
-    .expect { matchesStatus(it, deliveryId, DeliveryStatus.PickedUp) }
-    .expect { matchesStatus(it, deliveryId, DeliveryStatus.Delivered) }
-    .timeout(customer.options().waitTimeout)
-    .await()
-```
+--8<-- "framework/languages/java/samples/kotlin/DeliveryDispatch/Client/src/main/kotlin/systems/zlink/samples/kotlin/deliverydispatch/client/Program.kt:doc-e2e-sequence"
 
 ### 3.4 Confirming a Request Fails
 
 Whether a request with no permission or an out-of-order request **gets rejected** is also
 part of the contract. Verifying only the success path leaves this path unverified.
 
-```kotlin
-// Can't open a conversation before authenticating.
-ZLinkKotlinStreamAssert.expectFailure(ZLinkStreamErrorCode.REMOTE_ERROR.name) {
-    agent.kotlin().request(OpenConversationReq("unauthenticated"))
-        .awaitReply<OpenConversationRes>()
-}
-```
+--8<-- "framework/languages/java/samples/kotlin/SupportChat/Client/src/main/kotlin/systems/zlink/samples/kotlin/supportchat/client/SupportChatClientScenario.kt:doc-e2e-failure"
 
 ## 4. How to Handle Waiting for a Message
 
@@ -182,39 +126,12 @@ push that arrived in between.
 
 Reverse the order. Register the wait first, then run the action that triggers that push.
 
-```kotlin
-// Register the wait first -- don't await it yet.
-val statusSequenceDeferred = async(start = CoroutineStart.UNDISPATCHED) {
-    customer.kotlin().waitForSequence<DeliveryStatusNotify>()
-    .expect { matchesStatus(it, deliveryId, DeliveryStatus.Assigned) }
-    .timeout(customer.options().waitTimeout)
-    .await()
-}
-
-// Then run the action that triggers the push.
-val created = http.post("/deliveries")
-    .body(CreateDeliveryReq(deliveryId, "customer-1", "Kitchen 12", "Customer Lobby"))
-    .fetch(CreateDeliveryRes::class.java)
-
-// Receive the result last.
-val statusSequence = statusSequenceDeferred.await()
-```
+--8<-- "framework/languages/java/samples/kotlin/DeliveryDispatch/Client/src/main/kotlin/systems/zlink/samples/kotlin/deliverydispatch/client/Program.kt:doc-e2e-sequence"
 
 If multiple clients need to confirm the same event, register a wait for each and receive
 them together with `Task.WhenAll`.
 
-```kotlin
-// Bingo -- once both players have joined the room starts, and both clients get the same push.
-val client1Started = async(start = CoroutineStart.UNDISPATCHED) {
-    client1.kotlin().waitFor<BingoGameStartedNotify>().await()
-}
-val client2Started = async(start = CoroutineStart.UNDISPATCHED) {
-    client2.kotlin().waitFor<BingoGameStartedNotify>().await()
-}
-
-client1Started.await()
-client2Started.await()
-```
+--8<-- "framework/languages/java/samples/kotlin/Bingo/Client/src/main/kotlin/systems/zlink/samples/kotlin/bingo/client/BingoClientScenario.kt:doc-e2e-multi-wait"
 
 Don't use `Sleep` to line up timing. Express every wait through the timeout on
 `waitFor`/`expectNone`/`waitForSequence`. `Sleep` fails on slow hardware and wastes time on
@@ -226,51 +143,7 @@ The `TicTacToe` sample is the shortest. Create a room over HTTP → both players
 authenticate → confirm the join push → make a move → confirm the opponent observes that
 move, in that order.
 
-```kotlin
-suspend fun run(options: TicTacToeClientOptions) {
-    // 1. Create a room through the gateway API and get the endpoint to connect to.
-    val api = ZLinkHttpClient.create(options.apiUrl).timeout(options.httpTimeout).build()
-    val room = api.post("/games")
-        .body(CreateGameHttpReq(options.gameName))
-        .fetch(CreateGameHttpRes::class.java)
-    ZLinkStreamAssert.ensure(room.playEndpoints.size >= 2, "play endpoints are missing.")
-
-    // 2. Connect the two players to different Play nodes -- this verifies routing between nodes.
-    val client1 = createStreamClient(room.playEndpoints[0], options)
-    val client2 = createStreamClient(room.playEndpoints[1], options)
-
-    // 3. Whoever connects first authenticates and enters the empty room.
-    val kotlinClient1 = client1.kotlin()
-    val kotlinClient2 = client2.kotlin()
-    kotlinClient1.connect().await()
-    kotlinClient1.request(AuthenticateReq(options.xActorId)).awaitReply<AuthenticateRes>()
-    // Register wait -> send -> receive (see §3)
-    val join1 = joinGame(client1, room.roomId)
-    ZLinkStreamAssert.ensure(
-        join1.state.status == TicTacToeGameStatuses.WaitingForPlayers,
-        "room should wait for the second player.")
-
-    // Being alone in the room, their own join notification shouldn't come back to them.
-    client1.kotlin().expectNone<PlayerJoinedNotify>().within(Duration.ofMillis(250)).await()
-
-    // 4. Once the second player joins, the room starts.
-    kotlinClient2.connect().await()
-    kotlinClient2.request(AuthenticateReq(options.oActorId)).awaitReply<AuthenticateRes>()
-    val join2 = joinGame(client2, room.roomId)
-    ZLinkStreamAssert.ensure(
-        join2.state.status == TicTacToeGameStatuses.InProgress, "room should start with two players.")
-
-    // 5. Making a move -- the response and the push delivered to the opponent should point to the same state.
-    val sawMoveDeferred = async(start = CoroutineStart.UNDISPATCHED) {
-        kotlinClient2.waitFor<GameStateNotify>()
-            .where { it.payload().state.lastMoveCell == 0 }
-            .await()
-    }
-    val move = kotlinClient1.request(PlaceMarkReq(0)).awaitReply<PlaceMarkRes>()
-    val sawMove = sawMoveDeferred.await()
-    ZLinkStreamAssert.ensure(sawMove.payload().state.board == move.state.board, "board state mismatch.")
-}
-```
+--8<-- "framework/languages/java/samples/kotlin/TicTacToe/Client/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/client/TicTacToeClientScenario.kt:doc-e2e-scenario"
 
 **Choose verification points by this rule.** Don't just check a request's own response —
 also check *whether another client observes the same fact.* Making **the result that
@@ -288,17 +161,7 @@ client can't confirm.
 - **Two connected to different nodes** — whether routing and location resolution between
   nodes actually work
 
-```kotlin
-// The join completion arrives as a client push -- register the wait before the one-way send.
-private suspend fun joinGame(connector: ZLinkStreamConnector, roomId: String): JoinGameNotify {
-    val kotlinConnector = connector.kotlin()
-    val completion = async(start = CoroutineStart.UNDISPATCHED) {
-        kotlinConnector.waitFor<JoinGameNotify>().await()
-    }
-    kotlinConnector.send(JoinGameMsg(roomId)).await()
-    return completion.await().payload()
-}
-```
+--8<-- "framework/languages/java/samples/kotlin/TicTacToe/Client/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/client/TicTacToeClientScenario.kt:doc-e2e-multi-client"
 
 The `Bingo` sample uses this composition as-is — it brings together two players and one
 spectator, and even confirms the win notification is delivered only to the spectator.

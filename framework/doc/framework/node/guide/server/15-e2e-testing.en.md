@@ -35,18 +35,7 @@ open a socket, assemble frames, and wait for a response for every scenario. ZLin
 that work. **The client library your real users use is itself the verification tool.** An
 E2E test comes down to just this much code.
 
-```typescript
-// A real connection
-await client.connect(signal);
-// A real request
-const auth = await client.request(authenticateReq(actorId))
-  .submit<AuthenticateRes>(signal);
-// Confirms a real push arrived
-const push = await other.waitFor<PlayerJoinedNotify>(
-  PacketNames.playerJoinedNotify).submit(signal);
-zlinkStreamAssert.ensure(
-  push.payload.actorId === auth.player.actorId, 'join push actor mismatch.');
-```
+--8<-- "framework/languages/node/samples/TicTacToe.Ts/Client/tictactoe-client-scenario.ts:doc-e2e-connect-request"
 
 Because **the connector itself provides the wait functions verification needs**, like
 `WaitFor`, you don't implement a separate test harness. Every sample in this repository is
@@ -70,23 +59,7 @@ The two libraries used for verification don't overlap in role.
 Most scenarios chain the two together — create a target over HTTP, then connect to STREAM
 using the endpoint returned in that response.
 
-```typescript
-// Step 1 -- create a room through the gateway API.
-const api = ZLinkHttpClient.create(options.apiUrl).timeout(options.httpTimeout).build();
-// fetch returns the deserialized body as-is.
-const room = await api.post('/games')
-  .body(createGameHttpReq(options.gameName))
-  .fetch<CreateGameHttpRes>();
-
-// Step 2 -- open a real-time connection to the endpoint the response gave us.
-const client = zlinkStreamConnectorFactory.create({
-  endpoint: room.playEndpoints[0],
-  connectTimeoutMs: options.streamTimeoutMs,
-  requestTimeoutMs: options.streamTimeoutMs,
-  // Console scenarios use the automatic pump.
-  dispatchMode: ZlinkStreamDispatchMode.Immediate
-});
-```
+--8<-- "framework/languages/node/samples/TicTacToe.Ts/Client/tictactoe-client-scenario.ts:doc-e2e-create-room"
 
 When `dispatchMode` is `Immediate`, the connector handles receiving on its own, so the
 scenario code never runs a separate pump. Environments that must pump manually to match a
@@ -123,54 +96,28 @@ failure the scenario ends with an exception carrying that message.
 Specify a condition with `where(...)` to **wait for the first message matching that
 condition.** Other, nonmatching pushes may arrive without affecting the scenario.
 
-```typescript
-const joined = await client1.waitFor<PlayerJoinedNotify>(PacketNames.playerJoinedNotify)
-  .where((message) => message.payload.actorId === options.oActorId)
-  .submit(signal);
-zlinkStreamAssert.ensure(joined.payload.mark === TicTacToeMarks.O, 'joined mark mismatch.');
-```
+--8<-- "framework/languages/node/samples/TicTacToe.Ts/Client/tictactoe-client-scenario.ts:doc-e2e-wait-filter"
 
 ### 3.2 Confirming a Push Doesn't Arrive
 
 You can't confirm something never arrives without an observation window, so `within(...)`
 must be specified. Omitting it is an error.
 
-```typescript
-// The player who just joined shouldn't receive their own join notification.
-await client2.expectNone<PlayerJoinedNotify>(PacketNames.playerJoinedNotify)
-  .within(250)
-  .run(signal);
-```
+--8<-- "framework/languages/node/samples/TicTacToe.Ts/Client/tictactoe-client-scenario.ts:doc-e2e-expect-none"
 
 ### 3.3 Confirming Push Order
 
 In a flow where state changes in stages, the contract isn't whether something arrives but
 its **order.**
 
-```typescript
-const statusSequence = await customer
-  .waitForSequence<DeliveryStatusNotify>(PacketNames.deliveryStatusNotify)
-  .expect((message) => matchesStatus(message, deliveryId, DeliveryStatus.Assigned))
-  .expect((message) => matchesStatus(message, deliveryId, DeliveryStatus.Accepted))
-  .expect((message) => matchesStatus(message, deliveryId, DeliveryStatus.PickedUp))
-  .expect((message) => matchesStatus(message, deliveryId, DeliveryStatus.Delivered))
-  .timeout(customer.options.waitTimeoutMs)
-  .submit(signal);
-```
+--8<-- "framework/languages/node/samples/DeliveryDispatch.Ts/Client/deliverydispatch-client-scenario.ts:doc-e2e-sequence"
 
 ### 3.4 Confirming a Request Fails
 
 Whether a request with no permission or an out-of-order request **gets rejected** is also
 part of the contract. Verifying only the success path leaves this path unverified.
 
-```typescript
-// Can't open a conversation before authenticating.
-await zlinkStreamAssert.expectFailure(
-  () => agent.request(openConversationReq('unauthenticated'))
-    .submit<OpenConversationRes>(signal),
-  ZlinkStreamErrorCode.RemoteError
-);
-```
+--8<-- "framework/languages/node/samples/SupportChat.Ts/Client/supportchat-client-scenario.ts:doc-e2e-failure"
 
 ## 4. How to Handle Waiting for a Message
 
@@ -179,35 +126,12 @@ push that arrived in between.
 
 Reverse the order. Register the wait first, then run the action that triggers that push.
 
-```typescript
-// Register the wait first -- don't await it yet.
-const statusSequencePromise = customer
-  .waitForSequence<DeliveryStatusNotify>(PacketNames.deliveryStatusNotify)
-  .expect((message) => matchesStatus(message, deliveryId, DeliveryStatus.Assigned))
-  .timeout(customer.options.waitTimeoutMs)
-  .submit(signal);
-
-// Then run the action that triggers the push.
-const created = await http.post('/deliveries')
-  .body(createDeliveryReq(deliveryId, 'customer-1', 'Kitchen 12', 'Customer Lobby'))
-  .fetch<CreateDeliveryRes>();
-
-// Receive the result last.
-const statusSequence = await statusSequencePromise;
-```
+--8<-- "framework/languages/node/samples/DeliveryDispatch.Ts/Client/deliverydispatch-client-scenario.ts:doc-e2e-sequence"
 
 If multiple clients need to confirm the same event, register a wait for each and receive
 them together with `Task.WhenAll`.
 
-```typescript
-// Bingo -- once both players have joined the room starts, and both clients get the same push.
-const client1Started = client1
-  .waitFor<BingoGameStartedNotify>(PacketNames.gameStartedNotify).submit(signal);
-const client2Started = client2
-  .waitFor<BingoGameStartedNotify>(PacketNames.gameStartedNotify).submit(signal);
-
-await Promise.all([client1Started, client2Started]);
-```
+--8<-- "framework/languages/node/samples/Bingo.Ts/Client/bingo-client-scenario.ts:doc-e2e-multi-wait"
 
 Don't use `Sleep` to line up timing. Express every wait through the timeout on
 `WaitFor`/`ExpectNone`/`WaitForSequence`. `Sleep` fails on slow hardware and wastes time on
@@ -219,46 +143,7 @@ The `TicTacToe` sample is the shortest. Create a room over HTTP → both players
 authenticate → confirm the join push → make a move → confirm the opponent observes that
 move, in that order.
 
-```typescript
-async function run(options: TicTacToeClientOptions, signal: AbortSignal): Promise<void> {
-  // 1. Create a room through the gateway API and get the endpoint to connect to.
-  const api = ZLinkHttpClient.create(options.apiUrl).timeout(options.httpTimeout).build();
-  const room = await api.post('/games')
-    .body(createGameHttpReq(options.gameName))
-    .fetch<CreateGameHttpRes>();
-  zlinkStreamAssert.ensure(room.playEndpoints.length >= 2, 'play endpoints are missing.');
-
-  // 2. Connect the two players to different Play nodes -- this verifies routing between nodes.
-  const client1 = createStreamClient(room.playEndpoints[0], options);
-  const client2 = createStreamClient(room.playEndpoints[1], options);
-
-  // 3. Whoever connects first authenticates and enters the empty room.
-  await client1.connect(signal);
-  await client1.request(authenticateReq(options.xActorId)).submit<AuthenticateRes>(signal);
-  // Register wait -> send -> receive (see §3)
-  const join1 = await joinGame(client1, room.roomId, signal);
-  zlinkStreamAssert.ensure(
-    join1.state.status === TicTacToeGameStatuses.WaitingForPlayers,
-    'room should wait for the second player.');
-
-  // Being alone in the room, their own join notification shouldn't come back to them.
-  await client1.expectNone<PlayerJoinedNotify>(PacketNames.playerJoinedNotify).within(250).run(signal);
-
-  // 4. Once the second player joins, the room starts.
-  await client2.connect(signal);
-  await client2.request(authenticateReq(options.oActorId)).submit<AuthenticateRes>(signal);
-  const join2 = await joinGame(client2, room.roomId, signal);
-  zlinkStreamAssert.ensure(
-    join2.state.status === TicTacToeGameStatuses.InProgress, 'room should start with two players.');
-
-  // 5. Making a move -- the response and the push delivered to the opponent should point to the same state.
-  const move = await client1.request(placeMarkReq(0)).submit<PlaceMarkRes>(signal);
-  const sawMove = await client2.waitFor<GameStateNotify>(PacketNames.gameStateNotify)
-    .where((message) => message.payload.state.lastMoveCell === 0)
-    .submit(signal);
-  zlinkStreamAssert.ensure(sawMove.payload.state.board === move.state.board, 'board state mismatch.');
-}
-```
+--8<-- "framework/languages/node/samples/TicTacToe.Ts/Client/tictactoe-client-scenario.ts:doc-e2e-scenario"
 
 **Choose verification points by this rule.** Don't just check a request's own response —
 also check *whether another client observes the same fact.* Making **the result that
@@ -276,15 +161,7 @@ client can't confirm.
 - **Two connected to different nodes** — whether routing and location resolution between
   nodes actually work
 
-```typescript
-// The join completion arrives as a client push -- register the wait before the one-way send.
-async function joinGame(
-  connector: ZlinkStreamConnector, roomId: string, signal: AbortSignal): Promise<JoinGameNotify> {
-  const completion = connector.waitFor<JoinGameNotify>(PacketNames.joinGameNotify).submit(signal);
-  await connector.send(joinGameMsg(roomId)).submit();
-  return (await completion).payload;
-}
-```
+--8<-- "framework/languages/node/samples/TicTacToe.Ts/Client/tictactoe-client-scenario.ts:doc-e2e-multi-client"
 
 The `Bingo` sample uses this composition as-is — it brings together two players and one
 spectator, and even confirms the win notification is delivered only to the spectator.

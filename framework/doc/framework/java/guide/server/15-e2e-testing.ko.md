@@ -34,18 +34,7 @@ handler 단위 테스트를 아무리 촘촘히 작성해도 확인되지 않는
 사용자가 사용할 client library가 그대로 검증 도구**이기 때문이다. E2E 테스트는 다음
 코드만으로 끝난다.
 
-```java
-// 실제 연결
-client.connect().submit().toCompletableFuture().join();
-// 실제 request
-AuthenticateRes auth = client.request(new AuthenticateReq(actorId))
-    .submit(AuthenticateRes.class).toCompletableFuture().join();
-// 실제 push 도착 확인
-var push = other.waitFor(PlayerJoinedNotify.class)
-    .submit(PlayerJoinedNotify.class).toCompletableFuture().join();
-ZLinkStreamAssert.ensure(
-    push.payload().actorId().equals(auth.player().actorId()), "join push actor mismatch.");
-```
+--8<-- "framework/languages/java/samples/java/TicTacToe/Client/src/main/java/systems/zlink/samples/tictactoe/client/TicTacToeClientScenario.java:doc-e2e-connect-request"
 
 `waitFor`처럼 검증에 필요한 대기 함수를 connector가 직접 제공하므로 **별도 테스트
 하네스를 구현하지 않는다.** 저장소의 샘플이 모두 이 방식으로 검증된다.
@@ -67,24 +56,7 @@ ZLinkStreamAssert.ensure(
 대부분의 시나리오는 둘을 이어서 사용한다. HTTP로 대상을 만들고, 그 응답에 담겨 온
 endpoint로 STREAM에 접속하는 순서다.
 
-```java
-// 1단계 — 관문 API로 방을 만든다.
-ZLinkHttpClient api = ZLinkHttpClient.create(options.apiUrl())
-    .timeout(options.httpTimeout())
-    .build();
-// fetch는 역직렬화된 본문을 그대로 돌려준다.
-CreateGameHttpRes room = api.post("/games")
-    .body(new CreateGameHttpReq(options.gameName()))
-    .fetch(CreateGameHttpRes.class);
-
-// 2단계 — 응답이 알려 준 endpoint로 실시간 연결을 연다.
-ZLinkStreamConnector client = ZLinkStreamConnectorFactory.create(
-    new ZLinkStreamConnectorOptions(
-        URI.create(room.playEndpoints().get(0)),
-        // console 시나리오는 자동 펌프를 사용한다.
-        ZLinkStreamDispatchMode.IMMEDIATE,
-        options.streamTimeout()));
-```
+--8<-- "framework/languages/java/samples/java/TicTacToe/Client/src/main/java/systems/zlink/samples/tictactoe/client/TicTacToeClientScenario.java:doc-e2e-create-room"
 
 `dispatchMode`가 `Immediate`이면 connector가 수신을 자체적으로 처리하므로 시나리오
 코드에서 별도로 펌프를 실행하지 않는다. 게임 엔진처럼 프레임 루프에 맞춰 직접 펌프해야 하는 환경은
@@ -120,59 +92,27 @@ connector가 제공하는 검증 함수로 대부분의 시나리오를 표현�
 `where(...)`로 조건을 지정하면 **조건에 맞는 첫 message까지 기다린다.** 관심 대상이 아닌
 push가 섞여 들어와도 시나리오가 영향을 받지 않는다.
 
-```java
-var joined = client1.waitFor(PlayerJoinedNotify.class)
-    .where(PlayerJoinedNotify.class,
-        message -> message.payload().actorId().equals(options.oActorId()))
-    .submit(PlayerJoinedNotify.class)
-    .toCompletableFuture().join();
-ZLinkStreamAssert.ensure(joined.payload().mark() == TicTacToeMarks.O, "joined mark mismatch.");
-```
+--8<-- "framework/languages/java/samples/java/TicTacToe/Client/src/main/java/systems/zlink/samples/tictactoe/client/TicTacToeClientScenario.java:doc-e2e-wait-filter"
 
 ### 3.2 push 미도착 확인
 
 도착하지 않는다는 사실은 관찰 구간 없이 확정할 수 없으므로 `within(...)`으로 구간을 반드시
 지정한다. 지정하지 않으면 오류다.
 
-```java
-// 방금 들어온 본인에게는 자기 입장 알림이 가지 않아야 한다.
-client2.expectNone(PlayerJoinedNotify.class)
-    .within(Duration.ofMillis(250))
-    .submit()
-    .toCompletableFuture().join();
-```
+--8<-- "framework/languages/java/samples/java/DeliveryDispatch/Client/src/main/java/systems/zlink/samples/deliverydispatch/client/DeliveryDispatchClientScenario.java:doc-e2e-expect-none"
 
 ### 3.3 push 순서 확인
 
 상태가 단계적으로 바뀌는 흐름에서는 도착 여부가 아니라 **순서**가 계약이다.
 
-```java
-var statusSequence = customer.waitForSequence(DeliveryStatusNotify.class)
-    .expect(DeliveryStatusNotify.class,
-        message -> matchesStatus(message, deliveryId, DeliveryStatus.Assigned))
-    .expect(DeliveryStatusNotify.class,
-        message -> matchesStatus(message, deliveryId, DeliveryStatus.Accepted))
-    .expect(DeliveryStatusNotify.class,
-        message -> matchesStatus(message, deliveryId, DeliveryStatus.PickedUp))
-    .expect(DeliveryStatusNotify.class,
-        message -> matchesStatus(message, deliveryId, DeliveryStatus.Delivered))
-    .timeout(customer.options().waitTimeout())
-    .submit(DeliveryStatusNotify.class)
-    .toCompletableFuture().join();
-```
+--8<-- "framework/languages/java/samples/java/DeliveryDispatch/Client/src/main/java/systems/zlink/samples/deliverydispatch/client/DeliveryDispatchClientScenario.java:doc-e2e-sequence"
 
 ### 3.4 요청 실패 확인
 
 권한이 없거나 순서가 맞지 않는 요청이 **거절되는지**도 계약이다. 성공 경로만 검증하면 이
 경로가 검증되지 않은 채 남는다.
 
-```java
-// 인증 전에는 대화를 열 수 없어야 한다.
-ZLinkStreamAssert.expectFailure(
-    () -> agent.request(new OpenConversationReq("unauthenticated"))
-        .submit(OpenConversationRes.class),
-    ZLinkStreamErrorCode.RemoteError);
-```
+--8<-- "framework/languages/java/samples/java/SupportChat/Client/src/main/java/systems/zlink/samples/supportchat/client/Program.java:doc-e2e-failure"
 
 ## 4. 메시지 대기 처리 방법
 
@@ -181,34 +121,11 @@ E2E는 대부분 같은 원인으로 간헐 실패한다. **행동을 먼저 하
 
 순서를 반대로 둔다. 대기를 먼저 등록하고, 그다음에 그 push를 유발하는 행동을 실행한다.
 
-```java
-// 대기를 먼저 등록한다 — 아직 join하지 않는다.
-var statusSequenceStage = customer.waitForSequence(DeliveryStatusNotify.class)
-    .expect(DeliveryStatusNotify.class,
-        message -> matchesStatus(message, deliveryId, DeliveryStatus.Assigned))
-    .timeout(customer.options().waitTimeout())
-    .submit(DeliveryStatusNotify.class);
-
-// 그다음에 push를 유발하는 행동을 실행한다.
-CreateDeliveryRes created = http.post("/deliveries")
-    .body(new CreateDeliveryReq(deliveryId, "customer-1", "Kitchen 12", "Customer Lobby"))
-    .fetch(CreateDeliveryRes.class);
-
-// 마지막에 결과를 받는다.
-var statusSequence = statusSequenceStage.toCompletableFuture().join();
-```
+--8<-- "framework/languages/java/samples/java/DeliveryDispatch/Client/src/main/java/systems/zlink/samples/deliverydispatch/client/DeliveryDispatchClientScenario.java:doc-e2e-sequence"
 
 여러 client가 같은 사건을 확인해야 한다면 각각 등록해 두고 `Task.WhenAll`로 함께 받는다.
 
-```java
-// Bingo — 두 player가 모두 입장하면 방이 시작되고, 두 client가 같은 push를 받는다.
-var client1Started = client1.waitFor(BingoGameStartedNotify.class).submit(BingoGameStartedNotify.class);
-var client2Started = client2.waitFor(BingoGameStartedNotify.class)
-    .submit(BingoGameStartedNotify.class);
-
-CompletableFuture.allOf(
-    client1Started.toCompletableFuture(), client2Started.toCompletableFuture()).join();
-```
+--8<-- "framework/languages/java/samples/java/Bingo/Client/src/main/java/systems/zlink/samples/bingo/client/BingoClientScenario.java:doc-e2e-multi-wait"
 
 `Sleep`으로 시점을 맞추지 않는다. 대기는 전부 `waitFor`·`expectNone`·`waitForSequence`의
 timeout으로 표현한다. `Sleep`은 느린 장비에서 실패하고 빠른 장비에서는 시간을 낭비한다.
@@ -218,52 +135,7 @@ timeout으로 표현한다. `Sleep`은 느린 장비에서 실패하고 빠른 �
 `TicTacToe` 샘플이 가장 짧다. HTTP로 방을 만들고 → 두 player가 접속·인증하고 → 입장 push를
 확인하고 → 수를 두고 → 상대가 그 수를 관찰하는지 확인하는 순서다.
 
-```java
-public void run(TicTacToeClientOptions options) {
-    // 1. 관문 API로 방을 만들고 접속할 endpoint를 받는다.
-    ZLinkHttpClient api = ZLinkHttpClient.create(options.apiUrl()).timeout(options.httpTimeout()).build();
-    CreateGameHttpRes room = api.post("/games")
-        .body(new CreateGameHttpReq(options.gameName()))
-        .fetch(CreateGameHttpRes.class);
-    ZLinkStreamAssert.ensure(room.playEndpoints().size() >= 2, "play endpoints are missing.");
-
-    // 2. player 둘을 서로 다른 Play node에 연결한다 — node 사이 라우팅이 여기서 검증된다.
-    ZLinkStreamConnector client1 = createStreamClient(room.playEndpoints().get(0), options);
-    ZLinkStreamConnector client2 = createStreamClient(room.playEndpoints().get(1), options);
-
-    // 3. 먼저 접속한 쪽이 인증하고 빈 방에 들어간다.
-    client1.connect().submit().toCompletableFuture().join();
-    client1.request(new AuthenticateReq(options.xActorId()))
-        .submit(AuthenticateRes.class).toCompletableFuture().join();
-    // 대기 등록 → send → 수신(§3)
-    JoinGameNotify join1 = joinGame(client1, room.roomId());
-    ZLinkStreamAssert.ensure(
-        join1.state().status() == TicTacToeGameStatuses.WaitingForPlayers,
-        "room should wait for the second player.");
-
-    // 혼자 들어왔을 때 자기 입장 알림이 자기에게 오면 안 된다.
-    client1.expectNone(PlayerJoinedNotify.class)
-        .within(Duration.ofMillis(250)).submit().toCompletableFuture().join();
-
-    // 4. 두 번째 player가 입장하면 방이 시작된다.
-    client2.connect().submit().toCompletableFuture().join();
-    client2.request(new AuthenticateReq(options.oActorId()))
-        .submit(AuthenticateRes.class).toCompletableFuture().join();
-    JoinGameNotify join2 = joinGame(client2, room.roomId());
-    ZLinkStreamAssert.ensure(
-        join2.state().status() == TicTacToeGameStatuses.InProgress,
-        "room should start with two players.");
-
-    // 5. 수를 두면 응답과 상대에게 전달된 push가 같은 상태를 가리켜야 한다.
-    PlaceMarkRes move = client1.request(new PlaceMarkReq(0))
-        .submit(PlaceMarkRes.class).toCompletableFuture().join();
-    var sawMove = client2.waitFor(GameStateNotify.class)
-        .where(GameStateNotify.class, message -> message.payload().state().lastMoveCell() == 0)
-        .submit(GameStateNotify.class).toCompletableFuture().join();
-    ZLinkStreamAssert.ensure(
-        sawMove.payload().state().board().equals(move.state().board()), "board state mismatch.");
-}
-```
+--8<-- "framework/languages/java/samples/java/TicTacToe/Client/src/main/java/systems/zlink/samples/tictactoe/client/TicTacToeClientScenario.java:doc-e2e-scenario"
 
 **검증 지점은 다음 기준으로 고른다.** 요청의 응답만 확인하지 않고 *다른 client가 같은
 사실을 관찰하는지*까지 확인한다. 서버 내부 상태가 아니라 **사용자에게 실제로 도달하는
@@ -279,14 +151,7 @@ public void run(TicTacToeClientOptions options) {
   전달되지 않는지
 - **서로 다른 node에 연결한 둘** — node 사이 라우팅과 위치 해석이 실제로 동작하는지
 
-```java
-// join 완료 알림은 client push로 온다 — 대기를 먼저 등록하고 one-way send한다.
-private static JoinGameNotify joinGame(ZLinkStreamConnector connector, String roomId) {
-    var completion = connector.waitFor(JoinGameNotify.class).submit(JoinGameNotify.class);
-    connector.send(new JoinGameMsg(roomId)).submit().toCompletableFuture().join();
-    return completion.toCompletableFuture().join().payload();
-}
-```
+--8<-- "framework/languages/java/samples/java/TicTacToe/Client/src/main/java/systems/zlink/samples/tictactoe/client/TicTacToeClientScenario.java:doc-e2e-multi-client"
 
 `Bingo` 샘플이 이 구성을 그대로 사용한다 — player 둘과 관전자 하나를 함께 두고, 승리
 알림이 관전자에게만 전달되는 것까지 확인한다.

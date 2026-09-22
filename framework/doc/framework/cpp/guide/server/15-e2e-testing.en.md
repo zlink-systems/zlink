@@ -35,16 +35,7 @@ open a socket, assemble frames, and wait for a response for every scenario. ZLin
 that work. **The client library your real users use is itself the verification tool.** An
 E2E test comes down to just this much code.
 
-```cpp
-// A real connection
-co_await client.connect ().async ();
-// A real request
-auto auth = co_await client.request (authenticate_req_t{actor_id})
-              .async<authenticate_res_t> ();
-// Confirms a real push arrived
-auto push = co_await other.wait_for<player_joined_notify_t> ().async ();
-ensure (push.payload.actor_id == auth.player.actor_id);
-```
+--8<-- "framework/languages/cpp/samples/TicTacToe/Client/tictactoe_client_scenario.hpp:doc-e2e-connect-request"
 
 Because **the connector itself provides the wait functions verification needs**, like
 `wait_for`, you don't implement a separate test harness. Every sample in this repository is
@@ -68,25 +59,7 @@ The two libraries used for verification don't overlap in role.
 Most scenarios chain the two together — create a target over HTTP, then connect to STREAM
 using the endpoint returned in that response.
 
-```cpp
-// Step 1 -- create a room through the gateway API.
-auto api = zlink::http_client::client_builder_t (options.api_url)
-             .timeout (options.http_timeout)
-             .build ();
-// fetch returns the deserialized body as-is.
-auto room = api.post ("/games")
-              .body (create_game_http_req_t{options.game_name})
-              .fetch<create_game_http_res_t> ();
-
-// Step 2 -- open a real-time connection to the endpoint the response gave us.
-zlink::stream_connector::connector_options_t connector_options;
-connector_options.endpoint = room.play_endpoints[0];
-connector_options.connect_timeout = options.stream_timeout;
-connector_options.request_timeout = options.stream_timeout;
-// Console scenarios use the automatic pump.
-connector_options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::immediate;
-auto client = zlink::stream_connector::connector_factory_t::create (connector_options);
-```
+--8<-- "framework/languages/cpp/samples/TicTacToe/Client/tictactoe_client_scenario.hpp:doc-e2e-create-room"
 
 When `DispatchMode` is `Immediate`, the connector handles receiving on its own, so the
 scenario code never runs a separate pump. Environments that must pump manually to match a
@@ -123,67 +96,28 @@ failure the scenario ends with an exception carrying that message.
 Specify a condition with `Where(...)` to **wait for the first message matching that
 condition.** Other, nonmatching pushes may arrive without affecting the scenario.
 
-```cpp
-auto joined = co_await client1.wait_for<player_joined_notify_t> ()
-                .where (&player_joined_notify_t::actor_id, options.o_actor_id)
-                .async ();
-ensure (joined.payload.mark == tictactoe_marks_t::o);
-```
+--8<-- "framework/languages/cpp/samples/TicTacToe/Client/tictactoe_client_scenario.hpp:doc-e2e-wait-filter"
 
 ### 3.2 Confirming a Push Doesn't Arrive
 
 You can't confirm something never arrives without an observation window, so `Within(...)`
 must be specified. Omitting it is an error.
 
-```cpp
-// The player who just joined shouldn't receive their own join notification.
-co_await client2.expect_none<player_joined_notify_t> ()
-  .within (std::chrono::milliseconds (250))
-  .async ();
-```
+--8<-- "framework/languages/cpp/samples/TicTacToe/Client/tictactoe_client_scenario.hpp:doc-e2e-expect-none"
 
 ### 3.3 Confirming Push Order
 
 In a flow where state changes in stages, the contract isn't whether something arrives but
 its **order.**
 
-```cpp
-auto status_sequence = co_await customer.wait_for_sequence<delivery_status_notify_t> ()
-                     .expect ([&] (const auto &m) {
-                         return m.delivery_id == delivery_id
-                                && m.status == delivery_status_t::assigned;
-                     })
-                     .expect ([&] (const auto &m) {
-                         return m.delivery_id == delivery_id
-                                && m.status == delivery_status_t::accepted;
-                     })
-                     .expect ([&] (const auto &m) {
-                         return m.delivery_id == delivery_id
-                                && m.status == delivery_status_t::picked_up;
-                     })
-                     .expect ([&] (const auto &m) {
-                         return m.delivery_id == delivery_id
-                                && m.status == delivery_status_t::delivered;
-                     })
-                     .timeout (customer.options ().wait_timeout)
-                     .async ();
-```
+--8<-- "framework/languages/cpp/samples/DeliveryDispatch/Client/delivery_dispatch_client_scenario.hpp:doc-e2e-sequence"
 
 ### 3.4 Confirming a Request Fails
 
 Whether a request with no permission or an out-of-order request **gets rejected** is also
 part of the contract. Verifying only the success path leaves this path unverified.
 
-```cpp
-// Can't open a conversation before authenticating.
-bool failed = false;
-try {
-    co_await agent.request (open_conversation_req_t{"unauthenticated"}).async<open_conversation_res_t> ();
-} catch (const zlink::stream_connector::stream_error_t &error) {
-    failed = error.code == zlink::stream_connector::error_code_t::remote_error;
-}
-ensure (failed);
-```
+--8<-- "framework/languages/cpp/samples/SupportChat/Client/supportchat_client_scenario.hpp:doc-e2e-failure"
 
 ## 4. How to Handle Waiting for a Message
 
@@ -192,37 +126,12 @@ push that arrived in between.
 
 Reverse the order. Register the wait first, then run the action that triggers that push.
 
-```cpp
-// Register the wait first -- don't co_await it yet.
-auto status_sequence_task = customer.wait_for_sequence<delivery_status_notify_t> ()
-                          .expect ([&] (const auto &m) {
-                              return m.delivery_id == delivery_id
-                                     && m.status == delivery_status_t::assigned;
-                          })
-                          .timeout (customer.options ().wait_timeout)
-                          .async ();
-
-// Then run the action that triggers the push.
-auto created = http.post ("/deliveries")
-             .body (
-               create_delivery_req_t{delivery_id, "customer-1", "Kitchen 12", "Customer Lobby"})
-             .fetch<create_delivery_res_t> ();
-
-// Receive the result last.
-auto status_sequence = co_await std::move (status_sequence_task);
-```
+--8<-- "framework/languages/cpp/samples/DeliveryDispatch/Client/delivery_dispatch_client_scenario.hpp:doc-e2e-sequence"
 
 If multiple clients need to confirm the same event, register a wait for each and receive
 them together with `Task.WhenAll`.
 
-```cpp
-// Bingo -- once both players have joined the room starts, and both clients get the same push.
-auto client1_started = client1.wait_for<bingo_game_started_notify_t> ().async ();
-auto client2_started = client2.wait_for<bingo_game_started_notify_t> ().async ();
-
-co_await std::move (client1_started);
-co_await std::move (client2_started);
-```
+--8<-- "framework/languages/cpp/samples/Bingo/Client/bingo_client_scenario.hpp:doc-e2e-multi-wait"
 
 Don't use `Sleep` to line up timing. Express every wait through the timeout on
 `wait_for`/`ExpectNone`/`WaitForSequence`. `Sleep` fails on slow hardware and wastes time on
@@ -234,48 +143,7 @@ The `TicTacToe` sample is the shortest. Create a room over HTTP → both players
 authenticate → confirm the join push → make a move → confirm the opponent observes that
 move, in that order.
 
-```cpp
-task_t<void> run (const tictactoe_client_options_t &options)
-{
-    // 1. Create a room through the gateway API and get the endpoint to connect to.
-    auto api = zlink::http_client::client_builder_t (options.api_url)
-                 .timeout (options.http_timeout)
-                 .build ();
-    auto room = api.post ("/games")
-                  .body (create_game_http_req_t{options.game_name})
-                  .fetch<create_game_http_res_t> ();
-    ensure (room.play_endpoints.size () >= 2);
-
-    // 2. Connect the two players to different Play nodes -- this verifies routing between nodes.
-    auto client1 = create_stream_client (room.play_endpoints[0], options);
-    auto client2 = create_stream_client (room.play_endpoints[1], options);
-
-    // 3. Whoever connects first authenticates and enters the empty room.
-    co_await client1.connect ().async ();
-    co_await client1.request (authenticate_req_t{options.x_actor_id}).async<authenticate_res_t> ();
-    // Register wait -> send -> receive (see §3)
-    auto join1 = co_await join_game (client1, room.room_id);
-    ensure (join1.state.status == tictactoe_status_t::waiting_for_players);
-
-    // Being alone in the room, their own join notification shouldn't come back to them.
-    co_await client1.expect_none<player_joined_notify_t> ()
-      .within (std::chrono::milliseconds (250))
-      .async ();
-
-    // 4. Once the second player joins, the room starts and a push reaches the first player.
-    co_await client2.connect ().async ();
-    co_await client2.request (authenticate_req_t{options.o_actor_id}).async<authenticate_res_t> ();
-    auto join2 = co_await join_game (client2, room.room_id);
-    ensure (join2.state.status == tictactoe_status_t::in_progress);
-
-    // 5. Making a move -- the response and the push delivered to the opponent should point to the same state.
-    auto move = co_await client1.request (place_mark_req_t{0}).async<place_mark_res_t> ();
-    auto saw_move = co_await client2.wait_for<game_state_notify_t> ()
-                      .where ([] (const auto &m) { return m.state.last_move_cell == 0; })
-                      .async ();
-    ensure (saw_move.payload.state.board == move.state.board);
-}
-```
+--8<-- "framework/languages/cpp/samples/TicTacToe/Client/tictactoe_client_scenario.hpp:doc-e2e-scenario"
 
 **Choose verification points by this rule.** Don't just check a request's own response —
 also check *whether another client observes the same fact.* Making **the result that
@@ -293,15 +161,7 @@ client can't confirm.
 - **Two connected to different nodes** — whether routing and location resolution between
   nodes actually work
 
-```cpp
-// The join completion arrives as a client push -- register the wait before the one-way send.
-task_t<join_game_notify_t> join_game (auto &connector, const std::string &room_id)
-{
-    auto completion = connector.wait_for<join_game_notify_t> ().async ();
-    co_await connector.send (join_game_msg_t{room_id}).async ();
-    co_return (co_await std::move (completion)).payload;
-}
-```
+--8<-- "framework/languages/cpp/samples/TicTacToe/Client/tictactoe_client_scenario.hpp:doc-e2e-multi-client"
 
 The `Bingo` sample uses this composition as-is — it brings together two players and one
 spectator, and even confirms the win notification is delivered only to the spectator.

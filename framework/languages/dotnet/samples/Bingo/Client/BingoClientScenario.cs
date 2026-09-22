@@ -95,6 +95,7 @@ internal sealed class BingoClientScenario(ILogger logger)
             .Where(message => message.Payload.ActorId == client2Auth.ActorId)
             .Async(cancellationToken)
             .AsTask();
+        // --8<-- [start:doc-e2e-multi-wait]
         var client1StartedTask = client1
             .WaitFor<BingoGameStartedNotify>()
             .Async(cancellationToken)
@@ -103,6 +104,7 @@ internal sealed class BingoClientScenario(ILogger logger)
             .WaitFor<BingoGameStartedNotify>()
             .Async(cancellationToken)
             .AsTask();
+        // --8<-- [end:doc-e2e-multi-wait]
 
         var client2MatchRes = await MatchAsync(
             client2,

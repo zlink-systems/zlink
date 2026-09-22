@@ -108,8 +108,10 @@ class bingo_client_scenario_t
                                              return payload.actor_id () == client2_auth.actor_id ();
                                          })
                                          .async ();
+            // --8<-- [start:doc-e2e-multi-wait]
             auto client1_started_task = client1.wait_for<game_started_notify_t> ().async ();
             auto client2_started_task = client2.wait_for<game_started_notify_t> ().async ();
+            // --8<-- [end:doc-e2e-multi-wait]
             match_bingo_req_t match_request;
             match_request.set_mode (bingo_sample_modes_t::two_player);
             auto client2_match = co_await client2.request (match_request)
