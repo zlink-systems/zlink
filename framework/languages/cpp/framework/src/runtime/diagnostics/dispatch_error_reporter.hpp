@@ -11,8 +11,10 @@
 #include <atomic>
 #include <cstdint>
 #include <exception>
+#include <cstddef>
 #include <string>
 #include <string_view>
+#include <typeinfo>
 #include <utility>
 #include <vector>
 
@@ -106,27 +108,36 @@ class dispatch_error_reporter_t
     }
 
   private:
-    static std::string exception_summary (const std::exception_ptr &exception)
+    static constexpr std::size_t error_message_max_length = 512;
+
+    struct exception_summary_t
+    {
+        std::string type;
+        std::string message;
+    };
+
+    static exception_summary_t exception_summary (const std::exception_ptr &exception)
     {
         if (!exception)
             return {};
-        std::string summary;
+        exception_summary_t summary;
         try {
             std::rethrow_exception (exception);
         }
         catch (const std::exception &error) {
-            summary = error.what ();
+            summary.type = typeid (error).name ();
+            summary.message = error.what ();
         }
         catch (...) {
-            summary = "non-standard exception";
+            summary.type = "non-standard exception";
+            summary.message = "non-standard exception";
         }
-        for (auto &character : summary) {
+        for (auto &character : summary.message) {
             if (character == '\n' || character == '\r' || character == '\t')
                 character = ' ';
         }
-        constexpr std::size_t maximum_length = 256;
-        if (summary.size () > maximum_length)
-            summary.resize (maximum_length);
+        if (summary.message.size () > error_message_max_length)
+            summary.message.resize (error_message_max_length);
         return summary;
     }
 
@@ -194,7 +205,9 @@ class dispatch_error_reporter_t
                 add ("activation_state", *event.activation_state);
             }
             if (event.exception) {
-                add ("exception", exception_summary (event.exception));
+                const auto error = exception_summary (event.exception);
+                add ("error_type", error.type);
+                add ("error_message", error.message);
             }
             // Structured fields through the configured framework logger.
             diagnostic_event_sink_t::log_if_configured (

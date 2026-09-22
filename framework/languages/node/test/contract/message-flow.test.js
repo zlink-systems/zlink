@@ -198,6 +198,11 @@ test('MFLOW-004 provider failures do not change the message operation', () => {
 });
 
 test('dispatch errors record service-wire command and deepest handler cause', () => {
+  const errorMessage = 'x'.repeat(513);
+  const error = new Error(errorMessage, {
+    cause: new TypeError('Location authority relocation envelope is missing.')
+  });
+  error.stack = 'Error: stack trace must not be recorded';
   const reporter = new ZLinkDispatchErrorReporter(
     undefined,
     undefined,
@@ -214,19 +219,21 @@ test('dispatch errors record service-wire command and deepest handler cause', ()
     action: 'drop',
     channelName: 'play',
     commandId: 34,
-    error: new Error('Relocation owner committed, but target publication failed.', {
-      cause: new TypeError('Location authority relocation envelope is missing.')
-    })
+    error
   });
 
   assert.equal(telemetryRecords.length, 1);
+  const record = telemetryRecords[0];
   const attributes = traceRecords[0].attributes;
   assert.equal(attributes.command_id, 34);
   assert.equal(attributes.error_type, 'Error');
-  assert.equal(
-    attributes.error_message,
-    'Relocation owner committed, but target publication failed.'
-  );
+  assert.equal(attributes.error_message, errorMessage.slice(0, 512));
+  assert.equal(record.attributes.error_type, 'Error');
+  assert.equal(record.attributes.error_message, errorMessage.slice(0, 512));
+  assert.match(record.body, /error_type=Error/);
+  assert.match(record.body, new RegExp(`error_message=${errorMessage.slice(0, 512)}`));
+  assert.doesNotMatch(record.body, /stack trace must not be recorded/);
+  assert.doesNotMatch(record.body, new RegExp(errorMessage));
   assert.equal(attributes.error_cause_type, 'TypeError');
   assert.equal(
     attributes.error_cause_message,

@@ -212,24 +212,50 @@ public sealed class MessageFlowTracerTests
     [Fact]
     public void DispatchErrorIsOneUnsampledRecordWithoutPseudoPhase()
     {
+        const int errorMessageMaxLength = 512;
         var activities = CaptureActivities(out var listener);
         using (listener)
         {
             var options = new ZLinkDispatchOptionsModel();
             options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Errors);
             options.Diagnostics.SetSampleRate(0);
-            var reporter = new ZLinkDispatchErrorReporter(options, new CapturingLogger());
+            var logger = new CapturingLogger();
+            var reporter = new ZLinkDispatchErrorReporter(options, logger);
+            var message = new string('x', errorMessageMaxLength + 1);
+            InvalidOperationException exception;
+            try
+            {
+                throw new InvalidOperationException(message);
+            }
+            catch (InvalidOperationException caught)
+            {
+                exception = caught;
+            }
 
             reporter.Report(
                 new ZLinkDispatchFailure(
                     ZLinkDispatchErrorSurface.ClassicFanout,
                     ZLinkDispatchMessageKind.Send,
-                    ZLinkDispatchErrorReason.HandlerMissing,
+                    ZLinkDispatchErrorReason.HandlerException,
                     ZLinkDispatchErrorAction.Drop,
                     "packet",
-                    "channel"
+                    "channel",
+                    Exception: exception
                 )
             );
+
+            Assert.Contains(
+                logger.Fields,
+                field =>
+                    field.Key == "error_type" && (string?)field.Value == "InvalidOperationException"
+            );
+            Assert.Contains(
+                logger.Fields,
+                field =>
+                    field.Key == "error_message"
+                    && (string?)field.Value == message[..errorMessageMaxLength]
+            );
+            Assert.DoesNotContain(exception.StackTrace!, logger.Message);
         }
 
         var activity = Assert.Single(activities);
@@ -238,8 +264,10 @@ public sealed class MessageFlowTracerTests
         Assert.Equal("classic_fanout", activity.GetTagItem("surface"));
         Assert.Equal("send", activity.GetTagItem("message_kind"));
         Assert.Equal("failed", activity.GetTagItem("outcome"));
-        Assert.Equal("no_handler", activity.GetTagItem("reason"));
+        Assert.Equal("handler_exception", activity.GetTagItem("reason"));
         Assert.Equal("drop", activity.GetTagItem("action"));
+        Assert.Equal("InvalidOperationException", activity.GetTagItem("error_type"));
+        Assert.Equal(errorMessageMaxLength, ((string)activity.GetTagItem("error_message")!).Length);
         Assert.Null(activity.GetTagItem("channel_route_kind"));
     }
 

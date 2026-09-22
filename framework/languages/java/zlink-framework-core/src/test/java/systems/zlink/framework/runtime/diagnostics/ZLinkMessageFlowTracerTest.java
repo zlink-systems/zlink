@@ -387,13 +387,15 @@ class ZLinkMessageFlowTracerTest {
                         null,
                         ZLinkDispatchErrorReason.HANDLER_MISSING,
                         ZLinkDispatchErrorAction.DROP,
-                        null,
-                        null);
+                        IllegalStateException.class.getSimpleName(),
+                        "handler failed");
         String errorLine = ZLinkTraceFormat.flowLine(dispatchError, null);
         assertTrue(errorLine.contains("event_id=zlink.dispatch_error"));
         assertTrue(errorLine.contains("surface=classic_fanout"));
         assertTrue(errorLine.contains("reason=no_handler"));
         assertTrue(errorLine.contains("action=drop"));
+        assertTrue(errorLine.contains("error_type=IllegalStateException"));
+        assertTrue(errorLine.contains("error_message=handler failed"));
         assertTrue(errorLine.contains("outcome=failed"));
         assertFalse(errorLine.contains(" phase="));
         assertEquals(ZLinkDispatchErrorAction.DROP, dispatchError.errorAction());
@@ -445,6 +447,33 @@ class ZLinkMessageFlowTracerTest {
                                 null,
                                 null,
                                 null));
+    }
+
+    @Test
+    void dispatchErrorFormatterBoundsHandlerMessageWithoutStackTrace() {
+        String message = "x".repeat(513);
+        ZLinkMessageFlowEvent dispatchError =
+                ZLinkMessageFlowEvent.dispatchError(
+                        ZLinkDispatchErrorSurface.CHANNEL,
+                        ZLinkDispatchMessageKind.SEND,
+                        "Notice",
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
+                        ZLinkDispatchErrorAction.DROP,
+                        IllegalStateException.class.getSimpleName(),
+                        message);
+
+        String line = ZLinkTraceFormat.flowLine(dispatchError, null);
+
+        assertTrue(line.contains("error_type=IllegalStateException"));
+        assertTrue(line.contains("error_message=" + message.substring(0, 512)));
+        assertFalse(line.contains(message));
+        assertFalse(line.contains("at systems.zlink"));
     }
 
     @Test

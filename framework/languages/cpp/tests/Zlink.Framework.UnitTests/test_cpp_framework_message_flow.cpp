@@ -19,6 +19,7 @@
 #include <memory>
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <utility>
@@ -257,6 +258,27 @@ int main ()
         }
     }
 
+    // Handler exceptions project their runtime type and bounded diagnostic message
+    // without serializing the exception's stack trace.
+    {
+        const std::string message (513, 'x');
+        const auto out = capture_logs ([&] {
+            dispatch_error_reporter_t (options_with_mode (message_flow_log_mode_t::errors))
+              .report (message_dispatch_error_event_t{
+                .surface = dispatch_error_surface_t::channel,
+                .message_kind = dispatch_message_kind_t::send,
+                .reason = dispatch_error_reason_t::handler_exception,
+                .action = dispatch_error_action_t::drop,
+                .exception = std::make_exception_ptr (std::runtime_error (message))});
+        });
+        if (!contains (out, "error_type=" + std::string (typeid (std::runtime_error).name ())))
+            return 40;
+        if (!contains (out, "error_message=" + message.substr (0, 512)) || contains (out, message)
+            || contains (out, "stack trace")) {
+            return 41;
+        }
+    }
+
     // Every processing point reads the live shared mode once; ambient entry
     // snapshots never override a later runtime change.
     {
@@ -446,7 +468,8 @@ int main ()
         if (!contains (out, "event_id=zlink.dispatch_error")
             || !contains (out, "surface=classic_fanout") || !contains (out, "kind=send")
             || !contains (out, "reason=no_handler") || !contains (out, "packet=MissingEventMsg")
-            || !contains (out, "exception=handler is not registered")
+            || !contains (out, "error_type=" + std::string (typeid (framework_exception_t).name ()))
+            || !contains (out, "error_message=handler is not registered")
             || contains (out, "channel_route=")
             || occurrences (out, "event_id=zlink.dispatch_error") != 1
             || contains (out, "event_id=zlink.message_flow")) {

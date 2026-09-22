@@ -240,6 +240,8 @@ internal sealed class ZLinkMessageFlowTracer
 
 internal static class ZLinkTraceFormat
 {
+    internal const int ErrorMessageMaxLength = 512;
+
     public static LogLevel ResolveLogLevel(ZLinkMessageFlowEvent flow)
     {
         if (flow.Outcome == ZLinkMessageFlowOutcome.Dropped)
@@ -454,7 +456,19 @@ internal static class ZLinkTraceFormat
         );
         Add(fields, "outcome", "failed");
         Add(fields, "reason", DispatchReasonKey(error.Reason));
+        Add(fields, "action", DispatchActionKey(error.Action));
+        Add(fields, "error_type", ErrorType(error.Exception));
+        Add(fields, "error_message", ErrorMessage(error.Exception));
         return fields;
+    }
+
+    public static string? ErrorType(Exception? error) => error?.GetType().Name;
+
+    public static string? ErrorMessage(Exception? error)
+    {
+        if (string.IsNullOrEmpty(error?.Message))
+            return null;
+        return error.Message[..Math.Min(error.Message.Length, ErrorMessageMaxLength)];
     }
 
     private static void Add(

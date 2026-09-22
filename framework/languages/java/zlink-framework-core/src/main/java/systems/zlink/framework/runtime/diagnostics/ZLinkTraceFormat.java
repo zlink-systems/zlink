@@ -4,6 +4,8 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEven
 
 /** Spec 26 structured-log projection. */
 final class ZLinkTraceFormat {
+    private static final int ERROR_MESSAGE_MAX_LENGTH = 512;
+
     private ZLinkTraceFormat() {}
 
     static String flowLine(ZLinkMessageFlowEvent flow, Long size) {
@@ -36,6 +38,8 @@ final class ZLinkTraceFormat {
                 builder,
                 "action",
                 flow.errorAction() == null ? null : flow.errorAction().traceName());
+        append(builder, "error_type", flow.errorType());
+        appendErrorMessage(builder, flow.errorMessage());
         if (size != null) {
             append(builder, "size", String.valueOf(size.longValue()));
         }
@@ -46,6 +50,16 @@ final class ZLinkTraceFormat {
         if (value != null && !value.isEmpty()) {
             builder.append(' ').append(key).append('=').append(value);
         }
+    }
+
+    private static void appendErrorMessage(StringBuilder builder, String value) {
+        if (value == null || value.isEmpty()) {
+            return;
+        }
+        append(
+                builder,
+                "error_message",
+                value.substring(0, Math.min(value.length(), ERROR_MESSAGE_MAX_LENGTH)));
     }
 
     private static String token(Enum<?> value) {
