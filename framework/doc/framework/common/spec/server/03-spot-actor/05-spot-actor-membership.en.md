@@ -232,7 +232,7 @@ through an Entry Spot or User Spot callback.
 The placement of Actor payload on the Actor queue and the gate that
 determines handler execution authority are separate contracts. The execution
 gate assignment for Entry Spot Actors and User Spot Actors, the scope where
-`Yield` is allowed, and the registration rules/count/size/timeout limits of
+`Yield` is allowed, and the registration rules/timeout limits of
 Actor Join `Defer()` are owned by
 [Actor Model §3](04-actor-model.en.md#3-actor-queue) and apply as-is
 regardless of membership state.
@@ -1069,9 +1069,9 @@ The Session route contract is defined by
   the handler's last continuation ends normally.
 - If the handler fails, every barrier that handler registered is
   discarded.
-- The framework applies limits of 64 Joins per handler, 1 MiB per request,
-  and 8 MiB total requests, and an exceeded registration fails synchronously
-  with no partial record.
+- A cross-node Join request and reply follow the service wire's
+  application-payload size rules, and a registration whose timeout is out
+  of range fails synchronously with no partial record.
 - If the timeout is omitted, the framework uses 5 seconds and fixes a monotonic absolute
   deadline at `Defer()` time.
 - Rejects `Defer()` after the registration scope closes, and treats a

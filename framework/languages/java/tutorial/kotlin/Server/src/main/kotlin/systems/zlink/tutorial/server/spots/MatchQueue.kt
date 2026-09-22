@@ -2,7 +2,7 @@ package systems.zlink.tutorial.server.spots
 
 import systems.zlink.framework.kotlin.ZLinkSuspendingInstanceSpot
 import systems.zlink.framework.kotlin.ZLinkSuspendingSpotRequestHandler
-import systems.zlink.framework.kotlin.addHandler
+import systems.zlink.framework.kotlin.addPacket
 import systems.zlink.framework.spots.ZLinkInstanceSpotContext
 import systems.zlink.tutorial.shared.JoinMatchQueue
 import systems.zlink.tutorial.shared.MatchQueueStatus
@@ -22,7 +22,7 @@ class MatchQueue(override val context: ZLinkInstanceSpotContext) : ZLinkSuspendi
     init {
         // Handlers are named here, the same way
         // the room names its own.
-        context.handlers().addHandler<JoinMatchQueueHandler>()
+        context.handlers().addPacket<JoinMatchQueueHandler>()
     }
 
     fun waiting(): Int = waiting.size

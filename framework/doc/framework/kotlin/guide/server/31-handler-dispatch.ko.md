@@ -21,7 +21,7 @@ title: "Handler와 메시지 처리 · Kotlin"
 !!! info "이 장을 읽고 나면"
 
     여러 handler에 공통으로 적용되는 것을 다룰 수 있다 — packet 이름, filter, codec.
-    이 장의 코드는 [예제 저장소의 tutorial](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.ko.md)과 [`Bingo`](https://github.com/zlink-systems/zlink-java-examples/blob/main/samples/Bingo/README.ko.md)·[`DeliveryDispatch`](https://github.com/zlink-systems/zlink-java-examples/blob/main/samples/DeliveryDispatch/README.ko.md)·[`TicTacToe`](https://github.com/zlink-systems/zlink-java-examples/blob/main/samples/TicTacToe/README.ko.md)·[`ZoneWorld`](https://github.com/zlink-systems/zlink-java-examples/blob/main/samples/ZoneWorld/README.ko.md) 샘플 README에서 가져왔으며, 각 README의 「내려받기와 설치」·「빌드」·「실행」 절을 따르면 handler 등록과 dispatch를 재현할 수 있다.
+    이 장의 코드는 [예제 저장소의 tutorial](https://github.com/zlink-systems/zlink-kotlin-examples/blob/main/tutorial/README.ko.md)과 [`Bingo`](https://github.com/zlink-systems/zlink-kotlin-examples/blob/main/samples/Bingo/README.ko.md)·[`DeliveryDispatch`](https://github.com/zlink-systems/zlink-kotlin-examples/blob/main/samples/DeliveryDispatch/README.ko.md)·[`TicTacToe`](https://github.com/zlink-systems/zlink-kotlin-examples/blob/main/samples/TicTacToe/README.ko.md)·[`ZoneWorld`](https://github.com/zlink-systems/zlink-kotlin-examples/blob/main/samples/ZoneWorld/README.ko.md) 샘플 README에서 가져왔으며, 각 README의 「내려받기와 설치」·「빌드」·「실행」 절을 따르면 handler 등록과 dispatch를 재현할 수 있다.
 
 [Channel 메시징](20-channel-messaging.ko.md)이 handler 하나를 만들어 호출까지 가는 길을
 다뤘다면, 이 장은 **여러 handler에 공통으로 적용되는 것**을 다룬다. 등록 방법의 변형, 공통

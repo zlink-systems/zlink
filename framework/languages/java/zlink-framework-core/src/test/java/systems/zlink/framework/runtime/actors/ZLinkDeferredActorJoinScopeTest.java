@@ -2,25 +2,109 @@ package systems.zlink.framework.runtime.actors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.actors.ZLinkActor;
+import systems.zlink.framework.actors.ZLinkActorContext;
+import systems.zlink.framework.actors.ZLinkActorFactory;
+import systems.zlink.framework.actors.ZLinkActorJoinCompletion;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.messaging.ZLinkMessage;
+import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
+import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
+import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
+import systems.zlink.framework.spots.ZLinkEntrySpot;
+import systems.zlink.framework.spots.ZLinkEntrySpotContext;
+import systems.zlink.framework.spots.ZLinkSpot;
+import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
+import systems.zlink.framework.spots.ZLinkSpotContext;
 
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 final class ZLinkDeferredActorJoinScopeTest {
+    private static final int BULK_JOIN_COUNT = 65;
+    private static final int BULK_REQUEST_BYTES = 129 * 1024;
+    private static final String BULK_TARGET_SPOT_ID = "bulk-target";
+
+    @Test
+    void oneHandlerCompletes65ActualDeferredActorJoinsWhoseRequestsTotalMoreThan8MiB()
+            throws Exception {
+        BulkActorFactory.reset();
+        BulkTargetSpot.reset();
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.addLocationStore(new ZLinkInMemoryLocationStore());
+        var node = options.addRouteMesh("bulk-join");
+        node.listen("inproc://bulk-deferred-join-" + System.nanoTime())
+                .setRoutingId(RoutingId.from("bulk-deferred-join"));
+        var objects = node.objects().server();
+        objects.addEntrySpot(BulkEntrySpot.class);
+        objects.addSpotFactory(
+                "bulk-target", BulkTargetSpot.class, factory -> factory.disableRelocation());
+        objects.addActorFactory(
+                "bulk-actor",
+                BulkActor.class,
+                BulkActorFactory.class,
+                factory -> factory.disableRelocation());
+
+        try (ZLinkFrameworkRuntime runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
+            runtime.spotManager()
+                    .getOrCreate(BULK_TARGET_SPOT_ID, "bulk-target")
+                    .submit()
+                    .toCompletableFuture()
+                    .get(3, TimeUnit.SECONDS);
+            for (int index = 0; index < BULK_JOIN_COUNT; index++) {
+                runtime.actorManager()
+                        .create("bulk-actor-" + index, "bulk-actor")
+                        .submit()
+                        .toCompletableFuture()
+                        .get(3, TimeUnit.SECONDS);
+            }
+
+            ZLinkActorRuntime actorRuntime = (ZLinkActorRuntime) runtime.actorManager();
+            String request = "x".repeat(BULK_REQUEST_BYTES);
+            ZLinkDeferredActorJoinHandlerScope.run(
+                            actorRuntime.deferredJoinRuntimeScope(),
+                            actorId -> actorId.startsWith("bulk-actor-"),
+                            () -> {
+                                for (int index = 0; index < BULK_JOIN_COUNT; index++) {
+                                    BulkActorFactory.actor("bulk-actor-" + index)
+                                            .context()
+                                            .joinSpot(BULK_TARGET_SPOT_ID, request)
+                                            .defer();
+                                }
+                                return CompletableFuture.completedFuture(null);
+                            })
+                    .toCompletableFuture()
+                    .join();
+
+            BulkActorFactory.allCompleted().get(10, TimeUnit.SECONDS);
+            assertEquals(BULK_JOIN_COUNT, BulkTargetSpot.joinCount());
+            assertTrue(BulkTargetSpot.requestBytes() > 8L * 1024 * 1024);
+        }
+    }
+
     @Test
     void deferredJoinUsesOnlyTheTimeLeftAfterItsHandlerBarrier() {
         long deadline = System.nanoTime() + Duration.ofSeconds(1).toNanos();
@@ -47,7 +131,6 @@ final class ZLinkDeferredActorJoinScopeTest {
                                             new Object(),
                                             incarnation,
                                             "actor-a",
-                                            0,
                                             Long.MAX_VALUE,
                                             () -> CompletableFuture.completedFuture(null),
                                             operation -> operation.get(),
@@ -62,7 +145,6 @@ final class ZLinkDeferredActorJoinScopeTest {
                                             runtime,
                                             new Object(),
                                             "actor-a",
-                                            0,
                                             Long.MAX_VALUE,
                                             () -> CompletableFuture.completedFuture(null),
                                             operation -> operation.get(),
@@ -89,7 +171,6 @@ final class ZLinkDeferredActorJoinScopeTest {
                                                                     new Object(),
                                                                     new Object(),
                                                                     "actor-a",
-                                                                    0,
                                                                     Long.MAX_VALUE,
                                                                     () ->
                                                                             CompletableFuture
@@ -116,7 +197,6 @@ final class ZLinkDeferredActorJoinScopeTest {
                             order.add("handler");
                             ZLinkDeferredActorJoinScope.register(
                                     "actor-a",
-                                    4,
                                     Long.MAX_VALUE,
                                     () -> {
                                         order.add("join");
@@ -146,7 +226,6 @@ final class ZLinkDeferredActorJoinScopeTest {
                                                     order.add("continuation");
                                                     ZLinkDeferredActorJoinScope.register(
                                                             "actor-a",
-                                                            0,
                                                             Long.MAX_VALUE,
                                                             () -> {
                                                                 order.add("join");
@@ -176,7 +255,6 @@ final class ZLinkDeferredActorJoinScopeTest {
                                                 () -> {
                                                     ZLinkDeferredActorJoinScope.register(
                                                             "actor-a",
-                                                            4,
                                                             Long.MAX_VALUE,
                                                             () -> {
                                                                 order.add("join");
@@ -198,7 +276,6 @@ final class ZLinkDeferredActorJoinScopeTest {
                         () -> {
                             ZLinkDeferredActorJoinScope.register(
                                     "actor-a",
-                                    0,
                                     Long.MAX_VALUE,
                                     () -> CompletableFuture.completedFuture(null));
                             return CompletableFuture.completedFuture(null);
@@ -208,14 +285,13 @@ final class ZLinkDeferredActorJoinScopeTest {
     }
 
     @Test
-    void rejectsDetachedWrongActorOversizedAndDuplicateClaims() {
+    void rejectsDetachedWrongActorAndDuplicateClaims() {
         ZLinkFrameworkException detached =
                 assertThrows(
                         ZLinkFrameworkException.class,
                         () ->
                                 ZLinkDeferredActorJoinScope.register(
                                         "actor-a",
-                                        0,
                                         Long.MAX_VALUE,
                                         () -> CompletableFuture.completedFuture(null)));
         assertEquals(ZLinkFrameworkErrorKind.NOT_CONFIGURED, detached.kind());
@@ -228,31 +304,18 @@ final class ZLinkDeferredActorJoinScopeTest {
                             () ->
                                     ZLinkDeferredActorJoinScope.register(
                                             "actor-b",
-                                            0,
                                             Long.MAX_VALUE,
                                             () -> CompletableFuture.completedFuture(null)));
             assertEquals(ZLinkFrameworkErrorKind.NOT_CONFIGURED, wrongActor.kind());
 
-            ZLinkFrameworkException oversized =
-                    assertThrows(
-                            ZLinkFrameworkException.class,
-                            () ->
-                                    ZLinkDeferredActorJoinScope.register(
-                                            "actor-a",
-                                            ZLinkDeferredActorJoinScope.MAX_REQUEST_BYTES + 1,
-                                            Long.MAX_VALUE,
-                                            () -> CompletableFuture.completedFuture(null)));
-            assertEquals(ZLinkFrameworkErrorKind.NOT_CONFIGURED, oversized.kind());
-
             ZLinkDeferredActorJoinScope.register(
-                    "actor-a", 0, Long.MAX_VALUE, () -> CompletableFuture.completedFuture(null));
+                    "actor-a", Long.MAX_VALUE, () -> CompletableFuture.completedFuture(null));
             ZLinkFrameworkException moving =
                     assertThrows(
                             ZLinkFrameworkException.class,
                             () ->
                                     ZLinkDeferredActorJoinScope.register(
                                             "actor-a",
-                                            0,
                                             Long.MAX_VALUE,
                                             () -> CompletableFuture.completedFuture(null)));
             assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, moving.kind());
@@ -271,7 +334,6 @@ final class ZLinkDeferredActorJoinScopeTest {
                         () -> {
                             ZLinkDeferredActorJoinScope.register(
                                     "actor-a",
-                                    2,
                                     Long.MAX_VALUE,
                                     () -> {
                                         order.add("actor-a");
@@ -279,7 +341,6 @@ final class ZLinkDeferredActorJoinScopeTest {
                                     });
                             ZLinkDeferredActorJoinScope.register(
                                     "actor-b",
-                                    2,
                                     Long.MAX_VALUE,
                                     () -> {
                                         order.add("actor-b");
@@ -305,7 +366,6 @@ final class ZLinkDeferredActorJoinScopeTest {
                                                 () -> {
                                                     ZLinkDeferredActorJoinScope.register(
                                                             "actor-b",
-                                                            0,
                                                             Long.MAX_VALUE,
                                                             () ->
                                                                     CompletableFuture
@@ -332,7 +392,6 @@ final class ZLinkDeferredActorJoinScopeTest {
                         () -> {
                             ZLinkDeferredActorJoinScope.registerWithActorBarrier(
                                     "actor-a",
-                                    0,
                                     Long.MAX_VALUE,
                                     () -> {
                                         order.add("join");
@@ -363,7 +422,6 @@ final class ZLinkDeferredActorJoinScopeTest {
                         () -> {
                             ZLinkDeferredActorJoinScope.register(
                                     "actor-a",
-                                    0,
                                     Long.MAX_VALUE,
                                     () -> {
                                         order.add("join-a");
@@ -372,7 +430,6 @@ final class ZLinkDeferredActorJoinScopeTest {
                                     });
                             ZLinkDeferredActorJoinScope.register(
                                     "actor-b",
-                                    0,
                                     Long.MAX_VALUE,
                                     () -> {
                                         order.add("join-b");
@@ -400,7 +457,6 @@ final class ZLinkDeferredActorJoinScopeTest {
                         () -> {
                             ZLinkDeferredActorJoinScope.registerWithActorBarrier(
                                     "actor-a",
-                                    0,
                                     Long.MAX_VALUE,
                                     () -> {
                                         order.add("join-a");
@@ -411,7 +467,6 @@ final class ZLinkDeferredActorJoinScopeTest {
                                     operation -> serials.enqueueBarrier("actor-a", operation));
                             ZLinkDeferredActorJoinScope.registerWithActorBarrier(
                                     "actor-b",
-                                    0,
                                     Long.MAX_VALUE,
                                     () -> {
                                         order.add("join-b");
@@ -457,7 +512,6 @@ final class ZLinkDeferredActorJoinScopeTest {
                         () -> {
                             ZLinkDeferredActorJoinScope.registerWithActorBarrier(
                                     "actor-a",
-                                    0,
                                     Long.MAX_VALUE,
                                     () -> {
                                         order.add("join");
@@ -484,5 +538,136 @@ final class ZLinkDeferredActorJoinScopeTest {
         joinCompletion.complete(null);
         queuedApplication.toCompletableFuture().join();
         assertEquals(List.of("handler-terminal", "join", "queued-application"), order);
+    }
+
+    public static final class BulkActor implements ZLinkActor {
+        private final ZLinkActorContext context;
+
+        public BulkActor(ZLinkActorContext context) {
+            this.context = context;
+        }
+
+        @Override
+        public ZLinkActorContext context() {
+            return context;
+        }
+
+        @Override
+        public CompletionStage<Void> onJoinCompleted(ZLinkActorJoinCompletion completion) {
+            try {
+                assertInstanceOf(ZLinkActorJoinCompletion.Accepted.class, completion);
+                BulkActorFactory.joinCompleted();
+            } catch (RuntimeException | AssertionError error) {
+                BulkActorFactory.joinFailed(error);
+            }
+            return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    public static final class BulkActorFactory implements ZLinkActorFactory {
+        private static final Map<String, BulkActor> ACTORS = new ConcurrentHashMap<>();
+        private static final AtomicInteger COMPLETED = new AtomicInteger();
+        private static CompletableFuture<Void> allCompleted = new CompletableFuture<>();
+
+        static void reset() {
+            ACTORS.clear();
+            COMPLETED.set(0);
+            allCompleted = new CompletableFuture<>();
+        }
+
+        static BulkActor actor(String actorId) {
+            return ACTORS.get(actorId);
+        }
+
+        static CompletableFuture<Void> allCompleted() {
+            return allCompleted;
+        }
+
+        static void joinCompleted() {
+            if (COMPLETED.incrementAndGet() == BULK_JOIN_COUNT) {
+                allCompleted.complete(null);
+            }
+        }
+
+        static void joinFailed(Throwable error) {
+            allCompleted.completeExceptionally(error);
+        }
+
+        @Override
+        public CompletionStage<ZLinkActor> create(ZLinkActorContext context) {
+            BulkActor actor = new BulkActor(context);
+            ACTORS.put(context.actorId(), actor);
+            return CompletableFuture.completedFuture(actor);
+        }
+    }
+
+    public static final class BulkEntrySpot implements ZLinkEntrySpot<BulkActor> {
+        private final ZLinkEntrySpotContext context;
+
+        public BulkEntrySpot(ZLinkEntrySpotContext context) {
+            this.context = context;
+        }
+
+        @Override
+        public ZLinkEntrySpotContext context() {
+            return context;
+        }
+
+        @Override
+        public CompletionStage<Void> onJoinedActor(BulkActor actor) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<Void> onLeaveActor(BulkActor actor) {
+            return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    public static final class BulkTargetSpot implements ZLinkSpot<BulkActor> {
+        private static final AtomicInteger JOIN_COUNT = new AtomicInteger();
+        private static final AtomicLong REQUEST_BYTES = new AtomicLong();
+        private final ZLinkSpotContext context;
+
+        public BulkTargetSpot(ZLinkSpotContext context) {
+            this.context = context;
+        }
+
+        static void reset() {
+            JOIN_COUNT.set(0);
+            REQUEST_BYTES.set(0);
+        }
+
+        static int joinCount() {
+            return JOIN_COUNT.get();
+        }
+
+        static long requestBytes() {
+            return REQUEST_BYTES.get();
+        }
+
+        @Override
+        public ZLinkSpotContext context() {
+            return context;
+        }
+
+        @Override
+        public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
+                String actorId, ZLinkMessage request) {
+            String payload = request.decode(String.class);
+            REQUEST_BYTES.addAndGet(payload.length());
+            JOIN_COUNT.incrementAndGet();
+            return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept());
+        }
+
+        @Override
+        public CompletionStage<Void> onJoinedActor(BulkActor actor) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<Void> onLeaveActor(BulkActor actor) {
+            return CompletableFuture.completedFuture(null);
+        }
     }
 }

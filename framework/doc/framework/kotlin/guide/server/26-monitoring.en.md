@@ -22,7 +22,7 @@ View in another language — [C++](../../../cpp/guide/server/26-monitoring.en.md
 
     You can read what is ready right now, receive that state whenever it changes, and record
     where one message ended up.
-    The code is the minimal call on each language's observation surface from the [tutorial README in the examples repository](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.md); follow its Download, Build, and Run sections to read the processes' state and records.
+    The code is the minimal call on each language's observation surface from the [tutorial README in the examples repository](https://github.com/zlink-systems/zlink-kotlin-examples/blob/main/tutorial/README.md); follow its Download, Build, and Run sections to read the processes' state and records.
 
 The earlier chapters covered registering and calling. Once it is running, something else is
 needed — whether the connections are ready, which peer dropped out, and where a message failed.

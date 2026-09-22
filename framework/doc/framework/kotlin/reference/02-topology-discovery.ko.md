@@ -71,12 +71,12 @@ actor-relocation category 참고)를 사용하는 host가 dispatcher를 명시�
 
 ---
 
-## `actorFactory { }` (구성 시점, reified DSL)
+## `addActorFactory { }` (구성 시점, reified DSL)
 
 `ZLinkMeshObjectServerBuilder.addActorFactory(...)`를 reified type parameter로 감싼 DSL이다.
 
 ```kotlin
-serverBuilder.actorFactory<PlayerActor, PlayerActorFactory>("player") {
+serverBuilder.addActorFactory<PlayerActor, PlayerActorFactory>("player") {
     preserveStateWith(PlayerRelocationAdapter::class.java)
 }
 ```

@@ -22,7 +22,7 @@ View in another language — [C++](../../../cpp/guide/server/34-activation-lifet
 
     You can tell when each of the three kinds of Spot is created, which callbacks it receives, and
     how long a service injected into it lives.
-    The code in this chapter comes from the [TicTacToe sample in the per-language example repositories](https://github.com/zlink-systems/zlink-java-examples/tree/main/samples/TicTacToe).
+    The code in this chapter comes from the [TicTacToe sample in the per-language example repositories](https://github.com/zlink-systems/zlink-kotlin-examples/tree/main/samples/TicTacToe).
 
 What [Spot](21-spot.en.md) created was **the Spot an application creates explicitly**. This chapter
 covers how the other two kinds differ, which lifecycle callbacks each kind receives, and the

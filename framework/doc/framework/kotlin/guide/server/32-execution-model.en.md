@@ -22,7 +22,7 @@ View in another language — [C++](../../../cpp/guide/server/32-execution-model.
 
     You can tell what runs together inside one Spot, what queues up behind it, and what decides
     that boundary.
-    The code comes from the [Bingo sample README in the examples repository](https://github.com/zlink-systems/zlink-java-examples/blob/main/samples/Bingo/README.md); follow its Download, Build, and Run sections to reproduce the execution-model example.
+    The code comes from the [Bingo sample README in the examples repository](https://github.com/zlink-systems/zlink-kotlin-examples/blob/main/samples/Bingo/README.md); follow its Download, Build, and Run sections to reproduce the execution-model example.
 
 [Spot](21-spot.en.md) and [Actor](22-actor.en.md) summarized it as "work addressed to it is
 handled one at a time." This chapter covers how far that sentence holds — which work shares one

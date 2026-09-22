@@ -6,42 +6,6 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class ActorRemoteJoinRecoveryCodecBoundaryTests
 {
-    private const int MaximumMessageBytes = 1024 * 1024;
-
-    [Fact]
-    public void Exact_request_and_reply_limits_round_trip_together()
-    {
-        var request = Enumerable.Repeat((byte)0x5a, MaximumMessageBytes).ToArray();
-        var reply = Enumerable.Repeat((byte)0xa5, MaximumMessageBytes).ToArray();
-
-        var restored = ZLinkActorRemoteJoinRecoveryCodec.Decode(
-            ZLinkActorRemoteJoinRecoveryCodec.Encode(CreateRecovery(request, reply))
-        );
-
-        Assert.Equal(request, restored.Request.Request);
-        Assert.Equal(reply, restored.Reply);
-    }
-
-    [Fact]
-    public void Request_above_limit_is_rejected()
-    {
-        var recovery = CreateRecovery(new byte[MaximumMessageBytes + 1], []);
-
-        Assert.Throws<ArgumentOutOfRangeException>(() =>
-            ZLinkActorRemoteJoinRecoveryCodec.Encode(recovery)
-        );
-    }
-
-    [Fact]
-    public void Reply_above_limit_is_rejected()
-    {
-        var recovery = CreateRecovery([], new byte[MaximumMessageBytes + 1]);
-
-        Assert.Throws<ArgumentOutOfRangeException>(() =>
-            ZLinkActorRemoteJoinRecoveryCodec.Encode(recovery)
-        );
-    }
-
     [Fact]
     public void Operation_and_route_metadata_round_trip()
     {
@@ -84,6 +48,22 @@ public sealed class ActorRemoteJoinRecoveryCodecBoundaryTests
     }
 
     [Fact]
+    public void Request_and_reply_above_one_mib_round_trip()
+    {
+        var expected = CreateRecovery(
+            Enumerable.Repeat((byte)0x5a, 1024 * 1024 + 1).ToArray(),
+            Enumerable.Repeat((byte)0xa5, 1024 * 1024 + 1).ToArray()
+        );
+
+        var restored = ZLinkActorRemoteJoinRecoveryCodec.Decode(
+            ZLinkActorRemoteJoinRecoveryCodec.Encode(expected)
+        );
+
+        Assert.Equal(expected.Request.Request, restored.Request.Request);
+        Assert.Equal(expected.Reply, restored.Reply);
+    }
+
+    [Fact]
     public void Truncated_payload_is_rejected()
     {
         var encoded = ZLinkActorRemoteJoinRecoveryCodec.Encode(
@@ -103,9 +83,13 @@ public sealed class ActorRemoteJoinRecoveryCodecBoundaryTests
         );
         var zljrOffset = encoded.AsSpan().IndexOf("ZLJR"u8);
         Assert.True(zljrOffset >= 0);
+        var requestLengthOffset = zljrOffset + 9;
+        var declaredLength = BinaryPrimitives.ReadUInt32BigEndian(
+            encoded.AsSpan(requestLengthOffset, sizeof(uint))
+        );
         BinaryPrimitives.WriteUInt32BigEndian(
-            encoded.AsSpan(zljrOffset + 9, sizeof(uint)),
-            MaximumMessageBytes + 1U
+            encoded.AsSpan(requestLengthOffset, sizeof(uint)),
+            declaredLength + 1
         );
 
         Assert.Throws<InvalidDataException>(() =>

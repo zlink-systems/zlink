@@ -11,12 +11,12 @@ request/reply 한 번을 주고받는다.
 
 ## 0. 예제 저장소 clone
 
-이 장의 project는 `zlink-java-examples` 저장소의 `quickstart/`이며, 기능 가이드가 읽는
+이 장의 project는 `zlink-kotlin-examples` 저장소의 `quickstart/`이며, 기능 가이드가 읽는
 program인 `tutorial/`과 `samples/`도 같은 저장소에 있다.
 
 ```bash
-git clone https://github.com/zlink-systems/zlink-java-examples.git
-cd zlink-java-examples/quickstart
+git clone https://github.com/zlink-systems/zlink-kotlin-examples.git
+cd zlink-kotlin-examples/quickstart
 ```
 
 `main`은 최신 릴리스에 그 뒤의 수정을 더한 것이고, 패키지 버전은 그 릴리스에 맞춰져 있다.
@@ -86,7 +86,7 @@ context refresh 직후 JVM이 종료된다.
 ## 5. 실행
 
 ```bash
-cd zlink-java-examples/quickstart
+cd zlink-kotlin-examples/quickstart
 ./gradlew :kotlin:Server:installDist :kotlin:Client:installDist
 
 # 터미널 두 개. server를 먼저 실행한다.

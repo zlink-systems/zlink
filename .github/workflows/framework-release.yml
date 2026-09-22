@@ -426,6 +426,16 @@ jobs:
       ref: ${{ github.event_name == 'push' && github.ref_name || format('framework-java/v{0}', needs.resolve.outputs.java_version) }}
       language: java
 
+  mirror-kotlin:
+    if: needs.tutorial-java.result == 'success'
+    name: Mirror zlink-kotlin-examples
+    needs: [resolve, tutorial-java]
+    uses: ./.github/workflows/examples-mirror.yml
+    secrets: inherit
+    with:
+      ref: ${{ github.event_name == 'push' && github.ref_name || format('framework-java/v{0}', needs.resolve.outputs.java_version) }}
+      language: kotlin
+
   release-cpp:
     if: needs.resolve.outputs.target == 'cpp' || needs.resolve.outputs.target == 'all'
     name: Package C++ framework sources

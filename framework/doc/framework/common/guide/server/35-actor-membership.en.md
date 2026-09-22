@@ -111,9 +111,8 @@ no admission, join or leave callback.
 
 ### 2.3 Where the Result Arrives
 
-The result arrives on the Actor's join-completion callback. Its name in the tabs is
-`OnJoinCompletedAsync` for C#/.NET, `on_join_completed` for C++, and `onJoinCompleted` for Java,
-Kotlin, and Node/TypeScript.
+The result arrives on the Actor's join-completion callback (`OnJoinCompleted`). The
+per-language spelling is what the code in each tab shows.
 
 === "C#/.NET"
 

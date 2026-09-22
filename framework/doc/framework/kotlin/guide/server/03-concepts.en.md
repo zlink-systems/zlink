@@ -22,7 +22,7 @@ View in another language — [C++](../../../cpp/guide/server/03-concepts.en.md) 
 
     You can tell what a channel, a Spot, an Actor, STREAM and Location each are, and when to
     choose them.
-    The code in this chapter comes from the [language-specific example repositories](https://github.com/zlink-systems/zlink-java-examples).
+    The code in this chapter comes from the [language-specific example repositories](https://github.com/zlink-systems/zlink-kotlin-examples).
 
 The ZLink framework provides **channel · spot · actor · stream · location** as its core
 concepts. Every other chapter is a variation on these. We'll go through them in order below,

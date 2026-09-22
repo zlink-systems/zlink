@@ -21,7 +21,7 @@ title: "Channel 메시징 · Kotlin"
 !!! info "이 장을 읽고 나면"
 
     서버가 서로 호출하는 세 가지 구성을 등록하고 호출할 수 있다. 각 절의 코드는
-    [언어별 예제 저장소](https://github.com/zlink-systems/zlink-java-examples)의 tutorial에서 가져왔다.
+    [언어별 예제 저장소](https://github.com/zlink-systems/zlink-kotlin-examples)의 tutorial에서 가져왔다.
 
 서버가 다른 서버를 호출할 때 상대의 주소를 지정하지 않는다. 호출하는 쪽은 **이름**만
 지정하고, Framework가 그 이름을 맡은 **node**로 보낸다. node는 Framework를 올린 서버 process

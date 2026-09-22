@@ -22,7 +22,7 @@ title: "모니터링 · Kotlin"
 
     지금 무엇이 준비되었는지 읽고, 그 상태가 바뀔 때마다 받고, message 하나가 어디서
     끝났는지 남길 수 있다.
-    이 장의 코드는 [예제 저장소의 tutorial README](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.ko.md)에서 가져온 언어별 관측 표면의 최소 호출이며, README의 「내려받기와 설치」·「빌드」·「실행」 절을 따르면 process의 상태와 기록을 읽을 수 있다.
+    이 장의 코드는 [예제 저장소의 tutorial README](https://github.com/zlink-systems/zlink-kotlin-examples/blob/main/tutorial/README.ko.md)에서 가져온 언어별 관측 표면의 최소 호출이며, README의 「내려받기와 설치」·「빌드」·「실행」 절을 따르면 process의 상태와 기록을 읽을 수 있다.
 
 앞 장들은 등록하고 호출하는 쪽을 다뤘다. 돌기 시작하면 다른 것이 필요해진다 — 연결이
 준비되었는지, 어느 상대가 빠졌는지, message가 어디서 실패했는지다. handler를 아무리 읽어도

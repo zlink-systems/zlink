@@ -3828,8 +3828,7 @@ function decodeZljrByteOracle(schema, hex) {
   const requestLength = oracleInteger(inner, "u32");
   const replyLength = oracleInteger(inner, "u32");
   if (metadataLength + requestLength + replyLength !== BigInt(inner.bytes.length - inner.offset)
-      || metadataLength > 256n * 1024n || requestLength > 1024n * 1024n
-      || replyLength > 1024n * 1024n) byteOracleError("invalid-zljr-length");
+      || metadataLength > 256n * 1024n) byteOracleError("invalid-zljr-length");
   const metadataBytes = oracleTake(inner, Number(metadataLength));
   const request = oracleTake(inner, Number(requestLength));
   const reply = oracleTake(inner, Number(replyLength));
@@ -3902,6 +3901,16 @@ function validateZljrFixture(schema, schemaPath) {
         || crypto.createHash("sha256").update(bytes).digest("hex") !== fixture.notes?.sha256
         || fixture.notes.sha256 !== "0c8cd156c73c23e785dc63fb2979041cbae63511fa046edfd6bb76ce6adbe08a") {
       fail("canonical does not match the pinned cross-language Node vector digest");
+    }
+    const largeDecoded = {
+      ...fixture.canonical.decoded,
+      requestHex: "a5".repeat(1024 * 1024 + 1),
+      replyHex: "5a".repeat(1024 * 1024 + 1),
+    };
+    const largeEncoded = encodeZljrByteOracle(schema, largeDecoded);
+    if (JSON.stringify(decodeZljrByteOracle(schema, largeEncoded.toString("hex")))
+        !== JSON.stringify(largeDecoded)) {
+      fail("request and reply larger than 1 MiB do not round-trip");
     }
   } catch (error) {
     fail(`canonical rejected as ${error.code ?? error.message}`);

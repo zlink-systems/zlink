@@ -21,7 +21,7 @@ View in another language — [C++](../../../cpp/guide/server/35-actor-membership
 !!! info "What you get from this chapter"
 
     You can move an Actor between Spots and let the receiving side accept or refuse that move.
-    The code in this chapter comes from the [TicTacToe sample in the per-language example repositories](https://github.com/zlink-systems/zlink-java-examples/tree/main/samples/TicTacToe).
+    The code in this chapter comes from the [TicTacToe sample in the per-language example repositories](https://github.com/zlink-systems/zlink-kotlin-examples/tree/main/samples/TicTacToe).
 
 An [Actor](22-actor.en.md) is always inside some Spot, and right after creation it is in an Entry
 Spot. This chapter covers **the procedure that moves it into a room** — who admits it, when it
@@ -103,9 +103,8 @@ no admission, join or leave callback.
 
 ### 2.3 Where the Result Arrives
 
-The result arrives on the Actor's join-completion callback. Its name in the tabs is
-`OnJoinCompletedAsync` for C#/.NET, `on_join_completed` for C++, and `onJoinCompleted` for Java,
-Kotlin, and Node/TypeScript.
+The result arrives on the Actor's join-completion callback (`onJoinCompleted`). The
+per-language spelling is what the code in each tab shows.
 
 ```kotlin
 --8<-- "framework/languages/java/samples/kotlin/TicTacToe/Server/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/server/play/infrastructure/zlink/actors/PlayActor.kt:doc-join-completed"

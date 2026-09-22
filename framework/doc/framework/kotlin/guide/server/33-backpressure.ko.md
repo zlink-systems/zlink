@@ -21,7 +21,7 @@ title: "Backpressure — 처리보다 도착이 빠를 때 · Kotlin"
 !!! info "이 장을 읽고 나면"
 
     Core HWM과 Application job queue가 backpressure를 만드는 경로와 운영 지표를 구분할 수 있다.
-    이 장의 코드는 [언어별 예제 저장소](https://github.com/zlink-systems/zlink-java-examples)에서 가져온다.
+    이 장의 코드는 [언어별 예제 저장소](https://github.com/zlink-systems/zlink-kotlin-examples)에서 가져온다.
 
 Core HWM은 Core queue의 byte를, Application job queue는 handler 시작을 기다리는 job 수를 제한한다.
 이 장은 두 제한이 sender의 대기와 관찰 지표로 이어지는 경로를 설명한다.

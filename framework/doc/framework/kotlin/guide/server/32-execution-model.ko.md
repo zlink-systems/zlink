@@ -22,7 +22,7 @@ title: "실행 모델 · Kotlin"
 
     한 Spot 안에서 무엇이 함께 실행되고 무엇이 줄을 서는지, 그 경계를 무엇이 정하는지 알 수
     있다.
-    이 장의 코드는 [예제 저장소의 Bingo 샘플 README](https://github.com/zlink-systems/zlink-java-examples/blob/main/samples/Bingo/README.ko.md)에서 가져왔으며, README의 「내려받기와 설치」·「빌드」·「실행」 절을 따르면 실행 모델 예제를 재현할 수 있다.
+    이 장의 코드는 [예제 저장소의 Bingo 샘플 README](https://github.com/zlink-systems/zlink-kotlin-examples/blob/main/samples/Bingo/README.ko.md)에서 가져왔으며, README의 「내려받기와 설치」·「빌드」·「실행」 절을 따르면 실행 모델 예제를 재현할 수 있다.
 
 [Spot](21-spot.ko.md)과 [Actor](22-actor.ko.md)는 "자기 앞으로 온 일을 한 번에 하나씩
 처리한다"로 요약했다. 이 장은 그 문장이 어디까지 참인지 다룬다 — 어떤 작업이 같은 줄에 서고,
