@@ -48,6 +48,22 @@ public sealed class ActorRemoteJoinRecoveryCodecBoundaryTests
     }
 
     [Fact]
+    public void Request_and_reply_above_one_mib_round_trip()
+    {
+        var expected = CreateRecovery(
+            Enumerable.Repeat((byte)0x5a, 1024 * 1024 + 1).ToArray(),
+            Enumerable.Repeat((byte)0xa5, 1024 * 1024 + 1).ToArray()
+        );
+
+        var restored = ZLinkActorRemoteJoinRecoveryCodec.Decode(
+            ZLinkActorRemoteJoinRecoveryCodec.Encode(expected)
+        );
+
+        Assert.Equal(expected.Request.Request, restored.Request.Request);
+        Assert.Equal(expected.Reply, restored.Reply);
+    }
+
+    [Fact]
     public void Truncated_payload_is_rejected()
     {
         var encoded = ZLinkActorRemoteJoinRecoveryCodec.Encode(
