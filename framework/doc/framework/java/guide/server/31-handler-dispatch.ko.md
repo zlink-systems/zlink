@@ -18,7 +18,7 @@ title: "Handler와 메시지 처리 · Java"
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-이 장은 tutorial의 `Server`·`Client`와 `Bingo`·`DeliveryDispatch`·`TicTacToe`·`ZoneWorld` 샘플 디렉터리에서 코드를 인용한다. 각 언어의 해당 tree를 bootstrap하고 build하면 아래 handler 등록과 dispatch 예제를 재현할 수 있다.
+이 장의 코드는 [tutorial README](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.ko.md)와 [`Bingo`](https://github.com/zlink-systems/zlink-java-examples/blob/main/samples/Bingo/README.ko.md)·[`DeliveryDispatch`](https://github.com/zlink-systems/zlink-java-examples/blob/main/samples/DeliveryDispatch/README.ko.md)·[`TicTacToe`](https://github.com/zlink-systems/zlink-java-examples/blob/main/samples/TicTacToe/README.ko.md)·[`ZoneWorld`](https://github.com/zlink-systems/zlink-java-examples/blob/main/samples/ZoneWorld/README.ko.md) 샘플 README에서 가져왔다. [예제 저장소](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.ko.md)를 내려받아 각 README의 「내려받기와 설치」·「빌드」·「실행」 절을 따라 실행하면 아래 handler 등록과 dispatch 예제를 재현할 수 있다.
 
 !!! info "이 장을 읽고 나면"
 

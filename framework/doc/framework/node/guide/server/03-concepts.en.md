@@ -18,7 +18,7 @@ View in another language — [C++](../../../cpp/guide/server/03-concepts.en.md) 
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-This chapter quotes code from the tutorial's [`Server` and `Client` directories and its Run section](https://github.com/zlink-systems/zlink-node-examples/blob/main/tutorial/README.md#run); bootstrapping and building that tree reproduces the results explained in later chapters.
+The code in this chapter comes from the [tutorial README](https://github.com/zlink-systems/zlink-node-examples/blob/main/tutorial/README.md). Download the [examples repository](https://github.com/zlink-systems/zlink-node-examples/blob/main/tutorial/README.md) and follow its README's Download, Build and Run sections to reproduce the results below.
 
 !!! info "What you get from this chapter"
 

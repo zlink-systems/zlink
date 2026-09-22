@@ -18,7 +18,7 @@ View in another language — **C++** · [C#/.NET](../../../dotnet/guide/server/2
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-Bootstrap, build, and run the tutorial Server and Client as its [README Run section](https://github.com/zlink-systems/zlink-cpp-examples/blob/main/tutorial/README.md#run) specifies, then use this chapter's observation calls to read those processes' status and records.
+The code in this chapter comes from the [tutorial README](https://github.com/zlink-systems/zlink-cpp-examples/blob/main/tutorial/README.md). Download the [examples repository](https://github.com/zlink-systems/zlink-cpp-examples/blob/main/tutorial/README.md) and follow its README's Download, Build and Run sections to reproduce the results below.
 
 !!! info "What you get from this chapter"
 

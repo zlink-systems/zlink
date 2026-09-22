@@ -1,6 +1,6 @@
 # 1. Overview
 
-This chapter quotes code from the tutorial's [`Server` and `Client` directories and its Run section](https://github.com/zlink-systems/zlink-<language>-examples/blob/main/tutorial/README.md#run); bootstrapping and building that tree reproduces the results explained in later chapters.
+The code in this chapter comes from the [tutorial README](https://github.com/zlink-systems/zlink-<language>-examples/blob/main/tutorial/README.md). Download the [examples repository](https://github.com/zlink-systems/zlink-<language>-examples/blob/main/tutorial/README.md) and follow its README's Download, Build and Run sections to reproduce the results below.
 
 === "C#/.NET"
 

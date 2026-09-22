@@ -18,7 +18,7 @@ View in another language — [C++](../../../cpp/guide/server/34-activation-lifet
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-This chapter quotes code from the `TicTacToe` sample's `Server` directory. Bootstrap and build that language's sample tree to inspect the activation and lifetime examples below in running code.
+The code in this chapter comes from the [`TicTacToe` sample README](https://github.com/zlink-systems/zlink-node-examples/blob/main/samples/TicTacToe/README.md). Download the [examples repository](https://github.com/zlink-systems/zlink-node-examples/blob/main/samples/TicTacToe/README.md) and follow its README's Download, Build and Run sections to reproduce the results below.
 
 !!! info "What you get from this chapter"
 

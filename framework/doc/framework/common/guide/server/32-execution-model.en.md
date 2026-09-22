@@ -1,6 +1,6 @@
 # The Execution Model
 
-This chapter quotes code from the `Bingo` sample's `Server` directory. Bootstrap and build that language's sample tree to inspect the execution-model examples below in running code.
+The code in this chapter comes from the [`Bingo` sample README](https://github.com/zlink-systems/zlink-<language>-examples/blob/main/samples/Bingo/README.md). Download the [examples repository](https://github.com/zlink-systems/zlink-<language>-examples/blob/main/samples/Bingo/README.md) and follow its README's Download, Build and Run sections to reproduce the results below.
 
 !!! info "What you get from this chapter"
 

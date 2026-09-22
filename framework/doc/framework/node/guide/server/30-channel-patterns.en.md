@@ -18,7 +18,7 @@ View in another language — [C++](../../../cpp/guide/server/30-channel-patterns
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-This chapter quotes code from the tutorial's `Server` and `Client` directories and the `TicTacToe` and `ZoneWorld` sample directories. Bootstrap and build the corresponding tree for each language to inspect the described connections and target selection in running code.
+The code in this chapter comes from the [tutorial README](https://github.com/zlink-systems/zlink-node-examples/blob/main/tutorial/README.md) and the [`TicTacToe`](https://github.com/zlink-systems/zlink-node-examples/blob/main/samples/TicTacToe/README.md) and [`ZoneWorld`](https://github.com/zlink-systems/zlink-node-examples/blob/main/samples/ZoneWorld/README.md) sample READMEs. Download the [examples repository](https://github.com/zlink-systems/zlink-node-examples/blob/main/tutorial/README.md) and follow each README's Download, Build and Run sections to reproduce the results below.
 
 !!! info "What you get from this chapter"
 
