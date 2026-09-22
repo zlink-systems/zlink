@@ -9,6 +9,12 @@ import {
   translateWireReplyDecodeError
 } from '../framework-errors-internal';
 import { RequestResult, SubmitResult, isZLinkBackendResultError } from '../backend/runtime-values';
+import type { ZLinkDispatchErrorReporter } from '../channels/dispatch-error-reporter';
+import {
+  ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
+  ZLinkDispatchErrorSurface,
+  ZLinkDispatchMessageKind
+} from '../../contracts/Dispatch/ZLinkDispatchOptions';
 import type {
   RawServiceIngressRecord,
   RawServiceMeshRuntime,
@@ -128,20 +134,6 @@ interface ServiceSpotMessageFollowState {
   suppressionFence?: MessageFollowSuppressionFence;
   expiresAtMs?: number;
   draining: boolean;
-}
-
-export type ServiceSpotPublishFailureReason = 'stale_target' | 'backpressure' | 'shutdown';
-
-/** A routed logical-multicast submission failed after the local publish was admitted. */
-export class ServiceSpotPublishTargetError extends Error {
-  constructor(
-    readonly targetRid: string,
-    readonly reason: ServiceSpotPublishFailureReason,
-    options?: ErrorOptions
-  ) {
-    super(`Logical multicast submission to '${targetRid}' failed (${reason}).`, options);
-    this.name = 'ServiceSpotPublishTargetError';
-  }
 }
 
 export interface ServiceStatefulResult {
@@ -415,6 +407,8 @@ export class ServiceStatefulRuntime {
     readonly kind: 'spot_multicast' | 'actor_control' | 'actor_binding';
     readonly owner: string;
   }) => void;
+  private dispatchErrors?: ZLinkDispatchErrorReporter;
+  private dispatchErrorMeshName?: string;
   private readonly admittedUserSpotOperations = new Map<
     string,
     {
@@ -450,6 +444,11 @@ export class ServiceStatefulRuntime {
     }) => void
   ): void {
     this.mailboxDropHandler = handler;
+  }
+
+  setDispatchErrorReporter(reporter: ZLinkDispatchErrorReporter, meshName: string): void {
+    this.dispatchErrors = reporter;
+    this.dispatchErrorMeshName = meshName;
   }
 
   createSpot(
@@ -1251,7 +1250,8 @@ export class ServiceStatefulRuntime {
       );
     const header = encodeLogicalMulticastHeader(channelName, topic, sourceSpotId);
     const payloadFrame = encodeApplicationPayload(payload);
-    const failures: ServiceSpotPublishTargetError[] = [];
+    const reporter = this.dispatchErrors;
+    const captureFailures = reporter?.captureEnabled() === true;
     for (const target of targets) {
       // Remote admission ends at the source outbound transport queue. The
       // receiver's Spot queue and handler completion are not publish results.
@@ -1260,20 +1260,23 @@ export class ServiceStatefulRuntime {
         payloadFrame
       ]);
       if (!accepted) {
-        failures.push(
-          new ServiceSpotPublishTargetError(
-            target.descriptor.nodeRoutingId,
-            serviceSpotPublishFailureReason(
+        if (captureFailures) {
+          reporter.report({
+            surface: ZLinkDispatchErrorSurface.SpotRoute,
+            messageKind: ZLinkDispatchMessageKind.Send,
+            reason: serviceSpotPublishFailureReason(
               undefined,
               this.raw.isPeerRouteReady(target.descriptor.nodeRoutingId),
               this.closed
-            )
-          )
-        );
+            ),
+            action: ZLinkDispatchErrorAction.Drop,
+            meshName: this.dispatchErrorMeshName,
+            channelName,
+            topic,
+            targetRid: target.descriptor.nodeRoutingId
+          });
+        }
       }
-    }
-    if (failures.length > 0) {
-      throw new AggregateError(failures, 'Logical multicast target submission failed.');
     }
   }
 
@@ -5289,12 +5292,12 @@ function serviceSpotPublishFailureReason(
   result: number | undefined,
   routeReady: boolean,
   closed: boolean
-): ServiceSpotPublishFailureReason {
+): 'stale_target' | 'backpressure' | 'shutdown' {
   if (closed || result === SubmitResult.Terminated) return 'shutdown';
   switch (result) {
     case SubmitResult.Backpressured:
-    case SubmitResult.NotAdmitted:
       return 'backpressure';
+    case SubmitResult.NotAdmitted:
     case SubmitResult.NotConnected:
     case SubmitResult.NotFound:
     case SubmitResult.InvalidHandle:
