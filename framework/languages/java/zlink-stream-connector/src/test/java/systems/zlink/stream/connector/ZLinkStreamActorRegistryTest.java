@@ -48,9 +48,11 @@ final class ZLinkStreamActorRegistryTest {
 
         registry.unbound(unboundControl(7));
         assertTrue(connector.actors().isEmpty());
-        assertTrue(actor.isBound());
-        connector.dispatch().submit().toCompletableFuture().join();
         assertFalse(actor.isBound());
+        ZLinkStreamException closedFailure =
+                assertThrows(ZLinkStreamException.class, () -> actor.send(payload()).submit());
+        assertEquals(ZLinkStreamErrorCode.VALIDATION_FAILED, closedFailure.errorCode());
+        connector.dispatch().submit().toCompletableFuture().join();
         assertSame(actor, unbound.join());
         registry.bound(boundControl(7, "player-b"));
         assertTrue(connector.actor("player-b").orElseThrow().isBound());
@@ -158,11 +160,47 @@ final class ZLinkStreamActorRegistryTest {
                     .join();
             TcpStreamConnectorTestServer.awaitCondition(() -> connector.actors().isEmpty());
 
-            assertTrue(actor.isBound());
+            assertFalse(actor.isBound());
             ConnectorTestAwait.await(connector.dispatch());
             assertEquals("player-a", received.join());
             assertTrue(unbound.isDone());
             assertFalse(actor.isBound());
+            ConnectorTestAwait.await(connector.close());
+        }
+    }
+
+    @Test
+    void manualDispatchSkipsActorHandlerUnregisteredAfterPacketWasQueued() throws Exception {
+        try (TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer()) {
+            ZLinkStreamConnector connector =
+                    ZLinkStreamConnectorFactory.create(
+                            server.options(ZLinkStreamDispatchMode.MANUAL));
+            ConnectorTestAwait.await(connector.connect());
+            server.sendAsync(
+                            controlHeader(ZLinkStreamActorRegistry.BOUND),
+                            boundControl(7, "player-a"))
+                    .join();
+            TcpStreamConnectorTestServer.awaitCondition(
+                    () -> connector.actor("player-a").isPresent());
+            ZLinkStreamActor actor = connector.actor("player-a").orElseThrow();
+            java.util.concurrent.atomic.AtomicInteger calls =
+                    new java.util.concurrent.atomic.AtomicInteger();
+            AutoCloseable registration =
+                    actor.on(
+                            "Ping",
+                            message -> {
+                                calls.incrementAndGet();
+                                message.payload().payload().close();
+                                return CompletableFuture.completedFuture(null);
+                            });
+
+            server.sendAsync(actorPacketHeader(7, "Ping"), new byte[] {1}).join();
+            TcpStreamConnectorTestServer.awaitCondition(
+                    () -> connector.pendingDispatchCount() == 1);
+            registration.close();
+            ConnectorTestAwait.await(connector.dispatch());
+
+            assertEquals(0, calls.get());
             ConnectorTestAwait.await(connector.close());
         }
     }

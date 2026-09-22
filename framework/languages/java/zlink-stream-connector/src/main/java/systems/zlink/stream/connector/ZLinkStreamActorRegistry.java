@@ -69,8 +69,7 @@ final class ZLinkStreamActorRegistry {
         return actor.slot();
     }
 
-    synchronized List<ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>> handlers(
-            int slot, String name) {
+    synchronized List<DefaultActor.HandlerRegistration> handlers(int slot, String name) {
         DefaultActor actor = bySlot.get(slot);
         return actor == null ? List.of() : List.copyOf(actor.handlers(name));
     }
@@ -114,6 +113,7 @@ final class ZLinkStreamActorRegistry {
                 throw new IllegalArgumentException("Actor unbound control uses an unknown slot");
             }
             byId.remove(actor.actorId());
+            actor.close();
         }
         publishUnbound(actor);
     }
@@ -156,7 +156,6 @@ final class ZLinkStreamActorRegistry {
         List<ZLinkStreamActorHandler> handlers = List.copyOf(unboundHandlers);
         Runnable invoke =
                 () -> {
-                    actor.close();
                     handlers.forEach(handler -> invoke(handler, actor));
                 };
         if (configuration.dispatchMode() == ZLinkStreamDispatchMode.IMMEDIATE) {
@@ -203,8 +202,8 @@ final class ZLinkStreamActorRegistry {
         private final DefaultZLinkStreamConnector connector;
         private final int slot;
         private final String actorId;
-        private final Map<String, List<ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>>>
-                handlers = new java.util.concurrent.ConcurrentHashMap<>();
+        private final Map<String, List<HandlerRegistration>> handlers =
+                new java.util.concurrent.ConcurrentHashMap<>();
         private volatile boolean bound = true;
 
         private DefaultActor(DefaultZLinkStreamConnector connector, int slot, String actorId) {
@@ -217,13 +216,12 @@ final class ZLinkStreamActorRegistry {
             return slot;
         }
 
-        List<ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>> handlers(String name) {
+        List<HandlerRegistration> handlers(String name) {
             return handlers.getOrDefault(name, List.of());
         }
 
         void close() {
             bound = false;
-            handlers.clear();
         }
 
         @Override
@@ -263,8 +261,13 @@ final class ZLinkStreamActorRegistry {
                 String name, ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload> handler) {
             DefaultZLinkStreamConnector.validatePacketName(name);
             Objects.requireNonNull(handler, "handler");
-            handlers.computeIfAbsent(name, ignored -> new CopyOnWriteArrayList<>()).add(handler);
-            return () -> handlers.getOrDefault(name, List.of()).remove(handler);
+            HandlerRegistration registration = new HandlerRegistration(handler);
+            handlers.computeIfAbsent(name, ignored -> new CopyOnWriteArrayList<>())
+                    .add(registration);
+            return () -> {
+                registration.close();
+                handlers.getOrDefault(name, List.of()).remove(registration);
+            };
         }
 
         @Override
@@ -299,6 +302,28 @@ final class ZLinkStreamActorRegistry {
                                             message.flowId(),
                                             message.flowOrigin(),
                                             message.actorId())));
+        }
+
+        static final class HandlerRegistration {
+            private final ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload> handler;
+            private volatile boolean active = true;
+
+            private HandlerRegistration(
+                    ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload> handler) {
+                this.handler = handler;
+            }
+
+            ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload> handler() {
+                return handler;
+            }
+
+            boolean active() {
+                return active;
+            }
+
+            void close() {
+                active = false;
+            }
         }
     }
 }

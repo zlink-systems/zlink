@@ -711,12 +711,18 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         return created.thenCompose(
                 actor -> {
                     previous.forEach(this::removeBinding);
+                    installBinding(actor);
                     return announceBound(actor)
                             .thenApply(
                                     ignored -> {
                                         stream.publishBoundActor(sessionRid, actor.actorId());
-                                        installBinding(actor);
                                         return actor;
+                                    })
+                            .whenComplete(
+                                    (ignored, failure) -> {
+                                        if (failure != null) {
+                                            removeBinding(actor);
+                                        }
                                     });
                 });
     }

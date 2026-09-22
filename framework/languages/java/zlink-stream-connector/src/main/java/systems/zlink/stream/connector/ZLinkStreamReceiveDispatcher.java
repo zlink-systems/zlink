@@ -206,11 +206,10 @@ final class ZLinkStreamReceiveDispatcher {
         String actorId = header.actorSlot() == null ? null : actors.actorId(header.actorSlot());
         List<ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>> registered =
                 List.copyOf(handlers.getOrDefault(header.name(), List.of()));
-        List<ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>> actorRegistered =
+        List<ZLinkStreamActorRegistry.DefaultActor.HandlerRegistration> actorRegistered =
                 header.actorSlot() == null
                         ? List.of()
                         : actors.handlers(header.actorSlot(), header.name());
-        boolean hasRegisteredHandlers = !registered.isEmpty() || !actorRegistered.isEmpty();
         ZLinkStreamMessage<ZLinkStreamEncodedPayload> message =
                 new ZLinkStreamMessage<>(
                         header.name(),
@@ -225,7 +224,26 @@ final class ZLinkStreamReceiveDispatcher {
                         actorId);
         Supplier<CompletionStage<Void>> dispatch =
                 () -> {
-                    if (!hasRegisteredHandlers) {
+                    List<ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>> activeRegistered =
+                            registered.stream()
+                                    .filter(
+                                            handler ->
+                                                    handlers.getOrDefault(header.name(), List.of())
+                                                            .contains(handler))
+                                    .toList();
+                    List<ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>>
+                            activeActorRegistered =
+                                    actorRegistered.stream()
+                                            .filter(
+                                                    ZLinkStreamActorRegistry.DefaultActor
+                                                                    .HandlerRegistration
+                                                            ::active)
+                                            .map(
+                                                    ZLinkStreamActorRegistry.DefaultActor
+                                                                    .HandlerRegistration
+                                                            ::handler)
+                                            .toList();
+                    if (activeRegistered.isEmpty() && activeActorRegistered.isEmpty()) {
                         message.payload().payload().close();
                         return CompletableFuture.completedFuture(null);
                     }
@@ -233,7 +251,7 @@ final class ZLinkStreamReceiveDispatcher {
                     completion =
                             invokeHandlers(
                                     completion,
-                                    registered,
+                                    activeRegistered,
                                     header,
                                     payload,
                                     flow,
@@ -242,7 +260,7 @@ final class ZLinkStreamReceiveDispatcher {
                     completion =
                             invokeHandlers(
                                     completion,
-                                    actorRegistered,
+                                    activeActorRegistered,
                                     header,
                                     payload,
                                     flow,
@@ -254,7 +272,18 @@ final class ZLinkStreamReceiveDispatcher {
         dispatchQueue.addMessage(
                 message,
                 dispatch,
-                () -> hasRegisteredHandlers,
+                () ->
+                        registered.stream()
+                                        .anyMatch(
+                                                handler ->
+                                                        handlers.getOrDefault(
+                                                                        header.name(), List.of())
+                                                                .contains(handler))
+                                || actorRegistered.stream()
+                                        .anyMatch(
+                                                ZLinkStreamActorRegistry.DefaultActor
+                                                                .HandlerRegistration
+                                                        ::active),
                 configuration.dispatchMode() == ZLinkStreamDispatchMode.IMMEDIATE);
     }
 
