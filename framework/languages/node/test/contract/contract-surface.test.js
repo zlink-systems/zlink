@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const ts = require('typescript');
 
 const workspaceRoot = path.resolve(__dirname, '..', '..');
 const nodeDocRoot = path.resolve(workspaceRoot, '..', '..', 'doc', 'framework', 'node');
@@ -103,16 +104,17 @@ test('Nest options builder matches the exact public member set', () => {
 });
 
 test('Nest fanout builder matches the exact public member set', () => {
+  const specification = fs.readFileSync(
+    path.join(interfaceSpecRoot, '07-nestjs-host.ko.md'),
+    'utf8'
+  );
   const declarations = readTree(path.join(workspaceRoot, 'packages', 'nestjs', 'dist'));
-  const fanoutBuilder = declarationBody(declarations, 'ZLinkNestFanoutChannelBuilder');
-  const expected = [...publicContractSnapshot.nestjsFanoutChannelBuilder];
-  for (const name of expected) {
-    assert.match(
-      fanoutBuilder,
-      new RegExp(`\\b${name}\\s*\\(`),
-      `Nest fanout declaration missing ${name}`
-    );
-  }
+  const interfaceName = 'ZLinkNestFanoutChannelBuilder';
+
+  assert.deepEqual(
+    typescriptInterfaceMembers(declarations, interfaceName),
+    markdownInterfaceMembers(specification, interfaceName)
+  );
 });
 
 test('Nest RouteMesh builder keeps the formal scheduler limits in build output', () => {
@@ -997,6 +999,39 @@ function runtimeCatalogNames(spec) {
 
 function uniqueMatches(text, pattern) {
   return [...new Set([...text.matchAll(pattern)].map((match) => match[1]))].sort();
+}
+
+function markdownInterfaceMembers(markdown, name) {
+  for (const match of markdown.matchAll(/```(?:ts|typescript)\s*\n([\s\S]*?)```/g)) {
+    const declaration = findInterfaceDeclaration(match[1], name);
+    if (declaration !== undefined) return interfaceMemberNames(declaration);
+  }
+  assert.fail(`missing specification interface for ${name}`);
+}
+
+function typescriptInterfaceMembers(source, name) {
+  const declaration = findInterfaceDeclaration(source, name);
+  assert.notEqual(declaration, undefined, `missing declaration for ${name}`);
+  return interfaceMemberNames(declaration);
+}
+
+function findInterfaceDeclaration(source, name) {
+  const sourceFile = ts.createSourceFile(
+    'public-contract.ts',
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS
+  );
+  return sourceFile.statements.find(
+    (statement) => ts.isInterfaceDeclaration(statement) && statement.name.text === name
+  );
+}
+
+function interfaceMemberNames(declaration) {
+  return [
+    ...new Set(declaration.members.map((member) => member.name?.getText()).filter(Boolean))
+  ].sort();
 }
 
 function declarationBody(text, name) {
