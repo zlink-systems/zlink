@@ -141,7 +141,9 @@ cp -a "$OPENSSL_SSL" "$OPENSSL_CRYPTO" "$PACKAGE_LIB/"
 
 if [ -n "$DYLIB_FILE" ]; then
     TARGET_DYLIB="$REPO_ROOT/$OUTPUT_DIR/libzlink.dylib"
-    install_name_tool -id "@loader_path/libzlink.0.dylib" "$DYLIB_FILE"
+    # The Core dylib keeps an @rpath install name: a consumer links it through its
+    # own rpath (lib/), while the OpenSSL siblings inside lib/ resolve via @loader_path.
+    install_name_tool -id "@rpath/libzlink.0.dylib" "$DYLIB_FILE"
 
     for binary in "$DYLIB_FILE" "$PACKAGE_LIB/libssl.3.dylib" "$PACKAGE_LIB/libcrypto.3.dylib"; do
         while IFS= read -r dependency; do
