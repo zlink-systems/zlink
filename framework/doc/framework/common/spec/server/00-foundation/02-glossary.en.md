@@ -2509,12 +2509,6 @@ the byte representation by
 and the client's table and handles by
 [Stream Connector common spec §5.6](../../stream-connector/32-stream-connector.en.md#56-bound-actor).
 
-| Item | Content |
-|---|---|
-| Form | `u16`; `0` is never used |
-| Creation and management | Issued per binding by the session owner |
-| Lifetime | The same as its binding. When the connection drops, the client's table is gone as well |
-
 <a id="session-sequence"></a>
 ### Session Sequence
 

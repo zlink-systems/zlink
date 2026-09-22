@@ -2395,12 +2395,6 @@ byte 표현은 [Stream Connector 공통 스펙 §4](../../stream-connector/32-st
 client의 대응표와 handle은 [Stream Connector 공통 스펙 §5.6](../../stream-connector/32-stream-connector.ko.md#56-bound-actor)이
 소유한다.
 
-| 항목 | 내용 |
-|---|---|
-| 형태 | `u16`, `0`은 쓰지 않는다 |
-| 생성·관리 | Session owner의 binding별 발급 |
-| 수명 | 그 binding과 같다. 연결이 끊기면 client의 대응표도 사라진다 |
-
 <a id="session-sequence"></a>
 ### Session sequence
 

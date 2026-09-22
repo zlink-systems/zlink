@@ -819,17 +819,17 @@ Unity WebGL UPM package는 새 wire runtime을 만들지 않는다. npm package 
 | **transport 추론** | **transport를 명시하지 않으면 endpoint scheme이 정하고, 명시한 값이 scheme과 어긋나면 `ConfigurationError`다(§3.1)** |
 | **오류 전달** | **받는 쪽이 §9의 13개 중 무엇인지 읽어낸다. 언어 표준 예외를 그대로 쓰지 않는다(§9.2)** |
 | **재연결 지연** | **시도 사이의 대기가 기준 지연의 50%에서 100% 사이에 들어간다. 시도가 소진되면 상태가 `Disconnected`가 되고 끊김 handler가 실행된다(§6)** |
-| **등록 해제** | **push·error·disconnect·connection state 네 등록이 모두 해제할 수 있는 값을 돌려주고, 해제한 handler는 그 뒤의 dispatch에서 실행되지 않는다(§7)** |
+| **등록 해제** | **connector와 handle의 push, error, disconnect, connection state, Actor bound·unbound 등록이 모두 해제할 수 있는 값을 돌려주고, 해제한 handler는 그 뒤의 dispatch에서 실행되지 않는다(§7)** |
 | **수신 개수** | **`receivedCount(name)`가 받은 개수를 세고 소비해도 줄지 않으며, dispatch mode와 무관하다. 연결이 성립할 때 0에서 다시 시작한다(§10)** |
 | **대기 표면** | **이름을 명시하는 길과 payload type에서 결정하는 길이 모두 있고, 술어와 반환이 message이며, 관측 조건 위반은 `ValidationFailed`·연결 종료는 `Disconnected`다(§10.1)** |
 | **Actor slot wire** | **`actor_slot` flag와 field를 양방향으로 encode·decode하고, control header에는 slot이 없으며, flag와 field 존재가 어긋나면 decode error다(§4.2, §4.5, §4.6)** |
 | **Actor lifecycle control** | **잘못된 bound·unbound payload, 이미 열린 slot의 bound, 이미 쓰는 `actor_id`의 bound, 표에 없는 slot의 unbound가 모두 `FrameDecodeFailed`로 연결을 끝낸다(§4.6, §5.6, §9)** |
 | **Actor 대응표** | **`$zlink.actor.bound`가 그 slot을 싣는 첫 packet보다 먼저 도착하고, 수신 message의 `actor_id`가 표로 해석되며, slot이 없는 frame은 `actor_id`가 비어 있다(§5.6)** |
-| **Actor handle** | **목록과 조회가 bound·unbound에 따라 갱신되고, bound callback이 그 Actor의 첫 packet callback보다 먼저 실행되며, 등록을 해제할 수 있고, 연결이 끊기면 열린 handle이 모두 닫히며 unbound callback이 disconnect callback보다 먼저 실행된다(§5.6, §7)** |
-| **Actor handle 송수신** | **handle의 send·request가 그 slot을 싣고, handle 수신 등록이 그 Actor의 message만 받으며, 닫힌 handle의 send·request는 `ValidationFailed`다(§5.6)** |
+| **Actor handle** | **`actors`가 호출 시점의 read-only snapshot이고 닫힌 handle에서도 `actor_id`를 읽는다. 목록과 조회가 bound·unbound에 따라 먼저 갱신되고, bound callback이 그 Actor의 첫 packet callback보다 먼저 실행되며, 연결이 끊기면 발급 순서대로 handle을 닫고 unbound callback을 disconnect callback보다 먼저 실행한다(§5.6, §7)** |
+| **Actor handle 송수신** | **handle의 send·request가 그 slot을 싣고, handle 수신 등록이 그 Actor의 message만 받는다. 닫힌 handle의 send·request는 `ValidationFailed`이고, 열린 handle은 connector 수준 builder와 같은 timeout·cancellation·backpressure 결과를 낸다(§5.6)** |
 | **Actor 언어 투영** | **.NET typed 확장, Java named typed overload, C++ template과 subscription, TypeScript Disposable, Unity WebGL JSON 경계 왕복을 public 표면으로 관찰한다(§5.6, 언어 문서)** |
 | **flow 노출과 전파** | **수신 message가 flow 식별자와 출처를 노출하고, ambient 문맥이 없는 런타임은 명시 전달 수단을 제공한다(§5.5)** |
-| **handler와 종료** | **push·error·끊김·연결 상태 handler와 request callback 다섯 종류 모두, 끝나지 않는 handler가 있어도 connector가 그 완료를 기다리지 않는다. `close`는 연결 상태 handler와 끊김 handler를 실행한 뒤 돌아온다. 재연결 소진과 transport 오류로 끊길 때도 같은 순서로 실행하고 기다리지 않는다(§7)** |
+| **handler와 종료** | **push·error·끊김·연결 상태·Actor bound·Actor unbound handler와 request callback 모두 등록 순서·callback 실패·완료를 기다리지 않는 규칙을 따르며, 끝나지 않는 handler가 있어도 connector가 그 완료를 기다리지 않는다. `close`는 연결 상태 handler와 끊김 handler를 실행한 뒤 돌아온다. 재연결 소진과 transport 오류로 끊길 때도 같은 순서로 실행하고 기다리지 않는다(§7)** |
 | **종료 사유 읽기** | **끊긴 뒤 이벤트를 받지 않은 코드도 같은 값을 읽는다. 첫 connect 실패에도 사유가 남고, 재연결해도 지워지지 않는다(§6.2)** |
 | diagnostics level | `Off` outbound frame에 flow 필드·flag(0x10) 부재, inbound flow 값 검증 생략, `Errors` 기본값에서 현행 wire 유지, one-way `Send`의 correlation id 부재(§13) |
 
