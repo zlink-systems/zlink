@@ -8,6 +8,7 @@ import java.util.HexFormat
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.awaitCancellation
 import org.springframework.beans.factory.ObjectProvider
 import systems.zlink.framework.ZLinkMessageContext
 import systems.zlink.framework.actors.ZLinkActor
@@ -18,25 +19,32 @@ import systems.zlink.framework.actors.ZLinkActorJoinCompletion
 import systems.zlink.framework.actors.ZLinkActorJoinOperationId
 import systems.zlink.framework.actors.ZLinkActorRelocationAdapter
 import systems.zlink.framework.actors.ZLinkRelocationCancellation
-import systems.zlink.framework.channels.ZLinkFanoutHandler
 import systems.zlink.framework.channels.ZLinkPublishMessageContext
 import systems.zlink.framework.channels.ZLinkRouteClient
 import systems.zlink.framework.handlers.ZLinkHandlerGroup
 import systems.zlink.framework.handlers.ZLinkSpotActorRequest
 import systems.zlink.framework.handlers.ZLinkSpotActorSend
+import systems.zlink.framework.kotlin.ZLinkSuspendingActor
+import systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpotActorRequestHandler
+import systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpotActorSendHandler
+import systems.zlink.framework.kotlin.ZLinkSuspendingPublishHandler
+import systems.zlink.framework.kotlin.ZLinkSuspendingSpot
+import systems.zlink.framework.kotlin.ZLinkSuspendingSpotActorRequestHandler
+import systems.zlink.framework.kotlin.ZLinkSuspendingSpotActorSendHandler
+import systems.zlink.framework.kotlin.ZLinkSuspendingSpotPacketHandler
+import systems.zlink.framework.kotlin.ZLinkSuspendingSpotSubscriptionHandler
+import systems.zlink.framework.kotlin.ZLinkSuspendingSpotTimerHandler
+import systems.zlink.framework.kotlin.await
+import systems.zlink.framework.kotlin.decode
+import systems.zlink.framework.kotlin.kotlin
+import systems.zlink.framework.kotlin.sendToSpot
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.spots.ZLinkActorCreateResponse
 import systems.zlink.framework.spots.ZLinkEntrySpot
-import systems.zlink.framework.spots.ZLinkEntrySpotActorRequestHandler
-import systems.zlink.framework.spots.ZLinkEntrySpotActorSendHandler
 import systems.zlink.framework.spots.ZLinkEntrySpotContext
-import systems.zlink.framework.spots.ZLinkSpot
 import systems.zlink.framework.spots.ZLinkSpotActorJoinResult
 import systems.zlink.framework.spots.ZLinkSpotContext
 import systems.zlink.framework.spots.ZLinkSpotCreateResponse
-import systems.zlink.framework.spots.ZLinkSpotPacketHandler
-import systems.zlink.framework.spots.ZLinkSpotSubscriptionHandler
-import systems.zlink.framework.spots.ZLinkSpotTimerHandler
 import systems.zlink.framework.spots.ZLinkTimer
 import systems.zlink.framework.spots.ZLinkTimerTick
 import systems.zlink.samples.kotlin.zoneworld.dynamic.BorderSubscriptionHandlers
@@ -48,7 +56,8 @@ import systems.zlink.samples.kotlin.zoneworld.shared.Messages
 import systems.zlink.samples.kotlin.zoneworld.shared.ZoneWorldNames
 import systems.zlink.samples.kotlin.zoneworld.shared.ZoneWorldSpec
 
-class PlayerActor(val actorId: String, private val actorContext: ZLinkActorContext) : ZLinkActor {
+class PlayerActor(val actorId: String, override val context: ZLinkActorContext) :
+    ZLinkSuspendingActor() {
     var x: Int = 0
         private set
 
@@ -81,8 +90,6 @@ class PlayerActor(val actorId: String, private val actorContext: ZLinkActorConte
         ZONE_CHANGE,
         CRASH_PROBE,
     }
-
-    override fun context(): ZLinkActorContext = actorContext
 
     val pending: Boolean
         get() = pendingJoin
@@ -175,25 +182,24 @@ class PlayerActor(val actorId: String, private val actorContext: ZLinkActorConte
         dirY = -dirY
     }
 
-    fun send(message: Any): CompletionStage<Void> =
-        if (isBot) {
-            CompletableFuture.completedFuture<Void>(null)
-        } else actorContext.boundSession().send(message).submit()
+    suspend fun send(message: Any) {
+        if (!isBot) context.boundSession().kotlin().send(message).await()
+    }
 
     // --8<-- [start:doc-zw-join-completed]
-    override fun onJoinCompleted(completion: ZLinkActorJoinCompletion): CompletionStage<Void> {
+    override suspend fun onJoinCompletedSuspending(completion: ZLinkActorJoinCompletion) {
         val operationId =
             when (completion) {
                 is ZLinkActorJoinCompletion.Accepted -> completion.operationId()
                 is ZLinkActorJoinCompletion.Rejected -> completion.operationId()
                 is ZLinkActorJoinCompletion.Failed -> completion.operationId()
             }
-        if (operationId in completedJoins) return CompletableFuture.completedFuture<Void>(null)
+        if (operationId in completedJoins) return
         rememberJoin(operationId)
         pendingJoin = false
-        return when (completion) {
+        when (completion) {
             is ZLinkActorJoinCompletion.Accepted -> {
-                val reply = completion.reply().decode(Messages.EnterZoneRes::class.java)
+                val reply = completion.reply().decode<Messages.EnterZoneRes>()
                 val joinedZone =
                     reply.zoneId.ifBlank {
                         pendingZone.ifBlank { ZoneWorldSpec.zoneOf(pendingX, pendingY) }
@@ -204,15 +210,15 @@ class PlayerActor(val actorId: String, private val actorContext: ZLinkActorConte
                     JoinPurpose.INITIAL_HUMAN ->
                         send(Messages.JoinWorldNotify(actorId, joinedZone, x, y))
                     JoinPurpose.CRASH_PROBE -> send(Messages.CrashRelocationProbeRes())
-                    else -> CompletableFuture.completedFuture<Void>(null)
-                }.also { pendingPurpose = JoinPurpose.NONE }
+                    else -> Unit
+                }
+                pendingPurpose = JoinPurpose.NONE
             }
             else -> {
                 val reason =
                     when (completion) {
                         is ZLinkActorJoinCompletion.Rejected ->
-                            completion.reply().decode(Messages.EnterZoneRes::class.java).error
-                                ?: "Rejected"
+                            completion.reply().decode<Messages.EnterZoneRes>().error ?: "Rejected"
                         is ZLinkActorJoinCompletion.Failed -> mapFailure(completion.kind().name)
                         else -> error("unreachable")
                     }
@@ -231,11 +237,9 @@ class PlayerActor(val actorId: String, private val actorContext: ZLinkActorConte
                     JoinPurpose.CRASH_PROBE -> send(Messages.CrashRelocationProbeRes(reason))
                     else ->
                         if (!isBot) send(Messages.MoveRejectedNotify(reason, x, y))
-                        else {
-                            reverseDirection()
-                            CompletableFuture.completedFuture<Void>(null)
-                        }
-                }.also { pendingPurpose = JoinPurpose.NONE }
+                        else reverseDirection()
+                }
+                pendingPurpose = JoinPurpose.NONE
             }
         }
     }
@@ -341,7 +345,7 @@ class ZoneEntrySpot(private val context: ZLinkEntrySpotContext) : ZLinkEntrySpot
     ): CompletionStage<ZLinkActorCreateResponse> {
         if (createRequest.isEmpty)
             return CompletableFuture.completedFuture(ZLinkActorCreateResponse.accept())
-        val request = createRequest.decode(Messages.EnterWorldReq::class.java)
+        val request = createRequest.decode<Messages.EnterWorldReq>()
         if (!ZoneWorldSpec.inRange(request.x, request.y)) {
             return CompletableFuture.completedFuture(
                 ZLinkActorCreateResponse.reject(
@@ -384,13 +388,13 @@ class ZoneEntrySpot(private val context: ZLinkEntrySpotContext) : ZLinkEntrySpot
 }
 
 class ZoneSpot(
-    private val context: ZLinkSpotContext,
+    override val context: ZLinkSpotContext,
     private val maintenance: NodeMaintenanceState,
     private val census: NodeCensus,
     private val actors: ZLinkActorClient,
     private val topology: SampleTopology,
-) : ZLinkSpot<PlayerActor> {
-    override fun context(): ZLinkSpotContext = context
+) : ZLinkSuspendingSpot<PlayerActor>() {
+    private val kotlinActors = actors.kotlin()
 
     private val residents = mutableMapOf<String, PlayerActor>()
     private val pending = mutableMapOf<String, Messages.EnterZoneReq>()
@@ -411,40 +415,33 @@ class ZoneSpot(
         }
     }
 
-    override fun onCreate(request: ZLinkMessage): CompletionStage<ZLinkSpotCreateResponse> {
-        return CompletableFuture.completedFuture(ZLinkSpotCreateResponse.accept())
-    }
+    override suspend fun onCreateSuspending(request: ZLinkMessage): ZLinkSpotCreateResponse =
+        ZLinkSpotCreateResponse.accept()
 
-    override fun onActorJoin(
+    override suspend fun onActorJoinSuspending(
         actorId: String,
         request: ZLinkMessage,
-    ): CompletionStage<ZLinkSpotActorJoinResult> {
-        val join = request.decode(Messages.EnterZoneReq::class.java)
+    ): ZLinkSpotActorJoinResult {
+        val join = request.decode<Messages.EnterZoneReq>()
         val zone = context.spotId()
         if (actorId != join.playerId || zone != ZoneWorldSpec.zoneOf(join.x, join.y)) {
-            return CompletableFuture.completedFuture(
-                ZLinkSpotActorJoinResult.reject(Messages.EnterZoneRes(zone, "InvalidZone"))
-            )
+            return ZLinkSpotActorJoinResult.reject(Messages.EnterZoneRes(zone, "InvalidZone"))
         }
         // --8<-- [start:doc-zw-admission]
         if (maintenance.rejectsArrival(topology.nodeValue(), zone, join.fromZoneId)) {
-            return CompletableFuture.completedFuture(
-                ZLinkSpotActorJoinResult.reject(Messages.EnterZoneRes(zone, "ZoneMaintenance"))
-            )
+            return ZLinkSpotActorJoinResult.reject(Messages.EnterZoneRes(zone, "ZoneMaintenance"))
         }
         if (join.crashBoundaryProbe) {
             println("crash-boundary join pending zone=$zone actor=$actorId")
-            return CompletableFuture()
+            awaitCancellation()
         }
         pending[actorId] = join
-        return CompletableFuture.completedFuture(
-            ZLinkSpotActorJoinResult.accept(Messages.EnterZoneRes(zone))
-        )
+        return ZLinkSpotActorJoinResult.accept(Messages.EnterZoneRes(zone))
         // --8<-- [end:doc-zw-admission]
     }
 
-    override fun onJoinedActor(actor: PlayerActor): CompletionStage<Void> {
-        val join = pending.remove(actor.actorId) ?: return CompletableFuture.completedFuture(null)
+    override suspend fun onJoinedActorSuspending(actor: PlayerActor) {
+        val join = pending.remove(actor.actorId) ?: return
         actor.applyAtZone(join.x, join.y, context.spotId(), join.isBot)
         residents[actor.actorId] = actor
         census.record(context.spotId(), residents.size)
@@ -452,26 +449,23 @@ class ZoneSpot(
             "zone actor joined zone=${context.spotId()} actor=${actor.actorId} generation=${actor.context().objectGeneration()} " +
                 "player=${actor.actorId}, bot=${actor.isBot}, initial=${join.initialEntry}"
         )
-        return if (!actor.isBot && !join.initialEntry)
+        if (!actor.isBot && !join.initialEntry)
             actor.send(Messages.ZoneChangedNotify(actor.actorId, context.spotId()))
-        else CompletableFuture.completedFuture(null)
     }
 
-    override fun onLeaveActor(actor: PlayerActor): CompletionStage<Void> {
+    override suspend fun onLeaveActorSuspending(actor: PlayerActor) {
         residents.remove(actor.actorId, actor)
         census.record(context.spotId(), residents.size)
         println("zone actor left zone=${context.spotId()} actor=${actor.actorId}")
-        return CompletableFuture.completedFuture(null)
     }
 
-    override fun onDisconnectActor(actor: PlayerActor): CompletionStage<Void> {
+    override suspend fun onDisconnectActorSuspending(actor: PlayerActor) {
         residents.remove(actor.actorId, actor)
         census.record(context.spotId(), residents.size)
         println("zone actor disconnected zone=${context.spotId()} actor=${actor.actorId}")
-        return CompletableFuture.completedFuture(null)
     }
 
-    override fun onInitialize(): CompletionStage<Void> {
+    override suspend fun onInitializeSuspending() {
         census.hostZone(context.spotId())
         val tick =
             context.addTimer(
@@ -487,72 +481,62 @@ class ZoneSpot(
                 ZoneBotTickHandler::class.java,
                 null,
             )
-        return tick.thenCombine(bots) { first, second ->
-            tickTimer = first
-            botTimer = second
-            null
-        }
+        tickTimer = tick.await()
+        botTimer = bots.await()
     }
 
-    override fun onClosing(): CompletionStage<Void> {
-        census.releaseZone(context.spotId())
-        val first = tickTimer?.cancel() ?: CompletableFuture.completedFuture(null)
-        val second = botTimer?.cancel() ?: CompletableFuture.completedFuture(null)
-        return first.thenCombine(second) { _, _ -> null }
+    override suspend fun onClosingSuspending(
+        context: systems.zlink.framework.spots.ZLinkSpotClosingContext
+    ) {
+        census.releaseZone(this.context.spotId())
+        tickTimer?.cancel()?.await()
+        botTimer?.cancel()?.await()
     }
 
-    fun tick(): CompletionStage<Void> {
+    suspend fun tick() {
         tickValue++
         borders.entries.removeIf { tickValue - it.value.tick > ZoneWorldSpec.BORDER_EXPIRY_TICKS }
         publishBorders()
-        var send: CompletionStage<Void> = CompletableFuture.completedFuture(null)
-        residents.values
-            .toList()
-            .filterNot { it.isBot }
-            .forEach { actor ->
-                send =
-                    send.thenCompose {
-                        actors
-                            .sendToActor(
-                                actor.actorId,
-                                Messages.DeliverZoneStateMsg(
-                                    context.spotId(),
-                                    tickValue,
-                                    statePlayers(),
-                                ),
-                            )
-                            .submit()
-                    }
-            }
-        return send.exceptionally {
-            println("zone tick delivery error zone=${context.spotId()} detail=${it.message}")
-            null
+        try {
+            residents.values
+                .toList()
+                .filterNot { it.isBot }
+                .forEach { actor ->
+                    kotlinActors
+                        .sendToActor(
+                            actor.actorId,
+                            Messages.DeliverZoneStateMsg(
+                                context.spotId(),
+                                tickValue,
+                                statePlayers(),
+                            ),
+                        )
+                        .await()
+                }
+        } catch (error: RuntimeException) {
+            println("zone tick delivery error zone=${context.spotId()} detail=${error.message}")
         }
     }
 
-    fun botTick(): CompletionStage<Void> {
-        var send: CompletionStage<Void> = CompletableFuture.completedFuture(null)
+    suspend fun botTick() {
         residents.values
             .toList()
             .filter { it.isBot && !it.pending }
             .forEach { actor ->
-                send =
-                    send.thenCompose {
-                        actors.sendToActor(actor.actorId, Messages.BotTickMsg()).submit()
-                    }
+                kotlinActors.sendToActor(actor.actorId, Messages.BotTickMsg()).await()
             }
-        return send
     }
 
-    fun move(actor: PlayerActor, targetX: Int, targetY: Int): CompletionStage<Void> {
+    suspend fun move(actor: PlayerActor, targetX: Int, targetY: Int) {
         // --8<-- [start:doc-zw-move]
         val decision = ZoneWorldSpec.validateMove(actor.x, actor.y, targetX, targetY)
-        if (!decision.accepted)
-            return if (actor.isBot) CompletableFuture.completedFuture(null)
-            else
+        if (!decision.accepted) {
+            if (!actor.isBot)
                 actor.send(
                     Messages.MoveRejectedNotify(decision.reason ?: "Rejected", actor.x, actor.y)
                 )
+            return
+        }
         val targetZone = ZoneWorldSpec.zoneOf(targetX, targetY)
         if (!decision.zoneChanged) {
             actor.updatePosition(targetX, targetY)
@@ -562,15 +546,16 @@ class ZoneSpot(
                     context.spotId(),
                     Messages.UpdatePositionMsg(actor.actorId, targetX, targetY, actor.isBot),
                 )
+                // #895: Spot outbound fanout has no Kotlin wrapper in the spec.
                 .submit()
-            return if (actor.isBot) CompletableFuture.completedFuture(null)
-            else
-                actors
+            if (!actor.isBot)
+                kotlinActors
                     .sendToActor(
                         actor.actorId,
                         Messages.DeliverZoneStateMsg(context.spotId(), tickValue, statePlayers()),
                     )
-                    .submit()
+                    .await()
+            return
         }
         // --8<-- [start:doc-zw-zone-change]
         actor.prepareMove(targetX, targetY, targetZone)
@@ -594,16 +579,14 @@ class ZoneSpot(
         println(
             "zone transfer requested actor=${actor.actorId} from=${context.spotId()} to=$targetZone node=${topology.nodeValue()}"
         )
-        return CompletableFuture.completedFuture(null)
+        return
         // --8<-- [end:doc-zw-move]
     }
 
-    fun crashProbe(actor: PlayerActor, targetX: Int, targetY: Int): CompletionStage<Void> {
+    suspend fun crashProbe(actor: PlayerActor, targetX: Int, targetY: Int) {
         val decision = ZoneWorldSpec.validateMove(actor.x, actor.y, targetX, targetY)
         if (!decision.accepted || !decision.zoneChanged)
-            return CompletableFuture.failedFuture(
-                IllegalArgumentException("Crash probe requires one legal cross-zone move")
-            )
+            throw IllegalArgumentException("Crash probe requires one legal cross-zone move")
         val targetZone = ZoneWorldSpec.zoneOf(targetX, targetY)
         actor.prepareCrashProbe(targetX, targetY, targetZone)
         actor
@@ -622,7 +605,6 @@ class ZoneSpot(
             )
             .timeout(Duration.ofSeconds(30))
             .defer()
-        return CompletableFuture.completedFuture(null)
     }
 
     fun applyPosition(update: Messages.UpdatePositionMsg) {
@@ -630,12 +612,9 @@ class ZoneSpot(
     }
 
     // --8<-- [start:doc-zw-state-push]
-    fun deliverState(
-        actor: PlayerActor,
-        message: Messages.DeliverZoneStateMsg,
-    ): CompletionStage<Void> {
-        if (residents[actor.actorId] !== actor) return CompletableFuture.completedFuture(null)
-        return actor.send(Messages.ZoneStateNotify(message.zoneId, message.tick, message.players))
+    suspend fun deliverState(actor: PlayerActor, message: Messages.DeliverZoneStateMsg) {
+        if (residents[actor.actorId] !== actor) return
+        actor.send(Messages.ZoneStateNotify(message.zoneId, message.tick, message.players))
     }
 
     // --8<-- [end:doc-zw-state-push]
@@ -645,7 +624,7 @@ class ZoneSpot(
             borders[event.fromZoneId] = BorderSnapshot(event.tick, event.players.toList())
     }
 
-    fun announce(message: Messages.DeliverAnnounceMsg) {
+    suspend fun announce(message: Messages.DeliverAnnounceMsg) {
         println(
             "zone spot: announcement delivered zone=${context.spotId()} id=${message.announcementId}"
         )
@@ -667,7 +646,7 @@ class ZoneSpot(
     }
 
     // --8<-- [start:doc-zw-border-publish]
-    private fun publishBorders() {
+    private suspend fun publishBorders() {
         ZoneWorldSpec.adjacentZones(context.spotId()).forEach { target ->
             val players =
                 residents.values
@@ -681,6 +660,7 @@ class ZoneSpot(
                     ZoneWorldNames.borderTopic(context.spotId(), target),
                     Messages.ZoneBorderEvent(context.spotId(), target, tickValue, players),
                 )
+                // #895: Spot outbound fanout has no Kotlin wrapper in the spec.
                 .submit()
         }
     }
@@ -688,60 +668,63 @@ class ZoneSpot(
 }
 
 @ZLinkHandlerGroup(ZoneWorldNames.ZONE_CHANNEL)
-class ZoneMoveHandler {
+class ZoneMoveHandler :
+    ZLinkSuspendingSpotActorSendHandler<ZoneSpot, PlayerActor, Messages.MoveMsg> {
     @ZLinkSpotActorSend
-    fun handle(
+    override suspend fun handle(
         spot: ZoneSpot,
         actor: PlayerActor,
         context: ZLinkMessageContext,
         message: Messages.MoveMsg,
-    ): CompletionStage<Void> = spot.move(actor, message.x, message.y)
+    ) = spot.move(actor, message.x, message.y)
 }
 
 @ZLinkHandlerGroup(ZoneWorldNames.ZONE_CHANNEL)
-class ZoneBotMoveHandler {
+class ZoneBotMoveHandler :
+    ZLinkSuspendingSpotActorSendHandler<ZoneSpot, PlayerActor, Messages.BotTickMsg> {
     @ZLinkSpotActorSend
-    fun handle(
+    override suspend fun handle(
         spot: ZoneSpot,
         actor: PlayerActor,
         context: ZLinkMessageContext,
         message: Messages.BotTickMsg,
-    ): CompletionStage<Void> {
+    ) {
         val x = actor.x + actor.dirX * ZoneWorldSpec.BOT_STEP
         val y = actor.y + actor.dirY * ZoneWorldSpec.BOT_STEP
         if (!ZoneWorldSpec.validateMove(actor.x, actor.y, x, y).accepted) {
             actor.reverseDirection()
-            return CompletableFuture.completedFuture(null)
+            return
         }
         return spot.move(actor, x, y)
     }
 }
 
 @ZLinkHandlerGroup(ZoneWorldNames.ZONE_CHANNEL)
-class ZoneJoinHandler {
+class ZoneJoinHandler :
+    ZLinkSuspendingSpotActorSendHandler<ZoneSpot, PlayerActor, Messages.JoinWorldMsg> {
     @ZLinkSpotActorSend
-    fun handle(
+    override suspend fun handle(
         spot: ZoneSpot,
         actor: PlayerActor,
         context: ZLinkMessageContext,
         message: Messages.JoinWorldMsg,
-    ): CompletionStage<Void> {
+    ) {
         if (actor.pending) {
-            return CompletableFuture.failedFuture(IllegalStateException("Zone actor is not ready"))
+            throw IllegalStateException("Zone actor is not ready")
         }
         return actor.send(Messages.JoinWorldNotify(actor.actorId, actor.zoneId, actor.x, actor.y))
     }
 }
 
 class EntryZoneJoinHandler :
-    ZLinkEntrySpotActorSendHandler<ZoneEntrySpot, PlayerActor, Messages.JoinWorldMsg> {
-    override fun handle(
+    ZLinkSuspendingEntrySpotActorSendHandler<ZoneEntrySpot, PlayerActor, Messages.JoinWorldMsg> {
+    override suspend fun handle(
         entrySpot: ZoneEntrySpot,
         actor: PlayerActor,
         context: ZLinkMessageContext,
-        request: Messages.JoinWorldMsg,
-    ): CompletionStage<Void> {
-        require(actor.actorId == request.playerId) { "Join player does not match the actor" }
+        message: Messages.JoinWorldMsg,
+    ) {
+        require(actor.actorId == message.playerId) { "Join player does not match the actor" }
         actor.prepareEntry(ZoneWorldSpec.SPAWN_X, ZoneWorldSpec.SPAWN_Y, false, 0, 0)
         val zone = ZoneWorldSpec.zoneOf(ZoneWorldSpec.SPAWN_X, ZoneWorldSpec.SPAWN_Y)
         actor
@@ -760,27 +743,24 @@ class EntryZoneJoinHandler :
             )
             .timeout(Duration.ofSeconds(10))
             .defer()
-        return CompletableFuture.completedFuture(null)
     }
 }
 
 class EntryZoneEnterWorldHandler :
-    ZLinkEntrySpotActorRequestHandler<
+    ZLinkSuspendingEntrySpotActorRequestHandler<
         ZoneEntrySpot,
         PlayerActor,
         Messages.EnterWorldReq,
         Messages.EnterWorldRes,
     > {
-    override fun handle(
+    override suspend fun handle(
         entrySpot: ZoneEntrySpot,
         actor: PlayerActor,
         context: ZLinkMessageContext,
         request: Messages.EnterWorldReq,
-    ): CompletionStage<Messages.EnterWorldRes> {
+    ): Messages.EnterWorldRes {
         if (!ZoneWorldSpec.inRange(request.x, request.y))
-            return CompletableFuture.completedFuture(
-                Messages.EnterWorldRes("", request.x, request.y, "OutOfRange")
-            )
+            return Messages.EnterWorldRes("", request.x, request.y, "OutOfRange")
         // --8<-- [start:doc-zw-entry-join]
         actor.prepareEntry(request.x, request.y, request.isBot, request.dirX, request.dirY)
         val zone = ZoneWorldSpec.zoneOf(request.x, request.y)
@@ -800,60 +780,53 @@ class EntryZoneEnterWorldHandler :
             )
             .defer()
         // --8<-- [end:doc-zw-entry-join]
-        return CompletableFuture.completedFuture(Messages.EnterWorldRes(zone, request.x, request.y))
+        return Messages.EnterWorldRes(zone, request.x, request.y)
     }
 }
 
 @ZLinkHandlerGroup(ZoneWorldNames.ZONE_CHANNEL)
-class DeliverZoneStateHandler {
+class DeliverZoneStateHandler :
+    ZLinkSuspendingSpotActorSendHandler<ZoneSpot, PlayerActor, Messages.DeliverZoneStateMsg> {
     @ZLinkSpotActorSend
-    fun handle(
+    override suspend fun handle(
         spot: ZoneSpot,
         actor: PlayerActor,
         context: ZLinkMessageContext,
         message: Messages.DeliverZoneStateMsg,
-    ): CompletionStage<Void> = spot.deliverState(actor, message)
+    ) = spot.deliverState(actor, message)
 }
 
 @ZLinkHandlerGroup(ZoneWorldNames.ZONE_CHANNEL)
-class UpdatePositionHandler : ZLinkSpotPacketHandler<ZoneSpot, Messages.UpdatePositionMsg> {
-    override fun handle(
-        spot: ZoneSpot,
-        message: Messages.UpdatePositionMsg,
-    ): CompletionStage<Void> {
+class UpdatePositionHandler :
+    ZLinkSuspendingSpotPacketHandler<ZoneSpot, Messages.UpdatePositionMsg> {
+    override suspend fun handle(spot: ZoneSpot, message: Messages.UpdatePositionMsg) {
         spot.applyPosition(message)
-        return CompletableFuture.completedFuture(null)
     }
 }
 
 @ZLinkHandlerGroup(ZoneWorldNames.ZONE_CHANNEL)
-class DeliverAnnouncementHandler : ZLinkSpotPacketHandler<ZoneSpot, Messages.DeliverAnnounceMsg> {
-    override fun handle(
-        spot: ZoneSpot,
-        message: Messages.DeliverAnnounceMsg,
-    ): CompletionStage<Void> {
+class DeliverAnnouncementHandler :
+    ZLinkSuspendingSpotPacketHandler<ZoneSpot, Messages.DeliverAnnounceMsg> {
+    override suspend fun handle(spot: ZoneSpot, message: Messages.DeliverAnnounceMsg) {
         spot.announce(message)
-        return CompletableFuture.completedFuture(null)
     }
 }
 
 class ZoneTickHandler(private val topology: SampleTopology, private val routes: ZLinkRouteClient) :
-    ZLinkSpotTimerHandler<ZoneSpot> {
-    override fun handle(spot: ZoneSpot, tick: ZLinkTimerTick): CompletionStage<Void> {
-        val operation =
-            try {
-                val fault = topology.faultTickZone
-                if (
-                    (fault == "*" || fault == spot.context().spotId()) &&
-                        faultInjected.compareAndSet(false, true)
-                ) {
-                    error("injected tick failure for ZW-C4. zone=${spot.context().spotId()}")
-                }
-                spot.tick()
-            } catch (error: RuntimeException) {
-                CompletableFuture.failedFuture(error)
+    ZLinkSuspendingSpotTimerHandler<ZoneSpot> {
+    private val kotlinRoutes = routes.kotlin()
+
+    override suspend fun handle(spot: ZoneSpot, tick: ZLinkTimerTick) {
+        try {
+            val fault = topology.faultTickZone
+            if (
+                (fault == "*" || fault == spot.context().spotId()) &&
+                    faultInjected.compareAndSet(false, true)
+            ) {
+                error("injected tick failure for ZW-C4. zone=${spot.context().spotId()}")
             }
-        return operation.exceptionallyCompose { error ->
+            spot.tick()
+        } catch (error: RuntimeException) {
             val report =
                 Messages.ReportSpotEventMsg(
                     topology.nodeValue(),
@@ -861,11 +834,11 @@ class ZoneTickHandler(private val topology: SampleTopology, private val routes: 
                     "spot=${spot.context().spotId()}; timer=zone-tick; detail=${error.message}",
                     Instant.now().toString(),
                 )
-            routes
-                .sendToChannel(ZoneWorldNames.REPORT_CHANNEL, report)
-                .submit()
-                .handle { _, _ -> null }
-                .thenCompose { CompletableFuture.failedFuture(error) }
+            try {
+                kotlinRoutes.sendToChannel(ZoneWorldNames.REPORT_CHANNEL, report).await()
+            } finally {
+                throw error
+            }
         }
     }
 
@@ -874,50 +847,60 @@ class ZoneTickHandler(private val topology: SampleTopology, private val routes: 
     }
 }
 
-class ZoneBotTickHandler : ZLinkSpotTimerHandler<ZoneSpot> {
-    override fun handle(spot: ZoneSpot, tick: ZLinkTimerTick): CompletionStage<Void> =
-        spot.botTick()
+class ZoneBotTickHandler : ZLinkSuspendingSpotTimerHandler<ZoneSpot> {
+    override suspend fun handle(spot: ZoneSpot, tick: ZLinkTimerTick) = spot.botTick()
 }
 
 @ZLinkHandlerGroup(ZoneWorldNames.ZONE_CHANNEL)
-class ProbeHandlers {
+class ProbeRequestHandler :
+    ZLinkSuspendingSpotActorRequestHandler<
+        ZoneSpot,
+        PlayerActor,
+        Messages.MessageFollowProbeReq,
+        Messages.MessageFollowProbeRes,
+    > {
     @ZLinkSpotActorRequest
-    fun request(
+    override suspend fun handle(
         spot: ZoneSpot,
         actor: PlayerActor,
         context: ZLinkMessageContext,
         request: Messages.MessageFollowProbeReq,
-    ): CompletionStage<Messages.MessageFollowProbeRes> {
+    ): Messages.MessageFollowProbeRes {
         println(
             "message-follow probe handled. actor=${actor.actorId}, probe=${request.probeId}, " +
                 "payload=${HexFormat.of().withUpperCase().formatHex(request.payload)}"
         )
-        return CompletableFuture.completedFuture(
-            Messages.MessageFollowProbeRes(request.probeId, request.payload)
-        )
+        return Messages.MessageFollowProbeRes(request.probeId, request.payload)
     }
+}
 
+@ZLinkHandlerGroup(ZoneWorldNames.ZONE_CHANNEL)
+class ProbeSendHandler :
+    ZLinkSuspendingSpotActorSendHandler<ZoneSpot, PlayerActor, Messages.MessageFollowProbeMsg> {
     @ZLinkSpotActorSend
-    fun send(
+    override suspend fun handle(
         spot: ZoneSpot,
         actor: PlayerActor,
         context: ZLinkMessageContext,
         message: Messages.MessageFollowProbeMsg,
-    ): CompletionStage<Void> {
+    ) {
         println(
             "message-follow probe one-way handled. actor=${actor.actorId}, probe=${message.probeId}, " +
                 "payload=${HexFormat.of().withUpperCase().formatHex(message.payload)}"
         )
-        return CompletableFuture.completedFuture(null)
     }
+}
 
+@ZLinkHandlerGroup(ZoneWorldNames.ZONE_CHANNEL)
+class ProbeCrashHandler :
+    ZLinkSuspendingSpotActorSendHandler<ZoneSpot, PlayerActor, Messages.CrashRelocationProbeMsg> {
     @ZLinkSpotActorSend
-    fun crash(
+    override suspend fun handle(
         spot: ZoneSpot,
         actor: PlayerActor,
         context: ZLinkMessageContext,
         message: Messages.CrashRelocationProbeMsg,
-    ): CompletionStage<Void> = spot.crashProbe(actor, message.x, message.y)
+    ) = spot.crashProbe(actor, message.x, message.y)
 }
 
 // --8<-- [start:doc-zw-border-subscribe]
@@ -936,42 +919,57 @@ class BorderSubscriptionHandlers {
                 else -> error("unknown border route: $fromZoneId -> $toZoneId")
             }
 
-        fun apply(spot: ZoneSpot, event: Messages.ZoneBorderEvent): CompletionStage<Void> {
+        suspend fun apply(spot: ZoneSpot, event: Messages.ZoneBorderEvent) {
             spot.applyBorder(event)
-            return CompletableFuture.completedFuture(null)
         }
     }
 
-    class NorthWestToNorthEast : ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
-        override fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) = apply(spot, event)
+    class NorthWestToNorthEast :
+        ZLinkSuspendingSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
+        override suspend fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) =
+            apply(spot, event)
     }
 
-    class NorthWestToSouthWest : ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
-        override fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) = apply(spot, event)
+    class NorthWestToSouthWest :
+        ZLinkSuspendingSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
+        override suspend fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) =
+            apply(spot, event)
     }
 
-    class NorthEastToNorthWest : ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
-        override fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) = apply(spot, event)
+    class NorthEastToNorthWest :
+        ZLinkSuspendingSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
+        override suspend fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) =
+            apply(spot, event)
     }
 
-    class NorthEastToSouthEast : ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
-        override fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) = apply(spot, event)
+    class NorthEastToSouthEast :
+        ZLinkSuspendingSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
+        override suspend fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) =
+            apply(spot, event)
     }
 
-    class SouthWestToNorthWest : ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
-        override fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) = apply(spot, event)
+    class SouthWestToNorthWest :
+        ZLinkSuspendingSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
+        override suspend fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) =
+            apply(spot, event)
     }
 
-    class SouthWestToSouthEast : ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
-        override fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) = apply(spot, event)
+    class SouthWestToSouthEast :
+        ZLinkSuspendingSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
+        override suspend fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) =
+            apply(spot, event)
     }
 
-    class SouthEastToNorthEast : ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
-        override fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) = apply(spot, event)
+    class SouthEastToNorthEast :
+        ZLinkSuspendingSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
+        override suspend fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) =
+            apply(spot, event)
     }
 
-    class SouthEastToSouthWest : ZLinkSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
-        override fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) = apply(spot, event)
+    class SouthEastToSouthWest :
+        ZLinkSuspendingSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
+        override suspend fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) =
+            apply(spot, event)
     }
 }
 
@@ -982,28 +980,22 @@ class WorldAnnounceSubscriber(
     private val routes: ZLinkRouteClient,
     private val topology: SampleTopology,
     private val census: NodeCensus,
-) : ZLinkFanoutHandler<Messages.WorldAnnounceEvent> {
-    override fun handle(
+) : ZLinkSuspendingPublishHandler<Messages.WorldAnnounceEvent> {
+    private val kotlinRoutes = routes.kotlin()
+
+    override suspend fun handle(
         message: Messages.WorldAnnounceEvent,
         context: ZLinkPublishMessageContext,
-    ): CompletionStage<Void> {
+    ) {
         println(
             "fanout subscriber received announcement node=${topology.nodeValue()} id=${message.announcementId}"
         )
-        if (topology.isSubscriberOnly()) return CompletableFuture.completedFuture(null)
-        var send: CompletionStage<Void> = CompletableFuture.completedFuture(null)
+        if (topology.isSubscriberOnly()) return
         census.zoneIds().forEach { zone ->
-            send =
-                send.thenCompose {
-                    routes
-                        .sendToSpot(
-                            zone,
-                            Messages.DeliverAnnounceMsg(message.announcementId, message.text),
-                        )
-                        .submit()
-                }
+            kotlinRoutes
+                .sendToSpot(zone, Messages.DeliverAnnounceMsg(message.announcementId, message.text))
+                .await()
         }
-        return send
     }
 }
 
@@ -1014,20 +1006,17 @@ class NodeMaintenanceSubscriber(
     private val store: MaintenanceStore,
     private val topology: SampleTopology,
     private val statusReporter: ObjectProvider<ZoneStatusReporter>,
-) : ZLinkFanoutHandler<Messages.NodeMaintenanceChangedEvent> {
-    override fun handle(
+) : ZLinkSuspendingPublishHandler<Messages.NodeMaintenanceChangedEvent> {
+    override suspend fun handle(
         message: Messages.NodeMaintenanceChangedEvent,
         context: ZLinkPublishMessageContext,
-    ): CompletionStage<Void> {
+    ) {
         state.apply(message.nodeId, message.enabled)
         store.set(message.nodeId, message.enabled)
         if (topology.nodeValue() == message.nodeId) {
             println("maintenance state node=${message.nodeId} enabled=${message.enabled}")
-            statusReporter.ifAvailable?.let {
-                return it.reportNow()
-            }
+            statusReporter.ifAvailable?.let { it.reportNow() }
         }
-        return CompletableFuture.completedFuture(null)
     }
 }
 // --8<-- [end:doc-zw-maintenance-subscriber]

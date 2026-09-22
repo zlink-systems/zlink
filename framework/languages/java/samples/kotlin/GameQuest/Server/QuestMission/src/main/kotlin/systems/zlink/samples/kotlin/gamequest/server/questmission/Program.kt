@@ -91,6 +91,7 @@ class Program {
                 )
             )
             options.useCoroutineHandlers(Dispatchers.Default)
+            // #895: configuration package scanning has no Kotlin form in the spec.
             options.addHandlersFromPackageOf(Program::class.java)
             options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 
@@ -155,7 +156,7 @@ private fun startHttp(
     server.createContext("/self-check/owner/") { exchange ->
         val parts = exchange.requestURI.path.split("/")
         val playerId = parts.getOrElse(3) { "" }
-        routes.sendToSpot(playerId, ClosePlayerQuestMsg()).submit().toCompletableFuture().join()
+        routes.sendToSpot(playerId, ClosePlayerQuestMsg()).submit_sync()
         writeJson(exchange, 202, mapOf("closed" to true, "owner" to true))
     }
     server.createContext("/self-check/events") { exchange ->
@@ -210,6 +211,7 @@ class PlayerQuestSpot(
 }
 
 // --8<-- [start:doc-gq-apply-handler]
+// #895: the spec has no Kotlin handler form for an entry/instance Spot packet handler.
 class GameplayMsgRouteHandler(private val actors: ZLinkActorClient) :
     ZLinkSpotPacketHandler<PlayerQuestSpot, GameplayMsg> {
     override fun handle(spot: PlayerQuestSpot, request: GameplayMsg): CompletionStage<Void> {
@@ -220,6 +222,7 @@ class GameplayMsgRouteHandler(private val actors: ZLinkActorClient) :
                 "gamequest-mission processed player=${request.playerId} quest=${progress.questId}"
             )
         }
+        // #895: this entry/instance Spot packet handler has no Kotlin form in the spec.
         actors.sendToActor(request.playerId, processed).submit()
         // --8<-- [end:doc-gq-notify-actor]
         return CompletableFuture.completedFuture(null)
@@ -279,6 +282,7 @@ class SyncQuestProgressHandler(private val store: QuestStore) :
 }
 
 // --8<-- [start:doc-gq-close-handler]
+// #895: the spec has no Kotlin handler form for an entry/instance Spot packet handler.
 class ClosePlayerQuestSpotHandler : ZLinkSpotPacketHandler<PlayerQuestSpot, ClosePlayerQuestMsg> {
     override fun handle(
         spot: PlayerQuestSpot,

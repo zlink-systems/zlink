@@ -1,7 +1,6 @@
 package systems.zlink.tutorial.client
 
 import java.time.Duration
-import kotlinx.coroutines.future.await
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
@@ -11,16 +10,18 @@ import org.springframework.web.bind.annotation.RestController
 import systems.zlink.framework.actors.ZLinkActorClient
 import systems.zlink.framework.actors.ZLinkActorCreateResult
 import systems.zlink.framework.actors.ZLinkActorManager
+import systems.zlink.framework.kotlin.kotlin
+import systems.zlink.framework.kotlin.requestToActor
 import systems.zlink.tutorial.shared.ChangeNickname
 import systems.zlink.tutorial.shared.CreatePlayer
 import systems.zlink.tutorial.shared.GetPlayer
 import systems.zlink.tutorial.shared.PlayerInfo
 
 @RestController
-class PlayerActorEndpoints(
-    private val playerManager: ZLinkActorManager,
-    private val players: ZLinkActorClient,
-) {
+class PlayerActorEndpoints(playerManager: ZLinkActorManager, players: ZLinkActorClient) {
+
+    private val playerManager = playerManager.kotlin()
+    private val players = players.kotlin()
 
     // --8<-- [start:actor-create-call]
     @PostMapping("/players/{playerId}")
@@ -36,7 +37,6 @@ class PlayerActorEndpoints(
                 .inMesh("game")
                 .request(request)
                 .timeout(Duration.ofSeconds(10))
-                .submit()
                 .await()
 
         return when (result) {
@@ -55,7 +55,7 @@ class PlayerActorEndpoints(
         @RequestBody message: ChangeNickname,
     ): ResponseEntity<Void> {
         // Addressed by player id, like a room is by room id.
-        players.sendToActor(playerId, message).submit().await()
+        players.sendToActor(playerId, message).await()
 
         return ResponseEntity.accepted().build()
     }
@@ -66,9 +66,8 @@ class PlayerActorEndpoints(
     @GetMapping("/players/{playerId}")
     suspend fun getPlayer(@PathVariable playerId: String): PlayerInfo =
         players
-            .requestToActor(playerId, GetPlayer())
+            .requestToActor<PlayerInfo>(playerId, GetPlayer())
             .timeout(Duration.ofSeconds(3))
-            .submit(PlayerInfo::class.java)
             .await()
     // --8<-- [end:actor-request-call]
 }

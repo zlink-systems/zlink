@@ -1,6 +1,6 @@
 package systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zlink
 
-import kotlinx.coroutines.future.await
+import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.framework.spots.ZLinkSpotManager
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.supportchat.server.support.application.ConversationStartReq
@@ -8,9 +8,11 @@ import systems.zlink.samples.kotlin.supportchat.server.support.application.Conve
 import systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zlink.spots.conversationspot.ConversationCreateReq
 
 class FrameworkConversationStarter(private val spots: ZLinkSpotManager) : ConversationStarter {
+    private val kotlinSpots = spots.kotlin()
+
     override suspend fun start(conversationId: String, request: ConversationStartReq) {
         // --8<-- [start:doc-sc-api-open]
-        spots
+        kotlinSpots
             .getOrCreate(conversationId, SampleNames.ConversationSpotType)
             .request(
                 ConversationCreateReq(
@@ -20,7 +22,6 @@ class FrameworkConversationStarter(private val spots: ZLinkSpotManager) : Conver
                     createdAtUnixMs = request.createdAtUnixMs,
                 )
             )
-            .submit()
             .await()
         // --8<-- [end:doc-sc-api-open]
     }

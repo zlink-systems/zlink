@@ -66,11 +66,13 @@ class ServerApplication {
 
         // Finds the handler classes in this package tree. A channel registration
         // then names the group it wants; discovery alone exposes nothing.
+        // #895: configuration package scanning has no Kotlin form in the spec.
         options.addHandlersFromPackageOf(GetPlayerProfileHandler::class.java)
 
         // --8<-- [start:filter-register]
         // Registration order is execution order. Filters wrap handlers this node
         // receives; Spot and Actor handlers are not covered.
+        // #895: handler filters have no Kotlin form in the spec.
         options.useFilter(CallLogFilter::class.java)
         // --8<-- [end:filter-register]
 
@@ -160,6 +162,7 @@ class ServerApplication {
 
         // --8<-- [start:actor-register]
         // One lobby per object server. Newly created players start there.
+        // #895: entry-spot registration has no Kotlin form in the spec.
         objects.addEntrySpot(LobbySpot::class.java)
 
         // Nodes that register "player" are candidates to host one.
@@ -179,8 +182,11 @@ class ServerApplication {
             .addStreamNode("client-stream")
             .bind("tcp://0.0.0.0:7621")
             .enableActorDispatch()
+            // #895: session registration has no Kotlin form in the spec.
             .registerSession(GameSession::class.java)
+            // #895: session packet registration has no Kotlin form in the spec.
             .addSessionPacketHandler(PingHandler::class.java)
+            // #895: session packet registration has no Kotlin form in the spec.
             .addSessionPacketHandler(AuthenticateHandler::class.java)
         // --8<-- [end:stream-register]
     }

@@ -90,8 +90,8 @@ echo "tutorial-http=ok"
 **Windows — PowerShell 7**
 
 ```powershell title="windows"
-$profile = Invoke-RestMethod -Uri 'http://127.0.0.1:5280/players/p1/profile'
-if ($profile.playerId -ne 'p1') { throw "unexpected profile: $($profile | ConvertTo-Json -Compress)" }
+$playerProfile = Invoke-RestMethod -Uri 'http://127.0.0.1:5280/players/p1/profile'
+if ($playerProfile.playerId -ne 'p1') { throw "unexpected profile: $($playerProfile | ConvertTo-Json -Compress)" }
 Write-Output 'tutorial-http=ok'
 ```
 

@@ -1,11 +1,11 @@
 package systems.zlink.tutorial.server.actors
 
-import kotlinx.coroutines.future.await
 import systems.zlink.framework.ZLinkMessageContext
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind
 import systems.zlink.framework.errors.ZLinkFrameworkException
 import systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpotActorRequestHandler
 import systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpotActorSendHandler
+import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.tutorial.server.spots.LobbySpot
 import systems.zlink.tutorial.shared.ChangeNickname
 import systems.zlink.tutorial.shared.GetPlayer
@@ -32,7 +32,7 @@ class ChangeNicknameHandler :
         // on an HTTP path with no bound connection, where push ends with InvalidOperation.
         // Rename is already complete, so only that failure is discarded.
         try {
-            actor.context().boundSession().send(NicknameChanged(actor.nickname)).submit().await()
+            actor.context().boundSession().kotlin().send(NicknameChanged(actor.nickname)).await()
         } catch (error: ZLinkFrameworkException) {
             if (error.kind() != ZLinkFrameworkErrorKind.INVALID_OPERATION) {
                 throw error

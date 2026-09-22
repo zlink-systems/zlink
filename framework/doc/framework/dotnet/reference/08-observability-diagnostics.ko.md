@@ -31,7 +31,7 @@ services.AddZLinkFramework(options =>
 | --- | --- | --- |
 | `.SetLevel(ZLinkDiagnosticsLevel)` | exact interface에 명시된 기본값 없음(`Off`/`Errors`/`Normal`/`Detailed` 중 하나) | 기록할 상세도 |
 | `.SetSampleRate(double)` | exact interface에 명시된 기본값 없음 | `0.0`..`1.0`. 범위를 벗어나면 `ArgumentOutOfRangeException` |
-| `.IncludeMessageSizes(bool)` | exact interface에 명시된 기본값 없음 | Payload 크기 분포를 telemetry에 포함할지 여부. Payload 내용 자체는 절대 기록하지 않는다 |
+| `.IncludeMessageSizes(bool)` | 꺼짐(`false`) — [message-flow tracing §4](../../common/spec/server/06-observability/03-message-flow-tracing.ko.md#4-기록-범위-설정--level과-sampling)이 정한다 | Payload 크기 분포를 telemetry에 포함할지 여부. Payload 내용 자체는 절대 기록하지 않는다 |
 
 각 modifier는 `IZLinkDiagnosticsOptions`를 반환하는 동기 fluent 호출이다 — 반환값 없는 등록이
 아니다.

@@ -47,6 +47,7 @@ class PlayServerApplication {
     @Bean
     fun playFramework(topology: SampleTopology): ZLinkFrameworkConfigurer =
         ZLinkFrameworkConfigurer { options ->
+            // #895: configuration package scanning has no Kotlin form in the spec.
             options.addHandlersFromPackageOf(PlayServerApplication::class.java)
             options.useCoroutineHandlers(Dispatchers.Default)
             options.configureDispatch { messageFlow(ZLinkMessageFlowLogMode.NORMAL) }
@@ -67,6 +68,7 @@ class PlayServerApplication {
             node
                 .objects()
                 .server()
+                // #895: entry-spot registration has no Kotlin form in the spec.
                 .addEntrySpot(BingoEntrySpot::class.java)
                 // --8<-- [start:doc-execution-mode]
                 // SPOT_WIDE is the default. Naming it here keeps the choice visible:
@@ -76,6 +78,7 @@ class PlayServerApplication {
                     factory.relocationCoordinationMode(
                         ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED
                     )
+                    // #895: state preservation configuration has no Kotlin form in the spec.
                     factory.preserveStateWith(BingoRoomRelocationAdapter::class.java)
                 }
                 // --8<-- [end:doc-execution-mode]
@@ -84,6 +87,7 @@ class PlayServerApplication {
                     PlayerActor::class.java,
                     PlayerActorFactory::class.java,
                 ) { factory ->
+                    // #895: state preservation configuration has no Kotlin form in the spec.
                     factory.preserveStateWith(PlayerActorRelocationAdapter::class.java)
                 }
             // --8<-- [end:doc-bingo-play-register]

@@ -1,9 +1,10 @@
 package systems.zlink.samples.kotlin.shoppingmall.server.commerceapi
 
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.future.await
 import org.springframework.stereotype.Component
 import systems.zlink.framework.channels.ZLinkClient
+import systems.zlink.framework.kotlin.kotlin
+import systems.zlink.framework.kotlin.requestToChannel
 import systems.zlink.samples.kotlin.shoppingmall.server.configuration.CommerceStore
 import systems.zlink.samples.kotlin.shoppingmall.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.shoppingmall.server.configuration.SampleTimings
@@ -25,6 +26,7 @@ class StartOrderUseCase(
     topology: SampleTopology,
 ) {
     private val instanceId = topology.role().instanceId
+    private val kotlinChannels = channels.kotlin()
 
     suspend fun execute(request: StartOrderReq): StartOrderRes {
         // --8<-- [start:doc-sm-api-start]
@@ -107,10 +109,9 @@ class StartOrderUseCase(
         var lastError: RuntimeException? = null
         for (attempt in 1..SampleTimings.MaxChannelAttempts) {
             try {
-                return channels
-                    .requestToChannel(channel, request)
+                return kotlinChannels
+                    .requestToChannel<StartOrderRes>(channel, request)
                     .timeout(SampleTimings.RequestTimeout)
-                    .submit(StartOrderRes::class.java)
                     .await()
             } catch (error: RuntimeException) {
                 lastError = error

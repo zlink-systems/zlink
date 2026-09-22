@@ -36,6 +36,7 @@ class ApiApplication {
             val api = topology.api()
             val channelEndpoint = URI.create(api.channelEndpoint)
             options.configureLocations()
+            // #895: configuration package scanning has no Kotlin form in the spec.
             options.addHandlersFromPackageOf(ApiApplication::class.java)
             options.useCoroutineHandlers(Dispatchers.Default)
             options.configureDispatch { messageFlow(ZLinkMessageFlowLogMode.NORMAL) }
