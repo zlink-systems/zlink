@@ -134,10 +134,27 @@ class JslibConnector {
   }
 
   on(name, handler) {
+    return this.registerHandler(name, { handler, actorHandle: undefined });
+  }
+
+  onActor(actorHandle, name, handler) {
+    return this.registerHandler(name, { handler, actorHandle });
+  }
+
+  registerHandler(name, registration) {
     this.ensureObserved(name);
     const handlers = this.handlers.get(name) ?? [];
-    handlers.push(handler);
+    handlers.push(registration);
     this.handlers.set(name, handlers);
+    return {
+      dispose: () => {
+        const index = handlers.indexOf(registration);
+        if (index >= 0) handlers.splice(index, 1);
+        if (handlers.length === 0 && this.handlers.get(name) === handlers) {
+          this.handlers.delete(name);
+        }
+      }
+    };
   }
 
   onActorBound(handler) {
@@ -259,7 +276,7 @@ class JslibConnector {
         };
         const handlers = this.handlers.get(message.name);
         if (handlers && handlers.length > 0) {
-          this.dispatchQueue.push({ kind: 'message', handlers: [...handlers], message });
+          this.dispatchOrQueue({ kind: 'message', message, actorHandle: descriptor.actorHandle });
           return;
         }
 
@@ -307,7 +324,7 @@ class JslibConnector {
   async runDispatchItem(item) {
     switch (item.kind) {
       case 'message':
-        for (const handler of item.handlers) await handler(item.message);
+        await this.runMessageHandlers(item);
         break;
       case 'error':
         this.errors.push(item.error);
@@ -331,6 +348,21 @@ class JslibConnector {
       default:
         this.stateChanges.push(item.change);
     }
+  }
+
+  async runMessageHandlers(item) {
+    const handlers = this.handlers.get(item.message.name) ?? [];
+    const matching = handlers.filter(
+      (registration) => registration.actorHandle === undefined ||
+        registration.actorHandle === item.actorHandle
+    );
+    if (matching.length === 0) {
+      const history = this.received.get(item.message.name) ?? [];
+      history.push(item.message);
+      this.received.set(item.message.name, history);
+      return;
+    }
+    for (const registration of matching) await registration.handler(item.message);
   }
 
   tryTake(name, predicate) {

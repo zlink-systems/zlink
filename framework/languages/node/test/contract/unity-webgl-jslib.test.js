@@ -125,6 +125,32 @@ test('Unity actor boundary carries actorId and preserves stale TypeScript handle
   assert.equal(replacement.requests, 1);
 });
 
+test('Unity Actor On resolves registrations when queued Manual dispatch executes', async () => {
+  const harness = createHarness();
+  const fake = installActorConnector(harness, 'manual');
+  const boundary = new JslibConnector(
+    harness,
+    JSON.stringify({ endpoint: 'ws://actor.test', dispatchMode: 'manual' })
+  );
+  const actor = fake.actor('queued');
+  fake.bind(actor);
+  await boundary.dispatch();
+  const actorHandle = boundary.actorEvents.at(-1).actorHandle;
+  const received = [];
+  const removed = boundary.onActor(
+    actorHandle,
+    'ActorPush',
+    () => received.push('removed')
+  );
+  boundary.onActor(actorHandle, 'ActorPush', () => received.push('active'));
+
+  fake.message('ActorPush', actor, Uint8Array.of(1));
+  boundary.pumpAndTransfer();
+  removed.dispose();
+  await boundary.runDispatchQueue();
+  assert.deepEqual(received, ['active']);
+});
+
 test('Unity C# actor lifecycle dispatch resolves mode and subscriptions at execution time', () => {
   const source = fs.readFileSync(
     path.join(packageRoot, 'Runtime/ZlinkStreamWebGlConnector.cs'),

@@ -161,9 +161,17 @@ export class ZlinkStreamReceivedMessages {
    */
   resetForNewConnection(): void {
     this.receivedCounts.clear();
+    // Messages belong to the connection that received them, but callbacks are
+    // already-submitted lifecycle work. In Manual mode a reconnect can finish
+    // before the application next pumps dispatch; keep those callbacks so the
+    // old connection's unbound/state/disconnected sequence remains observable.
+    const submittedCallbacks = this.queue
+      .slice(this.queueHead)
+      .filter((item): item is QueuedCallback => item?.kind === 'callback');
     this.queue.length = 0;
+    this.queue.push(...submittedCallbacks);
     this.queueHead = 0;
-    this.queuedCount = 0;
+    this.queuedCount = submittedCallbacks.length;
   }
 
   /**

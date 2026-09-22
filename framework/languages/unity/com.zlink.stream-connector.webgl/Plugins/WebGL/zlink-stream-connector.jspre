@@ -1890,9 +1890,11 @@ var ZlinkStreamConnectorBundle = (() => {
      */
     resetForNewConnection() {
       this.receivedCounts.clear();
+      const submittedCallbacks = this.queue.slice(this.queueHead).filter((item) => (item == null ? void 0 : item.kind) === "callback");
       this.queue.length = 0;
+      this.queue.push(...submittedCallbacks);
       this.queueHead = 0;
-      this.queuedCount = 0;
+      this.queuedCount = submittedCallbacks.length;
     }
     /**
      * Releases every registered wait surface because the connection it was
@@ -2641,8 +2643,8 @@ var ZlinkStreamConnectorBundle = (() => {
       });
       this.receivedMessages.connectionEnded();
       this.actors.closeAll(signal);
-      void this.setState("closed" /* Closed */, void 0, signal);
-      this.publishDisconnectedWithoutWaiting(signal);
+      this.queueState("closed" /* Closed */, void 0, signal);
+      this.queueDisconnected(signal);
       if (errors.length === 1) throw errors[0];
       if (errors.length > 1) throw new AggregateError(errors, "Stream connector close failed.");
     }
@@ -2891,11 +2893,8 @@ var ZlinkStreamConnectorBundle = (() => {
      */
     async announceDisconnect(error) {
       if (this.closeRequested) return;
-      const announce = this.claimDisconnectedPublish();
-      void this.setState("disconnected" /* Disconnected */, error);
-      if (announce) {
-        void this.events.publishDisconnected().catch(() => void 0);
-      }
+      this.queueState("disconnected" /* Disconnected */, error);
+      this.queueDisconnected();
       if (this.shouldReconnect()) {
         queueMicrotask(() => {
           void this.connect().catch(() => void 0);
@@ -2943,16 +2942,35 @@ var ZlinkStreamConnectorBundle = (() => {
     publishDisconnectedWithoutWaiting(signal) {
       void this.publishDisconnectedOnce(signal).catch(() => void 0);
     }
+    queueDisconnected(signal) {
+      if (!this.claimDisconnectedPublish()) return;
+      this.receivedMessages.enqueueCallback(() => {
+        void this.events.publishDisconnected(signal).catch(() => void 0);
+      });
+    }
+    queueState(current, error, signal) {
+      const change = this.transitionState(current, error);
+      if (change === void 0) return;
+      this.receivedMessages.enqueueCallback(() => {
+        void this.publishStateChange(change, signal).catch(() => void 0);
+      });
+    }
     async setState(current, error, signal) {
+      const change = this.transitionState(current, error);
+      if (change === void 0) return;
+      await this.publishStateChange(change, signal);
+    }
+    transitionState(current, error) {
       const previous = this.currentState;
       this.currentState = current;
       if (previous === current && error === void 0) {
-        return;
+        return void 0;
       }
-      await this.events.publishStateChanged({ previous, current, error }, signal);
-      if (error !== void 0) {
-        await this.events.publishError(error, signal);
-      }
+      return { previous, current, error };
+    }
+    async publishStateChange(change, signal) {
+      await this.events.publishStateChanged(change, signal);
+      if (change.error !== void 0) await this.events.publishError(change.error, signal);
     }
   };
 

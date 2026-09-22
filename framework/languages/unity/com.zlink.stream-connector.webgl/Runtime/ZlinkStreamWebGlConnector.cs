@@ -709,27 +709,46 @@ namespace Systems.Zlink.Stream.Connector.Runtime
                 payload,
                 node.TextOf("actorId")
             );
+            var actorHandle = node.IntOf("actorHandle", 0);
+            _actorsByHandle.TryGetValue(actorHandle, out var messageActor);
 
             // Same rule as the native connector: a registered handler takes the message,
             // otherwise it waits in the unread history for a wait surface.
             if (_handlers.TryGetValue(name, out var handlers) && handlers.Count > 0)
             {
-                var currentActor = message.ActorId is null ? null : Actor(message.ActorId);
-                var matching = new List<HandlerRegistration>(handlers.Count);
-                foreach (var handler in handlers)
-                {
-                    if (handler.Actor is null || handler.Actor == currentActor)
-                        matching.Add(handler);
-                }
-
-                if (matching.Count > 0)
-                {
-                    DispatchOrQueue(DispatchItem.ForMessage(matching.ToArray(), message));
-                    return;
-                }
+                DispatchOrQueue(DispatchItem.ForMessage(message, messageActor));
+                return;
             }
 
             _received.Record(message);
+        }
+
+        internal async ValueTask InvokeMessageHandlers(
+            ZlinkStreamMessage<ZlinkStreamEncodedPayload> message,
+            ZlinkStreamActor messageActor,
+            CancellationToken cancellationToken
+        )
+        {
+            if (!_handlers.TryGetValue(message.Name, out var handlers))
+            {
+                _received.Record(message);
+                return;
+            }
+
+            var matching = new List<HandlerRegistration>(handlers.Count);
+            foreach (var handler in handlers)
+            {
+                if (handler.Actor is null || handler.Actor == messageActor)
+                    matching.Add(handler);
+            }
+            if (matching.Count == 0)
+            {
+                _received.Record(message);
+                return;
+            }
+
+            foreach (var handler in matching)
+                await handler.Handler(message, cancellationToken);
         }
 
         private void RouteActorBound(string json)
@@ -1303,7 +1322,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime
         private readonly struct DispatchItem
         {
             private readonly int _kind;
-            private readonly HandlerRegistration[] _handlers;
+            private readonly ZlinkStreamActor _messageActor;
             private readonly ZlinkStreamMessage<ZlinkStreamEncodedPayload> _message;
             private readonly ZlinkStreamError _error;
             private readonly ZlinkStreamDisconnected _disconnected;
@@ -1314,7 +1333,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime
 
             private DispatchItem(
                 int kind,
-                HandlerRegistration[] handlers,
+                ZlinkStreamActor messageActor,
                 ZlinkStreamMessage<ZlinkStreamEncodedPayload> message,
                 ZlinkStreamError error,
                 ZlinkStreamDisconnected disconnected,
@@ -1325,7 +1344,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime
             )
             {
                 _kind = kind;
-                _handlers = handlers;
+                _messageActor = messageActor;
                 _message = message;
                 _error = error;
                 _disconnected = disconnected;
@@ -1336,11 +1355,11 @@ namespace Systems.Zlink.Stream.Connector.Runtime
             }
 
             public static DispatchItem ForMessage(
-                HandlerRegistration[] handlers,
-                ZlinkStreamMessage<ZlinkStreamEncodedPayload> message
+                ZlinkStreamMessage<ZlinkStreamEncodedPayload> message,
+                ZlinkStreamActor actor
             )
             {
-                return new DispatchItem(1, handlers, message, null, null, null, null, default);
+                return new DispatchItem(1, actor, message, null, null, null, null, default);
             }
 
             public static DispatchItem ForError(ZlinkStreamError error)
@@ -1389,8 +1408,11 @@ namespace Systems.Zlink.Stream.Connector.Runtime
                 switch (_kind)
                 {
                     case 1:
-                        foreach (var handler in _handlers)
-                            await handler.Handler(_message, cancellationToken);
+                        await connector.InvokeMessageHandlers(
+                            _message,
+                            _messageActor,
+                            cancellationToken
+                        );
                         break;
                     case 2:
                     {

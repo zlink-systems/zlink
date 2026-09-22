@@ -200,8 +200,8 @@ export class ZlinkStreamConnectorLifecycle {
     // connection a wait was observing, and the wait ends with it.
     this.receivedMessages.connectionEnded();
     this.actors.closeAll(signal);
-    void this.setState(ZlinkStreamConnectionState.Closed, undefined, signal);
-    this.publishDisconnectedWithoutWaiting(signal);
+    this.queueState(ZlinkStreamConnectionState.Closed, undefined, signal);
+    this.queueDisconnected(signal);
     if (errors.length === 1) throw errors[0];
     if (errors.length > 1) throw new AggregateError(errors, 'Stream connector close failed.');
   }
@@ -514,11 +514,8 @@ export class ZlinkStreamConnectorLifecycle {
    */
   private async announceDisconnect(error: ZlinkStreamError): Promise<void> {
     if (this.closeRequested) return;
-    const announce = this.claimDisconnectedPublish();
-    void this.setState(ZlinkStreamConnectionState.Disconnected, error);
-    if (announce) {
-      void this.events.publishDisconnected().catch(() => undefined);
-    }
+    this.queueState(ZlinkStreamConnectionState.Disconnected, error);
+    this.queueDisconnected();
     if (this.shouldReconnect()) {
       queueMicrotask(() => {
         void this.connect().catch(() => undefined);
@@ -571,19 +568,62 @@ export class ZlinkStreamConnectorLifecycle {
     void this.publishDisconnectedOnce(signal).catch(() => undefined);
   }
 
+  private queueDisconnected(signal?: AbortSignal): void {
+    if (!this.claimDisconnectedPublish()) return;
+    this.receivedMessages.enqueueCallback(() => {
+      void this.events.publishDisconnected(signal).catch(() => undefined);
+    });
+  }
+
+  private queueState(
+    current: ZlinkStreamConnectionState,
+    error: ZlinkStreamError | undefined,
+    signal?: AbortSignal
+  ): void {
+    const change = this.transitionState(current, error);
+    if (change === undefined) return;
+    this.receivedMessages.enqueueCallback(() => {
+      void this.publishStateChange(change, signal).catch(() => undefined);
+    });
+  }
+
   private async setState(
     current: ZlinkStreamConnectionState,
     error: ZlinkStreamError | undefined,
     signal?: AbortSignal
   ): Promise<void> {
+    const change = this.transitionState(current, error);
+    if (change === undefined) return;
+    await this.publishStateChange(change, signal);
+  }
+
+  private transitionState(
+    current: ZlinkStreamConnectionState,
+    error: ZlinkStreamError | undefined
+  ):
+    | {
+        readonly previous: ZlinkStreamConnectionState;
+        readonly current: ZlinkStreamConnectionState;
+        readonly error?: ZlinkStreamError;
+      }
+    | undefined {
     const previous = this.currentState;
     this.currentState = current;
     if (previous === current && error === undefined) {
-      return;
+      return undefined;
     }
-    await this.events.publishStateChanged({ previous, current, error }, signal);
-    if (error !== undefined) {
-      await this.events.publishError(error, signal);
-    }
+    return { previous, current, error };
+  }
+
+  private async publishStateChange(
+    change: {
+      readonly previous: ZlinkStreamConnectionState;
+      readonly current: ZlinkStreamConnectionState;
+      readonly error?: ZlinkStreamError;
+    },
+    signal?: AbortSignal
+  ): Promise<void> {
+    await this.events.publishStateChanged(change, signal);
+    if (change.error !== undefined) await this.events.publishError(change.error, signal);
   }
 }

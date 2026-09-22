@@ -179,6 +179,7 @@ var ZlinkStreamWebGlRuntime = (function () {
         nextObserverId: 1,
         actorHandles: {},
         actorHandleIds: new WeakMap(),
+        currentActorHandles: {},
         nextActorHandle: 1,
         sink: null,
         pumping: false,
@@ -219,6 +220,7 @@ var ZlinkStreamWebGlRuntime = (function () {
         var actorHandle = state.nextActorHandle++;
         state.actorHandles[actorHandle] = actor;
         state.actorHandleIds.set(actor, actorHandle);
+        state.currentActorHandles[actor.actorId] = actorHandle;
         push(state, {
           type: EVENT_ACTOR_BOUND,
           id: 0,
@@ -229,6 +231,9 @@ var ZlinkStreamWebGlRuntime = (function () {
       }));
       state.subscriptions.push(connector.onActorUnbound(function (actor) {
         var actorHandle = state.actorHandleIds.get(actor);
+        if (state.currentActorHandles[actor.actorId] === actorHandle) {
+          delete state.currentActorHandles[actor.actorId];
+        }
         push(state, {
           type: EVENT_ACTOR_UNBOUND,
           id: 0,
@@ -368,7 +373,8 @@ var ZlinkStreamWebGlRuntime = (function () {
           text: JSON.stringify({
             name: message.name,
             metadata: metadataToObject(message.metadata),
-            actorId: message.actorId || null
+            actorId: message.actorId || null,
+            actorHandle: message.actorId ? state.currentActorHandles[message.actorId] || null : null
           }),
           bytes: message.payload.payload
         });
