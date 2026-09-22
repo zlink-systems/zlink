@@ -8,7 +8,7 @@ name: Framework Tutorial
 # binding을 pack할 필요가 없다. framework-dotnet.yml과 달리 SDK 하나로 끝난다.
 #
 # quickstart(설치부터 첫 응답까지의 최소 project)도 같은 이유로 여기서 빌드한다(#831). C++은
-# tutorial의 bootstrap이 만든 `.zlink/`를 `ZLINK_ROOT`로 재사용해 framework를 두 번 짓지 않는다.
+# tutorial의 bootstrap이 받은 `.zlink/`를 `ZLINK_ROOT`로 재사용해 archive를 두 번 받지 않는다.
 
 on:
   push:
@@ -587,38 +587,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      # bootstrap.cmake resolves the third-party libraries through Conan
-      # (ConanCenter prebuilt binaries, #854). Keep Conan's package cache in
-      # the Actions cache; the key hashes bootstrap.cmake, which pins the
-      # framework version whose conanfile.py owns the dependency list.
-      - name: Install Conan 2
-        run: |
-          pipx install conan==2.32.0
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-      - name: Restore the Conan package cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.conan2/p
-          key: conan-${{ runner.os }}-${{ hashFiles('framework/languages/cpp/tutorial/bootstrap.cmake') }}
-          restore-keys: conan-${{ runner.os }}-
-
-      # The third-party list comes from this checkout's recipe, not the downloaded
-      # archive's, so a recipe change is verified before it ships (ZLINK_CONAN_RECIPE).
       - name: Build the C++ tutorial against the published archives
         id: bootstrap
         working-directory: framework/languages/cpp/tutorial
         run: |
-          cmake -DZLINK_CONAN_RECIPE="${GITHUB_WORKSPACE}/framework/languages/cpp/packaging/conan/conanfile.py" -P bootstrap.cmake
+          cmake -P bootstrap.cmake
           cmake --build build --parallel
 
-      # Saved right after the bootstrap and even when a later step fails: the
-      # ports built here are what the next run must not build again.
+      # Reuse the just-downloaded framework prefix for the quickstart.
       - name: Build and run the C++ quickstart (reusing the tutorial's .zlink)
         working-directory: framework/languages/cpp/quickstart
         run: |
           set -euo pipefail
-          cmake -DZLINK_ROOT="$PWD/../tutorial/.zlink" -DZLINK_CONAN_RECIPE="${GITHUB_WORKSPACE}/framework/languages/cpp/packaging/conan/conanfile.py" -P bootstrap.cmake
+          cmake -DZLINK_ROOT="$PWD/../tutorial/.zlink" -P bootstrap.cmake
           cmake --build build --parallel
           ./build/quickstart_server > server.log 2>&1 &
           ./build/quickstart_client > client.log 2>&1 &

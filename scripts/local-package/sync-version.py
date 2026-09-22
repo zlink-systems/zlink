@@ -327,19 +327,19 @@ FRAMEWORK_SCALAR_FIELDS = (
     FrameworkField(
         "framework/languages/cpp/tutorial/bootstrap.cmake",
         "cpp",
-        "ZLINK_FRAMEWORK_CPP_VERSION (framework source archive the tutorial builds)",
+        "ZLINK_FRAMEWORK_CPP_VERSION (framework prebuilt the tutorial downloads)",
         rf'(set\(ZLINK_FRAMEWORK_CPP_VERSION ")(?P<version>{SEMVER})("\))',
     ),
     FrameworkField(
         "framework/languages/cpp/samples/bootstrap.cmake",
         "cpp",
-        "ZLINK_FRAMEWORK_CPP_VERSION (framework source archive the samples build)",
+        "ZLINK_FRAMEWORK_CPP_VERSION (framework prebuilt the samples download)",
         rf'(set\(ZLINK_FRAMEWORK_CPP_VERSION ")(?P<version>{SEMVER})("\))',
     ),
     FrameworkField(
         "framework/languages/cpp/quickstart/bootstrap.cmake",
         "cpp",
-        "ZLINK_FRAMEWORK_CPP_VERSION (framework source archive the quickstart builds)",
+        "ZLINK_FRAMEWORK_CPP_VERSION (framework prebuilt the quickstart downloads)",
         rf'(set\(ZLINK_FRAMEWORK_CPP_VERSION ")(?P<version>{SEMVER})("\))',
     ),
 )
