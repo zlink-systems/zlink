@@ -18,6 +18,8 @@ title: "Channel 동작 원리 · Kotlin"
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
+이 장은 tutorial의 `Server`·`Client`와 `TicTacToe`·`ZoneWorld` 샘플 디렉터리에서 코드를 인용한다. 각 언어의 해당 tree를 bootstrap하고 build하면 설명한 연결과 대상 선택을 실제 코드에서 확인할 수 있다.
+
 !!! info "이 장을 읽고 나면"
 
     각 구성이 어떤 연결을 열고, 누구를 대상으로 고르고, 언제 거부되는지 알 수 있다.

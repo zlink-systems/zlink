@@ -132,6 +132,22 @@ Get-Content client.pid, server.pid | ForEach-Object {
 Get-Job | Stop-Job -ErrorAction SilentlyContinue
 ```
 
+## IDE에서 실행
+
+`bootstrap.cmake`는 이 폴더를 구성한 인자 그대로를 `CMakeUserPresets.json`의 preset `zlink`로 남긴다.
+Visual Studio·Rider·CLion은 폴더를 열 때 이 preset을 읽으므로, bootstrap을 한 번 실행한 뒤에는
+IDE가 같은 `build/`를 이어서 쓴다. 이 파일은 bootstrap이 매번 다시 쓰며 손으로 고치지 않는다.
+
+1. 터미널에서 [빌드](#빌드) 절의 `cmake -P bootstrap.cmake`를 한 번 실행한다(IDE는 `-P` script를
+   실행하지 못한다).
+2. **Visual Studio 2022·2026**: 파일 › 열기 › 폴더로 이 디렉터리를 연다. CMake 설정에서 preset
+   `zlink`를 고르면 구성이 끝나고, 시작 항목 목록에 `quickstart_server`와 `quickstart_client`가 나타난다. server를 먼저 실행하고
+   client를 실행한다.
+3. **Rider·CLion**: 이 디렉터리의 `CMakeLists.txt`를 프로젝트로 연다. Settings › Build, Execution,
+   Deployment › CMake에서 preset `zlink`를 활성화하면 구성이 끝나고, Run 구성에 `quickstart_server`와 `quickstart_client`가 생긴다.
+4. 종료는 IDE의 Stop 버튼으로 한다. IDE가 process tree를 함께 끝내므로 [종료](#종료) 절의 명령은
+   필요 없다.
+
 ## 문제 해결
 
 설치 단계의 증상(Conan 없음, 지원하지 않는 컴파일러 설정, download 실패, 컴파일러 없음,
@@ -152,7 +168,7 @@ Get-Job | Stop-Job -ErrorAction SilentlyContinue
 | `Server/` | `greeting` channel handler를 등록하고 `7301`에서 듣는다 |
 | `Client/` | server에 연결하고 `GET /hello/{name}`을 열어 `greeting`을 호출한다 |
 | `bootstrap.cmake` | 설치 script. tutorial·samples에서도 같은 파일을 사용한다 |
-| `CMakePresets.json` | IDE(Visual Studio·Rider·CLion)용 preset. bootstrap이 만든 `.zlink/`를 가리킨다 |
+| `CMakeUserPresets.json` | bootstrap이 쓰는 IDE preset `zlink`(git이 무시한다). [IDE에서 실행](#ide에서-실행) |
 
 ## 내 프로젝트에 옮길 것
 

@@ -18,6 +18,8 @@ title: "Channel 메시징 · C++"
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
+이 장은 [tutorial의 `Shared`·`Server`·`Client` 디렉터리와 「실행」 절](https://github.com/zlink-systems/zlink-cpp-examples/blob/main/tutorial/README.ko.md#실행)에서 코드를 인용하며, 그 tree를 bootstrap하고 build하면 아래 실행 결과를 재현할 수 있다.
+
 !!! info "이 장을 읽고 나면"
 
     서버가 서로 호출하는 세 가지 구성을 등록하고 호출할 수 있다. 각 절의 코드는
@@ -138,6 +140,17 @@ Framework가 준비된 담당 node 중에서 하나를 고른다. node를 늘리
 mesh 이름은 양쪽 node가 동일하게 지정해야 한다. 그리고 `Server()`로 노출한 handler만 다른
 node가 호출할 수 있다 — 같은 assembly에 있더라도 등록하지 않으면 호출 대상이 되지 않는다.
 
+`listen`의 host는 현재 process가 socket을 bind할 주소이며 `0.0.0.0`은 모든 local interface에서
+연결을 받는다. `advertise_host`는
+peer가 실제로 dial하고 Location Store의 MeshNode descriptor에 게시할 주소다. wildcard bind는 remote가
+dial할 주소가 아니므로 단일 machine tutorial에는 `127.0.0.1`을 지정한다. 여러 host, container, NAT,
+Kubernetes에서는 그 node에 도달 가능한 IP 또는 DNS를 지정하며, Pod IP 또는 pod별 DNS를 사용한다.
+Service 하나로 여러 Pod를 나타내면 각 node endpoint를 구별할 수 없다. `advertise_host`를 생략하면
+  [Network listener identity §2.1](../../../common/spec/server/02-channel-transport/04-network-listener-identity.ko.md#21-기본값)의
+규칙대로 non-wildcard bind host를 사용하고, wildcard `0.0.0.0`·`::`에는 같은 address family의 loopback
+`127.0.0.1`·`::1`을 사용한다. advertised host에는 wildcard를 지정할 수 없다. 각 언어의 mesh 등록 code block은
+그 언어의 option 표면을 그대로 보인다.
+
 ```cpp
 --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:mesh-register"
 ```
@@ -164,6 +177,8 @@ node가 호출할 수 있다 — 같은 assembly에 있더라도 등록하지 �
 ```
 
 ### 3.5 실행 결과
+
+tutorial README의 「실행」 절대로 Server와 Client를 실행한 상태에서 Client의 HTTP 표면에 아래 `curl` 요청을 보내면, 첫 응답은 `curl` stdout에 나오고 login 기록은 Server process의 stdout 또는 `server.log`에 나온다.
 
 ```bash
 curl http://127.0.0.1:5080/players/p1/profile
@@ -232,6 +247,8 @@ channel 호출에 사용한 것과 같은 등록이다.
 ```
 
 #### 실행 결과
+
+tutorial README의 「실행」 절대로 Server와 Client를 실행한 상태에서 Client의 HTTP 표면에 아래 `curl` 요청을 보내면, HTTP 응답은 `curl` stdout에 나오고 node-direct handler의 기록은 Server process의 stdout 또는 `server.log`에 나온다.
 
 ```bash
 curl http://127.0.0.1:5080/ops/nodes/game-server-1/status
@@ -319,6 +336,8 @@ mesh와 별개로 자신의 포트를 열고 밖에서 접근할 주소를 따�
 
 ### 4.4 실행 결과
 
+tutorial README의 「실행」 절대로 ClientServer Server와 Client를 실행한 상태에서 Client의 HTTP 표면에 아래 `curl` 요청을 보내면, 응답은 `curl` stdout에 나오고 handler 기록은 Server process의 stdout 또는 `server.log`에 나온다.
+
 ```bash
 curl -X POST http://127.0.0.1:5080/players/p1/tickets
 # "ticket-p1"
@@ -370,6 +389,8 @@ curl -X POST http://127.0.0.1:5080/players/p1/tickets
 ```
 
 ### 5.4 실행 결과
+
+tutorial README의 「실행」 절대로 fanout publisher와 subscriber가 포함된 Server·Client를 실행한 상태에서 Client의 HTTP 표면에 아래 `curl` 요청을 보내면, HTTP 응답은 `curl` stdout에 나오고 수신 기록은 subscriber process의 stdout 또는 `server.log`에 나온다.
 
 ```bash
 curl -X POST http://127.0.0.1:5080/notices \

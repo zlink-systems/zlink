@@ -522,7 +522,10 @@ zlink_sample_gradle_standalone() (
   fi
 
   cp -- "${settings_source}" "${settings_target}"
-  trap 'rm -f -- "${settings_target}"' EXIT INT TERM HUP
+  # Expanded now: bash 5.2 runs a subshell's EXIT trap after the function's
+  # locals are gone, so a trap that reads ${settings_target} at exit dies
+  # under set -u (#906).
+  trap "rm -f -- '${settings_target}'" EXIT INT TERM HUP
   "$@"
 )
 

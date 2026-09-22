@@ -18,6 +18,8 @@ View in another language — **C++** · [C#/.NET](../../../dotnet/guide/server/0
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
+This chapter quotes code from the tutorial's [`Server` and `Client` directories and its Run section](https://github.com/zlink-systems/zlink-cpp-examples/blob/main/tutorial/README.md#run); bootstrapping and building that tree reproduces the results explained in later chapters.
+
 > This document is the entry point of the C++ guide. The guide explains the concepts and usage of
 > ZLink Framework directly so a C++ developer can **read it and start writing code right
 > away.** The concepts alone are in

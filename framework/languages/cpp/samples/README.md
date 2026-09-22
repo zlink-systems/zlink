@@ -162,6 +162,26 @@ A failed run keeps its run directory with the per-role stdout/stderr logs and pr
 as `framework tests: skipped (package tree; no framework test targets)` -- those tests exist
 only in the repository tree.
 
+## Running from an IDE
+
+`bootstrap.cmake` records the exact arguments it configured this folder with as the preset `zlink`
+in `CMakeUserPresets.json`. Visual Studio, Rider and CLion read that preset when they open the
+folder, so after one bootstrap the IDE continues in the same `build/`. The bootstrap rewrites the
+file every time; it is not edited by hand.
+
+A sample is several processes plus Redis, orchestrated by `run_sample.sh` (port choice, generated
+configuration files, shutdown order). In the IDE you therefore **build, browse and debug**; running
+and verifying stay with the runner in the [Run](#run) section.
+
+1. Run `cmake -P bootstrap.cmake` from the [Build](#build) section once in a terminal (an IDE cannot
+   run a `-P` script).
+2. **Visual Studio 2022 or 2026**: File › Open › Folder on this directory and pick the preset `zlink`
+   in the CMake settings. **Rider or CLion**: open this directory's `CMakeLists.txt` as the project
+   and enable the preset `zlink` under Settings › Build, Execution, Deployment › CMake. The sample
+   targets appear as build targets.
+3. Debug by attaching the IDE to a process the runner started; the runner finds the executables the
+   IDE built in the same `build/`.
+
 ## Troubleshooting
 
 | Symptom | Cause and fix |

@@ -26,7 +26,7 @@ release. An older release is the tag `vA.B.C` (`git checkout vA.B.C`). Send issu
 ## 1. Installation
 
 - CMake 3.20 or later, a C++20 compiler. The framework uses C++20 coroutines. The
-  [IDE](#7-opening-it-in-an-ide) path reads `CMakePresets.json` and needs 3.21 or later; `bootstrap.cmake` needs 3.24
+  [IDE](#7-opening-it-in-an-ide) path reads the preset the bootstrap writes and needs 3.21 or later; `bootstrap.cmake` needs 3.24
 - nlohmann_json, Boost, liblz4, libprotobuf, OpenSSL, opentelemetry-cpp
 
 `zlink` is not in the official vcpkg registry or ConanCenter yet. This repository carries an
@@ -165,57 +165,50 @@ The response is `"hello, world"` with status 200.
 
 ## 7. Opening it in an IDE
 
-It is a CMake project, so an IDE reads `CMakeLists.txt` and `CMakePresets.json` as they are.
-The presets point at the `.zlink/` that `bootstrap.cmake` creates (the framework install prefix
-and the vcpkg manifest and installed tree), so **run §6's `cmake -P bootstrap.cmake` once, open
-the folder and pick a preset** — that is all. The only environment variable is the same
-`VCPKG_ROOT` the bootstrap uses (a Developer PowerShell sets it for the vcpkg Visual Studio
-installs). The presets configure into `build/<preset>/`, so they do not collide with §6's
-`build/`. The Windows preset is Release only: the framework is a static library, a Debug consumer
-cannot link against a Release build of it, and `/Od` keeps it debuggable.
+It is a CMake project, so an IDE reads `CMakeLists.txt` and the preset as they are. `bootstrap.cmake`
+records the exact arguments it configured this folder with (Conan toolchain, framework install
+prefix, compile flags, generator) as the preset **`zlink`** in `CMakeUserPresets.json`, so **run
+§6's `cmake -P bootstrap.cmake` once, open the folder and pick that preset** — that is all. No
+environment variable is needed. The preset configures into the same `build/` as §6, so the IDE
+continues from the terminal build. `CMakeUserPresets.json` is rewritten by every bootstrap and
+ignored by git; it is not edited by hand — to change a value, change the bootstrap's options
+(`-DZLINK_PACKAGE_MANAGER=vcpkg` and so on) and run it again. The Windows preset is Release only:
+the framework is a static library, a Debug consumer cannot link against Release objects, and `/Od`
+keeps it debuggable.
 
-### 7.1 Visual Studio 2022
+### 7.1 Visual Studio 2022 or 2026
 
-It needs the **Desktop development with C++** workload and its **C++ CMake tools for Windows**
-component.
+The **Desktop development with C++** workload with its **C++ CMake tools for Windows** component is
+required.
 
-1. Run `cmake -P bootstrap.cmake` from a Developer PowerShell (§6).
+1. Run `cmake -P bootstrap.cmake` in a terminal (§6).
 2. **File → Open → Folder** on `quickstart/`. No solution file is needed.
-3. Pick **`Visual Studio 2022 (x64, Release)`** in the configuration dropdown.
+3. Pick **`zlink bootstrap (Release)`** in the configuration drop-down.
 4. **Build → Build All.**
-5. Select `quickstart_server` as the startup item and run it; start the client from a separate
-   Developer PowerShell.
+5. Choose `quickstart_server.exe` as the startup item and run it, then run `quickstart_client.exe`
+   and check from a terminal.
 
     ```powershell
-    .\build\vs2022\Release\quickstart_client.exe
     curl http://127.0.0.1:5083/hello/world
     ```
 
 ### 7.2 Rider · CLion
 
-The JetBrains IDEs (Rider with C++ support, CLion) also recognize the folder as a CMake project
-and read the presets as profiles.
+The JetBrains IDEs (Rider with C++ support, CLion) also recognise the folder as a CMake project and
+read the preset as a profile.
 
-1. Run `cmake -P bootstrap.cmake` from a terminal (§6). To build under WSL, run it inside WSL.
+1. Run `cmake -P bootstrap.cmake` in a terminal (§6); run it inside WSL to build there.
 2. **File → Open** on the `quickstart/` folder.
-3. **Settings → Build, Execution, Deployment → CMake** lists the presets as profiles. Enable the
-   one for your platform (`linux`, `macos`, `vs2022`). For the toolchain pick Visual Studio on
-   Windows, or the WSL toolchain when building under WSL. If `VCPKG_ROOT` is not in the IDE's
-   environment, set it in that profile's **Environment**.
-4. Once CMake has loaded, the run configurations `quickstart_server` and `quickstart_client`
-   appear. Run `quickstart_server`, then `quickstart_client`, and check from a terminal.
+3. **Settings → Build, Execution, Deployment → CMake** lists the preset `zlink` as a profile. Enable
+   it. The toolchain is Visual Studio on Windows, or the WSL toolchain when building under WSL.
+4. After the CMake load, run configurations `quickstart_server` and `quickstart_client` appear.
+   Run `quickstart_server`, then `quickstart_client`, and check from a terminal.
 
     ```bash
     curl http://127.0.0.1:5083/hello/world
     ```
 
-The presets live in the project's `CMakePresets.json`. To change a value, add a
-`CMakeUserPresets.json` next to it rather than editing that file — the user file is not
-version controlled.
-
-```json title="CMakePresets.json"
---8<-- "framework/languages/cpp/quickstart/CMakePresets.json"
-```
+Stop with the IDE's Stop button.
 
 ## 8. What to check when the first run fails
 

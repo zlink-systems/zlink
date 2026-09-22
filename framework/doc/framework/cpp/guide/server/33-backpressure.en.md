@@ -18,6 +18,8 @@ View in another language — **C++** · [C#/.NET](../../../dotnet/guide/server/3
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
+This chapter quotes no tutorial code; it explains the limits and outcomes observable when load reaches tutorial `Server` and `Client` processes that have been bootstrapped and built using the [README Run section](https://github.com/zlink-systems/zlink-cpp-examples/blob/main/tutorial/README.md#run).
+
 > **The documents that own this chapter's contract** — covered by the
 > [Async Execution Policy](../../../common/spec/server/01-execution/README.en.md),
 > [Framework API](../../../common/spec/server/00-foundation/06-framework-api.en.md),

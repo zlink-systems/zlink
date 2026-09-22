@@ -18,6 +18,8 @@ title: "Actor · Node/TypeScript"
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
+이 장은 [tutorial의 `Server`·`Client` 디렉터리와 「실행」 절](https://github.com/zlink-systems/zlink-node-examples/blob/main/tutorial/README.ko.md#실행)에서 코드를 인용하며, 그 tree를 bootstrap하고 build하면 아래 실행 결과를 재현할 수 있다.
+
 !!! info "이 장을 읽고 나면"
 
     개체 하나를 id로 만들고, 그것에 메시지를 보내고 답을 받을 수 있다.
@@ -117,6 +119,17 @@ Entry Spot과 Actor factory를 같은 Object Server에 등록한다. actor type�
 Spot과 달리 **id를 호출하는 쪽이 정한다.** 플레이어 id처럼 이미 있는 값을 그대로 쓰기
 때문이다. 같은 id로 다시 호출하면 만들지 않고 있던 것을 돌려준다.
 
+tutorial의 `Server`는 `game` route mesh를 먼저 정의한다. mesh 이름은 Actor가 배치될 수 있는
+node 집합의 이름이고, `inMesh`는 만들 때 그 집합을 고른다. 등록 코드는
+[Channel 메시징의 받는 쪽](20-channel-messaging.ko.md#32-받는-쪽--channel을-담당하는-node)에 있고, 선택 규칙은
+[Location runtime §7](../../../common/spec/server/05-location-relocation/01-location-runtime.ko.md#7-actor와-user-spot을-만든다)이 정한다.
+
+```typescript
+--8<-- "framework/languages/node/tutorial/Server/main.ts:mesh-register"
+```
+
+그 mesh 안에 Actor를 만드는 호출은 다음과 같다.
+
 ```typescript
 --8<-- "framework/languages/node/tutorial/Client/main.ts:actor-create-call"
 ```
@@ -147,7 +160,7 @@ actor id만 준다. 그 Actor가 지금 어느 Spot 안에 있는지는 Framewor
 
 ## 4. 실행 결과
 
-아래 명령은 tutorial(`framework/languages/node/tutorial`)의 Server와 Client를 그 README의 「실행」 절대로 띄운 상태에서 실행한다. 주소는 Client의 HTTP 표면이다.
+tutorial README의 「실행」 절대로 Server와 Client를 실행한 상태에서 Client의 HTTP 표면에 아래 `curl` 요청을 보내면, 각 HTTP 응답은 `curl` stdout에 나오고 handler 기록은 Server process의 stdout 또는 `server.log`에 나온다.
 
 ```bash
 curl -X POST http://127.0.0.1:5080/players/p7 \

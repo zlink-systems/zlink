@@ -18,6 +18,8 @@ title: "3. 핵심 개념 · Kotlin"
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
+이 장은 [tutorial의 `Server`·`Client` 디렉터리와 「실행」 절](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.ko.md#실행)에서 코드를 인용하며, 그 tree를 bootstrap하고 build하면 뒤의 장에서 설명하는 실행 결과를 재현할 수 있다.
+
 !!! info "이 장을 읽고 나면"
 
     channel · Spot · Actor · STREAM · Location이 각각 무엇이고 언제 고르는지 알 수 있다.

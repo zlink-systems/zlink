@@ -18,6 +18,8 @@ View in another language — [C++](../../../cpp/guide/server/31-handler-dispatch
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
+This chapter quotes code from the tutorial's `Server` and `Client` directories and the `Bingo`, `DeliveryDispatch`, `TicTacToe`, and `ZoneWorld` sample directories. Bootstrap and build the corresponding tree for each language to reproduce the handler registration and dispatch examples below.
+
 !!! info "What you get from this chapter"
 
     You can work with what applies across many handlers at once — packet names,

@@ -221,6 +221,22 @@ Get-Job | Stop-Job -ErrorAction SilentlyContinue
 docker rm -f zlink-tutorial-redis 2>$null | Out-Null
 ```
 
+## IDE에서 실행
+
+`bootstrap.cmake`는 이 폴더를 구성한 인자 그대로를 `CMakeUserPresets.json`의 preset `zlink`로 남긴다.
+Visual Studio·Rider·CLion은 폴더를 열 때 이 preset을 읽으므로, bootstrap을 한 번 실행한 뒤에는
+IDE가 같은 `build/`를 이어서 쓴다. 이 파일은 bootstrap이 매번 다시 쓰며 손으로 고치지 않는다.
+
+1. 터미널에서 [빌드](#빌드) 절의 `cmake -P bootstrap.cmake`를 한 번 실행한다(IDE는 `-P` script를
+   실행하지 못한다).
+2. **Visual Studio 2022·2026**: 파일 › 열기 › 폴더로 이 디렉터리를 연다. CMake 설정에서 preset
+   `zlink`를 고르면 구성이 끝나고, 시작 항목 목록에 `tutorial_server`와 `tutorial_client`가 나타난다. server를 먼저 실행하고
+   client를 실행한다.
+3. **Rider·CLion**: 이 디렉터리의 `CMakeLists.txt`를 프로젝트로 연다. Settings › Build, Execution,
+   Deployment › CMake에서 preset `zlink`를 활성화하면 구성이 끝나고, Run 구성에 `tutorial_server`와 `tutorial_client`가 생긴다.
+4. 종료는 IDE의 Stop 버튼으로 한다. IDE가 process tree를 함께 끝내므로 [종료](#종료) 절의 명령은
+   필요 없다.
+
 ## 문제 해결
 
 | 증상 | 원인과 조치 |

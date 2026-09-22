@@ -159,6 +159,25 @@ Write-Output 'tictactoe=ok'
 `framework tests: skipped (package tree; no framework test targets)`로 표시한다 — 그 테스트는
 저장소 트리에만 있다.
 
+## IDE에서 실행
+
+`bootstrap.cmake`는 이 폴더를 구성한 인자 그대로를 `CMakeUserPresets.json`의 preset `zlink`로 남긴다.
+Visual Studio·Rider·CLion은 폴더를 열 때 이 preset을 읽으므로, bootstrap을 한 번 실행한 뒤에는
+IDE가 같은 `build/`를 이어서 쓴다. 이 파일은 bootstrap이 매번 다시 쓰며 손으로 고치지 않는다.
+
+샘플은 process 여럿과 Redis를 `run_sample.sh`가 조율한다(port 선택, 설정 파일 생성, 종료 순서).
+그래서 IDE에서는 **빌드와 코드 탐색·디버깅**까지 하고, 실행과 검증은 [실행](#실행) 절의 runner로
+한다.
+
+1. 터미널에서 [빌드](#빌드) 절의 `cmake -P bootstrap.cmake`를 한 번 실행한다(IDE는 `-P` script를
+   실행하지 못한다).
+2. **Visual Studio 2022·2026**: 파일 › 열기 › 폴더로 이 디렉터리를 열고 CMake 설정에서 preset
+   `zlink`를 고른다. **Rider·CLion**: 이 디렉터리의 `CMakeLists.txt`를 프로젝트로 열고 Settings ›
+   Build, Execution, Deployment › CMake에서 preset `zlink`를 활성화한다. 샘플 target들이 빌드
+   대상으로 나타난다.
+3. 디버깅은 runner가 띄운 process에 IDE의 "process에 attach"로 붙는다. IDE에서 빌드한 실행 파일은
+   runner가 같은 `build/`에서 찾는다.
+
 ## 문제 해결
 
 | 증상 | 원인과 조치 |
