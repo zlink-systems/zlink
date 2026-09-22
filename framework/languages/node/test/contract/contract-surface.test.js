@@ -102,6 +102,19 @@ test('Nest options builder matches the exact public member set', () => {
 
 });
 
+test('Nest fanout builder matches the exact public member set', () => {
+  const declarations = readTree(path.join(workspaceRoot, 'packages', 'nestjs', 'dist'));
+  const fanoutBuilder = declarationBody(declarations, 'ZLinkNestFanoutChannelBuilder');
+  const expected = [...publicContractSnapshot.nestjsFanoutChannelBuilder];
+  for (const name of expected) {
+    assert.match(
+      fanoutBuilder,
+      new RegExp(`\\b${name}\\s*\\(`),
+      `Nest fanout declaration missing ${name}`
+    );
+  }
+});
+
 test('Nest RouteMesh builder keeps the formal scheduler limits in build output', () => {
   const nestjs = require('../../packages/nestjs/dist');
   const builder = nestjs.zlinkFramework();
