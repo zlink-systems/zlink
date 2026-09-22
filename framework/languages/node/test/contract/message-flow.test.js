@@ -50,6 +50,9 @@ const {
 const {
   ZLinkDispatchErrorReporter
 } = require('../../packages/framework/dist/runtime/channels/dispatch-error-reporter');
+const {
+  ServiceStatefulRuntime
+} = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
 const connector = require('../../packages/stream-connector/dist');
 const protocolCodecs = require('./helpers/stream-protocol-codecs');
 
@@ -580,6 +583,78 @@ test('classic fanout omits normal delivery flow and reports only subscriber-loca
       channelRouteKind: undefined
     }
   );
+});
+
+test('logical multicast target submission failure reports stale target without changing publish terminal', async () => {
+  telemetryRecords.length = 0;
+  traceRecords.length = 0;
+  let readyChecks = 0;
+  let observedFailure;
+  const raw = {
+    setServiceIngress() {},
+    reserveLocalIngress: async () => ({ close() {} }),
+    topology: {
+      peers() {
+        return [
+          {
+            descriptor: {
+              nodeRoutingId: 'peer-gone',
+              channels: [{ name: 'events', weight: 1 }]
+            }
+          }
+        ];
+      }
+    },
+    isPeerRouteReady() {
+      readyChecks += 1;
+      return readyChecks === 1;
+    },
+    async sendService() {
+      return false;
+    }
+  };
+  const stateful = new ServiceStatefulRuntime(raw, 'publisher', 1n);
+  const runtime = new framework.ZLinkSpotNodeRuntimeManager({
+    registration: framework.createFrameworkRegistration({}),
+    backendAdapterFactory: {},
+    context: {},
+    dispatchErrors: makeDispatchErrorReporter()
+  });
+  runtime.publishers.set('play', {
+    publishAsync(channelName, topic) {
+      return stateful
+        .publishLogicalMulticast(channelName, topic, {
+          packetName: 'ProfileChanged',
+          contentType: 'application/json',
+          payload: Buffer.from('{"sequence":1}')
+        })
+        .catch((error) => {
+          observedFailure = error;
+          throw error;
+        });
+    }
+  });
+
+  const result = await runtime.publish('play', 'events', 'score', 'ProfileChanged', {
+    sequence: 1
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(result.status, 'submitted');
+  assert.equal(observedFailure instanceof AggregateError, true);
+  assert.equal(observedFailure.errors[0].targetRid, 'peer-gone');
+  assert.equal(observedFailure.errors[0].reason, 'stale_target');
+  const attributes = telemetryRecords.at(-1).attributes;
+  assert.equal(attributes.event_id, 'zlink.dispatch_error');
+  assert.equal(attributes.surface, 'spot');
+  assert.equal(attributes.message_kind, 'send');
+  assert.equal(attributes.outcome, 'failed');
+  assert.equal(attributes.action, 'drop');
+  assert.equal(attributes.reason, 'stale_target');
+  assert.equal(attributes.target_rid, 'peer-gone');
+  assert.equal(attributes.topic, 'score');
+  assert.equal(attributes.channel_name, 'events');
+  assert.equal(attributes.mesh_name, 'play');
 });
 
 test('channel one-way flow records queue admission, handler start, and terminal completion in order', async () => {

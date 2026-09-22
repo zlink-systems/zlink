@@ -72,6 +72,7 @@ import {
 import type { ZLinkRemoteBoundSessionTarget } from '../actors';
 import type { ZLinkActorHandoffPacket } from '../actors/actor-handoff';
 import type { ZLinkDetachedTaskRunner } from './spot-actor-join-dispatch';
+import { ServiceSpotPublishTargetError } from '../foundation/service-stateful-runtime';
 import { ZLinkEntrySpotActivation } from './spot-entry-activation';
 import {
   createSpotNodeLocationAutoConnectContext,
@@ -1105,10 +1106,19 @@ export class ZLinkSpotNodeRuntimeManager {
     if (publisher === undefined) {
       throw new ZLinkConfigurationException(`RouteMesh '${meshName}' publisher is not started.`);
     }
-    return this.executePublish(publisher, channelName, topic, packetName, event, metadata);
+    return this.executePublish(
+      meshName,
+      publisher,
+      channelName,
+      topic,
+      packetName,
+      event,
+      metadata
+    );
   }
 
   private async executePublish(
+    meshName: string,
     publisher: ReturnType<ZLinkBackendMeshNode['createPublisher']>,
     channelName: string,
     topic: string,
@@ -1130,7 +1140,9 @@ export class ZLinkSpotNodeRuntimeManager {
         )
     );
     const processing = publisher.publishAsync(channelName, topic, parts, undefined, undefined);
-    void Promise.resolve(processing).catch(() => undefined);
+    void Promise.resolve(processing).catch((error) =>
+      this.reportPublishFailures(meshName, channelName, topic, error)
+    );
     return Promise.resolve({ status: ZLinkSubmitStatus.Submitted });
   }
 
@@ -1183,13 +1195,39 @@ export class ZLinkSpotNodeRuntimeManager {
         )
     );
     try {
-      publisher.publish(channelName, topic, parts, { flags });
+      const processing = publisher.publish(channelName, topic, parts, { flags });
+      void Promise.resolve(processing).catch((error) =>
+        this.reportPublishFailures(meshName, channelName, topic, error)
+      );
       return { status: ZLinkSubmitStatus.Submitted };
     } catch (error) {
       if (isZLinkBackendResultError(error) && error.operation === 'submit') {
         return { status: mapPublishSubmitStatus(error.result) };
       }
       throw error;
+    }
+  }
+
+  private reportPublishFailures(
+    meshName: string,
+    channelName: string,
+    topic: string,
+    error: unknown
+  ): void {
+    const failures = error instanceof AggregateError ? error.errors : [error];
+    for (const failure of failures) {
+      if (!(failure instanceof ServiceSpotPublishTargetError)) continue;
+      this.options.dispatchErrors?.report({
+        surface: ZLinkDispatchErrorSurface.SpotRoute,
+        messageKind: ZLinkDispatchMessageKind.Send,
+        reason: failure.reason,
+        action: ZLinkDispatchErrorAction.Drop,
+        meshName,
+        channelName,
+        topic,
+        targetRid: failure.targetRid,
+        error: failure
+      });
     }
   }
 }

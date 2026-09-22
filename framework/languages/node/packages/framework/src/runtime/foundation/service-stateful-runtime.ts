@@ -130,6 +130,20 @@ interface ServiceSpotMessageFollowState {
   draining: boolean;
 }
 
+export type ServiceSpotPublishFailureReason = 'stale_target' | 'backpressure' | 'shutdown';
+
+/** A routed logical-multicast submission failed after the local publish was admitted. */
+export class ServiceSpotPublishTargetError extends Error {
+  constructor(
+    readonly targetRid: string,
+    readonly reason: ServiceSpotPublishFailureReason,
+    options?: ErrorOptions
+  ) {
+    super(`Logical multicast submission to '${targetRid}' failed (${reason}).`, options);
+    this.name = 'ServiceSpotPublishTargetError';
+  }
+}
+
 export interface ServiceStatefulResult {
   readonly terminalResult: number;
   readonly failureCode: number;
@@ -1229,17 +1243,37 @@ export class ServiceStatefulRuntime {
     await this.enqueueLogicalMulticast(channelName, topic, sourceSpotId, payload);
     const targets = this.raw.topology
       .peers()
-      .filter((peer) =>
-        peer.descriptor.channels.some(
-          (channel) => channel.name === channelName && channel.weight > 0
-        )
+      .filter(
+        (peer) =>
+          peer.descriptor.channels.some(
+            (channel) => channel.name === channelName && channel.weight > 0
+          ) && this.raw.isPeerRouteReady(peer.descriptor.nodeRoutingId)
       );
     const header = encodeLogicalMulticastHeader(channelName, topic, sourceSpotId);
     const payloadFrame = encodeApplicationPayload(payload);
+    const failures: ServiceSpotPublishTargetError[] = [];
     for (const target of targets) {
       // Remote admission ends at the source outbound transport queue. The
       // receiver's Spot queue and handler completion are not publish results.
-      await this.raw.sendService(target.descriptor.nodeRoutingId, [header, payloadFrame]);
+      const accepted = await this.raw.sendService(target.descriptor.nodeRoutingId, [
+        header,
+        payloadFrame
+      ]);
+      if (!accepted) {
+        failures.push(
+          new ServiceSpotPublishTargetError(
+            target.descriptor.nodeRoutingId,
+            serviceSpotPublishFailureReason(
+              undefined,
+              this.raw.isPeerRouteReady(target.descriptor.nodeRoutingId),
+              this.closed
+            )
+          )
+        );
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(failures, 'Logical multicast target submission failed.');
     }
   }
 
@@ -5248,6 +5282,28 @@ export class ServiceStatefulRuntime {
 
   private requireOpen(): void {
     if (this.closed) throw new Error('Stateful runtime is closed.');
+  }
+}
+
+function serviceSpotPublishFailureReason(
+  result: number | undefined,
+  routeReady: boolean,
+  closed: boolean
+): ServiceSpotPublishFailureReason {
+  if (closed || result === SubmitResult.Terminated) return 'shutdown';
+  switch (result) {
+    case SubmitResult.Backpressured:
+    case SubmitResult.NotAdmitted:
+      return 'backpressure';
+    case SubmitResult.NotConnected:
+    case SubmitResult.NotFound:
+    case SubmitResult.InvalidHandle:
+      return 'stale_target';
+    default:
+      // RawServiceMeshRuntime exposes failed Core submissions as false. A
+      // ready route therefore identifies queue admission failure; a route
+      // that became unready after selection is a stale target.
+      return routeReady ? 'backpressure' : 'stale_target';
   }
 }
 
