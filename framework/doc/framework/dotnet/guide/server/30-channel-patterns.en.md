@@ -412,7 +412,7 @@ directly, it works without one.
 
 The registration code is in [Spot](21-spot.en.md#2-the-location-store--a-prerequisite-for-registering-a-spot),
 and the operational queries are in
-[Operations and Lifecycle](12-operations.en.md#5-location-readiness-and-operational-queries).
+[Operations and Lifecycle](12-operations.en.md#6-location-readiness-and-operational-queries).
 
 **There are two stores.** The Location Store handles the atomic changes to small location records;
 the Relocation Store holds what remains after a move — the record of an Instance Spot's first

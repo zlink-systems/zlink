@@ -1,11 +1,9 @@
 # Channel 메시징
 
-이 장의 코드는 [tutorial README](https://github.com/zlink-systems/zlink-<언어>-examples/blob/main/tutorial/README.ko.md)에서 가져왔다. [예제 저장소](https://github.com/zlink-systems/zlink-<언어>-examples/blob/main/tutorial/README.ko.md)를 내려받아 README의 「내려받기와 설치」·「빌드」·「실행」 절을 따라 실행하면 아래 실행 결과를 재현할 수 있다.
-
 !!! info "이 장을 읽고 나면"
 
     서버가 서로 호출하는 세 가지 구성을 등록하고 호출할 수 있다. 각 절의 코드는
-    `framework/languages/dotnet/tutorial`에서 그대로 실행된다.
+    [언어별 예제 저장소](https://github.com/zlink-systems/zlink-<언어>-examples)의 tutorial에서 가져왔다.
 
 서버가 다른 서버를 호출할 때 상대의 주소를 지정하지 않는다. 호출하는 쪽은 **이름**만
 지정하고, Framework가 그 이름을 맡은 **node**로 보낸다. node는 Framework를 올린 서버 process
@@ -206,8 +204,7 @@ peer가 실제로 dial하고 Location Store의 MeshNode descriptor에 게시할 
 dial할 주소가 아니므로 단일 machine tutorial에는 `127.0.0.1`을 지정한다. 여러 host, container, NAT,
 Kubernetes에서는 그 node에 도달 가능한 IP 또는 DNS를 지정하며, Pod IP 또는 pod별 DNS를 사용한다.
 Service 하나로 여러 Pod를 나타내면 각 node endpoint를 구별할 수 없다. `AdvertiseHost`를 생략하면
-  [Network listener identity §2.1](../../../common/spec/server/02-channel-transport/04-network-listener-identity.ko.md#21-기본값)의
-규칙대로 non-wildcard bind host를 사용하고, wildcard `0.0.0.0`·`::`에는 같은 address family의 loopback
+non-wildcard bind host를 광고하고, wildcard `0.0.0.0`·`::`에는 같은 address family의 loopback
 `127.0.0.1`·`::1`을 사용한다. advertised host에는 wildcard를 지정할 수 없다. 각 언어의 mesh 등록 code block은
 그 언어의 option 표면을 그대로 보인다.
 

@@ -18,13 +18,11 @@ View in another language — [C++](../../../cpp/guide/server/20-channel-messagin
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-The code in this chapter comes from the [tutorial README](https://github.com/zlink-systems/zlink-dotnet-examples/blob/main/tutorial/README.md). Download the [examples repository](https://github.com/zlink-systems/zlink-dotnet-examples/blob/main/tutorial/README.md) and follow its README's Download, Build and Run sections to reproduce the results below.
-
 !!! info "What you get from this chapter"
 
     You can register and call the three arrangements servers use to call each
-    other. The code in every section runs as it stands in
-    `framework/languages/dotnet/tutorial`.
+    other. The code in every section comes from the
+    [language-specific example repositories](https://github.com/zlink-systems/zlink-dotnet-examples).
 
 When a server calls another server, it does not name the other side's address. The caller names
 only a **name**, and the Framework delivers it to the **node** that serves that name. A node is

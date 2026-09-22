@@ -106,7 +106,7 @@ curl http://127.0.0.1:5080/locations/players/ghost
 
 - id로 호출하는 상태 객체 — [Spot](21-spot.ko.md) · [Actor](22-actor.ko.md)
 - Store가 무엇을 적어 두는가 — [Channel 동작 원리](30-channel-patterns.ko.md#61-location-store--누가-어디-있는지-적어-두는-곳)
-- 운영 조회 — [운영과 lifecycle](12-operations.ko.md#5-location-readiness와-운영-조회)
+- 운영 조회 — [운영과 lifecycle](12-operations.ko.md#6-location-readiness와-운영-조회)
 - 이 장 코드의 실행본 — `framework/languages/dotnet/tutorial`
 
 <script>

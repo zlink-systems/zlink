@@ -18,12 +18,11 @@ View in another language — [C++](../../../cpp/guide/server/03-concepts.en.md) 
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-The code in this chapter comes from the [tutorial README](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.md). Download the [examples repository](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.md) and follow its README's Download, Build and Run sections to reproduce the results below.
-
 !!! info "What you get from this chapter"
 
     You can tell what a channel, a Spot, an Actor, STREAM and Location each are, and when to
     choose them.
+    The code in this chapter comes from the [language-specific example repositories](https://github.com/zlink-systems/zlink-java-examples).
 
 The ZLink framework provides **channel · spot · actor · stream · location** as its core
 concepts. Every other chapter is a variation on these. We'll go through them in order below,
@@ -267,7 +266,7 @@ chapter.
 **Completion has two consistent forms.** A send-family call finishes with
 no return value once **the send slot accepts it**, and a request-family call finishes with
 one of **reply · timeout · route error**. This holds no matter which surface you use
-([33-backpressure §3](33-backpressure.en.md#3-backpressure-visible-in-the-api)).
+([Backpressure Visible in the API](33-backpressure.en.md#3-backpressure-visible-in-the-api)).
 
 ## 8. Naming Convention
 
@@ -310,12 +309,12 @@ Policy for an edge exposed directly to the internet is owned by whatever sits in
 
 - Full usage of request/send/pub-sub, writing a handler, and the `async` execution model:
   [Channel Messaging](20-channel-messaging.en.md)
-- Spot kinds, execution model, handler lifetime, and DI scope: [Spot](21-spot.en.md)
+- Spot kinds, execution model, handler lifetime, and DI scope: [Activation and Lifetime](34-activation-lifetime.en.md)
 - Host lifecycle and operations: [12-operations](12-operations.en.md)
 - Registration points and layering: the [01. Overview](01-overview.en.md)
 - The full interface, attribute and context set: [Key type index](13-interface-catalog.en.md)
 - Runnable sample code: [14-samples](14-samples.en.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

@@ -25,7 +25,7 @@ View in another language — [C++](../../../cpp/guide/server/56-zoneworld.en.md)
     console's announcements and maintenance reach every node. The code in this chapter runs as it
     stands in `framework/languages/java/samples/java/ZoneWorld`.
 
-[Picking a Sample](14-samples.en.md#8-zoneworld--building-a-zone-sharded-mmorpg-and-ops-control)
+[Picking a Sample](14-samples.en.md#9-zoneworld--building-a-zone-sharded-mmorpg-and-ops-control)
 introduced what this sample demonstrates. This chapter is what you read after that introduction — the
 roles and where their code lives, the message flow of the main scenarios, and, for each flow, the
 framework feature it uses and the chapter that explains it, in the order the source is laid out.

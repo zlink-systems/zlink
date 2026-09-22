@@ -139,8 +139,7 @@ RouteMesh·Spot·Instance Spot 조합으로 구현한다. 방식이 바뀌어도
 runtime이 없다.
 
 > 트위치 FPS의 **초저지연 snapshot netcode**는 유실을 허용하는 비신뢰 전송을 사용한다.
-> 현재 STREAM이 제공하는 transport는 TCP/TLS/WS/WSS이며, **비신뢰 전송(QUIC
-> datagram·WebTransport)은 지원 예정**이다. 다만 그런 게임에서도 매칭·로비·메타·
+> STREAM은 TCP, TLS, WebSocket 기반 transport를 제공한다. 다만 그런 게임에서도 매칭·로비·메타·
 > 소셜은 이 방식들로 처리된다. 어디까지 되고 안 되는지는
 > [ZLink의 경계](#5-zlink의-경계--다루지-않는-요구)가 다룬다.
 
@@ -651,8 +650,7 @@ ZLink가 대체 후보다. Actor·Spot lifecycle과 relocation timer 복원은 F
 | `framework` — 이 가이드가 다루는 Spot/actor·channel messaging·STREAM·drain | [Functional Source License 1.1, ALv2 Future License](../../../../../LICENSE) |
 | 각 언어의 `http-client` 패키지 | Apache License 2.0 |
 
-FSL-1.1-ALv2는 ZLink와 경쟁하는 제품으로 파는 것만 막는다. ZLink와 경쟁하는 제품으로 파는 것만 막고, 나머지는 다
-허용하며, 각 릴리스는 공개 2년 뒤 Apache-2.0이 된다.
+FSL-1.1-ALv2는 ZLink와 경쟁하는 제품 판매만 제한하고, 나머지 사용을 허용한다. 각 릴리스는 공개 2년 뒤 Apache-2.0이 된다.
 
 | | |
 | --- | --- |
@@ -675,7 +673,7 @@ v4.3.5에서 출발했기 때문이다. `http-client`는 각 플랫폼의 통상
 
 - 공통 업무 시나리오: [Framework Common Sample Scenarios](../../../common/sample/README.ko.md)
 - 사용 방법: [Channel Messaging](20-channel-messaging.ko.md)
-- 표면 매핑: [Channel 메시징](20-channel-messaging.ko.md) §0, [13. Interface 카탈로그](13-interface-catalog.ko.md) §1.6
+- 표면 매핑: [Channel 메시징](20-channel-messaging.ko.md), [주요 타입 사용 색인](13-interface-catalog.ko.md)
 - 실행 코드로 보는 샘플: [14-samples](14-samples.ko.md)
 
 ### 9.1 참고 자료
@@ -689,5 +687,5 @@ v4.3.5에서 출발했기 때문이다. `http-client`는 각 플랫폼의 통상
 - [Akka License Change의 영향 (Coralogix)](https://coralogix.com/blog/akka-license-change/)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

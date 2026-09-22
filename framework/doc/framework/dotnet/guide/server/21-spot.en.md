@@ -18,19 +18,17 @@ View in another language — [C++](../../../cpp/guide/server/21-spot.en.md) · *
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-The code in this chapter comes from the [tutorial README](https://github.com/zlink-systems/zlink-dotnet-examples/blob/main/tutorial/README.md). Download the [examples repository](https://github.com/zlink-systems/zlink-dotnet-examples/blob/main/tutorial/README.md) and follow its README's Download, Build and Run sections to reproduce the results below.
-
 !!! info "What you get from this chapter"
 
     You can create a stateful object addressed by id, send messages to it, and
-    receive answers. The code in this chapter runs as it stands in
-    `framework/languages/dotnet/tutorial`.
+    receive answers. The code in this chapter comes from the
+    [language-specific example repositories](https://github.com/zlink-systems/zlink-dotnet-examples).
 
 In [Channel Messaging](20-channel-messaging.en.md) a call was received by one of the nodes
 serving the name. That path does not work when the recipient is already decided. **A Spot is a
 stateful object found by id**, and it processes the work addressed to it in a single line. This
 chapter goes as far as creating one Spot and calling it; the differences between the kinds and
-the full lifecycle are covered by [Spot](21-spot.en.md).
+the full lifecycle are covered by [How Spots Execute](32-execution-model.en.md).
 
 ## 1. The Role of a Spot
 
@@ -131,12 +129,12 @@ prefix.
 
 ### 4.1 Creating
 
-Create by naming the stable type. The id that comes back is the address for every later call.
+Create a Spot by naming the stable type: a type used consistently for the same id. The id that comes back is the address for every later call.
 
 First, the tutorial `Server` defines the `game` route mesh. A mesh name names the set of nodes
-where a Spot may be placed, and `InMesh` selects one such set. [The receiving side of Channel
+where a Spot may be placed, and `InMesh` selects a node that participates in that route mesh to host the Spot. [The receiving side of Channel
 Messaging](20-channel-messaging.en.md#32-the-receiving-side--the-node-serving-the-channel) shows
-how to register a route mesh, and [Location Runtime §7](../../../common/spec/server/05-location-relocation/01-location-runtime.en.md#7-creating-an-actor-or-user-spot) defines the selection rule.
+how to register a route mesh.
 
 ```csharp
 --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:mesh-register"

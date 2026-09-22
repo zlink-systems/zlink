@@ -154,8 +154,7 @@ are implemented with the same RouteMesh/Spot/Instance Spot combination. Switchin
 means no new runtime to learn.
 
 > A Twitch-scale FPS's **ultra-low-latency snapshot netcode** uses unreliable transport that
-> tolerates loss. STREAM currently provides TCP/TLS/WS/WSS as transport, and **unreliable
-> transport (QUIC datagram/WebTransport) is planned.** Even for that kind of game, though,
+> tolerates loss. STREAM provides TCP, TLS, and WebSocket transports. Even for that kind of game, though,
 > matching/lobby/meta/social are handled by these approaches today. Exactly
 > where the line falls is covered in [Chapter 17](17-alternative.en.md) §4.
 
@@ -713,8 +712,8 @@ differs by layer.
 | `framework` — the Spot/actor, channel messaging, STREAM, and drain this guide covers | [Functional Source License 1.1, ALv2 Future License](../../../../../LICENSE) |
 | Each language's `http-client` package | Apache License 2.0 |
 
-**FSL-1.1-ALv2 in one line:** it only blocks selling a product that competes with ZLink;
-everything else is allowed, and each release becomes Apache-2.0 two years after publication.
+**FSL-1.1-ALv2:** it limits only the sale of products that compete with ZLink, while allowing
+other uses. Each release becomes Apache-2.0 two years after publication.
 
 | | |
 | --- | --- |
@@ -739,7 +738,7 @@ background is documented in
 
 - Common business scenarios: [Framework Common Sample Scenarios](../../../common/sample/README.en.md)
 - How to use it: [Channel Messaging](20-channel-messaging.en.md)
-- Surface mapping: [Channel Messaging](20-channel-messaging.en.md) §0, [13. Interface Catalog](13-interface-catalog.en.md) §1.6
+- Surface mapping: [Channel Messaging](20-channel-messaging.en.md), [Key Type Index](13-interface-catalog.en.md)
 - Samples as runnable code: [14-samples](14-samples.en.md)
 
 ### 9.1 References
@@ -753,5 +752,5 @@ background is documented in
 - [The impact of the Akka License Change (Coralogix)](https://coralogix.com/blog/akka-license-change/)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

@@ -18,7 +18,10 @@ View in another language — [C++](../../../cpp/guide/server/01-overview.en.md) 
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-The code in this chapter comes from the [tutorial README](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.md). Download the [examples repository](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.md) and follow its README's Download, Build and Run sections to reproduce the results below.
+!!! info "What you get from this chapter"
+
+    You can distinguish the problems ZLink Framework solves from its main messaging surfaces.
+    The code in this chapter comes from the [language-specific example repositories](https://github.com/zlink-systems/zlink-java-examples).
 
 > This document is the entry point of the Kotlin guide. The guide explains the concepts and usage of
 > ZLink Framework directly so a Kotlin developer can **read it and start writing code
@@ -154,8 +157,7 @@ are implemented with the same RouteMesh/Spot/Instance Spot combination. Switchin
 means no new runtime to learn.
 
 > A Twitch-scale FPS's **ultra-low-latency snapshot netcode** uses unreliable transport that
-> tolerates loss. STREAM currently provides TCP/TLS/WS/WSS as transport, and **unreliable
-> transport (QUIC datagram/WebTransport) is planned.** Even for that kind of game, though,
+> tolerates loss. STREAM provides TCP, TLS, and WebSocket transports. Even for that kind of game, though,
 > matching/lobby/meta/social are handled just fine today by these four approaches. Exactly
 > where the line falls is covered in [Chapter 17](17-alternative.en.md) §4.
 
@@ -479,7 +481,7 @@ The difference in the amount of code needed to wire up the same "inter-server
 request/response."
 
 **Directly with raw bindings (conceptual)** — not runnable code, but the list of work a
-direct implementation would require. All five languages face the same list, so it isn't
+direct implementation would require. Supported languages use the same list, so it isn't
 split into language tabs.
 
 ```text
@@ -671,5 +673,5 @@ Uses the Java notation as-is. Any surface the Kotlin layer adds follows the same
 ---
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

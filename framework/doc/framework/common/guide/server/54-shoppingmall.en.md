@@ -7,7 +7,7 @@
     and through compensation when a step fails. The code in this chapter runs as it stands in
     `framework/languages/<language>/samples/ShoppingMall`.
 
-[Picking a Sample](14-samples.en.md#6-shoppingmall--building-an-order-processing-system) introduced
+[Picking a Sample](14-samples.en.md#7-shoppingmall--building-an-order-processing-system) introduced
 what this sample demonstrates. This chapter is what you read after that introduction — the roles and
 where their code lives, the message flow of the main scenarios, and, for each flow, the framework
 feature it uses and the chapter that explains it, in the order the source is laid out. This chapter

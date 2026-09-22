@@ -7,7 +7,7 @@
     the code of each server it passes. The code in this chapter runs as it stands in
     `framework/languages/<language>/samples/SupportChat`.
 
-[Picking a Sample](14-samples.en.md#4-supportchat--building-a-live-chat-support-system) introduced
+[Picking a Sample](14-samples.en.md#5-supportchat--building-a-live-chat-support-system) introduced
 what this sample demonstrates. This chapter is what you read after that introduction — the roles and
 where their code lives, the message flow of the main scenarios, and, for each flow, the framework
 feature it uses and the chapter that explains it, in the order the source is laid out. This chapter

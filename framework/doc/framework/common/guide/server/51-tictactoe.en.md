@@ -6,7 +6,7 @@
     creates a room to the point where both players leave and their Actors are destroyed. The code
     in this chapter runs as it stands in `framework/languages/<language>/samples/TicTacToe`.
 
-[Picking a Sample](14-samples.en.md#2-tictactoe--building-a-real-time-head-to-head-game-server)
+[Picking a Sample](14-samples.en.md#3-tictactoe--building-a-real-time-head-to-head-game-server)
 introduced what this sample demonstrates. This chapter is what you read after that introduction —
 the roles and where their code lives, the message flow of the main scenarios, and, for each flow, the
 framework feature it uses and the chapter that explains it, in the order the source is laid out.

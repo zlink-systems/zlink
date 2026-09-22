@@ -594,7 +594,7 @@ Store에서 읽어 결정하기 때문이다. channel 메시징만 사용하고 
 동작한다.
 
 등록 코드는 [Spot](21-spot.ko.md#2-location-store--spot-등록의-선행-조건)에, 운영 조회는
-[운영과 lifecycle](12-operations.ko.md#5-location-readiness와-운영-조회)에 있다.
+[운영과 lifecycle](12-operations.ko.md#6-location-readiness와-운영-조회)에 있다.
 
 **Location Store와 Relocation Store는 맡는 기록이 다르다.** Location Store는 작은 위치 기록의 원자적 변경을 맡고, Relocation Store는
 옮기고 난 뒤에 남는 기록 — Instance Spot을 처음 깨운 기록과 이동 뒤에 완료되는 요청의 종결

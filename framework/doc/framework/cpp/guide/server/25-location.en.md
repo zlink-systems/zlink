@@ -111,7 +111,7 @@ leaves a target recreated under the same id untouched.
 
 - State objects called by id — [Spot](21-spot.en.md) · [Actor](22-actor.en.md)
 - What the Store writes down — [How Channels Work](30-channel-patterns.en.md#61-location-store--where-who-is-where-is-written-down)
-- Operational queries — [Operations and Lifecycle](12-operations.en.md#5-location-readiness-and-operational-queries)
+- Operational queries — [Operations and Lifecycle](12-operations.en.md#6-location-readiness-and-operational-queries)
 - A running version of this chapter's code — `framework/languages/cpp/tutorial`
 
 <script>

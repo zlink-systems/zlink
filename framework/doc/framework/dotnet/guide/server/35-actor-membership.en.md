@@ -185,7 +185,7 @@ application does not track node identifiers.
 **A request sent during the move also completes at the original caller.** The reply the destination
 produces is correlated back to the original caller, the timeout follows the caller's existing path,
 and a late reply is dropped. The number of requests awaiting a reply during a move is observed
-through a runtime metric — [Operations and Lifecycle](12-operations.en.md#1-runtime-metrics) is that
+through a runtime metric — [Operations and Lifecycle](12-operations.en.md#2-runtime-metrics) is that
 place.
 
 ## 7. Related Documents

@@ -40,7 +40,7 @@ surfaces below.
 | --- | --- | --- |
 | Whether it is ready now, who dropped out | Status lookups and status subscriptions | [Reading the Current State](#2-reading-the-current-state) · [Subscribing to Changes](#3-subscribing-to-changes) |
 | Where and how one message ended | Diagnostic records (traces, logs) | [Setting the Diagnostics Level](#4-setting-the-diagnostics-level) |
-| Numbers such as concurrent users and queue depth | Meters | [Operations and Lifecycle](12-operations.en.md#1-runtime-metrics) |
+| Numbers such as concurrent users and queue depth | Meters | [Operations and Lifecycle](12-operations.en.md#2-runtime-metrics) |
 
 <iframe class="zlink-diagram" src="/common/diagrams/26-observation-paths-en.html" title="The kinds of observation surface" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/26-observation-paths-en.html" target="_blank">↗ View larger</a></p>
@@ -143,11 +143,11 @@ the result of the original message processing.
   start the subscription.
 - **I expect a health endpoint** — the framework creates no HTTP endpoint. Wire the readiness into
   the application's existing endpoint —
-  [Operations and Lifecycle](12-operations.en.md#4-wiring-operational-calls-and-readiness) is that
+  [Operations and Lifecycle](12-operations.en.md#5-wiring-operational-calls-and-readiness) is that
   place.
 - **I want to see what lives on which node** — use the lookup in [Location](25-location.en.md) and
   the topology query in
-  [Operations and Lifecycle](12-operations.en.md#5-location-readiness-and-operational-queries).
+  [Operations and Lifecycle](12-operations.en.md#6-location-readiness-and-operational-queries).
 - **I want to know about messages with no handler** — at the errors step or above they are recorded
   as dispatch failures. A request comes back as an error reply while a send is dropped quietly, so
   the send side shows up only in diagnostics —

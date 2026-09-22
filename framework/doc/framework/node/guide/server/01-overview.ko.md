@@ -18,7 +18,10 @@ title: "1. 개요 · Node/TypeScript"
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-이 장의 코드는 [tutorial README](https://github.com/zlink-systems/zlink-node-examples/blob/main/tutorial/README.ko.md)에서 가져왔다. [예제 저장소](https://github.com/zlink-systems/zlink-node-examples/blob/main/tutorial/README.ko.md)를 내려받아 README의 「내려받기와 설치」·「빌드」·「실행」 절을 따라 실행하면 뒤의 장에서 설명하는 실행 결과를 재현할 수 있다.
+!!! info "이 장을 읽고 나면"
+
+    ZLink Framework가 해결하는 문제와 주요 메시징 표면을 구분할 수 있다.
+    이 장의 코드는 [언어별 예제 저장소](https://github.com/zlink-systems/zlink-node-examples)에서 가져왔다.
 
 > 이 문서는 Node.js 가이드의 진입점이다. 가이드는 TypeScript 개발자가
 > ZLink Framework의 기능을 **읽고 바로 따라 사용할 수 있도록** 개념과 사용법을
@@ -44,7 +47,7 @@ correlation은 framework가 처리한다.
 > protocol(ZMP) + codec + 논리 channel/packet이라 서로 다른 언어로 구현된 서비스가
 > 같은 channel 위에서 상호 호출한다(예: room 서버 C++, API 서버 .NET·Java). 이
 > 가이드는 `.NET` 기준이며 `.NET` 구현을 reference implementation(기준 구현)으로
-> 삼는다. 자세한 cross-language 모델은 [17-alternative §2.1](17-alternative.ko.md)이 다룬다.
+> 삼는다. cross-language 모델은 [ZLink를 사용하는 상황](17-alternative.ko.md#2-zlink를-사용하는-상황)에서 다룬다.
 
 ## 2. 사용이 필요한 상황
 
@@ -138,8 +141,7 @@ RouteMesh·Spot·Instance Spot 조합으로 구현한다. 방식이 바뀌어도
 런타임이 없다.
 
 > 트위치 FPS의 **초저지연 snapshot netcode**는 유실을 허용하는 비신뢰 전송을 쓴다.
-> 현재 STREAM이 제공하는 transport는 TCP/TLS/WS/WSS이며, **비신뢰 전송(QUIC
-> datagram·WebTransport)은 지원 예정**이다. 다만 그런 게임에서도 매칭·로비·메타·
+> STREAM은 TCP, TLS, WebSocket 기반 transport를 제공한다. 다만 그런 게임에서도 매칭·로비·메타·
 > 소셜은 지금 이 네 방식으로 충분히 처리된다. 어디까지 되고 안 되는지는
 > [17장](17-alternative.ko.md) §4에서 다룬다.
 
@@ -435,7 +437,7 @@ application에서는 "`services` mesh의 `orders` channel로 요청을 보낸다
 같은 "서버 간 요청/응답"을 붙이는 코드량 차이다.
 
 **raw 바인딩으로 직접 (개념적)** — 실행되는 코드가 아니라 직접 구성해야 할 작업
-목록이다. 다섯 언어 모두 같은 목록이라 언어 탭으로 나누지 않는다.
+목록이다. 지원 언어에서 같은 목록을 사용하므로 언어 탭으로 나누지 않는다.
 
 ```text
 위치 저장소 조회, endpoint 연결, 재연결 관리,
@@ -612,5 +614,5 @@ location store 모델로 공개 기능을 사용한다. runtime 내부 구조를
 ---
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}function a(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(a,t);});window.addEventListener("resize",function(){setTimeout(a,150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}function a(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(a,t);});window.addEventListener("resize",function(){setTimeout(a,150);});})();
 </script>

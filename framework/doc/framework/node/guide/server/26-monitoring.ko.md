@@ -37,7 +37,7 @@ runtime의 사건을 handler로 받는 표면은 없다. 관측은 다음 표면
 | --- | --- | --- |
 | 지금 준비되었는가, 누가 빠졌는가 | 상태 조회와 상태 구독 | [지금 상태 읽기](#2-지금-상태-읽기) · [변화 구독하기](#3-변화-구독하기) |
 | message 하나가 어디서 어떻게 끝났는가 | 진단 기록(trace·log) | [진단 수준 정하기](#4-진단-수준-정하기) |
-| 동시 접속 수·queue 깊이 같은 수치 | 계기(meter) | [운영과 lifecycle](12-operations.ko.md#1-런타임-메트릭) |
+| 동시 접속 수·queue 깊이 같은 수치 | 계기(meter) | [운영과 lifecycle](12-operations.ko.md#2-런타임-메트릭) |
 
 <iframe class="zlink-diagram" src="/common/diagrams/26-observation-paths.html" title="관측 표면의 종류" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/26-observation-paths.html" target="_blank">↗ 크게 보기</a></p>
@@ -122,10 +122,10 @@ provider 호출이 실패해도 원래 메시지 처리의 결과는 바뀌지 �
   [지금 상태 읽기](#2-지금-상태-읽기)를 먼저 읽고 구독을 이어 받는다.
 - **health endpoint를 기대한다** — Framework는 HTTP endpoint를 만들지 않는다. 준비 여부를
   application의 기존 endpoint에 연결한다 —
-  [운영과 lifecycle](12-operations.ko.md#4-운영-호출과-readiness-연결)이 그 자리다.
+  [운영과 lifecycle](12-operations.ko.md#5-운영-호출과-readiness-연결)이 그 자리다.
 - **어느 node에 무엇이 있는지 보고 싶다** —
   [Location](25-location.ko.md)의 조회와
-  [운영과 lifecycle](12-operations.ko.md#5-location-readiness와-운영-조회)의 topology 조회를 사용한다.
+  [운영과 lifecycle](12-operations.ko.md#6-location-readiness와-운영-조회)의 topology 조회를 사용한다.
 - **handler가 없는 message를 알고 싶다** — 진단 수준을 오류 이상으로 두면 dispatch 실패로
   남는다. 요청은 오류 응답으로 돌아오고 보내기는 조용히 버려지므로, 보내기 쪽은 진단으로만
   확인된다 — [Channel 동작 원리](30-channel-patterns.ko.md#7-호출이-끝났다는-것의-의미)가 그

@@ -25,7 +25,7 @@ View in another language — [C++](../../../cpp/guide/server/55-gamequest.en.md)
     pushes, and through the reconciliation of lost progress. The code in this chapter runs as it
     stands in `framework/languages/java/samples/java/GameQuest`.
 
-[Picking a Sample](14-samples.en.md#7-gamequest--building-a-quest-progression-system) introduced what
+[Picking a Sample](14-samples.en.md#8-gamequest--building-a-quest-progression-system) introduced what
 this sample demonstrates. This chapter is what you read after that introduction — the roles and where
 their code lives, the message flow of the main scenarios, and, for each flow, the framework feature it
 uses and the chapter that explains it, in the order the source is laid out. This chapter has no spec

@@ -7,7 +7,7 @@
     the status pushed to the customer. The code in this chapter runs as it stands in
     `framework/languages/<language>/samples/DeliveryDispatch`.
 
-[Picking a Sample](14-samples.en.md#5-deliverydispatch--building-a-dispatch-system) introduced what
+[Picking a Sample](14-samples.en.md#6-deliverydispatch--building-a-dispatch-system) introduced what
 this sample demonstrates. This chapter is what you read after that introduction — the roles and where
 their code lives, the message flow of the main scenarios, and, for each flow, the framework feature it
 uses and the chapter that explains it, in the order the source is laid out. This chapter has no spec

@@ -24,7 +24,7 @@ View in another language — [C++](../../../cpp/guide/server/50-bingo.en.md) · 
     authentication to the end of a game, through the code of each server it passes. The code in
     this chapter runs as it stands in `framework/languages/java/samples/java/Bingo`.
 
-[Picking a Sample](14-samples.en.md#3-bingo--building-an-online-game-server) introduced what this
+[Picking a Sample](14-samples.en.md#4-bingo--building-an-online-game-server) introduced what this
 sample demonstrates. This chapter is what you read after that introduction — the roles and where
 their code lives, the message flow of the main scenarios, and, for each flow, the framework feature
 it uses and the chapter that explains it, in the order the source is laid out. This chapter has no
