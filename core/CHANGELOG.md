@@ -12,6 +12,27 @@ Libraries` workflow for a `core/vX.Y.Z` tag embeds that version's section.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-09-22
+
+The public C API and ABI are unchanged from 1.2.0
+(`LIBZLINK_ABI_SOVERSION=0`). This release makes the distributed static and
+macOS archives safe to consume in their intended configurations.
+
+### Changed
+
+- `libzlink.a` is restricted to the public `zlink_*` C ABI. Its vendored Boost
+  implementation symbols are localized before publishing, so a consumer can
+  link its own Boost version without collapsing Core and consumer definitions
+  onto one symbol. The archive rewrite works on the GCC/binutils versions that
+  build the release archives and on macOS; it fails the build rather than
+  shipping an archive if that public-surface restriction cannot be established
+  (#424, #433).
+- The macOS arm64 release archive is a relocatable runtime closure. It bundles
+  the required OpenSSL dylibs, rewrites Core and OpenSSL install names and
+  dependencies to `@loader_path`, then ad-hoc signs every modified Mach-O
+  binary. The package verification checks that closure, its signatures, and a
+  clean C consumer before an archive is published (#855).
+
 ## [1.1.0] - 2026-09-14
 
 Packaging fix for the Linux release archives. The library itself is
