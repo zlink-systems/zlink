@@ -726,10 +726,24 @@ zlink::submit_result_t spot_handle_t::publish (const std::string &channel_name,
     return zlink::submit_result_t::ok;
 }
 
+task_t<void> spot_handle_t::publish_tail (const std::vector<zlink::message_t> &parts,
+                                          std::span<const std::uint8_t> metadata)
+{
+    co_await publish_tail_impl (parts, metadata, nullptr);
+}
+
 task_t<void> spot_handle_t::publish_tail (
   const std::vector<zlink::message_t> &parts,
   std::span<const std::uint8_t> metadata,
   std::function<void (const zlink::routing_id_t &, zlink::submit_result_t)> failure_observer)
+{
+    co_await publish_tail_impl (parts, metadata, &failure_observer);
+}
+
+task_t<void> spot_handle_t::publish_tail_impl (
+  const std::vector<zlink::message_t> &parts,
+  std::span<const std::uint8_t> metadata,
+  const std::function<void (const zlink::routing_id_t &, zlink::submit_result_t)> *failure_observer)
 {
     if (!_host) {
         throw framework_exception_t (framework_error_kind_t::invalid_operation,
@@ -747,13 +761,13 @@ task_t<void> spot_handle_t::publish_tail (
                   runtime::messaging::map_submit_result_error_kind (submitted),
                   "logical multicast physical fanout was not admitted"));
             }
-            if (submitted != zlink::submit_result_t::ok && failure_observer) {
-                failure_observer (zlink::routing_id_t::from (target.descriptor.node_routing_id),
-                                  submitted);
+            if (submitted != zlink::submit_result_t::ok && failure_observer != nullptr) {
+                (*failure_observer) (zlink::routing_id_t::from (target.descriptor.node_routing_id),
+                                     submitted);
             }
         }
         catch (...) {
-            if (failure_observer) {
+            if (failure_observer != nullptr) {
                 auto submitted = zlink::submit_result_t::not_connected;
                 try {
                     throw;
@@ -768,8 +782,8 @@ task_t<void> spot_handle_t::publish_tail (
                 }
                 catch (...) {
                 }
-                failure_observer (zlink::routing_id_t::from (target.descriptor.node_routing_id),
-                                  submitted);
+                (*failure_observer) (zlink::routing_id_t::from (target.descriptor.node_routing_id),
+                                     submitted);
             }
             if (!first_failure)
                 first_failure = std::current_exception ();

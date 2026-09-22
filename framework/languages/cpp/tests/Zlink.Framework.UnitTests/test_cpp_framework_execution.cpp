@@ -6124,19 +6124,16 @@ int main ()
                   && event.message_kind == zlink::framework::dispatch_message_kind_t::send
                   && event.reason == zlink::framework::dispatch_error_reason_t::stale_target
                   && event.action == zlink::framework::dispatch_error_action_t::drop
-                  && event.packet_name && *event.packet_name == "PlayerMoved" && event.channel_name
-                  && *event.channel_name == "world" && event.mesh_name && *event.mesh_name == "game"
-                  && event.target_rid && *event.target_rid == "gone-player" && event.topic
+                  && !event.packet_name && event.channel_name && *event.channel_name == "world"
+                  && event.mesh_name && *event.mesh_name == "game" && event.target_rid
+                  && *event.target_rid == "gone-player" && event.topic
                   && *event.topic == "players") {
                   observed.store (true, std::memory_order_release);
               }
           });
-        const zlink::framework::framework_exception_t failure (
-          zlink::framework::framework_error_kind_t::unavailable,
-          "logical multicast target route is gone");
         zlink::framework::detail::report_logical_multicast_failure (
-          state, "world", "game", "players", "PlayerMoved", "gone-player",
-          zlink::framework::dispatch_error_reason_t::stale_target, failure);
+          state, "world", "game", "players", "gone-player",
+          zlink::framework::dispatch_error_reason_t::stale_target);
         if (!wait_until ([&] { return observed.load (std::memory_order_acquire); })) {
             return 90;
         }

@@ -380,10 +380,8 @@ void report_logical_multicast_failure (const std::shared_ptr<spot_node_builder_s
                                        std::string_view channel_name,
                                        std::string_view mesh_name,
                                        std::string_view topic,
-                                       std::string_view packet_name,
                                        std::string_view target_rid,
-                                       dispatch_error_reason_t reason,
-                                       const framework_exception_t &error) noexcept;
+                                       dispatch_error_reason_t reason) noexcept;
 
 /* actor_instance_index maintenance (caller runs on the node state lane). A record
  * replaces any prior address for the same actor, so a re-registered actor

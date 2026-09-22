@@ -3554,20 +3554,28 @@ void verify_logical_multicast_continues_after_one_target_failure ()
     auto publisher_state =
       std::make_shared<zlink::framework::detail::spot_node_builder_state_t> ("m6b-mesh");
     std::atomic_bool observed_failure{false};
-    zlink::framework::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
-      publisher_state->dispatch,
-      [&] (const zlink::framework::message_dispatch_error_event_t &event) {
-          if (event.surface == zlink::framework::dispatch_error_surface_t::spot_route
-              && event.message_kind == zlink::framework::dispatch_message_kind_t::send
-              && event.reason == zlink::framework::dispatch_error_reason_t::stale_target
-              && event.action == zlink::framework::dispatch_error_action_t::drop
-              && event.channel_name.value_or ("") == "framework.spot"
-              && event.mesh_name.value_or ("") == "m6b-mesh"
-              && event.target_rid.value_or ("") == "a-unavailable-target"
-              && event.topic.value_or ("") == "reward") {
+    zlink::framework::logging_builder_t logging;
+    logging.use_provider (
+      "logical-multicast-dispatch-error", [&] (const zlink::framework::log_record_t &record) {
+          const auto field = [&] (std::string_view key) -> std::optional<std::string_view> {
+              for (const auto &candidate : record.fields) {
+                  if (candidate.key == key)
+                      return candidate.value;
+              }
+              return std::nullopt;
+          };
+          if (field ("event_id") == "zlink.dispatch_error" && field ("surface") == "spot"
+              && field ("kind") == "send" && field ("outcome") == "failed"
+              && field ("action") == "drop" && field ("reason") == "stale_target"
+              && field ("target_rid") == "a-unavailable-target" && field ("topic") == "reward"
+              && field ("channel") == "framework.spot" && field ("mesh") == "m6b-mesh"
+              && !field ("phase") && !field ("source_rid") && !field ("packet")
+              && !field ("exception") && !field ("error_type") && !field ("error_message")) {
               observed_failure.store (true, std::memory_order_release);
           }
       });
+    zlink::framework::detail::dispatch_options_access_t::set_logger (
+      publisher_state->dispatch, logging.create_logger ("logical-multicast-dispatch-error"));
     zlink::framework::detail::spot_node_runtime_t publisher_runtime (publisher_state);
     publisher_runtime.attach_native_node (source);
     zlink::framework::serializer_registry_t serializers;

@@ -26,6 +26,14 @@ class dispatch_error_reporter_t
   public:
     explicit dispatch_error_reporter_t (const dispatch_options_t &options) : _options (&options) {}
 
+    bool enabled () const noexcept
+    {
+        return dispatch_options_access_t::effective_message_flow (*_options)
+                 != message_flow_log_mode_t::off
+               && (dispatch_options_access_t::logger (*_options)
+                   || dispatch_options_access_t::has_dispatch_error_observer (*_options));
+    }
+
     void report (message_dispatch_error_event_t event) const noexcept
     {
         const auto effective_mode = dispatch_options_access_t::effective_message_flow (*_options);
@@ -224,14 +232,24 @@ inline dispatch_error_reason_t dispatch_reason_from_error (framework_error_kind_
             return dispatch_error_reason_t::handler_missing;
         case framework_error_kind_t::protocol_error:
             return dispatch_error_reason_t::invalid_frame;
-        case framework_error_kind_t::deadline_exceeded:
-            return dispatch_error_reason_t::backpressure;
-        case framework_error_kind_t::unavailable:
-            return dispatch_error_reason_t::stale_target;
         case framework_error_kind_t::shutting_down:
             return dispatch_error_reason_t::shutdown;
         default:
             return dispatch_error_reason_t::handler_exception;
+    }
+}
+
+inline dispatch_error_reason_t
+dispatch_reason_from_logical_multicast_error (framework_error_kind_t kind) noexcept
+{
+    switch (kind) {
+        case framework_error_kind_t::shutting_down:
+            return dispatch_error_reason_t::shutdown;
+        case framework_error_kind_t::deadline_exceeded:
+        case framework_error_kind_t::rejected:
+            return dispatch_error_reason_t::backpressure;
+        default:
+            return dispatch_error_reason_t::stale_target;
     }
 }
 
