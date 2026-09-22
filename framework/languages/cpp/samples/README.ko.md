@@ -2,7 +2,7 @@
 
 # ZLink C++ Framework Samples
 
-C++ 샘플 일곱 개는 framework의 공개 API로 여러 서버 역할을 구성하는 방법을 보여 준다.
+C++ 샘플은 framework의 공개 API로 여러 server 역할을 구성하는 방법을 보여 준다.
 업무 흐름과 검증 기준은 공통 sample 문서(`framework/doc/framework/common/sample/README.ko.md`)를
 따르며, C++ 코드는 runtime reflection 대신 compile-time 타입으로 handler를 등록한다.
 
@@ -41,7 +41,7 @@ container를 정리한다. 샘플 코드가 다른 서버 역할을 같은 프�
 
 이 밖에는 아무것도 필요 없다. zlink 저장소, Node.js는 쓰지 않는다. ZoneWorld의 ZW-B8 장애
 proxy까지 C++로 샘플과 함께 빌드된다. Conan은 pipx(또는 pip)로 설치하며 ConanCenter의 세 번째
-파티 바이너리를 받으므로 지원 컴파일러에서 **첫 설치는 약 3분**이다. 두 번째부터는 로컬 캐시를
+파티 바이너리를 받으므로 지원 컴파일러에서 **첫 설치에는 약 3분이 걸린다**. 이후에는 로컬 캐시를
 재사용한다.
 
 ## 내려받기와 설치
@@ -49,12 +49,12 @@ proxy까지 C++로 샘플과 함께 빌드된다. Conan은 pipx(또는 pip)로 �
 [`zlink-cpp-examples`](https://github.com/zlink-systems/zlink-cpp-examples) 저장소를 clone한다.
 아래 명령은 모두 그 저장소의 `samples/` 안에서 실행한다.
 
-설치는 `bootstrap.cmake` 하나가 한다 — [빌드](#빌드) 블록의 첫 줄이다. GitHub Release에서 세
+설치는 [빌드](#빌드) 블록 첫 줄의 `bootstrap.cmake`로 처리한다. GitHub Release에서
 아카이브 — 이 플랫폼의 Core prebuilt(`core/v1.2.0`), C++ binding 소스(`cpp/v1.2.0`), framework
 소스(`framework-cpp/v0.18.0`) — 를 받아 binding과 framework를 빌드해 `.zlink/install/`에
-설치하고, 샘플 일곱 개를 한 프로젝트로 `build/`에 구성한다. 기본 package manager는 Conan이며
-vcpkg fallback은 `-DZLINK_PACKAGE_MANAGER=vcpkg`로 고른다. 두 번째 실행부터는 받은 것과 지은
-것을 그대로 쓴다.
+설치하고, 모든 sample을 한 프로젝트로 `build/`에 구성한다. 기본 package manager는 Conan이며
+vcpkg fallback은 `-DZLINK_PACKAGE_MANAGER=vcpkg`로 선택한다. 이후 실행에서는 받은 파일과 빌드
+결과를 그대로 사용한다.
 
 병렬도는 논리 코어 수가 기본이며 `cmake -DZLINK_JOBS=4 -P bootstrap.cmake`처럼 `-P` 앞에
 두어 줄인다. 다시 처음부터 하려면 `.zlink/`와 `build/`를 지운다.
@@ -71,8 +71,8 @@ cmake -P bootstrap.cmake
 cmake --build build --config Release --parallel
 ```
 
-역할별 실행 파일 28개와 ZoneWorld proxy가 나온다 — Windows는 `build\Release\`, Linux는
-`build/` 아래다. Windows에서는 Core `zlink.dll`과 세 번째 파티 DLL이 실행 파일 옆에 함께
+역할별 실행 파일 28개와 ZoneWorld proxy는 Windows의 `build\Release\`, Linux의
+`build/` 아래에 생성된다. Windows에서는 Core `zlink.dll`과 서드파티 DLL이 실행 파일 옆에 함께
 복사된다. Linux runner는 실행 전에 자기 샘플의 target을 다시 빌드하므로 한 샘플만 볼 때는
 `cmake --build`를 건너뛰어도 된다.
 
@@ -80,8 +80,8 @@ cmake --build build --config Release --parallel
 
 샘플마다 `run_sample.ps1`과 `run_sample.sh`가 있고, 한 번의 호출은 샘플 하나를 실행한다.
 **Runner가 Redis를 Docker container로 직접 띄우고**(`redis:7-alpine`, `127.0.0.1`의
-20000–20099 중 빈 port) 끝날 때 지운다. 미리 띄울 것은 없다. 아래 블록은 일곱을 차례로
-실행한다.
+20000–20099 중 빈 port)를 실행이 끝날 때 제거한다. Redis를 미리 시작할 필요는 없다. 아래 블록은
+각 sample을 차례로 실행한다.
 
 ```bash title="linux"
 ./Bingo/run_sample.sh
@@ -103,8 +103,8 @@ cmake --build build --config Release --parallel
 .\ZoneWorld\run_sample.ps1
 ```
 
-한 번에 하나씩 실행한다. Runner는 build, 역할별 설정 파일 생성, 서버 시작, readiness 확인,
-client self-check와 정리를 순서대로 수행한다. 애플리케이션 port는 `127.0.0.1`의 20100–21999
+각 호출은 sample 하나를 실행한다. Runner는 빌드, 역할별 설정 파일 생성, server 시작, readiness 확인,
+client self-check와 정리를 순서대로 수행한다. application 포트는 `127.0.0.1`의 20100–21999
 안에서 실행마다 새로 고른다.
 
 `ZLINK_CPP_BUILD_DIR`을 지정하면 `build/` 대신 그 빌드 트리의 실행 파일을 쓴다.
@@ -173,13 +173,13 @@ TicTacToe만 peer endpoint를 수동으로 설정한다. 다른 샘플은 Spot�
 peer를 구성할 때 Redis location store를 사용한다. Application code가 peer 목록이나 연결 순서를
 관리하지 않는다.
 
-`samples/TicTacToe/run_sample.sh`와 `samples/Bingo/run_sample.sh`는 서버 역할 전체와 공개
-client self-check를 한 번에 실행하는 전체 self-check다. 저장소 트리 안에서는 그 앞에
+`samples/TicTacToe/run_sample.sh`와 `samples/Bingo/run_sample.sh`는 모든 server 역할과 공개
+client self-check를 함께 실행한다. 저장소 tree에서는 그 전에
 framework 자체 테스트도 함께 돈다.
 
 하나의 물리 mesh는 process마다 MeshNode 하나로 구성한다. `ChannelName`은 그 MeshNode가
 참여하는 논리 service group이며 별도 ROUTER endpoint를 만들지 않는다. Node direct, ChannelName
-select-one, Spot, Actor와 Logical Multicast는 같은 MeshNode를 사용한다. 전 수신자에게
+select-one, Spot, Actor와 Logical Multicast는 같은 MeshNode를 사용한다. 모든 수신자에게
 전달하는 classic fanout은 별도 PUB/SUB channel이다.
 
 ## 설정과 계약 배치
@@ -203,4 +203,4 @@ sample_cpp_framework_tictactoe_client --api-http-endpoint=http://127.0.0.1:48113
 
 각 샘플의 `CMakeLists.txt`는 단독으로도 구성된다 — `find_package(zlink_framework CONFIG
 REQUIRED)`에 `CMAKE_PREFIX_PATH`로 `.zlink/install`을 주면 된다. 루트의 `CMakeLists.txt`는
-일곱 개를 한 빌드 트리에 모은 것이다.
+모든 sample을 하나의 빌드 트리에 모은다.
