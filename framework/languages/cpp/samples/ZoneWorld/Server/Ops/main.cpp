@@ -287,20 +287,22 @@ class ops_monitor_service_t final : public fw::hosted_service_t
     {
         _state = &services.get_required<ops_state_t> ();
         _notifications = &services.get_required<ops_notification_queue_t> ();
-        // --8<-- [start:doc-zw-observe-peers]
         auto &runtime = services.get_required<fw::route_mesh_runtime_t> ();
+        // --8<-- [start:doc-zw-observe-peers]
         _observation = runtime.observe (
           names_t::mesh,
           64,
           [this] (const fw::observed_status_t<fw::mesh_node_snapshot_t> &observed) {
               apply_snapshot (observed.status);
           });
+        // --8<-- [end:doc-zw-observe-peers]
+        // --8<-- [start:doc-zw-snapshot-peers]
         try {
             apply_snapshot (runtime.snapshot (names_t::mesh));
         }
         catch (...) {
         }
-        // --8<-- [end:doc-zw-observe-peers]
+        // --8<-- [end:doc-zw-snapshot-peers]
         _running.store (true);
         _worker = std::thread ([this] {
             while (_running.load ()) {

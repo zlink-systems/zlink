@@ -48,7 +48,7 @@ A lookup returns **one value as of the call**. Use it to answer an operational e
 something once.
 
 ```typescript
---8<-- "framework/languages/node/samples/ZoneWorld/Server/Ops/ops-runtime-events.ts:doc-zw-observe-peers"
+--8<-- "framework/languages/node/samples/ZoneWorld/Server/Ops/ops-runtime-events.ts:doc-zw-snapshot-peers"
 ```
 
 **Read the readiness and the state value together.** Readiness alone does not say what to do, and

@@ -48,7 +48,7 @@ A lookup returns **one value as of the call**. Use it to answer an operational e
 something once.
 
 ```csharp
---8<-- "framework/languages/dotnet/samples/ZoneWorld/Server/Ops/Infrastructure/ZLink/Monitoring/OpsEventHandlers.cs:doc-zw-observe-peers"
+--8<-- "framework/languages/dotnet/samples/ZoneWorld/Server/Ops/Infrastructure/ZLink/Monitoring/OpsEventHandlers.cs:doc-zw-snapshot-peers"
 ```
 
 **Read the readiness and the state value together.** Readiness alone does not say what to do, and

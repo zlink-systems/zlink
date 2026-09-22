@@ -30,31 +30,31 @@ runtime의 사건을 handler로 받는 표면은 없다. 운영 endpoint에는 �
 === "C#/.NET"
 
     ```csharp
-    --8<-- "framework/languages/dotnet/samples/ZoneWorld/Server/Ops/Infrastructure/ZLink/Monitoring/OpsEventHandlers.cs:doc-zw-observe-peers"
+    --8<-- "framework/languages/dotnet/samples/ZoneWorld/Server/Ops/Infrastructure/ZLink/Monitoring/OpsEventHandlers.cs:doc-zw-snapshot-peers"
     ```
 
 === "C++"
 
     ```cpp
-    --8<-- "framework/languages/cpp/samples/ZoneWorld/Server/Ops/main.cpp:doc-zw-observe-peers"
+    --8<-- "framework/languages/cpp/samples/ZoneWorld/Server/Ops/main.cpp:doc-zw-snapshot-peers"
     ```
 
 === "Java"
 
     ```java
-    --8<-- "framework/languages/java/samples/java/ZoneWorld/Server/src/main/java/systems/zlink/samples/zoneworld/server/ops/NodeLivenessObserver.java:doc-zw-observe-peers"
+    --8<-- "framework/languages/java/samples/java/ZoneWorld/Server/src/main/java/systems/zlink/samples/zoneworld/server/ops/NodeLivenessObserver.java:doc-zw-snapshot-peers"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    --8<-- "framework/languages/java/samples/kotlin/ZoneWorld/Server/src/main/kotlin/systems/zlink/samples/kotlin/zoneworld/server/ops/NodeLivenessObserver.kt:doc-zw-observe-peers"
+    --8<-- "framework/languages/java/samples/kotlin/ZoneWorld/Server/src/main/kotlin/systems/zlink/samples/kotlin/zoneworld/server/ops/NodeLivenessObserver.kt:doc-zw-snapshot-peers"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    --8<-- "framework/languages/node/samples/ZoneWorld/Server/Ops/ops-runtime-events.ts:doc-zw-observe-peers"
+    --8<-- "framework/languages/node/samples/ZoneWorld/Server/Ops/ops-runtime-events.ts:doc-zw-snapshot-peers"
     ```
 
 **준비 여부와 상태 값을 함께 읽는다.** 준비되지 않았다는 것만으로는 무엇을 할지 정할 수

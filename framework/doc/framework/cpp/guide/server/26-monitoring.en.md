@@ -48,7 +48,7 @@ A lookup returns **one value as of the call**. Use it to answer an operational e
 something once.
 
 ```cpp
---8<-- "framework/languages/cpp/samples/ZoneWorld/Server/Ops/main.cpp:doc-zw-observe-peers"
+--8<-- "framework/languages/cpp/samples/ZoneWorld/Server/Ops/main.cpp:doc-zw-snapshot-peers"
 ```
 
 **Read the readiness and the state value together.** Readiness alone does not say what to do, and

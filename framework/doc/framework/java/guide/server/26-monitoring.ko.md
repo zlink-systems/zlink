@@ -46,7 +46,7 @@ runtime의 사건을 handler로 받는 표면은 없다. 운영 endpoint에는 �
 확인할 때 사용한다.
 
 ```java
---8<-- "framework/languages/java/samples/java/ZoneWorld/Server/src/main/java/systems/zlink/samples/zoneworld/server/ops/NodeLivenessObserver.java:doc-zw-observe-peers"
+--8<-- "framework/languages/java/samples/java/ZoneWorld/Server/src/main/java/systems/zlink/samples/zoneworld/server/ops/NodeLivenessObserver.java:doc-zw-snapshot-peers"
 ```
 
 **준비 여부와 상태 값을 함께 읽는다.** 준비되지 않았다는 것만으로는 무엇을 할지 정할 수

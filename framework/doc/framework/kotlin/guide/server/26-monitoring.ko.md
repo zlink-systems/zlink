@@ -46,7 +46,7 @@ runtime의 사건을 handler로 받는 표면은 없다. 운영 endpoint에는 �
 확인할 때 사용한다.
 
 ```kotlin
---8<-- "framework/languages/java/samples/kotlin/ZoneWorld/Server/src/main/kotlin/systems/zlink/samples/kotlin/zoneworld/server/ops/NodeLivenessObserver.kt:doc-zw-observe-peers"
+--8<-- "framework/languages/java/samples/kotlin/ZoneWorld/Server/src/main/kotlin/systems/zlink/samples/kotlin/zoneworld/server/ops/NodeLivenessObserver.kt:doc-zw-snapshot-peers"
 ```
 
 **준비 여부와 상태 값을 함께 읽는다.** 준비되지 않았다는 것만으로는 무엇을 할지 정할 수

@@ -48,7 +48,7 @@ A lookup returns **one value as of the call**. Use it to answer an operational e
 something once.
 
 ```kotlin
---8<-- "framework/languages/java/samples/kotlin/ZoneWorld/Server/src/main/kotlin/systems/zlink/samples/kotlin/zoneworld/server/ops/NodeLivenessObserver.kt:doc-zw-observe-peers"
+--8<-- "framework/languages/java/samples/kotlin/ZoneWorld/Server/src/main/kotlin/systems/zlink/samples/kotlin/zoneworld/server/ops/NodeLivenessObserver.kt:doc-zw-snapshot-peers"
 ```
 
 **Read the readiness and the state value together.** Readiness alone does not say what to do, and

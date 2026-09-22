@@ -48,7 +48,7 @@ A lookup returns **one value as of the call**. Use it to answer an operational e
 something once.
 
 ```java
---8<-- "framework/languages/java/samples/java/ZoneWorld/Server/src/main/java/systems/zlink/samples/zoneworld/server/ops/NodeLivenessObserver.java:doc-zw-observe-peers"
+--8<-- "framework/languages/java/samples/java/ZoneWorld/Server/src/main/java/systems/zlink/samples/zoneworld/server/ops/NodeLivenessObserver.java:doc-zw-snapshot-peers"
 ```
 
 **Read the readiness and the state value together.** Readiness alone does not say what to do, and
