@@ -41,7 +41,7 @@ Kotlin은 Java `ZLinkActorRelocationAdapter<TActor>`와 factory builder를 그�
 Opaque Java `byte[]`는 Kotlin `ByteArray`로 보이며 `capture`와 `restore`의 asynchronous completion은
 `CompletionStage`다. 별도 suspending adapter, `TState`, `stateContractId`, state class와 `ZLinkMessage` 기반
 relocation API를 만들지 않는다. State 보존 policy는
-`preserveStateWith(ActorAdapter::class.java)`로 구성하며 factory와 adapter target의 일치는 socket
+`preserveStateWith<ActorAdapter>()`로 구성하며 factory와 adapter target의 일치는 socket
 bind 전에 검증한다. Java interop에서 null adapter class를 전달한 policy도 bind 전에 startup configuration error로
 거부한다.
 

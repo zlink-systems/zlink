@@ -54,7 +54,7 @@ builder unchanged. The opaque Java `byte[]` appears as Kotlin
 `CompletionStage`. A separate suspending adapter, `TState`,
 `stateContractId`, state class, or `ZLinkMessage`-based relocation API
 isn't created. The state-preservation policy is configured with
-`preserveStateWith(ActorAdapter::class.java)`, and the match between
+`preserveStateWith<ActorAdapter>()`, and the match between
 factory and adapter target is validated before socket bind. A policy
 passing a null adapter class through Java interop is also rejected as a
 startup configuration error before bind.

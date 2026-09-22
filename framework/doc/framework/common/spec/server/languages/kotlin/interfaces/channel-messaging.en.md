@@ -32,11 +32,13 @@ not calling it on a request is `REJECTED`. Even if the filter returns an
 arbitrary value, it doesn't substitute for the handler reply. Coroutine
 suspension doesn't extend the dispatch scope beyond terminal completion.
 
-A Spot direct send/request isn't reduced to a Channel call. Since a
-Kotlin-only Spot wrapper configures `instanceSpot` and `inMesh` before
-terminal `await()`/`yield()`, it keeps the fluent state of Missing
-Instance cold activation. Kotlin's Spot-dedicated wrapper and JVM
+A Spot context's `outbound()` is used through the Kotlin wrapper that
+`outbound().kotlin()` returns; the wrapper's calls, terminals and JVM
 signature are owned by the [Spot Interface](spots.en.md).
+
+Handler registration on the Channel Server builders follows the
+registration rule in [Kotlin Configuration](configuration-host.en.md). The
+source and JVM signatures below declare those extensions.
 
 ## Kotlin Source Signature
 
@@ -227,6 +229,27 @@ fun ZLinkMeshPeerConnections.connect(
  expectedRoutingId: RoutingId,
  endpoint: String,
 )
+
+inline fun <reified THandler : Any, reified TMessage : Any>
+ ZLinkMeshNodeBuilder.addRouteSendHandler(): ZLinkMeshNodeBuilder
+
+inline fun <reified THandler : Any, reified TRequest : Any, reified TReply : Any>
+ ZLinkMeshNodeBuilder.addRouteRequestHandler(): ZLinkMeshNodeBuilder
+
+inline fun <reified THandler : ZLinkSendHandler<TMessage>, reified TMessage : Any>
+ ZLinkMeshChannelServerBuilder.addSendHandler(): ZLinkMeshChannelServerBuilder
+
+inline fun <reified THandler : ZLinkRouteSendHandler<TMessage>, reified TMessage : Any>
+ ZLinkMeshChannelServerBuilder.addRouteSendHandler(): ZLinkMeshChannelServerBuilder
+
+inline fun <reified THandler : ZLinkRequestHandler<TRequest, TReply>, reified TRequest : Any, reified TReply : Any>
+ ZLinkMeshChannelServerBuilder.addRequestHandler(): ZLinkMeshChannelServerBuilder
+
+inline fun <reified THandler : ZLinkSendHandler<TMessage>, reified TMessage : Any>
+ ZLinkClientServerChannelServerBuilder.addSendHandler(): ZLinkClientServerChannelServerBuilder
+
+inline fun <reified THandler : ZLinkRequestHandler<TRequest, TReply>, reified TRequest : Any, reified TReply : Any>
+ ZLinkClientServerChannelServerBuilder.addRequestHandler(): ZLinkClientServerChannelServerBuilder
 ```
 
 ```kotlin
@@ -251,6 +274,15 @@ public final class systems.zlink.framework.kotlin.ZLinkRouteMeshExtensionsKt {
  public static final systems.zlink.framework.configuration.ZLinkMeshChannelBuilder channelName(systems.zlink.framework.configuration.ZLinkMeshNodeBuilder, java.lang.String, kotlin.jvm.functions.Function1<? super systems.zlink.framework.configuration.ZLinkMeshChannelBuilder, kotlin.Unit>);
  public static systems.zlink.framework.configuration.ZLinkMeshChannelBuilder channelName$default(systems.zlink.framework.configuration.ZLinkMeshNodeBuilder, java.lang.String, kotlin.jvm.functions.Function1, int, java.lang.Object);
  public static final void connect(systems.zlink.framework.configuration.ZLinkMeshPeerConnections, systems.zlink.contracts.core.RoutingId, java.lang.String);
+}
+public final class systems.zlink.framework.kotlin.ZLinkFrameworkExtensionsKt {
+ public static final <THandler, TMessage> systems.zlink.framework.configuration.ZLinkMeshNodeBuilder addRouteSendHandler(systems.zlink.framework.configuration.ZLinkMeshNodeBuilder);
+ public static final <THandler, TRequest, TReply> systems.zlink.framework.configuration.ZLinkMeshNodeBuilder addRouteRequestHandler(systems.zlink.framework.configuration.ZLinkMeshNodeBuilder);
+ public static final <THandler extends systems.zlink.framework.channels.ZLinkSendHandler<TMessage>, TMessage> systems.zlink.framework.configuration.ZLinkMeshChannelServerBuilder addSendHandler(systems.zlink.framework.configuration.ZLinkMeshChannelServerBuilder);
+ public static final <THandler extends systems.zlink.framework.channels.ZLinkRouteSendHandler<TMessage>, TMessage> systems.zlink.framework.configuration.ZLinkMeshChannelServerBuilder addRouteSendHandler(systems.zlink.framework.configuration.ZLinkMeshChannelServerBuilder);
+ public static final <THandler extends systems.zlink.framework.channels.ZLinkRequestHandler<TRequest, TReply>, TRequest, TReply> systems.zlink.framework.configuration.ZLinkMeshChannelServerBuilder addRequestHandler(systems.zlink.framework.configuration.ZLinkMeshChannelServerBuilder);
+ public static final <THandler extends systems.zlink.framework.channels.ZLinkSendHandler<TMessage>, TMessage> systems.zlink.framework.configuration.ZLinkClientServerChannelServerBuilder addSendHandler(systems.zlink.framework.configuration.ZLinkClientServerChannelServerBuilder);
+ public static final <THandler extends systems.zlink.framework.channels.ZLinkRequestHandler<TRequest, TReply>, TRequest, TReply> systems.zlink.framework.configuration.ZLinkClientServerChannelServerBuilder addRequestHandler(systems.zlink.framework.configuration.ZLinkClientServerChannelServerBuilder);
 }
 public final class systems.zlink.framework.kotlin.ZLinkSuspendingHandlersKt {
 }
