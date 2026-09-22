@@ -2181,11 +2181,6 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
         for (std::size_t index = 0; index < _nodes.size (); ++index) {
             const auto &node = _nodes[index];
             const auto &registration = _registrations[index];
-            if (registration->object_role == object_role_t::none) {
-                node->bind_descriptor_publisher ({});
-                continue;
-            }
-            const auto descriptor_index = _published_mesh_descriptors.size ();
             const auto status = node->status ();
             mesh_node_descriptor_t descriptor;
             const auto owner = current_location_owner ();
@@ -2194,7 +2189,6 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
             descriptor.lifecycle_generation = status.lifecycle_generation ();
             descriptor.descriptor_revision = 1;
             descriptor.endpoint = status.local_endpoint ();
-            descriptor.entry_spot_id = node->native_node ().entry_spot ().spot_id ();
             descriptor.channel_weights = node->channel_weights ();
             descriptor.object_role = registration->object_role;
             descriptor.placement_weight = node->placement_weight ();
@@ -2205,89 +2199,93 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
             descriptor.security_identity = "default";
             descriptor.owner_id = owner ? owner->owner_id : std::string{};
             descriptor.lease_generation = owner ? owner->lease_generation : 0;
-            for (const auto &stable_type : registration->spot_state->snapshot.actor_types) {
-                const auto configured =
-                  registration->spot_state->actor_factories.find (stable_type);
-                const auto relocation =
-                  configured != registration->spot_state->actor_factories.end ()
-                    ? configured->second.relocation.kind
-                    : detail::factory_relocation_kind_t::disabled;
-                const auto has_state_adapter =
-                  relocation == detail::factory_relocation_kind_t::preserve_state;
-                descriptor.object_capabilities.push_back (object_capability_t{
-                  .object_kind = placement_object_kind_t::actor,
-                  .stable_type = stable_type,
-                  .policy = has_state_adapter ? maintenance_policy_kind_t::snapshot
-                            : relocation == detail::factory_relocation_kind_t::recreate
-                              ? maintenance_policy_kind_t::recreate
-                              : maintenance_policy_kind_t::disabled,
-                  .has_snapshot_adapter = has_state_adapter});
+            if (registration->object_role == object_role_t::server) {
+                descriptor.entry_spot_id = node->native_node ().entry_spot ().spot_id ();
+                for (const auto &stable_type : registration->spot_state->snapshot.actor_types) {
+                    const auto configured =
+                      registration->spot_state->actor_factories.find (stable_type);
+                    const auto relocation =
+                      configured != registration->spot_state->actor_factories.end ()
+                        ? configured->second.relocation.kind
+                        : detail::factory_relocation_kind_t::disabled;
+                    const auto has_state_adapter =
+                      relocation == detail::factory_relocation_kind_t::preserve_state;
+                    descriptor.object_capabilities.push_back (object_capability_t{
+                      .object_kind = placement_object_kind_t::actor,
+                      .stable_type = stable_type,
+                      .policy = has_state_adapter ? maintenance_policy_kind_t::snapshot
+                                : relocation == detail::factory_relocation_kind_t::recreate
+                                  ? maintenance_policy_kind_t::recreate
+                                  : maintenance_policy_kind_t::disabled,
+                      .has_snapshot_adapter = has_state_adapter});
+                }
+                for (const auto &stable_type : registration->spot_state->snapshot.spot_names) {
+                    if (registration->spot_state->snapshot.entry_spot_name == stable_type)
+                        continue;
+                    if (std::find (registration->spot_state->snapshot.instance_spot_names.begin (),
+                                   registration->spot_state->snapshot.instance_spot_names.end (),
+                                   stable_type)
+                        != registration->spot_state->snapshot.instance_spot_names.end ())
+                        continue;
+                    const auto configured =
+                      registration->spot_state->spot_factory_relocations.find (stable_type);
+                    const auto relocation =
+                      configured != registration->spot_state->spot_factory_relocations.end ()
+                        ? configured->second.kind
+                        : detail::factory_relocation_kind_t::disabled;
+                    descriptor.object_capabilities.push_back (object_capability_t{
+                      .object_kind = placement_object_kind_t::user_spot,
+                      .stable_type = stable_type,
+                      .policy = relocation == detail::factory_relocation_kind_t::preserve_state
+                                  ? maintenance_policy_kind_t::snapshot
+                                : relocation == detail::factory_relocation_kind_t::recreate
+                                  ? maintenance_policy_kind_t::recreate
+                                  : maintenance_policy_kind_t::disabled,
+                      .has_snapshot_adapter =
+                        relocation == detail::factory_relocation_kind_t::preserve_state});
+                    descriptor.capacity.spot_types.push_back (spot_type_capacity_t{
+                      .object_kind = placement_object_kind_t::user_spot,
+                      .stable_type = stable_type,
+                      .usage = {.limit = registration->spot_state->spot_stable_type_limits.at (
+                                  stable_type)}});
+                }
+                for (const auto &stable_type :
+                     registration->spot_state->snapshot.instance_spot_names) {
+                    const auto configured =
+                      registration->spot_state->spot_factory_relocations.find (stable_type);
+                    const auto relocation =
+                      configured != registration->spot_state->spot_factory_relocations.end ()
+                        ? configured->second.kind
+                        : detail::factory_relocation_kind_t::disabled;
+                    descriptor.object_capabilities.push_back (object_capability_t{
+                      .object_kind = placement_object_kind_t::instance_spot,
+                      .stable_type = stable_type,
+                      .policy = relocation == detail::factory_relocation_kind_t::preserve_state
+                                  ? maintenance_policy_kind_t::snapshot
+                                : relocation == detail::factory_relocation_kind_t::recreate
+                                  ? maintenance_policy_kind_t::recreate
+                                  : maintenance_policy_kind_t::disabled,
+                      .has_snapshot_adapter =
+                        relocation == detail::factory_relocation_kind_t::preserve_state});
+                    descriptor.capacity.spot_types.push_back (spot_type_capacity_t{
+                      .object_kind = placement_object_kind_t::instance_spot,
+                      .stable_type = stable_type,
+                      .usage = {.limit = registration->spot_state->spot_stable_type_limits.at (
+                                  stable_type)}});
+                }
+                std::sort (descriptor.object_capabilities.begin (),
+                           descriptor.object_capabilities.end (),
+                           [] (const object_capability_t &left, const object_capability_t &right) {
+                               return std::tie (left.object_kind, left.stable_type)
+                                      < std::tie (right.object_kind, right.stable_type);
+                           });
+                std::sort (
+                  descriptor.capacity.spot_types.begin (), descriptor.capacity.spot_types.end (),
+                  [] (const spot_type_capacity_t &left, const spot_type_capacity_t &right) {
+                      return std::tie (left.object_kind, left.stable_type)
+                             < std::tie (right.object_kind, right.stable_type);
+                  });
             }
-            for (const auto &stable_type : registration->spot_state->snapshot.spot_names) {
-                if (registration->spot_state->snapshot.entry_spot_name == stable_type)
-                    continue;
-                if (std::find (registration->spot_state->snapshot.instance_spot_names.begin (),
-                               registration->spot_state->snapshot.instance_spot_names.end (),
-                               stable_type)
-                    != registration->spot_state->snapshot.instance_spot_names.end ())
-                    continue;
-                const auto configured =
-                  registration->spot_state->spot_factory_relocations.find (stable_type);
-                const auto relocation =
-                  configured != registration->spot_state->spot_factory_relocations.end ()
-                    ? configured->second.kind
-                    : detail::factory_relocation_kind_t::disabled;
-                descriptor.object_capabilities.push_back (object_capability_t{
-                  .object_kind = placement_object_kind_t::user_spot,
-                  .stable_type = stable_type,
-                  .policy = relocation == detail::factory_relocation_kind_t::preserve_state
-                              ? maintenance_policy_kind_t::snapshot
-                            : relocation == detail::factory_relocation_kind_t::recreate
-                              ? maintenance_policy_kind_t::recreate
-                              : maintenance_policy_kind_t::disabled,
-                  .has_snapshot_adapter =
-                    relocation == detail::factory_relocation_kind_t::preserve_state});
-                descriptor.capacity.spot_types.push_back (spot_type_capacity_t{
-                  .object_kind = placement_object_kind_t::user_spot,
-                  .stable_type = stable_type,
-                  .usage = {.limit =
-                              registration->spot_state->spot_stable_type_limits.at (stable_type)}});
-            }
-            for (const auto &stable_type : registration->spot_state->snapshot.instance_spot_names) {
-                const auto configured =
-                  registration->spot_state->spot_factory_relocations.find (stable_type);
-                const auto relocation =
-                  configured != registration->spot_state->spot_factory_relocations.end ()
-                    ? configured->second.kind
-                    : detail::factory_relocation_kind_t::disabled;
-                descriptor.object_capabilities.push_back (object_capability_t{
-                  .object_kind = placement_object_kind_t::instance_spot,
-                  .stable_type = stable_type,
-                  .policy = relocation == detail::factory_relocation_kind_t::preserve_state
-                              ? maintenance_policy_kind_t::snapshot
-                            : relocation == detail::factory_relocation_kind_t::recreate
-                              ? maintenance_policy_kind_t::recreate
-                              : maintenance_policy_kind_t::disabled,
-                  .has_snapshot_adapter =
-                    relocation == detail::factory_relocation_kind_t::preserve_state});
-                descriptor.capacity.spot_types.push_back (spot_type_capacity_t{
-                  .object_kind = placement_object_kind_t::instance_spot,
-                  .stable_type = stable_type,
-                  .usage = {.limit =
-                              registration->spot_state->spot_stable_type_limits.at (stable_type)}});
-            }
-            std::sort (descriptor.object_capabilities.begin (),
-                       descriptor.object_capabilities.end (),
-                       [] (const object_capability_t &left, const object_capability_t &right) {
-                           return std::tie (left.object_kind, left.stable_type)
-                                  < std::tie (right.object_kind, right.stable_type);
-                       });
-            std::sort (descriptor.capacity.spot_types.begin (),
-                       descriptor.capacity.spot_types.end (),
-                       [] (const spot_type_capacity_t &left, const spot_type_capacity_t &right) {
-                           return std::tie (left.object_kind, left.stable_type)
-                                  < std::tie (right.object_kind, right.stable_type);
-                       });
             if (owner) {
                 const auto written =
                   _location_store->update_mesh_node (descriptor, location_write_intent_t::new_claim)
@@ -2301,16 +2299,15 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
             }
             _published_mesh_descriptors.push_back (descriptor);
             node->bind_descriptor_publisher (
-              [this, descriptor_index] (const std::map<std::string, int> &channel_weights,
-                                        int placement_weight, std::uint64_t descriptor_revision) {
+              [this, index] (const std::map<std::string, int> &channel_weights,
+                             int placement_weight, std::uint64_t descriptor_revision) {
                   std::lock_guard lock (_descriptor_publish_mutex);
                   const auto owner = current_location_owner ();
-                  if (!_location_store || !owner
-                      || descriptor_index >= _published_mesh_descriptors.size ())
+                  if (!_location_store || !owner || index >= _published_mesh_descriptors.size ())
                       throw framework_exception_t (
                         framework_error_kind_t::protocol_error,
                         "MeshNode Location descriptor publisher is not active");
-                  auto descriptor = _published_mesh_descriptors[descriptor_index];
+                  auto descriptor = _published_mesh_descriptors[index];
                   descriptor.owner_id = owner->owner_id;
                   descriptor.lease_generation = owner->lease_generation;
                   descriptor.channel_weights = channel_weights;
@@ -2324,7 +2321,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                       throw framework_exception_t (
                         framework_error_kind_t::protocol_error,
                         "MeshNode Location descriptor update was fenced");
-                  _published_mesh_descriptors[descriptor_index] = std::move (descriptor);
+                  _published_mesh_descriptors[index] = std::move (descriptor);
               });
         }
         for (std::size_t index = 0; index < _nodes.size (); ++index) {

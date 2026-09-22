@@ -1016,12 +1016,14 @@ void verify_local_node_submit_bridge ()
 // (raw_mesh_node_owner_t::request_with_header's `_topology.peer(...)` gate),
 // not fail with a blanket not_found merely because the target routing id is
 // absent from this node's own Location Store page. Route-only
-// (object_role=none) MeshNode peers are never published to the Location
-// Store, so classify_node_direct_target used to misclassify EVERY
-// direct-target send/request as not_found before the network call was ever
-// attempted, regardless of whether the target was actually admitted. This
-// node never admits any peer at all, so the correct (post-fix) outcome for
-// an unknown target is not_connected -- the real topology-backed answer.
+// (object_role=none) MeshNode peers are published for route/channel topology,
+// but their descriptors expose no object placement capability. The absent
+// entry below is therefore the unknown target, not this source node.
+// classify_node_direct_target used to misclassify every direct-target
+// send/request as not_found before the network call was attempted, regardless
+// of whether the target was actually admitted. This node never admits any
+// peer at all, so the correct (post-fix) outcome for an unknown target is
+// not_connected -- the real topology-backed answer.
 // Before the fix, classify_node_direct_target returned not_found here
 // unconditionally without ever consulting the transport layer, so this
 // assertion would have failed pre-fix and pins the fix now.
@@ -1054,6 +1056,17 @@ void verify_direct_target_falls_through_absent_location_store_entry ()
                                                                  {}, application_jobs);
     service.start (provider);
     const auto node = service.nodes ().front ();
+
+    const auto descriptors = location_store.list_mesh_nodes ("vertical-mesh").result ().value ();
+    const auto source_descriptor =
+      std::find_if (descriptors.items.begin (), descriptors.items.end (), [&] (const auto &item) {
+          return item.rid.to_hex () == registration->routing_id->to_hex ();
+      });
+    assert (source_descriptor != descriptors.items.end ());
+    assert (source_descriptor->object_role == zlink::framework::object_role_t::none);
+    assert (source_descriptor->object_capabilities.empty ());
+    assert (!source_descriptor->entry_spot_id);
+    assert (source_descriptor->channel_weights.contains ("work"));
 
     const std::vector<zlink::message_t> parts{zlink::message_t::from (std::string ("direct"))};
     const auto target = zlink::routing_id_t::from (std::string ("never-admitted-target"));
