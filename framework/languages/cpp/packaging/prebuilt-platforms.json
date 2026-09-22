@@ -1,0 +1,28 @@
+{
+  "include": [
+    {
+      "platform": "linux-x64",
+      "runner": "ubuntu-24.04",
+      "c_compiler": "gcc-13",
+      "cxx_compiler": "g++-13"
+    },
+    {
+      "platform": "linux-arm64",
+      "runner": "ubuntu-24.04-arm",
+      "c_compiler": "gcc-13",
+      "cxx_compiler": "g++-13"
+    },
+    {
+      "platform": "macos-arm64",
+      "runner": "macos-15",
+      "c_compiler": "clang",
+      "cxx_compiler": "clang++"
+    },
+    {
+      "platform": "windows-x64",
+      "runner": "windows-2022",
+      "c_compiler": "cl",
+      "cxx_compiler": "cl"
+    }
+  ]
+}

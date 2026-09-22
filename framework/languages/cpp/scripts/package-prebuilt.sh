@@ -76,6 +76,7 @@ else
 fi
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source_dir="$(cd "$script_dir/.." && pwd)"
+platform_manifest="$source_dir/packaging/prebuilt-platforms.json"
 version="$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' "$source_dir/VERSION")"
 [[ -n "$version" ]] || { echo "missing framework VERSION" >&2; exit 1; }
 
@@ -90,6 +91,18 @@ else
   echo "Python 3 is required" >&2
   exit 1
 fi
+IFS='|' read -r c_compiler cxx_compiler <<<"$("$python_command" - "$platform_manifest" "$platform" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as manifest_file:
+    matches = [entry for entry in json.load(manifest_file)["include"]
+               if entry["platform"] == sys.argv[2]]
+if len(matches) != 1:
+    raise SystemExit(f"expected one platform entry for {sys.argv[2]}")
+print(matches[0]["c_compiler"] + "|" + matches[0]["cxx_compiler"])
+PY
+)"
 if (( ! update_lock )); then
   : "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX:?set the Core prebuilt prefix}"
   : "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX:?set the zlink-cpp prebuilt prefix}"
@@ -142,16 +155,11 @@ PY
 compiler_args=()
 case "$platform" in
   linux-*)
-    if command -v g++-13 >/dev/null 2>&1; then
-      c_compiler=gcc-13
-      cxx_compiler=g++-13
-    else
-      command -v g++ >/dev/null || { echo "g++ is required" >&2; exit 1; }
-      c_compiler=gcc
-      cxx_compiler=g++
-    fi
+    command -v "$c_compiler" >/dev/null || { echo "$c_compiler is required for $platform" >&2; exit 1; }
+    command -v "$cxx_compiler" >/dev/null || { echo "$cxx_compiler is required for $platform" >&2; exit 1; }
     gcc_version="$("$cxx_compiler" -dumpfullversion -dumpversion)"
     gcc_version="${gcc_version%%.*}"
+    [[ "$gcc_version" == 13 ]] || { echo "$platform requires GCC 13, found $gcc_version" >&2; exit 1; }
     cat >"$conan_profile" <<EOF
 [settings]
 os=Linux
@@ -170,8 +178,8 @@ EOF
     compiler_args=(-DCMAKE_C_COMPILER="$c_compiler" -DCMAKE_CXX_COMPILER="$cxx_compiler")
     ;;
   macos-arm64)
-    command -v clang++ >/dev/null || { echo "Apple clang is required" >&2; exit 1; }
-    apple_clang_version="$(clang++ --version | sed -n 's/^Apple clang version \([0-9][0-9]*\).*/\1/p' | head -n1)"
+    command -v "$cxx_compiler" >/dev/null || { echo "Apple clang is required" >&2; exit 1; }
+    apple_clang_version="$("$cxx_compiler" --version | sed -n 's/^Apple clang version \([0-9][0-9]*\).*/\1/p' | head -n1)"
     [[ -n "$apple_clang_version" ]] || { echo "could not determine Apple clang version" >&2; exit 1; }
     cat >"$conan_profile" <<EOF
 [settings]
@@ -186,12 +194,12 @@ compiler.cppstd=gnu20
 zlink-bootstrap/*:compiler.cppstd=gnu20
 
 [conf]
-tools.build:compiler_executables={"c": "clang", "cpp": "clang++"}
+tools.build:compiler_executables={"c": "$c_compiler", "cpp": "$cxx_compiler"}
 EOF
-    compiler_args=(-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++)
+    compiler_args=(-DCMAKE_C_COMPILER="$c_compiler" -DCMAKE_CXX_COMPILER="$cxx_compiler")
     ;;
   windows-x64)
-    command -v cl >/dev/null || { echo "MSVC cl.exe is required; run from an initialized VS 2022 environment" >&2; exit 1; }
+    command -v "$cxx_compiler" >/dev/null || { echo "MSVC cl.exe is required; run from an initialized VS 2022 environment" >&2; exit 1; }
     msvc_toolset="${ZLINK_FRAMEWORK_CPP_MSVC_VERSION:-}"
     if [[ -z "$msvc_toolset" && -n "${VSINSTALLDIR:-}" ]]; then
       vc_version_file="$(cygpath -u "$VSINSTALLDIR")/VC/Auxiliary/Build/Microsoft.VCToolsVersion.default.txt"
@@ -216,7 +224,7 @@ zlink-bootstrap/*:compiler.cppstd=20
 [conf]
 tools.cmake.cmaketoolchain:generator=Ninja
 EOF
-    compiler_args=(-DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl)
+    compiler_args=(-DCMAKE_C_COMPILER="$c_compiler" -DCMAKE_CXX_COMPILER="$cxx_compiler")
     ;;
 esac
 
@@ -264,15 +272,6 @@ with open(sys.argv[2], "w", encoding="utf-8", newline="\n") as output_file:
 PY
 }
 
-if (( ! update_lock )); then
-  if [[ -f "$package_lockfile" ]]; then
-    write_package_lockfile "$candidate_lockfile" "$candidate_package_lockfile"
-    cmp -s "$candidate_package_lockfile" "$package_lockfile" || {
-      echo "$package_lockfile is out of date for resolved Conan package revisions" >&2
-      exit 1
-    }
-  fi
-fi
 conan install "$conan_dir" \
   "--profile:host=$conan_profile" \
   "--profile:build=$conan_profile" \
@@ -286,11 +285,26 @@ if ((update_lock)); then
   echo "updated $lockfile and $package_lockfile"
   exit 0
 fi
-if [[ -f "$package_lockfile" ]]; then
-  cmp -s "$candidate_package_lockfile" "$package_lockfile" || {
-    echo "$package_lockfile does not match installed Conan package revisions" >&2
-    exit 1
-  }
+if [[ ! -f "$package_lockfile" ]] || ! "$python_command" - "$candidate_package_lockfile" "$package_lockfile" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as candidate_file:
+        candidate = json.load(candidate_file)
+    with open(sys.argv[2], encoding="utf-8") as committed_file:
+        committed = json.load(committed_file)
+except FileNotFoundError:
+    raise SystemExit(1)
+raise SystemExit(0 if candidate == committed else 1)
+PY
+then
+  echo "Conan packages file to commit: $package_lockfile" >&2
+  echo "----- BEGIN $package_lockfile -----" >&2
+  cat "$candidate_package_lockfile" >&2
+  echo "----- END $package_lockfile -----" >&2
+  echo "run '$0 --update-lock --platform $platform' on $platform and commit both platform pin files" >&2
+  exit 1
 fi
 
 # The shared Framework and staged Core configs retain their public compile/link
@@ -394,6 +408,29 @@ case "$platform" in
         echo "third-party dynamic export found in $library" >&2; exit 1
       fi
     done
+    while IFS= read -r binary; do
+      install_name="$(otool -D "$binary" | tail -n +2 | head -n1)"
+      [[ "$install_name" == @loader_path/* ]] || {
+        echo "non-relocatable install name in $(basename "$binary"): $install_name" >&2
+        exit 1
+      }
+      while IFS= read -r dependency; do
+        case "$dependency" in
+          /usr/lib/*|/System/Library/*) ;;
+          @loader_path/*)
+            dependency_path="$prefix/lib/${dependency#@loader_path/}"
+            [[ -e "$dependency_path" ]] || {
+              echo "unresolved dependency in clean prefix: $(basename "$binary") -> $dependency" >&2
+              exit 1
+            }
+            ;;
+          *)
+            echo "non-relocatable dependency in $(basename "$binary"): $dependency" >&2
+            exit 1
+            ;;
+        esac
+      done < <(otool -L "$binary" | tail -n +2 | sed 's/^[[:space:]]*//' | cut -d ' ' -f1)
+    done < <(find "$prefix/lib" -maxdepth 1 -type f -name '*.dylib' -print)
     ;;
   windows-x64)
     for library in "${libraries[@]}"; do
@@ -404,11 +441,29 @@ case "$platform" in
       if grep -Eiq 'boost|protobuf|absl|opentelemetry' <<<"$exports"; then
         echo "third-party dynamic export found in $library" >&2; exit 1
       fi
-      dependencies="$(MSYS2_ARG_CONV_EXCL=/DEPENDENTS dumpbin /DEPENDENTS "$(cygpath -w "$binary")")"
-      if grep -Eiq 'boost|protobuf|absl|opentelemetry|libssl|libcrypto|lz4' <<<"$dependencies"; then
-        echo "third-party DLL dependency found in $library" >&2; exit 1
-      fi
     done
+    while IFS= read -r binary; do
+      while IFS= read -r dependency; do
+        dependency_lower="$(tr '[:upper:]' '[:lower:]' <<<"$dependency")"
+        case "$dependency_lower" in
+          api-ms-win-*|ext-ms-win-*|kernel32.dll|user32.dll|advapi32.dll|ws2_32.dll|bcrypt.dll|crypt32.dll|secur32.dll|shell32.dll|ole32.dll|oleaut32.dll|gdi32.dll|ntdll.dll|rpcrt4.dll|shlwapi.dll|normaliz.dll|comdlg32.dll|winmm.dll|version.dll|msvcp*.dll|vcruntime*.dll|ucrtbase.dll) ;;
+          *)
+            resolved=0
+            while IFS= read -r packaged_dll; do
+              if [[ "$(tr '[:upper:]' '[:lower:]' <<<"$(basename "$packaged_dll")")" == "$dependency_lower" ]]; then
+                resolved=1
+                break
+              fi
+            done < <(find "$prefix/bin" -maxdepth 1 -type f -iname '*.dll' -print)
+            ((resolved)) || {
+              echo "unresolved dependency in clean prefix: $(basename "$binary") -> $dependency" >&2
+              exit 1
+            }
+            ;;
+        esac
+      done < <(MSYS2_ARG_CONV_EXCL=/DEPENDENTS dumpbin /DEPENDENTS "$(cygpath -w "$binary")" |
+        sed -n 's/^[[:space:]]*\([^[:space:]]*[.][dD][lL][lL]\)[[:space:]]*$/\1/p')
+    done < <(find "$prefix/bin" -maxdepth 1 -type f -iname '*.dll' -print)
     ;;
 esac
 

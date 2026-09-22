@@ -18,7 +18,7 @@ Every release runs in GitHub Actions; nothing is published from a local machine.
 | Binding Node | `@zlink-systems/zlink` (with linux-x64 prebuild) | npm | `bindings-release.yml` | `node/v*` tag or dispatch | npm Trusted Publishing (OIDC, provenance) |
 | Binding Java | `systems.zlink:zlink`, `zlink-ext-netty` | Maven Central, GitHub Packages | `bindings-release.yml` | `java/v*` tag or dispatch | `MAVEN_CENTRAL_*`, `SIGNING_*` (GPG) |
 | Binding .NET | `Zlink` nupkg (+snupkg) | nuget.org | `release-dotnet.yml` (target `binding`) | `dotnet/v*` tag or dispatch | nuget Trusted Publishing (`NuGet/login`, policy `zlink-dotnet-release`) |
-| Framework C++ | source archive + sha256 (`cmake -P framework/languages/cpp/cmake/prepare-source-archive.cmake`: `framework/languages/cpp` + `framework/runtime` + `framework/LICENSE`, generated protocol headers verified with `--check`), plus shared prebuilt archives + sha256 for the four supported platforms (Framework shared libraries, headers, and CMake config with that platform's Core prebuilt and C++ binding) | GitHub Release `framework-cpp/vA.B.C` | `framework-release.yml` | `framework-cpp/v*` tag or `target=cpp` dispatch (`cpp_platform` reruns one platform) | `GITHUB_TOKEN` |
+| Framework C++ | source archive + sha256 (`cmake -P framework/languages/cpp/cmake/prepare-source-archive.cmake`: `framework/languages/cpp` + `framework/runtime` + `framework/LICENSE`, generated protocol headers verified with `--check`), plus shared prebuilt archives + sha256 for the four supported platforms (Framework shared libraries, headers, and CMake config with that platform's Core prebuilt and C++ binding); all assets are built from the single resolved release ref (`framework/v*` or `framework-cpp/v*` for a tag run, `framework-cpp/vA.B.C` for a dispatch) | GitHub Release at the resolved release ref | `framework-release.yml`; runner and compiler matrix in `framework/languages/cpp/packaging/prebuilt-platforms.json` | `framework/v*` or `framework-cpp/v*` tag, or `target=cpp` dispatch (`cpp_platform` reruns one platform) | `GITHUB_TOKEN` |
 | Framework Node | 8 `@zlink-systems/*` packages | npm | `framework-release.yml` | `framework-node/v*` tag or `target=node` dispatch | npm Trusted Publishing (registered per package) |
 | Framework JVM | 13 `systems.zlink:zlink-framework-*` artifacts (incl. Kotlin) | Maven Central | `framework-release.yml` | `framework-java/v*` tag or `target=java` dispatch | `MAVEN_CENTRAL_*`, `SIGNING_*` |
 | Framework .NET | 9 packages (`Zlink.Framework*`, `Zlink.HttpClient`, `Zlink.Stream.Connector`, ...) | nuget.org | `release-dotnet.yml` (target `framework`) | `framework-dotnet/v*` tag or dispatch | nuget Trusted Publishing |
@@ -113,10 +113,10 @@ gh release view core/v0.17.5 --json assets -q '.assets[].name'
 
 | Platform | Core release | Framework C++ prebuilt | Node prebuild | .NET runtimes | Notes |
 | --- | --- | --- | --- | --- | --- |
-| linux-x64 | ✅ | ✅ | ✅ | ✅ | release runner ubuntu-24.04, needs glibc ≥ 2.38 |
-| linux-arm64 | ✅ | ✅ | source build | Core archive | |
-| macos-arm64 | ✅ | ✅ | source build | Core archive | |
-| windows-x64 | ✅ | ✅ | source build | Core archive | the Core archive bundles the OpenSSL DLLs |
+| linux-x64 | ✅ | ✅ | ✅ | ✅ | ubuntu-24.04, GCC 13; needs glibc ≥ 2.38 |
+| linux-arm64 | ✅ | ✅ | source build | Core archive | ubuntu-24.04-arm, GCC 13 |
+| macos-arm64 | ✅ | ✅ | source build | Core archive | macos-15, Apple Clang |
+| windows-x64 | ✅ | ✅ | source build | Core archive | windows-2022, MSVC; the Core archive bundles the OpenSSL DLLs |
 | windows-arm64 | ❌ | ❌ | ❌ | ❌ | unsupported (decided 2026-09-14) |
 | macos-x64 (Intel) | ❌ | ❌ | ❌ | ❌ | unsupported from Core up (decided 2026-09-09) |
 

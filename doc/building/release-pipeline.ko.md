@@ -18,7 +18,7 @@
 | Binding Node | `@zlink-systems/zlink` (linux-x64 prebuild 포함) | npm | `bindings-release.yml` | `node/v*` 태그 또는 dispatch | npm Trusted Publishing(OIDC, provenance) |
 | Binding Java | `systems.zlink:zlink`, `zlink-ext-netty` | Maven Central, GitHub Packages | `bindings-release.yml` | `java/v*` 태그 또는 dispatch | `MAVEN_CENTRAL_*`, `SIGNING_*`(GPG) |
 | Binding .NET | `Zlink` nupkg (+snupkg) | nuget.org | `release-dotnet.yml` (target `binding`) | `dotnet/v*` 태그 또는 dispatch | nuget Trusted Publishing(`NuGet/login`, 정책 `zlink-dotnet-release`) |
-| Framework C++ | source archive + sha256(`cmake -P framework/languages/cpp/cmake/prepare-source-archive.cmake`: `framework/languages/cpp` + `framework/runtime` + `framework/LICENSE`, generated protocol header를 `--check`로 검증), 4개 지원 플랫폼의 shared prebuilt archive + sha256(Framework shared library·header·CMake config와 해당 플랫폼의 Core prebuilt·C++ binding 포함) | GitHub Release `framework-cpp/vA.B.C` | `framework-release.yml` | `framework-cpp/v*` 태그 또는 `target=cpp` dispatch(`cpp_platform`으로 단일 플랫폼 재실행) | `GITHUB_TOKEN` |
+| Framework C++ | source archive + sha256(`cmake -P framework/languages/cpp/cmake/prepare-source-archive.cmake`: `framework/languages/cpp` + `framework/runtime` + `framework/LICENSE`, generated protocol header를 `--check`로 검증), 4개 지원 플랫폼의 shared prebuilt archive + sha256(Framework shared library·header·CMake config와 해당 플랫폼의 Core prebuilt·C++ binding 포함). 모든 자산은 하나로 결정한 릴리스 ref(태그 실행은 `framework/v*` 또는 `framework-cpp/v*`, dispatch는 `framework-cpp/vA.B.C`)에서 빌드한다. | 결정된 릴리스 ref의 GitHub Release | `framework-release.yml`, runner·compiler matrix는 `framework/languages/cpp/packaging/prebuilt-platforms.json` | `framework/v*`·`framework-cpp/v*` 태그 또는 `target=cpp` dispatch(`cpp_platform`으로 단일 플랫폼 재실행) | `GITHUB_TOKEN` |
 | Framework Node | `@zlink-systems/*` 8개 | npm | `framework-release.yml` | `framework-node/v*` 태그 또는 `target=node` dispatch | npm Trusted Publishing(패키지별 등록) |
 | Framework JVM | `systems.zlink:zlink-framework-*` 13개(Kotlin 포함) | Maven Central | `framework-release.yml` | `framework-java/v*` 태그 또는 `target=java` dispatch | `MAVEN_CENTRAL_*`, `SIGNING_*` |
 | Framework .NET | `Zlink.Framework*`, `Zlink.HttpClient`, `Zlink.Stream.Connector` 등 9개 | nuget.org | `release-dotnet.yml` (target `framework`) | `framework-dotnet/v*` 태그 또는 dispatch | nuget Trusted Publishing |
@@ -126,10 +126,10 @@ gh release view core/v0.17.5 --json assets -q '.assets[].name'
 
 | 플랫폼 | Core 릴리스 | Framework C++ prebuilt | Node prebuild | .NET runtimes | 비고 |
 | --- | --- | --- | --- | --- | --- |
-| linux-x64 | ✅ | ✅ | ✅ | ✅ | 릴리스 러너 ubuntu-24.04, glibc ≥ 2.38 필요 |
-| linux-arm64 | ✅ | ✅ | 소스 빌드 | Core 아카이브 | |
-| macos-arm64 | ✅ | ✅ | 소스 빌드 | Core 아카이브 | |
-| windows-x64 | ✅ | ✅ | 소스 빌드 | Core 아카이브 | Core 아카이브에 OpenSSL DLL 포함 |
+| linux-x64 | ✅ | ✅ | ✅ | ✅ | ubuntu-24.04, GCC 13, glibc ≥ 2.38 필요 |
+| linux-arm64 | ✅ | ✅ | 소스 빌드 | Core 아카이브 | ubuntu-24.04-arm, GCC 13 |
+| macos-arm64 | ✅ | ✅ | 소스 빌드 | Core 아카이브 | macos-15, Apple Clang |
+| windows-x64 | ✅ | ✅ | 소스 빌드 | Core 아카이브 | windows-2022, MSVC, Core 아카이브에 OpenSSL DLL 포함 |
 | windows-arm64 | ❌ | ❌ | ❌ | ❌ | 미지원(2026-09-14 결정) |
 | macos-x64 (Intel) | ❌ | ❌ | ❌ | ❌ | Core부터 미지원(2026-09-09 결정) |
 

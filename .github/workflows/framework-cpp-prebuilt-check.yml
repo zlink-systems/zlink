@@ -10,27 +10,36 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - 'framework/languages/cpp/scripts/package-prebuilt.sh'
-      - 'framework/languages/cpp/cmake/**'
-      - 'framework/languages/cpp/packaging/conan/**'
-      - 'framework/languages/cpp/CMakeLists.txt'
+      - 'framework/languages/cpp/**'
+      - 'framework/runtime/**'
+      - 'bindings/cpp/**'
+      - 'scripts/local-package/core/fetch-release.sh'
       - '.github/workflows/framework-cpp-prebuilt-check.yml'
 
 permissions:
   contents: read
 
 jobs:
+  platforms:
+    name: Resolve prebuilt platform matrix
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: matrix
+        shell: bash
+        run: |
+          matrix="$(python3 -c 'import json; print(json.dumps(json.load(open("framework/languages/cpp/packaging/prebuilt-platforms.json")), separators=(",", ":")))')"
+          echo "matrix=${matrix}" >>"${GITHUB_OUTPUT}"
+
   prebuilt-cpp:
     name: Prebuilt C++ framework (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
+    needs: platforms
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - { platform: linux-x64, runner: ubuntu-24.04 }
-          - { platform: linux-arm64, runner: ubuntu-24.04-arm }
-          - { platform: macos-arm64, runner: macos-15 }
-          - { platform: windows-x64, runner: windows-2022 }
+      matrix: ${{ fromJSON(needs.platforms.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v5
 
@@ -57,11 +66,7 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          if [ "${{ matrix.platform }}" = linux-x64 ]; then
-            sudo apt-get install -y gcc-13 g++-13 ninja-build
-          else
-            sudo apt-get install -y build-essential ninja-build
-          fi
+          sudo apt-get install -y "${{ matrix.c_compiler }}" "${{ matrix.cxx_compiler }}" ninja-build
 
       - name: Install macOS build tools
         if: matrix.platform == 'macos-arm64'
@@ -72,7 +77,9 @@ jobs:
         id: inputs
         shell: bash
         env:
-          PLATFORM: ${{ matrix.platform }}
+          ZLINK_PLATFORM: ${{ matrix.platform }}
+          CC: ${{ matrix.c_compiler }}
+          CXX: ${{ matrix.cxx_compiler }}
           RUNNER_TEMP_NATIVE: ${{ runner.temp }}
         run: |
           set -euo pipefail
@@ -81,7 +88,7 @@ jobs:
             runner_temp="$(cygpath -u "${runner_temp}")"
           fi
           core_prefix="$(bash scripts/local-package/core/fetch-release.sh \
-            --platform "${PLATFORM}" --cache-dir "${runner_temp}/core")"
+            --platform "${ZLINK_PLATFORM}" --cache-dir "${runner_temp}/core")"
           binding_version="$(sed -n 's/^ZLINK_BINDING_VERSION=//p' bindings/cpp/VERSION)"
           binding_build="${runner_temp}/zlink-cpp-build"
           binding_prefix="${runner_temp}/zlink-cpp-${binding_version}"
@@ -100,7 +107,7 @@ jobs:
       - name: Build and verify the prebuilt archive
         shell: bash
         env:
-          PLATFORM: ${{ matrix.platform }}
+          ZLINK_PLATFORM: ${{ matrix.platform }}
           ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX: ${{ steps.inputs.outputs.core_prefix }}
           ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX: ${{ steps.inputs.outputs.binding_prefix }}
         run: |
@@ -108,7 +115,7 @@ jobs:
           mkdir -p dist/framework-cpp-prebuilt
           export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
           bash framework/languages/cpp/scripts/package-prebuilt.sh \
-            --platform "${PLATFORM}" dist/framework-cpp-prebuilt
+            --platform "${ZLINK_PLATFORM}" dist/framework-cpp-prebuilt
 
       - uses: actions/upload-artifact@v6
         with:

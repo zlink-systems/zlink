@@ -242,10 +242,13 @@ case "$platform" in
     runtime_soname="libzlink.so.0"
     ;;
   macos-*)
-    runtime="$binary_prefix/libzlink.dylib"
+    runtime="$binary_prefix/lib/libzlink.dylib"
     [[ -f "$runtime" ]] || { echo "macOS Core runtime is missing: $runtime" >&2; exit 1; }
     mkdir -p "$stage/lib"
-    install -m 0755 "$runtime" "$stage/lib/libzlink.dylib"
+    # The exported zlinkTargets.cmake names the fully-versioned dylib. Keep
+    # the release archive's dylib directory as one runtime closure so the
+    # versioned names, symlinks, and any non-system dependencies agree.
+    cp -a "$binary_prefix/lib/." "$stage/lib/"
     runtime_path="lib/libzlink.dylib"
     runtime_soname=""
     ;;
@@ -267,14 +270,13 @@ esac
 # Copy it as-is instead of re-deriving a shared-only config by hand. Older
 # archives (pre-#397, e.g. core/v1.1.0) have neither; the node step below
 # falls back to synthesizing a minimal shared-only config for those, as it
-# always has. The windows-* branch above already staged the archive's whole
-# lib/ tree (cp -a "$binary_prefix/lib/." "$stage/lib/"), so it already has
-# whatever CMake package and static .lib the archive carries; redoing the
-# copy here would nest lib/cmake/zlink inside itself.
+# always has. Platforms that staged the archive's whole lib/ tree above
+# already have whatever CMake package and static library it carries; redoing
+# the copy here would nest lib/cmake/zlink inside itself.
 has_archive_config=0
 if [[ -f "$binary_prefix/lib/cmake/zlink/zlinkConfig.cmake" ]]; then
   has_archive_config=1
-  if [[ "$platform" != windows-* ]]; then
+  if [[ ! -f "$stage/lib/cmake/zlink/zlinkConfig.cmake" ]]; then
     mkdir -p "$stage/lib/cmake"
     cp -a "$binary_prefix/lib/cmake/zlink" "$stage/lib/cmake/zlink"
     for static_lib in "$binary_prefix"/lib/libzlink.a "$binary_prefix"/lib/libzlink*.lib; do
