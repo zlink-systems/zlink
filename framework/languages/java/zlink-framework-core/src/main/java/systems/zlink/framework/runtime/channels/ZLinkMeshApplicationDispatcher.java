@@ -188,7 +188,53 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
             //  A JSON-object first frame that is not a valid shared envelope
             //  is a protocol error (C++ decode parity).
             recordDrop(record, "decode_error");
-            reject(record, invalidEnvelope.getMessage(), claim);
+            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header rejectedEnvelope;
+            try {
+                rejectedEnvelope =
+                        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
+                                .decodeDispatchHeader(record.parts(), false);
+            } catch (systems.zlink.framework.errors.ZLinkFrameworkException unreadableEnvelope) {
+                rejectedEnvelope = null;
+            }
+            boolean request = kind == RecordKind.NODE_REQUEST || kind == RecordKind.CHANNEL_REQUEST;
+            boolean canReply =
+                    request
+                            && (record.receive().replyToken() != null || record.canReply())
+                            && rejectedEnvelope != null
+                            && rejectedEnvelope.correlationId() != null;
+            dispatchErrors.report(
+                    new ZLinkDispatchFailure(
+                            kind == RecordKind.NODE_REQUEST || kind == RecordKind.NODE_SEND
+                                    ? ZLinkDispatchErrorSurface.NODE
+                                    : ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
+                            request
+                                    ? ZLinkDispatchMessageKind.REQUEST
+                                    : ZLinkDispatchMessageKind.SEND,
+                            ZLinkDispatchErrorReason.INVALID_FRAME,
+                            canReply
+                                    ? ZLinkDispatchErrorAction.REPLY_ERROR
+                                    : ZLinkDispatchErrorAction.DROP,
+                            rejectedEnvelope == null ? null : rejectedEnvelope.messageName(),
+                            record.receive().channelName(),
+                            null,
+                            null,
+                            null,
+                            record.receive().sourceNodeRid() == null
+                                    ? null
+                                    : record.receive().sourceNodeRid().toString(),
+                            rejectedEnvelope == null ? null : rejectedEnvelope.correlationId(),
+                            invalidEnvelope.getClass().getName(),
+                            invalidEnvelope.getMessage()));
+            if (canReply) {
+                reject(
+                        record,
+                        rejectedEnvelope,
+                        invalidEnvelope.kind(),
+                        invalidEnvelope.getMessage(),
+                        claim);
+            } else {
+                closeRecord(record, claim);
+            }
             return;
         }
         ZLinkFlowContext.State inboundFlow =
