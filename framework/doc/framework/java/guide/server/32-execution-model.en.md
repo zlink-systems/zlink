@@ -18,12 +18,11 @@ View in another language — [C++](../../../cpp/guide/server/32-execution-model.
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-The code in this chapter comes from the [`Bingo` sample README](https://github.com/zlink-systems/zlink-java-examples/blob/main/samples/Bingo/README.md). Download the [examples repository](https://github.com/zlink-systems/zlink-java-examples/blob/main/samples/Bingo/README.md) and follow its README's Download, Build and Run sections to reproduce the results below.
-
 !!! info "What you get from this chapter"
 
     You can tell what runs together inside one Spot, what queues up behind it, and what decides
-    that boundary. The code in this chapter comes from the samples in the repository.
+    that boundary.
+    The code comes from the [Bingo sample README in the examples repository](https://github.com/zlink-systems/zlink-java-examples/blob/main/samples/Bingo/README.md); follow its Download, Build, and Run sections to reproduce the execution-model example.
 
 [Spot](21-spot.en.md) and [Actor](22-actor.en.md) summarized it as "work addressed to it is
 handled one at a time." This chapter covers how far that sentence holds — which work shares one
@@ -152,5 +151,5 @@ terminator line is where the room Spot gives its turn back.
 - When arrival outpaces processing — [Backpressure](33-backpressure.en.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

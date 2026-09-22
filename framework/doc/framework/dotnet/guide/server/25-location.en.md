@@ -18,13 +18,10 @@ View in another language — [C++](../../../cpp/guide/server/25-location.en.md) 
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-The code in this chapter comes from the [tutorial README](https://github.com/zlink-systems/zlink-dotnet-examples/blob/main/tutorial/README.md). Download the [examples repository](https://github.com/zlink-systems/zlink-dotnet-examples/blob/main/tutorial/README.md) and follow its README's Download, Build and Run sections to reproduce the results below.
-
 !!! info "What you get from this chapter"
 
     You can ask which node a Spot or Actor is on right now, holding nothing but its id.
-    The code in this chapter runs as it stands in
-    `framework/languages/dotnet/tutorial`.
+    The code comes from the [tutorial README in the examples repository](https://github.com/zlink-systems/zlink-dotnet-examples/blob/main/tutorial/README.md); follow its Download, Build, and Run sections to reproduce the results below.
 
 [Spot](21-spot.en.md) and [Actor](22-actor.en.md) were called by id alone, and the Framework
 found which node they were on. The place that holds that record is the **Location Store**. This
@@ -112,8 +109,8 @@ leaves a target recreated under the same id untouched.
 - State objects called by id — [Spot](21-spot.en.md) · [Actor](22-actor.en.md)
 - What the Store writes down — [How Channels Work](30-channel-patterns.en.md#61-location-store--where-who-is-where-is-written-down)
 - Operational queries — [Operations and Lifecycle](12-operations.en.md#6-location-readiness-and-operational-queries)
-- A running version of this chapter's code — `framework/languages/dotnet/tutorial`
+- A running version of this chapter's code — [the tutorial README in the examples repository](https://github.com/zlink-systems/zlink-dotnet-examples/blob/main/tutorial/README.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

@@ -18,12 +18,10 @@ title: "Channel 동작 원리 · C++"
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-이 장의 코드는 [tutorial README](https://github.com/zlink-systems/zlink-cpp-examples/blob/main/tutorial/README.ko.md)와 [`TicTacToe`](https://github.com/zlink-systems/zlink-cpp-examples/blob/main/samples/TicTacToe/README.ko.md)·[`ZoneWorld`](https://github.com/zlink-systems/zlink-cpp-examples/blob/main/samples/ZoneWorld/README.ko.md) 샘플 README에서 가져왔다. [예제 저장소](https://github.com/zlink-systems/zlink-cpp-examples/blob/main/tutorial/README.ko.md)를 내려받아 각 README의 「내려받기와 설치」·「빌드」·「실행」 절을 따라 실행하면 설명한 연결과 대상 선택을 재현할 수 있다.
-
 !!! info "이 장을 읽고 나면"
 
     각 구성이 어떤 연결을 열고, 누구를 대상으로 고르고, 언제 거부되는지 알 수 있다.
-    이 장의 코드는 저장소의 샘플과 튜토리얼에서 가져왔다.
+    이 장의 코드는 [예제 저장소의 tutorial](https://github.com/zlink-systems/zlink-cpp-examples/blob/main/tutorial/README.ko.md)과 [`TicTacToe`](https://github.com/zlink-systems/zlink-cpp-examples/blob/main/samples/TicTacToe/README.ko.md)·[`ZoneWorld`](https://github.com/zlink-systems/zlink-cpp-examples/blob/main/samples/ZoneWorld/README.ko.md) 샘플 README에서 가져왔으며, 각 README의 「내려받기와 설치」·「빌드」·「실행」 절을 따르면 연결과 대상 선택을 재현할 수 있다.
 
 [Channel 메시징](20-channel-messaging.ko.md)이 등록하고 호출하는 방법을 다뤘다면, 이 장은
 **왜 그렇게 되는지와 어디까지 되는지**를 다룬다. 패턴 사이의 차이, 대상 선택 규칙, 연결과
@@ -497,5 +495,5 @@ record로 남는다([모니터링](26-monitoring.ko.md)).
 - 이 장 코드의 실행본 — `framework/languages/dotnet/tutorial`
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

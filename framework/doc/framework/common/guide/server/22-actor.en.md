@@ -1,12 +1,9 @@
 # Actor
 
-The code in this chapter comes from the [tutorial README](https://github.com/zlink-systems/zlink-<language>-examples/blob/main/tutorial/README.md). Download the [examples repository](https://github.com/zlink-systems/zlink-<language>-examples/blob/main/tutorial/README.md) and follow its README's Download, Build and Run sections to reproduce the results below.
-
 !!! info "What you get from this chapter"
 
     You can create one entity by id, send messages to it, and receive answers.
-    The code in this chapter runs as it stands in
-    `framework/languages/<language>/tutorial`.
+    The code comes from the [tutorial README in the examples repository](https://github.com/zlink-systems/zlink-<language>-examples/blob/main/tutorial/README.md); follow its Download, Build, and Run sections to reproduce the results below.
 
 [Spot](21-spot.en.md) covered **a place several parties share**, such as a room or a queue. An
 Actor holds **per-entity state** instead — one player, one session. Both are called by id and
@@ -257,10 +254,10 @@ Unlike a Spot, **the calling side decides the id**, because a value that already
 player id — is used as it stands. Call again with the same id and nothing is created; the existing
 one comes back.
 
-The tutorial `Server` first defines the `game` route mesh. A mesh name names the set of nodes
-where an Actor may be placed, and `InMesh` selects that set when creating one. [The receiving side
-of Channel Messaging](20-channel-messaging.en.md#32-the-receiving-side--the-node-serving-the-channel)
-shows the registration code, and [Location Runtime §7](../../../common/spec/server/05-location-relocation/01-location-runtime.en.md#7-creating-an-actor-or-user-spot) defines the selection rule.
+The tutorial `Server` first defines the `game` route mesh. A mesh name names the set of nodes that
+can host an Actor, and `InMesh` selects the mesh in which a host node is chosen when creating one.
+[The receiving side of Channel Messaging](20-channel-messaging.en.md#32-the-receiving-side--the-node-serving-the-channel)
+shows the registration code.
 
 === "C#/.NET"
 
@@ -444,8 +441,8 @@ during a move by [Relocation](37-relocation.en.md).
 - A place several parties share — [Spot](21-spot.en.md)
 - The path that calls by name — [Channel Messaging](20-channel-messaging.en.md)
 - Moving and membership — [Actor Membership](35-actor-membership.en.md)
-- A running version of this chapter's code — `framework/languages/<language>/tutorial`
+- A running version of this chapter's code — [the tutorial README in the examples repository](https://github.com/zlink-systems/zlink-<language>-examples/blob/main/tutorial/README.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

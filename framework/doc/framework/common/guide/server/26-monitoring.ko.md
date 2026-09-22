@@ -1,31 +1,26 @@
 # 모니터링
 
-이 장의 코드는 [tutorial README](https://github.com/zlink-systems/zlink-<언어>-examples/blob/main/tutorial/README.ko.md)에서 가져왔다. [예제 저장소](https://github.com/zlink-systems/zlink-<언어>-examples/blob/main/tutorial/README.ko.md)를 내려받아 README의 「내려받기와 설치」·「빌드」·「실행」 절을 따라 실행하면 이 장의 관측 호출로 그 process들의 상태와 기록을 읽을 수 있다.
-
 !!! info "이 장을 읽고 나면"
 
     지금 무엇이 준비되었는지 읽고, 그 상태가 바뀔 때마다 받고, message 하나가 어디서
-    끝났는지 남길 수 있다. 이 장의 코드는 언어별 관측 표면의 최소 호출이다.
+    끝났는지 남길 수 있다.
+    이 장의 코드는 [예제 저장소의 tutorial README](https://github.com/zlink-systems/zlink-<언어>-examples/blob/main/tutorial/README.ko.md)에서 가져온 언어별 관측 표면의 최소 호출이며, README의 「내려받기와 설치」·「빌드」·「실행」 절을 따르면 process의 상태와 기록을 읽을 수 있다.
 
 앞 장들은 등록하고 호출하는 쪽을 다뤘다. 돌기 시작하면 다른 것이 필요해진다 — 연결이
 준비되었는지, 어느 상대가 빠졌는지, message가 어디서 실패했는지다. handler를 아무리 읽어도
 그 답은 나오지 않는다. **Framework는 그것들을 공개 표면으로 제공한다.**
 
-runtime의 사건을 handler로 받는 표면은 없다. 관측은 다음 표면을 통한다.
+runtime의 사건을 handler로 받는 표면은 없다. 운영 endpoint에는 먼저 상태 조회를 사용하고, 상태
+변화를 처리해야 할 때만 구독을 추가한다. message 하나의 처리 경로는 진단 기록으로 보고, 대시보드
+수치는 [운영과 lifecycle](12-operations.ko.md#2-런타임-메트릭)의 계기로 수집한다.
 
-## 1. 관측 표면의 종류
-
-| 무엇을 보나 | 어떻게 | 어디서 다루나 |
-| --- | --- | --- |
-| 지금 준비되었는가, 누가 빠졌는가 | 상태 조회와 상태 구독 | [지금 상태 읽기](#2-지금-상태-읽기) · [변화 구독하기](#3-변화-구독하기) |
-| message 하나가 어디서 어떻게 끝났는가 | 진단 기록(trace·log) | [진단 수준 정하기](#4-진단-수준-정하기) |
-| 동시 접속 수·queue 깊이 같은 수치 | 계기(meter) | [운영과 lifecycle](12-operations.ko.md#2-런타임-메트릭) |
+## 1. 운영 상태 읽기로 시작하기
 
 <iframe class="zlink-diagram" src="/common/diagrams/26-observation-paths.html" title="관측 표면의 종류" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/26-observation-paths.html" target="_blank">↗ 크게 보기</a></p>
 
-소비하는 방식이 서로 다르다. **상태 표면**은 지금 값을 읽거나 변화를 순서대로 받을 때,
-**진단**은 개별 message를 추적할 때, **계기**는 대시보드에 올릴 수치를 모을 때 사용한다.
+이 흐름은 운영 endpoint가 현재 상태를 즉시 응답하면서도, 필요한 곳에서만 변화와 message 처리 경로를
+따로 관찰하게 한다.
 
 ## 2. 지금 상태 읽기
 
@@ -224,7 +219,12 @@ provider 호출이 실패해도 원래 메시지 처리의 결과는 바뀌지 �
   확인된다 — [Channel 동작 원리](30-channel-patterns.ko.md#7-호출이-끝났다는-것의-의미)가 그
   차이를 다룬다.
 
-## 6. 관련 문서
+## 6. 확인
+
+Server와 Client를 실행한 뒤 상태 조회에서 준비 상태와 peer 상태를 확인하고, 진단 수준을 높여 보낸
+message의 수신·dispatch·완료 기록을 확인한다.
+
+## 7. 관련 문서
 
 - 수치와 운영 호출 — [운영과 lifecycle](12-operations.ko.md)
 - 준비되지 않은 이유의 종류 — [Channel 동작 원리](30-channel-patterns.ko.md#6-연결과-discovery)
@@ -232,5 +232,5 @@ provider 호출이 실패해도 원래 메시지 처리의 결과는 바뀌지 �
 - 언어별 표면 이름 — [주요 타입 사용 색인](13-interface-catalog.ko.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>
