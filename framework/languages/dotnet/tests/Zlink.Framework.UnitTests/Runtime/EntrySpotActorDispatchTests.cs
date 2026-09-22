@@ -8043,6 +8043,45 @@ public sealed partial class EntrySpotActorDispatchTests
         }
     }
 
+    [Fact]
+    public async Task OneHandlerCompletes65DeferredActorJoinsWhoseRequestsTotalMoreThan8MiB()
+    {
+        var node = new CapturingSpotNode();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node);
+        try
+        {
+            const int joinCount = 65;
+            const int requestBytes = 129 * 1024;
+            var actors = new List<ProbeActor>(joinCount);
+
+            using (var handler = ZLinkDeferredActorJoinHandlerScope.Open())
+            {
+                for (var index = 0; index < joinCount; index++)
+                {
+                    var distinctRef = actorRef with
+                    {
+                        ActorId = $"bulk-actor-{index}",
+                        Generation = actorRef.Generation + (ulong)index + 1,
+                    };
+                    var actor = RegisterProbeActor(runtime, distinctRef);
+                    actors.Add(actor);
+                    var request = ZLinkMessage.From(new byte[requestBytes]);
+                    actor.Context.JoinSpot($"bulk-target-{index}", request).Defer();
+                }
+                handler.Complete();
+            }
+
+            var completions = actors.Select(actor => actor.JoinCompletion.Task).ToArray();
+            await Task.WhenAll(completions).WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal(joinCount, completions.Length);
+            Assert.True(joinCount * requestBytes > 8 * 1024 * 1024);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
     private static ZLinkSpotActivation GetSpotActivation(
         ZLinkFrameworkRuntime runtime,
         string spotId
