@@ -70,9 +70,9 @@ namespace EngineLobby
                 // --8<-- [start:connect]
                 await _connector.Connect.Async();
                 _pumping = true;
-                var joined = await _connector.Request(new Join(playerName)).Async<Joined>();
+                var joined = await _connector.Request(new JoinReq(playerName)).Async<JoinRes>();
                 _statusText.text = $"joined as {joined.name} ({joined.actorId})";
-                await _connector.Send(new Chat(firstChat)).Async();
+                await _connector.Send(new ChatMsg(firstChat)).Async();
                 // --8<-- [end:connect]
             }
             catch (Exception error)

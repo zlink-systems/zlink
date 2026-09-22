@@ -85,6 +85,7 @@ jobs:
       # Empty on a main push; the mirror gets a `v<version>` tag only for a tag run.
       version: ${{ steps.pick.outputs.version }}
       languages: ${{ steps.pick.outputs.languages }}
+      target_ids: ${{ steps.pick.outputs.target_ids }}
       targets: ${{ steps.pick.outputs.targets }}
     steps:
       - uses: actions/checkout@v5
@@ -108,10 +109,10 @@ jobs:
               || git rev-parse -q --verify "refs/tags/framework/v${declared}" >/dev/null
           }
           append_target() {
-            if [ "${languages}" = '[]' ]; then
-              languages="[\"$1\"]"
+            if [ "${target_ids}" = '[]' ]; then
+              target_ids="[\"$1\"]"
             else
-              languages="${languages%]},\"$1\"]"
+              target_ids="${target_ids%]},\"$1\"]"
             fi
           }
           case "${ref}" in
@@ -136,24 +137,6 @@ jobs:
               ;;
             *) echo "::error::not a framework tag or main: ${ref}"; exit 1 ;;
           esac
-          if [[ "${ref}" == main || "${ref}" == framework/v* ]]; then
-            cpp_version="$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' framework/languages/cpp/VERSION)"
-            dotnet_version="$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' framework/languages/dotnet/VERSION)"
-            node_version="$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' framework/languages/node/VERSION)"
-            if [ -d framework/languages/engines/Server ] \
-               && released dotnet "${dotnet_version}"; then
-              append_target engine-server
-            fi
-            if [ -d framework/languages/engines/Unity ] \
-               && released dotnet "${dotnet_version}" \
-               && released node "${node_version}"; then
-              append_target unity
-            fi
-            if [ -d framework/languages/engines/Unreal ] \
-               && released cpp "${cpp_version}"; then
-              append_target unreal
-            fi
-          fi
           # A release call mirrors the one language the caller published; the
           # other languages' packages for the same version may not exist yet.
           if [ -n "${CALL_LANGUAGE}" ]; then
@@ -162,13 +145,48 @@ jobs:
               *) echo "::error::${ref} does not release ${CALL_LANGUAGE}"; exit 1 ;;
             esac
           fi
+          target_ids="${languages}"
+          release_lane="${CALL_LANGUAGE}"
+          if [ -z "${release_lane}" ]; then
+            case "${ref}" in
+              framework-cpp/v*) release_lane=cpp ;;
+              framework-dotnet/v*) release_lane=dotnet ;;
+              framework-node/v*) release_lane=node ;;
+            esac
+          fi
+          all_engine_targets=false
+          if [ -z "${CALL_LANGUAGE}" ] \
+             && [[ "${ref}" == main || "${ref}" == framework/v* ]]; then
+            all_engine_targets=true
+          fi
+          cpp_version="$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' framework/languages/cpp/VERSION)"
+          dotnet_version="$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' framework/languages/dotnet/VERSION)"
+          node_version="$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' framework/languages/node/VERSION)"
+          if [ -d framework/languages/engines/Server ] \
+             && released dotnet "${dotnet_version}" \
+             && { ${all_engine_targets} || [ "${release_lane}" = dotnet ]; }; then
+            append_target engine-server
+          fi
+          if [ -d framework/languages/engines/Unity ] \
+             && released dotnet "${dotnet_version}" \
+             && released node "${node_version}" \
+             && { ${all_engine_targets} \
+                  || [ "${release_lane}" = dotnet ] \
+                  || [ "${release_lane}" = node ]; }; then
+            append_target unity
+          fi
+          if [ -d framework/languages/engines/Unreal ] \
+             && released cpp "${cpp_version}" \
+             && { ${all_engine_targets} || [ "${release_lane}" = cpp ]; }; then
+            append_target unreal
+          fi
           if [ "${ref}" != main ]; then
             version="${ref##*/v}"
             if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
               echo "::error::tag ${ref} does not end in /vA.B.C"; exit 1
             fi
           fi
-          targets="$(jq -cn --argjson enabled "${languages}" '
+          targets="$(jq -cn --argjson enabled "${target_ids}" '
             [
               {id:"cpp", mirror:"zlink-systems/zlink-cpp-examples",
                tree:".artifacts/examples/zlink-cpp-examples", source_path:"framework/languages/cpp",
@@ -196,31 +214,31 @@ jobs:
                secret:"EXAMPLES_MIRROR_KEY_UNREAL"}
             ] | map(select(.id as $id | $enabled | index($id)))
           ')"
-          echo "ref=${ref}, version=${version:-none}, languages=${languages}, targets=${targets}"
+          echo "ref=${ref}, version=${version:-none}, languages=${languages}, target_ids=${target_ids}, targets=${targets}"
           {
             echo "ref=${ref}"
             echo "version=${version}"
             echo "languages=${languages}"
+            echo "target_ids=${target_ids}"
             echo "targets=${targets}"
           } >> "$GITHUB_OUTPUT"
 
   # Same trees, built and run from their READMEs in jobs without a checkout.
-  # Only the languages this run mirrors are smoked: a mirror is pushed on its
-  # own language's proof, so another language's unpublished packages cannot
-  # block it.
+  # Only this run's language lanes and dependency-ready engine targets are
+  # smoked before their mirrors are pushed.
   smoke:
     name: Smoke the exported trees
     needs: resolve
-    if: needs.resolve.outputs.languages != '[]'
+    if: needs.resolve.outputs.target_ids != '[]'
     uses: ./.github/workflows/examples-smoke.yml
     with:
       ref: ${{ needs.resolve.outputs.ref }}
-      languages: ${{ needs.resolve.outputs.languages }}
+      languages: ${{ needs.resolve.outputs.target_ids }}
 
   push:
     name: Push ${{ matrix.target.id }} mirror
     needs: [resolve, smoke]
-    if: needs.resolve.outputs.languages != '[]'
+    if: needs.resolve.outputs.target_ids != '[]'
     runs-on: ubuntu-24.04
     env:
       MIRROR: ${{ matrix.target.mirror }}

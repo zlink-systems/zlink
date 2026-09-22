@@ -3,7 +3,7 @@
 # ZLink Engine Lobby Unity sample
 
 하나의 `ZLinkClient` MonoBehaviour가 native player와 WebGL player에서 같은 코드로 Engine Lobby
-server에 연결한다. 시작할 때 `Join`과 `Chat`을 보내고, `Update`에서 connector를 pump하며,
+server에 연결한다. 시작할 때 `JoinReq`와 `ChatMsg`를 보내고, `Update`에서 connector를 pump하며,
 `ChatNotify`를 받으면 화면 중앙의 UI text를 갱신한다.
 
 ## Unity version

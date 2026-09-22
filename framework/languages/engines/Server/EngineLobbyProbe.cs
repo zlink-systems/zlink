@@ -12,21 +12,21 @@ public static class EngineLobbyProbe
         await alice.Connect.Async();
         await bob.Connect.Async();
 
-        var pong = await alice.Request(new Ping("1000")).Async<Pong>();
-        Ensure(pong.SentAtUnixMs == "1000", "Ping/Pong payload mismatch.");
+        var pong = await alice.Request(new PingReq("1000")).Async<PingRes>();
+        Ensure(pong.SentAtUnixMs == "1000", "PingReq/PingRes payload mismatch.");
 
-        var joinedAlice = await alice.Request(new Join("alice")).Async<Joined>();
-        var joinedBob = await bob.Request(new Join("bob")).Async<Joined>();
+        var joinedAlice = await alice.Request(new JoinReq("alice")).Async<JoinRes>();
+        var joinedBob = await bob.Request(new JoinReq("bob")).Async<JoinRes>();
         Ensure(joinedAlice.Name == "alice", "Alice joined with the wrong name.");
         Ensure(joinedBob.Name == "bob", "Bob joined with the wrong name.");
         Ensure(
             joinedAlice.ActorId.Length > 0 && joinedAlice.ActorId != joinedBob.ActorId,
-            "Joined actor IDs must be non-empty and distinct."
+            "JoinRes actor IDs must be non-empty and distinct."
         );
 
         var aliceChat = alice.WaitFor<ChatNotify>().Async().AsTask();
         var bobChat = bob.WaitFor<ChatNotify>().Async().AsTask();
-        await alice.Send(new Chat("hello")).Async();
+        await alice.Send(new ChatMsg("hello")).Async();
 
         var notifications = await Task.WhenAll(aliceChat, bobChat);
         foreach (var notification in notifications.Select(static value => value.Payload))

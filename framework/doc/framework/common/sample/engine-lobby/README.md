@@ -26,9 +26,9 @@ not store chat history or define a policy for finding and rebinding an Actor aft
 
 ### 2.1 Functional requirements
 
-- A `Ping` request returns a `Pong` with the same `sentAtUnixMs`.
-- A `Join` request creates and binds the Actor for that connection before replying with `Joined`.
-- After joining, a one-way `Chat` causes the lobby to push the same `ChatNotify` to every currently
+- A `PingReq` request returns a `PingRes` with the same `sentAtUnixMs`.
+- A `JoinReq` request creates and binds the Actor for that connection before replying with `JoinRes`.
+- After joining, a one-way `ChatMsg` causes the lobby to push the same `ChatNotify` to every currently
   bound Actor, including the sender.
 - `ChatNotify` carries the name owned by the sender Actor and the submitted text.
 
@@ -63,10 +63,10 @@ locations and node descriptors, not chat or participant names.
 
 | Role | Responsibility | Owned state |
 |---|---|---|
-| Engine client | Connect, pump on the main thread, send `Ping`/`Join`/`Chat`, update UI | Connector lifecycle and last notification shown |
+| Engine client | Connect, pump on the main thread, send `PingReq`/`JoinReq`/`ChatMsg`, update UI | Connector lifecycle and last notification shown |
 | STREAM session | Connection lifecycle, session packet dispatch, Actor creation and binding | Session ID and current bound Actor reference |
 | Lobby Entry Spot | Select the currently connected participants on this node for chat push | Set of Actors currently eligible for notification |
-| Participant Actor | Keep the participant name and process `Chat` | Actor ID and participant name |
+| Participant Actor | Keep the participant name and process `ChatMsg` | Actor ID and participant name |
 | Redis Location Store | Share Object Server descriptors and Actor locations | Framework object-location records |
 
 The Participant Actor is the sole owner of its name. The Entry Spot participant set is a current
@@ -94,12 +94,16 @@ required and does not accept `null`. Messages carry no transport identity or rou
 
 | Message | Direction and mode | Fields | Completion meaning |
 |---|---|---|---|
-| `Ping` | Client → session request | `sentAtUnixMs: string` | The server read the request value. |
-| `Pong` | Session → client reply | `sentAtUnixMs: string` | Echoes the `Ping` value. |
-| `Join` | Client → session request | `name: string` | Starts Actor creation and session binding. |
-| `Joined` | Session → client reply | `actorId: string`, `name: string` | The Actor is Ready and bound to this session. |
-| `Chat` | Client → bound Actor one-way send | `text: string` | The Actor queue accepted the message and runs lobby fan-out; there is no reply. |
+| `PingReq` | Client → session request | `sentAtUnixMs: string` | The server read the request value. |
+| `PingRes` | Session → client reply | `sentAtUnixMs: string` | Echoes the `PingReq` value. |
+| `JoinReq` | Client → session request | `name: string` | Starts Actor creation and session binding. |
+| `JoinRes` | Session → client reply | `actorId: string`, `name: string` | The Actor is Ready and bound to this session. |
+| `ChatMsg` | Client → bound Actor one-way send | `text: string` | The Actor queue accepted the message and runs lobby fan-out; there is no reply. |
 | `ChatNotify` | Actor → bound client push | `actorId: string`, `name: string`, `text: string` | Reports one chat's sender and text. |
+
+`ParticipantActorCreateReq(name: string)` is the server-internal message used by the `JoinReq`
+handler for the Actor manager's `Create` request. The client packet is not reused as the Actor
+creation payload.
 
 `sentAtUnixMs` is a decimal string to avoid language differences when decoding 64-bit JSON
 numbers. `actorId` is an opaque application identity derived by the server from the session
@@ -121,31 +125,31 @@ sequenceDiagram
     participant L as Lobby Entry Spot
     participant P as Participant Actor
 
-    A->>S: Ping request
-    S-->>A: Pong reply
-    A->>S: Join(name) request
+    A->>S: PingReq request
+    S-->>A: PingRes reply
+    A->>S: JoinReq(name) request
     S->>P: create and bind
     P->>L: initial Entry Spot membership
-    S-->>A: Joined reply
-    B->>S: Join(name) request
+    S-->>A: JoinRes reply
+    B->>S: JoinReq(name) request
     S->>P: create and bind
     P->>L: initial Entry Spot membership
-    S-->>B: Joined reply
-    A->>P: Chat(text) relay
+    S-->>B: JoinRes reply
+    A->>P: ChatMsg(text) relay
     P->>L: fan-out current participants
     L-->>A: ChatNotify push
     L-->>B: ChatNotify push
 ```
 
-`Joined` is returned after Actor creation, Ready publication, and session binding. `Chat` has no
+`JoinRes` is returned after Actor creation, Ready publication, and session binding. `ChatMsg` has no
 session handler, so the session relays it to the bound Actor. The Actor handler creates a
 `ChatNotify` from its name and the text, then the Entry Spot sends it through the bound session of
 each Actor in the current participant snapshot.
 
 ### 7.2 Failure and recovery flow
 
-- A `Chat` sent before `Join` has no bound Actor, so it is not handled and produces no
-  `ChatNotify`. The client reconnects and starts with `Join`.
+- A `ChatMsg` sent before `JoinReq` has no bound Actor, so it is not handled and produces no
+  `ChatNotify`. The client reconnects and starts with `JoinReq`.
 - If a client disconnects during push, it is removed from the current participant set. The
   application does not roll back completed pushes to other clients or retry them into duplicates.
 - If Redis cannot start or the Object Server cannot register with the Location Store, server
@@ -175,20 +179,19 @@ in the guide.
 
 Two self-check clients verify this order directly:
 
-1. Client A sends `Ping("1000")` and receives `Pong("1000")`.
-2. Client A's `Join("alice")` and client B's `Join("bob")` return distinct non-empty `actorId`
+1. Client A sends `PingReq("1000")` and receives `PingRes("1000")`.
+2. Client A's `JoinReq("alice")` and client B's `JoinReq("bob")` return distinct non-empty `actorId`
    values and the requested names.
 3. Both clients register their `ChatNotify` waits before chat is sent.
-4. Client A sends `Chat("hello")`.
+4. Client A sends `ChatMsg("hello")`.
 5. Both notifications have the same `actorId`, `name`, and `text` as client A's
-   `Joined.actorId`, `alice`, and `hello`.
+   `JoinRes.actorId`, `alice`, and `hello`.
 6. The probe closes both connectors and exits successfully.
 
 ## 10. Smoke execution
 
-The Linux runner executes the server README's `Download and install`, `Build`, `Run`, `Verify`, and
-`Stop` sections in that order. The Windows runner verifies installation and build; the Linux lane
-owns Redis-backed run and verification. The server runner owns these operations:
+The Linux lane runs install, build, run, verify, and stop. The Windows lane checks install and
+build only; the Linux lane owns Redis-backed run/verify. The server runner owns these operations:
 
 1. Build the .NET sample.
 2. Create a dedicated Docker Redis container and key prefix for the run.
@@ -207,8 +210,8 @@ same connector contract with a C# probe and needs no engine installation.
 - Korean and English contracts have the same message names, fields, normal and failure flows, and
   state owners.
 - The .NET server builds from public packages and passes its dedicated runner's client self-check.
-- Linux examples smoke executes the complete server procedure, and the Windows lane verifies the
-  build.
+- The Linux lane runs install, build, run, verify, and stop. The Windows lane checks install and
+  build only; the Linux lane owns Redis-backed run/verify.
 - At the documented Unity version, native and WebGL targets compile and use the same `ZLinkClient`
   source for connect, pump, join, chat, and notification UI updates.
 - The Unreal project compiles with Unreal Engine 5 and uses the C++ connector for the same packet

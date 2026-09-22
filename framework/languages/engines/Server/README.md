@@ -3,7 +3,8 @@
 # ZLink Engine Lobby server
 
 This .NET server lets Unity and other game-engine clients join a shared lobby and exchange chat.
-One STREAM listener provides the `Ping`/`Pong`, `Join`/`Joined`, and `Chat`/`ChatNotify` flow; an
+One STREAM listener provides the `PingReq`/`PingRes`, `JoinReq`/`JoinRes`, and
+`ChatMsg`/`ChatNotify` flow; an
 Actor bound to each session performs lobby fan-out.
 
 Prerequisites are the .NET 8 SDK, Docker, curl, and Python 3. This directory references only public
@@ -57,7 +58,8 @@ and HTTP readiness ports, and starts the server.
 ## Verify
 
 The step checks readiness with curl first. A small C# probe in the same project then uses two
-connectors to verify `Ping`, both `Join` replies, `Chat`, and both clients' `ChatNotify` payloads.
+connectors to verify `PingReq`, both `JoinReq` replies, `ChatMsg`, and both clients'
+`ChatNotify` payloads.
 
 **Linux · macOS · WSL — bash**
 

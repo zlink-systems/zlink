@@ -3,7 +3,7 @@
 # ZLink Engine Lobby server
 
 Unity를 비롯한 게임 엔진 client가 공용 lobby에 참가해 chat을 주고받는 .NET server다. 하나의
-STREAM listener가 `Ping`/`Pong`, `Join`/`Joined`와 `Chat`/`ChatNotify` 흐름을 제공하며,
+STREAM listener가 `PingReq`/`PingRes`, `JoinReq`/`JoinRes`와 `ChatMsg`/`ChatNotify` 흐름을 제공하며,
 session에 bind된 Actor가 lobby fan-out을 수행한다.
 
 요구 사항은 .NET 8 SDK, Docker, curl과 Python 3이다. 이 디렉터리는 공개 NuGet package만
@@ -57,7 +57,7 @@ readiness port를 배정한 뒤 server를 시작한다.
 ## 검증
 
 먼저 curl로 readiness를 확인한다. 이어서 같은 project의 C# probe가 connector 두 개로
-`Ping`, 두 번의 `Join`, `Chat`과 두 client의 `ChatNotify` payload를 직접 검증한다.
+`PingReq`, 두 번의 `JoinReq`, `ChatMsg`와 두 client의 `ChatNotify` payload를 직접 검증한다.
 
 **Linux · macOS · WSL — bash**
 

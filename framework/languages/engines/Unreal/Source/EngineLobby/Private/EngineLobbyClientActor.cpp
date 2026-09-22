@@ -74,7 +74,7 @@ void AZLinkClientActor::BeginPlay ()
 
 void AZLinkClientActor::SendPing ()
 {
-    Connector->RequestJson (PacketName (engine_lobby::packet::ping),
+    Connector->RequestJson (PacketName (engine_lobby::packet::ping_req),
                             EncodeStringField (engine_lobby::field::sent_at_unix_ms, TEXT ("1000")),
                             5.0F);
 }
@@ -94,23 +94,23 @@ void AZLinkClientActor::Tick (float DeltaSeconds)
 void AZLinkClientActor::HandleResponse (const FZLinkStreamPacket &Packet)
 {
     const TSharedPtr<FJsonObject> Json = DecodePayload (Packet);
-    if (Packet.PacketName == PacketName (engine_lobby::packet::pong)) {
+    if (Packet.PacketName == PacketName (engine_lobby::packet::ping_res)) {
         FString SentAt;
         if (!ReadRequiredString (Json, engine_lobby::field::sent_at_unix_ms, SentAt)
             || SentAt != TEXT ("1000")) {
-            SetStatus (TEXT ("Engine Lobby: invalid Pong"), FColor::Red);
+            SetStatus (TEXT ("Engine Lobby: invalid PingRes"), FColor::Red);
             return;
         }
         SendJoin ();
         return;
     }
 
-    if (Packet.PacketName == PacketName (engine_lobby::packet::joined)) {
+    if (Packet.PacketName == PacketName (engine_lobby::packet::join_res)) {
         FString ActorId;
         FString Name;
         if (!ReadRequiredString (Json, engine_lobby::field::actor_id, ActorId)
             || !ReadRequiredString (Json, engine_lobby::field::name, Name) || Name != PlayerName) {
-            SetStatus (TEXT ("Engine Lobby: invalid Joined"), FColor::Red);
+            SetStatus (TEXT ("Engine Lobby: invalid JoinRes"), FColor::Red);
             return;
         }
         SetStatus (FString::Printf (TEXT ("joined as %s (%s)"), *Name, *ActorId), FColor::Green);
@@ -139,13 +139,13 @@ void AZLinkClientActor::HandlePacket (const FZLinkStreamPacket &Packet)
 
 void AZLinkClientActor::SendJoin ()
 {
-    Connector->RequestJson (PacketName (engine_lobby::packet::join),
+    Connector->RequestJson (PacketName (engine_lobby::packet::join_req),
                             EncodeStringField (engine_lobby::field::name, PlayerName), 5.0F);
 }
 
 void AZLinkClientActor::SendChat ()
 {
-    Connector->SendJson (PacketName (engine_lobby::packet::chat),
+    Connector->SendJson (PacketName (engine_lobby::packet::chat_msg),
                          EncodeStringField (engine_lobby::field::text, FirstChat));
 }
 // --8<-- [end:handler]

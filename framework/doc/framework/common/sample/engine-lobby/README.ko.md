@@ -24,10 +24,10 @@ history 저장, moderation, reconnect 뒤 상태 복원과 UI 디자인은 이 �
 
 ### 2.1 기능 요구사항
 
-- Client가 `Ping`을 request하면 server는 같은 `sentAtUnixMs`를 담은 `Pong`으로 reply한다.
-- Client가 `Join`을 request하면 server는 그 connection에 대응하는 Actor를 만들고 bind한 뒤
-  `Joined`로 reply한다.
-- Join을 마친 client가 `Chat`을 one-way로 보내면 lobby는 sender를 포함해 현재 bind된 모든
+- Client가 `PingReq`를 request하면 server는 같은 `sentAtUnixMs`를 담은 `PingRes`로 reply한다.
+- Client가 `JoinReq`를 request하면 server는 그 connection에 대응하는 Actor를 만들고 bind한 뒤
+  `JoinRes`로 reply한다.
+- Join을 마친 client가 `ChatMsg`를 one-way로 보내면 lobby는 sender를 포함해 현재 bind된 모든
   Actor의 client에 같은 `ChatNotify`를 push한다.
 - `ChatNotify`는 참가한 Actor가 소유한 이름과 보낸 text를 함께 담는다.
 
@@ -63,10 +63,10 @@ Location Store가 필요하다는 MeshNode 계약에 따라 Redis를 사용한�
 
 | 역할 | 책임 | 소유 상태 |
 |---|---|---|
-| Engine client | 연결, main-thread pump, `Ping`·`Join`·`Chat` 전송과 UI 갱신 | connector lifecycle, 화면에 표시한 마지막 알림 |
+| Engine client | 연결, main-thread pump, `PingReq`·`JoinReq`·`ChatMsg` 전송과 UI 갱신 | connector lifecycle, 화면에 표시한 마지막 알림 |
 | STREAM session | connection lifecycle과 session packet dispatch, Actor 생성·binding | session ID와 현재 bound Actor reference |
 | Lobby Entry Spot | 해당 node lobby의 현재 연결 참가자를 모아 chat 대상을 선택 | 현재 알림을 받을 수 있는 Actor 집합 |
-| Participant Actor | 참가자 이름을 보관하고 `Chat`을 처리 | Actor ID와 참가자 이름 |
+| Participant Actor | 참가자 이름을 보관하고 `ChatMsg`를 처리 | Actor ID와 참가자 이름 |
 | Redis Location Store | Object Server descriptor와 Actor 위치를 공유 | Framework object location record |
 
 참가자 이름의 단일 소유자는 Participant Actor다. Entry Spot의 참가자 집합은 push 대상의 현재
@@ -94,12 +94,15 @@ Actor factory는 `DisableRelocation`을 선택한다. Sample은 server 하나만
 
 | Message | 방향과 방식 | Field | 완료 의미 |
 |---|---|---|---|
-| `Ping` | Client → session request | `sentAtUnixMs: string` | Server가 request 값을 읽었다. |
-| `Pong` | Session → client reply | `sentAtUnixMs: string` | `Ping`의 값을 그대로 돌려준다. |
-| `Join` | Client → session request | `name: string` | Actor 생성과 session binding을 시작한다. |
-| `Joined` | Session → client reply | `actorId: string`, `name: string` | Actor가 Ready이고 이 session에 bind되었다. |
-| `Chat` | Client → bound Actor one-way send | `text: string` | Actor queue가 message를 받아 lobby fan-out을 실행한다. 별도 reply는 없다. |
+| `PingReq` | Client → session request | `sentAtUnixMs: string` | Server가 request 값을 읽었다. |
+| `PingRes` | Session → client reply | `sentAtUnixMs: string` | `PingReq`의 값을 그대로 돌려준다. |
+| `JoinReq` | Client → session request | `name: string` | Actor 생성과 session binding을 시작한다. |
+| `JoinRes` | Session → client reply | `actorId: string`, `name: string` | Actor가 Ready이고 이 session에 bind되었다. |
+| `ChatMsg` | Client → bound Actor one-way send | `text: string` | Actor queue가 message를 받아 lobby fan-out을 실행한다. 별도 reply는 없다. |
 | `ChatNotify` | Actor → bound client push | `actorId: string`, `name: string`, `text: string` | 한 chat의 sender와 text를 client에 알린다. |
+
+`ParticipantActorCreateReq(name: string)`는 `JoinReq` handler가 Actor manager의 `Create` request에
+사용하는 server 내부 message다. Client packet을 Actor 생성 payload로 재사용하지 않는다.
 
 `sentAtUnixMs`는 64-bit 숫자를 JSON number로 해석하는 언어 차이를 피하기 위해 decimal string으로
 전달한다. `actorId`는 server가 session identity에서 만든 opaque application identity이며 client는
@@ -120,30 +123,30 @@ sequenceDiagram
     participant L as Lobby Entry Spot
     participant P as Participant Actor
 
-    A->>S: Ping request
-    S-->>A: Pong reply
-    A->>S: Join(name) request
+    A->>S: PingReq request
+    S-->>A: PingRes reply
+    A->>S: JoinReq(name) request
     S->>P: create and bind
     P->>L: initial Entry Spot membership
-    S-->>A: Joined reply
-    B->>S: Join(name) request
+    S-->>A: JoinRes reply
+    B->>S: JoinReq(name) request
     S->>P: create and bind
     P->>L: initial Entry Spot membership
-    S-->>B: Joined reply
-    A->>P: Chat(text) relay
+    S-->>B: JoinRes reply
+    A->>P: ChatMsg(text) relay
     P->>L: fan-out current participants
     L-->>A: ChatNotify push
     L-->>B: ChatNotify push
 ```
 
-`Joined`는 Actor 생성, Ready publication과 session binding이 끝난 뒤 반환한다. `Chat`은 session에
+`JoinRes`는 Actor 생성, Ready publication과 session binding이 끝난 뒤 반환한다. `ChatMsg`는 session에
 등록된 handler가 아니므로 bound Actor에 typed relay된다. Actor handler는 자신의 이름과 text로
 `ChatNotify`를 만들고 Entry Spot이 가진 현재 참가자 snapshot의 bound session으로 보낸다.
 
 ### 7.2 실패·복구 흐름
 
-- `Join` 전에 `Chat`을 보내면 bound Actor가 없으므로 chat을 처리하지 않고 `ChatNotify`를 만들지
-  않는다. Client는 다시 연결해 `Join`부터 시작한다.
+- `JoinReq` 전에 `ChatMsg`를 보내면 bound Actor가 없으므로 chat을 처리하지 않고 `ChatNotify`를
+  만들지 않는다. Client는 다시 연결해 `JoinReq`부터 시작한다.
 - Push 중 client가 끊기면 그 client는 현재 참가자 집합에서 제거된다. 이미 다른 client에 완료한
   push를 되돌리거나 application retry로 중복 전송하지 않는다.
 - Redis를 준비하지 못하거나 Object Server가 Location Store에 등록되지 못하면 server startup이
@@ -172,20 +175,19 @@ Server는 public `Zlink.Framework` package surface만 사용한다. Unity projec
 
 Self-check client 두 개는 다음 순서를 직접 검증한다.
 
-1. Client A의 `Ping("1000")`이 `Pong("1000")`을 반환한다.
-2. Client A의 `Join("alice")`와 client B의 `Join("bob")`이 서로 다른 non-empty `actorId`와
+1. Client A의 `PingReq("1000")`이 `PingRes("1000")`을 반환한다.
+2. Client A의 `JoinReq("alice")`와 client B의 `JoinReq("bob")`이 서로 다른 non-empty `actorId`와
    요청한 이름을 반환한다.
 3. 두 client 모두 `ChatNotify` wait를 먼저 등록한다.
-4. Client A가 `Chat("hello")`을 보낸다.
-5. 두 notification의 `actorId`, `name`과 `text`가 client A의 `Joined.actorId`, `alice`,
+4. Client A가 `ChatMsg("hello")`을 보낸다.
+5. 두 notification의 `actorId`, `name`과 `text`가 client A의 `JoinRes.actorId`, `alice`,
    `hello`와 각각 같다.
 6. Probe는 connector를 정상적으로 닫고 성공 status로 끝난다.
 
 ## 10. Smoke 실행
 
-Linux runner는 server README의 `내려받기와 설치`, `빌드`, `실행`, `검증`, `종료` 구간을 그
-순서로 실행한다. Windows runner는 설치와 build를 확인하고 Redis 기반 실행과 검증은 Linux lane이
-소유한다. Server runner는 다음 작업을 소유한다.
+Linux lane은 install, build, run, verify, stop을 실행한다. Windows lane은 install과 build만
+확인하며 Redis 기반 run/verify는 Linux lane이 소유한다. Server runner는 다음 작업을 소유한다.
 
 1. .NET sample을 build한다.
 2. 실행 전용 Docker Redis container와 key prefix를 만든다.
@@ -202,7 +204,8 @@ Unity Editor/player build와 Unreal Editor/project build는 각 engine 설치와
 
 - 공통 message 이름, field, 정상·실패 흐름과 상태 소유자가 한국어·영어 문서에서 같다.
 - .NET server가 public package만 사용해 build되고 전용 runner의 client self-check를 통과한다.
-- Linux examples smoke가 README의 전체 server 절차를 실행하고 Windows lane이 build를 확인한다.
+- Linux lane은 install, build, run, verify, stop을 실행한다. Windows lane은 install과 build만
+  확인하며 Redis 기반 run/verify는 Linux lane이 소유한다.
 - Unity project가 지정 Unity version에서 native와 WebGL target을 각각 compile하고, 같은
   `ZLinkClient` source로 connect, pump, join, chat과 notification UI 갱신을 수행한다.
 - Unreal project가 Unreal Engine 5에서 compile되고 C++ connector로 같은 packet contract의

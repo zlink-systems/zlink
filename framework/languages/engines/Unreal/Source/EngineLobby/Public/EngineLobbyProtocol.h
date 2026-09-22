@@ -4,11 +4,11 @@ namespace engine_lobby
 {
 namespace packet
 {
-inline constexpr char ping[] = "Ping";
-inline constexpr char pong[] = "Pong";
-inline constexpr char join[] = "Join";
-inline constexpr char joined[] = "Joined";
-inline constexpr char chat[] = "Chat";
+inline constexpr char ping_req[] = "PingReq";
+inline constexpr char ping_res[] = "PingRes";
+inline constexpr char join_req[] = "JoinReq";
+inline constexpr char join_res[] = "JoinRes";
+inline constexpr char chat_msg[] = "ChatMsg";
 inline constexpr char chat_notify[] = "ChatNotify";
 } // namespace packet
 

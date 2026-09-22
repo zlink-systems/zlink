@@ -20,8 +20,8 @@ public sealed class LobbySpot(IZLinkEntrySpotContext context) : IZLinkEntrySpot<
         CancellationToken cancellationToken
     )
     {
-        var join = createRequest.Decode<Join>();
-        actor.SetName(join.Name);
+        var create = createRequest.Decode<ParticipantActorCreateReq>();
+        actor.SetName(create.Name);
         _participants[actor.Context.ActorId] = actor;
         return ValueTask.FromResult(ZLinkActorCreateResponse.Accept());
     }
@@ -64,13 +64,14 @@ public sealed class LobbySpot(IZLinkEntrySpotContext context) : IZLinkEntrySpot<
     }
 }
 
-public sealed class ChatHandler : IZLinkEntrySpotActorSendHandler<LobbySpot, ParticipantActor, Chat>
+public sealed class ChatHandler
+    : IZLinkEntrySpotActorSendHandler<LobbySpot, ParticipantActor, ChatMsg>
 {
     public async ValueTask HandleAsync(
         LobbySpot lobby,
         ParticipantActor actor,
         IZLinkMessageContext context,
-        Chat message,
+        ChatMsg message,
         CancellationToken cancellationToken
     )
     {

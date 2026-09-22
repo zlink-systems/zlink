@@ -15,7 +15,7 @@ void ValidateEngineLobbyConnectorSurface ()
     Options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::manual;
 
     zlink::stream_connector::packet_t Packet;
-    Packet.name = engine_lobby::packet::join;
+    Packet.name = engine_lobby::packet::join_req;
     Packet.codec = zlink::stream_connector::codec_t::json;
     Packet.payload = zlink::message_t::from (std::string (R"({"name":"unreal-player"})"));
 

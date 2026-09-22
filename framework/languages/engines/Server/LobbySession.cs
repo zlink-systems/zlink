@@ -11,8 +11,8 @@ public sealed class LobbySession(IZLinkSessionContext context, ILogger<LobbySess
 
     public void Configure()
     {
-        Context.Handlers.AddHandler<PingHandler>(nameof(Ping));
-        Context.Handlers.AddHandler<JoinHandler>(nameof(Join));
+        Context.Handlers.AddHandler<PingHandler>(nameof(PingReq));
+        Context.Handlers.AddHandler<JoinHandler>(nameof(JoinReq));
     }
 
     public ValueTask OnConnectedAsync(CancellationToken cancellationToken)
@@ -44,29 +44,29 @@ public sealed class LobbySession(IZLinkSessionContext context, ILogger<LobbySess
 
         var bound = Context.Actors.Bound;
         if (bound.Count != 1)
-            throw new InvalidOperationException("Join before sending lobby packets.");
+            throw new InvalidOperationException("JoinReq before sending lobby packets.");
 
         await bound.Single().RelayAsync(payload, cancellationToken);
     }
 }
 
-public sealed class PingHandler : IZLinkSessionPacketHandler<IZLinkSessionContext, Ping>
+public sealed class PingHandler : IZLinkSessionPacketHandler<IZLinkSessionContext, PingReq>
 {
     public ValueTask HandleAsync(
         IZLinkSessionContext context,
         ZLinkSessionDispatchContext dispatch,
-        Ping message,
+        PingReq message,
         CancellationToken cancellationToken
-    ) => context.Client.Reply(new Pong(message.SentAtUnixMs)).Async(cancellationToken);
+    ) => context.Client.Reply(new PingRes(message.SentAtUnixMs)).Async(cancellationToken);
 }
 
 public sealed class JoinHandler(IZLinkActorManager actors)
-    : IZLinkSessionPacketHandler<IZLinkSessionContext, Join>
+    : IZLinkSessionPacketHandler<IZLinkSessionContext, JoinReq>
 {
     public async ValueTask HandleAsync(
         IZLinkSessionContext context,
         ZLinkSessionDispatchContext dispatch,
-        Join message,
+        JoinReq message,
         CancellationToken cancellationToken
     )
     {
@@ -76,7 +76,7 @@ public sealed class JoinHandler(IZLinkActorManager actors)
         var result = await actors
             .Create(context.SessionId, "participant")
             .InMesh("engine-lobby")
-            .Request(message)
+            .Request(new ParticipantActorCreateReq(message.Name))
             .Async(cancellationToken);
 
         var actor = result switch
@@ -87,7 +87,7 @@ public sealed class JoinHandler(IZLinkActorManager actors)
 
         var bound = await context.Actors.BindAsync(actor, cancellationToken);
         await context
-            .Client.Reply(new Joined(bound.ActorId, message.Name))
+            .Client.Reply(new JoinRes(bound.ActorId, message.Name))
             .Async(cancellationToken);
     }
 }

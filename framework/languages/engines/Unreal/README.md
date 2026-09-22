@@ -4,7 +4,8 @@
 
 This Unreal Engine 5 C++ project connects to the same Engine Lobby server as the Unity sample. A
 single `AZLinkClientActor` owns the C++ stream connector, pumps it from `Tick`, performs
-`Ping` → `Join` → `Chat`, and reports the `ChatNotify` result on screen and in the log.
+`PingReq` → `PingRes` → `JoinReq` → `JoinRes` → `ChatMsg`, and reports the `ChatNotify` result on
+screen and in the log.
 
 The [`engine-lobby` sample contract](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/sample/engine-lobby/README.md)
 owns the packet names and JSON fields. This project adds no engine-specific aliases or fields.

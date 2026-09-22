@@ -1,13 +1,15 @@
 namespace EngineLobby;
 
-public sealed record Ping(string SentAtUnixMs);
+public sealed record PingReq(string SentAtUnixMs);
 
-public sealed record Pong(string SentAtUnixMs);
+public sealed record PingRes(string SentAtUnixMs);
 
-public sealed record Join(string Name);
+public sealed record JoinReq(string Name);
 
-public sealed record Joined(string ActorId, string Name);
+public sealed record JoinRes(string ActorId, string Name);
 
-public sealed record Chat(string Text);
+public sealed record ChatMsg(string Text);
 
 public sealed record ChatNotify(string ActorId, string Name, string Text);
+
+public sealed record ParticipantActorCreateReq(string Name);
