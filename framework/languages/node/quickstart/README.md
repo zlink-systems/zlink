@@ -51,7 +51,7 @@ npm run build
 
 ## Run
 
-Start the server first and the client second in separate terminals. The server listens on
+[Complete the [Build](#build) section first. Start the server first and the client second in separate terminals. The server listens on
 `tcp://0.0.0.0:7101` and handles the `greeting` channel. The client listens on
 `tcp://0.0.0.0:7102`, connects to `tcp://127.0.0.1:7101`, and serves
 `GET /hello/{name}` on `http://127.0.0.1:5080`.
@@ -120,6 +120,13 @@ Get-Content client.pid, server.pid | ForEach-Object {
 }
 Get-Job | Stop-Job -ErrorAction SilentlyContinue
 ```
+
+## Running from an IDE
+
+Open the `quickstart/` project in WebStorm. In the npm tool window or with each script's gutter ▶,
+run `build` → `server` → `client`. For debugging, create a Node.js run configuration with Working
+directory set to the project directory, JavaScript file `dist/Server/main.js`, and Before launch set
+to npm `build`. Stop with the ■ Stop button.
 
 ## Troubleshooting
 

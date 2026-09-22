@@ -116,6 +116,17 @@ Get-Content client.pid, server.pid | ForEach-Object {
 Get-Job | Stop-Job -ErrorAction SilentlyContinue
 ```
 
+## IDE에서 실행
+
+IntelliJ에서 `tutorial/`을 Gradle project로 연다. Gradle tool window에서 Java의
+`:java:Server:installDist`와 `:java:Client:installDist`, 또는 Kotlin의
+`:kotlin:Server:installDist`와 `:kotlin:Client:installDist`를 실행한다. Application 구성에서
+Server를 먼저, Client를 다음으로 실행한다. Java main class는
+`systems.zlink.tutorial.server.ServerApplication`과
+`systems.zlink.tutorial.client.ClientApplication`이고, Kotlin은 각각
+`systems.zlink.tutorial.server.ServerApplicationKt`와
+`systems.zlink.tutorial.client.ClientApplicationKt`이다. 종료는 IDE의 Stop 버튼으로 한다.
+
 ## 문제 해결
 
 언어마다 포트와 key prefix가 달라 문제 해결 항목도 다르다. Docker/Redis·JDK 관련 오류(연결 거부,

@@ -5,8 +5,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "build:http-client": "npm --prefix HttpClient run build",
-    "server": "node dist/Server/main.js",
-    "client": "node dist/Client/main.js",
+    "server": "node -e \"require('node:fs').existsSync('dist') || (console.error('run npm run build first'), process.exit(1))\" && node dist/Server/main.js",
+    "client": "node -e \"require('node:fs').existsSync('dist') || (console.error('run npm run build first'), process.exit(1))\" && node dist/Client/main.js",
     "http-client": "npm --prefix HttpClient start"
   },
   "dependencies": {

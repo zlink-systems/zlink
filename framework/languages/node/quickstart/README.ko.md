@@ -50,7 +50,7 @@ npm run build
 
 ## 실행
 
-서버를 먼저 실행하고 별도 terminal에서 client를 실행한다. server는 `tcp://0.0.0.0:7101`에서
+[빌드](#빌드) 절을 먼저 마친다. 서버를 먼저 실행하고 별도 terminal에서 client를 실행한다. server는 `tcp://0.0.0.0:7101`에서
 듣고 `greeting` channel을 처리한다. client는 `tcp://0.0.0.0:7102`에서 듣고
 `tcp://127.0.0.1:7101`에 연결하며, `http://127.0.0.1:5080`에서 `GET /hello/{name}`을
 제공한다.
@@ -119,6 +119,13 @@ Get-Content client.pid, server.pid | ForEach-Object {
 }
 Get-Job | Stop-Job -ErrorAction SilentlyContinue
 ```
+
+## IDE에서 실행
+
+WebStorm에서 `quickstart/` project를 연다. npm tool window 또는 각 script의 gutter ▶에서
+`build` → `server` → `client` 순서로 실행한다. 디버깅할 때는 Node.js run configuration을
+만들어 Working directory를 project directory, JavaScript file을 `dist/Server/main.js`로
+지정하고 Before launch에 npm `build`를 둔다. 종료는 ■ Stop 버튼으로 한다.
 
 ## 문제 해결
 
