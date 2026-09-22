@@ -4,8 +4,8 @@
   "version": "0.0.0",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "server": "node dist/Server/main.js",
-    "client": "node dist/Client/main.js"
+    "server": "node -e \"require('node:fs').existsSync('dist') || (console.error('run npm run build first'), process.exit(1))\" && node dist/Server/main.js",
+    "client": "node -e \"require('node:fs').existsSync('dist') || (console.error('run npm run build first'), process.exit(1))\" && node dist/Client/main.js"
   },
   "dependencies": {
     "@zlink-systems/framework": "0.22.0",

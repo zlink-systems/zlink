@@ -145,6 +145,12 @@ Get-Job | Stop-Job -ErrorAction SilentlyContinue
 docker rm -f zlink-tutorial-dotnet-redis 2>$null | Out-Null
 ```
 
+## IDE에서 열기
+
+Rider 또는 Visual Studio 2022·2026에서 `Tutorial.sln`을 연다. `Server`를 먼저, `Client`를
+다음으로 하는 `Multiple startup projects` 구성으로 함께 실행하거나 각 project를 그 순서로
+개별 실행한다. 종료는 IDE의 Stop 버튼으로 한다.
+
 ## 문제 해결
 
 - **Docker가 실행 중이 아니다 / Redis에 연결할 수 없다** — Docker Desktop(또는
