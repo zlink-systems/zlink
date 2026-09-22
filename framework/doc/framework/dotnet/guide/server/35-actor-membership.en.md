@@ -127,15 +127,12 @@ The completion callback also carries an id that distinguishes a retried result.
 
 Returning from a User Spot to the Entry Spot works the same way.
 
-## 3. Join Request and Reply Size, and Timeout
+## 3. The Join Timeout
 
-| What | Limit |
-| --- | --- |
-| Encoded size of one join request | 1 MiB |
-| The reply of a join that crosses to another node | 1 MiB |
-| Default timeout | 5 seconds. When given it has to be a finite positive value |
-
-Exceeding a limit ends in an error right there. The request and reply limits are independent.
+The default timeout is 5 seconds; a given value has to be finite and positive. A value out of
+that range ends in an error at the registration. A join request and reply have no size limit of
+their own — a request and reply that cross to another node follow the same wire limit as any
+other message.
 
 ## 4. The Limit on Requests to a Reserved Actor
 
