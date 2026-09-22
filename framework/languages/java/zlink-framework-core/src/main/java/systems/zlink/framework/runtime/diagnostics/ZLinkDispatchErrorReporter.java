@@ -52,6 +52,8 @@ public final class ZLinkDispatchErrorReporter {
                         error.sourceRid(),
                         error.spotId(),
                         error.actorId(),
+                        error.meshName(),
+                        error.targetRid(),
                         error.reason(),
                         error.action(),
                         error.errorType(),

@@ -41,6 +41,11 @@ import systems.zlink.framework.runtime.internal.binding.spot.ReceiveRecord;
 import systems.zlink.framework.runtime.internal.binding.spot.RecordKind;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.completion.ZLinkTerminalWinner;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchFailure;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkMeshMessageMetrics;
@@ -136,6 +141,7 @@ final class ZLinkJavaRawMeshNode
 
     private final String meshName;
     private final ZLinkMeshMessageMetrics messageMetrics;
+    private volatile Consumer<ZLinkDispatchFailure> dispatchErrorReporter = ignored -> {};
     private final java.util.function.BiConsumer<
                     String, ZLinkServiceTopologyRegistry.ChannelSelectionFailure>
             selectionFailureObserver = this::recordChannelSelectionFailure;
@@ -298,6 +304,11 @@ final class ZLinkJavaRawMeshNode
     @Override
     public String name() {
         return meshName;
+    }
+
+    @Override
+    public void setDispatchErrorReporter(Consumer<ZLinkDispatchFailure> reporter) {
+        dispatchErrorReporter = Objects.requireNonNull(reporter, "reporter");
     }
 
     @Override
@@ -1734,7 +1745,10 @@ final class ZLinkJavaRawMeshNode
                 topology == null
                         ? List.of()
                         : topology.peers().stream()
-                                .filter(peer -> peer.descriptor().serves(selectedChannel))
+                                .filter(
+                                        peer ->
+                                                isReadyLogicalMulticastTarget(
+                                                        peer, selectedChannel))
                                 .toList();
         int flags =
                 metadata == null || metadata.length == 0 ? 0 : ServiceWireConstants.FLAG_METADATA;
@@ -1753,13 +1767,83 @@ final class ZLinkJavaRawMeshNode
                 targets.stream()
                         .map(
                                 target ->
-                                        port.send(
-                                                        requireStarted(),
-                                                        target.descriptor().nodeRoutingId(),
-                                                        frames)
-                                                .toCompletableFuture())
+                                        submitLogicalMulticastTarget(
+                                                target, frames, selectedChannel, topic))
                         .toArray(CompletableFuture[]::new);
         return CompletableFuture.allOf(submissions);
+    }
+
+    private boolean isReadyLogicalMulticastTarget(
+            ZLinkServiceTopologyRegistry.Peer peer, String channelName) {
+        return peer.descriptor().serves(channelName) && isReadyPeer(peer);
+    }
+
+    private CompletableFuture<Void> submitLogicalMulticastTarget(
+            ZLinkServiceTopologyRegistry.Peer target,
+            List<byte[]> frames,
+            String channelName,
+            String topic) {
+        RoutingId targetRid = target.descriptor().nodeRoutingId();
+        CompletionStage<Void> submission;
+        try {
+            submission = port.send(requireStarted(), targetRid, frames);
+        } catch (RuntimeException failure) {
+            submission = CompletableFuture.failedFuture(failure);
+        }
+        CompletionStage<Void> observed =
+                submission.whenComplete(
+                        (ignored, failure) -> {
+                            if (failure != null) {
+                                reportLogicalMulticastFailure(
+                                        channelName,
+                                        topic,
+                                        targetRid,
+                                        unwrapCompletionFailure(failure));
+                            }
+                        });
+        return observed.toCompletableFuture();
+    }
+
+    private void reportLogicalMulticastFailure(
+            String channelName, String topic, RoutingId targetRid, Throwable failure) {
+        dispatchErrorReporter.accept(
+                new ZLinkDispatchFailure(
+                        ZLinkDispatchErrorSurface.SPOT_ROUTE,
+                        ZLinkDispatchMessageKind.SEND,
+                        logicalMulticastReason(failure),
+                        ZLinkDispatchErrorAction.DROP,
+                        null,
+                        channelName,
+                        topic,
+                        null,
+                        null,
+                        routingId == null ? null : routingId.toString(),
+                        null,
+                        failure.getClass().getName(),
+                        failure.getMessage(),
+                        meshName,
+                        targetRid.toString()));
+    }
+
+    private static ZLinkDispatchErrorReason logicalMulticastReason(Throwable failure) {
+        if (failure instanceof ZlinkSubmitException submit) {
+            return switch (submit.getResult()) {
+                case BACKPRESSURED -> ZLinkDispatchErrorReason.BACKPRESSURE;
+                case TERMINATED -> ZLinkDispatchErrorReason.SHUTDOWN;
+                default -> ZLinkDispatchErrorReason.STALE_TARGET;
+            };
+        }
+        return ZLinkDispatchErrorReason.STALE_TARGET;
+    }
+
+    private static Throwable unwrapCompletionFailure(Throwable failure) {
+        Throwable current = failure;
+        while ((current instanceof CompletionException
+                        || current instanceof java.util.concurrent.ExecutionException)
+                && current.getCause() != null) {
+            current = current.getCause();
+        }
+        return current;
     }
 
     CompletionStage<ZLinkBackendReceived> requestNode(

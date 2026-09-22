@@ -436,6 +436,9 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         handlerFactory,
                         this.handlerExecutor,
                         eventDispatcher);
+        for (ZLinkInternalMeshNode meshNode : this.routeMeshNodes) {
+            meshNode.setDispatchErrorReporter(this.dispatchErrors::report);
+        }
         this.directOutbound =
                 new ZLinkSpotDirectOutbound(
                         routeMessages, this.handlerExecutor, dispatchErrors.flow());
