@@ -48,8 +48,8 @@ final class ZLinkProviderAuthorityRepository {
     private static final byte AGGREGATE_STAGING = 0;
     private static final byte AGGREGATE_PREPARED = 1;
     private static final byte AGGREGATE_COMMITTED = 2;
-    private static final Duration AGGREGATE_COMMIT_RETRY_WINDOW = Duration.ofSeconds(5);
-    private static final int AGGREGATE_COMMIT_RETRY_LIMIT = 64;
+    private static final Duration AGGREGATE_COUNTER_RETRY_WINDOW = Duration.ofSeconds(5);
+    private static final int AGGREGATE_COUNTER_RETRY_LIMIT = 64;
     private final ZLinkLocationStore provider;
     private final ZLinkProviderDescriptorRepository descriptors;
     private final ZLinkAggregateInventoryStore aggregateInventory;
@@ -977,6 +977,15 @@ final class ZLinkProviderAuthorityRepository {
 
     CompletionStage<ZLinkAggregatePrepareResult> prepareAggregate(
             ZLinkAggregatePrepareRequest request, ZLinkStoreCancellation cancellation) {
+        return prepareAggregate(
+                request, cancellation, 0, Instant.now().plus(AGGREGATE_COUNTER_RETRY_WINDOW));
+    }
+
+    private CompletionStage<ZLinkAggregatePrepareResult> prepareAggregate(
+            ZLinkAggregatePrepareRequest request,
+            ZLinkStoreCancellation cancellation,
+            int counterRetry,
+            Instant retryDeadline) {
         Objects.requireNonNull(request, "request");
         ZLinkAggregateFence fence =
                 new ZLinkAggregateFence(request.aggregateId(), request.aggregateGeneration());
@@ -1009,7 +1018,14 @@ final class ZLinkProviderAuthorityRepository {
                                     return completed(new ZLinkAggregateConflict());
                                 }
                                 return continueAggregatePrepare(
-                                        request, fence, key, found, opaqueCancellation, false);
+                                        request,
+                                        fence,
+                                        key,
+                                        found,
+                                        opaqueCancellation,
+                                        false,
+                                        counterRetry,
+                                        retryDeadline);
                             }
                             return provider.write(
                                             new ZLinkStoreWriteRequest(
@@ -1027,7 +1043,11 @@ final class ZLinkProviderAuthorityRepository {
                                                 if (!(result
                                                         instanceof
                                                         ZLinkStoreWriteApplied applied)) {
-                                                    return prepareAggregate(request, cancellation);
+                                                    return prepareAggregate(
+                                                            request,
+                                                            cancellation,
+                                                            counterRetry,
+                                                            retryDeadline);
                                                 }
                                                 ZLinkStoreVersion version =
                                                         applied.putVersions().get(key);
@@ -1051,7 +1071,9 @@ final class ZLinkProviderAuthorityRepository {
                                                                         null,
                                                                         applied.storeNow())),
                                                         opaqueCancellation,
-                                                        true);
+                                                        true,
+                                                        counterRetry,
+                                                        retryDeadline);
                                             });
                         });
     }
@@ -1062,10 +1084,15 @@ final class ZLinkProviderAuthorityRepository {
             ZLinkStoreKey key,
             ZLinkStoreReadFound staging,
             systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation,
-            boolean ownsStaging) {
+            boolean ownsStaging,
+            int counterRetry,
+            Instant retryDeadline) {
         return aggregateInventory
                 .store(request, cancellation)
-                .thenCompose(ignored -> installAggregateMarkers(request, fence, cancellation))
+                .thenCompose(
+                        ignored ->
+                                installAggregateMarkers(
+                                        request, fence, cancellation, counterRetry, retryDeadline))
                 .thenCompose(
                         markers -> {
                             if (!markers.installed()) {
@@ -1185,7 +1212,7 @@ final class ZLinkProviderAuthorityRepository {
         Objects.requireNonNull(fence, "fence");
         Objects.requireNonNull(cancellation, "cancellation");
         return commitAggregate(
-                fence, cancellation, 0, Instant.now().plus(AGGREGATE_COMMIT_RETRY_WINDOW));
+                fence, cancellation, 0, Instant.now().plus(AGGREGATE_COUNTER_RETRY_WINDOW));
     }
 
     private CompletionStage<ZLinkAggregateCommitResult> commitAggregate(
@@ -1339,12 +1366,12 @@ final class ZLinkProviderAuthorityRepository {
                                                                 .ALREADY_COMMITTED);
                             }
                             if (current.state() != AGGREGATE_PREPARED
-                                    || retryAttempt >= AGGREGATE_COMMIT_RETRY_LIMIT
+                                    || retryAttempt >= AGGREGATE_COUNTER_RETRY_LIMIT
                                     || !Instant.now().isBefore(retryDeadline)
                                     || cancellation.isCancellationRequested()) {
                                 return completed(ZLinkAggregateCommitResult.STALE);
                             }
-                            return delayAggregateCommitRetry(
+                            return delayAggregateCounterRetry(
                                             retryAttempt, retryDeadline, cancellation)
                                     .thenCompose(
                                             ignored ->
@@ -1356,7 +1383,7 @@ final class ZLinkProviderAuthorityRepository {
                         });
     }
 
-    private static CompletionStage<Void> delayAggregateCommitRetry(
+    private static CompletionStage<Void> delayAggregateCounterRetry(
             int retryAttempt, Instant retryDeadline, ZLinkStoreCancellation cancellation) {
         long remainingMillis = Duration.between(Instant.now(), retryDeadline).toMillis();
         if (remainingMillis <= 0 || cancellation.isCancellationRequested()) {
@@ -1852,7 +1879,9 @@ final class ZLinkProviderAuthorityRepository {
     private CompletionStage<AggregateMarkerInstallation> installAggregateMarkers(
             ZLinkAggregatePrepareRequest request,
             ZLinkAggregateFence fence,
-            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation,
+            int counterRetry,
+            Instant retryDeadline) {
         List<ZLinkStoreCondition> counterConditions = new ArrayList<>();
         int ownerChanges =
                 Math.toIntExact(
@@ -1993,12 +2022,15 @@ final class ZLinkProviderAuthorityRepository {
                                                                                                                             .sha256(
                                                                                                                                     participant
                                                                                                                                             .membershipMutation()));
-                                                                                            if (!counterApplied[
-                                                                                                            0]
-                                                                                                    && participant
-                                                                                                                    .ownerTransition()
-                                                                                                            == ZLinkAuthorityGenerationTransition
-                                                                                                                    .NEW_OWNER) {
+                                                                                            boolean
+                                                                                                    reservesOwnerGeneration =
+                                                                                                            !counterApplied[
+                                                                                                                            0]
+                                                                                                                    && participant
+                                                                                                                                    .ownerTransition()
+                                                                                                                            == ZLinkAuthorityGenerationTransition
+                                                                                                                                    .NEW_OWNER;
+                                                                                            if (reservesOwnerGeneration) {
                                                                                                 conditions
                                                                                                         .addAll(
                                                                                                                 counterConditions);
@@ -2055,18 +2087,46 @@ final class ZLinkProviderAuthorityRepository {
                                                                                                                         .thenCompose(
                                                                                                                                 raced -> {
                                                                                                                                     if (!(raced
-                                                                                                                                                    instanceof
-                                                                                                                                                    ZLinkStoreReadFound
-                                                                                                                                                            racedFound)
-                                                                                                                                            || !sameAggregateMarker(
+                                                                                                                                            instanceof
+                                                                                                                                            ZLinkStoreReadFound
+                                                                                                                                                    racedFound)) {
+                                                                                                                                        return completed(
+                                                                                                                                                false);
+                                                                                                                                    }
+                                                                                                                                    AuthorityRecord
+                                                                                                                                            racedCurrent =
                                                                                                                                                     decode(
-                                                                                                                                                                    racedFound
-                                                                                                                                                                            .value()
-                                                                                                                                                                            .bytes())
-                                                                                                                                                            .aggregate(),
-                                                                                                                                                    fence,
-                                                                                                                                                    participantIndex,
-                                                                                                                                                    participant)) {
+                                                                                                                                                            racedFound
+                                                                                                                                                                    .value()
+                                                                                                                                                                    .bytes());
+                                                                                                                                    boolean
+                                                                                                                                            sameMarker =
+                                                                                                                                                    sameAggregateMarker(
+                                                                                                                                                            racedCurrent
+                                                                                                                                                                    .aggregate(),
+                                                                                                                                                            fence,
+                                                                                                                                                            participantIndex,
+                                                                                                                                                            participant);
+                                                                                                                                    boolean
+                                                                                                                                            unchangedFence =
+                                                                                                                                                    reservesOwnerGeneration
+                                                                                                                                                            && racedCurrent
+                                                                                                                                                                            .aggregate()
+                                                                                                                                                                    == null
+                                                                                                                                                            && racedFound
+                                                                                                                                                                    .value()
+                                                                                                                                                                    .version()
+                                                                                                                                                                    .value()
+                                                                                                                                                                    .equals(
+                                                                                                                                                                            participant
+                                                                                                                                                                                    .expectedStoreVersion())
+                                                                                                                                                            && racedCurrent
+                                                                                                                                                                            .allocation()
+                                                                                                                                                                            .state()
+                                                                                                                                                                    == ZLinkPlacementAllocationState
+                                                                                                                                                                            .ACTIVE;
+                                                                                                                                    if (!sameMarker
+                                                                                                                                            && !unchangedFence) {
                                                                                                                                         return completed(
                                                                                                                                                 false);
                                                                                                                                     }
@@ -2101,10 +2161,44 @@ final class ZLinkProviderAuthorityRepository {
                                                                                                                                                             return completed(
                                                                                                                                                                     false);
                                                                                                                                                         }
-                                                                                                                                                        return prepareAggregate(
-                                                                                                                                                                        request,
+                                                                                                                                                        if (sameMarker) {
+                                                                                                                                                            return prepareAggregate(
+                                                                                                                                                                            request,
+                                                                                                                                                                            cancellation
+                                                                                                                                                                                    ::isCancellationRequested,
+                                                                                                                                                                            counterRetry,
+                                                                                                                                                                            retryDeadline)
+                                                                                                                                                                    .thenApply(
+                                                                                                                                                                            reentered ->
+                                                                                                                                                                                    !(reentered
+                                                                                                                                                                                            instanceof
+                                                                                                                                                                                            ZLinkAggregateConflict));
+                                                                                                                                                        }
+                                                                                                                                                        if (counterRetry
+                                                                                                                                                                        >= AGGREGATE_COUNTER_RETRY_LIMIT
+                                                                                                                                                                || !Instant
+                                                                                                                                                                        .now()
+                                                                                                                                                                        .isBefore(
+                                                                                                                                                                                retryDeadline)
+                                                                                                                                                                || cancellation
+                                                                                                                                                                        .isCancellationRequested()) {
+                                                                                                                                                            return completed(
+                                                                                                                                                                    false);
+                                                                                                                                                        }
+                                                                                                                                                        return delayAggregateCounterRetry(
+                                                                                                                                                                        counterRetry,
+                                                                                                                                                                        retryDeadline,
                                                                                                                                                                         cancellation
                                                                                                                                                                                 ::isCancellationRequested)
+                                                                                                                                                                .thenCompose(
+                                                                                                                                                                        ignored ->
+                                                                                                                                                                                prepareAggregate(
+                                                                                                                                                                                        request,
+                                                                                                                                                                                        cancellation
+                                                                                                                                                                                                ::isCancellationRequested,
+                                                                                                                                                                                        counterRetry
+                                                                                                                                                                                                + 1,
+                                                                                                                                                                                        retryDeadline))
                                                                                                                                                                 .thenApply(
                                                                                                                                                                         reentered ->
                                                                                                                                                                                 !(reentered
