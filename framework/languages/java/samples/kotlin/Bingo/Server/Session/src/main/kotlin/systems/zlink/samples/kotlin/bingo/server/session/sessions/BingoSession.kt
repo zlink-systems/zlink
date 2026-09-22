@@ -3,6 +3,7 @@ package systems.zlink.samples.kotlin.bingo.server.session.sessions
 import org.slf4j.LoggerFactory
 import systems.zlink.framework.kotlin.ZLinkSuspendingSession
 import systems.zlink.framework.kotlin.await
+import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.streams.ZLinkSessionActor
 import systems.zlink.framework.streams.ZLinkSessionContext
@@ -42,7 +43,7 @@ class BingoSession(
             return
         }
         val actor = requireSingleBoundActor(dispatch.packetName())
-        actor.relay(dispatch, payload).await()
+        actor.kotlin().relay(dispatch, payload).await()
     }
 
     // --8<-- [end:doc-bingo-session-relay]

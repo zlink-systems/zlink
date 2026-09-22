@@ -2,6 +2,7 @@ package systems.zlink.samples.kotlin.deliverydispatch.server.customergateway.ses
 
 import systems.zlink.framework.kotlin.ZLinkSuspendingSession
 import systems.zlink.framework.kotlin.await
+import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.streams.ZLinkSessionContext
 import systems.zlink.framework.streams.ZLinkSessionDispatchContext
@@ -40,6 +41,6 @@ class CustomerSession(
                         "Exactly one customer actor must be bound before relaying packet '${dispatch.packetName()}'"
                     )
             }
-        actor.relay(dispatch, payload).await()
+        actor.kotlin().relay(dispatch, payload).await()
     }
 }

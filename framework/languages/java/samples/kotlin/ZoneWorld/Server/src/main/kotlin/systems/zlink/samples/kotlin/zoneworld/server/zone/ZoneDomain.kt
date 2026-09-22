@@ -46,9 +46,9 @@ import systems.zlink.framework.spots.ZLinkEntrySpotContext
 import systems.zlink.framework.spots.ZLinkSpotActorJoinResult
 import systems.zlink.framework.spots.ZLinkSpotContext
 import systems.zlink.framework.spots.ZLinkSpotCreateResponse
+import systems.zlink.framework.spots.ZLinkSpotHandlerRegistry
 import systems.zlink.framework.spots.ZLinkTimer
 import systems.zlink.framework.spots.ZLinkTimerTick
-import systems.zlink.samples.kotlin.zoneworld.dynamic.BorderSubscriptionHandlers
 import systems.zlink.samples.kotlin.zoneworld.server.configuration.MaintenanceStore
 import systems.zlink.samples.kotlin.zoneworld.server.configuration.NodeCensus
 import systems.zlink.samples.kotlin.zoneworld.server.configuration.NodeMaintenanceState
@@ -410,9 +410,11 @@ class ZoneSpot(
         // The topic selects the two incoming routes for this Zone Spot, so payload handling
         // does not repeat that routing decision by filtering on its destination zone.
         ZoneWorldSpec.adjacentZones(context.spotId()).forEach { fromZoneId ->
-            context
-                .handlers()
-                .addHandler(BorderSubscriptionHandlers.forRoute(fromZoneId, context.spotId()))
+            BorderSubscriptionHandlers.registerForRoute(
+                context.handlers(),
+                fromZoneId,
+                context.spotId(),
+            )
         }
     }
 
@@ -913,18 +915,23 @@ class ProbeCrashHandler :
 // --8<-- [start:doc-zw-border-subscribe]
 class BorderSubscriptionHandlers {
     companion object {
-        fun forRoute(fromZoneId: String, toZoneId: String): Class<*> =
+        fun registerForRoute(
+            handlers: ZLinkSpotHandlerRegistry,
+            fromZoneId: String,
+            toZoneId: String,
+        ) {
             when (ZoneWorldNames.borderTopic(fromZoneId, toZoneId)) {
-                ZoneWorldNames.NW_NE -> NorthWestToNorthEast::class.java
-                ZoneWorldNames.NW_SW -> NorthWestToSouthWest::class.java
-                ZoneWorldNames.NE_NW -> NorthEastToNorthWest::class.java
-                ZoneWorldNames.NE_SE -> NorthEastToSouthEast::class.java
-                ZoneWorldNames.SW_NW -> SouthWestToNorthWest::class.java
-                ZoneWorldNames.SW_SE -> SouthWestToSouthEast::class.java
-                ZoneWorldNames.SE_NE -> SouthEastToNorthEast::class.java
-                ZoneWorldNames.SE_SW -> SouthEastToSouthWest::class.java
+                ZoneWorldNames.NW_NE -> handlers.addHandler<NorthWestToNorthEast>()
+                ZoneWorldNames.NW_SW -> handlers.addHandler<NorthWestToSouthWest>()
+                ZoneWorldNames.NE_NW -> handlers.addHandler<NorthEastToNorthWest>()
+                ZoneWorldNames.NE_SE -> handlers.addHandler<NorthEastToSouthEast>()
+                ZoneWorldNames.SW_NW -> handlers.addHandler<SouthWestToNorthWest>()
+                ZoneWorldNames.SW_SE -> handlers.addHandler<SouthWestToSouthEast>()
+                ZoneWorldNames.SE_NE -> handlers.addHandler<SouthEastToNorthEast>()
+                ZoneWorldNames.SE_SW -> handlers.addHandler<SouthEastToSouthWest>()
                 else -> error("unknown border route: $fromZoneId -> $toZoneId")
             }
+        }
 
         suspend fun apply(spot: ZoneSpot, event: Messages.ZoneBorderEvent) {
             spot.applyBorder(event)
