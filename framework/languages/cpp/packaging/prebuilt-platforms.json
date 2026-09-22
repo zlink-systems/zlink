@@ -22,7 +22,8 @@
       "platform": "windows-x64",
       "runner": "windows-2022",
       "c_compiler": "cl",
-      "cxx_compiler": "cl"
+      "cxx_compiler": "cl",
+      "compiler_version": "194"
     }
   ]
 }

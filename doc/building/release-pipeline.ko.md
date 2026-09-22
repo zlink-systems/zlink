@@ -128,13 +128,18 @@ gh release view core/v0.17.5 --json assets -q '.assets[].name'
 | --- | --- | --- | --- | --- | --- |
 | linux-x64 | ✅ | ✅ | ✅ | ✅ | ubuntu-24.04, GCC 13, glibc ≥ 2.38 필요 |
 | linux-arm64 | ✅ | ✅ | 소스 빌드 | Core 아카이브 | ubuntu-24.04-arm, GCC 13 |
-| macos-arm64 | ✅ | ✅ | 소스 빌드 | Core 아카이브 | macos-15, Apple Clang |
+| macos-arm64 | ✅ | ✅ | 소스 빌드 | Core 아카이브 | macos-15, Xcode 16.4 / Apple Clang, 사전 빌드 패키지에는 macOS 아카이브가 재배치 가능한 Core 릴리스(Core ≥ 1.2.2) 필요 |
 | windows-x64 | ✅ | ✅ | 소스 빌드 | Core 아카이브 | windows-2022, MSVC, Core 아카이브에 OpenSSL DLL 포함 |
 | windows-arm64 | ❌ | ❌ | ❌ | ❌ | 미지원(2026-09-14 결정) |
 | macos-x64 (Intel) | ❌ | ❌ | ❌ | ❌ | Core부터 미지원(2026-09-09 결정) |
 
 "소스 빌드"는 패키지 설치 시 `ZLINK_CORE_SOURCE=release`와 `ZLINK_CORE_PACKAGE_PREFIX`로 가리킨 Core
 릴리스 아카이브에 대해 addon을 컴파일한다는 뜻이다.
+
+`macos-arm64` 사전 빌드 패키지를 사용하려면 Xcode 16.4의 Apple Clang이 필요하다. 공개 헤더가
+`std::stop_token`을 사용하므로 설치된 `zlink::framework` CMake target이 소비자의 컴파일·링크 명령
+양쪽에 `-fexperimental-library`를 전파한다. CMake target을 사용하지 않는 소비자는 컴파일·링크 명령
+양쪽에 `-fexperimental-library`를 직접 추가해야 한다.
 
 ## 8. CI(검증) 워크플로우
 

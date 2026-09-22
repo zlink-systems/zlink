@@ -91,7 +91,7 @@ else
   echo "Python 3 is required" >&2
   exit 1
 fi
-IFS='|' read -r c_compiler cxx_compiler <<<"$("$python_command" - "$platform_manifest" "$platform" <<'PY'
+IFS='|' read -r c_compiler cxx_compiler compiler_version <<<"$("$python_command" - "$platform_manifest" "$platform" <<'PY'
 import json
 import sys
 
@@ -100,7 +100,9 @@ with open(sys.argv[1], encoding="utf-8") as manifest_file:
                if entry["platform"] == sys.argv[2]]
 if len(matches) != 1:
     raise SystemExit(f"expected one platform entry for {sys.argv[2]}")
-print(matches[0]["c_compiler"] + "|" + matches[0]["cxx_compiler"])
+entry = matches[0]
+print("|".join((entry["c_compiler"], entry["cxx_compiler"],
+                entry.get("compiler_version", ""))))
 PY
 )"
 if (( ! update_lock )); then
@@ -200,22 +202,23 @@ EOF
     ;;
   windows-x64)
     command -v "$cxx_compiler" >/dev/null || { echo "MSVC cl.exe is required; run from an initialized VS 2022 environment" >&2; exit 1; }
-    msvc_toolset="${ZLINK_FRAMEWORK_CPP_MSVC_VERSION:-}"
-    if [[ -z "$msvc_toolset" && -n "${VSINSTALLDIR:-}" ]]; then
-      vc_version_file="$(cygpath -u "$VSINSTALLDIR")/VC/Auxiliary/Build/Microsoft.VCToolsVersion.default.txt"
-      vc_toolset="$(tr -d '\r\n' <"$vc_version_file")"
-      if [[ "$vc_toolset" =~ ^14\.([0-9])[0-9]\. ]]; then
-        msvc_toolset="19${BASH_REMATCH[1]}"
-      fi
-    fi
-    [[ "$msvc_toolset" =~ ^19[0-9]$ ]] || { echo "could not determine the Conan MSVC version from cl.exe" >&2; exit 1; }
+    [[ "$compiler_version" =~ ^19[0-9]$ ]] || { echo "prebuilt-platforms.json must pin the Conan MSVC version" >&2; exit 1; }
+    [[ -n "${VSINSTALLDIR:-}" ]] || { echo "VSINSTALLDIR is required to verify the MSVC toolset" >&2; exit 1; }
+    vc_version_file="$(cygpath -u "$VSINSTALLDIR")/VC/Auxiliary/Build/Microsoft.VCToolsVersion.default.txt"
+    vc_toolset="$(tr -d '\r\n' <"$vc_version_file")"
+    [[ "$vc_toolset" =~ ^14\.([0-9])[0-9]\. ]] || { echo "could not determine the MSVC toolset version" >&2; exit 1; }
+    detected_msvc_version="19${BASH_REMATCH[1]}"
+    [[ "$detected_msvc_version" == "$compiler_version" ]] || {
+      echo "windows-x64 requires MSVC $compiler_version, found $detected_msvc_version ($vc_toolset)" >&2
+      exit 1
+    }
     cat >"$conan_profile" <<EOF
 [settings]
 os=Windows
 arch=x86_64
 build_type=Release
 compiler=msvc
-compiler.version=$msvc_toolset
+compiler.version=$compiler_version
 compiler.runtime=dynamic
 compiler.cppstd=20
 *:compiler.cppstd=17
@@ -256,65 +259,27 @@ import sys
 with open(sys.argv[1], encoding="utf-8") as graph_file:
     nodes = json.load(graph_file)["graph"]["nodes"].values()
 packages = sorted({
-    (node["ref"], node["package_id"])
+    (node["ref"], node["package_id"], node.get("prev"))
     for node in nodes
     if node.get("ref") and node.get("package_id")
+    and node.get("binary") != "Skip"
     and not node["ref"].startswith("zlink-bootstrap/")
 })
 if not packages:
     raise SystemExit("Conan graph did not resolve package revisions")
+missing_revisions = [ref for ref, package_id, prev in packages if not prev]
+if missing_revisions:
+    raise SystemExit("Conan graph has packages without revisions: " +
+                     ", ".join(missing_revisions))
 with open(sys.argv[2], "w", encoding="utf-8", newline="\n") as output_file:
     json.dump({"version": 1, "packages": [
-        {"ref": ref, "package_id": package_id}
-        for ref, package_id in packages
+        {"ref": ref, "package_id": package_id, "prev": prev}
+        for ref, package_id, prev in packages
     ]}, output_file, indent=2)
     output_file.write("\n")
 PY
 }
 
-if (( ! update_lock )); then
-  write_package_lockfile "$candidate_lockfile" "$candidate_package_lockfile"
-  if [[ ! -f "$package_lockfile" ]] || ! "$python_command" - "$candidate_package_lockfile" "$package_lockfile" <<'PY'
-import json
-import sys
-
-try:
-    with open(sys.argv[1], encoding="utf-8") as candidate_file:
-        candidate = json.load(candidate_file)
-    with open(sys.argv[2], encoding="utf-8") as committed_file:
-        committed = json.load(committed_file)
-except FileNotFoundError:
-    raise SystemExit(1)
-
-if candidate.get("version") != committed.get("version"):
-    raise SystemExit(1)
-candidate_packages = {
-    package["ref"]: package["package_id"]
-    for package in candidate.get("packages", [])
-}
-committed_packages = {
-    package["ref"]: {
-        package["package_id"],
-        *package.get("compatible_package_ids", []),
-    }
-    for package in committed.get("packages", [])
-}
-if candidate_packages.keys() != committed_packages.keys():
-    raise SystemExit(1)
-raise SystemExit(0 if all(
-    package_id in committed_packages[ref]
-    for ref, package_id in candidate_packages.items()
-) else 1)
-PY
-  then
-    echo "Conan packages file to commit: $package_lockfile" >&2
-    echo "----- BEGIN $package_lockfile -----" >&2
-    cat "$candidate_package_lockfile" >&2
-    echo "----- END $package_lockfile -----" >&2
-    echo "run '$0 --update-lock --platform $platform' on $platform and commit both platform pin files" >&2
-    exit 1
-  fi
-fi
 conan install "$conan_dir" \
   "--profile:host=$conan_profile" \
   "--profile:build=$conan_profile" \
@@ -327,6 +292,14 @@ if ((update_lock)); then
   cp "$candidate_package_lockfile" "$package_lockfile"
   echo "updated $lockfile and $package_lockfile"
   exit 0
+fi
+if [[ ! -f "$package_lockfile" ]] || ! cmp -s "$candidate_package_lockfile" "$package_lockfile"; then
+  echo "Conan packages file to commit: $package_lockfile" >&2
+  echo "----- BEGIN $package_lockfile -----" >&2
+  cat "$candidate_package_lockfile" >&2
+  echo "----- END $package_lockfile -----" >&2
+  echo "run '$0 --update-lock --platform $platform' on $platform and commit both platform pin files" >&2
+  exit 1
 fi
 # The shared Framework and staged Core configs retain their public compile/link
 # contracts for nlohmann_json and OpenSSL. Stage those development inputs so
@@ -373,9 +346,9 @@ endif()
 unset(_nlohmann_json_prefix)
 CMAKE
 
-# Materialize absolute symlinks from local-package caches so the archive has no
-# references to the build machine.
-cp -aL "$core_input/." "$staged_core_prefix/"
+# Preserve the Core archive's relative library symlinks as part of its runtime
+# closure. Core release packaging owns making those links relocatable.
+cp -a "$core_input/." "$staged_core_prefix/"
 cp -aL "$cpp_input/." "$staged_cpp_prefix/"
 
 cmake -S "$source_dir" -B "$build_dir" -G Ninja \
@@ -498,6 +471,39 @@ if [[ "$platform" == macos-arm64 ]]; then
 fi
 "$tar_command" --sort=name --mtime="@$source_date_epoch" --owner=0 --group=0 --numeric-owner \
   -C "$work_dir" -cf - "$(basename "$prefix")" | gzip -n >"$archive"
+if [[ "$platform" == macos-arm64 ]]; then
+  archive_verify_dir="$work_dir/archive-verify"
+  archive_prefix="$archive_verify_dir/$(basename "$prefix")"
+  quickstart_build="$work_dir/quickstart-build"
+  mkdir -p "$archive_verify_dir"
+  "$tar_command" -xzf "$archive" -C "$archive_verify_dir"
+  while IFS= read -r binary; do
+    codesign --verify --deep --strict "$binary"
+  done < <(find "$archive_prefix/lib" -maxdepth 1 -type f -name '*.dylib' -print)
+  cmake -S "$source_dir/quickstart" -B "$quickstart_build" -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_CXX_COMPILER="$cxx_compiler" \
+    -DCMAKE_PREFIX_PATH="$archive_prefix" \
+    -DCMAKE_RUNTIME_OUTPUT_DIRECTORY="$archive_prefix/lib"
+  cmake --build "$quickstart_build" --parallel 8
+  "$archive_prefix/lib/quickstart_server" >"$work_dir/quickstart-server.log" 2>&1 &
+  quickstart_server_pid=$!
+  "$archive_prefix/lib/quickstart_client" >"$work_dir/quickstart-client.log" 2>&1 &
+  quickstart_client_pid=$!
+  quickstart_answer=""
+  for _ in $(seq 1 60); do
+    quickstart_answer="$(curl -sf http://127.0.0.1:5083/hello/world || true)"
+    [[ "$quickstart_answer" == *'"hello, world"'* ]] && break
+    sleep 1
+  done
+  kill "$quickstart_client_pid" "$quickstart_server_pid" 2>/dev/null || true
+  wait "$quickstart_client_pid" "$quickstart_server_pid" 2>/dev/null || true
+  if [[ "$quickstart_answer" != *'"hello, world"'* ]]; then
+    cat "$work_dir/quickstart-server.log" "$work_dir/quickstart-client.log" >&2
+    echo "quickstart failed against the unpacked macOS archive" >&2
+    exit 1
+  fi
+fi
 (
   cd "$output_dir"
   archive_name="$(basename "$archive")"

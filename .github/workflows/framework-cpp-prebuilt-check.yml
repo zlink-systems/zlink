@@ -13,7 +13,9 @@ on:
       - 'framework/languages/cpp/**'
       - 'framework/runtime/**'
       - 'bindings/cpp/**'
-      - 'scripts/local-package/core/fetch-release.sh'
+      - 'scripts/local-package/core/**'
+      - 'VERSION'
+      - '.github/actions/msvc-env/**'
       - '.github/workflows/framework-cpp-prebuilt-check.yml'
 
 permissions:

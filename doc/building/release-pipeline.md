@@ -115,13 +115,18 @@ gh release view core/v0.17.5 --json assets -q '.assets[].name'
 | --- | --- | --- | --- | --- | --- |
 | linux-x64 | ✅ | ✅ | ✅ | ✅ | ubuntu-24.04, GCC 13; needs glibc ≥ 2.38 |
 | linux-arm64 | ✅ | ✅ | source build | Core archive | ubuntu-24.04-arm, GCC 13 |
-| macos-arm64 | ✅ | ✅ | source build | Core archive | macos-15, Apple Clang |
+| macos-arm64 | ✅ | ✅ | source build | Core archive | macos-15, Xcode 16.4 / Apple Clang; the prebuilt requires a Core release whose macOS archive is relocatable (Core ≥ 1.2.2) |
 | windows-x64 | ✅ | ✅ | source build | Core archive | windows-2022, MSVC; the Core archive bundles the OpenSSL DLLs |
 | windows-arm64 | ❌ | ❌ | ❌ | ❌ | unsupported (decided 2026-09-14) |
 | macos-x64 (Intel) | ❌ | ❌ | ❌ | ❌ | unsupported from Core up (decided 2026-09-09) |
 
 "Source build" means the addon is compiled at install time against the Core release archive named by
 `ZLINK_CORE_SOURCE=release` and `ZLINK_CORE_PACKAGE_PREFIX`.
+
+The macos-arm64 prebuilt requires Xcode 16.4 / Apple Clang. The installed `zlink::framework` CMake
+target propagates `-fexperimental-library` to both consumer compile and link lines because its public
+headers use `std::stop_token`. A non-CMake consumer must add `-fexperimental-library` to both its
+compile and link commands.
 
 ## 8. CI (verification) workflows
 
