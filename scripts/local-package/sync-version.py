@@ -342,6 +342,51 @@ FRAMEWORK_SCALAR_FIELDS = (
         "ZLINK_FRAMEWORK_CPP_VERSION (framework source archive the quickstart builds)",
         rf'(set\(ZLINK_FRAMEWORK_CPP_VERSION ")(?P<version>{SEMVER})("\))',
     ),
+    # Engine samples (#935) consume the released .NET packages and the Unity WebGL package of
+    # the framework-node tag; they are mirrored to the engine examples repositories.
+    FrameworkField(
+        "framework/languages/engines/Server/Directory.Packages.props",
+        "dotnet",
+        "engine server Zlink.Framework.AspNetCore, Locations.Redis and Stream.Connector",
+        rf'(<PackageVersion Include="Zlink\.(?:Framework\.AspNetCore|Framework\.Locations\.Redis|Stream\.Connector)" Version=")(?P<version>{SEMVER})(" />)',
+        3,
+    ),
+    FrameworkField(
+        "framework/languages/engines/Unity/Assets/packages.config",
+        "dotnet",
+        "Unity NuGet Zlink.Stream.Connector",
+        rf'(<package id="Zlink\.Stream\.Connector" version=")(?P<version>{SEMVER})(" />)',
+    ),
+    FrameworkField(
+        "framework/languages/engines/Unity/Packages/manifest.json",
+        "node",
+        "Unity WebGL package framework-node tag",
+        rf'(com\.zlink\.stream-connector\.webgl#framework-node/v)(?P<version>{SEMVER})(")',
+    ),
+    FrameworkField(
+        "framework/languages/engines/Unity/README.md",
+        "node",
+        "Unity README framework-node tag",
+        rf'(`framework-node/v)(?P<version>{SEMVER})(`)',
+    ),
+    FrameworkField(
+        "framework/languages/engines/Unity/README.md",
+        "dotnet",
+        "Unity README Zlink.Stream.Connector version",
+        rf'(`Zlink\.Stream\.Connector` `)(?P<version>{SEMVER})(`)',
+    ),
+    FrameworkField(
+        "framework/languages/engines/Unity/README.ko.md",
+        "node",
+        "Unity README (ko) framework-node tag",
+        rf'(`framework-node/v)(?P<version>{SEMVER})(`)',
+    ),
+    FrameworkField(
+        "framework/languages/engines/Unity/README.ko.md",
+        "dotnet",
+        "Unity README (ko) Zlink.Stream.Connector version",
+        rf'(`Zlink\.Stream\.Connector` `)(?P<version>{SEMVER})(`)',
+    ),
 )
 
 
