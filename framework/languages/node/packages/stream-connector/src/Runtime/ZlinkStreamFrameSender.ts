@@ -27,7 +27,8 @@ export class ZlinkStreamFrameSender {
     requestSeq: bigint | undefined,
     signal?: AbortSignal,
     correlationId?: string,
-    explicitFlow?: ZlinkStreamFlow
+    explicitFlow?: ZlinkStreamFlow,
+    actorSlot?: number
   ): Promise<void> {
     throwIfAborted(signal);
     // Spec 27 §4 / spec stream-connector 32 §13: the diagnostics level is read
@@ -48,7 +49,8 @@ export class ZlinkStreamFrameSender {
         requestSeq,
         correlationId,
         flow?.flowId,
-        flow?.flowOrigin
+        flow?.flowOrigin,
+        actorSlot
       ),
       signal
     );

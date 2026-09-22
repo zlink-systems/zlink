@@ -11,6 +11,8 @@ const EVENT_MESSAGE = 2;
 const EVENT_ERROR_RECEIVED = 3;
 const EVENT_DISCONNECTED = 4;
 const EVENT_STATE_CHANGED = 5;
+const EVENT_ACTOR_BOUND = 6;
+const EVENT_ACTOR_UNBOUND = 7;
 
 class JslibConnector {
   constructor(harness, optionsJson) {
@@ -26,6 +28,7 @@ class JslibConnector {
     this.stateChanges = [];
     this.errors = [];
     this.disconnects = [];
+    this.actorEvents = [];
     this.nextCallId = 1;
     this.advance = null;
     this.sinkStack = 0;
@@ -238,6 +241,7 @@ class JslibConnector {
         const message = {
           name: descriptor.name ?? observed,
           metadata: descriptor.metadata ?? {},
+          actorId: descriptor.actorId ?? undefined,
           payload: { codec: event.value, payload: event.bytes }
         };
         const handlers = this.handlers.get(message.name);
@@ -264,6 +268,14 @@ class JslibConnector {
         this.dispatchQueue.push({ kind: 'state', change: JSON.parse(event.text) });
         return;
 
+      case EVENT_ACTOR_BOUND:
+        this.dispatchQueue.push({ kind: 'actorBound', actor: JSON.parse(event.text) });
+        return;
+
+      case EVENT_ACTOR_UNBOUND:
+        this.dispatchQueue.push({ kind: 'actorUnbound', actor: JSON.parse(event.text) });
+        return;
+
       default:
     }
   }
@@ -280,6 +292,10 @@ class JslibConnector {
           break;
         case 'disconnected':
           this.disconnects.push(item.detail);
+          break;
+        case 'actorBound':
+        case 'actorUnbound':
+          this.actorEvents.push({ kind: item.kind, actorId: item.actor.actorId });
           break;
         default:
           this.stateChanges.push(item.change);

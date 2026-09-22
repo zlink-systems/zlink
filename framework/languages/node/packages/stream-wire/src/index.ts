@@ -27,6 +27,7 @@ export interface ZLinkStreamWireHeader {
   readonly correlationId?: string;
   readonly flowId?: string;
   readonly flowOrigin?: number;
+  readonly actorSlot?: number;
 }
 
 export interface ZLinkStreamWireHeaderFlags {
@@ -34,6 +35,7 @@ export interface ZLinkStreamWireHeaderFlags {
   readonly hasMetadata: number;
   readonly hasCorrelationId: number;
   readonly hasFlowId: number;
+  readonly hasActorSlot: number;
 }
 
 // The functions below resolve this inside their bodies rather than in a parameter
@@ -45,7 +47,8 @@ const defaultHeaderFlags: ZLinkStreamWireHeaderFlags = {
   hasRequestSeq: 0x01,
   hasMetadata: 0x02,
   hasCorrelationId: 0x08,
-  hasFlowId: 0x10
+  hasFlowId: 0x10,
+  hasActorSlot: 0x20
 };
 
 export const ZLINK_STREAM_FORMAT_MARKER = 0xf2;
@@ -117,6 +120,7 @@ export function encodeStreamWireHeader(
   }
   const hasCorrelation = correlationBytes !== undefined;
   const hasFlow = header.flowId !== undefined || header.flowOrigin !== undefined;
+  const hasActorSlot = header.actorSlot !== undefined;
   if (hasFlow && (header.flowId === undefined || header.flowOrigin === undefined)) {
     throw new Error('Stream flow id and origin must be provided together.');
   }
@@ -133,6 +137,7 @@ export function encodeStreamWireHeader(
     ? headerFlags | flags.hasCorrelationId
     : headerFlags & ~flags.hasCorrelationId;
   headerFlags = hasFlow ? headerFlags | flags.hasFlowId : headerFlags & ~flags.hasFlowId;
+  headerFlags = hasActorSlot ? headerFlags | flags.hasActorSlot : headerFlags & ~flags.hasActorSlot;
 
   const metadataBytes = hasMetadata ? encodeStreamWireMetadata(header.metadata) : new Uint8Array();
   const size =
@@ -142,7 +147,8 @@ export function encodeStreamWireHeader(
     nameBytes.length +
     (hasMetadata ? 2 + metadataBytes.length : 0) +
     (hasCorrelation ? 1 + correlationBytes.length : 0) +
-    (hasFlow ? 37 : 0);
+    (hasFlow ? 37 : 0) +
+    (hasActorSlot ? 2 : 0);
   const buffer = new Uint8Array(size);
   let offset = 0;
   buffer[offset++] = ZLINK_STREAM_FORMAT_MARKER;
@@ -175,6 +181,16 @@ export function encodeStreamWireHeader(
     offset += 36;
     buffer[offset++] = header.flowOrigin!;
   }
+  if (hasActorSlot) {
+    if (
+      !Number.isInteger(header.actorSlot) ||
+      header.actorSlot! <= 0 ||
+      header.actorSlot! > 0xffff
+    ) {
+      throw new Error('Stream actor slot is invalid.');
+    }
+    writeUInt16BE(buffer, offset, header.actorSlot!);
+  }
   return buffer;
 }
 
@@ -198,7 +214,8 @@ export function decodeStreamWireHeader(
   const hasMetadata = (headerFlags & flags.hasMetadata) !== 0;
   const hasCorrelation = (headerFlags & flags.hasCorrelationId) !== 0;
   const hasFlow = (headerFlags & flags.hasFlowId) !== 0;
-  if ((headerFlags & ~0x1f) !== 0) {
+  const hasActorSlot = (headerFlags & flags.hasActorSlot) !== 0;
+  if ((headerFlags & ~0x3f) !== 0) {
     throw new Error('Unknown mandatory stream header flag.');
   }
   let requestSeq: bigint | undefined;
@@ -255,6 +272,17 @@ export function decodeStreamWireHeader(
     }
     flowOrigin = includeFlow ? decodedFlowOrigin : undefined;
   }
+  let actorSlot: number | undefined;
+  if (hasActorSlot) {
+    if (header.length - offset < 2) {
+      throw new Error('Stream actor slot is incomplete.');
+    }
+    actorSlot = readUInt16BE(header, offset);
+    if (actorSlot === 0) {
+      throw new Error('Stream actor slot must not be zero.');
+    }
+    offset += 2;
+  }
   if (offset !== header.length) {
     throw new Error('Stream header has trailing bytes.');
   }
@@ -267,7 +295,8 @@ export function decodeStreamWireHeader(
     metadata: decodedMetadata.metadata,
     correlationId,
     flowId,
-    flowOrigin
+    flowOrigin,
+    actorSlot
   };
 }
 

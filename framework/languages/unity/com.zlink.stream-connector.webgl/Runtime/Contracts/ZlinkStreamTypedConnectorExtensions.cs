@@ -25,116 +25,164 @@ namespace Systems.Zlink.Stream.Connector.Contracts
     {
         public static ZlinkStreamTypedSendBuilder Send<TPayload>(
             this IZlinkStreamConnector connector,
-            TPayload payload)
+            TPayload payload
+        )
         {
-            if (connector is null) throw new ArgumentNullException(nameof(connector));
+            if (connector is null)
+                throw new ArgumentNullException(nameof(connector));
             return new ZlinkStreamTypedSendBuilder(
-                connector.Send(EncodePayload(connector.Options.PayloadCodec, payload)));
+                connector.Send(EncodePayload(connector.Options.PayloadCodec, payload))
+            );
         }
 
         public static ZlinkStreamTypedRequestBuilder Request<TPayload>(
             this IZlinkStreamConnector connector,
-            TPayload payload)
+            TPayload payload
+        )
         {
-            if (connector is null) throw new ArgumentNullException(nameof(connector));
+            if (connector is null)
+                throw new ArgumentNullException(nameof(connector));
             return new ZlinkStreamTypedRequestBuilder(
                 connector.Request(EncodePayload(connector.Options.PayloadCodec, payload)),
-                connector.Options.PayloadCodec);
+                connector.Options.PayloadCodec
+            );
         }
 
         public static IDisposable On<TPayload>(
             this IZlinkStreamConnector connector,
-            Func<ZlinkStreamMessage<TPayload>, CancellationToken, ValueTask> handler)
+            Func<ZlinkStreamMessage<TPayload>, CancellationToken, ValueTask> handler
+        )
         {
-            if (connector is null) throw new ArgumentNullException(nameof(connector));
+            if (connector is null)
+                throw new ArgumentNullException(nameof(connector));
             return connector.On(connector.Options.NameResolver.Resolve(typeof(TPayload)), handler);
         }
 
         public static IDisposable On<TPayload>(
             this IZlinkStreamConnector connector,
             string name,
-            Func<ZlinkStreamMessage<TPayload>, CancellationToken, ValueTask> handler)
+            Func<ZlinkStreamMessage<TPayload>, CancellationToken, ValueTask> handler
+        )
         {
-            if (connector is null) throw new ArgumentNullException(nameof(connector));
-            if (handler is null) throw new ArgumentNullException(nameof(handler));
-            return connector.On(name, (message, cancellationToken) =>
-            {
-                var payload = DecodePayload<TPayload>(connector.Options.PayloadCodec, message.Payload);
-                return handler(
-                    new ZlinkStreamMessage<TPayload>(message.Name, message.Metadata, payload),
-                    cancellationToken);
-            });
+            if (connector is null)
+                throw new ArgumentNullException(nameof(connector));
+            if (handler is null)
+                throw new ArgumentNullException(nameof(handler));
+            return connector.On(
+                name,
+                (message, cancellationToken) =>
+                {
+                    var payload = DecodePayload<TPayload>(
+                        connector.Options.PayloadCodec,
+                        message.Payload
+                    );
+                    return handler(
+                        new ZlinkStreamMessage<TPayload>(
+                            message.Name,
+                            message.Metadata,
+                            payload,
+                            message.ActorId
+                        ),
+                        cancellationToken
+                    );
+                }
+            );
         }
 
         public static ZlinkStreamTypedWaitBuilder<TPayload> WaitFor<TPayload>(
             this IZlinkStreamConnector connector,
-            string name)
+            string name
+        )
         {
-            if (connector is null) throw new ArgumentNullException(nameof(connector));
-            return new ZlinkStreamTypedWaitBuilder<TPayload>(connector.WaitFor(name), connector.Options.PayloadCodec);
+            if (connector is null)
+                throw new ArgumentNullException(nameof(connector));
+            return new ZlinkStreamTypedWaitBuilder<TPayload>(
+                connector.WaitFor(name),
+                connector.Options.PayloadCodec
+            );
         }
 
         public static ZlinkStreamTypedWaitBuilder<TPayload> WaitFor<TPayload>(
-            this IZlinkStreamConnector connector)
+            this IZlinkStreamConnector connector
+        )
         {
-            if (connector is null) throw new ArgumentNullException(nameof(connector));
-            return connector.WaitFor<TPayload>(connector.Options.NameResolver.Resolve(typeof(TPayload)));
+            if (connector is null)
+                throw new ArgumentNullException(nameof(connector));
+            return connector.WaitFor<TPayload>(
+                connector.Options.NameResolver.Resolve(typeof(TPayload))
+            );
         }
 
         public static ZlinkStreamTypedExpectNoneBuilder<TPayload> ExpectNone<TPayload>(
             this IZlinkStreamConnector connector,
-            string name)
+            string name
+        )
         {
-            if (connector is null) throw new ArgumentNullException(nameof(connector));
+            if (connector is null)
+                throw new ArgumentNullException(nameof(connector));
             return new ZlinkStreamTypedExpectNoneBuilder<TPayload>(connector.ExpectNone(name));
         }
 
         public static ZlinkStreamTypedExpectNoneBuilder<TPayload> ExpectNone<TPayload>(
-            this IZlinkStreamConnector connector)
+            this IZlinkStreamConnector connector
+        )
         {
-            if (connector is null) throw new ArgumentNullException(nameof(connector));
-            return connector.ExpectNone<TPayload>(connector.Options.NameResolver.Resolve(typeof(TPayload)));
+            if (connector is null)
+                throw new ArgumentNullException(nameof(connector));
+            return connector.ExpectNone<TPayload>(
+                connector.Options.NameResolver.Resolve(typeof(TPayload))
+            );
         }
 
         public static ZlinkStreamTypedSequenceBuilder<TPayload> WaitForSequence<TPayload>(
             this IZlinkStreamConnector connector,
-            string name)
+            string name
+        )
         {
-            if (connector is null) throw new ArgumentNullException(nameof(connector));
+            if (connector is null)
+                throw new ArgumentNullException(nameof(connector));
             return new ZlinkStreamTypedSequenceBuilder<TPayload>(
                 connector.WaitForSequence(name),
-                connector.Options.PayloadCodec);
+                connector.Options.PayloadCodec
+            );
         }
 
         public static ZlinkStreamTypedSequenceBuilder<TPayload> WaitForSequence<TPayload>(
-            this IZlinkStreamConnector connector)
+            this IZlinkStreamConnector connector
+        )
         {
-            if (connector is null) throw new ArgumentNullException(nameof(connector));
+            if (connector is null)
+                throw new ArgumentNullException(nameof(connector));
             return connector.WaitForSequence<TPayload>(
-                connector.Options.NameResolver.Resolve(typeof(TPayload)));
+                connector.Options.NameResolver.Resolve(typeof(TPayload))
+            );
         }
 
         internal static ZlinkStreamEncodedPayload EncodePayload<TPayload>(
             IZlinkStreamPayloadCodec codec,
-            TPayload payload)
+            TPayload payload
+        )
         {
             return RequireCodec(codec).Encode(payload);
         }
 
         internal static TPayload DecodePayload<TPayload>(
             IZlinkStreamPayloadCodec codec,
-            ZlinkStreamEncodedPayload payload)
+            ZlinkStreamEncodedPayload payload
+        )
         {
             return RequireCodec(codec).Decode<TPayload>(payload);
         }
 
         private static IZlinkStreamPayloadCodec RequireCodec(IZlinkStreamPayloadCodec codec)
         {
-            if (codec != null) return codec;
+            if (codec != null)
+                return codec;
             throw new NotSupportedException(
-                "The typed stream API needs ZlinkStreamConnectorOptions.PayloadCodec on WebGL. " +
-                "Unity ships no System.Text.Json, so this package has no JSON fallback. " +
-                "Set a codec, or use the encoded API on IZlinkStreamConnector.");
+                "The typed stream API needs ZlinkStreamConnectorOptions.PayloadCodec on WebGL. "
+                    + "Unity ships no System.Text.Json, so this package has no JSON fallback. "
+                    + "Set a codec, or use the encoded API on IZlinkStreamConnector."
+            );
         }
     }
 
@@ -166,15 +214,21 @@ namespace Systems.Zlink.Stream.Connector.Contracts
         private readonly IZlinkStreamPayloadCodec _codec;
         private readonly IZlinkStreamSequenceCall _inner;
 
-        internal ZlinkStreamTypedSequenceBuilder(IZlinkStreamSequenceCall inner, IZlinkStreamPayloadCodec codec)
+        internal ZlinkStreamTypedSequenceBuilder(
+            IZlinkStreamSequenceCall inner,
+            IZlinkStreamPayloadCodec codec
+        )
         {
             _inner = inner;
             _codec = codec;
         }
 
-        public ZlinkStreamTypedSequenceBuilder<TPayload> Expect(Func<ZlinkStreamMessage<TPayload>, bool> predicate)
+        public ZlinkStreamTypedSequenceBuilder<TPayload> Expect(
+            Func<ZlinkStreamMessage<TPayload>, bool> predicate
+        )
         {
-            if (predicate is null) throw new ArgumentNullException(nameof(predicate));
+            if (predicate is null)
+                throw new ArgumentNullException(nameof(predicate));
             _inner.Expect(message => predicate(Decode(message)));
             return this;
         }
@@ -186,20 +240,29 @@ namespace Systems.Zlink.Stream.Connector.Contracts
         }
 
         public async ValueTask<IReadOnlyList<ZlinkStreamMessage<TPayload>>> Async(
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             var messages = await _inner.Async(cancellationToken);
             var decoded = new List<ZlinkStreamMessage<TPayload>>(messages.Count);
-            foreach (var message in messages) decoded.Add(Decode(message));
+            foreach (var message in messages)
+                decoded.Add(Decode(message));
             return decoded;
         }
 
-        private ZlinkStreamMessage<TPayload> Decode(ZlinkStreamMessage<ZlinkStreamEncodedPayload> message)
+        private ZlinkStreamMessage<TPayload> Decode(
+            ZlinkStreamMessage<ZlinkStreamEncodedPayload> message
+        )
         {
             return new ZlinkStreamMessage<TPayload>(
                 message.Name,
                 message.Metadata,
-                ZlinkStreamTypedConnectorExtensions.DecodePayload<TPayload>(_codec, message.Payload));
+                ZlinkStreamTypedConnectorExtensions.DecodePayload<TPayload>(
+                    _codec,
+                    message.Payload
+                ),
+                message.ActorId
+            );
         }
     }
 
@@ -208,7 +271,10 @@ namespace Systems.Zlink.Stream.Connector.Contracts
         private readonly IZlinkStreamPayloadCodec _codec;
         private readonly IZlinkStreamWaitCall _inner;
 
-        internal ZlinkStreamTypedWaitBuilder(IZlinkStreamWaitCall inner, IZlinkStreamPayloadCodec codec)
+        internal ZlinkStreamTypedWaitBuilder(
+            IZlinkStreamWaitCall inner,
+            IZlinkStreamPayloadCodec codec
+        )
         {
             _inner = inner;
             _codec = codec;
@@ -220,23 +286,42 @@ namespace Systems.Zlink.Stream.Connector.Contracts
             return this;
         }
 
-        public ZlinkStreamTypedWaitBuilder<TPayload> Where(Func<ZlinkStreamMessage<TPayload>, bool> predicate)
+        public ZlinkStreamTypedWaitBuilder<TPayload> Where(
+            Func<ZlinkStreamMessage<TPayload>, bool> predicate
+        )
         {
-            if (predicate is null) throw new ArgumentNullException(nameof(predicate));
-            _inner.Where(message => predicate(new ZlinkStreamMessage<TPayload>(
-                message.Name,
-                message.Metadata,
-                ZlinkStreamTypedConnectorExtensions.DecodePayload<TPayload>(_codec, message.Payload))));
+            if (predicate is null)
+                throw new ArgumentNullException(nameof(predicate));
+            _inner.Where(message =>
+                predicate(
+                    new ZlinkStreamMessage<TPayload>(
+                        message.Name,
+                        message.Metadata,
+                        ZlinkStreamTypedConnectorExtensions.DecodePayload<TPayload>(
+                            _codec,
+                            message.Payload
+                        ),
+                        message.ActorId
+                    )
+                )
+            );
             return this;
         }
 
-        public async ValueTask<ZlinkStreamMessage<TPayload>> Async(CancellationToken cancellationToken = default)
+        public async ValueTask<ZlinkStreamMessage<TPayload>> Async(
+            CancellationToken cancellationToken = default
+        )
         {
             var message = await _inner.Async(cancellationToken);
             return new ZlinkStreamMessage<TPayload>(
                 message.Name,
                 message.Metadata,
-                ZlinkStreamTypedConnectorExtensions.DecodePayload<TPayload>(_codec, message.Payload));
+                ZlinkStreamTypedConnectorExtensions.DecodePayload<TPayload>(
+                    _codec,
+                    message.Payload
+                ),
+                message.ActorId
+            );
         }
     }
 
@@ -284,7 +369,10 @@ namespace Systems.Zlink.Stream.Connector.Contracts
         private readonly IZlinkStreamPayloadCodec _codec;
         private readonly IZlinkStreamRequestCall _inner;
 
-        internal ZlinkStreamTypedRequestBuilder(IZlinkStreamRequestCall inner, IZlinkStreamPayloadCodec codec)
+        internal ZlinkStreamTypedRequestBuilder(
+            IZlinkStreamRequestCall inner,
+            IZlinkStreamPayloadCodec codec
+        )
         {
             _inner = inner;
             _codec = codec;
@@ -333,7 +421,8 @@ namespace Systems.Zlink.Stream.Connector.Contracts
 
         public void Submit<TReply>(Action<ZlinkStreamResult<TReply>> callback)
         {
-            if (callback is null) throw new ArgumentNullException(nameof(callback));
+            if (callback is null)
+                throw new ArgumentNullException(nameof(callback));
             _inner.Submit(result =>
             {
                 if (!result.IsSuccess)
@@ -344,15 +433,26 @@ namespace Systems.Zlink.Stream.Connector.Contracts
 
                 try
                 {
-                    callback(ZlinkStreamResult<TReply>.Success(
-                        ZlinkStreamTypedConnectorExtensions.DecodePayload<TReply>(_codec, result.Value)));
+                    callback(
+                        ZlinkStreamResult<TReply>.Success(
+                            ZlinkStreamTypedConnectorExtensions.DecodePayload<TReply>(
+                                _codec,
+                                result.Value
+                            )
+                        )
+                    );
                 }
                 catch (Exception exception)
                 {
-                    callback(ZlinkStreamResult<TReply>.Failure(new ZlinkStreamError(
-                        ZlinkStreamErrorCode.UserCallbackFailed,
-                        "Stream reply decode failed.",
-                        exception)));
+                    callback(
+                        ZlinkStreamResult<TReply>.Failure(
+                            new ZlinkStreamError(
+                                ZlinkStreamErrorCode.UserCallbackFailed,
+                                "Stream reply decode failed.",
+                                exception
+                            )
+                        )
+                    );
                 }
             });
         }

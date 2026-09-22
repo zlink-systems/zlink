@@ -25,6 +25,8 @@ var ZlinkStreamWebGlRuntime = (function () {
   var EVENT_ERROR_RECEIVED = 3;
   var EVENT_DISCONNECTED = 4;
   var EVENT_STATE_CHANGED = 5;
+  var EVENT_ACTOR_BOUND = 6;
+  var EVENT_ACTOR_UNBOUND = 7;
 
   var instances = {};
   var nextHandle = 1;
@@ -128,7 +130,9 @@ var ZlinkStreamWebGlRuntime = (function () {
       message: EVENT_MESSAGE,
       errorReceived: EVENT_ERROR_RECEIVED,
       disconnected: EVENT_DISCONNECTED,
-      stateChanged: EVENT_STATE_CHANGED
+      stateChanged: EVENT_STATE_CHANGED,
+      actorBound: EVENT_ACTOR_BOUND,
+      actorUnbound: EVENT_ACTOR_UNBOUND
     },
 
     takeLastError: function () {
@@ -205,6 +209,24 @@ var ZlinkStreamWebGlRuntime = (function () {
             current: change.current,
             error: change.error ? { code: change.error.code, message: change.error.message || '' } : null
           }),
+          bytes: null
+        });
+      }));
+      state.subscriptions.push(connector.onActorBound(function (actor) {
+        push(state, {
+          type: EVENT_ACTOR_BOUND,
+          id: 0,
+          value: 0,
+          text: JSON.stringify({ actorId: actor.actorId }),
+          bytes: null
+        });
+      }));
+      state.subscriptions.push(connector.onActorUnbound(function (actor) {
+        push(state, {
+          type: EVENT_ACTOR_UNBOUND,
+          id: 0,
+          value: 0,
+          text: JSON.stringify({ actorId: actor.actorId }),
           bytes: null
         });
       }));
@@ -286,7 +308,9 @@ var ZlinkStreamWebGlRuntime = (function () {
       var state = instance(handle);
       var call = JSON.parse(callJson);
       start(state, callId, function () {
-        var builder = state.connector.send({ codec: call.codec, payload: payload });
+        var target = call.actorId ? state.connector.actor(call.actorId) : state.connector;
+        if (!target) throw actorNotBound(call.actorId);
+        var builder = target.send({ codec: call.codec, payload: payload });
         if (call.packetName) builder = builder.packetName(call.packetName);
         builder = applyMetadata(builder, call.metadata);
         if (call.compress) builder = builder.compress();
@@ -298,7 +322,9 @@ var ZlinkStreamWebGlRuntime = (function () {
       var state = instance(handle);
       var call = JSON.parse(callJson);
       start(state, callId, function (signal) {
-        var builder = state.connector.request({ codec: call.codec, payload: payload });
+        var target = call.actorId ? state.connector.actor(call.actorId) : state.connector;
+        if (!target) throw actorNotBound(call.actorId);
+        var builder = target.request({ codec: call.codec, payload: payload });
         if (call.packetName) builder = builder.packetName(call.packetName);
         builder = applyMetadata(builder, call.metadata);
         if (typeof call.timeoutMs === 'number') builder = builder.timeout(call.timeoutMs);
@@ -332,7 +358,11 @@ var ZlinkStreamWebGlRuntime = (function () {
           type: EVENT_MESSAGE,
           id: id,
           value: message.payload.codec,
-          text: JSON.stringify({ name: message.name, metadata: metadataToObject(message.metadata) }),
+          text: JSON.stringify({
+            name: message.name,
+            metadata: metadataToObject(message.metadata),
+            actorId: message.actorId || null
+          }),
           bytes: message.payload.payload
         });
       });
@@ -399,6 +429,15 @@ var ZlinkStreamWebGlRuntime = (function () {
       }
     }
     return builder;
+  }
+
+  function actorNotBound(actorId) {
+    return {
+      error: {
+        code: 'validationFailed',
+        message: "Actor '" + actorId + "' is no longer bound."
+      }
+    };
   }
 
   function stateOrdinal(value) {

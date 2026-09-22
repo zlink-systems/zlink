@@ -28,7 +28,8 @@ export class ZlinkStreamHeaderCodec {
         metadata: header.metadata.values,
         correlationId: header.correlationId,
         flowId: header.flowId,
-        flowOrigin: encodeFlowOrigin(header.flowOrigin)
+        flowOrigin: encodeFlowOrigin(header.flowOrigin),
+        actorSlot: header.actorSlot
       });
     } catch (cause) {
       throw connectorError(
@@ -61,7 +62,8 @@ export class ZlinkStreamHeaderCodec {
         metadata,
         correlationId: wire.correlationId,
         flowId: wire.flowId,
-        flowOrigin: decodeFlowOrigin(wire.flowOrigin)
+        flowOrigin: decodeFlowOrigin(wire.flowOrigin),
+        actorSlot: wire.actorSlot
       };
     } catch (cause) {
       throw connectorError(
@@ -96,7 +98,8 @@ export function buildHeader(
   requestSeq: bigint | undefined,
   correlationId?: string,
   flowId?: string,
-  flowOrigin?: import('../../Contracts').ZlinkFlowOrigin
+  flowOrigin?: import('../../Contracts').ZlinkFlowOrigin,
+  actorSlot?: number
 ): ZlinkStreamHeader {
   let flags = ZlinkStreamHeaderFlags.None;
   if (requestSeq !== undefined) {
@@ -112,7 +115,19 @@ export function buildHeader(
     flags |= ZlinkStreamHeaderFlags.HasCorrelationId;
   }
   if (flowId !== undefined) flags |= ZlinkStreamHeaderFlags.HasFlowId;
-  return { kind, codec, flags, requestSeq, name, metadata, correlationId, flowId, flowOrigin };
+  if (actorSlot !== undefined) flags |= ZlinkStreamHeaderFlags.HasActorSlot;
+  return {
+    kind,
+    codec,
+    flags,
+    requestSeq,
+    name,
+    metadata,
+    correlationId,
+    flowId,
+    flowOrigin,
+    actorSlot
+  };
 }
 
 function validateHeaderSemantics(header: ZlinkStreamHeader): void {
@@ -151,12 +166,15 @@ function validateHeaderSemantics(header: ZlinkStreamHeader): void {
       header.flowId !== undefined ||
       header.flowOrigin !== undefined ||
       (header.flags & ZlinkStreamHeaderFlags.HasFlowId) !== 0;
+    const hasActorSlot =
+      header.actorSlot !== undefined || (header.flags & ZlinkStreamHeaderFlags.HasActorSlot) !== 0;
     if (
       header.flags !== ZlinkStreamHeaderFlags.None ||
       hasRequestSeq ||
       hasMetadata ||
       hasCorrelation ||
       hasFlow ||
+      hasActorSlot ||
       header.codec !== ZlinkStreamCodec.Raw
     ) {
       throw connectorError(
@@ -183,7 +201,8 @@ function validateEnum(
     ZlinkStreamHeaderFlags.HasMetadata |
     ZlinkStreamHeaderFlags.PayloadCompressed |
     ZlinkStreamHeaderFlags.HasCorrelationId |
-    ZlinkStreamHeaderFlags.HasFlowId;
+    ZlinkStreamHeaderFlags.HasFlowId |
+    ZlinkStreamHeaderFlags.HasActorSlot;
   if ((flags & ~known) !== 0) {
     throw connectorError(ZlinkStreamErrorCode.FrameDecodeFailed, 'Unknown stream header flag.');
   }

@@ -21,9 +21,17 @@ type EncodedMessageHandler = (
 type EncodedMessageObserver = (message: ZlinkStreamMessage<ZlinkStreamEncodedPayload>) => boolean;
 
 interface QueuedMessage {
+  readonly kind: 'message';
   readonly message: ZlinkStreamMessage<ZlinkStreamEncodedPayload>;
   readonly signal?: AbortSignal;
 }
+
+interface QueuedCallback {
+  readonly kind: 'callback';
+  readonly callback: () => Promise<void> | void;
+}
+
+type QueuedDispatch = QueuedMessage | QueuedCallback;
 
 /**
  * A registered wait surface plus what to call when the connection it is
@@ -43,7 +51,7 @@ export class ZlinkStreamReceivedMessages {
   // A handler can be registered after messages for another name arrive, so the
   // queue is not a simple FIFO. Tombstones let us remove a deliverable entry
   // without shifting every later message on the hot receive path.
-  private readonly queue: Array<QueuedMessage | undefined> = [];
+  private readonly queue: Array<QueuedDispatch | undefined> = [];
   private queueHead = 0;
   private queuedCount = 0;
   private drainTask: Promise<void> | undefined;
@@ -186,7 +194,15 @@ export class ZlinkStreamReceivedMessages {
         return;
       }
     }
-    this.queue.push({ message, signal });
+    this.queue.push({ kind: 'message', message, signal });
+    this.queuedCount += 1;
+    if (this.deliverOnArrival) {
+      this.scheduleDrain();
+    }
+  }
+
+  enqueueCallback(callback: () => Promise<void> | void): void {
+    this.queue.push({ kind: 'callback', callback });
     this.queuedCount += 1;
     if (this.deliverOnArrival) {
       this.scheduleDrain();
@@ -215,7 +231,7 @@ export class ZlinkStreamReceivedMessages {
   private offerQueued(name: string, registration: RegisteredObserver): void {
     for (let index = this.queueHead; index < this.queue.length; index += 1) {
       const queued = this.queue[index];
-      if (queued === undefined || queued.message.name !== name) {
+      if (queued === undefined || queued.kind !== 'message' || queued.message.name !== name) {
         continue;
       }
       if (!registration.consume(queued.message)) {
@@ -249,6 +265,10 @@ export class ZlinkStreamReceivedMessages {
         const queued = this.queue[index];
         if (queued === undefined) continue;
         this.removeAt(index);
+        if (queued.kind === 'callback') {
+          await queued.callback();
+          continue;
+        }
         const { message, signal } = queued;
         const handlers = [...this.handlers.get(message.name)!];
         for (const handler of handlers) {
@@ -281,7 +301,10 @@ export class ZlinkStreamReceivedMessages {
   private findDeliverableIndex(): number {
     for (let index = this.queueHead; index < this.queue.length; index += 1) {
       const queued = this.queue[index];
-      if (queued !== undefined && (this.handlers.get(queued.message.name)?.size ?? 0) > 0) {
+      if (
+        queued !== undefined &&
+        (queued.kind === 'callback' || (this.handlers.get(queued.message.name)?.size ?? 0) > 0)
+      ) {
         return index;
       }
     }
@@ -290,7 +313,8 @@ export class ZlinkStreamReceivedMessages {
 
   private hasQueuedMessage(name: string): boolean {
     for (let index = this.queueHead; index < this.queue.length; index += 1) {
-      if (this.queue[index]?.message.name === name) return true;
+      const queued = this.queue[index];
+      if (queued?.kind === 'message' && queued.message.name === name) return true;
     }
     return false;
   }

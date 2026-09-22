@@ -68,6 +68,177 @@ test('stream header and frame codec follow dotnet binary layout', () => {
   assert.deepEqual([...decodedFrame.payload], [1, 2, 3]);
 });
 
+test('stream header codec round-trips actor slots and rejects malformed slot fields', () => {
+  const encoded = protocolCodecs.ZlinkStreamHeaderCodec.encode({
+    kind: connector.ZlinkStreamMessageKind.Send,
+    codec: connector.ZlinkStreamCodec.Raw,
+    flags: connector.ZlinkStreamHeaderFlags.HasActorSlot,
+    name: 'ActorPush',
+    metadata: connector.ZlinkStreamMetadataMap.empty,
+    actorSlot: 0x1234
+  });
+  const decoded = protocolCodecs.ZlinkStreamHeaderCodec.decode(encoded);
+  assert.equal(decoded.actorSlot, 0x1234);
+  assert.equal(
+    decoded.flags & connector.ZlinkStreamHeaderFlags.HasActorSlot,
+    connector.ZlinkStreamHeaderFlags.HasActorSlot
+  );
+
+  assert.throws(
+    () => protocolCodecs.ZlinkStreamHeaderCodec.decode(encoded.slice(0, -1)),
+    (error) => error.error?.code === connector.ZlinkStreamErrorCode.FrameDecodeFailed
+  );
+  assert.throws(
+    () => protocolCodecs.ZlinkStreamHeaderCodec.encode({
+      kind: connector.ZlinkStreamMessageKind.Control,
+      codec: connector.ZlinkStreamCodec.Raw,
+      flags: connector.ZlinkStreamHeaderFlags.HasActorSlot,
+      name: '$zlink.actor.bound',
+      metadata: connector.ZlinkStreamMetadataMap.empty,
+      actorSlot: 1
+    }),
+    /must not contain flags/
+  );
+});
+
+test('bound actor controls project handles messages and outbound actor slots', async () => {
+  const transportFactory = new MemoryTransportFactory();
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory,
+    dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
+    heartbeat: { enabled: false },
+    reconnect: { enabled: false }
+  });
+  const events = [];
+  instance.onActorBound((actor) => events.push(`bound:${actor.actorId}`));
+  instance.onActorUnbound((actor) => events.push(`unbound:${actor.actorId}`));
+  await instance.connect();
+
+  transportFactory.connection.pushFrame(actorControlFrame('$zlink.actor.bound', [1, 0, 7, 5, ...new TextEncoder().encode('alice')]));
+  await instance.dispatch();
+  const actor = instance.actor('alice');
+  assert.equal(actor.actorId, 'alice');
+  assert.equal(actor.isBound, true);
+  assert.deepEqual(instance.actors.map((value) => value.actorId), ['alice']);
+  assert.deepEqual(events, ['bound:alice']);
+
+  const messages = [];
+  actor.on('ActorPush', (message) => messages.push(message.actorId));
+  transportFactory.connection.pushFrame(sendFrameForActor('ActorPush', 'hello', 7));
+  await instance.dispatch();
+  assert.deepEqual(messages, ['alice']);
+
+  await actor
+    .send({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array([1]) })
+    .packetName('ActorSend')
+    .submit();
+  const outbound = protocolCodecs.ZlinkStreamFrameCodec.decode(
+    transportFactory.connection.frames.at(-1)
+  );
+  assert.equal(protocolCodecs.ZlinkStreamHeaderCodec.decode(outbound.header).actorSlot, 7);
+
+  const pending = actor
+    .request({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array([2]) })
+    .packetName('ActorRequest')
+    .timeout(1000)
+    .submitEncoded();
+  const request = protocolCodecs.ZlinkStreamFrameCodec.decode(
+    transportFactory.connection.frames.at(-1)
+  );
+  const requestHeader = protocolCodecs.ZlinkStreamHeaderCodec.decode(request.header);
+  assert.equal(requestHeader.actorSlot, 7);
+  transportFactory.connection.pushFrame(
+    protocolCodecs.ZlinkStreamFrameCodec.encode(
+      protocolCodecs.ZlinkStreamHeaderCodec.encode({
+        kind: connector.ZlinkStreamMessageKind.Response,
+        codec: connector.ZlinkStreamCodec.Raw,
+        flags: connector.ZlinkStreamHeaderFlags.HasRequestSeq |
+          connector.ZlinkStreamHeaderFlags.HasActorSlot,
+        requestSeq: requestHeader.requestSeq,
+        name: 'ActorRequest',
+        metadata: connector.ZlinkStreamMetadataMap.empty,
+        actorSlot: 7
+      }),
+      new Uint8Array([3])
+    )
+  );
+  await instance.dispatch();
+  assert.deepEqual([...(await pending).payload], [3]);
+
+  transportFactory.connection.pushFrame(actorControlFrame('$zlink.actor.unbound', [1, 0, 7]));
+  await instance.dispatch();
+  assert.equal(actor.isBound, false);
+  assert.equal(instance.actor('alice'), undefined);
+  assert.deepEqual(events, ['bound:alice', 'unbound:alice']);
+  assert.throws(
+    () => actor.send({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() }),
+    (error) => error.error?.code === connector.ZlinkStreamErrorCode.ValidationFailed
+  );
+  assert.throws(
+    () => actor.request({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() }),
+    (error) => error.error?.code === connector.ZlinkStreamErrorCode.ValidationFailed
+  );
+});
+
+test('unknown actor slots fail decoding and close the connection', async () => {
+  const transportFactory = new MemoryTransportFactory();
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory,
+    heartbeat: { enabled: false },
+    reconnect: { enabled: false }
+  });
+  const errors = [];
+  const lifecycle = [];
+  instance.onErrorReceived((error) => errors.push(error.code));
+  instance.onActorUnbound((actor) => lifecycle.push(`unbound:${actor.actorId}`));
+  instance.onDisconnected(() => lifecycle.push('disconnected'));
+  await instance.connect();
+  transportFactory.connection.pushFrame(
+    actorControlFrame('$zlink.actor.bound', [1, 0, 1, 1, 97])
+  );
+  transportFactory.connection.pushFrame(
+    actorControlFrame('$zlink.actor.bound', [1, 0, 2, 1, 98])
+  );
+  await instance.dispatch();
+  transportFactory.connection.pushFrame(sendFrameForActor('UnknownActor', 'bad', 99));
+  await waitFor(() => instance.state === connector.ZlinkStreamConnectionState.Disconnected, 1000);
+  await waitFor(() => lifecycle.includes('disconnected'), 1000);
+  assert.equal(transportFactory.connection.closed, true);
+  assert.ok(errors.includes(connector.ZlinkStreamErrorCode.FrameDecodeFailed));
+  assert.deepEqual(lifecycle, ['unbound:a', 'unbound:b', 'disconnected']);
+});
+
+test('invalid actor lifecycle controls fail decoding and close the connection', async () => {
+  const invalidControls = [
+    { name: 'duplicate slot', setup: [[1, 0, 7, 1, 97]], invalid: [1, 0, 7, 1, 98] },
+    { name: 'duplicate actor id', setup: [[1, 0, 7, 1, 97]], invalid: [1, 0, 8, 1, 97] },
+    { name: 'unknown unbound slot', setup: [], invalid: [1, 0, 9], packet: '$zlink.actor.unbound' },
+    { name: 'malformed bound payload', setup: [], invalid: [1, 0, 7, 2, 97] }
+  ];
+
+  for (const scenario of invalidControls) {
+    const transportFactory = new MemoryTransportFactory();
+    const instance = createStreamConnector({
+      endpoint: 'ws://127.0.0.1:19000',
+      transportFactory,
+      heartbeat: { enabled: false },
+      reconnect: { enabled: false }
+    });
+    await instance.connect();
+    for (const payload of scenario.setup) {
+      transportFactory.connection.pushFrame(actorControlFrame('$zlink.actor.bound', payload));
+      await instance.dispatch();
+    }
+    transportFactory.connection.pushFrame(
+      actorControlFrame(scenario.packet ?? '$zlink.actor.bound', scenario.invalid)
+    );
+    await waitFor(() => instance.state === connector.ZlinkStreamConnectionState.Disconnected, 1000);
+    assert.equal(transportFactory.connection.closed, true, scenario.name);
+  }
+});
+
 test('stream connector rejects outbound metadata above the fixed 1024-byte limit', async () => {
   assert.doesNotThrow(() => protocolCodecs.ZlinkStreamHeaderCodec.encode({
     kind: connector.ZlinkStreamMessageKind.Send,
@@ -2420,6 +2591,33 @@ function sendFrame(name, payload) {
       metadata: connector.ZlinkStreamMetadataMap.empty
     }),
     new TextEncoder().encode(payload)
+  );
+}
+
+function sendFrameForActor(name, payload, actorSlot) {
+  return protocolCodecs.ZlinkStreamFrameCodec.encode(
+    protocolCodecs.ZlinkStreamHeaderCodec.encode({
+      kind: connector.ZlinkStreamMessageKind.Send,
+      codec: connector.ZlinkStreamCodec.Raw,
+      flags: connector.ZlinkStreamHeaderFlags.HasActorSlot,
+      name,
+      metadata: connector.ZlinkStreamMetadataMap.empty,
+      actorSlot
+    }),
+    new TextEncoder().encode(payload)
+  );
+}
+
+function actorControlFrame(name, payload) {
+  return protocolCodecs.ZlinkStreamFrameCodec.encode(
+    protocolCodecs.ZlinkStreamHeaderCodec.encode({
+      kind: connector.ZlinkStreamMessageKind.Control,
+      codec: connector.ZlinkStreamCodec.Raw,
+      flags: connector.ZlinkStreamHeaderFlags.None,
+      name,
+      metadata: connector.ZlinkStreamMetadataMap.empty
+    }),
+    Uint8Array.from(payload)
   );
 }
 

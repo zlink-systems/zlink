@@ -17,6 +17,7 @@ import type { ZlinkStreamPendingRequests } from './ZlinkStreamPendingRequests';
 import type { ZlinkStreamReceiveDispatcher } from './ZlinkStreamReceiveDispatcher';
 import type { ZlinkStreamReceivedMessages } from './ZlinkStreamReceivedMessages';
 import { connectorError, delay, throwIfAborted, toStreamError } from './ZlinkStreamSupport';
+import type { ZlinkStreamActors } from './ZlinkStreamActors';
 
 /**
  * Spec stream-connector 32 §6: the wait between attempts is a value picked in
@@ -53,6 +54,7 @@ export class ZlinkStreamConnectorLifecycle {
     private readonly frameSender: ZlinkStreamFrameSender,
     private readonly receiveDispatcher: ZlinkStreamReceiveDispatcher,
     private readonly receivedMessages: ZlinkStreamReceivedMessages,
+    private readonly actors: ZlinkStreamActors,
     private readonly events: ZlinkStreamConnectorEvents
   ) {}
 
@@ -197,6 +199,7 @@ export class ZlinkStreamConnectorLifecycle {
     // Spec stream-connector 32 §10.1.1: closing the connector ends the
     // connection a wait was observing, and the wait ends with it.
     this.receivedMessages.connectionEnded();
+    this.actors.closeAll(signal);
     void this.setState(ZlinkStreamConnectionState.Closed, undefined, signal);
     this.publishDisconnectedWithoutWaiting(signal);
     if (errors.length === 1) throw errors[0];
@@ -493,6 +496,7 @@ export class ZlinkStreamConnectorLifecycle {
     // connection it observed ends, here, and not when the reconnect that may
     // follow establishes the next one.
     this.receivedMessages.connectionEnded();
+    this.actors.closeAll();
     try {
       await connection?.close();
     } catch {

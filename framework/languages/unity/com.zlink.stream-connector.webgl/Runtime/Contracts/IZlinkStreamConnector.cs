@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Systems.Zlink.Stream.Connector.Contracts.Calls;
@@ -28,6 +29,18 @@ namespace Systems.Zlink.Stream.Connector.Contracts
 
         /// <summary>Gets the connector's current diagnostics level.</summary>
         ZlinkStreamDiagnosticsLevel DiagnosticsLevel { get; }
+
+        /// <summary>Gets a snapshot of the Actors currently bound to this connection.</summary>
+        IReadOnlyList<ZlinkStreamActor> Actors { get; }
+
+        /// <summary>Finds the currently bound Actor with the given identity.</summary>
+        ZlinkStreamActor Actor(string actorId);
+
+        /// <summary>Registers a callback for Actor bind notifications.</summary>
+        IDisposable OnActorBound(Action<ZlinkStreamActor> handler);
+
+        /// <summary>Registers a callback for Actor unbind notifications.</summary>
+        IDisposable OnActorUnbound(Action<ZlinkStreamActor> handler);
 
         /// <summary>
         ///     Changes the connector's diagnostics level while it keeps running.
@@ -59,7 +72,11 @@ namespace Systems.Zlink.Stream.Connector.Contracts
         event Func<ZlinkStreamDisconnected, CancellationToken, ValueTask> Disconnected;
 
         /// <summary>Raised when the connection state changes.</summary>
-        event Func<ZlinkStreamConnectionStateChanged, CancellationToken, ValueTask> ConnectionStateChanged;
+        event Func<
+            ZlinkStreamConnectionStateChanged,
+            CancellationToken,
+            ValueTask
+        > ConnectionStateChanged;
 
         /// <summary>Gets the number of received messages with <paramref name="name" />.</summary>
         int ReceivedCount(string name);
@@ -73,7 +90,12 @@ namespace Systems.Zlink.Stream.Connector.Contracts
         /// <summary>Registers a callback for messages with the given packet name.</summary>
         IDisposable On(
             string name,
-            Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, CancellationToken, ValueTask> handler);
+            Func<
+                ZlinkStreamMessage<ZlinkStreamEncodedPayload>,
+                CancellationToken,
+                ValueTask
+            > handler
+        );
 
         /// <summary>Starts a wait operation for the next unread received message with the given packet name.</summary>
         IZlinkStreamWaitCall WaitFor(string name);
