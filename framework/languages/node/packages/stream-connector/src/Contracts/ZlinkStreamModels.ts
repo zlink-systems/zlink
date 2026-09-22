@@ -30,6 +30,7 @@ export interface ZlinkStreamMessage<TPayload = unknown> {
    */
   readonly flowId?: string;
   readonly flowOrigin?: ZlinkFlowOrigin;
+  readonly actorId?: string;
 }
 
 export interface ZlinkStreamHeader {
@@ -42,6 +43,7 @@ export interface ZlinkStreamHeader {
   readonly correlationId?: string;
   readonly flowId?: string;
   readonly flowOrigin?: ZlinkFlowOrigin;
+  readonly actorSlot?: number;
 }
 
 export interface ZlinkStreamError {

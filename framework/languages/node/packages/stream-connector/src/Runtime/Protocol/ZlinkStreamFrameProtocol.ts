@@ -33,7 +33,8 @@ export class ZlinkStreamFrameProtocol {
     requestSeq: bigint | undefined,
     correlationId?: string,
     flowId?: string,
-    flowOrigin?: ZlinkFlowOrigin
+    flowOrigin?: ZlinkFlowOrigin,
+    actorSlot?: number
   ): Uint8Array {
     const payloadBytes = compress
       ? compressPayload(payload.payload, this.options.compression, this.options.compressionCodec)
@@ -47,7 +48,8 @@ export class ZlinkStreamFrameProtocol {
       requestSeq,
       correlationId,
       flowId,
-      flowOrigin
+      flowOrigin,
+      actorSlot
     );
     return this.encodeFrame(header, payloadBytes);
   }

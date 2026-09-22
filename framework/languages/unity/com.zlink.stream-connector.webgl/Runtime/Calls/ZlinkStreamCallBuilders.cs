@@ -16,7 +16,10 @@ namespace Systems.Zlink.Stream.Connector.Runtime.Calls
         private readonly ZlinkStreamWebGlConnector _connector;
         private readonly ZlinkStreamLifecycleKind _kind;
 
-        internal ZlinkStreamLifecycleCall(ZlinkStreamWebGlConnector connector, ZlinkStreamLifecycleKind kind)
+        internal ZlinkStreamLifecycleCall(
+            ZlinkStreamWebGlConnector connector,
+            ZlinkStreamLifecycleKind kind
+        )
         {
             _connector = connector;
             _kind = kind;
@@ -51,7 +54,9 @@ namespace Systems.Zlink.Stream.Connector.Runtime.Calls
         {
             if (string.IsNullOrEmpty(name))
                 throw ZlinkStreamWebGlConnector.Error(
-                    ZlinkStreamErrorCode.ValidationFailed, "Packet name must not be empty.");
+                    ZlinkStreamErrorCode.ValidationFailed,
+                    "Packet name must not be empty."
+                );
             PacketNameValue = name;
         }
 
@@ -59,16 +64,21 @@ namespace Systems.Zlink.Stream.Connector.Runtime.Calls
         {
             if (string.IsNullOrEmpty(key))
                 throw ZlinkStreamWebGlConnector.Error(
-                    ZlinkStreamErrorCode.ValidationFailed, "Metadata key must not be empty.");
-            if (value is null) throw new ArgumentNullException(nameof(value));
+                    ZlinkStreamErrorCode.ValidationFailed,
+                    "Metadata key must not be empty."
+                );
+            if (value is null)
+                throw new ArgumentNullException(nameof(value));
             _metadata ??= new Dictionary<string, string>(StringComparer.Ordinal);
             _metadata[key] = value;
         }
 
         protected void AddMetadata(ZlinkStreamMetadata metadata)
         {
-            if (metadata is null) throw new ArgumentNullException(nameof(metadata));
-            foreach (var pair in metadata.Values) AddMetadata(pair.Key, pair.Value);
+            if (metadata is null)
+                throw new ArgumentNullException(nameof(metadata));
+            foreach (var pair in metadata.Values)
+                AddMetadata(pair.Key, pair.Value);
         }
 
         protected void SetCompress()
@@ -80,7 +90,9 @@ namespace Systems.Zlink.Stream.Connector.Runtime.Calls
         {
             if (_executed)
                 throw ZlinkStreamWebGlConnector.Error(
-                    ZlinkStreamErrorCode.ValidationFailed, "Builder instances can be executed only once.");
+                    ZlinkStreamErrorCode.ValidationFailed,
+                    "Builder instances can be executed only once."
+                );
             _executed = true;
         }
     }
@@ -89,11 +101,17 @@ namespace Systems.Zlink.Stream.Connector.Runtime.Calls
     {
         private readonly ZlinkStreamWebGlConnector _connector;
         private readonly ZlinkStreamEncodedPayload _payload;
+        private readonly ZlinkStreamActor _actor;
 
-        internal ZlinkStreamSendBuilder(ZlinkStreamWebGlConnector connector, ZlinkStreamEncodedPayload payload)
+        internal ZlinkStreamSendBuilder(
+            ZlinkStreamWebGlConnector connector,
+            ZlinkStreamEncodedPayload payload,
+            ZlinkStreamActor actor = null
+        )
         {
             _connector = connector;
             _payload = payload;
+            _actor = actor;
         }
 
         public IZlinkStreamSendCall PacketName(string name)
@@ -123,20 +141,36 @@ namespace Systems.Zlink.Stream.Connector.Runtime.Calls
         public ValueTask Async(CancellationToken cancellationToken = default)
         {
             EnsureNotExecuted();
-            return _connector.SendAsync(_payload, PacketNameValue, MetadataValue, CompressValue, cancellationToken);
+            _actor?.EnsureBound();
+            return _connector.SendAsync(
+                _payload,
+                PacketNameValue,
+                MetadataValue,
+                CompressValue,
+                cancellationToken,
+                _actor
+            );
         }
     }
 
-    internal sealed class ZlinkStreamRequestBuilder : ZlinkStreamCallBuilder, IZlinkStreamRequestCall
+    internal sealed class ZlinkStreamRequestBuilder
+        : ZlinkStreamCallBuilder,
+            IZlinkStreamRequestCall
     {
         private readonly ZlinkStreamWebGlConnector _connector;
         private readonly ZlinkStreamEncodedPayload _payload;
+        private readonly ZlinkStreamActor _actor;
         private TimeSpan? _timeout;
 
-        internal ZlinkStreamRequestBuilder(ZlinkStreamWebGlConnector connector, ZlinkStreamEncodedPayload payload)
+        internal ZlinkStreamRequestBuilder(
+            ZlinkStreamWebGlConnector connector,
+            ZlinkStreamEncodedPayload payload,
+            ZlinkStreamActor actor = null
+        )
         {
             _connector = connector;
             _payload = payload;
+            _actor = actor;
         }
 
         public IZlinkStreamRequestCall PacketName(string name)
@@ -160,7 +194,10 @@ namespace Systems.Zlink.Stream.Connector.Runtime.Calls
         public IZlinkStreamRequestCall Timeout(TimeSpan timeout)
         {
             if (timeout <= TimeSpan.Zero)
-                throw new ArgumentOutOfRangeException(nameof(timeout), "Request timeout must be greater than zero.");
+                throw new ArgumentOutOfRangeException(
+                    nameof(timeout),
+                    "Request timeout must be greater than zero."
+                );
             _timeout = timeout;
             return this;
         }
@@ -171,27 +208,54 @@ namespace Systems.Zlink.Stream.Connector.Runtime.Calls
             return this;
         }
 
-        public ValueTask<ZlinkStreamEncodedPayload> Async(CancellationToken cancellationToken = default)
+        public ValueTask<ZlinkStreamEncodedPayload> Async(
+            CancellationToken cancellationToken = default
+        )
         {
             EnsureNotExecuted();
+            _actor?.EnsureBound();
             return _connector.RequestAsync(
-                _payload, PacketNameValue, MetadataValue, CompressValue, _timeout, cancellationToken);
+                _payload,
+                PacketNameValue,
+                MetadataValue,
+                CompressValue,
+                _timeout,
+                cancellationToken,
+                _actor
+            );
         }
 
         public void Submit(Action<ZlinkStreamResult> callback)
         {
-            if (callback is null) throw new ArgumentNullException(nameof(callback));
-            Submit((Action<ZlinkStreamResult<ZlinkStreamEncodedPayload>>)(result => callback(result.IsSuccess
-                ? ZlinkStreamResult.Success()
-                : ZlinkStreamResult.Failure(result.Error))));
+            if (callback is null)
+                throw new ArgumentNullException(nameof(callback));
+            Submit(
+                (Action<ZlinkStreamResult<ZlinkStreamEncodedPayload>>)(
+                    result =>
+                        callback(
+                            result.IsSuccess
+                                ? ZlinkStreamResult.Success()
+                                : ZlinkStreamResult.Failure(result.Error)
+                        )
+                )
+            );
         }
 
         public void Submit(Action<ZlinkStreamResult<ZlinkStreamEncodedPayload>> callback)
         {
-            if (callback is null) throw new ArgumentNullException(nameof(callback));
+            if (callback is null)
+                throw new ArgumentNullException(nameof(callback));
             EnsureNotExecuted();
+            _actor?.EnsureBound();
             _connector.SubmitRequest(
-                _payload, PacketNameValue, MetadataValue, CompressValue, _timeout, callback);
+                _payload,
+                PacketNameValue,
+                MetadataValue,
+                CompressValue,
+                _timeout,
+                callback,
+                _actor
+            );
         }
     }
 
@@ -212,14 +276,20 @@ namespace Systems.Zlink.Stream.Connector.Runtime.Calls
         public IZlinkStreamWaitCall Timeout(TimeSpan timeout)
         {
             if (timeout <= TimeSpan.Zero)
-                throw new ArgumentOutOfRangeException(nameof(timeout), "Wait timeout must be greater than zero.");
+                throw new ArgumentOutOfRangeException(
+                    nameof(timeout),
+                    "Wait timeout must be greater than zero."
+                );
             _timeout = timeout;
             return this;
         }
 
-        public IZlinkStreamWaitCall Where(Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, bool> predicate)
+        public IZlinkStreamWaitCall Where(
+            Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, bool> predicate
+        )
         {
-            if (predicate is null) throw new ArgumentNullException(nameof(predicate));
+            if (predicate is null)
+                throw new ArgumentNullException(nameof(predicate));
             var previous = _predicate;
             _predicate = previous is null
                 ? predicate
@@ -228,17 +298,21 @@ namespace Systems.Zlink.Stream.Connector.Runtime.Calls
         }
 
         public ValueTask<ZlinkStreamMessage<ZlinkStreamEncodedPayload>> Async(
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             if (_executed)
                 throw ZlinkStreamWebGlConnector.Error(
-                    ZlinkStreamErrorCode.ValidationFailed, "Builder instances can be executed only once.");
+                    ZlinkStreamErrorCode.ValidationFailed,
+                    "Builder instances can be executed only once."
+                );
             _executed = true;
             return _connector.WaitForEncodedAsync(
                 _name,
                 _predicate,
                 _timeout ?? _connector.Options.WaitTimeout,
-                cancellationToken);
+                cancellationToken
+            );
         }
     }
 
@@ -258,7 +332,10 @@ namespace Systems.Zlink.Stream.Connector.Runtime.Calls
         public IZlinkStreamExpectNoneCall Within(TimeSpan window)
         {
             if (window <= TimeSpan.Zero)
-                throw new ArgumentOutOfRangeException(nameof(window), "Observation window must be greater than zero.");
+                throw new ArgumentOutOfRangeException(
+                    nameof(window),
+                    "Observation window must be greater than zero."
+                );
             _window = window;
             return this;
         }
@@ -267,11 +344,15 @@ namespace Systems.Zlink.Stream.Connector.Runtime.Calls
         {
             if (_executed)
                 throw ZlinkStreamWebGlConnector.Error(
-                    ZlinkStreamErrorCode.ValidationFailed, "Builder instances can be executed only once.");
+                    ZlinkStreamErrorCode.ValidationFailed,
+                    "Builder instances can be executed only once."
+                );
             _executed = true;
             if (!_window.HasValue)
                 throw ZlinkStreamWebGlConnector.Error(
-                    ZlinkStreamErrorCode.ValidationFailed, "ExpectNone requires Within(window).");
+                    ZlinkStreamErrorCode.ValidationFailed,
+                    "ExpectNone requires Within(window)."
+                );
 
             try
             {
@@ -283,15 +364,17 @@ namespace Systems.Zlink.Stream.Connector.Runtime.Calls
             }
 
             throw new InvalidOperationException(
-                $"Expected no '{_name}' stream message within {_window.Value}.");
+                $"Expected no '{_name}' stream message within {_window.Value}."
+            );
         }
     }
 
     internal sealed class ZlinkStreamSequenceBuilder : IZlinkStreamSequenceCall
     {
         private readonly ZlinkStreamWebGlConnector _connector;
-        private readonly List<Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, bool>> _expectations =
-            new List<Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, bool>>();
+        private readonly List<
+            Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, bool>
+        > _expectations = new List<Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, bool>>();
 
         private readonly string _name;
         private bool _executed;
@@ -303,9 +386,12 @@ namespace Systems.Zlink.Stream.Connector.Runtime.Calls
             _name = name;
         }
 
-        public IZlinkStreamSequenceCall Expect(Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, bool> predicate)
+        public IZlinkStreamSequenceCall Expect(
+            Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, bool> predicate
+        )
         {
-            if (predicate is null) throw new ArgumentNullException(nameof(predicate));
+            if (predicate is null)
+                throw new ArgumentNullException(nameof(predicate));
             _expectations.Add(predicate);
             return this;
         }
@@ -313,36 +399,53 @@ namespace Systems.Zlink.Stream.Connector.Runtime.Calls
         public IZlinkStreamSequenceCall Timeout(TimeSpan timeout)
         {
             if (timeout <= TimeSpan.Zero)
-                throw new ArgumentOutOfRangeException(nameof(timeout), "Sequence timeout must be greater than zero.");
+                throw new ArgumentOutOfRangeException(
+                    nameof(timeout),
+                    "Sequence timeout must be greater than zero."
+                );
             _timeout = timeout;
             return this;
         }
 
         public async ValueTask<IReadOnlyList<ZlinkStreamMessage<ZlinkStreamEncodedPayload>>> Async(
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             if (_executed)
                 throw ZlinkStreamWebGlConnector.Error(
-                    ZlinkStreamErrorCode.ValidationFailed, "Builder instances can be executed only once.");
+                    ZlinkStreamErrorCode.ValidationFailed,
+                    "Builder instances can be executed only once."
+                );
             _executed = true;
             if (_expectations.Count == 0)
                 throw ZlinkStreamWebGlConnector.Error(
-                    ZlinkStreamErrorCode.ValidationFailed, "WaitForSequence requires at least one expectation.");
+                    ZlinkStreamErrorCode.ValidationFailed,
+                    "WaitForSequence requires at least one expectation."
+                );
 
             var timeout = _timeout ?? _connector.Options.WaitTimeout;
             var elapsed = Stopwatch.StartNew();
-            var messages = new List<ZlinkStreamMessage<ZlinkStreamEncodedPayload>>(_expectations.Count);
+            var messages = new List<ZlinkStreamMessage<ZlinkStreamEncodedPayload>>(
+                _expectations.Count
+            );
             for (var index = 0; index < _expectations.Count; index++)
             {
                 var remaining = timeout - elapsed.Elapsed;
                 if (remaining <= TimeSpan.Zero)
-                    throw new TimeoutException($"Timed out waiting for '{_name}' stream message sequence.");
+                    throw new TimeoutException(
+                        $"Timed out waiting for '{_name}' stream message sequence."
+                    );
 
-                var message = await _connector
-                    .WaitForEncodedAsync(_name, null, remaining, cancellationToken);
+                var message = await _connector.WaitForEncodedAsync(
+                    _name,
+                    null,
+                    remaining,
+                    cancellationToken
+                );
                 if (!_expectations[index](message))
                     throw new InvalidOperationException(
-                        $"Stream message '{_name}' arrived out of the expected sequence at index {index}.");
+                        $"Stream message '{_name}' arrived out of the expected sequence at index {index}."
+                    );
                 messages.Add(message);
             }
 

@@ -11,6 +11,8 @@ const EVENT_MESSAGE = 2;
 const EVENT_ERROR_RECEIVED = 3;
 const EVENT_DISCONNECTED = 4;
 const EVENT_STATE_CHANGED = 5;
+const EVENT_ACTOR_BOUND = 6;
+const EVENT_ACTOR_UNBOUND = 7;
 
 class JslibConnector {
   constructor(harness, optionsJson) {
@@ -26,6 +28,10 @@ class JslibConnector {
     this.stateChanges = [];
     this.errors = [];
     this.disconnects = [];
+    this.actorEvents = [];
+    this.actorBoundHandlers = new Set();
+    this.actorUnboundHandlers = new Set();
+    this.dispatchMode = JSON.parse(optionsJson).dispatchMode ?? 'manual';
     this.nextCallId = 1;
     this.advance = null;
     this.sinkStack = 0;
@@ -128,10 +134,37 @@ class JslibConnector {
   }
 
   on(name, handler) {
+    return this.registerHandler(name, { handler, actorHandle: undefined });
+  }
+
+  onActor(actorHandle, name, handler) {
+    return this.registerHandler(name, { handler, actorHandle });
+  }
+
+  registerHandler(name, registration) {
     this.ensureObserved(name);
     const handlers = this.handlers.get(name) ?? [];
-    handlers.push(handler);
+    handlers.push(registration);
     this.handlers.set(name, handlers);
+    return {
+      dispose: () => {
+        const index = handlers.indexOf(registration);
+        if (index >= 0) handlers.splice(index, 1);
+        if (handlers.length === 0 && this.handlers.get(name) === handlers) {
+          this.handlers.delete(name);
+        }
+      }
+    };
+  }
+
+  onActorBound(handler) {
+    this.actorBoundHandlers.add(handler);
+    return { dispose: () => this.actorBoundHandlers.delete(handler) };
+  }
+
+  onActorUnbound(handler) {
+    this.actorUnboundHandlers.add(handler);
+    return { dispose: () => this.actorUnboundHandlers.delete(handler) };
   }
 
   receivedCount(name) {
@@ -238,11 +271,12 @@ class JslibConnector {
         const message = {
           name: descriptor.name ?? observed,
           metadata: descriptor.metadata ?? {},
+          actorId: descriptor.actorId ?? undefined,
           payload: { codec: event.value, payload: event.bytes }
         };
         const handlers = this.handlers.get(message.name);
         if (handlers && handlers.length > 0) {
-          this.dispatchQueue.push({ kind: 'message', handlers: [...handlers], message });
+          this.dispatchOrQueue({ kind: 'message', message, actorHandle: descriptor.actorHandle });
           return;
         }
 
@@ -264,27 +298,71 @@ class JslibConnector {
         this.dispatchQueue.push({ kind: 'state', change: JSON.parse(event.text) });
         return;
 
+      case EVENT_ACTOR_BOUND:
+        this.dispatchOrQueue({ kind: 'actorBound', actor: JSON.parse(event.text) });
+        return;
+
+      case EVENT_ACTOR_UNBOUND:
+        this.dispatchOrQueue({ kind: 'actorUnbound', actor: JSON.parse(event.text) });
+        return;
+
       default:
     }
   }
 
   async runDispatchQueue() {
     while (this.dispatchQueue.length > 0) {
-      const item = this.dispatchQueue.shift();
-      switch (item.kind) {
-        case 'message':
-          for (const handler of item.handlers) await handler(item.message);
-          break;
-        case 'error':
-          this.errors.push(item.error);
-          break;
-        case 'disconnected':
-          this.disconnects.push(item.detail);
-          break;
-        default:
-          this.stateChanges.push(item.change);
-      }
+      await this.runDispatchItem(this.dispatchQueue.shift());
     }
+  }
+
+  dispatchOrQueue(item) {
+    if (this.dispatchMode === 'manual') this.dispatchQueue.push(item);
+    else void this.runDispatchItem(item);
+  }
+
+  async runDispatchItem(item) {
+    switch (item.kind) {
+      case 'message':
+        await this.runMessageHandlers(item);
+        break;
+      case 'error':
+        this.errors.push(item.error);
+        break;
+      case 'disconnected':
+        this.disconnects.push(item.detail);
+        break;
+      case 'actorBound':
+      case 'actorUnbound': {
+        const handlers = item.kind === 'actorBound'
+          ? this.actorBoundHandlers
+          : this.actorUnboundHandlers;
+        for (const handler of [...handlers]) handler(item.actor);
+        this.actorEvents.push({
+          kind: item.kind,
+          actorId: item.actor.actorId,
+          actorHandle: item.actor.actorHandle
+        });
+        break;
+      }
+      default:
+        this.stateChanges.push(item.change);
+    }
+  }
+
+  async runMessageHandlers(item) {
+    const handlers = this.handlers.get(item.message.name) ?? [];
+    const matching = handlers.filter(
+      (registration) => registration.actorHandle === undefined ||
+        registration.actorHandle === item.actorHandle
+    );
+    if (matching.length === 0) {
+      const history = this.received.get(item.message.name) ?? [];
+      history.push(item.message);
+      this.received.set(item.message.name, history);
+      return;
+    }
+    for (const registration of matching) await registration.handler(item.message);
   }
 
   tryTake(name, predicate) {
