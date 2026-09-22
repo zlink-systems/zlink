@@ -58,6 +58,10 @@ internal sealed class ZLinkBackendSpotNodeWrapper
     public void SetFlowCaptureGate(Func<bool> flowCaptureEnabled) =>
         _node.SetFlowCaptureGate(flowCaptureEnabled);
 
+    public void SetLogicalMulticastFailureObserver(
+        Action<string, string, RoutingId, ZLinkDispatchErrorReason, Exception?> observer
+    ) => _node.SetLogicalMulticastFailureObserver(observer);
+
     public void SetPeerAdmissionSealGate(Func<bool> sealedForShutdown) =>
         _node.SetPeerAdmissionSealGate(sealedForShutdown);
 
