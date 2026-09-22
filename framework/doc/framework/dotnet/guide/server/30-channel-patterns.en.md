@@ -18,13 +18,10 @@ View in another language — [C++](../../../cpp/guide/server/30-channel-patterns
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-This chapter quotes code from the tutorial's `Server` and `Client` directories and the `TicTacToe` and `ZoneWorld` sample directories. Bootstrap and build the corresponding tree for each language to inspect the described connections and target selection in running code.
-
 !!! info "What you get from this chapter"
 
     You learn which connection each of the three arrangements opens, who it picks
-    as a target, and when it refuses. This chapter's code comes from the
-    repository's samples and tutorials.
+    as a target, and when it refuses. The code comes from the [tutorial](https://github.com/zlink-systems/zlink-dotnet-examples/blob/main/tutorial/README.md) and the [`TicTacToe`](https://github.com/zlink-systems/zlink-dotnet-examples/blob/main/samples/TicTacToe/README.md) and [`ZoneWorld`](https://github.com/zlink-systems/zlink-dotnet-examples/blob/main/samples/ZoneWorld/README.md) sample READMEs in the examples repository; follow each README's Download, Build, and Run sections to reproduce the connection and target selection.
 
 [Channel Messaging](20-channel-messaging.en.md) covered how to register and how to call. This
 chapter covers **why it behaves that way and how far it goes**: the differences between the
@@ -43,7 +40,7 @@ caller sees when a call fails.
 | Connection | Many channels share one mesh peer connection | The client connects to the endpoint the server published | A subscriber SUB socket per publisher PUB endpoint |
 | When the sending node is itself a Server | **Not a candidate** | A candidate like any other server | Not applicable |
 | When there are no candidates | Fails immediately with no target | Waits briefly, then fails | Succeeds with no receiving node |
-| Loss | None | None | **Drops a slow subscriber's share** (not configurable today — [#442](https://github.com/zlink-systems/zlink/issues/442)) |
+| Loss | None | None | **Drops a slow subscriber's share** (with NoDrop, ends with an error) |
 
 The calling code is the same for RouteMesh and ClientServer. `SendToChannel` and
 `RequestToChannel` pick a process-local send path from the ChannelName alone, and whether that
@@ -195,17 +192,8 @@ Some targets drop out of the candidate set first. This is the same in both arran
 | A target whose weight is `0` | Membership is kept, but it drops out of new selections |
 | A target that has begun a safe shutdown | It is finishing the requests it has and going down |
 
-**When removing those three leaves no target at all, the call ends as `Unavailable`.** `request`
-and `send` produce the same result. The send path and its connection are still there and only the
-target to pick is missing, which is why it is not `NotFound` — that is the result when you named a
-target by routing id and no node knows that id. This is the value framework 0.16.0 settled on.
-
-!!! warning "Only the C++ one-way send still differs"
-
-    In 0.16.0, .NET, Java, Kotlin, and Node all produce `Unavailable` for both `request` and
-    `send`. **Only C++ produces `NotFound` for `send`** — the one-way path of a RouteMesh channel
-    does not pass the place [#498](https://github.com/zlink-systems/zlink/issues/498) fixed. In
-    C++ too, `request` is `Unavailable`.
+**When removing those three leaves no target at all, both `request` and one-way `send` end as
+`NotFound`.** No target produces the same result for the two calls.
 
 Distribution among the remaining targets is **decided by weight.** Weight ranges over `0..10000`
 and defaults to `100`.
@@ -338,44 +326,37 @@ reaches its limit (`SendHighWaterMark`), **that subscriber's share is discarded 
 ends as a success.** The remaining subscribers are unaffected, and the publisher does not stall on
 account of one slow subscriber.
 
-!!! warning "This behavior cannot be changed today"
+**Turn on NoDrop when a slow subscriber's share must not be discarded.** The slow subscriber's
+backpressure then waits the publish, and the publish ends with an error if the queue does not clear
+before its deadline.
 
-    A PUB socket has a `NODROP` setting that ends with an error instead of discarding under
-    back-pressure, but the fanout channel builder does not expose that value today. So all an
-    application can choose is to raise `SendHighWaterMark` and delay the point at which discarding
-    begins. Adding the surface is covered in
-    [#442](https://github.com/zlink-systems/zlink/issues/442).
+```csharp
+options.AddFanoutChannel("events").EnablePublisher("tcp://*:7400").SetNoDrop(true);
+```
 
-    **Delivery that cannot tolerate loss is not built on a fanout channel today.** Logical
-    Multicast does not use PUB/SUB sockets and delivers over the mesh connection, so it is not
-    subject to this rule. Neither of them provides storage, retransmission, or acks.
+NoDrop is available only on a channel with the publisher capability. Logical Multicast provides no
+storage, retransmission, or acknowledgements either.
 
-### 5.3 Topic — Only Logical Multicast Selects Receivers by It
+### 5.3 Topic — Both Forms Select Receivers by It
 
-A topic does different work in the two forms. **One decides who receives; the other does not.**
+A topic selects receivers in both forms. Logical Multicast selects Spots; classic fanout selects
+subscriber sockets.
 
 | | Logical Multicast | Classic fanout |
 | --- | --- | --- |
-| Subscription registration | ChannelName + **topic** | ChannelName + packet name |
-| Does the topic filter delivery | **It does.** Only Spots subscribed to the same topic receive it | **It does not.** Every event on that channel is received |
+| Subscription registration | ChannelName + **topic** | ChannelName + **topic** |
+| Does the topic filter delivery | **It does.** Only Spots subscribed to the same topic receive it | **It does.** Only subscribers subscribed to the same topic receive it |
 | After receiving | The subscription handler of that Spot processes it | A handler is found by packet name; with none, it is discarded |
 
-A classic fanout subscriber connects its socket to **every topic**. So subscribers attached to the
-same channel receive every published event, process only the ones they have a handler for, and
-discard the rest on the spot.
+A classic fanout subscriber registers each topic it receives with `subscribe(topic)`. Only events
+published to a matching topic travel to that subscriber.
 
-**The topic is visible after receiving.** The publish context the handler receives alongside the
-event carries the topic it arrived on. Narrowing the targets on the network is not possible, but
-having one handler receive several topics and branch on them is.
+```csharp
+options.AddFanoutChannel("events").EnableSubscriber().Subscribe("order.created");
+```
 
-!!! warning "You cannot select by topic on a classic fanout today"
-
-    The subscription registration surface has no topic argument — there is only
-    `AddHandler<THandler, TEvent>(packetName)`. Publish events of differing character onto one
-    channel and every subscriber **receives all of them over the network.** Filtering after
-    receipt is after the transfer already happened. The only way to reduce traffic today is **to
-    split the channel**. Specifying a subscription topic is covered in
-    [#445](https://github.com/zlink-systems/zlink/issues/445).
+The publish context received by a handler also holds the arriving topic, so one handler can
+register several topics and branch on it.
 
 ### 5.4 How to Set the Topic When Publishing
 
@@ -428,7 +409,7 @@ directly, it works without one.
 
 The registration code is in [Spot](21-spot.en.md#2-the-location-store--a-prerequisite-for-registering-a-spot),
 and the operational queries are in
-[Operations and Lifecycle](12-operations.en.md#5-location-readiness-and-operational-queries).
+[Operations and Lifecycle](12-operations.en.md#6-location-readiness-and-operational-queries).
 
 **There are two stores.** The Location Store handles the atomic changes to small location records;
 the Relocation Store holds what remains after a move — the record of an Instance Spot's first
@@ -501,15 +482,15 @@ Registering both is refused at startup.
 
 ### 6.5 Finding It in the Store Is Not Yet Sending to It
 
-After obtaining an endpoint from the registration, a client **re-confirms identity and execution
+After obtaining an endpoint from the registration, a client **re-confirms identity and lifecycle
 generation on the actual connection** before it uses that target. A manual connection goes through
 the same confirmation. So a call can end with no target even though the row is in the store — at
 that point, look at **whether the connection was established**, not at the store.
 
-**Restarting a server changes the execution generation.** Even with the same endpoint, a
-connection from the previous generation is not used as a new target; the client prepares the new
-generation and then removes the previous connection. Generation values are not ordered by
-numerical size.
+**Restarting a server changes the lifecycle generation**, which says which run of the node this is.
+Even with the same endpoint, a connection from the previous lifecycle generation is not used as a
+new target; the client prepares the new value and then removes the previous connection. Lifecycle
+generation values are not ordered by numerical size.
 
 A reply that arrives late **becomes the result if the original request is still waiting** — even
 when it came from a previous generation. Conversely, if that request is gone through timeout,
@@ -547,5 +528,5 @@ structured record ([Monitoring](26-monitoring.en.md)).
 - A running version of this chapter's code — `framework/languages/dotnet/tutorial`
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

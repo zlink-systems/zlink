@@ -141,6 +141,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     // historical always-on behavior.
     private volatile Func<bool>? _flowCaptureEnabled;
 
+    private volatile ZLinkDispatchErrorReporter? _logicalMulticastDispatchErrors;
+    private string? _logicalMulticastMeshName;
+
     // Spec 30 §14 step 1: the host's shutdown admission seal, consulted before
     // this node starts or accepts peer admission (Hello). The host drain gate owns the
     // seal; a gate-less standalone node keeps admitting peers.
@@ -271,6 +274,17 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         ArgumentNullException.ThrowIfNull(flowCaptureEnabled);
         _flowCaptureEnabled = flowCaptureEnabled;
+    }
+
+    internal void SetLogicalMulticastDispatchErrors(
+        ZLinkDispatchErrorReporter reporter,
+        string meshName
+    )
+    {
+        ArgumentNullException.ThrowIfNull(reporter);
+        ArgumentException.ThrowIfNullOrWhiteSpace(meshName);
+        _logicalMulticastDispatchErrors = reporter;
+        _logicalMulticastMeshName = meshName;
     }
 
     internal void SetPeerAdmissionSealGate(Func<bool> sealedForShutdown)
@@ -2909,7 +2923,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 return value;
             });
             if (peer is null || !peer.Admitted)
+            {
+                ObserveLogicalMulticastFailure(
+                    channelName,
+                    topic,
+                    target.RoutingId,
+                    ZLinkDispatchErrorReason.StaleTarget
+                );
                 continue;
+            }
 
             var head = ZLinkServiceWireCodec.EncodeLogicalMulticast(
                 channelName,
@@ -2921,9 +2943,74 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             if (!metadata.IsEmpty)
                 wireParts.Add(metadata);
             wireParts.Add(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts));
-            _ = TryScheduleRoutedSend(peer.PhysicalRoutingId, wireParts);
+            var reporter = _logicalMulticastDispatchErrors;
+            var scheduled =
+                reporter?.Enabled == true
+                    ? TryScheduleRoutedSend(
+                        peer.PhysicalRoutingId,
+                        wireParts,
+                        error =>
+                            ObserveLogicalMulticastFailure(
+                                channelName,
+                                topic,
+                                target.RoutingId,
+                                ClassifyLogicalMulticastFailure(error)
+                            )
+                    )
+                    : TryScheduleRoutedSend(peer.PhysicalRoutingId, wireParts);
+            if (!scheduled)
+            {
+                ObserveLogicalMulticastFailure(
+                    channelName,
+                    topic,
+                    target.RoutingId,
+                    _stop?.IsCancellationRequested == true
+                        ? ZLinkDispatchErrorReason.Shutdown
+                        : ZLinkDispatchErrorReason.Backpressure
+                );
+            }
         }
     }
+
+    private void ObserveLogicalMulticastFailure(
+        string channelName,
+        string topic,
+        RoutingId targetRid,
+        ZLinkDispatchErrorReason reason
+    )
+    {
+        var reporter = _logicalMulticastDispatchErrors;
+        if (reporter?.Enabled != true)
+            return;
+        reporter.Report(
+            new ZLinkDispatchFailure(
+                ZLinkDispatchErrorSurface.SpotRoute,
+                ZLinkDispatchMessageKind.Send,
+                reason,
+                ZLinkDispatchErrorAction.Drop,
+                PacketName: null,
+                ChannelName: channelName,
+                Topic: topic,
+                MeshName: _logicalMulticastMeshName,
+                TargetRid: targetRid.ToString()
+            )
+        );
+    }
+
+    private static ZLinkDispatchErrorReason ClassifyLogicalMulticastFailure(Exception error) =>
+        error switch
+        {
+            OperationCanceledException => ZLinkDispatchErrorReason.Shutdown,
+            ObjectDisposedException => ZLinkDispatchErrorReason.StaleTarget,
+            ZlinkSubmitException submit
+                when submit.Result is ZlinkSubmitException.ErrorCode.Terminated =>
+                ZLinkDispatchErrorReason.Shutdown,
+            ZlinkSubmitException submit
+                when submit.Result is ZlinkSubmitException.ErrorCode.Backpressured =>
+                ZLinkDispatchErrorReason.Backpressure,
+            ZlinkSubmitException => ZLinkDispatchErrorReason.StaleTarget,
+            _ => ZLinkDispatchErrorReason.Backpressure,
+        };
 
     public SubmitResult SendToActor(
         ActorRef actor,
@@ -11915,7 +12002,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             Publish(MeshMonitorEventKind.PeerClosed, peerRid: closedRid);
     }
 
-    private bool TryScheduleRoutedSend(RoutingId target, IReadOnlyList<ReadOnlyMemory<byte>> parts)
+    private bool TryScheduleRoutedSend(
+        RoutingId target,
+        IReadOnlyList<ReadOnlyMemory<byte>> parts,
+        Action<Exception>? failureObserver = null
+    )
     {
         try
         {
@@ -11924,7 +12015,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 await SendRoutedBestEffortAsync(
                         target,
                         parts,
-                        _stop?.Token ?? CancellationToken.None
+                        _stop?.Token ?? CancellationToken.None,
+                        failureObserver
                     )
                     .ConfigureAwait(false);
             });
@@ -11947,16 +12039,26 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private async Task SendRoutedBestEffortAsync(
         RoutingId target,
         IReadOnlyList<ReadOnlyMemory<byte>> parts,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Action<Exception>? failureObserver = null
     )
     {
         try
         {
             await SendRoutedAsync(target, parts, cancellationToken).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
-        catch (ObjectDisposedException) { }
-        catch (ZlinkException) { }
+        catch (OperationCanceledException error) when (cancellationToken.IsCancellationRequested)
+        {
+            failureObserver?.Invoke(error);
+        }
+        catch (ObjectDisposedException error)
+        {
+            failureObserver?.Invoke(error);
+        }
+        catch (ZlinkException error)
+        {
+            failureObserver?.Invoke(error);
+        }
     }
 
     private async Task SendRoutedAsync(

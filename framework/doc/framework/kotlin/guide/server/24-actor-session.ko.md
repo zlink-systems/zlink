@@ -18,22 +18,20 @@ title: "Session과 Actor 연결 · Kotlin"
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-이 장은 [tutorial의 `Server`·`StreamClient` 디렉터리와 「실행」 절](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.ko.md#실행)에서 코드를 인용하며, 그 tree를 bootstrap하고 build하면 아래 실행 결과를 재현할 수 있다.
-
 !!! info "이 장을 읽고 나면"
 
     외부 client의 연결 하나를 Actor 하나에 묶고, 그 Actor가 같은 연결로 알림을 보낼 수 있다.
-    이 장의 코드는 `framework/languages/java/tutorial/kotlin`에서 그대로 실행된다.
+    이 장의 코드는 [예제 저장소의 tutorial README](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.ko.md)에서 가져왔으며, README의 「내려받기와 설치」·「빌드」·「실행」 절을 따르면 아래 결과를 재현할 수 있다.
 
 [STREAM](23-stream.ko.md)의 session은 연결이 끊기면 함께 끝난다. 플레이어의 상태는 그보다
 오래 남아야 하고, 그 상태를 맡는 것이 [Actor](22-actor.ko.md)다. **이 장은 그 둘을 묶는다.** 묶은 뒤에는 session이 다루지 않은 packet이 그 Actor로 간다.
 Actor는 같은 연결로 보낼 수 있다.
 
-## 1. 묶는 것이 푸는 문제
+## 1. Actor와 session을 묶는 역할
 
-연결과 Actor는 수명이 다르다. 같은 플레이어가 끊었다 다시 접속하면 연결은 새로 만들어진다.
-Actor는 이전 것이 그대로 남아 있다. 그래서 **연결이 자기 Actor를 가리키게 해 두고**, 그 뒤의
-packet은 그 Actor가 받는다.
+Actor와 session을 묶으면 수명이 다른 연결과 Actor가 서로 이어진다. 같은 플레이어가 끊었다 다시
+접속하면 연결은 새로 만들어지고 Actor는 이전 것이 그대로 남아 있다. 그래서 **연결이 자기 Actor를
+가리키게 해 두고**, 그 뒤의 packet은 그 Actor가 받는다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/24-actor-session-binding.html" title="연결 하나를 개체 하나에 묶는다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/24-actor-session-binding.html" target="_blank">↗ 크게 보기</a></p>
@@ -108,7 +106,7 @@ Actor는 자기에게 묶인 연결을 알고 있다. 응답이 아니라 **스�
 
 ## 5. 실행 결과
 
-tutorial README의 「실행」 절대로 Server를 실행한 상태에서 아래 명령으로 StreamClient를 시작하면, StreamClient가 보낸 bind request와 받은 Actor 알림은 StreamClient process의 stdout에 나오고 session·Actor handler 기록은 Server process의 stdout 또는 `server.log`에 나온다.
+tutorial README의 「실행」 절을 따라 띄운 상태에서 Server를 실행한 상태에서 아래 명령으로 StreamClient를 시작하면, StreamClient가 보낸 bind request와 받은 Actor 알림은 StreamClient process의 stdout에 나오고 session·Actor handler 기록은 Server process의 stdout 또는 `server.log`에 나온다.
 
 ```bash
 dotnet run --project StreamClient/StreamClient.csproj
@@ -134,8 +132,8 @@ node로 이동하는 중의 처리는 [Session 묶음의 동작 원리](39-sessi
 - 연결을 받는 자리 — [STREAM](23-stream.ko.md)
 - 묶이는 대상 — [Actor](22-actor.ko.md)
 - 묶음의 규칙 — [Session 묶음의 동작 원리](39-session-binding.ko.md)
-- 이 장 코드의 실행본 — `framework/languages/java/tutorial/kotlin`
+- 이 장 코드의 실행본 — [예제 저장소의 tutorial README](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.ko.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

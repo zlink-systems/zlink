@@ -1,5 +1,6 @@
 package systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zlink.spots.conversationspot.notifications
 
+import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.samples.kotlin.supportchat.server.support.domain.ConversationEvent
 import systems.zlink.samples.kotlin.supportchat.server.support.domain.ConversationEventKind
 import systems.zlink.samples.kotlin.supportchat.server.support.domain.ConversationSnapshot
@@ -23,11 +24,16 @@ class ConversationNotificationPublisher {
     // --8<-- [start:doc-sc-roster-push]
     suspend fun publishAssignedToRoster(roster: SupportUserActor, snapshot: ConversationSnapshot) {
         val state = ConversationContracts.toState(snapshot)
-        roster
-            .context()
-            .boundSession()
-            .send(ConversationAssignedNotify(state.conversationId, state))
-            .submit()
+        try {
+            roster
+                .context()
+                .boundSession()
+                .kotlin()
+                .send(ConversationAssignedNotify(state.conversationId, state))
+                .await()
+        } catch (_: RuntimeException) {
+            // Notifications are best effort when the participant session is stale.
+        }
     }
 
     // --8<-- [end:doc-sc-roster-push]
@@ -44,16 +50,18 @@ class ConversationNotificationPublisher {
                     actor
                         .context()
                         .boundSession()
+                        .kotlin()
                         .send(ConversationIdleNotify(state.conversationId, state))
-                        .submit()
+                        .await()
                 }
             ConversationEventKind.Closed ->
                 publishAll(excludeActor(actors, event.actorId).values) { actor ->
                     actor
                         .context()
                         .boundSession()
+                        .kotlin()
                         .send(ConversationClosedNotify(state.conversationId, state))
-                        .submit()
+                        .await()
                 }
         }
     }
@@ -69,18 +77,23 @@ class ConversationNotificationPublisher {
         if (customer.participantId == actorId) {
             return
         }
-        customer
-            .context()
-            .boundSession()
-            .send(
-                ParticipantJoinedNotify(
-                    state.conversationId,
-                    actorId,
-                    ConversationContracts.toRole(role),
-                    state,
+        try {
+            customer
+                .context()
+                .boundSession()
+                .kotlin()
+                .send(
+                    ParticipantJoinedNotify(
+                        state.conversationId,
+                        actorId,
+                        ConversationContracts.toRole(role),
+                        state,
+                    )
                 )
-            )
-            .submit()
+                .await()
+        } catch (_: RuntimeException) {
+            // Notifications are best effort when the participant session is stale.
+        }
     }
 
     // --8<-- [start:doc-sc-message-push]
@@ -95,8 +108,9 @@ class ConversationNotificationPublisher {
             actor
                 .context()
                 .boundSession()
+                .kotlin()
                 .send(ChatMessageNotify(state.conversationId, chatMessage, state))
-                .submit()
+                .await()
         }
     }
 
@@ -113,8 +127,9 @@ class ConversationNotificationPublisher {
             actor
                 .context()
                 .boundSession()
+                .kotlin()
                 .send(TypingChangedNotify(state.conversationId, actorId, isTyping, state))
-                .submit()
+                .await()
         }
     }
 
@@ -126,10 +141,14 @@ class ConversationNotificationPublisher {
 
     private suspend fun publishAll(
         actors: Collection<SupportUserActor>,
-        publish: (SupportUserActor) -> Unit,
+        publish: suspend (SupportUserActor) -> Unit,
     ) {
         for (actor in actors) {
-            publish(actor)
+            try {
+                publish(actor)
+            } catch (_: RuntimeException) {
+                // Preserve order while allowing later live participants to receive the event.
+            }
         }
     }
 }

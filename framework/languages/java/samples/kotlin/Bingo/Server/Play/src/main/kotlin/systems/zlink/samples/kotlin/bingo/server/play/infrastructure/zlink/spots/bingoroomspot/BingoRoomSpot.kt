@@ -1,10 +1,22 @@
 package systems.zlink.samples.kotlin.bingo.server.play.infrastructure.zlink.spots.bingoroomspot
 
 import java.time.Duration
-import kotlinx.coroutines.future.await
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.supervisorScope
 import org.slf4j.LoggerFactory
+import systems.zlink.framework.channels.ZLinkRouteClient
 import systems.zlink.framework.kotlin.ZLinkSuspendingSpot
-import systems.zlink.framework.kotlin.yieldReply
+import systems.zlink.framework.kotlin.await
+import systems.zlink.framework.kotlin.decode
+import systems.zlink.framework.kotlin.kotlin
+import systems.zlink.framework.kotlin.requestToChannel
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.spots.ZLinkSpotActorJoinResult
 import systems.zlink.framework.spots.ZLinkSpotClosingContext
@@ -46,8 +58,11 @@ import systems.zlink.samples.kotlin.bingo.shared.contracts.winners
 class BingoRoomSpot(
     override val context: ZLinkSpotContext,
     private val settingsInitializer: BingoRoomSettingsInitializer,
+    routes: ZLinkRouteClient,
 ) : ZLinkSuspendingSpot<PlayerActor>() {
     private val logger = LoggerFactory.getLogger(BingoRoomSpot::class.java)
+    private val outbound = routes.kotlin()
+    private val playerNotifications = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val actors = mutableMapOf<String, PlayerActor>()
     private val observers = mutableMapOf<String, PlayerActor>()
@@ -68,7 +83,7 @@ class BingoRoomSpot(
         actorId: String,
         request: ZLinkMessage,
     ): ZLinkSpotActorJoinResult {
-        val joinRequest = request.decode(BingoRoomJoinReq::class.java)
+        val joinRequest = request.decode<BingoRoomJoinReq>()
         validateJoin(actorId, joinRequest)
         val preview =
             if (joinRequest.observeOnly) {
@@ -93,11 +108,13 @@ class BingoRoomSpot(
         }
         // --8<-- [start:doc-bingo-room-join]
         val record =
-            context
-                .outbound()
-                .requestToChannel(SampleNames.ApiChannel, GetPlayerRecordReq(actor.actorId()))
+            outbound
+                .requestToChannel<GetPlayerRecordRes>(
+                    SampleNames.ApiChannel,
+                    GetPlayerRecordReq(actor.actorId()),
+                )
                 .timeout(SampleTimings.RequestTimeout)
-                .yieldReply<GetPlayerRecordRes>()
+                .yield()
         val game = this.game
         if (pendingJoins[actor.actorId()] !== request || game == null || !game.canAcceptPlayer()) {
             pendingJoins.remove(actor.actorId())
@@ -123,9 +140,8 @@ class BingoRoomSpot(
         }
         val state = requireGame().snapshot()
         val record =
-            context
-                .outbound()
-                .requestToChannel(
+            outbound
+                .requestToChannel<ReportBingoResultRes>(
                     SampleNames.ApiChannel,
                     ReportBingoResultReq(
                         state.roomId,
@@ -135,7 +151,7 @@ class BingoRoomSpot(
                     ),
                 )
                 .timeout(SampleTimings.RequestTimeout)
-                .yieldReply<ReportBingoResultRes>()
+                .yield()
         logger.info(
             "bingo-record reported actor={} wins={} losses={}",
             actor.actorId(),
@@ -166,6 +182,7 @@ class BingoRoomSpot(
     }
 
     override suspend fun onClosingSuspending(context: ZLinkSpotClosingContext) {
+        playerNotifications.cancel()
         timer?.cancel()?.await()
     }
 
@@ -173,7 +190,7 @@ class BingoRoomSpot(
         completion: ZLinkSpotRelocationReadyCompletion
     ) = Unit
 
-    fun join(
+    suspend fun join(
         actor: PlayerActor,
         request: BingoRoomJoinReq,
         wins: Int,
@@ -232,9 +249,11 @@ class BingoRoomSpot(
         publishEvents(change.events, actors::get)
         publishWinner(change)
         leaveFinishedActors(change)
+        // --8<-- [start:doc-relocation-ready]
         if (change.state.status == BingoRoomGame.Finished) {
             context.relocationReady().defer()
         }
+        // --8<-- [end:doc-relocation-ready]
     }
 
     // --8<-- [end:doc-bingo-draw-timer]
@@ -252,19 +271,24 @@ class BingoRoomSpot(
     }
 
     private suspend fun notifyObservers(event: BingoRewardAcquiredEvent) {
-        for (observer in observers.values.toList()) {
-            observer
-                .push(
-                    BingoRewardAnnouncedNotify(
-                        event.roomId,
-                        event.actorId,
-                        event.drawSeq,
-                        event.itemId,
-                        event.itemName,
-                        event.rarity,
-                    )
-                )
-                .await()
+        supervisorScope {
+            observers.values
+                .toList()
+                .map { observer ->
+                    async(start = CoroutineStart.UNDISPATCHED) {
+                        observer.push(
+                            BingoRewardAnnouncedNotify(
+                                event.roomId,
+                                event.actorId,
+                                event.drawSeq,
+                                event.itemId,
+                                event.itemName,
+                                event.rarity,
+                            )
+                        )
+                    }
+                }
+                .awaitAll()
         }
     }
 
@@ -360,6 +384,7 @@ class BingoRoomSpot(
                     "Legendary",
                 ),
             )
+            // #895: Spot outbound fanout has no Kotlin wrapper in the spec.
             .submit()
             .await()
         // --8<-- [end:doc-bingo-reward-publish]
@@ -370,11 +395,13 @@ class BingoRoomSpot(
         actorResolver: (String) -> PlayerActor?,
     ) {
         for (event in events) {
-            publishEvent(event, actorResolver(event.recipientActorId))
+            playerNotifications.launch(start = CoroutineStart.UNDISPATCHED) {
+                publishEvent(event, actorResolver(event.recipientActorId))
+            }
         }
     }
 
-    private fun publishEvent(event: BingoRoomEvent, recipient: PlayerActor?) {
+    private suspend fun publishEvent(event: BingoRoomEvent, recipient: PlayerActor?) {
         if (recipient == null) {
             return
         }

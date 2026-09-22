@@ -1,9 +1,11 @@
 package systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.spots.entryspot
 
-import kotlinx.coroutines.future.await
 import org.slf4j.LoggerFactory
 import systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpot
 import systems.zlink.framework.kotlin.addHandler
+import systems.zlink.framework.kotlin.await
+import systems.zlink.framework.kotlin.decode
+import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.spots.ZLinkActorCreateResponse
 import systems.zlink.framework.spots.ZLinkEntrySpotContext
@@ -40,7 +42,7 @@ class PlayEntrySpot(
         if (createRequest.isEmpty) {
             return ZLinkActorCreateResponse.accept()
         }
-        val request = createRequest.decode(PlayerActorCreateReq::class.java)
+        val request = createRequest.decode<PlayerActorCreateReq>()
         actor.applyPlayer(request.player)
         return ZLinkActorCreateResponse.accept()
     }
@@ -70,7 +72,7 @@ class PlayEntrySpot(
     }
 
     // --8<-- [start:doc-ttt-milestone-notify]
-    fun notifyMilestone(event: PlayerWinMilestoneEvent) {
+    suspend fun notifyMilestone(event: PlayerWinMilestoneEvent) {
         val payload =
             WinMilestoneNotify(
                 roomId = event.roomId,
@@ -79,7 +81,11 @@ class PlayEntrySpot(
                 wins = event.wins,
             )
         milestoneObservers.toList().forEach { observer ->
-            observer.context().boundSession().send(payload).submit()
+            try {
+                observer.context().boundSession().kotlin().send(payload).await()
+            } catch (_: RuntimeException) {
+                // A stale observer cannot prevent later best-effort notifications.
+            }
         }
     }
 

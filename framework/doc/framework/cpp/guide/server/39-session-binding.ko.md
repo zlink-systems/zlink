@@ -45,8 +45,8 @@ title: "Session 묶음의 동작 원리 · C++"
 
 ## 2. 묶음과 Spot membership — 서로 독립이다
 
-묶음은 Actor의 Spot membership과 별개다. Actor가 다른 Spot이나 node로 옮겨 가도 actor id와 세대
-값은 유지되고, Framework가 묶음의 경로를 갱신한다 —
+묶음은 Actor의 Spot membership과 별개다. Actor가 다른 Spot이나 node로 옮겨 가도 actor id와
+[generation](22-actor.ko.md#33-참조의-generation)은 유지되고, Framework가 묶음의 경로를 갱신한다 —
 [Actor membership](35-actor-membership.ko.md)과 [Relocation](37-relocation.ko.md)이 그 이동을
 다룬다.
 
@@ -63,7 +63,21 @@ application이 다시 묶지 않는다.
 논리적으로 끊겼다고 알릴 때만 application이 직접 호출한다.
 
 끊김은 Actor를 지우지도 Entry Spot으로 옮기지도 않는다. 다시 접속한 session은 같은 참조를 다시
-조회해 묶을 수 있다.
+조회해 [다시 묶을 수 있다](24-actor-session.ko.md#31-묶기). TicTacToe의 게임 Spot은 끊긴 Actor를
+표시할 뿐 room과 경기 상태에서는 빼지 않는다.
+
+```cpp
+--8<-- "framework/languages/cpp/samples/TicTacToe/Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/tictactoe_game_spot.hpp:doc-disconnect-actor"
+```
+
+이 호출은 물리 연결이 유지된 채 application 규약상 끊김을 알릴 때만 사용한다.
+
+**실행 결과.** 2026-09-22에 .NET TicTacToe의 `run_sample.sh`를 실행하고 host client가 연결을
+닫았을 때 `play-a.log`에는 묶인 Actor 하나가 있던 연결의 실제 기록이 남았다.
+
+```text
+20:12:39.106 info: TicTacToe.Server.Play.Infrastructure.ZLink.Sessions.PlaySession[0] client -> play stream: disconnected. sessionId=00000002, actors=1
+```
 
 **한 Actor의 통지가 실패해도 나머지는 계속한다.** Framework는 연결이 끊긴 시점의 묶음 목록을
 고정하고 각 Actor에 알리는데, 그중 하나가 실패하거나 callback이 기한을 넘겨도 남은 Actor 통지와
@@ -71,13 +85,18 @@ session 정리를 멈추지 않는다.
 
 **자동 통지와 직접 호출이 겹쳐도 callback은 한 번만 실행된다.** 같은 묶음에 대한 두 통지를
 Framework가 합치므로, 직접 호출한 직후에 연결이 끊겨도 Spot의 끊김 callback이 두 번 돌지 않는다.
+연결은 유지하지만 application 규약상 끊겼다고 처리할 때만 Actor에 직접 알린다.
+
+```cpp
+co_await actor.notify_disconnected ();
+```
 
 ## 4. 묶기가 실패하거나 무효가 되는 경우
 
 | 상황 | 결과 |
 | --- | --- |
 | Actor가 없거나 받을 수 있는 상태가 아니다 | 묶기가 typed 오류로 끝난다 |
-| 참조의 세대 값이 다르다 | 낡은 참조를 다른 세대에 묶지 않는다 |
+| 참조의 [generation](22-actor.ko.md#33-참조의-generation)이 다르다 | 낡은 참조를 다른 generation에 묶지 않는다 |
 | Actor가 옮겨 가는 중이다 | 옮기는 중이라는 오류로 끝나며 몰래 재시도하지 않는다 |
 | 묶은 뒤 Actor가 옮겨 갔다 | Framework가 경로를 갱신하며 session을 다시 묶지 않는다 |
 | session이 끊겼다 | Actor와 Spot membership은 유지한다 |
@@ -97,5 +116,5 @@ Framework가 합치므로, 직접 호출한 직후에 연결이 끊겨도 Spot�
 - 옮겨 가는 동안의 처리 — [Relocation](37-relocation.ko.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

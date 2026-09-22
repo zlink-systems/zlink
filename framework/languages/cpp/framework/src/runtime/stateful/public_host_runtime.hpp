@@ -446,11 +446,20 @@ class spot_handle_t
                                     std::span<const std::uint8_t> metadata = {});
     task_t<void> publish_tail (const std::vector<zlink::message_t> &parts,
                                std::span<const std::uint8_t> metadata = {});
+    task_t<void> publish_tail (
+      const std::vector<zlink::message_t> &parts,
+      std::span<const std::uint8_t> metadata,
+      std::function<void (const zlink::routing_id_t &, zlink::submit_result_t)> failure_observer);
     void set_subscription (const std::string &channel_name, const std::string &topic);
     void unset_subscription (const std::string &channel_name, const std::string &topic);
     bool close () noexcept;
 
   private:
+    task_t<void> publish_tail_impl (
+      const std::vector<zlink::message_t> &parts,
+      std::span<const std::uint8_t> metadata,
+      const std::function<void (const zlink::routing_id_t &, zlink::submit_result_t)>
+        *failure_observer);
     std::shared_ptr<public_host_runtime_t> _host;
     stateful::object_ref_t _object;
 };

@@ -39,6 +39,7 @@ class CommerceApiApplication {
             configurer.addLocationStore(SampleLocationStore.create(topology))
             configurer.useCoroutineHandlers(Dispatchers.Default)
             configurer.configureDispatch { messageFlow(ZLinkMessageFlowLogMode.NORMAL) }
+            // #895: configuration package scanning has no Kotlin form in the spec.
             configurer.addHandlersFromPackageOf(CommerceApiApplication::class.java)
 
             configurer

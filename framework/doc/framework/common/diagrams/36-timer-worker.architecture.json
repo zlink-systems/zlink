@@ -2,8 +2,8 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "timer는 줄에 서고, worker는 줄 밖에서 돈다",
-    "subtitle": "같은 줄에 서야 상태를 만질 수 있다 · 줄 밖의 결과는 다시 줄로 들어온다",
+    "title": "timer는 Spot queue에 들어가고, worker는 별도 실행 문맥에서 실행된다",
+    "subtitle": "Spot queue에서만 상태를 다룬다 · worker 결과는 Spot queue로 돌아온다",
     "output": "36-timer-worker.html",
     "legend": {
       "mode": "hidden"
@@ -41,7 +41,7 @@
     {
       "id": "Q",
       "type": "backend",
-      "label": "실행 줄",
+      "label": "Spot queue",
       "sublabel": "한 번에 하나씩",
       "row": 1,
       "col": 1
@@ -50,7 +50,7 @@
       "id": "W",
       "type": "frontend",
       "label": "worker",
-      "sublabel": "줄 밖에서 실행",
+      "sublabel": "별도 실행 문맥",
       "row": 1,
       "col": 2
     }
@@ -69,13 +69,13 @@
     {
       "from": "T",
       "to": "Q",
-      "label": "tick도 줄에 선다",
+      "label": "tick이 Spot queue에 들어간다",
       "variant": "default"
     },
     {
       "from": "M",
       "to": "Q",
-      "label": "message도 같은 줄",
+      "label": "message도 같은 Spot queue",
       "variant": "default"
     },
     {
@@ -87,18 +87,21 @@
     {
       "from": "W",
       "to": "Q",
-      "label": "결과는 다시 줄로 들어온다",
+      "label": "결과는 Spot queue로 돌아온다",
       "variant": "dashed",
-      "labelDy": 24
+      "labelAt": [
+        500,
+        370
+      ]
     }
   ],
   "cards": [
     {
       "dot": "cyan",
-      "title": "줄 밖에서 상태를 만지지 않는다",
+      "title": "Spot queue 밖에서 상태를 다루지 않는다",
       "items": [
-        "tick이 줄에 서므로 timer 안에서 상태를 만져도 다른 처리와 섞이지 않는다. 그래서 lock이 필요 없다.",
-        "worker는 줄 밖에서 돌기 때문에 그 안에서 Spot의 상태를 읽거나 쓰지 않는다. 결과를 줄로 다시 넣어 그 자리에서 반영한다."
+        "tick이 Spot queue에 들어가므로 timer 안에서 상태를 다뤄도 다른 처리와 섞이지 않는다. 그래서 lock이 필요 없다.",
+        "worker는 Spot queue 밖의 실행 문맥에서 실행되므로 그 안에서 Spot 상태를 읽거나 쓰지 않는다. 결과를 Spot queue로 돌려보내 그 자리에서 반영한다."
       ]
     }
   ]

@@ -1,88 +1,37 @@
 {
   "schema_version": 1,
-  "diagram_type": "architecture",
+  "diagram_type": "sequence",
   "meta": {
-    "title": "join은 예약이고, 실행은 handler가 끝난 뒤다",
-    "subtitle": "받는 쪽이 먼저 승인하고 · 확정 뒤 양쪽에 알린다",
+    "title": "예약은 `Defer()` 호출이고, join은 handler가 끝난 뒤 시작한다",
+    "subtitle": "등록만 한 뒤 handler가 정상적으로 끝나면 join이 시작된다",
     "output": "35-actor-join.html",
-    "legend": {
-      "mode": "hidden"
-    }
+    "column_fit": "spread",
+    "viewBox": [1320, 760],
+    "legend": { "mode": "hidden" }
   },
-  "layout": {
-    "mode": "grid",
-    "origin": [
-      50,
-      150
-    ],
-    "cols": 3,
-    "gapX": 150,
-    "gapY": 90,
-    "cellW": 120,
-    "cellH": 60
-  },
-  "components": [
-    {
-      "id": "E",
-      "type": "backend",
-      "label": "Entry Spot",
-      "sublabel": "만들어진 직후의 자리",
-      "row": 0,
-      "col": 0
-    },
-    {
-      "id": "A",
-      "type": "messagebus",
-      "label": "player-7",
-      "sublabel": "Actor",
-      "row": 1,
-      "col": 0
-    },
-    {
-      "id": "B",
-      "type": "external",
-      "label": "예약",
-      "sublabel": "handler가 끝나야 열린다",
-      "row": 1,
-      "col": 1
-    },
-    {
-      "id": "U",
-      "type": "backend",
-      "label": "room-42",
-      "sublabel": "가려는 User Spot",
-      "row": 1,
-      "col": 2
-    }
+  "participants": [
+    { "id": "Entry", "type": "backend", "label": "Entry Spot (Actor의 handler)" },
+    { "id": "Framework", "type": "messagebus", "label": "Framework" },
+    { "id": "Record", "type": "backend", "label": "위치 기록" },
+    { "id": "User", "type": "external", "label": "가려는 User Spot" },
+    { "id": "Callbacks", "type": "backend", "label": "간 쪽 / 떠난 쪽 callback" }
   ],
-  "connections": [
-    {
-      "from": "E",
-      "to": "A",
-      "label": "지금 실행되는 자리",
-      "variant": "default",
-      "labelDy": 24
-    },
-    {
-      "from": "A",
-      "to": "B",
-      "label": "handler 안에서 예약만 한다",
-      "variant": "default"
-    },
-    {
-      "from": "B",
-      "to": "U",
-      "label": "handler가 끝난 뒤 실행한다",
-      "variant": "default"
-    }
+  "messages": [
+    { "from": "Entry", "to": "Framework", "y": 160, "label": "handler 실행 중 JoinSpot(...).Defer() — 등록만, 아직 아무 일도 없음", "variant": "default" },
+    { "from": "Entry", "to": "Framework", "y": 235, "label": "handler 정상 종료 → join 시작", "variant": "default" },
+    { "from": "Entry", "to": "Framework", "y": 295, "label": "예외로 끝남 → 등록 폐기, join 시작 안 함", "variant": "dashed" },
+    { "from": "Framework", "to": "User", "y": 370, "label": "OnActorJoin으로 승인 / 거절", "variant": "default" },
+    { "from": "Framework", "to": "Record", "y": 445, "label": "승인되면 위치 기록과 membership을 함께 확정", "variant": "return" },
+    { "from": "Framework", "to": "Callbacks", "y": 520, "label": "간 쪽 OnJoinedActor · 떠난 쪽 OnLeaveActor", "variant": "default" },
+    { "from": "Framework", "to": "User", "y": 595, "label": "그 뒤 Actor 앞으로 온 message는 User Spot에서 실행", "variant": "return" }
   ],
   "cards": [
     {
       "dot": "cyan",
-      "title": "받는 쪽이 먼저 승인한다",
+      "title": "등록과 join은 다른 시점이다",
       "items": [
-        "예약이 실행되면 가려는 User Spot이 먼저 승인하거나 거절하고, 확정된 뒤에야 간 쪽과 떠난 쪽에 알림이 간다.",
-        "받아들여지면 확정한 간 쪽 Actor가 완료를 받는다. 거절되거나 확정 전에 실패하면 그대로 남은 떠난 쪽 Actor가 받는다."
+        "`Defer()`는 지금 join을 실행하지 않고, handler가 정상적으로 끝난 뒤 시작할 join을 등록한다.",
+        "handler가 예외로 끝나면 그 등록은 버려진다."
       ]
     }
   ]

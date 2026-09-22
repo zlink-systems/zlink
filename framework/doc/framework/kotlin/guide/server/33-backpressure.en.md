@@ -18,18 +18,16 @@ View in another language — [C++](../../../cpp/guide/server/33-backpressure.en.
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-This chapter quotes no tutorial code; it explains the limits and outcomes observable when load reaches tutorial `Server` and `Client` processes that have been bootstrapped and built using the [README Run section](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.md#run).
+!!! info "What you get from this chapter"
 
-> **The documents that own this chapter's contract** — covered by the
-> [Async Execution Policy](../../../common/spec/server/01-execution/README.en.md),
-> [Framework API](../../../common/spec/server/00-foundation/06-framework-api.en.md),
-> [Runtime Monitoring](../../../common/spec/server/06-observability/01-runtime-monitoring.en.md), and the
-> [per-language topology public contract](../../../common/spec/server/languages/README.en.md).
-> This chapter explains that behavior as concepts and principles, and covers which options
-> affect it. Exact option names, defaults, and mutability are owned by each language's
-> [16. Options](16-options.en.md) and exact interface.
+    You can distinguish the paths through which Core HWM and the application job queue create
+    backpressure, and the metrics that show them.
+    The code in this chapter comes from the [per-language example repositories](https://github.com/zlink-systems/zlink-java-examples).
 
-## 0. Options When Inflow Exceeds Processing Capacity
+Core HWM limits bytes in Core queues, and the application job queue limits jobs waiting to start a
+handler. This chapter explains how those limits become sender waits and observable metrics.
+
+## 1. Options When Inflow Exceeds Processing Capacity
 
 One of the following happens.
 
@@ -45,7 +43,7 @@ back to the sender by making it wait is called backpressure.** An application me
 already been accepted is never dropped because of load. So under load, the application-visible
 symptom isn't "the message vanished" — it's "`send` got slow" or "`DeadlineExceeded` happened."
 
-## 1. Core HWM and the Application Job Queue
+## 2. Core HWM and the Application Job Queue
 
 Framework host backpressure limits two different resources. Core HWM limits accounted bytes
 held by ordinary send/receive queues per origin. The framework's application job queue limits
@@ -72,9 +70,9 @@ before a new receive/claim.
 Load does not turn an accepted message into a drop or capacity error. As Core ordinary receive
 queues fill, their per-origin byte HWMs propagate pressure back to the sender.
 
-## 2. How It Works
+## 3. How It Works
 
-### 2.1 The Basis for Locking Sends
+### 3.1 The Basis for Locking Sends
 
 The decision to stop sending is based on **one value inside your own process.** It doesn't ask
 the peer how much it's OK to send — once the byte sum of messages the peer hasn't yet taken
@@ -87,7 +85,7 @@ ceiling gets reached.
 - The receiver can't keep up processing, so the send path is blocked.
 - The connection dropped and there's nowhere to send while reconnecting.
 
-### 2.2 How Receive-Side Delay Propagates to Sends
+### 3.2 How Receive-Side Delay Propagates to Sends
 
 It passes through three stages. The receiving framework and Core handle the first two; the
 sending application encounters a wait only at the last stage.
@@ -121,7 +119,7 @@ distinguish a remote handler delay, network delay, or local Core queue pressure,
 Core HWM and application job queue status on both sides
 ([12-operations](12-operations.en.md) §1).
 
-### 2.3 Permit Return and Wait Resumption
+### 3.3 Permit Return and Wait Resumption
 
 An application job queue permit is returned immediately before the user's callback's first
 instruction, not when a queue publishes a job or an executor task is created. A returned
@@ -138,7 +136,7 @@ immediately after being classified as creating no handler job.
 This separation allows terminal completion of an already-started request to progress while
 ordinary traffic is saturated.
 
-### 2.4 Splitting the Application Connection and Completion Connection
+### 3.4 Splitting the Application Connection and Completion Connection
 
 Connecting to one peer creates two paths.
 
@@ -159,15 +157,16 @@ There's no shared arrival order between the two paths. Even from the same peer, 
 on the Completion connection can overtake a message on the Application connection, so a handler
 never infers ordering from arrival order.
 
-## 3. Backpressure Visible in the API
+## 4. Backpressure Visible in the API
 
-### 3.1 Why send Is `async`
+### 4.1 Why send Is `async`
 
 `send` doesn't wait for a response, but there's one thing it does have to wait for — **a
 slot to send into.**
 
 ```kotlin
-client.sendToChannel("orders", CancelOrder("order-1042")).submit().await()
+val kotlinClient = client.kotlin()
+kotlinClient.sendToChannel("orders", CancelOrder("order-1042")).await()
 // This await finishing means only "my runtime accepted the submission."
 // It doesn't mean the peer received it or the handler finished.
 ```
@@ -182,8 +181,9 @@ whether to start a new operation, drop it, or tell the user it failed is up to t
 application.
 
 ```kotlin
+val kotlinClient = client.kotlin()
 try {
-    client.sendToChannel("orders", command).submit().await()
+    kotlinClient.sendToChannel("orders", command).await()
 } catch (ex: ZLinkFrameworkException) {
     if (ex.kind() != ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED) throw ex
     // Only this operation's DeadlineExceeded terminal is certain. The peer's state is unknown.
@@ -217,7 +217,7 @@ candidate immediately before starting the operation. **After the operation start
 reselects its target while Core performs the HWM wait and retry.** A later, new channel operation
 can observe and select a candidate that has changed by then.
 
-### 3.2 request's Timeout Boundary
+### 4.2 request's Timeout Boundary
 
 A request waits for both a slot to send into and the peer's reply, so in a congested
 stretch, `timeout(...)` is the real ceiling. In particular, **always give a finite timeout
@@ -227,10 +227,9 @@ to a flow that sends another request from inside a handler.**
 suspend fun handle(request: PlaceOrder, context: ZLinkMessageContext): PlaceOrderReply {
     // While the handler waits for the reply, this handler's execution slot stays occupied.
     // If both nodes' processing is delayed at the same time, a finite timeout is the only place recovery starts.
-    val reserved = client
-        .requestToChannel("inventory", ReserveStock(request.sku, request.quantity))
+    val reserved = client.kotlin()
+        .requestToChannel<StockReserved>("inventory", ReserveStock(request.sku, request.quantity))
         .timeout(Duration.ofSeconds(3))
-        .submit(StockReserved::class.java)
         .await()
 
     return PlaceOrderReply(request.orderId, reserved.reservationId)
@@ -241,7 +240,7 @@ A timeout isn't a knob to tune backpressure — it's **the boundary where you st
 Even when the caller ends on a timeout, the remote handler's execution, if already started,
 is neither cancelled nor rolled back.
 
-## 4. Options That Affect This
+## 5. Options That Affect This
 
 | Option | What it sets | Where it's configured |
 | --- | --- | --- |
@@ -297,7 +296,7 @@ bucket table. The framework root forwards Core memory settings to the same Core 
 Core computes its physical-queue census and directional HWMs. The application job queue
 limits job count independently of that byte calculation.
 
-### 4.1 Core HWM — The Byte Budget Owned by Core
+### 5.1 Core HWM — The Byte Budget Owned by Core
 
 Set the following values through the root inbound-dispatch configuration. See `16. Options` and the
 exact interface for each language's precise spelling.
@@ -319,7 +318,7 @@ throughput, latency, and process memory under production-like payload distributi
 connection count. [Perf §23](../../../common/perf/README.en.md#23-measuring-production-values-for-core-hwm-and-the-application-job-queue)
 defines the measurement procedure.
 
-### 4.2 Setting an HWM Directly
+### 5.2 Setting an HWM Directly
 
 `sendHighWaterMark` and `receiveHighWaterMark` are per-socket-direction manual HWMs. They use
 bytes like `coreHwmBudgetBytes`, but have a different owner and scope. A manual socket HWM
@@ -333,7 +332,7 @@ budget.
 - **It does not apply to the completion lane.** Public send/receive HWMs are not copied to
   progress identifiable before receive as terminal reply/error completion.
 
-### 4.3 Application Job Queue HWM — The Host-Wide Job Limit
+### 5.3 Application Job Queue HWM — The Host-Wide Job Limit
 
 The application job queue HWM limits the number of jobs waiting for handler start across a
 framework host instance. It participates in backpressure alongside Core HWM, but does not
@@ -386,7 +385,7 @@ and 1:N local dispatch do not create more handler jobs than the permits already 
 Terminal reply/error completion identifiable before receive does not use this permit, and
 `maxMessageSize` remains an independent single-message cap.
 
-## 5. How to Confirm Congestion Is Happening
+## 6. How to Confirm Congestion Is Happening
 
 ```kotlin
 // Kotlin uses the Java surface as-is.
@@ -412,52 +411,30 @@ and clears only the current epoch's counts and duration.
 message was dropped for another confirmed reason, not load, so check the `reason`
 attribute first.
 
-## 6. Framework Runtime Coverage
+## 7. Framework Runtime Coverage
 
-This common guide does not list per-language implementation differences. Common behavior is
-owned by [Framework API §2.1](../../../common/spec/server/00-foundation/06-framework-api.en.md),
-and status/reset semantics are owned by
-[Runtime Monitoring](../../../common/spec/server/06-observability/01-runtime-monitoring.en.md).
+Common behavior is the same in every language; per-language guides differ only in the spelling and
+call form of their options and monitoring APIs. See [Framework API](../../../common/spec/server/00-foundation/06-framework-api.en.md)
+and [Runtime Monitoring](../../../common/spec/server/06-observability/01-runtime-monitoring.en.md) for
+settings and status/reset semantics.
 
-See the language's `16. Options`, `11. Monitoring`, and
-[exact interface](../../../common/spec/server/languages/README.en.md) for its spelling and
-call form.
+## 8. Common Problems
 
-## 7. Common Problems
+| Symptom | Cause and what to inspect |
+| --- | --- |
+| `send` ends in `DeadlineExceeded` | A send slot never opened up. Before raising the ceiling, inspect the receiver's Core `blocked_ratio`, application job queue waiters, and handler execution time. |
+| Core-accounted bytes are low, but receiving waits | Application job queue permits may be full. Inspect `reserved`, `queued`, `in_use`, and capacity waiters. |
+| Application job queue `queued` is low, but the limit is reached | `in_use` also counts the short pre-receive `reserved` permits. Size a manual limit from `reserved + queued`. |
+| A handler appears scheduled, but the job count has not dropped | Permit release occurs at the user's actual first callback instruction, not executor task publication. Check the handler-start gate. |
+| `MaxQueuedApplicationJobs = 0` fails startup | `0` is not unlimited. Omit the manual value to select Auto. |
+| The same profile label does not move byte and job limits by the same ratio | `CoreHwmProfile` and `ApplicationJobQueueProfile` share labels only; their units and calculations are independent. |
+| Replies still complete while the application job queue is full | Terminal reply/error completion identifiable before receive bypasses the shared permit and ordinary Core HWM, so this is expected. |
+| Raising the ceiling made the symptom show up later | Congestion absorbed into memory surfaces the failure later. To fail fast and switch to a different path, lower the ceiling and shrink `DefaultSocketSendTimeout`. |
+| `publish` completed normally, but the subscriber never received it | Publish completion means only that it was ready to send and the runtime accepted the submission. Delivery, resend, and ack aren't provided ([Channel Messaging](30-channel-patterns.en.md#7-what-it-means-for-a-call-to-be-finished)). |
+| A request inside a handler hangs for a long time | If both sides' processing is delayed at the same time, a finite timeout is where recovery starts. Give a nested request a `timeout(...)`. |
+| One slow node is also delaying other calls | The send queue is separate per peer, but waiting inside the same handler also occupies that handler's execution slot. Do not put a call to a slow-responding target in the same handler as other calls. |
 
-- **`send` ends in `DeadlineExceeded`** → a send slot never opened up. Before raising the
-  ceiling, inspect the receiver's Core `blocked_ratio`, application job queue waiters, and
-  handler execution time.
-- **Core-accounted bytes are low, but receiving waits** → application job queue permits may
-  be full. Inspect `reserved`, `queued`, `in_use`, and capacity waiters.
-- **Application job queue `queued` is low, but the limit is reached** → `in_use` also counts
-  the short pre-receive `reserved` permits. Size a manual limit from `reserved + queued`.
-- **A handler appears scheduled, but the job count has not dropped** → permit release occurs
-  at the user's actual first callback instruction, not executor task publication. Check the
-  handler-start gate.
-- **`MaxQueuedApplicationJobs = 0` fails startup** → `0` is not unlimited. Omit the manual
-  value to select Auto.
-- **Using the same profile label does not move byte and job limits by the same ratio** →
-  `CoreHwmProfile` and `ApplicationJobQueueProfile` share labels only; their units and
-  calculations are independent.
-- **Replies still complete while the application job queue is full** → terminal reply/error
-  completion identifiable before receive bypasses the shared permit and ordinary Core HWM, so
-  this is expected.
-- **Raising the ceiling made the symptom show up later** → this is normal. Once congestion
-  is absorbed into memory, the failure surfaces later. To fail fast and switch to a
-  different path, lower the ceiling and shrink `DefaultSocketSendTimeout`.
-- **`publish` completed normally, but the subscriber never received it** → publish's
-  completion means only that it was ready to send and the runtime accepted the submission.
-  Delivery, resend, and ack aren't provided
-  ([Channel Messaging](30-channel-patterns.en.md#7-what-it-means-for-a-call-to-be-finished)).
-- **A request inside a handler hangs for a long time** → if both sides' processing is
-  delayed at the same time, a finite timeout is where recovery starts. Give a nested request
-  a `timeout(...)`.
-- **One slow node is also delaying other calls** → the send queue is separate per peer, but
-  waiting inside the same handler also occupies that handler's execution slot the whole
-  time. Don't put a call to a slow-responding target in the same handler as other calls.
-
-## 8. Related Documents
+## 9. Related Documents
 
 - Option defaults and when they can change: [16. Options](16-options.en.md) §3
 - The formal contract for one-way submit and the completion boundary:
@@ -473,5 +450,5 @@ call form.
 - Next axis: [Channel Messaging](20-channel-messaging.en.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

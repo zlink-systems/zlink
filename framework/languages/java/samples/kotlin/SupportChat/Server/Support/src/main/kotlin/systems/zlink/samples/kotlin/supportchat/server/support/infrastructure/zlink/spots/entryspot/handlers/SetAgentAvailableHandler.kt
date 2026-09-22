@@ -1,9 +1,9 @@
 package systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zlink.spots.entryspot.handlers
 
-import kotlinx.coroutines.future.await
 import systems.zlink.framework.ZLinkMessageContext
 import systems.zlink.framework.actors.ZLinkActorManager
 import systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpotActorRequestHandler
+import systems.zlink.framework.kotlin.await
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SupportChatRoles
 import systems.zlink.samples.kotlin.supportchat.server.support.application.AgentAssignmentService
 import systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zlink.actors.SupportActorDirectory

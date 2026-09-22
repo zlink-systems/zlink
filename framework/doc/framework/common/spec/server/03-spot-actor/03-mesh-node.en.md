@@ -134,7 +134,7 @@ error.
 
 ## 4. Object Role and the Features That Can Be Registered
 
-Each MeshNode selects one object role.
+Each MeshNode may select an object role at most once. If none is selected, its role is `None`.
 
 | Object role | Logical object operation | Local [factory](../00-foundation/02-glossary.en.md#factory) and Entry Spot | Target to place a new object on |
 |---|---|---|---|
@@ -524,6 +524,8 @@ runtime snapshot and event).
   configuration fail at startup.
 - `None`, `Client`, `Server` restrict manager, factory, and placement
   capability as contracted.
+- A MeshNode with no selected object role starts as `None` and creates no
+  object manager, factory, Entry Spot, or placement capability.
 - An invalid combination of object role with Location Store, automatic
   discovery, and fixed RID fails at startup.
 - Automatic RID follows the prefix and lowercase canonical UUID v4 format,

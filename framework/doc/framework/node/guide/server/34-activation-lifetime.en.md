@@ -18,13 +18,11 @@ View in another language — [C++](../../../cpp/guide/server/34-activation-lifet
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-This chapter quotes code from the `TicTacToe` sample's `Server` directory. Bootstrap and build that language's sample tree to inspect the activation and lifetime examples below in running code.
-
 !!! info "What you get from this chapter"
 
     You can tell when each of the three kinds of Spot is created, which callbacks it receives, and
-    how long a service injected into it lives. The code in this chapter comes from the samples in
-    the repository.
+    how long a service injected into it lives.
+    The code in this chapter comes from the [TicTacToe sample in the per-language example repositories](https://github.com/zlink-systems/zlink-node-examples/tree/main/samples/TicTacToe).
 
 What [Spot](21-spot.en.md) created was **the Spot an application creates explicitly**. This chapter
 covers how the other two kinds differ, which lifecycle callbacks each kind receives, and the
@@ -90,20 +88,22 @@ lifecycle of Actors arriving and leaving.
 --8<-- "framework/languages/node/samples/TicTacToe.Ts/Server/Play/Infrastructure/ZLink/Spots/EntrySpot/play-entry-spot.ts:doc-entry-spot"
 ```
 
+This code shows that the Entry Spot provides the lifecycle callbacks needed to admit and destroy Actors.
+
 ### 3.1 What an Entry Spot Does Not Hold
 
 **Keep no per-Actor state in an Entry Spot.** An Actor's state belongs to the Actor, and the Entry
 Spot provides only handlers and membership callbacks. There is one Entry Spot per Object Server, so
 per-Actor values accumulated here grow with the number of Actors that Object Server serves.
 
-### 3.2 Where an Actor Is Destroyed
+### 3.2 Actor Creation and Destruction Happen in the Entry Spot
 
-**An Actor can be destroyed only from the Entry Spot.** An Actor in a User Spot must return to the
-Entry Spot first — [Actor Membership](35-actor-membership.en.md) covers that move.
+The Entry Spot accepts or refuses Actor creation requests. Its context also provides the call that
+destroys an Actor. An Actor in a User Spot first returns to the Entry Spot before it is destroyed;
+[Actor Membership](35-actor-membership.en.md) handles that move.
 
-The destroy call is offered by the Entry Spot's context and takes the current instance. It does not
-re-run the membership callbacks; it clears the framework's registration record and the bound session
-route.
+The destroy call takes the current instance and does not run membership callbacks again. It clears
+the Framework's registration record and the bound session route.
 
 ## 4. User Spot — Created by the Application
 
@@ -113,6 +113,8 @@ call. Refuse in the create callback and the call fails, leaving no Spot behind.
 ```typescript
 --8<-- "framework/languages/node/samples/TicTacToe.Ts/Server/Api/Handlers/create-game-http-handler.ts:doc-create"
 ```
+
+The id returned by this call is the address for later calls to the User Spot.
 
 ## 5. The Lifetime of an Injected Service
 
@@ -151,5 +153,5 @@ handler in [Channel Messaging](20-channel-messaging.en.md) is that place.
 - Moving the execution site — [Relocation](37-relocation.en.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

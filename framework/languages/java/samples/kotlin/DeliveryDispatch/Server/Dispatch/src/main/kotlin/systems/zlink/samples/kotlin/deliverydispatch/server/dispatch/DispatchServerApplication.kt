@@ -30,6 +30,7 @@ class DispatchServerApplication {
     @Bean
     fun dispatchFramework(): ZLinkFrameworkConfigurer = ZLinkFrameworkConfigurer { options ->
         options.useCoroutineHandlers(Dispatchers.Default)
+        // #895: configuration package scanning has no Kotlin form in the spec.
         options.addHandlersFromPackageOf(DispatchServerApplication::class.java)
         options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 

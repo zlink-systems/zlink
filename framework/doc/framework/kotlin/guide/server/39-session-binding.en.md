@@ -47,7 +47,7 @@ resent authentication, uses the find-or-bind call instead.
 ## 2. Binding and Spot Membership — Independent of Each Other
 
 Binding is separate from the Actor's Spot membership. Even when the Actor moves to another Spot or
-another node, the actor id and the incarnation value are kept and the framework refreshes the
+another node, the actor id and [generation](22-actor.en.md#33-generation-in-a-reference) are kept and the framework refreshes the
 binding's route — [Actor Membership](35-actor-membership.en.md) and
 [Relocation](37-relocation.en.md) cover those moves.
 
@@ -65,7 +65,21 @@ automatically. The application calls explicitly only to announce a logical disco
 connection is still up.
 
 A disconnect neither deletes the Actor nor moves it to the Entry Spot. A session that reconnects can
-look the same reference up again and bind.
+look the same reference up again and [bind it again](24-actor-session.en.md#31-binding). TicTacToe's
+game Spot marks the disconnected Actor but leaves the room and match state in place.
+
+```kotlin
+--8<-- "framework/languages/java/samples/kotlin/TicTacToe/Server/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/server/play/infrastructure/zlink/spots/tictactoegamespot/TicTacToeGame.kt:doc-disconnect-actor"
+```
+
+This call is used only to report an application-level disconnection while the physical connection remains open.
+
+**Run result.** On 2026-09-22, running .NET TicTacToe's `run_sample.sh` and closing the host
+client left this real record for the connection that held one bound Actor in `play-a.log`.
+
+```text
+20:12:39.106 info: TicTacToe.Server.Play.Infrastructure.ZLink.Sessions.PlaySession[0] client -> play stream: disconnected. sessionId=00000002, actors=1
+```
 
 **A failed notification for one Actor does not stop the rest.** The framework fixes the list of
 bindings held when the connection dropped and notifies each Actor; one of them failing, or a
@@ -73,14 +87,19 @@ callback overrunning its deadline, does not stop the remaining notifications or 
 
 **An automatic notification overlapping an explicit call still runs the callback once.** The
 framework merges the two notifications for the same binding, so a drop right after an explicit call
-does not run the Spot's disconnect callback twice.
+does not run the Spot's disconnect callback twice. Call the Actor directly only when the connection
+is still up but the application protocol treats it as disconnected.
+
+```kotlin
+actor.notifyDisconnected().await()
+```
 
 ## 4. When a Bind Fails or Becomes Void
 
 | Situation | Result |
 | --- | --- |
 | The Actor does not exist, or is not in a state to receive | The bind ends with a typed error |
-| The reference's incarnation value differs | A stale reference is not bound to another incarnation |
+| The reference's [generation](22-actor.en.md#33-generation-in-a-reference) differs | A stale reference is not bound to another generation |
 | The Actor is moving | It ends as a moving error and is not retried silently |
 | The Actor moved after the bind | The framework refreshes the route; the session is not bound again |
 | The session dropped | The Actor and its Spot membership are kept |
@@ -101,5 +120,5 @@ covers that boundary.
 - What happens during a move — [Relocation](37-relocation.en.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

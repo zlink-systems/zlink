@@ -6120,19 +6120,20 @@ int main ()
         std::atomic_bool observed{false};
         zlink::framework::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
           state->dispatch, [&] (const zlink::framework::message_dispatch_error_event_t &event) {
-              if (event.surface == zlink::framework::dispatch_error_surface_t::route_mesh_channel
-                  && event.message_kind == zlink::framework::dispatch_message_kind_t::publish
-                  && event.reason == zlink::framework::dispatch_error_reason_t::handler_exception
+              if (event.surface == zlink::framework::dispatch_error_surface_t::spot_route
+                  && event.message_kind == zlink::framework::dispatch_message_kind_t::send
+                  && event.reason == zlink::framework::dispatch_error_reason_t::stale_target
                   && event.action == zlink::framework::dispatch_error_action_t::drop
-                  && event.packet_name && *event.packet_name == "PlayerMoved" && event.channel_name
-                  && *event.channel_name == "world" && event.topic && *event.topic == "players") {
+                  && !event.packet_name && event.channel_name && *event.channel_name == "world"
+                  && event.mesh_name && *event.mesh_name == "game" && event.target_rid
+                  && *event.target_rid == "gone-player" && event.topic
+                  && *event.topic == "players") {
                   observed.store (true, std::memory_order_release);
               }
           });
-        const zlink::framework::framework_exception_t failure (
-          zlink::framework::framework_error_kind_t::rejected, "logical multicast was rejected");
-        zlink::framework::detail::report_logical_multicast_failure (state, "world", "players",
-                                                                    "PlayerMoved", failure);
+        zlink::framework::detail::report_logical_multicast_failure (
+          state, "world", "game", "players", "gone-player",
+          zlink::framework::dispatch_error_reason_t::stale_target);
         if (!wait_until ([&] { return observed.load (std::memory_order_acquire); })) {
             return 90;
         }

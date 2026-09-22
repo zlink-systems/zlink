@@ -10,4 +10,5 @@ bash "$script_dir/verify-framework-instance-spot-contracts.sh" --check
 bash "$script_dir/verify-framework-submit-api.sh" --contract
 bash "$script_dir/verify-framework-submit-api.sh" --implementation
 python3 "$script_dir/verify-framework-runner-isolation.py" --check
+python3 "$script_dir/../doc/site/scripts/check_guide_issue_refs.py"
 node "$script_dir/run-framework-relocation-conformance.mjs" --list

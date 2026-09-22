@@ -123,7 +123,7 @@ public final class ZLinkDispatchOptionsRegistration implements ZLinkDispatchOpti
     public static final class DiagnosticsOptions implements ZLinkDiagnosticsOptions {
         private ZLinkMessageFlowLogMode messageFlow = ZLinkMessageFlowLogMode.ERRORS;
         private double sampleRate = 1.0d;
-        private boolean includeMessageSizes = true;
+        private boolean includeMessageSizes = false;
         // Shared, runtime-mutable mode cell installed by the host at start; shared
         // across surfaces so setMessageFlowMode flips it live. Null before install.
         private volatile AtomicReference<ZLinkMessageFlowLogMode> liveMode;

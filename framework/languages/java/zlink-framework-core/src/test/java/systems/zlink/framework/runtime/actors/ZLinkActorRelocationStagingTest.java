@@ -113,6 +113,24 @@ final class ZLinkActorRelocationStagingTest {
     }
 
     @Test
+    void idleActorWithoutMessageFollowDoesNotBlockShutdownClose() {
+        AtomicInteger closes = new AtomicInteger();
+        ZLinkActorRuntime runtime = runtime(new AtomicInteger(), closes);
+        var prepared = publishedActor(runtime, "actor-shutdown");
+        systems.zlink.framework.runtime.internal.handlers.ZLinkActorHandlerInstances.instance(
+                prepared.actor(), CloseableProbeHandler.class);
+
+        assertTrue(runtime.awaitDrainBarrier().toCompletableFuture().isDone());
+        assertTrue(
+                runtime.drainComplete(),
+                "an idle Actor without a Message Follow source is not unfinished accepted work");
+
+        runtime.closeAsync().toCompletableFuture().join();
+        assertEquals(1, closes.get());
+        assertTrue(runtime.localActor(prepared.actorId()).isEmpty());
+    }
+
+    @Test
     void localJoinSourceNotificationDoesNotBlockTargetCompletion() {
         ZLinkActorRuntime runtime = runtime(new AtomicInteger());
         var prepared = publishedActor(runtime, "actor-local-join");

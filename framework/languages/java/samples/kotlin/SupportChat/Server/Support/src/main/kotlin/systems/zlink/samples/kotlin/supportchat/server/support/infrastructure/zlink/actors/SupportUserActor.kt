@@ -1,11 +1,10 @@
 package systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zlink.actors
 
-import java.util.concurrent.CompletableFuture
-import java.util.concurrent.CompletionStage
-import systems.zlink.framework.actors.ZLinkActor
 import systems.zlink.framework.actors.ZLinkActorContext
 import systems.zlink.framework.actors.ZLinkActorJoinCompletion
 import systems.zlink.framework.actors.ZLinkActorJoinOperationId
+import systems.zlink.framework.kotlin.ZLinkSuspendingActor
+import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.samples.kotlin.supportchat.server.configuration.ConversationStatuses
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleTimings
@@ -15,7 +14,8 @@ import systems.zlink.samples.kotlin.supportchat.shared.contracts.JoinConversatio
 import systems.zlink.samples.kotlin.supportchat.shared.contracts.JoinConversationReq
 import systems.zlink.samples.kotlin.supportchat.shared.contracts.JoinConversationRes
 
-class SupportUserActor(val actorId: String, private val context: ZLinkActorContext) : ZLinkActor {
+class SupportUserActor(val actorId: String, override val context: ZLinkActorContext) :
+    ZLinkSuspendingActor() {
     var displayName: String = actorId
         private set
 
@@ -30,8 +30,6 @@ class SupportUserActor(val actorId: String, private val context: ZLinkActorConte
 
     private var pendingConversationId: String? = null
     private val completedJoinOperations = mutableSetOf<ZLinkActorJoinOperationId>()
-
-    override fun context(): ZLinkActorContext = context
 
     fun setIdentity(displayName: String, role: String, participantId: String) {
         this.displayName = displayName
@@ -81,7 +79,7 @@ class SupportUserActor(val actorId: String, private val context: ZLinkActorConte
         )
     }
 
-    override fun onJoinCompleted(completion: ZLinkActorJoinCompletion): CompletionStage<Void> {
+    override suspend fun onJoinCompletedSuspending(completion: ZLinkActorJoinCompletion) {
         val operationId =
             when (completion) {
                 is ZLinkActorJoinCompletion.Accepted -> completion.operationId()
@@ -89,28 +87,30 @@ class SupportUserActor(val actorId: String, private val context: ZLinkActorConte
                 is ZLinkActorJoinCompletion.Failed -> completion.operationId()
             }
         if (!completedJoinOperations.add(operationId)) {
-            return CompletableFuture.completedFuture(null)
+            return
         }
-        if (pendingConversationId == null) return CompletableFuture.completedFuture(null)
+        if (pendingConversationId == null) return
         val pending = pendingConversationId.orEmpty()
         if (completion is ZLinkActorJoinCompletion.Accepted) {
             conversationId = pendingConversationId.orEmpty()
         }
         pendingConversationId = null
-        return when (completion) {
-            is ZLinkActorJoinCompletion.Accepted -> CompletableFuture.completedFuture(null)
+        when (completion) {
+            is ZLinkActorJoinCompletion.Accepted -> Unit
             is ZLinkActorJoinCompletion.Rejected ->
                 context
                     .boundSession()
+                    .kotlin()
                     .send(JoinConversationFailedNotify(pending, "Rejected", false))
                     .metadata(SampleNames.ConversationIdMetadataKey, pending)
-                    .submit()
+                    .await()
             is ZLinkActorJoinCompletion.Failed ->
                 context
                     .boundSession()
+                    .kotlin()
                     .send(JoinConversationFailedNotify(pending, completion.kind().name, false))
                     .metadata(SampleNames.ConversationIdMetadataKey, pending)
-                    .submit()
+                    .await()
         }
     }
 }

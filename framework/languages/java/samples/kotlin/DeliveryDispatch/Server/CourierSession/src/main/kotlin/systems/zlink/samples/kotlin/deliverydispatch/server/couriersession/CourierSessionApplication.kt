@@ -26,6 +26,7 @@ class CourierSessionApplication {
     @Bean
     fun courierSessionFramework(): ZLinkFrameworkConfigurer = ZLinkFrameworkConfigurer { options ->
         options.useCoroutineHandlers(Dispatchers.Default)
+        // #895: configuration package scanning has no Kotlin form in the spec.
         options.addHandlersFromPackageOf(CourierSessionApplication::class.java)
         options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 
@@ -39,6 +40,7 @@ class CourierSessionApplication {
             .addStreamNode(SampleNames.CourierStreamNode)
             .bind(SampleTopology.CourierStreamEndpoint)
             .enableActorDispatch()
+            // #895: session registration has no Kotlin form in the spec.
             .registerSession(CourierSession::class.java)
     }
 

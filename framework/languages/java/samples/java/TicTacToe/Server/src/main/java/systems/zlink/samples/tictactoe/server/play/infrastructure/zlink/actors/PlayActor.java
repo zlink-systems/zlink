@@ -79,6 +79,7 @@ public final class PlayActor implements ZLinkActor {
         pendingRoomId = roomId;
     }
 
+    // --8<-- [start:doc-join-completed]
     @Override
     public CompletionStage<Void> onJoinCompleted(ZLinkActorJoinCompletion completion) {
         ZLinkActorJoinOperationId operationId =
@@ -115,6 +116,7 @@ public final class PlayActor implements ZLinkActor {
                 .send(new JoinGameFailedNotify(roomId, failed.kind().name()))
                 .submit();
     }
+    // --8<-- [end:doc-join-completed]
 
     public String requireJoinedGame() {
         if (joinedRoomId == null || joinedRoomId.isEmpty()) {

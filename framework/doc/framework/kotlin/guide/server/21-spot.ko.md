@@ -18,22 +18,20 @@ title: "Spot · Kotlin"
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-이 장은 [tutorial의 `Server`·`Client` 디렉터리와 「실행」 절](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.ko.md#실행)에서 코드를 인용하며, 그 tree를 bootstrap하고 build하면 아래 실행 결과를 재현할 수 있다.
-
 !!! info "이 장을 읽고 나면"
 
     id로 호출하는 상태 객체를 만들고, 그것에 메시지를 보내고 답을 받을 수 있다.
-    이 장의 코드는 `framework/languages/java/tutorial/kotlin`에서 그대로 실행된다.
+    이 장의 코드는 [언어별 예제 저장소](https://github.com/zlink-systems/zlink-java-examples)의 tutorial에서 가져왔다.
 
 [Channel 메시징](20-channel-messaging.ko.md)의 호출은 이름을 맡은 node 중 하나가 받았다.
 받을 대상이 정해져 있으면 그 경로를 사용할 수 없다. **Spot은 id로 찾는 상태 객체**이고, 자기
 앞으로 온 일을 한 줄로 세워 처리한다. 이 장은 Spot 하나를 만들어 호출하기까지 다루며, 종류별
-차이와 lifecycle 전체는 [Spot](21-spot.ko.md)이 다룬다.
+차이와 lifecycle 전체는 [Spot 동작 원리](32-execution-model.ko.md)에서 다룬다.
 
-## 1. Spot이 푸는 문제
+## 1. Spot의 역할
 
-채팅방 하나, 매칭 queue 하나처럼 **무언가를 기억하면서 자기 앞으로 온 일을 순서대로 처리해야
-하는 단위**가 있다. channel로는 그것을 표현할 수 없다 — channel 호출은 그 이름을 맡은 node
+Spot은 채팅방 하나, 매칭 queue 하나처럼 **무언가를 기억하면서 자기 앞으로 온 일을 순서대로 처리하는
+단위**를 만든다. channel로는 그것을 표현할 수 없다 — channel 호출은 그 이름을 맡은 node
 중 하나로 가므로, 같은 방에 보낸 두 메시지가 서로 다른 node에 도착할 수 있다.
 
 Spot은 id를 가진다. 같은 id로 보낸 메시지는 언제나 같은 Spot에 도착하고, 그 Spot 안에서
@@ -105,7 +103,9 @@ mesh node가 Object Server 역할을 한 번 고르고, 그 위에 Spot factory�
 
 등록할 때 주는 이름이 **stable type**이다. 호출하는 쪽은 Spot을 만들 때 그 이름을 지정한다.
 같은 이름을 등록한 node가 후보가 된다. Spot factory를 등록할 때 이동 정책을 하나 지정하며,
-이 장의 코드는 이동을 끈 정책을 지정한다.
+이 장의 코드는 이동을 끈 정책을 지정한다. adapter로 상태를 보존하려면 이 등록에서
+`preserveStateWith`를 지정한다 — [Relocation의 adapter](37-relocation.ko.md#2-application이-맡는-부분--adapter)가
+그 상태를 담고 푸는 코드를 보인다.
 
 ## 4. 호출하는 쪽 — Spot을 호출하는 node
 
@@ -124,12 +124,11 @@ client 역할을 고르고, 위치를 읽을 Location Store를 같은 prefix로 
 
 ### 4.1 만들기
 
-stable type을 지정해 만든다. 응답으로 오는 id가 그 뒤 모든 호출의 주소다.
+같은 id에 항상 같은 Spot type을 사용하는 stable type을 지정해 Spot을 만든다. 응답으로 오는 id가 그 뒤 모든 호출의 주소다.
 
 먼저 tutorial의 `Server`가 `game` route mesh를 정의한다. mesh 이름은 Spot이 배치될 수 있는
-node 집합의 이름이고, `inMesh`는 그 집합 하나를 고른다. route mesh를 등록하는 방법은
-[Channel 메시징의 받는 쪽](20-channel-messaging.ko.md#32-받는-쪽--channel을-담당하는-node)에 있고, 선택 규칙은
-[Location runtime §7](../../../common/spec/server/05-location-relocation/01-location-runtime.ko.md#7-actor와-user-spot을-만든다)이 정한다.
+node 집합의 이름이고, `inMesh`는 route mesh에 참여한 node 가운데 Spot을 배치할 node를 고른다. route mesh를 등록하는 방법은
+[Channel 메시징의 받는 쪽](20-channel-messaging.ko.md#32-받는-쪽--channel을-담당하는-node)에 있다.
 
 ```kotlin
 --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:mesh-register"
@@ -157,7 +156,7 @@ node 집합의 이름이고, `inMesh`는 그 집합 하나를 고른다. route m
 
 ## 5. 실행 결과
 
-tutorial README의 「실행」 절대로 Server와 Client를 실행한 상태에서 Client의 HTTP 표면에 아래 `curl` 요청을 보내면, 각 HTTP 응답은 `curl` stdout에 나오고 handler 기록은 Server process의 stdout 또는 `server.log`에 나온다.
+tutorial README의 「실행」 절을 따라 띄운 상태에서 Server와 Client를 실행한 상태에서 Client의 HTTP 표면에 아래 `curl` 요청을 보내면, 각 HTTP 응답은 `curl` stdout에 나오고 handler 기록은 Server process의 stdout 또는 `server.log`에 나온다.
 
 ```bash
 curl -X POST http://127.0.0.1:5080/rooms \

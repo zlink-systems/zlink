@@ -3,7 +3,8 @@ package systems.zlink.samples.kotlin.deliverydispatch.server.dispatch
 import java.time.Instant
 import systems.zlink.framework.actors.ZLinkActorClient
 import systems.zlink.framework.channels.ZLinkClient
-import systems.zlink.framework.kotlin.await
+import systems.zlink.framework.kotlin.kotlin
+import systems.zlink.framework.kotlin.requestToChannel
 import systems.zlink.samples.kotlin.deliverydispatch.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.deliverydispatch.server.configuration.SampleTimings
 import systems.zlink.samples.kotlin.deliverydispatch.shared.contracts.AssignDeliveryMsg
@@ -24,6 +25,8 @@ class DispatchWorker(
     private val actors: ZLinkActorClient,
     private val offers: DeliveryOfferStore,
 ) {
+    private val kotlinChannels = channels.kotlin()
+    private val kotlinActors = actors.kotlin()
     /** Who gets offered a delivery, and in what order. The worker's policy, not the node's. */
     private val candidates = listOf("courier-a", "courier-b")
 
@@ -83,15 +86,14 @@ class DispatchWorker(
     // --8<-- [end:doc-dd-reassign]
 
     suspend fun assertServerEvidence(request: ServerAssertionReq): ServerAssertionRes =
-        channels
-            .requestToChannel(SampleNames.TrackingChannel, request)
-            .submit(ServerAssertionRes::class.java)
+        kotlinChannels
+            .requestToChannel<ServerAssertionRes>(SampleNames.TrackingChannel, request)
             .await()
 
     // --8<-- [start:doc-dd-offer-send]
     /** The offer is a one-way send: the turn that sends it ends right there. */
     private suspend fun offer(request: AssignDeliveryMsg, courierId: String, attempt: Int) {
-        actors
+        kotlinActors
             .sendToActor(
                 courierId,
                 OfferDeliveryMsg(
@@ -102,7 +104,6 @@ class DispatchWorker(
                     dropoffAddress = request.dropoffAddress,
                 ),
             )
-            .submit()
             .await()
     }
 
@@ -113,8 +114,8 @@ class DispatchWorker(
         status: DeliveryStatus,
         courierId: String,
     ) {
-        channels
-            .requestToChannel(
+        kotlinChannels
+            .requestToChannel<DeliveryStatusChangedRes>(
                 SampleNames.TrackingChannel,
                 DeliveryStatusChangedReq(
                     deliveryId = delivery.deliveryId,
@@ -124,7 +125,6 @@ class DispatchWorker(
                     occurredAt = Instant.now(),
                 ),
             )
-            .submit(DeliveryStatusChangedRes::class.java)
             .await()
     }
 }

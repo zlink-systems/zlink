@@ -18,21 +18,20 @@ View in another language — [C++](../../../cpp/guide/server/14-samples.en.md) �
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-> **This chapter has no spec document that owns a contract.** It's guidance for choosing
-> which sample to look at. Each sample's language-neutral scenario, message contract, and
-> verification criteria are defined by the
-> [common sample document](../../../common/sample/README.en.md). This document lays out
-> **which sample is the best place to start** and how to run it.
+!!! info "What you get from this chapter"
+
+    You can choose and run the sample closest to the system you want to build.
+    Each sample command uses its language-specific example repository.
 
 The samples are split so each one owns a different bundle of features. You don't need to
 read all of them — it's faster to pick the one closest to what you're building and follow its
 registration code and handlers.
 
-**If you don't know where to start, look at [Bingo](#3-bingo--building-an-online-game-server).**
+**If you don't know where to start, look at [Bingo](#4-bingo--building-an-online-game-server).**
 It's where the most framework features show up, and its architecture mirrors that of a
 typical online game server.
 
-## 0. Clone the examples repository
+## 1. Clone the examples repository
 
 Clone the repository below and run the samples from `samples/`.
 
@@ -47,17 +46,17 @@ cd zlink-node-examples/samples
 release. An older release is the tag `vA.B.C` (`git checkout vA.B.C`). Send issues and PRs to
 `zlink-systems/zlink`.
 
-## 1. Choosing by What You're Building
+## 2. Choosing by What You're Building
 
 | System you're building | Sample | What this sample covers |
 | --- | --- | --- |
 | A real-time head-to-head game server | [TicTacToe](#2-tictactoe--building-a-real-time-head-to-head-game-server) | The smallest configuration, with auto-connect and auto-registration stripped away |
-| A full online game server — where the most framework features show up | [Bingo](#3-bingo--building-an-online-game-server) | A conventional game server split into a connection gateway, auth/matchmaking, and room servers |
-| A live chat support system | [SupportChat](#4-supportchat--building-a-live-chat-support-system) | An actor/routing setup where one agent handles several conversations at once |
-| A dispatch system | [DeliveryDispatch](#5-deliverydispatch--building-a-dispatch-system) | Create a request → pick a fulfiller → reassign on no response → deliver to the party involved |
-| An order-processing system | [ShoppingMall](#6-shoppingmall--building-an-order-processing-system) | Lossless event sourcing written as sequential code, with no orchestration layer |
-| A quest/mission progression system | [GameQuest](#7-gamequest--building-a-quest-progression-system) | Owner processing that accepts possible data loss in exchange for real-time responsiveness |
-| A zone-sharded MMORPG with ops control | [ZoneWorld](#8-zoneworld--building-a-zone-sharded-mmorpg-and-ops-control) — a common target sample in every language | Which surface to pick when doing something across multiple nodes |
+| A full online game server — where the most framework features show up | [Bingo](#4-bingo--building-an-online-game-server) | A conventional game server split into a connection gateway, auth/matchmaking, and room servers |
+| A live chat support system | [SupportChat](#5-supportchat--building-a-live-chat-support-system) | An actor/routing setup where one agent handles several conversations at once |
+| A dispatch system | [DeliveryDispatch](#6-deliverydispatch--building-a-dispatch-system) | Create a request → pick a fulfiller → reassign on no response → deliver to the party involved |
+| An order-processing system | [ShoppingMall](#7-shoppingmall--building-an-order-processing-system) | Lossless event sourcing written as sequential code, with no orchestration layer |
+| A quest/mission progression system | [GameQuest](#8-gamequest--building-a-quest-progression-system) | Owner processing that accepts possible data loss in exchange for real-time responsiveness |
+| A zone-sharded MMORPG with ops control | [ZoneWorld](#9-zoneworld--building-a-zone-sharded-mmorpg-and-ops-control) — a common target sample in every language | Which surface to pick when doing something across multiple nodes |
 
 To pick by feature instead, look at the [01. Overview](01-overview.en.md)'s introduction order first.
 
@@ -71,7 +70,7 @@ decision criteria clear.
 - **ShoppingMall ↔ GameQuest** — the same owner Spot/event sourcing shown once for a domain
   that needs zero loss, and once for a domain that tolerates loss and corrects for it.
 
-## 2. TicTacToe — Building a Real-Time Head-to-Head Game Server
+## 3. TicTacToe — Building a Real-Time Head-to-Head Game Server
 
 **The smallest real-time game server configuration**, handling a two-player match with 2
 `Api`s and 2 `Play`s. It's also **the only sample that writes endpoints directly instead of
@@ -95,7 +94,7 @@ receives it and pushes it to spectating clients.
 - Scenario: [TicTacToe](../../../common/sample/tictactoe/README.en.md) · payload JSON
 - Reading along: [Reading Along: TicTacToe](51-tictactoe.en.md) — the sample's code in flow order
 
-## 3. Bingo — Building an Online Game Server
+## 4. Bingo — Building an Online Game Server
 
 **If you pick only one, pick this sample.** Everything an online game server needs —
 authentication, matchmaking, game progress, real-time push — is all in here, and it's where
@@ -137,7 +136,7 @@ keeps the same field and wire names.
 - The registration-code examples in chapters 06 and 07 come from this sample.
 - Reading along: [Reading Along: Bingo](50-bingo.en.md) — the sample's code in flow order
 
-## 4. SupportChat — Building a Live Chat Support System
+## 5. SupportChat — Building a Live Chat Support System
 
 A system where a customer requests support, an agent is assigned, and they chat in real
 time. One conversation maps to a conversation Spot, which owns the participants, message
@@ -182,7 +181,7 @@ rooms/tasks at once** has the same architecture.
 - Scenario: [SupportChat](../../../common/sample/supportchat/README.en.md) · payload JSON
 - Reading along: [Reading Along: SupportChat](52-supportchat.en.md) — the sample's code in flow order
 
-## 5. DeliveryDispatch — Building a Dispatch System
+## 6. DeliveryDispatch — Building a Dispatch System
 
 Create a delivery, offer it to a courier, reassign it if there's no response within a set
 time, and deliver status updates to the customer. This sample's point isn't delivery
@@ -206,7 +205,7 @@ timeout-reassignment flows.
 - Scenario: [DeliveryDispatch](../../../common/sample/deliverydispatch/README.en.md) · payload JSON
 - Reading along: [Reading Along: DeliveryDispatch](53-deliverydispatch.en.md) — the sample's code in flow order
 
-## 6. ShoppingMall — Building an Order-Processing System
+## 7. ShoppingMall — Building an Order-Processing System
 
 One order is owned by an `OrderWorkflow` owner Spot, which reserves inventory → approves
 payment → confirms the order, and compensates on failure. `CommerceApi` terminates the
@@ -230,7 +229,7 @@ stalled orders. If the read model breaks, it can be rebuilt by replaying the eve
   top of a Spot.
 - Reading along: [Reading Along: ShoppingMall](54-shoppingmall.en.md) — the sample's code in flow order
 
-## 7. GameQuest — Building a Quest Progression System
+## 8. GameQuest — Building a Quest Progression System
 
 This sample gathers per-player gameplay events and has **the server** determine quest
 progress and completion. Letting the client say "I finished the quest, give me the reward"
@@ -252,7 +251,7 @@ into a separate tier.
 - Scenario: [GameQuest](../../../common/sample/event/gamequest.en.md) · payload JSON
 - Reading along: [Reading Along: GameQuest](55-gamequest.en.md) — the sample's code in flow order
 
-## 8. ZoneWorld — Building a Zone-Sharded MMORPG and Ops Control
+## 9. ZoneWorld — Building a Zone-Sharded MMORPG and Ops Control
 
 > ZoneWorld is a common sample implemented by all five framework languages. Each implementation
 > follows this chapter and the common scenario for topology, actor relocation, operations
@@ -286,11 +285,11 @@ UI**, so you can watch boundary crossings and maintenance-mode changes in the br
 - Paired chapters: [Relocation](37-relocation.en.md),
   `11. Monitoring` chapter, [12-operations](12-operations.en.md)
 - Scenario: [ZoneWorld](../../../common/sample/zoneworld/README.en.md) · payload JSON
-- The server and runner are provided in all five languages and share the business behavior and
+- The server and runner are provided in supported languages and share the business behavior and
   verification criteria. The .NET and Node.js browser smoke tests use the same TypeScript client.
 - Reading along: [Reading Along: ZoneWorld](56-zoneworld.en.md) — the sample's code in flow order
 
-## 9. Running It
+## 10. Running It
 
 One runner per sample directory brings up several servers together with a client scenario,
 and runs verification too. For a sample that needs a location store, the runner brings up
@@ -305,12 +304,12 @@ framework/languages/node/samples/Bingo.Ts/run_sample.sh
 
 ```
 
-Samples run one at a time. Checking all seven means seven invocations. ZoneWorld and its
+Run samples one at a time by invoking each sample's script from that language's sample root. ZoneWorld and its
 browser UI work the same way: invoke `ZoneWorld/run_sample.sh` from that language's sample
 root. Why no runner walks several samples is settled by
 [the common sample](../../../common/sample/README.en.md).
 
-## 10. Related Documents
+## 11. Related Documents
 
 - Each sample's language-neutral scenario and verification criteria:
   [Common sample](../../../common/sample/README.en.md)
@@ -319,5 +318,5 @@ root. Why no runner walks several samples is settled by
   [12-operations](12-operations.en.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

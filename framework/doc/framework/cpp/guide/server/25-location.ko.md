@@ -18,12 +18,10 @@ title: "Location · C++"
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-이 장은 [tutorial의 `Client` 디렉터리와 「실행」 절](https://github.com/zlink-systems/zlink-cpp-examples/blob/main/tutorial/README.ko.md#실행)에서 코드를 인용하며, 그 tree를 bootstrap하고 build하면 아래 실행 결과를 재현할 수 있다.
-
 !!! info "이 장을 읽고 나면"
 
     id만 가지고 그 Spot·Actor가 지금 어느 node에 있는지 물어볼 수 있다.
-    이 장의 코드는 `framework/languages/cpp/tutorial`에서 그대로 실행된다.
+    이 장의 코드는 [예제 저장소의 tutorial README](https://github.com/zlink-systems/zlink-cpp-examples/blob/main/tutorial/README.ko.md)에서 가져왔으며, README의 「내려받기와 설치」·「빌드」·「실행」 절을 따르면 아래 결과를 재현할 수 있다.
 
 [Spot](21-spot.ko.md)과 [Actor](22-actor.ko.md)는 id로만 호출했다. 그것이 지금 어느 node에
 있는지는 Framework가 찾는다. 그 기록을 보관하는 곳이 **Location Store**다. 이 장은
@@ -67,7 +65,7 @@ Spot은 spot manager에, Actor는 actor manager에 조회한다. 둘 다 id 하�
 
 ## 4. 실행 결과
 
-tutorial README의 「실행」 절대로 Server와 Client를 실행한 상태에서 Client의 HTTP 표면에 아래 `curl` 요청을 보내면, 각 HTTP 응답은 `curl` stdout에 나오고 생성·조회 handler 기록은 Server process의 stdout 또는 `server.log`에 나온다.
+tutorial README의 「실행」 절을 따라 띄운 상태에서 Server와 Client를 실행한 상태에서 Client의 HTTP 표면에 아래 `curl` 요청을 보내면, 각 HTTP 응답은 `curl` stdout에 나오고 생성·조회 handler 기록은 Server process의 stdout 또는 `server.log`에 나온다.
 
 ```bash
 curl -X POST http://127.0.0.1:5080/rooms \
@@ -75,14 +73,14 @@ curl -X POST http://127.0.0.1:5080/rooms \
 # "5ce8339b-ec20-42d8-a117-a74677ad9af0"
 
 curl http://127.0.0.1:5080/locations/rooms/5ce8339b-ec20-42d8-a117-a74677ad9af0
-# {"spotId":"5ce8339b-ec20-42d8-a117-a74677ad9af0","node":"game-server-1"}
+# {"spotId":"5ce8339b-ec20-42d8-a117-a74677ad9af0","generation":1,"node":"game-server-1"}
 
 curl -X POST http://127.0.0.1:5080/players/p7 \
   -H 'Content-Type: application/json' -d '{"nickname":"rookie"}'
 # "created"
 
 curl http://127.0.0.1:5080/locations/players/p7
-# {"actorId":"p7","node":"game-server-1"}
+# {"actorId":"p7","generation":1,"node":"game-server-1"}
 
 curl http://127.0.0.1:5080/locations/players/ghost
 # 404
@@ -98,16 +96,17 @@ curl http://127.0.0.1:5080/locations/players/ghost
 [node를 직접 호출하기](20-channel-messaging.ko.md#36-node를-직접-호출하기)로 보내면 그 따라가기를
 잃는다.
 
-참조를 그대로 넘기는 자리는 따로 있다. 닫거나 지우는 호출은 **그 참조가 가리키는 세대**만
-대상으로 삼으며, 같은 id로 다시 만들어진 대상은 그대로 둔다.
+참조를 그대로 넘기는 자리는 따로 있다. 닫거나 지우는 호출은 **그 참조가 가리키는
+[generation](22-actor.ko.md#33-참조의-generation)**만 대상으로 삼으며, 같은 id로 다시 만들어진
+대상은 그대로 둔다.
 
 ## 6. 관련 문서
 
 - id로 호출하는 상태 객체 — [Spot](21-spot.ko.md) · [Actor](22-actor.ko.md)
 - Store가 무엇을 적어 두는가 — [Channel 동작 원리](30-channel-patterns.ko.md#61-location-store--누가-어디-있는지-적어-두는-곳)
-- 운영 조회 — [운영과 lifecycle](12-operations.ko.md#5-location-readiness와-운영-조회)
-- 이 장 코드의 실행본 — `framework/languages/cpp/tutorial`
+- 운영 조회 — [운영과 lifecycle](12-operations.ko.md#6-location-readiness와-운영-조회)
+- 이 장 코드의 실행본 — [예제 저장소의 tutorial README](https://github.com/zlink-systems/zlink-cpp-examples/blob/main/tutorial/README.ko.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

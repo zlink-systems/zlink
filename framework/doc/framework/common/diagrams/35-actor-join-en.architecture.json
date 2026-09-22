@@ -1,88 +1,37 @@
 {
   "schema_version": 1,
-  "diagram_type": "architecture",
+  "diagram_type": "sequence",
   "meta": {
-    "title": "A join is a reservation; it runs after the handler ends",
-    "subtitle": "The receiving side approves first · both sides are told after the commit",
+    "title": "A reservation is the `Defer()` call; the join starts after the handler ends",
+    "subtitle": "The call only registers; the join starts when the handler completes normally",
     "output": "35-actor-join-en.html",
-    "legend": {
-      "mode": "hidden"
-    }
+    "column_fit": "spread",
+    "viewBox": [1320, 760],
+    "legend": { "mode": "hidden" }
   },
-  "layout": {
-    "mode": "grid",
-    "origin": [
-      50,
-      150
-    ],
-    "cols": 3,
-    "gapX": 150,
-    "gapY": 90,
-    "cellW": 120,
-    "cellH": 60
-  },
-  "components": [
-    {
-      "id": "E",
-      "type": "backend",
-      "label": "Entry Spot",
-      "sublabel": "where it sits once created",
-      "row": 0,
-      "col": 0
-    },
-    {
-      "id": "A",
-      "type": "messagebus",
-      "label": "player-7",
-      "sublabel": "Actor",
-      "row": 1,
-      "col": 0
-    },
-    {
-      "id": "B",
-      "type": "external",
-      "label": "reservation",
-      "sublabel": "opens when the handler ends",
-      "row": 1,
-      "col": 1
-    },
-    {
-      "id": "U",
-      "type": "backend",
-      "label": "room-42",
-      "sublabel": "the User Spot it is going to",
-      "row": 1,
-      "col": 2
-    }
+  "participants": [
+    { "id": "Entry", "type": "backend", "label": "Entry Spot (Actor handler)" },
+    { "id": "Framework", "type": "messagebus", "label": "Framework" },
+    { "id": "Record", "type": "backend", "label": "location record" },
+    { "id": "User", "type": "external", "label": "destination User Spot" },
+    { "id": "Callbacks", "type": "backend", "label": "join / leave callbacks" }
   ],
-  "connections": [
-    {
-      "from": "E",
-      "to": "A",
-      "label": "where it runs right now",
-      "variant": "default",
-      "labelDy": 24
-    },
-    {
-      "from": "A",
-      "to": "B",
-      "label": "the handler only reserves",
-      "variant": "default"
-    },
-    {
-      "from": "B",
-      "to": "U",
-      "label": "runs after the handler ends",
-      "variant": "default"
-    }
+  "messages": [
+    { "from": "Entry", "to": "Framework", "y": 160, "label": "during handler: JoinSpot(...).Defer() — register only; nothing starts", "variant": "default" },
+    { "from": "Entry", "to": "Framework", "y": 235, "label": "handler completes normally → start join", "variant": "default" },
+    { "from": "Entry", "to": "Framework", "y": 295, "label": "handler throws → discard registration; do not start join", "variant": "dashed" },
+    { "from": "Framework", "to": "User", "y": 370, "label": "OnActorJoin accepts or refuses", "variant": "default" },
+    { "from": "Framework", "to": "Record", "y": 445, "label": "when accepted, commit location record and membership together", "variant": "return" },
+    { "from": "Framework", "to": "Callbacks", "y": 520, "label": "destination OnJoinedActor · departure OnLeaveActor", "variant": "default" },
+    { "from": "Framework", "to": "User", "y": 595, "label": "later messages for the Actor run in the User Spot", "variant": "return" }
   ],
   "cards": [
     {
       "dot": "cyan",
-      "title": "The receiving side approves first",
+      "title": "Registration and join happen at different times",
       "items": [
-        "When the reservation runs, the User Spot it is going to approves or refuses first, and only after the commit are the arriving and departing sides told.",
-        "On acceptance the Actor that committed receives the completion. On a refusal, or a failure before the commit, the Actor that stayed put receives it."
+        "`Defer()` does not run the join now; it registers the join to start after the handler completes normally.",
+        "If the handler throws, its registration is discarded."
       ]
     }
   ]

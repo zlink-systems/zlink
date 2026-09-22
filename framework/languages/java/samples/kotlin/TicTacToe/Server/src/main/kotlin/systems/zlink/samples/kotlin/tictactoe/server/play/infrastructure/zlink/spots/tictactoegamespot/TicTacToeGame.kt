@@ -3,9 +3,11 @@ package systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.
 import com.fasterxml.jackson.databind.ObjectMapper
 import java.time.Duration
 import java.time.Instant
-import kotlinx.coroutines.future.await
 import systems.zlink.framework.kotlin.ZLinkSuspendingSpot
 import systems.zlink.framework.kotlin.addHandler
+import systems.zlink.framework.kotlin.await
+import systems.zlink.framework.kotlin.decode
+import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.spots.ZLinkSpotActorJoinResult
 import systems.zlink.framework.spots.ZLinkSpotClosingContext
@@ -62,7 +64,7 @@ class TicTacToeGame(
         actorId: String,
         request: ZLinkMessage,
     ): ZLinkSpotActorJoinResult {
-        val joinRequest = request.decode(TicTacToeGameJoinReq::class.java)
+        val joinRequest = request.decode<TicTacToeGameJoinReq>()
         require(joinRequest.player.actorId == actorId) {
             "join request actor id does not match bound actor"
         }
@@ -83,9 +85,11 @@ class TicTacToeGame(
         players.removeIf { it.actor.actorId == actor.actorId }
     }
 
+    // --8<-- [start:doc-disconnect-actor]
     override suspend fun onDisconnectActorSuspending(actor: PlayActor) {
         actor.markDisconnected()
     }
+    // --8<-- [end:doc-disconnect-actor]
 
     // --8<-- [start:doc-ttt-timer-register]
     override suspend fun onInitializeSuspending() {
@@ -109,7 +113,7 @@ class TicTacToeGame(
     }
 
     // --8<-- [start:doc-ttt-game-join]
-    fun join(actor: PlayActor, roomId: String, player: PlayerInfo): TicTacToeGameJoinRes {
+    suspend fun join(actor: PlayActor, roomId: String, player: PlayerInfo): TicTacToeGameJoinRes {
         validateJoin(roomId, player)
         actor.applyPlayer(player)
         val change = match.joinPlayer(actor.actorId, Instant.now())
@@ -189,19 +193,23 @@ class TicTacToeGame(
         definition ?: error("tic-tac-toe game has not completed creation")
 
     // --8<-- [start:doc-ttt-broadcast]
-    private fun broadcast(state: GameState, excludedActorId: String?) {
+    private suspend fun broadcast(state: GameState, excludedActorId: String?) {
         players
             .asSequence()
             .map { it.actor }
             .filter { excludedActorId == null || it.actorId != excludedActorId }
             .forEach { actor ->
-                actor.context().boundSession().send(GameStateNotify(state)).submit()
+                try {
+                    actor.context().boundSession().kotlin().send(GameStateNotify(state)).await()
+                } catch (_: RuntimeException) {
+                    // A stale player cannot prevent later best-effort notifications.
+                }
             }
     }
 
     // --8<-- [end:doc-ttt-broadcast]
 
-    private fun notifyPlayerJoined(
+    private suspend fun notifyPlayerJoined(
         joinedActor: PlayActor,
         joinedSlot: PlayerSlot,
         state: GameState,
@@ -220,7 +228,13 @@ class TicTacToeGame(
             .asSequence()
             .map { it.actor }
             .filter { it.actorId != joinedActor.actorId }
-            .forEach { actor -> actor.context().boundSession().send(message).submit() }
+            .forEach { actor ->
+                try {
+                    actor.context().boundSession().kotlin().send(message).await()
+                } catch (_: RuntimeException) {
+                    // A stale player cannot prevent later best-effort notifications.
+                }
+            }
     }
 
     private data class PlayerSlot(var actor: PlayActor, val mark: String)
@@ -262,6 +276,7 @@ class TicTacToeGame(
                     wins = wins,
                 ),
             )
+            // #895: Spot outbound fanout has no Kotlin wrapper in the spec.
             .submit()
         // --8<-- [end:doc-multicast-publish]
     }

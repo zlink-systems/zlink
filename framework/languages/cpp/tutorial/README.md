@@ -446,8 +446,8 @@ $ curl http://127.0.0.1:5180/players/p7
 {"nickname":"veteran","playerId":"p7"}
 ```
 
-Actors are made by `player_factory_t`, not by a constructor; one Entry Spot must be registered,
-and in C++ its `on_actor_join` admission callback is mandatory.
+Actors are made by `player_factory_t`, not by a constructor; one Entry Spot must be registered.
+`on_create_actor` admits the initial creation, and return to the Entry Spot commits without admission.
 
 ### 10. Location -- where is it
 

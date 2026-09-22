@@ -591,8 +591,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
     public boolean drainComplete() {
         for (ActorEntry entry : actorRegistry.entries()) {
-            if (entry.context().moving()
-                    || handoff.messageFollowSource(entry.actor().context().actorId()).isEmpty()) {
+            if (entry.context().moving()) {
                 return false;
             }
         }

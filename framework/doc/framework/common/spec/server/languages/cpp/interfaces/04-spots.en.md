@@ -174,9 +174,6 @@ public:
     virtual task_t<actor_create_response_t> on_create_actor(
       TActor &actor,
       const message_t &create_request);
-    virtual task_t<spot_actor_join_result_t> on_actor_join(
-      std::string_view actor_id,
-      const message_t &request) = 0;
     virtual task_t<void> on_actor_joined(TActor &actor) = 0;
     virtual task_t<void> on_leave_actor(TActor &actor) = 0;
     virtual task_t<void> on_disconnect_actor(TActor &actor);
@@ -516,8 +513,10 @@ activation, a new handler and scope are built. The application doesn't
 separately register a timer handler as a singleton/scoped/transient
 service or choose its lifetime. A public handler lifetime option isn't
 provided.
-A User Spot and Entry Spot return accept or reject in
-`on_actor_join(...)`, which takes the actor ID and join request. After
+A User Spot returns accept or reject in `on_actor_join(...)`, which
+takes the actor ID and join request. An Entry Spot has no such callback:
+`on_create_actor(...)` accepts or rejects initial creation, and a return
+commits without admission. After
 commit, the callback directly receives the concrete Actor reference the
 matching factory built. So a separate membership DTO isn't inserted
 into the lifecycle callback. The Joined, leave, and disconnect
@@ -706,9 +705,10 @@ membership, and starts Actor message processing. [Session–Actor binding §8.2]
 Infrastructure relocation doesn't
 call target joined, source leave, or a separate relocation callback.
 
-Only an ordinary same-node/remote User/Entry Spot join uses the
-existing `on_actor_join(...)`, `on_actor_joined(...)`, and source
-`on_leave_actor(...)` contract. In a `SpotWide` User Spot aggregate's
+An ordinary same-node or remote User Spot join uses `on_actor_join(...)`,
+`on_actor_joined(...)`, and source `on_leave_actor(...)`. A return to an
+Entry Spot commits without `on_actor_join(...)`, then uses target
+`on_actor_joined(...)` and source `on_leave_actor(...)`. In a `SpotWide` User Spot aggregate's
 or a `PerActor` User Spot's Actor relocation, the member Actor's
 membership callback isn't called. A `PerActor` Spot policy only allows
 `RecreateOnRelocation` and doesn't register a Spot adapter. A Spot
