@@ -35,6 +35,10 @@ public final class ZLinkDispatchErrorReporter {
         return flow;
     }
 
+    public boolean captureEnabled() {
+        return flow.captureEnabled();
+    }
+
     public void report(ZLinkDispatchFailure error) {
         ZLinkMessageFlowTracer.TracePoint tracePoint = flow.beginDispatchError();
         if (tracePoint == null) {
@@ -52,6 +56,8 @@ public final class ZLinkDispatchErrorReporter {
                         error.sourceRid(),
                         error.spotId(),
                         error.actorId(),
+                        error.meshName(),
+                        error.targetRid(),
                         error.reason(),
                         error.action(),
                         error.errorType(),

@@ -8,6 +8,7 @@
 #include "runtime/actors/actor_client.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/channels/channel_reply_writer.hpp"
+#include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/execution/actor_execution_context.hpp"
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
@@ -3521,7 +3522,6 @@ void verify_logical_multicast_continues_after_one_target_failure ()
     target_descriptor.channels = {{"framework.spot", 100}};
     auto target = std::make_shared<host::public_host_runtime_t> (
       host::host_options_t{mesh::raw_mesh_node_options_t{std::move (target_descriptor)}});
-    auto entry = source->entry_spot ();
     source->start ();
     target->start ();
 
@@ -3551,14 +3551,55 @@ void verify_logical_multicast_continues_after_one_target_failure ()
     assert (fanout_targets.size () >= 2);
     assert (fanout_targets.front ().descriptor.node_routing_id == bytes ("a-unavailable-target"));
 
-    bool tail_failed = false;
-    try {
-        await_task (entry.publish_tail ({zlink::message_t::from (std::string ("payload"))}));
+    auto publisher_state =
+      std::make_shared<zlink::framework::detail::spot_node_builder_state_t> ("m6b-mesh");
+    std::atomic_bool observed_failure{false};
+    std::atomic_int dispatch_error_count{0};
+    std::atomic_int empty_target_count{0};
+    zlink::framework::logging_builder_t logging;
+    logging.use_provider (
+      "logical-multicast-dispatch-error", [&] (const zlink::framework::log_record_t &record) {
+          const auto field = [&] (std::string_view key) -> std::optional<std::string_view> {
+              for (const auto &candidate : record.fields) {
+                  if (candidate.key == key)
+                      return candidate.value;
+              }
+              return std::nullopt;
+          };
+          if (field ("event_id") != "zlink.dispatch_error" || field ("surface") != "spot"
+              || field ("topic") != "reward" || field ("channel") != "framework.spot"
+              || field ("mesh") != "m6b-mesh")
+              return;
+          dispatch_error_count.fetch_add (1, std::memory_order_relaxed);
+          if (!field ("target_rid") || field ("target_rid")->empty ())
+              empty_target_count.fetch_add (1, std::memory_order_relaxed);
+          if (field ("kind") == "send" && field ("outcome") == "failed"
+              && field ("action") == "drop" && field ("reason") == "stale_target"
+              && field ("target_rid") == "a-unavailable-target" && field ("topic") == "reward"
+              && field ("channel") == "framework.spot" && field ("mesh") == "m6b-mesh"
+              && !field ("phase") && !field ("source_rid") && !field ("packet")
+              && !field ("exception") && !field ("error_type") && !field ("error_message")) {
+              observed_failure.store (true, std::memory_order_release);
+          }
+      });
+    zlink::framework::detail::dispatch_options_access_t::set_logger (
+      publisher_state->dispatch, logging.create_logger ("logical-multicast-dispatch-error"));
+    zlink::framework::detail::spot_node_runtime_t publisher_runtime (publisher_state);
+    publisher_runtime.attach_native_node (source);
+    zlink::framework::serializer_registry_t serializers;
+    zlink::framework::spot_publisher_client_t publisher (publisher_runtime.manager (), serializers);
+    const auto publish_terminal =
+      publisher.publish<std::string> ("framework.spot", "reward", "payload").async ().result ();
+    assert (publish_terminal);
+
+    const auto diagnostic_deadline = std::chrono::steady_clock::now () + 5s;
+    while (!observed_failure.load (std::memory_order_acquire)
+           && std::chrono::steady_clock::now () < diagnostic_deadline) {
+        std::this_thread::sleep_for (1ms);
     }
-    catch (const zlink::framework::framework_exception_t &) {
-        tail_failed = true;
-    }
-    assert (tail_failed);
+    assert (observed_failure.load (std::memory_order_acquire));
+    assert (dispatch_error_count.load (std::memory_order_acquire) == 1);
+    assert (empty_target_count.load (std::memory_order_acquire) == 0);
 
     const auto receive_deadline = mesh::service_liveness_registry_t::clock_t::now () + 5s;
     while (

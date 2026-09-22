@@ -20,6 +20,7 @@ import {
 } from '../runtime-values';
 import { ZLinkBufferMessage } from '../runtime-message';
 import type { Message as FrameworkMessage } from '../../../contracts/Common/Message';
+import type { ZLinkDispatchErrorReporter } from '../../channels/dispatch-error-reporter';
 import type {
   MeshOperationId,
   MeshPeerEntry,
@@ -178,6 +179,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   private messageFollowHandler?: (
     record: import('../../foundation/service-stateful-wire-codec').ServiceMessageFollowRecord
   ) => void;
+  private dispatchErrors?: ZLinkDispatchErrorReporter;
   private readonly peerDisconnectedHandlers = new Set<(endpoint: string) => void>();
   constructor(
     private readonly meshName: string,
@@ -226,6 +228,11 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   ): void {
     this.mailboxRecordDropped = handler;
     this.stateful?.setMailboxDropHandler(handler);
+  }
+
+  setDispatchErrorReporter(reporter: ZLinkDispatchErrorReporter): void {
+    this.dispatchErrors = reporter;
+    this.stateful?.setDispatchErrorReporter(reporter, this.meshName);
   }
 
   setProtocolErrorHandler(
@@ -381,6 +388,9 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       descriptor.nodeRoutingId,
       descriptor.lifecycleGeneration
     );
+    if (this.dispatchErrors !== undefined) {
+      this.stateful.setDispatchErrorReporter(this.dispatchErrors, this.meshName);
+    }
     if (this.mailboxRecordDropped !== undefined) {
       this.stateful.setMailboxDropHandler(this.mailboxRecordDropped);
     }
