@@ -712,7 +712,10 @@ The Actor owner host's Relocate uses the §8 barrier. The session owner
 host's Relocate and Shutdown reject new sessions/bindings and process
 accepted callbacks/replies/cleanup up to the
 [deadline](../00-foundation/02-glossary.en.md#deadline), then close the connection. The
-physical connection isn't moved to a different process.
+physical connection isn't moved to a different process. The cleanup of
+the bound Actors of a connection that Shutdown closes is the §7 disconnect
+notification — there is no shutdown-specific unbind path and no remote
+terminal is required.
 
 The internal confirmation condition for the above rule — that two session
 callbacks of the same connection don't run at the same time, and the Actor
