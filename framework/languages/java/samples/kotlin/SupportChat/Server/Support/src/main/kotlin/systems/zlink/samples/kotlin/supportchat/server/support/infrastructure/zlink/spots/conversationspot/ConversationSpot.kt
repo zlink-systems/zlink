@@ -1,9 +1,10 @@
 package systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zlink.spots.conversationspot
 
 import java.time.Duration
-import kotlinx.coroutines.future.await
 import org.slf4j.LoggerFactory
 import systems.zlink.framework.kotlin.ZLinkSuspendingSpot
+import systems.zlink.framework.kotlin.await
+import systems.zlink.framework.kotlin.decode
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.spots.ZLinkSpotActorJoinResult
 import systems.zlink.framework.spots.ZLinkSpotClosingContext
@@ -43,7 +44,7 @@ class ConversationSpot(
     private var idleTimer: ZLinkTimer? = null
 
     override suspend fun onCreateSuspending(request: ZLinkMessage): ZLinkSpotCreateResponse {
-        val create = request.decode(ConversationCreateReq::class.java)
+        val create = request.decode<ConversationCreateReq>()
         val conversationId = context.spotId()
         conversation =
             Conversation(
@@ -89,7 +90,7 @@ class ConversationSpot(
         request: ZLinkMessage,
     ): ZLinkSpotActorJoinResult {
         val conversation = requireConversation()
-        request.decode(JoinConversationReq::class.java)
+        request.decode<JoinConversationReq>()
         pendingJoins += actorId
         return ZLinkSpotActorJoinResult.accept(
             JoinConversationRes(

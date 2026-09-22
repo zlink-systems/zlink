@@ -6,6 +6,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.stereotype.Component
 import systems.zlink.framework.actors.ZLinkActorCreateResult
 import systems.zlink.framework.actors.ZLinkActorManager
+import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.spots.ZLinkSpotManager
 import systems.zlink.samples.kotlin.zoneworld.shared.Messages
@@ -66,25 +67,26 @@ class RelocationProbeService(
             else Messages.ActorLocationProbeRes(actorId, 0, "", "ActorNotFound")
         }
 
-    fun createFresh(actorId: String): CompletionStage<Messages.FreshActorProbeRes> =
-        actors
-            .getOrCreate(actorId, ZoneWorldNames.PLAYER_ACTOR_TYPE)
-            .inMesh(ZoneWorldNames.MESH)
-            .request(ZLinkMessage.empty())
-            .submit()
-            .thenApply { result ->
-                val actor =
-                    when (result) {
-                        is ZLinkActorCreateResult.Created -> result.actor()
-                        is ZLinkActorCreateResult.Existing -> result.actor()
-                        is ZLinkActorCreateResult.Rejected -> null
-                    }
-                actor?.let {
-                    Messages.FreshActorProbeRes(
-                        it.actorId(),
-                        it.objectGeneration(),
-                        it.nodeRid().toString(),
-                    )
-                } ?: Messages.FreshActorProbeRes(actorId, 0, "", "ActorCreateRejected")
+    suspend fun createFresh(actorId: String): Messages.FreshActorProbeRes {
+        val result =
+            actors
+                .kotlin()
+                .getOrCreate(actorId, ZoneWorldNames.PLAYER_ACTOR_TYPE)
+                .inMesh(ZoneWorldNames.MESH)
+                .request(ZLinkMessage.empty())
+                .await()
+        val actor =
+            when (result) {
+                is ZLinkActorCreateResult.Created -> result.actor
+                is ZLinkActorCreateResult.Existing -> result.actor
+                is ZLinkActorCreateResult.Rejected -> null
             }
+        return actor?.let {
+            Messages.FreshActorProbeRes(
+                it.actorId(),
+                it.objectGeneration(),
+                it.nodeRid().toString(),
+            )
+        } ?: Messages.FreshActorProbeRes(actorId, 0, "", "ActorCreateRejected")
+    }
 }

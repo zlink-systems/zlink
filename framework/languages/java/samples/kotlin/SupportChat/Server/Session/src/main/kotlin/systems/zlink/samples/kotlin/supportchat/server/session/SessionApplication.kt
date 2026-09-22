@@ -34,6 +34,7 @@ class SessionApplication {
     fun sessionFramework(topology: SampleTopology): ZLinkFrameworkConfigurer =
         ZLinkFrameworkConfigurer { options ->
             val session = topology.session()
+            // #895: configuration package scanning has no Kotlin form in the spec.
             options.addHandlersFromPackageOf(SessionApplication::class.java)
             options.useCoroutineHandlers(Dispatchers.Default)
             options.configureDispatch { messageFlow(ZLinkMessageFlowLogMode.NORMAL) }
@@ -48,6 +49,7 @@ class SessionApplication {
                 .addStreamNode(SampleNames.StreamNode)
                 .bind(session.streamEndpoint)
                 .enableActorDispatch()
+                // #895: session registration has no Kotlin form in the spec.
                 .registerSession(SupportChatSession::class.java)
             // --8<-- [end:doc-sc-session-register]
         }

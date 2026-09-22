@@ -32,6 +32,7 @@ class ApiServerApplication {
     @Bean
     fun apiFramework(topology: SampleTopology): ZLinkFrameworkConfigurer =
         ZLinkFrameworkConfigurer { options ->
+            // #895: configuration package scanning has no Kotlin form in the spec.
             options.addHandlersFromPackageOf(ApiServerApplication::class.java)
             options.useCoroutineHandlers(Dispatchers.Default)
             options.configureDispatch { messageFlow(ZLinkMessageFlowLogMode.NORMAL) }

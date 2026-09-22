@@ -49,6 +49,7 @@ class OrderWorkflowApplication {
             )
             configurer.useCoroutineHandlers(Dispatchers.Default)
             configurer.configureDispatch { messageFlow(ZLinkMessageFlowLogMode.NORMAL) }
+            // #895: configuration package scanning has no Kotlin form in the spec.
             configurer.addHandlersFromPackageOf(OrderWorkflowApplication::class.java)
             // --8<-- [start:doc-sm-workflow-register]
             configurer

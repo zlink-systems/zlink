@@ -48,6 +48,7 @@ class SupportApplication {
         ZLinkFrameworkConfigurer { options ->
             val support = topology.support()
             val channelEndpoint = URI.create(support.channelEndpoint)
+            // #895: configuration package scanning has no Kotlin form in the spec.
             options.addHandlersFromPackageOf(SupportApplication::class.java)
             options.useCoroutineHandlers(Dispatchers.Default)
             options.configureLocations()
@@ -73,12 +74,14 @@ class SupportApplication {
             node
                 .objects()
                 .server()
+                // #895: entry-spot registration has no Kotlin form in the spec.
                 .addEntrySpot(SupportEntrySpot::class.java)
                 .addActorFactory(
                     SampleNames.SupportActorType,
                     SupportUserActor::class.java,
                     SupportUserActorFactory::class.java,
                 ) { factory ->
+                    // #895: state preservation configuration has no Kotlin form in the spec.
                     factory.preserveStateWith(SupportUserActorRelocationAdapter::class.java)
                 }
                 .addSpotFactory(SampleNames.ConversationSpotType, ConversationSpot::class.java) {

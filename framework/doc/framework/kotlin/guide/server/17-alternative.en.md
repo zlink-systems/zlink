@@ -275,10 +275,9 @@ same time in the first place.
 
 ```kotlin
 // Applying to join a guild — request directly by guild id. No prior lock, no prior creation.
-spots.requestToSpot(guildId, JoinGuildReq(userId))
+spots.kotlin().requestToSpot<JoinGuildRes>(guildId, JoinGuildReq(userId))
     .instanceSpot("guild")
     .inMesh("social")
-    .submit(JoinGuildRes::class.java)
     .await()
 ```
 
@@ -347,14 +346,13 @@ remains.
 // The first request cold-activates the spot keyed on OrderId, and later requests arrive
 // at the same already-created spot, always processed serially in one place (no distributed lock).
 // request is already a StartOrderWorkflowReq body.
-spots.requestToSpot(request.orderId, request)
+spots.kotlin().requestToSpot<StartOrderWorkflowRes>(request.orderId, request)
     .instanceSpot("order-workflow")
     .inMesh("commerce")
-    .submit(StartOrderWorkflowRes::class.java)
     .await()
 
 // Inside an actor handler — push to a client that's still tied to the same actor after reconnect (no sticky LB).
-actor.context().boundSession().send(OrderStatusChanged(orderId, status)).submit().await()
+actor.context().boundSession().kotlin().send(OrderStatusChanged(orderId, status)).await()
 ```
 
 Runnable reference samples: [SupportChat](../../../common/sample/supportchat/README.en.md) ·

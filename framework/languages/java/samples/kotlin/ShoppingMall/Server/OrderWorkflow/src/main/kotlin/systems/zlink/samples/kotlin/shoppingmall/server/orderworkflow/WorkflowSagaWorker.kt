@@ -53,9 +53,7 @@ class WorkflowSagaWorker(
                     .sendToSpot(orderId, RunOrderWorkflowMsg(orderId))
                     .instanceSpot(SampleNames.OrderWorkflowSpotType)
                     .inMesh(SampleNames.OrderWorkflowMesh)
-                    .submit()
-                    .toCompletableFuture()
-                    .join()
+                    .submit_sync()
                 System.err.println("shoppingmall order: advanced order=$orderId")
             } catch (error: RuntimeException) {
                 System.err.println(

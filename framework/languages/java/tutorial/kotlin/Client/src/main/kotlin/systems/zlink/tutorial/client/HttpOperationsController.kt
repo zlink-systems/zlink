@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import jakarta.servlet.http.HttpServletRequest
 import java.io.OutputStream
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.future.await
 import kotlinx.coroutines.withContext
 import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
@@ -14,6 +13,9 @@ import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RestController
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody
 import systems.zlink.framework.channels.ZLinkRouteClient
+import systems.zlink.framework.kotlin.kotlin
+import systems.zlink.framework.kotlin.requestToSpot
+import systems.zlink.framework.kotlin.sendToSpot
 import systems.zlink.tutorial.shared.GetRoomState
 import systems.zlink.tutorial.shared.PostChat
 import systems.zlink.tutorial.shared.RoomState
@@ -21,12 +23,11 @@ import systems.zlink.tutorial.shared.RoomState
 @RestController
 class HttpOperationsController(route: ZLinkRouteClient, private val mapper: ObjectMapper) {
 
-    private val route = route
+    private val route = route.kotlin()
 
     @GetMapping("/rooms/{roomId}/export")
     suspend fun exportRoom(@PathVariable roomId: String): ResponseEntity<StreamingResponseBody> {
-        val state =
-            route.requestToSpot(roomId, GetRoomState()).submit(RoomState::class.java).await()
+        val state = route.requestToSpot<RoomState>(roomId, GetRoomState()).await()
         val body = StreamingResponseBody { output ->
             writeLine(output, RoomLine(roomId, state.title, null))
             state.chat.forEach { message -> writeLine(output, RoomLine(null, null, message)) }
@@ -42,7 +43,7 @@ class HttpOperationsController(route: ZLinkRouteClient, private val mapper: Obje
             while (true) {
                 val line = withContext(Dispatchers.IO) { reader.readLine() } ?: break
                 val message = mapper.readValue(line, PostChat::class.java)
-                route.sendToSpot(roomId, message).submit().await()
+                route.sendToSpot(roomId, message).await()
                 count += 1
             }
         } finally {

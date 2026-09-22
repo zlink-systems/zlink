@@ -36,6 +36,7 @@ class MatchmakingServerApplication {
                         .setKeyPrefix(topology.redisKeyPrefix + "relocation:")
                 )
             )
+            // #895: configuration package scanning has no Kotlin form in the spec.
             options.addHandlersFromPackageOf(MatchmakingServerApplication::class.java)
             options
                 .addRouteMesh(SampleNames.MatchmakingMesh)

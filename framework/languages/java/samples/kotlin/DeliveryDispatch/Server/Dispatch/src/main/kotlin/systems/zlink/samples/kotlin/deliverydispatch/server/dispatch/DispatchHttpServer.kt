@@ -6,9 +6,10 @@ import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
 import java.net.URI
 import java.nio.charset.StandardCharsets
-import kotlinx.coroutines.future.await
 import kotlinx.coroutines.runBlocking
 import systems.zlink.framework.channels.ZLinkClient
+import systems.zlink.framework.kotlin.await
+import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.samples.kotlin.deliverydispatch.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.deliverydispatch.server.configuration.SampleTopology
 import systems.zlink.samples.kotlin.deliverydispatch.shared.contracts.AssignDeliveryMsg
@@ -45,7 +46,7 @@ class DispatchHttpServer(
                 pickupAddress = request.pickupAddress,
                 dropoffAddress = request.dropoffAddress,
             )
-        runBlocking { channels.sendToChannel(SampleNames.DispatchChannel, assign).submit().await() }
+        runBlocking { channels.kotlin().sendToChannel(SampleNames.DispatchChannel, assign).await() }
         exchange.writeJson(200, json.writeValueAsString(CreateDeliveryRes(request.deliveryId)))
     }
 

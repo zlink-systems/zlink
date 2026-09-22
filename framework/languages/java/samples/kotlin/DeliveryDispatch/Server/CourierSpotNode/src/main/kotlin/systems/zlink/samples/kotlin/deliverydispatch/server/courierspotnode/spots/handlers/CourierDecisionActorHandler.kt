@@ -3,6 +3,7 @@ package systems.zlink.samples.kotlin.deliverydispatch.server.courierspotnode.spo
 import systems.zlink.framework.ZLinkMessageContext
 import systems.zlink.framework.channels.ZLinkClient
 import systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpotActorSendHandler
+import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.samples.kotlin.deliverydispatch.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.deliverydispatch.server.courierspotnode.CourierActor
 import systems.zlink.samples.kotlin.deliverydispatch.server.courierspotnode.spots.CourierEntrySpot
@@ -16,6 +17,8 @@ import systems.zlink.samples.kotlin.deliverydispatch.shared.contracts.OfferDeliv
  */
 class CourierDecisionActorHandler(private val channels: ZLinkClient) :
     ZLinkSuspendingEntrySpotActorSendHandler<CourierEntrySpot, CourierActor, CourierDecisionMsg> {
+    private val kotlinChannels = channels.kotlin()
+
     override suspend fun handle(
         entrySpot: CourierEntrySpot,
         actor: CourierActor,
@@ -32,7 +35,7 @@ class CourierDecisionActorHandler(private val channels: ZLinkClient) :
             return
         }
 
-        channels
+        kotlinChannels
             .sendToChannel(
                 SampleNames.DispatchChannel,
                 OfferDeliveryResultMsg(
@@ -43,7 +46,7 @@ class CourierDecisionActorHandler(private val channels: ZLinkClient) :
                     reason = message.reason,
                 ),
             )
-            .submit()
+            .await()
         // --8<-- [end:doc-dd-decision-send]
         println(
             "deliverydispatch courier-actor: decision delivery=${message.deliveryId} " +
