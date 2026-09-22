@@ -5,9 +5,9 @@
 {% block htmltitle %}
   {% if is_zlink_homepage %}
     {% if config.theme.language == "ko" %}
-      <title>ZLink — 게임 서버 엔진 없이 만드는 실시간 메시징 프레임워크</title>
+      <title>ZLink — 게임 서버 엔진 역할을 하는 실시간 메시징 프레임워크</title>
     {% else %}
-      <title>ZLink — Real-Time Messaging Framework Without a Game Server Engine</title>
+      <title>ZLink — Real-Time Messaging Framework and Game Server Engine</title>
     {% endif %}
   {% else %}
     {{ super() }}
@@ -33,7 +33,7 @@
           {
             "@type": "WebSite",
             "@id": "https://zlink.systems/#website",
-            "name": "ZLink",
+            "name": {% if config.theme.language == "ko" %}{{ "ZLink — 게임 서버 엔진 역할을 하는 실시간 메시징 프레임워크" | tojson }}{% else %}{{ "ZLink — Real-Time Messaging Framework and Game Server Engine" | tojson }}{% endif %},
             "alternateName": "zlink",
             "url": "https://zlink.systems/",
             "description": {{ config.site_description | tojson }},

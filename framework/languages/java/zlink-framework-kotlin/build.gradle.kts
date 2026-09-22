@@ -1,3 +1,5 @@
+import dev.detekt.gradle.Detekt
+
 plugins {
     `java-library`
     `maven-publish`
@@ -17,3 +19,29 @@ dependencies {
     testImplementation(project(":zlink-framework-spring-boot-starter"))
     testImplementation(project(":zlink-framework-testkit"))
 }
+
+val detektMain = tasks.named<Detekt>("detektMain")
+val detektNegative =
+    tasks.register<Detekt>("detektNegative") {
+        description = "Verifies that every forbidden Kotlin Java terminal fixture is detected."
+        group = LifecycleBasePlugin.VERIFICATION_GROUP
+        setSource(layout.projectDirectory.dir("src/detektNegative/kotlin"))
+        classpath.setFrom(detektMain.map { it.classpath })
+        config.setFrom(detektMain.map { it.config })
+        ignoreFailures.set(true)
+        reports {
+            checkstyle.required.set(true)
+            html.required.set(false)
+            sarif.required.set(false)
+            markdown.required.set(false)
+        }
+        doLast {
+            val report = reports.checkstyle.outputLocation.get().asFile
+            val findings = report.useLines { lines -> lines.count { "<error " in it } }
+            check(findings == 29) {
+                "Expected 29 forbidden Kotlin Java terminal findings, but Detekt reported $findings"
+            }
+        }
+    }
+
+tasks.named("check") { dependsOn(detektNegative) }

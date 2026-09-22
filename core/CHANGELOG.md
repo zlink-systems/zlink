@@ -12,6 +12,18 @@ Libraries` workflow for a `core/vX.Y.Z` tag embeds that version's section.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-09-23
+
+The public C API and ABI are unchanged from 1.3.0
+(`LIBZLINK_ABI_SOVERSION=0`).
+
+### Fixed
+
+- The macOS release dylibs remove CMake's absolute `LC_RPATH` entries and add
+  `@loader_path` instead. The build and package verification now reject any
+  non-relative `LC_RPATH`, preventing a build-machine path from reaching a
+  published archive (#962).
+
 ## [1.3.0] - 2026-09-22
 
 The public C API and ABI are unchanged from 1.2.0

@@ -1,11 +1,18 @@
-# ZLink Java And Kotlin Samples
-
-This directory contains Java and Kotlin samples for the published
+This directory contains samples for the published
 `zlink-framework-*` package version (see `gradle/zlink-sample-dependencies.settings.gradle.kts`'s
-`zlink.frameworkVersion` default). Java samples are under `java/`, Kotlin
-samples are under `kotlin/`, and both languages implement the same seven
-sample scenarios defined by the
-[common sample documents](../../../doc/framework/common/sample/README.ko.md).
+`zlink.frameworkVersion` default). The seven sample scenarios are defined by the
+[common sample documents](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/sample/README.ko.md).
+
+<!-- zlink-lang: java -->
+# ZLink Java Samples
+
+Java samples are under `java/`.
+<!-- zlink-lang: end -->
+<!-- zlink-lang: kotlin -->
+# ZLink Kotlin Samples
+
+Kotlin samples are under `kotlin/`.
+<!-- zlink-lang: end -->
 
 한국어: [`README.ko.md`](./README.ko.md)
 
@@ -36,8 +43,13 @@ JDK 25 above is the only runtime either one needs.
 
 ## Download and install
 
-Clone the `zlink-java-examples` repository and run from its `samples/`
-directory; it builds against the published `zlink-framework-*` packages from
+<!-- zlink-lang: java -->
+Clone `zlink-java-examples` and run from its `samples/` directory.
+<!-- zlink-lang: end -->
+<!-- zlink-lang: kotlin -->
+Clone `zlink-kotlin-examples` and run from its `samples/` directory.
+<!-- zlink-lang: end -->
+It builds against the published `zlink-framework-*` packages from
 Maven Central (version: see
 `zlink.frameworkVersion`'s default in
 `gradle/zlink-sample-dependencies.settings.gradle.kts`). There is nothing
@@ -70,7 +82,7 @@ running any scenario:
 
 Every sample root owns a `run_sample.sh` and a `run_sample.ps1`, and one
 invocation runs one sample end to end. The
-[common sample document](../../../doc/framework/common/sample/README.ko.md)
+[common sample document](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/sample/README.ko.md)
 owns this rule in its "The Sample Run Script And Redis Isolation Standard"
 section. Redis needs no separate setup: each script starts and removes its
 own container (see "Prerequisites" — Docker is the only requirement).
@@ -79,6 +91,7 @@ Linux/WSL:
 
 **Linux · macOS · WSL — bash**
 
+<!-- zlink-lang: java -->
 ```bash title="linux"
 ./java/Bingo/run_sample.sh
 ./java/DeliveryDispatch/run_sample.sh
@@ -87,6 +100,10 @@ Linux/WSL:
 ./java/SupportChat/run_sample.sh
 ./java/TicTacToe/run_sample.sh
 ./java/ZoneWorld/run_sample.sh
+```
+<!-- zlink-lang: end -->
+<!-- zlink-lang: kotlin -->
+```bash title="linux"
 ./kotlin/Bingo/run_sample.sh
 ./kotlin/DeliveryDispatch/run_sample.sh
 ./kotlin/GameQuest/run_sample.sh
@@ -95,11 +112,13 @@ Linux/WSL:
 ./kotlin/TicTacToe/run_sample.sh
 ./kotlin/ZoneWorld/run_sample.sh
 ```
+<!-- zlink-lang: end -->
 
 Windows:
 
 **Windows — PowerShell 7**
 
+<!-- zlink-lang: java -->
 ```powershell title="windows"
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\java\Bingo\run_sample.ps1
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\java\DeliveryDispatch\run_sample.ps1
@@ -108,6 +127,10 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\java\ShoppingMall\run_sample.ps1
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\java\SupportChat\run_sample.ps1
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\java\TicTacToe\run_sample.ps1
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\java\ZoneWorld\run_sample.ps1
+```
+<!-- zlink-lang: end -->
+<!-- zlink-lang: kotlin -->
+```powershell title="windows"
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\kotlin\Bingo\run_sample.ps1
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\kotlin\DeliveryDispatch\run_sample.ps1
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\kotlin\GameQuest\run_sample.ps1
@@ -116,6 +139,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\kotlin\SupportChat\run_sample.ps
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\kotlin\TicTacToe\run_sample.ps1
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\kotlin\ZoneWorld\run_sample.ps1
 ```
+<!-- zlink-lang: end -->
 
 ## Verify
 
@@ -164,28 +188,32 @@ success.
 | `ShoppingMall` | Channel service selection, order workflow, event streams, projections, and fanout events | Redis location store |
 | `ZoneWorld` | Gateway, two ZoneNodes, and Ops roles: Actor transfer across zones, zone Logical Multicast, Node direct operations, and runtime events | Redis location store |
 
-Both language directories contain these seven sample roots. Their internal file
-layouts follow each language and are not required to be identical:
+Each language directory contains these seven sample roots. Its internal file layout may differ.
 
+<!-- zlink-lang: java -->
 ```text
-samples/
-|-- java/
-|   |-- Bingo/
-|   |-- DeliveryDispatch/
-|   |-- GameQuest/
-|   |-- ShoppingMall/
-|   |-- SupportChat/
-|   |-- TicTacToe/
-|   `-- ZoneWorld/
-`-- kotlin/
-    |-- Bingo/
-    |-- DeliveryDispatch/
-    |-- GameQuest/
-    |-- ShoppingMall/
-    |-- SupportChat/
-    |-- TicTacToe/
-    `-- ZoneWorld/
+samples/java/
+|-- Bingo/
+|-- DeliveryDispatch/
+|-- GameQuest/
+|-- ShoppingMall/
+|-- SupportChat/
+|-- TicTacToe/
+`-- ZoneWorld/
 ```
+<!-- zlink-lang: end -->
+<!-- zlink-lang: kotlin -->
+```text
+samples/kotlin/
+|-- Bingo/
+|-- DeliveryDispatch/
+|-- GameQuest/
+|-- ShoppingMall/
+|-- SupportChat/
+|-- TicTacToe/
+`-- ZoneWorld/
+```
+<!-- zlink-lang: end -->
 
 The common sample documents own workflow and message contracts. An individual
 sample README is present only when that language needs additional setup,

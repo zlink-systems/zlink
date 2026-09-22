@@ -99,6 +99,29 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
     }
 
     @Test
+    void zljrGeneratedCodecRoundTripsRequestAndReplyAboveOneMib() throws Exception {
+        var canonical = ServiceWirePilotCodec.decodeZljrRecordV1(canonicalObject("zljr-v1.json"));
+        byte[] request = new byte[1024 * 1024 + 1];
+        byte[] reply = new byte[1024 * 1024 + 1];
+        Arrays.fill(request, (byte) 0x5a);
+        Arrays.fill(reply, (byte) 0xa5);
+        var large =
+                new ServiceWirePilotCodec.ZljrRecordV1(
+                        canonical.source(),
+                        canonical.operation(),
+                        canonical.metadata(),
+                        request,
+                        reply);
+
+        var restored =
+                ServiceWirePilotCodec.decodeZljrRecordV1(
+                        ServiceWirePilotCodec.encodeZljrRecordV1(large));
+
+        assertArrayEquals(request, restored.request());
+        assertArrayEquals(reply, restored.reply());
+    }
+
+    @Test
     void zljrRuntimeAndGeneratedCodecsRejectTheSameMalformedGoldens() throws Exception {
         for (byte[] bytes : array("zljr-v1.json", "malformed")) {
             assertTrue(runtimeZljrRejects(bytes));

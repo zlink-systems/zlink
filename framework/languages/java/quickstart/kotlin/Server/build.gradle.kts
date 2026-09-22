@@ -11,6 +11,7 @@ kotlin {
 dependencies {
     implementation(project(":kotlin:Shared"))
     implementation(libs.zlink.framework.core)
+    implementation(libs.zlink.framework.kotlin)
     // DI and lifecycle registration (EnableZLinkFramework). This process exposes no HTTP, so
     // plain spring-boot-starter is enough — no embedded web server starts.
     implementation(libs.zlink.framework.spring.boot.starter)

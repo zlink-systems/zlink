@@ -12,6 +12,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import org.slf4j.LoggerFactory
 import systems.zlink.framework.channels.ZLinkRouteClient
+import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.kotlin.ZLinkSuspendingSpot
 import systems.zlink.framework.kotlin.await
 import systems.zlink.framework.kotlin.decode
@@ -172,11 +173,14 @@ class BingoRoomSpot(
         }
         timer =
             context
-                .addTimer(
+                .addTimer<BingoRoomTimerHandler>(
                     "bingo-draw",
                     Duration.ofMillis(settings.drawPeriodMillis),
-                    BingoRoomTimerHandler::class.java,
-                    null,
+                    systems.zlink.framework.spots.ZLinkTimerOptions(
+                        systems.zlink.framework.spots.ZLinkTimerOverrunPolicy.SKIP_LATE_TICKS,
+                        1,
+                        false,
+                    ),
                 )
                 .await()
     }
@@ -249,9 +253,11 @@ class BingoRoomSpot(
         publishEvents(change.events, actors::get)
         publishWinner(change)
         leaveFinishedActors(change)
+        // --8<-- [start:doc-relocation-ready]
         if (change.state.status == BingoRoomGame.Finished) {
             context.relocationReady().defer()
         }
+        // --8<-- [end:doc-relocation-ready]
     }
 
     // --8<-- [end:doc-bingo-draw-timer]
@@ -370,6 +376,7 @@ class BingoRoomSpot(
         // --8<-- [start:doc-bingo-reward-publish]
         context
             .outbound()
+            .kotlin()
             .publish(
                 SampleNames.RoomRewardChannel,
                 SampleNames.WinnerTopic,
@@ -382,8 +389,6 @@ class BingoRoomSpot(
                     "Legendary",
                 ),
             )
-            // #895: Spot outbound fanout has no Kotlin wrapper in the spec.
-            .submit()
             .await()
         // --8<-- [end:doc-bingo-reward-publish]
     }

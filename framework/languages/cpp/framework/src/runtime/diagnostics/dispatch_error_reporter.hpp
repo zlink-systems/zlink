@@ -11,10 +11,14 @@
 #include "runtime/diagnostics/message_flow_tracer.hpp"
 
 #include <atomic>
+#include <array>
 #include <cstdint>
 #include <exception>
+#include <cstddef>
+#include <regex>
 #include <string>
 #include <string_view>
+#include <typeinfo>
 #include <utility>
 #include <vector>
 
@@ -44,6 +48,12 @@ class dispatch_error_reporter_t
             && !dispatch_options_access_t::has_dispatch_error_observer (*_options))
             return;
         reported_count ().fetch_add (1, std::memory_order_relaxed);
+        if (event.exception) {
+            auto error = exception_summary (event.exception);
+            event.error_type = std::move (error.type);
+            event.error_message = std::move (error.message);
+            event.exception = {};
+        }
         if (event.flow_id.has_value () != event.flow_origin.has_value ()) {
             event.flow_id.reset ();
             event.flow_origin.reset ();
@@ -116,27 +126,48 @@ class dispatch_error_reporter_t
     }
 
   private:
-    static std::string exception_summary (const std::exception_ptr &exception)
+    static constexpr std::size_t error_message_max_length = 512;
+
+    struct exception_summary_t
+    {
+        std::string type;
+        std::string message;
+    };
+
+    static exception_summary_t exception_summary (const std::exception_ptr &exception)
     {
         if (!exception)
             return {};
-        std::string summary;
+        exception_summary_t summary;
         try {
             std::rethrow_exception (exception);
         }
         catch (const std::exception &error) {
-            summary = error.what ();
+            summary.type = typeid (error).name ();
+            summary.message = error.what ();
         }
         catch (...) {
-            summary = "non-standard exception";
+            summary.type = "non-standard exception";
+            summary.message = "non-standard exception";
         }
-        for (auto &character : summary) {
-            if (character == '\n' || character == '\r' || character == '\t')
-                character = ' ';
+        const auto line_end = summary.message.find_first_of ("\r\n");
+        if (line_end != std::string::npos)
+            summary.message.resize (line_end);
+        static const std::array<std::pair<std::regex, std::string>, 4> credential_patterns{
+          std::pair{std::regex (R"(Authorization\s*:\s*(?:(?:Bearer|Basic)\s+)?[^\s,;]+)",
+                                std::regex_constants::icase),
+                    std::string ("Authorization: <redacted>")},
+          std::pair{std::regex (R"(Bearer\s+[^\s,;]+)", std::regex_constants::icase),
+                    std::string ("Bearer <redacted>")},
+          std::pair{std::regex (R"(password\s*=\s*[^\s,;]+)", std::regex_constants::icase),
+                    std::string ("password=<redacted>")},
+          std::pair{std::regex (R"(token\s*=\s*[^\s,;]+)", std::regex_constants::icase),
+                    std::string ("token=<redacted>")}};
+        for (const auto &[pattern, replacement] : credential_patterns) {
+            summary.message = std::regex_replace (summary.message, pattern, replacement);
         }
-        constexpr std::size_t maximum_length = 256;
-        if (summary.size () > maximum_length)
-            summary.resize (maximum_length);
+        if (summary.message.size () > error_message_max_length)
+            summary.message.resize (error_message_max_length);
         return summary;
     }
 
@@ -203,8 +234,11 @@ class dispatch_error_reporter_t
             if (event.activation_state) {
                 add ("activation_state", *event.activation_state);
             }
-            if (event.exception) {
-                add ("exception", exception_summary (event.exception));
+            if (event.error_type) {
+                add ("error_type", *event.error_type);
+            }
+            if (event.error_message) {
+                add ("error_message", *event.error_message);
             }
             // Structured fields through the configured framework logger.
             diagnostic_event_sink_t::log_if_configured (

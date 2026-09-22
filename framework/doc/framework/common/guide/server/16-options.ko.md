@@ -5,7 +5,7 @@
     무엇을 정할 수 있는지, 정하지 않으면 어떤 값으로 동작하는지, 시작한 뒤에 바꿀 수 있는
     값이 무엇인지 안다.
 
-옵션의 이름과 기본값은 다섯 언어가 같다. 언어마다 다른 것은 표기와 지정 방법이며 각 절의
+옵션의 이름과 기본값은 지원 언어에서 같다. 언어마다 다른 것은 표기와 지정 방법이며 각 절의
 탭이 그것을 보여준다. **대부분의 옵션은 지정하지 않아도 동작한다.** 바꿀 이유가 생겼을 때
 해당 줄의 기본값을 확인하고, 그전에는 그대로 사용한다.
 
@@ -103,20 +103,19 @@ host가 시작된 뒤에 builder를 다시 호출하는 표면은 없다. 잘못
   연결을 받는다. `AdvertiseHost`는
   peer가 실제로 dial하고 Location Store에 게시할 주소다. wildcard bind에서는 단일 machine 예제처럼
   `127.0.0.1`을 지정한다. 여러 host, container, NAT, Kubernetes에서는 그 node에 도달 가능한 IP 또는
-  DNS를 지정하며, Kubernetes에서는 Pod IP 또는 pod별 DNS를 사용한다. 생략하면
-  [Network listener identity §2.1](../../../common/spec/server/02-channel-transport/04-network-listener-identity.ko.md#21-기본값)의
-  규칙대로 non-wildcard bind host 또는 wildcard의 같은 address family loopback을 광고한다. advertised
+  DNS를 지정하며, Kubernetes에서는 Pod IP 또는 pod별 DNS를 사용한다. `AdvertiseHost`를 생략하면
+  non-wildcard bind host를 광고하고, wildcard bind에는 같은 address family의 loopback을 사용한다. advertised
   host에는 wildcard를 지정할 수 없다. [Channel 메시징](20-channel-messaging.ko.md#32-받는-쪽--channel을-담당하는-node)의
   언어별 mesh 등록 code block은 각 언어의 실제 option 표면을 보인다.
 - **STREAM 압축은 켜진 상태로 시작한다.** 끄려면 압축 설정에서 명시적으로 끈다.
-- **CPU worker 풀에는 대기열 상한이 없다.** 유입을 제한하는 것은 Application job queue다(§3).
+- **CPU worker 풀에는 대기열 상한이 없다.** 유입을 제한하는 것은 [Core HWM과 Application job queue 상한](#3-core-hwm과-application-job-queue-상한)이다.
   `DefaultRequestTimeout`은 `0` 이하를 거부한다.
 
 ## 3. Core HWM과 Application job queue 상한
 
 Core HWM은 ordinary queue가 보유한 byte를, Application job queue는 handler 시작을 기다리는 job
 수를 host 전체에서 제한한다. 두 상한의 동작은
-[Backpressure](33-backpressure.ko.md#1-core-hwm과-application-job-queue)가 다룬다.
+[Backpressure — Core HWM과 Application job queue](33-backpressure.ko.md#2-core-hwm과-application-job-queue)가 다룬다.
 
 | 옵션 | 무엇을 정하나 | 기본값 |
 | --- | --- | --- |
@@ -146,11 +145,6 @@ handler가 없는 packet이 도착했을 때의 동작도 같은 자리에서 �
 오류 응답 동작을 지정할 수 없다. 이 설정은 C++에 없으며 기본 동작만 적용된다. 수준별로
 무엇이 남는지는 [모니터링](26-monitoring.ko.md#4-진단-수준-정하기)이 다룬다.
 
-!!! warning "message 크기 기록의 기본값은 JVM에서만 다르다"
-
-    Java와 Kotlin은 `IncludeMessageSizes`가 켜진 상태로 시작하고 나머지 언어는 꺼진 상태로
-    시작한다. 언어를 섞은 구성에서 기록의 양을 맞추려면 값을 명시한다.
-
 ## 5. MeshNode 옵션
 
 | 옵션 | 무엇을 정하나 | 기본값 |
@@ -158,7 +152,7 @@ handler가 없는 packet이 도착했을 때의 동작도 같은 자리에서 �
 | `Listen` | 다른 node가 접속할 자기 주소 | 지정해야 한다 |
 | `BindHost` · `AdvertiseHost` | 이 node만의 bind · 광고 주소 | 루트 값 |
 | `RoutingId` · `RoutingIdPrefix` | 이 node의 식별자 | 자동 생성 |
-| `ObjectRole` | Spot · Actor 배치 참여 여부 | 아래 주의 |
+| `ObjectRole` | Spot · Actor 배치 참여 여부 | `None` |
 | `PlacementWeight` | 새 배치 대상으로 선택되는 비중. 범위는 `0..10000` | 100 |
 | `ActorLimit` · `SpotLimit` | 이 node가 동시에 담을 수 있는 상한 | `0` — 제한 없음 |
 | `ActivationConcurrency` | 동시에 진행할 cold activation 수 | 128 |
@@ -168,11 +162,6 @@ handler가 없는 packet이 도착했을 때의 동작도 같은 자리에서 �
 
 두 limit의 `0`은 제한 없음이고 양수는 `1..2,147,483,647`이다. `ActivationConcurrency`는 반대로
 `0`을 거부한다 — object 수가 아니라 동시에 진행되는 활성화를 제한하는 값이기 때문이다.
-
-!!! warning "배치 참여의 기본값은 C++만 다르다"
-
-    C++은 `ObjectRole`을 지정하지 않으면 배치를 받는 `Server`로 시작하고 나머지 언어는
-    배치에 참여하지 않는다. Spot과 Actor를 두지 않을 node라면 C++에서는 역할을 명시한다.
 
 ## 6. 송신 대기와 socket 상한
 
@@ -280,7 +269,7 @@ STREAM node마다 한 번만 활성화하며 두 번 호출하면 오류가 난�
 
 두 값의 범위는 `0..10000`이고 기본값은 100이다. `0`으로 두면 **새 배정만 멈춘다** — 이미 있는
 object와 연결은 유지된다. 무중단 배포에서 이 node로 새 트래픽이 가지 않게 한 뒤 relocation을
-시작하는 순서로 사용한다([운영과 lifecycle](12-operations.ko.md#4-운영-호출과-readiness-연결)).
+시작하는 순서로 사용한다([운영과 lifecycle](12-operations.ko.md#5-운영-호출과-readiness-연결)).
 
 ## 10. 반드시 지정하는 값
 

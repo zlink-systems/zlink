@@ -18,15 +18,12 @@ View in another language — [C++](../../../cpp/guide/server/23-stream.en.md) ·
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-This chapter quotes code from the tutorial's [`Server` and `StreamClient` directories and its Run section](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.md#run); bootstrapping and building that tree reproduces the results below.
-
-A client that reaches a STREAM node uses its language's stream connector. [Client stream connector](../../../install.en.md#client-stream-connector) covers installation for Unity, Unreal, browser, Node, .NET, Java, and C++ clients, and the [stream connector guide](../stream-connector/README.en.md) for that language covers connection and packet handling.
-
 !!! info "What you get from this chapter"
 
     You can let a program outside the mesh attach over one connection, send requests and
-    receive answers. The code in this chapter runs as it stands in
-    `framework/languages/java/tutorial/java`.
+    receive answers. The code comes from the [tutorial README in the examples repository](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.md); follow its Download, Build, and Run sections to reproduce the results below.
+
+A client that reaches a STREAM node uses its language's stream connector. [Client stream connector](../../../install.en.md#client-stream-connector) covers installation for Unity, Unreal, browser, Node, .NET, Java, and C++ clients, and the [stream connector guide](../stream-connector/README.en.md) for that language covers connection and packet handling.
 
 Every call so far ran between nodes inside the mesh. A game client or an app is outside it and
 references no Framework at all. **STREAM is where such a program attaches**, and while the one
@@ -34,11 +31,12 @@ connection is open both sides send to each other. This chapter goes as far as ac
 connection and answering one packet; binding that connection to an Actor is covered by
 [Session and Actor](24-actor-session.en.md).
 
-## 1. The Problem STREAM Solves
+## 1. The Role of STREAM
 
-Channels, Spots and Actors are all **paths called from inside the mesh**. The caller has to be a
-member of the mesh and to reference the Framework. A client running on a player's device meets
-neither condition.
+STREAM is the boundary where a client outside the mesh exchanges packets with it over one
+connection. Channels, Spots and Actors are all **paths called from inside the mesh**. The caller
+has to be a member of the mesh and to reference the Framework. A client running on a player's
+device meets neither condition.
 
 STREAM narrows that boundary to a single connection. The client needs one address and the packet
 names, and it never learns how many nodes the mesh has.
@@ -147,8 +145,8 @@ connection to an Actor — covered by [Session and Actor](24-actor-session.en.md
 - Binding a connection to an entity — [Session and Actor](24-actor-session.en.md)
 - State objects called by id — [Spot](21-spot.en.md) · [Actor](22-actor.en.md)
 - The whole session lifecycle and its options — [STREAM](23-stream.en.md)
-- A running version of this chapter's code — `framework/languages/java/tutorial/java`
+- A running version of this chapter's code — [the tutorial README in the examples repository](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

@@ -18,20 +18,15 @@ View in another language — [C++](../../../cpp/guide/server/31-handler-dispatch
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-This chapter quotes code from the tutorial's `Server` and `Client` directories and the `Bingo`, `DeliveryDispatch`, `TicTacToe`, and `ZoneWorld` sample directories. Bootstrap and build the corresponding tree for each language to reproduce the handler registration and dispatch examples below.
-
 !!! info "What you get from this chapter"
 
     You can work with what applies across many handlers at once — packet names,
-    filters, and codecs. This chapter's code comes from the repository's
-    tutorials and samples.
+    filters, and codecs. The code comes from the [tutorial](https://github.com/zlink-systems/zlink-dotnet-examples/blob/main/tutorial/README.md) and the [`Bingo`](https://github.com/zlink-systems/zlink-dotnet-examples/blob/main/samples/Bingo/README.md), [`DeliveryDispatch`](https://github.com/zlink-systems/zlink-dotnet-examples/blob/main/samples/DeliveryDispatch/README.md), [`TicTacToe`](https://github.com/zlink-systems/zlink-dotnet-examples/blob/main/samples/TicTacToe/README.md), and [`ZoneWorld`](https://github.com/zlink-systems/zlink-dotnet-examples/blob/main/samples/ZoneWorld/README.md) sample READMEs in the examples repository; follow each README's Download, Build, and Run sections to reproduce handler registration and dispatch.
 
 [Channel Messaging](20-channel-messaging.en.md) covered the path from writing one handler to
 calling it. This chapter covers **what applies across many handlers**: the variations on
 registration, the filter that collects shared processing, and the codec that turns a payload
 into bytes.
-
-This chapter's code comes from the repository's tutorials and samples.
 
 ## 1. Variations on Handler Registration
 
@@ -385,5 +380,5 @@ member Actors is valid.
 - Observing dispatch failures — [Monitoring](26-monitoring.en.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

@@ -18,12 +18,11 @@ title: "활성화와 수명 · Kotlin"
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-이 장은 `TicTacToe` 샘플의 `Server` 디렉터리에서 코드를 인용한다. 해당 언어 sample tree를 bootstrap하고 build하면 아래 활성화와 수명 예제를 실제 코드에서 확인할 수 있다.
-
 !!! info "이 장을 읽고 나면"
 
     Spot 종류마다 언제 만들어지고 어떤 callback을 받는지, 그리고 그 안에 주입한 서비스가
-    얼마나 사는지 알 수 있다. 이 장의 코드는 TicTacToe 샘플에서 가져왔다.
+    얼마나 사는지 알 수 있다.
+    이 장의 코드는 [언어별 예제 저장소의 TicTacToe 샘플](https://github.com/zlink-systems/zlink-kotlin-examples/tree/main/samples/TicTacToe)에서 가져온다.
 
 [Spot](21-spot.ko.md)은 **application이 명시적으로 만드는 Spot**을 다뤘다. 이 장은
 나머지 종류와의 차이, 종류마다 받는 lifecycle callback, 그리고 Spot이 살아 있는 동안 유지되는
@@ -87,19 +86,22 @@ lifecycle을 처리한다.
 --8<-- "framework/languages/java/samples/kotlin/TicTacToe/Server/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/server/play/infrastructure/zlink/spots/entryspot/PlayEntrySpot.kt:doc-entry-spot"
 ```
 
+이 코드에서 Entry Spot은 Actor 생성 승인과 소멸에 필요한 lifecycle callback을 제공한다.
+
 ### 3.1 Entry Spot이 담지 않는 것
 
 **Entry Spot에는 Actor별 상태를 두지 않는다.** Actor의 상태는 Actor가 소유하고, Entry Spot은
 handler와 membership callback만 제공한다. Entry Spot은 Object Server마다 하나뿐이므로 여기에
 Actor마다의 값을 쌓으면 그 Object Server가 다루는 Actor 수만큼 자란다.
 
-### 3.2 Actor를 없애는 자리
+### 3.2 Actor의 생성과 소멸은 Entry Spot에서 진행된다
 
-**Actor는 Entry Spot에서만 없앨 수 있다.** User Spot에 있는 Actor는 먼저 Entry Spot으로
-돌아와야 한다 — [Actor membership](35-actor-membership.ko.md)이 그 이동을 다룬다.
+Actor 생성 요청은 Entry Spot이 승인하거나 거절한다. Actor를 소멸시키는 호출도 Entry Spot context가
+제공한다. User Spot에 있는 Actor는 먼저 Entry Spot으로 돌아온 뒤 소멸시킨다. 그 이동은 Actor의
+[membership](35-actor-membership.ko.md)이 처리한다.
 
-없애는 호출은 Entry Spot의 context가 제공하며, 지금 instance를 넘긴다. 이 호출은 membership
-callback을 다시 실행하지 않고 Framework의 등록 기록과 묶인 session 경로를 정리한다.
+소멸 호출은 현재 instance를 받고 membership callback을 다시 실행하지 않는다. Framework의 등록 기록과
+묶인 session 경로를 정리한다.
 
 ## 4. User Spot — application이 만드는 자리
 
@@ -109,6 +111,8 @@ stable type을 지정해 만들며, 돌아오는 id가 그 뒤 모든 호출의 
 ```kotlin
 --8<-- "framework/languages/java/samples/kotlin/TicTacToe/Server/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/server/api/handlers/CreateGameHttpHandler.kt:doc-create"
 ```
+
+이 호출이 돌려준 id가 이후 User Spot을 호출하는 주소가 된다.
 
 ## 5. 주입한 서비스의 수명
 
@@ -145,5 +149,5 @@ scope를 가지므로 ORM을 생성자로 받아도 된다 —
 - 실행 위치를 옮기는 것 — [Relocation](37-relocation.ko.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

@@ -40,7 +40,7 @@ Stored creation intent의 재개 범위와 steady `Ready` owner 실패의 구분
 Kotlin은 Java `ZLinkSpotRelocationAdapter<TSpot>`를 그대로 구현한다. Opaque `byte[]`는 `ByteArray`로 보이고
 `capture`와 `restore`는 Java 계약과 같은 `CompletionStage`를 반환한다. 별도 suspending Spot adapter,
 `TState`, `stateContractId`, state class와 `ZLinkMessage` relocation surface는 제공하지 않는다. State 보존 factory는
-`preserveStateWith(SpotAdapter::class.java)`를 사용하고 factory target과 adapter type은 socket bind
+`preserveStateWith<SpotAdapter>()`를 사용하고 factory target과 adapter type은 socket bind
 전에 검증한다.
 
 State를 보존하는 whole User Spot relocation은 Spot 자체에 Spot adapter를, member Actor마다 Actor adapter를 사용한다.
@@ -64,10 +64,12 @@ context만 받고 별도 Framework cancellation 타입을 사용하지 않는다
 bridge coroutine을 cancel하며 callback은 coroutine cancellation을 그대로 따른다. Actor별 closing callback은
 제공하지 않는다.
 
+Spot registry와 context의 등록은 [Kotlin 구성](configuration-host.ko.md)의 등록 규칙을 따른다.
+
 ## Kotlin source signature
 
 ```kotlin
-interface ZLinkSuspendingSpotPacketHandler<TSpot : ZLinkSpot<*>, TMessage> {
+interface ZLinkSuspendingSpotPacketHandler<TSpot : Any, TMessage> {
  suspend fun handle(spot: TSpot, message: TMessage)
  suspend fun handle(
  spot: TSpot,
@@ -150,6 +152,26 @@ abstract class ZLinkSuspendingInstanceSpot : ZLinkInstanceSpot {
 
 inline fun <reified THandler : Any> ZLinkSpotHandlerRegistry.addHandler()
 
+inline fun <reified THandler : Any> ZLinkInstanceSpotHandlerRegistry.addPacket()
+
+inline fun <reified THandler : Any> ZLinkEntrySpotContext.addTimer(
+ name: String,
+ period: Duration,
+ options: ZLinkTimerOptions,
+): CompletionStage<ZLinkTimer>
+
+inline fun <reified THandler : Any> ZLinkSpotContext.addTimer(
+ name: String,
+ period: Duration,
+ options: ZLinkTimerOptions,
+): CompletionStage<ZLinkTimer>
+
+inline fun <reified THandler : Any> ZLinkInstanceSpotContext.addTimer(
+ name: String,
+ period: Duration,
+ options: ZLinkTimerOptions,
+): CompletionStage<ZLinkTimer>
+
 interface ZLinkKotlinSpotSendCall {
  fun metadata(key: String, value: String): ZLinkKotlinSpotSendCall
  fun instanceSpot(): ZLinkKotlinSpotSendCall
@@ -158,7 +180,7 @@ interface ZLinkKotlinSpotSendCall {
  suspend fun await()
 }
 
-interface ZLinkKotlinSpotRequestCall<TReply> {
+interface ZLinkKotlinSpotRequestCall<TReply : Any> {
  fun metadata(key: String, value: String): ZLinkKotlinSpotRequestCall<TReply>
  fun instanceSpot(): ZLinkKotlinSpotRequestCall<TReply>
  fun instanceSpot(stableType: String): ZLinkKotlinSpotRequestCall<TReply>
@@ -189,10 +211,44 @@ fun ZLinkKotlinRouteClient.sendToSpot(
  message: Any,
 ): ZLinkKotlinSpotSendCall
 
-inline fun <reified TReply> ZLinkKotlinRouteClient.requestToSpot(
+inline fun <reified TReply : Any> ZLinkKotlinRouteClient.requestToSpot(
  spotId: String,
  request: Any,
 ): ZLinkKotlinSpotRequestCall<TReply>
+
+fun <TReply : Any> ZLinkKotlinRouteClient.requestToSpot(
+ spotId: String,
+ request: Any,
+ replyType: KClass<TReply>,
+): ZLinkKotlinSpotRequestCall<TReply>
+
+interface ZLinkKotlinSpotOutbound {
+ fun sendToSpot(spotId: String, message: Any): ZLinkKotlinSpotSendCall
+ fun <TReply : Any> requestToSpot(
+ spotId: String,
+ request: Any,
+ replyType: KClass<TReply>,
+ ): ZLinkKotlinSpotRequestCall<TReply>
+ fun publish(channelName: String, topic: String, message: Any): ZLinkKotlinSubmissionCall
+ fun sendToChannel(channelName: String, message: Any): ZLinkKotlinMessageSendCall
+ fun <TReply : Any> requestToChannel(
+ channelName: String,
+ request: Any,
+ replyType: KClass<TReply>,
+ ): ZLinkKotlinRequestCall<TReply>
+}
+
+fun ZLinkSpotOutbound.kotlin(): ZLinkKotlinSpotOutbound
+
+inline fun <reified TReply : Any> ZLinkKotlinSpotOutbound.requestToSpot(
+ spotId: String,
+ request: Any,
+): ZLinkKotlinSpotRequestCall<TReply>
+
+inline fun <reified TReply : Any> ZLinkKotlinSpotOutbound.requestToChannel(
+ channelName: String,
+ request: Any,
+): ZLinkKotlinRequestCall<TReply>
 ```
 
 Kotlin은 Java `ZLinkTimerOptions`와 `ZLinkTimerOverrunPolicy`를 그대로 사용한다. Timer option을 생략하면
@@ -215,19 +271,22 @@ Ready 전에는 복원한 tick을 실행하지 않는다.
 ```java
 public final class systems.zlink.framework.kotlin.ZLinkSpotHandlerRegistryExtensionsKt {
  public static final <THandler> void addHandler(systems.zlink.framework.spots.ZLinkSpotHandlerRegistry);
- public static final void addTypedHandler(systems.zlink.framework.spots.ZLinkSpotHandlerRegistry, java.lang.Class<?>);
+ public static final <THandler> void addPacket(systems.zlink.framework.spots.ZLinkInstanceSpotHandlerRegistry);
+ public static final <THandler> java.util.concurrent.CompletionStage<systems.zlink.framework.spots.ZLinkTimer> addTimer(systems.zlink.framework.spots.ZLinkEntrySpotContext, java.lang.String, java.time.Duration, systems.zlink.framework.spots.ZLinkTimerOptions);
+ public static final <THandler> java.util.concurrent.CompletionStage<systems.zlink.framework.spots.ZLinkTimer> addTimer(systems.zlink.framework.spots.ZLinkSpotContext, java.lang.String, java.time.Duration, systems.zlink.framework.spots.ZLinkTimerOptions);
+ public static final <THandler> java.util.concurrent.CompletionStage<systems.zlink.framework.spots.ZLinkTimer> addTimer(systems.zlink.framework.spots.ZLinkInstanceSpotContext, java.lang.String, java.time.Duration, systems.zlink.framework.spots.ZLinkTimerOptions);
 }
-public interface systems.zlink.framework.kotlin.ZLinkSuspendingSpotPacketHandler<TSpot extends systems.zlink.framework.spots.ZLinkSpot<?>, TMessage> {
+public interface systems.zlink.framework.kotlin.ZLinkSuspendingSpotPacketHandler<TSpot, TMessage> {
  public abstract java.lang.Object handle(TSpot, TMessage, kotlin.coroutines.Continuation<? super kotlin.Unit>);
- public abstract java.lang.Object handle(TSpot, TMessage, systems.zlink.framework.messaging.ZLinkMessageContext, kotlin.coroutines.Continuation<? super kotlin.Unit>);
+ public default java.lang.Object handle(TSpot, TMessage, systems.zlink.framework.ZLinkMessageContext, kotlin.coroutines.Continuation<? super kotlin.Unit>);
 }
 public interface systems.zlink.framework.kotlin.ZLinkSuspendingSpotRequestHandler<TSpot, TRequest, TReply> {
  public abstract java.lang.Object handle(TSpot, TRequest, kotlin.coroutines.Continuation<? super TReply>);
- public abstract java.lang.Object handle(TSpot, TRequest, systems.zlink.framework.messaging.ZLinkMessageContext, kotlin.coroutines.Continuation<? super TReply>);
+ public default java.lang.Object handle(TSpot, TRequest, systems.zlink.framework.ZLinkMessageContext, kotlin.coroutines.Continuation<? super TReply>);
 }
 public interface systems.zlink.framework.kotlin.ZLinkSuspendingSpotSubscriptionHandler<TSpot, TEvent> {
  public abstract java.lang.Object handle(TSpot, TEvent, kotlin.coroutines.Continuation<? super kotlin.Unit>);
- public abstract java.lang.Object handle(TSpot, TEvent, systems.zlink.framework.messaging.ZLinkPublishMessageContext, kotlin.coroutines.Continuation<? super kotlin.Unit>);
+ public default java.lang.Object handle(TSpot, TEvent, systems.zlink.framework.channels.ZLinkPublishMessageContext, kotlin.coroutines.Continuation<? super kotlin.Unit>);
 }
 public interface systems.zlink.framework.kotlin.ZLinkSuspendingSpotTimerHandler<TSpot> {
  public abstract java.lang.Object handle(TSpot, systems.zlink.framework.spots.ZLinkTimerTick, kotlin.coroutines.Continuation<? super kotlin.Unit>);
@@ -263,9 +322,20 @@ public abstract class systems.zlink.framework.kotlin.ZLinkSuspendingInstanceSpot
  public final java.util.concurrent.CompletionStage<java.lang.Void> onInitialize();
  public final java.util.concurrent.CompletionStage<java.lang.Void> onClosing(systems.zlink.framework.spots.ZLinkSpotClosingContext);
 }
-public final class systems.zlink.framework.kotlin.ZLinkFrameworkExtensionsKt {
+public final class systems.zlink.framework.kotlin.ZLinkOneWayCallsKt {
  public static final systems.zlink.framework.kotlin.ZLinkKotlinSpotSendCall sendToSpot(systems.zlink.framework.kotlin.ZLinkKotlinRouteClient, java.lang.String, java.lang.Object);
  public static final <TReply> systems.zlink.framework.kotlin.ZLinkKotlinSpotRequestCall<TReply> requestToSpot(systems.zlink.framework.kotlin.ZLinkKotlinRouteClient, java.lang.String, java.lang.Object);
+ public static final <TReply> systems.zlink.framework.kotlin.ZLinkKotlinSpotRequestCall<TReply> requestToSpot(systems.zlink.framework.kotlin.ZLinkKotlinRouteClient, java.lang.String, java.lang.Object, kotlin.reflect.KClass<TReply>);
+ public static final systems.zlink.framework.kotlin.ZLinkKotlinSpotOutbound kotlin(systems.zlink.framework.spots.ZLinkSpotOutbound);
+ public static final <TReply> systems.zlink.framework.kotlin.ZLinkKotlinSpotRequestCall<TReply> requestToSpot(systems.zlink.framework.kotlin.ZLinkKotlinSpotOutbound, java.lang.String, java.lang.Object);
+ public static final <TReply> systems.zlink.framework.kotlin.ZLinkKotlinRequestCall<TReply> requestToChannel(systems.zlink.framework.kotlin.ZLinkKotlinSpotOutbound, java.lang.String, java.lang.Object);
+}
+public interface systems.zlink.framework.kotlin.ZLinkKotlinSpotOutbound {
+ public abstract systems.zlink.framework.kotlin.ZLinkKotlinSpotSendCall sendToSpot(java.lang.String, java.lang.Object);
+ public abstract <TReply> systems.zlink.framework.kotlin.ZLinkKotlinSpotRequestCall<TReply> requestToSpot(java.lang.String, java.lang.Object, kotlin.reflect.KClass<TReply>);
+ public abstract systems.zlink.framework.kotlin.ZLinkKotlinSubmissionCall publish(java.lang.String, java.lang.String, java.lang.Object);
+ public abstract systems.zlink.framework.kotlin.ZLinkKotlinMessageSendCall sendToChannel(java.lang.String, java.lang.Object);
+ public abstract <TReply> systems.zlink.framework.kotlin.ZLinkKotlinRequestCall<TReply> requestToChannel(java.lang.String, java.lang.Object, kotlin.reflect.KClass<TReply>);
 }
 public interface systems.zlink.framework.kotlin.ZLinkKotlinSpotSendCall {
  public abstract systems.zlink.framework.kotlin.ZLinkKotlinSpotSendCall metadata(java.lang.String, java.lang.String);
@@ -279,14 +349,14 @@ public interface systems.zlink.framework.kotlin.ZLinkKotlinSpotRequestCall<TRepl
  public abstract systems.zlink.framework.kotlin.ZLinkKotlinSpotRequestCall<TReply> instanceSpot();
  public abstract systems.zlink.framework.kotlin.ZLinkKotlinSpotRequestCall<TReply> instanceSpot(java.lang.String);
  public abstract systems.zlink.framework.kotlin.ZLinkKotlinSpotRequestCall<TReply> inMesh(java.lang.String);
- public abstract systems.zlink.framework.kotlin.ZLinkKotlinSpotRequestCall<TReply> timeout-LRDsOJo(long);
+ public abstract systems.zlink.framework.kotlin.ZLinkKotlinSpotRequestCall<TReply> timeout(java.time.Duration);
  public abstract java.lang.Object await(kotlin.coroutines.Continuation<? super TReply>);
  public abstract java.lang.Object yield(kotlin.coroutines.Continuation<? super TReply>);
 }
 public interface systems.zlink.framework.kotlin.ZLinkKotlinSpotCreateCall {
  public abstract systems.zlink.framework.kotlin.ZLinkKotlinSpotCreateCall inMesh(java.lang.String);
  public abstract systems.zlink.framework.kotlin.ZLinkKotlinSpotCreateCall request(java.lang.Object);
- public abstract systems.zlink.framework.kotlin.ZLinkKotlinSpotCreateCall timeout-LRDsOJo(long);
+ public abstract systems.zlink.framework.kotlin.ZLinkKotlinSpotCreateCall timeout(java.time.Duration);
  public abstract java.lang.Object await(kotlin.coroutines.Continuation<? super systems.zlink.framework.spots.ZLinkSpotCreateResult>);
  public abstract java.lang.Object yield(kotlin.coroutines.Continuation<? super systems.zlink.framework.spots.ZLinkSpotCreateResult>);
 }

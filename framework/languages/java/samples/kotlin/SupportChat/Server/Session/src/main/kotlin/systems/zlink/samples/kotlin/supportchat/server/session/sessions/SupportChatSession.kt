@@ -122,14 +122,14 @@ class SupportChatSession(
         payload: ZLinkMessage,
     ) {
         if (identityRole == SupportChatRoles.Customer) {
-            requireIdentityActor().relay(dispatch, payload).await()
+            requireIdentityActor().kotlin().relay(dispatch, payload).await()
             return
         }
 
         val conversationId = requireConversationId(dispatch)
         val existing = conversationActors[conversationId]
         if (existing != null) {
-            existing.relay(dispatch, payload).await()
+            existing.kotlin().relay(dispatch, payload).await()
             return
         }
 
@@ -165,7 +165,7 @@ class SupportChatSession(
     ) {
         val conversationId = dispatch.metadata()[SampleNames.ConversationIdMetadataKey]
         val target = conversationId?.let { conversationActors[it] } ?: requireIdentityActor()
-        target.relay(dispatch, payload).await()
+        target.kotlin().relay(dispatch, payload).await()
     }
 
     // --8<-- [end:doc-sc-metadata-relay]

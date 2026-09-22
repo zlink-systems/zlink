@@ -167,6 +167,7 @@ the following values.
 | `surface`, `message_kind`, `outcome` | Included in every message-flow record. |
 | `reason` | Included when there's a failure, backpressure, or drop cause. |
 | `action` | Included in `zlink.dispatch_error`. |
+| `error_type`, `error_message` | Both included together when a dispatch failure has an exception or error value. `error_type` is that value's runtime type name and `error_message` is its diagnostic message. `error_message` is limited to an implementation-defined maximum length and includes neither a secret nor a stack trace. |
 | `channel_name` | Included when a logical Channel address exists. |
 | `channel_route_kind` | Included only when `surface=channel`; not included for `classic_fanout`. |
 | `mesh_name` | Included when there's a Node direct or RouteMesh scope. |
@@ -183,9 +184,7 @@ the following values.
 `channel_route_kind`, `mesh_name`, and `server_rid` aren't inputs for
 finding a handler or selecting a target. A trace doesn't include payload,
 application [metadata values](../00-foundation/02-glossary.en.md#metadata-snapshot),
-native handle, raw frame, or an exception object. When recording an error
-description as a string, it's limited to an implementation-defined maximum
-length and doesn't include a secret or stack trace.
+native handle, raw frame, or an exception object.
 
 #### Structured Log Substitute Notation
 
@@ -195,7 +194,7 @@ An implementation providing a structured log as a substitute uses the
 `event`, `phase`, `surface`, `kind`, `mesh`, `channel`, `channel_route`,
 `source_rid`, `target_rid`, `server_rid`, `packet`, `topic`, `spot`,
 `instance_type`, `activation_state`, `actor`, `corr`, `flow`, `origin`,
-`outcome`, `reason`, `size`.
+`outcome`, `reason`, `error_type`, `error_message`, `size`.
 
 Normal publish and subscriber delivery for Logical Multicast and Classic
 fanout don't build a `zlink.message_flow` record. If local dispatch at a
@@ -369,6 +368,10 @@ interface. Each item corresponds to one contract test.
 - A missing subscriber-local Classic fanout handler builds a dispatch
   error with `surface=classic_fanout`, `reason=no_handler`, and
   `action=drop`, without `channel_route_kind`.
+- A dispatch error from a handler exception leaves `error_type` and
+  `error_message` together in both the trace and the structured log, and
+  `error_message` neither exceeds the implementation limit nor contains a
+  secret or stack trace.
 - A routed submission failure for each remote Logical Multicast target
   builds a dispatch error in the publisher process with `surface=spot`,
   `message_kind=send`, `outcome=failed`, `action=drop`, the corresponding

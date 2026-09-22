@@ -18,24 +18,23 @@ title: "STREAM · Node/TypeScript"
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-이 장은 [tutorial의 `Server`·`StreamClient` 디렉터리와 「실행」 절](https://github.com/zlink-systems/zlink-node-examples/blob/main/tutorial/README.ko.md#실행)에서 코드를 인용하며, 그 tree를 bootstrap하고 build하면 아래 실행 결과를 재현할 수 있다.
-
-STREAM node에 연결하는 client는 언어별 stream connector를 사용한다. Unity·Unreal·browser·Node·.NET·Java·C++ client의 설치 범위는 [Client stream connector](../../../install.ko.md#client-stream-connector)에 있고, 사용하는 언어의 [stream connector 가이드](../stream-connector/README.ko.md)가 연결과 packet 처리 방법을 다룬다.
-
 !!! info "이 장을 읽고 나면"
 
     mesh 밖의 프로그램이 연결 하나로 접속해 요청을 보내고 답을 받게 할 수 있다.
-    이 장의 코드는 `framework/languages/node/tutorial`에서 그대로 실행된다.
+    이 장의 코드는 [예제 저장소의 tutorial README](https://github.com/zlink-systems/zlink-node-examples/blob/main/tutorial/README.ko.md)에서 가져왔으며, README의 「내려받기와 설치」·「빌드」·「실행」 절을 따르면 아래 결과를 재현할 수 있다.
+
+STREAM node에 연결하는 client는 언어별 stream connector를 사용한다. Unity·Unreal·browser·Node·.NET·Java·C++ client의 설치 범위는 [Client stream connector](../../../install.ko.md#client-stream-connector)에 있고, 사용하는 언어의 [stream connector 가이드](../stream-connector/README.ko.md)가 연결과 packet 처리 방법을 다룬다.
 
 지금까지의 호출은 모두 mesh 안의 node끼리였다. 게임 client나 application은 mesh 밖에 있고, Framework를
 참조하지도 않는다. **STREAM은 그런 프로그램이 접속하는 자리**이고, 연결 하나가 열려 있는 동안
 양쪽이 서로에게 보낸다. 이 장은 연결을 받아 packet 하나에 답하기까지 다루며, 그 연결을 Actor에
 묶는 것은 [Session과 Actor 연결](24-actor-session.ko.md)이 다룬다.
 
-## 1. STREAM이 푸는 문제
+## 1. STREAM의 역할
 
-channel도 Spot도 Actor도 **mesh 안에서 호출하는 경로**다. 호출하는 쪽이 mesh의 구성원이어야 하고,
-Framework를 참조해야 한다. 플레이어의 기기에서 실행되는 client는 그 조건을 충족하지 못한다.
+STREAM은 mesh 밖의 client가 연결 하나로 mesh와 packet을 주고받는 경계를 맡는다. channel도 Spot도
+Actor도 **mesh 안에서 호출하는 경로**다. 호출하는 쪽이 mesh의 구성원이어야 하고, Framework를 참조해야
+한다. 플레이어의 기기에서 실행되는 client는 그 조건을 충족하지 못한다.
 
 STREAM은 그 경계를 하나의 연결로 좁힌다. client는 주소 하나와 packet 이름만 알면 되고, mesh가
 몇 개의 node로 되어 있는지는 모른다.
@@ -115,7 +114,7 @@ stream node는 포트를 열고 session type 하나를 받는다. mesh node와�
 
 ## 5. 실행 결과
 
-tutorial README의 「실행」 절대로 Server를 실행한 상태에서 아래 명령으로 StreamClient를 시작하면, StreamClient가 Server의 stream endpoint에 보낸 request와 받은 응답은 StreamClient process의 stdout에 나오고 연결·handler 기록은 Server process의 stdout 또는 `server.log`에 나온다.
+tutorial README의 「실행」 절을 따라 띄운 상태에서 Server를 실행한 상태에서 아래 명령으로 StreamClient를 시작하면, StreamClient가 Server의 stream endpoint에 보낸 request와 받은 응답은 StreamClient process의 stdout에 나오고 연결·handler 기록은 Server process의 stdout 또는 `server.log`에 나온다.
 
 ```bash
 dotnet run --project StreamClient/StreamClient.csproj
@@ -139,8 +138,8 @@ mesh 호출은 호출하는 쪽이 mesh의 구성원이다. 대상은 이름이�
 - 연결을 개체에 묶기 — [Session과 Actor 연결](24-actor-session.ko.md)
 - id로 호출하는 상태 객체 — [Spot](21-spot.ko.md) · [Actor](22-actor.ko.md)
 - session lifecycle과 옵션 전체 — [STREAM](23-stream.ko.md)
-- 이 장 코드의 실행본 — `framework/languages/node/tutorial`
+- 이 장 코드의 실행본 — [예제 저장소의 tutorial README](https://github.com/zlink-systems/zlink-node-examples/blob/main/tutorial/README.ko.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

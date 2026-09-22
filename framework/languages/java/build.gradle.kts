@@ -7,6 +7,7 @@ plugins {
     idea
     id("org.jetbrains.kotlin.jvm") apply false
     kotlin("plugin.spring")
+    id("dev.detekt") version "2.0.0-alpha.3" apply false
 }
 
 group = "systems.zlink"
@@ -37,6 +38,7 @@ subprojects {
     version = rootProject.version
 
     plugins.withId("org.jetbrains.kotlin.jvm") {
+        apply(from = rootProject.file("gradle/kotlin-detekt.gradle"))
         val localBindingsBuild = gradle.includedBuilds.find { it.name == "zlink-bindings-java" }
         if (localBindingsBuild != null) {
             tasks.matching { it.name == "compileKotlin" || it.name == "compileTestKotlin" }.configureEach {

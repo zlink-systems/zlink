@@ -140,10 +140,7 @@ internal sealed class ZLinkActorJoinCall : IZLinkActorJoinSpotCall, IZLinkActorJ
             snapshot,
             _timeout ?? _runtime.Registration.DefaultRequestTimeout
         );
-        ZLinkDeferredActorJoinHandlerScope.Register(
-            join,
-            snapshot.Encode(_runtime.Registration.Codecs).Payload.Bytes.Length
-        );
+        ZLinkDeferredActorJoinHandlerScope.Register(join);
     }
 
     private void SetTimeout(TimeSpan timeout)

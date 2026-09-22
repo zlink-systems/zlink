@@ -1,0 +1,19 @@
+{
+  "FileVersion": 3,
+  "EngineAssociation": "5.4",
+  "Category": "Samples",
+  "Description": "ZLink Engine Lobby client sample",
+  "Modules": [
+    {
+      "Name": "EngineLobby",
+      "Type": "Runtime",
+      "LoadingPhase": "Default"
+    }
+  ],
+  "Plugins": [
+    {
+      "Name": "ZLinkStreamConnector",
+      "Enabled": true
+    }
+  ]
+}

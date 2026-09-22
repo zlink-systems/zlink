@@ -6942,6 +6942,36 @@ int main ()
             barrier_events.clear ();
         }
 
+        constexpr std::size_t bulk_join_count = 65;
+        const std::string bulk_request (129u * 1024u, 'x');
+        std::size_t completed_bulk_joins = 0;
+        std::size_t completed_bulk_request_bytes = 0;
+        std::set<std::string> completed_bulk_targets;
+        actor_gateway.on_join_spot (
+          [&] (const auto &actor, const auto &spot_id, const auto &request, auto, auto,
+               auto) -> zlink::framework::task_t<zlink::framework::detail::actor_join_reply_t> {
+              ++completed_bulk_joins;
+              completed_bulk_request_bytes += request.to_string ().size ();
+              completed_bulk_targets.emplace (spot_id);
+              co_return zlink::framework::result_t<
+                zlink::framework::detail::actor_join_reply_t>::success ({1, actor,
+                                                                         zlink::message_t{}});
+          });
+        deferred_queue.run ("bulk-deferred-actor-joins", [&] {
+            for (std::size_t index = 0; index < bulk_join_count; ++index) {
+                actor_context
+                  .join_spot ("bulk-target-" + std::to_string (index),
+                              zlink::framework::message_t::from (bulk_request))
+                  .defer ();
+            }
+        });
+        target_queue.drain ();
+        if (completed_bulk_joins != bulk_join_count
+            || completed_bulk_targets.size () != bulk_join_count
+            || completed_bulk_request_bytes <= 8u * 1024u * 1024u) {
+            return 74;
+        }
+
         deferred_queue.run ("failed-production-cross-actor-barrier", [&] {
             actor_context.join_spot ("target-spot").defer ();
             if (!target_queue.try_post ("production-turn-after-cancel", [&] {

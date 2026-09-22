@@ -6,6 +6,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.builder.SpringApplicationBuilder
 import org.springframework.context.annotation.Bean
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
+import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.kotlin.useCoroutineHandlers
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
@@ -27,28 +28,26 @@ class CustomerGatewayApplication {
     @Bean
     fun customerGatewayFramework(): ZLinkFrameworkConfigurer = ZLinkFrameworkConfigurer { options ->
         options.useCoroutineHandlers(Dispatchers.Default)
-        // #895: configuration package scanning has no Kotlin form in the spec.
-        options.addHandlersFromPackageOf(CustomerGatewayApplication::class.java)
+        options.addHandlersFromPackageOf<CustomerGatewayApplication>()
         options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 
         val node = options.addRouteMesh(SampleNames.CustomerSpotMesh)
         node
             .listen(SampleTopology.CustomerSpotRouterEndpoint)
             .setRoutingIdPrefix("delivery-customer")
-        // #895: entry-spot registration has no Kotlin form in the spec.
-        node.objects().server().addEntrySpot(CustomerEntrySpot::class.java).addActorFactory(
-            SampleNames.CustomerActorType,
-            CustomerActor::class.java,
-            CustomerActorFactory::class.java,
-        ) { factory ->
-            factory.disableRelocation()
+        node.objects().server().addEntrySpot<CustomerEntrySpot>().addActorFactory<
+            CustomerActor,
+            CustomerActorFactory,
+        >(
+            SampleNames.CustomerActorType
+        ) {
+            disableRelocation()
         }
         options
             .addStreamNode(SampleNames.CustomerStreamNode)
             .bind(SampleTopology.CustomerStreamEndpoint)
             .enableActorDispatch()
-            // #895: session registration has no Kotlin form in the spec.
-            .registerSession(CustomerSession::class.java)
+            .registerSession<CustomerSession>()
     }
 
     @Bean fun locationStore(): ZLinkRedisLocationStore = SampleLocationStore.create()

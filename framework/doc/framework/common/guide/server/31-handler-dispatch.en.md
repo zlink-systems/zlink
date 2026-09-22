@@ -1,19 +1,14 @@
 # Handlers and Message Processing
 
-This chapter quotes code from the tutorial's `Server` and `Client` directories and the `Bingo`, `DeliveryDispatch`, `TicTacToe`, and `ZoneWorld` sample directories. Bootstrap and build the corresponding tree for each language to reproduce the handler registration and dispatch examples below.
-
 !!! info "What you get from this chapter"
 
     You can work with what applies across many handlers at once — packet names,
-    filters, and codecs. This chapter's code comes from the repository's
-    tutorials and samples.
+    filters, and codecs. The code comes from the [tutorial](https://github.com/zlink-systems/zlink-<language>-examples/blob/main/tutorial/README.md) and the [`Bingo`](https://github.com/zlink-systems/zlink-<language>-examples/blob/main/samples/Bingo/README.md), [`DeliveryDispatch`](https://github.com/zlink-systems/zlink-<language>-examples/blob/main/samples/DeliveryDispatch/README.md), [`TicTacToe`](https://github.com/zlink-systems/zlink-<language>-examples/blob/main/samples/TicTacToe/README.md), and [`ZoneWorld`](https://github.com/zlink-systems/zlink-<language>-examples/blob/main/samples/ZoneWorld/README.md) sample READMEs in the examples repository; follow each README's Download, Build, and Run sections to reproduce handler registration and dispatch.
 
 [Channel Messaging](20-channel-messaging.en.md) covered the path from writing one handler to
 calling it. This chapter covers **what applies across many handlers**: the variations on
 registration, the filter that collects shared processing, and the codec that turns a payload
 into bytes.
-
-This chapter's code comes from the repository's tutorials and samples.
 
 ## 1. Variations on Handler Registration
 
@@ -377,15 +372,15 @@ The interface names and registration methods per language are as follows.
 
     | What it receives | Interface to implement | Registration |
     | --- | --- | --- |
-    | A one-way packet addressed to the Spot | `ZLinkSpotPacketHandler<TSpot, TMessage>` | `addHandler(THandler::class.java)` |
-    | A request addressed to the Spot | `ZLinkSpotRequestHandler<TSpot, TRequest, TReply>` | `addHandler(THandler::class.java)` |
-    | A Logical Multicast subscription event | `ZLinkSpotSubscriptionHandler<TSpot, TEvent>` | `@ZLinkSpotSubscription(topic)` on the handler + `addHandler(THandler::class.java)` |
-    | A timer tick | `ZLinkSpotTimerHandler<TSpot>` | `context.addTimer(name, period, THandler::class.java, options)` ([Timers and workers](36-timer-worker.en.md)) |
-    | A one-way packet addressed to a member Actor | `ZLinkSpotActorSendHandler<TSpot, TActor, TMessage>` | `@ZLinkSpotActorSend` on the handler + `addHandler(THandler::class.java)` |
-    | A request addressed to a member Actor | `ZLinkSpotActorRequestHandler<TSpot, TActor, TRequest, TReply>` | `@ZLinkSpotActorRequest` on the handler + `addHandler(THandler::class.java)` |
+    | A one-way packet addressed to the Spot | `ZLinkSpotPacketHandler<TSpot, TMessage>` | `addHandler<THandler>()` |
+    | A request addressed to the Spot | `ZLinkSpotRequestHandler<TSpot, TRequest, TReply>` | `addHandler<THandler>()` |
+    | A Logical Multicast subscription event | `ZLinkSpotSubscriptionHandler<TSpot, TEvent>` | `@ZLinkSpotSubscription(topic)` on the handler + `addHandler<THandler>()` |
+    | A timer tick | `ZLinkSpotTimerHandler<TSpot>` | `context.addTimer<THandler>(name, period, options)` ([Timers and workers](36-timer-worker.en.md)) |
+    | A one-way packet addressed to a member Actor | `ZLinkSpotActorSendHandler<TSpot, TActor, TMessage>` | `@ZLinkSpotActorSend` on the handler + `addHandler<THandler>()` |
+    | A request addressed to a member Actor | `ZLinkSpotActorRequestHandler<TSpot, TActor, TRequest, TReply>` | `@ZLinkSpotActorRequest` on the handler + `addHandler<THandler>()` |
 
-    **Uses the Java surface as-is.** There's a single registration method, `addHandler`, and
-    what kind of handler it is comes from the interface it implements and its annotation.
+    **Register with reified `addHandler<THandler>()`.** What kind of handler it is comes from the
+    interface it implements and its annotation.
 
 === "Node/TypeScript"
 
@@ -803,9 +798,9 @@ callbacks.
 
         override fun configure() {
             // Registers the Spot send handler.
-            spotContext.handlers().addHandler(ChatHandler::class.java)
+            spotContext.handlers().addHandler<ChatHandler>()
             // The subscription topic is set by @ZLinkSpotSubscription on ScoreHandler.
-            spotContext.handlers().addHandler(ScoreHandler::class.java)
+            spotContext.handlers().addHandler<ScoreHandler>()
         }
 
         override suspend fun onCreate(request: ZLinkMessage): ZLinkSpotCreateResponse {
@@ -896,5 +891,5 @@ member Actors is valid.
 - Observing dispatch failures — [Monitoring](26-monitoring.en.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

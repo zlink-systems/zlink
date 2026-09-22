@@ -7,17 +7,11 @@ namespace Zlink.Framework.Runtime.Actors;
 internal static class ZLinkActorRemoteJoinRecoveryCodec
 {
     private const int MaximumMetadataBytes = 256 * 1024;
-    private const int MaximumMessageBytes = 1024 * 1024;
     private static readonly UTF8Encoding Utf8 = new(false, true);
 
     internal static byte[] Encode(ZLinkActorRelocationRecoveryRecord value)
     {
         ArgumentNullException.ThrowIfNull(value);
-        if (
-            value.Request.Request.Length > MaximumMessageBytes
-            || value.Reply.Length > MaximumMessageBytes
-        )
-            throw new ArgumentOutOfRangeException(nameof(value));
         Validate(value);
 
         var metadata = SerializeMetadata(value);

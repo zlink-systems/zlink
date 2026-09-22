@@ -1,12 +1,18 @@
 [English](./README.md) | [한국어](./README.ko.md)
 
-# ZLink Java/Kotlin quickstart
-
 가장 단순한 프로젝트다. Location Store 없이 각 client가 server endpoint를 직접 지정하고, 두
-process가 channel로 한 번 호출한다. 사이트의 `framework/doc/framework/java/quickstart.ko.md`와
-`framework/doc/framework/kotlin/quickstart.ko.md` 페이지는 이 파일에서 코드 블록을 읽는다.
-이 디렉터리는 `zlink-java-examples` 저장소의 `quickstart/`이며, 하나의 Gradle build 안에
-`java/`와 `kotlin/` subproject가 있다.
+process가 channel로 한 번 호출한다.
+
+<!-- zlink-lang: java -->
+# ZLink Java quickstart
+
+이 디렉터리는 `zlink-java-examples` 저장소의 `quickstart/`이며 Java subproject만 담는다.
+<!-- zlink-lang: end -->
+<!-- zlink-lang: kotlin -->
+# ZLink Kotlin quickstart
+
+이 디렉터리는 `zlink-kotlin-examples` 저장소의 `quickstart/`이며 Kotlin subproject만 담는다.
+<!-- zlink-lang: end -->
 
 | | 목적 |
 |---|---|
@@ -18,40 +24,56 @@ process가 channel로 한 번 호출한다. 사이트의 `framework/doc/framewor
 
 bash 블록은 Linux·macOS·WSL에서, PowerShell 블록은 Windows PowerShell 7에서 실행한다. `cmd`는 지원하지 않는다.
 
-- JDK 25 이상. Java와 Kotlin subproject의 toolchain이 25로 고정되어 있다.
+- JDK 25 이상. 이 project의 toolchain은 25로 고정되어 있다.
 - 이 디렉터리에 포함된 Gradle wrapper. 첫 빌드에서 Gradle과 package를 Maven Central에서
   내려받는다.
 - Redis나 다른 외부 service는 필요하지 않다.
 
 ## 내려받기와 설치
 
-[`zlink-java-examples`](https://github.com/zlink-systems/zlink-java-examples) 저장소를
-clone한다. 아래 명령은 저장소의 `quickstart/`에서 실행한다.
+<!-- zlink-lang: java -->
+[`zlink-java-examples`](https://github.com/zlink-systems/zlink-java-examples) 저장소를 clone한다.
+<!-- zlink-lang: end -->
+<!-- zlink-lang: kotlin -->
+[`zlink-kotlin-examples`](https://github.com/zlink-systems/zlink-kotlin-examples) 저장소를 clone한다.
+<!-- zlink-lang: end -->
+아래 명령은 저장소의 `quickstart/`에서 실행한다.
 
-`gradle/libs.versions.toml`이 `zlink-framework-core`, `zlink-framework-spring-boot-starter`,
-`zlink-framework-kotlin`과 Spring Boot·Kotlin·Jackson의 버전을 고정한다.
+`gradle/libs.versions.toml`이 framework와 Spring Boot·Kotlin·Jackson의 버전을 고정한다.
 `systems.zlink:zlink` binding은 목록에 넣지 않고 `zlink-framework-core`의 전이 의존에 맡긴다.
 
+<!-- zlink-lang: kotlin -->
 Kotlin Client는 subproject build file에서 `kotlinx-coroutines-reactor`도 version 없이 선언한다.
 이 package의 version은 전이 coroutine 제약으로 해석된다.
+<!-- zlink-lang: end -->
 
 ## 빌드
 
 **Linux · macOS · WSL — bash**
 
+<!-- zlink-lang: java -->
 ```bash title="linux"
-./gradlew \
-  :java:Server:installDist :java:Client:installDist \
-  :kotlin:Server:installDist :kotlin:Client:installDist
+./gradlew :java:Server:installDist :java:Client:installDist
 ```
+<!-- zlink-lang: end -->
+<!-- zlink-lang: kotlin -->
+```bash title="linux"
+./gradlew :kotlin:Server:installDist :kotlin:Client:installDist
+```
+<!-- zlink-lang: end -->
 
 **Windows — PowerShell 7**
 
+<!-- zlink-lang: java -->
 ```powershell title="windows"
-.\gradlew.bat `
-  :java:Server:installDist :java:Client:installDist `
-  :kotlin:Server:installDist :kotlin:Client:installDist
+.\gradlew.bat :java:Server:installDist :java:Client:installDist
 ```
+<!-- zlink-lang: end -->
+<!-- zlink-lang: kotlin -->
+```powershell title="windows"
+.\gradlew.bat :kotlin:Server:installDist :kotlin:Client:installDist
+```
+<!-- zlink-lang: end -->
 
 ## 실행
 
@@ -62,6 +84,7 @@ channel을 처리한다. 각 Client는 `tcp://0.0.0.0:7102`에서 듣고
 
 **Linux · macOS · WSL — bash**
 
+<!-- zlink-lang: java -->
 ```bash title="linux"
 ./java/Server/build/install/Server/bin/Server > server.log 2>&1 &
 echo $! > server.pid
@@ -69,9 +92,20 @@ echo $! > server.pid
 echo $! > client.pid
 for i in $(seq 1 60); do curl -sf http://127.0.0.1:5080/hello/world > /dev/null && break; sleep 1; done
 ```
+<!-- zlink-lang: end -->
+<!-- zlink-lang: kotlin -->
+```bash title="linux"
+./kotlin/Server/build/install/Server/bin/Server > server.log 2>&1 &
+echo $! > server.pid
+./kotlin/Client/build/install/Client/bin/Client > client.log 2>&1 &
+echo $! > client.pid
+for i in $(seq 1 60); do curl -sf http://127.0.0.1:5080/hello/world > /dev/null && break; sleep 1; done
+```
+<!-- zlink-lang: end -->
 
 **Windows — PowerShell 7**
 
+<!-- zlink-lang: java -->
 ```powershell title="windows"
 $server = Start-Process -NoNewWindow .\java\Server\build\install\Server\bin\Server.bat -RedirectStandardOutput server.log -RedirectStandardError server.err.log -PassThru
 $server.Id | Set-Content server.pid
@@ -80,9 +114,17 @@ $client.Id | Set-Content client.pid
 foreach ($i in 1..60) { $answer = curl.exe -s http://127.0.0.1:5080/hello/world; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds 1 }
 if ($LASTEXITCODE -ne 0) { throw 'quickstart did not come up' }
 ```
-
-Kotlin pair는 Java process를 종료한 뒤 같은 명령을 `kotlin/` 경로에서 실행한다
-(`./kotlin/Server/build/install/Server/bin/Server`, `.../Client`).
+<!-- zlink-lang: end -->
+<!-- zlink-lang: kotlin -->
+```powershell title="windows"
+$server = Start-Process -NoNewWindow .\kotlin\Server\build\install\Server\bin\Server.bat -RedirectStandardOutput server.log -RedirectStandardError server.err.log -PassThru
+$server.Id | Set-Content server.pid
+$client = Start-Process -NoNewWindow .\kotlin\Client\build\install\Client\bin\Client.bat -RedirectStandardOutput client.log -RedirectStandardError client.err.log -PassThru
+$client.Id | Set-Content client.pid
+foreach ($i in 1..60) { $answer = curl.exe -s http://127.0.0.1:5080/hello/world; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds 1 }
+if ($LASTEXITCODE -ne 0) { throw 'quickstart did not come up' }
+```
+<!-- zlink-lang: end -->
 
 ## 검증
 
@@ -104,7 +146,7 @@ if ($LASTEXITCODE -ne 0 -or $answer -notmatch 'hello, world') { throw 'quickstar
 Write-Output 'quickstart=ok'
 ```
 
-Java와 Kotlin pair 모두 endpoint가 HTTP 상태 코드 200과 `hello, world`를 반환한다.
+endpoint는 HTTP 상태 코드 200과 `hello, world`를 반환한다.
 
 ## 종료
 
@@ -147,17 +189,28 @@ Server를 먼저, Client를 다음으로 실행한다. Java main class는
 | curl 요청이 연결되지 않는다 | Server를 먼저 실행한 뒤 Client를 실행하고 process 출력을 확인한다 |
 | 요청에 대상이 없다 | client의 `peerConnections().connect` endpoint와 server의 `listen` endpoint를 같게 둔다 |
 | Server가 시작 직후 종료된다 | 각 비웹 Server entry point에 `setKeepAlive(true)`를 유지한다 |
-| Java Client에서 path variable 오류가 발생한다 | Java Client compiler option에 `-parameters`를 유지한다 |
-| Kotlin Client coroutine 요청이 실패한다 | Client 의존성에 `kotlinx-coroutines-reactor`를 유지한다 |
-| Kotlin class 또는 payload가 실패한다 | Kotlin Spring plugin과 `jackson-module-kotlin`을 유지한다 |
+<!-- zlink-lang: java -->
+| Client에서 path variable 오류가 발생한다 | Client compiler option에 `-parameters`를 유지한다 |
+<!-- zlink-lang: end -->
+<!-- zlink-lang: kotlin -->
+| Client coroutine 요청이 실패한다 | Client 의존성에 `kotlinx-coroutines-reactor`를 유지한다 |
+| class 또는 payload가 실패한다 | Kotlin Spring plugin과 `jackson-module-kotlin`을 유지한다 |
+<!-- zlink-lang: end -->
 
 ## 구성
 
 | 경로 | 내용 |
 |---|---|
-| `java/Shared`, `kotlin/Shared` | Java record와 Kotlin data class 계약 |
-| `java/Server`, `kotlin/Server` | `greeting` handler를 등록하고 7101 port에서 듣는 process |
-| `java/Client`, `kotlin/Client` | server에 연결하고 5080 port에서 `GET /hello/{name}`을 제공하는 process |
+<!-- zlink-lang: java -->
+| `java/Shared` | Java record 계약 |
+| `java/Server` | `greeting` handler를 등록하고 7101 port에서 듣는 process |
+| `java/Client` | server에 연결하고 5080 port에서 `GET /hello/{name}`을 제공하는 process |
+<!-- zlink-lang: end -->
+<!-- zlink-lang: kotlin -->
+| `kotlin/Shared` | Kotlin data class 계약 |
+| `kotlin/Server` | `greeting` handler를 등록하고 7101 port에서 듣는 process |
+| `kotlin/Client` | server에 연결하고 5080 port에서 `GET /hello/{name}`을 제공하는 process |
+<!-- zlink-lang: end -->
 | `gradle/libs.versions.toml` | package와 plugin의 중앙 version 고정 |
 | `gradlew`, `gradlew.bat` | Linux와 Windows용 Gradle wrapper 실행기 |
 
@@ -165,7 +218,12 @@ Server를 먼저, Client를 다음으로 실행한다. Java main class는
 
 - framework, Spring Boot, Kotlin, Jackson version을 명시하는
   `gradle/libs.versions.toml`. `systems.zlink:zlink`는 framework의 전이 의존에 맡긴다.
-- `Shared`에 있는 Java record와 Kotlin data class 계약 형태.
+<!-- zlink-lang: java -->
+- `Shared`에 있는 Java record 계약 형태.
+<!-- zlink-lang: end -->
+<!-- zlink-lang: kotlin -->
+- `Shared`에 있는 Kotlin data class 계약 형태.
+<!-- zlink-lang: end -->
 - mesh 이름, `listen(...)`, `channelName(...).server().addRequestHandler(...)`, 비웹
   process의 `setKeepAlive(true)`를 담은 Server `ZLinkFrameworkConfigurer` 블록.
 - `channelName(...).client()`, `peerConnections().connect(...)`,

@@ -19,6 +19,7 @@
 #include <memory>
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <utility>
@@ -257,6 +258,62 @@ int main ()
         }
     }
 
+    // Handler exceptions project one sanitized pair to both the trace observer and log.
+    {
+        const auto message =
+          std::string ("Authorization: Bearer auth Bearer standalone password=p token=t ")
+          + std::string (513, 'x') + "\n at Secret.Handler";
+        const auto expected =
+          (std::string (
+             "Authorization: <redacted> Bearer <redacted> password=<redacted> token=<redacted> ")
+           + std::string (513, 'x'))
+            .substr (0, 512);
+        auto options = options_with_mode (message_flow_log_mode_t::errors);
+        std::optional<message_dispatch_error_event_t> observed;
+        zlink::framework::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+          options, [&] (const message_dispatch_error_event_t &event) { observed = event; });
+        const auto out = capture_logs ([&] {
+            dispatch_error_reporter_t (options).report (message_dispatch_error_event_t{
+              .surface = dispatch_error_surface_t::channel,
+              .message_kind = dispatch_message_kind_t::send,
+              .reason = dispatch_error_reason_t::handler_exception,
+              .action = dispatch_error_action_t::drop,
+              .exception = std::make_exception_ptr (std::runtime_error (message))});
+        });
+        const auto type = std::string (typeid (std::runtime_error).name ());
+        if (!observed || observed->exception || observed->error_type != type
+            || observed->error_message != expected)
+            return 40;
+        if (!contains (out, "error_type=" + type) || !contains (out, "error_message=" + expected)
+            || contains (out, "Bearer auth") || contains (out, "Bearer standalone")
+            || contains (out, "password=p") || contains (out, "token=t")
+            || contains (out, "Secret.Handler")) {
+            return 41;
+        }
+    }
+
+    // Empty exception messages remain present in both observer and log projections.
+    {
+        auto options = options_with_mode (message_flow_log_mode_t::errors);
+        std::optional<message_dispatch_error_event_t> observed;
+        zlink::framework::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+          options, [&] (const message_dispatch_error_event_t &event) { observed = event; });
+        const auto out = capture_logs ([&] {
+            dispatch_error_reporter_t (options).report (message_dispatch_error_event_t{
+              .surface = dispatch_error_surface_t::channel,
+              .message_kind = dispatch_message_kind_t::send,
+              .reason = dispatch_error_reason_t::handler_exception,
+              .action = dispatch_error_action_t::drop,
+              .exception = std::make_exception_ptr (std::runtime_error (""))});
+        });
+        const auto type = std::string (typeid (std::runtime_error).name ());
+        if (!observed || observed->error_type != type || !observed->error_message.has_value ()
+            || !observed->error_message->empty ())
+            return 42;
+        if (!contains (out, "error_type=" + type) || !contains (out, "error_message="))
+            return 43;
+    }
+
     // Every processing point reads the live shared mode once; ambient entry
     // snapshots never override a later runtime change.
     {
@@ -446,7 +503,8 @@ int main ()
         if (!contains (out, "event_id=zlink.dispatch_error")
             || !contains (out, "surface=classic_fanout") || !contains (out, "kind=send")
             || !contains (out, "reason=no_handler") || !contains (out, "packet=MissingEventMsg")
-            || !contains (out, "exception=handler is not registered")
+            || !contains (out, "error_type=" + std::string (typeid (framework_exception_t).name ()))
+            || !contains (out, "error_message=handler is not registered")
             || contains (out, "channel_route=")
             || occurrences (out, "event_id=zlink.dispatch_error") != 1
             || contains (out, "event_id=zlink.message_flow")) {

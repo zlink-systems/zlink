@@ -7,6 +7,7 @@ import org.springframework.boot.builder.SpringApplicationBuilder
 import org.springframework.context.annotation.Bean
 import systems.zlink.contracts.core.RoutingId
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
+import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.kotlin.useCoroutineHandlers
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
@@ -29,8 +30,7 @@ class CourierSpotNodeApplication {
         options.useCoroutineHandlers(Dispatchers.Default)
         val node = SampleTopology.CourierNode
         val selected = NodeOptions.resolve(node)
-        // #895: configuration package scanning has no Kotlin form in the spec.
-        options.addHandlersFromPackageOf(CourierSpotNodeApplication::class.java)
+        options.addHandlersFromPackageOf<CourierSpotNodeApplication>()
         options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 
         // --8<-- [start:doc-dd-node-register]
@@ -48,13 +48,13 @@ class CourierSpotNodeApplication {
                     }
                 )
             )
-        // #895: entry-spot registration has no Kotlin form in the spec.
-        spotNode.objects().server().addEntrySpot(CourierEntrySpot::class.java).addActorFactory(
-            SampleNames.CourierActorType,
-            CourierActor::class.java,
-            CourierActorFactory::class.java,
-        ) { factory ->
-            factory.disableRelocation()
+        spotNode.objects().server().addEntrySpot<CourierEntrySpot>().addActorFactory<
+            CourierActor,
+            CourierActorFactory,
+        >(
+            SampleNames.CourierActorType
+        ) {
+            disableRelocation()
         }
         // The courier's decision goes back to dispatch as its own one-way message, so this
         // node needs a way to speak to the dispatch channel (common sample spec section 7.4).

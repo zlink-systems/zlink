@@ -18,12 +18,11 @@ View in another language — [C++](../../../cpp/guide/server/32-execution-model.
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-This chapter quotes code from the `Bingo` sample's `Server` directory. Bootstrap and build that language's sample tree to inspect the execution-model examples below in running code.
-
 !!! info "What you get from this chapter"
 
     You can tell what runs together inside one Spot, what queues up behind it, and what decides
-    that boundary. The code in this chapter comes from the samples in the repository.
+    that boundary.
+    The code comes from the [Bingo sample README in the examples repository](https://github.com/zlink-systems/zlink-java-examples/blob/main/samples/Bingo/README.md); follow its Download, Build, and Run sections to reproduce the execution-model example.
 
 [Spot](21-spot.en.md) and [Actor](22-actor.en.md) summarized it as "work addressed to it is
 handled one at a time." This chapter covers how far that sentence holds — which work shares one
@@ -35,7 +34,7 @@ Work arriving at a Spot waits in two queues. Packets addressed to the Spot itsel
 into the **Spot queue**; payloads addressed to an Actor that belongs to the Spot go into the
 **Actor queue**.
 
-**A business message addressed to an Actor does not pass through the Spot queue.** No Spot
+**A message addressed to an Actor does not pass through the Spot queue.** No Spot
 callback receives it and hands it on; it enters the Actor queue from the start.
 
 | Queue | Goes in | Does not go in |
@@ -102,16 +101,55 @@ Serial execution does not mean holding one thread throughout. When a handler rea
 point the executing thread handles other work, but **the turn is held until the handler
 completes.** Under `SpotWide` the next callback of the same Spot does not start in the meantime.
 
-When the next turn has to run while a long I/O is awaited, use the `Yield` contract in
-[Timers and Workers](36-timer-worker.en.md).
+`Async` and `Yield` both submit an operation and wait for its application result. `await` on
+`Async` releases only the thread and keeps the current turn. Use `Async` only for short waits.
+Use `Yield` when the next turn in the same Spot has to run during a long I/O wait.
+
+`Yield` is a terminator that ends the current turn and gives back the shared gate that lets one
+thing run at a time in the Spot when it starts waiting for a result. While it waits, queued turns
+in the same Spot run. When the reply arrives, its continuation gets that gate again and continues
+in a **new turn** at the tail of the queue.
+
+<iframe class="zlink-diagram" src="/common/diagrams/32-yield-turns-en.html" title="Async and Yield in one SpotWide Spot" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/32-yield-turns-en.html" target="_blank">↗ View larger</a></p>
+
+Another turn may have changed state across a `Yield`, so check again before changing state after
+resuming. Copy values handed to the operation inside the current turn before `Yield`. When a
+member Actor in `SpotWide` uses `Yield`, it gives back only the shared Spot gate. Its own Actor
+queue position remains reserved, so its next message cannot run first, while another Actor, Spot
+handler, or timer can run.
+
+`Yield` is available where there is a shared turn: a `SpotWide` User Spot and an Instance Spot.
+An Entry Spot and a `PerActor` User Spot have no shared turn and therefore do not offer `Yield`.
+For calls such as requests and workers that offer it, the terminator name is:
+
+| Language | Yield terminator |
+| --- | --- |
+| C#/.NET | `Yield(...)` |
+| C++ | `.yield()` |
+| Java | `.yield(...)` |
+| Kotlin | `.yield()` |
+| Node/TypeScript | `.yield()` |
+
+<iframe class="zlink-diagram" src="/common/diagrams/32-yield-sequence-en.html" title="The turn transition of one Yield request" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/32-yield-sequence-en.html" target="_blank">↗ View larger</a></p>
+
+This is the player-record request in a Bingo room join. In every tab, the marked `Yield`
+terminator line is where the room Spot gives its turn back.
+
+`.yield(Messages.GetPlayerRecordRes.class)` gives the room Spot turn back.
+
+```java
+--8<-- "framework/languages/java/samples/java/Bingo/Server/Play/src/main/java/systems/zlink/samples/bingo/server/play/infrastructure/zlink/spots/bingoroomspot/BingoRoomSpot.java:doc-bingo-room-join"
+```
 
 ## 6. Related Documents
 
 - State objects called by id — [Spot](21-spot.en.md) · [Actor](22-actor.en.md)
 - Creation points and lifecycle callbacks per kind — [Activation and Lifetime](34-activation-lifetime.en.md)
-- The contract that yields a turn — [Timers and Workers](36-timer-worker.en.md)
+- The contract that yields a turn — [this section](#5-serial-execution-and-thread-occupancy)
 - When arrival outpaces processing — [Backpressure](33-backpressure.en.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

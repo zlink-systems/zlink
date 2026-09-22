@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="generator" content="archify 2.17.0-dev.1">
-  <title>timer는 줄에 서고, worker는 줄 밖에서 돈다 Diagram</title>
+  <title>timer는 Spot queue에 들어가고, worker는 별도 실행 문맥에서 실행된다 Diagram</title>
   <script>
     // Resolve the theme before first paint so light-preference users don't
     // see a dark flash. The toolbar script below re-applies with UI state.
@@ -5081,9 +5081,9 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
            data-preset-badge-blueprint="BLUEPRINT / REV 01"
            data-preset-badge-editorial="EDITORIAL / FIELD NOTE">
         <div class="pulse-dot"></div>
-        <h1>timer는 줄에 서고, worker는 줄 밖에서 돈다</h1>
+        <h1>timer는 Spot queue에 들어가고, worker는 별도 실행 문맥에서 실행된다</h1>
       </div>
-      <p class="subtitle">같은 줄에 서야 상태를 만질 수 있다 · 줄 밖의 결과는 다시 줄로 들어온다</p>
+      <p class="subtitle">Spot queue에서만 상태를 다룬다 · worker 결과는 Spot queue로 돌아온다</p>
     </div>
 
     <script id="archify-guided-views-data" type="application/json">[]</script>
@@ -5132,8 +5132,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
     <div class="diagram-container" data-detail-level="read"
          data-preset-badge-editorial-plate="ARCHIFY / PLATE 04">
       <svg viewBox="22 122 696 282" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="standard" data-quality-gates="advisory">
-        <title id="archify-diagram-title">timer는 줄에 서고, worker는 줄 밖에서 돈다</title>
-        <desc id="archify-diagram-description">같은 줄에 서야 상태를 만질 수 있다 · 줄 밖의 결과는 다시 줄로 들어온다</desc>
+        <title id="archify-diagram-title">timer는 Spot queue에 들어가고, worker는 별도 실행 문맥에서 실행된다</title>
+        <desc id="archify-diagram-description">Spot queue에서만 상태를 다룬다 · worker 결과는 Spot queue로 돌아온다</desc>
         <!-- Definitions -->
         <defs>
           <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
@@ -5160,10 +5160,10 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="0" data-composition-frame-label="Spot 하나" x="278" y="264" width="184" height="112" rx="12" class="c-region" stroke-width="1"/>
 
         <!-- Connection paths (before components for correct z-order) -->
-        <path data-edge-from="T" data-edge-to="Q" data-edge-label="tick도 줄에 선다" data-edge-key="0" data-composition-points="170,180;240,180;240,319;310,319" d="M 170 180 L 232 180 Q 240 180 240 188 L 240 311 Q 240 319 248 319 L 310 319" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="M" data-edge-to="Q" data-edge-label="message도 같은 줄" data-edge-key="1" data-composition-points="170,333;310,333" d="M 170 333 L 310 333" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="Q" data-edge-to="W" data-edge-label="오래 걸리는 일을 넘긴다" data-edge-key="2" data-composition-points="430,319;570,319" d="M 430 319 L 570 319" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="W" data-edge-to="Q" data-edge-label="결과는 다시 줄로 들어온다" data-edge-key="3" data-composition-points="570,333;430,333" d="M 570 333 L 430 333" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="T" data-edge-to="Q" data-edge-label="tick이 Spot queue에 들어간다" data-edge-key="0" data-composition-points="170,180;240,180;240,319;310,319" d="M 170 180 L 232 180 Q 240 180 240 188 L 240 311 Q 240 319 248 319 L 310 319" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="M" data-edge-to="Q" data-edge-label="message도 같은 Spot queue" data-edge-key="1" data-composition-points="170,333;310,333" d="M 170 333 L 310 333" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="Q" data-edge-to="W" data-edge-label="오래 걸리는 일을 넘긴다" data-edge-key="2" data-composition-points="430,326;570,326" d="M 430 326 L 570 326" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="W" data-edge-to="Q" data-edge-label="결과는 Spot queue로 돌아온다" data-edge-key="3" data-composition-points="570,326;430,326" d="M 570 326 L 430 326" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
 
         <!-- Components -->
         <g id="node-T" data-node-id="T" data-node-label="timer" tabindex="0" role="button" aria-label="Focus timer, 주기가 되면 tick, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="주기가 되면 tick" data-node-context="Architecture component">
@@ -5192,19 +5192,19 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <text data-detail="context" x="110" y="340" class="t-muted" font-size="9" text-anchor="middle">바깥에서 온다</text>
         </g>
 
-        <g id="node-Q" data-node-id="Q" data-node-label="실행 줄" tabindex="0" role="button" aria-label="Focus 실행 줄, 한 번에 하나씩, Spot 하나" aria-pressed="false" data-node-kind="backend" data-node-sublabel="한 번에 하나씩" data-node-context="Spot 하나">
-          <title>실행 줄 · 한 번에 하나씩 · Spot 하나</title>
+        <g id="node-Q" data-node-id="Q" data-node-label="Spot queue" tabindex="0" role="button" aria-label="Focus Spot queue, 한 번에 하나씩, Spot 하나" aria-pressed="false" data-node-kind="backend" data-node-sublabel="한 번에 하나씩" data-node-context="Spot 하나">
+          <title>Spot queue · 한 번에 하나씩 · Spot 하나</title>
           <rect x="310" y="296" width="120" height="60" rx="6" class="c-mask"/>
           <rect x="310" y="296" width="120" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(316 302) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="370" y="324" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">실행 줄</text>
+          <text data-node-label="" data-detail-anchor="" x="370" y="324" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Spot queue</text>
         <text data-detail="context" x="370" y="340" class="t-muted" font-size="9" text-anchor="middle">한 번에 하나씩</text>
         </g>
 
-        <g id="node-W" data-node-id="W" data-node-label="worker" tabindex="0" role="button" aria-label="Focus worker, 줄 밖에서 실행, Architecture component" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="줄 밖에서 실행" data-node-context="Architecture component">
-          <title>worker · 줄 밖에서 실행 · Architecture component</title>
+        <g id="node-W" data-node-id="W" data-node-label="worker" tabindex="0" role="button" aria-label="Focus worker, 별도 실행 문맥, Architecture component" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="별도 실행 문맥" data-node-context="Architecture component">
+          <title>worker · 별도 실행 문맥 · Architecture component</title>
           <rect x="570" y="296" width="120" height="60" rx="6" class="c-mask"/>
           <rect x="570" y="296" width="120" height="60" rx="6" class="c-frontend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(576 302) scale(0.6875)">
@@ -5214,25 +5214,25 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
             <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
           <text data-node-label="" data-detail-anchor="" x="630" y="324" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">worker</text>
-        <text data-detail="context" x="630" y="340" class="t-muted" font-size="9" text-anchor="middle">줄 밖에서 실행</text>
+        <text data-detail="context" x="630" y="340" class="t-muted" font-size="9" text-anchor="middle">별도 실행 문맥</text>
         </g>
 
         <!-- Connection labels -->
-        <g data-detail="context" data-edge-from="T" data-edge-to="Q" data-edge-label="tick도 줄에 선다" data-edge-key="0">
-          <rect x="196.6" y="229.5" width="86.8" height="14" rx="3" class="c-mask"/>
-          <text x="240" y="239.5" class="t-muted" font-size="8" text-anchor="middle">tick도 줄에 선다</text>
+        <g data-detail="context" data-edge-from="T" data-edge-to="Q" data-edge-label="tick이 Spot queue에 들어간다" data-edge-key="0">
+          <rect x="167.8" y="229.5" width="144.4" height="14" rx="3" class="c-mask"/>
+          <text x="240" y="239.5" class="t-muted" font-size="8" text-anchor="middle">tick이 Spot queue에 들어간다</text>
         </g>
-        <g data-detail="context" data-edge-from="M" data-edge-to="Q" data-edge-label="message도 같은 줄" data-edge-key="1">
-          <rect x="194.2" y="313" width="91.6" height="14" rx="3" class="c-mask"/>
-          <text x="240" y="323" class="t-muted" font-size="8" text-anchor="middle">message도 같은 줄</text>
+        <g data-detail="context" data-edge-from="M" data-edge-to="Q" data-edge-label="message도 같은 Spot queue" data-edge-key="1">
+          <rect x="175" y="313" width="130" height="14" rx="3" class="c-mask"/>
+          <text x="240" y="323" class="t-muted" font-size="8" text-anchor="middle">message도 같은 Spot queue</text>
         </g>
         <g data-detail="context" data-edge-from="Q" data-edge-to="W" data-edge-label="오래 걸리는 일을 넘긴다" data-edge-key="2">
-          <rect x="439.8" y="299" width="120.39999999999999" height="14" rx="3" class="c-mask"/>
-          <text x="500" y="309" class="t-muted" font-size="8" text-anchor="middle">오래 걸리는 일을 넘긴다</text>
+          <rect x="439.8" y="306" width="120.39999999999999" height="14" rx="3" class="c-mask"/>
+          <text x="500" y="316" class="t-muted" font-size="8" text-anchor="middle">오래 걸리는 일을 넘긴다</text>
         </g>
-        <g data-detail="context" data-edge-from="W" data-edge-to="Q" data-edge-label="결과는 다시 줄로 들어온다" data-edge-key="3">
-          <rect x="435" y="337" width="130" height="14" rx="3" class="c-mask"/>
-          <text x="500" y="347" class="t-messagebus" font-size="8" text-anchor="middle">결과는 다시 줄로 들어온다</text>
+        <g data-detail="context" data-edge-from="W" data-edge-to="Q" data-edge-label="결과는 Spot queue로 돌아온다" data-edge-key="3">
+          <rect x="427.8" y="360" width="144.4" height="14" rx="3" class="c-mask"/>
+          <text x="500" y="370" class="t-messagebus" font-size="8" text-anchor="middle">결과는 Spot queue로 돌아온다</text>
         </g>
 
         <!-- Boundary labels (foreground masks keep routes out of titles) -->
@@ -5432,11 +5432,11 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
       <div class="card">
         <div class="card-header">
           <div class="card-dot cyan"></div>
-          <h3>줄 밖에서 상태를 만지지 않는다</h3>
+          <h3>Spot queue 밖에서 상태를 다루지 않는다</h3>
         </div>
         <ul>
-          <li>&bull; tick이 줄에 서므로 timer 안에서 상태를 만져도 다른 처리와 섞이지 않는다. 그래서 lock이 필요 없다.</li>
-          <li>&bull; worker는 줄 밖에서 돌기 때문에 그 안에서 Spot의 상태를 읽거나 쓰지 않는다. 결과를 줄로 다시 넣어 그 자리에서 반영한다.</li>
+          <li>&bull; tick이 Spot queue에 들어가므로 timer 안에서 상태를 다뤄도 다른 처리와 섞이지 않는다. 그래서 lock이 필요 없다.</li>
+          <li>&bull; worker는 Spot queue 밖의 실행 문맥에서 실행되므로 그 안에서 Spot 상태를 읽거나 쓰지 않는다. 결과를 Spot queue로 돌려보내 그 자리에서 반영한다.</li>
         </ul>
       </div>
     </div>

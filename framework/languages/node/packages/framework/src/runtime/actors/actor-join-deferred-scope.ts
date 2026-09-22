@@ -1,16 +1,7 @@
-import {
-  ZLinkFrameworkInternalErrorKind,
-  createInternalFrameworkException
-} from '../framework-errors-internal';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { ZLinkConfigurationException } from '../configuration';
 
-const MAX_DEFERRED_JOINS = 64;
-const MAX_DEFERRED_JOIN_REQUEST_BYTES = 1024 * 1024;
-const MAX_DEFERRED_JOIN_BYTES = 8 * 1024 * 1024;
-
 interface DeferredActorJoin {
-  readonly requestBytes: number;
   /** Starts target admission after the handler terminal, before reply admission. */
   readonly prepare?: () => Promise<void> | void;
   readonly execute: () => Promise<void>;
@@ -19,7 +10,6 @@ interface DeferredActorJoin {
 
 class ActorJoinRegistrationScope {
   private readonly intents: DeferredActorJoin[] = [];
-  private totalBytes = 0;
   private open = true;
   private prepared = false;
 
@@ -34,29 +24,7 @@ class ActorJoinRegistrationScope {
         'Actor join defer requires an open Framework actor handler scope.'
       );
     }
-    if (this.intents.length >= MAX_DEFERRED_JOINS) {
-      discardWithoutWaiting(intent);
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.InvalidConfiguration,
-        `An actor handler may defer at most ${MAX_DEFERRED_JOINS} joins.`
-      );
-    }
-    if (intent.requestBytes > MAX_DEFERRED_JOIN_REQUEST_BYTES) {
-      discardWithoutWaiting(intent);
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.InvalidConfiguration,
-        `A deferred actor join request may use at most ${MAX_DEFERRED_JOIN_REQUEST_BYTES} bytes.`
-      );
-    }
-    if (this.totalBytes + intent.requestBytes > MAX_DEFERRED_JOIN_BYTES) {
-      discardWithoutWaiting(intent);
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.InvalidConfiguration,
-        `Deferred actor join requests may use at most ${MAX_DEFERRED_JOIN_BYTES} bytes per handler.`
-      );
-    }
     this.intents.push(intent);
-    this.totalBytes += intent.requestBytes;
   }
 
   sealAfterHandlerTerminal(): void {

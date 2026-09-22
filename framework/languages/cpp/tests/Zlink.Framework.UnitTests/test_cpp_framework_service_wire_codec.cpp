@@ -384,6 +384,13 @@ void verify_generated_adoption_goldens ()
     const auto canonical = from_hex (zljr.at ("canonical").at ("hex").get<std::string> ());
     const auto generated = protocol::decode_zljr_record_v1 (canonical);
     assert (protocol::encode_zljr_record_v1 (generated) == canonical);
+    auto large_generated = generated;
+    large_generated.request.assign (1024u * 1024u + 1u, 0x5au);
+    large_generated.reply.assign (1024u * 1024u + 1u, 0xa5u);
+    const auto large_encoded = protocol::encode_zljr_record_v1 (large_generated);
+    const auto large_decoded = protocol::decode_zljr_record_v1 (large_encoded);
+    assert (large_decoded.request == large_generated.request);
+    assert (large_decoded.reply == large_generated.reply);
     const auto frozen = protocol::decode_frozen_record (canonical);
     const auto recovery = protocol::decode_actor_join_recovery_saved_work (frozen);
     assert (recovery.has_value ());

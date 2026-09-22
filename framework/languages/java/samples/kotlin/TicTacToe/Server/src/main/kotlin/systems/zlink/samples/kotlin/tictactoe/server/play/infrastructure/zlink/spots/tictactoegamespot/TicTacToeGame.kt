@@ -3,6 +3,7 @@ package systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.
 import com.fasterxml.jackson.databind.ObjectMapper
 import java.time.Duration
 import java.time.Instant
+import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.kotlin.ZLinkSuspendingSpot
 import systems.zlink.framework.kotlin.addHandler
 import systems.zlink.framework.kotlin.await
@@ -14,6 +15,8 @@ import systems.zlink.framework.spots.ZLinkSpotClosingContext
 import systems.zlink.framework.spots.ZLinkSpotContext
 import systems.zlink.framework.spots.ZLinkSpotCreateResponse
 import systems.zlink.framework.spots.ZLinkTimer
+import systems.zlink.framework.spots.ZLinkTimerOptions
+import systems.zlink.framework.spots.ZLinkTimerOverrunPolicy
 import systems.zlink.samples.kotlin.tictactoe.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.tictactoe.server.play.domain.tictactoe.TicTacToeMatch
 import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.actors.PlayActor
@@ -85,16 +88,23 @@ class TicTacToeGame(
         players.removeIf { it.actor.actorId == actor.actorId }
     }
 
+    // --8<-- [start:doc-disconnect-actor]
     override suspend fun onDisconnectActorSuspending(actor: PlayActor) {
         actor.markDisconnected()
     }
+
+    // --8<-- [end:doc-disconnect-actor]
 
     // --8<-- [start:doc-ttt-timer-register]
     override suspend fun onInitializeSuspending() {
         // timer: TicTacToeGameTimerHandler가 turn timeout을 주기적으로 확인한다.
         gameTick =
             context
-                .addTimer("game-tick", gameTickPeriod, TicTacToeGameTimerHandler::class.java, null)
+                .addTimer<TicTacToeGameTimerHandler>(
+                    "game-tick",
+                    gameTickPeriod,
+                    ZLinkTimerOptions(ZLinkTimerOverrunPolicy.SKIP_LATE_TICKS, 1, false),
+                )
                 .await()
     }
 
@@ -264,6 +274,7 @@ class TicTacToeGame(
         // --8<-- [start:doc-multicast-publish]
         context
             .outbound()
+            .kotlin()
             .publish(
                 SampleNames.PlayNode,
                 SampleNames.PlayerMilestoneTopic,
@@ -274,8 +285,7 @@ class TicTacToeGame(
                     wins = wins,
                 ),
             )
-            // #895: Spot outbound fanout has no Kotlin wrapper in the spec.
-            .submit()
+            .await()
         // --8<-- [end:doc-multicast-publish]
     }
 }

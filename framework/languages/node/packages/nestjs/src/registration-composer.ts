@@ -430,9 +430,11 @@ export function createRegistrationOptions(
     channels[name] = {
       routingId: channel.routingId,
       routingIdPrefix: channel.routingIdPrefix,
+      noDrop: channel.noDrop,
       publishHandlers: channel.publishHandlers,
       publisher: channel.publisher,
-      subscriber: channel.subscriber
+      subscriber: channel.subscriber,
+      subscriptions: channel.subscriptions
     };
   }
 

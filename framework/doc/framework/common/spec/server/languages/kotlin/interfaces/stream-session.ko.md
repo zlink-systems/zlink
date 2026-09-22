@@ -125,7 +125,7 @@ public final class systems.zlink.framework.kotlin.ZLinkFrameworkExtensionsKt {
 public interface systems.zlink.framework.kotlin.ZLinkKotlinSessionSendCall {
  public abstract systems.zlink.framework.kotlin.ZLinkKotlinSessionSendCall metadata(java.lang.String, java.lang.String);
  public abstract systems.zlink.framework.kotlin.ZLinkKotlinSessionSendCall compress();
- public abstract systems.zlink.framework.kotlin.ZLinkKotlinSessionSendCall timeout-LRDsOJo(long);
+ public abstract systems.zlink.framework.kotlin.ZLinkKotlinSessionSendCall timeout(java.time.Duration);
  public abstract java.lang.Object await(kotlin.coroutines.Continuation<? super kotlin.Unit>);
 }
 public interface systems.zlink.framework.kotlin.ZLinkKotlinSessionReplyCall {

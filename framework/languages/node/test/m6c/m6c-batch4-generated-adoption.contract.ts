@@ -222,6 +222,17 @@ test('batch-4 ZLJR hand/generated codecs match the fixed 1958-byte golden record
   assert.deepEqual(Buffer.from(encodeZljrRecordV1(generated)), encoded);
 });
 
+test('batch-4 ZLJR generated codec round-trips request and reply above 1 MiB', () => {
+  const canonical = decodeZljrRecordV1(Buffer.from(zljrGolden().canonical.hex, 'hex'));
+  const request = Buffer.alloc(1024 * 1024 + 1, 0x5a);
+  const reply = Buffer.alloc(1024 * 1024 + 1, 0xa5);
+
+  const restored = decodeZljrRecordV1(encodeZljrRecordV1({ ...canonical, request, reply }));
+
+  assert.deepEqual(Buffer.from(restored.request), request);
+  assert.deepEqual(Buffer.from(restored.reply), reply);
+});
+
 test('batch-4 ZLJR hand/generated codecs reject every adjudicated malformed record', () => {
   for (const malformed of zljrGolden().malformed) {
     const encoded = Buffer.from(malformed.hex, 'hex');

@@ -18,6 +18,7 @@ import systems.zlink.framework.actors.ZLinkActorManager
 import systems.zlink.framework.channels.ZLinkRouteClient
 import systems.zlink.framework.configuration.ZLinkMeshNodeBuilder
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
+import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions
@@ -111,8 +112,7 @@ class Program {
         options.configureLocations()
         options.addLocationStore(locations)
         options.addRelocationStore(relocation)
-        // #895: configuration package scanning has no Kotlin form in the spec.
-        options.addHandlersFromPackageOf(Program::class.java)
+        options.addHandlersFromPackageOf<Program>()
         options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
         if (topology.isRole("zone") && topology.isSubscriberOnly()) {
             options
@@ -139,8 +139,7 @@ class Program {
                     .addStreamNode(ZoneWorldNames.GATEWAY_STREAM)
                     .bind(topology.streamValue())
                     .enableActorDispatch()
-                    // #895: session registration has no Kotlin form in the spec.
-                    .registerSession(GameSession::class.java)
+                    .registerSession<GameSession>()
             }
             "zone" -> {
                 // --8<-- [start:doc-multi-channel-register]
@@ -154,18 +153,14 @@ class Program {
                 mesh
                     .objects()
                     .server()
-                    // #895: entry-spot registration has no Kotlin form in the spec.
-                    .addEntrySpot(ZoneEntrySpot::class.java)
-                    .addSpotFactory(ZoneWorldNames.ZONE_SPOT_TYPE, ZoneSpot::class.java) {
-                        it.stableTypeLimit(2).disableRelocation()
+                    .addEntrySpot<ZoneEntrySpot>()
+                    .addSpotFactory<ZoneSpot>(ZoneWorldNames.ZONE_SPOT_TYPE) {
+                        stableTypeLimit(2).disableRelocation()
                     }
-                    .addActorFactory(
-                        ZoneWorldNames.PLAYER_ACTOR_TYPE,
-                        PlayerActor::class.java,
-                        PlayerActorFactory::class.java,
+                    .addActorFactory<PlayerActor, PlayerActorFactory>(
+                        ZoneWorldNames.PLAYER_ACTOR_TYPE
                     ) {
-                        // #895: state preservation configuration has no Kotlin form in the spec.
-                        it.preserveStateWith(PlayerActorRelocationAdapter::class.java)
+                        preserveStateWith<PlayerActor, PlayerActorRelocationAdapter>()
                     }
                 // --8<-- [end:doc-zw-node-register]
                 // --8<-- [start:doc-zw-fanout-subscribe]
@@ -191,8 +186,7 @@ class Program {
                     .addStreamNode(ZoneWorldNames.OPS_STREAM)
                     .bind(topology.streamValue())
                     .enableActorDispatch()
-                    // #895: session registration has no Kotlin form in the spec.
-                    .registerSession(OpsSession::class.java)
+                    .registerSession<OpsSession>()
             }
         }
     }

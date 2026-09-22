@@ -74,8 +74,6 @@ internal static class ZLinkActorRelocationSourceFenceCodec
             if (version == 2)
             {
                 var legacyRecoveryLength = checked((int)ReadU32(encoded, ref offset));
-                if (legacyRecoveryLength > 1024 * 1024)
-                    throw new InvalidDataException();
                 legacyRemoteJoinRecovery = Read(encoded, ref offset, legacyRecoveryLength)
                     .ToArray();
             }

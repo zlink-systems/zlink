@@ -1,6 +1,9 @@
 # 1. 개요
 
-이 장은 [tutorial의 `Server`·`Client` 디렉터리와 「실행」 절](https://github.com/zlink-systems/zlink-<언어>-examples/blob/main/tutorial/README.ko.md#실행)에서 코드를 인용하며, 그 tree를 bootstrap하고 build하면 뒤의 장에서 설명하는 실행 결과를 재현할 수 있다.
+!!! info "이 장을 읽고 나면"
+
+    ZLink Framework가 해결하는 문제와 주요 메시징 표면을 구분할 수 있다.
+    이 장의 코드는 [언어별 예제 저장소](https://github.com/zlink-systems/zlink-<언어>-examples)에서 가져왔다.
 
 === "C#/.NET"
 
@@ -82,7 +85,7 @@ correlation은 framework가 처리한다.
 > protocol(ZMP) + codec + 논리 channel/packet이라 서로 다른 언어로 구현된 서비스가
 > 같은 channel 위에서 상호 호출한다(예: room 서버 C++, API 서버 .NET·Java). 이
 > 가이드는 `.NET` 기준이며 `.NET` 구현을 reference implementation(기준 구현)으로
-> 삼는다. 자세한 cross-language 모델은 [17-alternative §2.1](17-alternative.ko.md)이 다룬다.
+> 삼는다. cross-language 모델은 [ZLink를 사용하는 상황](17-alternative.ko.md#2-zlink를-사용하는-상황)에서 다룬다.
 
 ## 2. 사용이 필요한 상황
 
@@ -143,7 +146,7 @@ correlation은 framework가 처리한다.
 | 어려움 | ZLink 기능 | 자세히 |
 | --- | --- | --- |
 | 장르별 토폴로지를 소켓부터 직접 만듦 | **channel 조합으로 토폴로지 선언** — 1:N 요청/응답, fan-out, 노드 지목 route mesh, room 단위 spot mesh를 등록 몇 줄로 조합, 연결은 location store가 자동 유지 | [§3 아키텍처](#33-계층-구조와-등록-지점) · [05](20-channel-messaging.ko.md)·[06](21-spot.ko.md)·[10](25-location.ko.md) |
-| in-memory 상태의 lock·경합 | **SPOT 직렬 실행** — 한 room의 모든 메시지를 하나의 실행 줄로 세워 순서대로 실행. lock이 업무 로직에서 사라진다 | 아래 코드 · [06](21-spot.ko.md) |
+| in-memory 상태의 lock·경합 | **SPOT 직렬 실행** — 한 room의 모든 message가 Spot queue에 들어가 순서대로 실행된다. lock이 업무 로직에서 사라진다 | 아래 코드 · [06](21-spot.ko.md) |
 | 소켓 framing·세션 수명 직접 구현 | **STREAM** — 연결 수명·framing·packet codec을 framework가 소유(TCP/TLS/WS/WSS) | [09](23-stream.ko.md) |
 | 재접속 유저 위치 추적 | **actor binding** — 재접속한 새 연결이 같은 actor로 이어진다 | [08](24-actor-session.ko.md) |
 | 배포 때 유저 튕김 | **graceful drain** — 신규 차단, actor handoff, 진행 중 마무리 후 종료. 앱 코드 0줄 | [12](12-operations.ko.md) |
@@ -176,8 +179,7 @@ RouteMesh·Spot·Instance Spot 조합으로 구현한다. 방식이 바뀌어도
 런타임이 없다.
 
 > 트위치 FPS의 **초저지연 snapshot netcode**는 유실을 허용하는 비신뢰 전송을 쓴다.
-> 현재 STREAM이 제공하는 transport는 TCP/TLS/WS/WSS이며, **비신뢰 전송(QUIC
-> datagram·WebTransport)은 지원 예정**이다. 다만 그런 게임에서도 매칭·로비·메타·
+> STREAM은 TCP, TLS, WebSocket 기반 transport를 제공한다. 다만 그런 게임에서도 매칭·로비·메타·
 > 소셜은 지금 이 네 방식으로 충분히 처리된다. 어디까지 되고 안 되는지는
 > [17장](17-alternative.ko.md) §4에서 다룬다.
 
@@ -280,8 +282,8 @@ mesh 이름과 room 타입 이름은 이 장의 "빙고 room"이 아니라 tutor
 
 여러 플레이어가 동시에 채팅을 보내고 상태를 조회하는 room인데 `lock`도,
 `Interlocked`도, Redis 분산 락도 없다. framework가 한 room의 모든 메시지(요청,
-구독 이벤트, timer tick, actor packet)를 **하나의 실행 줄에 세워 순서대로**
-실행하기 때문이다 — timer와 actor packet도 같은 큐에 서지만, 이 tutorial 코드는
+구독 이벤트, timer tick, actor packet)가 **Spot queue에 들어가 순서대로**
+실행되기 때문이다 — timer와 actor packet도 같은 Spot queue에 들어가지만, 이 tutorial 코드는
 채팅 메시지와 상태 조회만 다룬다. 여기서 직렬은 codec 직렬화가 아니라 **실행
 순서의 직렬화**다([06 §3](21-spot.ko.md)).
 
@@ -681,7 +683,7 @@ application에서는 "`services` mesh의 `orders` channel로 요청을 보낸다
 같은 "서버 간 요청/응답"을 붙이는 코드량 차이다.
 
 **raw 바인딩으로 직접 (개념적)** — 실행되는 코드가 아니라 직접 구성해야 할 작업
-목록이다. 다섯 언어 모두 같은 목록이라 언어 탭으로 나누지 않는다.
+목록이다. 지원 언어에서 같은 목록을 사용하므로 언어 탭으로 나누지 않는다.
 
 ```text
 위치 저장소 조회, endpoint 연결, 재연결 관리,
@@ -1235,5 +1237,5 @@ ZLink의 용도를 구체적인 업무 흐름으로 확인할 때는 [공통 샘
     ---
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}function a(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(a,t);});window.addEventListener("resize",function(){setTimeout(a,150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}function a(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(a,t);});window.addEventListener("resize",function(){setTimeout(a,150);});})();
 </script>

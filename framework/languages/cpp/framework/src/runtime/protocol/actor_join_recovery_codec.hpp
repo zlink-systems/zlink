@@ -270,9 +270,6 @@ inline frozen_record_t encode_actor_join_recovery_saved_work (const actor_join_r
         || (value.operation.high == 0 && value.operation.low == 0)
         || value.reply_content_type.empty ())
         throw service_wire_error_t ("Actor Join recovery identity is invalid");
-    if (value.request.size () > 1024u * 1024u || value.reply.size () > 1024u * 1024u)
-        throw service_wire_error_t ("Actor Join recovery message exceeds 1 MiB");
-
     /* ZLJR is a byte-stable cross-language record.  The Node encoder emits
      * object properties in declaration order, as does System.Text.Json for
      * the .NET record.  Do not use nlohmann::json here: its default object
