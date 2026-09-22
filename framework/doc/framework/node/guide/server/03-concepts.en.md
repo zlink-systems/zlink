@@ -266,7 +266,7 @@ chapter.
 **Completion has two consistent forms.** A send-family call finishes with
 no return value once **the send slot accepts it**, and a request-family call finishes with
 one of **reply · timeout · route error**. This holds no matter which surface you use
-([Backpressure Visible in the API](33-backpressure.en.md#3-backpressure-visible-in-the-api)).
+([Backpressure Visible in the API](33-backpressure.en.md#4-backpressure-visible-in-the-api)).
 
 ## 8. Naming Convention
 
