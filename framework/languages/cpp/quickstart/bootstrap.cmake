@@ -108,10 +108,13 @@ if(CMAKE_HOST_WIN32)
   if(NOT EXISTS "${_zlink_vswhere}")
     zlink_fail("could not find vswhere.exe; install Visual Studio 2022 or 2026 with the 'Desktop development with C++' workload")
   endif()
-  execute_process(COMMAND "${_zlink_vswhere}" -latest -products * -version "[17.0,19.0)"
+  # -prerelease: a machine whose only Visual Studio is a preview (Insiders)
+  # channel still has a complete toolset; vswhere orders by version, so a
+  # released 2026 wins over a 2022 either way.
+  execute_process(COMMAND "${_zlink_vswhere}" -latest -prerelease -products * -version "[17.0,19.0)"
     -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64
     -property installationPath OUTPUT_VARIABLE ZLINK_VS_ROOT OUTPUT_STRIP_TRAILING_WHITESPACE)
-  execute_process(COMMAND "${_zlink_vswhere}" -latest -products * -version "[17.0,19.0)"
+  execute_process(COMMAND "${_zlink_vswhere}" -latest -prerelease -products * -version "[17.0,19.0)"
     -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64
     -property installationVersion OUTPUT_VARIABLE _zlink_vs_version OUTPUT_STRIP_TRAILING_WHITESPACE)
   if(NOT ZLINK_VS_ROOT OR NOT _zlink_vs_version MATCHES "^(17|18)\\.")
