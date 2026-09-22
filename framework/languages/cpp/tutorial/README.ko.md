@@ -35,6 +35,8 @@ HTTP client를 다룬다.
 
 ## 전제 조건
 
+bash 블록은 Linux·macOS·WSL에서, PowerShell 블록은 Windows PowerShell 7에서 실행한다. `cmd`는 지원하지 않는다.
+
 | 도구 | Windows | Linux · WSL |
 |---|---|---|
 | C++20 컴파일러 | Visual Studio 2022 17.4 이상, **Desktop development with C++** 워크로드 (MSVC 19.44로 확인) | GCC 13 이상 (13.3으로 확인) |
@@ -66,10 +68,14 @@ script에 적혀 있고, Core·binding 버전과 서드파티 목록은 framewor
 
 ## 빌드
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 cmake -P bootstrap.cmake
 cmake --build build --parallel
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 cmake -P bootstrap.cmake
@@ -86,21 +92,27 @@ Redis가 `127.0.0.1:6379`에서 실행 중이어야 한다. Spot·Actor·Locatio
 아래 블록은 Redis를 Docker로 실행하고 Server, Client를 차례로 시작한 뒤 첫 요청으로 두 process의
 mesh 연결을 확인한다. handler와 filter의 로그는 **stderr**로 기록된다.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 docker run -d --rm --name zlink-tutorial-redis -p 127.0.0.1:6379:6379 redis:7-alpine && until docker exec zlink-tutorial-redis redis-cli ping 2>/dev/null | grep -q PONG; do sleep 0.2; done
 ./build/tutorial_server > server.log 2>&1 &
+echo $! > server.pid
 ./build/tutorial_client > client.log 2>&1 &
+echo $! > client.pid
 for i in $(seq 1 60); do curl -sf http://127.0.0.1:5180/players/p1/profile > /dev/null && break; sleep 1; done
-curl -sf http://127.0.0.1:5180/players/p1/profile
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 docker run -d --rm --name zlink-tutorial-redis -p 127.0.0.1:6379:6379 redis:7-alpine | Out-Null; if ($LASTEXITCODE -eq 0) { while (-not ((docker exec zlink-tutorial-redis redis-cli ping 2>$null) -match 'PONG')) { Start-Sleep -Milliseconds 200 } }
-Start-Process -NoNewWindow .\build\Release\tutorial_server.exe -RedirectStandardOutput server.out -RedirectStandardError server.log
-Start-Process -NoNewWindow .\build\Release\tutorial_client.exe -RedirectStandardOutput client.out -RedirectStandardError client.log
+$server = Start-Process -NoNewWindow .\build\Release\tutorial_server.exe -RedirectStandardOutput server.out -RedirectStandardError server.log -PassThru
+$server.Id | Set-Content server.pid
+$client = Start-Process -NoNewWindow .\build\Release\tutorial_client.exe -RedirectStandardOutput client.out -RedirectStandardError client.log -PassThru
+$client.Id | Set-Content client.pid
 foreach ($i in 1..60) { $answer = curl.exe -s http://127.0.0.1:5180/players/p1/profile; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds 1 }
 if ($LASTEXITCODE -ne 0) { throw 'tutorial-http did not come up' }
-$answer
 ```
 
 PowerShell의 `curl`은 `Invoke-WebRequest`의 별칭이므로 `curl.exe`를 쓰고, JSON 본문의
@@ -120,12 +132,17 @@ STREAM 단계의 외부 client는 `tutorial_stream_client`이고 HTTP client 단
 정리할 때는 Server·Client process와 Redis container를 종료한다.
 
 ```powershell
-Stop-Process -Name tutorial_server,tutorial_client
+Get-Content client.pid, server.pid | ForEach-Object {
+  if ($_ -match '^\d+$') { taskkill /PID $_ /T /F 2>$null | Out-Null }
+}
 docker stop zlink-tutorial-redis
 ```
 
 ```bash
-pkill -f build/tutorial_server; pkill -f build/tutorial_client
+for pid in "$(cat client.pid)" "$(cat server.pid)"; do
+  pkill -TERM -P "$pid" 2>/dev/null || true
+  kill "$pid" 2>/dev/null || true
+done
 docker stop zlink-tutorial-redis
 ```
 
@@ -144,6 +161,8 @@ docker stop zlink-tutorial-redis
 
 ## 검증
 
+examples-smoke는 이 블록을 그대로 실행한다.
+
 | 단계 | 성공의 증거 |
 |---|---|
 | `cmake -P bootstrap.cmake` | 마지막 줄 `-- bootstrap done. Next: cmake --build ...`. `.zlink/install/lib/cmake/zlink_framework/zlink_frameworkConfig.cmake`가 있다 |
@@ -156,6 +175,8 @@ docker stop zlink-tutorial-redis
 아래 블록은 [실행](#실행) 블록이 띄운 상태에서 첫 요청의 응답과 STREAM client의 종료 코드로
 이를 확인한다.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 set -e
 curl -sf http://127.0.0.1:5180/players/p1/profile | grep -q '"playerId":"p1"'
@@ -163,6 +184,8 @@ echo "tutorial-http=ok"
 ./build/tutorial_stream_client
 echo "tutorial-stream=ok"
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 if ((curl.exe -s http://127.0.0.1:5180/players/p1/profile) -notmatch '"playerId":"p1"') { throw 'tutorial-http failed' }
@@ -173,6 +196,30 @@ Write-Output 'tutorial-stream=ok'
 ```
 
 [단계별 확인](#단계별-확인)에 각 단계의 요청과 기대 출력이 있다.
+
+## 종료
+
+실행 절에서 시작한 process를 종료한다.
+
+**Linux · macOS · WSL — bash**
+
+```bash title="linux"
+for pid in "$(cat client.pid)" "$(cat server.pid)"; do
+  pkill -TERM -P "$pid" 2>/dev/null || true
+  kill "$pid" 2>/dev/null || true
+done
+docker rm -f zlink-tutorial-redis 2>/dev/null || true
+```
+
+**Windows — PowerShell 7**
+
+```powershell title="windows"
+Get-Content client.pid, server.pid | ForEach-Object {
+  if ($_ -match '^\d+$') { taskkill /PID $_ /T /F 2>$null | Out-Null }
+}
+Get-Job | Stop-Job -ErrorAction SilentlyContinue
+docker rm -f zlink-tutorial-redis 2>$null | Out-Null
+```
 
 ## 문제 해결
 
@@ -583,9 +630,13 @@ C++ 쪽에서 알아 둘 것은 다음과 같다.
 비동기 `async<T>()`, `async_raw()`, `fetch<T>()`, `download()` 종결자를 `co_await`로 기다린다.
 Server와 Client를 실행한 상태에서 다음 명령으로 실행한다.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 ./build/tutorial_http_client
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 & .\build\Release\tutorial_http_client.exe

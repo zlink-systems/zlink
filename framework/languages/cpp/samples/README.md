@@ -32,6 +32,8 @@ The command blocks of `Build`, `Run` and `Verify` are marked `title="linux"` (ba
 
 ## Prerequisites
 
+Bash blocks run on Linux, macOS, and WSL; PowerShell blocks run on Windows PowerShell 7. `cmd` is not supported.
+
 | Tool | Windows | Linux / WSL |
 |---|---|---|
 | C++20 compiler | Visual Studio 2022 17.4 or later with the **Desktop development with C++** workload (verified with MSVC 19.44) | GCC 13 or later (verified with 13.3) |
@@ -64,10 +66,14 @@ bootstrap.cmake`. To start over, delete `.zlink/` and `build/`.
 
 ## Build
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 cmake -P bootstrap.cmake
 cmake --build build --parallel
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 cmake -P bootstrap.cmake
@@ -86,6 +92,8 @@ Every sample has a `run_sample.ps1` and a `run_sample.sh`; one invocation runs o
 20000-20099 on `127.0.0.1`) and removes it at the end. Nothing has to be started beforehand.
 The block below runs the seven in turn.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 ./Bingo/run_sample.sh
 ./DeliveryDispatch/run_sample.sh
@@ -95,6 +103,8 @@ The block below runs the seven in turn.
 ./TicTacToe/run_sample.sh
 ./ZoneWorld/run_sample.sh
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 .\Bingo\run_sample.ps1
@@ -114,6 +124,8 @@ Set `ZLINK_CPP_BUILD_DIR` to use the executables of another build tree instead o
 
 ## Verify
 
+Examples smoke runs this block exactly as written.
+
 A sample passes when the runner's last line is the marker below and its exit code is 0. The
 items the client self-check confirmed precede it as `<sample>-...=verified` lines.
 
@@ -129,14 +141,20 @@ items the client self-check confirmed precede it as `<sample>-...=verified` line
 
 The block below checks this with TicTacToe alone.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 ./TicTacToe/run_sample.sh | tee tictactoe.log | tail -n 1 | grep -x 'tictactoe-placement=completed'
+echo "tictactoe=ok"
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 $lines = @(& .\TicTacToe\run_sample.ps1 *>&1 | ForEach-Object { "$_" })
 if ($lines[-1] -ne 'tictactoe-placement=completed') { throw ('TicTacToe failed: ' + $lines[-1]) }
 Write-Output $lines[-1]
+Write-Output 'tictactoe=ok'
 ```
 
 A failed run keeps its run directory with the per-role stdout/stderr logs and prints its path as

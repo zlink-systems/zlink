@@ -11,6 +11,8 @@ sample scenarios defined by the
 
 ## Prerequisites
 
+Bash blocks run on Linux, macOS, and WSL; PowerShell blocks run on Windows PowerShell 7. `cmd` is not supported.
+
 - **JDK 25.** Gradle toolchain is pinned to 25
   (`gradle/zlink-jvm-baseline.settings.gradle.kts`). No Gradle toolchain
   auto-download resolver (such as
@@ -50,10 +52,14 @@ The run scripts (see "Run" below) build as part of running, so a separate
 build step isn't required. To check the IDE-importable Gradle build without
 running any scenario:
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 ./gradlew projects
 ./gradlew buildAllSamples
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 .\gradlew.bat projects
@@ -70,6 +76,8 @@ section. Redis needs no separate setup: each script starts and removes its
 own container (see "Prerequisites" — Docker is the only requirement).
 
 Linux/WSL:
+
+**Linux · macOS · WSL — bash**
 
 ```bash title="linux"
 ./java/Bingo/run_sample.sh
@@ -90,6 +98,8 @@ Linux/WSL:
 
 Windows:
 
+**Windows — PowerShell 7**
+
 ```powershell title="windows"
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\java\Bingo\run_sample.ps1
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\java\DeliveryDispatch\run_sample.ps1
@@ -108,6 +118,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\kotlin\ZoneWorld\run_sample.ps1
 ```
 
 ## Verify
+
+Examples smoke runs this block exactly as written.
 
 Each sample runner starts role-specific Spring processes, waits for readiness,
 runs the probe or client scenario, and removes the processes and Redis

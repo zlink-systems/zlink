@@ -10,15 +10,21 @@ places this code corrects the guide text, is [README.ko.md](README.ko.md).
 
 ## Prerequisites
 
+Bash blocks run on Linux, macOS, and WSL; PowerShell blocks run on Windows PowerShell 7. `cmd` is not supported.
+
 - **.NET SDK 8.0 or later** -- `dotnet --version` must report an `8.0.x` (or
   newer) SDK.
 - **Docker Desktop** (or another Docker Engine) -- rooms, queues, and players
   need a Location Store to record where they live. Channel messaging alone
   does not need one.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 docker run --rm -d -p 6379:6379 --name zlink-tutorial-dotnet-redis redis:7.2-alpine
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 docker run --rm -d -p 6379:6379 --name zlink-tutorial-dotnet-redis redis:7.2-alpine
@@ -39,9 +45,13 @@ nuget.org the same thing. Building inside the repository still references
 the `Zlink.Framework` package, and copying just this directory out still
 builds the same way.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 dotnet build Tutorial.sln -c Release
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 dotnet build Tutorial.sln -c Release
@@ -64,6 +74,8 @@ Start the Server in the background first, then the Client, which opens HTTP
 on top of it. Once both are ready, one request confirms they are connected,
 and this leaves that result in a file the next section reads.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 dotnet run --project Server/Server.csproj -c Release --no-build > server.log 2>&1 &
 echo $! > server.pid
@@ -73,8 +85,9 @@ for _ in $(seq 1 60); do
   curl -sf http://127.0.0.1:5080/players/warmup/profile >/dev/null 2>&1 && break
   sleep 1
 done
-curl -sf http://127.0.0.1:5080/players/p1/profile
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 $server = Start-Process dotnet -ArgumentList "run","--project","Server/Server.csproj","-c","Release","--no-build" `
@@ -87,24 +100,29 @@ for ($i = 0; $i -lt 60; $i++) {
   try { Invoke-RestMethod -Uri "http://127.0.0.1:5080/players/warmup/profile" -TimeoutSec 2 | Out-Null; break }
   catch { Start-Sleep -Seconds 1 }
 }
-Invoke-RestMethod -Uri "http://127.0.0.1:5080/players/p1/profile" | ConvertTo-Json -Compress
 ```
 
 ## Verify
+
+Examples smoke runs this block exactly as written.
 
 A `/players/p1/profile` response containing `"playerId":"p1"` means the Server and
 Client found each other (the same request "Run" issued). Once confirmed, stop both
 processes.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 curl -sf http://127.0.0.1:5080/players/p1/profile | grep -q '"playerId":"p1"'
-kill "$(cat client.pid)" "$(cat server.pid)" 2>/dev/null || true
+echo "tutorial-http=ok"
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 $profile = Invoke-RestMethod -Uri 'http://127.0.0.1:5080/players/p1/profile'
 if ($profile.playerId -ne 'p1') { throw "tutorial verify failed: $($profile | ConvertTo-Json -Compress)" }
-Get-Content client.pid, server.pid | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
+Write-Output 'tutorial-http=ok'
 ```
 
 Each feature's own `curl` command under the Korean canonical's chapter
@@ -113,6 +131,30 @@ count as working. To check the whole tutorial the way CI does, follow
 [`.github/workflows/framework-tutorial.yml`](https://github.com/zlink-systems/zlink/blob/main/.github/workflows/framework-tutorial.yml)
 in order -- its last line after every step passes is `all tutorial steps
 passed`.
+
+## Stop
+
+Stop the processes started by the Run section.
+
+**Linux · macOS · WSL — bash**
+
+```bash title="linux"
+for pid in "$(cat client.pid)" "$(cat server.pid)"; do
+  pkill -TERM -P "$pid" 2>/dev/null || true
+  kill "$pid" 2>/dev/null || true
+done
+docker rm -f zlink-tutorial-dotnet-redis 2>/dev/null || true
+```
+
+**Windows — PowerShell 7**
+
+```powershell title="windows"
+Get-Content client.pid, server.pid | ForEach-Object {
+  if ($_ -match '^\d+$') { taskkill /PID $_ /T /F 2>$null | Out-Null }
+}
+Get-Job | Stop-Job -ErrorAction SilentlyContinue
+docker rm -f zlink-tutorial-dotnet-redis 2>$null | Out-Null
+```
 
 ## Troubleshooting
 
@@ -144,10 +186,14 @@ feature guides without referencing Framework internals.
 
 With Server and Client running, build and run it as follows:
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 dotnet build Tutorial.sln -c Release
 dotnet run --project HttpClient/HttpClient.csproj -c Release --no-build
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 dotnet build Tutorial.sln -c Release

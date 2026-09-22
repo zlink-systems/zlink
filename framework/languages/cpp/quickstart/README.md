@@ -18,6 +18,8 @@ binding and framework source archives from GitHub Releases plus Conan.
 
 ## Prerequisites
 
+Bash blocks run on Linux, macOS, and WSL; PowerShell blocks run on Windows PowerShell 7. `cmd` is not supported.
+
 The same as the tutorial's, minus Docker (this project uses no Redis):
 
 | Tool | Windows | Linux / WSL |
@@ -46,10 +48,14 @@ downloaded and built. To start over, delete `.zlink/` and `build/`.
 
 ## Build
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 cmake -P bootstrap.cmake
 cmake --build build --parallel
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 cmake -P bootstrap.cmake
@@ -63,22 +69,32 @@ Two executables come out — under `build\Release\` on Windows, `build/` on Linu
 The server listens on `tcp://0.0.0.0:7301`; the client listens on `7302`, connects to the
 server, and serves `GET /hello/{name}` on `http://127.0.0.1:5083`.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 ./build/quickstart_server > server.log 2>&1 &
+echo $! > server.pid
 ./build/quickstart_client > client.log 2>&1 &
+echo $! > client.pid
 for i in $(seq 1 60); do curl -sf http://127.0.0.1:5083/hello/world > /dev/null && break; sleep 1; done
-curl -sf http://127.0.0.1:5083/hello/world
 ```
 
+**Windows — PowerShell 7**
+
 ```powershell title="windows"
-Start-Process -NoNewWindow .\build\Release\quickstart_server.exe -RedirectStandardOutput server.out -RedirectStandardError server.log
-Start-Process -NoNewWindow .\build\Release\quickstart_client.exe -RedirectStandardOutput client.out -RedirectStandardError client.log
+$server = Start-Process -NoNewWindow .\build\Release\quickstart_server.exe -RedirectStandardOutput server.out -RedirectStandardError server.log -PassThru
+$server.Id | Set-Content server.pid
+$client = Start-Process -NoNewWindow .\build\Release\quickstart_client.exe -RedirectStandardOutput client.out -RedirectStandardError client.log -PassThru
+$client.Id | Set-Content client.pid
 foreach ($i in 1..60) { $answer = curl.exe -s http://127.0.0.1:5083/hello/world; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds 1 }
 if ($LASTEXITCODE -ne 0) { throw 'quickstart did not come up' }
-$answer
 ```
 
 ## Verify
+
+Examples smoke runs this block exactly as written.
+
+**Linux · macOS · WSL — bash**
 
 ```bash title="linux"
 set -e
@@ -86,12 +102,36 @@ curl -sf http://127.0.0.1:5083/hello/world | grep -q '"hello, world"'
 echo "quickstart=ok"
 ```
 
+**Windows — PowerShell 7**
+
 ```powershell title="windows"
 if ((curl.exe -s http://127.0.0.1:5083/hello/world) -notmatch '"hello, world"') { throw 'quickstart failed' }
 Write-Output 'quickstart=ok'
 ```
 
 The answer is `"hello, world"` with status 200.
+
+## Stop
+
+Stop the processes started by the Run section.
+
+**Linux · macOS · WSL — bash**
+
+```bash title="linux"
+for pid in "$(cat client.pid)" "$(cat server.pid)"; do
+  pkill -TERM -P "$pid" 2>/dev/null || true
+  kill "$pid" 2>/dev/null || true
+done
+```
+
+**Windows — PowerShell 7**
+
+```powershell title="windows"
+Get-Content client.pid, server.pid | ForEach-Object {
+  if ($_ -match '^\d+$') { taskkill /PID $_ /T /F 2>$null | Out-Null }
+}
+Get-Job | Stop-Job -ErrorAction SilentlyContinue
+```
 
 ## Troubleshooting
 

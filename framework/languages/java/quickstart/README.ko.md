@@ -16,6 +16,8 @@ process가 channel로 한 번 호출한다. 사이트의 `framework/doc/framewor
 
 ## 전제 조건
 
+bash 블록은 Linux·macOS·WSL에서, PowerShell 블록은 Windows PowerShell 7에서 실행한다. `cmd`는 지원하지 않는다.
+
 - JDK 25 이상. Java와 Kotlin subproject의 toolchain이 25로 고정되어 있다.
 - 이 디렉터리에 포함된 Gradle wrapper. 첫 빌드에서 Gradle과 package를 Maven Central에서
   내려받는다.
@@ -35,11 +37,15 @@ Kotlin Client는 subproject build file에서 `kotlinx-coroutines-reactor`도 ver
 
 ## 빌드
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 ./gradlew \
   :java:Server:installDist :java:Client:installDist \
   :kotlin:Server:installDist :kotlin:Client:installDist
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 .\gradlew.bat `
@@ -54,19 +60,25 @@ channel을 처리한다. 각 Client는 `tcp://0.0.0.0:7102`에서 듣고
 `tcp://127.0.0.1:7101`에 연결하며, `http://127.0.0.1:5080`에서 `GET /hello/{name}`을
 제공한다.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 ./java/Server/build/install/Server/bin/Server > server.log 2>&1 &
+echo $! > server.pid
 ./java/Client/build/install/Client/bin/Client > client.log 2>&1 &
+echo $! > client.pid
 for i in $(seq 1 60); do curl -sf http://127.0.0.1:5080/hello/world > /dev/null && break; sleep 1; done
-curl -sf http://127.0.0.1:5080/hello/world
 ```
 
+**Windows — PowerShell 7**
+
 ```powershell title="windows"
-Start-Process -NoNewWindow .\java\Server\build\install\Server\bin\Server.bat -RedirectStandardOutput server.log -RedirectStandardError server.err.log
-Start-Process -NoNewWindow .\java\Client\build\install\Client\bin\Client.bat -RedirectStandardOutput client.log -RedirectStandardError client.err.log
+$server = Start-Process -NoNewWindow .\java\Server\build\install\Server\bin\Server.bat -RedirectStandardOutput server.log -RedirectStandardError server.err.log -PassThru
+$server.Id | Set-Content server.pid
+$client = Start-Process -NoNewWindow .\java\Client\build\install\Client\bin\Client.bat -RedirectStandardOutput client.log -RedirectStandardError client.err.log -PassThru
+$client.Id | Set-Content client.pid
 foreach ($i in 1..60) { $answer = curl.exe -s http://127.0.0.1:5080/hello/world; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds 1 }
 if ($LASTEXITCODE -ne 0) { throw 'quickstart did not come up' }
-$answer
 ```
 
 Kotlin pair는 Java process를 종료한 뒤 같은 명령을 `kotlin/` 경로에서 실행한다
@@ -74,11 +86,17 @@ Kotlin pair는 Java process를 종료한 뒤 같은 명령을 `kotlin/` 경로�
 
 ## 검증
 
+examples-smoke는 이 블록을 그대로 실행한다.
+
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 set -e
 curl -sf http://127.0.0.1:5080/hello/world | grep -q 'hello, world'
 echo "quickstart=ok"
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 $answer = curl.exe -sf http://127.0.0.1:5080/hello/world
@@ -87,6 +105,28 @@ Write-Output 'quickstart=ok'
 ```
 
 Java와 Kotlin pair 모두 endpoint가 HTTP 상태 코드 200과 `hello, world`를 반환한다.
+
+## 종료
+
+실행 절에서 시작한 process를 종료한다.
+
+**Linux · macOS · WSL — bash**
+
+```bash title="linux"
+for pid in "$(cat client.pid)" "$(cat server.pid)"; do
+  pkill -TERM -P "$pid" 2>/dev/null || true
+  kill "$pid" 2>/dev/null || true
+done
+```
+
+**Windows — PowerShell 7**
+
+```powershell title="windows"
+Get-Content client.pid, server.pid | ForEach-Object {
+  if ($_ -match '^\d+$') { taskkill /PID $_ /T /F 2>$null | Out-Null }
+}
+Get-Job | Stop-Job -ErrorAction SilentlyContinue
+```
 
 ## 문제 해결
 

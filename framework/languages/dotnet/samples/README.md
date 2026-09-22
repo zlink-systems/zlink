@@ -11,6 +11,8 @@ Korean canonical version is [README.ko.md](README.ko.md).
 
 ## Prerequisites
 
+Bash blocks run on Linux, macOS, and WSL; PowerShell blocks run on Windows PowerShell 7. `cmd` is not supported.
+
 - **.NET SDK 8.0** -- `dotnet --version` reports an `8.0.x` SDK, on PATH.
 - **Docker Desktop** (or another Docker Engine), running and reachable from
   the shell that starts a sample. Every `run_sample.sh`/`run_sample.ps1`
@@ -39,9 +41,13 @@ Each `run_sample.sh`/`run_sample.ps1` builds its own sample before running
 it -- there is no separate build step to run first. To build one sample by
 hand (for example to check it compiles without running it):
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 dotnet build TicTacToe/TicTacToe.sln
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 dotnet build TicTacToe\TicTacToe.sln
@@ -59,10 +65,14 @@ checkout, or `samples/` in the cloned examples repository). The runner
 starts its own Redis container in Docker itself -- do not start one by hand.
 This saves the run's own output to a file the next section checks.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 set -o pipefail
 ./TicTacToe/run_sample.sh 2>&1 | tee tictactoe-run.log
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 .\TicTacToe\run_sample.ps1 *>&1 | Tee-Object -FilePath tictactoe-run.log
@@ -81,6 +91,8 @@ processes and Redis container it created. Server code starts only its own role.
 
 ## Verify
 
+Examples smoke runs this block exactly as written.
+
 A successful run builds, runs every scenario, tears every role down cleanly,
 and prints that sample's completion marker as its last line before exiting
 `0`:
@@ -98,14 +110,20 @@ and prints that sample's completion marker as its last line before exiting
 For TicTacToe, that means `tictactoe-run.log` from "Run" above ends with
 `tictactoe-placement=completed`:
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 grep -q 'tictactoe-placement=completed' tictactoe-run.log
+echo "tictactoe=ok"
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 if (-not (Select-String -Path tictactoe-run.log -Pattern 'tictactoe-placement=completed' -Quiet)) {
   throw "tictactoe verify failed"
 }
+Write-Output 'tictactoe=ok'
 ```
 
 A nonzero exit code, or any line starting `scenario ... FAILED` /

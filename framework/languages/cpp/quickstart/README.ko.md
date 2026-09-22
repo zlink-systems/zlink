@@ -18,6 +18,8 @@ server endpoint를 직접 지정한다. 사이트의 `framework/doc/framework/cp
 
 ## 전제 조건
 
+bash 블록은 Linux·macOS·WSL에서, PowerShell 블록은 Windows PowerShell 7에서 실행한다. `cmd`는 지원하지 않는다.
+
 tutorial과 같지만 Docker는 필요 없다(이 프로젝트는 Redis를 쓰지 않는다).
 
 | 도구 | Windows | Linux / WSL |
@@ -45,10 +47,14 @@ Conan이고 vcpkg fallback은 `-DZLINK_PACKAGE_MANAGER=vcpkg`로 고른다. 두 
 
 ## 빌드
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 cmake -P bootstrap.cmake
 cmake --build build --parallel
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 cmake -P bootstrap.cmake
@@ -62,22 +68,32 @@ cmake --build build --config Release --parallel
 server는 `tcp://0.0.0.0:7301`에서 대기한다. client는 `7302`에서 대기하고 server에 연결한 뒤
 `http://127.0.0.1:5083`에서 `GET /hello/{name}`을 제공한다.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 ./build/quickstart_server > server.log 2>&1 &
+echo $! > server.pid
 ./build/quickstart_client > client.log 2>&1 &
+echo $! > client.pid
 for i in $(seq 1 60); do curl -sf http://127.0.0.1:5083/hello/world > /dev/null && break; sleep 1; done
-curl -sf http://127.0.0.1:5083/hello/world
 ```
 
+**Windows — PowerShell 7**
+
 ```powershell title="windows"
-Start-Process -NoNewWindow .\build\Release\quickstart_server.exe -RedirectStandardOutput server.out -RedirectStandardError server.log
-Start-Process -NoNewWindow .\build\Release\quickstart_client.exe -RedirectStandardOutput client.out -RedirectStandardError client.log
+$server = Start-Process -NoNewWindow .\build\Release\quickstart_server.exe -RedirectStandardOutput server.out -RedirectStandardError server.log -PassThru
+$server.Id | Set-Content server.pid
+$client = Start-Process -NoNewWindow .\build\Release\quickstart_client.exe -RedirectStandardOutput client.out -RedirectStandardError client.log -PassThru
+$client.Id | Set-Content client.pid
 foreach ($i in 1..60) { $answer = curl.exe -s http://127.0.0.1:5083/hello/world; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds 1 }
 if ($LASTEXITCODE -ne 0) { throw 'quickstart did not come up' }
-$answer
 ```
 
 ## 검증
+
+examples-smoke는 이 블록을 그대로 실행한다.
+
+**Linux · macOS · WSL — bash**
 
 ```bash title="linux"
 set -e
@@ -85,12 +101,36 @@ curl -sf http://127.0.0.1:5083/hello/world | grep -q '"hello, world"'
 echo "quickstart=ok"
 ```
 
+**Windows — PowerShell 7**
+
 ```powershell title="windows"
 if ((curl.exe -s http://127.0.0.1:5083/hello/world) -notmatch '"hello, world"') { throw 'quickstart failed' }
 Write-Output 'quickstart=ok'
 ```
 
 응답은 `"hello, world"`, 상태 코드 200이다.
+
+## 종료
+
+실행 절에서 시작한 process를 종료한다.
+
+**Linux · macOS · WSL — bash**
+
+```bash title="linux"
+for pid in "$(cat client.pid)" "$(cat server.pid)"; do
+  pkill -TERM -P "$pid" 2>/dev/null || true
+  kill "$pid" 2>/dev/null || true
+done
+```
+
+**Windows — PowerShell 7**
+
+```powershell title="windows"
+Get-Content client.pid, server.pid | ForEach-Object {
+  if ($_ -match '^\d+$') { taskkill /PID $_ /T /F 2>$null | Out-Null }
+}
+Get-Job | Stop-Job -ErrorAction SilentlyContinue
+```
 
 ## 문제 해결
 

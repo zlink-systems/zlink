@@ -11,6 +11,8 @@
 
 ## 전제 조건
 
+bash 블록은 Linux·macOS·WSL에서, PowerShell 블록은 Windows PowerShell 7에서 실행한다. `cmd`는 지원하지 않는다.
+
 - **.NET SDK 8.0** — `dotnet --version`이 `8.0.x` SDK를 보고해야 하고 PATH에 있어야
   한다.
 - **Docker Desktop**(또는 다른 Docker Engine)이 실행 중이고 샘플을 시작하는 셸에서
@@ -36,9 +38,13 @@
 `run_sample.sh`/`run_sample.ps1` 각각이 실행 전에 그 샘플을 스스로 빌드하므로
 별도의 빌드 단계는 없다. sample 하나만 직접 빌드하여 컴파일만 확인하려면 다음 명령을 사용한다.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 dotnet build TicTacToe/TicTacToe.sln
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 dotnet build TicTacToe\TicTacToe.sln
@@ -55,10 +61,14 @@ sample 하나가 실행된다.
 root)에서 실행한다. 러너가 자기 Redis 컨테이너를 Docker로 직접 띄우므로 따로
 손으로 띄우지 않는다. 실행 결과는 다음 절이 읽을 파일에 남긴다.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 set -o pipefail
 ./TicTacToe/run_sample.sh 2>&1 | tee tictactoe-run.log
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 .\TicTacToe\run_sample.ps1 *>&1 | Tee-Object -FilePath tictactoe-run.log
@@ -74,6 +84,8 @@ marker를 확인한다.
 컨테이너를 없앤다. server 코드는 자기 역할만 시작한다.
 
 ## 검증
+
+examples-smoke는 이 블록을 그대로 실행한다.
 
 성공한 실행은 빌드와 모든 시나리오를 마치고 모든 역할을 정상 종료한다. 마지막 줄에는 해당
 sample의 완료 마커를 기록하고 종료 코드 `0`으로 끝난다.
@@ -91,14 +103,20 @@ sample의 완료 마커를 기록하고 종료 코드 `0`으로 끝난다.
 TicTacToe는 위 "실행"에서 만든 `tictactoe-run.log`의 마지막 줄이
 `tictactoe-placement=completed`인지 확인한다.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 grep -q 'tictactoe-placement=completed' tictactoe-run.log
+echo "tictactoe=ok"
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 if (-not (Select-String -Path tictactoe-run.log -Pattern 'tictactoe-placement=completed' -Quiet)) {
   throw "tictactoe verify failed"
 }
+Write-Output 'tictactoe=ok'
 ```
 
 exit code가 0이 아니거나 `scenario ... FAILED` / `!! ... withheld`로 시작하는 줄이
