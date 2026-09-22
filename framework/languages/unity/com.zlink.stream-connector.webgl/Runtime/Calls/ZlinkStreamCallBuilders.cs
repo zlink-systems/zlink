@@ -101,17 +101,17 @@ namespace Systems.Zlink.Stream.Connector.Runtime.Calls
     {
         private readonly ZlinkStreamWebGlConnector _connector;
         private readonly ZlinkStreamEncodedPayload _payload;
-        private readonly string _actorId;
+        private readonly ZlinkStreamActor _actor;
 
         internal ZlinkStreamSendBuilder(
             ZlinkStreamWebGlConnector connector,
             ZlinkStreamEncodedPayload payload,
-            string actorId = null
+            ZlinkStreamActor actor = null
         )
         {
             _connector = connector;
             _payload = payload;
-            _actorId = actorId;
+            _actor = actor;
         }
 
         public IZlinkStreamSendCall PacketName(string name)
@@ -141,13 +141,14 @@ namespace Systems.Zlink.Stream.Connector.Runtime.Calls
         public ValueTask Async(CancellationToken cancellationToken = default)
         {
             EnsureNotExecuted();
+            _actor?.EnsureBound();
             return _connector.SendAsync(
                 _payload,
                 PacketNameValue,
                 MetadataValue,
                 CompressValue,
                 cancellationToken,
-                _actorId
+                _actor
             );
         }
     }
@@ -158,18 +159,18 @@ namespace Systems.Zlink.Stream.Connector.Runtime.Calls
     {
         private readonly ZlinkStreamWebGlConnector _connector;
         private readonly ZlinkStreamEncodedPayload _payload;
-        private readonly string _actorId;
+        private readonly ZlinkStreamActor _actor;
         private TimeSpan? _timeout;
 
         internal ZlinkStreamRequestBuilder(
             ZlinkStreamWebGlConnector connector,
             ZlinkStreamEncodedPayload payload,
-            string actorId = null
+            ZlinkStreamActor actor = null
         )
         {
             _connector = connector;
             _payload = payload;
-            _actorId = actorId;
+            _actor = actor;
         }
 
         public IZlinkStreamRequestCall PacketName(string name)
@@ -212,6 +213,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime.Calls
         )
         {
             EnsureNotExecuted();
+            _actor?.EnsureBound();
             return _connector.RequestAsync(
                 _payload,
                 PacketNameValue,
@@ -219,7 +221,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime.Calls
                 CompressValue,
                 _timeout,
                 cancellationToken,
-                _actorId
+                _actor
             );
         }
 
@@ -244,6 +246,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime.Calls
             if (callback is null)
                 throw new ArgumentNullException(nameof(callback));
             EnsureNotExecuted();
+            _actor?.EnsureBound();
             _connector.SubmitRequest(
                 _payload,
                 PacketNameValue,
@@ -251,7 +254,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime.Calls
                 CompressValue,
                 _timeout,
                 callback,
-                _actorId
+                _actor
             );
         }
     }

@@ -29,6 +29,9 @@ class JslibConnector {
     this.errors = [];
     this.disconnects = [];
     this.actorEvents = [];
+    this.actorBoundHandlers = new Set();
+    this.actorUnboundHandlers = new Set();
+    this.dispatchMode = JSON.parse(optionsJson).dispatchMode ?? 'manual';
     this.nextCallId = 1;
     this.advance = null;
     this.sinkStack = 0;
@@ -135,6 +138,16 @@ class JslibConnector {
     const handlers = this.handlers.get(name) ?? [];
     handlers.push(handler);
     this.handlers.set(name, handlers);
+  }
+
+  onActorBound(handler) {
+    this.actorBoundHandlers.add(handler);
+    return { dispose: () => this.actorBoundHandlers.delete(handler) };
+  }
+
+  onActorUnbound(handler) {
+    this.actorUnboundHandlers.add(handler);
+    return { dispose: () => this.actorUnboundHandlers.delete(handler) };
   }
 
   receivedCount(name) {
@@ -269,11 +282,11 @@ class JslibConnector {
         return;
 
       case EVENT_ACTOR_BOUND:
-        this.dispatchQueue.push({ kind: 'actorBound', actor: JSON.parse(event.text) });
+        this.dispatchOrQueue({ kind: 'actorBound', actor: JSON.parse(event.text) });
         return;
 
       case EVENT_ACTOR_UNBOUND:
-        this.dispatchQueue.push({ kind: 'actorUnbound', actor: JSON.parse(event.text) });
+        this.dispatchOrQueue({ kind: 'actorUnbound', actor: JSON.parse(event.text) });
         return;
 
       default:
@@ -282,24 +295,41 @@ class JslibConnector {
 
   async runDispatchQueue() {
     while (this.dispatchQueue.length > 0) {
-      const item = this.dispatchQueue.shift();
-      switch (item.kind) {
-        case 'message':
-          for (const handler of item.handlers) await handler(item.message);
-          break;
-        case 'error':
-          this.errors.push(item.error);
-          break;
-        case 'disconnected':
-          this.disconnects.push(item.detail);
-          break;
-        case 'actorBound':
-        case 'actorUnbound':
-          this.actorEvents.push({ kind: item.kind, actorId: item.actor.actorId });
-          break;
-        default:
-          this.stateChanges.push(item.change);
+      await this.runDispatchItem(this.dispatchQueue.shift());
+    }
+  }
+
+  dispatchOrQueue(item) {
+    if (this.dispatchMode === 'manual') this.dispatchQueue.push(item);
+    else void this.runDispatchItem(item);
+  }
+
+  async runDispatchItem(item) {
+    switch (item.kind) {
+      case 'message':
+        for (const handler of item.handlers) await handler(item.message);
+        break;
+      case 'error':
+        this.errors.push(item.error);
+        break;
+      case 'disconnected':
+        this.disconnects.push(item.detail);
+        break;
+      case 'actorBound':
+      case 'actorUnbound': {
+        const handlers = item.kind === 'actorBound'
+          ? this.actorBoundHandlers
+          : this.actorUnboundHandlers;
+        for (const handler of [...handlers]) handler(item.actor);
+        this.actorEvents.push({
+          kind: item.kind,
+          actorId: item.actor.actorId,
+          actorHandle: item.actor.actorHandle
+        });
+        break;
       }
+      default:
+        this.stateChanges.push(item.change);
     }
   }
 

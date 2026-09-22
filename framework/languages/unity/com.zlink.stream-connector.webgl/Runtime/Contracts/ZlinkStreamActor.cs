@@ -11,16 +11,23 @@ namespace Systems.Zlink.Stream.Connector.Contracts
     {
         private readonly ZlinkStreamWebGlConnector _connector;
 
-        internal ZlinkStreamActor(ZlinkStreamWebGlConnector connector, string actorId)
+        internal ZlinkStreamActor(
+            ZlinkStreamWebGlConnector connector,
+            string actorId,
+            int handle
+        )
         {
             _connector = connector;
             ActorId = actorId;
+            Handle = handle;
             IsBound = true;
         }
 
         public string ActorId { get; }
 
         public bool IsBound { get; private set; }
+
+        internal int Handle { get; }
 
         public IZlinkStreamSendCall Send(object payload)
         {

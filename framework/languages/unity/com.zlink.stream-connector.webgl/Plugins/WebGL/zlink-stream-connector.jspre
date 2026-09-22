@@ -2208,7 +2208,7 @@ var ZlinkStreamConnectorBundle = (() => {
         this.bySlot.delete(actor.slot);
         this.byId.delete(actor.actorId);
         actor.close();
-        this.publishNow(this.unboundHandlers, actor, signal);
+        this.queue(this.unboundHandlers, actor, signal);
       }
       this.issued.length = 0;
     }
@@ -2260,11 +2260,6 @@ var ZlinkStreamConnectorBundle = (() => {
           this.invoke(handler, actor, signal);
         }
       });
-    }
-    publishNow(handlers, actor, signal) {
-      for (const handler of [...handlers]) {
-        this.invoke(handler, actor, signal);
-      }
     }
     invoke(handler, actor, signal) {
       try {

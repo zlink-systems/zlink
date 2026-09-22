@@ -77,6 +77,8 @@ namespace Systems.Zlink.Stream.Connector.Runtime
             string,
             ZlinkStreamActor
         >(StringComparer.Ordinal);
+        private readonly Dictionary<int, ZlinkStreamActor> _actorsByHandle =
+            new Dictionary<int, ZlinkStreamActor>();
         private readonly List<ZlinkStreamActor> _actorOrder = new List<ZlinkStreamActor>();
         private readonly List<Action<ZlinkStreamActor>> _actorBoundHandlers =
             new List<Action<ZlinkStreamActor>>();
@@ -219,7 +221,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime
         )
         {
             actor.EnsureBound();
-            return new ZlinkStreamSendBuilder(this, payload, actor.ActorId);
+            return new ZlinkStreamSendBuilder(this, payload, actor);
         }
 
         internal IZlinkStreamRequestCall RequestActor(
@@ -228,7 +230,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime
         )
         {
             actor.EnsureBound();
-            return new ZlinkStreamRequestBuilder(this, payload, actor.ActorId);
+            return new ZlinkStreamRequestBuilder(this, payload, actor);
         }
 
         internal IDisposable OnActor(
@@ -385,7 +387,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime
             ZlinkStreamMetadata metadata,
             bool compress,
             CancellationToken cancellationToken,
-            string actorId = null
+            ZlinkStreamActor actor = null
         )
         {
             var call = new ZlinkStreamJson.Writer().StartObject();
@@ -394,8 +396,11 @@ namespace Systems.Zlink.Stream.Connector.Runtime
                 call.String("packetName", packetName);
             WriteMetadata(call, metadata);
             call.Bool("compress", compress);
-            if (actorId != null)
-                call.String("actorId", actorId);
+            if (actor != null)
+            {
+                call.Number("actorHandle", actor.Handle);
+                call.String("actorId", actor.ActorId);
+            }
             call.EndObject();
 
             var callId = NextCallId();
@@ -415,7 +420,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime
             bool compress,
             TimeSpan? timeout,
             CancellationToken cancellationToken,
-            string actorId = null
+            ZlinkStreamActor actor = null
         )
         {
             var callId = StartRequest(
@@ -425,7 +430,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime
                 compress,
                 timeout,
                 out var pending,
-                actorId
+                actor
             );
             await DriveAsync(callId, pending, true, cancellationToken);
             return pending.Result;
@@ -438,7 +443,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime
             bool compress,
             TimeSpan? timeout,
             Action<ZlinkStreamResult<ZlinkStreamEncodedPayload>> callback,
-            string actorId = null
+            ZlinkStreamActor actor = null
         )
         {
             var callId = StartRequest(
@@ -448,7 +453,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime
                 compress,
                 timeout,
                 out var pending,
-                actorId
+                actor
             );
             // Spec 32 section 7: request callbacks run on Dispatch, like push handlers.
             pending.Callback = callback;
@@ -462,7 +467,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime
             bool compress,
             TimeSpan? timeout,
             out PendingCall pending,
-            string actorId = null
+            ZlinkStreamActor actor = null
         )
         {
             ThrowIfDisposed();
@@ -473,8 +478,11 @@ namespace Systems.Zlink.Stream.Connector.Runtime
             WriteMetadata(call, metadata);
             call.Bool("compress", compress);
             call.Number("timeoutMs", (timeout ?? Options.RequestTimeout).TotalMilliseconds);
-            if (actorId != null)
-                call.String("actorId", actorId);
+            if (actor != null)
+            {
+                call.Number("actorHandle", actor.Handle);
+                call.String("actorId", actor.ActorId);
+            }
             call.EndObject();
 
             var callId = NextCallId();
@@ -611,11 +619,11 @@ namespace Systems.Zlink.Stream.Connector.Runtime
                     RouteMessage(inbound);
                     break;
                 case ZlinkStreamInterop.EventErrorReceived:
-                    _dispatchQueue.Enqueue(DispatchItem.ForError(ParseError(inbound.Text)));
+                    DispatchOrQueue(DispatchItem.ForError(ParseError(inbound.Text)));
                     break;
                 case ZlinkStreamInterop.EventDisconnected:
                     _closeReason = ParseCloseReason(inbound.Text);
-                    _dispatchQueue.Enqueue(
+                    DispatchOrQueue(
                         DispatchItem.ForDisconnected(
                             new ZlinkStreamDisconnected(
                                 _closeReason ?? ZlinkStreamCloseReason.TransportError
@@ -626,7 +634,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime
                 case ZlinkStreamInterop.EventStateChanged:
                     var change = ParseStateChange(inbound.Text);
                     _state = change.Current;
-                    _dispatchQueue.Enqueue(DispatchItem.ForStateChange(change));
+                    DispatchOrQueue(DispatchItem.ForStateChange(change));
                     break;
                 case ZlinkStreamInterop.EventActorBound:
                     RouteActorBound(inbound.Text);
@@ -654,7 +662,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime
                 pending.Complete(payload);
                 if (pending.Callback != null)
                 {
-                    _dispatchQueue.Enqueue(
+                    DispatchOrQueue(
                         DispatchItem.ForRequestResult(
                             pending.Callback,
                             ZlinkStreamResult<ZlinkStreamEncodedPayload>.Success(
@@ -675,7 +683,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime
             pending.Fail(error);
             if (pending.Callback != null)
             {
-                _dispatchQueue.Enqueue(
+                DispatchOrQueue(
                     DispatchItem.ForRequestResult(
                         pending.Callback,
                         ZlinkStreamResult<ZlinkStreamEncodedPayload>.Failure(error)
@@ -716,7 +724,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime
 
                 if (matching.Count > 0)
                 {
-                    _dispatchQueue.Enqueue(DispatchItem.ForMessage(matching.ToArray(), message));
+                    DispatchOrQueue(DispatchItem.ForMessage(matching.ToArray(), message));
                     return;
                 }
             }
@@ -726,24 +734,59 @@ namespace Systems.Zlink.Stream.Connector.Runtime
 
         private void RouteActorBound(string json)
         {
-            var actorId = ZlinkStreamJson.Parse(json).TextOf("actorId");
-            if (string.IsNullOrEmpty(actorId) || _actors.ContainsKey(actorId))
+            var node = ZlinkStreamJson.Parse(json);
+            var actorId = node.TextOf("actorId");
+            var actorHandle = node.IntOf("actorHandle", 0);
+            if (
+                string.IsNullOrEmpty(actorId)
+                || actorHandle <= 0
+                || _actors.ContainsKey(actorId)
+                || _actorsByHandle.ContainsKey(actorHandle)
+            )
                 return;
-            var actor = new ZlinkStreamActor(this, actorId);
+            var actor = new ZlinkStreamActor(this, actorId, actorHandle);
             _actors.Add(actorId, actor);
+            _actorsByHandle.Add(actorHandle, actor);
             _actorOrder.Add(actor);
-            _dispatchQueue.Enqueue(DispatchItem.ForActor(_actorBoundHandlers.ToArray(), actor));
+            DispatchOrQueue(
+                DispatchItem.ForCallback(() => InvokeActorHandlers(_actorBoundHandlers, actor))
+            );
         }
 
         private void RouteActorUnbound(string json)
         {
-            var actorId = ZlinkStreamJson.Parse(json).TextOf("actorId");
-            if (string.IsNullOrEmpty(actorId) || !_actors.TryGetValue(actorId, out var actor))
+            var node = ZlinkStreamJson.Parse(json);
+            var actorHandle = node.IntOf("actorHandle", 0);
+            if (actorHandle <= 0 || !_actorsByHandle.TryGetValue(actorHandle, out var actor))
                 return;
-            _actors.Remove(actorId);
+            _actorsByHandle.Remove(actorHandle);
+            if (_actors.TryGetValue(actor.ActorId, out var current) && current == actor)
+                _actors.Remove(actor.ActorId);
             _actorOrder.Remove(actor);
             actor.Close();
-            _dispatchQueue.Enqueue(DispatchItem.ForActor(_actorUnboundHandlers.ToArray(), actor));
+            DispatchOrQueue(
+                DispatchItem.ForCallback(() => InvokeActorHandlers(_actorUnboundHandlers, actor))
+            );
+        }
+
+        private void DispatchOrQueue(DispatchItem item)
+        {
+            if (Options.DispatchMode == ZlinkStreamDispatchMode.Manual)
+            {
+                _dispatchQueue.Enqueue(item);
+                return;
+            }
+
+            _ = InvokeDispatchItemAsync(item, CancellationToken.None);
+        }
+
+        private static void InvokeActorHandlers(
+            List<Action<ZlinkStreamActor>> handlers,
+            ZlinkStreamActor actor
+        )
+        {
+            foreach (var handler in handlers.ToArray())
+                handler(actor);
         }
 
         /// <summary>
@@ -755,28 +798,36 @@ namespace Systems.Zlink.Stream.Connector.Runtime
             while (_dispatchQueue.Count > 0)
             {
                 var item = _dispatchQueue.Dequeue();
+                await InvokeDispatchItemAsync(item, cancellationToken);
+            }
+        }
+
+        private async Task InvokeDispatchItemAsync(
+            DispatchItem item,
+            CancellationToken cancellationToken
+        )
+        {
+            try
+            {
+                await item.InvokeAsync(this, cancellationToken);
+            }
+            catch (Exception exception)
+            {
+                var handler = ErrorReceived;
+                if (handler is null)
+                    return;
+                var error = new ZlinkStreamError(
+                    ZlinkStreamErrorCode.UserCallbackFailed,
+                    "Stream callback failed.",
+                    exception
+                );
                 try
                 {
-                    await item.InvokeAsync(this, cancellationToken);
+                    await handler(error, cancellationToken);
                 }
-                catch (Exception exception)
+                catch (Exception)
                 {
-                    var handler = ErrorReceived;
-                    if (handler is null)
-                        continue;
-                    var error = new ZlinkStreamError(
-                        ZlinkStreamErrorCode.UserCallbackFailed,
-                        "Stream callback failed.",
-                        exception
-                    );
-                    try
-                    {
-                        await handler(error, cancellationToken);
-                    }
-                    catch (Exception)
-                    {
-                        // A failing error handler must not abort the dispatch pass.
-                    }
+                    // A failing error handler must not abort the dispatch pass.
                 }
             }
         }
@@ -1259,8 +1310,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime
             private readonly ZlinkStreamConnectionStateChanged _stateChange;
             private readonly Action<ZlinkStreamResult<ZlinkStreamEncodedPayload>> _callback;
             private readonly ZlinkStreamResult<ZlinkStreamEncodedPayload> _result;
-            private readonly Action<ZlinkStreamActor>[] _actorHandlers;
-            private readonly ZlinkStreamActor _actor;
+            private readonly Action _action;
 
             private DispatchItem(
                 int kind,
@@ -1271,8 +1321,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime
                 ZlinkStreamConnectionStateChanged stateChange,
                 Action<ZlinkStreamResult<ZlinkStreamEncodedPayload>> callback,
                 ZlinkStreamResult<ZlinkStreamEncodedPayload> result,
-                Action<ZlinkStreamActor>[] actorHandlers = null,
-                ZlinkStreamActor actor = null
+                Action action = null
             )
             {
                 _kind = kind;
@@ -1283,8 +1332,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime
                 _stateChange = stateChange;
                 _callback = callback;
                 _result = result;
-                _actorHandlers = actorHandlers;
-                _actor = actor;
+                _action = action;
             }
 
             public static DispatchItem ForMessage(
@@ -1318,10 +1366,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime
                 return new DispatchItem(5, null, null, null, null, null, callback, result);
             }
 
-            public static DispatchItem ForActor(
-                Action<ZlinkStreamActor>[] handlers,
-                ZlinkStreamActor actor
-            )
+            public static DispatchItem ForCallback(Action callback)
             {
                 return new DispatchItem(
                     6,
@@ -1332,8 +1377,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime
                     null,
                     null,
                     default,
-                    handlers,
-                    actor
+                    callback
                 );
             }
 
@@ -1376,8 +1420,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime
                         _callback(_result);
                         break;
                     default:
-                        foreach (var handler in _actorHandlers)
-                            handler(_actor);
+                        _action();
                         break;
                 }
             }

@@ -181,11 +181,35 @@ test('bound actor controls project handles messages and outbound actor slots', a
   );
 });
 
+test('manual dispatch defers disconnect actor unbound handlers until dispatch', async () => {
+  const transportFactory = new MemoryTransportFactory();
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory,
+    dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
+    heartbeat: { enabled: false },
+    reconnect: { enabled: false }
+  });
+  const lifecycle = [];
+  instance.onActorUnbound((actor) => lifecycle.push(actor.actorId));
+  await instance.connect();
+  transportFactory.connection.pushFrame(
+    actorControlFrame('$zlink.actor.bound', [1, 0, 7, 1, 97])
+  );
+  await instance.dispatch();
+
+  await instance.close();
+  assert.deepEqual(lifecycle, []);
+  await instance.dispatch();
+  assert.deepEqual(lifecycle, ['a']);
+});
+
 test('unknown actor slots fail decoding and close the connection', async () => {
   const transportFactory = new MemoryTransportFactory();
   const instance = createStreamConnector({
     endpoint: 'ws://127.0.0.1:19000',
     transportFactory,
+    dispatchMode: connector.ZlinkStreamDispatchMode.Immediate,
     heartbeat: { enabled: false },
     reconnect: { enabled: false }
   });

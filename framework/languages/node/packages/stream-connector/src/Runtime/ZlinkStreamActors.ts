@@ -147,7 +147,7 @@ export class ZlinkStreamActors {
       this.bySlot.delete(actor.slot);
       this.byId.delete(actor.actorId);
       actor.close();
-      this.publishNow(this.unboundHandlers, actor, signal);
+      this.queue(this.unboundHandlers, actor, signal);
     }
     this.issued.length = 0;
   }
@@ -206,16 +206,6 @@ export class ZlinkStreamActors {
         this.invoke(handler, actor, signal);
       }
     });
-  }
-
-  private publishNow(
-    handlers: Set<(actor: ZlinkStreamActor, signal?: AbortSignal) => Promise<void> | void>,
-    actor: ZlinkStreamActor,
-    signal?: AbortSignal
-  ): void {
-    for (const handler of [...handlers]) {
-      this.invoke(handler, actor, signal);
-    }
   }
 
   private invoke(

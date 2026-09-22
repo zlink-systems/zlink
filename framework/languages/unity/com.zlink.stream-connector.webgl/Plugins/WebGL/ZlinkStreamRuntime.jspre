@@ -177,6 +177,9 @@ var ZlinkStreamWebGlRuntime = (function () {
         calls: {},
         observers: {},
         nextObserverId: 1,
+        actorHandles: {},
+        actorHandleIds: new WeakMap(),
+        nextActorHandle: 1,
         sink: null,
         pumping: false,
         subscriptions: []
@@ -213,20 +216,24 @@ var ZlinkStreamWebGlRuntime = (function () {
         });
       }));
       state.subscriptions.push(connector.onActorBound(function (actor) {
+        var actorHandle = state.nextActorHandle++;
+        state.actorHandles[actorHandle] = actor;
+        state.actorHandleIds.set(actor, actorHandle);
         push(state, {
           type: EVENT_ACTOR_BOUND,
           id: 0,
           value: 0,
-          text: JSON.stringify({ actorId: actor.actorId }),
+          text: JSON.stringify({ actorId: actor.actorId, actorHandle: actorHandle }),
           bytes: null
         });
       }));
       state.subscriptions.push(connector.onActorUnbound(function (actor) {
+        var actorHandle = state.actorHandleIds.get(actor);
         push(state, {
           type: EVENT_ACTOR_UNBOUND,
           id: 0,
           value: 0,
-          text: JSON.stringify({ actorId: actor.actorId }),
+          text: JSON.stringify({ actorId: actor.actorId, actorHandle: actorHandle }),
           bytes: null
         });
       }));
@@ -308,7 +315,7 @@ var ZlinkStreamWebGlRuntime = (function () {
       var state = instance(handle);
       var call = JSON.parse(callJson);
       start(state, callId, function () {
-        var target = call.actorId ? state.connector.actor(call.actorId) : state.connector;
+        var target = call.actorHandle == null ? state.connector : state.actorHandles[call.actorHandle];
         if (!target) throw actorNotBound(call.actorId);
         var builder = target.send({ codec: call.codec, payload: payload });
         if (call.packetName) builder = builder.packetName(call.packetName);
@@ -322,7 +329,7 @@ var ZlinkStreamWebGlRuntime = (function () {
       var state = instance(handle);
       var call = JSON.parse(callJson);
       start(state, callId, function (signal) {
-        var target = call.actorId ? state.connector.actor(call.actorId) : state.connector;
+        var target = call.actorHandle == null ? state.connector : state.actorHandles[call.actorHandle];
         if (!target) throw actorNotBound(call.actorId);
         var builder = target.request({ codec: call.codec, payload: payload });
         if (call.packetName) builder = builder.packetName(call.packetName);
