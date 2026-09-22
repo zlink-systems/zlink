@@ -365,38 +365,37 @@ disappear. An **Instance Spot** preserves ordering, **Session servers** (STREAM)
 real-time connections instead of shell servers, and **direct runtime connections** handle
 inter-server delivery. The **location store is the only new infrastructure.**
 
-**As code.** DeliveryDispatch's status handler sends the notification through the customer
-Actor, and the Actor's bound session delivers it to the current client connection. The app
-does not query a sticky-routing table.
+**As code.** DeliveryDispatch's status-push path sends the notification through the session
+bound to the customer Actor. The app does not query a sticky-routing table.
 
 === "C#/.NET"
 
     ```csharp
-    --8<-- "framework/languages/dotnet/samples/DeliveryDispatch/Server/CustomerGateway/Spots/EntrySpot/Handlers/DeliveryStatusUpdatedHandler.cs:doc-dd-customer-push"
+    --8<-- "framework/languages/dotnet/samples/DeliveryDispatch/Server/CustomerGateway/CustomerActor.cs:doc-dd-bound-session-push"
     ```
 
 === "C++"
 
     ```cpp
-    --8<-- "framework/languages/cpp/samples/DeliveryDispatch/Server/CustomerGateway/main.cpp:doc-dd-customer-push"
+    --8<-- "framework/languages/cpp/samples/DeliveryDispatch/Server/CustomerGateway/main.cpp:doc-dd-bound-session-push"
     ```
 
 === "Java"
 
     ```java
-    --8<-- "framework/languages/java/samples/java/DeliveryDispatch/Server/CustomerGateway/src/main/java/systems/zlink/samples/deliverydispatch/server/customergateway/spots/handlers/DeliveryStatusUpdatedHandler.java:doc-dd-customer-push"
+    --8<-- "framework/languages/java/samples/java/DeliveryDispatch/Server/CustomerGateway/src/main/java/systems/zlink/samples/deliverydispatch/server/customergateway/CustomerActor.java:doc-dd-bound-session-push"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    --8<-- "framework/languages/java/samples/kotlin/DeliveryDispatch/Server/CustomerGateway/src/main/kotlin/systems/zlink/samples/kotlin/deliverydispatch/server/customergateway/spots/handlers/DeliveryStatusUpdatedHandler.kt:doc-dd-customer-push"
+    --8<-- "framework/languages/java/samples/kotlin/DeliveryDispatch/Server/CustomerGateway/src/main/kotlin/systems/zlink/samples/kotlin/deliverydispatch/server/customergateway/CustomerActor.kt:doc-dd-bound-session-push"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    --8<-- "framework/languages/node/samples/DeliveryDispatch.Ts/Server/Session/customer-status-handler.ts:doc-dd-customer-push"
+    --8<-- "framework/languages/node/samples/DeliveryDispatch.Ts/Server/Session/customer-status-handler.ts:doc-dd-bound-session-push"
     ```
 
 Runnable reference samples: [SupportChat](../../../common/sample/supportchat/README.en.md) ·

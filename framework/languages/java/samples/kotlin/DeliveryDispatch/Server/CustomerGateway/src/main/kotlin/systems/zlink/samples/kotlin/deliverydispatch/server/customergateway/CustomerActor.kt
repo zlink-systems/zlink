@@ -10,6 +10,7 @@ class CustomerActor(private val id: String, private val actorContext: ZLinkActor
 
     override fun context(): ZLinkActorContext = actorContext
 
+    // --8<-- [start:doc-dd-bound-session-push]
     suspend fun push(message: Any) {
         try {
             actorContext.boundSession().kotlin().send(message).await()
@@ -17,4 +18,5 @@ class CustomerActor(private val id: String, private val actorContext: ZLinkActor
             // Delivery notifications are best effort when the customer session is stale.
         }
     }
+    // --8<-- [end:doc-dd-bound-session-push]
 }

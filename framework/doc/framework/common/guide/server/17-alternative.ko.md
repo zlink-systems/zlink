@@ -338,38 +338,37 @@ sticky LB · pub/sub 브로커 · 분산 락 — 이 인프라 구성 요소가 
 **Instance Spot**이, 실시간 연결은 shell 서버 대신 **Session 서버**(STREAM)가, 서버 간
 전달은 **runtime 직접 연결**이 맡는다. 새로 두는 인프라는 **location store 하나**뿐이다.
 
-**코드로 보면.** DeliveryDispatch의 상태 handler는 customer actor로 알림을 보내고,
-actor에 bound된 session이 현재 client 연결로 전달한다. application이 sticky routing
-테이블을 조회하지 않는다.
+**코드로 보면.** DeliveryDispatch의 상태 push 경로는 customer actor에 bound된 session으로
+알림을 보낸다. application이 sticky routing 테이블을 조회하지 않는다.
 
 === "C#/.NET"
 
     ```csharp
-    --8<-- "framework/languages/dotnet/samples/DeliveryDispatch/Server/CustomerGateway/Spots/EntrySpot/Handlers/DeliveryStatusUpdatedHandler.cs:doc-dd-customer-push"
+    --8<-- "framework/languages/dotnet/samples/DeliveryDispatch/Server/CustomerGateway/CustomerActor.cs:doc-dd-bound-session-push"
     ```
 
 === "C++"
 
     ```cpp
-    --8<-- "framework/languages/cpp/samples/DeliveryDispatch/Server/CustomerGateway/main.cpp:doc-dd-customer-push"
+    --8<-- "framework/languages/cpp/samples/DeliveryDispatch/Server/CustomerGateway/main.cpp:doc-dd-bound-session-push"
     ```
 
 === "Java"
 
     ```java
-    --8<-- "framework/languages/java/samples/java/DeliveryDispatch/Server/CustomerGateway/src/main/java/systems/zlink/samples/deliverydispatch/server/customergateway/spots/handlers/DeliveryStatusUpdatedHandler.java:doc-dd-customer-push"
+    --8<-- "framework/languages/java/samples/java/DeliveryDispatch/Server/CustomerGateway/src/main/java/systems/zlink/samples/deliverydispatch/server/customergateway/CustomerActor.java:doc-dd-bound-session-push"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    --8<-- "framework/languages/java/samples/kotlin/DeliveryDispatch/Server/CustomerGateway/src/main/kotlin/systems/zlink/samples/kotlin/deliverydispatch/server/customergateway/spots/handlers/DeliveryStatusUpdatedHandler.kt:doc-dd-customer-push"
+    --8<-- "framework/languages/java/samples/kotlin/DeliveryDispatch/Server/CustomerGateway/src/main/kotlin/systems/zlink/samples/kotlin/deliverydispatch/server/customergateway/CustomerActor.kt:doc-dd-bound-session-push"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    --8<-- "framework/languages/node/samples/DeliveryDispatch.Ts/Server/Session/customer-status-handler.ts:doc-dd-customer-push"
+    --8<-- "framework/languages/node/samples/DeliveryDispatch.Ts/Server/Session/customer-status-handler.ts:doc-dd-bound-session-push"
     ```
 
 실행되는 근거 샘플: [SupportChat](../../../common/sample/supportchat/README.ko.md) ·

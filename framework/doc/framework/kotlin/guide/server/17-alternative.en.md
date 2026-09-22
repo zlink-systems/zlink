@@ -305,12 +305,11 @@ disappear. An **Instance Spot** preserves ordering, **Session servers** (STREAM)
 real-time connections instead of shell servers, and **direct runtime connections** handle
 inter-server delivery. The **location store is the only new infrastructure.**
 
-**As code.** DeliveryDispatch's status handler sends the notification through the customer
-Actor, and the Actor's bound session delivers it to the current client connection. The app
-does not query a sticky-routing table.
+**As code.** DeliveryDispatch's status-push path sends the notification through the session
+bound to the customer Actor. The app does not query a sticky-routing table.
 
 ```kotlin
---8<-- "framework/languages/java/samples/kotlin/DeliveryDispatch/Server/CustomerGateway/src/main/kotlin/systems/zlink/samples/kotlin/deliverydispatch/server/customergateway/spots/handlers/DeliveryStatusUpdatedHandler.kt:doc-dd-customer-push"
+--8<-- "framework/languages/java/samples/kotlin/DeliveryDispatch/Server/CustomerGateway/src/main/kotlin/systems/zlink/samples/kotlin/deliverydispatch/server/customergateway/CustomerActor.kt:doc-dd-bound-session-push"
 ```
 
 Runnable reference samples: [SupportChat](../../../common/sample/supportchat/README.en.md) ·

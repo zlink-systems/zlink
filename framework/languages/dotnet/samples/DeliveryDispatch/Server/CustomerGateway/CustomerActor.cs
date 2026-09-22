@@ -9,6 +9,7 @@ internal sealed class CustomerActor(string actorId, IZLinkActorContext context) 
 
     public IZLinkActorContext Context { get; } = context;
 
+    // --8<-- [start:doc-dd-bound-session-push]
     public async ValueTask PushStatusAsync(
         DeliveryStatusUpdatedMsg status,
         CancellationToken cancellationToken
@@ -25,6 +26,7 @@ internal sealed class CustomerActor(string actorId, IZLinkActorContext context) 
             )
             .Async(cancellationToken);
     }
+    // --8<-- [end:doc-dd-bound-session-push]
 }
 
 internal sealed class CustomerActorFactory : IZLinkActorFactory<CustomerActor>

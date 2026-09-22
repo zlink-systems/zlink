@@ -305,12 +305,11 @@ disappear. An **Instance Spot** preserves ordering, **Session servers** (STREAM)
 real-time connections instead of shell servers, and **direct runtime connections** handle
 inter-server delivery. The **location store is the only new infrastructure.**
 
-**As code.** DeliveryDispatch's status handler sends the notification through the customer
-Actor, and the Actor's bound session delivers it to the current client connection. The app
-does not query a sticky-routing table.
+**As code.** DeliveryDispatch's status-push path sends the notification through the session
+bound to the customer Actor. The app does not query a sticky-routing table.
 
 ```java
---8<-- "framework/languages/java/samples/java/DeliveryDispatch/Server/CustomerGateway/src/main/java/systems/zlink/samples/deliverydispatch/server/customergateway/spots/handlers/DeliveryStatusUpdatedHandler.java:doc-dd-customer-push"
+--8<-- "framework/languages/java/samples/java/DeliveryDispatch/Server/CustomerGateway/src/main/java/systems/zlink/samples/deliverydispatch/server/customergateway/CustomerActor.java:doc-dd-bound-session-push"
 ```
 
 Runnable reference samples: [SupportChat](../../../common/sample/supportchat/README.en.md) ·
