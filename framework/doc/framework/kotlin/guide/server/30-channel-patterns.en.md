@@ -21,7 +21,7 @@ View in another language — [C++](../../../cpp/guide/server/30-channel-patterns
 !!! info "What you get from this chapter"
 
     You learn which connection each of the three arrangements opens, who it picks
-    as a target, and when it refuses. The code comes from the [tutorial](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.md) and the [`TicTacToe`](https://github.com/zlink-systems/zlink-java-examples/blob/main/samples/TicTacToe/README.md) and [`ZoneWorld`](https://github.com/zlink-systems/zlink-java-examples/blob/main/samples/ZoneWorld/README.md) sample READMEs in the examples repository; follow each README's Download, Build, and Run sections to reproduce the connection and target selection.
+    as a target, and when it refuses. The code comes from the [tutorial](https://github.com/zlink-systems/zlink-kotlin-examples/blob/main/tutorial/README.md) and the [`TicTacToe`](https://github.com/zlink-systems/zlink-kotlin-examples/blob/main/samples/TicTacToe/README.md) and [`ZoneWorld`](https://github.com/zlink-systems/zlink-kotlin-examples/blob/main/samples/ZoneWorld/README.md) sample READMEs in the examples repository; follow each README's Download, Build, and Run sections to reproduce the connection and target selection.
 
 [Channel Messaging](20-channel-messaging.en.md) covered how to register and how to call. This
 chapter covers **why it behaves that way and how far it goes**: the differences between the

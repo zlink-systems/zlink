@@ -22,7 +22,7 @@ View in another language — [C++](../../../cpp/guide/server/33-backpressure.en.
 
     You can distinguish the paths through which Core HWM and the application job queue create
     backpressure, and the metrics that show them.
-    The code in this chapter comes from the [per-language example repositories](https://github.com/zlink-systems/zlink-java-examples).
+    The code in this chapter comes from the [per-language example repositories](https://github.com/zlink-systems/zlink-kotlin-examples).
 
 Core HWM limits bytes in Core queues, and the application job queue limits jobs waiting to start a
 handler. This chapter explains how those limits become sender waits and observable metrics.

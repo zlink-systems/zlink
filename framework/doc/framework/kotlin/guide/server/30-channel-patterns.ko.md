@@ -21,7 +21,7 @@ title: "Channel 동작 원리 · Kotlin"
 !!! info "이 장을 읽고 나면"
 
     각 구성이 어떤 연결을 열고, 누구를 대상으로 고르고, 언제 거부되는지 알 수 있다.
-    이 장의 코드는 [예제 저장소의 tutorial](https://github.com/zlink-systems/zlink-java-examples/blob/main/tutorial/README.ko.md)과 [`TicTacToe`](https://github.com/zlink-systems/zlink-java-examples/blob/main/samples/TicTacToe/README.ko.md)·[`ZoneWorld`](https://github.com/zlink-systems/zlink-java-examples/blob/main/samples/ZoneWorld/README.ko.md) 샘플 README에서 가져왔으며, 각 README의 「내려받기와 설치」·「빌드」·「실행」 절을 따르면 연결과 대상 선택을 재현할 수 있다.
+    이 장의 코드는 [예제 저장소의 tutorial](https://github.com/zlink-systems/zlink-kotlin-examples/blob/main/tutorial/README.ko.md)과 [`TicTacToe`](https://github.com/zlink-systems/zlink-kotlin-examples/blob/main/samples/TicTacToe/README.ko.md)·[`ZoneWorld`](https://github.com/zlink-systems/zlink-kotlin-examples/blob/main/samples/ZoneWorld/README.ko.md) 샘플 README에서 가져왔으며, 각 README의 「내려받기와 설치」·「빌드」·「실행」 절을 따르면 연결과 대상 선택을 재현할 수 있다.
 
 [Channel 메시징](20-channel-messaging.ko.md)이 등록하고 호출하는 방법을 다뤘다면, 이 장은
 **왜 그렇게 되는지와 어디까지 되는지**를 다룬다. 패턴 사이의 차이, 대상 선택 규칙, 연결과

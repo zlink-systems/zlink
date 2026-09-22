@@ -22,7 +22,7 @@ View in another language — [C++](../../../cpp/guide/server/52-supportchat.en.m
 
     You can open the SupportChat sample in an editor and follow a message from the customer's
     request to open a conversation, through agent assignment, to the conversation closing, through
-    the code of each server it passes. The code in this chapter comes from the [SupportChat sample in the per-language example repositories](https://github.com/zlink-systems/zlink-java-examples/tree/main/samples/SupportChat).
+    the code of each server it passes. The code in this chapter comes from the [SupportChat sample in the per-language example repositories](https://github.com/zlink-systems/zlink-kotlin-examples/tree/main/samples/SupportChat).
 
 [Picking a Sample](14-samples.en.md#5-supportchat--building-a-live-chat-support-system) introduced
 what this sample demonstrates. This chapter is what you read after that introduction — the roles and
