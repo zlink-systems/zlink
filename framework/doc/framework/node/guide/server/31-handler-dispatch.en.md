@@ -236,12 +236,6 @@ it touches state directly, with no lock.
 --8<-- "framework/languages/node/samples/TicTacToe.Ts/Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/Handlers/play-actor-place-mark-handler.ts:doc-actor-packet-handler"
 ```
 
-The four branches in their minimal form look like this.
-
-```typescript
---8<-- "framework/languages/node/samples/TicTacToe.Ts/Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/Handlers/play-actor-place-mark-handler.ts:doc-actor-packet-handler"
-```
-
 An Actor request handler takes the same arguments; the only difference is that its return
 value is the reply.
 

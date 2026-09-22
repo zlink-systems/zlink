@@ -239,12 +239,6 @@ it touches state directly, with no lock.
 --8<-- "framework/languages/java/samples/kotlin/TicTacToe/Server/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/server/play/infrastructure/zlink/spots/tictactoegamespot/handlers/PlayActorPlaceMarkHandler.kt:doc-actor-packet-handler"
 ```
 
-The four branches in their minimal form look like this.
-
-```kotlin
---8<-- "framework/languages/java/samples/kotlin/TicTacToe/Server/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/server/play/infrastructure/zlink/spots/tictactoegamespot/handlers/PlayActorPlaceMarkHandler.kt:doc-actor-packet-handler"
-```
-
 An Actor request handler takes the same arguments; the only difference is that its return
 value is the reply.
 

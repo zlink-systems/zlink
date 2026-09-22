@@ -225,12 +225,6 @@ handler는 대상 Spot instance를 첫 인자로 받는다. Spot 안에서 실�
 --8<-- "framework/languages/java/samples/kotlin/TicTacToe/Server/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/server/play/infrastructure/zlink/spots/tictactoegamespot/handlers/PlayActorPlaceMarkHandler.kt:doc-actor-packet-handler"
 ```
 
-최소 형태로 보면 이렇다.
-
-```kotlin
---8<-- "framework/languages/java/samples/kotlin/TicTacToe/Server/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/server/play/infrastructure/zlink/spots/tictactoegamespot/handlers/PlayActorPlaceMarkHandler.kt:doc-actor-packet-handler"
-```
-
 Actor 앞 request는 actor request handler이며
 같은 인자에 반환값이 reply라는 점만 다르다.
 

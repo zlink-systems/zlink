@@ -236,12 +236,6 @@ it touches state directly, with no lock.
 --8<-- "framework/languages/dotnet/samples/TicTacToe/Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/Handlers/PlayActorPlaceMarkHandler.cs:doc-actor-packet-handler"
 ```
 
-The four branches in their minimal form look like this.
-
-```csharp
---8<-- "framework/languages/dotnet/samples/TicTacToe/Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/Handlers/PlayActorPlaceMarkHandler.cs:doc-actor-packet-handler"
-```
-
 An Actor request handler takes the same arguments; the only difference is that its return
 value is the reply.
 

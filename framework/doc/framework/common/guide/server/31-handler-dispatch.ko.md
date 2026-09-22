@@ -414,39 +414,6 @@ handler는 대상 Spot instance를 첫 인자로 받는다. Spot 안에서 실�
     --8<-- "framework/languages/node/samples/TicTacToe.Ts/Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/Handlers/play-actor-place-mark-handler.ts:doc-actor-packet-handler"
     ```
 
-최소 형태로 보면 이렇다.
-
-=== "C#/.NET"
-
-    ```csharp
-    --8<-- "framework/languages/dotnet/samples/TicTacToe/Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/Handlers/PlayActorPlaceMarkHandler.cs:doc-actor-packet-handler"
-    ```
-
-=== "C++"
-
-    ```cpp
-    --8<-- "framework/languages/cpp/samples/TicTacToe/Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/Handlers/play_actor_place_mark_handler.hpp:doc-actor-packet-handler"
-    ```
-
-=== "Java"
-
-    ```java
-    --8<-- "framework/languages/java/samples/java/TicTacToe/Server/src/main/java/systems/zlink/samples/tictactoe/server/play/infrastructure/zlink/spots/tictactoegamespot/handlers/PlayActorPlaceMarkHandler.java:doc-actor-packet-handler"
-    ```
-
-=== "Kotlin"
-
-    ```kotlin
-    --8<-- "framework/languages/java/samples/kotlin/TicTacToe/Server/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/server/play/infrastructure/zlink/spots/tictactoegamespot/handlers/PlayActorPlaceMarkHandler.kt:doc-actor-packet-handler"
-    ```
-
-=== "Node/TypeScript"
-
-    ```typescript
-    --8<-- "framework/languages/node/samples/TicTacToe.Ts/Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/Handlers/play-actor-place-mark-handler.ts:doc-actor-packet-handler"
-    ```
-
-
 Actor 앞 request는 actor request handler이며
 같은 인자에 반환값이 reply라는 점만 다르다.
 

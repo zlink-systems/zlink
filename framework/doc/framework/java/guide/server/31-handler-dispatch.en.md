@@ -240,12 +240,6 @@ it touches state directly, with no lock.
 --8<-- "framework/languages/java/samples/java/TicTacToe/Server/src/main/java/systems/zlink/samples/tictactoe/server/play/infrastructure/zlink/spots/tictactoegamespot/handlers/PlayActorPlaceMarkHandler.java:doc-actor-packet-handler"
 ```
 
-The four branches in their minimal form look like this.
-
-```java
---8<-- "framework/languages/java/samples/java/TicTacToe/Server/src/main/java/systems/zlink/samples/tictactoe/server/play/infrastructure/zlink/spots/tictactoegamespot/handlers/PlayActorPlaceMarkHandler.java:doc-actor-packet-handler"
-```
-
 An Actor request handler takes the same arguments; the only difference is that its return
 value is the reply.
 
