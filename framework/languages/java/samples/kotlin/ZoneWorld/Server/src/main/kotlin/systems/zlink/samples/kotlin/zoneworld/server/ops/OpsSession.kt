@@ -80,6 +80,7 @@ class OpsSession(
             return
         }
         maintenance.set(request.nodeId, request.enabled)
+        // --8<-- [start:doc-zw-ops-publish]
         kotlinFanout
             .publish(
                 ZoneWorldNames.BROADCAST_CHANNEL,
@@ -88,6 +89,7 @@ class OpsSession(
             )
             .await()
         reply(Messages.SetMaintenanceRes(request.nodeId, request.enabled, node.zones))
+        // --8<-- [end:doc-zw-ops-publish]
     }
 
     private suspend fun diagnostics(request: Messages.NodeDiagnosticsReq) {
