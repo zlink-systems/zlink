@@ -279,6 +279,7 @@ test('RMETRIC-007 server catalog does not publish connector-only session bind me
   const metrics = new framework.ZLinkRuntimeMetrics(provider);
   const socket = {
     send() { return true; },
+    async submit() {},
     disconnectPeer() {},
     async bindActor() {},
     async unbindActor() {},

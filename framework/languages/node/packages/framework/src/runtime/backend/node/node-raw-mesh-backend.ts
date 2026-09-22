@@ -1,5 +1,11 @@
 import { randomBytes } from 'node:crypto';
 import { setImmediate as yieldToIO } from 'node:timers/promises';
+import {
+  decodeStreamWireFrame,
+  decodeStreamWireHeader,
+  encodeStreamWireFrame,
+  encodeStreamWireHeader
+} from '@zlink-systems/stream-wire';
 import { disconnectStreamPeer } from './node-socket-backend-adapter';
 import { ZLinkFrameworkException } from '../../../contracts';
 import { internalFrameworkWireReply } from '../../framework-errors-internal';
@@ -1867,7 +1873,8 @@ class RawStreamSessionService implements StreamSessionService {
         sessionKey,
         actor,
         timeoutMs,
-        (targetSessionRid, payloadFrame) => this.deliver(targetSessionRid, payloadFrame),
+        (targetSessionRid, payloadFrame) =>
+          this.deliver(targetSessionRid, actor.actorId, payloadFrame),
         onBindingReplaced,
         serviceSessionBindingIngressPortIfRegistered(this),
         actorAuthority
@@ -1905,12 +1912,22 @@ class RawStreamSessionService implements StreamSessionService {
     )) as SubmitResultValue;
   }
 
-  private async deliver(sessionRid: string, payload: Uint8Array): Promise<boolean> {
+  private async deliver(
+    sessionRid: string,
+    actorId: string,
+    payload: Uint8Array
+  ): Promise<boolean> {
     const target = this.sessionTargets.get(sessionRid);
     if (target === undefined) return false;
     const operation = this.stream.send(target as unknown as BindingRoutingId);
     const parts = decodeMultipartBuffers(decodeApplicationPayloadView(payload).payload);
     if (parts.length === 0) return false;
+    const actorSlot = await serviceSessionBindingIngressPortIfRegistered(this)?.actorSlot(
+      actorId,
+      sessionRid
+    );
+    if (actorSlot === undefined) return false;
+    parts[0] = Buffer.from(streamFrameWithActorSlot(parts[0]!, actorSlot));
     let submit = operation.message(parts[0]!);
     for (let index = 1; index < parts.length; index++) {
       submit = submit.message(parts[index]!);
@@ -1946,6 +1963,15 @@ class RawStreamSessionService implements StreamSessionService {
       throw new Error('STREAM session service is not started.');
     }
   }
+}
+
+function streamFrameWithActorSlot(frame: Uint8Array, actorSlot: number): Uint8Array {
+  const decodedFrame = decodeStreamWireFrame(frame);
+  const decodedHeader = decodeStreamWireHeader(decodedFrame.header);
+  return encodeStreamWireFrame(
+    encodeStreamWireHeader({ ...decodedHeader, actorSlot }),
+    decodedFrame.payload
+  );
 }
 
 class RawReadyBatch implements ReadyBatch {

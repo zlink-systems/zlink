@@ -33,11 +33,14 @@ import {
   type ZLinkMeshCompletionTable
 } from '../backend/mesh-completion-table';
 import {
+  encodeActorBoundFrame,
+  encodeActorUnboundFrame,
   encodeSessionClosingFrame,
   encodeStreamControlFrame,
   ZLinkStreamCloseReasonCode
 } from './protocol';
 import type { ZLinkActorSessionAuthorityFence } from './actor-session-binding-registry';
+import { routingIdsEqual } from '../routing-id';
 
 const ZLINK_SEND_DONT_WAIT = 1;
 const NO_ACCEPTED_TERMINAL_RESULTS: ReadonlySet<number> = new Set();
@@ -51,18 +54,19 @@ export interface ZLinkNativeSessionRoute {
   readonly completions: ZLinkMeshCompletionTable;
 }
 
+interface ZLinkManagedActorBinding {
+  readonly actor: ZLinkBackendActorRef;
+  readonly bindingGeneration?: bigint;
+  readonly actorSlot: number;
+  readonly route?: ZLinkNativeSessionRoute;
+}
+
 export class ZLinkManagedStream implements ZLinkStream {
   private currentLocalAddr: string | undefined;
   private currentRemoteAddr: string | undefined;
   private transportClosed = false;
-  private readonly nativeActorBindings = new Map<
-    string,
-    {
-      readonly actor: ZLinkBackendActorRef;
-      readonly bindingGeneration: bigint;
-      readonly route?: ZLinkNativeSessionRoute;
-    }
-  >();
+  private readonly nativeActorBindings = new Map<string, ZLinkManagedActorBinding>();
+  private nextActorSlot = 1;
 
   constructor(
     private readonly socket: ZLinkBackendStreamSocket,
@@ -90,6 +94,17 @@ export class ZLinkManagedStream implements ZLinkStream {
 
   actorBindingGeneration(actorId: string): bigint | undefined {
     return this.nativeActorBindings.get(actorId)?.bindingGeneration;
+  }
+
+  actorSlot(actorId: string): number | undefined {
+    return this.nativeActorBindings.get(actorId)?.actorSlot;
+  }
+
+  actorIdForSlot(actorSlot: number): string | undefined {
+    for (const [actorId, binding] of this.nativeActorBindings) {
+      if (binding.actorSlot === actorSlot) return actorId;
+    }
+    return undefined;
   }
 
   private isTransportClosed(): boolean {
@@ -195,12 +210,23 @@ export class ZLinkManagedStream implements ZLinkStream {
         `Stream session '${this.sessionId}' is disconnected.`
       );
     }
+    const nativeActor = toNativeActorRef(actor);
+    const currentBinding = this.nativeActorBindings.get(actor.actorId);
+    const keepActorSlot =
+      currentBinding !== undefined &&
+      routingIdsEqual(currentBinding.actor.nodeRid, nativeActor.nodeRid) &&
+      currentBinding.actor.generation === nativeActor.generation;
+    if (!keepActorSlot && this.nextActorSlot > 0xffff) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.InvalidOperation,
+        `Stream session '${this.sessionId}' exhausted its Actor slots.`
+      );
+    }
     const route = this.nativeRoute(actor.meshName);
     if (route !== undefined) {
       if (route.service.status().state === 1) {
         route.service.start();
       }
-      const nativeActor = toNativeActorRef(actor);
       await this.ensureNativeActorRoute(route, actor, timeoutMs, signal);
       if (this.isTransportClosed()) {
         throw createInternalFrameworkException(
@@ -265,11 +291,14 @@ export class ZLinkManagedStream implements ZLinkStream {
           `Stream session '${this.sessionId}' is disconnected.`
         );
       }
-      this.nativeActorBindings.set(actor.actorId, {
-        actor: nativeActor,
-        bindingGeneration: binding.bindingGeneration,
-        route
-      });
+      await this.publishActorBinding(
+        actor.actorId,
+        nativeActor,
+        binding.bindingGeneration,
+        route,
+        currentBinding,
+        keepActorSlot
+      );
       return;
     }
     await this.socket.bindActor(
@@ -277,6 +306,14 @@ export class ZLinkManagedStream implements ZLinkStream {
       toBackendActorRef(actor),
       timeoutMs,
       signal
+    );
+    await this.publishActorBinding(
+      actor.actorId,
+      nativeActor,
+      undefined,
+      undefined,
+      currentBinding,
+      keepActorSlot
     );
   }
 
@@ -327,8 +364,8 @@ export class ZLinkManagedStream implements ZLinkStream {
     const binding = this.nativeActorBindings.get(actorId);
     if (binding?.route !== undefined) {
       const route = binding.route;
-      if (!this.hasNativeBinding(route, actorId, binding.bindingGeneration)) {
-        this.nativeActorBindings.delete(actorId);
+      if (!this.hasNativeBinding(route, actorId, binding.bindingGeneration!)) {
+        await this.retireActorBinding(actorId, binding);
         return;
       }
       try {
@@ -338,7 +375,7 @@ export class ZLinkManagedStream implements ZLinkStream {
               route.service.unbindActor(
                 this.backendRoutingId(),
                 binding.actor as never,
-                binding.bindingGeneration,
+                binding.bindingGeneration!,
                 timeoutMs
               ),
             signal
@@ -354,16 +391,64 @@ export class ZLinkManagedStream implements ZLinkStream {
         // tombstone. A transport teardown can therefore report an internal
         // completion after the exact binding is already gone. Treat only that
         // exact missing binding as stale cleanup; preserve other failures.
-        if (this.hasNativeBinding(route, actorId, binding.bindingGeneration)) {
+        if (this.hasNativeBinding(route, actorId, binding.bindingGeneration!)) {
           throw error;
         }
       }
-      if (this.nativeActorBindings.get(actorId) === binding) {
-        this.nativeActorBindings.delete(actorId);
-      }
+      await this.retireActorBinding(actorId, binding);
       return;
     }
     await this.socket.unbindActor(this.backendRoutingId(), actorId, timeoutMs, signal);
+    if (binding !== undefined) await this.retireActorBinding(actorId, binding);
+  }
+
+  private async publishActorBinding(
+    actorId: string,
+    actor: ZLinkBackendActorRef,
+    bindingGeneration: bigint | undefined,
+    route: ZLinkNativeSessionRoute | undefined,
+    previous: ZLinkManagedActorBinding | undefined,
+    keepActorSlot: boolean
+  ): Promise<void> {
+    if (keepActorSlot && previous !== undefined) {
+      this.nativeActorBindings.set(actorId, {
+        actor,
+        actorSlot: previous.actorSlot,
+        ...(bindingGeneration === undefined ? {} : { bindingGeneration }),
+        ...(route === undefined ? {} : { route })
+      });
+      return;
+    }
+    if (previous !== undefined) {
+      this.nativeActorBindings.delete(actorId);
+      await this.submitActorBindingControl(encodeActorUnboundFrame(previous.actorSlot));
+    }
+    const actorSlot = this.nextActorSlot++;
+    await this.submitActorBindingControl(encodeActorBoundFrame(actorSlot, actorId));
+    this.nativeActorBindings.set(actorId, {
+      actor,
+      actorSlot,
+      ...(bindingGeneration === undefined ? {} : { bindingGeneration }),
+      ...(route === undefined ? {} : { route })
+    });
+  }
+
+  private async retireActorBinding(
+    actorId: string,
+    binding: ZLinkManagedActorBinding
+  ): Promise<void> {
+    if (this.nativeActorBindings.get(actorId) !== binding) return;
+    this.nativeActorBindings.delete(actorId);
+    await this.submitActorBindingControl(encodeActorUnboundFrame(binding.actorSlot));
+  }
+
+  private async submitActorBindingControl(frame: Uint8Array): Promise<void> {
+    const message = NativeMessage.from(frame);
+    try {
+      await this.socket.submit(this.backendRoutingId(), message);
+    } finally {
+      message.close();
+    }
   }
 
   async sendBoundActor(

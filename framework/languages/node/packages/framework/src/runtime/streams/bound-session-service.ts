@@ -87,7 +87,9 @@ export class ZLinkBoundSessionService {
       metadata,
       false,
       undefined,
-      message
+      message,
+      undefined,
+      this.actorSlot(route)
     );
     try {
       const result = await this.requireTransport().send(actorId, frame, {
@@ -120,7 +122,9 @@ export class ZLinkBoundSessionService {
       metadata,
       false,
       undefined,
-      message
+      message,
+      undefined,
+      this.actorSlot(route)
     );
     try {
       throwIfAborted(signal);
@@ -348,7 +352,9 @@ export class ZLinkBoundSessionService {
       metadata,
       compressPayload,
       requestSeq,
-      payload
+      payload,
+      undefined,
+      this.actorSlot(route)
     );
     try {
       if ((await this.routes.route(actorId))?.bindingToken !== route.bindingToken) {
@@ -447,6 +453,12 @@ export class ZLinkBoundSessionService {
       );
     }
     return this.options.transport;
+  }
+
+  private actorSlot(route: ZLinkStreamActorSessionRoute): number | undefined {
+    return route.context.stream instanceof ZLinkManagedStream
+      ? route.context.stream.actorSlot(route.actor.actorId)
+      : undefined;
   }
 }
 
