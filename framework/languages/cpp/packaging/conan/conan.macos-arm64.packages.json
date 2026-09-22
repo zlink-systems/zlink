@@ -9,6 +9,7 @@
     { "ref": "gnu-config/cci.20210814#466e9d4d7779e1c142443f7ea44b4284", "package_id": "da39a3ee5e6b4b0d3255bfef95601890afd80709" },
     { "ref": "hiredis/1.3.0#e39b0954c9bf2bac589b762bba5c5dce", "package_id": "a348043a983e9bb2910e396d3ea0d4695fb2ca11" },
     { "ref": "libcurl/8.22.0#3599f8564660d38f96af52da40795734", "package_id": "c2af002283d791477748d4bb9f263f03377eca00" },
+    { "ref": "libtool/2.4.7#14e7739cc128bc1623d2ed318008e47e", "package_id": "ca639360bb681229d056d23829e74b0c62d596de" },
     { "ref": "libuv/1.51.0#ea781dcacf58c65462ab0d3d75e9b002", "package_id": "ca639360bb681229d056d23829e74b0c62d596de" },
     { "ref": "lz4/1.9.4#a2f02ad3908618757c68d3618256a196", "package_id": "ca639360bb681229d056d23829e74b0c62d596de" },
     { "ref": "m4/1.4.19#1727f439cf74e83826ec96d0b4904eee", "package_id": "617cae191537b47386c088e07b1822d8606b7e67" },
