@@ -322,8 +322,8 @@ attribute key, diagnostics level·sampling rate 설정 interface)만으로 다�
   `reason=no_handler`, `action=drop`인 dispatch error를 만들고 `channel_route_kind`를
   포함하지 않는다.
 - Handler 예외로 만든 dispatch error가 trace와 structured log 양쪽에 `error_type`과
-  `error_message`를 함께 남기고, `error_message`가 구현의 최대 길이를 넘거나 secret과
-  stack trace를 담지 않는다.
+  `error_message`를 함께 남기고, `error_message`가 구현의 최대 길이를 넘지 않으며
+  secret과 stack trace를 담지 않는다.
 - 각 request surface가 terminal trace를 정확히 한 번 기록한다.
 - Instance Spot의 one-way 생성 실패를 `surface=instance_spot`, `phase=dropped`로
   정확히 한 번 기록하고, 숨은 request나 replay를 만들지 않는다.
