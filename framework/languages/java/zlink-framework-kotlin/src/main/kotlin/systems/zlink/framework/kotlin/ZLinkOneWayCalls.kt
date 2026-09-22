@@ -1,3 +1,5 @@
+@file:Suppress("ForbiddenMethodCall") // Kotlin adapter owns the Java terminal bridge.
+
 package systems.zlink.framework.kotlin
 
 import java.time.Duration
@@ -18,6 +20,7 @@ import systems.zlink.framework.actors.ZLinkBoundSessionSendCall
 import systems.zlink.framework.channels.ZLinkClient
 import systems.zlink.framework.channels.ZLinkFanoutClient
 import systems.zlink.framework.channels.ZLinkFanoutPublishCall
+import systems.zlink.framework.channels.ZLinkPublishCall
 import systems.zlink.framework.channels.ZLinkRequestCall
 import systems.zlink.framework.channels.ZLinkRouteClient
 import systems.zlink.framework.channels.ZLinkSendCall
@@ -28,6 +31,7 @@ import systems.zlink.framework.spots.ZLinkSpotCreateCall
 import systems.zlink.framework.spots.ZLinkSpotCreateResult
 import systems.zlink.framework.spots.ZLinkSpotGetOrCreateCall
 import systems.zlink.framework.spots.ZLinkSpotManager
+import systems.zlink.framework.spots.ZLinkSpotOutbound
 import systems.zlink.framework.spots.ZLinkSpotRequestCall
 import systems.zlink.framework.spots.ZLinkSpotSendCall
 import systems.zlink.framework.spots.ZLinkWorkerCall
@@ -77,12 +81,16 @@ private class JavaBoundSessionMessageSendCall(
 }
 
 private class JavaSubmissionCall(
-    private val call: ZLinkFanoutPublishCall,
+    private val submit: () -> CompletionStage<Void>,
     private val terminal: KotlinSingleUse = KotlinSingleUse(),
 ) : ZLinkKotlinSubmissionCall {
+    constructor(call: ZLinkFanoutPublishCall) : this(call::submit)
+
+    constructor(call: ZLinkPublishCall) : this(call::submit)
+
     override suspend fun await() {
         terminal.enter()
-        awaitFrameworkStage(call.submit())
+        awaitFrameworkStage(submit())
     }
 }
 
@@ -270,6 +278,34 @@ private class JavaRouteClient(private val client: ZLinkRouteClient) :
         JavaRequestCall(client.requestToChannel(channelName, request), replyType.java)
 }
 
+private class JavaSpotOutbound(private val outbound: ZLinkSpotOutbound) : ZLinkKotlinSpotOutbound {
+    override fun sendToSpot(spotId: String, message: Any): ZLinkKotlinSpotSendCall =
+        JavaSpotSendCall(outbound.sendToSpot(spotId, message))
+
+    override fun <TReply : Any> requestToSpot(
+        spotId: String,
+        request: Any,
+        replyType: KClass<TReply>,
+    ): ZLinkKotlinSpotRequestCall<TReply> =
+        JavaSpotRequestCall(outbound.requestToSpot(spotId, request), replyType.java)
+
+    override fun publish(
+        channelName: String,
+        topic: String,
+        message: Any,
+    ): ZLinkKotlinSubmissionCall = JavaSubmissionCall(outbound.publish(channelName, topic, message))
+
+    override fun sendToChannel(channelName: String, message: Any): ZLinkKotlinMessageSendCall =
+        JavaMessageSendCall(outbound.sendToChannel(channelName, message))
+
+    override fun <TReply : Any> requestToChannel(
+        channelName: String,
+        request: Any,
+        replyType: KClass<TReply>,
+    ): ZLinkKotlinRequestCall<TReply> =
+        JavaRequestCall(outbound.requestToChannel(channelName, request), replyType.java)
+}
+
 private class JavaActorClient(private val client: ZLinkActorClient) : ZLinkKotlinActorClient {
     override fun sendToActor(actorId: String, message: Any): ZLinkKotlinMessageSendCall =
         JavaActorMessageSendCall(client.sendToActor(actorId, message))
@@ -448,6 +484,8 @@ fun ZLinkFanoutClient.kotlin(): ZLinkKotlinFanoutClient = JavaFanoutClient(this)
 
 fun ZLinkRouteClient.kotlin(): ZLinkKotlinRouteClient = JavaRouteClient(this)
 
+fun ZLinkSpotOutbound.kotlin(): ZLinkKotlinSpotOutbound = JavaSpotOutbound(this)
+
 fun ZLinkActorClient.kotlin(): ZLinkKotlinActorClient = JavaActorClient(this)
 
 fun ZLinkActorManager.kotlin(): ZLinkKotlinActorManager = JavaActorManager(this)
@@ -538,3 +576,13 @@ fun <TReply : Any> ZLinkKotlinRouteClient.requestToSpot(
             )
     return JavaSpotRequestCall(capability.requestToSpotCall(spotId, request), replyType.java)
 }
+
+inline fun <reified TReply : Any> ZLinkKotlinSpotOutbound.requestToSpot(
+    spotId: String,
+    request: Any,
+): ZLinkKotlinSpotRequestCall<TReply> = requestToSpot(spotId, request, TReply::class)
+
+inline fun <reified TReply : Any> ZLinkKotlinSpotOutbound.requestToChannel(
+    channelName: String,
+    request: Any,
+): ZLinkKotlinRequestCall<TReply> = requestToChannel(channelName, request, TReply::class)

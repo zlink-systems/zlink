@@ -22,16 +22,15 @@ View in another language — **C++** · [C#/.NET](../../../dotnet/guide/server/5
 
     You can open the DeliveryDispatch sample in an editor and follow the code from a delivery
     request accepted over HTTP, through the offer to a courier and the reassignment on no answer, to
-    the status pushed to the customer. The code in this chapter runs as it stands in
-    `framework/languages/cpp/samples/DeliveryDispatch`.
+    the status pushed to the customer. The code in this chapter comes from the [DeliveryDispatch sample in the per-language example repositories](https://github.com/zlink-systems/zlink-cpp-examples/tree/main/samples/DeliveryDispatch).
 
-[Picking a Sample](14-samples.en.md#5-deliverydispatch--building-a-dispatch-system) introduced what
+[Picking a Sample](14-samples.en.md#6-deliverydispatch--building-a-dispatch-system) introduced what
 this sample demonstrates. This chapter is what you read after that introduction — the roles and where
 their code lives, the message flow of the main scenarios, and, for each flow, the framework feature it
-uses and the chapter that explains it, in the order the source is laid out. This chapter has no spec
-document that owns a contract. The requirements, message contract and verification criteria are owned
-by the [DeliveryDispatch scenario](../../../common/sample/deliverydispatch/README.en.md), and this
-chapter does not restate them.
+uses and the chapter that explains it, in the order the source is laid out. This chapter explains the
+DeliveryDispatch sample's roles and code locations, its main message flows, and its run verification
+in source order. See the [DeliveryDispatch scenario](../../../common/sample/deliverydispatch/README.en.md)
+for requirements, message contracts, and verification criteria.
 
 ## 1. What This Sample Demonstrates
 
@@ -244,5 +243,5 @@ dispatch flow and the timeout reassignment flow. The checks and the exact log st
 - A layout that binds several Actors to one session: [Reading Along: SupportChat](52-supportchat.en.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

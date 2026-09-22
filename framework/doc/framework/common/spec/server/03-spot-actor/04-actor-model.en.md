@@ -128,19 +128,15 @@ Registration fixes the Actor's generation, current membership, an
 immutable request snapshot, an absolute deadline, and a non-zero 128-bit
 operation ID.
 
-One handler can register at most 64 Joins. One Join request's encoded size is
-at most 1 MiB, and the sum of every Join request the same handler registered
-is at most 8 MiB. If the request is omitted, an empty `ZLinkMessage` is fixed.
-Each `Defer()` turns the request into an immutable snapshot and computes an
-absolute deadline based on the monotonic clock. The default timeout is 5
-seconds; an explicit value must be a finite value in `1..INT_MAX`, rounded up
-to milliseconds. Exceeding the limit fails the current registration
-synchronously as a startup configuration error, without leaving any partial
-record.
-
-A cross-node Join's application reply is also at most 1 MiB. The request's and
-reply's size limits are independent of each other and aren't merged into one 1 MiB
-limit.
+A cross-node Join request and application reply follow the
+[service wire's application-payload size rules](../02-channel-transport/06-wire-protocol.en.md#decode-validation-and-size-limits).
+If the request is omitted, an empty `ZLinkMessage` is
+fixed. Each `Defer()` turns the request into an immutable snapshot and
+computes an absolute deadline based on the monotonic clock. The default
+timeout is 5 seconds; an explicit value must be a finite value in
+`1..INT_MAX`, rounded up to milliseconds. A registration whose timeout is out
+of range fails synchronously as a startup configuration error, without
+leaving any partial record.
 
 An Actor send/request handler, and a User/Entry Spot's
 packet/request/subscription/timer handler, can register a local member
@@ -723,8 +719,8 @@ Gate, Yield, Actor-claim, and self-request observations reference
   [inactive barrier](../00-foundation/02-glossary.en.md#deferred-join-barrier), with no
   target lookup or Store I/O, and runs the Join only once the handler ends
   normally.
-- The limits are at most 64 per handler, at most 1 MiB per request, at most
-  8 MiB in total request size, and a default timeout of 5 seconds.
+- A default timeout of 5 seconds applies, and a cross-node Join request and
+  reply follow the service wire's application-payload size rules.
 - Same-node Join, cross-node Join, and the
   [`RecreateOnRelocation` relocation policy](../00-foundation/02-glossary.en.md#relocation-policy)
   keep the same logical incarnation's `ObjectGeneration`.

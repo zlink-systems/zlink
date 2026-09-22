@@ -21,16 +21,16 @@ View in another language — **C++** · [C#/.NET](../../../dotnet/guide/server/5
 !!! info "What you get from this chapter"
 
     You can open the Bingo sample in an editor and follow a message from the client's
-    authentication to the end of a game, through the code of each server it passes. The code in
-    this chapter runs as it stands in `framework/languages/cpp/samples/Bingo`.
+    authentication to the end of a game, through the code of each server it passes. The code in this
+    chapter comes from the [Bingo sample in the per-language example repositories](https://github.com/zlink-systems/zlink-cpp-examples/tree/main/samples/Bingo).
 
-[Picking a Sample](14-samples.en.md#3-bingo--building-an-online-game-server) introduced what this
+[Picking a Sample](14-samples.en.md#4-bingo--building-an-online-game-server) introduced what this
 sample demonstrates. This chapter is what you read after that introduction — the roles and where
 their code lives, the message flow of the main scenarios, and, for each flow, the framework feature
-it uses and the chapter that explains it, in the order the source is laid out. This chapter has no
-spec document that owns a contract. The requirements, message contract and verification criteria
-are owned by the [Bingo scenario](../../../common/sample/bingo/README.en.md), and this chapter does
-not restate them.
+it uses and the chapter that explains it, in the order the source is laid out. This chapter explains
+the Bingo sample's roles and code locations, its main message flows, and its run verification in
+source order. See the [Bingo scenario](../../../common/sample/bingo/README.en.md) for requirements,
+message contracts, and verification criteria.
 
 ## 1. What This Sample Demonstrates
 
@@ -194,11 +194,8 @@ other player's join and the timer would wait. So the request is sent with `Yield
 --8<-- "framework/languages/cpp/samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/bingo_room_spot.hpp:doc-bingo-room-join"
 ```
 
-`Yield` gives the turn back while the reply is pending and resumes in a new turn when it arrives. The
-room's state may have changed in between, so the resumed code checks the pending join again before
-changing anything. The Node implementation sends this request without `Yield` and does not re-check. The difference between the terminators is covered by
-[Timers and Workers](36-timer-worker.en.md#3-the-terminator-that-gives-the-turn-back), and the
-serialization boundary of one Spot by [The Execution Model](32-execution-model.en.md).
+Why this request gives its turn back with `Yield` and checks the pending join again after resuming
+is covered by [The Execution Model §5](32-execution-model.en.md#5-serial-execution-and-thread-occupancy).
 
 ## 7. Cards, the Draw Timer and Pushes
 
@@ -346,5 +343,5 @@ logs and prints `bingo-placement=completed`. The checks and the exact log string
   [Reading Along: TicTacToe](51-tictactoe.en.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

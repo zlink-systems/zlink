@@ -246,9 +246,11 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
                 .thenCompose(ignored -> leaveFinishedActors(change))
                 .thenRun(
                         () -> {
+                            // --8<-- [start:doc-relocation-ready]
                             if (change.state().getStatus().equals("Finished")) {
                                 context.relocationReady().defer();
                             }
+                            // --8<-- [end:doc-relocation-ready]
                         });
     }
 

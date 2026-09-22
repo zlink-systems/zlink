@@ -2,6 +2,7 @@ package systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.
 
 import systems.zlink.framework.kotlin.ZLinkSuspendingSession
 import systems.zlink.framework.kotlin.await
+import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.streams.ZLinkSessionActor
 import systems.zlink.framework.streams.ZLinkSessionContext
@@ -26,7 +27,7 @@ class PlaySession(
         if (handlers.tryHandle(context, header, payload).await()) {
             return
         }
-        requireActor(header.packetName()).relay(header, payload).await()
+        requireActor(header.packetName()).kotlin().relay(header, payload).await()
     }
 
     private fun requireActor(packetName: String): ZLinkSessionActor =

@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "한 SpotWide Spot에서 대기하는 두 방법",
+    "subtitle": "Async는 turn을 유지하고, Yield는 같은 Spot의 다음 turn에 실행권을 준다",
+    "output": "32-yield-turns.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [40, 130], "cols": 5, "gapX": 70, "gapY": 70, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "async-turn", "type": "backend", "label": "turn A", "sublabel": "Async로 요청", "row": 1, "col": 0 },
+    { "id": "async-wait", "type": "backend", "label": "turn A 대기", "sublabel": "gate 유지", "row": 1, "col": 1 },
+    { "id": "async-next", "type": "messagebus", "label": "turn B", "sublabel": "queue에서 대기", "row": 1, "col": 2 },
+    { "id": "yield-turn", "type": "backend", "label": "turn A", "sublabel": "Yield로 요청", "row": 3, "col": 0 },
+    { "id": "yield-next", "type": "messagebus", "label": "turn B", "sublabel": "gate를 받아 실행", "row": 3, "col": 1 },
+    { "id": "yield-resume", "type": "backend", "label": "turn A 재개", "sublabel": "queue 끝의 새 turn", "row": 3, "col": 2 },
+    { "id": "remote", "type": "external", "label": "원격 작업", "sublabel": "결과를 나중에 반환", "row": 2, "col": 4 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Async — gate를 유지", "wraps": ["async-turn", "async-wait", "async-next"] },
+    { "kind": "region", "label": "Yield — gate를 반납", "wraps": ["yield-turn", "yield-next", "yield-resume"] }
+  ],
+  "connections": [
+    { "from": "async-turn", "to": "async-wait", "label": "요청 제출", "variant": "emphasis", "labelDy": -20 },
+    { "from": "async-wait", "to": "async-next", "label": "다음 turn은 기다림", "variant": "dashed", "labelDy": -20 },
+    { "from": "async-wait", "to": "remote", "label": "결과 대기", "variant": "default" },
+    { "from": "remote", "to": "async-wait", "label": "응답 → 같은 turn", "variant": "default", "labelDy": -18 },
+    { "from": "yield-turn", "to": "yield-next", "label": "gate 반납", "variant": "emphasis", "labelDy": -20 },
+    { "from": "yield-next", "to": "yield-resume", "label": "완료 뒤 queue 끝", "variant": "default", "labelAt": [385, 594] },
+    { "from": "yield-turn", "to": "remote", "label": "요청 제출", "variant": "default" },
+    { "from": "remote", "to": "yield-resume", "label": "응답 → 새 turn", "variant": "default", "labelDy": 20 }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Async",
+      "items": ["await 중 thread는 비지만 SpotWide gate는 남는다.", "그래서 turn B는 응답이 올 때까지 시작하지 못한다."]
+    },
+    {
+      "dot": "emerald",
+      "title": "Yield",
+      "items": ["turn A가 끝나며 gate를 반납하므로 turn B가 실행된다.", "응답 continuation은 turn B 뒤의 새 turn으로 다시 들어온다."]
+    }
+  ]
+}

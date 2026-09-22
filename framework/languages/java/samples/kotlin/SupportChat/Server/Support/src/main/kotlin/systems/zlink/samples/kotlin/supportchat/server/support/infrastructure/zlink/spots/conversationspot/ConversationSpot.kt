@@ -2,6 +2,7 @@ package systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.z
 
 import java.time.Duration
 import org.slf4j.LoggerFactory
+import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.kotlin.ZLinkSuspendingSpot
 import systems.zlink.framework.kotlin.await
 import systems.zlink.framework.kotlin.decode
@@ -72,11 +73,14 @@ class ConversationSpot(
     override suspend fun onInitializeSuspending() {
         idleTimer =
             context
-                .addTimer(
+                .addTimer<ConversationIdleTimerHandler>(
                     "conversation-idle",
                     Duration.ofMillis(200),
-                    ConversationIdleTimerHandler::class.java,
-                    null,
+                    systems.zlink.framework.spots.ZLinkTimerOptions(
+                        systems.zlink.framework.spots.ZLinkTimerOverrunPolicy.SKIP_LATE_TICKS,
+                        1,
+                        false,
+                    ),
                 )
                 .await()
     }

@@ -116,12 +116,6 @@ class customer_entry_spot_t : public entry_spot_t<customer_actor_t>
             delivery_status_updated_msg_t::packet_name);
     }
 
-    task_t<spot_actor_join_result_t> on_actor_join (std::string_view,
-                                                    const zlink::framework::message_t &) override
-    {
-        co_return spot_actor_join_result_t::accept ();
-    }
-
     task_t<void> on_actor_joined (customer_actor_t &) override { co_return; }
     task_t<void> on_leave_actor (customer_actor_t &) override { co_return; }
 

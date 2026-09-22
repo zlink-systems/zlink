@@ -3,6 +3,7 @@ package systems.zlink.samples.kotlin.tictactoe.server.play
 import kotlinx.coroutines.Dispatchers
 import systems.zlink.contracts.core.RoutingId
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
+import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.kotlin.configureDispatch
 import systems.zlink.framework.kotlin.useCoroutineHandlers
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
@@ -43,28 +44,18 @@ object PlayServer {
             node
                 .objects()
                 .server()
-                // #895: entry-spot registration has no Kotlin form in the spec.
-                .addEntrySpot(PlayEntrySpot::class.java)
-                .addSpotFactory("tictactoe.game", TicTacToeGame::class.java) { factory ->
-                    factory.disableRelocation()
-                }
-                .addActorFactory(
-                    SampleNames.PlayActor,
-                    PlayActor::class.java,
-                    PlayActorFactory::class.java,
-                ) { factory ->
-                    // #895: state preservation configuration has no Kotlin form in the spec.
-                    factory.preserveStateWith(PlayActorRelocationAdapter::class.java)
+                .addEntrySpot<PlayEntrySpot>()
+                .addSpotFactory<TicTacToeGame>("tictactoe.game") { disableRelocation() }
+                .addActorFactory<PlayActor, PlayActorFactory>(SampleNames.PlayActor) {
+                    preserveStateWith<PlayActor, PlayActorRelocationAdapter>()
                 }
             options
                 .addStreamNode(SampleNames.PlayStream)
                 .bind(settings.playEndpoint)
                 .enableActorDispatch()
-                // #895: session registration has no Kotlin form in the spec.
-                .registerSession(PlaySession::class.java)
+                .registerSession<PlaySession>()
                 // request: STREAM AuthenticateReq를 처리하고 AuthenticateRes를 reply한다.
-                // #895: session packet registration has no Kotlin form in the spec.
-                .addSessionPacketHandler(AuthenticatePlaySessionHandler::class.java)
+                .addSessionPacketHandler<AuthenticatePlaySessionHandler>()
             // --8<-- [end:doc-ttt-play-register]
         }
 }

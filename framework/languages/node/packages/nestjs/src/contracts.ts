@@ -70,8 +70,10 @@ export type Mutable<T> = {
 export interface InternalZLinkNestFanoutChannelOptions extends ZLinkNestHandlerDiscoveryOptions {
   readonly routingId?: string;
   readonly routingIdPrefix?: string;
+  readonly noDrop?: boolean;
   readonly publisher?: ZLinkPublisherCapabilityOptions;
   readonly subscriber?: ZLinkClientCapabilityOptions;
+  readonly subscriptions?: readonly string[];
   readonly publishHandlers?: readonly ZLinkChannelPublishHandlerRegistration[];
   readonly publishHandlerTypes?: readonly ZLinkNestManualHandlerOptions[];
 }
@@ -249,7 +251,9 @@ export interface ZLinkNestFanoutChannelBuilder extends ZLinkNestFrameworkOptions
   setAdvertiseHost(advertiseHost: string): this;
   routingId(routingId: string | undefined): this;
   setRoutingIdPrefix(prefix: string): this;
+  setNoDrop(noDrop?: boolean): this;
   enableSubscriber(endpoint?: string | readonly string[]): this;
+  subscribe(topic: string): this;
   addPublishHandler(packetName: string, handlerType: Type): this;
   addHandlerGroup(groupName: string): this;
 }

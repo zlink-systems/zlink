@@ -6,7 +6,7 @@ plugins {
 }
 
 group = 'systems.zlink'
-version = '1.2.1'
+version = '1.4.0'
 description = 'zlink Java bindings — high-performance async messaging library'
 
 java {
@@ -126,7 +126,7 @@ def windowsCorePackage = coreSource == 'release' && corePackagePrefix != null
 ['apiElements', 'runtimeElements'].each { configurationName ->
     configurations.named(configurationName) {
         attributes {
-            attribute(Attribute.of('systems.zlink.core.version', String), '1.3.0')
+            attribute(Attribute.of('systems.zlink.core.version', String), '1.4.0')
             attribute(Attribute.of('systems.zlink.core.soname', String),
                 windowsCorePackage ? 'zlink.dll' : 'libzlink.so.0')
             attribute(Attribute.of('systems.zlink.core.provenance-sha256', String),
@@ -206,7 +206,7 @@ tasks.register('prepareZlinkNativeResources') {
             }
         } else if (corePackagePrefix == null || !corePackagePrefix.isAbsolute()) {
             throw new GradleException(
-                'ZLINK_CORE_PACKAGE_PREFIX must name an absolute Core 1.3.0 install prefix')
+                'ZLINK_CORE_PACKAGE_PREFIX must name an absolute Core 1.4.0 install prefix')
         } else {
             def includeDir = new File(corePackagePrefix, 'include')
             def runtimeDir = new File(corePackagePrefix,
@@ -236,11 +236,11 @@ tasks.register('prepareZlinkNativeResources') {
             def runtimeSha256 = java.security.MessageDigest.getInstance('SHA-256')
                 .digest(runtime.bytes).encodeHex().toString()
             def expectedSoname = windowsCorePackage ? 'zlink.dll' : 'libzlink.so.0'
-            if (metadata.version != '1.3.0') {
-                throw new GradleException('Core package must report version 1.3.0')
+            if (metadata.version != '1.4.0') {
+                throw new GradleException('Core package must report version 1.4.0')
             }
             def approved = approvedCorePackage
-            if (approved != null && (approved.version != '1.3.0'
+            if (approved != null && (approved.version != '1.4.0'
                 || approved.prefix != corePackagePrefix.canonicalPath
                 || approved.provenanceSha256 != manifestSha256
                 || approved.runtime.sha256 != runtimeSha256
@@ -381,7 +381,7 @@ publishing {
                 name = 'zlink'
                 description = project.description
                 properties = [
-                    'zlink.core.version': '1.3.0',
+                    'zlink.core.version': '1.4.0',
                     'zlink.core.soname': windowsCorePackage
                         ? 'zlink.dll' : 'libzlink.so.0',
                     'zlink.core.abi-major': '0',

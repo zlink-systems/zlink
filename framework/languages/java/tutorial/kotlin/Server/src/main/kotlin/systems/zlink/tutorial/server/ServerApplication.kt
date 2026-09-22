@@ -5,7 +5,17 @@ import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.runApplication
 import org.springframework.context.annotation.Bean
 import systems.zlink.contracts.core.RoutingId
+import systems.zlink.framework.kotlin.addActorFactory
+import systems.zlink.framework.kotlin.addEntrySpot
+import systems.zlink.framework.kotlin.addHandlersFromPackageOf
+import systems.zlink.framework.kotlin.addInstanceSpotFactory
+import systems.zlink.framework.kotlin.addPublishHandler
+import systems.zlink.framework.kotlin.addRouteRequestHandler
+import systems.zlink.framework.kotlin.addSessionPacketHandler
+import systems.zlink.framework.kotlin.addSpotFactory
+import systems.zlink.framework.kotlin.registerSession
 import systems.zlink.framework.kotlin.useCoroutineHandlers
+import systems.zlink.framework.kotlin.useFilter
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions
@@ -66,14 +76,12 @@ class ServerApplication {
 
         // Finds the handler classes in this package tree. A channel registration
         // then names the group it wants; discovery alone exposes nothing.
-        // #895: configuration package scanning has no Kotlin form in the spec.
-        options.addHandlersFromPackageOf(GetPlayerProfileHandler::class.java)
+        options.addHandlersFromPackageOf<GetPlayerProfileHandler>()
 
         // --8<-- [start:filter-register]
         // Registration order is execution order. Filters wrap handlers this node
         // receives; Spot and Actor handlers are not covered.
-        // #895: handler filters have no Kotlin form in the spec.
-        options.useFilter(CallLogFilter::class.java)
+        options.useFilter<CallLogFilter>()
         // --8<-- [end:filter-register]
 
         // --8<-- [start:mesh-register]
@@ -102,11 +110,7 @@ class ServerApplication {
         // --8<-- [start:node-direct-register]
         // Registered on the mesh itself, with no channelName(...) call. Handlers
         // added this way are reached by routing id instead of by channel name.
-        mesh.addRouteRequestHandler(
-            NodeStatusHandler::class.java,
-            GetNodeStatus::class.java,
-            NodeStatus::class.java,
-        )
+        mesh.addRouteRequestHandler<NodeStatusHandler, GetNodeStatus, NodeStatus>()
         // --8<-- [end:node-direct-register]
 
         // --8<-- [start:clientserver-register]
@@ -129,10 +133,7 @@ class ServerApplication {
         options
             .addFanoutChannel("broadcast")
             .connect("tcp://127.0.0.1:7612")
-            .addPublishHandler(
-                MaintenanceNoticeSubscriber::class.java,
-                MaintenanceNotice::class.java,
-            )
+            .addPublishHandler<MaintenanceNoticeSubscriber, MaintenanceNotice>()
         // --8<-- [end:fanout-subscribe]
 
         // --8<-- [start:object-server]
@@ -147,29 +148,20 @@ class ServerApplication {
         // node that registers it is a candidate to host one. Exactly one
         // relocation policy is required; moving a live room to another node is a
         // separate topic.
-        objects.addSpotFactory<GameRoom>("game-room", GameRoom::class.java) { factory ->
-            factory.disableRelocation()
-        }
+        objects.addSpotFactory<GameRoom>("game-room") { disableRelocation() }
         // --8<-- [end:spot-register]
 
         // --8<-- [start:instance-spot-register]
         // Registered the same way, but callers never create one explicitly.
-        objects.addInstanceSpotFactory<MatchQueue>("match-queue", MatchQueue::class.java) { factory
-            ->
-            factory.disableRelocation()
-        }
+        objects.addInstanceSpotFactory<MatchQueue>("match-queue") { disableRelocation() }
         // --8<-- [end:instance-spot-register]
 
         // --8<-- [start:actor-register]
         // One lobby per object server. Newly created players start there.
-        // #895: entry-spot registration has no Kotlin form in the spec.
-        objects.addEntrySpot(LobbySpot::class.java)
+        objects.addEntrySpot<LobbySpot>()
 
         // Nodes that register "player" are candidates to host one.
-        objects.addActorFactory("player", Player::class.java, PlayerFactory::class.java) { factory
-            ->
-            factory.disableRelocation()
-        }
+        objects.addActorFactory<Player, PlayerFactory>("player") { disableRelocation() }
         // --8<-- [end:actor-register]
 
         // --8<-- [start:stream-register]
@@ -182,12 +174,9 @@ class ServerApplication {
             .addStreamNode("client-stream")
             .bind("tcp://0.0.0.0:7621")
             .enableActorDispatch()
-            // #895: session registration has no Kotlin form in the spec.
-            .registerSession(GameSession::class.java)
-            // #895: session packet registration has no Kotlin form in the spec.
-            .addSessionPacketHandler(PingHandler::class.java)
-            // #895: session packet registration has no Kotlin form in the spec.
-            .addSessionPacketHandler(AuthenticateHandler::class.java)
+            .registerSession<GameSession>()
+            .addSessionPacketHandler<PingHandler>()
+            .addSessionPacketHandler<AuthenticateHandler>()
         // --8<-- [end:stream-register]
     }
 }

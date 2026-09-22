@@ -11,6 +11,7 @@
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/spots/spot_runtime.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
+#include "runtime/timers/timer_runtime.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -525,6 +526,34 @@ bool wait_until_bounded (Predicate &&condition, std::chrono::milliseconds timeou
     return condition ();
 }
 
+bool run_serial_turn (const std::shared_ptr<zlink::framework::detail::spot_context_state_t> &state,
+                      std::string name,
+                      std::function<void ()> work)
+{
+    struct turn_state_t
+    {
+        std::promise<void> entered;
+        std::exception_ptr error;
+    };
+    auto turn_state = std::make_shared<turn_state_t> ();
+    auto terminal = turn_state->entered.get_future ();
+    const auto posted =
+      state->serial_queue->try_post (std::move (name), [turn_state, work = std::move (work)] {
+          try {
+              work ();
+          }
+          catch (...) {
+              turn_state->error = std::current_exception ();
+          }
+          turn_state->entered.set_value ();
+      });
+    if (!posted || terminal.wait_for (std::chrono::seconds (1)) != std::future_status::ready)
+        return false;
+    if (turn_state->error)
+        std::rethrow_exception (turn_state->error);
+    return true;
+}
+
 void test_relocation_ready_completion_runs_once_on_spot_turn (test_context_t &test)
 {
     namespace detail = zlink::framework::detail;
@@ -603,8 +632,8 @@ void test_relocation_ready_completion_runs_once_on_spot_turn (test_context_t &te
       "continued exactly once on the next Spot serial turn");
 
     state->node->lane.run ([state] { state->relocation_boundary_active = true; }).get ();
-    const auto prepared_deferred = state->run_serial_sync (
-      "defer-prepared-relocation", [&] { context.relocation_ready ().defer (); });
+    const auto prepared_deferred = run_serial_turn (state, "defer-prepared-relocation",
+                                                    [&] { context.relocation_ready ().defer (); });
     state->complete_relocation_ready (spot_relocation_ready_outcome_t::relocated);
     state->complete_relocation_ready (spot_relocation_ready_outcome_t::continued);
     test.require (prepared_deferred && completions.load () == 2
@@ -622,6 +651,74 @@ void test_relocation_ready_completion_runs_once_on_spot_turn (test_context_t &te
         rejected = error.kind () == zlink::framework::framework_error_kind_t::not_configured;
     }
     test.require (rejected, "FrameworkManaged must reject relocation_ready().defer()");
+}
+
+void test_relocation_ready_defer_holds_queued_timer_turn (test_context_t &test)
+{
+    namespace detail = zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+    using zlink::framework::spot_relocation_coordination_mode_t;
+    using zlink::framework::spot_relocation_ready_outcome_t;
+    using zlink::framework::timer_tick_t;
+    using zlink::framework::user_spot_execution_mode_t;
+
+    auto state = std::make_shared<detail::spot_context_state_t> ();
+    state->execution_mode = user_spot_execution_mode_t::spot_wide;
+    state->relocation_coordination_mode = spot_relocation_coordination_mode_t::application_signaled;
+    state->relocation_boundary_active = true;
+    state->serial_executor =
+      std::make_shared<runtime::offload_executor_t> (2, "relocation-ready-timer-test");
+    state->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
+      *state->serial_executor, runtime::serial_execution_queue_options_t{},
+      runtime::serial_execution_queue_t::error_handler_t{},
+      runtime::serial_lane_policy_t::spot_wide ());
+    state->node =
+      std::make_shared<detail::spot_node_builder_state_t> ("relocation-ready-timer-node");
+    state->channel_runtime = std::make_shared<detail::channel_runtime_state_t> ();
+    zlink::framework::serializer_registry_t serializers;
+    state->channel_runtime->serializers = &serializers;
+    state->spot_instance = std::make_shared<int> (1);
+
+    std::atomic_int completions{0};
+    std::atomic_int timer_calls{0};
+    std::atomic_bool timer_ran_after_completion{false};
+    state->lifecycle.on_relocation_ready_completed =
+      [&] (void *, const zlink::framework::spot_relocation_ready_completion_t &) {
+          completions.fetch_add (1, std::memory_order_acq_rel);
+      };
+
+    auto timer_state = std::make_shared<detail::timer_state_t> ();
+    timer_state->name = "queued-before-relocation-ready";
+    auto timer_handler = std::make_shared<int> (1);
+    timer_state->handler_instance = timer_handler;
+    timer_state->handler_invoker =
+      [&] (void *, void *, zlink::framework::serializer_registry_t &,
+           const timer_tick_t &) -> zlink::framework::task_t<zlink::message_t> {
+        timer_ran_after_completion.store (completions.load (std::memory_order_acquire) == 1,
+                                          std::memory_order_release);
+        timer_calls.fetch_add (1, std::memory_order_acq_rel);
+        co_return zlink::message_t{};
+    };
+    state->timers.push_back (timer_state);
+
+    auto context = detail::spot_context_access_t::create (state);
+    const auto deferred = run_serial_turn (state, "defer-with-queued-timer", [&] {
+        detail::timer_runtime_t::post_fire_count (state, timer_state, {}, 1);
+        context.relocation_ready ().defer ();
+    });
+    const auto timer_ran_while_deferred =
+      wait_until_bounded ([&] { return timer_calls.load (std::memory_order_acquire) != 0; },
+                          std::chrono::milliseconds (100));
+
+    test.require (deferred && !timer_ran_while_deferred,
+                  "a timer turn queued before relocation readiness defer must remain held");
+
+    state->complete_relocation_ready (spot_relocation_ready_outcome_t::continued);
+    const auto timer_resumed = wait_until_bounded (
+      [&] { return timer_calls.load (std::memory_order_acquire) == 1; }, std::chrono::seconds (1));
+    test.require (timer_resumed && completions.load (std::memory_order_acquire) == 1
+                    && timer_ran_after_completion.load (std::memory_order_acquire),
+                  "the held timer turn must resume after relocation readiness completion");
 }
 
 void test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test_context_t &test)
@@ -741,6 +838,126 @@ void test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test_cont
         node->actor_instances.clear ();
         node->actor_instance_index.clear ();
     }
+}
+
+void test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callbacks (
+  test_context_t &test)
+{
+    namespace detail = zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+    using zlink::framework::node_rid_t;
+    using zlink::framework::serializer_registry_t;
+    using zlink::framework::spot_id_t;
+    using zlink::framework::user_spot_execution_mode_t;
+
+    struct returning_actor_t
+    {
+    };
+
+    const auto run_case = [&] (bool remote) {
+        const std::string case_name = remote ? "remote" : "same-node";
+        const auto node =
+          std::make_shared<detail::spot_node_builder_state_t> ("entry-return-" + case_name);
+        const auto local_node_name = "entry-return-target-" + case_name;
+        const auto local_node_rid = node_rid_t::from_string (local_node_name);
+        const auto source_id = spot_id_t ("source-spot-" + case_name);
+        const auto entry_id = spot_id_t ("entry-spot-" + case_name);
+        node->snapshot.routing_id = zlink::routing_id_t::from (local_node_name);
+        node->snapshot.entry_spot_name = "entry";
+        node->spot_ids_by_name.emplace ("entry", entry_id);
+        node->spot_names_by_id.emplace (source_id, "source");
+        node->spot_names_by_id.emplace (entry_id, "entry");
+
+        serializer_registry_t serializers;
+        auto channel_runtime = std::make_shared<detail::channel_runtime_state_t> ();
+        channel_runtime->serializers = &serializers;
+        const auto make_state = [&] (spot_id_t spot_id, std::string spot_name, bool entry_spot) {
+            auto state = std::make_shared<detail::spot_context_state_t> ();
+            state->node = node;
+            state->node_rid = local_node_rid;
+            state->spot_id = std::move (spot_id);
+            state->spot_name = std::move (spot_name);
+            state->lifecycle_domain = entry_spot ? detail::spot_lifecycle_domain_t::entry ()
+                                                 : detail::spot_lifecycle_domain_t::user ();
+            state->execution_mode = user_spot_execution_mode_t::spot_wide;
+            state->serial_executor =
+              std::make_shared<runtime::offload_executor_t> (2, "entry-return-" + case_name);
+            state->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
+              *state->serial_executor, runtime::serial_execution_queue_options_t{},
+              runtime::serial_execution_queue_t::error_handler_t{},
+              runtime::serial_lane_policy_t::spot_wide ());
+            state->spot_instance = std::make_shared<int> (1);
+            state->channel_runtime = channel_runtime;
+            return state;
+        };
+
+        const auto source = make_state (source_id, "source", false);
+        const auto entry = make_state (entry_id, "entry", true);
+        std::atomic_int leave_callbacks{0};
+        std::atomic_int joined_callbacks{0};
+        detail::spot_actor_admission_callbacks_t source_callbacks;
+        source_callbacks.on_leave_actor = [&] (void *, void *) {
+            leave_callbacks.fetch_add (1, std::memory_order_acq_rel);
+            return zlink::framework::task_t<void> (zlink::framework::result_t<void>::success ());
+        };
+        detail::spot_actor_admission_callbacks_t entry_callbacks;
+        entry_callbacks.on_actor_joined = [&] (void *, void *) {
+            joined_callbacks.fetch_add (1, std::memory_order_acq_rel);
+            return zlink::framework::task_t<void> (zlink::framework::result_t<void>::success ());
+        };
+        const auto actor_type = std::type_index (typeid (returning_actor_t));
+        source->actor_admissions.emplace (actor_type, std::move (source_callbacks));
+        entry->actor_admissions.emplace (actor_type, std::move (entry_callbacks));
+        node->spot_contexts_by_id.emplace (source_id,
+                                           detail::spot_context_access_t::create (source));
+        node->spot_contexts_by_id.emplace (entry_id, detail::spot_context_access_t::create (entry));
+
+        detail::spot_node_builder_state_t::actor_factory_registration_t registration;
+        registration.actor_type = actor_type;
+        registration.create_instance = [] (std::string) {
+            return std::make_shared<returning_actor_t> ();
+        };
+        registration.configure_instance = [] (void *, const auto &, void *) {};
+        node->actor_factories.emplace ("returning-actor", std::move (registration));
+
+        const auto source_node_rid =
+          remote ? node_rid_t::from_string ("entry-return-source-remote") : local_node_rid;
+        const auto actor_ref =
+          detail::actor_ref_access_t::make (source_node_rid, "returning-actor", "actor-1", 1);
+        const std::string key = "returning-actor:actor-1";
+        auto actor = std::make_shared<returning_actor_t> ();
+        node->actor_instances.emplace (key, actor);
+        node->actor_instance_index.emplace (actor.get (),
+                                            std::make_pair ("returning-actor", "actor-1"));
+        node->actor_spot_ids.emplace (key, source_id);
+        node->actor_generations.emplace (key, 1);
+        node->actor_created_keys.emplace (key);
+        source->actor_count = 1;
+
+        detail::spot_node_runtime_t spot_runtime (node);
+        const auto joined =
+          remote ? spot_runtime.join_remote_actor_to_spot_erased (actor_ref, entry_id,
+                                                                  zlink::message_t{})
+                 : spot_runtime.join_actor_to_spot_erased (actor_ref, entry_id, zlink::message_t{});
+        const auto current = node->actor_spot_ids.find (key);
+        test.require (joined && joined.value ().result_code == 0
+                        && current != node->actor_spot_ids.end () && current->second == entry_id
+                        && source->actor_count == 0 && entry->actor_count == 1
+                        && joined_callbacks.load (std::memory_order_acquire) == 1
+                        && leave_callbacks.load (std::memory_order_acquire) == 1,
+                      remote ? "remote User Spot to Entry Spot return must commit without "
+                               "admission and run target joined/source leave exactly once"
+                             : "same-node User Spot to Entry Spot return must commit without "
+                               "admission and run target joined/source leave exactly once");
+
+        spot_runtime.request_stop ();
+        spot_runtime.cancel_pending_dispatch ();
+        spot_runtime.cancel_pending_work ();
+        spot_runtime.release_native_handles ();
+    };
+
+    run_case (false);
+    run_case (true);
 }
 
 void test_temporary_channel_request_yield_owns_call_state (test_context_t &test)
@@ -3593,11 +3810,6 @@ class entry_relocation_test_entry_spot_t final
         co_return;
     }
 
-    zlink::framework::task_t<zlink::framework::spot_actor_join_result_t>
-    on_actor_join (std::string_view, const zlink::framework::message_t &) override
-    {
-        co_return zlink::framework::spot_actor_join_result_t::reject ();
-    }
     zlink::framework::task_t<void> on_actor_joined (entry_relocation_test_actor_t &actor) override
     {
         ++joined_count;
@@ -4862,7 +5074,9 @@ int main ()
     test_spot_lifecycle_domain_rejects_invalid_kind_combinations (test);
     test_generation_barrier_quiesces_yield_spot_and_timer (test);
     test_relocation_ready_completion_runs_once_on_spot_turn (test);
+    test_relocation_ready_defer_holds_queued_timer_turn (test);
     test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test);
+    test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callbacks (test);
     test_temporary_channel_request_yield_owns_call_state (test);
     test_accepted_message_payload_is_deserialized_once (test);
     test_close_barrier_waits_and_abort_restores_ingress (test);

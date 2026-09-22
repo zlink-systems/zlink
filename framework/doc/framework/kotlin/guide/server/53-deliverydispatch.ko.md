@@ -21,22 +21,20 @@ title: "DeliveryDispatch 따라 읽기 · Kotlin"
 !!! info "이 장을 읽고 나면"
 
     DeliveryDispatch 샘플을 편집기에 열고, HTTP로 접수된 배송 요청이 배송원에게 제안되고 무응답이면
-    재배정되어 고객에게 상태가 push되기까지 코드를 따라갈 수 있다. 이 장의 코드는
-    `framework/languages/java/samples/kotlin/DeliveryDispatch`에서 그대로 실행된다.
+    재배정되어 고객에게 상태가 push되기까지 코드를 따라갈 수 있다. 이 장의 코드는 [언어별 예제 저장소의 DeliveryDispatch 샘플](https://github.com/zlink-systems/zlink-kotlin-examples/tree/main/samples/DeliveryDispatch)에서 가져온다.
 
-[샘플 고르기](14-samples.ko.md#5-deliverydispatch--배차-시스템-구축)가 이 샘플이 무엇을 보여 주는지
+[샘플 고르기](14-samples.ko.md#6-deliverydispatch--배차-시스템-구축)가 이 샘플이 무엇을 보여 주는지
 소개했다. 이 장은 그 소개 다음에 읽는 자리다 — 역할과 코드 위치, 주요 시나리오의 메시지 흐름,
-각 흐름에 등장하는 framework 기능과 그것을 설명하는 장을 소스가 놓인 순서대로 따라간다.
-이 장에는 계약을 소유하는 스펙 문서가 없다. 요구사항, 메시지 계약과 검증 기준은
-[DeliveryDispatch 시나리오](../../../common/sample/deliverydispatch/README.ko.md)가 소유하며, 이
-장은 그것을 다시 적지 않는다.
+각 흐름에 등장하는 framework 기능과 그것을 설명하는 장을 소스가 놓인 순서대로 따라간다. 이 장은
+DeliveryDispatch 샘플의 역할과 코드 위치, 주요 메시지 흐름, 실행 검증을 소스 순서대로 설명한다.
+요구사항, 메시지 계약과 검증 기준은 [DeliveryDispatch 시나리오](../../../common/sample/deliverydispatch/README.ko.md)에서 참고한다.
 
 ## 1. 이 샘플이 보여 주는 것
 
 고객은 HTTP로 배송을 만들고 STREAM으로 상태를 받는다. 배송원은 STREAM으로 제안을 받고 결정을
 보낸다. 그 사이의 서버는 session map이나 socket registry를 두지 않는다 — 배송원과 고객은 각각
 id를 가진 Actor이고, 제안과 상태는 그 Actor에 묶인 session으로 push된다. 배송원의 응답을 기다리는
-동안 어떤 handler도 실행 줄을 점유하지 않으며, 제안의 deadline은 Dispatch가 기록으로 관리한다.
+동안 어떤 handler도 Spot의 turn을 점유하지 않으며, 제안의 deadline은 Dispatch가 기록으로 관리한다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/14-delivery.html" title="DeliveryDispatch 샘플 토폴로지" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/14-delivery.html" target="_blank">↗ 크게 보기</a></p>
@@ -104,6 +102,8 @@ Actor를 얻는 호출은 어느 CourierActorNode에 만들지 정하지 않는�
 <iframe class="zlink-diagram" src="/common/diagrams/sample-delivery-success.html" title="정상 흐름 — 배차·수락·상태 push" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-delivery-success.html" target="_blank">↗ 크게 보기</a></p>
 
+HTTP handler는 배송원 결정을 기다리지 않고 worker에 접수를 넘긴 뒤 즉시 응답한다.
+
 `Server/Dispatch/src/main/kotlin/systems/zlink/samples/kotlin/deliverydispatch/server/dispatch/DispatchHttpServer.kt`
 
 ```kotlin
@@ -170,6 +170,8 @@ handler도 배송원을 기다리지 않는다.
 <iframe class="zlink-diagram" src="/common/diagrams/sample-delivery-reassign.html" title="Timeout 재배정 — Attempt=2 승격" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-delivery-reassign.html" target="_blank">↗ 크게 보기</a></p>
 
+timeout 재배정은 기다리는 handler가 아니라 Dispatch sweeper가 만료된 offer를 확인해 시작한다.
+
 `Server/Dispatch/src/main/kotlin/systems/zlink/samples/kotlin/deliverydispatch/server/dispatch/OfferDeadlineSweeper.kt`
 
 ```kotlin
@@ -232,5 +234,5 @@ client는 정상 배차와 timeout 재배차 두 흐름에서 상태 notify의 �
 - session 하나에 Actor 여럿을 묶는 구성: [SupportChat 따라 읽기](52-supportchat.ko.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

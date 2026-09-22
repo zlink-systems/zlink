@@ -719,11 +719,6 @@ struct contract_context_entry_spot_t : public zlink::framework::entry_spot_t<con
         return value;
     }
     void configure () override {}
-    zlink::framework::task_t<zlink::framework::spot_actor_join_result_t>
-    on_actor_join (std::string_view, const zlink::framework::message_t &) override
-    {
-        co_return zlink::framework::spot_actor_join_result_t::accept ();
-    }
     zlink::framework::task_t<void> on_actor_joined (contract_actor_t &) override { co_return; }
     zlink::framework::task_t<void> on_leave_actor (contract_actor_t &) override { co_return; }
     zlink::framework::entry_spot_context_t value;

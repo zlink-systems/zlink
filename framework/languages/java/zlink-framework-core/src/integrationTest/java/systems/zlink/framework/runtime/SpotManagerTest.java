@@ -9,10 +9,12 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.framework.actors.ZLinkActor;
+import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.ZLinkPeerState;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
@@ -34,6 +36,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Handler;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 final class SpotManagerTest {
     @Test
@@ -253,6 +258,101 @@ final class SpotManagerTest {
     }
 
     @Test
+    void logicalMulticastGoneTargetEmitsDispatchErrorAndKeepsPublishTerminal() throws Exception {
+        Zlink.version();
+        DiagnosticPublishingSpot.createdContext.set(null);
+        String suffix = Long.toUnsignedString(System.nanoTime(), 36);
+        String targetEndpoint = tcpEndpoint();
+        RoutingId targetRid = RoutingId.from("multicast-target-" + suffix);
+        CompletableFuture<String> dispatchError = new CompletableFuture<>();
+        Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
+        Handler handler =
+                new Handler() {
+                    @Override
+                    public void publish(LogRecord record) {
+                        String message = record.getMessage();
+                        if (message.contains("event_id=zlink.dispatch_error")
+                                && message.contains("target_rid=" + targetRid)) {
+                            dispatchError.complete(message);
+                        }
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        logger.addHandler(handler);
+        var store = new ZLinkInMemoryLocationStore();
+
+        DefaultZLinkFrameworkOptions targetOptions = new DefaultZLinkFrameworkOptions();
+        targetOptions.addLocationStore(store);
+        var targetNode = targetOptions.addRouteMesh("game");
+        targetNode.listen(targetEndpoint).setRoutingId(targetRid);
+        targetNode.channelName("events").server().setWeight(10_000);
+        targetNode.objects().server();
+
+        DefaultZLinkFrameworkOptions sourceOptions = new DefaultZLinkFrameworkOptions();
+        sourceOptions.addLocationStore(store);
+        sourceOptions.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+        var sourceNode = sourceOptions.addRouteMesh("game");
+        sourceNode.listen(tcpEndpoint()).setRoutingId(RoutingId.from("multicast-source-" + suffix));
+        sourceNode.channelName("events").server().setWeight(10_000);
+        sourceNode.peerConnections().connect(targetEndpoint);
+        sourceNode
+                .objects()
+                .server()
+                .addSpotFactory(
+                        "DiagnosticPublishingSpot",
+                        DiagnosticPublishingSpot.class,
+                        factory -> factory.disableRelocation());
+
+        try (ZLinkFrameworkRuntime target =
+                        RuntimeTestSupport.startFramework(
+                                targetOptions, new ZLinkJavaBackendAdapterFactory());
+                ZLinkFrameworkRuntime source =
+                        RuntimeTestSupport.startFramework(
+                                sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
+            waitForPeer(source, targetRid, 3_000);
+            ZLinkSpotCreateResult created =
+                    source.spotManager()
+                            .create("DiagnosticPublishingSpot")
+                            .submit()
+                            .toCompletableFuture()
+                            .get(3, TimeUnit.SECONDS);
+            target.close();
+
+            DiagnosticPublishingSpot.createdContext
+                    .get()
+                    .outbound()
+                    .publish("events", "orders", "gone-target")
+                    .submit()
+                    .toCompletableFuture()
+                    .get(3, TimeUnit.SECONDS);
+
+            String record = dispatchError.get(3, TimeUnit.SECONDS);
+            assertTrue(record.contains("event_id=zlink.dispatch_error"));
+            assertTrue(record.contains("surface=spot"));
+            assertTrue(record.contains("kind=send"));
+            assertTrue(record.contains("outcome=failed"));
+            assertTrue(record.contains("action=drop"));
+            assertTrue(record.contains("reason=stale_target"));
+            assertTrue(record.contains("target_rid=" + targetRid));
+            assertTrue(record.contains("topic=orders"));
+            assertTrue(record.contains("channel=events"));
+            assertTrue(record.contains("mesh=game"));
+            assertFalse(record.contains(" phase="));
+            assertFalse(record.contains(" source_rid="));
+            assertFalse(record.contains(" packet="));
+            assertFalse(record.contains("error_type="));
+            assertFalse(record.contains("error_message="));
+        } finally {
+            logger.removeHandler(handler);
+        }
+    }
+
+    @Test
     void spotManager_create_returnsRejectedAndDoesNotRegisterSpotWhenOnCreateRejects() {
         Zlink.version();
         String suffix = Long.toUnsignedString(System.nanoTime(), 36);
@@ -308,6 +408,31 @@ final class SpotManagerTest {
 
         @Override
         public CompletionStage<Void> onInitialize() {
+            return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    public static final class DiagnosticPublishingSpot implements ZLinkSpot<ZLinkActor> {
+        static final AtomicReference<ZLinkSpotContext> createdContext = new AtomicReference<>();
+        private final ZLinkSpotContext context;
+
+        public DiagnosticPublishingSpot(ZLinkSpotContext context) {
+            this.context = context;
+            createdContext.set(context);
+        }
+
+        @Override
+        public ZLinkSpotContext context() {
+            return context;
+        }
+
+        @Override
+        public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
     }

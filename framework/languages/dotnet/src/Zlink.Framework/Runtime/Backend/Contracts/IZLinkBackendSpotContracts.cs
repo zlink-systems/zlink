@@ -15,6 +15,11 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
     // and gate-less standalone nodes on the historical always-on behavior.
     void SetFlowCaptureGate(Func<bool> flowCaptureEnabled) { }
 
+    // Logical Multicast target failures are observed at the MeshNode, where
+    // the target RID and Core submit result are still available. Backends
+    // without routed MeshNode support keep the default no-op.
+    void SetLogicalMulticastDispatchErrors(ZLinkDispatchErrorReporter reporter, string meshName) { }
+
     // Spec 30 §14 step 1: the host's shutdown admission seal is followed by
     // the mesh node, which then starts no new peer admission (Hello). Default
     // keeps fakes and gate-less standalone nodes admitting peers.

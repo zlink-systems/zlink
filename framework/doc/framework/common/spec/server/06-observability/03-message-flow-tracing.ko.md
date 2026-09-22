@@ -149,6 +149,7 @@ lease fencing은 `target_closed`로 기록한다.
 | `surface`, `message_kind`, `outcome` | 모든 message-flow 기록에 포함한다. |
 | `reason` | 실패, backpressure 또는 drop 원인이 있을 때 포함한다. |
 | `action` | `zlink.dispatch_error`에 포함한다. |
+| `error_type`, `error_message` | Dispatch 실패에 exception 또는 error 값이 있을 때 두 값을 함께 포함한다. `error_type`은 그 값의 runtime type 이름이고 `error_message`는 진단 message다. `error_message`는 구현이 정한 최대 길이 안에서 제한하며 secret과 stack trace를 넣지 않는다. |
 | `channel_name` | 논리 Channel 주소가 있을 때 포함한다. |
 | `channel_route_kind` | `surface=channel`에만 포함한다. `classic_fanout`에는 포함하지 않는다. |
 | `mesh_name` | Node direct 또는 RouteMesh 범위가 있을 때 포함한다. |
@@ -165,8 +166,7 @@ lease fencing은 `target_closed`로 기록한다.
 `channel_route_kind`, `mesh_name`과 `server_rid`는 handler를 찾거나 target을 선택하는
 입력이 아니다. Trace에는 payload, application
 [metadata 값](../00-foundation/02-glossary.ko.md#metadata-snapshot), native handle, raw frame와 exception
-object를 넣지 않는다. Error 설명을 문자열로 기록할 때는 구현이 정한 최대 길이
-안에서 제한하며 secret과 stack trace를 넣지 않는다.
+object를 넣지 않는다.
 
 #### Structured log 대체 표기
 
@@ -175,14 +175,20 @@ Structured log를 대신 제공하는 구현은 `zlink flow:` prefix와 다음 k
 
 `event`, `phase`, `surface`, `kind`, `mesh`, `channel`, `channel_route`, `source_rid`,
 `target_rid`, `server_rid`, `packet`, `topic`, `spot`, `instance_type`,
-`activation_state`, `actor`, `corr`, `flow`, `origin`, `outcome`, `reason`, `size`.
+`activation_state`, `actor`, `corr`, `flow`, `origin`, `outcome`, `reason`,
+`error_type`, `error_message`, `size`.
 
 Logical Multicast와 Classic fanout의 정상 publish·subscriber delivery는
 `zlink.message_flow`를 만들지 않는다. Classic fanout subscriber의 local dispatch에서
 handler가 없으면 `surface=classic_fanout`, `message_kind=send`, `outcome=failed`,
 `reason=no_handler`, `action=drop`인 `zlink.dispatch_error`를 subscriber process의
 logger provider에 기록한다. 이 record에는 `channel_route_kind`를 넣지 않고
-publisher별 delivery 결과로 되돌리지 않는다.
+publisher별 delivery 결과로 되돌리지 않는다. Logical Multicast의 remote target 하나에
+대한 routed 제출이 실패하면 publisher process가 같은 방식으로 `surface=spot`,
+`message_kind=send`, `outcome=failed`, `action=drop`인 `zlink.dispatch_error`를
+`target_rid`·`topic`과 함께 기록한다 — `reason`은 target route가 없거나 준비되지 않았거나
+닫힌 경우 `stale_target`, 그 밖에는 `backpressure` 또는 `shutdown`이다. 이 record도 publish
+terminal이나 publisher별 delivery 결과로 되돌리지 않는다.
 
 ## 4. 기록 범위 설정 — level과 sampling
 
@@ -320,6 +326,13 @@ attribute key, diagnostics level·sampling rate 설정 interface)만으로 다�
 - Classic fanout의 subscriber-local handler 누락이 `surface=classic_fanout`,
   `reason=no_handler`, `action=drop`인 dispatch error를 만들고 `channel_route_kind`를
   포함하지 않는다.
+- Handler 예외로 만든 dispatch error가 trace와 structured log 양쪽에 `error_type`과
+  `error_message`를 함께 남기고, `error_message`가 구현의 최대 길이를 넘지 않으며
+  secret과 stack trace를 담지 않는다.
+- Logical Multicast의 remote target별 routed 제출 실패가 publisher process에서
+  `surface=spot`, `message_kind=send`, `outcome=failed`, `action=drop`, 해당
+  `target_rid`·`topic`과 분류된 `reason`을 가진 dispatch error를 만들고 publish
+  terminal이나 delivery 결과를 바꾸지 않는다.
 - 각 request surface가 terminal trace를 정확히 한 번 기록한다.
 - Instance Spot의 one-way 생성 실패를 `surface=instance_spot`, `phase=dropped`로
   정확히 한 번 기록하고, 숨은 request나 replay를 만들지 않는다.

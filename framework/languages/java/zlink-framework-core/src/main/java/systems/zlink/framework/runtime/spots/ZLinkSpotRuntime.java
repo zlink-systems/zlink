@@ -44,7 +44,6 @@ import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistra
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
-import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchFailure;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
@@ -103,7 +102,6 @@ import systems.zlink.framework.spots.ZLinkSpotPublisherClient;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
-import java.lang.reflect.InvocationTargetException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -436,6 +434,9 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         handlerFactory,
                         this.handlerExecutor,
                         eventDispatcher);
+        for (ZLinkInternalMeshNode meshNode : this.routeMeshNodes) {
+            meshNode.setDispatchErrorReporter(this.dispatchErrors);
+        }
         this.directOutbound =
                 new ZLinkSpotDirectOutbound(
                         routeMessages, this.handlerExecutor, dispatchErrors.flow());
@@ -5207,22 +5208,20 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     private void reportDispatchError(DispatchFailureReport failure) {
         dispatchErrors.report(
-                new ZLinkDispatchFailure(
-                        failure.surface,
-                        failure.messageKind,
-                        failure.reason,
-                        failure.action,
-                        failure.packetName == null || failure.packetName.isBlank()
-                                ? null
-                                : failure.packetName,
-                        failure.channelName,
-                        failure.topic,
-                        failure.spotId == null ? null : failure.spotId.toString(),
-                        failure.actorId,
-                        failure.sourceRid == null ? null : failure.sourceRid.toString(),
-                        failure.correlationId,
-                        errorType(failure.error),
-                        errorMessage(failure.error)));
+                failure.surface,
+                failure.messageKind,
+                failure.reason,
+                failure.action,
+                failure.packetName == null || failure.packetName.isBlank()
+                        ? null
+                        : failure.packetName,
+                failure.channelName,
+                failure.topic,
+                failure.spotId,
+                failure.actorId,
+                failure.sourceRid,
+                failure.correlationId,
+                failure.error);
     }
 
     void recordSpotDrop(String spotId, String reason) {
@@ -5302,38 +5301,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         .sourceRid(sourceRid)
                         .correlationId(
                                 packetHeader.requestSeq().map(Object::toString).orElse(null)));
-    }
-
-    private static String errorType(Throwable error) {
-        if (error == null) {
-            return null;
-        }
-        Throwable current = unwrapDispatchError(error);
-        return current.getClass().getSimpleName();
-    }
-
-    private static String errorMessage(Throwable error) {
-        if (error == null) {
-            return null;
-        }
-        Throwable current = unwrapDispatchError(error);
-        return current.getMessage() == null ? current.getClass().getName() : current.getMessage();
-    }
-
-    private static Throwable unwrapDispatchError(Throwable error) {
-        Throwable current = error;
-        while ((current instanceof CompletionException
-                        || current instanceof InvocationTargetException)
-                && current.getCause() != null) {
-            current = current.getCause();
-        }
-        if (current instanceof ZLinkConfigurationException
-                && current.getCause() != null
-                && current.getMessage() != null
-                && current.getMessage().startsWith("failed to invoke ")) {
-            current = current.getCause();
-        }
-        return current;
     }
 
     void replySpotRouteDispatchError(

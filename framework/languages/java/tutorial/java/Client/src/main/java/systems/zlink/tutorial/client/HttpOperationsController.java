@@ -42,22 +42,22 @@ final class HttpOperationsController {
     CompletionStage<ResponseEntity<StreamingResponseBody>> exportRoom(@PathVariable String roomId) {
         return route.requestToSpot(roomId, new Contracts.GetRoomState())
                 .submit(Contracts.RoomState.class)
-                .thenApply(
-                        state ->
-                                ResponseEntity.ok()
-                                        .contentType(NDJSON)
-                                        .body(
-                                                output -> {
-                                                    writeLine(
-                                                            output,
-                                                            new RoomLine(
-                                                                    roomId, state.title(), null));
-                                                    for (String message : state.chat()) {
-                                                        writeLine(
-                                                                output,
-                                                                new RoomLine(null, null, message));
-                                                    }
-                                                }));
+                .thenApply(state -> roomExport(roomId, state));
+    }
+
+    private ResponseEntity<StreamingResponseBody> roomExport(
+            String roomId, Contracts.RoomState state) {
+        return ResponseEntity.ok()
+                .contentType(NDJSON)
+                .body(output -> writeRoom(output, roomId, state));
+    }
+
+    private void writeRoom(OutputStream output, String roomId, Contracts.RoomState state)
+            throws IOException {
+        writeLine(output, new RoomLine(roomId, state.title(), null));
+        for (String message : state.chat()) {
+            writeLine(output, new RoomLine(null, null, message));
+        }
     }
 
     @PostMapping("/rooms/{roomId}/import")

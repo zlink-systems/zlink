@@ -11,6 +11,7 @@ import org.springframework.context.ConfigurableApplicationContext
 import org.springframework.context.annotation.Bean
 import org.springframework.core.env.StandardEnvironment
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
+import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.kotlin.configureDispatch
 import systems.zlink.framework.kotlin.useCoroutineHandlers
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
@@ -34,8 +35,7 @@ class SessionApplication {
     fun sessionFramework(topology: SampleTopology): ZLinkFrameworkConfigurer =
         ZLinkFrameworkConfigurer { options ->
             val session = topology.session()
-            // #895: configuration package scanning has no Kotlin form in the spec.
-            options.addHandlersFromPackageOf(SessionApplication::class.java)
+            options.addHandlersFromPackageOf<SessionApplication>()
             options.useCoroutineHandlers(Dispatchers.Default)
             options.configureDispatch { messageFlow(ZLinkMessageFlowLogMode.NORMAL) }
             options.configureLocations()
@@ -49,8 +49,7 @@ class SessionApplication {
                 .addStreamNode(SampleNames.StreamNode)
                 .bind(session.streamEndpoint)
                 .enableActorDispatch()
-                // #895: session registration has no Kotlin form in the spec.
-                .registerSession(SupportChatSession::class.java)
+                .registerSession<SupportChatSession>()
             // --8<-- [end:doc-sc-session-register]
         }
 

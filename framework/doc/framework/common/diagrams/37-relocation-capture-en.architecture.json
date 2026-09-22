@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "When state is captured after a move request",
+    "subtitle": "The default captures before the next turn; the signalled mode captures after the turn that closes a round",
+    "output": "37-relocation-capture-en.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [40, 130], "cols": 5, "gapX": 65, "gapY": 90, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "default-request", "type": "external", "label": "move request", "sublabel": "current turn runs", "row": 1, "col": 0 },
+    { "id": "default-end", "type": "backend", "label": "current turn ends", "sublabel": "before next turn", "row": 1, "col": 1 },
+    { "id": "default-capture", "type": "database", "label": "adapter captures", "sublabel": "whole chat state", "row": 1, "col": 2 },
+    { "id": "signal-request", "type": "external", "label": "move request", "sublabel": "round is running", "row": 3, "col": 0 },
+    { "id": "signal-turns", "type": "messagebus", "label": "new turns run", "sublabel": "input and state change", "row": 3, "col": 1 },
+    { "id": "signal-ready", "type": "backend", "label": "settlement ends", "sublabel": "RelocationReady", "row": 3, "col": 2 },
+    { "id": "signal-capture", "type": "database", "label": "adapter captures", "sublabel": "complete round", "row": 3, "col": 3 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Framework-managed (default)", "wraps": ["default-request", "default-end", "default-capture"] },
+    { "kind": "region", "label": "Application-signaled", "wraps": ["signal-request", "signal-turns", "signal-ready", "signal-capture"] }
+  ],
+  "connections": [
+    { "from": "default-request", "to": "default-end", "label": "waits for end", "variant": "default", "labelDy": -24 },
+    { "from": "default-end", "to": "default-capture", "label": "captures in gap", "variant": "emphasis", "labelDy": -24 },
+    { "from": "signal-request", "to": "signal-turns", "label": "keeps running", "variant": "dashed", "labelDy": -24 },
+    { "from": "signal-turns", "to": "signal-ready", "label": "closes unit", "variant": "default", "labelDy": -24 },
+    { "from": "signal-ready", "to": "signal-capture", "label": "captures after Defer", "variant": "emphasis", "labelDy": -24 }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Default mode", "items": ["After the move request, the adapter runs when the current turn ends.", "For a chat room, one message is one complete state change."] },
+    { "dot": "emerald", "title": "Application-signaled mode", "items": ["For an FPS round spanning turns, the application chooses the boundary.", "RelocationReady().Defer() says it is safe to capture after this turn ends."] }
+  ]
+}

@@ -61,6 +61,9 @@ public interface ZLinkMeshChannelServerBuilder {
  <THandler extends ZLinkSendHandler<TMessage>, TMessage>
  ZLinkMeshChannelServerBuilder addSendHandler(
  Class<THandler> handlerType, Class<TMessage> messageType);
+ <THandler extends ZLinkRouteSendHandler<TMessage>, TMessage>
+ ZLinkMeshChannelServerBuilder addRouteSendHandler(
+ Class<THandler> handlerType, Class<TMessage> messageType);
  <THandler extends ZLinkRequestHandler<TRequest, TReply>, TRequest, TReply>
  ZLinkMeshChannelServerBuilder addRequestHandler(
  Class<THandler> handlerType,
@@ -223,6 +226,7 @@ public interface systems.zlink.framework.configuration.ZLinkMeshChannelServerBui
  public abstract systems.zlink.framework.configuration.ZLinkMeshChannelServerBuilder setWeight(int);
  public abstract systems.zlink.framework.configuration.ZLinkMeshChannelServerBuilder addHandlerGroup(java.lang.String);
  public abstract <THandler extends systems.zlink.framework.channels.ZLinkSendHandler<TMessage>, TMessage> systems.zlink.framework.configuration.ZLinkMeshChannelServerBuilder addSendHandler(java.lang.Class<THandler>, java.lang.Class<TMessage>);
+ public abstract <THandler extends systems.zlink.framework.channels.ZLinkRouteSendHandler<TMessage>, TMessage> systems.zlink.framework.configuration.ZLinkMeshChannelServerBuilder addRouteSendHandler(java.lang.Class<THandler>, java.lang.Class<TMessage>);
  public abstract <THandler extends systems.zlink.framework.channels.ZLinkRequestHandler<TRequest, TReply>, TRequest, TReply> systems.zlink.framework.configuration.ZLinkMeshChannelServerBuilder addRequestHandler(java.lang.Class<THandler>, java.lang.Class<TRequest>, java.lang.Class<TReply>);
 }
 public interface systems.zlink.framework.configuration.ZLinkClientServerChannelClientBuilder {
