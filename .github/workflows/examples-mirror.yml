@@ -85,6 +85,7 @@ jobs:
       # Empty on a main push; the mirror gets a `v<version>` tag only for a tag run.
       version: ${{ steps.pick.outputs.version }}
       languages: ${{ steps.pick.outputs.languages }}
+      targets: ${{ steps.pick.outputs.targets }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -162,11 +163,36 @@ jobs:
               echo "::error::tag ${ref} does not end in /vA.B.C"; exit 1
             fi
           fi
-          echo "ref=${ref}, version=${version:-none}, languages=${languages}"
+          targets="$(jq -cn --argjson enabled "${languages}" '
+            [
+              {id:"cpp", mirror:"zlink-systems/zlink-cpp-examples",
+               tree:".artifacts/examples/zlink-cpp-examples", source_path:"framework/languages/cpp",
+               secret:"EXAMPLES_MIRROR_KEY_CPP"},
+              {id:"dotnet", mirror:"zlink-systems/zlink-dotnet-examples",
+               tree:".artifacts/examples/zlink-dotnet-examples", source_path:"framework/languages/dotnet",
+               secret:"EXAMPLES_MIRROR_KEY_DOTNET"},
+              {id:"java", mirror:"zlink-systems/zlink-java-examples",
+               tree:".artifacts/examples/zlink-java-examples", source_path:"framework/languages/java",
+               secret:"EXAMPLES_MIRROR_KEY_JAVA"},
+              {id:"node", mirror:"zlink-systems/zlink-node-examples",
+               tree:".artifacts/examples/zlink-node-examples", source_path:"framework/languages/node",
+               secret:"EXAMPLES_MIRROR_KEY_NODE"},
+              {id:"engine-server", mirror:"zlink-systems/zlink-engine-server",
+               tree:".artifacts/examples/zlink-engine-server",
+               source_path:"framework/languages/engines/Server",
+               secret:"EXAMPLES_MIRROR_KEY_ENGINE_SERVER"},
+              {id:"unity", mirror:"zlink-systems/zlink-unity-examples",
+               tree:".artifacts/examples/zlink-unity-examples",
+               source_path:"framework/languages/engines/Unity",
+               secret:"EXAMPLES_MIRROR_KEY_UNITY"}
+            ] | map(select(.id as $id | $enabled | index($id)))
+          ')"
+          echo "ref=${ref}, version=${version:-none}, languages=${languages}, targets=${targets}"
           {
             echo "ref=${ref}"
             echo "version=${version}"
             echo "languages=${languages}"
+            echo "targets=${targets}"
           } >> "$GITHUB_OUTPUT"
 
   # Same trees, built and run from their READMEs in jobs without a checkout.
@@ -183,14 +209,18 @@ jobs:
       languages: ${{ needs.resolve.outputs.languages }}
 
   push:
-    name: Push ${{ matrix.lang }} mirror
+    name: Push ${{ matrix.target.id }} mirror
     needs: [resolve, smoke]
     if: needs.resolve.outputs.languages != '[]'
     runs-on: ubuntu-24.04
+    env:
+      MIRROR: ${{ matrix.target.mirror }}
+      TREE: ${{ matrix.target.tree }}
+      SOURCE_PATH: ${{ matrix.target.source_path }}
     strategy:
       fail-fast: false
       matrix:
-        lang: ${{ fromJSON(needs.resolve.outputs.languages) }}
+        target: ${{ fromJSON(needs.resolve.outputs.targets) }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -203,30 +233,7 @@ jobs:
       - name: Export the tree at the ref
         run: python3 scripts/tutorial/export_examples.py .artifacts/examples HEAD
 
-      - name: Resolve the mirror repository and export tree
-        run: |
-          set -euo pipefail
-          case "${{ matrix.lang }}" in
-            engine-server)
-              echo "MIRROR=zlink-systems/zlink-engine-server" >> "$GITHUB_ENV"
-              echo "TREE=.artifacts/examples/zlink-engine-server" >> "$GITHUB_ENV"
-              echo "SOURCE_PATH=framework/languages/engines/Server" >> "$GITHUB_ENV"
-              ;;
-            unity)
-              echo "MIRROR=zlink-systems/zlink-unity-examples" >> "$GITHUB_ENV"
-              echo "TREE=.artifacts/examples/zlink-unity-examples" >> "$GITHUB_ENV"
-              echo "SOURCE_PATH=framework/languages/engines/Unity" >> "$GITHUB_ENV"
-              ;;
-            *)
-              echo "MIRROR=zlink-systems/zlink-${{ matrix.lang }}-examples" >> "$GITHUB_ENV"
-              echo "TREE=.artifacts/examples/zlink-${{ matrix.lang }}-examples" >> "$GITHUB_ENV"
-              echo "SOURCE_PATH=framework/languages/${{ matrix.lang }}" >> "$GITHUB_ENV"
-              ;;
-          esac
-
-      # One secret per mirror, named after the language; the shell picks it so
-      # the matrix stays a plain list (a matrix `include` with an unmatched
-      # `lang` would add that language to the run instead of annotating it).
+      # One write-only deploy key per configured mirror target.
       - name: Load the mirror's deploy key
         env:
           EXAMPLES_MIRROR_KEY_CPP: ${{ secrets.EXAMPLES_MIRROR_KEY_CPP }}
@@ -237,12 +244,7 @@ jobs:
           EXAMPLES_MIRROR_KEY_UNITY: ${{ secrets.EXAMPLES_MIRROR_KEY_UNITY }}
         run: |
           set -euo pipefail
-          case "${{ matrix.lang }}" in
-            engine-server) name="EXAMPLES_MIRROR_KEY_ENGINE_SERVER" ;;
-            unity) name="EXAMPLES_MIRROR_KEY_UNITY" ;;
-            *) name="EXAMPLES_MIRROR_KEY_${{ matrix.lang }}" ;;
-          esac
-          name="${name^^}"
+          name="${{ matrix.target.secret }}"
           DEPLOY_KEY="${!name:-}"
           if [ -z "${DEPLOY_KEY}" ]; then
             echo "::error::secret ${name} is empty"; exit 1
