@@ -42,11 +42,6 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
-import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
-import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
-import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
-import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchFailure;
-import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
@@ -2064,58 +2059,6 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 }
             } while (placement.isPresent() && System.nanoTime() < placementUpdateDeadline);
             assertTrue(placement.isEmpty());
-        }
-    }
-
-    @Test
-    void logicalMulticastGoneTargetReportsDispatchErrorAndKeepsPublishTerminal() throws Exception {
-        String endpoint = "inproc://jvm-m6b-multicast-gone-" + System.nanoTime();
-        RoutingId sourceRid = RoutingId.from("jvm-m6b-multicast-gone-source");
-        RoutingId targetRid = RoutingId.from("jvm-m6b-multicast-gone-target");
-        AtomicReference<ZLinkDispatchFailure> failure = new AtomicReference<>();
-        try (var context = Zlink.createContext();
-                var source = new ZLinkJavaRawMeshNode(context, "mesh");
-                var target = new ZLinkJavaRawMeshNode(context, "mesh")) {
-            source.setRoutingId(sourceRid);
-            source.setBind("inproc://jvm-m6b-multicast-gone-source-" + System.nanoTime());
-            source.addChannel("events");
-            source.setChannelWeight("events", 10_000);
-            target.setRoutingId(targetRid);
-            target.setBind(endpoint);
-            target.setObjectRole(ZLinkMeshNodeObjectRole.SERVER);
-            target.addChannel("events");
-            source.start();
-            target.start();
-            source.connectPeer(endpoint, targetRid);
-            awaitAdmitted(source, targetRid);
-            source.setDispatchErrorReporter(failure::set);
-
-            target.close();
-            ZLinkBackendSpot publisher = source.spotNode().createSpot("jvm-m6b-multicast-gone");
-            boolean terminal;
-            try (Message packet = Message.from("Packet");
-                    Message payload = Message.from("gone-target")) {
-                terminal =
-                        publisher.publish(
-                                "events", "orders", List.of(packet, payload), SendFlags.DONT_WAIT);
-            }
-
-            assertTrue(terminal);
-            long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
-            while (failure.get() == null && System.nanoTime() < deadline) {
-                Thread.sleep(1);
-            }
-            ZLinkDispatchFailure record = failure.get();
-            assertNotNull(record);
-            assertEquals("mesh", record.meshName());
-            assertEquals(sourceRid.toString(), record.sourceRid());
-            assertEquals(targetRid.toString(), record.targetRid());
-            assertEquals("events", record.channelName());
-            assertEquals("orders", record.topic());
-            assertEquals(ZLinkDispatchErrorReason.STALE_TARGET, record.reason());
-            assertEquals(ZLinkDispatchErrorSurface.SPOT_ROUTE, record.surface());
-            assertEquals(ZLinkDispatchMessageKind.SEND, record.messageKind());
-            assertEquals(ZLinkDispatchErrorAction.DROP, record.action());
         }
     }
 

@@ -18,6 +18,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
 import systems.zlink.framework.runtime.channels.ZLinkChannelContentTypeFrame;
+import systems.zlink.framework.runtime.diagnostics.ZLinkDispatchErrorReporter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
@@ -141,7 +142,7 @@ final class ZLinkJavaRawMeshNode
 
     private final String meshName;
     private final ZLinkMeshMessageMetrics messageMetrics;
-    private volatile Consumer<ZLinkDispatchFailure> dispatchErrorReporter = ignored -> {};
+    private volatile ZLinkDispatchErrorReporter dispatchErrorReporter;
     private final java.util.function.BiConsumer<
                     String, ZLinkServiceTopologyRegistry.ChannelSelectionFailure>
             selectionFailureObserver = this::recordChannelSelectionFailure;
@@ -307,7 +308,7 @@ final class ZLinkJavaRawMeshNode
     }
 
     @Override
-    public void setDispatchErrorReporter(Consumer<ZLinkDispatchFailure> reporter) {
+    public void setDispatchErrorReporter(ZLinkDispatchErrorReporter reporter) {
         dispatchErrorReporter = Objects.requireNonNull(reporter, "reporter");
     }
 
@@ -1790,11 +1791,16 @@ final class ZLinkJavaRawMeshNode
         } catch (RuntimeException failure) {
             submission = CompletableFuture.failedFuture(failure);
         }
+        ZLinkDispatchErrorReporter reporter = dispatchErrorReporter;
+        if (reporter == null || !reporter.captureEnabled()) {
+            return submission.toCompletableFuture();
+        }
         CompletionStage<Void> observed =
                 submission.whenComplete(
                         (ignored, failure) -> {
                             if (failure != null) {
                                 reportLogicalMulticastFailure(
+                                        reporter,
                                         channelName,
                                         topic,
                                         targetRid,
@@ -1805,8 +1811,12 @@ final class ZLinkJavaRawMeshNode
     }
 
     private void reportLogicalMulticastFailure(
-            String channelName, String topic, RoutingId targetRid, Throwable failure) {
-        dispatchErrorReporter.accept(
+            ZLinkDispatchErrorReporter reporter,
+            String channelName,
+            String topic,
+            RoutingId targetRid,
+            Throwable failure) {
+        reporter.report(
                 new ZLinkDispatchFailure(
                         ZLinkDispatchErrorSurface.SPOT_ROUTE,
                         ZLinkDispatchMessageKind.SEND,
@@ -1817,10 +1827,10 @@ final class ZLinkJavaRawMeshNode
                         topic,
                         null,
                         null,
-                        routingId == null ? null : routingId.toString(),
                         null,
-                        failure.getClass().getName(),
-                        failure.getMessage(),
+                        null,
+                        null,
+                        null,
                         meshName,
                         targetRid.toString()));
     }
