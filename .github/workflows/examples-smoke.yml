@@ -111,7 +111,7 @@ jobs:
           echo "ref=${ref}" >> "$GITHUB_OUTPUT"
 
   export:
-    name: Export the five examples trees
+    name: Export examples trees
     needs: resolve
     runs-on: ubuntu-24.04
     steps:
@@ -127,14 +127,14 @@ jobs:
       - name: Export the examples trees at this ref
         run: python3 scripts/tutorial/export_examples.py .artifacts/examples "${{ needs.resolve.outputs.ref }}"
 
-      - name: Verify five trees with three sections each and no repo-only file leaked in
+      - name: Verify language and engine trees and no repo-only file leaked in
         run: |
           python3 - <<'PY'
           import pathlib
           import sys
 
           sys.path.insert(0, "scripts/tutorial")
-          from export_examples import EXCLUDED_ENTRIES, LANGUAGES, SECTIONS
+          from export_examples import ENGINE_EXPORTS, EXCLUDED_ENTRIES, LANGUAGES, SECTIONS
 
           out = pathlib.Path(".artifacts/examples")
           bad = []
@@ -150,10 +150,19 @@ jobs:
                   if entry_lang == lang and (root / section / entry).exists():
                       bad.append(f"{root.name}: {section}/{entry} should have been excluded")
 
+          for source_name, mirror_name in ENGINE_EXPORTS.items():
+              source = pathlib.Path("framework/languages/engines") / source_name
+              if not source.is_dir():
+                  continue
+              root = out / mirror_name
+              for name in ("README.md", "README.ko.md", ".gitignore", ".gitattributes"):
+                  if not (root / name).is_file():
+                      bad.append(f"{root.name}: missing {name}")
+
           if bad:
               print("::error::" + "; ".join(bad))
               sys.exit(1)
-          print(f"verified {len(LANGUAGES)} trees; no excluded repo-only file leaked in")
+          print("verified language and engine trees; no excluded repo-only file leaked in")
           PY
 
       # The consumer jobs below never checkout the repository, so the README
@@ -168,7 +177,7 @@ jobs:
       - name: Pack the trees as a tar (keeps the executable bits)
         run: tar -C .artifacts -cf examples-trees.tar examples
 
-      - name: Upload the five trees and the README-extraction helper
+      - name: Upload the trees and the README-extraction helper
         uses: actions/upload-artifact@v4
         with:
           name: examples-trees
@@ -186,6 +195,106 @@ jobs:
   # 모두 병합됐다. 현재 남은 `continue-on-error: true`의 사유는 Windows
   # Redis(Memurai) 설치·실행이 아직 실제 Actions에서 검증되지 않은 하나뿐이다.
   # ---------------------------------------------------------------------------
+
+  engine-server-linux:
+    name: engine server / ubuntu-24.04 (no checkout)
+    needs: export
+    if: contains(fromJSON(inputs.languages || '[]'), 'engine-server')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: examples-trees
+
+      - name: Unpack the trees
+        run: tar -xf examples-trees.tar
+
+      - name: Confirm this job never checked out the repository and ZLINK_* is unset
+        run: |
+          set -euo pipefail
+          test ! -e .git
+          if env | grep -q '^ZLINK_'; then
+            echo "::error::ZLINK_* leaked into the environment"; env | grep '^ZLINK_'; exit 1
+          fi
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '8.0.x'
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Install (README's own 내려받기와 설치/linux block)
+        working-directory: examples/zlink-engine-server
+        run: bash ../run_readme_step.sh README.ko.md "내려받기와 설치" linux
+
+      - name: Build (README's own 빌드/linux block)
+        working-directory: examples/zlink-engine-server
+        run: bash ../run_readme_step.sh README.ko.md 빌드 linux
+
+      - name: Run (README's own 실행/linux block)
+        working-directory: examples/zlink-engine-server
+        run: bash ../run_readme_step.sh README.ko.md 실행 linux
+
+      - name: Verify (README's own 검증/linux block)
+        working-directory: examples/zlink-engine-server
+        run: bash ../run_readme_step.sh README.ko.md 검증 linux
+
+      - name: Logs (on failure)
+        if: failure()
+        working-directory: examples/zlink-engine-server
+        run: |
+          for file in .run/server.log .run/server.err.log; do
+            if [ -f "${file}" ]; then
+              echo "::group::${file}"; tail -n 200 "${file}"; echo "::endgroup::"
+            fi
+          done
+
+      - name: Stop server and Redis
+        if: always()
+        working-directory: examples/zlink-engine-server
+        run: bash ../run_readme_step.sh README.ko.md 종료 linux
+
+  engine-server-windows:
+    name: engine server build / windows-2022 (no checkout)
+    needs: export
+    if: contains(fromJSON(inputs.languages || '[]'), 'engine-server')
+    runs-on: windows-2022
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: examples-trees
+
+      - name: Unpack the trees
+        shell: pwsh
+        run: tar -xf examples-trees.tar
+
+      - name: Confirm this job never checked out the repository and ZLINK_* is unset
+        shell: pwsh
+        run: |
+          if (Test-Path -LiteralPath '.git') { throw '.git present -- this job checked out the repository' }
+          $leaked = Get-ChildItem Env: | Where-Object { $_.Name -like 'ZLINK_*' }
+          if ($leaked) { throw "ZLINK_* leaked into the environment: $($leaked.Name -join ', ')" }
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '8.0.x'
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Install (README's own 내려받기와 설치/windows block)
+        working-directory: examples/zlink-engine-server
+        shell: bash
+        run: bash ../run_readme_step.sh README.ko.md "내려받기와 설치" windows
+
+      - name: Build (README's own 빌드/windows block)
+        working-directory: examples/zlink-engine-server
+        shell: bash
+        run: bash ../run_readme_step.sh README.ko.md 빌드 windows
+      # Windows owns the build lane; Linux owns the Redis-backed run and verify lane.
 
   dotnet-linux:
     name: dotnet / ubuntu-24.04 (no checkout)

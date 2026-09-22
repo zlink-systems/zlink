@@ -219,7 +219,6 @@ class DefaultZLinkActorJoinSpotCall implements ZLinkActorJoinSpotCall {
     };
     try {
       deferActorJoin({
-        requestBytes: requestMessage.data().byteLength,
         prepare: async () => {
           if (prepared) return;
           prepared = true;
@@ -358,7 +357,6 @@ class DefaultZLinkActorJoinEntrySpotCall implements ZLinkActorJoinEntrySpotCall 
     };
     try {
       deferActorJoin({
-        requestBytes: requestMessage.data().byteLength,
         prepare: async () => {
           if (prepared) return;
           prepared = true;

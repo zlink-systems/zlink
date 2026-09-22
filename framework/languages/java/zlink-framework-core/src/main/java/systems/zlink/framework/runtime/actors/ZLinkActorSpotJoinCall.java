@@ -195,7 +195,6 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                     services.actors().deferredJoinRuntimeScope(),
                     services.actors().deferredJoinIncarnation(context),
                     context.actorRef().actorId(),
-                    request.size(),
                     deadline,
                     () -> executeDeferred(operationId, deadline),
                     operation ->

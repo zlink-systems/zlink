@@ -10,15 +10,11 @@ namespace Zlink.Framework.Runtime.Actors;
 
 internal sealed class ZLinkDeferredActorJoinHandlerScope : IDisposable
 {
-    private const int MaxOperations = 64;
-    private const int MaxRequestBytes = 1024 * 1024;
-    private const int MaxTotalRequestBytes = 8 * 1024 * 1024;
     private static readonly AsyncLocal<ZLinkDeferredActorJoinHandlerScope?> CurrentScope = new();
     private readonly List<ZLinkDeferredActorJoin> _joins = [];
     private readonly bool _allowed;
     private readonly ZLinkDeferredActorJoinHandlerScope? _previous;
     private readonly ZLinkStateLane _lane = new();
-    private int _requestBytes;
     private bool _completed;
     private bool _sealed;
 
@@ -34,19 +30,13 @@ internal sealed class ZLinkDeferredActorJoinHandlerScope : IDisposable
         return new ZLinkDeferredActorJoinHandlerScope(allowed);
     }
 
-    public static void Register(ZLinkDeferredActorJoin join, int requestBytes)
+    public static void Register(ZLinkDeferredActorJoin join)
     {
         var scope =
             CurrentScope.Value
             ?? throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 "Actor Join Defer is only valid in a Framework-managed Spot or Actor handler."
-            );
-
-        if (requestBytes > MaxRequestBytes)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.InvalidOperation,
-                $"Actor Join request exceeds the {MaxRequestBytes}-byte limit."
             );
 
         AwaitStateLane(
@@ -62,20 +52,8 @@ internal sealed class ZLinkDeferredActorJoinHandlerScope : IDisposable
                         ZLinkFrameworkErrorKind.InvalidOperation,
                         "Actor Join Defer cannot register after the handler has completed."
                     );
-                if (scope._joins.Count >= MaxOperations)
-                    throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.InvalidOperation,
-                        $"A handler turn cannot register more than {MaxOperations} Actor Joins."
-                    );
-                if (scope._requestBytes > MaxTotalRequestBytes - requestBytes)
-                    throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.InvalidOperation,
-                        $"Actor Join requests in one handler turn exceed {MaxTotalRequestBytes} bytes."
-                    );
-
                 join.ReserveBarrier();
                 scope._joins.Add(join);
-                scope._requestBytes += requestBytes;
             })
         );
     }

@@ -115,16 +115,13 @@ cancellation으로 끝나면 그 handler가 등록한 비활성 barrier를 모�
 Registration은 Actor generation, current membership, immutable request
 snapshot, absolute deadline과 non-zero 128-bit operation ID를 고정한다.
 
-한 handler는 Join을 최대 64개까지 등록할 수 있다. Join request 하나의 encoded
-크기는 최대 1 MiB이며 같은 handler가 등록한 모든 Join request의 합계는 최대
-8 MiB다. Request를 생략하면 empty `ZLinkMessage`를 고정한다. 각 `Defer()`는
+Cross-node Join request와 application reply에는
+[service wire의 application payload 크기 규칙](../02-channel-transport/06-wire-protocol.ko.md#decode-검증과-크기-상한)을
+적용한다. Request를 생략하면 empty `ZLinkMessage`를 고정한다. 각 `Defer()`는
 request를 변경할 수 없는 snapshot으로 만들고 monotonic clock을 기준으로 absolute
 deadline을 계산한다. Timeout 기본값은 5초이며, 명시한 값은 millisecond로 올림한
-`1..INT_MAX` 범위의 유한한 값이어야 한다. 제한을 넘긴 현재 registration은 일부
+`1..INT_MAX` 범위의 유한한 값이어야 한다. 범위 밖 timeout의 현재 registration은 일부
 record를 남기지 않고 동기 startup configuration error로 실패한다.
-
-Cross-node Join의 application reply도 최대 1 MiB다. Request와 reply의 크기 제한은
-서로 독립적이며 하나의 1 MiB 제한으로 합치지 않는다.
 
 Actor send/request handler와 User·Entry Spot의 packet·request·subscription·timer handler에서 local member
 Actor의 Join을 등록할 수 있다. [Factory](../00-foundation/02-glossary.ko.md#factory)(등록된
@@ -629,8 +626,8 @@ Gate·Yield·Actor claim과 self-request의 관찰은
 - `Defer()`는 target 조회나 Store I/O 없이 Join intent와
   [비활성 barrier](../00-foundation/02-glossary.ko.md#deferred-join-barrier)만
   등록하며 handler가 정상적으로 끝난 뒤에만 Join을 실행한다.
-- Handler당 최대 64개, request 하나당 최대 1 MiB, request 합계 최대 8 MiB와
-  기본 5초 timeout을 적용한다.
+- 기본 5초 timeout을 적용하며, cross-node Join request와 reply의 크기는 service wire의
+  application payload 규칙을 따른다.
 - Same-node Join, cross-node Join과
   [`RecreateOnRelocation` relocation policy](../00-foundation/02-glossary.ko.md#relocation-policy)에서 같은 logical
   incarnation의 `ObjectGeneration`을 유지한다.

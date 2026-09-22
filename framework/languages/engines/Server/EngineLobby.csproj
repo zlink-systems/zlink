@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <RootNamespace>EngineLobby</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Zlink.Framework.AspNetCore" />
+    <PackageReference Include="Zlink.Framework.Locations.Redis" />
+    <PackageReference Include="Zlink.Stream.Connector" />
+  </ItemGroup>
+</Project>
