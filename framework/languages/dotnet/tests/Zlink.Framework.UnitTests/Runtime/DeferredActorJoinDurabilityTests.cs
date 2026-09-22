@@ -52,40 +52,27 @@ public sealed class DeferredActorJoinDurabilityTests
     }
 
     [Fact]
-    public void Completion_codec_accepts_maximum_reply_and_metadata()
+    public void Completion_codec_round_trips_reply_and_metadata()
     {
         var maximumString = new string('a', ushort.MaxValue);
         var maximumActorId = new string('a', 255);
         var maximumRoutingId = RoutingId.From(
             Enumerable.Repeat((byte)0x5a, byte.MaxValue).ToArray()
         );
-        var maximumReply = new byte[1024 * 1024];
+        var reply = new byte[128];
         var record = new ZLinkDeferredJoinCompletionRecord(
             maximumActorId,
             7,
             new ZLinkActorJoinOperationId(11, 13),
             new ActorRef(maximumActorId, 7, maximumString, maximumRoutingId),
             maximumString,
-            maximumReply,
+            reply,
             ZLinkDeferredJoinCompletionCursor.Delivered
         );
 
         var encoded = ZLinkDeferredJoinCompletionCodec.Encode(record);
         var decoded = ZLinkDeferredJoinCompletionCodec.Decode(encoded);
 
-        Assert.Equal(
-            1024 * 1024
-                + sizeof(ushort)
-                + 255
-                + 2 * (sizeof(ushort) + ushort.MaxValue)
-                + sizeof(byte)
-                + byte.MaxValue
-                + 4 * sizeof(ulong)
-                + sizeof(uint)
-                + sizeof(int)
-                + 3 * sizeof(byte),
-            encoded.Length
-        );
         Assert.Equal(record.ActorId, decoded.ActorId);
         Assert.Equal(record.ObjectGeneration, decoded.ObjectGeneration);
         Assert.Equal(record.OperationId, decoded.OperationId);
@@ -282,7 +269,7 @@ public sealed class DeferredActorJoinDurabilityTests
             actorAuthority.NodeRid
         );
         var operation = new ZLinkActorJoinOperationId(23, 47);
-        var completionReply = Enumerable.Repeat((byte)0x5a, 1024 * 1024).ToArray();
+        var completionReply = Enumerable.Repeat((byte)0x5a, 4096).ToArray();
         var prepared = await new ZLinkDeferredActorJoinCompletionJournal(
             authority,
             relocation

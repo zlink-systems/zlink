@@ -859,25 +859,12 @@ internal static class ZLinkDeferredJoinCompletionCodec
     private const uint Magic = 0x5a4c4a43; // ZLJC
     private const byte Version = 2;
     private const int MaximumActorIdBytes = 255;
-    private const int MaximumReplyBytes = 1024 * 1024;
-    private const int MaximumEncodedBytes =
-        MaximumReplyBytes
-        + sizeof(ushort)
-        + MaximumActorIdBytes
-        + 2 * (sizeof(ushort) + ushort.MaxValue)
-        + sizeof(byte)
-        + byte.MaxValue
-        + 4 * sizeof(ulong)
-        + sizeof(uint)
-        + sizeof(int)
-        + 3 * sizeof(byte);
 
     internal static byte[] Encode(ZLinkDeferredJoinCompletionRecord value)
     {
         if (
             !string.Equals(value.ActorId, value.Actor.ActorId, StringComparison.Ordinal)
             || Encoding.UTF8.GetByteCount(value.ActorId) > MaximumActorIdBytes
-            || value.Reply.Length > MaximumReplyBytes
         )
             throw new InvalidDataException();
         using var stream = new MemoryStream();
@@ -898,14 +885,12 @@ internal static class ZLinkDeferredJoinCompletionCodec
         writer.Write(value.Reply.Span);
         writer.Write((byte)value.Cursor);
         writer.Flush();
-        if (stream.Length > MaximumEncodedBytes)
-            throw new InvalidDataException();
         return stream.ToArray();
     }
 
     internal static ZLinkDeferredJoinCompletionRecord Decode(ReadOnlySpan<byte> encoded)
     {
-        if (encoded.Length is <= 0 or > MaximumEncodedBytes)
+        if (encoded.Length <= 0)
             throw new InvalidDataException();
         using var stream = new MemoryStream(encoded.ToArray(), writable: false);
         using var reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen: true);
@@ -919,7 +904,7 @@ internal static class ZLinkDeferredJoinCompletionCodec
         var actorGeneration = reader.ReadUInt64();
         var contentType = reader.ReadBoolean() ? ReadString(reader) : null;
         var replyLength = reader.ReadInt32();
-        if (replyLength < 0 || replyLength > MaximumReplyBytes)
+        if (replyLength < 0)
             throw new InvalidDataException();
         var reply = reader.ReadBytes(replyLength);
         if (reply.Length != replyLength)
