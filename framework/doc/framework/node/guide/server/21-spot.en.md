@@ -32,10 +32,10 @@ stateful object found by id**, and it processes the work addressed to it in a si
 chapter goes as far as creating one Spot and calling it; the differences between the kinds and
 the full lifecycle are covered by [Spot](21-spot.en.md).
 
-## 1. The Problem a Spot Solves
+## 1. The Role of a Spot
 
-Some units **remember something and have to process the work addressed to them in order** — one
-chat room, one matchmaking queue. A channel cannot express that: a channel call goes to one of
+Spot creates units that **remember something and process the work addressed to them in order** —
+one chat room, one matchmaking queue. A channel cannot express that: a channel call goes to one of
 the nodes serving that name, so two messages sent to the same room can arrive at different
 nodes.
 

@@ -14,10 +14,11 @@ STREAM node에 연결하는 client는 언어별 stream connector를 사용한다
 양쪽이 서로에게 보낸다. 이 장은 연결을 받아 packet 하나에 답하기까지 다루며, 그 연결을 Actor에
 묶는 것은 [Session과 Actor 연결](24-actor-session.ko.md)이 다룬다.
 
-## 1. STREAM이 푸는 문제
+## 1. STREAM의 역할
 
-channel도 Spot도 Actor도 **mesh 안에서 호출하는 경로**다. 호출하는 쪽이 mesh의 구성원이어야 하고,
-Framework를 참조해야 한다. 플레이어의 기기에서 실행되는 client는 그 조건을 충족하지 못한다.
+STREAM은 mesh 밖의 client가 연결 하나로 mesh와 packet을 주고받는 경계를 맡는다. channel도 Spot도
+Actor도 **mesh 안에서 호출하는 경로**다. 호출하는 쪽이 mesh의 구성원이어야 하고, Framework를 참조해야
+한다. 플레이어의 기기에서 실행되는 client는 그 조건을 충족하지 못한다.
 
 STREAM은 그 경계를 하나의 연결로 좁힌다. client는 주소 하나와 packet 이름만 알면 되고, mesh가
 몇 개의 node로 되어 있는지는 모른다.

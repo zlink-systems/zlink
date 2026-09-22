@@ -29,11 +29,11 @@ title: "Session과 Actor 연결 · Node/TypeScript"
 오래 남아야 하고, 그 상태를 맡는 것이 [Actor](22-actor.ko.md)다. **이 장은 그 둘을 묶는다.** 묶은 뒤에는 session이 다루지 않은 packet이 그 Actor로 간다.
 Actor는 같은 연결로 보낼 수 있다.
 
-## 1. 묶는 것이 푸는 문제
+## 1. Actor와 session을 묶는 역할
 
-연결과 Actor는 수명이 다르다. 같은 플레이어가 끊었다 다시 접속하면 연결은 새로 만들어진다.
-Actor는 이전 것이 그대로 남아 있다. 그래서 **연결이 자기 Actor를 가리키게 해 두고**, 그 뒤의
-packet은 그 Actor가 받는다.
+Actor와 session을 묶으면 수명이 다른 연결과 Actor가 서로 이어진다. 같은 플레이어가 끊었다 다시
+접속하면 연결은 새로 만들어지고 Actor는 이전 것이 그대로 남아 있다. 그래서 **연결이 자기 Actor를
+가리키게 해 두고**, 그 뒤의 packet은 그 Actor가 받는다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/24-actor-session-binding.html" title="연결 하나를 개체 하나에 묶는다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/24-actor-session-binding.html" target="_blank">↗ 크게 보기</a></p>

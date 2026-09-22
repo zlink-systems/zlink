@@ -34,11 +34,12 @@ connection is open both sides send to each other. This chapter goes as far as ac
 connection and answering one packet; binding that connection to an Actor is covered by
 [Session and Actor](24-actor-session.en.md).
 
-## 1. The Problem STREAM Solves
+## 1. The Role of STREAM
 
-Channels, Spots and Actors are all **paths called from inside the mesh**. The caller has to be a
-member of the mesh and to reference the Framework. A client running on a player's device meets
-neither condition.
+STREAM is the boundary where a client outside the mesh exchanges packets with it over one
+connection. Channels, Spots and Actors are all **paths called from inside the mesh**. The caller
+has to be a member of the mesh and to reference the Framework. A client running on a player's
+device meets neither condition.
 
 STREAM narrows that boundary to a single connection. The client needs one address and the packet
 names, and it never learns how many nodes the mesh has.
