@@ -2235,9 +2235,14 @@ final class ZLinkProviderAuthorityRepository {
                             return chain.thenCompose(
                                     ok -> {
                                         if (reenteredResult[0] != null) {
-                                            return completed(
-                                                    AggregateMarkerInstallation.reenteredResult(
-                                                            reenteredResult[0]));
+                                            return clearAggregateMarkers(
+                                                            fence, installed, cancellation)
+                                                    .thenApply(
+                                                            ignored ->
+                                                                    AggregateMarkerInstallation
+                                                                            .reenteredResult(
+                                                                                    reenteredResult[
+                                                                                            0]));
                                         }
                                         return ok
                                                 ? completed(
