@@ -1031,7 +1031,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
         String authorityContractKey = ZLinkAuthorityKeyCodec.actor("authority-counter-only-race");
         var delegate = new ZLinkInMemoryProviderLocationStore();
         ZLinkStoreKey authority = authorityKey(authorityContractKey);
-        var store = new IndependentCounterContentionStore(delegate, authority, null);
+        var store = new IndependentCounterContentionStore(delegate, authority, "2", null);
         var owner =
                 (ZLinkOwnerLeaseClaimed)
                         new ZLinkProviderOwnerLeaseRepository(store)
@@ -1091,6 +1091,64 @@ final class ZLinkProviderAuthorityRepositoryTest {
     }
 
     @Test
+    void aggregatePreparePropagatesCounterExhaustionFromReentry()
+            throws ReflectiveOperationException {
+        String authorityContractKey = ZLinkAuthorityKeyCodec.actor("authority-counter-exhausted");
+        var delegate = new ZLinkInMemoryProviderLocationStore();
+        ZLinkStoreKey authority = authorityKey(authorityContractKey);
+        var store =
+                new IndependentCounterContentionStore(
+                        delegate, authority, Long.toString(Long.MAX_VALUE), null);
+        var owner =
+                (ZLinkOwnerLeaseClaimed)
+                        new ZLinkProviderOwnerLeaseRepository(store)
+                                .claim("owner-a", Duration.ofHours(1))
+                                .toCompletableFuture()
+                                .join();
+        var seeded =
+                (systems.zlink.framework.locationprovider.ZLinkStoreWriteApplied)
+                        delegate.write(
+                                        new ZLinkStoreWriteRequest(
+                                                List.of(),
+                                                List.of(
+                                                        new ZLinkStorePut(
+                                                                authority,
+                                                                encodedAuthorityRecord(),
+                                                                null))),
+                                        () -> false)
+                                .toCompletableFuture()
+                                .join();
+        var participant =
+                new ZLinkAggregateParticipant(
+                        authorityContractKey,
+                        1,
+                        1,
+                        seeded.putVersions().get(authority).value(),
+                        ZLinkAuthorityGenerationTransition.NEW_OWNER,
+                        new byte[] {11},
+                        new byte[] {12});
+        var request =
+                new ZLinkAggregatePrepareRequest(
+                        new UUID(0, 15),
+                        1,
+                        List.of(participant),
+                        new byte[32],
+                        new ZLinkMeshNodeDescriptorKey("game", RoutingId.from("node-a")),
+                        1,
+                        ZLinkPlacementCapacityBundle.actor(1),
+                        owner.token());
+
+        var result =
+                new ZLinkProviderAuthorityRepository(store)
+                        .prepareAggregate(request, () -> false)
+                        .toCompletableFuture()
+                        .join();
+
+        assertTrue(store.bumpedCounter, "test store did not exhaust the contended counter");
+        assertInstanceOf(ZLinkAggregateGenerationExhausted.class, result);
+    }
+
+    @Test
     void aggregatePrepareStillConflictsWhenParticipantFenceChangesDuringCounterContention()
             throws ReflectiveOperationException {
         String authorityContractKey = ZLinkAuthorityKeyCodec.actor("authority-fence-race");
@@ -1098,7 +1156,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
         ZLinkStoreKey authority = authorityKey(authorityContractKey);
         var store =
                 new IndependentCounterContentionStore(
-                        delegate, authority, encodedAuthorityRecord());
+                        delegate, authority, "2", encodedAuthorityRecord());
         var owner =
                 (ZLinkOwnerLeaseClaimed)
                         new ZLinkProviderOwnerLeaseRepository(store)
@@ -1767,15 +1825,18 @@ final class ZLinkProviderAuthorityRepositoryTest {
 
         private final ZLinkLocationStore delegate;
         private final ZLinkStoreKey authorityKey;
+        private final String counterValue;
         private final byte[] changedParticipant;
         private boolean bumpedCounter;
 
         private IndependentCounterContentionStore(
                 ZLinkLocationStore delegate,
                 ZLinkStoreKey authorityKey,
+                String counterValue,
                 byte[] changedParticipant) {
             this.delegate = delegate;
             this.authorityKey = authorityKey;
+            this.counterValue = counterValue;
             this.changedParticipant = changedParticipant;
         }
 
@@ -1809,7 +1870,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
             mutations.add(
                     new ZLinkStorePut(
                             COUNTER_KEY,
-                            "2".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                            counterValue.getBytes(java.nio.charset.StandardCharsets.UTF_8),
                             null));
             if (changedParticipant != null) {
                 mutations.add(new ZLinkStorePut(authorityKey, changedParticipant, null));

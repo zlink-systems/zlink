@@ -1095,6 +1095,22 @@ final class ZLinkProviderAuthorityRepository {
                                         request, fence, cancellation, counterRetry, retryDeadline))
                 .thenCompose(
                         markers -> {
+                            if (markers.reenteredResult() != null) {
+                                ZLinkAggregatePrepareResult reentered = markers.reenteredResult();
+                                boolean needsCleanup =
+                                        reentered instanceof ZLinkAggregateConflict
+                                                || reentered
+                                                        instanceof
+                                                        ZLinkAggregateGenerationExhausted;
+                                CompletionStage<Boolean> cleanup =
+                                        ownsStaging && needsCleanup
+                                                ? abortOwnedAggregateStaging(
+                                                        fence,
+                                                        staging.value().version().value(),
+                                                        cancellation)
+                                                : completed(false);
+                                return cleanup.thenApply(ignored -> reentered);
+                            }
                             if (!markers.installed()) {
                                 CompletionStage<Boolean> cleanup =
                                         ownsStaging
@@ -1903,6 +1919,7 @@ final class ZLinkProviderAuthorityRepository {
                             List<ZLinkStoreKey> installed = new ArrayList<>();
                             long[] nextOwnerGeneration = {counter.value()};
                             boolean[] counterApplied = {false};
+                            ZLinkAggregatePrepareResult[] reenteredResult = {null};
                             for (int index = 0; index < request.participants().size(); index++) {
                                 int participantIndex = index;
                                 ZLinkAggregateParticipant participant =
@@ -2169,10 +2186,12 @@ final class ZLinkProviderAuthorityRepository {
                                                                                                                                                                             counterRetry,
                                                                                                                                                                             retryDeadline)
                                                                                                                                                                     .thenApply(
-                                                                                                                                                                            reentered ->
-                                                                                                                                                                                    !(reentered
-                                                                                                                                                                                            instanceof
-                                                                                                                                                                                            ZLinkAggregateConflict));
+                                                                                                                                                                            reentered -> {
+                                                                                                                                                                                reenteredResult[
+                                                                                                                                                                                                0] =
+                                                                                                                                                                                        reentered;
+                                                                                                                                                                                return true;
+                                                                                                                                                                            });
                                                                                                                                                         }
                                                                                                                                                         if (counterRetry
                                                                                                                                                                         >= AGGREGATE_COUNTER_RETRY_LIMIT
@@ -2200,10 +2219,12 @@ final class ZLinkProviderAuthorityRepository {
                                                                                                                                                                                                 + 1,
                                                                                                                                                                                         retryDeadline))
                                                                                                                                                                 .thenApply(
-                                                                                                                                                                        reentered ->
-                                                                                                                                                                                !(reentered
-                                                                                                                                                                                        instanceof
-                                                                                                                                                                                        ZLinkAggregateConflict));
+                                                                                                                                                                        reentered -> {
+                                                                                                                                                                            reenteredResult[
+                                                                                                                                                                                            0] =
+                                                                                                                                                                                    reentered;
+                                                                                                                                                                            return true;
+                                                                                                                                                                        });
                                                                                                                                                     });
                                                                                                                                 });
                                                                                                             });
@@ -2212,17 +2233,23 @@ final class ZLinkProviderAuthorityRepository {
                                                 });
                             }
                             return chain.thenCompose(
-                                    ok ->
-                                            ok
-                                                    ? completed(
-                                                            AggregateMarkerInstallation
-                                                                    .installedResult())
-                                                    : clearAggregateMarkers(
-                                                                    fence, installed, cancellation)
-                                                            .thenApply(
-                                                                    ignored ->
-                                                                            AggregateMarkerInstallation
-                                                                                    .conflictResult()));
+                                    ok -> {
+                                        if (reenteredResult[0] != null) {
+                                            return completed(
+                                                    AggregateMarkerInstallation.reenteredResult(
+                                                            reenteredResult[0]));
+                                        }
+                                        return ok
+                                                ? completed(
+                                                        AggregateMarkerInstallation
+                                                                .installedResult())
+                                                : clearAggregateMarkers(
+                                                                fence, installed, cancellation)
+                                                        .thenApply(
+                                                                ignored ->
+                                                                        AggregateMarkerInstallation
+                                                                                .conflictResult());
+                                    });
                         });
     }
 
@@ -3473,17 +3500,23 @@ final class ZLinkProviderAuthorityRepository {
         }
     }
 
-    private record AggregateMarkerInstallation(boolean installed, boolean exhausted) {
+    private record AggregateMarkerInstallation(
+            boolean installed, boolean exhausted, ZLinkAggregatePrepareResult reenteredResult) {
         private static AggregateMarkerInstallation installedResult() {
-            return new AggregateMarkerInstallation(true, false);
+            return new AggregateMarkerInstallation(true, false, null);
         }
 
         private static AggregateMarkerInstallation conflictResult() {
-            return new AggregateMarkerInstallation(false, false);
+            return new AggregateMarkerInstallation(false, false, null);
         }
 
         private static AggregateMarkerInstallation exhaustedResult() {
-            return new AggregateMarkerInstallation(false, true);
+            return new AggregateMarkerInstallation(false, true, null);
+        }
+
+        private static AggregateMarkerInstallation reenteredResult(
+                ZLinkAggregatePrepareResult result) {
+            return new AggregateMarkerInstallation(false, false, result);
         }
     }
 
