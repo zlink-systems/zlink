@@ -18,12 +18,11 @@ title: "활성화와 수명 · Java"
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-이 장의 코드는 [`TicTacToe` 샘플 README](https://github.com/zlink-systems/zlink-java-examples/blob/main/samples/TicTacToe/README.ko.md)에서 가져왔다. [예제 저장소](https://github.com/zlink-systems/zlink-java-examples/blob/main/samples/TicTacToe/README.ko.md)를 내려받아 README의 「내려받기와 설치」·「빌드」·「실행」 절을 따라 실행하면 아래 활성화와 수명 예제를 재현할 수 있다.
-
 !!! info "이 장을 읽고 나면"
 
     Spot 종류마다 언제 만들어지고 어떤 callback을 받는지, 그리고 그 안에 주입한 서비스가
-    얼마나 사는지 알 수 있다. 이 장의 코드는 TicTacToe 샘플에서 가져왔다.
+    얼마나 사는지 알 수 있다.
+    이 장의 코드는 [언어별 예제 저장소의 TicTacToe 샘플](https://github.com/zlink-systems/zlink-java-examples/tree/main/samples/TicTacToe)에서 가져온다.
 
 [Spot](21-spot.ko.md)은 **application이 명시적으로 만드는 Spot**을 다뤘다. 이 장은
 나머지 종류와의 차이, 종류마다 받는 lifecycle callback, 그리고 Spot이 살아 있는 동안 유지되는
@@ -87,6 +86,8 @@ lifecycle을 처리한다.
 --8<-- "framework/languages/java/samples/java/TicTacToe/Server/src/main/java/systems/zlink/samples/tictactoe/server/play/infrastructure/zlink/spots/entryspot/PlayEntrySpot.java:doc-entry-spot"
 ```
 
+이 코드에서 Entry Spot은 Actor 생성 승인과 소멸에 필요한 lifecycle callback을 제공한다.
+
 ### 3.1 Entry Spot이 담지 않는 것
 
 **Entry Spot에는 Actor별 상태를 두지 않는다.** Actor의 상태는 Actor가 소유하고, Entry Spot은
@@ -110,6 +111,8 @@ stable type을 지정해 만들며, 돌아오는 id가 그 뒤 모든 호출의 
 ```java
 --8<-- "framework/languages/java/samples/java/TicTacToe/Server/src/main/java/systems/zlink/samples/tictactoe/server/api/handlers/CreateGameHttpHandler.java:doc-create"
 ```
+
+이 호출이 돌려준 id가 이후 User Spot을 호출하는 주소가 된다.
 
 ## 5. 주입한 서비스의 수명
 
@@ -146,5 +149,5 @@ scope를 가지므로 ORM을 생성자로 받아도 된다 —
 - 실행 위치를 옮기는 것 — [Relocation](37-relocation.ko.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

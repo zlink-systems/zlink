@@ -48,6 +48,8 @@ registration.
     --8<-- "framework/languages/node/samples/TicTacToe.Ts/Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/Handlers/tictactoe-game-timer-handler.ts:doc-timer-handler"
     ```
 
+This handler processes a tick on the Spot queue, so it uses that Spot's state and ordering directly.
+
 ### 1.1 Ticks Past Their Scheduled Time
 
 When work piles up in the Spot queue or a handler runs long, a tick runs later than scheduled. The
@@ -82,6 +84,8 @@ and reports the load gives operations a place to look for the cause.
 
 <iframe class="zlink-diagram" src="/common/diagrams/36-timer-worker-en.html" title="A timer enters the Spot queue; a worker uses another execution context" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/36-timer-worker-en.html" target="_blank">↗ View larger</a></p>
+
+Because the execution contexts differ, a worker does not touch Spot state directly and copies needed values before its call.
 
 ## 2. Workers — Running Outside the Spot Queue
 
@@ -123,5 +127,5 @@ before it, and the Spots where it is available, see
 - The exact option names and defaults — the `16. Options` chapter for your language
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

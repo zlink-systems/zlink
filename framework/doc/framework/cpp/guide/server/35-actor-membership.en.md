@@ -18,12 +18,10 @@ View in another language — **C++** · [C#/.NET](../../../dotnet/guide/server/3
 { .zlink-langswitch }
 <!-- language-switch:end -->
 
-The code in this chapter comes from the [`TicTacToe` sample README](https://github.com/zlink-systems/zlink-cpp-examples/blob/main/samples/TicTacToe/README.md). Download the [examples repository](https://github.com/zlink-systems/zlink-cpp-examples/blob/main/samples/TicTacToe/README.md) and follow its README's Download, Build and Run sections to reproduce the results below.
-
 !!! info "What you get from this chapter"
 
-    You can move an Actor between Spots and let the receiving side accept or refuse that move. The
-    code in this chapter comes from the samples in the repository.
+    You can move an Actor between Spots and let the receiving side accept or refuse that move.
+    The code in this chapter comes from the [TicTacToe sample in the per-language example repositories](https://github.com/zlink-systems/zlink-cpp-examples/tree/main/samples/TicTacToe).
 
 An [Actor](22-actor.en.md) is always inside some Spot, and right after creation it is in an Entry
 Spot. This chapter covers **the procedure that moves it into a room** — who admits it, when it
@@ -49,6 +47,8 @@ The way back to the Entry Spot has no admission step, because that is the defaul
 <iframe class="zlink-diagram" src="/common/diagrams/35-actor-join-en.html" title="A reservation is the Defer() call; the join starts after the handler ends" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/35-actor-join-en.html" target="_blank">↗ View larger</a></p>
 
+This order means that a callback receives the join result after the current handler ends rather than that handler awaiting it.
+
 ## 2. Reserving a Join — It Runs After the Handler Ends
 
 A join call has no form that awaits the result on the spot. **It only reserves, and the handler
@@ -58,6 +58,8 @@ calls it a reservation. The reservation runs after the handler completes normall
 ```cpp
 --8<-- "framework/languages/cpp/samples/TicTacToe/Server/Play/Infrastructure/ZLink/Spots/EntrySpot/Handlers/play_actor_join_game_handler.hpp:doc-join-defer"
 ```
+
+This registration starts the join only after the current handler completes normally.
 
 ### 2.1 Why No Awaiting Form Is Offered
 
@@ -196,5 +198,5 @@ place.
 - The other procedure that moves the execution site — [Relocation](37-relocation.en.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

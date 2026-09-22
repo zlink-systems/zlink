@@ -21,15 +21,13 @@ title: "TicTacToe 따라 읽기 · C#/.NET"
 !!! info "이 장을 읽고 나면"
 
     TicTacToe 샘플을 편집기에 열고, HTTP로 room을 만드는 곳부터 두 player가 방을 나가고 Actor가
-    정리되는 곳까지 코드를 따라갈 수 있다. 이 장의 코드는
-    `framework/languages/dotnet/samples/TicTacToe`에서 그대로 실행된다.
+    정리되는 곳까지 코드를 따라갈 수 있다. 이 장의 코드는 [언어별 예제 저장소의 TicTacToe 샘플](https://github.com/zlink-systems/zlink-dotnet-examples/tree/main/samples/TicTacToe)에서 가져온다.
 
 [샘플 고르기](14-samples.ko.md#2-tictactoe--실시간-대전-게임-서버-구축)가 이 샘플이 무엇을 보여
 주는지 소개했다. 이 장은 그 소개 다음에 읽는 자리다 — 역할과 코드 위치, 주요 시나리오의 메시지
 흐름, 각 흐름에 등장하는 framework 기능과 그것을 설명하는 장을 소스가 놓인 순서대로 따라간다.
-이 장에는 계약을 소유하는 스펙 문서가 없다. 요구사항, 메시지 계약과 검증 기준은
-[TicTacToe 시나리오](../../../common/sample/tictactoe/README.ko.md)가 소유하며, 이 장은 그것을
-다시 적지 않는다.
+이 장은 TicTacToe 샘플의 역할과 코드 위치, 주요 메시지 흐름, 실행 검증을 소스 순서대로 설명한다.
+요구사항, 메시지 계약과 검증 기준은 [TicTacToe 시나리오](../../../common/sample/tictactoe/README.ko.md)에서 참고한다.
 
 ## 1. 이 샘플이 보여 주는 것
 
@@ -94,6 +92,8 @@ framework가 발급한 `RoomId`와 Play endpoint 목록을 응답한다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-create-auth.html" title="Room 생성과 인증·입장" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-tictactoe-create-auth.html" target="_blank">↗ 크게 보기</a></p>
+
+이 흐름에서 API는 room의 실행 위치를 정하지 않고 `RoomId`와 필요한 접속 정보를 응답한다.
 
 `Server/Api/Handlers/CreateGameHttpHandler.cs`
 
@@ -162,6 +162,8 @@ domain에 수를 반영하고 갱신된 state를 응답한다.
 <iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-place-mark.html" title="수 두기와 최종 state" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-tictactoe-place-mark.html" target="_blank">↗ 크게 보기</a></p>
 
+room Spot의 직렬 handler가 state 갱신과 응답 순서를 하나의 turn 안에서 유지한다.
+
 `Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/Handlers/PlayActorPlaceMarkHandler.cs`
 
 ```csharp
@@ -196,6 +198,8 @@ Play에 접속해 있으므로 room이 observer의 위치를 알 필요가 없�
 
 <iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-milestone.html" title="Wins 100 milestone" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-tictactoe-milestone.html" target="_blank">↗ 크게 보기</a></p>
+
+Logical Multicast는 observer의 위치를 알지 않아도 같은 topic을 구독한 대상에게 milestone을 전달한다.
 
 `Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/TicTacToeGame.cs`
 
@@ -276,5 +280,5 @@ assertion으로 확인한다. runner는 서버 로그에서 각 Actor의 room le
 - 같은 게임을 자동 연결·자동 등록과 별도 Session 서버로 만든 구성: [Bingo 따라 읽기](50-bingo.ko.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

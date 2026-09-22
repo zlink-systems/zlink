@@ -119,7 +119,7 @@ startup.**
 
 Core HWM limits the bytes held by the ordinary queues, and the Application job queue limits the
 number of jobs waiting for a handler to start across the whole host. How both behave is covered
-by [Backpressure](33-backpressure.en.md#1-core-hwm-and-the-application-job-queue).
+by [Backpressure — Core HWM and the Application Job Queue](33-backpressure.en.md#2-core-hwm-and-the-application-job-queue).
 
 | Option | What it sets | Default |
 | --- | --- | --- |

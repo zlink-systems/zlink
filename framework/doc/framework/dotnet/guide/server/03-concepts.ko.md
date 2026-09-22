@@ -249,7 +249,7 @@ store 없이 endpoint를 등록에 직접 지정하는 수동 연결도 지원�
 
 **완료의 뜻은 두 표면에서 같다.** send 계열은 **보낼 자리가 수락**하면 반환값 없이
 끝나고, request 계열은 **reply · timeout · route 오류** 중 하나로 끝난다. 어느 표면을
-쓰든 같다([33-backpressure §3](33-backpressure.ko.md#3-api에-드러나는-backpressure)).
+쓰든 같다([Backpressure — API에 드러나는 backpressure](33-backpressure.ko.md#4-api에-드러나는-backpressure)).
 
 ## 8. 이름 표기 규칙
 

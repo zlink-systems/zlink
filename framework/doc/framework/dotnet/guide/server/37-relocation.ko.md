@@ -47,6 +47,8 @@ title: "Relocation · C#/.NET"
 <iframe class="zlink-diagram" src="/common/diagrams/37-relocation-move.html" title="논리 id는 그대로, 실행 위치만 옮긴다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/37-relocation-move.html" target="_blank">↗ 크게 보기</a></p>
 
+논리 id가 유지되므로 호출하는 쪽은 relocation 뒤에도 target 주소를 다시 얻을 필요가 없다.
+
 ## 2. application이 맡는 부분 — adapter
 
 Actor·Spot을 다른 node로 옮기려면 instance가 들고 있는 application 상태(사용자 클래스의 필드)를
@@ -96,7 +98,7 @@ handler 한 번·tick 한 번은 각각 하나의 [turn](32-execution-model.ko.m
 
 **application 신호 모드.** FPS 라운드처럼 시작 tick·여러 입력 packet·정산 tick이 한 단위이면, 그
 사이 turn 경계의 상태는 반쯤 진행된 라운드다. factory 등록에서 이 모드를 고르고 단위를 닫는 handler
-안에서 `RelocationReady().Defer()`를 부른다. 이는 "이 turn이 끝나면 담아도 된다"는 신호다. 신호한
+안에서 `RelocationReady().Defer()`를 호출한다. 이는 "이 turn이 끝나면 담아도 된다"는 신호다. 신호한
 turn이 끝날 때까지 새 turn은 계속 실행되고 상태도 바뀐다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/37-relocation-capture.html" title="이동 요청에서 상태를 담는 시점" loading="lazy" style="width:100%;border:0"></iframe>
@@ -145,5 +147,5 @@ application이 신호하는 모드는 `SpotWide` User Spot에서만 사용할 �
 - 운영에서 호출하는 API — [운영과 lifecycle](12-operations.ko.md)
 
 <script>
-(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h<40&&d.documentElement)h=d.documentElement.scrollHeight;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+(function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>
