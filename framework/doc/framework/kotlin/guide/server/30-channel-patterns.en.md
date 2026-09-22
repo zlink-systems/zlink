@@ -219,9 +219,8 @@ Ahead of maintenance or a rolling restart, you sometimes want a node **to stop a
 requests** without taking it down. Change its weight to `0`. **This is the one value you can
 change while running.** Inject the RouteMesh runtime options and name the ChannelName.
 
-```kotlin
---8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/AdminEndpoints.kt:weight-runtime"
-```
+The language-specific executable code is the runtime-weight example in
+[Options](16-options.en.md).
 
 - `Weight = 0` does **not close** the serving socket. Requests already received are handled and
   answered to the end, and other nodes drop this node only as a target for new requests. Its

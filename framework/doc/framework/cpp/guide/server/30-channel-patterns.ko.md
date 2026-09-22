@@ -208,9 +208,7 @@ ClientServer를 사용한다.
 있다. weight를 `0`으로 바꾸면 된다. **실행 중에 바꿀 수 있는 값은 이것 하나다.** RouteMesh
 runtime 옵션을 주입받아 ChannelName으로 지정한다.
 
-```cpp
---8<-- "framework/languages/cpp/tutorial/Server/ops/channel_weight_handler.hpp:weight-runtime"
-```
+언어별 실행 코드는 [Options](16-options.ko.md)의 runtime weight 예제를 따른다.
 
 - `Weight = 0`은 serving socket을 **닫지 않는다.** 이미 들어온 요청은 끝까지 처리하고 응답하며,
   다른 node가 이 node를 새 요청 대상에서만 뺀다. Location Store의 등록 정보도 그대로 남는다.
