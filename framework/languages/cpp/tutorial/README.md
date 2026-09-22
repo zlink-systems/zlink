@@ -35,6 +35,8 @@ The command blocks of `Build`, `Run` and `Verify` are marked `title="linux"` (ba
 
 ## Prerequisites
 
+Bash blocks run on Linux, macOS, and WSL; PowerShell blocks run on Windows PowerShell 7. `cmd` is not supported.
+
 | Tool | Windows | Linux / WSL |
 |---|---|---|
 | C++20 compiler | Visual Studio 2022 17.4 or later with the **Desktop development with C++** workload (verified with MSVC 19.44) | GCC 13 or later (verified with 13.3) |
@@ -67,10 +69,14 @@ bootstrap.cmake`. To start over, delete `.zlink/` and `build/`.
 
 ## Build
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 cmake -P bootstrap.cmake
 cmake --build build --parallel
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 cmake -P bootstrap.cmake
@@ -88,21 +94,27 @@ Store. The block below starts Redis with Docker, then the Server and the Client,
 with the first request that the two processes are connected over the mesh. Handler and filter
 logs go to **stderr**.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 docker run -d --rm --name zlink-tutorial-redis -p 127.0.0.1:6379:6379 redis:7-alpine && until docker exec zlink-tutorial-redis redis-cli ping 2>/dev/null | grep -q PONG; do sleep 0.2; done
 ./build/tutorial_server > server.log 2>&1 &
+echo $! > server.pid
 ./build/tutorial_client > client.log 2>&1 &
+echo $! > client.pid
 for i in $(seq 1 60); do curl -sf http://127.0.0.1:5180/players/p1/profile > /dev/null && break; sleep 1; done
-curl -sf http://127.0.0.1:5180/players/p1/profile
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 docker run -d --rm --name zlink-tutorial-redis -p 127.0.0.1:6379:6379 redis:7-alpine | Out-Null; if ($LASTEXITCODE -eq 0) { while (-not ((docker exec zlink-tutorial-redis redis-cli ping 2>$null) -match 'PONG')) { Start-Sleep -Milliseconds 200 } }
-Start-Process -NoNewWindow .\build\Release\tutorial_server.exe -RedirectStandardOutput server.out -RedirectStandardError server.log
-Start-Process -NoNewWindow .\build\Release\tutorial_client.exe -RedirectStandardOutput client.out -RedirectStandardError client.log
+$server = Start-Process -NoNewWindow .\build\Release\tutorial_server.exe -RedirectStandardOutput server.out -RedirectStandardError server.log -PassThru
+$server.Id | Set-Content server.pid
+$client = Start-Process -NoNewWindow .\build\Release\tutorial_client.exe -RedirectStandardOutput client.out -RedirectStandardError client.log -PassThru
+$client.Id | Set-Content client.pid
 foreach ($i in 1..60) { $answer = curl.exe -s http://127.0.0.1:5180/players/p1/profile; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds 1 }
 if ($LASTEXITCODE -ne 0) { throw 'tutorial-http did not come up' }
-$answer
 ```
 
 In PowerShell `curl` is an alias of `Invoke-WebRequest`, so use `curl.exe` and escape the double
@@ -122,12 +134,17 @@ executable. Run both while the Server and Client are up; each completes its own 
 Cleanup stops the two processes and the Redis container.
 
 ```powershell
-Stop-Process -Name tutorial_server,tutorial_client
+Get-Content client.pid, server.pid | ForEach-Object {
+  if ($_ -match '^\d+$') { taskkill /PID $_ /T /F 2>$null | Out-Null }
+}
 docker stop zlink-tutorial-redis
 ```
 
 ```bash
-pkill -f build/tutorial_server; pkill -f build/tutorial_client
+for pid in "$(cat client.pid)" "$(cat server.pid)"; do
+  pkill -TERM -P "$pid" 2>/dev/null || true
+  kill "$pid" 2>/dev/null || true
+done
 docker stop zlink-tutorial-redis
 ```
 
@@ -145,6 +162,8 @@ The ports differ from the .NET tutorial so both can run on one machine.
 
 ## Verify
 
+Examples smoke runs this block exactly as written.
+
 | Step | Evidence of success |
 |---|---|
 | `cmake -P bootstrap.cmake` | last line `-- bootstrap done. Next: cmake --build ...`; `.zlink/install/lib/cmake/zlink_framework/zlink_frameworkConfig.cmake` exists |
@@ -157,6 +176,8 @@ The ports differ from the .NET tutorial so both can run on one machine.
 The block below checks this against the processes the [Run](#run) block started: the first
 request's answer and the STREAM client's exit code.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 set -e
 curl -sf http://127.0.0.1:5180/players/p1/profile | grep -q '"playerId":"p1"'
@@ -164,6 +185,8 @@ echo "tutorial-http=ok"
 ./build/tutorial_stream_client
 echo "tutorial-stream=ok"
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 if ((curl.exe -s http://127.0.0.1:5180/players/p1/profile) -notmatch '"playerId":"p1"') { throw 'tutorial-http failed' }
@@ -174,6 +197,30 @@ Write-Output 'tutorial-stream=ok'
 ```
 
 [Step by step](#step-by-step) lists the request and expected output of all eleven steps.
+
+## Stop
+
+Stop the processes started by the Run section.
+
+**Linux · macOS · WSL — bash**
+
+```bash title="linux"
+for pid in "$(cat client.pid)" "$(cat server.pid)"; do
+  pkill -TERM -P "$pid" 2>/dev/null || true
+  kill "$pid" 2>/dev/null || true
+done
+docker rm -f zlink-tutorial-redis 2>/dev/null || true
+```
+
+**Windows — PowerShell 7**
+
+```powershell title="windows"
+Get-Content client.pid, server.pid | ForEach-Object {
+  if ($_ -match '^\d+$') { taskkill /PID $_ /T /F 2>$null | Out-Null }
+}
+Get-Job | Stop-Job -ErrorAction SilentlyContinue
+docker rm -f zlink-tutorial-redis 2>$null | Out-Null
+```
 
 ## Troubleshooting
 
@@ -422,9 +469,13 @@ dispatch so a push arriving before `wait` is queued rather than dropped.
 the asynchronous `async<T>()`, `async_raw()`, `fetch<T>()`, and `download()` terminators. Run it
 while the Server and Client are up:
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 ./build/tutorial_http_client
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 & .\build\Release\tutorial_http_client.exe

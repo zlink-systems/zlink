@@ -8,13 +8,19 @@
 
 ## 전제 조건
 
+bash 블록은 Linux·macOS·WSL에서, PowerShell 블록은 Windows PowerShell 7에서 실행한다. `cmd`는 지원하지 않는다.
+
 - **.NET SDK 8.0 이상** — `dotnet --version`이 `8.0.x` 이상 SDK를 보고해야 한다.
 - **Docker Desktop**(또는 다른 Docker Engine) — 방·queue·player는 위치를 기록할
   Location Store가 있어야 동작한다. Channel 메시징에는 필요 없다.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 docker run --rm -d -p 6379:6379 --name zlink-tutorial-dotnet-redis redis:7.2-alpine
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 docker run --rm -d -p 6379:6379 --name zlink-tutorial-dotnet-redis redis:7.2-alpine
@@ -33,9 +39,13 @@ tutorial은 공개된 `Zlink.Framework` NuGet 패키지만 참조한다. `zlink-
 저장소에서 빌드해도 `Zlink.Framework` package를 참조하며, 이 디렉터리만 복사해도
 빌드할 수 있다.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 dotnet build Tutorial.sln -c Release
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 dotnet build Tutorial.sln -c Release
@@ -55,6 +65,8 @@ dotnet build Tutorial.sln -c Release -p:ZLinkTutorialUseLocalSource=true
 Server를 백그라운드 process로 먼저 실행하고, Client가 HTTP를 제공한다. 연결이 준비되면
 요청으로 상태를 확인하고 결과를 다음 절에서 읽을 파일에 기록한다.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 dotnet run --project Server/Server.csproj -c Release --no-build > server.log 2>&1 &
 echo $! > server.pid
@@ -64,8 +76,9 @@ for _ in $(seq 1 60); do
   curl -sf http://127.0.0.1:5080/players/warmup/profile >/dev/null 2>&1 && break
   sleep 1
 done
-curl -sf http://127.0.0.1:5080/players/p1/profile
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 $server = Start-Process dotnet -ArgumentList "run","--project","Server/Server.csproj","-c","Release","--no-build" `
@@ -78,23 +91,28 @@ for ($i = 0; $i -lt 60; $i++) {
   try { Invoke-RestMethod -Uri "http://127.0.0.1:5080/players/warmup/profile" -TimeoutSec 2 | Out-Null; break }
   catch { Start-Sleep -Seconds 1 }
 }
-Invoke-RestMethod -Uri "http://127.0.0.1:5080/players/p1/profile" | ConvertTo-Json -Compress
 ```
 
 ## 검증
 
+examples-smoke는 이 블록을 그대로 실행한다.
+
 `/players/p1/profile` 응답에 `"playerId":"p1"`이 있으면 Server와 Client 연결이 준비된
 상태다("실행" 절과 같은 요청이다). 확인 후 두 process를 종료한다.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 curl -sf http://127.0.0.1:5080/players/p1/profile | grep -q '"playerId":"p1"'
-kill "$(cat client.pid)" "$(cat server.pid)" 2>/dev/null || true
+echo "tutorial-http=ok"
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 $profile = Invoke-RestMethod -Uri 'http://127.0.0.1:5080/players/p1/profile'
 if ($profile.playerId -ne 'p1') { throw "tutorial verify failed: $($profile | ConvertTo-Json -Compress)" }
-Get-Content client.pid, server.pid | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
+Write-Output 'tutorial-http=ok'
 ```
 
 "## 단계" 아래 각 기능의 curl 명령도 적힌 응답을 반환해야 한다. 전체를 자동으로 확인하려면
@@ -102,6 +120,30 @@ Get-Content client.pid, server.pid | ForEach-Object { Stop-Process -Id $_ -Force
 순서를 그대로 따라간다 — 모든 단계를 통과하면 마지막 줄이 `all tutorial steps
 passed`다.
 
+
+## 종료
+
+실행 절에서 시작한 process를 종료한다.
+
+**Linux · macOS · WSL — bash**
+
+```bash title="linux"
+for pid in "$(cat client.pid)" "$(cat server.pid)"; do
+  pkill -TERM -P "$pid" 2>/dev/null || true
+  kill "$pid" 2>/dev/null || true
+done
+docker rm -f zlink-tutorial-dotnet-redis 2>/dev/null || true
+```
+
+**Windows — PowerShell 7**
+
+```powershell title="windows"
+Get-Content client.pid, server.pid | ForEach-Object {
+  if ($_ -match '^\d+$') { taskkill /PID $_ /T /F 2>$null | Out-Null }
+}
+Get-Job | Stop-Job -ErrorAction SilentlyContinue
+docker rm -f zlink-tutorial-dotnet-redis 2>$null | Out-Null
+```
 
 ## 문제 해결
 
@@ -277,10 +319,14 @@ pushed: speedy            # player가 그 연결로 밀어 준다
 
 Server와 Client를 실행한 상태에서 다음 명령으로 빌드하고 실행한다.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 dotnet build Tutorial.sln -c Release
 dotnet run --project HttpClient/HttpClient.csproj -c Release --no-build
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 dotnet build Tutorial.sln -c Release

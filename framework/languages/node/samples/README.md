@@ -24,6 +24,8 @@ reachable from inside the repository; not needed to run the samples).
 
 ## Prerequisites
 
+Bash blocks run on Linux, macOS, and WSL; PowerShell blocks run on Windows PowerShell 7. `cmd` is not supported.
+
 - **Node.js 22 or newer.** `@zlink-systems/zlink` declares `"engines": { "node": ">=22" }`.
   Check with `node --version`. Starting at `@zlink-systems/framework` 0.18.1, it pins
   `zlink@1.2.1`, which carries the Windows prebuild (#656) — an earlier framework release
@@ -43,11 +45,15 @@ That directory contains `Bingo.Ts/`, `TicTacToe.Ts/`, … the seven samples. Eac
 `@zlink-systems/*` from the npm registry at the version that sample pins. Samples are not an npm
 workspace, so install each one separately.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 cd Bingo.Ts
 npm install
 npm run browser:install   # only for samples that use Chromium (all but ShoppingMall.Ts)
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 Set-Location Bingo.Ts
@@ -74,6 +80,8 @@ There is no separate build step. Each sample's `npm run sample` (which `run_samp
 runs `npm run build` automatically before it runs. To pre-build several samples at once on
 Windows, use `build_samples.ps1`.
 
+**Windows — PowerShell 7**
+
 ```powershell title="windows"
 ./build_samples.ps1 Bingo.Ts TicTacToe.Ts
 # Omit the arguments to build all seven.
@@ -86,9 +94,13 @@ Linux/WSL has no separate build step — `run_sample.sh` in "Run" below builds i
 Each sample has a `run_sample.sh` (Linux/WSL) and `run_sample.ps1` (Windows); one invocation runs
 one sample. Call it from this directory as-is.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 ./TicTacToe.Ts/run_sample.sh
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 ./TicTacToe.Ts/run_sample.ps1
@@ -107,6 +119,8 @@ For example, Bingo's full client flow can be seen in
 [`Bingo.Ts/Client/bingo-client-scenario.ts`](Bingo.Ts/Client/bingo-client-scenario.ts).
 
 ## Verify
+
+Examples smoke runs this block exactly as written.
 
 Every runner prints `PASS <Sample>` as the last line of standard output and exits `0` on success.
 

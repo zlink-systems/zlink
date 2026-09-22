@@ -30,6 +30,8 @@ container를 정리한다. 샘플 코드가 다른 서버 역할을 같은 프�
 
 ## 전제 조건
 
+bash 블록은 Linux·macOS·WSL에서, PowerShell 블록은 Windows PowerShell 7에서 실행한다. `cmd`는 지원하지 않는다.
+
 | 도구 | Windows | Linux · WSL |
 |---|---|---|
 | C++20 컴파일러 | Visual Studio 2022 17.4 이상, **Desktop development with C++** 워크로드 (MSVC 19.44로 확인) | GCC 13 이상 (13.3으로 확인) |
@@ -61,10 +63,14 @@ vcpkg fallback은 `-DZLINK_PACKAGE_MANAGER=vcpkg`로 선택한다. 이후 실행
 
 ## 빌드
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 cmake -P bootstrap.cmake
 cmake --build build --parallel
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 cmake -P bootstrap.cmake
@@ -83,6 +89,8 @@ cmake --build build --config Release --parallel
 20000–20099 중 빈 port)를 실행이 끝날 때 제거한다. Redis를 미리 시작할 필요는 없다. 아래 블록은
 각 sample을 차례로 실행한다.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 ./Bingo/run_sample.sh
 ./DeliveryDispatch/run_sample.sh
@@ -92,6 +100,8 @@ cmake --build build --config Release --parallel
 ./TicTacToe/run_sample.sh
 ./ZoneWorld/run_sample.sh
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 .\Bingo\run_sample.ps1
@@ -111,6 +121,8 @@ client self-check와 정리를 순서대로 수행한다. application 포트는 
 
 ## 검증
 
+examples-smoke는 이 블록을 그대로 실행한다.
+
 Runner의 마지막 줄이 아래 표의 표식이고 종료 코드가 0이면 그 샘플은 통과다. 표식 앞에는
 client self-check가 확인한 항목들이 `<샘플>-…=verified` 꼴로 찍힌다.
 
@@ -126,14 +138,20 @@ client self-check가 확인한 항목들이 `<샘플>-…=verified` 꼴로 찍�
 
 아래 블록은 TicTacToe 하나로 이를 확인한다.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 ./TicTacToe/run_sample.sh | tee tictactoe.log | tail -n 1 | grep -x 'tictactoe-placement=completed'
+echo "tictactoe=ok"
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 $lines = @(& .\TicTacToe\run_sample.ps1 *>&1 | ForEach-Object { "$_" })
 if ($lines[-1] -ne 'tictactoe-placement=completed') { throw ('TicTacToe failed: ' + $lines[-1]) }
 Write-Output $lines[-1]
+Write-Output 'tictactoe=ok'
 ```
 
 실패한 실행은 역할별 stdout·stderr 로그가 든 run 디렉터리를 남기고 그 경로를

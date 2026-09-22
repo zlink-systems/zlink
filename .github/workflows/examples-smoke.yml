@@ -241,21 +241,13 @@ jobs:
         if: always()
         working-directory: examples/zlink-dotnet-examples/tutorial
         run: |
-          if [ -f .readme-step.pgids ]; then
-            while read -r pgid; do
-              case "${pgid}" in
-                ''|*[!0-9]*) continue ;;
-              esac
-              kill -TERM -- "-${pgid}" 2>/dev/null || true
-            done < .readme-step.pgids
-          fi
+          bash ../../run_readme_step.sh README.ko.md 종료 linux
           if [ -f redis.container ]; then
             redis_name="$(cat redis.container)"
             case "${redis_name}" in
               zlink-redis-[0-9]*) docker rm -f "${redis_name}" 2>/dev/null || true ;;
             esac
           fi
-
       - name: Sample install (README's own 내려받기와 설치/linux block)
         working-directory: examples/zlink-dotnet-examples/samples
         run: bash ../../run_readme_step.sh README.ko.md "내려받기와 설치" linux
@@ -365,17 +357,8 @@ jobs:
       - name: Stop tutorial processes
         if: always()
         working-directory: examples/zlink-dotnet-examples/tutorial
-        shell: pwsh
-        run: |
-          foreach ($file in @('server.pid', 'client.pid')) {
-            if (Test-Path $file) {
-              foreach ($pid_ in Get-Content $file) {
-                if ($pid_ -match '^\d+$') { taskkill /PID $pid_ /T /F 2>$null | Out-Null }
-              }
-            }
-          }
-          exit 0
-
+        shell: bash
+        run: bash ../../run_readme_step.sh README.ko.md 종료 windows
       - name: Sample install (README's own 내려받기와 설치/windows block)
         if: steps.memurai.outcome == 'success'
         working-directory: examples/zlink-dotnet-examples/samples
@@ -465,16 +448,7 @@ jobs:
       - name: Stop tutorial processes and Redis
         if: always()
         working-directory: examples/zlink-node-examples/tutorial
-        run: |
-          if [ -f .readme-step.pgids ]; then
-            while read -r pgid; do
-              case "${pgid}" in
-                ''|*[!0-9]*) continue ;;
-              esac
-              kill -TERM -- "-${pgid}" 2>/dev/null || true
-            done < .readme-step.pgids
-          fi
-
+        run: bash ../../run_readme_step.sh README.ko.md 종료 linux
       - name: Sample install (README's own 내려받기와 설치/linux block)
         working-directory: examples/zlink-node-examples/samples
         run: bash ../../run_readme_step.sh README.ko.md "내려받기와 설치" linux
@@ -559,21 +533,13 @@ jobs:
         if: always()
         working-directory: examples/zlink-java-examples/tutorial
         run: |
-          if [ -f .readme-step.pgids ]; then
-            while read -r pgid; do
-              case "${pgid}" in
-                ''|*[!0-9]*) continue ;;
-              esac
-              kill -TERM -- "-${pgid}" 2>/dev/null || true
-            done < .readme-step.pgids
-          fi
+          bash ../../run_readme_step.sh README.ko.md 종료 linux
           if [ -f redis.container ]; then
             redis_name="$(cat redis.container)"
             case "${redis_name}" in
               zlink-redis-[0-9]*) docker rm -f "${redis_name}" 2>/dev/null || true ;;
             esac
           fi
-
       - name: Sample install (README's own 내려받기와 설치/linux block)
         working-directory: examples/zlink-java-examples/samples
         run: bash ../../run_readme_step.sh README.ko.md "내려받기와 설치" linux
@@ -690,17 +656,8 @@ jobs:
       - name: Stop tutorial processes
         if: always()
         working-directory: examples/zlink-java-examples/tutorial
-        shell: pwsh
-        run: |
-          foreach ($file in @('server.pid', 'client.pid')) {
-            if (Test-Path $file) {
-              foreach ($pid_ in Get-Content $file) {
-                if ($pid_ -match '^\d+$') { taskkill /PID $pid_ /T /F 2>$null | Out-Null }
-              }
-            }
-          }
-          exit 0
-
+        shell: bash
+        run: bash ../../run_readme_step.sh README.ko.md 종료 windows
       - name: Sample install (README's own 내려받기와 설치/windows block)
         if: steps.memurai.outcome == 'success'
         working-directory: examples/zlink-java-examples/samples
@@ -821,19 +778,7 @@ jobs:
       - name: Stop tutorial processes and Redis
         if: always()
         working-directory: examples/zlink-cpp-examples/tutorial
-        run: |
-          if [ -f .readme-step.pgids ]; then
-            while read -r pgid; do
-              case "${pgid}" in
-                ''|*[!0-9]*) continue ;;
-              esac
-              kill -TERM -- "-${pgid}" 2>/dev/null || true
-            done < .readme-step.pgids
-          fi
-          # The C++ README run block names its container zlink-tutorial-redis
-          # (README convention shared with the windows block); the runner is
-          # ephemeral, so remove that fixed name here.
-          docker rm -f zlink-tutorial-redis 2>/dev/null || true
+        run: bash ../../run_readme_step.sh README.ko.md 종료 linux
 
       # The quickstart README's own build block bootstraps into its own .zlink/;
       # here the tutorial's tree is reused through the documented ZLINK_ROOT
@@ -865,16 +810,7 @@ jobs:
       - name: Stop quickstart processes
         if: always()
         working-directory: examples/zlink-cpp-examples/quickstart
-        run: |
-          if [ -f .readme-step.pgids ]; then
-            while read -r pgid; do
-              case "${pgid}" in
-                ''|*[!0-9]*) continue ;;
-              esac
-              kill -TERM -- "-${pgid}" 2>/dev/null || true
-            done < .readme-step.pgids
-          fi
-
+        run: bash ../../run_readme_step.sh README.ko.md 종료 linux
       - name: Sample install (README's own 내려받기와 설치/linux block)
         working-directory: examples/zlink-cpp-examples/samples
         run: bash ../../run_readme_step.sh README.ko.md "내려받기와 설치" linux

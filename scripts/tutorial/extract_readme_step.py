@@ -57,6 +57,8 @@ SECTIONS = frozenset(
         "Build",
         "Run",
         "Verify",
+        "종료",
+        "Stop",
     }
 )
 

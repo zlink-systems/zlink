@@ -14,6 +14,8 @@ A program that the feature guides read through, chapter by chapter. This directo
 
 ## Prerequisites
 
+Bash blocks run on Linux, macOS, and WSL; PowerShell blocks run on Windows PowerShell 7. `cmd` is not supported.
+
 - **Node.js 22 or newer.** `@zlink-systems/zlink` declares `"engines": { "node": ">=22" }`.
   Check with `node --version`.
 - **Docker Desktop (or Docker Engine) running.** It hosts a single Redis (see "Run" below).
@@ -31,9 +33,13 @@ A program that the feature guides read through, chapter by chapter. This directo
 Clone the `zlink-node-examples` repository and run this tutorial from its `tutorial/` directory.
 Like quickstart, it references only npm registry packages.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 npm install
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 npm install
@@ -54,9 +60,13 @@ only). They are never hand-edited.
 
 ## Build
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 npm run build
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 npm run build
@@ -70,9 +80,13 @@ built separately (see "11. STREAM and the Session-Actor Link" below).
 CommonJS, but it is kept separate so the guide example depends only on the
 `@zlink-systems/http-client` package.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 npm run build:http-client
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 npm run build:http-client
@@ -85,13 +99,18 @@ itself — and you clean it up yourself when done. Following along in two termin
 run `npm run server` then `npm run client` directly. The block below does the same thing
 unattended, backgrounding both and leaving their PID in a file.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 docker run -d --rm --name zlink-tutorial-node-redis -p 127.0.0.1:6379:6379 redis:7.2-alpine && until docker exec zlink-tutorial-node-redis redis-cli ping 2>/dev/null | grep -q PONG; do sleep 0.2; done
 npm run server > server.log 2>&1 &
 echo $! > server.pid
 npm run client > client.log 2>&1 &
 echo $! > client.pid
+for i in $(seq 1 60); do curl -sf http://127.0.0.1:5480/players/p1/profile > /dev/null && break; sleep 1; done
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 docker run -d --rm --name zlink-tutorial-node-redis -p 127.0.0.1:6379:6379 redis:7.2-alpine | Out-Null; if ($LASTEXITCODE -eq 0) { while (-not ((docker exec zlink-tutorial-node-redis redis-cli ping 2>$null) -match 'PONG')) { Start-Sleep -Milliseconds 200 } }
@@ -99,11 +118,14 @@ $serverProc = Start-Process -PassThru -NoNewWindow npm.cmd -ArgumentList 'run','
 Set-Content -Path server.pid -Value $serverProc.Id
 $clientProc = Start-Process -PassThru -NoNewWindow npm.cmd -ArgumentList 'run','client' -RedirectStandardOutput client.log -RedirectStandardError client.err.log
 Set-Content -Path client.pid -Value $clientProc.Id
+foreach ($i in 1..60) { try { Invoke-RestMethod -Uri 'http://127.0.0.1:5480/players/p1/profile' -TimeoutSec 2 | Out-Null; break } catch { Start-Sleep -Seconds 1 } }
 ```
 
 The full feature set is confirmed one step at a time below, under "Steps".
 
 ## Verify
+
+Examples smoke runs this block exactly as written.
 
 The server and client each print a line like this on a healthy start.
 
@@ -117,41 +139,22 @@ client listening on http://127.0.0.1:5480
 ```
 
 Startup can take up to 45 seconds (especially on a WSL 9p mount like `/mnt/d` — see
-"Troubleshooting" below), so the confirming call retries for up to 60 seconds instead of a
-fixed wait. It always cleans up both processes and the Redis container regardless of outcome,
-and only exits non-zero when the check never succeeded.
+"Troubleshooting" below), so Run waits for readiness for up to 60 seconds instead of using a
+fixed wait. Verify and Stop own their respective actions.
+
+**Linux · macOS · WSL — bash**
 
 ```bash title="linux"
-ready=""
-for _ in $(seq 1 60); do
-  if curl -sf http://127.0.0.1:5480/players/p1/profile > response.json 2>/dev/null; then
-    ready=1
-    break
-  fi
-  sleep 1
-done
-[ -n "$ready" ] && cat response.json
-kill "$(cat client.pid)" "$(cat server.pid)" 2>/dev/null
-docker rm -f zlink-tutorial-node-redis
-[ -n "$ready" ]
+curl -sf http://127.0.0.1:5480/players/p1/profile | grep -q '"playerId":"p1"'
+echo "tutorial-http=ok"
 ```
 
+**Windows — PowerShell 7**
+
 ```powershell title="windows"
-$ready = $false
-for ($i = 0; $i -lt 60; $i++) {
-    try {
-        $response = Invoke-RestMethod http://127.0.0.1:5480/players/p1/profile -ErrorAction Stop
-        $ready = $true
-        break
-    } catch {
-        Start-Sleep -Seconds 1
-    }
-}
-if ($ready) { $response | ConvertTo-Json -Compress }
-taskkill /F /T /PID $(Get-Content client.pid) 2>$null
-taskkill /F /T /PID $(Get-Content server.pid) 2>$null
-docker rm -f zlink-tutorial-node-redis
-if (-not $ready) { exit 1 }
+$profile = Invoke-RestMethod -Uri 'http://127.0.0.1:5480/players/p1/profile'
+if ($profile.playerId -ne 'p1') { throw "tutorial verify failed: $($profile | ConvertTo-Json -Compress)" }
+Write-Output 'tutorial-http=ok'
 ```
 
 On success it returns:
@@ -162,6 +165,30 @@ On success it returns:
 
 Seeing this means mesh/channel registration and the RouteMesh call path are all working. Expected
 responses for each step are under "Steps" and "Actual output" below.
+
+## Stop
+
+Stop the processes and Redis container started by the Run section.
+
+**Linux · macOS · WSL — bash**
+
+```bash title="linux"
+for pid in "$(cat client.pid)" "$(cat server.pid)"; do
+  pkill -TERM -P "$pid" 2>/dev/null || true
+  kill "$pid" 2>/dev/null || true
+done
+docker rm -f zlink-tutorial-node-redis 2>/dev/null || true
+```
+
+**Windows — PowerShell 7**
+
+```powershell title="windows"
+Get-Content client.pid, server.pid | ForEach-Object {
+  if ($_ -match '^\d+$') { taskkill /PID $_ /T /F 2>$null | Out-Null }
+}
+Get-Job | Stop-Job -ErrorAction SilentlyContinue
+docker rm -f zlink-tutorial-node-redis 2>$null | Out-Null
+```
 
 ## Troubleshooting
 
@@ -503,12 +530,16 @@ public API of `@zlink-systems/http-client`. One run demonstrates typed, raw, and
 responses, per-request timeout and headers, gzip, redirects, Basic authentication,
 download/upload streams, and exception kinds.
 
+**Linux · macOS · WSL — bash**
+
 ```bash title="linux"
 cd HttpClient
 npm install
 npm run build
 npm start
 ```
+
+**Windows — PowerShell 7**
 
 ```powershell title="windows"
 cd HttpClient
