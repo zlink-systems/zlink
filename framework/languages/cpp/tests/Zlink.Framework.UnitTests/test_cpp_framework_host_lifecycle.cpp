@@ -1001,6 +1001,19 @@ bool expect_not_configured (
 
 bool verify_object_store_configuration_preflight ()
 {
+    auto unselected = zlink::framework::app_t::create ();
+    try {
+        unselected.add_zlink_framework ([] (zlink::framework::zlink_framework_options_t &options) {
+            options.add_route_mesh ("unselected-object-role")
+              .listen ("inproc://unselected-object-role");
+        });
+    }
+    catch (const std::exception &error) {
+        std::cerr << "unselected Object role must not require a Location Store: " << error.what ()
+                  << '\n';
+        return false;
+    }
+
     if (!expect_not_configured ("Object Client without Location Store",
                                 [] (zlink::framework::zlink_framework_options_t &options) {
                                     options.add_route_mesh ("missing-client-location")
@@ -1023,6 +1036,7 @@ bool verify_object_store_configuration_preflight ()
           [location_store] (zlink::framework::zlink_framework_options_t &options) {
               options.add_location_store (location_store);
               options.add_route_mesh ("missing-actor-relocation")
+                .set_object_role (zlink::framework::object_role_t::server)
                 .listen ("inproc://missing-actor-relocation")
                 .add_actor_factory<configuration_actor_t, configuration_actor_factory_t> (
                   "configuration-actor", std::make_shared<configuration_actor_factory_t> (),
@@ -1034,6 +1048,7 @@ bool verify_object_store_configuration_preflight ()
           [location_store] (zlink::framework::zlink_framework_options_t &options) {
               options.add_location_store (location_store);
               options.add_route_mesh ("missing-spot-relocation")
+                .set_object_role (zlink::framework::object_role_t::server)
                 .listen ("inproc://missing-spot-relocation")
                 .add_spot_factory<relocation_ready_spot_t> (
                   "configuration-spot",
@@ -1048,6 +1063,7 @@ bool verify_object_store_configuration_preflight ()
           [location_store] (zlink::framework::zlink_framework_options_t &options) {
               options.add_location_store (location_store);
               options.add_route_mesh ("missing-instance-relocation")
+                .set_object_role (zlink::framework::object_role_t::server)
                 .listen ("inproc://missing-instance-relocation")
                 .add_instance_spot_factory<configuration_instance_spot_t> (
                   "configuration-instance",
@@ -1064,6 +1080,7 @@ bool verify_object_store_configuration_preflight ()
           [location_store] (zlink::framework::zlink_framework_options_t &options) {
               options.add_location_store (location_store);
               auto mesh = options.add_route_mesh ("disabled-relocation");
+              mesh.set_object_role (zlink::framework::object_role_t::server);
               mesh.listen ("inproc://disabled-relocation");
               mesh.add_actor_factory<configuration_actor_t, configuration_actor_factory_t> (
                 "disabled-actor", std::make_shared<configuration_actor_factory_t> (),
@@ -1098,7 +1115,8 @@ void configure_relocation_app (
           options.configure_locations ().polling_interval = std::chrono::milliseconds (10);
           auto mesh = options.add_route_mesh ("host-relocation-mesh");
           mesh.channel_name ("host-relocation-channel").server ();
-          mesh.listen ("tcp://127.0.0.1:0")
+          mesh.set_object_role (zlink::framework::object_role_t::server)
+            .listen ("tcp://127.0.0.1:0")
             .set_routing_id (zlink::routing_id_t::from (routing_id))
             .add_spot_factory<relocation_ready_spot_t> (
               "host-relocation-spot",
@@ -1305,7 +1323,9 @@ void configure_empty_relocation_app (
           options.configure_locations ().polling_interval = std::chrono::milliseconds (10);
           auto mesh = options.add_route_mesh ("host-relocation-retry-mesh");
           mesh.channel_name ("host-relocation-retry-channel").server ();
-          mesh.listen ("tcp://127.0.0.1:0").set_routing_id (zlink::routing_id_t::from (routing_id));
+          mesh.set_object_role (zlink::framework::object_role_t::server)
+            .listen ("tcp://127.0.0.1:0")
+            .set_routing_id (zlink::routing_id_t::from (routing_id));
       });
 }
 
@@ -2004,8 +2024,12 @@ int main ()
     if (!verify_relocation_blocker (
           "automatic RouteMesh without a replacement",
           [] (zlink::framework::zlink_framework_options_t &options) {
+              options.add_location_store (
+                std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ());
+              options.add_relocation_store (
+                std::make_shared<zlink::framework::runtime::in_memory_relocation_store_t> ());
               auto node = options.add_route_mesh ("retire-single-mesh");
-              node.set_object_role (zlink::framework::object_role_t::none);
+              node.set_object_role (zlink::framework::object_role_t::server);
               node.channel_name ("retire-single-channel").client ();
               node.set_routing_id (zlink::routing_id_t::from ("retire-single-node"))
                 .listen ("inproc://cpp-retire-single-node");

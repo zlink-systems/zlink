@@ -2181,6 +2181,11 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
         for (std::size_t index = 0; index < _nodes.size (); ++index) {
             const auto &node = _nodes[index];
             const auto &registration = _registrations[index];
+            if (registration->object_role == object_role_t::none) {
+                node->bind_descriptor_publisher ({});
+                continue;
+            }
+            const auto descriptor_index = _published_mesh_descriptors.size ();
             const auto status = node->status ();
             mesh_node_descriptor_t descriptor;
             const auto owner = current_location_owner ();
@@ -2296,15 +2301,16 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
             }
             _published_mesh_descriptors.push_back (descriptor);
             node->bind_descriptor_publisher (
-              [this, index] (const std::map<std::string, int> &channel_weights,
-                             int placement_weight, std::uint64_t descriptor_revision) {
+              [this, descriptor_index] (const std::map<std::string, int> &channel_weights,
+                                        int placement_weight, std::uint64_t descriptor_revision) {
                   std::lock_guard lock (_descriptor_publish_mutex);
                   const auto owner = current_location_owner ();
-                  if (!_location_store || !owner || index >= _published_mesh_descriptors.size ())
+                  if (!_location_store || !owner
+                      || descriptor_index >= _published_mesh_descriptors.size ())
                       throw framework_exception_t (
                         framework_error_kind_t::protocol_error,
                         "MeshNode Location descriptor publisher is not active");
-                  auto descriptor = _published_mesh_descriptors[index];
+                  auto descriptor = _published_mesh_descriptors[descriptor_index];
                   descriptor.owner_id = owner->owner_id;
                   descriptor.lease_generation = owner->lease_generation;
                   descriptor.channel_weights = channel_weights;
@@ -2318,7 +2324,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                       throw framework_exception_t (
                         framework_error_kind_t::protocol_error,
                         "MeshNode Location descriptor update was fenced");
-                  _published_mesh_descriptors[index] = std::move (descriptor);
+                  _published_mesh_descriptors[descriptor_index] = std::move (descriptor);
               });
         }
         for (std::size_t index = 0; index < _nodes.size (); ++index) {

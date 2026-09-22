@@ -405,6 +405,7 @@ make_node (std::string endpoint, std::string routing_id)
     state->listen_endpoint = std::move (endpoint);
     state->listen_port.reset ();
     state->routing_id = zlink::routing_id_t::from (routing_id);
+    state->object_role = zlink::framework::object_role_t::server;
     state->channels.emplace (
       "work", zlink::framework::detail::mesh_channel_registration_t{100, {}, true, true});
     // The host admits object creation only for declared stable types.
@@ -420,11 +421,24 @@ make_named_node (std::string mesh_name, std::string routing_id)
     state->core_context = std::make_shared<zlink::context_t> ();
     state->listen_endpoint = "tcp://127.0.0.1:0";
     state->routing_id = zlink::routing_id_t::from (std::move (routing_id));
+    state->object_role = zlink::framework::object_role_t::server;
     state->channels.emplace (
       "work", zlink::framework::detail::mesh_channel_registration_t{100, {}, true, true});
     // The host admits object creation only for declared stable types.
     state->spot_state->snapshot.actor_types.emplace_back ("vertical.actor");
     return state;
+}
+
+void verify_unselected_object_role_defaults_to_none ()
+{
+    auto state = std::make_shared<zlink::framework::detail::mesh_node_builder_state_t> (
+      "unselected-object-role");
+    zlink::framework::detail::mesh_node_runtime_t runtime (state);
+
+    assert (state->object_role == zlink::framework::object_role_t::none);
+    assert (runtime.object_role () == zlink::framework::object_role_t::none);
+    assert (state->spot_state->spot_factories.empty ());
+    assert (!state->spot_state->snapshot.entry_spot_name.has_value ());
 }
 
 zlink::message_t make_route_multicast_frame (std::string_view packet_name,
@@ -1014,6 +1028,7 @@ void verify_local_node_submit_bridge ()
 void verify_direct_target_falls_through_absent_location_store_entry ()
 {
     auto registration = make_node ("tcp://127.0.0.1:0", "location-gate-node");
+    registration->object_role = zlink::framework::object_role_t::none;
 
     zlink::framework::serializer_registry_t serializers;
     zlink::framework::service_collection_t services;
@@ -1066,6 +1081,7 @@ void verify_direct_target_falls_through_absent_location_store_entry ()
 void verify_request_to_never_admitted_target_reports_not_found ()
 {
     auto registration = make_node ("tcp://127.0.0.1:0", "never-admitted-request-node");
+    registration->object_role = zlink::framework::object_role_t::none;
 
     zlink::framework::serializer_registry_t serializers;
     zlink::framework::service_collection_t services;
@@ -2105,6 +2121,7 @@ int main (int argc, char **argv)
         return run_cross_process_delivery ();
 #endif
     verify_local_join_timeout_releases_membership ();
+    verify_unselected_object_role_defaults_to_none ();
     verify_automatic_identity_and_port_builder ();
     verify_public_runtime_surface ();
     verify_slow_observer_does_not_block_stop ();

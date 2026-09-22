@@ -137,10 +137,8 @@ handler가 없는 packet이 도착했을 때의 동작도 같은 자리에서 �
 두 limit의 `0`은 제한 없음이고 양수는 `1..2,147,483,647`이다. `ActivationConcurrency`는 반대로
 `0`을 거부한다 — object 수가 아니라 동시에 진행되는 활성화를 제한하는 값이기 때문이다.
 
-!!! warning "배치 참여의 기본값은 C++만 다르다"
-
-    C++은 `object_role`을 지정하지 않으면 배치를 받는 `Server`로 시작하고 나머지 언어는
-    배치에 참여하지 않는다. Spot과 Actor를 두지 않을 node라면 C++에서는 역할을 명시한다.
+`object_role`을 지정하지 않으면 C++도 `none`을 사용하므로 node는 배치에 참여하지 않는다. Object를
+호스팅하거나 발견할 node라면 역할을 명시한다.
 
 ## 6. 송신 대기와 socket 상한
 
