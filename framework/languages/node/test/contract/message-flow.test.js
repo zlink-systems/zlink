@@ -15,14 +15,20 @@ const telemetryRecords = [];
 const traceRecords = [];
 let failTelemetryProvider = false;
 const loggerProvider = new LoggerProvider({
-  processors: [{
-    onEmit(record) {
-      if (failTelemetryProvider) throw new Error('logger provider failed');
-      telemetryRecords.push(record);
-    },
-    forceFlush() { return Promise.resolve(); },
-    shutdown() { return Promise.resolve(); }
-  }]
+  processors: [
+    {
+      onEmit(record) {
+        if (failTelemetryProvider) throw new Error('logger provider failed');
+        telemetryRecords.push(record);
+      },
+      forceFlush() {
+        return Promise.resolve();
+      },
+      shutdown() {
+        return Promise.resolve();
+      }
+    }
+  ]
 });
 logs.setGlobalLoggerProvider(loggerProvider);
 trace.setGlobalTracerProvider({
@@ -38,7 +44,9 @@ trace.setGlobalTracerProvider({
 
 const framework = require('../../packages/framework/dist/internal');
 const streamProtocol = require('../../packages/framework/dist/runtime/streams/protocol');
-const { ZLinkStreamFrameMessageFactory } = require('../../packages/framework/dist/runtime/streams/stream-frame-factory');
+const {
+  ZLinkStreamFrameMessageFactory
+} = require('../../packages/framework/dist/runtime/streams/stream-frame-factory');
 const flowContext = require('../../packages/framework/dist/runtime/diagnostics/flow-context');
 const channelEnvelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
 const {
@@ -50,14 +58,13 @@ const {
 const {
   ZLinkDispatchErrorReporter
 } = require('../../packages/framework/dist/runtime/channels/dispatch-error-reporter');
+const {
+  ServiceStatefulRuntime
+} = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
 const connector = require('../../packages/stream-connector/dist');
 const protocolCodecs = require('./helpers/stream-protocol-codecs');
 
-const {
-  ZLinkMessageFlowTracer,
-  createDiagnosticsContext,
-  createMessageFlowModeCell
-} = framework;
+const { ZLinkMessageFlowTracer, createDiagnosticsContext, createMessageFlowModeCell } = framework;
 
 const ZLinkMessageFlowOutcome = {
   Received: 'received',
@@ -198,15 +205,10 @@ test('MFLOW-004 provider failures do not change the message operation', () => {
 });
 
 test('dispatch errors record service-wire command and deepest handler cause', () => {
-  const reporter = new ZLinkDispatchErrorReporter(
-    undefined,
-    undefined,
-    silentSink(),
-    {
-      diagnostics: diagnostics('errors'),
-      liveMode: { mode: 'errors' }
-    }
-  );
+  const reporter = new ZLinkDispatchErrorReporter(undefined, undefined, silentSink(), {
+    diagnostics: diagnostics('errors'),
+    liveMode: { mode: 'errors' }
+  });
   reporter.report({
     surface: 'routeMeshChannel',
     messageKind: 'send',
@@ -303,7 +305,11 @@ test('spec 26 maps every added surface and control without admitting publish as 
   }
   assert.deepEqual(
     telemetryRecords.map((record) => [record.attributes.surface, record.attributes.message_kind]),
-    [['node', 'send'], ['actor_relocation', 'control'], ['classic_fanout', 'send']]
+    [
+      ['node', 'send'],
+      ['actor_relocation', 'control'],
+      ['classic_fanout', 'send']
+    ]
   );
   assert.throws(
     () => tracer.trace({ ...receivedEvent(), messageKind: 'publish' }),
@@ -325,11 +331,31 @@ test('spec 26 structured log projection uses only the exact keys', () => {
   //  기록의 attribute 이름은 Message flow tracing 3.2가 고정한다. `zlink flow:` 본문의
   //  축약 key(`kind`, `mesh` …)는 별도 집합이며 본문 문자열에만 쓴다.
   const allowed = [
-    'action', 'activation_state', 'actor_id', 'channel_name', 'channel_route_kind',
-    'correlation_id', 'duration_seconds', 'event_id', 'flow_id', 'flow_origin',
-    'instance_spot_type', 'mesh_name', 'message_kind', 'message_size_bytes', 'outcome',
-    'packet_name', 'phase', 'reason', 'server_rid', 'source_rid', 'spot_id', 'surface',
-    'target_rid', 'timestamp', 'topic'
+    'action',
+    'activation_state',
+    'actor_id',
+    'channel_name',
+    'channel_route_kind',
+    'correlation_id',
+    'duration_seconds',
+    'event_id',
+    'flow_id',
+    'flow_origin',
+    'instance_spot_type',
+    'mesh_name',
+    'message_kind',
+    'message_size_bytes',
+    'outcome',
+    'packet_name',
+    'phase',
+    'reason',
+    'server_rid',
+    'source_rid',
+    'spot_id',
+    'surface',
+    'target_rid',
+    'timestamp',
+    'topic'
   ];
   assert.deepEqual(keys, allowed.filter((key) => keys.includes(key)).sort());
   assert.equal(telemetryRecords[0].attributes.server_rid, 'server-1');
@@ -352,23 +378,25 @@ test('spec 26 flow-less sampling does not create a flow context and backpressure
 });
 
 test('dispatch reporter Off gate skips trace formatting and trace-only counters', () => {
-  const reporter = new ZLinkDispatchErrorReporter(
-    undefined,
-    undefined,
-    silentSink(),
-    { diagnostics: diagnostics('off'), liveMode: { mode: 'off' } }
-  );
+  const reporter = new ZLinkDispatchErrorReporter(undefined, undefined, silentSink(), {
+    diagnostics: diagnostics('off'),
+    liveMode: { mode: 'off' }
+  });
   const error = {};
   Object.defineProperty(error, 'toString', {
-    value() { throw new Error('error formatting must remain behind the Off gate'); }
+    value() {
+      throw new Error('error formatting must remain behind the Off gate');
+    }
   });
-  assert.doesNotThrow(() => reporter.report({
-    surface: 'channel',
-    messageKind: 'send',
-    reason: 'handler_exception',
-    action: 'drop',
-    error
-  }));
+  assert.doesNotThrow(() =>
+    reporter.report({
+      surface: 'channel',
+      messageKind: 'send',
+      reason: 'handler_exception',
+      action: 'drop',
+      error
+    })
+  );
   assert.equal(reporter.reportedCount, 0);
   assert.equal(telemetryRecords.length, 0);
 });
@@ -378,16 +406,24 @@ test('channel request completion owner records one terminal for failure, cancell
     {
       expected: 'failed',
       sockets: {
-        async awaitClientDealerForOutbound() { return undefined; },
-        hasKnownClientServerTargets() { return false; }
+        async awaitClientDealerForOutbound() {
+          return undefined;
+        },
+        hasKnownClientServerTargets() {
+          return false;
+        }
       }
     },
     {
       expected: 'cancelled',
       signal: AbortSignal.abort(new Error('cancelled')),
       sockets: {
-        async awaitClientDealerForOutbound() { throw new Error('must not await'); },
-        hasKnownClientServerTargets() { return false; }
+        async awaitClientDealerForOutbound() {
+          throw new Error('must not await');
+        },
+        hasKnownClientServerTargets() {
+          return false;
+        }
       }
     },
     {
@@ -399,7 +435,9 @@ test('channel request completion owner records one terminal for failure, cancell
             'request deadline'
           );
         },
-        hasKnownClientServerTargets() { return true; }
+        hasKnownClientServerTargets() {
+          return true;
+        }
       }
     },
     {
@@ -411,30 +449,30 @@ test('channel request completion owner records one terminal for failure, cancell
             'runtime shutdown'
           );
         },
-        hasKnownClientServerTargets() { return false; }
+        hasKnownClientServerTargets() {
+          return false;
+        }
       }
     }
   ];
 
   for (const scenario of cases) {
     const events = [];
-    const operations = new ZLinkChannelOutboundOperations(
-      scenario.sockets,
-      undefined,
-      {
-        flowCreationEnabled() { return false; },
-        beginOutbound(outcome) {
-          return { trace(event) { events.push({ outcome, ...event }); } };
-        }
+    const operations = new ZLinkChannelOutboundOperations(scenario.sockets, undefined, {
+      flowCreationEnabled() {
+        return false;
+      },
+      beginOutbound(outcome) {
+        return {
+          trace(event) {
+            events.push({ outcome, ...event });
+          }
+        };
       }
+    });
+    await assert.rejects(() =>
+      operations.request('api', 'EchoRequest', { value: 'ping' }, 10, scenario.signal)
     );
-    await assert.rejects(() => operations.request(
-      'api',
-      'EchoRequest',
-      { value: 'ping' },
-      10,
-      scenario.signal
-    ));
     const terminals = events.filter((event) => event.outcome === 'replyReceived');
     assert.equal(terminals.length, 1);
     assert.equal(terminals[0].result, scenario.expected);
@@ -446,31 +484,44 @@ test('channel request completion owner records success and in-flight cancellatio
   const successDealer = {
     async request(parts) {
       const messages = parts.map((part) =>
-        typeof part.data === 'function' ? part : bindingMessage(part));
+        typeof part.data === 'function' ? part : bindingMessage(part)
+      );
       const header = channelEnvelope.decodeChannelHeader(messages);
       channelEnvelope.closeMessages(parts);
-      return channelEnvelope.encodeChannelReplyParts(header, { ok: true }).map((part) =>
-        typeof part.data === 'function' ? part : bindingMessage(part));
+      return channelEnvelope
+        .encodeChannelReplyParts(header, { ok: true })
+        .map((part) => (typeof part.data === 'function' ? part : bindingMessage(part)));
     }
   };
   const success = new ZLinkChannelOutboundOperations(
     {
-      async awaitClientDealerForOutbound() { return successDealer; },
-      hasKnownClientServerTargets() { return true; },
-      selectedClientServerRid() { return 'server-1'; }
+      async awaitClientDealerForOutbound() {
+        return successDealer;
+      },
+      hasKnownClientServerTargets() {
+        return true;
+      },
+      selectedClientServerRid() {
+        return 'server-1';
+      }
     },
     undefined,
     {
-      flowCreationEnabled() { return false; },
+      flowCreationEnabled() {
+        return false;
+      },
       beginOutbound(outcome) {
-        return { trace(event) { successEvents.push({ outcome, ...event }); } };
+        return {
+          trace(event) {
+            successEvents.push({ outcome, ...event });
+          }
+        };
       }
     }
   );
-  assert.deepEqual(
-    await success.request('api', 'EchoRequest', { value: 'ping' }, 100),
-    { ok: true }
-  );
+  assert.deepEqual(await success.request('api', 'EchoRequest', { value: 'ping' }, 100), {
+    ok: true
+  });
   assert.deepEqual(
     successEvents.filter((event) => event.outcome === 'replyReceived').map((event) => event.result),
     ['succeeded']
@@ -486,25 +537,43 @@ test('channel request completion owner records success and in-flight cancellatio
   };
   const pending = new ZLinkChannelOutboundOperations(
     {
-      async awaitClientDealerForOutbound() { return pendingDealer; },
-      hasKnownClientServerTargets() { return true; },
-      selectedClientServerRid() { return 'server-2'; }
+      async awaitClientDealerForOutbound() {
+        return pendingDealer;
+      },
+      hasKnownClientServerTargets() {
+        return true;
+      },
+      selectedClientServerRid() {
+        return 'server-2';
+      }
     },
     undefined,
     {
-      flowCreationEnabled() { return false; },
+      flowCreationEnabled() {
+        return false;
+      },
       beginOutbound(outcome) {
-        return { trace(event) { cancelledEvents.push({ outcome, ...event }); } };
+        return {
+          trace(event) {
+            cancelledEvents.push({ outcome, ...event });
+          }
+        };
       }
     }
   );
   const operation = pending.request(
-    'api', 'EchoRequest', { value: 'ping' }, 100, controller.signal
+    'api',
+    'EchoRequest',
+    { value: 'ping' },
+    100,
+    controller.signal
   );
   controller.abort();
   await assert.rejects(operation, /aborted/i);
   assert.deepEqual(
-    cancelledEvents.filter((event) => event.outcome === 'replyReceived').map((event) => event.result),
+    cancelledEvents
+      .filter((event) => event.outcome === 'replyReceived')
+      .map((event) => event.result),
     ['cancelled']
   );
 });
@@ -523,9 +592,15 @@ test('route outbound tracing records the destination as target_rid', async () =>
     },
     undefined,
     {
-      flowCreationEnabled() { return false; },
+      flowCreationEnabled() {
+        return false;
+      },
       beginOutbound(outcome) {
-        return { trace(event) { events.push({ outcome, ...event }); } };
+        return {
+          trace(event) {
+            events.push({ outcome, ...event });
+          }
+        };
       }
     }
   );
@@ -545,12 +620,20 @@ test('classic fanout omits normal delivery flow and reports only subscriber-loca
     surface: 'channel',
     dispatchErrors: {
       flow: {
-        flowCreationEnabled() { return false; },
+        flowCreationEnabled() {
+          return false;
+        },
         begin() {
-          return { trace(event) { flows.push(event); } };
+          return {
+            trace(event) {
+              flows.push(event);
+            }
+          };
         }
       },
-      report(event) { errors.push(event); }
+      report(event) {
+        errors.push(event);
+      }
     }
   });
   await pipeline.dispatchOneWay({
@@ -582,30 +665,114 @@ test('classic fanout omits normal delivery flow and reports only subscriber-loca
   );
 });
 
+test('logical multicast target submission failure reports stale target without changing publish terminal', async () => {
+  telemetryRecords.length = 0;
+  traceRecords.length = 0;
+  let readyChecks = 0;
+  const raw = {
+    setServiceIngress() {},
+    reserveLocalIngress: async () => ({ close() {} }),
+    topology: {
+      peers() {
+        return [
+          {
+            descriptor: {
+              nodeRoutingId: 'peer-gone',
+              channels: [{ name: 'events', weight: 1 }]
+            }
+          }
+        ];
+      }
+    },
+    isPeerRouteReady() {
+      readyChecks += 1;
+      return readyChecks === 1;
+    },
+    async sendService() {
+      return false;
+    }
+  };
+  const stateful = new ServiceStatefulRuntime(raw, 'publisher', 1n);
+  const reporter = makeDispatchErrorReporter();
+  Object.assign(stateful, {
+    dispatchErrors: reporter,
+    dispatchErrorMeshName: 'play'
+  });
+  const runtime = new framework.ZLinkSpotNodeRuntimeManager({
+    registration: framework.createFrameworkRegistration({}),
+    backendAdapterFactory: {},
+    context: {},
+    dispatchErrors: reporter
+  });
+  runtime.publishers.set('play', {
+    publishAsync(channelName, topic) {
+      return stateful.publishLogicalMulticast(channelName, topic, {
+        packetName: 'ProfileChanged',
+        contentType: 'application/json',
+        payload: Buffer.from('{"sequence":1}')
+      });
+    }
+  });
+
+  const result = await runtime.publish('play', 'events', 'score', 'ProfileChanged', {
+    sequence: 1
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(result.status, 'submitted');
+  assert.equal(telemetryRecords.length, 1, 'expected one emitted dispatch-error record');
+  const attributes = telemetryRecords.at(-1).attributes;
+  assert.equal(attributes.event_id, 'zlink.dispatch_error');
+  assert.equal(attributes.surface, 'spot');
+  assert.equal(attributes.message_kind, 'send');
+  assert.equal(attributes.outcome, 'failed');
+  assert.equal(attributes.action, 'drop');
+  assert.equal(attributes.reason, 'stale_target');
+  assert.equal(attributes.target_rid, 'peer-gone');
+  assert.equal(attributes.topic, 'score');
+  assert.equal(attributes.channel_name, 'events');
+  assert.equal(attributes.mesh_name, 'play');
+  assert.equal(attributes.phase, undefined);
+  assert.equal(attributes.source_rid, undefined);
+  assert.equal(attributes.packet_name, undefined);
+  assert.equal(attributes.error_type, undefined);
+  assert.equal(attributes.error_message, undefined);
+});
+
 test('channel one-way flow records queue admission, handler start, and terminal completion in order', async () => {
   const phases = [];
-  const parts = channelEnvelope.encodeChannelEnvelopeParts(
-    3,
-    'api',
-    'Push',
-    { value: 1 },
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    false
-  ).map((part) => typeof part.data === 'function' ? part : bindingMessage(part));
+  const parts = channelEnvelope
+    .encodeChannelEnvelopeParts(
+      3,
+      'api',
+      'Push',
+      { value: 1 },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      false
+    )
+    .map((part) => (typeof part.data === 'function' ? part : bindingMessage(part)));
   const pipeline = new ZLinkChannelDispatchPipeline({
     channelName: 'api',
     surface: 'channel',
     dispatchErrors: {
       flow: {
-        flowCreationEnabled() { return false; },
+        flowCreationEnabled() {
+          return false;
+        },
         begin() {
-          return { trace(event) { phases.push(event.outcome); } };
+          return {
+            trace(event) {
+              phases.push(event.outcome);
+            }
+          };
         }
       },
-      report(error) { assert.fail(`unexpected dispatch error: ${error.reason}`); }
+      report(error) {
+        assert.fail(`unexpected dispatch error: ${error.reason}`);
+      }
     }
   });
   await pipeline.dispatchOneWay({
@@ -676,12 +843,9 @@ test('MFLOW-EXT channel wire and outbound trace use the same created flow', asyn
         // must agree without installing anything into the caller's context.
         let header;
         flowContext.runWithOutboundFlow(true, () => {
-          parts = channelEnvelope.encodeChannelEnvelopeParts(
-            1,
-            'api',
-            'EchoRequest',
-            { value: 'ping' }
-          );
+          parts = channelEnvelope.encodeChannelEnvelopeParts(1, 'api', 'EchoRequest', {
+            value: 'ping'
+          });
           header = JSON.parse(Buffer.from(parts[0]).toString());
           const { tracer } = makeTracer(diagnostics('normal'));
           tracer.trace(receivedEvent());
@@ -726,7 +890,9 @@ test('MFLOW-EXT Off host does not create channel or stream flow fields', async (
         const factory = new ZLinkStreamFrameMessageFactory({
           flowCreationEnabled: () => false,
           messageFactory: {
-            createTextMessage() { throw new Error('binary frame expected'); },
+            createTextMessage() {
+              throw new Error('binary frame expected');
+            },
             createBinaryMessage(payload) {
               streamFrame = payload;
               return {};
@@ -784,12 +950,9 @@ test('MFLOW-EXT Off host suppresses an inbound ambient flow on outbound wire', (
 test('MFLOW-EXT spec 27 \u00a74 Off decode neither validates nor keeps inbound channel flow fields', async () => {
   await new Promise((resolve, reject) => {
     setImmediate(() => {
-      const parts = channelEnvelope.encodeChannelEnvelopeParts(
-        1,
-        'api',
-        'EchoRequest',
-        { value: 'ping' }
-      );
+      const parts = channelEnvelope.encodeChannelEnvelopeParts(1, 'api', 'EchoRequest', {
+        value: 'ping'
+      });
       try {
         const onHeader = JSON.parse(Buffer.from(parts[0]).toString());
         assert.equal(typeof onHeader.flowId, 'string');
@@ -805,7 +968,9 @@ test('MFLOW-EXT spec 27 \u00a74 Off decode neither validates nor keeps inbound c
         assert.equal(offEnvelope.header.flowOrigin, undefined);
         assert.equal(offEnvelope.header.correlationId, onHeader.correlationId);
 
-        const replyParts = channelEnvelope.encodeChannelReplyParts(offEnvelope.header, { ok: true });
+        const replyParts = channelEnvelope.encodeChannelReplyParts(offEnvelope.header, {
+          ok: true
+        });
         const replyHeader = JSON.parse(Buffer.from(replyParts[0]).toString());
         assert.equal(replyHeader.flowId, undefined);
         assert.equal(replyHeader.flowOrigin, undefined);
@@ -822,7 +987,10 @@ test('MFLOW-EXT spec 27 \u00a74 Off decode neither validates nor keeps inbound c
         ];
         const decodedOff = channelEnvelope.decodeChannelEnvelope(malformedParts, undefined, false);
         assert.equal(decodedOff.header.flowId, undefined);
-        assert.throws(() => channelEnvelope.decodeChannelEnvelope(malformedParts, undefined, true), /UUIDv7/);
+        assert.throws(
+          () => channelEnvelope.decodeChannelEnvelope(malformedParts, undefined, true),
+          /UUIDv7/
+        );
         resolve();
       } catch (error) {
         reject(error);
@@ -850,7 +1018,9 @@ test('MFLOW-EXT spec 27 \u00a74 Off stream reply preserves correlation but not f
   const offFactory = new ZLinkStreamFrameMessageFactory({
     flowCreationEnabled: () => false,
     messageFactory: {
-      createTextMessage() { throw new Error('binary frame expected'); },
+      createTextMessage() {
+        throw new Error('binary frame expected');
+      },
       createBinaryMessage(payload) {
         offFrame = payload;
         return {};
@@ -864,7 +1034,9 @@ test('MFLOW-EXT spec 27 \u00a74 Off stream reply preserves correlation but not f
     false,
     { ok: true }
   );
-  const offHeader = streamProtocol.decodeStreamHeader(streamProtocol.decodeStreamFrame(offFrame).header);
+  const offHeader = streamProtocol.decodeStreamHeader(
+    streamProtocol.decodeStreamFrame(offFrame).header
+  );
   assert.equal(offHeader.correlationId, 'corr-1');
   assert.equal(offHeader.flowId, undefined);
   assert.equal(offHeader.flowOrigin, undefined);
@@ -873,7 +1045,9 @@ test('MFLOW-EXT spec 27 \u00a74 Off stream reply preserves correlation but not f
   const onFactory = new ZLinkStreamFrameMessageFactory({
     flowCreationEnabled: () => true,
     messageFactory: {
-      createTextMessage() { throw new Error('binary frame expected'); },
+      createTextMessage() {
+        throw new Error('binary frame expected');
+      },
       createBinaryMessage(payload) {
         onFrame = payload;
         return {};
@@ -887,7 +1061,9 @@ test('MFLOW-EXT spec 27 \u00a74 Off stream reply preserves correlation but not f
     false,
     { ok: true }
   );
-  const onHeader = streamProtocol.decodeStreamHeader(streamProtocol.decodeStreamFrame(onFrame).header);
+  const onHeader = streamProtocol.decodeStreamHeader(
+    streamProtocol.decodeStreamFrame(onFrame).header
+  );
   assert.equal(onHeader.flowId, requestHeader.flowId);
   assert.equal(onHeader.flowOrigin, 'Inbound');
 });
@@ -913,21 +1089,14 @@ test('MFLOW-EXT spec 27 \u00a74 Off stream decode skips and strips malformed flo
   assert.equal(decodedOff.correlationId, 'corr-9');
   assert.equal(decodedOff.flowId, undefined);
   assert.equal(decodedOff.flowOrigin, undefined);
-  assert.equal(
-    decodedOff.flags & streamProtocol.ZLinkStreamHeaderFlags.HasFlowId,
-    0
-  );
+  assert.equal(decodedOff.flags & streamProtocol.ZLinkStreamHeaderFlags.HasFlowId, 0);
 });
 
 test('MFLOW-EXT absent disabled flow does not create an ambient context', () => {
   const absent = flowContext.createInboundFlow(undefined, undefined, false);
   assert.equal(absent, undefined);
   assert.equal(
-    flowContext.createInboundFlow(
-      '018f2b63-9d4a-7abc-8def-0123456789ab',
-      'Inbound',
-      false
-    ),
+    flowContext.createInboundFlow('018f2b63-9d4a-7abc-8def-0123456789ab', 'Inbound', false),
     undefined,
     'Off must not read an inbound wire flow into async-local context'
   );
@@ -983,12 +1152,15 @@ test('MFLOW-010 stream correlation_id round-trips byte-identically across framew
   const connectorDecoded = protocolCodecs.ZlinkStreamHeaderCodec.decode(frameworkBytes);
   assert.equal(connectorDecoded.correlationId, correlationId);
 
-  assert.notEqual((frameworkDecoded.flags & 0x08), 0, 'HasCorrelationId flag must be set');
+  assert.notEqual(frameworkDecoded.flags & 0x08, 0, 'HasCorrelationId flag must be set');
 });
 
 test('MFLOW-010b correlation id survives alongside metadata (no offset overlap)', () => {
   const correlationId = 'deadbeef';
-  const metadata = connector.ZlinkStreamMetadataMap.empty.withMany([['tenant', 'acme'], ['trace', 'on']]);
+  const metadata = connector.ZlinkStreamMetadataMap.empty.withMany([
+    ['tenant', 'acme'],
+    ['trace', 'on']
+  ]);
 
   const bytes = protocolCodecs.ZlinkStreamHeaderCodec.encode({
     kind: connector.ZlinkStreamMessageKind.Request,
@@ -1032,7 +1204,9 @@ test('MFLOW-010c stream frame prefix and payload round-trip across framework and
   assert.equal(connectorHeader.correlationId, 'corr-frame');
   assert.deepEqual(Buffer.from(connectorFrame.payload), payload);
   assert.deepEqual(
-    Buffer.from(protocolCodecs.ZlinkStreamFrameCodec.encode(connectorFrame.header, connectorFrame.payload)),
+    Buffer.from(
+      protocolCodecs.ZlinkStreamFrameCodec.encode(connectorFrame.header, connectorFrame.payload)
+    ),
     Buffer.from(frameworkFrame)
   );
 });
@@ -1051,15 +1225,17 @@ test('MFLOW-010d framework and connector reject duplicate stream metadata keys',
 });
 
 test('MFLOW-011 control packets reject a correlation id', () => {
-  assert.throws(() => protocolCodecs.ZlinkStreamHeaderCodec.encode({
-    kind: connector.ZlinkStreamMessageKind.Control,
-    codec: connector.ZlinkStreamCodec.Raw,
-    flags: connector.ZlinkStreamHeaderFlags.None,
-    requestSeq: undefined,
-    name: 'ctl',
-    metadata: connector.ZlinkStreamMetadataMap.empty,
-    correlationId: 'nope'
-  }));
+  assert.throws(() =>
+    protocolCodecs.ZlinkStreamHeaderCodec.encode({
+      kind: connector.ZlinkStreamMessageKind.Control,
+      codec: connector.ZlinkStreamCodec.Raw,
+      flags: connector.ZlinkStreamHeaderFlags.None,
+      requestSeq: undefined,
+      name: 'ctl',
+      metadata: connector.ZlinkStreamMetadataMap.empty,
+      correlationId: 'nope'
+    })
+  );
 });
 
 test('MFLOW-EXT-005/006 stream flow fields use mandatory marker and reject old or unknown formats', () => {
@@ -1079,10 +1255,16 @@ test('MFLOW-EXT-005/006 stream flow fields use mandatory marker and reject old o
   assert.equal(decoded.flowId, flowId);
   assert.equal(decoded.flowOrigin, 'Application');
 
-  assert.throws(() => protocolCodecs.ZlinkStreamHeaderCodec.decode(encoded.subarray(1)), /format marker/i);
+  assert.throws(
+    () => protocolCodecs.ZlinkStreamHeaderCodec.decode(encoded.subarray(1)),
+    /format marker/i
+  );
   const unknownFlag = Uint8Array.from(encoded);
   unknownFlag[3] |= 0x20;
-  assert.throws(() => protocolCodecs.ZlinkStreamHeaderCodec.decode(unknownFlag), /unknown mandatory|unknown stream header flag/i);
+  assert.throws(
+    () => protocolCodecs.ZlinkStreamHeaderCodec.decode(unknownFlag),
+    /unknown mandatory|unknown stream header flag/i
+  );
 });
 
 function duplicateMetadataHeaderBytes() {
@@ -1090,16 +1272,14 @@ function duplicateMetadataHeaderBytes() {
   const key = Buffer.from('trace');
   const first = Buffer.from('one');
   const second = Buffer.from('two');
-  const metadataLength = 1
-    + 1 + key.length + 2 + first.length
-    + 1 + key.length + 2 + second.length;
+  const metadataLength = 1 + 1 + key.length + 2 + first.length + 1 + key.length + 2 + second.length;
   const header = Buffer.alloc(4 + 8 + 1 + name.length + 2 + metadataLength);
   let offset = 0;
   header[offset++] = 0xf2;
   header[offset++] = connector.ZlinkStreamMessageKind.Request;
   header[offset++] = connector.ZlinkStreamCodec.Json;
-  header[offset++] = connector.ZlinkStreamHeaderFlags.HasRequestSeq
-    | connector.ZlinkStreamHeaderFlags.HasMetadata;
+  header[offset++] =
+    connector.ZlinkStreamHeaderFlags.HasRequestSeq | connector.ZlinkStreamHeaderFlags.HasMetadata;
   header.writeBigUInt64BE(12n, offset);
   offset += 8;
   header[offset++] = name.length;
@@ -1126,8 +1306,12 @@ function writeMetadataEntry(header, offset, key, value) {
 function bindingMessage(payload) {
   const bytes = Buffer.isBuffer(payload) ? payload : Buffer.from(payload);
   return {
-    data() { return bytes; },
-    toBytes() { return bytes; },
+    data() {
+      return bytes;
+    },
+    toBytes() {
+      return bytes;
+    },
     close() {}
   };
 }
@@ -1145,29 +1329,26 @@ const {
 const boundSessionWire = require('../../packages/framework/dist/runtime/actors/bound-session-wire');
 
 function makeDispatchErrorReporter() {
-  return new ZLinkDispatchErrorReporter(
-    undefined,
-    undefined,
-    silentSink(),
-    {
-      diagnostics: diagnostics('errors'),
-      liveMode: { mode: 'errors' },
-      sourceMeshGeneration: 1n
-    }
-  );
+  return new ZLinkDispatchErrorReporter(undefined, undefined, silentSink(), {
+    diagnostics: diagnostics('errors'),
+    liveMode: { mode: 'errors' },
+    sourceMeshGeneration: 1n
+  });
 }
 
 function malformedEnvelopeParts(headerFields) {
   return [
-    bindingMessage(JSON.stringify({
-      formatMarker: 0xf2,
-      channelName: 'api',
-      messageName: 'EchoRequest',
-      contentType: 'application/json',
-      deadline: null,
-      topic: null,
-      ...headerFields
-    })),
+    bindingMessage(
+      JSON.stringify({
+        formatMarker: 0xf2,
+        channelName: 'api',
+        messageName: 'EchoRequest',
+        contentType: 'application/json',
+        deadline: null,
+        topic: null,
+        ...headerFields
+      })
+    ),
     bindingMessage('{}')
   ];
 }
@@ -1192,16 +1373,19 @@ test('MFLOW-MAL malformed request envelope replies protocol error and records in
     }
   };
 
-  await dispatcher.dispatch({
-    // flowId without flowOrigin is a protocol error (spec 27 §3).
-    parts: malformedEnvelopeParts({
-      kind: 1,
-      correlationId: 'corr-malformed',
-      flowId: '01890000-0000-7000-8000-000000000001'
-    }),
-    routingId: 'peer-1',
-    requestSeq: 9n
-  }, router);
+  await dispatcher.dispatch(
+    {
+      // flowId without flowOrigin is a protocol error (spec 27 §3).
+      parts: malformedEnvelopeParts({
+        kind: 1,
+        correlationId: 'corr-malformed',
+        flowId: '01890000-0000-7000-8000-000000000001'
+      }),
+      routingId: 'peer-1',
+      requestSeq: 9n
+    },
+    router
+  );
 
   assert.equal(replies.length >= 1, true);
   const replyHeader = JSON.parse(Buffer.from(replies[0]).toString());
@@ -1230,20 +1414,28 @@ test('MFLOW-MAL malformed one-way envelope drops and records invalid_frame/drop'
   const router = {
     reply() {
       replied = true;
-      const operation = { message() { return operation; }, submit() {} };
+      const operation = {
+        message() {
+          return operation;
+        },
+        submit() {}
+      };
       return operation;
     }
   };
 
-  await dispatcher.dispatch({
-    parts: malformedEnvelopeParts({
-      kind: 3,
-      correlationId: null,
-      flowId: '01890000-0000-7000-8000-000000000001'
-    }),
-    routingId: 'peer-1',
-    requestSeq: null
-  }, router);
+  await dispatcher.dispatch(
+    {
+      parts: malformedEnvelopeParts({
+        kind: 3,
+        correlationId: null,
+        flowId: '01890000-0000-7000-8000-000000000001'
+      }),
+      routingId: 'peer-1',
+      requestSeq: null
+    },
+    router
+  );
 
   assert.equal(replied, false);
   assert.equal(traceRecords.length, 1);

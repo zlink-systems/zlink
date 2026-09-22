@@ -8,6 +8,7 @@
 #include "runtime/configuration/service_scope.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/execution/serial_execution_queue.hpp"
+#include "runtime/diagnostics/dispatch_events.hpp"
 #include "runtime/execution/state_lane.hpp"
 #include "runtime/locations/location_lifecycle.hpp"
 #include "runtime/locations/spot_address_resolvers.hpp"
@@ -377,9 +378,10 @@ void drain_spot_node_executors (spot_node_builder_state_t &node);
 
 void report_logical_multicast_failure (const std::shared_ptr<spot_node_builder_state_t> &state,
                                        std::string_view channel_name,
+                                       std::string_view mesh_name,
                                        std::string_view topic,
-                                       std::string_view packet_name,
-                                       const framework_exception_t &error) noexcept;
+                                       std::string_view target_rid,
+                                       dispatch_error_reason_t reason) noexcept;
 
 /* actor_instance_index maintenance (caller runs on the node state lane). A record
  * replaces any prior address for the same actor, so a re-registered actor
