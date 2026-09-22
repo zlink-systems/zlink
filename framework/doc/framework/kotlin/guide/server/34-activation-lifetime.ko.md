@@ -93,13 +93,14 @@ lifecycle을 처리한다.
 handler와 membership callback만 제공한다. Entry Spot은 Object Server마다 하나뿐이므로 여기에
 Actor마다의 값을 쌓으면 그 Object Server가 다루는 Actor 수만큼 자란다.
 
-### 3.2 Actor를 없애는 자리
+### 3.2 Actor의 생성과 소멸은 Entry Spot에서 진행된다
 
-**Actor는 Entry Spot에서만 없앨 수 있다.** User Spot에 있는 Actor는 먼저 Entry Spot으로
-돌아와야 한다 — [Actor membership](35-actor-membership.ko.md)이 그 이동을 다룬다.
+Actor 생성 요청은 Entry Spot이 승인하거나 거절한다. Actor를 소멸시키는 호출도 Entry Spot context가
+제공한다. User Spot에 있는 Actor는 먼저 Entry Spot으로 돌아온 뒤 소멸시킨다. 그 이동은 Actor의
+[membership](35-actor-membership.ko.md)이 처리한다.
 
-없애는 호출은 Entry Spot의 context가 제공하며, 지금 instance를 넘긴다. 이 호출은 membership
-callback을 다시 실행하지 않고 Framework의 등록 기록과 묶인 session 경로를 정리한다.
+소멸 호출은 현재 instance를 받고 membership callback을 다시 실행하지 않는다. Framework의 등록 기록과
+묶인 session 경로를 정리한다.
 
 ## 4. User Spot — application이 만드는 자리
 

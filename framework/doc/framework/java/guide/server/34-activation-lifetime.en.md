@@ -96,14 +96,14 @@ lifecycle of Actors arriving and leaving.
 Spot provides only handlers and membership callbacks. There is one Entry Spot per Object Server, so
 per-Actor values accumulated here grow with the number of Actors that Object Server serves.
 
-### 3.2 Where an Actor Is Destroyed
+### 3.2 Actor Creation and Destruction Happen in the Entry Spot
 
-**An Actor can be destroyed only from the Entry Spot.** An Actor in a User Spot must return to the
-Entry Spot first — [Actor Membership](35-actor-membership.en.md) covers that move.
+The Entry Spot accepts or refuses Actor creation requests. Its context also provides the call that
+destroys an Actor. An Actor in a User Spot first returns to the Entry Spot before it is destroyed;
+[Actor Membership](35-actor-membership.en.md) handles that move.
 
-The destroy call is offered by the Entry Spot's context and takes the current instance. It does not
-re-run the membership callbacks; it clears the framework's registration record and the bound session
-route.
+The destroy call takes the current instance and does not run membership callbacks again. It clears
+the Framework's registration record and the bound session route.
 
 ## 4. User Spot — Created by the Application
 

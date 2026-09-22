@@ -397,7 +397,7 @@ actor id만 준다. 그 Actor가 지금 어느 Spot 안에 있는지는 Framewor
 
     만들기 호출은 actor id와 함께 **그때의 세대와 조회 당시 owner 경로**를 담은 참조를 돌려준다.
     이 참조를 사용하는 자리는 [Session과 Actor 연결](24-actor-session.ko.md)과
-    [활성화와 수명](34-activation-lifetime.ko.md#32-actor를-없애는-자리)이 다룬다.
+    [활성화와 수명](34-activation-lifetime.ko.md#32-actor의-생성과-소멸은-entry-spot에서-진행된다)이 다룬다.
     평소의 Actor 호출에는 actor id만 있으면 된다.
 
 ## 4. 실행 결과

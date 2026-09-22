@@ -102,15 +102,9 @@ Which terminator closes a worker call decides **whether the Spot's turn is held 
 | `Async` | **Held** while waiting | When the work is short and Spot state must not change meanwhile |
 | `Submit` | Returns at once | When the result is not awaited and the work is only submitted |
 
-**Other work in the same Spot runs while `Yield` has given the turn back.** Write the code
-assuming Spot state may have changed across a `Yield`. Copy the values the worker needs inside the
-turn first.
-
-!!! warning "`Yield` is available only in certain places"
-
-    It can be used in a `SpotWide` User Spot and in an Instance Spot. An Entry Spot and a
-    `PerActor` User Spot share no Spot turn, so there is no turn to give back —
-    [The Execution Model](32-execution-model.en.md) covers that boundary.
+For the difference between `Yield` and `Async`, checking state after a `Yield`, copying values
+before it, and the Spots where it is available, see
+[The Execution Model §5](32-execution-model.en.md#5-serial-execution-and-thread-occupancy).
 
 ## 4. Related Documents
 

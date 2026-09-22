@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Yield 요청 하나가 새 turn으로 이어지는 흐름",
+    "subtitle": "요청을 보낸 turn은 gate를 반납하고, 응답 continuation은 queue 끝에서 다시 시작한다",
+    "output": "32-yield-sequence.html",
+    "column_fit": "spread",
+    "viewBox": [1040, 650],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "Turn", "type": "backend", "label": "현재 turn" },
+    { "id": "Gate", "type": "messagebus", "label": "SpotWide gate" },
+    { "id": "Remote", "type": "external", "label": "원격 작업" },
+    { "id": "Queue", "type": "backend", "label": "같은 Spot queue" }
+  ],
+  "messages": [
+    { "from": "Turn", "to": "Remote", "y": 160, "label": "Yield로 요청 제출", "variant": "default" },
+    { "from": "Turn", "to": "Gate", "y": 220, "label": "turn 종료 · gate 반납", "variant": "return" },
+    { "from": "Gate", "to": "Queue", "y": 280, "label": "대기하던 다른 turn 실행", "variant": "default" },
+    { "from": "Remote", "to": "Queue", "y": 350, "label": "응답 도착 · 재개 record를 queue 끝에 추가", "variant": "return" },
+    { "from": "Queue", "to": "Gate", "y": 420, "label": "새 turn이 gate 획득", "variant": "default" },
+    { "from": "Gate", "to": "Turn", "y": 480, "label": "continuation 재개", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "반납과 재개",
+      "items": ["현재 turn은 요청을 제출한 뒤 끝난다.", "응답은 현재 turn을 되살리지 않고 queue 끝의 새 turn을 만든다."]
+    },
+    {
+      "dot": "slate",
+      "title": "상태 확인",
+      "items": ["다른 turn이 응답 전에 실행될 수 있다.", "continuation은 상태를 다시 확인한 뒤에 바꾼다."]
+    }
+  ]
+}

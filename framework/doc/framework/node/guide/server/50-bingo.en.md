@@ -194,11 +194,8 @@ other player's join and the timer would wait. So the request is sent with `Yield
 --8<-- "framework/languages/node/samples/Bingo.Ts/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/bingo-room-spot.ts:doc-bingo-room-join"
 ```
 
-`Yield` gives the turn back while the reply is pending and resumes in a new turn when it arrives. The
-room's state may have changed in between, so the resumed code checks the pending join again before
-changing anything. The Node implementation sends this request without `Yield` and does not re-check. The difference between the terminators is covered by
-[Timers and Workers](36-timer-worker.en.md#3-the-terminator-that-gives-the-turn-back), and the
-serialization boundary of one Spot by [The Execution Model](32-execution-model.en.md).
+Why this request gives its turn back with `Yield` and checks the pending join again after resuming
+is covered by [The Execution Model §5](32-execution-model.en.md#5-serial-execution-and-thread-occupancy).
 
 ## 7. Cards, the Draw Timer and Pushes
 

@@ -95,14 +95,51 @@ database 같은 외부 저장소에 둔다.** Factory의 이동 정책은 `Recre
 thread는 다른 일을 처리하지만, **그 turn은 handler가 끝날 때까지 유지된다.** `SpotWide`에서는
 그동안 같은 Spot의 다음 callback을 시작하지 않는다.
 
-오래 걸리는 I/O를 기다리는 동안 다음 turn을 실행해야 하면
-[Timer와 worker](36-timer-worker.ko.md)의 `Yield` 계약을 사용한다.
+`Async`와 `Yield`는 모두 operation을 제출하고 application 결과를 기다린다. `Async`의 `await`는
+thread만 반납하고 현재 turn은 유지한다. 짧은 대기에만 `Async`를 사용한다. 오래 걸리는 I/O 동안
+같은 Spot의 다음 turn을 실행해야 하면 `Yield`를 사용한다.
+
+`Yield`는 결과를 기다리기 시작할 때 현재 turn을 끝내고, 같은 Spot에서 한 번에 하나만 실행하게
+하는 shared gate를 반납하는 terminator다. 기다리는 동안 같은 Spot에서 대기하던 turn이 실행되고,
+응답이 오면 continuation은 그 gate를 다시 얻어 queue 끝의 **새 turn**으로 이어서 실행한다.
+
+<iframe class="zlink-diagram" src="/common/diagrams/32-yield-turns.html" title="한 SpotWide Spot에서 Async와 Yield의 차이" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/32-yield-turns.html" target="_blank">↗ 크게 보기</a></p>
+
+`Yield` 뒤에는 그 사이 다른 turn이 상태를 바꿨을 수 있으므로, 재개한 뒤 확인하고서만 상태를
+바꾼다. operation에 넘길 값은 `Yield` 전에 현재 turn 안에서 복사한다. `SpotWide`의 member
+Actor가 `Yield`하면 shared Spot gate만 반납한다. 그 Actor의 다음 message가 먼저 실행되지 않도록
+Actor queue의 차례는 유지되지만, 다른 Actor·Spot handler·timer는 실행할 수 있다.
+
+`Yield`를 쓸 수 있는 곳은 shared turn이 있는 `SpotWide` User Spot과 Instance Spot이다. Entry
+Spot과 `PerActor` User Spot은 shared turn이 없으므로 `Yield`를 제공하지 않는다. 이를 제공하는
+request·worker와 같은 call에서는 언어별 terminator 이름이 다음과 같다.
+
+| 언어 | Yield terminator |
+| --- | --- |
+| C#/.NET | `Yield(...)` |
+| C++ | `.yield()` |
+| Java | `.yield(...)` |
+| Kotlin | `.yield()` |
+| Node/TypeScript | `.yield()` |
+
+<iframe class="zlink-diagram" src="/common/diagrams/32-yield-sequence.html" title="Yield 요청의 turn 전환" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/32-yield-sequence.html" target="_blank">↗ 크게 보기</a></p>
+
+다음은 Bingo room join의 player record 요청이다. 각 탭에서 표시한 `Yield` terminator 줄이 turn을
+반납하는 지점이다.
+
+`Yield<GetPlayerRecordRes>(...)` 줄에서 room Spot turn을 반납한다.
+
+```csharp
+--8<-- "framework/languages/dotnet/samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/BingoRoom.cs:doc-bingo-room-join"
+```
 
 ## 6. 관련 문서
 
 - id로 호출하는 상태 객체 — [Spot](21-spot.ko.md) · [Actor](22-actor.ko.md)
 - 종류별 생성 시점과 lifecycle callback — [활성화와 수명](34-activation-lifetime.ko.md)
-- turn을 넘기는 계약 — [Timer와 worker](36-timer-worker.ko.md)
+- turn을 넘기는 계약 — [이 절](#5-직렬-실행과-thread-점유)
 - 도착이 처리보다 빠를 때 — [Backpressure](33-backpressure.ko.md)
 
 <script>

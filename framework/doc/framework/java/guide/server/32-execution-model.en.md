@@ -102,14 +102,53 @@ Serial execution does not mean holding one thread throughout. When a handler rea
 point the executing thread handles other work, but **the turn is held until the handler
 completes.** Under `SpotWide` the next callback of the same Spot does not start in the meantime.
 
-When the next turn has to run while a long I/O is awaited, use the `Yield` contract in
-[Timers and Workers](36-timer-worker.en.md).
+`Async` and `Yield` both submit an operation and wait for its application result. `await` on
+`Async` releases only the thread and keeps the current turn. Use `Async` only for short waits.
+Use `Yield` when the next turn in the same Spot has to run during a long I/O wait.
+
+`Yield` is a terminator that ends the current turn and gives back the shared gate that lets one
+thing run at a time in the Spot when it starts waiting for a result. While it waits, queued turns
+in the same Spot run. When the reply arrives, its continuation gets that gate again and continues
+in a **new turn** at the tail of the queue.
+
+<iframe class="zlink-diagram" src="/common/diagrams/32-yield-turns-en.html" title="Async and Yield in one SpotWide Spot" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/32-yield-turns-en.html" target="_blank">↗ View larger</a></p>
+
+Another turn may have changed state across a `Yield`, so check again before changing state after
+resuming. Copy values handed to the operation inside the current turn before `Yield`. When a
+member Actor in `SpotWide` uses `Yield`, it gives back only the shared Spot gate. Its own Actor
+queue position remains reserved, so its next message cannot run first, while another Actor, Spot
+handler, or timer can run.
+
+`Yield` is available where there is a shared turn: a `SpotWide` User Spot and an Instance Spot.
+An Entry Spot and a `PerActor` User Spot have no shared turn and therefore do not offer `Yield`.
+For calls such as requests and workers that offer it, the terminator name is:
+
+| Language | Yield terminator |
+| --- | --- |
+| C#/.NET | `Yield(...)` |
+| C++ | `.yield()` |
+| Java | `.yield(...)` |
+| Kotlin | `.yield()` |
+| Node/TypeScript | `.yield()` |
+
+<iframe class="zlink-diagram" src="/common/diagrams/32-yield-sequence-en.html" title="The turn transition of one Yield request" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/32-yield-sequence-en.html" target="_blank">↗ View larger</a></p>
+
+This is the player-record request in a Bingo room join. In every tab, the marked `Yield`
+terminator line is where the room Spot gives its turn back.
+
+`.yield(Messages.GetPlayerRecordRes.class)` gives the room Spot turn back.
+
+```java
+--8<-- "framework/languages/java/samples/java/Bingo/Server/Play/src/main/java/systems/zlink/samples/bingo/server/play/infrastructure/zlink/spots/bingoroomspot/BingoRoomSpot.java:doc-bingo-room-join"
+```
 
 ## 6. Related Documents
 
 - State objects called by id — [Spot](21-spot.en.md) · [Actor](22-actor.en.md)
 - Creation points and lifecycle callbacks per kind — [Activation and Lifetime](34-activation-lifetime.en.md)
-- The contract that yields a turn — [Timers and Workers](36-timer-worker.en.md)
+- The contract that yields a turn — [this section](#5-serial-execution-and-thread-occupancy)
 - When arrival outpaces processing — [Backpressure](33-backpressure.en.md)
 
 <script>

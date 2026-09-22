@@ -103,14 +103,8 @@ worker 호출을 어떤 종결자로 닫느냐가 **기다리는 동안 그 Spot
 | `Async` | 기다리는 동안 **쥐고 있는다** | 작업이 짧고, 기다리는 동안 Spot 상태가 바뀌면 안 될 때 |
 | `Submit` | 즉시 돌아온다 | 결과를 기다리지 않고 제출만 할 때 |
 
-**`Yield`로 반납한 사이에 같은 Spot의 다른 작업이 실행된다.** 그러므로 `Yield` 전후로 Spot
-상태가 바뀌었을 수 있다고 보고 코드를 사용한다. worker에 넘길 값은 turn 안에서 먼저 복사해 둔다.
-
-!!! warning "`Yield`를 사용할 수 있는 자리가 정해져 있다"
-
-    `SpotWide` User Spot과 Instance Spot에서만 사용할 수 있다. Entry Spot과 `PerActor` User Spot에는
-    공유하는 Spot turn이 없어 반납할 실행권 자체가 없다 —
-    [실행 모델](32-execution-model.ko.md)이 그 경계를 다룬다.
+`Yield`와 `Async`의 turn 차이, `Yield` 뒤 상태 재확인과 호출에 넘길 값의 사전 복사, 사용할 수
+있는 Spot은 [실행 모델 §5](32-execution-model.ko.md#5-직렬-실행과-thread-점유)가 다룬다.
 
 ## 4. 관련 문서
 

@@ -185,11 +185,8 @@ record를 읽어야 하는데, 그 왕복 동안 room의 실행권을 반납하�
 --8<-- "framework/languages/dotnet/samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/BingoRoom.cs:doc-bingo-room-join"
 ```
 
-`Yield`는 응답을 기다리는 동안 실행권을 반납하고, 응답이 오면 새 turn에서 이어서 실행한다.
-그 사이에 room 상태가 바뀌었을 수 있으므로 재개된 코드는 pending join을 다시 확인한 뒤에만
-상태를 바꾼다. Node 구현은 이 요청을 `Yield` 없이 보내고 재확인도 하지 않는다. 종결자의 차이는
-[Timer와 worker](36-timer-worker.ko.md#3-실행권을-반납하는-종결자)가, 한 Spot의 직렬 실행
-범위는 [실행 모델](32-execution-model.ko.md)이 다룬다.
+이 요청에서 `Yield`가 turn을 반납하고 재개 뒤 pending join을 다시 확인하는 이유는
+[실행 모델 §5](32-execution-model.ko.md#5-직렬-실행과-thread-점유)가 다룬다.
 
 ## 7. card, 추첨 timer와 push
 
