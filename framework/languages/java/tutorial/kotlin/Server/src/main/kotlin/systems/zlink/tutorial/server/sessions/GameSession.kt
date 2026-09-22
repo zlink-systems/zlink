@@ -1,7 +1,7 @@
 package systems.zlink.tutorial.server.sessions
 
-import kotlinx.coroutines.future.await
 import systems.zlink.framework.kotlin.ZLinkSuspendingSession
+import systems.zlink.framework.kotlin.await
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.streams.ZLinkSessionContext
 import systems.zlink.framework.streams.ZLinkSessionDispatchContext

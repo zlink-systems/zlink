@@ -1,11 +1,12 @@
 package systems.zlink.samples.kotlin.supportchat.server.api.handlers
 
-import kotlinx.coroutines.future.await
 import org.slf4j.LoggerFactory
 import systems.zlink.framework.ZLinkMessageContext
 import systems.zlink.framework.channels.ZLinkClient
 import systems.zlink.framework.handlers.ZLinkHandlerGroup
 import systems.zlink.framework.kotlin.ZLinkSuspendingRequestHandler
+import systems.zlink.framework.kotlin.kotlin
+import systems.zlink.framework.kotlin.requestToChannel
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleTimings
 import systems.zlink.samples.kotlin.supportchat.shared.contracts.AllocateConversationReq
@@ -16,6 +17,8 @@ import systems.zlink.samples.kotlin.supportchat.shared.contracts.OpenConversatio
 @ZLinkHandlerGroup(SampleNames.ApiChannel)
 class OpenConversationHandler(private val channels: ZLinkClient) :
     ZLinkSuspendingRequestHandler<OpenConversationApiReq, OpenConversationApiRes> {
+    private val kotlinChannels = channels.kotlin()
+
     override suspend fun handle(
         request: OpenConversationApiReq,
         context: ZLinkMessageContext,
@@ -26,8 +29,8 @@ class OpenConversationHandler(private val channels: ZLinkClient) :
             request.subject,
         )
         val allocated =
-            channels
-                .requestToChannel(
+            kotlinChannels
+                .requestToChannel<AllocateConversationRes>(
                     SampleNames.SupportChannel,
                     AllocateConversationReq(
                         request.customerActorId,
@@ -36,7 +39,6 @@ class OpenConversationHandler(private val channels: ZLinkClient) :
                     ),
                 )
                 .timeout(SampleTimings.RequestTimeout)
-                .submit(AllocateConversationRes::class.java)
                 .await()
         logger.info(
             "support api open: allocated conversation={} status={}",

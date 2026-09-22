@@ -1,6 +1,5 @@
 package systems.zlink.quickstart.client
 
-import kotlinx.coroutines.future.await
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.runApplication
 import org.springframework.context.annotation.Bean
@@ -8,6 +7,8 @@ import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.RestController
 import systems.zlink.framework.channels.ZLinkRouteClient
+import systems.zlink.framework.kotlin.kotlin
+import systems.zlink.framework.kotlin.requestToChannel
 import systems.zlink.framework.spring.EnableZLinkFramework
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
 import systems.zlink.quickstart.shared.Greeting
@@ -33,10 +34,12 @@ fun main(args: Array<String>) {
 }
 
 @RestController
-class HelloController(private val route: ZLinkRouteClient) {
+class HelloController(routeClient: ZLinkRouteClient) {
+
+    private val route = routeClient.kotlin()
 
     @GetMapping("/hello/{name}")
     suspend fun hello(@PathVariable name: String): String =
         // The target is a single ChannelName; which node handles it is not specified.
-        route.requestToChannel("greeting", Hello(name)).submit(Greeting::class.java).await().text
+        route.requestToChannel<Greeting>("greeting", Hello(name)).await().text
 }

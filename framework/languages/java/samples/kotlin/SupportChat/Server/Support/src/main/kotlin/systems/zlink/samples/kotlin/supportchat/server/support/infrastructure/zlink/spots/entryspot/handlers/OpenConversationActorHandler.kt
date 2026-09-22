@@ -1,8 +1,10 @@
 package systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zlink.spots.entryspot.handlers
 
 import systems.zlink.framework.ZLinkMessageContext
+import systems.zlink.framework.channels.ZLinkRouteClient
 import systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpotActorRequestHandler
-import systems.zlink.framework.kotlin.await
+import systems.zlink.framework.kotlin.kotlin
+import systems.zlink.framework.kotlin.requestToChannel
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleTimings
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SupportChatRoles
@@ -14,13 +16,15 @@ import systems.zlink.samples.kotlin.supportchat.shared.contracts.OpenConversatio
 import systems.zlink.samples.kotlin.supportchat.shared.contracts.OpenConversationReq
 import systems.zlink.samples.kotlin.supportchat.shared.contracts.OpenConversationRes
 
-class OpenConversationActorHandler :
+class OpenConversationActorHandler(routes: ZLinkRouteClient) :
     ZLinkSuspendingEntrySpotActorRequestHandler<
         SupportEntrySpot,
         SupportUserActor,
         OpenConversationReq,
         OpenConversationRes,
     > {
+    private val kotlinRoutes = routes.kotlin()
+
     override suspend fun handle(
         entrySpot: SupportEntrySpot,
         actor: SupportUserActor,
@@ -33,15 +37,12 @@ class OpenConversationActorHandler :
 
         // --8<-- [start:doc-sc-open-actor]
         val opened =
-            entrySpot
-                .context()
-                .outbound()
-                .requestToChannel(
+            kotlinRoutes
+                .requestToChannel<OpenConversationApiRes>(
                     SampleNames.ApiChannel,
                     OpenConversationApiReq(actor.participantId, actor.displayName, request.subject),
                 )
                 .timeout(SampleTimings.RequestTimeout)
-                .submit(OpenConversationApiRes::class.java)
                 .await()
 
         val joined =

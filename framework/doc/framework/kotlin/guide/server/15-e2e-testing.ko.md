@@ -36,11 +36,15 @@ handler 단위 테스트를 아무리 촘촘히 작성해도 확인되지 않는
 코드만으로 끝난다.
 
 ```kotlin
-client.connect().submit().await()                                   // 실제 연결
-val auth = client.request(AuthenticateReq(actorId))                 // 실제 request
-    .submit(AuthenticateRes::class.java).await()
-val push = other.waitFor(PlayerJoinedNotify::class.java)            // 실제 push 도착 확인
-    .submit(PlayerJoinedNotify::class.java).await()
+val kotlinClient = client.kotlin()
+val kotlinOther = other.kotlin()
+kotlinClient.connect().await()                                      // 실제 연결
+val pushDeferred = async(start = CoroutineStart.UNDISPATCHED) {
+    kotlinOther.waitFor<PlayerJoinedNotify>().await()
+}
+val auth = kotlinClient.request(AuthenticateReq(actorId))           // 실제 request
+    .awaitReply<AuthenticateRes>()
+val push = pushDeferred.await()                                     // 실제 push 도착 확인
 ZLinkStreamAssert.ensure(
     push.payload().actorId == auth.player.actorId, "join push actor mismatch.")
 ```
@@ -119,9 +123,8 @@ connector가 제공하는 검증 함수로 대부분의 시나리오를 표현�
 push가 섞여 들어와도 시나리오가 영향을 받지 않는다.
 
 ```kotlin
-val joined = client1.waitFor(PlayerJoinedNotify::class.java)
-    .where(PlayerJoinedNotify::class.java) { it.payload().actorId == options.oActorId }
-    .submit(PlayerJoinedNotify::class.java)
+val joined = client1.kotlin().waitFor<PlayerJoinedNotify>()
+    .where { it.payload().actorId == options.oActorId }
     .await()
 ZLinkStreamAssert.ensure(joined.payload().mark == TicTacToeMarks.O, "joined mark mismatch.")
 ```
@@ -133,9 +136,8 @@ ZLinkStreamAssert.ensure(joined.payload().mark == TicTacToeMarks.O, "joined mark
 
 ```kotlin
 // 방금 들어온 본인에게는 자기 입장 알림이 가지 않아야 한다.
-client2.expectNone(PlayerJoinedNotify::class.java)
+client2.kotlin().expectNone<PlayerJoinedNotify>()
     .within(Duration.ofMillis(250))
-    .submit()
     .await()
 ```
 
@@ -144,13 +146,12 @@ client2.expectNone(PlayerJoinedNotify::class.java)
 상태가 단계적으로 바뀌는 흐름에서는 도착 여부가 아니라 **순서**가 계약이다.
 
 ```kotlin
-val statusSequence = customer.waitForSequence(DeliveryStatusNotify::class.java)
-    .expect(DeliveryStatusNotify::class.java) { matchesStatus(it, deliveryId, DeliveryStatus.Assigned) }
-    .expect(DeliveryStatusNotify::class.java) { matchesStatus(it, deliveryId, DeliveryStatus.Accepted) }
-    .expect(DeliveryStatusNotify::class.java) { matchesStatus(it, deliveryId, DeliveryStatus.PickedUp) }
-    .expect(DeliveryStatusNotify::class.java) { matchesStatus(it, deliveryId, DeliveryStatus.Delivered) }
+val statusSequence = customer.kotlin().waitForSequence<DeliveryStatusNotify>()
+    .expect { matchesStatus(it, deliveryId, DeliveryStatus.Assigned) }
+    .expect { matchesStatus(it, deliveryId, DeliveryStatus.Accepted) }
+    .expect { matchesStatus(it, deliveryId, DeliveryStatus.PickedUp) }
+    .expect { matchesStatus(it, deliveryId, DeliveryStatus.Delivered) }
     .timeout(customer.options().waitTimeout)
-    .submit(DeliveryStatusNotify::class.java)
     .await()
 ```
 
@@ -161,10 +162,10 @@ val statusSequence = customer.waitForSequence(DeliveryStatusNotify::class.java)
 
 ```kotlin
 // 인증 전에는 대화를 열 수 없어야 한다.
-ZLinkStreamAssert.expectFailure(
-    { agent.request(OpenConversationReq("unauthenticated"))
-        .submit(OpenConversationRes::class.java) },
-    ZLinkStreamErrorCode.RemoteError)
+ZLinkKotlinStreamAssert.expectFailure(ZLinkStreamErrorCode.REMOTE_ERROR.name) {
+    agent.kotlin().request(OpenConversationReq("unauthenticated"))
+        .awaitReply<OpenConversationRes>()
+}
 ```
 
 ## 3. 메시지 대기 처리 방법
@@ -176,10 +177,12 @@ E2E는 대부분 같은 원인으로 간헐 실패한다. **행동을 먼저 하
 
 ```kotlin
 // 대기를 먼저 등록한다 — 아직 await하지 않는다.
-val statusSequenceDeferred = customer.waitForSequence(DeliveryStatusNotify::class.java)
-    .expect(DeliveryStatusNotify::class.java) { matchesStatus(it, deliveryId, DeliveryStatus.Assigned) }
+val statusSequenceDeferred = async(start = CoroutineStart.UNDISPATCHED) {
+    customer.kotlin().waitForSequence<DeliveryStatusNotify>()
+    .expect { matchesStatus(it, deliveryId, DeliveryStatus.Assigned) }
     .timeout(customer.options().waitTimeout)
-    .submit(DeliveryStatusNotify::class.java)
+    .await()
+}
 
 // 그다음에 push를 유발하는 행동을 실행한다.
 val created = http.post("/deliveries")
@@ -194,10 +197,12 @@ val statusSequence = statusSequenceDeferred.await()
 
 ```kotlin
 // Bingo — 두 player가 모두 입장하면 방이 시작되고, 두 client가 같은 push를 받는다.
-val client1Started = client1.waitFor(BingoGameStartedNotify::class.java)
-    .submit(BingoGameStartedNotify::class.java)
-val client2Started = client2.waitFor(BingoGameStartedNotify::class.java)
-    .submit(BingoGameStartedNotify::class.java)
+val client1Started = async(start = CoroutineStart.UNDISPATCHED) {
+    client1.kotlin().waitFor<BingoGameStartedNotify>().await()
+}
+val client2Started = async(start = CoroutineStart.UNDISPATCHED) {
+    client2.kotlin().waitFor<BingoGameStartedNotify>().await()
+}
 
 client1Started.await()
 client2Started.await()
@@ -225,8 +230,10 @@ suspend fun run(options: TicTacToeClientOptions) {
     val client2 = createStreamClient(room.playEndpoints[1], options)
 
     // 3. 먼저 접속한 쪽이 인증하고 빈 방에 들어간다.
-    client1.connect().submit().await()
-    client1.request(AuthenticateReq(options.xActorId)).submit(AuthenticateRes::class.java).await()
+    val kotlinClient1 = client1.kotlin()
+    val kotlinClient2 = client2.kotlin()
+    kotlinClient1.connect().await()
+    kotlinClient1.request(AuthenticateReq(options.xActorId)).awaitReply<AuthenticateRes>()
     // 대기 등록 → send → 수신(§3)
     val join1 = joinGame(client1, room.roomId)
     ZLinkStreamAssert.ensure(
@@ -234,20 +241,23 @@ suspend fun run(options: TicTacToeClientOptions) {
         "room should wait for the second player.")
 
     // 혼자 들어왔을 때 자기 입장 알림이 자기에게 오면 안 된다.
-    client1.expectNone(PlayerJoinedNotify::class.java).within(Duration.ofMillis(250)).submit().await()
+    client1.kotlin().expectNone<PlayerJoinedNotify>().within(Duration.ofMillis(250)).await()
 
     // 4. 두 번째 player가 입장하면 방이 시작된다.
-    client2.connect().submit().await()
-    client2.request(AuthenticateReq(options.oActorId)).submit(AuthenticateRes::class.java).await()
+    kotlinClient2.connect().await()
+    kotlinClient2.request(AuthenticateReq(options.oActorId)).awaitReply<AuthenticateRes>()
     val join2 = joinGame(client2, room.roomId)
     ZLinkStreamAssert.ensure(
         join2.state.status == TicTacToeGameStatuses.InProgress, "room should start with two players.")
 
     // 5. 수를 두면 응답과 상대에게 전달된 push가 같은 상태를 가리켜야 한다.
-    val move = client1.request(PlaceMarkReq(0)).submit(PlaceMarkRes::class.java).await()
-    val sawMove = client2.waitFor(GameStateNotify::class.java)
-        .where(GameStateNotify::class.java) { it.payload().state.lastMoveCell == 0 }
-        .submit(GameStateNotify::class.java).await()
+    val sawMoveDeferred = async(start = CoroutineStart.UNDISPATCHED) {
+        kotlinClient2.waitFor<GameStateNotify>()
+            .where { it.payload().state.lastMoveCell == 0 }
+            .await()
+    }
+    val move = kotlinClient1.request(PlaceMarkReq(0)).awaitReply<PlaceMarkRes>()
+    val sawMove = sawMoveDeferred.await()
     ZLinkStreamAssert.ensure(sawMove.payload().state.board == move.state.board, "board state mismatch.")
 }
 ```
@@ -269,8 +279,11 @@ suspend fun run(options: TicTacToeClientOptions) {
 ```kotlin
 // join 완료 알림은 client push로 온다 — 대기를 먼저 등록하고 one-way send한다.
 private suspend fun joinGame(connector: ZLinkStreamConnector, roomId: String): JoinGameNotify {
-    val completion = connector.waitFor(JoinGameNotify::class.java).submit(JoinGameNotify::class.java)
-    connector.send(JoinGameMsg(roomId)).submit().await()
+    val kotlinConnector = connector.kotlin()
+    val completion = async(start = CoroutineStart.UNDISPATCHED) {
+        kotlinConnector.waitFor<JoinGameNotify>().await()
+    }
+    kotlinConnector.send(JoinGameMsg(roomId)).await()
     return completion.await().payload()
 }
 ```

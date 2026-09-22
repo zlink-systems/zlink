@@ -1,7 +1,7 @@
 package systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.sessions
 
-import kotlinx.coroutines.future.await
 import systems.zlink.framework.kotlin.ZLinkSuspendingSession
+import systems.zlink.framework.kotlin.await
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.streams.ZLinkSessionActor
 import systems.zlink.framework.streams.ZLinkSessionContext

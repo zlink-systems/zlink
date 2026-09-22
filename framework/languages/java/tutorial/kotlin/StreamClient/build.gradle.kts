@@ -9,9 +9,10 @@ kotlin {
 
 dependencies {
     implementation(project(":kotlin:Shared"))
-    // This process is outside the mesh. It references the connector only, never
-    // the Framework.
+    // The connector is the transport surface; the Kotlin module supplies its
+    // coroutine wrapper.
     implementation(libs.zlink.stream.connector)
+    implementation(libs.zlink.framework.kotlin)
     // The connector's JSON codec (de)serializes the Kotlin data classes in Shared.
     implementation(libs.jackson.module.kotlin)
 }

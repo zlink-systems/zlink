@@ -1,8 +1,10 @@
 package systems.zlink.samples.kotlin.bingo.server.play.infrastructure.zlink.spots.entryspot
 
-import kotlinx.coroutines.future.await
 import org.slf4j.LoggerFactory
 import systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpot
+import systems.zlink.framework.kotlin.await
+import systems.zlink.framework.kotlin.decode
+import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.spots.ZLinkActorCreateResponse
 import systems.zlink.framework.spots.ZLinkEntrySpotContext
@@ -22,13 +24,14 @@ class BingoEntrySpot(
     override val context: ZLinkEntrySpotContext,
     private val spots: ZLinkSpotManager,
 ) : ZLinkSuspendingEntrySpot<PlayerActor>() {
+    private val kotlinSpots = spots.kotlin()
     private val logger = LoggerFactory.getLogger(BingoEntrySpot::class.java)
 
     override suspend fun onCreateActorSuspending(
         actor: PlayerActor,
         createRequest: ZLinkMessage,
     ): ZLinkActorCreateResponse {
-        val request = createRequest.decode(EnsurePlayerActorReq::class.java)
+        val request = createRequest.decode<EnsurePlayerActorReq>()
         actor.setDisplayName(request.displayName)
         return ZLinkActorCreateResponse.accept()
     }
@@ -69,11 +72,10 @@ class BingoEntrySpot(
                 purpose = settings.purpose,
                 observedRoomId = settings.observedRoomId ?: "",
             )
-        spots
+        kotlinSpots
             .getOrCreate(observerSpotId, SampleNames.RoomSpotType)
             .inMesh(SampleNames.Mesh)
             .request(BingoRoomCreateReq(settingsPayload))
-            .submit()
             .await()
         actor
             .context()

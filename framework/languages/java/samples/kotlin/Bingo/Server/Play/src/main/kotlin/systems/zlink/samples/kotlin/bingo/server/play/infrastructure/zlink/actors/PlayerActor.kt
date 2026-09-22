@@ -7,6 +7,9 @@ import systems.zlink.framework.actors.ZLinkActor
 import systems.zlink.framework.actors.ZLinkActorContext
 import systems.zlink.framework.actors.ZLinkActorJoinCompletion
 import systems.zlink.framework.actors.ZLinkActorJoinOperationId
+import systems.zlink.framework.kotlin.await
+import systems.zlink.framework.kotlin.decode
+import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.samples.kotlin.bingo.shared.contracts.BingoRoomJoinRes
 
 class PlayerActor(private val actorId: String, private val context: ZLinkActorContext) :
@@ -61,7 +64,7 @@ class PlayerActor(private val actorId: String, private val context: ZLinkActorCo
             return CompletableFuture.completedFuture(null)
         }
 
-        val joined = completion.reply().decode(BingoRoomJoinRes::class.java)
+        val joined = completion.reply().decode<BingoRoomJoinRes>()
         if (matchedRoomId.isNullOrBlank()) {
             matchedRoomId = joined.state.roomId
         }
@@ -78,7 +81,11 @@ class PlayerActor(private val actorId: String, private val context: ZLinkActorCo
         disconnected = true
     }
 
-    fun push(message: Any): CompletionStage<Void> {
-        return context.boundSession().send(message).submit()
+    suspend fun push(message: Any) {
+        try {
+            context.boundSession().kotlin().send(message).await()
+        } catch (_: RuntimeException) {
+            // A stale player session cannot fail the room or block later recipients.
+        }
     }
 }

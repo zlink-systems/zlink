@@ -1,8 +1,8 @@
 package systems.zlink.samples.kotlin.bingo.server.session.sessions
 
-import kotlinx.coroutines.future.await
 import org.slf4j.LoggerFactory
 import systems.zlink.framework.kotlin.ZLinkSuspendingSession
+import systems.zlink.framework.kotlin.await
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.streams.ZLinkSessionActor
 import systems.zlink.framework.streams.ZLinkSessionContext
