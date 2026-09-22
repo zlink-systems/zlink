@@ -256,22 +256,46 @@ import sys
 with open(sys.argv[1], encoding="utf-8") as graph_file:
     nodes = json.load(graph_file)["graph"]["nodes"].values()
 packages = sorted({
-    (node["ref"], node["package_id"], node["prev"])
+    (node["ref"], node["package_id"])
     for node in nodes
-    if node.get("ref") and node.get("package_id") and node.get("prev")
+    if node.get("ref") and node.get("package_id")
     and not node["ref"].startswith("zlink-bootstrap/")
 })
 if not packages:
     raise SystemExit("Conan graph did not resolve package revisions")
 with open(sys.argv[2], "w", encoding="utf-8", newline="\n") as output_file:
     json.dump({"version": 1, "packages": [
-        {"ref": ref, "package_id": package_id, "prev": prev}
-        for ref, package_id, prev in packages
+        {"ref": ref, "package_id": package_id}
+        for ref, package_id in packages
     ]}, output_file, indent=2)
     output_file.write("\n")
 PY
 }
 
+if (( ! update_lock )); then
+  write_package_lockfile "$candidate_lockfile" "$candidate_package_lockfile"
+  if [[ ! -f "$package_lockfile" ]] || ! "$python_command" - "$candidate_package_lockfile" "$package_lockfile" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as candidate_file:
+        candidate = json.load(candidate_file)
+    with open(sys.argv[2], encoding="utf-8") as committed_file:
+        committed = json.load(committed_file)
+except FileNotFoundError:
+    raise SystemExit(1)
+raise SystemExit(0 if candidate == committed else 1)
+PY
+  then
+    echo "Conan packages file to commit: $package_lockfile" >&2
+    echo "----- BEGIN $package_lockfile -----" >&2
+    cat "$candidate_package_lockfile" >&2
+    echo "----- END $package_lockfile -----" >&2
+    echo "run '$0 --update-lock --platform $platform' on $platform and commit both platform pin files" >&2
+    exit 1
+  fi
+fi
 conan install "$conan_dir" \
   "--profile:host=$conan_profile" \
   "--profile:build=$conan_profile" \
@@ -285,28 +309,6 @@ if ((update_lock)); then
   echo "updated $lockfile and $package_lockfile"
   exit 0
 fi
-if [[ ! -f "$package_lockfile" ]] || ! "$python_command" - "$candidate_package_lockfile" "$package_lockfile" <<'PY'
-import json
-import sys
-
-try:
-    with open(sys.argv[1], encoding="utf-8") as candidate_file:
-        candidate = json.load(candidate_file)
-    with open(sys.argv[2], encoding="utf-8") as committed_file:
-        committed = json.load(committed_file)
-except FileNotFoundError:
-    raise SystemExit(1)
-raise SystemExit(0 if candidate == committed else 1)
-PY
-then
-  echo "Conan packages file to commit: $package_lockfile" >&2
-  echo "----- BEGIN $package_lockfile -----" >&2
-  cat "$candidate_package_lockfile" >&2
-  echo "----- END $package_lockfile -----" >&2
-  echo "run '$0 --update-lock --platform $platform' on $platform and commit both platform pin files" >&2
-  exit 1
-fi
-
 # The shared Framework and staged Core configs retain their public compile/link
 # contracts for nlohmann_json and OpenSSL. Stage those development inputs so
 # consumers need only this archive on CMAKE_PREFIX_PATH.
@@ -446,7 +448,7 @@ case "$platform" in
       while IFS= read -r dependency; do
         dependency_lower="$(tr '[:upper:]' '[:lower:]' <<<"$dependency")"
         case "$dependency_lower" in
-          api-ms-win-*|ext-ms-win-*|kernel32.dll|user32.dll|advapi32.dll|ws2_32.dll|bcrypt.dll|crypt32.dll|secur32.dll|shell32.dll|ole32.dll|oleaut32.dll|gdi32.dll|ntdll.dll|rpcrt4.dll|shlwapi.dll|normaliz.dll|comdlg32.dll|winmm.dll|version.dll|msvcp*.dll|vcruntime*.dll|ucrtbase.dll) ;;
+          api-ms-win-*|ext-ms-win-*|kernel32.dll|user32.dll|advapi32.dll|ws2_32.dll|mswsock.dll|bcrypt.dll|crypt32.dll|secur32.dll|shell32.dll|ole32.dll|oleaut32.dll|gdi32.dll|ntdll.dll|rpcrt4.dll|shlwapi.dll|normaliz.dll|comdlg32.dll|winmm.dll|version.dll|iphlpapi.dll|psapi.dll|userenv.dll|wintrust.dll|ncrypt.dll|dnsapi.dll|combase.dll|cfgmgr32.dll|setupapi.dll|msvcp*.dll|vcruntime*.dll|ucrtbase.dll) ;;
           *)
             resolved=0
             while IFS= read -r packaged_dll; do

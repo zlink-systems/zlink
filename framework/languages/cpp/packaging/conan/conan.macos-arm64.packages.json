@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "packages": [
+    { "ref": "abseil/20250127.0#e0dcc4b8a367edb49b062cb07ed8e9e6", "package_id": "461f120128f0af7aba967bf3e9e4aaa5892a82b3" },
+    { "ref": "autoconf/2.71#51077f068e61700d65bb05541ea1e4b0", "package_id": "9e5323c65b94ae38c3c733fe12637776db0119a5" },
+    { "ref": "automake/1.16.5#b91b7c384c3deaa9d535be02da14d04f", "package_id": "9e5323c65b94ae38c3c733fe12637776db0119a5" },
+    { "ref": "boost/1.85.0#3ef9643dcf9d8bee3f925bceb080395d", "package_id": "da39a3ee5e6b4b0d3255bfef95601890afd80709" },
+    { "ref": "cmake/4.4.3#8b46ce9dbf1937af1c05f19579c1f105", "package_id": "9e5323c65b94ae38c3c733fe12637776db0119a5" },
+    { "ref": "gnu-config/cci.20210814#466e9d4d7779e1c142443f7ea44b4284", "package_id": "da39a3ee5e6b4b0d3255bfef95601890afd80709" },
+    { "ref": "hiredis/1.3.0#e39b0954c9bf2bac589b762bba5c5dce", "package_id": "a348043a983e9bb2910e396d3ea0d4695fb2ca11" },
+    { "ref": "libcurl/8.22.0#3599f8564660d38f96af52da40795734", "package_id": "c2af002283d791477748d4bb9f263f03377eca00" },
+    { "ref": "libuv/1.51.0#ea781dcacf58c65462ab0d3d75e9b002", "package_id": "ca639360bb681229d056d23829e74b0c62d596de" },
+    { "ref": "lz4/1.9.4#a2f02ad3908618757c68d3618256a196", "package_id": "ca639360bb681229d056d23829e74b0c62d596de" },
+    { "ref": "m4/1.4.19#1727f439cf74e83826ec96d0b4904eee", "package_id": "617cae191537b47386c088e07b1822d8606b7e67" },
+    { "ref": "meson/1.10.2#9d2d10681fe7fe61c788c58626c89b25", "package_id": "da39a3ee5e6b4b0d3255bfef95601890afd80709" },
+    { "ref": "ninja/1.13.2#c8c5dc2a52ed6e4e42a66d75b4717ceb", "package_id": "617cae191537b47386c088e07b1822d8606b7e67" },
+    { "ref": "nlohmann_json/3.11.3#45828be26eb619a2e04ca517bb7b828d", "package_id": "da39a3ee5e6b4b0d3255bfef95601890afd80709" },
+    { "ref": "openssl/3.6.4#bc460bf37686ccae86a15bfdce71be11", "package_id": "fbf6fadfdd9cc8f14c1f3e38b61c6b4e811106b1" },
+    { "ref": "opentelemetry-cpp/1.26.0#a671ccb304bb7ba023e64be6cb19e9e4", "package_id": "5f5476362db5814b9de6b29fc268012974c6d5e6" },
+    { "ref": "opentelemetry-proto/1.7.0#ed6d5bd761bef0afb0ba09676420b9ea", "package_id": "da39a3ee5e6b4b0d3255bfef95601890afd80709" },
+    { "ref": "pkgconf/2.5.1#93c2051284cba1279494a43a4fcfeae2", "package_id": "df7e47c8f0b96c79c977dd45ec51a050d8380273" },
+    { "ref": "protobuf/5.27.0#99c5d5f87d1eea580a2234238020821b", "package_id": "1440ae5ba0035f0c75461dc1bd4293a9938b6248" },
+    { "ref": "redis-plus-plus/1.3.15#465ec9e6b105587ae51e826d08dffa62", "package_id": "9e18b42fbb1bf8a876249ec77430f1bcd6b62ffb" },
+    { "ref": "zlib/1.3.2#1cb806da49011867778ffb6ac7190fcb", "package_id": "ca639360bb681229d056d23829e74b0c62d596de" }
+  ]
+}
