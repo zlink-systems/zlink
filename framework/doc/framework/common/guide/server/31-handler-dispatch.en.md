@@ -372,15 +372,15 @@ The interface names and registration methods per language are as follows.
 
     | What it receives | Interface to implement | Registration |
     | --- | --- | --- |
-    | A one-way packet addressed to the Spot | `ZLinkSpotPacketHandler<TSpot, TMessage>` | `addHandler(THandler::class.java)` |
-    | A request addressed to the Spot | `ZLinkSpotRequestHandler<TSpot, TRequest, TReply>` | `addHandler(THandler::class.java)` |
-    | A Logical Multicast subscription event | `ZLinkSpotSubscriptionHandler<TSpot, TEvent>` | `@ZLinkSpotSubscription(topic)` on the handler + `addHandler(THandler::class.java)` |
-    | A timer tick | `ZLinkSpotTimerHandler<TSpot>` | `context.addTimer(name, period, THandler::class.java, options)` ([Timers and workers](36-timer-worker.en.md)) |
-    | A one-way packet addressed to a member Actor | `ZLinkSpotActorSendHandler<TSpot, TActor, TMessage>` | `@ZLinkSpotActorSend` on the handler + `addHandler(THandler::class.java)` |
-    | A request addressed to a member Actor | `ZLinkSpotActorRequestHandler<TSpot, TActor, TRequest, TReply>` | `@ZLinkSpotActorRequest` on the handler + `addHandler(THandler::class.java)` |
+    | A one-way packet addressed to the Spot | `ZLinkSpotPacketHandler<TSpot, TMessage>` | `addHandler<THandler>()` |
+    | A request addressed to the Spot | `ZLinkSpotRequestHandler<TSpot, TRequest, TReply>` | `addHandler<THandler>()` |
+    | A Logical Multicast subscription event | `ZLinkSpotSubscriptionHandler<TSpot, TEvent>` | `@ZLinkSpotSubscription(topic)` on the handler + `addHandler<THandler>()` |
+    | A timer tick | `ZLinkSpotTimerHandler<TSpot>` | `context.addTimer<THandler>(name, period, options)` ([Timers and workers](36-timer-worker.en.md)) |
+    | A one-way packet addressed to a member Actor | `ZLinkSpotActorSendHandler<TSpot, TActor, TMessage>` | `@ZLinkSpotActorSend` on the handler + `addHandler<THandler>()` |
+    | A request addressed to a member Actor | `ZLinkSpotActorRequestHandler<TSpot, TActor, TRequest, TReply>` | `@ZLinkSpotActorRequest` on the handler + `addHandler<THandler>()` |
 
-    **Uses the Java surface as-is.** There's a single registration method, `addHandler`, and
-    what kind of handler it is comes from the interface it implements and its annotation.
+    **Register with reified `addHandler<THandler>()`.** What kind of handler it is comes from the
+    interface it implements and its annotation.
 
 === "Node/TypeScript"
 
@@ -798,9 +798,9 @@ callbacks.
 
         override fun configure() {
             // Registers the Spot send handler.
-            spotContext.handlers().addHandler(ChatHandler::class.java)
+            spotContext.handlers().addHandler<ChatHandler>()
             // The subscription topic is set by @ZLinkSpotSubscription on ScoreHandler.
-            spotContext.handlers().addHandler(ScoreHandler::class.java)
+            spotContext.handlers().addHandler<ScoreHandler>()
         }
 
         override suspend fun onCreate(request: ZLinkMessage): ZLinkSpotCreateResponse {

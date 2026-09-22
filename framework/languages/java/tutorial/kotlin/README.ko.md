@@ -482,7 +482,7 @@ Kotlin 쪽에서 알아 둘 것은 다음과 같다.
 
 - **Instance Spot의 Kotlin 기반은 `ZLinkSuspendingInstanceSpot`이다.** 방의
   `ZLinkSuspendingSpot`에 대응하며, actor 타입 인자도 create·join callback도 없다. handler는
-  방과 같은 `ZLinkSuspendingSpotRequestHandler`를 쓰고, 등록도 같은 `addHandler<H>()`다.
+  방과 같은 `ZLinkSuspendingSpotRequestHandler`를 쓰고, 등록은 `addPacket<H>()`로 한다.
 - **부르는 쪽은 `requestToSpot(...)`에 `.instanceSpot("match-queue").inMesh("game")`을 더한다.**
   아직 없는 큐를 어느 mesh에 어떤 stable type으로 만들지 이 두 호출이 정한다. 방을 부를 때와
   같이 Java 표면을 `await()`로 기다린다.

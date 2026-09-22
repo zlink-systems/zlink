@@ -121,17 +121,17 @@ timer handler는 `ZLinkSuspendingSpotTimerHandler<TSpot>`(`suspend fun handle(sp
 
 ---
 
-## Handler 등록 (`addHandler<T>()`, Spot 코드 안, `configure()`)
+## Handler 등록 (`addPacket<T>()`, Spot 코드 안, `configure()`)
 
 Suspending handler 타입을 등록하는 reified 확장 함수다.
 
 ```kotlin
 override fun configure() {
-    context.handlers().addHandler<StartGameHandler>()
+    context.handlers().addPacket<StartGameHandler>()
 }
 ```
 
-**옵션.** `ZLinkSpotHandlerRegistry.addHandler<THandler>()`는 내부에서 Java의 raw `Class<?>` 기반
+**옵션.** `ZLinkInstanceSpotHandlerRegistry.addPacket<THandler>()`는 내부에서 Java의 raw `Class<?>` 기반
 등록으로 위임한다. Handler가 구현하는 interface(`ZLinkSuspendingSpotPacketHandler`,
 `ZLinkSuspendingSpotRequestHandler`, `ZLinkSuspendingSpotSubscriptionHandler`,
 `ZLinkSuspendingSpotActorSendHandler`, `ZLinkSuspendingSpotActorRequestHandler`)로 실제 역할을
