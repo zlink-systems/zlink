@@ -142,6 +142,11 @@ export interface ZLinkActorSessionAuthorityFence {
   readonly actorType?: string;
 }
 
+export enum ZLinkActorSessionBindingTermination {
+  BindingEnd,
+  PhysicalDisconnect
+}
+
 export class ZLinkActorSessionBindingRegistry<
   TContext extends ZLinkActorSessionBindingContext<TActor>,
   TActor extends ZLinkActorSessionBindingActor
@@ -394,14 +399,20 @@ export class ZLinkActorSessionBindingRegistry<
     return Object.freeze({ context: route.context });
   }
 
-  async unbind(actorId: string, context: TContext, bindingToken: string): Promise<void> {
-    await this.lane.run(() => this.unbindCore(actorId, context, bindingToken));
+  async unbind(
+    actorId: string,
+    context: TContext,
+    bindingToken: string,
+    termination = ZLinkActorSessionBindingTermination.BindingEnd
+  ): Promise<void> {
+    await this.lane.run(() => this.unbindCore(actorId, context, bindingToken, termination));
   }
 
   private async unbindCore(
     actorId: string,
     context: TContext,
-    bindingToken: string
+    bindingToken: string,
+    termination: ZLinkActorSessionBindingTermination
   ): Promise<void> {
     const route = this.routes.get(actorId);
     if (route === undefined || route.context !== context || route.bindingToken !== bindingToken) {
@@ -422,7 +433,10 @@ export class ZLinkActorSessionBindingRegistry<
       route,
       new Error(`Actor '${actorId}' session binding was removed.`)
     );
-    if (route.actorSlot !== undefined) {
+    if (
+      termination === ZLinkActorSessionBindingTermination.BindingEnd &&
+      route.actorSlot !== undefined
+    ) {
       await context.actorSlotControls?.enqueueUnbound(route.actorSlot);
     }
   }
@@ -436,7 +450,12 @@ export class ZLinkActorSessionBindingRegistry<
     if (route === undefined) {
       return;
     }
-    await this.unbindCore(actorId, route.context, route.bindingToken);
+    await this.unbindCore(
+      actorId,
+      route.context,
+      route.bindingToken,
+      ZLinkActorSessionBindingTermination.BindingEnd
+    );
   }
 
   async cleanup(context: TContext): Promise<void> {
@@ -446,7 +465,12 @@ export class ZLinkActorSessionBindingRegistry<
   private async cleanupCore(context: TContext): Promise<void> {
     for (const route of [...this.routes.values()]) {
       if (route.context === context) {
-        await this.unbindCore(route.actor.actorId, context, route.bindingToken);
+        await this.unbindCore(
+          route.actor.actorId,
+          context,
+          route.bindingToken,
+          ZLinkActorSessionBindingTermination.PhysicalDisconnect
+        );
       }
     }
   }

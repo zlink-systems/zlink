@@ -7649,6 +7649,36 @@ test('physical disconnect releases the binding lane before its lifecycle callbac
   assert.equal(await replacement.actors.find(actorRef.actorId), rebound);
 });
 
+test('physical disconnect notifies the Actor after its STREAM transport is closed', async () => {
+  const socket = new FakeStreamSocket();
+  let transportClosed = false;
+  socket.submit = async function submit(...args) {
+    if (transportClosed) throw new Error('STREAM transport is closed');
+    this.sends.push(args);
+  };
+  const callbacks = [];
+  const runtime = new framework.ZLinkStreamBindingRuntime({
+    async notifyDisconnected(actor) {
+      callbacks.push(actor.actorId);
+    }
+  });
+  const stream = new framework.ZLinkManagedStream(socket, 'closed-session-rid');
+  const context = runtime.createSessionContext(stream);
+  await context.actors.bind({
+    nodeRid: 'node-a',
+    actorId: 'actor-closed-disconnect',
+    generation: 1n
+  });
+
+  transportClosed = true;
+  stream.markTransportClosed();
+  await runtime.cleanup(context);
+
+  assert.deepEqual(callbacks, ['actor-closed-disconnect']);
+  assert.equal(socket.sends.length, 1);
+  assert.equal(await runtime.find('actor-closed-disconnect'), undefined);
+});
+
 test('stream binding runtime can remove actor binding during actor destroy cleanup', async () => {
   const runtime = new framework.ZLinkStreamBindingRuntime();
   const context = runtime.createSessionContext(fakeStream('session-destroy', 'rid-destroy'));
