@@ -326,6 +326,18 @@ public sealed partial class StreamConnectorTests
 
         public int PendingDispatchCount => 0;
 
+        public IReadOnlyList<IZlinkStreamActor> Actors => [];
+
+        public IZlinkStreamActor? Actor(string actorId) => null;
+
+        public IDisposable OnActorBound(
+            Func<IZlinkStreamActor, CancellationToken, ValueTask> handler
+        ) => new NoopRegistration();
+
+        public IDisposable OnActorUnbound(
+            Func<IZlinkStreamActor, CancellationToken, ValueTask> handler
+        ) => new NoopRegistration();
+
         public int ReceivedCount(string name)
         {
             return _received.TryGetValue(name, out var messages) ? messages.Count : 0;

@@ -2911,7 +2911,8 @@ public sealed partial class EntrySpotActorDispatchTests
             _ = await runtime.SealCanonicalSessionActorRouteAsync(seal, CancellationToken.None);
 
             var sendBody = Encoding.UTF8.GetBytes("outbound-retained-body-async");
-            using var payload = Message.From(sendBody);
+            var sendFrame = StreamActorFrame(sendBody);
+            using var payload = Message.From(sendFrame);
 
             var submitResult = await runtime.SendActorBoundSessionIfCurrentAsync(
                 actorId,
@@ -2934,7 +2935,7 @@ public sealed partial class EntrySpotActorDispatchTests
             const int retainedOutboundCapacity = 4_096;
             for (var retained = 1; retained < retainedOutboundCapacity; retained++)
             {
-                using var retainedPayload = Message.From(sendBody);
+                using var retainedPayload = Message.From(sendFrame);
                 var retainedResult = await runtime.SendActorBoundSessionIfCurrentAsync(
                     actorId,
                     bindingToken,
@@ -2944,7 +2945,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 Assert.Equal(ZLinkOneWaySubmitStatus.Submitted, retainedResult.Status);
             }
 
-            using (var overflowPayload = Message.From(sendBody))
+            using (var overflowPayload = Message.From(sendFrame))
             {
                 var overflowResult = await runtime.SendActorBoundSessionIfCurrentAsync(
                     actorId,
@@ -2983,7 +2984,7 @@ public sealed partial class EntrySpotActorDispatchTests
             // The adjacent Immediate path has the same contract: a local
             // stream write refusal is Backpressured, not TargetNotFound.
             stream.AcceptWrites = false;
-            using var refusedPayload = Message.From(sendBody);
+            using var refusedPayload = Message.From(sendFrame);
             var refusedResult = await runtime.SendActorBoundSessionIfCurrentAsync(
                 actorId,
                 bindingToken,
@@ -3017,7 +3018,9 @@ public sealed partial class EntrySpotActorDispatchTests
         {
             if (!AcceptWrites)
                 return false;
-            Writes.Add(payload.Decode<byte[]>());
+            var frame = payload.Decode<byte[]>();
+            Assert.True(ZLinkStreamFrameCodec.TryDecode(frame, out _, out var body));
+            Writes.Add(body.ToArray());
             return true;
         }
 
@@ -3063,7 +3066,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 bindingToken
             );
             var responder = RoutingId.From("reply-once-responder");
-            var frame = new byte[] { 9, 0, 7 };
+            var frame = StreamActorFrame([9, 0, 7]);
 
             await runtime.DeliverRemoteActorReplyAsync(
                 actor.ActorId,
@@ -3096,6 +3099,22 @@ public sealed partial class EntrySpotActorDispatchTests
         {
             await runtime.StopAsync(CancellationToken.None);
         }
+    }
+
+    private static byte[] StreamActorFrame(byte[] payload)
+    {
+        var header = new ZlinkStreamHeader(
+            ZlinkStreamMessageKind.Send,
+            ZlinkStreamCodec.Raw,
+            ZlinkStreamHeaderFlags.None,
+            null,
+            "actor.test",
+            ZlinkStreamMetadata.Empty
+        );
+        return ZLinkStreamFrameCodec.Encode(
+            ZLinkStreamProtocolDefaults.EncodeHeader(header).Span,
+            payload
+        );
     }
 
     [Fact]

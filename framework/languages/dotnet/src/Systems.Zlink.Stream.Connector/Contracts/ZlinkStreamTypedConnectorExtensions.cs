@@ -50,6 +50,54 @@ public static class ZlinkStreamJsonExtensions
 public static class ZlinkStreamTypedConnectorExtensions
 {
     public static ZlinkStreamTypedSendBuilder Send<TPayload>(
+        this IZlinkStreamActor actor,
+        TPayload payload
+    )
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        var codec = ((IZlinkStreamActorRuntime)actor).Options.PayloadCodec;
+        return new ZlinkStreamTypedSendBuilder(actor.Send(EncodePayload(codec, payload)));
+    }
+
+    public static ZlinkStreamTypedRequestBuilder Request<TPayload>(
+        this IZlinkStreamActor actor,
+        TPayload payload
+    )
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        var codec = ((IZlinkStreamActorRuntime)actor).Options.PayloadCodec;
+        return new ZlinkStreamTypedRequestBuilder(
+            actor.Request(EncodePayload(codec, payload)),
+            codec
+        );
+    }
+
+    public static IDisposable On<TPayload>(
+        this IZlinkStreamActor actor,
+        Func<ZlinkStreamMessage<TPayload>, CancellationToken, ValueTask> handler
+    )
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(handler);
+        var options = ((IZlinkStreamActorRuntime)actor).Options;
+        return actor.On(
+            options.NameResolver.Resolve(typeof(TPayload)),
+            (message, cancellationToken) =>
+                handler(
+                    new ZlinkStreamMessage<TPayload>(
+                        message.Name,
+                        message.Metadata,
+                        DecodePayload<TPayload>(options.PayloadCodec, message.Payload),
+                        message.FlowId,
+                        message.FlowOrigin,
+                        message.ActorId
+                    ),
+                    cancellationToken
+                )
+        );
+    }
+
+    public static ZlinkStreamTypedSendBuilder Send<TPayload>(
         this IZlinkStreamConnector connector,
         TPayload payload
     )
@@ -119,7 +167,8 @@ public static class ZlinkStreamTypedConnectorExtensions
                         message.Metadata,
                         payload,
                         message.FlowId,
-                        message.FlowOrigin
+                        message.FlowOrigin,
+                        message.ActorId
                     ),
                     cancellationToken
                 );
@@ -281,7 +330,8 @@ public sealed class ZlinkStreamTypedSequenceBuilder<TPayload>
             message.Metadata,
             ZlinkStreamTypedConnectorExtensions.DecodePayload<TPayload>(_codec, message.Payload),
             message.FlowId,
-            message.FlowOrigin
+            message.FlowOrigin,
+            message.ActorId
         );
     }
 }
@@ -333,7 +383,8 @@ public sealed class ZlinkStreamTypedWaitBuilder<TPayload>
             message.Metadata,
             ZlinkStreamTypedConnectorExtensions.DecodePayload<TPayload>(_codec, message.Payload),
             message.FlowId,
-            message.FlowOrigin
+            message.FlowOrigin,
+            message.ActorId
         );
     }
 }

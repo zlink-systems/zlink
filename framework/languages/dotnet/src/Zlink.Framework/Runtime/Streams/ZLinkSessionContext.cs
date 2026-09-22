@@ -131,10 +131,12 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
                 : new ZLinkMessageMetadata(
                     new Dictionary<string, string>(header.Metadata.Values, StringComparer.Ordinal)
                 );
+        var actor = header.ActorSlot is { } slot ? ActorCoordinator.FindActor(slot) : null;
         _currentDispatch = new ZLinkSessionDispatchContext(
             header.Name,
             metadata,
             header.RequestSeq.HasValue,
+            actor,
             header
         );
         return _currentDispatch;
@@ -149,6 +151,12 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
     {
         return Transport.Write(payload);
     }
+
+    internal void SendActorBound(ZLinkSessionActor actor) =>
+        ZLinkStreamControlFrames.SendActorBound(_stream, actor.Slot, actor.ActorId);
+
+    internal void SendActorUnbound(ushort slot) =>
+        ZLinkStreamControlFrames.SendActorUnbound(_stream, slot);
 
     internal async ValueTask<ZLinkOneWaySubmitResult> SubmitAsync(
         Message payload,

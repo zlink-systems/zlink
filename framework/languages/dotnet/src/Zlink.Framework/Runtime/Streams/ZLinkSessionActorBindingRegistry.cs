@@ -5,6 +5,19 @@ namespace Zlink.Framework.Runtime.Streams;
 internal sealed class ZLinkSessionActorBindingRegistry(ZLinkFrameworkRuntime runtime)
 {
     private ZLinkSessionContext? _context;
+    private int _lastActorSlot;
+
+    internal ushort ReserveSlot()
+    {
+        var slot = Interlocked.Increment(ref _lastActorSlot);
+        if (slot <= ushort.MaxValue)
+            return checked((ushort)slot);
+        throw new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.InvalidOperation,
+            "STREAM session Actor slot capacity is exhausted.",
+            ZLinkRetryAdvice.DoNotRetry
+        );
+    }
 
     public IReadOnlyCollection<IZLinkSessionActor> BoundActors
     {
@@ -48,7 +61,8 @@ internal sealed class ZLinkSessionActorBindingRegistry(ZLinkFrameworkRuntime run
             context,
             actorId,
             binding.SessionRid,
-            binding.BindingToken
+            binding.BindingToken,
+            slot: 0
         );
 
         _context ??= context;
@@ -66,7 +80,14 @@ internal sealed class ZLinkSessionActorBindingRegistry(ZLinkFrameworkRuntime run
             sessionOwnerNodeGeneration,
             sessionOwnerNodeRid,
             sessionOwnerId,
-            sessionOwnerLeaseGeneration
+            sessionOwnerLeaseGeneration,
+            _ => actorRef.AssignSlot(ReserveSlot()),
+            replaced =>
+            {
+                foreach (var previous in replaced)
+                    previous.Context.SendActorUnbound(previous.ActorRef.Slot);
+                context.SendActorBound(actorRef);
+            }
         );
 
         return ValueTask.FromResult<IZLinkSessionActor>(actorRef);

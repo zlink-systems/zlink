@@ -4551,7 +4551,9 @@ internal sealed partial class ZLinkFrameworkRuntime
         ulong sessionOwnerNodeGeneration,
         RoutingId sessionOwnerNodeRid = default,
         string sessionOwnerId = "",
-        ulong sessionOwnerLeaseGeneration = 0
+        ulong sessionOwnerLeaseGeneration = 0,
+        Action<IReadOnlyList<ZLinkSessionBindingEntry>>? preparePublish = null,
+        Action<IReadOnlyList<ZLinkSessionBindingEntry>>? afterPublish = null
     )
     {
         return _actorBoundSessionCoordinator.BindSessionActor(
@@ -4564,7 +4566,9 @@ internal sealed partial class ZLinkFrameworkRuntime
             sessionOwnerNodeGeneration,
             sessionOwnerNodeRid,
             sessionOwnerId,
-            sessionOwnerLeaseGeneration
+            sessionOwnerLeaseGeneration,
+            preparePublish,
+            afterPublish
         );
     }
 

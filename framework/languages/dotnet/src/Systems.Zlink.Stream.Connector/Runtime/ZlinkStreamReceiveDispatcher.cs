@@ -10,6 +10,7 @@ internal sealed class ZlinkStreamReceiveDispatcher(
     ZlinkStreamReceivedMessages receivedMessages,
     ZlinkStreamFrameSender frameSender,
     ZlinkStreamConnectorCallbacks callbacks,
+    ZlinkStreamActors actors,
     Func<ZlinkStreamCloseReason, string?, CancellationToken, ValueTask> closeFromServer
 )
 {
@@ -38,6 +39,8 @@ internal sealed class ZlinkStreamReceiveDispatcher(
             return;
         }
 
+        var actor = header.ActorSlot is { } actorSlot ? actors.Resolve(actorSlot) : null;
+
         if (pending.TryComplete(header, frame, ParseErrorPayload))
             return;
 
@@ -52,7 +55,13 @@ internal sealed class ZlinkStreamReceiveDispatcher(
             return;
         }
 
-        await DispatchTypedHandlersAsync(header, frame.Payload, diagnosticsLevel, cancellationToken)
+        await DispatchTypedHandlersAsync(
+                header,
+                frame.Payload,
+                actor,
+                diagnosticsLevel,
+                cancellationToken
+            )
             .ConfigureAwait(false);
     }
 
@@ -66,6 +75,18 @@ internal sealed class ZlinkStreamReceiveDispatcher(
         {
             var closing = ZlinkStreamSessionClosingCodec.Decode(payload.Span);
             await closeFromServer(closing.Reason, closing.Diagnostic, cancellationToken)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (
+            header.Name
+            is ZlinkStreamActors.BoundControlName
+                or ZlinkStreamActors.UnboundControlName
+        )
+        {
+            await actors
+                .DispatchControlAsync(header.Name, payload, cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
@@ -96,13 +117,13 @@ internal sealed class ZlinkStreamReceiveDispatcher(
     private async ValueTask DispatchTypedHandlersAsync(
         ZlinkStreamHeader header,
         ReadOnlyMemory<byte> wirePayload,
+        ZlinkStreamActor? actor,
         ZlinkStreamDiagnosticsLevel diagnosticsLevel,
         CancellationToken cancellationToken
     )
     {
         var payload = frameSender.DecompressIfNeeded(header, wirePayload);
         var payloadObject = new ZlinkStreamEncodedPayload(header.Codec, payload);
-
         // The flow pair travels with the message so application code can align its own
         // logs with the server trace (stream-connector spec §5.5). At Off the header
         // carries no captured flow, so both values stay null.
@@ -111,7 +132,8 @@ internal sealed class ZlinkStreamReceiveDispatcher(
             header.Metadata,
             payloadObject,
             header.FlowId,
-            header.FlowOrigin
+            header.FlowOrigin,
+            actor?.ActorId
         );
 
         // Counted on arrival, before any surface takes it: the value must not depend on
@@ -133,6 +155,36 @@ internal sealed class ZlinkStreamReceiveDispatcher(
                         await handler.Invoke(message, dispatchedToken).ConfigureAwait(false);
                     },
                     cancellationToken
+                )
+                .ConfigureAwait(false);
+
+        if (actor is not null)
+            await callbacks
+                .DispatchUserCallbackAsync(
+                    async dispatchedToken =>
+                    {
+                        foreach (var handler in actor.Handlers(header.Name))
+                            await callbacks
+                                .InvokeUserCallbackInlineAsync(
+                                    async handlerToken =>
+                                    {
+                                        using var flow =
+                                            diagnosticsLevel == ZlinkStreamDiagnosticsLevel.Off
+                                                ? null
+                                                : ZlinkStreamFlowContext.Enter(
+                                                    header.FlowId,
+                                                    header.FlowOrigin
+                                                );
+                                        await handler
+                                            .Invoke(message, handlerToken)
+                                            .ConfigureAwait(false);
+                                    },
+                                    dispatchedToken
+                                )
+                                .ConfigureAwait(false);
+                    },
+                    cancellationToken,
+                    reportErrors: false
                 )
                 .ConfigureAwait(false);
     }
