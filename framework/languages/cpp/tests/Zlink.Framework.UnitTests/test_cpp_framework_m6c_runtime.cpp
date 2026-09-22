@@ -11,6 +11,7 @@
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/spots/spot_runtime.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
+#include "runtime/timers/timer_runtime.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -525,6 +526,34 @@ bool wait_until_bounded (Predicate &&condition, std::chrono::milliseconds timeou
     return condition ();
 }
 
+bool run_serial_turn (const std::shared_ptr<zlink::framework::detail::spot_context_state_t> &state,
+                      std::string name,
+                      std::function<void ()> work)
+{
+    struct turn_state_t
+    {
+        std::promise<void> entered;
+        std::exception_ptr error;
+    };
+    auto turn_state = std::make_shared<turn_state_t> ();
+    auto terminal = turn_state->entered.get_future ();
+    const auto posted =
+      state->serial_queue->try_post (std::move (name), [turn_state, work = std::move (work)] {
+          try {
+              work ();
+          }
+          catch (...) {
+              turn_state->error = std::current_exception ();
+          }
+          turn_state->entered.set_value ();
+      });
+    if (!posted || terminal.wait_for (std::chrono::seconds (1)) != std::future_status::ready)
+        return false;
+    if (turn_state->error)
+        std::rethrow_exception (turn_state->error);
+    return true;
+}
+
 void test_relocation_ready_completion_runs_once_on_spot_turn (test_context_t &test)
 {
     namespace detail = zlink::framework::detail;
@@ -603,8 +632,8 @@ void test_relocation_ready_completion_runs_once_on_spot_turn (test_context_t &te
       "continued exactly once on the next Spot serial turn");
 
     state->node->lane.run ([state] { state->relocation_boundary_active = true; }).get ();
-    const auto prepared_deferred = state->run_serial_sync (
-      "defer-prepared-relocation", [&] { context.relocation_ready ().defer (); });
+    const auto prepared_deferred = run_serial_turn (state, "defer-prepared-relocation",
+                                                    [&] { context.relocation_ready ().defer (); });
     state->complete_relocation_ready (spot_relocation_ready_outcome_t::relocated);
     state->complete_relocation_ready (spot_relocation_ready_outcome_t::continued);
     test.require (prepared_deferred && completions.load () == 2
@@ -622,6 +651,74 @@ void test_relocation_ready_completion_runs_once_on_spot_turn (test_context_t &te
         rejected = error.kind () == zlink::framework::framework_error_kind_t::not_configured;
     }
     test.require (rejected, "FrameworkManaged must reject relocation_ready().defer()");
+}
+
+void test_relocation_ready_defer_holds_queued_timer_turn (test_context_t &test)
+{
+    namespace detail = zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+    using zlink::framework::spot_relocation_coordination_mode_t;
+    using zlink::framework::spot_relocation_ready_outcome_t;
+    using zlink::framework::timer_tick_t;
+    using zlink::framework::user_spot_execution_mode_t;
+
+    auto state = std::make_shared<detail::spot_context_state_t> ();
+    state->execution_mode = user_spot_execution_mode_t::spot_wide;
+    state->relocation_coordination_mode = spot_relocation_coordination_mode_t::application_signaled;
+    state->relocation_boundary_active = true;
+    state->serial_executor =
+      std::make_shared<runtime::offload_executor_t> (2, "relocation-ready-timer-test");
+    state->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
+      *state->serial_executor, runtime::serial_execution_queue_options_t{},
+      runtime::serial_execution_queue_t::error_handler_t{},
+      runtime::serial_lane_policy_t::spot_wide ());
+    state->node =
+      std::make_shared<detail::spot_node_builder_state_t> ("relocation-ready-timer-node");
+    state->channel_runtime = std::make_shared<detail::channel_runtime_state_t> ();
+    zlink::framework::serializer_registry_t serializers;
+    state->channel_runtime->serializers = &serializers;
+    state->spot_instance = std::make_shared<int> (1);
+
+    std::atomic_int completions{0};
+    std::atomic_int timer_calls{0};
+    std::atomic_bool timer_ran_after_completion{false};
+    state->lifecycle.on_relocation_ready_completed =
+      [&] (void *, const zlink::framework::spot_relocation_ready_completion_t &) {
+          completions.fetch_add (1, std::memory_order_acq_rel);
+      };
+
+    auto timer_state = std::make_shared<detail::timer_state_t> ();
+    timer_state->name = "queued-before-relocation-ready";
+    auto timer_handler = std::make_shared<int> (1);
+    timer_state->handler_instance = timer_handler;
+    timer_state->handler_invoker =
+      [&] (void *, void *, zlink::framework::serializer_registry_t &,
+           const timer_tick_t &) -> zlink::framework::task_t<zlink::message_t> {
+        timer_ran_after_completion.store (completions.load (std::memory_order_acquire) == 1,
+                                          std::memory_order_release);
+        timer_calls.fetch_add (1, std::memory_order_acq_rel);
+        co_return zlink::message_t{};
+    };
+    state->timers.push_back (timer_state);
+
+    auto context = detail::spot_context_access_t::create (state);
+    const auto deferred = run_serial_turn (state, "defer-with-queued-timer", [&] {
+        detail::timer_runtime_t::post_fire_count (state, timer_state, {}, 1);
+        context.relocation_ready ().defer ();
+    });
+    const auto timer_ran_while_deferred =
+      wait_until_bounded ([&] { return timer_calls.load (std::memory_order_acquire) != 0; },
+                          std::chrono::milliseconds (100));
+
+    test.require (deferred && !timer_ran_while_deferred,
+                  "a timer turn queued before relocation readiness defer must remain held");
+
+    state->complete_relocation_ready (spot_relocation_ready_outcome_t::continued);
+    const auto timer_resumed = wait_until_bounded (
+      [&] { return timer_calls.load (std::memory_order_acquire) == 1; }, std::chrono::seconds (1));
+    test.require (timer_resumed && completions.load (std::memory_order_acquire) == 1
+                    && timer_ran_after_completion.load (std::memory_order_acquire),
+                  "the held timer turn must resume after relocation readiness completion");
 }
 
 void test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test_context_t &test)
@@ -4977,6 +5074,7 @@ int main ()
     test_spot_lifecycle_domain_rejects_invalid_kind_combinations (test);
     test_generation_barrier_quiesces_yield_spot_and_timer (test);
     test_relocation_ready_completion_runs_once_on_spot_turn (test);
+    test_relocation_ready_defer_holds_queued_timer_turn (test);
     test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test);
     test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callbacks (test);
     test_temporary_channel_request_yield_owns_call_state (test);

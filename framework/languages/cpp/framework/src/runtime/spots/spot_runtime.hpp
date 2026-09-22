@@ -1131,6 +1131,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     spot_lifecycle_domain_t lifecycle_domain = spot_lifecycle_domain_t::user ();
     bool relocation_boundary_active = false;
     bool relocation_ready_deferred = false;
+    std::shared_ptr<deferred_barrier_t> relocation_ready_barrier;
     std::vector<spot_packet_descriptor_t> packets;
     std::vector<spot_handler_descriptor_t> handlers;
     std::vector<spot_handler_registry_t::invoker_t> handler_invokers;
