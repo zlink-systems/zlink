@@ -156,11 +156,13 @@ export interface ZLinkFrameworkRegistrationOptions {
 export interface ZLinkChannelOptions {
   readonly routingId?: string;
   readonly routingIdPrefix?: string;
+  readonly noDrop?: boolean;
   readonly requestTimeoutMs?: number;
   readonly client?: ZLinkClientCapabilityOptions;
   readonly publisher?: ZLinkPublisherCapabilityOptions;
   readonly routeMesh?: ZLinkRouteMeshChannelOptions;
   readonly publishHandlers?: readonly ZLinkChannelPublishHandlerRegistration[];
+  readonly subscriptions?: readonly string[];
   readonly requestHandlers?: readonly ZLinkChannelRequestHandlerRegistration[];
   readonly sendHandlers?: readonly ZLinkChannelSendHandlerRegistration[];
   readonly server?: {
