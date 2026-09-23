@@ -151,7 +151,22 @@ In a client that works correctly, messages do not accumulate: a handler processe
 surface consumes them. Continued growth means the client is not calling the pump, which is why the
 received count is not a basis for flow control.
 
-## 8. Next Chapters
+## 8. Sending and Receiving with an Actor Handle
+
+An application with one Actor needs no changes to its existing send and receive code. When the server binds several Actors to one connection, use a handle to choose the Actor for a send and read the received message’s Actor ID to identify its server-side counterpart. The bound notice precedes that Actor’s first packet; the unbound notice follows its last packet. The connector maps slots to Actor IDs, so application code does not handle slots.
+
+Register for bound and unbound notices first. The tutorial server then binds `p1`; the client looks up its handle, sends through it, and reads the Actor ID on the returned message.
+
+```kotlin
+--8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/StreamClientProgram.kt:actor-handle-events"
+--8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/StreamClientProgram.kt:actor-handle-send"
+--8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/StreamClientProgram.kt:actor-handle-send-call"
+--8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/StreamClientProgram.kt:actor-handle-receive"
+```
+
+The Kotlin coroutine connector wraps the same Java connector. `javaConnector` above is the original instance retained when creating `connector`; its public API provides the Actor handle. The output includes `actor handle: p1` and `pushed: speedy, actor: p1`.
+
+## 9. Next Chapters
 
 - Connection state, reconnection, close reasons — [Connection Lifecycle](06-lifecycle.en.md)
 - Errors raised on the receive path — [Error Handling](07-error-handling.en.md)
