@@ -5,15 +5,18 @@ internal sealed class ZlinkStreamSendBuilder : IZlinkStreamSendCall
     private readonly ZlinkStreamEncodedPayload _body;
     private readonly IZlinkStreamConnectorInternal _connector;
     private readonly ZlinkStreamCallBuilderState _state;
+    private readonly Func<ushort?> _actorSlot;
 
     internal ZlinkStreamSendBuilder(
         IZlinkStreamConnectorInternal connector,
         string? name,
-        ZlinkStreamEncodedPayload payload
+        ZlinkStreamEncodedPayload payload,
+        Func<ushort?>? actorSlot = null
     )
     {
         _connector = connector;
         _body = payload;
+        _actorSlot = actorSlot ?? (() => null);
         _state = new ZlinkStreamCallBuilderState(name);
     }
 
@@ -50,7 +53,8 @@ internal sealed class ZlinkStreamSendBuilder : IZlinkStreamSendCall
             name,
             _body,
             _state.Metadata,
-            _state.Compress
+            _state.Compress,
+            _actorSlot()
         );
 
         return _connector.SubmitFrameAsync(frame, cancellationToken);

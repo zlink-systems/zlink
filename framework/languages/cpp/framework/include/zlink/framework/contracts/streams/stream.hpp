@@ -50,7 +50,8 @@ enum class stream_header_flags_t : std::uint8_t
     has_metadata = 0x02,
     payload_compressed = 0x04,
     has_correlation_id = 0x08,
-    has_flow_id = 0x10
+    has_flow_id = 0x10,
+    has_actor_slot = 0x20
 };
 
 constexpr stream_header_flags_t operator| (stream_header_flags_t lhs,
@@ -173,6 +174,8 @@ class stream_header_t
     std::optional<std::string_view> flow_id () const;
     std::optional<flow_origin_t> flow_origin () const noexcept;
     stream_header_t &with_flow (std::string flow_id, flow_origin_t origin);
+    std::optional<std::uint16_t> actor_slot () const noexcept;
+    stream_header_t &with_actor_slot (std::uint16_t actor_slot);
 
   private:
     stream_message_kind_t _kind = stream_message_kind_t::send;
@@ -184,6 +187,7 @@ class stream_header_t
     std::string _correlation_id;
     std::string _flow_id;
     std::optional<flow_origin_t> _flow_origin;
+    std::optional<std::uint16_t> _actor_slot;
 };
 
 } // namespace detail
@@ -193,6 +197,7 @@ struct session_message_context_t
     std::string packet_name;
     message_metadata_t metadata;
     bool can_reply = false;
+    std::shared_ptr<session_actor_t> actor;
 };
 
 class stream_t
@@ -219,6 +224,7 @@ class stream_t
     friend class detail::actor_gateway_runtime_t;
     friend class detail::session_actor_manager_access_t;
     friend class detail::stream_runtime_t;
+    friend class session_actor_manager_t;
     explicit stream_t (std::shared_ptr<detail::stream_state_t> state);
     stream_write_call_t write_packet_with_header (detail::stream_header_t header,
                                                   zlink::message_t payload);

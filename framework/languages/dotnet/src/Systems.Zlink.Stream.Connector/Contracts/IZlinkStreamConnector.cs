@@ -88,6 +88,14 @@ public interface IZlinkStreamConnector : IAsyncDisposable
     /// </summary>
     int PendingDispatchCount { get; }
 
+    IReadOnlyList<IZlinkStreamActor> Actors { get; }
+
+    IZlinkStreamActor? Actor(string actorId);
+
+    IDisposable OnActorBound(Func<IZlinkStreamActor, CancellationToken, ValueTask> handler);
+
+    IDisposable OnActorUnbound(Func<IZlinkStreamActor, CancellationToken, ValueTask> handler);
+
     /// <summary>
     ///     Starts the stream connection lifecycle operation.
     /// </summary>
@@ -188,4 +196,20 @@ public interface IZlinkStreamConnector : IAsyncDisposable
     ///     Waits for messages with the given packet name and verifies their arrival order.
     /// </summary>
     IZlinkStreamSequenceCall WaitForSequence(string name);
+}
+
+public interface IZlinkStreamActor
+{
+    string ActorId { get; }
+
+    bool IsBound { get; }
+
+    IZlinkStreamSendCall Send(ZlinkStreamEncodedPayload payload);
+
+    IZlinkStreamRequestCall Request(ZlinkStreamEncodedPayload payload);
+
+    IDisposable On(
+        string name,
+        Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, CancellationToken, ValueTask> handler
+    );
 }

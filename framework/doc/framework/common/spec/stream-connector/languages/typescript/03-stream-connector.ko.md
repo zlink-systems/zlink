@@ -26,6 +26,30 @@ Unity WebGL은 npm package root의 browser bundle과 jslib·C# 호출 경계를 
 `com.zlink.stream-connector.webgl` UPM source adapter를 사용한다. 이 adapter는 별도 wire runtime을
 제공하지 않는다.
 
+Unity WebGL C# adapter는 bound Actor 표면을 같은 의미로 투영한다.
+
+```csharp
+public partial class ZlinkStreamConnector
+{
+    public IReadOnlyList<ZlinkStreamActor> Actors { get; }
+    public ZlinkStreamActor? Actor(string actorId);
+    public IDisposable OnActorBound(Action<ZlinkStreamActor> handler);
+    public IDisposable OnActorUnbound(Action<ZlinkStreamActor> handler);
+}
+
+public sealed class ZlinkStreamActor
+{
+    public string ActorId { get; }
+    public bool IsBound { get; }
+    public ZlinkStreamSendCall Send(object payload);
+    public ZlinkStreamRequestCall Request(object payload);
+    public IDisposable On<TPayload>(string name, Action<ZlinkStreamMessage<TPayload>> handler);
+}
+```
+
+jslib JSON 경계는 `actorId`와 bound·unbound lifecycle event만 전달한다. `actor_slot`은 TypeScript
+wire runtime 안에 남으며 public C# 값으로 노출하지 않는다.
+
 ## 2. 진입점(entrypoint)
 
 공개 진입점은 package root인 `@zlink-systems/stream-connector` 하나다. 이 진입점은 플랫폼
@@ -98,6 +122,24 @@ interface ZlinkStreamConnector {
   onConnectionStateChanged(
     handler: (change: ZlinkStreamConnectionStateChanged, signal?: AbortSignal) => Promise<void> | void
   ): Disposable;
+
+  // 지금 bind되어 있는 Actor handle(공통 스펙 §5.6). application이 만들지 않는다.
+  readonly actors: readonly ZlinkStreamActor[];
+  actor(actorId: string): ZlinkStreamActor | undefined;
+  onActorBound(handler: (actor: ZlinkStreamActor, signal?: AbortSignal) => Promise<void> | void): Disposable;
+  onActorUnbound(handler: (actor: ZlinkStreamActor, signal?: AbortSignal) => Promise<void> | void): Disposable;
+}
+
+interface ZlinkStreamActor {
+  readonly actorId: string;
+  readonly isBound: boolean;                    // unbound 통지 뒤 false
+  send(payload: unknown, messageType?: Function): ZlinkStreamSendCall;       // 이 Actor의 slot을 싣는다
+  request(payload: unknown, messageType?: Function): ZlinkStreamRequestCall;
+  on<TPayload = ZlinkStreamEncodedPayload>(
+    name: string,
+    handler: (message: ZlinkStreamMessage<TPayload>, signal?: AbortSignal) => Promise<void> | void,
+    messageType?: Function
+  ): Disposable;                                // 이 Actor가 상대인 message만
 }
 
 interface ZlinkStreamSendCall {
@@ -159,6 +201,7 @@ interface ZlinkStreamMessage<TPayload = unknown> extends ZlinkStreamFlow {
   readonly name: string;
   readonly metadata: ZlinkStreamMetadata;
   readonly payload: TPayload;
+  readonly actorId?: string;                   // 상대 bound Actor. slot 없는 frame은 undefined(공통 스펙 §5.6)
 }
 
 interface ZlinkStreamError {
@@ -183,7 +226,7 @@ enum ZlinkStreamDispatchMode { Manual = 'manual', Immediate = 'immediate' }
 enum ZlinkStreamMessageKind { Send = 1, Request = 2, Response = 3, Error = 4, Control = 5 }
 enum ZlinkStreamHeaderFlags {
   None = 0, HasRequestSeq = 0x01, HasMetadata = 0x02,
-  PayloadCompressed = 0x04, HasCorrelationId = 0x08, HasFlowId = 0x10
+  PayloadCompressed = 0x04, HasCorrelationId = 0x08, HasFlowId = 0x10, HasActorSlot = 0x20
 }
 enum ZlinkStreamConnectionState {
   Created = 'created', Connecting = 'connecting', Connected = 'connected',

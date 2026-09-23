@@ -7,7 +7,8 @@ internal interface IZlinkStreamConnectorInternal : IZlinkStreamConnector
         string name,
         ZlinkStreamEncodedPayload payload,
         ZlinkStreamMetadata metadata,
-        bool compress
+        bool compress,
+        ushort? actorSlot
     );
 
     ValueTask SendFrameAsync(ZlinkStreamOutboundFrame frame, CancellationToken cancellationToken);
@@ -20,6 +21,7 @@ internal interface IZlinkStreamConnectorInternal : IZlinkStreamConnector
         ZlinkStreamMetadata metadata,
         bool compress,
         TimeSpan timeout,
+        ushort? actorSlot,
         CancellationToken cancellationToken
     );
 
@@ -29,6 +31,7 @@ internal interface IZlinkStreamConnectorInternal : IZlinkStreamConnector
         ZlinkStreamMetadata metadata,
         bool compress,
         TimeSpan timeout,
+        ushort? actorSlot,
         Action<ZlinkStreamResult> callback
     );
 
@@ -38,6 +41,7 @@ internal interface IZlinkStreamConnectorInternal : IZlinkStreamConnector
         ZlinkStreamMetadata metadata,
         bool compress,
         TimeSpan timeout,
+        ushort? actorSlot,
         Action<ZlinkStreamResult<ZlinkStreamEncodedPayload>> callback
     );
 

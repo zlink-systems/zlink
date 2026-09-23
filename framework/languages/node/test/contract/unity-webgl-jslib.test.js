@@ -7,10 +7,11 @@
 // them, against the same STREAM server the browser e2e uses.
 const assert = require('node:assert/strict');
 const childProcess = require('node:child_process');
+const fs = require('node:fs');
 const net = require('node:net');
 const path = require('node:path');
 const test = require('node:test');
-const { createHarness } = require('./helpers/unity-webgl-jslib-harness');
+const { createHarness, packageRoot } = require('./helpers/unity-webgl-jslib-harness');
 const { JslibConnector, MAX_EVENTS_PER_PUMP } = require('./helpers/unity-webgl-jslib-client');
 
 const workspaceRoot = path.resolve(__dirname, '../..');
@@ -32,6 +33,132 @@ test('jslib boundary rejects endpoints the browser sandbox cannot open', () => {
   // The failure is a create-time configuration error, so nothing is allocated
   // and no handle is handed out.
   assert.equal(harness.allocatedBlocks(), 0);
+});
+
+test('Unity actor boundary follows dispatch mode and observes lifecycle unsubscription', async () => {
+  const manualHarness = createHarness();
+  const manualFake = installActorConnector(manualHarness, 'manual');
+  const manual = new JslibConnector(
+    manualHarness,
+    JSON.stringify({ endpoint: 'ws://actor.test', dispatchMode: 'manual' })
+  );
+  const seen = [];
+  const removed = manual.onActorBound((actor) => seen.push(`removed:${actor.actorId}`));
+  manual.onActorBound((actor) => seen.push(`bound:${actor.actorId}`));
+  manual.onActorUnbound((actor) => seen.push(`unbound:${actor.actorId}`));
+  const manualActor = manualFake.actor('manual');
+  manualFake.bind(manualActor);
+  manual.pumpAndTransfer();
+  assert.deepEqual(seen, []);
+  removed.dispose();
+  await manual.dispatch();
+  assert.deepEqual(seen, ['bound:manual']);
+  manualFake.unbind(manualActor);
+  manual.pumpAndTransfer();
+  assert.deepEqual(seen, ['bound:manual']);
+  await manual.dispatch();
+  assert.deepEqual(seen, ['bound:manual', 'unbound:manual']);
+
+  const immediateHarness = createHarness();
+  const immediateFake = installActorConnector(immediateHarness, 'immediate');
+  const immediate = new JslibConnector(
+    immediateHarness,
+    JSON.stringify({ endpoint: 'ws://actor.test', dispatchMode: 'immediate' })
+  );
+  const immediateSeen = [];
+  immediate.onActorBound((actor) => immediateSeen.push(actor.actorId));
+  immediate.onActorUnbound((actor) => immediateSeen.push(`unbound:${actor.actorId}`));
+  const immediateActor = immediateFake.actor('immediate');
+  immediateFake.bind(immediateActor);
+  immediate.pumpAndTransfer();
+  assert.deepEqual(immediateSeen, ['immediate']);
+  immediateFake.unbind(immediateActor);
+  immediate.pumpAndTransfer();
+  assert.deepEqual(immediateSeen, ['immediate', 'unbound:immediate']);
+});
+
+test('Unity actor boundary carries actorId and preserves stale TypeScript handle identity', async () => {
+  const harness = createHarness();
+  const fake = installActorConnector(harness, 'manual');
+  const boundary = new JslibConnector(
+    harness,
+    JSON.stringify({ endpoint: 'ws://actor.test', dispatchMode: 'manual' })
+  );
+  const messages = [];
+  boundary.on('ActorPush', (message) => messages.push(message.actorId));
+
+  const first = fake.actor('same');
+  fake.bind(first);
+  await boundary.dispatch();
+  const firstHandle = boundary.actorEvents.at(-1).actorHandle;
+  assert.equal(typeof firstHandle, 'number');
+  fake.message('ActorPush', first, Uint8Array.of(1));
+  await boundary.dispatch();
+  assert.deepEqual(messages, ['same']);
+
+  fake.unbind(first);
+  const replacement = fake.actor('same');
+  fake.bind(replacement);
+  await boundary.dispatch();
+  await assert.rejects(
+    () => boundary.send(Uint8Array.of(2), { codec: 0, actorHandle: firstHandle }),
+    (error) => error.code === 'validationFailed'
+  );
+  await assert.rejects(
+    () => boundary.request(
+      Uint8Array.of(2),
+      { codec: 0, actorHandle: firstHandle, timeoutMs: 1000 }
+    ),
+    (error) => error.code === 'validationFailed'
+  );
+  assert.equal(replacement.sends, 0);
+  assert.equal(replacement.requests, 0);
+
+  const replacementHandle = boundary.actorEvents.at(-1).actorHandle;
+  await boundary.send(Uint8Array.of(3), { codec: 0, actorHandle: replacementHandle });
+  assert.equal(replacement.sends, 1);
+  const reply = await boundary.request(
+    Uint8Array.of(4),
+    { codec: 0, actorHandle: replacementHandle, timeoutMs: 1000 }
+  );
+  assert.deepEqual([...reply.payload], [5]);
+  assert.equal(replacement.requests, 1);
+});
+
+test('Unity Actor On resolves registrations when queued Manual dispatch executes', async () => {
+  const harness = createHarness();
+  const fake = installActorConnector(harness, 'manual');
+  const boundary = new JslibConnector(
+    harness,
+    JSON.stringify({ endpoint: 'ws://actor.test', dispatchMode: 'manual' })
+  );
+  const actor = fake.actor('queued');
+  fake.bind(actor);
+  await boundary.dispatch();
+  const actorHandle = boundary.actorEvents.at(-1).actorHandle;
+  const received = [];
+  const removed = boundary.onActor(
+    actorHandle,
+    'ActorPush',
+    () => received.push('removed')
+  );
+  boundary.onActor(actorHandle, 'ActorPush', () => received.push('active'));
+
+  fake.message('ActorPush', actor, Uint8Array.of(1));
+  boundary.pumpAndTransfer();
+  removed.dispose();
+  await boundary.runDispatchQueue();
+  assert.deepEqual(received, ['active']);
+});
+
+test('Unity C# actor lifecycle dispatch resolves mode and subscriptions at execution time', () => {
+  const source = fs.readFileSync(
+    path.join(packageRoot, 'Runtime/ZlinkStreamWebGlConnector.cs'),
+    'utf8'
+  );
+  assert.match(source, /DispatchOrQueue\([\s\S]*DispatchItem\.ForCallback/);
+  assert.match(source, /InvokeActorHandlers\(/);
+  assert.doesNotMatch(source, /_actor(?:Bound|Unbound)Handlers\.ToArray\(\)/);
 });
 
 test('jslib boundary drives a real STREAM server over ws', { timeout: 120_000 }, async (t) => {
@@ -173,6 +300,126 @@ function waitUntil(predicate, tick) {
 
     poll();
   });
+}
+
+function installActorConnector(harness, dispatchMode) {
+  const boundHandlers = new Set();
+  const unboundHandlers = new Set();
+  const observers = new Map();
+  const queued = [];
+  let current;
+
+  const publish = (handlers, actor) => {
+    const run = () => {
+      for (const handler of [...handlers]) handler(actor);
+    };
+    if (dispatchMode === 'immediate') run();
+    else queued.push(run);
+  };
+  const subscription = (handlers, handler) => ({ dispose: () => handlers.delete(handler) });
+  const connector = {
+    isConnected: true,
+    state: 'connected',
+    closeReason: null,
+    diagnosticsLevel: 'errors',
+    pendingDispatchCount: 0,
+    onErrorReceived: () => ({ dispose() {} }),
+    onDisconnected: () => ({ dispose() {} }),
+    onConnectionStateChanged: () => ({ dispose() {} }),
+    onActorBound(handler) {
+      boundHandlers.add(handler);
+      return subscription(boundHandlers, handler);
+    },
+    onActorUnbound(handler) {
+      unboundHandlers.add(handler);
+      return subscription(unboundHandlers, handler);
+    },
+    on(name, handler) {
+      observers.set(name, handler);
+      return { dispose: () => observers.delete(name) };
+    },
+    actor(actorId) {
+      return current?.actorId === actorId ? current : undefined;
+    },
+    send() {
+      return fakeBuilder(() => Promise.resolve());
+    },
+    request() {
+      return fakeBuilder(() => Promise.resolve({ codec: 0, payload: Uint8Array.of(5) }));
+    },
+    connect: () => Promise.resolve(),
+    close: () => Promise.resolve(),
+    dispatch() {
+      while (queued.length > 0) queued.shift()();
+      return Promise.resolve();
+    },
+    setDiagnosticsLevel() {}
+  };
+  harness.context.ZlinkStreamConnectorBundle = {
+    zlinkStreamConnectorFactory: { create: () => connector }
+  };
+
+  return {
+    actor(actorId) {
+      return {
+        actorId,
+        isBound: true,
+        sends: 0,
+        requests: 0,
+        send() {
+          if (!this.isBound) throw validationFailed(actorId);
+          return fakeBuilder(() => {
+            this.sends += 1;
+            return Promise.resolve();
+          });
+        },
+        request() {
+          if (!this.isBound) throw validationFailed(actorId);
+          return fakeBuilder(() => {
+            this.requests += 1;
+            return Promise.resolve({ codec: 0, payload: Uint8Array.of(5) });
+          });
+        }
+      };
+    },
+    bind(actor) {
+      current = actor;
+      publish(boundHandlers, actor);
+    },
+    unbind(actor) {
+      actor.isBound = false;
+      if (current === actor) current = undefined;
+      publish(unboundHandlers, actor);
+    },
+    message(name, actor, payload) {
+      observers.get(name)?.({
+        name,
+        metadata: { values: new Map() },
+        actorId: actor.actorId,
+        payload: { codec: 0, payload }
+      });
+    }
+  };
+}
+
+function fakeBuilder(submit) {
+  return {
+    packetName() { return this; },
+    metadata() { return this; },
+    timeout() { return this; },
+    compress() { return this; },
+    submit,
+    submitEncoded: submit
+  };
+}
+
+function validationFailed(actorId) {
+  return {
+    error: {
+      code: 'validationFailed',
+      message: `Actor '${actorId}' is no longer bound.`
+    }
+  };
 }
 
 function freePort() {

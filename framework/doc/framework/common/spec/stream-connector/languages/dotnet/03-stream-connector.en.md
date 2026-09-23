@@ -77,8 +77,42 @@ public interface IZlinkStreamConnector : IAsyncDisposable
     IDisposable OnConnectionStateChanged(Func<ZlinkStreamConnectionStateChanged, CancellationToken, ValueTask> handler);
     IDisposable OnDisconnected(Func<ZlinkStreamDisconnected, CancellationToken, ValueTask> handler);
     IDisposable OnErrorReceived(Func<ZlinkStreamError, CancellationToken, ValueTask> handler);
+
+    IReadOnlyList<IZlinkStreamActor> Actors { get; }        // the Actor handles bound right now (§3.1)
+    IZlinkStreamActor? Actor(string actorId);               // the open handle of that id, or null
+    IDisposable OnActorBound(Func<IZlinkStreamActor, CancellationToken, ValueTask> handler);
+    IDisposable OnActorUnbound(Func<IZlinkStreamActor, CancellationToken, ValueTask> handler);
 }
 ```
+
+### 3.1 `IZlinkStreamActor`
+
+The Actor handle of [common spec §5.6](../../32-stream-connector.en.md#56-bound-actor).
+The connector creates it from `$zlink.actor.bound` and closes it on
+`$zlink.actor.unbound`; the application never creates one.
+
+```csharp
+public interface IZlinkStreamActor
+{
+    string ActorId { get; }
+    bool IsBound { get; }                                    // false after the unbound announcement
+
+    IZlinkStreamSendCall    Send(ZlinkStreamEncodedPayload payload);     // carries this Actor's slot
+    IZlinkStreamRequestCall Request(ZlinkStreamEncodedPayload payload);
+    IDisposable On(string name, Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, CancellationToken, ValueTask> handler); // only messages whose counterpart is this Actor
+}
+```
+
+- The builders of `Send`/`Request` are the same `IZlinkStreamSendCall`/`IZlinkStreamRequestCall`
+  as at the connector level (§4). `Async()`/`Submit(...)` on a handle with
+  `IsBound == false` end in `ValidationFailed`.
+- The connector-level `On(name, …)` receives every message regardless of
+  Actor; a handle's `On` receives only the messages whose counterpart is that
+  Actor. A handler registered on both runs on both.
+- `OnActorBound`/`OnActorUnbound` follow the same `IDisposable` rule as the
+  other registration surfaces.
+- The typed surface (§5) provides the same extension methods
+  (`Send<TPayload>`, `Request<TPayload>`, `On<TPayload>`) on `IZlinkStreamActor`.
 
 - **The connection events are registration methods, not C#
   `event`s.** An `event` returns nothing at subscription time, so it does
@@ -402,7 +436,8 @@ public sealed record ZlinkStreamMessage<TPayload>(
     ZlinkStreamMetadata Metadata,
     TPayload Payload,
     string? FlowId = null,                    // null when the diagnostics level is Off (§13)
-    ZlinkStreamFlowOrigin? FlowOrigin = null);
+    ZlinkStreamFlowOrigin? FlowOrigin = null,
+    string? ActorId = null);                  // the counterpart bound Actor; null for a frame without a slot (common spec §5.6)
 
 public enum ZlinkStreamFlowOrigin { Inbound, Timer, Application, Lifecycle }
 ```

@@ -1460,6 +1460,7 @@ class stream_host_service_t::listener_t
      * submitting context (pre-suspension throw), so it must only record
      * intent (request_core_peer_disconnect), never enter a close. */
     void send_core_error_frame (const zlink::routing_id_t &rid,
+                                const stream_t &stream,
                                 const stream_header_t &request_header,
                                 const result_t<void> &error,
                                 std::function<void ()> completed = {}) noexcept
@@ -1472,12 +1473,8 @@ class stream_host_service_t::listener_t
             return;
         }
 
-        stream_header_t error_header (stream_message_kind_t::error, stream_codec_t::json,
-                                      stream_header_flags_t::has_request_seq,
-                                      request_header.request_seq (), "", {});
-        if (auto correlation = request_header.correlation_id ()) {
-            error_header.with_correlation_id (std::string (*correlation));
-        }
+        auto error_header = detail::stream_runtime_t::make_terminal_header (
+          stream, stream_message_kind_t::error, request_header);
         auto send = send_core_frame (rid, error_header, stream_error_payload (error));
         detail::observe_task_completion (
           send, [this, rid, completed = std::move (completed)] (const result_t<void> &result) {
@@ -1763,6 +1760,7 @@ class stream_host_service_t::listener_t
       actor_ref_t actor,
       std::shared_ptr<replacement_session_state_t> replacement,
       std::uint64_t binding_generation,
+      std::function<void ()> publish_client_binding,
       detail::application_actor_session_bind_attempt_t bind_attempt =
         detail::application_actor_session_bind_attempt_t::initial,
       std::optional<std::chrono::steady_clock::time_point> retry_deadline = std::nullopt)
@@ -1828,6 +1826,7 @@ class stream_host_service_t::listener_t
                     co_await detail::delay (std::min (remaining, std::chrono::milliseconds (10)));
                     co_await bind_actor_session (
                       transport_connection, session_rid, actor, replacement, binding_generation,
+                      publish_client_binding,
                       detail::application_actor_session_bind_attempt_t::retry, binding_deadline);
                     co_return;
                 }
@@ -1969,6 +1968,19 @@ class stream_host_service_t::listener_t
                                                                   binding.binding_generation);
         }
         if (recorded) {
+            try {
+                if (publish_client_binding)
+                    publish_client_binding ();
+            }
+            catch (const framework_exception_t &error) {
+                recorded = detail::result_access_t::failure<void> (error);
+            }
+            catch (const std::exception &error) {
+                recorded =
+                  result_t<void>::failure (framework_error_kind_t::unavailable, error.what ());
+            }
+        }
+        if (recorded) {
             if (replacement) {
                 const std::lock_guard lock (replacement->gate);
                 replacement->actor_bindings.insert_or_assign (
@@ -2034,9 +2046,10 @@ class stream_host_service_t::listener_t
                 (void) _mesh_node->refresh_application_actor_route (actor, *actor_route);
                 co_await detail::delay (std::min (remaining, std::chrono::milliseconds (10)));
             }
-            co_await bind_actor_session (
-              transport_connection, session_rid, actor, replacement, binding_generation,
-              detail::application_actor_session_bind_attempt_t::retry, binding_deadline);
+            co_await bind_actor_session (transport_connection, session_rid, actor, replacement,
+                                         binding_generation, publish_client_binding,
+                                         detail::application_actor_session_bind_attempt_t::retry,
+                                         binding_deadline);
             co_return;
         }
         throw recorded.error () ? *recorded.error ()
@@ -2153,10 +2166,17 @@ class stream_host_service_t::listener_t
         created->replacement = replacement;
         detail::session_actor_manager_access_t::bind_native (
           actors,
-          [this, transport_connection = created->transport_connection, rid,
-           replacement] (actor_ref_t actor, std::uint64_t binding_generation) -> task_t<void> {
+          [this, transport_connection = created->transport_connection, rid, replacement,
+           weak = std::weak_ptr<core_session_t> (created)] (
+            actor_ref_t actor, std::uint64_t binding_generation,
+            std::uint16_t actor_slot) -> task_t<void> {
+              const auto actor_id = std::string (actor.actor_id ().value ());
               return bind_actor_session (transport_connection, rid, actor, replacement,
-                                         binding_generation);
+                                         binding_generation, [this, weak, actor_slot, actor_id] {
+                                             if (const auto current = weak.lock ())
+                                                 _runtime.send_actor_bound (current->stream,
+                                                                            actor_slot, actor_id);
+                                         });
           });
         _runtime.attach_transport_writer (
           created->stream,
@@ -2435,7 +2455,7 @@ class stream_host_service_t::listener_t
                                    + (result.error () ? result.error ()->what () : "unknown")));
                       if (!result) {
                           report_packet_dispatch_error (header, result);
-                          send_core_error_frame (rid, header, result);
+                          send_core_error_frame (rid, current->stream, header, result);
                       }
                   },
                   [permit = std::move (application_permit)] () mutable {
@@ -2479,12 +2499,12 @@ class stream_host_service_t::listener_t
              * executes it outside every session lock, and
              * begin_core_session_close keeps the duplicate a no-op. */
             if (protocol_error) {
-                send_core_error_frame (rid, header, *rejected, [this, rid] {
+                send_core_error_frame (rid, current->stream, header, *rejected, [this, rid] {
                     request_core_peer_disconnect (rid, "protocol_error");
                 });
                 return false;
             }
-            send_core_error_frame (rid, header, *rejected);
+            send_core_error_frame (rid, current->stream, header, *rejected);
         }
         return true;
     }
@@ -3115,20 +3135,15 @@ class stream_host_service_t::listener_t
     template <typename TStream>
     void write_error_frame (const std::shared_ptr<tcp_connection_t> &owner,
                             const std::shared_ptr<TStream> &connection,
+                            const stream_t &stream,
                             const stream_header_t &request_header,
                             const result_t<void> &error)
     {
         if (!request_header.request_seq ()) {
             return;
         }
-        stream_header_t error_header (stream_message_kind_t::error, stream_codec_t::json,
-                                      stream_header_flags_t::has_request_seq,
-                                      request_header.request_seq (), "", {});
-        // Echo the request correlation id so a stream request FAILURE is traceable
-        // by the same corr as its inbound `received`.
-        if (auto correlation = request_header.correlation_id ()) {
-            error_header.with_correlation_id (std::string (*correlation));
-        }
+        auto error_header = detail::stream_runtime_t::make_terminal_header (
+          stream, stream_message_kind_t::error, request_header);
         write_frame (owner, connection, error_header, stream_error_payload (error));
     }
 
@@ -3211,10 +3226,17 @@ class stream_host_service_t::listener_t
             connection_state->replacement = replacement;
             detail::session_actor_manager_access_t::bind_native (
               session_actors,
-              [this, connection = *connection_state->transport_connection, session_rid,
-               replacement] (actor_ref_t actor, std::uint64_t binding_generation) -> task_t<void> {
-                  return bind_actor_session (connection, session_rid, actor, replacement,
-                                             binding_generation);
+              [this, connection = *connection_state->transport_connection, session_rid, replacement,
+               weak = std::weak_ptr<stream_connection_state_t> (connection_state)] (
+                actor_ref_t actor, std::uint64_t binding_generation,
+                std::uint16_t actor_slot) -> task_t<void> {
+                  const auto actor_id = std::string (actor.actor_id ().value ());
+                  return bind_actor_session (
+                    connection, session_rid, actor, replacement, binding_generation,
+                    [this, weak, actor_slot, actor_id] {
+                        if (const auto current = weak.lock ())
+                            _runtime.send_actor_bound (current->stream, actor_slot, actor_id);
+                    });
               });
         }
         if (attach_immediate_writer) {
@@ -3312,7 +3334,7 @@ class stream_host_service_t::listener_t
                     trace_stream_host ("dispatch-submit", _stream, header);
                     auto dispatched = _runtime.dispatch_packet_async (
                       session, stream, header, received_frame.payload,
-                      [this, owner, connection, connection_state, header,
+                      [this, owner, connection, connection_state, header, stream,
                        liveness] (const result_t<void> &result) {
                           trace_stream_host ("dispatch-complete", _stream, header,
                                              std::string ("result=")
@@ -3321,7 +3343,7 @@ class stream_host_service_t::listener_t
                               report_packet_dispatch_error (header, result);
                               if (header.kind () == stream_message_kind_t::request) {
                                   try {
-                                      write_error_frame (owner, connection, header, result);
+                                      write_error_frame (owner, connection, stream, header, result);
                                   }
                                   catch (...) {
                                   }
@@ -3342,7 +3364,7 @@ class stream_host_service_t::listener_t
                         report_packet_dispatch_error (header, dispatched);
                         if (header.kind () == stream_message_kind_t::request) {
                             try {
-                                write_error_frame (owner, connection, header, dispatched);
+                                write_error_frame (owner, connection, stream, header, dispatched);
                             }
                             catch (...) {
                             }

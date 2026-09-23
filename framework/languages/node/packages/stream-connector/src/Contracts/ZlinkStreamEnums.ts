@@ -44,7 +44,8 @@ export enum ZlinkStreamHeaderFlags {
   HasMetadata = 0x02,
   PayloadCompressed = 0x04,
   HasCorrelationId = 0x08,
-  HasFlowId = 0x10
+  HasFlowId = 0x10,
+  HasActorSlot = 0x20
 }
 
 export type ZlinkFlowOrigin = 'Inbound' | 'Timer' | 'Application' | 'Lifecycle';

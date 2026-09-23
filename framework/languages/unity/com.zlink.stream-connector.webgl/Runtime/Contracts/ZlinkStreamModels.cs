@@ -7,27 +7,34 @@ namespace Systems.Zlink.Stream.Connector.Contracts
     public sealed record ZlinkStreamEncodedPayload(
         ZlinkStreamCodec Codec,
         ReadOnlyMemory<byte> Payload,
-        Type MessageType = null);
+        Type MessageType = null
+    );
 
     public sealed record ZlinkStreamMessage(
         string Name,
         ZlinkStreamMetadata Metadata,
-        object Payload);
+        object Payload,
+        string ActorId = null
+    );
 
     public sealed record ZlinkStreamMessage<TPayload>(
         string Name,
         ZlinkStreamMetadata Metadata,
-        TPayload Payload);
+        TPayload Payload,
+        string ActorId = null
+    );
 
     public sealed record ZlinkStreamError(
         ZlinkStreamErrorCode Code,
         string Message,
-        Exception Exception = null);
+        Exception Exception = null
+    );
 
     public sealed record ZlinkStreamConnectionStateChanged(
         ZlinkStreamConnectionState Previous,
         ZlinkStreamConnectionState Current,
-        ZlinkStreamError Error = null);
+        ZlinkStreamError Error = null
+    );
 
     public sealed class ZlinkStreamException : Exception
     {

@@ -134,6 +134,7 @@ Session owner는 Actor마다 다음 정보를 하나의 binding으로 보관한�
 | `NodeGeneration`, `AuthorityOwnerGeneration`, `OwnerLeaseGeneration` | 재시작 전 node나 이전 owner에게 보내지 않기 위해 검증한다. |
 | Session owner RID와 lifecycle generation, binding generation과 token | 이전 connection이나 교체된 binding의 늦은 message를 거부한다. |
 | [Session sequence](../00-foundation/02-glossary.ko.md#session-sequence) | 같은 session에서 수락한 message의 순서를 보존한다. |
+| Actor slot | STREAM session 안에서 binding 하나를 가리키는 `0`이 아닌 `u16` 주소다. 새 binding에만 아직 발급하지 않은 다음 값을 할당하고 같은 session 안에서 다시 쓰지 않는다. 같은 physical session의 current binding을 다시 bind하거나 `BindOrGet`으로 얻으면 기존 slot을 유지한다. `65535`까지 발급한 session에서 새 binding이 필요하면 기존 binding을 바꾸지 않고 `InvalidOperation`으로 끝낸다. |
 
 Binding identity는 session owner Node RID, 그 node의 lifecycle generation과
 owner-local binding generation을 함께 사용한다. Binding generation의 대소 비교는 같은
@@ -143,7 +144,13 @@ session owner lifecycle 안에서만 유효하다. 다른 MeshNode가 bind하거
 
 ## 5. Bind와 relay
 
-STREAM packet은 먼저 session의 typed handler registry로 dispatch된다. Handler가 Actor
+STREAM packet은 먼저 session의 typed handler registry로 dispatch된다. Framework는 packet의
+`actor_slot`([Stream Connector 공통 스펙 §4.2](../../stream-connector/32-stream-connector.ko.md#42-header))을
+현재 binding으로 해석해 dispatch context의 Actor로 넣는다 — 없거나 현재 binding이 아니면 Actor
+없음이다. 이 해석은 `Send`와 `Request`에 같다. Unbind 뒤 늦게 도착한 slot도 Actor 없이 session
+handler에 전달하며, Framework가 대신 relay하거나 `Error` reply를 합성하지 않는다. Request의
+`Response`와 `Error`는 session handler가 만든 결과이고, handler가 terminal reply를 만들지 않으면
+기존 request timeout 규칙을 따른다. Session callback은 그 Actor로 relay하거나 다른 처리를 고른다. Handler가 Actor
 dispatch를 선택하면 Framework는 다음 값을 internal envelope에 보존한다.
 
 - 원본 request correlation
@@ -161,6 +168,14 @@ Bind는 caller가 제출한 `ActorRef`의 위치를 최초 route로 사용해 co
 generation)과 `AuthorityOwnerGeneration`을 모두 확인한 뒤
 [binding generation](../00-foundation/02-glossary.ko.md#binding-generation)을 등록하고 terminal
 reply를 한 번만 반환한다. **승인 판정은 이 세 값으로만 한다.**
+Bind가 완료되면 session owner는 binding의 Actor slot과 `ActorId`를 `$zlink.actor.bound`
+control packet으로 client에 보낸다. **Session owner는 `$zlink.actor.bound`를 그 slot을 싣는 첫
+STREAM packet보다 먼저 제출하고, `$zlink.actor.unbound`를 그 slot을 싣는 마지막 STREAM packet
+뒤에 제출한다.** Push와 relay된 request의 reply는 이 한 규칙의 사례다. Binding이 끝나는 시점은
+§6의 교체, §7의 tombstone과 Actor destroy다. 같은 current binding을 다시 bind하면 §4의 규칙대로
+slot을 유지하며 `$zlink.actor.bound`를 다시 보내지 않는다. 두 control packet의 형식은
+[Stream Connector 공통 스펙 §4.6](../../stream-connector/32-stream-connector.ko.md#46-control-frame)이 소유한다.
+
 `OwnerLeaseGeneration`은 envelope에 보존하는 값이지 bind 승인 판정의 입력이 아니다 —
 caller 측 lookup·projection이 실어 온 lease 사본과 Actor owner의 current lease가
 다르다는 이유로 bind를 거부하지 않는다. lease는 route fence
@@ -186,23 +201,26 @@ application queue에 직접 추가한다. Current Spot은 authority 검증에 �
 Actor가 session에 보내는 push는 `boundSessionSend(36)` record로 session owner에
 전달한다. Session owner는 source Actor `ObjectGeneration`, source `NodeGeneration`,
 `AuthorityOwnerGeneration`과 expected binding generation이 모두 current일 때만 실제
-STREAM connection에 제출한다.
+STREAM connection에 제출한다. 제출하는 frame에는 그 binding의 Actor slot을 싣는다.
 
 **Binding의 완료와 그 인지는 해석의 여지가 없는 두 선형화점으로 정의한다. push의
 current 판정에 그 선형화점 밖의 사본을 사용하지 않는다.**
 
-1. **Actor owner 측 완료 — terminal reply 반환 전.** Actor owner는 위 검증을 통과한
-   binding 등록을 — 그 노드에서 Actor→session 송신 경로가 참조하는 상태까지 포함해 —
-   **terminal reply를 반환하기 전에 하나의 소유 turn 안에서** 끝낸다. reply가 관찰된
-   뒤에는 그 노드의 어떤 구성요소도 이 binding을 모르는 상태로 남지 않는다. 따라서
-   binding 성립 이후 실행되는 Actor handler(join callback 포함)가 보내는 push는 그
-   노드에서 항상 등록된 binding으로 관찰된다.
-2. **Session owner 측 완료 = binding 완료의 인지 시점.** Session owner는 reply를 받은 뒤
-   registry의 binding commit과, push 판정·STREAM 제출 경로가 참조하는 **모든 파생
-   상태(projection·route 사본)를 하나의 선형화점에서 함께 공개한다.** 이 선형화점이
-   "binding이 완료되었다"를 인지하는 시점이며, bind caller의 성공 완료는 이 선형화점
-   뒤에만 관찰된다. commit이 관찰 가능해진 뒤 도착한 record가 아직 갱신되지 않은 파생
-   상태와 대조되는 창을 만들지 않는다.
+1. **Actor owner 측 완료 — terminal reply 제출 뒤 공개.** Actor owner는 위 검증을 통과한
+   binding 상태를 **하나의 소유 turn 안에서** 준비하고, `boundSessionBind(38)` terminal
+   reply를 해당 Node pair의 ordered connection에 먼저 제출한 뒤에만 그 binding을
+   `boundSessionSend(36)` 송신 경로에 공개한다. 따라서 같은 binding의 command 36은 terminal
+   reply를 추월하지 않고, binding 성립 이후 실행되는 Actor handler(join callback 포함)가
+   보내는 push는 그 노드에서 항상 등록된 binding으로 관찰된다.
+2. **Session owner 측 완료 = binding 완료의 인지 시점.** Session owner는 reply를 처리하는
+   turn에서 registry의 binding을 commit하고 `$zlink.actor.bound`를 그 session의 단일 ordered
+   STREAM 제출 queue에 먼저 넣은 뒤, 그 binding을 command 36과 relay된 reply의 제출 경로에
+   공개한다. 이 순서가 끝난 시점이 "binding이 완료되었다"를 인지하는 시점이며, bind caller의
+   성공 완료는 그 뒤에만 관찰된다. 공개할 때는 push 판정·STREAM 제출 경로가 참조하는 **모든
+   파생 상태(projection·route 사본)를 같은 선형화점에서 함께 공개해**, commit이 관찰 가능해진
+   뒤 도착한 record가 아직 갱신되지 않은 파생 상태와 대조되는 창을 만들지 않는다. Binding이
+   끝날 때는 역순이다 — 새 slotted 제출을 먼저 막고, 이미 수락한 frame을 제출한 뒤
+   `$zlink.actor.unbound`를 같은 queue에 넣는다.
 3. **판정 권위는 하나다.** push의 current 판정은 [§8.1](#81-seal-held-message와-route-전환)이
    열거한 Session owner 검증 항목(위의 네 generation 값)만 사용한다. 파생 사본의
    미갱신·불일치를 binding이 stale하다는 근거로 사용하지 않는다. Source 측도 전송 조건으로
@@ -726,6 +744,15 @@ lane 정책 타입, 검증 지점 하나)은 [§10](#10-실행과-수명)·[§11
 
 - `EnableActorDispatch()`는 `MeshName`을 받지 않는다. Object role 또는 Location Store가 없으면
   startup이 configuration error로 실패한다.
+- Local bind와 다른 MeshNode의 bind 모두에서 `$zlink.actor.bound`가 그 slot을 싣는 첫 STREAM
+  packet보다 먼저 도착하고, `$zlink.actor.unbound`가 마지막 slotted packet 뒤에 도착한다.
+- Push와 Actor로 relay한 request의 reply가 binding의 Actor slot을 싣는다.
+- `actor_slot`이 있는 packet의 dispatch context가 그 binding의 Actor를 가리킨다.
+- 현재 binding이 아닌 slot으로 도착한 `Send`와 `Request`가 모두 Actor 없이 session handler에
+  도달하고, Framework가 reply를 합성하지 않는다.
+- 두 Actor를 bind하면 서로 다른 slot을 받고, 같은 current binding을 다시 bind하면 같은 slot을
+  유지하며 통지를 다시 보내지 않고, 끝난 binding의 slot을 다시 쓰지 않으며, `65535`까지 발급한
+  session의 새 bind가 `InvalidOperation`으로 끝난다.
 - 한 session에서 Actor 둘을 bind하면 둘 다 bind되고 각각 독립된 route와 binding token으로 relay된다.
 - 위치가 stale한 `ActorRef`를 bind하면 Message Follow route가 있을 때 그 route로 한 번 relay되고,
   없으면 `Unavailable`로 끝난다. Store를 다시 읽어 재시도하지 않는다.

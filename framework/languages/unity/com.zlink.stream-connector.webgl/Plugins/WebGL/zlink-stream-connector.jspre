@@ -173,7 +173,8 @@ var ZlinkStreamConnectorBundle = (() => {
     hasRequestSeq: 1,
     hasMetadata: 2,
     hasCorrelationId: 8,
-    hasFlowId: 16
+    hasFlowId: 16,
+    hasActorSlot: 32
   };
   var ZLINK_STREAM_FORMAT_MARKER = 242;
   var ZLINK_STREAM_RESPONSE_KIND = 3;
@@ -220,6 +221,7 @@ var ZlinkStreamConnectorBundle = (() => {
     }
     const hasCorrelation = correlationBytes !== void 0;
     const hasFlow = header.flowId !== void 0 || header.flowOrigin !== void 0;
+    const hasActorSlot = header.actorSlot !== void 0;
     if (hasFlow && (header.flowId === void 0 || header.flowOrigin === void 0)) {
       throw new Error("Stream flow id and origin must be provided together.");
     }
@@ -232,8 +234,9 @@ var ZlinkStreamConnectorBundle = (() => {
     headerFlags = hasMetadata ? headerFlags | flags.hasMetadata : headerFlags & ~flags.hasMetadata;
     headerFlags = hasCorrelation ? headerFlags | flags.hasCorrelationId : headerFlags & ~flags.hasCorrelationId;
     headerFlags = hasFlow ? headerFlags | flags.hasFlowId : headerFlags & ~flags.hasFlowId;
+    headerFlags = hasActorSlot ? headerFlags | flags.hasActorSlot : headerFlags & ~flags.hasActorSlot;
     const metadataBytes = hasMetadata ? encodeStreamWireMetadata(header.metadata) : new Uint8Array();
-    const size = 4 + (hasRequestSeq ? 8 : 0) + 1 + nameBytes.length + (hasMetadata ? 2 + metadataBytes.length : 0) + (hasCorrelation ? 1 + correlationBytes.length : 0) + (hasFlow ? 37 : 0);
+    const size = 4 + (hasRequestSeq ? 8 : 0) + 1 + nameBytes.length + (hasMetadata ? 2 + metadataBytes.length : 0) + (hasCorrelation ? 1 + correlationBytes.length : 0) + (hasFlow ? 37 : 0) + (hasActorSlot ? 2 : 0);
     const buffer = new Uint8Array(size);
     let offset = 0;
     buffer[offset++] = ZLINK_STREAM_FORMAT_MARKER;
@@ -266,6 +269,12 @@ var ZlinkStreamConnectorBundle = (() => {
       offset += 36;
       buffer[offset++] = header.flowOrigin;
     }
+    if (hasActorSlot) {
+      if (!Number.isInteger(header.actorSlot) || header.actorSlot <= 0 || header.actorSlot > 65535) {
+        throw new Error("Stream actor slot is invalid.");
+      }
+      writeUInt16BE(buffer, offset, header.actorSlot);
+    }
     return buffer;
   }
   function decodeStreamWireHeader(header, flagOverrides, includeFlow = true) {
@@ -284,7 +293,8 @@ var ZlinkStreamConnectorBundle = (() => {
     const hasMetadata = (headerFlags & flags.hasMetadata) !== 0;
     const hasCorrelation = (headerFlags & flags.hasCorrelationId) !== 0;
     const hasFlow = (headerFlags & flags.hasFlowId) !== 0;
-    if ((headerFlags & ~31) !== 0) {
+    const hasActorSlot = (headerFlags & flags.hasActorSlot) !== 0;
+    if ((headerFlags & ~63) !== 0) {
       throw new Error("Unknown mandatory stream header flag.");
     }
     let requestSeq;
@@ -339,6 +349,17 @@ var ZlinkStreamConnectorBundle = (() => {
       }
       flowOrigin = includeFlow ? decodedFlowOrigin : void 0;
     }
+    let actorSlot;
+    if (hasActorSlot) {
+      if (header.length - offset < 2) {
+        throw new Error("Stream actor slot is incomplete.");
+      }
+      actorSlot = readUInt16BE(header, offset);
+      if (actorSlot === 0) {
+        throw new Error("Stream actor slot must not be zero.");
+      }
+      offset += 2;
+    }
     if (offset !== header.length) {
       throw new Error("Stream header has trailing bytes.");
     }
@@ -351,7 +372,8 @@ var ZlinkStreamConnectorBundle = (() => {
       metadata: decodedMetadata.metadata,
       correlationId,
       flowId,
-      flowOrigin
+      flowOrigin,
+      actorSlot
     };
   }
   function validateFlowId(flowId) {
@@ -539,6 +561,7 @@ var ZlinkStreamConnectorBundle = (() => {
     ZlinkStreamHeaderFlags2[ZlinkStreamHeaderFlags2["PayloadCompressed"] = 4] = "PayloadCompressed";
     ZlinkStreamHeaderFlags2[ZlinkStreamHeaderFlags2["HasCorrelationId"] = 8] = "HasCorrelationId";
     ZlinkStreamHeaderFlags2[ZlinkStreamHeaderFlags2["HasFlowId"] = 16] = "HasFlowId";
+    ZlinkStreamHeaderFlags2[ZlinkStreamHeaderFlags2["HasActorSlot"] = 32] = "HasActorSlot";
     return ZlinkStreamHeaderFlags2;
   })(ZlinkStreamHeaderFlags || {});
   var ZlinkStreamErrorCode = /* @__PURE__ */ ((ZlinkStreamErrorCode2) => {
@@ -789,7 +812,9 @@ var ZlinkStreamConnectorBundle = (() => {
 
   // packages/stream-connector/src/Runtime/Calls/ZlinkStreamCallBuilders.ts
   var ZlinkStreamCallBuilderState = class {
-    constructor(name) {
+    constructor(name, actorSlot, validateActor) {
+      this.actorSlot = actorSlot;
+      this.validateActor = validateActor;
       __publicField(this, "executed", false);
       __publicField(this, "name");
       __publicField(this, "metadata", ZlinkStreamMetadataMap.empty);
@@ -799,6 +824,7 @@ var ZlinkStreamConnectorBundle = (() => {
       this.name = name;
     }
     ensureNotExecuted() {
+      var _a;
       if (this.executed) {
         throw connectorError(
           "validationFailed" /* ValidationFailed */,
@@ -806,6 +832,7 @@ var ZlinkStreamConnectorBundle = (() => {
         );
       }
       this.executed = true;
+      (_a = this.validateActor) == null ? void 0 : _a.call(this);
     }
     resolveMessageName() {
       if (this.name === void 0) {
@@ -818,11 +845,11 @@ var ZlinkStreamConnectorBundle = (() => {
     }
   };
   var ZlinkStreamSendBuilder = class {
-    constructor(connector, name, payload) {
+    constructor(connector, name, payload, actorSlot, validateActor) {
       this.connector = connector;
       this.payload = payload;
       __publicField(this, "state");
-      this.state = new ZlinkStreamCallBuilderState(name);
+      this.state = new ZlinkStreamCallBuilderState(name, actorSlot, validateActor);
     }
     packetName(name) {
       validateName(name);
@@ -852,16 +879,18 @@ var ZlinkStreamConnectorBundle = (() => {
         this.state.compress,
         void 0,
         signal,
-        this.state.flow
+        this.state.flow,
+        void 0,
+        this.state.actorSlot
       );
     }
   };
   var ZlinkStreamRequestBuilder = class {
-    constructor(connector, name, payload) {
+    constructor(connector, name, payload, actorSlot, validateActor) {
       this.connector = connector;
       this.payload = payload;
       __publicField(this, "state");
-      this.state = new ZlinkStreamCallBuilderState(name);
+      this.state = new ZlinkStreamCallBuilderState(name, actorSlot, validateActor);
     }
     packetName(name) {
       validateName(name);
@@ -894,7 +923,8 @@ var ZlinkStreamConnectorBundle = (() => {
         this.state.compress,
         (_a = this.state.timeoutMs) != null ? _a : this.connector.options.requestTimeoutMs,
         typeof signalOrCallback === "function" ? void 0 : signalOrCallback,
-        this.state.flow
+        this.state.flow,
+        this.state.actorSlot
       );
       if (typeof signalOrCallback === "function") {
         operation.then(
@@ -920,7 +950,8 @@ var ZlinkStreamConnectorBundle = (() => {
         this.state.compress,
         (_a = this.state.timeoutMs) != null ? _a : this.connector.options.requestTimeoutMs,
         signal,
-        this.state.flow
+        this.state.flow,
+        this.state.actorSlot
       );
     }
   };
@@ -1279,7 +1310,8 @@ var ZlinkStreamConnectorBundle = (() => {
           metadata: header.metadata.values,
           correlationId: header.correlationId,
           flowId: header.flowId,
-          flowOrigin: encodeFlowOrigin(header.flowOrigin)
+          flowOrigin: encodeFlowOrigin(header.flowOrigin),
+          actorSlot: header.actorSlot
         });
       } catch (cause) {
         throw connectorError(
@@ -1308,7 +1340,8 @@ var ZlinkStreamConnectorBundle = (() => {
           metadata,
           correlationId: wire.correlationId,
           flowId: wire.flowId,
-          flowOrigin: decodeFlowOrigin(wire.flowOrigin)
+          flowOrigin: decodeFlowOrigin(wire.flowOrigin),
+          actorSlot: wire.actorSlot
         };
       } catch (cause) {
         throw connectorError(
@@ -1331,7 +1364,7 @@ var ZlinkStreamConnectorBundle = (() => {
   function streamWireErrorMessage2(cause) {
     return cause instanceof Error ? cause.message : "Stream header is invalid.";
   }
-  function buildHeader(kind, name, codec, metadata, compress, requestSeq, correlationId, flowId, flowOrigin) {
+  function buildHeader(kind, name, codec, metadata, compress, requestSeq, correlationId, flowId, flowOrigin, actorSlot) {
     let flags = 0 /* None */;
     if (requestSeq !== void 0) {
       flags |= 1 /* HasRequestSeq */;
@@ -1346,7 +1379,19 @@ var ZlinkStreamConnectorBundle = (() => {
       flags |= 8 /* HasCorrelationId */;
     }
     if (flowId !== void 0) flags |= 16 /* HasFlowId */;
-    return { kind, codec, flags, requestSeq, name, metadata, correlationId, flowId, flowOrigin };
+    if (actorSlot !== void 0) flags |= 32 /* HasActorSlot */;
+    return {
+      kind,
+      codec,
+      flags,
+      requestSeq,
+      name,
+      metadata,
+      correlationId,
+      flowId,
+      flowOrigin,
+      actorSlot
+    };
   }
   function validateHeaderSemantics(header) {
     validateEnum(header.kind, header.codec, header.flags);
@@ -1373,7 +1418,8 @@ var ZlinkStreamConnectorBundle = (() => {
     if (header.kind === 5 /* Control */) {
       const hasCorrelation = header.correlationId !== void 0 && header.correlationId.length > 0 || (header.flags & 8 /* HasCorrelationId */) !== 0;
       const hasFlow = header.flowId !== void 0 || header.flowOrigin !== void 0 || (header.flags & 16 /* HasFlowId */) !== 0;
-      if (header.flags !== 0 /* None */ || hasRequestSeq || hasMetadata || hasCorrelation || hasFlow || header.codec !== 0 /* Raw */) {
+      const hasActorSlot = header.actorSlot !== void 0 || (header.flags & 32 /* HasActorSlot */) !== 0;
+      if (header.flags !== 0 /* None */ || hasRequestSeq || hasMetadata || hasCorrelation || hasFlow || hasActorSlot || header.codec !== 0 /* Raw */) {
         throw connectorError(
           "frameDecodeFailed" /* FrameDecodeFailed */,
           "Control packet must use raw codec and must not contain flags."
@@ -1388,7 +1434,7 @@ var ZlinkStreamConnectorBundle = (() => {
     if (![0, 1, 2, 3].includes(codec)) {
       throw connectorError("frameDecodeFailed" /* FrameDecodeFailed */, "Unknown stream codec.");
     }
-    const known = 1 /* HasRequestSeq */ | 2 /* HasMetadata */ | 4 /* PayloadCompressed */ | 8 /* HasCorrelationId */ | 16 /* HasFlowId */;
+    const known = 1 /* HasRequestSeq */ | 2 /* HasMetadata */ | 4 /* PayloadCompressed */ | 8 /* HasCorrelationId */ | 16 /* HasFlowId */ | 32 /* HasActorSlot */;
     if ((flags & ~known) !== 0) {
       throw connectorError("frameDecodeFailed" /* FrameDecodeFailed */, "Unknown stream header flag.");
     }
@@ -1407,7 +1453,7 @@ var ZlinkStreamConnectorBundle = (() => {
     constructor(options) {
       this.options = options;
     }
-    encode(kind, name, payload, metadata, compress, requestSeq, correlationId, flowId, flowOrigin) {
+    encode(kind, name, payload, metadata, compress, requestSeq, correlationId, flowId, flowOrigin, actorSlot) {
       const payloadBytes = compress ? compressPayload(payload.payload, this.options.compression, this.options.compressionCodec) : payload.payload;
       const header = buildHeader(
         kind,
@@ -1418,7 +1464,8 @@ var ZlinkStreamConnectorBundle = (() => {
         requestSeq,
         correlationId,
         flowId,
-        flowOrigin
+        flowOrigin,
+        actorSlot
       );
       return this.encodeFrame(header, payloadBytes);
     }
@@ -1843,9 +1890,11 @@ var ZlinkStreamConnectorBundle = (() => {
      */
     resetForNewConnection() {
       this.receivedCounts.clear();
+      const submittedCallbacks = this.queue.slice(this.queueHead).filter((item) => (item == null ? void 0 : item.kind) === "callback");
       this.queue.length = 0;
+      this.queue.push(...submittedCallbacks);
       this.queueHead = 0;
-      this.queuedCount = 0;
+      this.queuedCount = submittedCallbacks.length;
     }
     /**
      * Releases every registered wait surface because the connection it was
@@ -1875,7 +1924,14 @@ var ZlinkStreamConnectorBundle = (() => {
           return;
         }
       }
-      this.queue.push({ message, signal });
+      this.queue.push({ kind: "message", message, signal });
+      this.queuedCount += 1;
+      if (this.deliverOnArrival) {
+        this.scheduleDrain();
+      }
+    }
+    enqueueCallback(callback) {
+      this.queue.push({ kind: "callback", callback });
       this.queuedCount += 1;
       if (this.deliverOnArrival) {
         this.scheduleDrain();
@@ -1902,7 +1958,7 @@ var ZlinkStreamConnectorBundle = (() => {
     offerQueued(name, registration) {
       for (let index = this.queueHead; index < this.queue.length; index += 1) {
         const queued = this.queue[index];
-        if (queued === void 0 || queued.message.name !== name) {
+        if (queued === void 0 || queued.kind !== "message" || queued.message.name !== name) {
           continue;
         }
         if (!registration.consume(queued.message)) {
@@ -1930,6 +1986,10 @@ var ZlinkStreamConnectorBundle = (() => {
           const queued = this.queue[index];
           if (queued === void 0) continue;
           this.removeAt(index);
+          if (queued.kind === "callback") {
+            await queued.callback();
+            continue;
+          }
           const { message, signal } = queued;
           const handlers = [...this.handlers.get(message.name)];
           for (const handler of handlers) {
@@ -1961,16 +2021,16 @@ var ZlinkStreamConnectorBundle = (() => {
       var _a, _b;
       for (let index = this.queueHead; index < this.queue.length; index += 1) {
         const queued = this.queue[index];
-        if (queued !== void 0 && ((_b = (_a = this.handlers.get(queued.message.name)) == null ? void 0 : _a.size) != null ? _b : 0) > 0) {
+        if (queued !== void 0 && (queued.kind === "callback" || ((_b = (_a = this.handlers.get(queued.message.name)) == null ? void 0 : _a.size) != null ? _b : 0) > 0)) {
           return index;
         }
       }
       return -1;
     }
     hasQueuedMessage(name) {
-      var _a;
       for (let index = this.queueHead; index < this.queue.length; index += 1) {
-        if (((_a = this.queue[index]) == null ? void 0 : _a.message.name) === name) return true;
+        const queued = this.queue[index];
+        if ((queued == null ? void 0 : queued.kind) === "message" && queued.message.name === name) return true;
       }
       return false;
     }
@@ -1999,7 +2059,7 @@ var ZlinkStreamConnectorBundle = (() => {
       this.flowContext = flowContext;
       __publicField(this, "pendingWrites", /* @__PURE__ */ new Set());
     }
-    async send(connection, kind, name, payload, metadata, compress, requestSeq, signal, correlationId, explicitFlow) {
+    async send(connection, kind, name, payload, metadata, compress, requestSeq, signal, correlationId, explicitFlow, actorSlot) {
       throwIfAborted(signal);
       const flow = this.protocol.flowEnabled() ? this.flowContext.currentOrCreate(explicitFlow) : void 0;
       await this.write(
@@ -2013,7 +2073,8 @@ var ZlinkStreamConnectorBundle = (() => {
           requestSeq,
           correlationId,
           flow == null ? void 0 : flow.flowId,
-          flow == null ? void 0 : flow.flowOrigin
+          flow == null ? void 0 : flow.flowOrigin,
+          actorSlot
         ),
         signal
       );
@@ -2060,15 +2121,186 @@ var ZlinkStreamConnectorBundle = (() => {
     return { closeReason, diagnostic };
   }
 
+  // packages/stream-connector/src/Runtime/ZlinkStreamActors.ts
+  var ACTOR_BOUND = "$zlink.actor.bound";
+  var ACTOR_UNBOUND = "$zlink.actor.unbound";
+  var zlinkStreamActorBinding = Symbol("zlink.stream.actorBinding");
+  var DefaultZlinkStreamActor = class {
+    constructor(connector, actorId, slot) {
+      this.connector = connector;
+      this.actorId = actorId;
+      this.slot = slot;
+      __publicField(this, "bound", true);
+    }
+    get isBound() {
+      return this.bound;
+    }
+    send(payload, messageType) {
+      this.ensureBound();
+      return this.connector.sendForActor(this, payload, messageType);
+    }
+    request(payload, messageType) {
+      this.ensureBound();
+      return this.connector.requestForActor(this, payload, messageType);
+    }
+    on(name, handler, messageType) {
+      return this.connector.onActorMessage(this, name, handler, messageType);
+    }
+    ensureBound() {
+      if (!this.bound) {
+        throw connectorError(
+          "validationFailed" /* ValidationFailed */,
+          `Actor '${this.actorId}' is no longer bound.`
+        );
+      }
+    }
+    close() {
+      this.bound = false;
+    }
+  };
+  var ZlinkStreamActors = class {
+    constructor(connector, receivedMessages, events) {
+      this.connector = connector;
+      this.receivedMessages = receivedMessages;
+      this.events = events;
+      __publicField(this, "bySlot", /* @__PURE__ */ new Map());
+      __publicField(this, "byId", /* @__PURE__ */ new Map());
+      __publicField(this, "issued", []);
+      __publicField(this, "boundHandlers", /* @__PURE__ */ new Set());
+      __publicField(this, "unboundHandlers", /* @__PURE__ */ new Set());
+    }
+    get snapshot() {
+      return Object.freeze([...this.bySlot.values()]);
+    }
+    find(actorId) {
+      return this.byId.get(actorId);
+    }
+    onBound(handler) {
+      this.boundHandlers.add(handler);
+      return subscription(() => this.boundHandlers.delete(handler));
+    }
+    onUnbound(handler) {
+      this.unboundHandlers.add(handler);
+      return subscription(() => this.unboundHandlers.delete(handler));
+    }
+    processControl(name, payload, signal) {
+      if (name === ACTOR_BOUND) {
+        this.bind(payload, signal);
+        return true;
+      }
+      if (name === ACTOR_UNBOUND) {
+        this.unbind(payload, signal);
+        return true;
+      }
+      return false;
+    }
+    resolve(slot) {
+      const actor = this.bySlot.get(slot);
+      if (actor === void 0) {
+        throw connectorError(
+          "frameDecodeFailed" /* FrameDecodeFailed */,
+          `Actor slot '${slot}' is not bound.`
+        );
+      }
+      return actor;
+    }
+    closeAll(signal) {
+      for (const actor of this.issued) {
+        if (!actor.isBound) continue;
+        this.bySlot.delete(actor.slot);
+        this.byId.delete(actor.actorId);
+        actor.close();
+        this.queue(this.unboundHandlers, actor, signal);
+      }
+      this.issued.length = 0;
+    }
+    bind(payload, signal) {
+      if (payload.length < 5 || payload[0] !== 1) {
+        throw invalidControl("Actor bound payload is invalid.");
+      }
+      const slot = payload[1] << 8 | payload[2];
+      const idLength = payload[3];
+      if (slot === 0 || idLength === 0 || payload.length !== 4 + idLength) {
+        throw invalidControl("Actor bound payload is invalid.");
+      }
+      let actorId;
+      try {
+        actorId = new TextDecoder("utf-8", { fatal: true }).decode(payload.subarray(4));
+      } catch (cause) {
+        throw connectorError(
+          "frameDecodeFailed" /* FrameDecodeFailed */,
+          "Actor id is not valid UTF-8.",
+          cause
+        );
+      }
+      if (actorId.length === 0 || this.bySlot.has(slot) || this.byId.has(actorId)) {
+        throw invalidControl("Actor bound identity is already in use.");
+      }
+      const actor = new DefaultZlinkStreamActor(this.connector, actorId, slot);
+      this.bySlot.set(slot, actor);
+      this.byId.set(actorId, actor);
+      this.issued.push(actor);
+      this.queue(this.boundHandlers, actor, signal);
+    }
+    unbind(payload, signal) {
+      if (payload.length !== 3 || payload[0] !== 1) {
+        throw invalidControl("Actor unbound payload is invalid.");
+      }
+      const slot = payload[1] << 8 | payload[2];
+      const actor = this.bySlot.get(slot);
+      if (slot === 0 || actor === void 0) {
+        throw invalidControl(`Actor slot '${slot}' is not bound.`);
+      }
+      this.bySlot.delete(slot);
+      this.byId.delete(actor.actorId);
+      actor.close();
+      this.queue(this.unboundHandlers, actor, signal);
+    }
+    queue(handlers, actor, signal) {
+      this.receivedMessages.enqueueCallback(() => {
+        for (const handler of [...handlers]) {
+          this.invoke(handler, actor, signal);
+        }
+      });
+    }
+    invoke(handler, actor, signal) {
+      try {
+        Promise.resolve(handler(actor, signal)).catch((cause) => {
+          void this.events.publishError(
+            {
+              code: "userCallbackFailed" /* UserCallbackFailed */,
+              message: "Actor lifecycle handler failed.",
+              cause
+            },
+            signal
+          );
+        });
+      } catch (cause) {
+        void this.events.publishError(
+          {
+            code: "userCallbackFailed" /* UserCallbackFailed */,
+            message: "Actor lifecycle handler failed.",
+            cause
+          },
+          signal
+        );
+      }
+    }
+  };
+  function invalidControl(message) {
+    return connectorError("frameDecodeFailed" /* FrameDecodeFailed */, message);
+  }
+
   // packages/stream-connector/src/Runtime/ZlinkStreamReceiveDispatcher.ts
   var ZlinkStreamReceiveDispatcher = class {
-    constructor(protocol, pendingRequests, receivedMessages, frameSender, events, flowContext, serverClosing) {
+    constructor(protocol, pendingRequests, receivedMessages, frameSender, events, flowContext, actors, serverClosing) {
       this.protocol = protocol;
       this.pendingRequests = pendingRequests;
       this.receivedMessages = receivedMessages;
       this.frameSender = frameSender;
       this.events = events;
       this.flowContext = flowContext;
+      this.actors = actors;
       this.serverClosing = serverClosing;
     }
     /**
@@ -2100,11 +2332,7 @@ var ZlinkStreamConnectorBundle = (() => {
       try {
         frames = this.protocol.decodeFrames(frameBytes, flowEnabled);
       } catch (cause) {
-        await this.events.publishError(
-          toStreamError(cause, "frameDecodeFailed" /* FrameDecodeFailed */, "Frame decode failed."),
-          signal
-        );
-        return { available: true, inbound: false };
+        throw cause;
       }
       for (const frame of frames) {
         if (isCurrent !== void 0 && !isCurrent()) {
@@ -2123,15 +2351,21 @@ var ZlinkStreamConnectorBundle = (() => {
           if (frame.header.kind === 5 /* Control */ && frame.header.name === ZLINK_STREAM_HEARTBEAT_PING) {
             throw cause;
           }
-          await this.events.publishError(
-            toStreamError(cause, "frameDecodeFailed" /* FrameDecodeFailed */, "Frame dispatch failed."),
-            signal
+          const error = toStreamError(
+            cause,
+            "frameDecodeFailed" /* FrameDecodeFailed */,
+            "Frame dispatch failed."
           );
+          if (error.code === "frameDecodeFailed" /* FrameDecodeFailed */) {
+            throw cause;
+          }
+          await this.events.publishError(error, signal);
         }
       }
       return { available: true, inbound: true };
     }
     async dispatch(connection, header, payload, signal, flowEnabled, connectionForSend) {
+      const actor = header.actorSlot === void 0 ? void 0 : this.actors.resolve(header.actorSlot);
       if (header.kind === 3 /* Response */ && header.requestSeq !== void 0) {
         try {
           if (!this.pendingRequests.resolve(header.requestSeq, {
@@ -2192,7 +2426,9 @@ var ZlinkStreamConnectorBundle = (() => {
             metadata: header.metadata,
             payload: { codec: header.codec, payload: this.protocol.decodePayload(header, payload) },
             flowId: flow == null ? void 0 : flow.flowId,
-            flowOrigin: flow == null ? void 0 : flow.flowOrigin
+            flowOrigin: flow == null ? void 0 : flow.flowOrigin,
+            actorId: actor == null ? void 0 : actor.actorId,
+            [zlinkStreamActorBinding]: actor
           },
           signal
         );
@@ -2200,6 +2436,9 @@ var ZlinkStreamConnectorBundle = (() => {
     }
     async dispatchControl(connection, header, payload, signal, connectionForSend) {
       var _a, _b;
+      if (this.actors.processControl(header.name, payload, signal)) {
+        return;
+      }
       if (header.name === ZLINK_SESSION_CLOSING) {
         const closing = decodeSessionClosing(payload);
         await ((_a = this.serverClosing) == null ? void 0 : _a.call(this, closing.closeReason));
@@ -2258,12 +2497,13 @@ var ZlinkStreamConnectorBundle = (() => {
     return Math.round(baseDelayMs * (0.5 + Math.random() * 0.5));
   }
   var ZlinkStreamConnectorLifecycle = class {
-    constructor(options, pendingRequests, frameSender, receiveDispatcher, receivedMessages, events) {
+    constructor(options, pendingRequests, frameSender, receiveDispatcher, receivedMessages, actors, events) {
       this.options = options;
       this.pendingRequests = pendingRequests;
       this.frameSender = frameSender;
       this.receiveDispatcher = receiveDispatcher;
       this.receivedMessages = receivedMessages;
+      this.actors = actors;
       this.events = events;
       __publicField(this, "receiveLoopAbort");
       __publicField(this, "receiveLoopSleeping", false);
@@ -2402,8 +2642,9 @@ var ZlinkStreamConnectorBundle = (() => {
         message: "Connector closed."
       });
       this.receivedMessages.connectionEnded();
-      void this.setState("closed" /* Closed */, void 0, signal);
-      this.publishDisconnectedWithoutWaiting(signal);
+      this.actors.closeAll(signal);
+      this.queueState("closed" /* Closed */, void 0, signal);
+      this.queueDisconnected(signal);
       if (errors.length === 1) throw errors[0];
       if (errors.length > 1) throw new AggregateError(errors, "Stream connector close failed.");
     }
@@ -2636,6 +2877,7 @@ var ZlinkStreamConnectorBundle = (() => {
       this.currentConnection = void 0;
       this.pendingRequests.failAll(error);
       this.receivedMessages.connectionEnded();
+      this.actors.closeAll();
       try {
         await (connection == null ? void 0 : connection.close());
       } catch {
@@ -2651,11 +2893,8 @@ var ZlinkStreamConnectorBundle = (() => {
      */
     async announceDisconnect(error) {
       if (this.closeRequested) return;
-      const announce = this.claimDisconnectedPublish();
-      void this.setState("disconnected" /* Disconnected */, error);
-      if (announce) {
-        void this.events.publishDisconnected().catch(() => void 0);
-      }
+      this.queueState("disconnected" /* Disconnected */, error);
+      this.queueDisconnected();
       if (this.shouldReconnect()) {
         queueMicrotask(() => {
           void this.connect().catch(() => void 0);
@@ -2703,16 +2942,35 @@ var ZlinkStreamConnectorBundle = (() => {
     publishDisconnectedWithoutWaiting(signal) {
       void this.publishDisconnectedOnce(signal).catch(() => void 0);
     }
+    queueDisconnected(signal) {
+      if (!this.claimDisconnectedPublish()) return;
+      this.receivedMessages.enqueueCallback(() => {
+        void this.events.publishDisconnected(signal).catch(() => void 0);
+      });
+    }
+    queueState(current, error, signal) {
+      const change = this.transitionState(current, error);
+      if (change === void 0) return;
+      this.receivedMessages.enqueueCallback(() => {
+        void this.publishStateChange(change, signal).catch(() => void 0);
+      });
+    }
     async setState(current, error, signal) {
+      const change = this.transitionState(current, error);
+      if (change === void 0) return;
+      await this.publishStateChange(change, signal);
+    }
+    transitionState(current, error) {
       const previous = this.currentState;
       this.currentState = current;
       if (previous === current && error === void 0) {
-        return;
+        return void 0;
       }
-      await this.events.publishStateChanged({ previous, current, error }, signal);
-      if (error !== void 0) {
-        await this.events.publishError(error, signal);
-      }
+      return { previous, current, error };
+    }
+    async publishStateChange(change, signal) {
+      await this.events.publishStateChanged(change, signal);
+      if (change.error !== void 0) await this.events.publishError(change.error, signal);
     }
   };
 
@@ -2994,6 +3252,7 @@ var ZlinkStreamConnectorBundle = (() => {
       __publicField(this, "frameSender");
       __publicField(this, "receiveDispatcher");
       __publicField(this, "diagnosticsLevelCell");
+      __publicField(this, "boundActors");
       __publicField(this, "options");
       const flowContext = new BrowserZlinkFlowContext();
       this.options = normalizeOptions(options, new BrowserStreamTransportFactory());
@@ -3009,6 +3268,7 @@ var ZlinkStreamConnectorBundle = (() => {
         this.events,
         this.options.dispatchMode === "immediate" /* Immediate */
       );
+      this.boundActors = new ZlinkStreamActors(this, this.receivedMessages, this.events);
       this.receiveDispatcher = new ZlinkStreamReceiveDispatcher(
         protocol,
         this.pendingRequests,
@@ -3016,6 +3276,7 @@ var ZlinkStreamConnectorBundle = (() => {
         this.frameSender,
         this.events,
         flowContext,
+        this.boundActors,
         (reason) => this.lifecycle.serverClosing(reason)
       );
       this.lifecycle = new ZlinkStreamConnectorLifecycle(
@@ -3024,6 +3285,7 @@ var ZlinkStreamConnectorBundle = (() => {
         this.frameSender,
         this.receiveDispatcher,
         this.receivedMessages,
+        this.boundActors,
         this.events
       );
     }
@@ -3038,6 +3300,18 @@ var ZlinkStreamConnectorBundle = (() => {
     }
     get pendingDispatchCount() {
       return this.pendingRequests.count;
+    }
+    get actors() {
+      return this.boundActors.snapshot;
+    }
+    actor(actorId) {
+      return this.boundActors.find(actorId);
+    }
+    onActorBound(handler) {
+      return this.boundActors.onBound(handler);
+    }
+    onActorUnbound(handler) {
+      return this.boundActors.onUnbound(handler);
     }
     /**
      * Spec stream-connector 32 §10: how many packets carrying `name` arrived on
@@ -3114,10 +3388,50 @@ var ZlinkStreamConnectorBundle = (() => {
           metadata: message.metadata,
           payload: this.decodePayload(message.payload, messageType),
           flowId: message.flowId,
-          flowOrigin: message.flowOrigin
+          flowOrigin: message.flowOrigin,
+          actorId: message.actorId
         },
         signal
       );
+      return this.receivedMessages.on(name, encodedHandler);
+    }
+    sendForActor(actor, payload, messageType) {
+      const encoded = this.encodePayload(payload, messageType);
+      return new ZlinkStreamSendBuilder(
+        this,
+        this.resolveNameOrDefault(encoded),
+        encoded,
+        actor.slot,
+        () => actor.ensureBound()
+      );
+    }
+    requestForActor(actor, payload, messageType) {
+      const encoded = this.encodePayload(payload, messageType);
+      return new ZlinkStreamRequestBuilder(
+        this,
+        this.resolveNameOrDefault(encoded),
+        encoded,
+        actor.slot,
+        () => actor.ensureBound()
+      );
+    }
+    onActorMessage(actor, name, handler, messageType) {
+      const encodedHandler = (message, signal) => {
+        if (message[zlinkStreamActorBinding] !== actor) {
+          return;
+        }
+        return handler(
+          {
+            name: message.name,
+            metadata: message.metadata,
+            payload: this.decodePayload(message.payload, messageType),
+            flowId: message.flowId,
+            flowOrigin: message.flowOrigin,
+            actorId: message.actorId
+          },
+          signal
+        );
+      };
       return this.receivedMessages.on(name, encodedHandler);
     }
     waitFor(nameOrType) {
@@ -3202,7 +3516,8 @@ var ZlinkStreamConnectorBundle = (() => {
                 metadata: message.metadata,
                 payload: this.decodeWaitPayload(message.payload),
                 flowId: message.flowId,
-                flowOrigin: message.flowOrigin
+                flowOrigin: message.flowOrigin,
+                actorId: message.actorId
               };
               if (!predicate(decoded)) {
                 return false;
@@ -3244,7 +3559,7 @@ var ZlinkStreamConnectorBundle = (() => {
       }
       return payload;
     }
-    async sendEncoded(kind, name, payload, metadata, compress, requestSeq, signal, flow, correlationId) {
+    async sendEncoded(kind, name, payload, metadata, compress, requestSeq, signal, flow, correlationId, actorSlot) {
       await this.frameSender.send(
         this.lifecycle.connectionForSend(),
         kind,
@@ -3255,7 +3570,8 @@ var ZlinkStreamConnectorBundle = (() => {
         requestSeq,
         signal,
         correlationId,
-        flow
+        flow,
+        actorSlot
       );
     }
     /**
@@ -3266,7 +3582,7 @@ var ZlinkStreamConnectorBundle = (() => {
       this.correlationCounter += 1n;
       return this.correlationCounter.toString(16);
     }
-    async requestEncoded(name, payload, metadata, compress, timeoutMs, signal, flow) {
+    async requestEncoded(name, payload, metadata, compress, timeoutMs, signal, flow, actorSlot) {
       const pending = this.pendingRequests.create(name, timeoutMs);
       try {
         await this.sendEncoded(
@@ -3278,7 +3594,8 @@ var ZlinkStreamConnectorBundle = (() => {
           pending.requestSeq,
           signal,
           flow,
-          this.nextCorrelationId()
+          this.nextCorrelationId(),
+          actorSlot
         );
         return await pending.promise;
       } catch (error) {

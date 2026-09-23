@@ -28,6 +28,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamErrorH
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
@@ -38,6 +39,7 @@ import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -84,6 +86,101 @@ final class ZLinkSessionActorBindingContractTest {
 
         assertEquals(List.of("actor-1"), stream.binds);
         assertEquals(1, stream.relays.size());
+    }
+
+    @Test
+    void bindingIssuesStableNonReusableSlotsAndOrdersLifecycleControls() {
+        FakeStream stream = new FakeStream();
+        ZLinkSessionActorsRuntime runtime = runtime(stream);
+
+        ZLinkSessionActor first =
+                runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A)).toCompletableFuture().join();
+        ZLinkSessionActor same =
+                runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A)).toCompletableFuture().join();
+        runtime.bind(new ActorRef("actor-2", 8, MESH, NODE_B)).toCompletableFuture().join();
+
+        assertSame(first, same);
+        assertEquals(List.of("$zlink.actor.bound", "$zlink.actor.bound"), stream.controlNames());
+        assertEquals(
+                List.of(
+                        "prepare:actor-1",
+                        "framework-visible:actor-1",
+                        "control:$zlink.actor.bound",
+                        "publish-visible:actor-1",
+                        "publish:actor-1",
+                        "prepare:actor-2",
+                        "framework-visible:actor-2",
+                        "control:$zlink.actor.bound",
+                        "publish-visible:actor-2",
+                        "publish:actor-2"),
+                stream.bindingEvents);
+        assertEquals(1, stream.controlSlot(0));
+        assertEquals(2, stream.controlSlot(1));
+
+        first.notifyDisconnected().toCompletableFuture().join();
+
+        assertEquals(
+                List.of("$zlink.actor.bound", "$zlink.actor.bound", "$zlink.actor.unbound"),
+                stream.controlNames());
+        assertEquals(1, stream.controlSlot(2));
+        assertTrue(runtime.findBySlot(1).isEmpty());
+        assertEquals("actor-2", runtime.findBySlot(2).orElseThrow().actorId());
+    }
+
+    @Test
+    void exhaustedActorSlotsRejectOnlyTheNewBinding() throws Exception {
+        FakeStream stream = new FakeStream();
+        ZLinkSessionActorsRuntime runtime = runtime(stream);
+        ZLinkSessionActor existing =
+                runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A)).toCompletableFuture().join();
+        Field slots = ZLinkSessionActorsRuntime.class.getDeclaredField("nextActorSlot");
+        slots.setAccessible(true);
+        slots.setInt(runtime, 0x10000);
+
+        CompletionException failure =
+                assertThrows(
+                        CompletionException.class,
+                        () ->
+                                runtime.bind(new ActorRef("actor-2", 8, MESH, NODE_B))
+                                        .toCompletableFuture()
+                                        .join());
+
+        assertEquals(
+                ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                ((ZLinkFrameworkException) failure.getCause()).kind());
+        assertEquals(List.of(existing), runtime.bound());
+    }
+
+    @Test
+    void failedBoundControlPhysicalTerminalKeepsTheAdmittedBindingPublished() {
+        FakeStream stream = new FakeStream();
+        ZLinkSessionActorsRuntime runtime = runtime(stream);
+        stream.controlAvailable = false;
+
+        assertThrows(
+                CompletionException.class,
+                () ->
+                        runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A))
+                                .toCompletableFuture()
+                                .join());
+
+        assertEquals("actor-1", runtime.bound().getFirst().actorId());
+        assertEquals("actor-1", runtime.findBySlot(1).orElseThrow().actorId());
+        assertTrue(stream.nativePublished.contains("actor-1"));
+    }
+
+    @Test
+    void command36QueuedAtBoundAdmissionSeesThePublishedBinding() {
+        FakeStream stream = new FakeStream();
+        ZLinkSessionActorsRuntime runtime =
+                runtime(stream, authoritySpotNode(Map.of(NODE_A, new ActorAuthority(3, 9, 4))));
+        stream.observeCommand36DuringBoundAdmission = true;
+
+        runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A)).toCompletableFuture().join();
+        Command36Observation observation = stream.command36Observation.join();
+
+        assertTrue(observation.accepted());
+        assertTrue(observation.nativePublished());
     }
 
     @Test
@@ -518,29 +615,35 @@ final class ZLinkSessionActorBindingContractTest {
     }
 
     private static ZLinkSessionActorsRuntime runtime(FakeStream stream) {
-        return new ZLinkSessionActorsRuntime(
-                stream,
-                SESSION,
-                null,
-                new RawSerializer(),
-                ignored -> true,
-                null,
-                true,
-                ZLinkStreamCodec.RAW);
+        ZLinkSessionActorsRuntime runtime =
+                new ZLinkSessionActorsRuntime(
+                        stream,
+                        SESSION,
+                        null,
+                        new RawSerializer(),
+                        ignored -> true,
+                        null,
+                        true,
+                        ZLinkStreamCodec.RAW);
+        stream.runtime = runtime;
+        return runtime;
     }
 
     private static ZLinkSessionActorsRuntime runtime(
             FakeStream stream, ZLinkInternalSpotNode spotNode) {
-        return new ZLinkSessionActorsRuntime(
-                spotNode,
-                stream,
-                SESSION,
-                null,
-                new RawSerializer(),
-                ignored -> true,
-                null,
-                true,
-                ZLinkStreamCodec.RAW);
+        ZLinkSessionActorsRuntime runtime =
+                new ZLinkSessionActorsRuntime(
+                        spotNode,
+                        stream,
+                        SESSION,
+                        null,
+                        new RawSerializer(),
+                        ignored -> true,
+                        null,
+                        true,
+                        ZLinkStreamCodec.RAW);
+        stream.runtime = runtime;
+        return runtime;
     }
 
     private static void corruptIngressGateProjection(
@@ -559,18 +662,21 @@ final class ZLinkSessionActorBindingContractTest {
 
     private static ZLinkSessionActorsRuntime runtime(
             FakeStream stream, Duration sessionRelocationSealTimeout) {
-        return new ZLinkSessionActorsRuntime(
-                null,
-                stream,
-                SESSION,
-                null,
-                new RawSerializer(),
-                ignored -> true,
-                null,
-                true,
-                ZLinkStreamCodec.RAW,
-                null,
-                sessionRelocationSealTimeout);
+        ZLinkSessionActorsRuntime runtime =
+                new ZLinkSessionActorsRuntime(
+                        null,
+                        stream,
+                        SESSION,
+                        null,
+                        new RawSerializer(),
+                        ignored -> true,
+                        null,
+                        true,
+                        ZLinkStreamCodec.RAW,
+                        null,
+                        sessionRelocationSealTimeout);
+        stream.runtime = runtime;
+        return runtime;
     }
 
     private static ZLinkServiceM6BWireCodec.BoundSessionSend boundSend(
@@ -717,6 +823,8 @@ final class ZLinkSessionActorBindingContractTest {
 
     private static final class FakeStream implements ZLinkBackendStreamSocket {
         private final List<String> binds = new ArrayList<>();
+        private final List<String> bindingEvents = new ArrayList<>();
+        private final List<ControlFrame> controls = new ArrayList<>();
         //  `unbindActor` is submitted from a pool thread (ZLinkBoundActor
         //  hops off the completing thread on purpose), so the recording list
         //  is read by the test thread while a pool thread appends to it.
@@ -738,12 +846,17 @@ final class ZLinkSessionActorBindingContractTest {
         private final List<CompletableFuture<Void>> boundPushAdmissions =
                 new java.util.concurrent.CopyOnWriteArrayList<>();
         private boolean deferBoundPushAdmission;
+        private boolean controlAvailable = true;
+        private boolean observeCommand36DuringBoundAdmission;
+        private final Set<String> nativePublished = ConcurrentHashMap.newKeySet();
+        private CompletableFuture<Command36Observation> command36Observation;
         private int disconnectNotifications;
         private RuntimeException disconnectSubmissionFailure;
         private RuntimeException unbindFailure;
         private int disconnectedPeers;
         private long nextIngressSequence = 1;
         private boolean closed;
+        private ZLinkSessionActorsRuntime runtime;
 
         @Override
         public String name() {
@@ -808,12 +921,66 @@ final class ZLinkSessionActorBindingContractTest {
         }
 
         @Override
+        public CompletionStage<Void> admitSessionControl(
+                RoutingId routingId, ZLinkStreamHeader header, List<Message> parts) {
+            CompletionStage<Void> admission =
+                    ZLinkBackendStreamSocket.super.admitSessionControl(routingId, header, parts);
+            if (observeCommand36DuringBoundAdmission
+                    && header.packetName().equals("$zlink.actor.bound")) {
+                var payload = outboundPayload("queued-command-36");
+                CompletionStage<Boolean> queuedCommand =
+                        CompletableFuture.supplyAsync(
+                                        () ->
+                                                runtime.acceptBoundSessionSendAsync(
+                                                        NODE_A,
+                                                        3,
+                                                        boundSend(NODE_A, 3, 9, 4),
+                                                        payload))
+                                .join();
+                command36Observation =
+                        queuedCommand
+                                .thenApply(
+                                        accepted ->
+                                                new Command36Observation(
+                                                        accepted,
+                                                        nativePublished.contains("actor-1")))
+                                .toCompletableFuture();
+                if (ZLinkStateLane.current() == null) {
+                    command36Observation.join();
+                }
+            }
+            return admission;
+        }
+
+        @Override
         public boolean send(
                 RoutingId routingId,
                 ZLinkStreamHeader header,
                 List<Message> parts,
                 SendFlags flags) {
+            if (header.kind() == ZLinkStreamMessageKind.CONTROL) {
+                int slot =
+                        Short.toUnsignedInt(
+                                ByteBuffer.wrap(parts.getFirst().toByteArray(), 1, Short.BYTES)
+                                        .getShort());
+                runtime.findBySlot(slot)
+                        .ifPresentOrElse(
+                                actor -> bindingEvents.add("framework-visible:" + actor.actorId()),
+                                () -> bindingEvents.add("framework-missing:" + slot));
+                controls.add(new ControlFrame(header.packetName(), parts.getFirst().toByteArray()));
+                bindingEvents.add("control:" + header.packetName());
+                return controlAvailable;
+            }
             return true;
+        }
+
+        private List<String> controlNames() {
+            return controls.stream().map(ControlFrame::name).toList();
+        }
+
+        private int controlSlot(int index) {
+            byte[] payload = controls.get(index).payload();
+            return Short.toUnsignedInt(ByteBuffer.wrap(payload, 1, Short.BYTES).getShort());
         }
 
         @Override
@@ -839,7 +1006,19 @@ final class ZLinkSessionActorBindingContractTest {
         public ZLinkBackendActorBindOperation bindActor(
                 RoutingId sessionRid, ZLinkBackendActorRef actor) {
             binds.add(actor.actorId());
+            bindingEvents.add("prepare:" + actor.actorId());
             return timeout -> CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public void publishBoundActor(RoutingId sessionRid, String actorId) {
+            if (runtime.bound().stream().anyMatch(actor -> actor.actorId().equals(actorId))) {
+                bindingEvents.add("publish-visible:" + actorId);
+            } else {
+                bindingEvents.add("publish-missing:" + actorId);
+            }
+            bindingEvents.add("publish:" + actorId);
+            nativePublished.add(actorId);
         }
 
         @Override
@@ -987,4 +1166,8 @@ final class ZLinkSessionActorBindingContractTest {
             return CompletableFuture.completedFuture(List.of(Message.from(new byte[0])));
         }
     }
+
+    private record Command36Observation(boolean accepted, boolean nativePublished) {}
+
+    private record ControlFrame(String name, byte[] payload) {}
 }

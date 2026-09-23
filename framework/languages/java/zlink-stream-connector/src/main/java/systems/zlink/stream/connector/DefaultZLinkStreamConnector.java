@@ -39,6 +39,7 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     private final List<ZLinkStreamDisconnectedHandler> disconnectedHandlers =
             new CopyOnWriteArrayList<>();
     private final ZLinkStreamDispatchQueue dispatchQueue;
+    private final ZLinkStreamActorRegistry actorRegistry;
     private final ZLinkStreamConnectorPayloadCodec payloadCodec;
     private final AtomicLong nextRequestSeq = new AtomicLong();
     //  Process-global monotonic correlation id (hex), stamped on outbound
@@ -66,6 +67,9 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     DefaultZLinkStreamConnector(ZLinkStreamConnectorOptions options) {
         this.configuration = ZLinkStreamConnectorConfiguration.from(options);
         this.dispatchQueue = new ZLinkStreamDispatchQueue(this::publishError);
+        this.actorRegistry =
+                new ZLinkStreamActorRegistry(
+                        this, configuration, dispatchQueue, this::publishError);
         this.payloadCodec = new ZLinkStreamConnectorPayloadCodec(this.configuration);
         this.receiveDispatcher =
                 new ZLinkStreamReceiveDispatcher(
@@ -76,7 +80,8 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
                         payloadCodec,
                         this::publishError,
                         this::sendControl,
-                        this::onSessionClosing);
+                        this::onSessionClosing,
+                        actorRegistry);
         this.lifecycle =
                 new ZLinkStreamConnectionLifecycle(
                         this.configuration,
@@ -223,7 +228,62 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
         return lifecycle.onConnectionStateChanged(handler);
     }
 
+    @Override
+    public List<ZLinkStreamActor> actors() {
+        return actorRegistry.snapshot();
+    }
+
+    @Override
+    public Optional<ZLinkStreamActor> actor(String actorId) {
+        Objects.requireNonNull(actorId, "actorId");
+        return actorRegistry.find(actorId);
+    }
+
+    @Override
+    public AutoCloseable onActorBound(ZLinkStreamActorHandler handler) {
+        return actorRegistry.onBound(handler);
+    }
+
+    @Override
+    public AutoCloseable onActorUnbound(ZLinkStreamActorHandler handler) {
+        return actorRegistry.onUnbound(handler);
+    }
+
+    ZLinkStreamSendCall actorSend(
+            ZLinkStreamActorRegistry.DefaultActor actor, ZLinkStreamEncodedPayload payload) {
+        return new ZLinkStreamConnectorSendCall(this, payloadCodec.copy(payload), false, actor);
+    }
+
+    ZLinkStreamRequestCall actorRequest(
+            ZLinkStreamActorRegistry.DefaultActor actor, ZLinkStreamEncodedPayload payload) {
+        return new ZLinkStreamConnectorRequestCall(
+                this, payloadCodec.copy(payload), configuration.timeouts().request(), false, actor);
+    }
+
+    ZLinkStreamEncodedPayload encodeActorPayload(Object payload) {
+        Objects.requireNonNull(payload, "payload");
+        if (payload instanceof ZLinkStreamEncodedPayload) {
+            throw ZLinkStreamException.validationFailed(
+                    "raw encoded payload must use the ZLinkStreamEncodedPayload overload");
+        }
+        ZLinkStreamTypedCodec codec = configuration.publicOptions().typedCodec();
+        if (codec == null) {
+            throw ZLinkStreamException.configurationError(
+                    "typed stream payload API requires ZLinkStreamConnectorOptions.typedCodec");
+        }
+        return codec.encode(
+                configuration.publicOptions().nameResolver().resolve(payload.getClass()), payload);
+    }
+
     CompletionStage<Void> submit(ZLinkStreamEncodedPayload payload, boolean compress) {
+        return submit(payload, compress, null);
+    }
+
+    CompletionStage<Void> submit(
+            ZLinkStreamEncodedPayload payload,
+            boolean compress,
+            ZLinkStreamActorRegistry.DefaultActor actor) {
+        Integer actorSlot = actorSlot(actor);
         ensureConnected();
         ZLinkConnectorFlowContext.State flow = outboundFlow();
         byte[] body = payloadCodec.encode(payload, compress);
@@ -242,7 +302,8 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
                         payload.metadata(),
                         null,
                         flow == null ? null : flow.flowId(),
-                        flow == null ? 0 : flow.flowOrigin());
+                        flow == null ? 0 : flow.flowOrigin(),
+                        actorSlot);
         return sendFrame(header, body);
     }
 
@@ -263,6 +324,15 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
 
     CompletionStage<ZLinkStreamEncodedPayload> submitRequest(
             ZLinkStreamEncodedPayload payload, Duration timeout, boolean compress) {
+        return submitRequest(payload, timeout, compress, null);
+    }
+
+    CompletionStage<ZLinkStreamEncodedPayload> submitRequest(
+            ZLinkStreamEncodedPayload payload,
+            Duration timeout,
+            boolean compress,
+            ZLinkStreamActorRegistry.DefaultActor actor) {
+        Integer actorSlot = actorSlot(actor);
         ensureConnected();
         ZLinkConnectorFlowContext.State flow = outboundFlow();
         long requestSeq = nextRequestSeq();
@@ -284,7 +354,8 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
                         payload.metadata(),
                         nextCorrelationId(),
                         flow == null ? null : flow.flowId(),
-                        flow == null ? 0 : flow.flowOrigin());
+                        flow == null ? 0 : flow.flowOrigin(),
+                        actorSlot);
 
         sendFrame(header, body)
                 .whenComplete(
@@ -399,7 +470,12 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
         }
     }
 
+    private Integer actorSlot(ZLinkStreamActorRegistry.DefaultActor actor) {
+        return actor == null ? null : actorRegistry.currentSlot(actor);
+    }
+
     private void notifyDisconnected() {
+        actorRegistry.connectionEnded();
         ZLinkStreamCloseReason reason = takeCloseReason();
         ZLinkStreamDisconnected event = new ZLinkStreamDisconnected(reason);
         //  disconnectedHandlers is a CopyOnWriteArrayList: its iterator is

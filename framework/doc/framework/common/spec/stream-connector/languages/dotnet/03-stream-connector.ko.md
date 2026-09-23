@@ -68,8 +68,38 @@ public interface IZlinkStreamConnector : IAsyncDisposable
     IDisposable OnConnectionStateChanged(Func<ZlinkStreamConnectionStateChanged, CancellationToken, ValueTask> handler);
     IDisposable OnDisconnected(Func<ZlinkStreamDisconnected, CancellationToken, ValueTask> handler);
     IDisposable OnErrorReceived(Func<ZlinkStreamError, CancellationToken, ValueTask> handler);
+
+    IReadOnlyList<IZlinkStreamActor> Actors { get; }        // 지금 bind되어 있는 Actor handle(§3.1)
+    IZlinkStreamActor? Actor(string actorId);               // 그 id의 열린 handle. 없으면 null
+    IDisposable OnActorBound(Func<IZlinkStreamActor, CancellationToken, ValueTask> handler);
+    IDisposable OnActorUnbound(Func<IZlinkStreamActor, CancellationToken, ValueTask> handler);
 }
 ```
+
+### 3.1 `IZlinkStreamActor`
+
+[공통 스펙 §5.6](../../32-stream-connector.ko.md#56-bound-actor)의 Actor handle이다. connector가
+`$zlink.actor.bound`로 만들고 `$zlink.actor.unbound`로 닫으며, application이 만들지 않는다.
+
+```csharp
+public interface IZlinkStreamActor
+{
+    string ActorId { get; }
+    bool IsBound { get; }                                    // unbound 통지 뒤 false
+
+    IZlinkStreamSendCall    Send(ZlinkStreamEncodedPayload payload);     // 이 Actor의 slot을 싣는다
+    IZlinkStreamRequestCall Request(ZlinkStreamEncodedPayload payload);
+    IDisposable On(string name, Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, CancellationToken, ValueTask> handler); // 이 Actor가 상대인 message만
+}
+```
+
+- `Send`·`Request`의 builder는 connector 수준과 같은 `IZlinkStreamSendCall`·`IZlinkStreamRequestCall`이다
+  (§4). `IsBound == false`인 handle의 `Async()`·`Submit(...)`은 `ValidationFailed`로 끝난다.
+- connector 수준 `On(name, …)`은 Actor와 무관하게 모든 message를 받고, handle의 `On`은 그 Actor가
+  상대인 message만 받는다. 둘 다 등록한 handler는 둘 다 실행된다.
+- `OnActorBound`·`OnActorUnbound`는 다른 등록 표면과 같은 `IDisposable` 규칙을 따른다.
+- typed 표면(§5)은 `IZlinkStreamActor`에도 같은 확장 메서드(`Send<TPayload>`, `Request<TPayload>`,
+  `On<TPayload>`)를 제공한다.
 
 - **handler는 등록 순서대로 호출된다.** handler 실패는 connector runtime을 종료하지 않고
   `UserCallbackFailed` 오류로 보고한다.
@@ -328,7 +358,8 @@ public sealed record ZlinkStreamMessage<TPayload>(
     ZlinkStreamMetadata Metadata,
     TPayload Payload,
     string? FlowId = null,                    // diagnostics level이 Off이면 null(§13)
-    ZlinkStreamFlowOrigin? FlowOrigin = null);
+    ZlinkStreamFlowOrigin? FlowOrigin = null,
+    string? ActorId = null);                  // 상대 bound Actor. slot 없는 frame은 null(공통 스펙 §5.6)
 
 public enum ZlinkStreamFlowOrigin { Inbound, Timer, Application, Lifecycle }
 ```

@@ -18,6 +18,7 @@ import type {
   ZlinkStreamConnectionState,
   ZlinkStreamDiagnosticsLevel
 } from './ZlinkStreamEnums';
+import type { ZlinkStreamActor } from './ZlinkStreamActor';
 
 export interface ZlinkStreamConnector {
   readonly isConnected: boolean;
@@ -30,6 +31,14 @@ export interface ZlinkStreamConnector {
    * Always equal to `options.diagnosticsLevel`.
    */
   readonly diagnosticsLevel: ZlinkStreamDiagnosticsLevel;
+  readonly actors: readonly ZlinkStreamActor[];
+  actor(actorId: string): ZlinkStreamActor | undefined;
+  onActorBound(
+    handler: (actor: ZlinkStreamActor, signal?: AbortSignal) => Promise<void> | void
+  ): Disposable;
+  onActorUnbound(
+    handler: (actor: ZlinkStreamActor, signal?: AbortSignal) => Promise<void> | void
+  ): Disposable;
   /**
    * Changes the diagnostics level at runtime without recreating the
    * connector (spec 26 §4.1, spec stream-connector 32 §13). Applies to

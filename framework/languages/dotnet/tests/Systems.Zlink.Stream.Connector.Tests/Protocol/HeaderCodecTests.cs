@@ -46,6 +46,31 @@ public sealed partial class StreamConnectorTests
         Assert.Equal("", decoded.Metadata.Get("optional"));
     }
 
+    [Fact]
+    public void HeaderProtocolRoundTripsActorSlotAndRejectsZero()
+    {
+        var codec = new ZlinkStreamHeaderCodec();
+        var source = new ZlinkStreamHeader(
+            ZlinkStreamMessageKind.Send,
+            ZlinkStreamCodec.Raw,
+            ZlinkStreamHeaderFlags.None,
+            null,
+            "actor.message",
+            ZlinkStreamMetadata.Empty,
+            ActorSlot: 7
+        );
+
+        var decoded = codec.Decode(codec.Encode(source));
+
+        Assert.Equal((ushort)7, decoded.ActorSlot);
+        Assert.True(decoded.Flags.HasFlag(ZlinkStreamHeaderFlags.HasActorSlot));
+        var zero = codec.Encode(source).ToArray();
+        zero[^2] = 0;
+        zero[^1] = 0;
+        var failure = Assert.Throws<ZlinkStreamException>(() => codec.Decode(zero));
+        Assert.Equal(ZlinkStreamErrorCode.FrameDecodeFailed, failure.Error.Code);
+    }
+
     // MFLOW-009: correlation id is a first-class header trailer (flag 0x08), wire layout
     // = after metadata, u8 length + UTF-8 bytes. Round-trips and is byte-exact.
     [Fact]

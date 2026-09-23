@@ -23,8 +23,10 @@ internal sealed class ZlinkStreamConnectorCallbacks(
     > _errorReceived = new();
 
     private bool _accepting = true;
+    private int _admittedDispatchCount;
+    private int _boundedDispatchCount;
     private int _pendingDispatchCount;
-    private int _reservedRequestCallbacks;
+    private int _waitingBoundedDispatchCount;
 
     public int PendingDispatchCount => Volatile.Read(ref _pendingDispatchCount);
 
@@ -37,8 +39,12 @@ internal sealed class ZlinkStreamConnectorCallbacks(
         lock (_dispatchGate)
         {
             _accepting = false;
+            foreach (var queued in _dispatchQueue)
+                queued.StopWaiting();
             _dispatchQueue.Clear();
-            _reservedRequestCallbacks = 0;
+            _admittedDispatchCount = 0;
+            _boundedDispatchCount = 0;
+            _waitingBoundedDispatchCount = 0;
             Volatile.Write(ref _pendingDispatchCount, 0);
         }
 
@@ -167,8 +173,13 @@ internal sealed class ZlinkStreamConnectorCallbacks(
             return;
         }
 
-        EnqueueDroppable(callback, reportErrors);
+        await EnqueueAsync(callback, reportErrors, cancellationToken).ConfigureAwait(false);
     }
+
+    internal ValueTask InvokeUserCallbackInlineAsync(
+        Func<CancellationToken, ValueTask> callback,
+        CancellationToken cancellationToken
+    ) => InvokeUserCallbackAsync(callback, cancellationToken, reportErrors: true);
 
     public async ValueTask DispatchAsync(CancellationToken cancellationToken)
     {
@@ -181,8 +192,19 @@ internal sealed class ZlinkStreamConnectorCallbacks(
                 if (_dispatchQueue.First is not { } first)
                     return;
                 queued = first.Value;
+                if (!queued.IsAdmitted)
+                    throw new InvalidOperationException(
+                        "The first dispatch callback must be admitted."
+                    );
                 _dispatchQueue.RemoveFirst();
-                Volatile.Write(ref _pendingDispatchCount, _dispatchQueue.Count);
+                queued.Node = null;
+                _admittedDispatchCount--;
+                if (queued.CountsAgainstLimit)
+                {
+                    _boundedDispatchCount--;
+                    AdmitNextWaitingCallbackLocked();
+                }
+                Volatile.Write(ref _pendingDispatchCount, _admittedDispatchCount);
             }
             await InvokeUserCallbackAsync(queued.Callback, cancellationToken, queued.ReportErrors)
                 .ConfigureAwait(false);
@@ -196,61 +218,46 @@ internal sealed class ZlinkStreamConnectorCallbacks(
         Action<TResult> callback
     )
     {
-        var reserved = ReserveRequestCallback();
-        try
+        taskRunner.RunDetached(async _ =>
         {
-            taskRunner.RunDetached(async _ =>
+            Func<CancellationToken, ValueTask> completion;
+            try
             {
-                Func<CancellationToken, ValueTask> completion;
-                try
+                var reply = await request().ConfigureAwait(false);
+                completion = _ =>
                 {
-                    var reply = await request().ConfigureAwait(false);
-                    completion = _ =>
-                    {
-                        // Read once here so the completion closure judges the
-                        // reply consistently even if the level changes again
-                        // before it runs.
-                        var diagnosticsLevel = options.DiagnosticsLevel;
-                        using var flow =
-                            diagnosticsLevel == ZlinkStreamDiagnosticsLevel.Off
-                                ? null
-                                : ZlinkStreamFlowContext.Enter(reply.FlowId, reply.FlowOrigin);
-                        callback(
-                            reply.Error is { } error ? failure(error) : success(reply.Payload!)
-                        );
-                        return ValueTask.CompletedTask;
-                    };
-                }
-                catch (ZlinkStreamException ex)
+                    // Read once here so the completion closure judges the
+                    // reply consistently even if the level changes again
+                    // before it runs.
+                    var diagnosticsLevel = options.DiagnosticsLevel;
+                    using var flow =
+                        diagnosticsLevel == ZlinkStreamDiagnosticsLevel.Off
+                            ? null
+                            : ZlinkStreamFlowContext.Enter(reply.FlowId, reply.FlowOrigin);
+                    callback(reply.Error is { } error ? failure(error) : success(reply.Payload!));
+                    return ValueTask.CompletedTask;
+                };
+            }
+            catch (ZlinkStreamException ex)
+            {
+                completion = _ =>
                 {
-                    completion = _ =>
-                    {
-                        callback(failure(ex.Error));
-                        return ValueTask.CompletedTask;
-                    };
-                }
-                catch (Exception ex)
+                    callback(failure(ex.Error));
+                    return ValueTask.CompletedTask;
+                };
+            }
+            catch (Exception ex)
+            {
+                var error = new ZlinkStreamError(ZlinkStreamErrorCode.SendFailed, ex.Message, ex);
+                completion = _ =>
                 {
-                    var error = new ZlinkStreamError(
-                        ZlinkStreamErrorCode.SendFailed,
-                        ex.Message,
-                        ex
-                    );
-                    completion = _ =>
-                    {
-                        callback(failure(error));
-                        return ValueTask.CompletedTask;
-                    };
-                }
+                    callback(failure(error));
+                    return ValueTask.CompletedTask;
+                };
+            }
 
-                await DispatchRequestCompletionAsync(completion, reserved).ConfigureAwait(false);
-            });
-        }
-        catch
-        {
-            ReleaseRequestCallbackReservation(reserved);
-            throw;
-        }
+            await DispatchRequestCompletionAsync(completion).ConfigureAwait(false);
+        });
     }
 
     private IDisposable? EnterLifecycleFlow()
@@ -275,7 +282,14 @@ internal sealed class ZlinkStreamConnectorCallbacks(
         }
         catch (Exception ex) when (reportErrors)
         {
-            await ReportUserCallbackErrorAsync(ex, cancellationToken).ConfigureAwait(false);
+            var report = ReportUserCallbackErrorAsync(ex, cancellationToken);
+            if (dispatchMode == ZlinkStreamDispatchMode.Immediate)
+            {
+                await report.ConfigureAwait(false);
+                return;
+            }
+            if (!report.IsCompletedSuccessfully)
+                _ = report.AsTask();
         }
         catch { }
     }
@@ -304,32 +318,11 @@ internal sealed class ZlinkStreamConnectorCallbacks(
             .ConfigureAwait(false);
     }
 
-    private bool ReserveRequestCallback()
-    {
-        if (dispatchMode == ZlinkStreamDispatchMode.Immediate)
-            return false;
-
-        lock (_dispatchGate)
-        {
-            ObjectDisposedException.ThrowIf(!_accepting, this);
-            while (_dispatchQueue.Count + _reservedRequestCallbacks >= maxPendingDispatchCallbacks)
-                if (!TryDropOldestDroppableLocked())
-                    throw ZlinkStreamConnector.Error(
-                        ZlinkStreamErrorCode.SendFailed,
-                        "Connector request callback queue is full."
-                    );
-
-            _reservedRequestCallbacks++;
-            return true;
-        }
-    }
-
     private async ValueTask DispatchRequestCompletionAsync(
-        Func<CancellationToken, ValueTask> callback,
-        bool reserved
+        Func<CancellationToken, ValueTask> callback
     )
     {
-        if (!reserved)
+        if (dispatchMode == ZlinkStreamDispatchMode.Immediate)
         {
             await InvokeUserCallbackAsync(callback, CancellationToken.None, true)
                 .ConfigureAwait(false);
@@ -338,60 +331,109 @@ internal sealed class ZlinkStreamConnectorCallbacks(
 
         lock (_dispatchGate)
         {
-            _reservedRequestCallbacks--;
             if (!_accepting)
                 return;
-            _dispatchQueue.AddLast(new QueuedCallback(callback, true, true));
-            Volatile.Write(ref _pendingDispatchCount, _dispatchQueue.Count);
+            var queued = new QueuedCallback(callback, true, false, isAdmitted: true);
+            queued.Node = _dispatchQueue.AddLast(queued);
+            _admittedDispatchCount++;
+            Volatile.Write(ref _pendingDispatchCount, _admittedDispatchCount);
         }
     }
 
-    private void EnqueueDroppable(Func<CancellationToken, ValueTask> callback, bool reportErrors)
+    private async ValueTask EnqueueAsync(
+        Func<CancellationToken, ValueTask> callback,
+        bool reportErrors,
+        CancellationToken cancellationToken
+    )
     {
+        QueuedCallback queued;
         lock (_dispatchGate)
         {
             if (!_accepting)
                 return;
-            while (_dispatchQueue.Count + _reservedRequestCallbacks >= maxPendingDispatchCallbacks)
-                if (!TryDropOldestDroppableLocked())
-                    return;
-
-            _dispatchQueue.AddLast(new QueuedCallback(callback, reportErrors, false));
-            Volatile.Write(ref _pendingDispatchCount, _dispatchQueue.Count);
+            var admitNow =
+                _boundedDispatchCount < maxPendingDispatchCallbacks
+                && _waitingBoundedDispatchCount == 0;
+            queued = new QueuedCallback(callback, reportErrors, true, admitNow);
+            queued.Node = _dispatchQueue.AddLast(queued);
+            if (admitNow)
+            {
+                _boundedDispatchCount++;
+                _admittedDispatchCount++;
+            }
+            else
+                _waitingBoundedDispatchCount++;
+            Volatile.Write(ref _pendingDispatchCount, _admittedDispatchCount);
         }
-    }
 
-    private void ReleaseRequestCallbackReservation(bool reserved)
-    {
-        if (!reserved)
+        if (queued.IsAdmitted)
             return;
 
-        lock (_dispatchGate)
+        try
         {
-            if (_reservedRequestCallbacks > 0)
-                _reservedRequestCallbacks--;
+            await queued.Admission.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            lock (_dispatchGate)
+            {
+                if (queued.IsAdmitted)
+                    return;
+                if (queued.Node?.List is not null)
+                {
+                    _dispatchQueue.Remove(queued.Node);
+                    queued.Node = null;
+                    _waitingBoundedDispatchCount--;
+                }
+            }
+            throw;
         }
     }
 
-    private bool TryDropOldestDroppableLocked()
+    private void AdmitNextWaitingCallbackLocked()
     {
-        for (var current = _dispatchQueue.First; current is not null; current = current.Next)
+        if (_waitingBoundedDispatchCount == 0)
+            return;
+        for (var node = _dispatchQueue.First; node is not null; node = node.Next)
         {
-            if (current.Value.Required)
+            var queued = node.Value;
+            if (queued.IsAdmitted || !queued.CountsAgainstLimit)
                 continue;
-            _dispatchQueue.Remove(current);
-            Volatile.Write(ref _pendingDispatchCount, _dispatchQueue.Count);
-            return true;
+            _waitingBoundedDispatchCount--;
+            _boundedDispatchCount++;
+            _admittedDispatchCount++;
+            queued.Admit();
+            return;
         }
-
-        return false;
+        throw new InvalidOperationException("A waiting dispatch callback is missing.");
     }
 
-    private readonly record struct QueuedCallback(
-        Func<CancellationToken, ValueTask> Callback,
-        bool ReportErrors,
-        bool Required
-    );
+    private sealed class QueuedCallback(
+        Func<CancellationToken, ValueTask> callback,
+        bool reportErrors,
+        bool countsAgainstLimit,
+        bool isAdmitted
+    )
+    {
+        private readonly TaskCompletionSource _admission = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+
+        internal Func<CancellationToken, ValueTask> Callback { get; } = callback;
+        internal bool ReportErrors { get; } = reportErrors;
+        internal bool CountsAgainstLimit { get; } = countsAgainstLimit;
+        internal bool IsAdmitted { get; private set; } = isAdmitted;
+        internal Task Admission => _admission.Task;
+        internal LinkedListNode<QueuedCallback>? Node { get; set; }
+
+        internal void Admit()
+        {
+            IsAdmitted = true;
+            _admission.TrySetResult();
+        }
+
+        internal void StopWaiting() => _admission.TrySetResult();
+    }
 }
 
 /// <summary>

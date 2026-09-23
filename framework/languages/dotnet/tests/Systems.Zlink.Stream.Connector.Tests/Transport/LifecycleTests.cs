@@ -1369,7 +1369,7 @@ public sealed partial class StreamConnectorTests
                 return ValueTask.FromResult<IZlinkStreamConnection>(secondConnection);
             },
             _ => { },
-            () => { }
+            () => ValueTask.CompletedTask
         );
         var states = new List<ZlinkStreamConnectionState>();
         var disconnected = new TaskCompletionSource<ZlinkStreamDisconnected>(
@@ -1455,7 +1455,7 @@ public sealed partial class StreamConnectorTests
             callbacks,
             _ => ValueTask.FromResult<IZlinkStreamConnection>(connection),
             _ => { },
-            () => { }
+            () => ValueTask.CompletedTask
         );
         var disconnected = new TaskCompletionSource<ZlinkStreamDisconnected>(
             TaskCreationOptions.RunContinuationsAsynchronously
@@ -1557,7 +1557,7 @@ public sealed partial class StreamConnectorTests
                         : secondConnection
                 ),
             _ => { },
-            () => { }
+            () => ValueTask.CompletedTask
         );
         var disconnectCount = 0;
         var disconnected = new TaskCompletionSource<ZlinkStreamDisconnected>(
@@ -1636,7 +1636,7 @@ public sealed partial class StreamConnectorTests
             callbacks,
             _ => ValueTask.FromResult<IZlinkStreamConnection>(connection),
             _ => { },
-            () => { }
+            () => ValueTask.CompletedTask
         );
         var disconnectCount = 0;
         var disconnected = new TaskCompletionSource<ZlinkStreamDisconnected>(
@@ -2475,7 +2475,7 @@ public sealed partial class StreamConnectorTests
             callbacks,
             OpenTransportAsync,
             _ => { },
-            () => { }
+            () => ValueTask.CompletedTask
         );
 
         await lifecycle.ConnectAsync(
