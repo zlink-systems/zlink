@@ -27,6 +27,7 @@ var ZlinkStreamWebGlRuntime = (function () {
   var EVENT_STATE_CHANGED = 5;
   var EVENT_ACTOR_BOUND = 6;
   var EVENT_ACTOR_UNBOUND = 7;
+  var EVENT_REPLY_RECEIVED = 8;
 
   var instances = {};
   var nextHandle = 1;
@@ -132,7 +133,8 @@ var ZlinkStreamWebGlRuntime = (function () {
       disconnected: EVENT_DISCONNECTED,
       stateChanged: EVENT_STATE_CHANGED,
       actorBound: EVENT_ACTOR_BOUND,
-      actorUnbound: EVENT_ACTOR_UNBOUND
+      actorUnbound: EVENT_ACTOR_UNBOUND,
+      replyReceived: EVENT_REPLY_RECEIVED
     },
 
     takeLastError: function () {
@@ -192,6 +194,24 @@ var ZlinkStreamWebGlRuntime = (function () {
           value: 0,
           text: JSON.stringify({ code: error.code, message: error.message || '' }),
           bytes: null
+        });
+      }));
+      state.subscriptions.push(connector.onReplyReceived(function (context) {
+        var reply = context.reply;
+        push(state, {
+          type: EVENT_REPLY_RECEIVED,
+          id: 0,
+          value: context.succeeded ? reply.payload.codec : -1,
+          text: JSON.stringify({
+            requestPacketName: context.requestPacketName,
+            actorId: context.actorId || null,
+            succeeded: context.succeeded,
+            name: reply ? reply.name : null,
+            metadata: reply ? metadataToObject(reply.metadata) : null,
+            error: context.error ? describeError({ error: context.error }) : null,
+            elapsed: context.elapsed
+          }),
+          bytes: reply ? reply.payload.payload : null
         });
       }));
       state.subscriptions.push(connector.onDisconnected(function () {
@@ -410,26 +430,6 @@ var ZlinkStreamWebGlRuntime = (function () {
       return instance(handle).connector.pendingDispatchCount | 0;
     },
 
-    diagnosticsLevel: function (handle) {
-      return diagnosticsOrdinal(instance(handle).connector.diagnosticsLevel);
-    },
-
-    setDiagnosticsLevel: function (handle, level) {
-      var state = instance(handle);
-      var names = ['off', 'errors', 'normal', 'detailed'];
-      if (level < 0 || level >= names.length) {
-        lastError = JSON.stringify({ code: 'configurationError', message: 'DiagnosticsLevel is invalid.' });
-        return 0;
-      }
-      try {
-        state.connector.setDiagnosticsLevel(names[level]);
-        return 1;
-      } catch (cause) {
-        lastError = JSON.stringify(describeError(cause));
-        return 0;
-      }
-    },
-
     stateOrdinal: stateOrdinal,
     closeReasonOrdinal: closeReasonOrdinal
   };
@@ -477,15 +477,6 @@ var ZlinkStreamWebGlRuntime = (function () {
     }
   }
 
-  function diagnosticsOrdinal(value) {
-    switch (value) {
-      case 'off': return 0;
-      case 'errors': return 1;
-      case 'normal': return 2;
-      case 'detailed': return 3;
-      default: return 1;
-    }
-  }
 })();
 
 if (typeof globalThis !== 'undefined') { globalThis.ZlinkStreamWebGlRuntime = ZlinkStreamWebGlRuntime; }

@@ -303,27 +303,6 @@ public sealed partial class StreamConnectorTests
 
         public ZlinkStreamConnectorOptions Options { get; }
 
-        public ZlinkStreamDiagnosticsLevel DiagnosticsLevel => Options.DiagnosticsLevel;
-
-        public void SetDiagnosticsLevel(ZlinkStreamDiagnosticsLevel level)
-        {
-            if (!System.Enum.IsDefined(level))
-                throw new ZlinkStreamException(
-                    new ZlinkStreamError(
-                        ZlinkStreamErrorCode.ValidationFailed,
-                        "DiagnosticsLevel is invalid."
-                    )
-                );
-
-            Options.SetDiagnosticsLevelLive(level);
-        }
-
-        public Task SetDiagnosticsLevelAsync(ZlinkStreamDiagnosticsLevel level)
-        {
-            SetDiagnosticsLevel(level);
-            return Task.CompletedTask;
-        }
-
         public int PendingDispatchCount => 0;
 
         public IReadOnlyList<IZlinkStreamActor> Actors => [];
@@ -336,6 +315,14 @@ public sealed partial class StreamConnectorTests
 
         public IDisposable OnActorUnbound(
             Func<IZlinkStreamActor, CancellationToken, ValueTask> handler
+        ) => new NoopRegistration();
+
+        public IDisposable OnRequestSending(
+            Action<ZlinkStreamRequestSendingContext> handler
+        ) => new NoopRegistration();
+
+        public IDisposable OnReplyReceived(
+            Func<ZlinkStreamReplyReceivedContext, CancellationToken, ValueTask> handler
         ) => new NoopRegistration();
 
         public int ReceivedCount(string name)

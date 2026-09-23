@@ -466,13 +466,6 @@ class KotlinPublicSurfaceContractTest {
                 "messages" to 1,
                 "errors" to 1,
                 "request" to 2,
-                // The connector keeps its current flow in a thread local
-                // (stream-connector/languages/java/03-stream-connector.ko.md 7.1).
-                // A coroutine resumes on whatever thread is free, so these
-                // three carry that flow across suspension points.
-                "currentZLinkStreamFlow" to 1,
-                "withZLinkStreamFlow" to 1,
-                "collectInStreamFlow" to 1,
             ),
         )
         assertFacadeMethodCounts(
@@ -587,16 +580,11 @@ class KotlinPublicSurfaceContractTest {
                 "isConnected" to 1,
                 "getState" to 1,
                 "getOptions" to 1,
-                // stream-connector/32-stream-connector.ko.md 13 asks for a
-                // synchronous surface and, where the language is idiomatic
-                // about it, a matching asynchronous pair. In Kotlin that is
-                // the property setter plus a suspending function.
-                "getDiagnosticsLevel" to 1,
-                "setDiagnosticsLevel" to 2,
                 "getPendingDispatchCount" to 1,
                 "receivedCount" to 1,
-                "on" to 2,
+                "on" to 3,
                 "onErrorReceived" to 1,
+                "onRequestSending" to 1,
                 "onDisconnected" to 1,
                 "onConnectionStateChanged" to 1,
                 "connect" to 1,
@@ -617,8 +605,9 @@ class KotlinPublicSurfaceContractTest {
                 "waitFor" to 2,
                 "expectNone" to 2,
                 "waitForSequence" to 2,
-                "messages" to 1,
+                "messages" to 3,
                 "errors" to 1,
+                "repliesReceived" to 1,
                 "actors" to 1,
                 "actor" to 1,
                 "actorBound" to 1,
@@ -627,7 +616,14 @@ class KotlinPublicSurfaceContractTest {
         )
         assertPublicMethodCounts(
             "ZLinkKotlinStreamActor",
-            mapOf("getActorId" to 1, "isBound" to 1, "send" to 2, "request" to 2, "messages" to 1),
+            mapOf(
+                "getActorId" to 1,
+                "isBound" to 1,
+                "send" to 2,
+                "request" to 2,
+                "on" to 3,
+                "messages" to 3,
+            ),
         )
         assertPublicMethodCounts(
             "ZLinkKotlinRawRequestCall",
@@ -687,7 +683,7 @@ class KotlinPublicSurfaceContractTest {
         val expectedHashes =
             mapOf(
                 "ZLinkConnectorExtensionsKt" to
-                    "06fe63e1abe658acfcebc9374e875deb0b9a525060448a9fc39ebefbf18fbc54",
+                    "10a3dea344e1e6490bb7b9bca90316a2270c62d31206d160151952c4e7ca47d5",
                 "ZLinkCoroutineHandlerOptionsKt" to
                     "67fda6a26015bcd374098db883ec13f012b2536da914e6b3e8fb0f6aea9e86f4",
                 "ZLinkCoroutineTurnAwaitKt" to
@@ -702,30 +698,12 @@ class KotlinPublicSurfaceContractTest {
                     "77ec5d78879dc243678140f1f99b9046f58b035ebf72a838f1f691e15c8673a7",
                 "ZLinkSpotHandlerRegistryExtensionsKt" to
                     "d92110bc3d42d0dc2c3a5056e52992567df4604cdad2d2c02cb0fec4777abdd7",
-                //  Updated for 0a66674a91, which removed observeInbound from the connector:
-                //  the Stream Connector uses each runtime own socket, so the Core STREAM
-                //  backpressure contract never applied and common spec 32 §10 now says the
-                //  client keeps receiving without a queue bound. The pin could not follow at
-                //  the time because this module test source did not compile (#513).
-                //  Re-pinned after merging main: this branch also changes the connector
-                //  surface (the suspending setDiagnosticsLevel pair among others), so the
-                //  merged surface is not the one main pinned. The value below is measured.
-                //
-                //  Re-pinned again for #600, which added the three members the Kotlin
-                //  surface list in
-                //  stream-connector/languages/java/03-stream-connector.ko.md §12 names:
-                //    closeReason ()L…/ZLinkStreamCloseReason;
-                //    expectNone ()L…/ZLinkStreamTypedExpectNoneCall;
-                //    waitForSequence ()L…/ZLinkStreamTypedSequenceCall;
-                //  Measured both ways: the 29 signatures hash to the value below, and
-                //  dropping those three walks it back to the 86e827b8… this pin held
-                //  before #600, so nothing else moved.
-                //  #933 adds Actor handles and aligns connector request calls
-                //  with the suspending Kotlin builders declared in §12.
+                //  Stream Connector wrapper public descriptors are pinned separately from
+                //  the framework extensions because their contract changes together.
                 "ZLinkKotlinStreamConnector" to
-                    "c55dd1ed32d466b6d4d859407206d0d0d8fa5c950821bd31ab2ab553cbfa33ac",
+                    "4c461ac885bce5d6ea3f2af5aa591ec0edd0d1b741fc959198ac5d6525aaa09a",
                 "ZLinkKotlinStreamActor" to
-                    "d470a4f1f206a81d304e43a22a7a44778c7def9027be4545be558ab72f1d74bc",
+                    "7484a864e32d1776e58ac49b20c5abdcab11fb02e5d32047077f68149c03d630",
                 "ZLinkKotlinRawRequestCall" to
                     "058cc51936de4e054bba28decc643dd4854d8c48b25434bb639fec569a4bc44b",
                 "systems.zlink.framework.kotlin.stream.ZLinkKotlinRequestCall" to

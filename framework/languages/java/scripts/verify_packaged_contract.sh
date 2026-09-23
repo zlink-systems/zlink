@@ -9,10 +9,11 @@ fi
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 repo_root="$(cd "$root_dir/../../.." && pwd)"
+framework_version="$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' "$root_dir/VERSION")"
 http_client_version="$(sed -n 's/.*VERSION = "\([^"]*\)".*/\1/p' \
     "$root_dir/zlink-http-client/src/main/java/systems/zlink/httpclient/internal/HttpClientVersion.java")"
-if [[ -z "$http_client_version" ]]; then
-    echo "could not determine zlink-http-client version" >&2
+if [[ -z "$framework_version" || -z "$http_client_version" ]]; then
+    echo "could not determine framework or zlink-http-client version" >&2
     exit 1
 fi
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/zlink-jvm-package-contract.XXXXXX")"
@@ -77,13 +78,13 @@ if [[ "$language" == "java" ]]; then
     cat > "$consumer_dir/build.gradle.kts" <<'EOF'
 plugins { application }
 dependencies {
-    implementation("systems.zlink:zlink-framework-core:0.10.0")
-    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.10.0")
-    implementation("systems.zlink:zlink-framework-locations-redis:0.10.0")
-    implementation("systems.zlink:zlink-stream-connector:0.10.0")
+    implementation("systems.zlink:zlink-framework-core:FRAMEWORK_VERSION")
+    implementation("systems.zlink:zlink-framework-spring-boot-starter:FRAMEWORK_VERSION")
+    implementation("systems.zlink:zlink-framework-locations-redis:FRAMEWORK_VERSION")
+    implementation("systems.zlink:zlink-stream-connector:FRAMEWORK_VERSION")
     implementation("systems.zlink:zlink-http-client:HTTP_CLIENT_VERSION")
-    implementation("systems.zlink:zlink-framework-codec-protobuf:0.10.0")
-    implementation("systems.zlink:zlink-framework-codec-msgpack:0.10.0")
+    implementation("systems.zlink:zlink-framework-codec-protobuf:FRAMEWORK_VERSION")
+    implementation("systems.zlink:zlink-framework-codec-msgpack:FRAMEWORK_VERSION")
 }
 application { mainClass.set("contract.PackagedContractConsumer") }
 java { toolchain { languageVersion.set(JavaLanguageVersion.of(25)) } }
@@ -100,9 +101,9 @@ import systems.zlink.httpclient.ZLinkHttpClient;
 import systems.zlink.stream.connector.ZLinkStreamConnector;
 import systems.zlink.stream.connector.ZLinkStreamConnectorFactory;
 import systems.zlink.stream.connector.ZLinkStreamConnectorOptions;
-import systems.zlink.stream.connector.ZLinkStreamFlow;
+import systems.zlink.stream.connector.ZLinkStreamRequestSendingContext;
 import systems.zlink.stream.connector.ZLinkStreamMessage;
-import systems.zlink.stream.connector.ZLinkFlowOrigin;
+import systems.zlink.stream.connector.ZLinkStreamReplyReceivedContext;
 
 public final class PackagedContractConsumer {
     public static void main(String[] args) {
@@ -115,9 +116,9 @@ public final class PackagedContractConsumer {
             ZLinkStreamConnector.class,
             ZLinkStreamConnectorFactory.class,
             ZLinkStreamConnectorOptions.class,
-            ZLinkStreamFlow.class,
+            ZLinkStreamRequestSendingContext.class,
             ZLinkStreamMessage.class,
-            ZLinkFlowOrigin.class,
+            ZLinkStreamReplyReceivedContext.class,
             ZLinkHttpClient.class
         };
         if (contract.length != 12) throw new AssertionError("contract manifest");
@@ -133,13 +134,13 @@ plugins {
     kotlin("jvm") version "2.3.21"
 }
 dependencies {
-    implementation("systems.zlink:zlink-framework-kotlin:0.10.0")
-    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.10.0")
-    implementation("systems.zlink:zlink-framework-locations-redis:0.10.0")
-    implementation("systems.zlink:zlink-stream-connector:0.10.0")
+    implementation("systems.zlink:zlink-framework-kotlin:FRAMEWORK_VERSION")
+    implementation("systems.zlink:zlink-framework-spring-boot-starter:FRAMEWORK_VERSION")
+    implementation("systems.zlink:zlink-framework-locations-redis:FRAMEWORK_VERSION")
+    implementation("systems.zlink:zlink-stream-connector:FRAMEWORK_VERSION")
     implementation("systems.zlink:zlink-http-client-kotlin:HTTP_CLIENT_VERSION")
-    implementation("systems.zlink:zlink-framework-codec-protobuf:0.10.0")
-    implementation("systems.zlink:zlink-framework-codec-msgpack:0.10.0")
+    implementation("systems.zlink:zlink-framework-codec-protobuf:FRAMEWORK_VERSION")
+    implementation("systems.zlink:zlink-framework-codec-msgpack:FRAMEWORK_VERSION")
 }
 application { mainClass.set("contract.PackagedContractConsumerKt") }
 kotlin { jvmToolchain(25) }
@@ -153,9 +154,9 @@ import systems.zlink.framework.kotlin.await
 import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.httpclient.kotlin.zlinkHttpClient
 import systems.zlink.stream.connector.ZLinkStreamConnectorFactory
-import systems.zlink.stream.connector.ZLinkStreamFlow
+import systems.zlink.stream.connector.ZLinkStreamRequestSendingContext
 import systems.zlink.stream.connector.ZLinkStreamMessage
-import systems.zlink.stream.connector.ZLinkFlowOrigin
+import systems.zlink.stream.connector.ZLinkStreamReplyReceivedContext
 import java.util.concurrent.CompletableFuture
 
 fun main() {
@@ -163,9 +164,9 @@ fun main() {
     check(ZLinkSuspendingActorFactory::class.java.name.isNotBlank())
     check(ZLinkSuspendingSession::class.java.name.isNotBlank())
     check(ZLinkStreamConnectorFactory::class.java.name.isNotBlank())
-    check(ZLinkStreamFlow::class.java.name.isNotBlank())
+    check(ZLinkStreamRequestSendingContext::class.java.name.isNotBlank())
     check(ZLinkStreamMessage::class.java.name.isNotBlank())
-    check(ZLinkFlowOrigin::class.java.name.isNotBlank())
+    check(ZLinkStreamReplyReceivedContext::class.java.name.isNotBlank())
     zlinkHttpClient("http://127.0.0.1").use { client ->
         check(client.javaClass.name.isNotBlank())
     }
@@ -174,7 +175,10 @@ fun main() {
 EOF
 fi
 
-sed -i "s/HTTP_CLIENT_VERSION/$http_client_version/g" "$consumer_dir/build.gradle.kts"
+sed -i \
+    -e "s/FRAMEWORK_VERSION/$framework_version/g" \
+    -e "s/HTTP_CLIENT_VERSION/$http_client_version/g" \
+    "$consumer_dir/build.gradle.kts"
 
 "$root_dir/gradlew" --no-daemon -p "$consumer_dir" clean run
 "$root_dir/scripts/verify_api_snapshot.sh" "$language"

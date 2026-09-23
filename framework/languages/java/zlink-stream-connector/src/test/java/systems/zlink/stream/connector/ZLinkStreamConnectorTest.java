@@ -1199,7 +1199,10 @@ final class ZLinkStreamConnectorTest {
                     .join();
 
             CompletionException failure = assertThrows(CompletionException.class, reply::join);
-            assertEquals("conflict: version conflict", failure.getCause().getMessage());
+            assertEquals(
+                    ZLinkStreamErrorCode.REMOTE_ERROR,
+                    ((ZLinkStreamException) failure.getCause()).errorCode());
+            assertEquals("version conflict", failure.getCause().getMessage());
             assertEquals(0, streamErrors.get());
         }
     }

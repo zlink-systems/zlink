@@ -11,11 +11,7 @@ namespace Systems.Zlink.Stream.Connector.Contracts
     {
         private readonly ZlinkStreamWebGlConnector _connector;
 
-        internal ZlinkStreamActor(
-            ZlinkStreamWebGlConnector connector,
-            string actorId,
-            int handle
-        )
+        internal ZlinkStreamActor(ZlinkStreamWebGlConnector connector, string actorId, int handle)
         {
             _connector = connector;
             ActorId = actorId;
@@ -32,13 +28,30 @@ namespace Systems.Zlink.Stream.Connector.Contracts
         public IZlinkStreamSendCall Send(object payload)
         {
             EnsureBound();
-            return _connector.SendActor(this, Encode(payload));
+            return _connector.SendActor(this, Encode(payload)).PacketName(ResolveName(payload));
+        }
+
+        public IZlinkStreamSendCall Send(object payload, string name)
+        {
+            EnsureBound();
+            return _connector.SendActor(this, Encode(payload)).PacketName(name);
         }
 
         public IZlinkStreamRequestCall Request(object payload)
         {
             EnsureBound();
-            return _connector.RequestActor(this, Encode(payload));
+            return _connector.RequestActor(this, Encode(payload)).PacketName(ResolveName(payload));
+        }
+
+        public IZlinkStreamRequestCall Request(object payload, string name)
+        {
+            EnsureBound();
+            return _connector.RequestActor(this, Encode(payload)).PacketName(name);
+        }
+
+        public IDisposable On<TPayload>(Action<ZlinkStreamMessage<TPayload>> handler)
+        {
+            return On(_connector.Options.NameResolver.Resolve(typeof(TPayload)), handler);
         }
 
         public IDisposable On<TPayload>(string name, Action<ZlinkStreamMessage<TPayload>> handler)
@@ -89,6 +102,21 @@ namespace Systems.Zlink.Stream.Connector.Contracts
                 _connector.Options.PayloadCodec,
                 payload
             );
+        }
+
+        private string ResolveName(object payload)
+        {
+            if (payload is null)
+                throw new ArgumentNullException(nameof(payload));
+            var type = payload is ZlinkStreamEncodedPayload encoded
+                ? encoded.MessageType
+                : payload.GetType();
+            if (type is null)
+                throw ZlinkStreamWebGlConnector.Error(
+                    ZlinkStreamErrorCode.ValidationFailed,
+                    "Encoded payload requires an explicit packet name."
+                );
+            return _connector.Options.NameResolver.Resolve(type);
         }
     }
 }

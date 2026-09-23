@@ -417,8 +417,7 @@ public sealed partial class StreamConnectorTests
         var callbacks = new ZlinkStreamConnectorCallbacks(
             taskRunner,
             ZlinkStreamDispatchMode.Manual,
-            1,
-            new ZlinkStreamConnectorOptions { Endpoint = new Uri("tcp://127.0.0.1:1") }
+            1
         );
         var order = new List<string>();
         Task? secondAdmission = null;

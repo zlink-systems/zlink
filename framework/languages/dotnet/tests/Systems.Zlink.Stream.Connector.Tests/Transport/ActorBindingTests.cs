@@ -10,6 +10,136 @@ using Xunit;
 public sealed partial class StreamConnectorTests
 {
     [Fact]
+    public async Task ActorHandlersIsolateMatchingNamesAndRequestHooksReportActorId()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var endpoint = (IPEndPoint)listener.LocalEndpoint;
+        var codec = new ZlinkStreamHeaderCodec();
+        var releaseServer = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releasePushes = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var server = Task.Run(async () =>
+        {
+            using var tcp = await listener.AcceptTcpClientAsync();
+            await using var stream = tcp.GetStream();
+            await WritePacketAsync(
+                stream,
+                ControlHeader(codec, "$zlink.actor.bound"),
+                BoundPayload(1, "actor-a")
+            );
+            await WritePacketAsync(
+                stream,
+                ControlHeader(codec, "$zlink.actor.bound"),
+                BoundPayload(2, "actor-b")
+            );
+            await releasePushes.Task;
+            foreach (
+                var (slot, name, value) in new[]
+                {
+                    ((ushort)2, "shared", "b"),
+                    ((ushort)1, "shared", "a"),
+                    ((ushort)1, nameof(Pong), "derived"),
+                }
+            )
+            {
+                var header = new ZlinkStreamHeader(
+                    ZlinkStreamMessageKind.Send,
+                    ZlinkStreamCodec.Json,
+                    ZlinkStreamHeaderFlags.None,
+                    null,
+                    name,
+                    ZlinkStreamMetadata.Empty,
+                    ActorSlot: slot
+                );
+                await WritePacketAsync(
+                    stream,
+                    codec.Encode(header).ToArray(),
+                    new Pong(value).ToJson().Payload.ToArray()
+                );
+            }
+            var request = codec.Decode((await ReadPacketAsync(stream)).Header);
+            Assert.Equal((ushort)1, request.ActorSlot);
+            Assert.Equal("actor-a", request.Metadata.Get("actor"));
+            var response = new ZlinkStreamHeader(
+                ZlinkStreamMessageKind.Response,
+                ZlinkStreamCodec.Raw,
+                ZlinkStreamHeaderFlags.HasRequestSeq,
+                request.RequestSeq,
+                string.Empty,
+                ZlinkStreamMetadata.Empty
+            );
+            await WritePacketAsync(stream, codec.Encode(response).ToArray(), [9]);
+            await releaseServer.Task;
+        });
+
+        await using var connector = ZlinkStreamConnectorFactory.Create(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
+                Heartbeat = DisabledHeartbeat(),
+                DispatchMode = ZlinkStreamDispatchMode.Immediate,
+                Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
+            }
+        );
+        var hooks = new List<string>();
+        var received = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        connector.OnRequestSending(context =>
+        {
+            hooks.Add($"sending:{context.ActorId}");
+            context.SetMetadata("actor", context.ActorId!);
+        });
+        connector.OnReplyReceived(
+            (context, _) =>
+            {
+                hooks.Add($"reply:{context.ActorId}");
+                return ValueTask.CompletedTask;
+            }
+        );
+        await connector.Connect.Async();
+        await WaitUntilAsync(() => connector.Actors.Count == 2, TimeSpan.FromSeconds(5));
+        var actorA = connector.Actor("actor-a")!;
+        var actorB = connector.Actor("actor-b")!;
+        using var onA = actorA.On<Pong>(
+            "shared",
+            (message, _) =>
+            {
+                received.Enqueue($"a:{message.Payload.Text}");
+                return ValueTask.CompletedTask;
+            }
+        );
+        using var onB = actorB.On<Pong>(
+            "shared",
+            (message, _) =>
+            {
+                received.Enqueue($"b:{message.Payload.Text}");
+                return ValueTask.CompletedTask;
+            }
+        );
+        using var onDerived = actorA.On<Pong>(
+            (message, _) =>
+            {
+                received.Enqueue($"a:{message.Payload.Text}");
+                return ValueTask.CompletedTask;
+            }
+        );
+        releasePushes.SetResult();
+        await WaitUntilAsync(() => received.Count == 3, TimeSpan.FromSeconds(5));
+        Assert.Equal(new[] { "b:b", "a:a", "a:derived" }, received.ToArray());
+        var reply = await actorA
+            .Request(new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, new byte[] { 1 }))
+            .PacketName("actor.query")
+            .Async();
+        Assert.Equal((byte)9, reply.Payload.Span[0]);
+        Assert.Equal(new[] { "sending:actor-a", "reply:actor-a" }, hooks);
+        releaseServer.SetResult();
+        await server;
+    }
+
+    [Fact]
     public async Task ActorBindingPublishesHandleRoutesMessagesAndCarriesSlotOutbound()
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);

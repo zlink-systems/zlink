@@ -9,6 +9,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeState;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinator;
@@ -49,6 +50,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongSupplier;
 import java.util.logging.Logger;
 
@@ -82,6 +84,15 @@ final class ZLinkCanonicalRelocationStateMachine
     private final Map<Fence, TerminalTarget> terminalTargets = new HashMap<>();
     private final Map<Fence, RetainedSource> retainedSources = new HashMap<>();
     private final AtomicInteger openSourceQuiescenceWindows = new AtomicInteger();
+
+    CompletionStage<Void> awaitAcceptedTargetRelocations() {
+        return inStateLane(
+                () ->
+                        CompletableFuture.allOf(
+                                targets.values().stream()
+                                        .map(TargetAttempt::terminal)
+                                        .toArray(CompletableFuture[]::new)));
+    }
 
     ZLinkCanonicalRelocationStateMachine(
             ZLinkInternalMeshNode node,
@@ -474,10 +485,27 @@ final class ZLinkCanonicalRelocationStateMachine
                         () -> {
                             TargetAttempt existing = targets.get(fence);
                             if (existing == null) {
+                                MeshNodeState state = node.status().state();
+                                if (state == MeshNodeState.DRAINING
+                                        || state == MeshNodeState.STOPPED
+                                        || state == MeshNodeState.ERROR) {
+                                    return created;
+                                }
                                 targets.put(fence, created);
                             }
                             return existing;
                         });
+        if (current == created) {
+            ZLinkFrameworkException rejected =
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+                            "canonical relocation target is shutting down");
+            created.ready().completeExceptionally(rejected);
+            return request
+                    ? replyReady(fence, created)
+                    : publishFailure(fence, created, transportSource, rejected, true)
+                            .thenApply(ignored -> null);
+        }
         TargetAttempt attempt = current == null ? created : current;
         if (!java.util.Arrays.equals(
                 ZLinkCanonicalRelocationProtocol.encodePrepare(attempt.prepare()),
@@ -530,18 +558,31 @@ final class ZLinkCanonicalRelocationStateMachine
                                                         }
                                                         attempt.ready()
                                                                 .completeExceptionally(cause);
+                                                        if (cleanupFailure == null) {
+                                                            attempt.terminal().complete(null);
+                                                        } else {
+                                                            attempt.terminal()
+                                                                    .completeExceptionally(
+                                                                            unwrap(cleanupFailure));
+                                                        }
                                                     });
                                 } else {
                                     attempt.ready().completeExceptionally(cause);
                                     publishFailure(fence, attempt, transportSource, cause, true)
-                                            .exceptionally(
-                                                    publicationFailure -> {
+                                            .whenComplete(
+                                                    (ignoredPublication, publicationFailure) -> {
+                                                        if (publicationFailure == null) {
+                                                            attempt.terminal().complete(null);
+                                                            return;
+                                                        }
                                                         LOGGER.warning(
                                                                 "Canonical relocation failure reply"
                                                                         + " could not be sent: "
                                                                         + unwrap(
                                                                                 publicationFailure));
-                                                        return null;
+                                                        attempt.terminal()
+                                                                .completeExceptionally(
+                                                                        unwrap(publicationFailure));
                                                     });
                                 }
                             }
@@ -630,7 +671,17 @@ final class ZLinkCanonicalRelocationStateMachine
                                                 + "could not discard target stage: "
                                                 + unwrap(failure));
                                 return null;
+                            })
+                    .whenComplete(
+                            (ignored, failure) -> {
+                                if (failure == null) {
+                                    attempt.terminal().complete(null);
+                                } else {
+                                    attempt.terminal().completeExceptionally(unwrap(failure));
+                                }
                             });
+        } else {
+            attempt.terminal().complete(null);
         }
     }
 
@@ -708,11 +759,13 @@ final class ZLinkCanonicalRelocationStateMachine
         } catch (RuntimeException cleanupFailure) {
             cleanup = CompletableFuture.failedFuture(cleanupFailure);
         }
+        AtomicReference<Throwable> discardFailure = new AtomicReference<>();
         long wireFailureCode = wireFailureCode(unwrap(failure), attempt.prepare().object().kind());
         return cleanup.handle(
                         (ignored, cleanupFailure) -> {
                             if (cleanupFailure != null) {
                                 Throwable cause = unwrap(cleanupFailure);
+                                discardFailure.set(cause);
                                 failure.addSuppressed(cause);
                                 LOGGER.warning(
                                         "Canonical relocation failed-stage cleanup "
@@ -737,7 +790,12 @@ final class ZLinkCanonicalRelocationStateMachine
                                                                 ZLinkCanonicalRelocationProtocol
                                                                         .TARGET,
                                                                 wireFailureCode)))
-                                        : CompletableFuture.completedFuture(null));
+                                        : CompletableFuture.completedFuture(null))
+                .thenCompose(
+                        ignored ->
+                                discardFailure.get() == null
+                                        ? CompletableFuture.completedFuture(null)
+                                        : CompletableFuture.failedFuture(discardFailure.get()));
     }
 
     /**
@@ -992,8 +1050,16 @@ final class ZLinkCanonicalRelocationStateMachine
                         attempt.request()
                                 .thenCompose(target::abort)
                                 .whenComplete(
-                                        (discarded, discardFailure) ->
-                                                inStateLane(() -> targets.remove(fence, attempt)));
+                                        (discarded, discardFailure) -> {
+                                            inStateLane(() -> targets.remove(fence, attempt));
+                                            if (discardFailure == null) {
+                                                attempt.terminal().complete(null);
+                                            } else {
+                                                attempt.terminal()
+                                                        .completeExceptionally(
+                                                                unwrap(discardFailure));
+                                            }
+                                        });
                     } else {
                         retainTerminalTarget(fence, attempt);
                     }
@@ -1057,6 +1123,7 @@ final class ZLinkCanonicalRelocationStateMachine
                     () -> inStateLane(() -> terminalTargets.remove(fence, terminal)));
         }
         inStateLane(() -> targets.remove(fence, attempt));
+        attempt.terminal().complete(null);
     }
 
     private CompletionStage<ZLinkAggregateRelocationCoordinator.Published> commitUntilRestoreExpiry(
@@ -1952,6 +2019,7 @@ final class ZLinkCanonicalRelocationStateMachine
         private final CompletableFuture<ZLinkAggregateRelocationCoordinator.Prepared> prepared =
                 new CompletableFuture<>();
         private final CompletableFuture<Void> ready = new CompletableFuture<>();
+        private final CompletableFuture<Void> terminal = new CompletableFuture<>();
         private CompletionStage<Void> publication;
         private CompletionStage<Void> readyPublication;
         private boolean fallbackArmed;
@@ -2010,6 +2078,10 @@ final class ZLinkCanonicalRelocationStateMachine
 
         CompletableFuture<Void> ready() {
             return ready;
+        }
+
+        CompletableFuture<Void> terminal() {
+            return terminal;
         }
 
         CompletableFuture<ZLinkAggregateRelocationCoordinator.Prepared> prepared() {

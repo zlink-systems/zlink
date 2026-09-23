@@ -1787,6 +1787,15 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return continueDrain(ZLinkSpotCloseReason.HOST_SHUTDOWN, Instant.now());
     }
 
+    public CompletionStage<Void> notifyClosing(Instant deadline) {
+        spotLifecycle.notifyClosing(ZLinkSpotCloseReason.HOST_SHUTDOWN, deadline);
+        for (ZLinkInstanceSpotActivation activation :
+                List.copyOf(instanceSpotActivations.values())) {
+            activation.notifyClosing(ZLinkSpotCloseReason.HOST_SHUTDOWN, deadline);
+        }
+        return CompletableFuture.completedFuture(null);
+    }
+
     public CompletionStage<Void> continueDrain(ZLinkSpotCloseReason reason, Instant deadline) {
         return spotLifecycle
                 .releaseRecreatableSpots(reason, deadline)

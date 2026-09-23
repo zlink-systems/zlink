@@ -4,7 +4,7 @@
 
 ---
 
-엔진 어댑터는 core connector를 private 구현으로 소유하고, 각 엔진의 타입과 thread 규칙에 맞는 표면만 노출한다. core의 `result_t<T>`, `connector_t` 같은 타입은 어댑터 public header에 드러나지 않는다. Main thread 전달, 이름별 구독, 요청 완료의 packet 이름은 [C++ 계약 §7](../../../common/spec/stream-connector/languages/cpp/03-stream-connector.ko.md#7-엔진-어댑터)을 따른다.
+엔진 어댑터는 core connector를 private 구현으로 소유하고, 각 엔진의 타입과 thread 규칙에 맞는 표면만 노출한다. core의 `result_t<T>`, `connector_t` 같은 타입은 어댑터 public header에 드러나지 않는다. Main thread 전달, packet 이름별 callback 등록, 호출별 요청 완료는 [C++ 계약 §7](../../../common/spec/stream-connector/languages/cpp/03-stream-connector.ko.md#7-엔진-어댑터)을 따른다.
 
 ---
 
@@ -25,7 +25,7 @@ Plugins/
 
 ### 기본 사용법
 
-Engine Lobby 샘플의 Actor는 connector를 만들고 수신 delegate를 연결한 뒤, 서버 push인 `ChatNotify`를 이름으로 구독하고 연결한다.
+Engine Lobby 샘플의 Actor는 connector를 만들고 서버 push인 `ChatNotify`의 delegate를 등록한 뒤 연결한다.
 
 ```cpp title="Unreal/Source/EngineLobby/Private/EngineLobbyClientActor.cpp"
 --8<-- "framework/languages/engines/Unreal/Source/EngineLobby/Private/EngineLobbyClientActor.cpp:connect-call"
@@ -39,7 +39,7 @@ Engine Lobby 샘플의 Actor는 connector를 만들고 수신 delegate를 연결
 
 ### Blueprint에서 사용
 
-`Connect`, `Close`, `SendJson`, `RequestJson`, `Subscribe`, `Dispatch`는 모두 `BlueprintCallable`이다. `OnPacketReceived`, `OnRequestCompleted`는 `BlueprintAssignable` delegate다.
+`Connect`, `Close`, `SendJson`, `RequestJson`, `On`, `Dispatch`는 모두 `BlueprintCallable`이다. `On(PacketName, Delegate)`는 해제 handle을 반환하고, `RequestJson(..., OnCompleted)`는 해당 요청의 결과를 delegate로 전달한다.
 
 PIE 종료, map unload, game instance shutdown에서 `Close()`가 자동 호출된다.
 
@@ -63,7 +63,7 @@ GDExtension source package로 배포한다. Godot project의 `addons/zlink_strea
 
 ### 기본 사용법 (C++)
 
-Engine Lobby 샘플의 node는 수신 callback을 등록하고 `ChatNotify`를 구독한 뒤 연결한다.
+Engine Lobby 샘플의 node는 `ChatNotify`의 callback을 등록한 뒤 연결한다.
 
 ```cpp title="Godot/cpp/src/engine_lobby_node.cpp"
 --8<-- "framework/languages/engines/Godot/cpp/src/engine_lobby_node.cpp:connect"
@@ -90,7 +90,7 @@ target_link_libraries(${APP_NAME} PRIVATE zlink_axmol_connector)
 
 ### 기본 사용법
 
-Engine Lobby 샘플의 Scene은 수신 callback을 등록하고 `ChatNotify`를 구독한 뒤 연결한다.
+Engine Lobby 샘플의 Scene은 `ChatNotify`의 callback을 등록한 뒤 연결한다.
 
 ```cpp title="Axmol/Source/EngineLobbyScene.cpp"
 --8<-- "framework/languages/engines/Axmol/Source/EngineLobbyScene.cpp:connect"
@@ -111,8 +111,7 @@ Axmol scheduler update에서 connector를 pump한다.
 | 연결 | `Connect(Endpoint)` | `connect(endpoint)` | `connect(endpoint)` |
 | 종료 | `Close()` | `close()` | `close()` |
 | 단방향 송신 | `SendJson(Name, Json)` | `send_json(name, json)` | `send_json(name, json)` |
-| 요청/응답 | `RequestJson(Name, Json, Timeout)` | `request_json(name, json, timeout)` | `request_json(name, json, timeout)` |
-| push 구독 | `Subscribe(PacketName)` | `subscribe(packet_name)` | `subscribe(packet_name)` |
+| 요청/응답 | `RequestJson(Name, Json, Timeout, OnCompleted)` | `request_json(name, json, timeout, callback)` | `request_json(name, json, timeout, callback)` |
+| push 등록 | `On(PacketName, Delegate)` → handle | `on(packet_name, callback)` → handle | `on(packet_name, callback)` → handle |
 | dispatch | `Dispatch()` (Tick에서 호출) | `dispatch()` (프레임에서 호출) | `dispatch()` (프레임에서 호출) |
-| push 수신 | `OnPacketReceived` delegate | `on_packet` callback | `on_packet` callback |
 | 상태 변경 | `OnConnectionStateChanged` delegate | `on_connection_state_changed` callback | `on_connection_state_changed` callback |

@@ -58,12 +58,6 @@ public interface ZLinkStreamConnector {
     // 마지막 종료 사유. 한 번도 끊긴 적이 없으면 비어 있다(아래 "세션 종료 사유").
     Optional<ZLinkStreamCloseReason> closeReason();
 
-    // 실행 중 diagnostics level 읽기/쓰기(§4.1, 서버 스펙 26 §4.1). connector를 다시
-    // 만들지 않고 level을 바꾼다. options().diagnosticsLevel()은 항상 이 값과 같다.
-    ZLinkStreamDiagnosticsLevel diagnosticsLevel();
-    void setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel level);
-    CompletionStage<Void> setDiagnosticsLevelAsync(ZLinkStreamDiagnosticsLevel level);
-
     int pendingDispatchCount();
     int receivedCount(String name);
 
@@ -76,7 +70,9 @@ public interface ZLinkStreamConnector {
     ZLinkStreamSendCall send(ZLinkStreamEncodedPayload payload);
     ZLinkStreamRequestCall request(ZLinkStreamEncodedPayload payload);
     ZLinkTypedStreamSendCall send(Object payload);
+    ZLinkTypedStreamSendCall send(String name, Object payload);
     ZLinkTypedStreamRequestCall request(Object payload);
+    ZLinkTypedStreamRequestCall request(String name, Object payload);
     ZLinkStreamWaitCall waitFor(String name);
     ZLinkStreamWaitCall waitFor(Class<?> payloadType);
     ZLinkStreamExpectNoneCall expectNone(String name);
@@ -94,6 +90,8 @@ public interface ZLinkStreamConnector {
         String name,
         Class<TPayload> payloadType,
         ZLinkStreamMessageHandler<TPayload> handler);
+    AutoCloseable onRequestSending(ZLinkStreamRequestSendingHandler handler);
+    AutoCloseable onReplyReceived(ZLinkStreamReplyReceivedHandler handler);
     AutoCloseable onErrorReceived(ZLinkStreamErrorHandler handler);
     AutoCloseable onDisconnected(ZLinkStreamDisconnectedHandler handler);
     AutoCloseable onConnectionStateChanged(ZLinkStreamConnectionStateHandler handler);
@@ -112,7 +110,9 @@ public interface ZLinkStreamActor {
     ZLinkStreamSendCall send(ZLinkStreamEncodedPayload payload);      // 이 Actor의 slot을 싣는다
     ZLinkStreamRequestCall request(ZLinkStreamEncodedPayload payload);
     ZLinkTypedStreamSendCall send(Object payload);
+    ZLinkTypedStreamSendCall send(String name, Object payload);
     ZLinkTypedStreamRequestCall request(Object payload);
+    ZLinkTypedStreamRequestCall request(String name, Object payload);
     AutoCloseable on(String name, ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload> handler); // 이 Actor가 상대인 message만
     <TPayload> AutoCloseable on(Class<TPayload> payloadType, ZLinkStreamMessageHandler<TPayload> handler);
     <TPayload> AutoCloseable on(
@@ -194,8 +194,7 @@ public record ZLinkStreamConnectorOptions(
     ZLinkStreamCompression compression,
     ZLinkStreamCompressionCodec compressionCodec,
     ZLinkStreamPacketNameResolver nameResolver, // 공통 스펙 §5.4의 name resolver 주입점
-    ZLinkStreamTypedCodec typedCodec,           // 공통 스펙 §5.4의 typed payload codec 주입점
-    ZLinkStreamDiagnosticsLevel diagnosticsLevel) { // default ERRORS (§4.1)
+    ZLinkStreamTypedCodec typedCodec) { // 공통 스펙 §5.4의 typed payload codec 주입점
 
     // 공통 스펙 §6이 요구하는 무제한 reconnect를 표현하는 이름 붙인 상수다.
     public static final int UNLIMITED_RECONNECT_ATTEMPTS = -1;
@@ -207,48 +206,6 @@ Java는 `ZLinkStreamConnectorFactory.create(options)`가 option 전 항목을 �
 `ZLinkStreamConnector` 인스턴스를 만들지 않고 `ZLinkStreamException`(§11)으로 실패한다. 값 하나가
 허용 범위를 벗어나면 `VALIDATION_FAILED`, 항목 사이가 맞지 않으면 `CONFIGURATION_ERROR`를 담는다.
 `maxReconnectAttempts`는 `UNLIMITED_RECONNECT_ATTEMPTS`이거나 양수여야 한다.
-
-### 4.1 Diagnostics level
-
-계약은 [공통 스펙 §13](../../32-stream-connector.ko.md#13-diagnostics-level)이 소유한다.
-Java 표면은 다음과 같다.
-
-```java
-public enum ZLinkStreamDiagnosticsLevel { OFF, ERRORS, NORMAL, DETAILED }
-
-// record component. compact 생성자가 null을 ERRORS로 정규화한다. 생성 시점의 초기값이다.
-public ZLinkStreamDiagnosticsLevel diagnosticsLevel();
-public ZLinkStreamConnectorOptions withDiagnosticsLevel(ZLinkStreamDiagnosticsLevel level);
-```
-
-`OFF`이면 outbound frame에 flow pair를 만들지 않고(0x10 미설정), inbound flow 필드는 구조
-길이 검사만 유지한 채 값 검증과 handler 전달을 생략한다. Request correlation은 level과
-무관하게 유지된다.
-
-**실행 중 변경.** [공통 스펙 §13](../../32-stream-connector.ko.md#13-diagnostics-level)이 요구하는
-[서버 스펙 26 §4.1](../../../server/06-observability/03-message-flow-tracing.ko.md#5-실행-중-기록-수준-변경과-비용-규칙) 규칙에
-따라, `ZLinkStreamConnectorOptions.diagnosticsLevel()`은 생성 시점 초기값일 뿐이고 connector
-자신이 실행 중 read/write API를 갖는다.
-
-```java
-// ZLinkStreamConnector에 선언된다(§3). Application은 connector를 다시 만들지 않고
-// level을 읽고 바꾼다.
-ZLinkStreamDiagnosticsLevel diagnosticsLevel();
-void setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel level);      // 기다리지 않고 값을 바꾼다
-CompletionStage<Void> setDiagnosticsLevelAsync(ZLinkStreamDiagnosticsLevel level);
-```
-
-`setDiagnosticsLevelAsync`는 다른 연산의 terminal과 같은 `CompletionStage`를 돌려주는 비동기 짝이며,
-공통 스펙 §13이 요구하는 동기 표면을 대신하지 않는다. 동기 표면은 비동기 짝의 완료를 기다리지
-않으므로 dispatch callback 안에서 호출해도 자기 완료를 기다리는 순환이 생기지 않는다.
-
-내부는 원자적 셀(`AtomicReference`)로 현재 level을 보관한다. `options()`가 반환하는
-`diagnosticsLevel()`은 항상 이 셀의 현재 값과 일치한다. 각 처리 지점(하나의 outbound
-submit, 하나의 inbound frame dispatch)은 그 처리를 시작할 때 셀을 **정확히 한 번** 읽고,
-읽은 값을 그 처리 전체(header 인코딩/디코드, flow 부착·검증 여부, handler에 전달하는 flow
-필드)에 일관되게 사용한다. 처리 도중 셀을 다시 읽지 않으므로, 처리 중간에 level이 바뀌어도
-그 처리는 시작 시점의 값으로 끝까지 일관되게 동작한다. 변경은 그 뒤에 시작하는 처리 지점부터
-적용되며, 이미 만들어진 frame에는 소급 적용되지 않는다.
 
 `skipServerCertificateValidation`은 테스트용 자체 서명 인증서에만 사용한다. 운영
 기본값은 `false`다. 이 값을 `true`로 바꾸면 TLS transport와 WSS transport 모두 서버
@@ -277,31 +234,13 @@ public record ZLinkStreamEncodedPayload(
     ZLinkStreamCodec codec) {
 }
 
-public enum ZLinkFlowOrigin {
-    INBOUND,
-    TIMER,
-    APPLICATION,
-    LIFECYCLE
-}
-
-public interface ZLinkStreamFlow {
-    String flowId();
-    ZLinkFlowOrigin flowOrigin();
-}
-
 public record ZLinkStreamMessage<TPayload>(
     String packetName,
     TPayload payload,
     Map<String, String> metadata,
-    String flowId,                // diagnostics level이 OFF이면 null(§4.1)
-    ZLinkFlowOrigin flowOrigin,
-    String actorId) implements ZLinkStreamFlow { // 상대 bound Actor. slot 없는 frame은 null(공통 스펙 §5.6)
+    String actorId) { // 상대 bound Actor. slot 없는 frame은 null(공통 스펙 §5.6)
 }
 ```
-
-`flowId`와 `flowOrigin`이 [공통 스펙 §5.5](../../32-stream-connector.ko.md#55-flow-노출과-전파)가
-요구하는 수신 flow 노출이다. JVM은 ambient 실행 문맥을 제공하므로 송신 call에 flow를 명시하는
-인자를 두지 않는다(§7.1).
 
 [공통 스펙 §5](../../32-stream-connector.ko.md#5-packet-모델)가 요구하는 **타입에 packet 이름을
 붙이는 수단은 annotation이다.**
@@ -377,18 +316,28 @@ public interface ZLinkStreamWaitCall {
 request timeout이 끝나면 pending request를 제거하고 반환한 `CompletionStage`를 timeout
 실패로 완료한다. 제거된 request의 response가 늦게 도착해도 그 stage를 다시 완료하지 않는다.
 
-### 7.1 Flow correlation
 
-Connector가 시작한 outbound operation은 UUIDv7 `flow_id`를 한 번 생성한다. Inbound handler의 실행
-범위에는 connector runtime이 현재 flow context를 설정한다. 그 handler에서 시작한 관련 outbound는
-별도 public 인자 없이 같은 `flowId`와 `flowOrigin`을 재사용하고, handler의 terminal completion에서
-이전 context를 복원한다. 관련 없는 다음 callback과 Framework가 관리하지 않는 별도 executor에는 flow를
-전파하지 않으며, 그곳에서 시작한 outbound는 `APPLICATION`이 origin인 새 flow를 시작한다.
+### 7.1 Request hook
 
-Connector instance의 mutable 필드나 thread ID로 current flow를 추정하지 않는다. wire 형식과 비동기
-문맥 경계는
-[Stream Connector §4.2](../../32-stream-connector.ko.md#42-header)와
-[Flow Correlation §6](../../../server/06-observability/04-flow-correlation.ko.md#6-async-작업과-execution-context)이 소유한다.
+[공통 스펙 §5.7](../../32-stream-connector.ko.md#57-요청-hook)의 두 hook은 connector에서
+`AutoCloseable onRequestSending(ZLinkStreamRequestSendingHandler)`와
+`AutoCloseable onReplyReceived(ZLinkStreamReplyReceivedHandler)`로 등록하고 반환값의 `close()`로 해제한다.
+
+```java
+public interface ZLinkStreamRequestSendingHandler {
+    void handle(ZLinkStreamRequestSendingContext context);
+}
+public interface ZLinkStreamReplyReceivedHandler {
+    void handle(ZLinkStreamReplyReceivedContext context);
+}
+```
+
+`ZLinkStreamRequestSendingContext`는 `requestPacketName()`, nullable
+`actorId()`, `setMetadata(String key, String value)`를 제공한다. Reply context는
+`requestPacketName()`, nullable `actorId()`, `succeeded()`, 성공 시
+`reply()`, 실패 시 `error()`, `elapsed()`를 읽기 전용으로 제공한다.
+metadata 검증과 hook 실패의 처리 원칙은 공통 스펙 §5.7과 §7을 따른다.
+
 
 ### 7.2 테스트 대기 표면
 
@@ -575,6 +524,9 @@ fun ZLinkStreamConnectorOptions.withStreamCompression(
 fun ZLinkStreamConnectorOptions.withoutStreamCompression(): ZLinkStreamConnectorOptions
 
 class ZLinkKotlinStreamConnector {
+    fun on(name: String, handler: ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>): AutoCloseable
+    inline fun <reified TPayload> on(handler: ZLinkStreamMessageHandler<TPayload>): AutoCloseable
+    fun <TPayload : Any> on(name: String, payloadType: KClass<TPayload>, handler: ZLinkStreamMessageHandler<TPayload>): AutoCloseable
     fun receivedCount(name: String): Int
     fun connect(): ZLinkKotlinLifecycleCall
     fun close(): ZLinkKotlinLifecycleCall
@@ -596,6 +548,10 @@ class ZLinkKotlinStreamConnector {
     fun <TPayload> waitForSequence(): ZLinkStreamTypedSequenceCall<TPayload>
     fun <TPayload> waitForSequence(name: String): ZLinkStreamTypedSequenceCall<TPayload>
     fun messages(packetName: String): Flow<ZLinkStreamMessage<ZLinkStreamEncodedPayload>>
+    inline fun <reified TPayload> messages(): Flow<ZLinkStreamMessage<TPayload>>
+    fun <TPayload : Any> messages(packetName: String, payloadType: KClass<TPayload>): Flow<ZLinkStreamMessage<TPayload>>
+    fun onRequestSending(handler: ZLinkStreamRequestSendingHandler): AutoCloseable
+    fun repliesReceived(): Flow<ZLinkStreamReplyReceivedContext>
     fun errors(): Flow<ZLinkStreamError>
     fun actors(): List<ZLinkKotlinStreamActor>
     fun actor(actorId: String): ZLinkKotlinStreamActor?
@@ -604,6 +560,9 @@ class ZLinkKotlinStreamConnector {
 }
 
 class ZLinkKotlinStreamActor {
+    fun on(name: String, handler: ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>): AutoCloseable
+    inline fun <reified TPayload> on(handler: ZLinkStreamMessageHandler<TPayload>): AutoCloseable
+    fun <TPayload : Any> on(name: String, payloadType: KClass<TPayload>, handler: ZLinkStreamMessageHandler<TPayload>): AutoCloseable
     val actorId: String
     val isBound: Boolean
     fun send(payload: ZLinkStreamEncodedPayload): ZLinkKotlinSendCall
@@ -614,6 +573,8 @@ class ZLinkKotlinStreamActor {
         replyType: KClass<TReply>,
     ): ZLinkKotlinRequestCall<TReply>
     fun messages(packetName: String): Flow<ZLinkStreamMessage<ZLinkStreamEncodedPayload>>
+    inline fun <reified TPayload> messages(): Flow<ZLinkStreamMessage<TPayload>>
+    fun <TPayload : Any> messages(packetName: String, payloadType: KClass<TPayload>): Flow<ZLinkStreamMessage<TPayload>>
 }
 
 inline fun <reified TReply : Any> ZLinkKotlinStreamActor.request(
@@ -626,6 +587,7 @@ class ZLinkKotlinLifecycleCall {
 }
 
 class ZLinkKotlinSendCall {
+    fun packetName(name: String): ZLinkKotlinSendCall
     suspend fun await(): Unit
 }
 
@@ -680,10 +642,16 @@ class ZLinkStreamTypedSequenceCall<TPayload> {
 
 Kotlin wrapper는 Java connector와 다른 상태 전이나 buffering 정책을 만들면 안 된다. options를
 복사하는 extension은 **현재 정의된 모든 option 값을 보존해야 한다.**
-`Flow`를 돌려주는 표면은 대응하는 Java 등록을 `callbackFlow`로 감싼다 — connector의 `messages(...)`·
+dispatch mode를 따르는 callback의 `Flow` 표면은 대응하는 Java 등록을 `callbackFlow`로 감싼다 — connector의 `messages(...)`·
 `errors()`·`actorBound()`·`actorUnbound()`는 `on(...)`·`onErrorReceived(...)`·`onActorBound(...)`·
 `onActorUnbound(...)`를, Actor의 `messages(...)`는 그 Actor handle의 `ZLinkStreamActor.on(...)`을 감싼다. 따라서 manual [dispatch mode](../../../server/00-foundation/02-glossary.ko.md#dispatch-mode)에서는 Java와 마찬가지로
 Kotlin wrapper의 `dispatch().await()`가 호출되어야 collector가 메시지나 error event를 받는다.
+
+reply received hook은 §7 dispatch mode를 따르므로 Kotlin의
+`repliesReceived(): Flow`로 투영한다. request sending hook은 §5.7에 따라 요청을
+호출한 스레드에서 frame 생성 전에 동기로 실행하므로
+`onRequestSending(handler: ZLinkStreamRequestSendingHandler): AutoCloseable`로
+등록한다. 이 handler는 metadata를 동기로 변경하고 반환값이나 cancellation 인자가 없다.
 
 ## 13. 검증 기준
 
@@ -703,6 +671,9 @@ Java connector는 아래 테스트를 별도 suite로 가진다.
 - JSON, MessagePack, Protobuf codec smoke
 - typed helper packet name resolver와 codec selection
 - typed request/reply decode
+- request hook 등록 순서·metadata·실패 결과·callback 오류
+- flow 필드 구조 검사 후 값 폐기와 outbound flag 0x10 미설정
+- connector와 Actor의 packet 이름 두 형태
 - Kotlin coroutine/Flow wrapper smoke
 
 ---
