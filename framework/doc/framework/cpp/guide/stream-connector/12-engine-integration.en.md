@@ -33,7 +33,7 @@ The packaging column points to the package and build steps for each target.
 | Unity native | `.NET` | [Unity native](../../../dotnet/guide/stream-connector/08-unity.en.md) | [Unity sample native build](https://github.com/zlink-systems/zlink/blob/main/framework/languages/engines/Unity/README.md) |
 | Unity WebGL | TypeScript connector and UPM adapter | [Unity WebGL](../../../node/guide/stream-connector/09-unity-webgl.en.md) | [Unity sample WebGL build](https://github.com/zlink-systems/zlink/blob/main/framework/languages/engines/Unity/README.md) |
 | Unreal | C++ connector's Unreal plugin | [Engine adapters](../../../cpp/guide/stream-connector/09-engine-adapters.en.md) | [C++ packaging](../../../cpp/guide/stream-connector/10-packaging.en.md) |
-| Godot C# | `.NET` | [Godot C#](../../../dotnet/guide/stream-connector/09-godot-csharp.en.md) | This chapter has no deployment steps |
+| Godot C# | `.NET` | [Godot C#](../../../dotnet/guide/stream-connector/09-godot-csharp.en.md) | The Godot C# chapter does not cover deployment |
 
 ## 1. Engine Lobby Sample
 

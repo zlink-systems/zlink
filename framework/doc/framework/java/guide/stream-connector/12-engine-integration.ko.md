@@ -32,7 +32,7 @@ Unreal과 Godot C#은 각각 C++와 .NET connector를 사용한다. 다음 표�
 | Unity native | `.NET` | [Unity native](../../../dotnet/guide/stream-connector/08-unity.ko.md) | [Unity sample의 native build](https://github.com/zlink-systems/zlink/blob/main/framework/languages/engines/Unity/README.ko.md) |
 | Unity WebGL | TypeScript connector와 UPM 어댑터 | [Unity WebGL](../../../node/guide/stream-connector/09-unity-webgl.ko.md) | [Unity sample의 WebGL build](https://github.com/zlink-systems/zlink/blob/main/framework/languages/engines/Unity/README.ko.md) |
 | Unreal | C++ connector의 Unreal plugin | [엔진 어댑터](../../../cpp/guide/stream-connector/09-engine-adapters.ko.md) | [C++ 배포](../../../cpp/guide/stream-connector/10-packaging.ko.md) |
-| Godot C# | `.NET` | [Godot C#](../../../dotnet/guide/stream-connector/09-godot-csharp.ko.md) | 이 장에는 배포 절차가 없다 |
+| Godot C# | `.NET` | [Godot C#](../../../dotnet/guide/stream-connector/09-godot-csharp.ko.md) | Godot C# 장은 배포 절차를 다루지 않는다 |
 
 ## 1. Engine Lobby sample
 
