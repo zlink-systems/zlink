@@ -18,12 +18,13 @@ Framework 0.23.0은 binding 1.4.0과 Core 1.4.0을 사용합니다. Framework �
 - 각 예제가 참조하는 tutorial code를 명시하고, 실행 결과를 설명하며, `set_advertise_host`와 `InMesh`, STREAM client connector를 문서화했습니다. (#903, #904, #905, #920)
 - 예제 README가 각 block의 실행 환경을 bash 또는 PowerShell로 표시하고, 검증을 한 곳에 모으며, 종료 절차를 설명하고, 한국어 산문을 격식체로 정리했습니다. (#890, #891)
 - Java와 Kotlin example을 서로 다른 read-only mirror로 export합니다. (#894)
-- engine example에 .NET server 하나와 Unity·Unreal client가 포함되며, 통합 sample을 위한 smoke와 mirror workflow를 제공합니다. (#934, #935)
+- engine example에 .NET server 하나와 Unity·Unreal·Godot(C#·C++)·Axmol·Cocos Creator(web) client가 포함됩니다. 모든 client는 같은 engine-lobby 계약을 따르며, 엔진별 미러 저장소(`zlink-engine-server`, `zlink-<engine>-examples`)로 제공되고, 가이드 사이트에 게임 엔진 통합 장이 있습니다. (#935, #980, #982, #983, #984, #987)
 - examples mirror가 각 언어 package의 게시와 검증이 끝난 뒤 호출됩니다. (#884)
 - Core 1.4.0 macOS dylib가 loader 기준 상대 경로를 사용하므로 release archive를 다른 위치로 재배치할 수 있습니다. (#962)
 
 ## Java·Kotlin 변경
 
+- Kotlin ZoneWorld 샘플의 경계 구독 handler가 topic을 선언해 시작 검사를 통과합니다. (#999)
 - DeliveryDispatch Kotlin sample에서 obsolete Registry module을 제거하여 현재 registry API로 sample을 빌드할 수 있습니다. (#959)
 - 동시 preparation 중에도 Bingo sample이 report reply 뒤 reward announcement를 유지하며, Java runtime이 표준 disconnect notification을 받으면 STREAM connection을 정리합니다. (#916, #915)
 - RouteMesh ingress가 Java message-flow 기록에서 wire의 `flow_id`/`flow_origin` pair를 보존합니다. (#923)

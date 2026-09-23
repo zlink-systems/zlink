@@ -18,12 +18,13 @@ Framework 0.23.0 uses binding 1.4.0 and Core 1.4.0. Each Framework language rele
 - Guides now identify the tutorial code behind each example, explain its execution result, describe `set_advertise_host` and `InMesh`, and document STREAM client connectors. (#903, #904, #905, #920)
 - Example READMEs show whether each block runs in bash or PowerShell, keep verification in one place, document the stop procedure, and use formal Korean prose. (#890, #891)
 - Java and Kotlin examples are exported to separate read-only mirrors. (#894)
-- The engine examples include one .NET server and Unity and Unreal clients, with smoke and mirror workflows for the integrated sample. (#934, #935)
+- The engine examples include one .NET server and Unity, Unreal, Godot (C# and C++), Axmol and Cocos Creator (web) clients. Every client follows the same engine-lobby contract and ships from its engine's mirror repository (`zlink-engine-server`, `zlink-<engine>-examples`); the guide site has a game engine integration chapter. (#935, #980, #982, #983, #984, #987)
 - The examples mirror is invoked after each language package is published and verified. (#884)
 - Core 1.4.0 macOS dylibs use loader-relative install paths, so the release archive is relocatable. (#962)
 
 ## Java/Kotlin Changes
 
+- The Kotlin ZoneWorld sample's border subscription handlers declare their topics, so the sample passes its start check. (#999)
 - The DeliveryDispatch Kotlin sample no longer contains the obsolete Registry module, so the sample builds with the current registry API. (#959)
 - The Bingo sample preserves the reward announcement after the report reply under concurrent preparation, and the Java runtime cleans up a STREAM connection when the standard disconnect notification arrives. (#916, #915)
 - RouteMesh ingress preserves the wire `flow_id`/`flow_origin` pair in Java message-flow records. (#923)

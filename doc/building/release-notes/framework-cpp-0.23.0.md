@@ -18,12 +18,13 @@ Framework 0.23.0 uses binding 1.4.0 and Core 1.4.0. Each Framework language rele
 - Guides now identify the tutorial code behind each example, explain its execution result, describe `set_advertise_host` and `InMesh`, and document STREAM client connectors. (#903, #904, #905, #920)
 - Example READMEs show whether each block runs in bash or PowerShell, keep verification in one place, document the stop procedure, and use formal Korean prose. (#890, #891)
 - Java and Kotlin examples are exported to separate read-only mirrors. (#894)
-- The engine examples include one .NET server and Unity and Unreal clients, with smoke and mirror workflows for the integrated sample. (#934, #935)
+- The engine examples include one .NET server and Unity, Unreal, Godot (C# and C++), Axmol and Cocos Creator (web) clients. Every client follows the same engine-lobby contract and ships from its engine's mirror repository (`zlink-engine-server`, `zlink-<engine>-examples`); the guide site has a game engine integration chapter. (#935, #980, #982, #983, #984, #987)
 - The examples mirror is invoked after each language package is published and verified. (#884)
 - Core 1.4.0 macOS dylibs use loader-relative install paths, so the release archive is relocatable. (#962)
 
 ## C++ Changes
 
+- The three C++ engine adapters (Unreal plugin, Godot GDExtension, Axmol) deliver server pushes subscribed with `Subscribe`/`subscribe(packet_name)` on the engine main thread; previously no push reached the application. A request completion carries the request's packet name (Unreal passed an empty name). (#985)
 - The framework-cpp release includes shared prebuilt archives for `linux-x64`, `linux-arm64`, `macos-arm64`, and `windows-x64`. `bootstrap.cmake` downloads the matching archive instead of building the framework from source; consumers do not need Conan or vcpkg for this path. (#855)
 - The default C++ build updates the cross-language host to the admission-free Entry Spot contract. (#953)
 - The ShoppingMall OrderWorkflow stops requesting relocation readiness after it has already deferred readiness, so the sample can shut down without a forced kill. (#930)
