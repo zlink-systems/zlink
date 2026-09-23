@@ -1,11 +1,13 @@
 package systems.zlink.framework.runtime.mesh;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendContext;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
@@ -44,6 +46,47 @@ class ZLinkMeshNodeRuntimeTest {
                 first.toString()
                         .matches(
                                 "play-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"));
+    }
+
+    @Test
+    void fixedRoutingIdCannotBeFollowedByAutomaticPrefix() {
+        RoutingId fixed = RoutingId.from("fixed-node");
+        MeshNodeRegistration fixedFirst = new MeshNodeRegistration("game");
+        fixedFirst.setRoutingId(fixed);
+
+        ZLinkConfigurationException failure =
+                assertThrows(
+                        ZLinkConfigurationException.class,
+                        () -> fixedFirst.setRoutingIdPrefix("automatic"));
+        assertEquals(
+                "MeshNode cannot configure both a fixed routing ID and an automatic routing ID prefix.",
+                failure.getMessage());
+        assertEquals(fixed, fixedFirst.routingId());
+    }
+
+    @Test
+    void automaticPrefixCannotBeFollowedByFixedRoutingId() {
+        RoutingId fixed = RoutingId.from("fixed-node");
+        MeshNodeRegistration prefixFirst = new MeshNodeRegistration("game");
+        prefixFirst.setRoutingIdPrefix("automatic");
+
+        ZLinkConfigurationException failure =
+                assertThrows(
+                        ZLinkConfigurationException.class, () -> prefixFirst.setRoutingId(fixed));
+        assertEquals(
+                "MeshNode cannot configure both a fixed routing ID and an automatic routing ID prefix.",
+                failure.getMessage());
+        assertEquals("automatic", prefixFirst.routingIdPrefix());
+    }
+
+    @Test
+    void generatedRoutingIdDoesNotPreventChangingAutomaticPrefix() {
+        MeshNodeRegistration registration = new MeshNodeRegistration("game");
+        registration.routingId();
+
+        registration.setRoutingIdPrefix("automatic");
+
+        assertTrue(registration.routingId().toString().startsWith("automatic-"));
     }
 
     @Test
