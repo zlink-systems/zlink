@@ -290,6 +290,16 @@ if(ZLINK_FRAMEWORK_CPP_SHARED)
 else()
   set(ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE STATIC)
 endif()
+if(ZLINK_FRAMEWORK_CPP_SHARED AND WIN32)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
+endif()
+if(ZLINK_FRAMEWORK_CPP_SHARED AND APPLE)
+  # Xcode 16.4's libc++ keeps C++20 stop_token behind this switch. Apply it
+  # before creating the object libraries and export it to archive consumers.
+  add_compile_options(-fexperimental-library)
+  add_link_options(-fexperimental-library)
+endif()
 
 function(zlink_framework_cpp_configure_shared_library target_name)
   if(NOT ZLINK_FRAMEWORK_CPP_SHARED)
@@ -303,13 +313,39 @@ function(zlink_framework_cpp_configure_shared_library target_name)
     # Keep the linker input independent of its temporary build directory so
     # GNU's content-derived build ID remains reproducible after installation.
     BUILD_WITH_INSTALL_RPATH ON)
-  if(UNIX AND NOT APPLE)
+  if(WIN32)
+    set_target_properties(${target_name} PROPERTIES
+      MSVC_RUNTIME_LIBRARY MultiThreadedDLL
+      CXX_LINKER_LAUNCHER
+        "${Python3_EXECUTABLE};${CMAKE_CURRENT_LIST_DIR}/cmake/filter-windows-exports.py")
+  elseif(UNIX AND NOT APPLE)
     set_property(TARGET ${target_name} PROPERTY INSTALL_RPATH "$ORIGIN")
     target_link_options(${target_name} PRIVATE
       "-Wl,--exclude-libs,ALL"
       "-Wl,--version-script=${CMAKE_CURRENT_LIST_DIR}/cmake/zlink-framework-shared-symbols.map")
   elseif(APPLE)
-    set_property(TARGET ${target_name} PROPERTY INSTALL_RPATH "@loader_path")
+    set(_zlink_apple_exports
+      "${CMAKE_CURRENT_BINARY_DIR}/zlink-framework-exported-symbols.list")
+    get_property(_zlink_apple_exports_generated GLOBAL
+      PROPERTY ZLINK_FRAMEWORK_CPP_APPLE_EXPORTS_GENERATED)
+    if(NOT _zlink_apple_exports_generated)
+      file(REMOVE "${_zlink_apple_exports}")
+      file(STRINGS
+        "${CMAKE_CURRENT_LIST_DIR}/cmake/zlink-framework-shared-symbols.map"
+        _zlink_apple_export_lines REGEX "^# APPLE_EXPORT: ")
+      foreach(_zlink_apple_export_line IN LISTS _zlink_apple_export_lines)
+        string(REGEX REPLACE "^# APPLE_EXPORT: " ""
+          _zlink_apple_export "${_zlink_apple_export_line}")
+        file(APPEND "${_zlink_apple_exports}" "${_zlink_apple_export}\n")
+      endforeach()
+      set_property(GLOBAL PROPERTY
+        ZLINK_FRAMEWORK_CPP_APPLE_EXPORTS_GENERATED TRUE)
+    endif()
+    set_target_properties(${target_name} PROPERTIES
+      INSTALL_NAME_DIR "@loader_path"
+      INSTALL_RPATH "@loader_path")
+    target_link_options(${target_name} PRIVATE
+      "-Wl,-exported_symbols_list,${_zlink_apple_exports}")
   endif()
 endfunction()
 
@@ -416,6 +452,10 @@ add_library(zlink::framework ALIAS zlink_framework)
 set_target_properties(zlink_framework PROPERTIES EXPORT_NAME framework)
 zlink_framework_cpp_configure_shared_library(zlink_framework)
 target_compile_features(zlink_framework PUBLIC cxx_std_20)
+if(ZLINK_FRAMEWORK_CPP_SHARED AND APPLE)
+  target_compile_options(zlink_framework INTERFACE -fexperimental-library)
+  target_link_options(zlink_framework INTERFACE -fexperimental-library)
+endif()
 zlink_framework_cpp_configure_msvc_target(zlink_framework)
 if(MSVC)
   set_property(SOURCE framework/src/runtime/spots/spot_runtime.cpp APPEND PROPERTY
@@ -1113,9 +1153,16 @@ if(ZLINK_FRAMEWORK_CPP_STAGE_STANDALONE_DEPENDENCIES
       OR (ZLINK_FRAMEWORK_CPP_NATIVE_STATIC_RUNTIME AND EXISTS "${ZLINK_FRAMEWORK_CPP_NATIVE_STATIC_RUNTIME}")))
   if(WIN32)
     if(EXISTS "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}")
-      install(FILES "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}"
-        DESTINATION ${CMAKE_INSTALL_BINDIR}
-        COMPONENT StreamConnector)
+      if(ZLINK_FRAMEWORK_CPP_SHARED)
+        install(DIRECTORY "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/bin/"
+          DESTINATION ${CMAKE_INSTALL_BINDIR}
+          COMPONENT StreamConnector
+          FILES_MATCHING PATTERN "*.dll")
+      else()
+        install(FILES "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}"
+          DESTINATION ${CMAKE_INSTALL_BINDIR}
+          COMPONENT StreamConnector)
+      endif()
       zlink_framework_cpp_stage_debug_counterparts(
         "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}" "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}")
     endif()
@@ -1152,7 +1199,17 @@ if(ZLINK_FRAMEWORK_CPP_STAGE_STANDALONE_DEPENDENCIES
     zlink_framework_cpp_stage_debug_counterparts(
       "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}" "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_FILES}")
   else()
-    if(EXISTS "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}")
+    if(ZLINK_FRAMEWORK_CPP_SHARED)
+      file(GLOB ZLINK_FRAMEWORK_CPP_NATIVE_DYLIBS
+        "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/*.dylib")
+      if(ZLINK_FRAMEWORK_CPP_NATIVE_DYLIBS)
+        install(FILES ${ZLINK_FRAMEWORK_CPP_NATIVE_DYLIBS}
+          DESTINATION ${CMAKE_INSTALL_LIBDIR}
+          COMPONENT StreamConnector)
+        zlink_framework_cpp_stage_debug_counterparts(
+          "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}" "${ZLINK_FRAMEWORK_CPP_NATIVE_DYLIBS}")
+      endif()
+    elseif(EXISTS "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}")
       install(FILES "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}"
         DESTINATION ${CMAKE_INSTALL_LIBDIR}
         COMPONENT StreamConnector)
@@ -2548,6 +2605,21 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     TIMEOUT 30
     PROPERTIES
       RESOURCE_LOCK zlink_cpp_heavy_runtime)
+
+  add_zlink_connector_test(
+    test_unreal_adapter_push
+    connector/engines/unreal/tests/test_unreal_stream_connector.cpp
+    "connector-unreal-contract;connector-unreal-smoke"
+    integration)
+  target_link_libraries(test_unreal_adapter_push PRIVATE
+    zlink_unreal_stream_connector)
+
+  if(ZLINK_STREAM_CONNECTOR_BUILD_GODOT)
+    add_subdirectory(connector/engines/godot/tests)
+  endif()
+  if(ZLINK_STREAM_CONNECTOR_BUILD_AXMOL)
+    add_subdirectory(connector/engines/axmol/tests)
+  endif()
 
   set(ZLINK_UNREAL_PACKAGE_CONFIGURATION "${CMAKE_BUILD_TYPE}")
   if(NOT ZLINK_UNREAL_PACKAGE_CONFIGURATION)

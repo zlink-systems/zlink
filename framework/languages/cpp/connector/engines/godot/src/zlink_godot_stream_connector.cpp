@@ -31,6 +31,7 @@ class stream_connector_t::runtime_t
 {
   public:
     zlink::stream_connector::connector_t connector;
+    std::vector<std::pair<std::string, zlink::stream_connector::subscription_t>> subscriptions;
     connection_state_t current_state = connection_state_t::created;
     std::function<void (const packet_t &)> packet_callback;
     std::function<void (const packet_t &)> request_callback;
@@ -80,6 +81,31 @@ class stream_connector_t::runtime_t
         post_to_main_thread (
           [callback = request_callback, packet = std::move (packet)] { callback (packet); });
     }
+
+    void emit_packet (packet_t packet)
+    {
+        if (!packet_callback) {
+            return;
+        }
+        post_to_main_thread (
+          [callback = packet_callback, packet = std::move (packet)] { callback (packet); });
+    }
+
+    zlink::stream_connector::subscription_t bind_subscription (std::string packet_name,
+                                                               std::weak_ptr<runtime_t> runtime)
+    {
+        return connector.on<zlink::stream_connector::packet_t> (
+          std::move (packet_name),
+          [runtime = std::move (runtime)] (
+            const zlink::stream_connector::message_t<zlink::stream_connector::packet_t> &message) {
+              if (auto owner = runtime.lock ()) {
+                  auto packet = to_godot_packet (message.packet_name, message.payload.payload);
+                  packet.compressed = message.payload.compressed;
+                  packet.metadata = message.metadata.values;
+                  owner->emit_packet (std::move (packet));
+              }
+          });
+    }
 };
 
 stream_connector_t::stream_connector_t () : _runtime (std::make_shared<runtime_t> ())
@@ -96,10 +122,16 @@ stream_connector_t &stream_connector_t::operator= (stream_connector_t &&) noexce
 
 void stream_connector_t::connect (std::string endpoint)
 {
+    for (auto &[name, handle] : _runtime->subscriptions) {
+        handle.unsubscribe ();
+    }
     zlink::stream_connector::connector_options_t options;
     options.endpoint = std::move (endpoint);
     _runtime->connector =
       zlink::stream_connector::connector_factory_t::create (std::move (options));
+    for (auto &[name, handle] : _runtime->subscriptions) {
+        handle = _runtime->bind_subscription (name, _runtime);
+    }
     _runtime->current_state = connection_state_t::connecting;
     _runtime->emit_state (_runtime->current_state);
     const auto connected = _runtime->connector.connect ();
@@ -110,6 +142,7 @@ void stream_connector_t::connect (std::string endpoint)
 
 void stream_connector_t::close ()
 {
+    _runtime->subscriptions.clear ();
     _runtime->connector.close ();
     _runtime->current_state = connection_state_t::closed;
     _runtime->emit_state (_runtime->current_state);
@@ -159,6 +192,16 @@ void stream_connector_t::request_json (std::string packet_name,
               owner->emit_request (to_godot_packet (std::move (reply_name), result.value ()));
           }
       });
+}
+
+void stream_connector_t::subscribe (std::string packet_name)
+{
+    zlink::stream_connector::subscription_t handle;
+    if (_runtime->current_state != connection_state_t::created
+        && _runtime->current_state != connection_state_t::closed) {
+        handle = _runtime->bind_subscription (packet_name, _runtime);
+    }
+    _runtime->subscriptions.emplace_back (std::move (packet_name), std::move (handle));
 }
 
 void stream_connector_t::dispatch ()
