@@ -6,6 +6,7 @@ Framework 0.23.0은 binding 1.4.0과 Core 1.4.0을 사용합니다. Framework �
 
 ## 계약 변경
 
+- Spot 구독 handler에 topic이 없거나 비면 등록 경로(명시 등록, 패키지 스캔)와 무관하게 host가 시작되지 않고, 오류가 handler 이름을 알려 줍니다. 이전에는 패키지 스캔이 그런 handler를 조용히 건너뛰었습니다. (#1004)
 - STREAM packet이 Actor를 식별할 수 있습니다. header는 `actor_slot`과 flag `0x20`을 사용하고, `$zlink.actor.bound`와 `$zlink.actor.unbound` control packet을 제공합니다. dispatch context는 bound Actor를 전달하며 connector는 `actors`, `actor(id)`, `onActorBound`/`onActorUnbound`로 Actor handle을 제공합니다. Actor 하나를 사용하는 application은 변경 없이 동작합니다. (#933)
 - Logical Multicast가 routed target별 제출 실패를 target RID, topic, `stale_target`·`backpressure`·`shutdown` reason과 함께 `dispatch_error`로 기록합니다. publish terminal result는 변경되지 않습니다. (#928)
 - Deferred Actor Join 전용 제한 네 가지(handler당 64개 operation, request 합계 8 MiB, request 1 MiB, reply 1 MiB)를 모두 제거했습니다. Cross-node Join request와 application reply는 service wire의 application payload 크기 규칙을 따릅니다. (#925)

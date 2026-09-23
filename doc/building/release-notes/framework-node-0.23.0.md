@@ -6,6 +6,7 @@ Framework 0.23.0 uses binding 1.4.0 and Core 1.4.0. Each Framework language rele
 
 ## Contract Changes
 
+- A Spot subscription handler with a missing or empty topic stops the host from starting on every registration path (explicit registration or package scan), and the error names the handler; previously the package scan skipped such a handler silently. (#1004)
 - STREAM packets can identify an Actor. The header uses `actor_slot` with flag `0x20`; `$zlink.actor.bound` and `$zlink.actor.unbound` are control packets; dispatch context carries the bound Actor; and connectors expose Actor handles through `actors`, `actor(id)`, and `onActorBound`/`onActorUnbound`. Applications that use one Actor are unchanged. (#933)
 - Logical Multicast records each routed target submission failure as `dispatch_error` with the target RID, topic, and a `stale_target`, `backpressure`, or `shutdown` reason. The publish terminal result is unchanged. (#928)
 - The four Deferred Actor Join-only limits (64 operations per handler, 8 MiB total per request set, 1 MiB per request, 1 MiB per reply) are removed. Cross-node Join requests and application replies follow the service wire's application payload size rule. (#925)
