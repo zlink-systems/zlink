@@ -16,6 +16,7 @@ import systems.zlink.framework.codecs.protobuf.ZLinkProtobufCodec
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
 import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode
+import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.kotlin.configureDispatch
 import systems.zlink.framework.kotlin.useCoroutineHandlers
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
@@ -47,8 +48,7 @@ class PlayServerApplication {
     @Bean
     fun playFramework(topology: SampleTopology): ZLinkFrameworkConfigurer =
         ZLinkFrameworkConfigurer { options ->
-            // #895: configuration package scanning has no Kotlin form in the spec.
-            options.addHandlersFromPackageOf(PlayServerApplication::class.java)
+            options.addHandlersFromPackageOf<PlayServerApplication>()
             options.useCoroutineHandlers(Dispatchers.Default)
             options.configureDispatch { messageFlow(ZLinkMessageFlowLogMode.NORMAL) }
             options.codecs().use(ZLinkProtobufCodec.defaultCodec())
@@ -67,29 +67,22 @@ class PlayServerApplication {
             node
                 .objects()
                 .server()
-                // #895: entry-spot registration has no Kotlin form in the spec.
-                .addEntrySpot(BingoEntrySpot::class.java)
+                .addEntrySpot<BingoEntrySpot>()
                 // --8<-- [start:doc-execution-mode]
                 // SPOT_WIDE is the default. Naming it here keeps the choice visible:
                 // every callback of this room runs through one gate.
                 // --8<-- [start:doc-bingo-play-register]
-                .addSpotFactory(SampleNames.RoomSpotType, BingoRoomSpot::class.java) { factory ->
-                    factory.executionMode(ZLinkUserSpotExecutionMode.SPOT_WIDE)
-                    factory.relocationCoordinationMode(
+                .addSpotFactory<BingoRoomSpot>(SampleNames.RoomSpotType) {
+                    executionMode(ZLinkUserSpotExecutionMode.SPOT_WIDE)
+                    relocationCoordinationMode(
                         ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED
                     )
-                    // #895: state preservation configuration has no Kotlin form in the spec.
-                    factory.preserveStateWith(BingoRoomRelocationAdapter::class.java)
+                    preserveStateWith<BingoRoomSpot, BingoRoomRelocationAdapter>()
                 }
                 // --8<-- [end:doc-bingo-play-register]
                 // --8<-- [end:doc-execution-mode]
-                .addActorFactory(
-                    SampleNames.PlayerActorType,
-                    PlayerActor::class.java,
-                    PlayerActorFactory::class.java,
-                ) { factory ->
-                    // #895: state preservation configuration has no Kotlin form in the spec.
-                    factory.preserveStateWith(PlayerActorRelocationAdapter::class.java)
+                .addActorFactory<PlayerActor, PlayerActorFactory>(SampleNames.PlayerActorType) {
+                    preserveStateWith<PlayerActor, PlayerActorRelocationAdapter>()
                 }
         }
 

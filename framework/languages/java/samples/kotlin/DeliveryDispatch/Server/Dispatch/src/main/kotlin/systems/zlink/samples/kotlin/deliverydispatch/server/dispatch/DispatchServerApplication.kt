@@ -11,6 +11,7 @@ import org.springframework.context.annotation.Bean
 import systems.zlink.framework.actors.ZLinkActorClient
 import systems.zlink.framework.channels.ZLinkClient
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
+import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.kotlin.useCoroutineHandlers
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
@@ -31,7 +32,7 @@ class DispatchServerApplication {
     fun dispatchFramework(): ZLinkFrameworkConfigurer = ZLinkFrameworkConfigurer { options ->
         options.useCoroutineHandlers(Dispatchers.Default)
         // #895: configuration package scanning has no Kotlin form in the spec.
-        options.addHandlersFromPackageOf(DispatchServerApplication::class.java)
+        options.addHandlersFromPackageOf<DispatchServerApplication>()
         options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 
         // --8<-- [start:doc-dd-dispatch-register]

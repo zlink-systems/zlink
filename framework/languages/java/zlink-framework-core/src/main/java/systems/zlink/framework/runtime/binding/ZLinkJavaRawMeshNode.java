@@ -1832,7 +1832,8 @@ final class ZLinkJavaRawMeshNode
                         null,
                         null,
                         meshName,
-                        targetRid.toString()));
+                        targetRid.toString(),
+                        failure));
     }
 
     private static ZLinkDispatchErrorReason logicalMulticastReason(Throwable failure) {

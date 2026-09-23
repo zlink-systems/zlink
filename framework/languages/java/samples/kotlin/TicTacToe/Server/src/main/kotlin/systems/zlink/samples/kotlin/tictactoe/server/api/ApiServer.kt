@@ -4,6 +4,7 @@ import java.net.URI
 import kotlinx.coroutines.Dispatchers
 import systems.zlink.contracts.core.RoutingId
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
+import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.kotlin.configureDispatch
 import systems.zlink.framework.kotlin.useCoroutineHandlers
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
@@ -28,11 +29,11 @@ object ApiServer {
                 .setBindHost(apiEndpoint.host)
                 .listen(apiEndpoint.port)
                 // request: AuthenticatePlayerReq에 AuthenticatePlayerRes로 응답한다.
-                .addRequestHandler(
-                    AuthenticatePlayerHandler::class.java,
-                    AuthenticatePlayerReq::class.java,
-                    AuthenticatePlayerRes::class.java,
-                )
+                .addRequestHandler<
+                    AuthenticatePlayerHandler,
+                    AuthenticatePlayerReq,
+                    AuthenticatePlayerRes,
+                >()
             val mesh = options.addRouteMesh(SampleNames.SpotMesh)
             mesh
                 .setRoutingId(RoutingId.from("tictactoe-api-${settings.nodeId}"))

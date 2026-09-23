@@ -112,6 +112,8 @@ struct message_dispatch_error_event_t
     std::optional<std::string> server_rid;
     std::optional<std::string> instance_spot_type;
     std::optional<std::string> activation_state;
+    std::optional<std::string> error_type;
+    std::optional<std::string> error_message;
 };
 
 struct message_flow_event_t

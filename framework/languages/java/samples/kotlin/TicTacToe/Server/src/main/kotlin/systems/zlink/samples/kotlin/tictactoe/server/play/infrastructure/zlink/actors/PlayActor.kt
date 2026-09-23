@@ -87,6 +87,7 @@ class PlayActor(val actorId: String, override val context: ZLinkActorContext) :
                     .await()
         }
     }
+
     // --8<-- [end:doc-join-completed]
 
     fun requireJoinedGame(): String =

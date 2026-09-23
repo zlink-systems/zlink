@@ -6,6 +6,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.builder.SpringApplicationBuilder
 import org.springframework.context.annotation.Bean
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
+import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.kotlin.useCoroutineHandlers
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
@@ -27,7 +28,7 @@ class CourierSessionApplication {
     fun courierSessionFramework(): ZLinkFrameworkConfigurer = ZLinkFrameworkConfigurer { options ->
         options.useCoroutineHandlers(Dispatchers.Default)
         // #895: configuration package scanning has no Kotlin form in the spec.
-        options.addHandlersFromPackageOf(CourierSessionApplication::class.java)
+        options.addHandlersFromPackageOf<CourierSessionApplication>()
         options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 
         options.addClientServerChannel(SampleNames.CourierChannel).client()
@@ -41,7 +42,7 @@ class CourierSessionApplication {
             .bind(SampleTopology.CourierStreamEndpoint)
             .enableActorDispatch()
             // #895: session registration has no Kotlin form in the spec.
-            .registerSession(CourierSession::class.java)
+            .registerSession<CourierSession>()
     }
 
     @Bean fun locationStore(): ZLinkRedisLocationStore = SampleLocationStore.create()

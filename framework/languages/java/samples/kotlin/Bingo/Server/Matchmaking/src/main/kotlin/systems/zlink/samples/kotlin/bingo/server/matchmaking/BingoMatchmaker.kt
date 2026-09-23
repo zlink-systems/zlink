@@ -4,6 +4,7 @@ import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.CompletionStage
 import java.util.concurrent.atomic.AtomicInteger
+import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.spots.ZLinkInstanceSpot
 import systems.zlink.framework.spots.ZLinkInstanceSpotContext
 
@@ -15,11 +16,14 @@ class BingoMatchmaker(private val instanceContext: ZLinkInstanceSpotContext) : Z
 
     override fun onInitialize(): CompletionStage<Void> =
         instanceContext
-            .addTimer(
+            .addTimer<BingoMatchmakerIdleTimerHandler>(
                 "matchmaker-idle-close",
                 IdleCheckPeriod,
-                BingoMatchmakerIdleTimerHandler::class.java,
-                null,
+                systems.zlink.framework.spots.ZLinkTimerOptions(
+                    systems.zlink.framework.spots.ZLinkTimerOverrunPolicy.SKIP_LATE_TICKS,
+                    1,
+                    false,
+                ),
             )
             .thenApply { null }
 

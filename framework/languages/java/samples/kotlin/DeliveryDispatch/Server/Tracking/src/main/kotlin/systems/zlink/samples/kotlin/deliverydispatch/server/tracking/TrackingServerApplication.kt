@@ -7,6 +7,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.builder.SpringApplicationBuilder
 import org.springframework.context.annotation.Bean
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
+import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.kotlin.useCoroutineHandlers
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
@@ -30,7 +31,7 @@ class TrackingServerApplication {
         options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 
         // #895: configuration package scanning has no Kotlin form in the spec.
-        options.addHandlersFromPackageOf(TrackingServerApplication::class.java)
+        options.addHandlersFromPackageOf<TrackingServerApplication>()
         val trackingSpot =
             options
                 .addRouteMesh(SampleNames.CustomerSpotMesh)

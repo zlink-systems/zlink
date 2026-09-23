@@ -75,7 +75,7 @@ class GameSession(
         require(sessionContext.actors().bound().size == 1) {
             "JoinWorldMsg must bind an actor first"
         }
-        sessionContext.actors().bound().single().relay(dispatch, payload).await()
+        sessionContext.actors().bound().single().kotlin().relay(dispatch, payload).await()
     }
 
     private suspend fun join(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage) {
@@ -94,7 +94,7 @@ class GameSession(
                 is ZLinkActorCreateResult.Existing -> result.actor
                 is ZLinkActorCreateResult.Rejected -> error("unreachable")
             }
-        sessionContext.actors().bindOrGet(actor).await().relay(dispatch, payload).await()
+        sessionContext.actors().bindOrGet(actor).await().kotlin().relay(dispatch, payload).await()
         // --8<-- [end:doc-zw-session-bind]
     }
 }

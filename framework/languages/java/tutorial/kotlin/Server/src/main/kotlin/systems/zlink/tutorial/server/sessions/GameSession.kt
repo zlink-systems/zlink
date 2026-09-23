@@ -2,6 +2,7 @@ package systems.zlink.tutorial.server.sessions
 
 import systems.zlink.framework.kotlin.ZLinkSuspendingSession
 import systems.zlink.framework.kotlin.await
+import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.streams.ZLinkSessionContext
 import systems.zlink.framework.streams.ZLinkSessionDispatchContext
@@ -45,7 +46,7 @@ class GameSession(
         val bound = context.actors().bound()
         check(bound.size == 1) { "Authenticate before sending player packets." }
 
-        bound[0].relay(dispatch, payload).await()
+        bound[0].kotlin().relay(dispatch, payload).await()
         // --8<-- [end:session-actor-relay]
     }
 }
