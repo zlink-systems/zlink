@@ -27,7 +27,7 @@ final class ZLinkChannelFlowFrame {
             systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header header) {
         return header.flowId() == null
                 ? null
-                : new ZLinkFlowContext.State(header.flowId(), header.flowOrigin());
+                : new ZLinkFlowContext.State(header.flowId(), header.flowOrigin(), null);
     }
 
     static ZLinkFlowContext.State decode(List<Message> parts) {
@@ -39,7 +39,7 @@ final class ZLinkChannelFlowFrame {
                                 parts.get(0), true);
                 return header.flowId() == null
                         ? null
-                        : new ZLinkFlowContext.State(header.flowId(), header.flowOrigin());
+                        : new ZLinkFlowContext.State(header.flowId(), header.flowOrigin(), null);
             } catch (ZLinkFrameworkException invalidEnvelope) {
                 throw new PayloadDecodeDispatchException(
                         invalidEnvelope.getMessage(), invalidEnvelope);
@@ -58,7 +58,10 @@ final class ZLinkChannelFlowFrame {
                 throw invalidFlow("Channel flow id must be UUIDv7");
             }
             try {
-                return new ZLinkFlowContext.State(fields[1], ZLinkFlowOrigin.valueOf(fields[2]));
+                return new ZLinkFlowContext.State(
+                        fields[1],
+                        ZLinkFlowOrigin.valueOf(fields[2]),
+                        null);
             } catch (IllegalArgumentException invalidOrigin) {
                 throw invalidFlow("Channel flow origin is invalid", invalidOrigin);
             }

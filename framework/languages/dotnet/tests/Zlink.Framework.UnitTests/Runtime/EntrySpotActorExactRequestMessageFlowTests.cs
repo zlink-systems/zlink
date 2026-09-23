@@ -235,6 +235,7 @@ public sealed partial class EntrySpotActorDispatchTests
                     Assert.Equal(ExactActorFlowId, flow.FlowId);
                     Assert.Equal("application", flow.FlowOrigin);
                     Assert.Equal("corr-1", flow.CorrelationId);
+                    Assert.Equal(RoutingId.From("source-session").ToHex(), flow.StreamSessionId);
                 }
             );
         }

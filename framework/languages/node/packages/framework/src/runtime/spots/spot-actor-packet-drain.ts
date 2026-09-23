@@ -138,6 +138,7 @@ export class ZLinkSpotActorPacketDrain {
           actorId,
           parts,
           returnResponse: false,
+          sourceSessionRid,
           fallbackActorRef: actorRef as unknown as ActorRef | undefined
         });
       }
@@ -200,6 +201,7 @@ export class ZLinkSpotActorPacketDrain {
         actorId,
         parts,
         returnResponse: true,
+        sourceSessionRid: info.sourceSessionRid,
         fallbackActorRef: actorRef as unknown as ActorRef | undefined
       });
       this.options.replyActorNoBind?.(

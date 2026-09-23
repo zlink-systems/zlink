@@ -69,6 +69,7 @@ interface ZLinkTelemetryRecord {
   readonly instanceSpotType?: string;
   readonly activationState?: string;
   readonly actorId?: string;
+  readonly streamSessionId?: string;
   readonly commandId?: number;
   readonly messageSizeBytes?: number;
   readonly durationSeconds?: number;
@@ -227,12 +228,13 @@ export class ZLinkMessageFlowTracer {
     acceptedFlowId?: string,
     acceptedFlowOrigin?: ZLinkFlowOrigin
   ): void {
-    const ambient = acceptedFlowId === undefined ? currentFlowContext() : undefined;
+    const ambient = currentFlowContext();
     const flowId = flowInput.flowId ?? acceptedFlowId ?? ambient?.flowId;
     const flowOrigin = flowInput.flowOrigin ?? acceptedFlowOrigin ?? ambient?.flowOrigin;
     const flow: ZLinkRuntimeMessageFlowEvent = {
       ...flowInput,
       ...(flowId === undefined ? {} : { flowId, flowOrigin }),
+      streamSessionId: flowInput.streamSessionId ?? ambient?.streamSessionId,
       effectiveMode
     };
     this.tracedEvents += 1;
@@ -381,6 +383,7 @@ function toTelemetryRecord(
     instanceSpotType: flow.instanceSpotType,
     activationState: flow.activationState,
     actorId: flow.actorId,
+    streamSessionId: flow.streamSessionId,
     commandId: flow.commandId,
     messageSizeBytes,
     durationSeconds,
@@ -422,6 +425,7 @@ function structuredLogAttributes(record: ZLinkTelemetryRecord): Attributes {
     instance_spot_type: record.instanceSpotType,
     activation_state: record.activationState,
     actor_id: record.actorId,
+    stream_session_id: record.streamSessionId,
     correlation_id: record.correlationId,
     flow_id: record.flowId,
     flow_origin: record.flowOrigin,
@@ -457,6 +461,7 @@ function structuredLogBodyAttributes(record: ZLinkTelemetryRecord): Attributes {
     instance_type: record.instanceSpotType,
     activation_state: record.activationState,
     actor: record.actorId,
+    session: record.streamSessionId,
     corr: record.correlationId,
     flow: record.flowId,
     origin: record.flowOrigin,

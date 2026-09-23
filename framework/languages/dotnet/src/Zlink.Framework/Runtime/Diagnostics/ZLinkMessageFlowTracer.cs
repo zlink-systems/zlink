@@ -412,7 +412,7 @@ internal static class ZLinkTraceFormat
         long? size
     )
     {
-        var fields = new List<KeyValuePair<string, object?>>(22);
+        var fields = new List<KeyValuePair<string, object?>>(23);
         //  Structured log 본문의 key는 관찰 스펙의 "Structured log 대체 표기"가 고정한다 —
         //  첫 key는 `event`다. telemetry attribute 이름(`event_id`)과는 다른 집합이다.
         Add(fields, "event", "zlink.message_flow");
@@ -431,6 +431,7 @@ internal static class ZLinkTraceFormat
         Add(fields, "instance_type", flow.InstanceSpotType);
         Add(fields, "activation_state", ActivationStateKey(flow.ActivationState));
         Add(fields, "actor", flow.ActorId);
+        Add(fields, "session", flow.StreamSessionId);
         Add(fields, "corr", flow.CorrelationId);
         Add(fields, "flow", FlowIdKey(flow));
         Add(fields, "origin", FlowOriginKey(flow));
@@ -447,7 +448,7 @@ internal static class ZLinkTraceFormat
         ZLinkFlowOrigin? flowOrigin
     )
     {
-        var fields = new List<KeyValuePair<string, object?>>(20);
+        var fields = new List<KeyValuePair<string, object?>>(21);
         Add(fields, "event", "zlink.dispatch_error");
         Add(fields, "surface", SurfaceKey(error.Surface));
         Add(fields, "kind", MessageKindKey(error.MessageKind));
@@ -463,6 +464,7 @@ internal static class ZLinkTraceFormat
         Add(fields, "instance_type", error.InstanceSpotType);
         Add(fields, "activation_state", ActivationStateKey(error.ActivationState));
         Add(fields, "actor", error.ActorId);
+        Add(fields, "session", error.StreamSessionId);
         Add(fields, "corr", error.CorrelationId);
         Add(fields, "flow", string.IsNullOrEmpty(flowId) || flowOrigin is null ? null : flowId);
         Add(
