@@ -15,6 +15,7 @@
 #include <boost/beast/core/detail/pcg.hpp>
 #include <atomic>
 #include <cstdlib>
+#include <memory>
 #include <mutex>
 #include <random>
 
@@ -120,8 +121,9 @@ inline
 std::uint32_t
 secure_generate()
 {
-    thread_local static beast::detail::chacha<20> gen{prng_seed(), make_nonce()};
-    return gen();
+    thread_local static std::unique_ptr<beast::detail::chacha<20>> gen{
+        new beast::detail::chacha<20>{prng_seed(), make_nonce()}};
+    return (*gen)();
 }
 
 inline
