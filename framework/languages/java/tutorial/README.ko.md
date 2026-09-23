@@ -99,7 +99,7 @@ for i in $(seq 1 60); do curl -sf http://127.0.0.1:5280/players/p1/profile >/dev
 echo $! > server.pid
 ./kotlin/Client/build/install/Client/bin/Client > client.log 2>&1 &
 echo $! > client.pid
-for i in $(seq 1 60); do curl -sf http://127.0.0.1:5280/players/p1/profile >/dev/null && break; sleep 1; done
+for i in $(seq 1 60); do curl -sf http://127.0.0.1:5380/players/p1/profile >/dev/null && break; sleep 1; done
 ```
 <!-- zlink-lang: end -->
 
@@ -120,7 +120,7 @@ $server = Start-Process -FilePath (Resolve-Path '.\kotlin\Server\build\install\S
 $server.Id | Set-Content server.pid
 $client = Start-Process -FilePath (Resolve-Path '.\kotlin\Client\build\install\Client\bin\Client.bat') -WindowStyle Hidden -RedirectStandardOutput client.log -RedirectStandardError client.err.log -PassThru
 $client.Id | Set-Content client.pid
-foreach ($i in 1..60) { try { Invoke-RestMethod -Uri 'http://127.0.0.1:5280/players/p1/profile' -TimeoutSec 2 | Out-Null; break } catch { Start-Sleep -Seconds 1 } }
+foreach ($i in 1..60) { try { Invoke-RestMethod -Uri 'http://127.0.0.1:5380/players/p1/profile' -TimeoutSec 2 | Out-Null; break } catch { Start-Sleep -Seconds 1 } }
 ```
 <!-- zlink-lang: end -->
 
@@ -133,18 +133,35 @@ examples-smoke는 이 블록을 그대로 실행한다.
 
 **Linux · macOS · WSL — bash**
 
+<!-- zlink-lang: java -->
 ```bash title="linux"
 curl -sf http://127.0.0.1:5280/players/p1/profile | grep -q '"playerId":"p1"'
 echo "tutorial-http=ok"
 ```
+<!-- zlink-lang: end -->
+<!-- zlink-lang: kotlin -->
+```bash title="linux"
+curl -sf http://127.0.0.1:5380/players/p1/profile | grep -q '"playerId":"p1"'
+echo "tutorial-http=ok"
+```
+<!-- zlink-lang: end -->
 
 **Windows — PowerShell 7**
 
+<!-- zlink-lang: java -->
 ```powershell title="windows"
 $playerProfile = Invoke-RestMethod -Uri 'http://127.0.0.1:5280/players/p1/profile'
 if ($playerProfile.playerId -ne 'p1') { throw "unexpected profile: $($playerProfile | ConvertTo-Json -Compress)" }
 Write-Output 'tutorial-http=ok'
 ```
+<!-- zlink-lang: end -->
+<!-- zlink-lang: kotlin -->
+```powershell title="windows"
+$playerProfile = Invoke-RestMethod -Uri 'http://127.0.0.1:5380/players/p1/profile'
+if ($playerProfile.playerId -ne 'p1') { throw "unexpected profile: $($playerProfile | ConvertTo-Json -Compress)" }
+Write-Output 'tutorial-http=ok'
+```
+<!-- zlink-lang: end -->
 
 ## 종료
 
