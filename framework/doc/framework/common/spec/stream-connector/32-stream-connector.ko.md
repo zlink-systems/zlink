@@ -326,6 +326,8 @@ header의 codec은 `JSON`이다.
 {"code":"error_code","message":"message"}
 ```
 
+Framework가 만드는 `Error`의 `code`는 Framework 오류 종류의 snake_case 이름이다(예: `invalid_operation`, `not_found`).
+
 애플리케이션 도메인의 오류를 정상 reply로 다루려면 `Error`가 아니라 `Response` kind와 사용자
 정의 payload를 사용한다.
 

@@ -373,6 +373,8 @@ codec configuration**, and the header's codec is `JSON`.
 {"code":"error_code","message":"message"}
 ```
 
+For an `Error` the framework produces, `code` is the snake_case name of the framework error kind (for example `invalid_operation`, `not_found`).
+
 To treat an application-domain error as a normal reply, use `Response`
 kind with a user-defined payload, not `Error`.
 
