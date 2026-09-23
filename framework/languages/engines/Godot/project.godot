@@ -1,0 +1,11 @@
+config_version=5
+
+[application]
+
+config/name="ZLink Engine Lobby"
+run/main_scene="res://EngineLobby.tscn"
+config/features=PackedStringArray("4.4", "C#")
+
+[dotnet]
+
+project/assembly_name="EngineLobby"

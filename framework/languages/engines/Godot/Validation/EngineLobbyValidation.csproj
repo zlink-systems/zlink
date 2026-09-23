@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Zlink.Stream.Connector" Version="0.22.0" />
+    <Compile Include="../Contracts.cs" Link="Contracts.cs" />
+    <Compile Include="../EngineLobbyClient.cs" Link="EngineLobbyClient.cs" />
+  </ItemGroup>
+</Project>
