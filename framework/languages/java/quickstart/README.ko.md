@@ -77,8 +77,8 @@ Kotlin Client는 subproject build file에서 `kotlinx-coroutines-reactor`도 ver
 
 ## 실행
 
-한 번에 한 언어의 pair만 실행한다. 각 Server는 `tcp://0.0.0.0:7101`에서 듣고 `greeting`
-channel을 처리한다. 각 Client는 `tcp://0.0.0.0:7102`에서 듣고
+한 번에 한 언어의 pair만 실행한다. 각 Server는 `tcp://127.0.0.1:7101`에서 듣고 `greeting`
+channel을 처리한다. 각 Client는 `tcp://127.0.0.1:7102`에서 듣고
 `tcp://127.0.0.1:7101`에 연결하며, `http://127.0.0.1:5080`에서 `GET /hello/{name}`을
 제공한다.
 

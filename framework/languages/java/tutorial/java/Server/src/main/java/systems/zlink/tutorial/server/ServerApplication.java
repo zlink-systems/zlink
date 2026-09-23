@@ -79,14 +79,11 @@ public class ServerApplication {
             // as peers. The routing id names this node; without it the Framework assigns
             // a generated one, which a caller cannot type into a URL.
             //
-            // The advertise host is what this node puts in the descriptor it hands a
-            // peer. A caller that names a routing id in connect(...) compares that
-            // descriptor against the endpoint it dialed, so the bind address 0.0.0.0
-            // has to be replaced by an address the caller actually used. Leave it out
-            // and admission is refused, silently, as long as the process runs.
+            // A caller that names a routing id in connect(...) compares the advertised
+            // endpoint against the endpoint it dialed. Both use 127.0.0.1 here.
             ZLinkMeshNodeBuilder mesh =
                     options.addRouteMesh("game")
-                            .listen("tcp://0.0.0.0:7501")
+                            .listen("tcp://127.0.0.1:7501")
                             .setAdvertiseHost("127.0.0.1")
                             .setRoutingId(RoutingId.from("game-server-1"));
             // --8<-- [end:mesh-register]
@@ -177,7 +174,7 @@ public class ServerApplication {
             // and actor dispatch must be on for a session to relay to its player.
             // Session handlers are registered here rather than inside the session.
             options.addStreamNode("client-stream")
-                    .bind("tcp://0.0.0.0:7521")
+                    .bind("tcp://127.0.0.1:7521")
                     .enableActorDispatch()
                     .registerSession(GameSession.class)
                     .addSessionPacketHandler(PingHandler.class)

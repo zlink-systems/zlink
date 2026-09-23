@@ -65,7 +65,7 @@ Two executables come out — under `build\Release\` on Windows, `build/` on Linu
 
 ## Run
 
-The server listens on `tcp://0.0.0.0:7301`; the client listens on `7302`, connects to the
+The server listens on `tcp://127.0.0.1:7301`; the client listens on `127.0.0.1:7302`, connects to the
 server, and serves `GET /hello/{name}` on `http://127.0.0.1:5083`.
 
 **Linux · macOS · WSL — bash**

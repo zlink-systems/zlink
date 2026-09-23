@@ -91,12 +91,9 @@ class ServerApplication {
         val mesh =
             options
                 .addRouteMesh("game")
-                .listen("tcp://0.0.0.0:7601")
-                // What this node tells peers to reach it at. It has to match the
-                // endpoint the caller passes to connect(routingId, endpoint) exactly:
-                // that form of connect checks the advertised endpoint string, and
-                // without this the node would advertise "tcp://0.0.0.0:7601" and the
-                // peer would be rejected as an expected-route mismatch.
+                .listen("tcp://127.0.0.1:7601")
+                // The advertised endpoint must match the endpoint passed to
+                // connect(routingId, endpoint). Both use 127.0.0.1 here.
                 .setAdvertiseHost("127.0.0.1")
                 .setRoutingId(RoutingId.from("game-server-1"))
         // --8<-- [end:mesh-register]
@@ -173,7 +170,7 @@ class ServerApplication {
         // handlers go in by type.
         options
             .addStreamNode("client-stream")
-            .bind("tcp://0.0.0.0:7621")
+            .bind("tcp://127.0.0.1:7621")
             .enableActorDispatch()
             .registerSession<GameSession>()
             .addSessionPacketHandler<PingHandler>()

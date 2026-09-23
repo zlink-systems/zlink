@@ -205,11 +205,11 @@ runtime weight endpoint 하나를 연다. Server도 HTTP를 여는 덕분에 emb
 |---|---|
 | Client HTTP | 5280 |
 | Server HTTP (weight endpoint) | 5281 |
-| mesh listen (Server) | `tcp://0.0.0.0:7501` |
-| mesh listen (Client) | `tcp://0.0.0.0:7502` |
+| mesh listen (Server) | `tcp://127.0.0.1:7501` |
+| mesh listen (Client) | `tcp://127.0.0.1:7502` |
 | ClientServer | 7511 |
 | fanout publisher | `tcp://127.0.0.1:7512` |
-| stream node (Server) | `tcp://0.0.0.0:7521` |
+| stream node (Server) | `tcp://127.0.0.1:7521` |
 
 ## 단계
 
@@ -257,9 +257,8 @@ channel 호출과 달리 후보를 고르지 않으므로 그대로 실패한다
 
 1. 받는 node가 `setRoutingId`로 id를 고정해야 한다. 고정하지 않으면 생성된 id라 부르는
    쪽이 URL에 적을 수 없다.
-2. 받는 node가 `setAdvertiseHost`로 **부르는 쪽이 실제로 접속한 주소**를 알려야 한다.
-   bind 주소 `0.0.0.0`을 그대로 광고하면 아래 3의 대조에서 어긋나 admission이 거부된다.
-   거부는 조용하다. 로그에 남지 않고 `PEER_READY`만 영영 나오지 않는다.
+2. 받는 node가 광고하는 endpoint는 **부르는 쪽이 실제로 접속한 주소**와 일치해야 한다.
+   이 예제의 listen 주소와 `setAdvertiseHost`는 모두 `127.0.0.1`이다.
 3. 부르는 쪽이 `peerConnections().connect(RoutingId, endpoint)`로 어느 id가 그 endpoint에
    있는지 알려야 한다.
 

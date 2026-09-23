@@ -57,7 +57,7 @@ builder.Services.AddZLinkFramework(options =>
     // a generated one, which a caller cannot type into a URL.
     var mesh = options
         .AddRouteMesh("game")
-        .Listen("tcp://0.0.0.0:7201")
+        .Listen("tcp://127.0.0.1:7201")
         .SetRoutingId(RoutingId.From("game-server-1"));
     // --8<-- [end:mesh-register]
 
@@ -139,7 +139,7 @@ builder.Services.AddZLinkFramework(options =>
     // actor dispatch must be on for a session to relay to its player.
     options
         .AddStreamNode("client-stream")
-        .Bind("tcp://0.0.0.0:7301")
+        .Bind("tcp://127.0.0.1:7301")
         .EnableActorDispatch()
         .AddSession<GameSession>();
     // --8<-- [end:stream-register]

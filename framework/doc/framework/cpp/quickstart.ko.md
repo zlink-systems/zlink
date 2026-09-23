@@ -121,9 +121,9 @@ ADL로 `to_json`/`from_json`을 찾으므로 bare struct는 직렬화되지 않�
 ## 4. 처리하는 쪽
 
 `object_role` 기본값은 `none`이다. 이 구성은 channel만 쓰는 node임을 드러내기 위해
-`none`을 명시한다. `routing_id`는 필수다. `0.0.0.0`으로 bind하고 `advertise_host`를 생략하면 같은 address family의
-loopback(`127.0.0.1`)을 광고한다. Container나 여러 host에서 remote process가 그 loopback으로 접속할
-수 없으면 접속 가능한 `advertise_host`를 지정한다.
+`none`을 명시한다. `routing_id`는 필수다. 이 예제는 `127.0.0.1`에 bind하므로 같은 host의 process만 접속하며, Windows에서
+방화벽 허용 창이 뜨지 않는다. 다른 host나 container에서 접속해야 하면 접속 가능한 주소에 bind하고
+`advertise_host`로 그 주소를 광고한다.
 
 ```cpp title="Server/main.cpp"
 --8<-- "framework/languages/cpp/quickstart/Server/main.cpp"

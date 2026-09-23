@@ -176,12 +176,12 @@ Node 직접 호출, ChannelName select-one, Spot, Actor, Logical Multicast 연�
 
 ```csharp
 var mesh = options.AddRouteMesh("game")
-    .Listen("tcp://0.0.0.0:7300"); // 이 process의 MeshNode endpoint를 만든다.
+    .Listen("tcp://127.0.0.1:7300"); // 이 process의 MeshNode endpoint를 만든다.
 
 mesh.ChannelName("orders"); // 다른 ROUTER 없이 논리적 서비스 소속만 추가한다.
 
 options.AddFanoutChannel("events")
-    .EnablePublisher("tcp://0.0.0.0:7400"); // Classic fanout은 자기 PUB endpoint를 쓴다.
+    .EnablePublisher("tcp://127.0.0.1:7400"); // Classic fanout은 자기 PUB endpoint를 쓴다.
 ```
 
 ## 설정과 계약

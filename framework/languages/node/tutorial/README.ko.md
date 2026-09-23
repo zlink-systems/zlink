@@ -128,7 +128,7 @@ examples-smoke는 이 블록을 그대로 실행한다.
 Server와 Client가 각각 아래 줄을 기록하면 정상적으로 시작한 상태다.
 
 ```
-server listening on tcp://0.0.0.0:7701 (mesh "game", routing id "game-server-1")
+server listening on tcp://127.0.0.1:7701 (mesh "game", routing id "game-server-1")
 server admin listening on http://127.0.0.1:5481
 ```
 
@@ -228,11 +228,11 @@ redis-cli --scan --pattern 'zlink-tutorial-node:*' | ForEach-Object { redis-cli 
 |---|---|
 | Client의 HTTP | `127.0.0.1:5480` |
 | Server의 admin HTTP | `127.0.0.1:5481` |
-| Server의 mesh listen | `0.0.0.0:7701` (advertise `127.0.0.1`) |
-| Client의 mesh listen | `0.0.0.0:7702` (advertise `127.0.0.1`) |
+| Server의 mesh listen | `127.0.0.1:7701` (advertise `127.0.0.1`) |
+| Client의 mesh listen | `127.0.0.1:7702` (advertise `127.0.0.1`) |
 | ClientServer channel | `127.0.0.1:7711` |
 | Fanout publisher | `127.0.0.1:7712` |
-| Server의 stream listen | `0.0.0.0:7721` (WebSocket) |
+| Server의 stream listen | `127.0.0.1:7721` (WebSocket) |
 
 ## 프로젝트
 
@@ -607,7 +607,7 @@ $ node dist/Server/main.js
 [Nest] ... LOG [InstanceLoader] ServerModule dependencies initialized
 [Nest] ... LOG [InstanceLoader] DiscoveryModule dependencies initialized
 [Nest] ... LOG [InstanceLoader] ZLinkModule dependencies initialized
-server listening on tcp://0.0.0.0:7701 (mesh "game", routing id "game-server-1")
+server listening on tcp://127.0.0.1:7701 (mesh "game", routing id "game-server-1")
 server admin listening on http://127.0.0.1:5481
 $ node dist/Client/main.js
 [Nest] ... LOG [NestFactory] Starting Nest application...
@@ -810,7 +810,6 @@ weight가 0인 동안 `profile` request는 `errno 0`으로, one-way send는 `One
 | handler 생성 | DI 컨테이너가 assembly에서 찾는다 | NestJS `providers`에 직접 올린다. filter도 같다 |
 | filter 등록 | `options.UseFilter<CallLogFilter>()` | `builder.options({ filters: [CallLogFilter] })`. 배열 순서가 실행 순서다 |
 | routing id 고정 | `SetRoutingId(RoutingId.From("game-server-1"))` | `routingId('game-server-1')`. Node의 `RoutingId`는 `string`의 별칭이다 |
-| wildcard bind | `Listen("tcp://0.0.0.0:7201")`만으로 된다 | advertise host를 함께 줘야 한다. 없으면 `ZLinkConfigurationException`으로 startup이 막힌다 |
 | node 직접 handler | `mesh.AddRouteRequestHandler<...>()` | `mesh.addRequestHandler(packetName, Type)`. 이름이 channel 쪽과 같고, `mesh.channel(...)`을 거치지 않는 것으로 구분한다 |
 | Fanout 구독 handler | `AddHandler<TSub, TMsg>()` | `addPublishHandler(packetName, Type)` |
 | ClientServer 호출 | `IZLinkRouteClient.RequestToChannel(...)`가 mesh channel과 ClientServer를 모두 받는다 | **client가 다르다.** mesh channel과 node 직접은 `ZLINK_ROUTE_CLIENT`, ClientServer는 `ZLINK_CHANNEL_CLIENT`다. `ZLinkRouteClient.requestToChannel`은 mesh channel만 찾는다 |

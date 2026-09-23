@@ -50,8 +50,8 @@ npm run build
 
 ## 실행
 
-[빌드](#빌드) 절을 먼저 마친다. 서버를 먼저 실행하고 별도 terminal에서 client를 실행한다. server는 `tcp://0.0.0.0:7101`에서
-듣고 `greeting` channel을 처리한다. client는 `tcp://0.0.0.0:7102`에서 듣고
+[빌드](#빌드) 절을 먼저 마친다. 서버를 먼저 실행하고 별도 terminal에서 client를 실행한다. server는 `tcp://127.0.0.1:7101`에서
+듣고 `greeting` channel을 처리한다. client는 `tcp://127.0.0.1:7102`에서 듣고
 `tcp://127.0.0.1:7101`에 연결하며, `http://127.0.0.1:5080`에서 `GET /hello/{name}`을
 제공한다.
 
@@ -136,7 +136,6 @@ WebStorm에서 `quickstart/` project를 연다. npm tool window 또는 각 scrip
 | 요청에 대상이 없다 | `peerConnections().connect` endpoint와 server의 `listen` endpoint를 같게 둔다 |
 | handler가 실행되기 전에 요청이 실패한다 | object literal 대신 `new Hello(name)`을 보낸다 |
 | handler가 호출되지 않는다 | `addRequestHandler`로 `HelloHandler`를 등록하고 Nest module의 `providers`에도 넣는다 |
-| wildcard endpoint를 시작할 수 없다 | wildcard `.listen(...)` 뒤에 `.setAdvertiseHost('127.0.0.1')`를 둔다 |
 
 ## 구성
 

@@ -11,7 +11,7 @@ builder.WebHost.UseUrls("http://127.0.0.1:5081");
 builder.Services.AddZLinkFramework(options =>
 {
     // Names the mesh and opens this process's endpoint for peers to connect to.
-    var mesh = options.AddRouteMesh("services").Listen("tcp://0.0.0.0:7101");
+    var mesh = options.AddRouteMesh("services").Listen("tcp://127.0.0.1:7101");
     // This process handles the "greeting" channel. An IZLinkRequestHandler<,>
     // class registers on the channel builder; AddHandlersFromAssemblyOf wires
     // only attribute-declared handlers.

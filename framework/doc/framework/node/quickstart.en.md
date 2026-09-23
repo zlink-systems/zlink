@@ -67,8 +67,9 @@ an object literal cannot be used. The reply type is not looked up by name and st
 ## 3. The handling side
 
 A handler is registered in two places — Nest's `providers` and `addRequestHandler` on
-`channel(...).server()`. When binding to `0.0.0.0` without `setAdvertiseHost`, `127.0.0.1` is advertised; set
-`setAdvertiseHost` to a reachable address when other hosts must connect.
+`channel(...).server()`. This example binds to `127.0.0.1`, so only processes on the same host connect and
+Windows shows no firewall prompt. When other hosts must connect, bind to a reachable address and advertise
+it with `setAdvertiseHost`.
 
 ```typescript title="Server/main.ts"
 --8<-- "framework/languages/node/quickstart/Server/main.ts"

@@ -33,7 +33,7 @@ builder.Services.AddZLinkFramework(options =>
 
     // --8<-- [start:channel-client-register]
     // This node opens an endpoint too. Both sides listen to become peers.
-    var mesh = options.AddRouteMesh("game").Listen("tcp://0.0.0.0:7202");
+    var mesh = options.AddRouteMesh("game").Listen("tcp://127.0.0.1:7202");
 
     // Client() means this node exposes no handler for the channel; it only calls.
     mesh.Channel("profile").Client();

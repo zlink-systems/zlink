@@ -10,7 +10,7 @@ builder.WebHost.UseUrls("http://127.0.0.1:5080");
 builder.Services.AddZLinkFramework(options =>
 {
     // This process also needs its own endpoint.
-    var mesh = options.AddRouteMesh("services").Listen("tcp://0.0.0.0:7102");
+    var mesh = options.AddRouteMesh("services").Listen("tcp://127.0.0.1:7102");
     // This side only calls; it does not handle "greeting".
     mesh.Channel("greeting").Client();
     // Manual connection — the server's endpoint is given directly.

@@ -187,12 +187,12 @@ share the MeshNode. Classic fanout remains a separate PUB/SUB channel.
 
 ```csharp
 var mesh = options.AddRouteMesh("game")
-    .Listen("tcp://0.0.0.0:7300"); // Creates this process's MeshNode endpoint.
+    .Listen("tcp://127.0.0.1:7300"); // Creates this process's MeshNode endpoint.
 
 mesh.ChannelName("orders"); // Adds logical service membership without another ROUTER.
 
 options.AddFanoutChannel("events")
-    .EnablePublisher("tcp://0.0.0.0:7400"); // Classic fanout uses its own PUB endpoint.
+    .EnablePublisher("tcp://127.0.0.1:7400"); // Classic fanout uses its own PUB endpoint.
 ```
 
 ## Configuration And Contracts

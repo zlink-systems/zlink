@@ -11,11 +11,10 @@ import { Greeting, Hello } from '../Shared/contracts';
     ZLinkModule.forRootFactory({
       useFactory: () => {
         const builder = zlinkFramework();
-        // This process also needs its own endpoint (also needs an advertise
-        // host -- see README "differences").
+        // This process also opens and advertises its own loopback endpoint.
         const mesh = builder
           .addRouteMesh('services')
-          .listen('tcp://0.0.0.0:7102')
+          .listen('tcp://127.0.0.1:7102')
           .setAdvertiseHost('127.0.0.1');
         // This side only calls; it does not handle "greeting".
         mesh.channel('greeting').client();

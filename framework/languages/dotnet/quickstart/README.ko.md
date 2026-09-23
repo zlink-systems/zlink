@@ -45,8 +45,8 @@ dotnet build
 
 ## 실행
 
-server를 먼저 실행하고 별도 terminal에서 client를 실행한다. server는 `tcp://0.0.0.0:7101`에서
-듣고 `greeting` channel을 처리한다. client는 `tcp://0.0.0.0:7102`에서 듣고
+server를 먼저 실행하고 별도 terminal에서 client를 실행한다. server는 `tcp://127.0.0.1:7101`에서
+듣고 `greeting` channel을 처리한다. client는 `tcp://127.0.0.1:7102`에서 듣고
 `tcp://127.0.0.1:7101`에 연결하며, `http://127.0.0.1:5080`에서 `GET /hello/{name}`을
 제공한다.
 
