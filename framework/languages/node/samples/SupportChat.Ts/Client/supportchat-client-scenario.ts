@@ -10,7 +10,6 @@ import {
   setAgentAvailable,
   setTyping
 } from '../Shared/Contracts/messages';
-import { SampleNames } from './Configuration/sample-names';
 import type {
   AuthenticateRes,
   ChatMessageNotify,
@@ -124,11 +123,12 @@ class SupportChatClientScenario {
     const agentJoin1 = await request<JoinConversationRes>(
       agent,
       PacketNames.joinConversationReq,
-      joinConversation(),
-      cid1,
+      joinConversation(cid1),
+      undefined,
       signal
     );
     zlinkStreamAssert.ensure(agentJoin1.scheduled, 'Sample scenario assertion failed.');
+    const agentRoom1 = requireActor(agent, agentJoin1.actorId);
     zlinkStreamAssert.ensure(
       agentJoin1.state.status === ConversationStatuses.WaitingForAgent,
       'Sample scenario assertion failed.'
@@ -155,6 +155,10 @@ class SupportChatClientScenario {
       'Sample scenario assertion failed.'
     );
     zlinkStreamAssert.ensure(
+      agent1Joined.actorId === agentRoom1.actorId,
+      'Sample scenario assertion failed.'
+    );
+    zlinkStreamAssert.ensure(
       agent1Joined.payload.state.status === ConversationStatuses.Active,
       'Sample scenario assertion failed.'
     );
@@ -164,7 +168,7 @@ class SupportChatClientScenario {
       agent,
       PacketNames.sendChatMessageReq,
       sendChatMessage('How can I help?'),
-      cid1,
+      agentRoom1.actorId,
       signal
     );
     zlinkStreamAssert.ensure(
@@ -217,7 +221,7 @@ class SupportChatClientScenario {
       customer1,
       PacketNames.sendChatMessageReq,
       sendChatMessage('Payment keeps failing.'),
-      cid1,
+      undefined,
       signal
     );
     zlinkStreamAssert.ensure(reply1.message.messageSeq === 2, 'Sample scenario assertion failed.');
@@ -234,6 +238,10 @@ class SupportChatClientScenario {
       'Sample scenario assertion failed.'
     );
     const reply1Push = await reply1Task;
+    zlinkStreamAssert.ensure(
+      reply1Push.actorId === agentRoom1.actorId,
+      'Sample scenario assertion failed.'
+    );
     zlinkStreamAssert.ensure(
       reply1Push.payload.message.messageSeq === 2,
       'Sample scenario assertion failed.'
@@ -287,19 +295,34 @@ class SupportChatClientScenario {
       PacketNames.participantJoinedNotify,
       signal
     );
+    const joinedAgent2 = wait<ParticipantJoinedNotify>(
+      agent,
+      PacketNames.participantJoinedNotify,
+      signal
+    );
     const agentJoin2 = await request<JoinConversationRes>(
       agent,
       PacketNames.joinConversationReq,
-      joinConversation(),
-      cid2,
+      joinConversation(cid2),
+      undefined,
       signal
     );
     zlinkStreamAssert.ensure(agentJoin2.scheduled, 'Sample scenario assertion failed.');
+    const agentRoom2 = requireActor(agent, agentJoin2.actorId);
+    zlinkStreamAssert.ensure(
+      agentRoom2.actorId !== agentRoom1.actorId,
+      'Sample scenario assertion failed.'
+    );
     zlinkStreamAssert.ensure(
       agentJoin2.state.status === ConversationStatuses.WaitingForAgent,
       'Sample scenario assertion failed.'
     );
     const customer2Joined = await joinedCustomer2;
+    const agent2Joined = await joinedAgent2;
+    zlinkStreamAssert.ensure(
+      agent2Joined.actorId === agentRoom2.actorId && agent2Joined.actorId !== agent1Joined.actorId,
+      'Sample scenario assertion failed.'
+    );
     zlinkStreamAssert.ensure(
       customer2Joined.payload.conversationId === cid2,
       'Sample scenario assertion failed.'
@@ -321,7 +344,7 @@ class SupportChatClientScenario {
       agent,
       PacketNames.sendChatMessageReq,
       sendChatMessage('Let me check your account.'),
-      cid2,
+      agentRoom2.actorId,
       signal
     );
     zlinkStreamAssert.ensure(
@@ -396,11 +419,12 @@ class SupportChatClientScenario {
     const agentJoin3 = await request<JoinConversationRes>(
       agent,
       PacketNames.joinConversationReq,
-      joinConversation(),
-      cid3,
+      joinConversation(cid3),
+      undefined,
       signal
     );
     zlinkStreamAssert.ensure(agentJoin3.scheduled, 'Sample scenario assertion failed.');
+    const agentRoom3 = requireActor(agent, agentJoin3.actorId);
     zlinkStreamAssert.ensure(
       agentJoin3.state.status === ConversationStatuses.WaitingForAgent,
       'Sample scenario assertion failed.'
@@ -411,7 +435,7 @@ class SupportChatClientScenario {
       agent,
       PacketNames.sendChatMessageReq,
       sendChatMessage('I will check the refund.'),
-      cid3,
+      agentRoom3.actorId,
       signal
     );
     zlinkStreamAssert.ensure(
@@ -435,11 +459,11 @@ class SupportChatClientScenario {
         customer4,
         PacketNames.sendChatMessageReq,
         sendChatMessage('before auth'),
-        'unknown',
+        undefined,
         signal
       );
     });
-    send(customer4, PacketNames.setTypingMsg, setTyping(true), cid1);
+    send(customer4, PacketNames.setTypingMsg, setTyping(true));
     await customer1.expectNone(PacketNames.typingChangedNotify).within(250).run(signal);
     await request<AuthenticateRes>(
       customer4,
@@ -461,23 +485,18 @@ class SupportChatClientScenario {
     );
     await agent.expectNone(PacketNames.conversationAssignedNotify).within(250).run(signal);
 
-    await zlinkStreamAssert.expectFailure(async () => {
-      await request(
-        customer2,
-        PacketNames.sendChatMessageReq,
-        sendChatMessage('not my room'),
-        cid1,
-        signal
-      );
-    });
-    send(customer2, PacketNames.setTypingMsg, setTyping(true), cid1);
+    zlinkStreamAssert.ensure(
+      customer2.actor(customer1Auth.actorId) === undefined,
+      'Sample scenario assertion failed.'
+    );
+    send(customer2, PacketNames.setTypingMsg, setTyping(true));
     await customer1.expectNone(PacketNames.typingChangedNotify).within(250).run(signal);
     const typingTask = wait<TypingChangedNotify>(
       customer1,
       PacketNames.typingChangedNotify,
       signal
     );
-    send(agent, PacketNames.setTypingMsg, setTyping(true), cid1);
+    send(agent, PacketNames.setTypingMsg, setTyping(true), agentRoom1.actorId);
     const typing = await typingTask;
     zlinkStreamAssert.ensure(
       typing.payload.actorId === 'agent-1',
@@ -487,14 +506,14 @@ class SupportChatClientScenario {
     const reconnectKeepaliveTask = waitConversation<ChatMessageNotify>(
       agent,
       PacketNames.chatMessageNotify,
-      cid1,
+      agentRoom1.actorId,
       signal
     );
     const reconnectKeepalive = await request<SendChatMessageRes>(
       customer1,
       PacketNames.sendChatMessageReq,
       sendChatMessage('Still looking into it.'),
-      cid1,
+      undefined,
       signal
     );
     zlinkStreamAssert.ensure(
@@ -527,11 +546,15 @@ class SupportChatClientScenario {
     const customerRejoined1 = await request<JoinConversationRes>(
       reconnectedCustomer,
       PacketNames.joinConversationReq,
-      joinConversation(),
-      cid1,
+      joinConversation(cid1),
+      undefined,
       signal
     );
     zlinkStreamAssert.ensure(!customerRejoined1.scheduled, 'Sample scenario assertion failed.');
+    zlinkStreamAssert.ensure(
+      customerRejoined1.actorId === reconnectedCustomerAuth.actorId,
+      'Sample scenario assertion failed.'
+    );
     zlinkStreamAssert.ensure(
       customerRejoined1.state.subject === 'checkout payment failed' &&
         customerRejoined1.state.lastMessageSeq === 3,
@@ -558,26 +581,35 @@ class SupportChatClientScenario {
     const rejoined1 = await request<JoinConversationRes>(
       reconnectedAgent,
       PacketNames.joinConversationReq,
-      joinConversation(),
-      cid1,
+      joinConversation(cid1),
+      undefined,
       signal
     );
     const rejoined2 = await request<JoinConversationRes>(
       reconnectedAgent,
       PacketNames.joinConversationReq,
-      joinConversation(),
-      cid2,
+      joinConversation(cid2),
+      undefined,
       signal
     );
     const rejoined3 = await request<JoinConversationRes>(
       reconnectedAgent,
       PacketNames.joinConversationReq,
-      joinConversation(),
-      cid3,
+      joinConversation(cid3),
+      undefined,
       signal
     );
     zlinkStreamAssert.ensure(
       !rejoined1.scheduled && !rejoined2.scheduled && !rejoined3.scheduled,
+      'Sample scenario assertion failed.'
+    );
+    const reconnectedRoom1 = requireActor(reconnectedAgent, rejoined1.actorId);
+    const reconnectedRoom2 = requireActor(reconnectedAgent, rejoined2.actorId);
+    const reconnectedRoom3 = requireActor(reconnectedAgent, rejoined3.actorId);
+    zlinkStreamAssert.ensure(
+      reconnectedRoom1.actorId === agentRoom1.actorId &&
+        reconnectedRoom2.actorId === agentRoom2.actorId &&
+        reconnectedRoom3.actorId === agentRoom3.actorId,
       'Sample scenario assertion failed.'
     );
     zlinkStreamAssert.ensure(
@@ -596,26 +628,26 @@ class SupportChatClientScenario {
     const firstIdleCustomer = waitConversation<ConversationIdleNotify>(
       reconnectedCustomer,
       PacketNames.conversationIdleNotify,
-      cid1,
+      undefined,
       signal
     );
     const firstIdleAgent = waitConversation<ConversationIdleNotify>(
       reconnectedAgent,
       PacketNames.conversationIdleNotify,
-      cid1,
+      reconnectedRoom1.actorId,
       signal
     );
     const closed2Notify = waitConversation<ConversationClosedNotify>(
-      reconnectedAgent,
+      customer2,
       PacketNames.conversationClosedNotify,
-      cid2,
+      undefined,
       signal
     );
     const closed2 = await request<CloseConversationRes>(
-      customer2,
+      reconnectedAgent,
       PacketNames.closeConversationReq,
       closeConversation('resolved'),
-      cid2,
+      reconnectedRoom2.actorId,
       signal
     );
     zlinkStreamAssert.ensure(
@@ -628,7 +660,13 @@ class SupportChatClientScenario {
       'Sample scenario assertion failed.'
     );
     await zlinkStreamAssert.expectFailure(async () => {
-      await request(customer2, PacketNames.closeConversationReq, closeConversation(), cid2, signal);
+      await request(
+        customer2,
+        PacketNames.closeConversationReq,
+        closeConversation(),
+        undefined,
+        signal
+      );
     });
 
     const [firstCustomerIdle, firstAgentIdle] = await Promise.all([
@@ -646,38 +684,38 @@ class SupportChatClientScenario {
     const resumedPush = waitConversation<ChatMessageNotify>(
       reconnectedAgent,
       PacketNames.chatMessageNotify,
-      cid1,
+      reconnectedRoom1.actorId,
       signal
     );
     const secondIdleCustomer = waitConversation<ConversationIdleNotify>(
       reconnectedCustomer,
       PacketNames.conversationIdleNotify,
-      cid1,
+      undefined,
       signal
     );
     const secondIdleAgent = waitConversation<ConversationIdleNotify>(
       reconnectedAgent,
       PacketNames.conversationIdleNotify,
-      cid1,
+      reconnectedRoom1.actorId,
       signal
     );
     const idleClosedCustomer = waitConversation<ConversationClosedNotify>(
       reconnectedCustomer,
       PacketNames.conversationClosedNotify,
-      cid1,
+      undefined,
       signal
     );
     const idleClosedAgent = waitConversation<ConversationClosedNotify>(
       reconnectedAgent,
       PacketNames.conversationClosedNotify,
-      cid1,
+      reconnectedRoom1.actorId,
       signal
     );
     const resumed = await request<SendChatMessageRes>(
       reconnectedCustomer,
       PacketNames.sendChatMessageReq,
       sendChatMessage('I am still here.'),
-      cid1,
+      undefined,
       signal
     );
     zlinkStreamAssert.ensure(
@@ -708,11 +746,11 @@ class SupportChatClientScenario {
         reconnectedCustomer,
         PacketNames.sendChatMessageReq,
         sendChatMessage('too late'),
-        cid1,
+        undefined,
         signal
       );
     });
-    send(reconnectedCustomer, PacketNames.setTypingMsg, setTyping(true), cid1);
+    send(reconnectedCustomer, PacketNames.setTypingMsg, setTyping(true));
     await reconnectedAgent.expectNone(PacketNames.typingChangedNotify).within(250).run(signal);
     console.log('supportchat-closed-typing-ignore=verified');
 
@@ -790,25 +828,29 @@ function request<T>(
   client: ZlinkStreamConnector,
   packetName: string,
   payload: unknown,
-  conversationId?: string,
+  actorId?: string,
   signal?: AbortSignal
 ): Promise<T> {
-  const call = client.request(payload, Object).packetName(packetName);
-  if (conversationId !== undefined)
-    call.metadata(SampleNames.conversationIdMetadataKey, conversationId);
-  return call.submit<T>(signal);
+  return (actorId === undefined ? client : requireActor(client, actorId))
+    .request(payload, Object)
+    .packetName(packetName)
+    .submit<T>(signal);
 }
 function send(
   client: ZlinkStreamConnector,
   packetName: string,
   payload: unknown,
-  conversationId: string
+  actorId?: string
 ): void {
-  client
+  (actorId === undefined ? client : requireActor(client, actorId))
     .send(payload, Object)
     .packetName(packetName)
-    .metadata(SampleNames.conversationIdMetadataKey, conversationId)
     .submit();
+}
+function requireActor(client: ZlinkStreamConnector, actorId: string) {
+  const actor = client.actor(actorId);
+  if (actor === undefined) throw new Error(`Bound actor '${actorId}' was not found.`);
+  return actor;
 }
 function wait<T>(client: ZlinkStreamConnector, packetName: string, signal?: AbortSignal) {
   return client.waitFor<T>(packetName).submit(signal);
@@ -816,14 +858,11 @@ function wait<T>(client: ZlinkStreamConnector, packetName: string, signal?: Abor
 function waitConversation<T>(
   client: ZlinkStreamConnector,
   packetName: string,
-  conversationId: string,
+  actorId: string | undefined,
   signal?: AbortSignal
 ) {
-  return client
-    .waitFor<T>(packetName)
-    .where(
-      (message) => message.metadata.get(SampleNames.conversationIdMetadataKey) === conversationId
-    )
-    .submit(signal);
+  const call = client.waitFor<T>(packetName);
+  if (actorId !== undefined) call.where((message) => message.actorId === actorId);
+  return call.submit(signal);
 }
 export { SupportChatClientScenario };

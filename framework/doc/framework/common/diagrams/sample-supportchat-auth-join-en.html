@@ -5188,11 +5188,11 @@
         </g>
         </g>
 
-        <g data-edge-from="A" data-edge-to="S" data-edge-label="JoinConversationReq(metadata ConversationId)" data-edge-key="18">
+        <g data-edge-from="A" data-edge-to="S" data-edge-label="JoinConversationReq(conversationId)" data-edge-key="18">
           <path data-composition-edge-from="A" data-composition-edge-to="S" data-composition-points="334.25,1024;509,1024" d="M 334.25 1024 L 509 1024" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <g data-detail="context">
           <rect x="301.225" y="1004" width="240.8" height="16" rx="3" class="c-mask"/>
-          <text x="421.625" y="1014" class="t-backend" font-size="9" text-anchor="middle">JoinConversationReq(metadata ConversationId)</text>
+          <text x="421.625" y="1014" class="t-backend" font-size="9" text-anchor="middle">JoinConversationReq(conversationId)</text>
         </g>
         </g>
 
@@ -5503,7 +5503,7 @@
         </div>
         <ul>
           <li>&bull; scheduled=true means the join was scheduled, not that membership commit is complete. Agent join should only be judged complete once both clients confirm the Active ParticipantJoinedNotify.</li>
-          <li>&bull; The ConversationId of JoinConversationReq is a required stream-metadata value and isn&#39;t put into the payload as a route. participantId, role, and displayName are values needed for the actor join.</li>
+          <li>&bull; JoinConversationReq is a Session binding packet without an Actor slot and sends conversationId in its payload. JoinConversationRes.actorId identifies the Actor handle for that room. participantId, role, and displayName are values needed for the actor join.</li>
         </ul>
       </div>
 

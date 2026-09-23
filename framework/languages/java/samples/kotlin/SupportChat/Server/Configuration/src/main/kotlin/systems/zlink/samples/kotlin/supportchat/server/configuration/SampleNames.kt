@@ -19,7 +19,6 @@ object SampleNames {
     const val SupportSpotDiscovery = "supportchat.support.spots"
     const val StreamNode = "supportchat.stream"
     const val AgentCapacity = 3
-    const val ConversationIdMetadataKey = "ConversationId"
 
     const val ServerEvidenceMarker = "supportchat-server-evidence=completed"
     const val ClientMarker = "supportchat=completed"

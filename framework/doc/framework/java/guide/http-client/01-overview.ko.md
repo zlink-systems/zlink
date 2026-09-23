@@ -25,7 +25,7 @@ title: "HTTP client 개요 · Java"
 
 HTTP client는 application이 외부 HTTP API에 요청을 보내고 응답을 받는 client-side library다. 다섯 언어는 이름과 표기만 다르며, 요청을 만들고 응답을 고르는 같은 의미론을 제공한다.
 
-## 1. HTTP client를 쓰는 자리
+## 1. HTTP client를 쓰는 경우
 
 서버 framework 안의 handler도, framework를 올리지 않는 CLI·배치·별도 client process도 외부 HTTP API를 호출할 수 있다. 반복 호출에는 client 하나를 만들어 재사용하고, 한 번뿐인 호출에는 one-shot을 사용한다. one-shot은 builder에서 곧바로 요청을 만드는 편의 경로다.
 

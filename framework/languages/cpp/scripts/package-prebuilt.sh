@@ -82,6 +82,9 @@ version="$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' "$source_dir/VERSION")"
 
 command -v conan >/dev/null || { echo "Conan 2 is required" >&2; exit 1; }
 command -v cmake >/dev/null || { echo "CMake is required" >&2; exit 1; }
+# One compile per core: the macOS runner (3 cores, 7 GB) swapped under a fixed -j8 and took 75 min
+# where Linux took 7 (#1005).
+build_jobs="$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || sysctl -n hw.ncpu)"
 command -v ninja >/dev/null || { echo "Ninja is required" >&2; exit 1; }
 if command -v python3 >/dev/null 2>&1; then
   python_command=python3
@@ -421,7 +424,7 @@ cmake -S "$source_dir" -B "$build_dir" -G Ninja \
   -DZLINK_STREAM_CONNECTOR_BUILD_UNREAL=OFF \
   -DZLINK_STREAM_CONNECTOR_BUILD_GODOT=OFF \
   -DZLINK_STREAM_CONNECTOR_BUILD_AXMOL=OFF
-cmake --build "$build_dir" --parallel 8
+cmake --build "$build_dir" --parallel "$build_jobs"
 cmake --install "$build_dir"
 
 libraries=(zlink_framework zlink_framework_locations_redis zlink_http_client zlink_stream_connector)
@@ -590,7 +593,7 @@ if [[ "$platform" == macos-arm64 ]]; then
     -DCMAKE_CXX_COMPILER="$cxx_compiler" \
     -DCMAKE_PREFIX_PATH="$archive_prefix" \
     -DCMAKE_RUNTIME_OUTPUT_DIRECTORY="$archive_prefix/lib"
-  cmake --build "$quickstart_build" --parallel 8
+  cmake --build "$quickstart_build" --parallel "$build_jobs"
   "$archive_prefix/lib/quickstart_server" >"$work_dir/quickstart-server.log" 2>&1 &
   quickstart_server_pid=$!
   "$archive_prefix/lib/quickstart_client" >"$work_dir/quickstart-client.log" 2>&1 &

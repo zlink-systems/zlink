@@ -23,10 +23,12 @@ import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorContext;
 import systems.zlink.framework.actors.ZLinkActorFactory;
+import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
+import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorBindOperation;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorUnbindOperation;
@@ -79,6 +81,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 final class ZLinkStreamRuntimeIngressTest {
     private static final RoutingId PEER_A = RoutingId.from("peer-a");
@@ -93,6 +99,7 @@ final class ZLinkStreamRuntimeIngressTest {
         TestSession.failNextConstruction = false;
         TestSession.replacementMode = ReplacementMode.NONE;
         TestSession.decodeWirePayload = false;
+        TestSession.replyOnDispatch = false;
         TestSession.decodedWirePayload.set(null);
         TestSession.constructionHook = null;
         TestSession.createdCount.set(0);
@@ -116,6 +123,80 @@ final class ZLinkStreamRuntimeIngressTest {
         assertTrue(stream.successfulReceives.get() >= 1);
         assertTrue(stream.readinessWaits.get() >= 1);
         assertEquals(List.of("packet"), session.packetNames);
+    }
+
+    @Test
+    void streamRequestFlowRecordsCarrySessionIdentity() throws Exception {
+        TestSession.replyOnDispatch = true;
+        FakeStream stream = new FakeStream();
+        ZLinkStreamHeader request =
+                new ZLinkStreamHeader(
+                        ZLinkStreamMessageKind.REQUEST,
+                        ZLinkStreamCodec.JSON,
+                        EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                        Optional.of(17L),
+                        "packet",
+                        Map.of());
+        stream.enqueue(
+                PEER_A,
+                ZLinkStreamFrameCodec.encode(
+                        ZLinkStreamHeaderCodec.encode(request),
+                        "{}".getBytes(StandardCharsets.UTF_8)));
+        Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
+        List<String> lines = Collections.synchronizedList(new ArrayList<>());
+        Handler handler =
+                new Handler() {
+                    @Override
+                    public void publish(LogRecord record) {
+                        lines.add(record.getMessage());
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        boolean parentHandlers = logger.getUseParentHandlers();
+        Level level = logger.getLevel();
+        logger.addHandler(handler);
+        logger.setUseParentHandlers(false);
+        logger.setLevel(Level.ALL);
+        try {
+            ZLinkStreamRuntime runtime = start(stream, 0);
+            lastRegistration.dispatchOptions().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+            runtimes.add(runtime);
+            TestSession session = awaitSession();
+            assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
+            String identity = " session=" + session.context.routingId().orElseThrow().toHex();
+            for (String phase : List.of("received", "admitted", "dispatched")) {
+                assertTrue(
+                        lines.stream()
+                                .anyMatch(
+                                        line ->
+                                                line.contains(" phase=" + phase)
+                                                        && line.contains(" surface=stream")
+                                                        && line.contains(identity)),
+                        () -> "missing session on " + phase + ": " + lines);
+            }
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (lines.stream().noneMatch(line -> line.contains(" phase=replied"))
+                    && System.nanoTime() < deadline) {
+                Thread.sleep(1);
+            }
+            assertTrue(
+                    lines.stream()
+                            .anyMatch(
+                                    line ->
+                                            line.contains(" phase=replied")
+                                                    && line.contains(" surface=stream")
+                                                    && line.contains(identity)),
+                    () -> "missing session on reply: " + lines);
+        } finally {
+            logger.removeHandler(handler);
+            logger.setUseParentHandlers(parentHandlers);
+            logger.setLevel(level);
+        }
     }
 
     @Test
@@ -1064,6 +1145,7 @@ final class ZLinkStreamRuntimeIngressTest {
         private static volatile boolean failNextConstruction;
         private static volatile ReplacementMode replacementMode = ReplacementMode.NONE;
         private static volatile boolean decodeWirePayload;
+        private static volatile boolean replyOnDispatch;
         private static volatile Runnable constructionHook;
         private static final AtomicReference<WirePayload> decodedWirePayload =
                 new AtomicReference<>();
@@ -1133,6 +1215,9 @@ final class ZLinkStreamRuntimeIngressTest {
             int count = dispatchCount.incrementAndGet();
             packetNames.add(dispatch.packetName());
             dispatchLatch.countDown();
+            if (replyOnDispatch && dispatch.canReply()) {
+                return context.client().reply(Map.of("ok", true)).submit();
+            }
             if (count == 1 && holdFirstDispatch) {
                 return firstDispatch;
             }

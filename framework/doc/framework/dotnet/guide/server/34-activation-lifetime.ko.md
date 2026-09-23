@@ -77,7 +77,7 @@ Actor가 Entry Spot으로 돌아가도 **Entry Spot의 `OnCreateActorAsync`와 `
     membership을 그대로 둔 채 실행 위치만 옮기는 것이기 때문이다 —
     [Relocation](37-relocation.ko.md)이 다룬다.
 
-## 3. Entry Spot — Framework가 만드는 자리
+## 3. Entry Spot — Framework가 만드는 Spot
 
 Object Server마다 하나이고, Actor 생성 요청을 승인하거나 거절하며 Actor가 들어오고 나가는
 lifecycle을 처리한다.
@@ -88,7 +88,7 @@ lifecycle을 처리한다.
 
 이 코드에서 Entry Spot은 Actor 생성 승인과 소멸에 필요한 lifecycle callback을 제공한다.
 
-### 3.1 Entry Spot이 담지 않는 것
+### 3.1 Entry Spot에는 Actor별 상태를 두지 않는다
 
 **Entry Spot에는 Actor별 상태를 두지 않는다.** Actor의 상태는 Actor가 소유하고, Entry Spot은
 handler와 membership callback만 제공한다. Entry Spot은 Object Server마다 하나뿐이므로 여기에
@@ -103,7 +103,7 @@ Actor 생성 요청은 Entry Spot이 승인하거나 거절한다. Actor를 소�
 소멸 호출은 현재 instance를 받고 membership callback을 다시 실행하지 않는다. Framework의 등록 기록과
 묶인 session 경로를 정리한다.
 
-## 4. User Spot — application이 만드는 자리
+## 4. User Spot — application이 만드는 Spot
 
 stable type을 지정해 만들며, 돌아오는 id가 그 뒤 모든 호출의 주소다. 생성 callback에서 거절하면
 호출이 실패하고 Spot은 남지 않는다.

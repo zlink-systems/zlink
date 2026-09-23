@@ -246,14 +246,24 @@ final class ZLinkStreamActorRegistry {
 
         @Override
         public ZLinkTypedStreamSendCall send(Object payload) {
+            return new ZLinkTypedStreamConnectorSendCall(connector, this, payload, null);
+        }
+
+        @Override
+        public ZLinkTypedStreamSendCall send(String name, Object payload) {
             return new ZLinkTypedStreamConnectorSendCall(
-                    send(connector.encodeActorPayload(payload)));
+                    connector, this, payload, DefaultZLinkStreamConnector.validatePacketName(name));
         }
 
         @Override
         public ZLinkTypedStreamRequestCall request(Object payload) {
+            return new ZLinkTypedStreamConnectorRequestCall(connector, this, payload, null);
+        }
+
+        @Override
+        public ZLinkTypedStreamRequestCall request(String name, Object payload) {
             return new ZLinkTypedStreamConnectorRequestCall(
-                    request(connector.encodeActorPayload(payload)));
+                    connector, this, payload, DefaultZLinkStreamConnector.validatePacketName(name));
         }
 
         @Override
@@ -299,8 +309,6 @@ final class ZLinkStreamActorRegistry {
                                             message.packetName(),
                                             codec.decode(message.payload(), payloadType),
                                             message.metadata(),
-                                            message.flowId(),
-                                            message.flowOrigin(),
                                             message.actorId())));
         }
 

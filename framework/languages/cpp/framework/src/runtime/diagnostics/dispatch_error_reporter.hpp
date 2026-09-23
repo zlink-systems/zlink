@@ -292,6 +292,10 @@ dispatch_reason_from_error (const framework_exception_t *error) noexcept
         && detail::failure_origin (*error) == detail::failure_origin_t::payload_decode) {
         return dispatch_error_reason_t::payload_decode_failed;
     }
+    if (error != nullptr
+        && detail::failure_origin (*error) == detail::failure_origin_t::stale_actor_slot) {
+        return dispatch_error_reason_t::stale_target;
+    }
     if (error != nullptr) {
         switch (detail::boundary_state (*error)) {
             case detail::boundary_error_t::shutdown:

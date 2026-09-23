@@ -609,7 +609,14 @@ public sealed partial class UnhandledDispatchPolicyTests
             ZlinkStreamMetadata.Empty
         );
 
-        await dispatcher.DispatchAsync(actor, runtimeState, header, body, CancellationToken.None);
+        await dispatcher.DispatchAsync(
+            actor,
+            runtimeState,
+            header,
+            body,
+            CancellationToken.None,
+            null
+        );
 
         Assert.Contains(
             logger.Messages,
@@ -669,7 +676,14 @@ public sealed partial class UnhandledDispatchPolicyTests
             ZlinkStreamMetadata.Empty
         );
 
-        await dispatcher.DispatchAsync(actor, runtimeState, header, body, CancellationToken.None);
+        await dispatcher.DispatchAsync(
+            actor,
+            runtimeState,
+            header,
+            body,
+            CancellationToken.None,
+            null
+        );
 
         Assert.Contains(
             logger.Messages,
@@ -867,6 +881,7 @@ public sealed partial class UnhandledDispatchPolicyTests
         public int NonOwnerSkipped;
     }
 
+    [ZLinkSpotSubscriptionHandler("events", "events")]
     private sealed class TestSubscriptionHandler
         : IZLinkSpotSubscriptionHandler<TestSubscriptionSpot, TestSubscriptionEvent>
     {

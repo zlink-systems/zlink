@@ -54,6 +54,7 @@ class SetAgentAvailableReq {
 type SetAgentAvailableRes = { isAvailable: boolean };
 class JoinConversationReq {
   constructor(
+    readonly conversationId: string,
     readonly participantId: string,
     readonly role: SupportRole,
     readonly displayName: string
@@ -62,6 +63,7 @@ class JoinConversationReq {
 class JoinConversationRes {
   constructor(
     readonly scheduled: boolean,
+    readonly actorId: string,
     readonly state: ConversationState
   ) {}
 }
@@ -179,10 +181,11 @@ const openConversationApi = (
 const openConversation = (subject: string) => new OpenConversationReq(subject);
 const setAgentAvailable = (isAvailable: boolean) => new SetAgentAvailableReq(isAvailable);
 const joinConversation = (
+  conversationId: string,
   participantId = '',
   role: SupportRole = SupportChatRoles.Customer,
   displayName = ''
-) => new JoinConversationReq(participantId, role, displayName);
+) => new JoinConversationReq(conversationId, participantId, role, displayName);
 const sendChatMessage = (text: string) => new SendChatMessageReq(text);
 const setTyping = (isTyping: boolean) => new SetTypingMsg(isTyping);
 const closeConversation = (reason?: string) => new CloseConversationReq(reason);

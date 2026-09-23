@@ -123,15 +123,18 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
             Runtime.CleanupActorSessionsForSession(sessionRid);
     }
 
-    internal ZLinkSessionDispatchContext EnterDispatch(ZlinkStreamHeader header)
+    internal ZLinkSessionDispatchContext? EnterDispatch(ZlinkStreamHeader header)
     {
+        var actor = header.ActorSlot is { } slot ? ActorCoordinator.FindActor(slot) : null;
+        if (header.ActorSlot is not null && actor is null)
+            return null;
+
         var metadata =
             header.Metadata.Count == 0
                 ? ZLinkMessageMetadata.Empty
                 : new ZLinkMessageMetadata(
                     new Dictionary<string, string>(header.Metadata.Values, StringComparer.Ordinal)
                 );
-        var actor = header.ActorSlot is { } slot ? ActorCoordinator.FindActor(slot) : null;
         _currentDispatch = new ZLinkSessionDispatchContext(
             header.Name,
             metadata,
@@ -157,6 +160,9 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
 
     internal void SendActorUnbound(ushort slot) =>
         ZLinkStreamControlFrames.SendActorUnbound(_stream, slot);
+
+    internal ValueTask SendActorUnboundAsync(ushort slot) =>
+        ZLinkStreamControlFrames.SendActorUnboundAsync(_stream, slot, CancellationToken.None);
 
     internal async ValueTask<ZLinkOneWaySubmitResult> SubmitAsync(
         Message payload,
@@ -237,6 +243,9 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
                 CorrelationId: header.CorrelationId,
                 SourceRid: RoutingId?.ToString()
             )
+            {
+                StreamSessionId = SessionId,
+            }
         );
     }
 

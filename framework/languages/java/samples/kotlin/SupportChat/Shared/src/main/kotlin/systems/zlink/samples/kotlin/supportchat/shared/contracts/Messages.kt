@@ -51,11 +51,7 @@ data class EnsureAgentConversationReq(
     val conversationId: String,
 )
 
-data class EnsureAgentConversationRes(
-    val actor: ActorRefSnapshot,
-    val scheduled: Boolean,
-    val state: ConversationState,
-)
+data class EnsureAgentConversationRes(val actor: ActorRefSnapshot)
 
 data class OpenConversationReq(val subject: String)
 
@@ -66,12 +62,17 @@ data class SetAgentAvailableReq(val isAvailable: Boolean)
 data class SetAgentAvailableRes(val isAvailable: Boolean)
 
 data class JoinConversationReq(
+    val conversationId: String,
     val participantId: String = "",
     val role: String = "",
     val displayName: String = "",
 )
 
-data class JoinConversationRes(val scheduled: Boolean, val state: ConversationState)
+data class JoinConversationRes(
+    val scheduled: Boolean,
+    val actorId: String,
+    val state: ConversationState,
+)
 
 data class JoinConversationFailedNotify(
     val conversationId: String,

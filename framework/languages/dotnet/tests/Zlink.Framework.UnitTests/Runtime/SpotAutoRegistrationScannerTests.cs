@@ -1,3 +1,5 @@
+using System.Reflection;
+using System.Reflection.Emit;
 using Zlink.Framework.Contracts.Actors;
 using Zlink.Framework.Contracts.Handlers;
 using Zlink.Framework.Contracts.Messaging;
@@ -10,6 +12,76 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class SpotAutoRegistrationScannerTests
 {
+    [Fact]
+    public void RegistrationRejectsScannedSubscriptionHandlerWithoutTopic()
+    {
+        var (assembly, handlerType) = CreateSubscriptionHandlerAssembly(withTopic: false);
+        var registration = new ZLinkFrameworkRegistration();
+        registration.HandlerAssemblies.Add(assembly);
+
+        var error = Assert.Throws<ZLinkConfigurationException>(() =>
+            ZLinkFrameworkRegistrationValidator.Validate(registration)
+        );
+
+        Assert.Contains(handlerType.FullName!, error.Message);
+        Assert.Contains("topic is required", error.Message);
+    }
+
+    [Fact]
+    public void RegistrationIncludesScannedSubscriptionHandlerWithTopic()
+    {
+        var (assembly, handlerType) = CreateSubscriptionHandlerAssembly(withTopic: true);
+        var registration = new ZLinkFrameworkRegistration();
+        registration.HandlerAssemblies.Add(assembly);
+
+        ZLinkFrameworkRegistrationValidator.Validate(registration);
+
+        Assert.Contains(
+            registration.ScannedHandlerCatalog.SpotHandlers,
+            handler =>
+                handler.HandlerType == handlerType
+                && handler.Kind == ZLinkScannedSpotHandlerKind.Subscription
+                && handler.Topic == "room.events"
+        );
+    }
+
+    private static (Assembly Assembly, Type HandlerType) CreateSubscriptionHandlerAssembly(
+        bool withTopic
+    )
+    {
+        var assembly = AssemblyBuilder.DefineDynamicAssembly(
+            new AssemblyName($"Zlink.SpotSubscriptionScan.{Guid.NewGuid():N}"),
+            AssemblyBuilderAccess.Run
+        );
+        var module = assembly.DefineDynamicModule("Main");
+        var builder = module.DefineType("ScannedSubscriptionHandler", TypeAttributes.Public);
+        var contract = typeof(IZLinkSpotSubscriptionHandler<object, string>);
+        builder.AddInterfaceImplementation(contract);
+        if (withTopic)
+        {
+            var constructor = typeof(ZLinkSpotSubscriptionHandlerAttribute).GetConstructor([
+                typeof(string),
+                typeof(string),
+            ])!;
+            builder.SetCustomAttribute(
+                new CustomAttributeBuilder(constructor, ["room-events", "room.events"])
+            );
+        }
+
+        var contractMethod = contract.GetMethod("HandleAsync")!;
+        var method = builder.DefineMethod(
+            contractMethod.Name,
+            MethodAttributes.Public | MethodAttributes.Virtual,
+            contractMethod.ReturnType,
+            contractMethod.GetParameters().Select(parameter => parameter.ParameterType).ToArray()
+        );
+        var il = method.GetILGenerator();
+        il.Emit(OpCodes.Newobj, typeof(NotImplementedException).GetConstructor(Type.EmptyTypes)!);
+        il.Emit(OpCodes.Throw);
+        builder.DefineMethodOverride(method, contractMethod);
+        return (assembly, builder.CreateTypeInfo()!.AsType());
+    }
+
     [Fact]
     public void RegistrationOwnsOneFrozenHandlerCatalog()
     {

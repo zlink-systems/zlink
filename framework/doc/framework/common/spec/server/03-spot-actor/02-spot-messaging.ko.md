@@ -667,6 +667,8 @@ Spot subscription은 다음 값으로 등록한다.
 - `topic`: 해당 Channel 안에서 Spot을 선택하는 값
 - packet name: typed handler를 선택하는 값
 
+topic이 없거나 빈 문자열이면 host를 시작할 수 없다. 등록 경로(명시 등록, 패키지 스캔)와 무관하다.
+
 등록한 Spot이 해당 ChannelName에 참여하지 않으면 host를 시작할 수 없다.
 
 같은 Spot에 다음 값이 모두 같은 subscription을 두 번 등록해도 host를 시작할 수 없다.

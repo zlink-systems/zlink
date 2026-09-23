@@ -85,6 +85,7 @@ internal sealed class TicTacToeGame(IZLinkSpotContext context, ILogger<TicTacToe
         );
         return ValueTask.CompletedTask;
     }
+
     // --8<-- [end:doc-disconnect-actor]
 
     public async ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(

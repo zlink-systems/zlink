@@ -37,23 +37,3 @@ async function updateFrame(): Promise<void> {
   await client.dispatch(); // Manual mode에서는 main loop가 수신 handler 실행 시점을 결정한다.
 }
 ```
-
-## 관련 outbound의 flow 전달
-
-브라우저에는 비동기 작업별 현재 값을 격리하는 표준 기능이 없다. inbound handler에서 시작한 관련
-outbound만 `flowFrom(message)`로 표시한다. 표시하지 않은 timer나 UI callback의 outbound는 새
-application flow를 시작하므로 동시에 실행되어도 inbound flow가 누출되지 않는다.
-
-```ts
-client.on('MatchAssigned', async (message) => {
-  await refreshView(message.payload);
-
-  client.send({ accepted: true })
-    .packetName('MatchAccepted')
-    .flowFrom(message) // await 뒤에도 이 outbound가 inbound flow에 속한다는 뜻을 명시한다.
-    .submit();
-});
-```
-
-application이 flow id를 전역 변수에 저장하거나 Promise와 timer 동작을 수정해서는 안 된다. 관련 없는
-outbound에는 `flowFrom(...)`을 호출하지 않는다.

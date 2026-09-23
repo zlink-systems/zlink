@@ -293,6 +293,14 @@ public final class ZLinkUserSpotRetireRuntime {
                 .allMatch(ZLinkCanonicalRelocationStateMachine::sourceQuiescent);
     }
 
+    public CompletionStage<Void> awaitAcceptedTargetRelocations() {
+        return CompletableFuture.allOf(
+                stateMachines.stream()
+                        .map(ZLinkCanonicalRelocationStateMachine::awaitAcceptedTargetRelocations)
+                        .map(CompletionStage::toCompletableFuture)
+                        .toArray(CompletableFuture[]::new));
+    }
+
     public CompletionStage<Void> startup() {
         return CompletableFuture.completedFuture(null);
     }

@@ -142,7 +142,7 @@ public sealed class StreamWireInteropTests
             )
         );
 
-        Assert.Equal("unavailable", error.Code);
+        Assert.Equal("Unavailable", error.Code);
         Assert.Equal("session binding is changing.", error.Message);
     }
 

@@ -10,7 +10,7 @@ title: "How Session Binding Works · Kotlin"
 # How Session Binding Works
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](README.en.md) | [Previous: How STREAM Works](38-stream-boundary.en.md) | [Next: 17. Where ZLink Applies — Internal Service Communication and Real-Time State Servers](17-alternative.en.md)
+[Guide Home](README.en.md) | [Previous: How STREAM Works](38-stream-boundary.en.md) | [Next: 12. Operations — Runtime Metrics · Graceful Drain · Readiness](12-operations.en.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
@@ -26,9 +26,9 @@ View in another language — [C++](../../../cpp/guide/server/39-session-binding.
 [Session and Actor](24-actor-session.en.md) went as far as binding one connection to one Actor and
 receiving a push. This chapter covers the rules that binding keeps.
 
-## 1. How Many May Be Bound — Several per Session, One per Actor
+## 1. How Many May Be Bound — Several Actors per Session, One Session per Actor
 
-<iframe class="zlink-diagram" src="/common/diagrams/39-binding-shape-en.html" title="A session binds several; an Actor binds to one" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/39-binding-shape-en.html" title="One session binds several Actors; an Actor binds to one session" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/39-binding-shape-en.html" target="_blank">↗ View larger</a></p>
 
 **One session may bind several Actors at once.** A single connection may use a player Actor and a
@@ -37,9 +37,11 @@ party Actor together.
 **One Actor, in return, is bound to exactly one session at a time.** When a new binding is
 committed, the previous one becomes void and a late message arriving on it is refused.
 
-Choosing which Actor to relay to on a session with several bindings is the application's part. The
-application picks the actor id by its own protocol and passes it to the lookup call — **the
-framework does not pick an arbitrary Actor.**
+On a session with several bindings, each packet names its target Actor. When the client sends through
+an Actor handle, the packet carries that Actor's slot and the session hands it to the dispatch
+context's Actor ([Session and Actor Connection §3.2](24-actor-session.en.md#32-forwarding-what-is-left)).
+**The framework does not pick an arbitrary Actor** — a packet with a slot that is not a current
+binding isn't handed to the session; it is refused.
 
 The binding call treats a duplicate bind as an error. A flow that may already be bound, such as a
 resent authentication, uses the find-or-bind call instead.

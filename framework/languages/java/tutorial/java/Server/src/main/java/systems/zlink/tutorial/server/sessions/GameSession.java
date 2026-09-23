@@ -63,14 +63,20 @@ public final class GameSession implements ZLinkSession {
                             }
 
                             // --8<-- [start:session-actor-relay]
-                            // Anything without a session handler is forwarded to the player bound
-                            // to this connection, which is why authentication has to come first.
-                            if (context.actors().bound().size() != 1) {
-                                throw new IllegalStateException(
-                                        "Authenticate before sending player packets.");
+                            ZLinkSessionActor player = dispatch.actor();
+                            if (player == null) {
+                                var bound = context.actors().bound();
+                                player =
+                                        switch (bound.size()) {
+                                            case 1 -> bound.getFirst();
+                                            case 0 ->
+                                                    throw new IllegalStateException(
+                                                            "Authenticate an Actor before sending player packets.");
+                                            default ->
+                                                    throw new IllegalStateException(
+                                                            "Select an Actor handle when more than one Actor is bound.");
+                                        };
                             }
-
-                            ZLinkSessionActor player = context.actors().bound().get(0);
                             return player.relay(dispatch, payload);
                             // --8<-- [end:session-actor-relay]
                         });

@@ -146,6 +146,7 @@ struct message_flow_event_t
     std::optional<std::uint64_t> source_mesh_generation;
     std::optional<message_flow_result_t> result;
     std::optional<message_flow_reason_t> reason;
+    std::optional<std::string> stream_session_id;
 };
 
 } // namespace zlink::framework

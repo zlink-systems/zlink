@@ -206,7 +206,6 @@ nav:
           - Handler dispatch: cpp/guide/server/31-handler-dispatch.md
           - STREAM boundary: cpp/guide/server/38-stream-boundary.md
           - Session binding: cpp/guide/server/39-session-binding.md
-          - Where ZLink fits: cpp/guide/server/17-alternative.md
       - Operations:
           - Operations and lifecycle: cpp/guide/server/12-operations.md
           - Options: cpp/guide/server/16-options.md
@@ -284,7 +283,6 @@ nav:
           - Handler dispatch: dotnet/guide/server/31-handler-dispatch.md
           - STREAM boundary: dotnet/guide/server/38-stream-boundary.md
           - Session binding: dotnet/guide/server/39-session-binding.md
-          - Where ZLink fits: dotnet/guide/server/17-alternative.md
       - Operations:
           - Operations and lifecycle: dotnet/guide/server/12-operations.md
           - Options: dotnet/guide/server/16-options.md
@@ -359,7 +357,6 @@ nav:
           - Handler dispatch: java/guide/server/31-handler-dispatch.md
           - STREAM boundary: java/guide/server/38-stream-boundary.md
           - Session binding: java/guide/server/39-session-binding.md
-          - Where ZLink fits: java/guide/server/17-alternative.md
       - Operations:
           - Operations and lifecycle: java/guide/server/12-operations.md
           - Options: java/guide/server/16-options.md
@@ -432,7 +429,6 @@ nav:
           - Handler dispatch: kotlin/guide/server/31-handler-dispatch.md
           - STREAM boundary: kotlin/guide/server/38-stream-boundary.md
           - Session binding: kotlin/guide/server/39-session-binding.md
-          - Where ZLink fits: kotlin/guide/server/17-alternative.md
       - Operations:
           - Operations and lifecycle: kotlin/guide/server/12-operations.md
           - Options: java/guide/server/16-options.md
@@ -506,7 +502,6 @@ nav:
           - Handler dispatch: node/guide/server/31-handler-dispatch.md
           - STREAM boundary: node/guide/server/38-stream-boundary.md
           - Session binding: node/guide/server/39-session-binding.md
-          - Where ZLink fits: node/guide/server/17-alternative.md
       - Operations:
           - Operations and lifecycle: node/guide/server/12-operations.md
           - Options: node/guide/server/16-options.md

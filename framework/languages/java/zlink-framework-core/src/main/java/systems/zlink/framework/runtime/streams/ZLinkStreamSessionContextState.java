@@ -20,6 +20,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutc
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.streams.ZLinkStreamErrorPayload;
 import systems.zlink.framework.streams.ZLinkSession;
+import systems.zlink.framework.streams.ZLinkSessionActor;
 import systems.zlink.framework.streams.ZLinkSessionActors;
 import systems.zlink.framework.streams.ZLinkSessionClient;
 import systems.zlink.framework.streams.ZLinkSessionContext;
@@ -180,6 +181,13 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
 
     CompletionStage<Void> dispatchStage(
             ZLinkStreamHeader header, ZLinkMessage payload, ZLinkSession session) {
+        Optional<ZLinkSessionActor> boundActor =
+                actors instanceof ZLinkSessionActorsRuntime runtime
+                        ? header.actorSlot().flatMap(runtime::findBySlot)
+                        : Optional.empty();
+        if (header.actorSlot().isPresent() && boundActor.isEmpty()) {
+            return rejectStaleActorSlot(header);
+        }
         ZLinkFlowContext.State dispatchFlow = ZLinkFlowContext.current();
         if (header.requestSequence().isPresent()) {
             String dispatchKey =
@@ -193,9 +201,7 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
                         header.name(),
                         header.metadata(),
                         header.requestSequence().isPresent(),
-                        actors instanceof ZLinkSessionActorsRuntime runtime
-                                ? header.actorSlot().flatMap(runtime::findBySlot).orElse(null)
-                                : null);
+                        boundActor.orElse(null));
         CompletionStage<Void> stage;
         try {
             ZLinkSessionActorsRuntime.enterRelayDispatch(dispatch, header);
@@ -218,29 +224,64 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
         return result;
     }
 
+    private CompletionStage<Void> rejectStaleActorSlot(ZLinkStreamHeader header) {
+        if (header.requestSequence().isPresent()) {
+            ZLinkFrameworkException error =
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                            "Actor slot is not a current binding");
+            traceDispatchError(header, error, ZLinkDispatchErrorReason.STALE_TARGET);
+            return sendErrorReply(header, error);
+        }
+        ZLinkMessageFlowTracer.TracePoint tracePoint = flow.begin(ZLinkMessageFlowOutcome.DROPPED);
+        if (tracePoint != null) {
+            tracePoint.trace(
+                    new ZLinkMessageFlowEvent(
+                            ZLinkMessageFlowOutcome.DROPPED,
+                            ZLinkDispatchErrorSurface.STREAM_SESSION,
+                            ZLinkDispatchMessageKind.SEND,
+                            header.packetName(),
+                            null,
+                            null,
+                            ZLinkStreamCorrelations.forTrace(header),
+                            null,
+                            null,
+                            null,
+                            null,
+                            ZLinkDispatchErrorReason.STALE_TARGET,
+                            null,
+                            null,
+                            null,
+                            header.flowId().orElse(null),
+                            header.flowOrigin().orElse(null)));
+        }
+        return CompletableFuture.completedFuture(null);
+    }
+
     void traceStreamReplied(ZLinkStreamHeader requestHeader) {
         systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer.TracePoint tracePoint =
                 flow.begin(ZLinkMessageFlowOutcome.REPLIED);
         if (tracePoint != null) {
             tracePoint.trace(
                     new ZLinkMessageFlowEvent(
-                            ZLinkMessageFlowOutcome.REPLIED,
-                            ZLinkDispatchErrorSurface.STREAM_SESSION,
-                            ZLinkDispatchMessageKind.REQUEST,
-                            requestHeader.packetName(),
-                            null,
-                            null,
-                            ZLinkStreamCorrelations.forTrace(requestHeader),
-                            null,
-                            null,
-                            null,
-                            null,
-                            null,
-                            null,
-                            null,
-                            null,
-                            requestHeader.flowId().orElse(null),
-                            requestHeader.flowOrigin().orElse(null)));
+                                    ZLinkMessageFlowOutcome.REPLIED,
+                                    ZLinkDispatchErrorSurface.STREAM_SESSION,
+                                    ZLinkDispatchMessageKind.REQUEST,
+                                    requestHeader.packetName(),
+                                    null,
+                                    null,
+                                    ZLinkStreamCorrelations.forTrace(requestHeader),
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    requestHeader.flowId().orElse(null),
+                                    requestHeader.flowOrigin().orElse(null))
+                            .withStreamSessionId(routingId.toHex()));
         }
     }
 
@@ -280,23 +321,24 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
         if (tracePoint != null) {
             tracePoint.trace(
                     new ZLinkMessageFlowEvent(
-                            ZLinkMessageFlowOutcome.COMPLETED,
-                            ZLinkDispatchErrorSurface.STREAM_SESSION,
-                            ZLinkDispatchMessageKind.SEND,
-                            header.packetName(),
-                            null,
-                            null,
-                            header.correlationId().orElse(null),
-                            null,
-                            null,
-                            null,
-                            null,
-                            null,
-                            null,
-                            null,
-                            null,
-                            header.flowId().orElse(null),
-                            header.flowOrigin().orElse(null)));
+                                    ZLinkMessageFlowOutcome.COMPLETED,
+                                    ZLinkDispatchErrorSurface.STREAM_SESSION,
+                                    ZLinkDispatchMessageKind.SEND,
+                                    header.packetName(),
+                                    null,
+                                    null,
+                                    header.correlationId().orElse(null),
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    header.flowId().orElse(null),
+                                    header.flowOrigin().orElse(null))
+                            .withStreamSessionId(routingId.toHex()));
         }
         result.complete(null);
     }
@@ -320,6 +362,11 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
     }
 
     private void traceDispatchError(ZLinkStreamHeader header, Throwable error) {
+        traceDispatchError(header, error, ZLinkDispatchErrorReason.HANDLER_EXCEPTION);
+    }
+
+    private void traceDispatchError(
+            ZLinkStreamHeader header, Throwable error, ZLinkDispatchErrorReason reason) {
         systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer.TracePoint tracePoint =
                 flow.beginDispatchError();
         if (tracePoint == null) {
@@ -339,7 +386,7 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
                         null,
                         null,
                         null,
-                        ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
+                        reason,
                         header.requestSequence().isPresent()
                                 ? ZLinkDispatchErrorAction.REPLY_ERROR
                                 : ZLinkDispatchErrorAction.DROP,
@@ -350,7 +397,7 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
                     event.withFlow(
                             header.flowId().orElseThrow(), header.flowOrigin().orElseThrow());
         }
-        tracePoint.trace(event);
+        tracePoint.trace(event.withStreamSessionId(routingId.toHex()));
     }
 
     private CompletionStage<Void> sendErrorReply(ZLinkStreamHeader requestHeader, Throwable error) {

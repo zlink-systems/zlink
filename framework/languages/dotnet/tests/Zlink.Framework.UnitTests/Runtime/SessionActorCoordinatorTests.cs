@@ -44,15 +44,17 @@ public sealed class SessionActorCoordinatorTests
         Assert.NotEqual(firstActor.Slot, secondActor.Slot);
         Assert.Equal(2, stream.ControlWrites.Count);
 
-        var dispatch = context.EnterDispatch(
-            new ZlinkStreamHeader(
-                ZlinkStreamMessageKind.Send,
-                ZlinkStreamCodec.Raw,
-                ZlinkStreamHeaderFlags.HasActorSlot,
-                null,
-                "actor.inbound",
-                ZlinkStreamMetadata.Empty,
-                ActorSlot: firstActor.Slot
+        var dispatch = Assert.IsType<ZLinkSessionDispatchContext>(
+            context.EnterDispatch(
+                new ZlinkStreamHeader(
+                    ZlinkStreamMessageKind.Send,
+                    ZlinkStreamCodec.Raw,
+                    ZlinkStreamHeaderFlags.HasActorSlot,
+                    null,
+                    "actor.inbound",
+                    ZlinkStreamMetadata.Empty,
+                    ActorSlot: firstActor.Slot
+                )
             )
         );
         Assert.Same(first, dispatch.Actor);
@@ -60,15 +62,16 @@ public sealed class SessionActorCoordinatorTests
 
         Assert.True(runtime.TryGetSessionActorBinding(firstRef.ActorId, out var binding));
         runtime.UnbindSessionActor(firstRef.ActorId, context, binding.BindingToken);
-        dispatch = context.EnterDispatch(
-            new ZlinkStreamHeader(
-                ZlinkStreamMessageKind.Send,
-                ZlinkStreamCodec.Raw,
-                ZlinkStreamHeaderFlags.HasActorSlot,
-                null,
-                "actor.stale",
-                ZlinkStreamMetadata.Empty,
-                ActorSlot: firstActor.Slot
+        dispatch = Assert.IsType<ZLinkSessionDispatchContext>(
+            context.EnterDispatch(
+                new ZlinkStreamHeader(
+                    ZlinkStreamMessageKind.Send,
+                    ZlinkStreamCodec.Raw,
+                    ZlinkStreamHeaderFlags.None,
+                    null,
+                    "session.unbound",
+                    ZlinkStreamMetadata.Empty
+                )
             )
         );
         Assert.Null(dispatch.Actor);
@@ -503,6 +506,43 @@ public sealed class SessionActorCoordinatorTests
             CancellationToken.None
         );
         Assert.Single(stream.Writes);
+    }
+
+    [Fact]
+    public async Task Rebind_Succeeds_When_Previous_Unbound_Control_Is_Refused()
+    {
+        var runtime = CreateRuntime();
+        var retiredFailures = new List<Exception>();
+        runtime.ErrorSink.UnhandledCallbackException += retiredFailures.Add;
+        var previousStream = new TestStream(RoutingId.From("session-previous-unbound"));
+        var previousContext = CreateSessionContext(runtime, previousStream);
+        var actor = new ActorRef("actor-rebind-unbound", 1, "actors", RoutingId.From("actor-node"));
+        await previousContext.ActorCoordinator.BindActorAsync(
+            previousContext,
+            actor,
+            CancellationToken.None
+        );
+        Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, out var previousBinding));
+
+        previousStream.AcceptsWrites = false;
+        var replacementStream = new TestStream(RoutingId.From("session-replacement-unbound"));
+        var replacementContext = CreateSessionContext(runtime, replacementStream);
+        var replacement = await replacementContext.ActorCoordinator.BindActorAsync(
+            replacementContext,
+            actor,
+            CancellationToken.None
+        );
+
+        Assert.NotNull(replacement);
+        Assert.Equal(2, previousStream.ControlWrites.Count);
+        Assert.Single(replacementStream.ControlWrites);
+        Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, out var current));
+        Assert.Equal(replacementContext, current.Context);
+        Assert.NotEqual(previousBinding.BindingToken, current.BindingToken);
+        Assert.Equal(
+            ZlinkSubmitException.ErrorCode.NotConnected,
+            Assert.IsType<ZlinkSubmitException>(Assert.Single(retiredFailures)).Result
+        );
     }
 
     [Fact]
@@ -2902,6 +2942,8 @@ public sealed class SessionActorCoordinatorTests
 
     private sealed class TestStream(RoutingId routingId, bool acceptsWrites = true) : IZLinkStream
     {
+        public bool AcceptsWrites { get; set; } = acceptsWrites;
+
         public string SessionId { get; } = routingId.ToHex();
 
         public RoutingId? RoutingId { get; } = routingId;
@@ -2930,7 +2972,7 @@ public sealed class SessionActorCoordinatorTests
             }
             else
                 Writes.Add((encoded, flags));
-            return acceptsWrites;
+            return AcceptsWrites;
         }
 
         public ValueTask CloseAsync()

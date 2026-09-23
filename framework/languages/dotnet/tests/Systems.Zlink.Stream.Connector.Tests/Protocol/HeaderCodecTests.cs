@@ -111,7 +111,7 @@ public sealed partial class StreamConnectorTests
     }
 
     [Fact]
-    public void OutboundFrameCreatesFlowOnceAndCodecRemainsDeterministic()
+    public void ConnectorOutboundFramesNeverCarryFlowAndOnlyRequestsCarryCorrelation()
     {
         var codec = new ZlinkStreamHeaderCodec();
         var sender = new ZlinkStreamFrameSender(
@@ -125,95 +125,16 @@ public sealed partial class StreamConnectorTests
             new SemaphoreSlim(1, 1),
             static () => null
         );
-
-        var frame = sender.BuildOutboundFrame(
-            ZlinkStreamMessageKind.Send,
-            "flow.start",
-            new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, ReadOnlyMemory<byte>.Empty),
-            ZlinkStreamMetadata.Empty,
-            false,
-            null
-        );
-        var header = codec.Decode(frame.HeaderBytes);
-
-        // One-way sends have no reply, so no correlation id is created (flow-correlation spec §2).
-        Assert.Null(header.CorrelationId);
-        Assert.False(header.Flags.HasFlag(ZlinkStreamHeaderFlags.HasCorrelationId));
-        Assert.True(ZlinkStreamFlowId.IsValid(header.FlowId));
-        Assert.Equal(ZlinkStreamFlowOrigin.Application, header.FlowOrigin);
-        Assert.Equal(codec.Encode(header).ToArray(), codec.Encode(header).ToArray());
-    }
-
-    [Fact]
-    public void OutboundRequestFrameKeepsCorrelationIdAtEveryDiagnosticsLevel()
-    {
-        var codec = new ZlinkStreamHeaderCodec();
-        foreach (
-            var level in new[]
-            {
-                ZlinkStreamDiagnosticsLevel.Off,
-                ZlinkStreamDiagnosticsLevel.Errors,
-                ZlinkStreamDiagnosticsLevel.Normal,
-                ZlinkStreamDiagnosticsLevel.Detailed,
-            }
-        )
-        {
-            var sender = new ZlinkStreamFrameSender(
-                new ZlinkStreamConnectorOptions
-                {
-                    Endpoint = new Uri("tcp://127.0.0.1:1"),
-                    Compression = ZlinkStreamCompression.None,
-                    DiagnosticsLevel = level,
-                },
-                codec,
-                null,
-                new SemaphoreSlim(1, 1),
-                static () => null
-            );
-
-            var frame = sender.BuildOutboundFrame(
-                ZlinkStreamMessageKind.Request,
-                "flow.request",
-                new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, ReadOnlyMemory<byte>.Empty),
-                ZlinkStreamMetadata.Empty,
-                false,
-                new ZlinkStreamRequestSeq(1)
-            );
-            var header = codec.Decode(frame.HeaderBytes);
-
-            // Correlation ids are protocol information: kept per request even at Off.
-            Assert.False(string.IsNullOrWhiteSpace(header.CorrelationId));
-            Assert.True(header.Flags.HasFlag(ZlinkStreamHeaderFlags.HasCorrelationId));
-        }
-    }
-
-    [Fact]
-    public void OutboundFramesAtOffCarryNoFlowFieldsAndNoSendCorrelation()
-    {
-        var codec = new ZlinkStreamHeaderCodec();
-        var sender = new ZlinkStreamFrameSender(
-            new ZlinkStreamConnectorOptions
-            {
-                Endpoint = new Uri("tcp://127.0.0.1:1"),
-                Compression = ZlinkStreamCompression.None,
-                DiagnosticsLevel = ZlinkStreamDiagnosticsLevel.Off,
-            },
-            codec,
-            null,
-            new SemaphoreSlim(1, 1),
-            static () => null
-        );
-
-        using var ambient = ZlinkStreamFlowContext.Enter(
-            ZlinkStreamFlowId.Create(),
-            ZlinkStreamFlowOrigin.Inbound
+        var payload = new ZlinkStreamEncodedPayload(
+            ZlinkStreamCodec.Raw,
+            ReadOnlyMemory<byte>.Empty
         );
         var send = codec.Decode(
             sender
                 .BuildOutboundFrame(
                     ZlinkStreamMessageKind.Send,
-                    "flow.off",
-                    new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, ReadOnlyMemory<byte>.Empty),
+                    "notice",
+                    payload,
                     ZlinkStreamMetadata.Empty,
                     false,
                     null
@@ -224,22 +145,19 @@ public sealed partial class StreamConnectorTests
             sender
                 .BuildOutboundFrame(
                     ZlinkStreamMessageKind.Request,
-                    "flow.off",
-                    new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, ReadOnlyMemory<byte>.Empty),
+                    "query",
+                    payload,
                     ZlinkStreamMetadata.Empty,
                     false,
-                    new ZlinkStreamRequestSeq(2)
+                    new ZlinkStreamRequestSeq(1)
                 )
                 .HeaderBytes
         );
 
         Assert.False(send.Flags.HasFlag(ZlinkStreamHeaderFlags.HasFlowId));
-        Assert.Null(send.FlowId);
-        Assert.Null(send.FlowOrigin);
-        Assert.Null(send.CorrelationId);
         Assert.False(request.Flags.HasFlag(ZlinkStreamHeaderFlags.HasFlowId));
-        Assert.Null(request.FlowId);
-        Assert.Null(request.FlowOrigin);
+        Assert.Null(send.CorrelationId);
+        Assert.NotNull(request.CorrelationId);
     }
 
     [Fact]
@@ -267,30 +185,6 @@ public sealed partial class StreamConnectorTests
         // The structural length check is kept: a flow flag with truncated flow bytes fails.
         var truncated = encoded[..^1];
         Assert.Throws<ZlinkStreamException>(() => codec.Decode(truncated, false));
-    }
-
-    [Fact]
-    public async Task InboundFlowIsReusedAndExpiresAfterCallbackScope()
-    {
-        var flowId = ZlinkStreamFlowId.Create();
-        var releaseDetached = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
-        Task<(string FlowId, ZlinkStreamFlowOrigin Origin)?> detached;
-
-        using (ZlinkStreamFlowContext.Enter(flowId, ZlinkStreamFlowOrigin.Inbound))
-        {
-            Assert.Equal((flowId, ZlinkStreamFlowOrigin.Inbound), ZlinkStreamFlowContext.Current);
-            detached = Task.Run(async () =>
-            {
-                await releaseDetached.Task.ConfigureAwait(false);
-                return ZlinkStreamFlowContext.Current;
-            });
-        }
-
-        releaseDetached.SetResult();
-        Assert.Null(await detached);
-        Assert.Null(ZlinkStreamFlowContext.Current);
     }
 
     [Fact]

@@ -58,7 +58,6 @@ connector를 사용한다.** 브라우저 샌드박스에서 OS 소켓을 열 �
 | 게임 엔진(공통) | 엔진 객체를 main thread 밖에서 다룰 수 없다 | 수신 callback 실행 문맥을 정하는 dispatch mode의 기본값은 **`Manual`**이다. Main thread에서 명시적으로 pump한다(§7). |
 | 게임 엔진(C++) | 예외·coroutine이 비활성인 빌드가 있다 | C++ connector core는 **no-exception·no-coroutine**. public header가 `<coroutine>`을 노출하지 않는다 |
 | **브라우저·WASM** | **OS 소켓을 열 수 없다**(보안 샌드박스) | **`tcp`·`tls` 사용 불가.** `ws`·`wss`만 사용하며 플랫폼의 네이티브 WebSocket API 위에서 동작한다(§3.2) |
-| **브라우저 JavaScript** | `AsyncLocalStorage`에 해당하는 **ambient 실행 문맥이 없다** | 수신 message의 flow를 이어받으려면 호출자가 송신 call에 그 flow를 **명시적으로 전달한다**(§5.5) |
 | Node.js | TypeScript connector의 제품 실행 환경이 아니다 | 서버 process와 browser test runner만 담당한다 |
 
 ## 3. Transport
@@ -276,6 +275,9 @@ payload를 기준으로 하므로 압축을 요청한 송신은 압축 결과를
   (attribute, annotation, 정적 멤버 등)는 언어 문서가 소유한다. 타입에 붙인 이름은 단순 타입
   이름보다 우선한다.
 - operation마다 **호출자가 명시한 이름**이 있으면 그쪽이 가장 우선이다.
+- **이름을 받는 모든 표면은 호출자가 이름을 명시하는 형태와 payload 타입에서 이름을 정하는 형태를 함께 둔다.**
+  수신 등록, send, request는 connector 수준과 Actor handle(§5.6) 수준에, 테스트 대기 표면(§10.1.1)은 connector
+  수준에 해당한다. 둘 중 하나만 두지 않는다.
 - 부가 정보가 필요하면 metadata key-value로 덧붙인다.
 - **임의 header bytes를 다루는 API를 공개 표면에 두지 않는다.**
 
@@ -350,29 +352,14 @@ TypeScript package root는 browser-safe `ZlinkStreamPayloadCodec`을 내보내�
 사용한다. 두 진입점은 `stream-wire`가 소유하는 같은 codec 번호를 사용하지만 browser module graph가
 server framework runtime을 참조하지 않아야 한다.
 
-### 5.5 flow 노출과 전파
+### 5.5 flow
 
-**수신 message는 payload, packet 이름, metadata와 함께 `flow_id`·`flow_origin`을 노출한다.**
-다섯 언어가 모두 노출한다. 두 값의 형식과 의미는
-[메시지 흐름 상관관계 §3](../server/06-observability/04-flow-correlation.ko.md#3-형식과-소유권)이 소유하며,
-diagnostics level이 `Off`이면 connector가 값을 전달하지 않으므로 두 값이 비어 있다(§13).
-application은 이 값을 읽어 자기 log와 서버 trace를 같은 흐름으로 맞춘다.
-
-handler가 수신 message를 처리하는 동안 시작한 send와 request는 **그 message의 flow를 이어받는다.**
-이어받는 방법은 실행 환경이 정한다.
-
-| 실행 환경 | flow를 잇는 방법 |
-|---|---|
-| ambient 실행 문맥을 제공하는 런타임 | connector가 handler를 실행하는 문맥에 현재 flow를 보관하고, 같은 문맥에서 시작한 send·request가 인자 없이 그 값을 사용한다 |
-| ambient 실행 문맥이 없는 런타임(브라우저 JavaScript) | 호출자가 처리 중인 message의 flow를 송신 call에 명시적으로 전달한다. 전달 표면의 이름은 언어 문서가 소유한다 |
-
-- **두 방법의 차이는 호출 방식이며 보장의 차이가 아니다.** 어느 쪽이든 만들어진 frame의
-  `flow_id`·`flow_origin`은 같은 값이고, flow를 잇지 않은 송신은 어느 쪽에서도 새 flow로 시작한다.
-- **ambient 문맥이 없는 런타임에 명시 전달 표면을 두는 것은
-  [메시지 흐름 상관관계 §6](../server/06-observability/04-flow-correlation.ko.md#6-async-작업과-execution-context)의
-  요구를 connector에 적용한 것이다.** 브라우저 JavaScript에는 `AsyncLocalStorage`에 해당하는 표면이
-  없어 실행 문맥에 값을 보관할 수 없다(§2.2). 같은 문서가 금지하는 대로 process 전역 변수나
-  connector의 변경 가능한 field로 현재 flow를 추정하지 않는다.
+**Connector는 flow를 만들지도, 보내지도, 노출하지도, 전파하지도 않는다.** Outbound frame에
+`flow_id`·`flow_origin`을 붙이지 않고 flag `0x10`을 세우지 않는다. Inbound frame에 flow 필드가 있으면
+구조 길이만 검사하고(§4.2) 값은 버린다. 수신 message는 flow 값을 노출하지 않는다. 흐름은 서버가 STREAM
+ingress에서 시작한다([메시지 흐름 상관관계 §4](../server/06-observability/04-flow-correlation.ko.md#4-flow를-만드는-시점)).
+Request의 correlation id는 protocol 정보이므로 그대로 만들고 보존한다. one-way `Send`는
+correlation id를 만들지 않는다(flag `0x08` 미설정).
 
 ### 5.6 bound Actor
 
@@ -405,6 +392,24 @@ application이 payload에 식별자를 넣어 구분하지 않는다.
   handle 없이 지금과 같이 사용한다. 호출마다 Actor 식별자를 문자열로 넘기는 표면은 두지 않는다 —
   Actor의 주소는 handle이 보존한다
   ([공개 계약 거버넌스 §7](../server/00-foundation/01-public-contract-governance.ko.md#7-설계-검토-기준)).
+
+### 5.7 요청 hook
+
+Application은 모든 요청에 공통 처리(공통 metadata, 로깅)를 붙이는 hook 둘을 등록한다. 등록 형태는 수신
+등록(§5)과 같다 — 등록하면 해제 handle을 돌려주고, 여러 hook은 등록 순서로 실행한다. **request sending hook은 request를 호출한 스레드에서
+frame을 만들기 전에 동기로 실행한다** — dispatch mode(§7)를 따르지 않는다. reply received hook은 다른 callback과
+같이 dispatch mode를 따른다(§7). 두 hook은 connector 수준과 Actor handle(§5.6) 수준의 모든 request에 적용한다.
+Send와 push 수신에는 적용하지 않는다.
+
+| hook | 호출 시점 | 받는 값 |
+|---|---|---|
+| request sending | request frame을 만들기 직전 | 요청 packet 이름, Actor handle로 보냈으면 그 `actor_id`, metadata 추가 수단 |
+| reply received | request가 끝났을 때(reply, 실패, timeout, 연결 종료) | 요청 packet 이름, `actor_id`, 성공 여부, 성공이면 reply message, 실패면 오류(§9), 경과 시간 |
+
+- **request sending hook이 추가한 metadata는 그 request에 실린다.** 검증은 다른 metadata와 같다(§4.4).
+- **reply received hook은 결과를 읽기만 한다.** hook은 reply나 오류를 바꾸거나 막지 못한다.
+- **hook이 실패해도 request 결과는 바뀌지 않는다.** 실패는 다른 callback 실패와 같이 다룬다(§7).
+- hook과 context의 이름은 언어 문서가 소유한다.
 
 ## 6. 연결 생명주기
 
@@ -519,7 +524,6 @@ await connector.Close.Async(cancellationToken);    // callback 밖에서는 공�
 | 압축 | Lz4(§8) |
 | 송신·수신 payload 한도 | 각 64KB(§4.7) |
 | TLS 인증서 검증 | 켜짐 — 검증 생략 option의 기본값은 꺼짐이며 테스트의 자체 서명 인증서에만 사용한다 |
-| diagnostics level | `Errors`(§13) |
 
 ### 6.2 종료 사유
 
@@ -556,8 +560,8 @@ disconnect 이벤트가 사유를 인자로 함께 전달하는 것은 이 읽�
 구성 실수와 연결 실패를 구분하지 못한다.
 
 - endpoint와 transport의 정합(§3.1), connect·request·wait timeout, heartbeat interval과 timeout,
-  reconnect 지연·backoff 계수·최대 시도, 송신·수신 payload 한도, codec과 압축 설정, dispatch mode,
-  diagnostics level을 **모두 확인한다.** §6.1의 기본값을 적용한 뒤의 값을 검증한다.
+  reconnect 지연·backoff 계수·최대 시도, 송신·수신 payload 한도, codec과 압축 설정, dispatch mode를
+  **모두 확인한다.** §6.1의 기본값을 적용한 뒤의 값을 검증한다.
 - **검증 지점은 그 언어가 실패를 알릴 수 있는 가장 이른 곳이다.** 실패를 돌려줄 통로가 있는
   언어는 connector를 만들 때 검증하고, 생성 표면에 그 통로가 없는 언어는 연결을 시도할 때
   검증한다. 어느 쪽이든 **연결이 이뤄지기 전에** 거부한다.
@@ -731,8 +735,7 @@ connector는 **테스트에서 push를 관측하는 대기 표면**을 공개 AP
 
 수신 메시지 큐(§10)를 관측해야만 판정할 수 있는 것. connector 인스턴스의 메서드다.
 
-아래 표면은 packet 이름을 **호출자가 명시하는 길과 payload type에서 결정하는 길을 함께**
-제공한다. 둘 중 하나만 두지 않는다. 정확한 인자와 overload, 완료 종결자
+아래 표면은 packet 이름의 두 형태를 모두 둔다(§5). 정확한 인자와 overload, 완료 종결자
 (`.Async`/`.submit`/`.run`)는 각 언어 문서가 소유하며, 나머지 조건은 builder 체이닝으로 좁힌다.
 
 | 표면 | 계약 | 실패 |
@@ -828,44 +831,9 @@ Unity WebGL UPM package는 새 wire runtime을 만들지 않는다. npm package 
 | **Actor handle** | **`actors`가 호출 시점의 read-only snapshot이고 닫힌 handle에서도 `actor_id`를 읽는다. 목록과 조회가 bound·unbound에 따라 먼저 갱신되고, bound callback이 그 Actor의 첫 packet callback보다 먼저 실행되며, 연결이 끊기면 발급 순서대로 handle을 닫고 unbound callback을 disconnect callback보다 먼저 실행한다(§5.6, §7)** |
 | **Actor handle 송수신** | **handle의 send·request가 그 slot을 싣고, handle 수신 등록이 그 Actor의 message만 받는다. 닫힌 handle의 send·request는 `ValidationFailed`이고, 열린 handle은 connector 수준 builder와 같은 timeout·cancellation·backpressure 결과를 낸다(§5.6)** |
 | **Actor 언어 투영** | **.NET typed 확장, Java named typed overload, C++ template과 subscription, TypeScript Disposable, Unity WebGL JSON 경계 왕복을 public 표면으로 관찰한다(§5.6, 언어 문서)** |
-| **flow 노출과 전파** | **수신 message가 flow 식별자와 출처를 노출하고, ambient 문맥이 없는 런타임은 명시 전달 수단을 제공한다(§5.5)** |
+| **flow 비전송** | **outbound frame에 flow 필드와 flag `0x10`이 없고, inbound flow 필드는 구조 검사 뒤 버려지며, one-way `Send`에 correlation id가 없다(§5.5)** |
+| **요청 hook** | **request sending hook이 connector·Actor handle request 모두에서 전송 직전에 등록 순서로 실행되고 추가한 metadata가 frame에 실리며, reply received hook이 성공·실패·timeout·연결 종료마다 한 번 실행되고 결과를 바꾸지 못하며, hook 실패가 request 결과를 바꾸지 않는다(§5.7)** |
+| **이름 두 형태** | **수신 등록·send·request는 connector·Actor handle 수준에서, 대기 표면은 connector 수준에서 이름 명시 형태와 타입 형태를 모두 제공하고 같은 packet 이름에 닿는다(§5)** |
 | **handler와 종료** | **push·error·끊김·연결 상태·Actor bound·Actor unbound handler와 request callback 모두 등록 순서·callback 실패·완료를 기다리지 않는 규칙을 따르며, 끝나지 않는 handler가 있어도 connector가 그 완료를 기다리지 않는다. `close`는 연결 상태 handler와 끊김 handler를 실행한 뒤 돌아온다. 재연결 소진과 transport 오류로 끊길 때도 같은 순서로 실행하고 기다리지 않는다(§7)** |
 | **종료 사유 읽기** | **끊긴 뒤 이벤트를 받지 않은 코드도 같은 값을 읽는다. 첫 connect 실패에도 사유가 남고, 재연결해도 지워지지 않는다(§6.2)** |
-| diagnostics level | `Off` outbound frame에 flow 필드·flag(0x10) 부재, inbound flow 값 검증 생략, `Errors` 기본값에서 현행 wire 유지, one-way `Send`의 correlation id 부재(§13) |
 
-## 13. Diagnostics level
-
-Connector는 생성 시점 option으로 diagnostics level을 받는다. 값과 의미는
-[Message flow tracing §4](../server/06-observability/03-message-flow-tracing.ko.md#4-기록-범위-설정--level과-sampling)의
-네 값 `Off`·`Errors`·`Normal`·`Detailed`를 그대로 사용하며 **기본값은 `Errors`다.**
-Connector는 [Flow correlation §4](../server/06-observability/04-flow-correlation.ko.md#4-flow를-만드는-시점)가
-말하는 client connector 규칙의 적용 대상이므로, 실행 중 level 변경도
-[Message flow tracing §4.1](../server/06-observability/03-message-flow-tracing.ko.md#5-실행-중-기록-수준-변경과-비용-규칙)을
-그대로 따른다. Application은 connector를 다시 만들지 않고 level을 읽고 바꿀 수 있으며,
-변경은 그 뒤의 처리 지점부터 적용한다. 이미 만들어진 frame에는 소급 적용하지 않는다.
-각 처리 지점은 현재 level을 한 번 읽어 그 값으로 판단한다.
-
-**level을 읽는 표면과 바꾸는 동기 표면을 제공한다.** level 변경은 값 하나를 바꾸는 작업이므로
-호출자가 기다릴 완료가 없다. 비동기 완료가 그 언어의 관용이면 같은 의미의 비동기 짝을 함께
-둔다 — 두 표면은 같은 값을 바꾸며, 비동기 짝이 동기 표면을 대신하지 않는다. 동기 표면을 비동기
-짝 위의 blocking 호출로 구현하면 receive callback 안에서 그 호출이 자기 완료를 기다리게 되므로,
-동기 표면은 기다리지 않고 값을 바꾼다. 두 표면의 이름은 언어 문서가 소유한다.
-
-`Off`가 아니면 connector는 기존과 같이 outbound frame에 `flow_id`·`flow_origin`을
-생성·부착하고(§4.2, flag `0x10`), inbound frame의 flow 필드를 검증해 수신 message에
-전달한다.
-
-`Off`이면 [Flow correlation §4](../server/06-observability/04-flow-correlation.ko.md#4-flow를-만드는-시점)의
-client connector 규칙을 그대로 적용한다.
-
-- Outbound frame에 `flow_id`·`flow_origin`을 만들지 않고 부착하지 않는다(flag `0x10`을
-  세우지 않는다).
-- Inbound frame의 flow 필드는 **구조 길이 검사만 유지**하고 값 검증(UUIDv7·origin 범위)과
-  수신 message로의 전달을 생략한다.
-- Flow 생성·검증·전파 등 관측 전용 작업을 하지 않는다.
-
-Diagnostics level은 protocol 정보에 영향을 주지 않는다. Request의 correlation id는
-`Off`에서도 만들고 보존한다. 반대로 **one-way `Send`는 어느 level에서도 correlation id를
-만들지 않는다** — [Flow correlation §2](../server/06-observability/04-flow-correlation.ko.md#2-두-식별자의-역할)의
-"reply가 없는 one-way message에는 `correlation_id`를 만들지 않는다"가 connector에도 그대로
-적용된다(flag `0x08` 미설정).

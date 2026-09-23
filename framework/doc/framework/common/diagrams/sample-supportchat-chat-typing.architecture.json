@@ -16,7 +16,7 @@
     { "id": "A", "type": "frontend", "label": "Agent Client" }
   ],
   "messages": [
-    { "from": "A", "to": "S", "y": 160, "label": "SendChatMessageReq(metadata ConversationId)", "variant": "default" },
+    { "from": "A", "to": "S", "y": 160, "label": "SendChatMessageReq(room Actor slot)", "variant": "default" },
     { "from": "S", "to": "P", "y": 208, "label": "SendChatMessageReq", "variant": "default" },
     { "from": "P", "to": "S", "y": 256, "label": "SendChatMessageRes(MessageSeq=1)", "variant": "return" },
     { "from": "S", "to": "A", "y": 304, "label": "SendChatMessageRes(MessageSeq=1)", "variant": "return" },

@@ -1253,7 +1253,7 @@ std::shared_ptr<service::spot_t> detail::spot_node_runtime_t::attach_native_spot
     }
 
     for (const auto &handler : plan.handlers) {
-        if (handler.kind == spot_handler_kind_t::subscription && !handler.topic.empty ()) {
+        if (handler.kind == spot_handler_kind_t::subscription) {
             /* The node creates its subscription receiver lazily on the first
                subscription, and that creation waits a bounded time for the
                inproc attachment pipe. Under congestion the wait can expire, and
@@ -3879,6 +3879,12 @@ spot_handler_registry_t &spot_handler_registry_t::add_handler_erased (spot_handl
                                                                       std::type_index reply_type,
                                                                       invoker_t invoker)
 {
+    if (kind == spot_handler_kind_t::subscription && topic.empty ()) {
+        throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                     "SPOT subscription handler topic is required for '"
+                                       + std::string (handler_type.name ()) + "' (packet '"
+                                       + packet_name + "')");
+    }
     const auto duplicate =
       std::any_of (_state->handlers.begin (), _state->handlers.end (),
                    [&] (const spot_handler_descriptor_t &descriptor) {
@@ -3895,7 +3901,7 @@ spot_handler_registry_t &spot_handler_registry_t::add_handler_erased (spot_handl
                                                           payload_type, actor_type, reply_type});
     _state->handler_invokers.push_back (std::move (invoker));
     const auto &descriptor = _state->handlers.back ();
-    if (descriptor.kind == spot_handler_kind_t::subscription && !descriptor.topic.empty ()) {
+    if (descriptor.kind == spot_handler_kind_t::subscription) {
         const auto topic = descriptor.topic;
         const auto subscription =
           _state->node
@@ -12035,7 +12041,8 @@ spot_node_runtime_t::dispatch_instance_activation (const spot_id_t &spot_id,
      * creates a new inbound flow only when the source did not carry one. */
     const auto diagnostics_mode = detail::message_flow_tracer_t (_state->dispatch).mode ();
     auto flow_scope = runtime::flow_context_t::enter (std::move (flow_id), flow_origin,
-                                                      diagnostics_mode, flow_origin_t::inbound);
+                                                      diagnostics_mode, flow_origin_t::inbound,
+                                                      std::nullopt);
     auto context = find_context (spot_id);
     const auto context_state = context ? context->_state : nullptr;
     const auto materialized =
@@ -13451,9 +13458,12 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
          * the envelope has been decoded. Re-enter the wire flow here so the
          * remote Spot handler observes the same flow as the originating
          * STREAM/session request. */
+        const auto flow_mode = detail::message_flow_tracer_t (_state->dispatch).mode ();
         auto flow_scope = runtime::flow_context_t::enter (
-          header.value ().flow_id, header.value ().flow_origin,
-          detail::message_flow_tracer_t (_state->dispatch).mode (), flow_origin_t::inbound);
+          header.value ().flow_id, header.value ().flow_origin, flow_mode, flow_origin_t::inbound,
+          flow_mode != message_flow_log_mode_t::off && record.source_session_rid
+            ? std::optional<std::string> (record.source_session_rid->to_hex ())
+            : std::nullopt);
 
         auto &actor_gateway = services.get_required<actor_gateway_runtime_t> ();
         spot_route_internal_dispatcher_t dispatcher (*this, actor_gateway, *route_client,
@@ -14454,7 +14464,8 @@ spot_node_runtime_t::dispatch_subscription (const spot_context_t &context,
     }
     const auto diagnostics_mode = detail::message_flow_tracer_t (_state->dispatch).mode ();
     auto flow_scope = runtime::flow_context_t::enter (std::move (flow_id), flow_origin,
-                                                      diagnostics_mode, flow_origin_t::inbound);
+                                                      diagnostics_mode, flow_origin_t::inbound,
+                                                      std::nullopt);
     const auto &message = body;
     bool handler_found = false;
     for (const auto &descriptor : context._state->handlers) {

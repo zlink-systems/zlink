@@ -104,7 +104,7 @@ framework가 발급한 `RoomId`와 Play endpoint 목록을 응답한다.
 응답의 Play endpoint는 client가 접속할 곳이지 room의 owner가 아니다. Api는 어느 Play에 room을
 만들지 정하지 않으며, 만들어진 위치는 Location Store에 기록된다. User Spot 생성은
 [Spot](21-spot.ko.md#4-호출하는-쪽--spot을-호출하는-node)이, 생성 시점과 callback은
-[활성화와 수명](34-activation-lifetime.ko.md#4-user-spot--application이-만드는-자리)이 다룬다.
+[활성화와 수명](34-activation-lifetime.ko.md#4-user-spot--application이-만드는-spot)이 다룬다.
 
 ## 5. 인증과 bind — Play가 session도 소유한다
 
@@ -258,7 +258,7 @@ Actor는 Entry Spot으로 돌아가고, Entry Spot의 joined callback이 표시�
 
 끊김 통지는 [Session 묶음의 동작 원리](39-session-binding.ko.md#3-연결이-끊길-때의-통지)가,
 Entry Spot으로 돌아가는 순서와 destroy는
-[활성화와 수명](34-activation-lifetime.ko.md#3-entry-spot--framework가-만드는-자리)이 다룬다.
+[활성화와 수명](34-activation-lifetime.ko.md#3-entry-spot--framework가-만드는-spot)이 다룬다.
 
 ## 10. 실행과 검증
 

@@ -603,9 +603,54 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                         decoded.Name,
                         CorrelationId: decoded.CorrelationId
                     )
+                    {
+                        StreamSessionId = Stream.SessionId,
+                    }
                 );
 
             var dispatch = _context.EnterDispatch(decoded);
+            if (dispatch is null)
+            {
+                if (decoded.RequestSeq.HasValue)
+                {
+                    var error = new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.InvalidOperation,
+                        "STREAM packet Actor slot is not a current binding."
+                    );
+                    if (_flow.CaptureEnabled)
+                        _flow.TraceDispatchError(
+                            new ZLinkDispatchFailure(
+                                ZLinkDispatchErrorSurface.StreamSession,
+                                ZLinkDispatchMessageKind.Request,
+                                ZLinkDispatchErrorReason.StaleTarget,
+                                ZLinkDispatchErrorAction.ReplyError,
+                                decoded.Name,
+                                CorrelationId: decoded.CorrelationId,
+                                Exception: error
+                            )
+                        );
+                    try
+                    {
+                        await _context
+                            .ReplyErrorAsync(decoded, error, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception replyException) when (IsClosedReplyFailure(replyException)) { }
+                }
+                else if (_flow.Enabled(ZLinkMessageFlowOutcome.Dropped))
+                    _flow.Trace(
+                        new ZLinkMessageFlowEvent(
+                            ZLinkMessageFlowOutcome.Dropped,
+                            ZLinkDispatchErrorSurface.StreamSession,
+                            ZLinkDispatchMessageKind.Send,
+                            decoded.Name,
+                            CorrelationId: decoded.CorrelationId,
+                            Result: ZLinkMessageFlowResult.Dropped,
+                            Reason: ZLinkMessageFlowReason.StaleTarget
+                        )
+                    );
+                return;
+            }
             try
             {
                 var decodedPayload = ZLinkStreamPacketPayloadCodec.DecodeMessage(
@@ -632,6 +677,9 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                             decoded.Name,
                             CorrelationId: decoded.CorrelationId
                         )
+                        {
+                            StreamSessionId = Stream.SessionId,
+                        }
                     );
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }

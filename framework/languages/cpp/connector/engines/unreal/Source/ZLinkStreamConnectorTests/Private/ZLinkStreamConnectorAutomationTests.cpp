@@ -22,8 +22,26 @@ bool FZLinkStreamConnectorLifecycleTest::RunTest (const FString &)
     Connector->Dispatch ();
     TestFalse (TEXT ("unreachable endpoint is not connected"), Connector->IsConnected ());
 
+    int SendingCalls = 0;
+    int ReplyCalls = 0;
+    auto Sending =
+      Connector->OnRequestSending ([&SendingCalls] (FZLinkStreamRequestSendingContext &Context) {
+          ++SendingCalls;
+          Context.SetMetadata (TEXT ("unreal-hook"), TEXT ("yes"));
+      });
+    auto Reply =
+      Connector->OnReplyReceived ([&ReplyCalls] (const FZLinkStreamReplyReceivedContext &Context) {
+          if (!Context.bSucceeded && Context.bHasError) {
+              ++ReplyCalls;
+          }
+      });
+
     Connector->SendJson (TEXT ("chat.send"), TEXT ("{\"text\":\"hello\"}"));
-    Connector->RequestJson (TEXT ("chat.request"), TEXT ("{\"text\":\"hello\"}"), 0.01f);
+    FZLinkStreamRequestDelegate OnCompleted;
+    Connector->RequestJson (TEXT ("chat.request"), TEXT ("{\"text\":\"hello\"}"), 0.01f,
+                            OnCompleted);
+    TestEqual (TEXT ("sending hook runs in request call"), SendingCalls, 1);
+    TestEqual (TEXT ("reply hook waits for dispatch"), ReplyCalls, 0);
     Connector->Dispatch ();
 
     Connector->ShutdownForPie ();

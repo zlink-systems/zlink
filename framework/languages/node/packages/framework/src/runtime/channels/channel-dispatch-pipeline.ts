@@ -110,7 +110,8 @@ export class ZLinkChannelDispatchPipeline {
       const flow = createInboundFlow(
         dispatch.fields.flowId,
         dispatch.fields.flowOrigin,
-        this.options.dispatchErrors.flow.flowCreationEnabled()
+        this.options.dispatchErrors.flow.flowCreationEnabled(),
+        undefined
       );
       const invocation = await runWithFlow(flow, () =>
         this.invoke(
@@ -161,7 +162,8 @@ export class ZLinkChannelDispatchPipeline {
       const flow = createInboundFlow(
         dispatch.fields.flowId,
         dispatch.fields.flowOrigin,
-        this.options.dispatchErrors.flow.flowCreationEnabled()
+        this.options.dispatchErrors.flow.flowCreationEnabled(),
+        undefined
       );
       const invocation = await runWithFlow(flow, () =>
         this.invoke(

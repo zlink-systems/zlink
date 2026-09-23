@@ -3,13 +3,11 @@ package systems.zlink.samples.supportchat.server.support.handlers;
 import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.actors.ActorRefSnapshot;
-import systems.zlink.framework.actors.ZLinkActorClient;
 import systems.zlink.framework.actors.ZLinkActorCreateResult;
 import systems.zlink.framework.actors.ZLinkActorManager;
 import systems.zlink.framework.channels.ZLinkRequestHandler;
 import systems.zlink.framework.handlers.ZLinkHandlerGroup;
 import systems.zlink.samples.supportchat.server.configuration.SampleNames;
-import systems.zlink.samples.supportchat.server.configuration.SampleTimings;
 import systems.zlink.samples.supportchat.shared.contracts.Messages;
 
 import java.util.concurrent.CompletionStage;
@@ -18,11 +16,9 @@ import java.util.concurrent.CompletionStage;
 public final class EnsureAgentConversationHandler
         implements ZLinkRequestHandler<
                 Messages.EnsureAgentConversationReq, Messages.EnsureAgentConversationRes> {
-    private final ZLinkActorClient actorClient;
     private final ZLinkActorManager actors;
 
-    public EnsureAgentConversationHandler(ZLinkActorClient actorClient, ZLinkActorManager actors) {
-        this.actorClient = actorClient;
+    public EnsureAgentConversationHandler(ZLinkActorManager actors) {
         this.actors = actors;
     }
 
@@ -35,8 +31,8 @@ public final class EnsureAgentConversationHandler
                         existing -> {
                             if (existing.isPresent()) {
                                 ActorRef actorRef = existing.orElseThrow();
-                                return refresh(actorRef)
-                                        .thenApply(joined -> response(actorRef, joined));
+                                return java.util.concurrent.CompletableFuture.completedFuture(
+                                        response(actorRef));
                             }
                             Messages.EnsureSupportUserActorReq create =
                                     new Messages.EnsureSupportUserActorReq(
@@ -48,26 +44,7 @@ public final class EnsureAgentConversationHandler
                                             conversationActorId, SampleNames.SupportActorType)
                                     .request(create)
                                     .submit()
-                                    .thenCompose(
-                                            result -> {
-                                                ActorRef actorRef = actorRef(result);
-                                                return actorClient
-                                                        .requestToActor(
-                                                                actorRef.actorId(),
-                                                                new Messages.JoinConversationReq(
-                                                                        request.rosterActorId(),
-                                                                        SampleNames.Roles.Agent,
-                                                                        request.displayName()))
-                                                        .metadata(
-                                                                SampleNames
-                                                                        .ConversationIdMetadataKey,
-                                                                request.conversationId())
-                                                        .timeout(SampleTimings.RequestTimeout)
-                                                        .submit(Messages.JoinConversationRes.class)
-                                                        .thenApply(
-                                                                joined ->
-                                                                        response(actorRef, joined));
-                                            });
+                                    .thenApply(result -> response(actorRef(result)));
                         });
     }
 
@@ -81,16 +58,7 @@ public final class EnsureAgentConversationHandler
         throw new IllegalStateException("Agent conversation actor creation was rejected");
     }
 
-    private CompletionStage<Messages.JoinConversationRes> refresh(ActorRef actorRef) {
-        return actorClient
-                .requestToActor(actorRef.actorId(), new Messages.JoinConversationReq())
-                .timeout(SampleTimings.RequestTimeout)
-                .submit(Messages.JoinConversationRes.class);
-    }
-
-    private static Messages.EnsureAgentConversationRes response(
-            ActorRef actorRef, Messages.JoinConversationRes joined) {
-        return new Messages.EnsureAgentConversationRes(
-                ActorRefSnapshot.from(actorRef), joined.scheduled(), joined.state());
+    private static Messages.EnsureAgentConversationRes response(ActorRef actorRef) {
+        return new Messages.EnsureAgentConversationRes(ActorRefSnapshot.from(actorRef));
     }
 }

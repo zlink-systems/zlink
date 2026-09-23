@@ -20,99 +20,131 @@ View in another language — [C++](../../../cpp/guide/server/38-stream-boundary.
 
 !!! info "What you get from this chapter"
 
-    You can tell when a stream node registration is refused, where an error goes, and how one
-    reply is matched to its request.
+    You can follow the order in which a packet on one connection reaches the session callback, what
+    happens when processing falls behind, how a reply is matched to its request, and where errors and
+    connection close go.
 
 [STREAM](23-stream.en.md) went as far as accepting a connection and answering one packet. This
-chapter covers what the framework settles at that boundary — the conditions refused at startup, where
-errors belong, how long a reply token lives, and the execution mode the connecting side picks.
+chapter walks through what the framework does in between, in order.
 
-## 1. Conditions Refused Before Startup
+## 1. The Order One Connection Goes Through
 
-Registration is decided by the node name, the bind endpoint and the session type. **The
-bind endpoint must be given.** There is no surface that registers a stream node
-automatically from a marker on a declaration.
+<iframe class="zlink-diagram" src="/common/diagrams/38-stream-dispatch-en.html" title="What one connection passes through" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/38-stream-dispatch-en.html" target="_blank">↗ View larger</a></p>
 
-The following conditions are not deferred to the first connection; they fail as configuration
-errors **before the host starts**.
+When a client connects, the framework creates that connection's session and runs the connected
+callback. After that, one packet is handled in this order.
+
+1. The framework secures one slot in the host's processing queue.
+2. Only after securing the slot does it take one packet from Core.
+3. It decodes the header and puts the packet name, metadata, request information, and **the packet's
+   Actor** into the dispatch context. The packet's Actor is present only when the client sent through
+   an Actor handle and that slot is a current binding — [How Session Binding Works](39-session-binding.en.md) covers this.
+4. It passes the dispatch context and the not-yet-converted payload to the session callback. Inside
+   the session callback, the payload is read as the type you want through the common decode surface.
+
+When the connection drops, the framework runs the disconnected callback. What identifies a
+connection is the routing ID that Core attaches to each connection, and it reaches the session
+callback unchanged.
+
+## 2. When Processing Falls Behind — Order and Backpressure
+
+### 2.1 Client → Server
+
+**While the processing queue is full, complete packets aren't dropped but stay in Core, and once
+processing resumes they reach the session callback once each, in per-connection order.** A packet with
+bad or incomplete framing isn't passed to the callback; the connection is closed.
+
+When the processing queue has no free slot, the framework doesn't take the next packet. A packet not
+taken stays in Core's receive buffer, and when that buffer reaches its limit (HWM), Core stops reading
+from that connection's socket. TCP flow control then fills the send buffer of the client's socket and
+the client's sends slow down. When a slot frees up, the held packets flow again in order. The queue
+slots are shared by the whole host, so this applies to every connection on the host, not just one.
+Limits and state transitions are covered in [Backpressure](33-backpressure.en.md).
+
+### 2.2 Server → Client
+
+Replies and pushes the server sends to a session queue up in Core's send buffer **per connection**.
+When the server sends faster than that connection actually drains and the buffer reaches its limit
+(HWM), a send to that connection waits until space frees up. Sends to other connections aren't
+affected. If the deadline passes while waiting, the send ends with `DeadlineExceeded`, and the
+framework doesn't resend the same content.
+
+The client connector uses the runtime's own socket and keeps reading whatever arrives without a limit,
+so slow processing in the client application doesn't hold back the server's sends. Pushes (`Send`)
+pile up in the client's unbounded receive queue, while replies and error replies skip that queue and
+complete the waiting request. The server's send waits when the network is slow or the client
+can't read its socket. The receive size limit (§4) doesn't apply in this direction.
+
+## 3. The Lifetime of a Reply Token
+
+To answer a request you use the current dispatch's **single-use reply token**. The token is valid only
+for the current request and can be submitted once. Even if sending fails through a timeout or
+cancellation, the same token can't be used again.
+
+A reply carries the request's sequence back unchanged, and the client uses that sequence to find the
+request it was waiting on. A reply carries no packet name. The type the reply is read as is the type the client named when it made
+the request. An error reply comes back under the same sequence.
+
+When the server sends first to a client that has no pending request, it uses a send (push), not a
+reply.
+
+## 4. Size Limit on Received Messages
+
+The limit for one message a client sends (header plus payload, excluding the 6-byte length prefix) is
+64 KiB by default. It doesn't apply
+to messages the server sends. A message over the limit reaches the session callback not even in part;
+the server records `EMSGSIZE` and closes the connection. The client receives no error code and sees
+only the connection close. Setting it to `0` removes the framework limit.
+
+## 5. Where Errors Go
+
+**The session error callback receives only transport errors that belong to that session.** Everything
+else goes elsewhere.
+
+| Error | Where it goes |
+| --- | --- |
+| A transport error of that session | The session error callback |
+| Handshake failure | Runtime observation. There's no session yet to call |
+| Socket- or node-level error | Runtime observation. It can't be pinned to one session |
+| Application handler exception | The handler exception path |
+
+## 6. When a Connection Closes
+
+Once a connection starts closing, the framework accepts no new packets on it, completes or cancels
+the reads and writes in progress, and then releases the TCP, TLS, or WebSocket resources. A transport
+completion that arrives late after that doesn't touch released resources. What happens to the Actors
+bound to that connection is covered in
+[How Session Binding Works](39-session-binding.en.md#3-notification-when-the-connection-drops).
+
+## 7. Settings Refused Before Startup
+
+A stream node registration is defined by the node name, the bind endpoint, and the session type. The
+following setting errors aren't deferred to the first connection; they are refused **before the host
+starts**.
 
 | Condition |
 | --- |
 | The node name is empty |
 | The same node name was registered twice |
 | There is no bind endpoint |
-| The same session type was registered twice |
+| The same session type was registered on more than one node of a host |
 | More than one session was registered on one node |
 | TLS is on but the certificate path is empty |
 | TLS is on but the key path is empty |
-| A client certificate is required without a TLS server configured |
+| A client certificate is required without configuring a TLS server |
+| The message size limit is negative |
 
-With TLS on, the certificate and the key path are given together. Requiring a client certificate is
-off by default; with it on, a connection that fails verification is refused **before a session is
+When you turn TLS on, set the certificate and key paths together. Requiring a client certificate is
+off by default; when on, a connection that fails verification is refused **before a session is
 created**.
 
-## 2. Where an Error Goes
-
-<iframe class="zlink-diagram" src="/common/diagrams/38-stream-dispatch-en.html" title="What one connection passes through" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/38-stream-dispatch-en.html" target="_blank">↗ View larger</a></p>
-
-**The session error callback receives only transport errors that belong to that session.** The
-rest take the paths below.
-
-| Error | Where it goes |
-| --- | --- |
-| A transport error on that session | The session error callback |
-| A handshake failure | Runtime observation. There is no session yet to call |
-| A socket-level or node-level error | Runtime observation. It cannot be pinned to one session |
-| An application handler exception | The handler exception path. **Not the session error callback** |
-
-**Handler filters do not apply to session dispatch.** A filter registered for another dispatch does
-not run ahead of a session callback —
-[Handlers and Message Processing](31-handler-dispatch.en.md#2-filters--collecting-shared-processing-in-one-place)
-covers the scope of filters. Work that must be screened on the session path, such as
-authentication, is handled by the session's own handler registration.
-
-**There is no surface that runs a receive loop directly.** The framework queues the packet and then
-runs the session callback, applying dispatch, injection and logging consistently at that boundary.
-The design removes the loop, the cancellation and the backpressure from the application's code —
-[Backpressure](33-backpressure.en.md) covers what comes after.
-
-## 3. The Lifetime of a Reply Token
-
-Answering a request uses the **one-shot reply token** of the current dispatch. That token is valid
-only for the current request and can be submitted once. It cannot be reused even when the send
-fails through a timeout or a cancellation.
-
-**A reply carries no packet name.** The connecting side finds the pending request by the request
-sequence alone, and the type to read the reply as is decided by **the type named at the call**.
-Since nothing is selected by name, there is no surface for putting a packet name on a reply. An
-error reply comes back on the same sequence.
-
-Sending to a peer that has no pending request uses a send rather than a reply.
-
-## 4. The Execution Mode the Connecting Side Picks
-
-The immediate mode runs callbacks on the connector's worker, which suits a client with no fixed
-execution site. A client with a fixed site, such as a game loop or a UI thread, picks the manual
-mode and drains what has queued up inside its own loop, at the moment the application calls for
-it.
-
-### 4.1 Turning Off the Observation Cost
-
-The connector takes the same diagnostics-level option as the server runtime. The default keeps
-errors only; lowering it to the bottom level stops the connector creating or attaching a flow
-identifier on outbound frames, so the observation-only cost disappears.
-
-The value that matches a request to its reply is protocol information rather than diagnostics, so it
-keeps working at the bottom level.
-
-## 5. Related Documents
+## 8. Related Documents
 
 - From accepting a connection to answering — [STREAM](23-stream.en.md)
-- Binding one connection to an Actor — [Session and Actor](24-actor-session.en.md)
-- The rules of that binding — [How Session Binding Works](39-session-binding.en.md)
-- The scope filters apply to — [Handlers and Message Processing](31-handler-dispatch.en.md)
-- The package a client installs — [Installation](../../../install.en.md)
+- Binding one connection to an Actor — [Session and Actor Connection](24-actor-session.en.md)
+- Binding rules and telling packets apart by Actor — [How Session Binding Works](39-session-binding.en.md)
+- The processing queue and its limits — [Backpressure](33-backpressure.en.md)
 
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();

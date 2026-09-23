@@ -5115,11 +5115,11 @@
         </g>
         </g>
 
-        <g data-edge-from="C" data-edge-to="S" data-edge-label="JoinConversationReq(metadata ConversationId)" data-edge-key="9">
+        <g data-edge-from="C" data-edge-to="S" data-edge-label="JoinConversationReq(conversationId)" data-edge-key="9">
           <path data-composition-edge-from="C" data-composition-edge-to="S" data-composition-points="154,592;349.33333333333337,592" d="M 154 592 L 349.33333333333337 592" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <g data-detail="context">
           <rect x="131.26666666666668" y="572" width="240.8" height="16" rx="3" class="c-mask"/>
-          <text x="251.66666666666669" y="582" class="t-backend" font-size="9" text-anchor="middle">JoinConversationReq(metadata ConversationId)</text>
+          <text x="251.66666666666669" y="582" class="t-backend" font-size="9" text-anchor="middle">JoinConversationReq(conversationId)</text>
         </g>
         </g>
 
@@ -5404,7 +5404,7 @@
         </div>
         <ul>
           <li>&bull; Reconnecting doesn&#39;t recreate the actor or the Conversation state — it returns the current state with scheduled=false. The Agent re-binds the roster actor, sends SetAgentAvailableReq(true), and then sends JoinConversationReq for each conversation that was open.</li>
-          <li>&bull; Session relays to the agent&#39;s conversation actor when the metadata ConversationId is found in the agent conversation-actor map, and relays a customer map miss to the customer identity actor.</li>
+          <li>&bull; Session handles JoinConversationReq as a binding packet. For other packets, it relays to the Actor bound in the dispatch context when the Actor slot is present, or to the connection&#39;s identity Actor when absent. The agent finds each room&#39;s Actor handle again from JoinConversationRes.actorId after rejoin.</li>
           <li>&bull; When preparation and reconnect assertions across several processes take longer than the idle deadline, the runner may send a normal typed SendChatMessageReq to renew valid application traffic — this is not a heartbeat or keepalive, and a control packet, sleep, or log line must not replace it. The actual idle and grace behavior is checked with a separate bounded wait.</li>
         </ul>
       </div>

@@ -1,12 +1,9 @@
 using System;
-using System.Threading;
 
 namespace Systems.Zlink.Stream.Connector.Contracts
 {
     public sealed class ZlinkStreamConnectorOptions
     {
-        private int _diagnosticsLevel = (int)ZlinkStreamDiagnosticsLevel.Errors;
-
         /// <summary>
         ///     The STREAM endpoint. WebGL accepts <c>ws://</c> and <c>wss://</c> only;
         ///     <c>tcp://</c> and <c>tls://</c> fail with
@@ -28,9 +25,11 @@ namespace Systems.Zlink.Stream.Connector.Contracts
 
         public TimeSpan WaitTimeout { get; init; } = TimeSpan.FromSeconds(5);
 
-        public ZlinkStreamHeartbeatOptions Heartbeat { get; init; } = new ZlinkStreamHeartbeatOptions();
+        public ZlinkStreamHeartbeatOptions Heartbeat { get; init; } =
+            new ZlinkStreamHeartbeatOptions();
 
-        public ZlinkStreamReconnectOptions Reconnect { get; init; } = new ZlinkStreamReconnectOptions();
+        public ZlinkStreamReconnectOptions Reconnect { get; init; } =
+            new ZlinkStreamReconnectOptions();
 
         public int MaxSendPayloadSize { get; init; } = 64 * 1024;
 
@@ -48,21 +47,6 @@ namespace Systems.Zlink.Stream.Connector.Contracts
         public ZlinkStreamDispatchMode DispatchMode { get; init; } = ZlinkStreamDispatchMode.Manual;
 
         public ZlinkStreamCompression Compression { get; init; } = ZlinkStreamCompression.Lz4;
-
-        /// <summary>
-        ///     Diagnostics level applied for the connector lifetime, default
-        ///     <see cref="ZlinkStreamDiagnosticsLevel.Errors" />.
-        /// </summary>
-        public ZlinkStreamDiagnosticsLevel DiagnosticsLevel
-        {
-            get { return (ZlinkStreamDiagnosticsLevel)Volatile.Read(ref _diagnosticsLevel); }
-            init { _diagnosticsLevel = (int)value; }
-        }
-
-        internal void SetDiagnosticsLevelLive(ZlinkStreamDiagnosticsLevel level)
-        {
-            Volatile.Write(ref _diagnosticsLevel, (int)level);
-        }
 
         /// <summary>
         ///     Not supported on WebGL: the compression codec lives in the JavaScript

@@ -2,21 +2,21 @@ export {
   ZlinkStreamTransport,
   ZlinkStreamCodec,
   ZlinkStreamCompression,
-  ZlinkStreamDiagnosticsLevel,
   ZlinkStreamDispatchMode,
   ZlinkStreamMessageKind,
   ZlinkStreamHeaderFlags,
   ZlinkStreamErrorCode,
   ZlinkStreamConnectionState
 } from './ZlinkStreamEnums';
-export type { ZlinkFlowOrigin, ZlinkStreamCloseReason } from './ZlinkStreamEnums';
+export type { ZlinkStreamCloseReason } from './ZlinkStreamEnums';
 export * from './ZlinkStreamConnectorOptions';
 export * from './ZlinkStreamInterfaces';
 export * from './ZlinkStreamMetadata';
 export type {
   ZlinkStreamEncodedPayload,
-  ZlinkStreamFlow,
   ZlinkStreamMessage,
+  ZlinkStreamRequestSendingContext,
+  ZlinkStreamReplyReceivedContext,
   ZlinkStreamError,
   ZlinkStreamConnectionStateChanged,
   ZlinkStreamResult,

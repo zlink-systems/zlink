@@ -69,7 +69,8 @@ result_t<runtime::messaging::message_parts_t> channel_packet_dispatcher_t::dispa
         }
     }();
     auto flow_scope = runtime::flow_context_t::enter (
-      header.value ().flow_id, header.value ().flow_origin, flow.mode (), flow_origin_t::inbound);
+      header.value ().flow_id, header.value ().flow_origin, flow.mode (), flow_origin_t::inbound,
+      std::nullopt);
     if (inbound_kind != dispatch_message_kind_t::publish) {
         flow.trace (message_flow_outcome_t::received, [&] {
             return message_flow_event_t{message_flow_outcome_t::received,

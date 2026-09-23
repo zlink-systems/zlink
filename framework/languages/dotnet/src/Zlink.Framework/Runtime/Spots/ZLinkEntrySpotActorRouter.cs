@@ -12,7 +12,8 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
         IZLinkActor actor,
         ZlinkStreamHeader header,
         Message body,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        RoutingId? sourceSessionRid
     )
     {
         foreach (var node in state.SpotNodes.Values)
@@ -36,7 +37,7 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
             }
             catch (ZLinkStreamPayloadDecodeException ex)
             {
-                CreateActorFlow(actor, header, ZLinkDispatchMessageKind.ActorSend)
+                CreateActorFlow(actor, header, ZLinkDispatchMessageKind.ActorSend, sourceSessionRid)
                     .PayloadDecodeFailed(
                         _dispatchErrors,
                         ZLinkDispatchErrorAction.Drop,
@@ -58,7 +59,8 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
         Message body,
         bool callerOwnsDispatchTurn,
         bool relocationReplay,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        RoutingId? sourceSessionRid
     )
     {
         foreach (var node in state.SpotNodes.Values)
@@ -71,7 +73,12 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
             )
                 continue;
 
-            var flow = CreateActorFlow(actor, header, ZLinkDispatchMessageKind.ActorRequest);
+            var flow = CreateActorFlow(
+                actor,
+                header,
+                ZLinkDispatchMessageKind.ActorRequest,
+                sourceSessionRid
+            );
             flow.Trace(_dispatchErrors, ZLinkMessageFlowOutcome.Received);
 
             // A caller inside the actor's dispatch turn (the dispatch
@@ -133,7 +140,11 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
                             header.Name,
                             ActorId: actor.Context.ActorId,
                             CorrelationId: header.CorrelationId,
-                            Exception: ex
+                            Exception: ex,
+                            StreamSessionId: _dispatchErrors.Enabled
+                            && sourceSessionRid is { IsEmpty: false } sessionRid
+                                ? sessionRid.ToHex()
+                                : null
                         )
                     );
                 return new EntrySpotActorReplyDispatchResult(true, ZLinkActorReply.FromError(ex));
@@ -146,7 +157,8 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
     private ZLinkDispatchFlowScope CreateActorFlow(
         IZLinkActor actor,
         ZlinkStreamHeader header,
-        ZLinkDispatchMessageKind messageKind
+        ZLinkDispatchMessageKind messageKind,
+        RoutingId? sourceSessionRid
     )
     {
         return new ZLinkDispatchFlowScope(
@@ -155,7 +167,11 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
             messageKind,
             header.Name,
             correlationId: header.CorrelationId,
-            actorId: actor.Context.ActorId
+            actorId: actor.Context.ActorId,
+            streamSessionId: _dispatchErrors.Flow.CaptureEnabled
+            && sourceSessionRid is { IsEmpty: false } sessionRid
+                ? sessionRid.ToHex()
+                : null
         );
     }
 

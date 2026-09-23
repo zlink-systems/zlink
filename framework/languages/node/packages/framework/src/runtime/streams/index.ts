@@ -420,7 +420,7 @@ export class ZLinkStreamBindingRuntime {
     this.routes = new ZLinkActorSessionBindingRegistry<
       DefaultZLinkSessionContext,
       DefaultZLinkSessionActor
-    >(4096, 4096, runtimeOptions.sessionRelocationSealTimeoutMs ?? 3_000);
+    >(4096, 4096, runtimeOptions.sessionRelocationSealTimeoutMs ?? 3_000, runtimeOptions.errorSink);
     this.compressionCodec = resolveStreamCompressionCodec(runtimeOptions.streamCompression);
     this.frameMessages = new ZLinkStreamFrameMessageFactory(runtimeOptions);
     this.boundSessions = new ZLinkBoundSessionService(

@@ -34,7 +34,7 @@ final class ZLinkSpotFlowFrame {
             systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header header) {
         return header.flowId() == null
                 ? null
-                : new ZLinkFlowContext.State(header.flowId(), header.flowOrigin());
+                : new ZLinkFlowContext.State(header.flowId(), header.flowOrigin(), null);
     }
 
     /**
@@ -52,7 +52,7 @@ final class ZLinkSpotFlowFrame {
                             parts.get(0), true);
             return header.flowId() == null
                     ? null
-                    : new ZLinkFlowContext.State(header.flowId(), header.flowOrigin());
+                    : new ZLinkFlowContext.State(header.flowId(), header.flowOrigin(), null);
         }
         //  The legacy encoder placed the flow frame at index 2, or at index 3
         //  when a content-type frame preceded it.
@@ -74,7 +74,10 @@ final class ZLinkSpotFlowFrame {
                 throw invalidFlow("SPOT route flow id must be UUIDv7", null);
             }
             try {
-                return new ZLinkFlowContext.State(fields[1], ZLinkFlowOrigin.valueOf(fields[2]));
+                return new ZLinkFlowContext.State(
+                        fields[1],
+                        ZLinkFlowOrigin.valueOf(fields[2]),
+                        null);
             } catch (IllegalArgumentException invalidOrigin) {
                 throw invalidFlow("SPOT route flow origin is invalid", invalidOrigin);
             }

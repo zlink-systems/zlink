@@ -54,7 +54,7 @@ WaitingForClose를 거쳐 Closed가 된다.
 |---|---|---|
 | 상태 소유 | 한 Conversation의 participant, message sequence, typing과 close 상태는 하나의 Spot turn에서 변경한다. | Sample domain + Spot |
 | multi-room | Agent roster actor와 conversation actor를 분리하고 capacity를 별도로 관리한다. | Application |
-| routing | ConversationId는 stream message metadata로 사용하고 payload에 transport route를 넣지 않는다. | Session application |
+| routing | 방별 packet의 상대 Actor는 packet의 Actor slot이 정한다 — Agent는 방의 Actor handle로 보낸다. ConversationId를 metadata나 payload의 transport route로 쓰지 않는다. | Session application |
 | request 완료 | Chat response는 접수·검증·MessageSeq 확정을 뜻하며 상대방 읽음을 뜻하지 않는다. | Sample contract |
 | typing | typing send의 정상 완료는 source-local admission이며 상대방 수신을 보장하지 않는다. | Framework contract |
 | reconnect | 기존 actor state를 유지하고 새 stream binding을 사용한다. | Framework contract |
@@ -94,7 +94,7 @@ resource 표에 두고, authentication·assignment·typing의 시간 순서는 �
 |---|---:|---|---|
 | Customer Client | scenario별 1 | 인증, 상담 시작, 메시지, typing, close와 reconnect | 내부 actor와 Spot을 직접 선택하지 않는다. |
 | Agent Client | 1 | availability 등록, 여러 방 join, 메시지와 reconnect | 한 session 위에 roster와 방별 actor를 사용한다. |
-| Session | 1 이상 | STREAM, 인증 packet, actor binding과 ConversationId relay | transport 수명과 상담 규칙을 분리한다. |
+| Session | 1 이상 | STREAM, 인증 packet, actor binding과 packet의 상대 Actor로 relay | transport 수명과 상담 규칙을 분리한다. |
 | Api | 1 이상 | token 검증과 Conversation Spot 생성 요청 | client stream을 직접 소유하지 않는다. |
 | Support | 1 이상 | actor factory, Entry Spot, Conversation Spot과 notification adapter | 대화 domain의 실행 owner다. |
 | SupportEntrySpot | Support별 1 | customer·agent actor의 최초 admission과 disconnect lifecycle | roster actor의 availability 수명과 연결한다. |
@@ -118,7 +118,7 @@ Support가 등록하는 identity·roster·conversation Actor factory와 Conversa
 | 새 conversation의 logical address를 만든다. | User Spot manager Create | Framework가 global SpotId를 발급하고 owner를 선택한다. [Framework API](../../spec/server/00-foundation/06-framework-api.ko.md) |
 | actor를 ConversationSpot에 참여시킨다. | public actor join | ActorRef나 owner NodeRid를 application payload로 보내지 않는다. [Spot·Actor membership](../../spec/server/03-spot-actor/05-spot-actor-membership.ko.md) |
 | 대화 상태를 순서대로 변경한다. | Spot turn | domain aggregate의 mutable state를 한 execution gate에서 변경한다. [Async execution policy](../../spec/server/01-execution/README.ko.md) |
-| current ConversationId actor로 relay한다. | session metadata routing | Session이 payload를 domain decode하지 않고 metadata로 bound actor를 고른다. [Session–Actor dispatch](../../spec/server/04-session/02-session-actor-binding.ko.md) |
+| packet의 상대 Actor로 relay한다. | dispatch context의 bound Actor | Session이 payload를 decode하지 않고 packet의 Actor slot으로 정해진 bound Actor에 relay한다. [Session–Actor dispatch](../../spec/server/04-session/02-session-actor-binding.ko.md) |
 | owner 장애를 표현한다. | failure/failover policy | Ready owner 장애는 자동 replacement가 아니다. [Failure policy](../../spec/server/05-location-relocation/06-failure-failover-policy.ko.md#42-기존-actor와-spot) |
 
 Session은 binding token과 current ActorRef를 직접 cache하지 않는다. GetOrCreate 결과의 exact
@@ -128,8 +128,9 @@ ActorRef는 같은 binding operation에만 사용한다. Actor destroy 뒤 같�
 ## 6. Message 계약
 
 SupportChat은 typed JSON codec을 사용한다. 아래 declaration은 언어별 class, record와
-type alias가 공유해야 하는 wire 구조다. Conversation 범위 inbound packet의 ConversationId는
-payload가 아니라 stream metadata에 있다.
+type alias가 공유해야 하는 wire 구조다. 인증과 JoinConversationReq는 Session handler가 직접 받는
+binding packet이다. 그 밖의 packet은 relay한다 — Actor slot이 있으면 그 bound Actor로, 없으면 이
+연결의 identity Actor(Customer identity, Agent roster)로.
 
 ### 6.1 인증과 상담 시작
 
@@ -202,6 +203,7 @@ message SetAgentAvailableRes {
 }
 
 message JoinConversationReq {
+  conversationId: string
   participantId: string
   role: SupportRole
   displayName: string
@@ -209,6 +211,7 @@ message JoinConversationReq {
 
 message JoinConversationRes {
   scheduled: bool
+  actorId: string
   state: ConversationState
 }
 
@@ -239,9 +242,13 @@ message CloseConversationRes {
 }
 ```
 
-JoinConversationReq, SendChatMessageReq, SetTypingMsg와 CloseConversationReq의
-ConversationId는 metadata 필수 값이다. JoinConversationReq의 participantId, role과
-displayName은 actor join에 필요한 값이며, reconnect에서 이미 membership이 있으면
+JoinConversationReq는 Actor slot 없이 연결 수준으로 보낸다. Session handler는 Agent면 `conversationId`로
+그 방의 conversation Actor를 GetOrCreate해 이 연결에 bind하고 그 Actor로, Customer면 identity Actor로
+join을 relay한다. JoinConversationRes의
+`actorId`는 이 연결에서 그 방을 맡는 Actor(Agent는 방별 conversation Actor, Customer는 identity
+Actor)이고, client는 이 값으로 Actor handle을 찾아 그 방의 SendChatMessageReq, SetTypingMsg,
+CloseConversationReq를 보낸다. Actor를 하나만 가진 Customer는 handle 없이 연결 수준으로 보내도
+같은 Actor에 닿는다. participantId, role과 displayName은 actor join에 필요한 값이며, reconnect에서 이미 membership이 있으면
 scheduled=false로 현재 state를 반환한다.
 
 SetTypingMsg는 response가 없는 one-way send다. source-local admission 뒤 target handler와
@@ -369,8 +376,8 @@ deadline을 대신 늘려서는 안 된다. 실제 idle과 grace 동작은 별�
 
 reconnect는 actor와 Conversation state를 새로 만들지 않는다. Agent는 roster actor를 다시
 bind하고 SetAgentAvailableReq(true)를 보낸 뒤 열려 있던 conversation마다 JoinConversationReq를
-보낸다. Session은 metadata ConversationId가 agent conversation actor map에 있으면 그 actor로
-relay하고, customer의 map miss는 customer identity actor로 relay한다.
+보낸다. 재join의 JoinConversationRes.actorId로 방별 Actor handle을 다시 찾으며, Session은 packet의
+Actor slot으로 relay한다.
 
 ## 8. 구현 구조
 
@@ -386,9 +393,9 @@ relay하고, customer의 map miss는 customer identity actor로 relay한다.
 | `Client/Program` | customer·agent connector와 scenario 실행 진입점을 구성한다. | Session binding token과 Support private type을 만들지 않는다. |
 | `Client/CustomerScenario` | 인증, open, message, typing, close와 reconnect assertion을 실행한다. | ConversationSpot과 binding token을 직접 선택하지 않는다. |
 | `Client/AgentScenario` | availability, 여러 conversation join, message와 reconnect assertion을 실행한다. | roster 저장소를 직접 수정하지 않는다. |
-| `Shared/Configuration` | role, Mesh·Channel, timeout과 smoke marker를 고정한다. | session metadata를 wire payload로 복제하지 않는다. |
+| `Shared/Configuration` | role, Mesh·Channel, timeout과 smoke marker를 고정한다. | ActorRef와 binding token을 wire payload로 만들지 않는다. |
 | `Shared/JSON Contracts` | auth, conversation, chat, typing과 notify wire 의미를 소유한다. | 언어별 class·record를 공통 계약으로 삼지 않는다. |
-| `Server/Session/Application` | current binding, metadata routing과 relay 대상을 선택한다. | domain payload와 MessageSeq를 해석하지 않는다. |
+| `Server/Session/Application` | binding packet(인증, join)을 처리하고 나머지를 packet의 상대 Actor로 relay한다. | binding packet 밖의 domain payload와 MessageSeq를 해석하지 않는다. |
 | `Server/Session/Infrastructure` | STREAM, packet handler, actor relay와 push adapter를 연결한다. | conversation state를 소유하지 않는다. |
 | `Server/Api/Application` | token 검증과 Conversation Spot 생성 요청을 조정한다. | session lifecycle과 conversation transition을 관리하지 않는다. |
 | `Server/Api/Infrastructure` | API handler와 Support client를 연결한다. | private route, ActorRef와 owner NodeRid를 payload로 만들지 않는다. |
@@ -397,15 +404,15 @@ relay하고, customer의 map miss는 customer identity actor로 relay한다.
 | `Server/Support/Infrastructure` | Entry Spot, Conversation Spot, actor와 timer adapter를 연결한다. | raw frame과 message별 codec registry를 사용하지 않는다. |
 
 Domain Conversation은 participant, MessageSeq, typing, idle와 close transition을 소유한다.
-AgentAssignmentService는 roster actor의 capacity만 판단한다. Session adapter는 metadata routing과
-binding만 담당하며 domain payload를 해석하지 않는다. ConversationSpot adapter는 timer callback과
+AgentAssignmentService는 roster actor의 capacity만 판단한다. Session adapter는 binding packet과 Actor slot
+relay만 담당하며 그 밖의 domain payload를 해석하지 않는다. ConversationSpot adapter는 timer callback과
 typed request를 domain operation으로 변환하고, notification publisher는 domain event를 bound
 session push로 매핑한다.
 
 언어별 구현은 Session·Api·Support를 하나의 server module로 합치거나, Conversation state를 Session에
 복제하지 않는다. 같은 logical component를 한 파일에 배치할 수는 있지만 package·namespace·module
 이름에서 component와 의존 방향을 찾을 수 있어야 한다. 언어별로 달라질 수 있는 것은 host·DI 구성,
-async 표현과 stream connector wrapper이며, metadata routing, MessageSeq, timer transition과 self-check
+async 표현과 stream connector wrapper이며, Actor 구분, MessageSeq, timer transition과 self-check
 순서는 공통 문서와 같아야 한다.
 
 .NET의 attribute, Java·Kotlin의 annotation과 Node.js의 decorator는 선언형 metadata scan으로
@@ -418,13 +425,14 @@ builder로 같은 handler 집합을 명시 등록한다. 이 차이는 등록 �
 1. Agent와 Customer가 AuthenticateReq/Res를 완료한다.
 2. Agent가 SetAgentAvailableReq(true)와 response를 확인한다.
 3. Customer가 OpenConversationReq를 보내 WaitingForAgent 또는 배정 결과를 확인한다.
-4. Agent가 ConversationAssignedNotify를 받고 JoinConversationReq(metadata ConversationId)를
-   보내 scheduled=true를 확인한다.
+4. Agent가 ConversationAssignedNotify를 받고 JoinConversationReq(conversationId)를 보내
+   scheduled=true를 확인하고, JoinConversationRes.actorId로 그 방의 Actor handle을 찾는다.
 5. 양쪽에서 Active ParticipantJoinedNotify와 동일한 Subject를 확인한다.
 6. Agent greeting의 SendChatMessageRes(MessageSeq=1)와 Customer ChatMessageNotify를 확인한다.
 7. Customer reply의 MessageSeq=2와 Agent notify를 확인한다.
-8. 같은 Agent가 두 번째 customer conversation에 join하고 두 방의 ConversationId, MessageSeq와
-   상태가 서로 섞이지 않는지 확인한다.
+8. 같은 Agent가 두 번째 customer conversation에 join하고, 방마다 그 방의 Actor handle로 보내며,
+   받은 push의 Actor ID로 방을 구분해 두 방의 ConversationId, MessageSeq와 상태가 서로 섞이지 않는지
+   확인한다.
 9. SetTypingMsg가 상대방 TypingChangedNotify를 만들고 요청자 response가 없음을 확인한다.
 10. reconnect 뒤 customer는 JoinConversationRes(scheduled=false)와 기존 state를 확인하고,
     agent는 availability 재등록과 각 방 재join을 확인한다.
@@ -524,7 +532,7 @@ Log 대기는 `100 ms` 간격으로 최대 `300`회 확인한다. 이 예산은 
 
 ## 11. 완료 기준
 
-- 모든 지원 언어가 같은 JSON declaration, metadata routing 규칙과 상태 전이를 구현한다.
+- 모든 지원 언어가 같은 JSON declaration, Actor slot relay 규칙과 상태 전이를 구현한다.
 - topology가 Client와 server component 및 구조적 연결만 표현한다.
 - 한 Conversation의 상태와 MessageSeq가 하나의 ConversationSpot에서 변경된다.
 - 한 Agent의 roster actor와 conversation actor가 분리되고 capacity 범위의 multi-room이 확인된다.

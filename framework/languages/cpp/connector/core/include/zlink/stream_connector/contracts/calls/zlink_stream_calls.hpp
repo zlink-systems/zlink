@@ -31,12 +31,12 @@ struct actor_binding_ref_t
 {
     std::uint16_t slot = 0;
     std::shared_ptr<std::atomic_bool> bound;
+    std::string actor_id;
 };
 
 struct request_reply_t
 {
-    codec_t codec = codec_t::raw;
-    zlink::message_t payload;
+    packet_t packet;
 };
 
 /* Applies the connector's typed codec (stream-connector §5.4) to a received
@@ -51,15 +51,13 @@ zlink::message_t decode_typed_reply (const std::shared_ptr<void> &state,
 /* Rebuilds the received message from the packet the connector queued
  * (stream-connector §5.5): the wait surfaces hand the caller a message, not a
  * bare payload, so a predicate also sees the packet name, the metadata and the
- * flow. */
+ * actor identity. */
 template <typename TMessage>
 result_t<message_t<TMessage>> decode_message (const std::shared_ptr<void> &state, packet_t packet)
 {
     message_t<TMessage> message;
     message.packet_name = packet.name;
     message.metadata = packet.metadata;
-    message.flow_id = packet.flow_id;
-    message.flow_origin = packet.flow_origin;
     message.actor_id = packet.actor_id;
     if constexpr (std::is_same_v<TMessage, packet_t>) {
         message.payload = std::move (packet);
@@ -88,7 +86,8 @@ void submit_request_async (std::shared_ptr<void> state,
                            std::chrono::milliseconds timeout,
                            std::function<void (result_t<request_reply_t>)> callback,
                            bool deliver_direct = false,
-                           std::optional<actor_binding_ref_t> actor_binding = std::nullopt);
+                           std::optional<actor_binding_ref_t> actor_binding = std::nullopt,
+                           std::shared_ptr<std::vector<std::uint64_t>> reply_hook_ids = {});
 result_t<packet_t> submit_wait (std::shared_ptr<void> state,
                                 std::string packet_name,
                                 std::function<bool (const packet_t &)> predicate,
@@ -100,6 +99,12 @@ void submit_wait_async (std::shared_ptr<void> state,
                         std::function<void (result_t<packet_t>)> callback);
 void post_runtime_operation (std::function<void ()> operation);
 void schedule_delivery (std::shared_ptr<void> state, std::function<void ()> callback);
+void run_request_sending (const std::shared_ptr<void> &state, request_sending_context_t &context);
+void run_reply_received (const std::shared_ptr<void> &state,
+                         const reply_received_context_t &context,
+                         const std::vector<std::uint64_t> &handler_ids);
+std::vector<std::uint64_t> capture_reply_hook_ids (const std::shared_ptr<void> &state);
+void schedule_reply_received (const std::shared_ptr<void> &state, reply_received_context_t context);
 } // namespace detail
 
 class send_call_t
@@ -193,7 +198,17 @@ class request_call_t
             return result_t<TReply>::failure (error_code_t::configuration_error,
                                               "request call has no connector");
         }
-        return submit_erased ().template as<TReply> ();
+        const auto started = std::chrono::steady_clock::now ();
+        const auto request_name = _packet.name;
+        const auto actor_id =
+          _actor_binding ? std::optional<std::string> (_actor_binding->actor_id) : std::nullopt;
+        request_sending_context_t sending{request_name, actor_id, _packet.metadata};
+        detail::run_request_sending (_state, sending);
+        auto reply = detail::submit_request (_state, std::move (_packet), _timeout, _actor_binding);
+        auto result = erased_result_t (_state, reply).template as<TReply> ();
+        auto context = reply_context (request_name, actor_id, reply, result, started);
+        detail::schedule_reply_received (_state, std::move (context));
+        return result;
     }
 
     /// Sends the request and invokes the callback with the decoded reply result.
@@ -207,24 +222,55 @@ class request_call_t
             return;
         }
         auto state = _state;
+        const auto started = std::chrono::steady_clock::now ();
+        const auto request_name = _packet.name;
+        const auto actor_id =
+          _actor_binding ? std::optional<std::string> (_actor_binding->actor_id) : std::nullopt;
+        request_sending_context_t sending{request_name, actor_id, _packet.metadata};
+        detail::run_request_sending (state, sending);
+        auto reply_hook_ids = std::make_shared<std::vector<std::uint64_t>> ();
         auto packet = std::move (_packet);
         const auto timeout = _timeout;
         detail::submit_request_async (
           state, std::move (packet), timeout,
-          [state,
+          [state, request_name, actor_id, started, reply_hook_ids,
            callback = std::move (callback)] (result_t<detail::request_reply_t> reply) mutable {
-              erased_result_t erased (state, std::move (reply));
+              erased_result_t erased (state, reply);
               auto result = erased.template as<TReply> ();
+              detail::run_reply_received (
+                state, reply_context (request_name, actor_id, reply, result, started),
+                *reply_hook_ids);
               if (callback) {
                   callback (std::move (result));
               }
           },
-          false, _actor_binding);
+          false, _actor_binding, reply_hook_ids);
     }
 
   private:
     friend class connector_t;
     friend class actor_t;
+
+    template <typename TReply>
+    static reply_received_context_t reply_context (const std::string &request_name,
+                                                   const std::optional<std::string> &actor_id,
+                                                   const result_t<detail::request_reply_t> &reply,
+                                                   const result_t<TReply> &result,
+                                                   std::chrono::steady_clock::time_point started)
+    {
+        reply_received_context_t context;
+        context.request_packet_name = request_name;
+        context.actor_id = actor_id;
+        context.succeeded = static_cast<bool> (result);
+        context.elapsed = std::chrono::duration_cast<std::chrono::milliseconds> (
+          std::chrono::steady_clock::now () - started);
+        if (result) {
+            context.reply = reply.value ().packet;
+        } else {
+            context.error = result.error ();
+        }
+        return context;
+    }
 
     class erased_result_t
     {
@@ -242,12 +288,12 @@ class request_call_t
                   _result.error () ? _result.error ()->message : "request failed");
             }
             if constexpr (std::is_same_v<T, zlink::message_t>) {
-                return result_t<T>::success (_result.value ().payload);
+                return result_t<T>::success (_result.value ().packet.payload);
             } else {
                 return detail::decode_typed_message<T> (
-                  _result.value ().codec,
-                  detail::decode_typed_reply (_state, _result.value ().codec,
-                                              _result.value ().payload));
+                  _result.value ().packet.codec,
+                  detail::decode_typed_reply (_state, _result.value ().packet.codec,
+                                              _result.value ().packet.payload));
             }
         }
 
@@ -261,12 +307,6 @@ class request_call_t
                     std::chrono::milliseconds default_timeout) :
         _state (std::move (state)), _packet (std::move (packet)), _timeout (default_timeout)
     {
-    }
-
-    erased_result_t submit_erased ()
-    {
-        return erased_result_t (
-          _state, detail::submit_request (_state, std::move (_packet), _timeout, _actor_binding));
     }
 
     std::shared_ptr<void> _state;

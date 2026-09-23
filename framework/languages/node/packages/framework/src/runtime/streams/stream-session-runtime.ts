@@ -467,7 +467,6 @@ export class ZLinkStreamSessionRuntime {
   ): Promise<void> {
     let dispatchPayload = payload;
     let enteredDispatch = false;
-    let dispatchHeader = decodedHeader;
     try {
       if (decodedHeader.kind === ZLinkStreamMessageKind.Control) {
         await this.handleControl(decodedHeader, payload);
@@ -480,23 +479,67 @@ export class ZLinkStreamSessionRuntime {
       }
       const dispatchActor = this.context.actorForSlot(decodedHeader.actorSlot);
       if (decodedHeader.actorSlot !== undefined && dispatchActor === undefined) {
-        const { actorSlot: _staleActorSlot, ...headerWithoutActor } = decodedHeader;
-        dispatchHeader = headerWithoutActor;
+        await runWithFlow(
+          createInboundFlow(
+            decodedHeader.flowId,
+            decodedHeader.flowOrigin,
+            this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
+          ),
+          async () => {
+            if (decodedHeader.kind === ZLinkStreamMessageKind.Request) {
+              const error = createInternalFrameworkException(
+                ZLinkFrameworkInternalErrorKind.InvalidOperation,
+                'Actor slot is not a current binding.'
+              );
+              this.options.dispatchErrors?.report({
+                surface: ZLinkDispatchErrorSurface.StreamSession,
+                messageKind: ZLinkDispatchMessageKind.Request,
+                reason: ZLinkDispatchErrorReason.StaleTarget,
+                action: ZLinkDispatchErrorAction.ReplyError,
+                packetName: decodedHeader.name,
+                sourceRid:
+                  this.context.routingId === undefined ? undefined : String(this.context.routingId),
+                correlationId: decodedHeader.correlationId,
+                flowId: decodedHeader.flowId,
+                flowOrigin: decodedHeader.flowOrigin,
+                error
+              });
+              await this.replyDispatchError(decodedHeader, error);
+            } else {
+              flowIfEnabled(
+                this.options.dispatchErrors?.flow,
+                ZLinkMessageFlowOutcome.Dropped
+              )?.trace({
+                outcome: ZLinkMessageFlowOutcome.Dropped,
+                surface: ZLinkDispatchErrorSurface.StreamSession,
+                messageKind: ZLinkDispatchMessageKind.Send,
+                packetName: decodedHeader.name,
+                correlationId: decodedHeader.correlationId,
+                sourceRid:
+                  this.context.routingId === undefined ? undefined : String(this.context.routingId),
+                errorReason: ZLinkDispatchErrorReason.StaleTarget
+              });
+            }
+          }
+        );
+        return;
       }
-      this.context.enterDispatch(dispatchHeader);
+      this.context.enterDispatch(decodedHeader);
       enteredDispatch = true;
       const session = await this.requireSession();
       const streamKind =
         decodedHeader.kind === ZLinkStreamMessageKind.Request
           ? ZLinkDispatchMessageKind.Request
           : ZLinkDispatchMessageKind.Send;
-      const streamCorr = dispatchHeader.correlationId;
-      const inboundHeader = dispatchHeader;
+      const streamCorr = decodedHeader.correlationId;
+      const inboundHeader = decodedHeader;
+      const flowEnabled = this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true;
       await runWithFlow(
         createInboundFlow(
           inboundHeader.flowId,
           inboundHeader.flowOrigin,
-          this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
+          flowEnabled,
+          flowEnabled ? this.stream.sessionId : undefined
         ),
         async () => {
           flowIfEnabled(this.options.dispatchErrors?.flow, ZLinkMessageFlowOutcome.Received)?.trace(
@@ -580,7 +623,7 @@ export class ZLinkStreamSessionRuntime {
         error
       });
       this.options.onError?.(error);
-      await this.replyDispatchError(dispatchHeader, error);
+      await this.replyDispatchError(decodedHeader, error);
       if (error instanceof ZLinkRouteDisconnectedError && decodedHeader.requestSeq === undefined) {
         await this.context.close();
       }
@@ -746,7 +789,8 @@ export class ZLinkStreamSessionRuntime {
             : ZLinkDispatchMessageKind.Send,
       packetName: packetName.length === 0 ? undefined : packetName,
       correlationId,
-      sourceRid: this.context.routingId === undefined ? undefined : String(this.context.routingId)
+      sourceRid: this.context.routingId === undefined ? undefined : String(this.context.routingId),
+      streamSessionId: this.stream.sessionId
     });
   }
 
@@ -880,6 +924,7 @@ export class ZLinkStreamSessionRuntime {
       packetName: header.name === '' ? undefined : header.name,
       correlationId: header.correlationId,
       sourceRid: this.context.routingId === undefined ? undefined : String(this.context.routingId),
+      streamSessionId: this.stream.sessionId,
       flowId: flowEnabled ? header.flowId : undefined,
       flowOrigin: flowEnabled ? header.flowOrigin : undefined,
       errorReason: ZLinkDispatchErrorReason.Shutdown

@@ -5,6 +5,7 @@ import { SampleNames, SampleTimings } from '../../Configuration/sample-names';
 import {
   AuthenticateReq,
   AuthenticateRes,
+  JoinConversationReq,
   PacketNames,
   SupportChatRoles,
   authenticateUser,
@@ -27,7 +28,6 @@ type SessionIdentity = {
   readonly actorId: string;
   readonly displayName: string;
   readonly role: SupportRole;
-  readonly conversationActors: Map<string, string>;
 };
 
 @Injectable()
@@ -67,8 +67,7 @@ class SupportChatSessionRouter {
     this.identities.set(context, {
       actorId: authenticated.actorId,
       displayName: authenticated.displayName,
-      role: authenticated.role,
-      conversationActors: new Map()
+      role: authenticated.role
     });
     // --8<-- [end:doc-sc-session-auth]
     context.client
@@ -78,29 +77,12 @@ class SupportChatSessionRouter {
       .submit();
   }
 
-  async relayIdentity(context: ZLinkSessionContext, payload: ZLinkMessage): Promise<void> {
-    await this.requireIdentityActor(context).relay(payload);
-  }
-
-  // --8<-- [start:doc-sc-metadata-relay]
-  async relayConversation(
-    context: ZLinkSessionContext,
-    dispatch: ZLinkSessionDispatchContext,
-    payload: ZLinkMessage
-  ): Promise<void> {
+  // --8<-- [start:doc-sc-agent-join]
+  async joinConversation(context: ZLinkSessionContext, payload: ZLinkMessage): Promise<void> {
     const identity = this.requireIdentity(context);
-    const conversationId = dispatch.metadata.get(SampleNames.conversationIdMetadataKey);
-    if (conversationId === undefined || conversationId.length === 0) {
-      if (dispatch.packetName === PacketNames.setTypingMsg) return;
-      throw new Error(`Conversation metadata is required for '${dispatch.packetName}'.`);
-    }
-    // --8<-- [start:doc-sc-agent-join]
-    if (
-      identity.role === SupportChatRoles.Agent &&
-      dispatch.packetName === PacketNames.joinConversationReq &&
-      !identity.conversationActors.has(conversationId)
-    ) {
-      const actorId = `${identity.actorId}@${conversationId}`;
+    if (identity.role === SupportChatRoles.Agent) {
+      const request = payload.decode(JoinConversationReq);
+      const actorId = `${identity.actorId}@${request.conversationId}`;
       const actorRef = await this.getOrCreateActor(
         actorId,
         new SupportUserActorCreateReq(
@@ -111,23 +93,26 @@ class SupportChatSessionRouter {
         )
       );
       await context.actors.bindOrGet(actorRef);
-      identity.conversationActors.set(conversationId, actorRef.actorId);
       const actor = context.actors.find(actorRef.actorId);
       if (actor === undefined)
         throw new Error(`Bound conversation actor '${actorRef.actorId}' was not found.`);
       await actor.relay(payload);
       return;
     }
-    // --8<-- [end:doc-sc-agent-join]
-    const actor = await this.conversationActor(
-      context,
-      identity,
-      conversationId,
-      dispatch.packetName
-    );
-    if (actor !== undefined) await actor.relay(payload);
+    await this.requireIdentityActor(context).relay(payload);
   }
-  // --8<-- [end:doc-sc-metadata-relay]
+  // --8<-- [end:doc-sc-agent-join]
+
+  async relay(
+    context: ZLinkSessionContext,
+    dispatch: ZLinkSessionDispatchContext,
+    payload: ZLinkMessage
+  ): Promise<void> {
+    // --8<-- [start:doc-sc-actor-relay]
+    const actor = dispatch.actor ?? this.requireIdentityActor(context);
+    // --8<-- [end:doc-sc-actor-relay]
+    await actor.relay(payload);
+  }
 
   private requireIdentity(context: ZLinkSessionContext): SessionIdentity {
     const identity = this.identities.get(context);
@@ -142,21 +127,6 @@ class SupportChatSessionRouter {
     if (actor === undefined)
       throw new Error(`Bound identity actor '${identity.actorId}' was not found.`);
     return actor;
-  }
-
-  private async conversationActor(
-    context: ZLinkSessionContext,
-    identity: SessionIdentity,
-    conversationId: string,
-    packetName: string
-  ): Promise<ZLinkSessionActor | undefined> {
-    if (identity.role === SupportChatRoles.Customer) return this.requireIdentityActor(context);
-    let actorId = identity.conversationActors.get(conversationId);
-    if (actorId === undefined) {
-      if (packetName === PacketNames.setTypingMsg) return undefined;
-      throw new Error(`JoinConversationReq is required before '${packetName}'.`);
-    }
-    return context.actors.find(actorId);
   }
 
   private async getOrCreateActor(
@@ -188,45 +158,40 @@ class AuthenticateSupportChatSessionHandler {
   }
 }
 
-function identityHandler(packetName: string) {
+function relayHandler(packetName: string) {
   @Injectable()
   @ZLinkPacket(packetName)
   class IdentityHandler {
     constructor(readonly router: SupportChatSessionRouter) {}
     async handle(
       context: ZLinkSessionContext,
-      _dispatch: ZLinkSessionDispatchContext,
+      dispatch: ZLinkSessionDispatchContext,
       payload: ZLinkMessage
     ): Promise<void> {
-      await this.router.relayIdentity(context, payload);
+      await this.router.relay(context, dispatch, payload);
     }
   }
   return IdentityHandler;
 }
 
-function conversationHandler(packetName: string) {
-  @Injectable()
-  @ZLinkPacket(packetName)
-  class ConversationHandler {
-    constructor(readonly router: SupportChatSessionRouter) {}
-    async handle(
-      context: ZLinkSessionContext,
-      dispatch: ZLinkSessionDispatchContext,
-      payload: ZLinkMessage
-    ): Promise<void> {
-      await this.router.relayConversation(context, dispatch, payload);
-    }
-  }
-  return ConversationHandler;
-}
-
 // --8<-- [start:doc-sc-session-dispatch]
-const OpenConversationSessionHandler = identityHandler(PacketNames.openConversationReq);
-const SetAgentAvailableSessionHandler = identityHandler(PacketNames.setAgentAvailableReq);
-const JoinConversationSessionHandler = conversationHandler(PacketNames.joinConversationReq);
-const SendChatMessageSessionHandler = conversationHandler(PacketNames.sendChatMessageReq);
-const SetTypingSessionHandler = conversationHandler(PacketNames.setTypingMsg);
-const CloseConversationSessionHandler = conversationHandler(PacketNames.closeConversationReq);
+const OpenConversationSessionHandler = relayHandler(PacketNames.openConversationReq);
+const SetAgentAvailableSessionHandler = relayHandler(PacketNames.setAgentAvailableReq);
+@Injectable()
+@ZLinkPacket(PacketNames.joinConversationReq)
+class JoinConversationSessionHandler {
+  constructor(private readonly router: SupportChatSessionRouter) {}
+  async handle(
+    context: ZLinkSessionContext,
+    _dispatch: ZLinkSessionDispatchContext,
+    payload: ZLinkMessage
+  ): Promise<void> {
+    await this.router.joinConversation(context, payload);
+  }
+}
+const SendChatMessageSessionHandler = relayHandler(PacketNames.sendChatMessageReq);
+const SetTypingSessionHandler = relayHandler(PacketNames.setTypingMsg);
+const CloseConversationSessionHandler = relayHandler(PacketNames.closeConversationReq);
 class SupportChatSession implements ZLinkSession {
   constructor(readonly context: ZLinkSessionContext) {}
 

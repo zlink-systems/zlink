@@ -24,8 +24,7 @@ View in another language — **C++** · [C#/.NET](../../../dotnet/guide/stream-c
     configuration is rejected.
 
 Options are passed once, when the connector is created. The connector keeps a copy and its read
-surface returns the values actually in use. The value that changes while the connector runs is the
-diagnostics level.
+surface returns the values actually in use.
 
 ## 1. Where Options Are Fixed
 
@@ -58,7 +57,6 @@ auto connector = sc::connector_factory_t::create (options);
 | Compression | Lz4 |
 | Send and receive payload limits | 64KB each |
 | TLS certificate validation | on |
-| Diagnostics level | errors only |
 
 The names differ per language, but the defaults are the same, because the same configuration has
 to behave the same in a game engine and in a desktop tool.
@@ -154,26 +152,7 @@ TLS and WSS validate the certificate chain and the host name. There is an option
 validation, but it is off by default and is meant for self-signed certificates in tests. Turning it
 on in a deployed configuration accepts a server certificate without trusting it.
 
-## 11. Diagnostics Level
-
-The diagnostics level decides how much flow-tracing information the connector produces and
-validates. The default records errors only. At the lowest level the connector attaches no flow
-identifier to outbound frames, and it checks only the length of the flow fields on inbound frames,
-skipping value validation and delivery. The request correlation identifier is kept at every level,
-so lowering the level never mismatches an answer.
-
-The value is read and changed while the connector runs, without creating it again. A change applies
-from the next processing point on and is not applied retroactively to frames already built.
-
-```cpp
-connector.set_diagnostics_level (sc::diagnostics_level_t::off);
-auto level = connector.diagnostics_level ();
-```
-
-The surface that changes the level does not wait for a completion. Writing one value has no
-completion to wait for, and calling it inside a receive callback never waits on its own completion.
-
-## 12. When Options Are Validated
+## 11. When Options Are Validated
 
 **Every option is validated.** Checking only some of them lets a wrong value elsewhere pass
 silently, and the caller then cannot tell a configuration mistake from a connection failure.

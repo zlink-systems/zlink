@@ -21,6 +21,7 @@ import systems.zlink.framework.handlers.ZLinkSpotActorRequest;
 import systems.zlink.framework.handlers.ZLinkSpotRequest;
 import systems.zlink.framework.handlers.ZLinkSpotSubscription;
 import systems.zlink.framework.handlers.ZLinkSpotTimer;
+import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotActorRequestHandler;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
@@ -32,6 +33,8 @@ import systems.zlink.framework.spots.ZLinkSpotTimerHandler;
 import systems.zlink.framework.spots.ZLinkTimerTick;
 import systems.zlink.testfixtures.handlerasync.CompletionStageAttributedHandler;
 import systems.zlink.testfixtures.handlerconflict.ConflictingSpotActorPacketHandler;
+import systems.zlink.testfixtures.subscriptionmissing.MissingTopicSubscription;
+import systems.zlink.testfixtures.subscriptionvalid.TopicSubscription;
 
 import java.time.Duration;
 import java.util.Set;
@@ -283,6 +286,36 @@ final class ZLinkHandlerScannerTest {
         assertEquals(TestSpot.class, timer.spotType());
         assertEquals("heartbeat", timer.timerName());
         assertEquals(Duration.ofMillis(250), timer.timerPeriod());
+    }
+
+    @Test
+    void missingScannedSubscriptionTopicFailsHostValidationWithHandlerName() {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.addHandlersFromPackageOf(MissingTopicSubscription.class);
+
+        ZLinkConfigurationException error =
+                assertThrows(ZLinkConfigurationException.class, options::validate);
+
+        assertEquals(
+                "SPOT subscription handler topic is required: "
+                        + MissingTopicSubscription.class.getName(),
+                error.getMessage());
+    }
+
+    @Test
+    void scannedSubscriptionWithTopicRegistersAndPassesHostValidation() {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.addHandlersFromPackageOf(TopicSubscription.class);
+
+        options.validate();
+
+        ZLinkScannedHandler subscription =
+                ZLinkHandlerScanner.scan(Set.of(TopicSubscription.class)).handlers().stream()
+                        .filter(handler -> handler.handlerType() == TopicSubscription.class)
+                        .findFirst()
+                        .orElseThrow();
+        assertEquals(ZLinkScannedHandlerKind.PUBLISH, subscription.kind());
+        assertEquals("room.events", subscription.topic());
     }
 
     @Test

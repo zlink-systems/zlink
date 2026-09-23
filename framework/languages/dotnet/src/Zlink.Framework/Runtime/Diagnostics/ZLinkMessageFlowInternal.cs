@@ -64,6 +64,8 @@ internal sealed record ZLinkMessageFlowEvent(
     public string FlowId { get; init; } = string.Empty;
 
     public ZLinkFlowOrigin? FlowOrigin { get; init; }
+
+    public string? StreamSessionId { get; init; }
 }
 
 internal enum ZLinkDispatchErrorSurface

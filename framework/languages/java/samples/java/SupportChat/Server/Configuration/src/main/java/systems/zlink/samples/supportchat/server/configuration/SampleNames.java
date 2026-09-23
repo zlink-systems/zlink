@@ -11,7 +11,6 @@ public final class SampleNames {
     public static final String ConversationSpotType = "supportchat.conversation";
     public static final String StreamNode = "supportchat-session";
     public static final int AgentCapacity = 3;
-    public static final String ConversationIdMetadataKey = "ConversationId";
     public static final String ServerEvidenceMarker = "supportchat-server-evidence=completed";
     public static final String ClientMarker = "supportchat=completed";
 

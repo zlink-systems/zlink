@@ -51,6 +51,7 @@ std::optional<stream_close_reason_t> close_reason() const;
 connector_options_t options() const;
 std::size_t pending_dispatch_count() const;
 std::size_t received_count(std::string_view packet_name) const; // packet 이름별 수신 개수.
+template <typename TMessage> std::size_t received_count() const; // 타입에서 이름을 결정한다.
 
 result_t<void> connect();                                  // 연결 결과를 현재 호출에서 기다린다.
 void connect(std::function<void(result_t<void>)> callback); // 연결 결과를 callback으로 받는다.
@@ -66,24 +67,14 @@ result_t<void> dispatch();                                 // Manual mode의 대
 수신 message는 `message_t<TPayload>`다. `on<T>` handler와 `wait_for` 계열이 이 타입을 다룬다.
 
 ```cpp
-enum class flow_origin_t : std::uint8_t {
-    inbound = 1, timer = 2, application = 3, lifecycle = 4
-};
-
 template <typename TPayload>
 struct message_t {
     std::string packet_name;
     TPayload payload;                          // typed codec으로 decode한 payload
     metadata_t metadata;
-    std::string flow_id;                       // diagnostics level이 off이면 비어 있다(§6)
-    std::optional<flow_origin_t> flow_origin;  // 같은 조건에서 빈 값이다
     std::optional<std::string> actor_id;       // 상대 bound Actor. slot 없는 frame은 빈 값(공통 스펙 §5.6)
 };
 ```
-
-`flow_id`와 `flow_origin`이 [공통 스펙 §5.5](../../32-stream-connector.ko.md#55-flow-노출과-전파)가
-요구하는 수신 flow 노출이다. C++ runtime은 handler 실행 문맥에 현재 flow를 보관하므로 송신 call에
-flow를 명시하는 인자를 두지 않는다(§5.1).
 
 push callback은 `on<T>(...)`으로 등록한다. `dispatch_mode_t::manual`에서는 `dispatch()`가 callback을
 실행하고, `dispatch_mode_t::immediate`에서는 수신 경로가 callback을 실행한다. `wait_for` 계열은 두
@@ -113,6 +104,23 @@ subscription_t on_connection_state_changed(
 // 지금 bind되어 있는 Actor handle(공통 스펙 §5.6). application이 만들지 않는다.
 std::vector<std::shared_ptr<actor_t>> actors() const;
 std::shared_ptr<actor_t> actor(std::string_view actor_id) const;   // 없으면 nullptr
+struct request_sending_context_t {
+    const std::string request_packet_name;
+    const std::optional<std::string> actor_id;
+    void set_metadata(std::string key, std::string value);
+};
+struct reply_received_context_t {
+    std::string request_packet_name;
+    std::optional<std::string> actor_id;
+    bool succeeded;
+    std::optional<packet_t> reply;
+    std::optional<error_t> error;
+    std::chrono::milliseconds elapsed;
+};
+subscription_t on_request_sending(
+    std::function<void(request_sending_context_t&)> callback);
+subscription_t on_reply_received(
+    std::function<void(const reply_received_context_t&)> callback);
 subscription_t on_actor_bound(std::function<void(const std::shared_ptr<actor_t>&)> callback);
 subscription_t on_actor_unbound(std::function<void(const std::shared_ptr<actor_t>&)> callback);
 ```
@@ -349,13 +357,10 @@ inline void value_or_throw(result_t<void> result);
 두 형태는 같은 `error_code_t` 값을 전달하며, 어느 쪽을 쓰든 받는 쪽이 공통 스펙 §9의 13개 중
 무엇인지 읽는다. 오류 종류와 의미는 [공통 스펙](../../32-stream-connector.ko.md)이 소유한다.
 
-### 5.1 Flow correlation
+### 5.1 요청 hook
 
-Connector가 시작한 outbound operation은 별도 public option 없이 UUIDv7 `flow_id`를 한 번 생성한다.
-Inbound callback에서 시작한 후속 operation은 현재 inbound flow를 재사용하고, callback이 끝나면
-connector runtime이 current flow context를 정리한다. wire 형식과 비동기 context 경계는
-[공통 Stream Connector §4.2](../../32-stream-connector.ko.md)와
-[Flow Correlation §6](../../../server/06-observability/04-flow-correlation.ko.md#6-async-작업과-execution-context)이 소유한다.
+`on_request_sending`·`on_reply_received`는 [공통 스펙 §5.7](../../32-stream-connector.ko.md#57-요청-hook)의
+두 hook이며 `subscription_t`를 반환한다. hook 실패는 `on_error`로 보고한다.
 
 ## 6. options
 
@@ -398,7 +403,6 @@ struct connector_options_t {
     std::shared_ptr<const compression_codec_t> compression_codec;
     std::shared_ptr<const typed_codec_t> typed_codec;         // 공통 스펙 §5.4의 codec 주입점. 비어 있으면 기본 JSON codec
     std::shared_ptr<const packet_name_resolver_t> name_resolver; // 공통 스펙 §5.4의 name resolver 주입점. 비어 있으면 §3의 기본 규칙
-    diagnostics_level_t diagnostics_level = diagnostics_level_t::errors;
 };
 
 class packet_name_resolver_t {
@@ -407,62 +411,33 @@ public:
     virtual std::string resolve(std::string_view type_name) const = 0;
 };
 
-// 계약은 공통 스펙 §13이 소유한다. 기본값 errors. off이면 outbound frame에 flow pair를
-// 만들지 않고(0x10 미설정), inbound flow 필드는 구조 길이 검사만 유지한 채 값 검증을
-// 생략한다. Request correlation은 level과 무관하게 유지된다.
-enum class diagnostics_level_t { off, errors, normal, detailed };
 ```
 
 `options()`는 [factory](../../../server/00-foundation/02-glossary.ko.md#factory)가 적용한 설정의 복사본을 반환한다. getter에 보이는 값은 실제 connect,
 request, wait, queue, TLS와 compression 경로가 사용하는 값이어야 하며, 동작에 반영되지 않는
 설정값을 공개하지 않는다.
 
-`connector_options_t::diagnostics_level`은 `create()`가 시작하는 level일 뿐이다. 공통 스펙
-§13에 따라 connector는 [flow correlation §4](../../../server/06-observability/04-flow-correlation.ko.md#4-flow를-만드는-시점)가
-말하는 client connector이므로, 실행 중 level 변경도
-[message-flow-tracing §4.1](../../../server/06-observability/03-message-flow-tracing.ko.md#5-실행-중-기록-수준-변경과-비용-규칙)을
-그대로 따른다. Application은 connector를 다시 만들지 않고 `connector_t`의 다음 두 메서드로
-level을 읽고 바꾼다.
-
-```cpp
-class connector_t {
-public:
-    // ...
-    diagnostics_level_t diagnostics_level() const;
-    void set_diagnostics_level(diagnostics_level_t level); // 기다리지 않고 값을 바꾼다
-    void set_diagnostics_level_async(                      // 같은 값을 바꾸는 비동기 짝
-      diagnostics_level_t level,
-      std::function<void(result_t<void>)> callback);
-};
-```
-
-`set_diagnostics_level_async`는 connector core가 `connect`·`close`에 두는 callback 완료 경로와 같은
-모양의 비동기 짝이며, [공통 스펙 §13](../../32-stream-connector.ko.md#13-diagnostics-level)이
-요구하는 동기 표면을 대신하지 않는다. 동기 표면은 비동기 짝의 완료를 기다리지 않으므로 수신
-callback 안에서 호출해도 자기 완료를 기다리는 순환이 생기지 않는다.
-
-`diagnostics_level()`은 현재 유효한 level을 반환한다. `set_diagnostics_level(level)`은 그 뒤의
-처리 지점(outbound frame encode 1회, inbound frame decode 1회)부터 적용되며, 호출 이전에 이미
-encode·decode된 frame에는 소급 적용하지 않는다. 각 처리 지점은 level을 정확히 한 번만 읽어 그
-처리 전체에 그 값 하나만 쓰므로, 처리 도중 level이 바뀌어도 하나의 frame이 두 level에 걸쳐
-나뉘는 일은 없다. `options()`가 보여주는 diagnostics_level도 호출 시점에 `diagnostics_level()`이
-반환할 값과 같으며, `create()`에 전달한 값과 다를 수 있다.
-
 ## 7. 엔진 어댑터
 
 Unreal plugin, Godot GDExtension, Axmol adapter는 `connector_t`를 private 구현으로 소유하고 엔진의
-타입과 thread 규칙에 맞춘 표면을 노출한다. 세 어댑터는 다음 세 규칙을 따른다.
+타입과 thread 규칙에 맞춘 표면을 노출한다. 수신과 요청의 모양은 다른 connector와 같다 — push는 packet
+이름과 callback을 함께 등록해 받고, 요청은 그 호출이 응답을 받는다. 세 어댑터는 다음 두 규칙을 따른다.
 
-- **callback과 delegate는 engine main thread에서만 실행한다.** 어댑터는 core callback을 자기 queue에
+- **callback과 delegate는 engine main thread에서만 실행한다(request sending hook은 공통 스펙 §5.7에 따라 요청 호출 문맥에서 실행한다).** 어댑터는 core callback을 자기 queue에
   넣고, engine이 frame마다 부르는 `dispatch` 또는 application이 등록한 main thread dispatcher(Godot
   `set_main_thread_dispatcher`, Axmol `set_axmol_thread_dispatcher`)로 전달한다.
-- **push는 packet 이름으로 구독한다.** core의 `on`처럼 어댑터도 이름을 받는 구독 호출을 둔다(Unreal
-  `Subscribe(PacketName)`, Godot·Axmol `subscribe(packet_name)`). 구독한 이름의
-  push만 어댑터의 수신 창구(Unreal `OnPacketReceived`, Godot·Axmol `on_packet` callback)로
-  packet 이름과 함께 전달한다.
-- **요청 완료는 그 요청의 packet 이름을 싣는다.** Response frame에는 packet 이름이 없으므로([공통 스펙
-  §4.2](../../32-stream-connector.ko.md#42-header)) 어댑터는 요청할 때의 이름을 완료 창구(Unreal
-  `OnRequestCompleted`, Godot·Axmol `on_request_completed` callback)에 붙여 전달한다.
+- **결과는 호출마다 받는 callback으로 전달한다.** push는 core의 `on`처럼
+  packet 이름과 callback을 한 번에 등록하고(Unreal `On(PacketName, Delegate)`, Godot·Axmol
+  `on(packet_name, callback)`), 등록은 해제 handle을 돌려준다. 요청은 호출할 때 완료 callback을 함께 받아
+  그 요청의 응답 또는 실패를 그 callback으로 전달한다(Unreal `RequestJson(..., OnCompleted)`, Godot·Axmol
+  `request_json(..., callback)`).
+
+- 어댑터는 JSON text를 주고받아 payload 타입이 없으므로 packet 이름을 항상 명시한다.
+- 요청 hook(공통 스펙 §5.7)은 Unreal `OnRequestSending`·`OnReplyReceived` delegate, Godot·Axmol
+  `on_request_sending`·`on_reply_received` callback이며 해제 handle을 반환한다. reply hook도 다른 결과와 같이
+  main thread에서 전달한다.
+- 어댑터의 callback·delegate 또는 요청 hook이 예외를 던지면 어댑터 경계에서 엔진 오류 로그로 기록하고, 그 예외로
+  요청 결과나 다른 callback의 전달을 바꾸지 않는다.
 
 ## 8. 검증
 
