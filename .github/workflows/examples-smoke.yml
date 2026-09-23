@@ -686,6 +686,8 @@ jobs:
           name: examples-trees
       - name: Unpack the trees
         run: tar -xf examples-trees.tar
+      - name: Install the JSON header used by the source check
+        run: sudo apt-get update && sudo apt-get install -y nlohmann-json3-dev
       - name: README minimum source check (not an engine build)
         working-directory: examples/zlink-axmol-examples
         run: |
