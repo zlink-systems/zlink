@@ -625,26 +625,33 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
     }
 
     void close(ZLinkSpotCloseReason reason, Instant deadline) {
-        if (spot == null) {
-            closeResources();
-            return;
-        }
         try {
-            host.awaitClosing(
-                    context.enqueueLifecycle(
-                            () ->
-                                    host.runWithOutbound(
-                                            context.dispatchOutbound(),
-                                            () ->
-                                                    ZLinkHandlerStages.fromStageSupplier(
-                                                            () ->
-                                                                    spot.onClosing(
-                                                                            new ZLinkSpotClosingContext(
-                                                                                    reason,
-                                                                                    deadline))))));
+            notifyClosing(reason, deadline);
         } finally {
             closeResources();
         }
+    }
+
+    void notifyClosing(ZLinkSpotCloseReason reason, Instant deadline) {
+        if (spot == null) {
+            return;
+        }
+        host.awaitClosing(
+                closingCallback(
+                        () ->
+                                context.enqueueLifecycle(
+                                        () ->
+                                                host.runWithOutbound(
+                                                        context.dispatchOutbound(),
+                                                        () ->
+                                                                ZLinkHandlerStages
+                                                                        .fromStageSupplier(
+                                                                                () ->
+                                                                                        spot
+                                                                                                .onClosing(
+                                                                                                        new ZLinkSpotClosingContext(
+                                                                                                                reason,
+                                                                                                                deadline)))))));
     }
 
     private void closeResources() {

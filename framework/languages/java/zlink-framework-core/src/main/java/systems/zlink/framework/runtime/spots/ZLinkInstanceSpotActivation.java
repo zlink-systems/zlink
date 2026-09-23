@@ -342,12 +342,21 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                     return null;
                 });
         try {
-            host.awaitClosing(
-                    context.runClosing(
-                            () -> spot.onClosing(new ZLinkSpotClosingContext(reason, deadline))));
+            notifyClosing(reason, deadline);
         } finally {
             closeResources();
         }
+    }
+
+    void notifyClosing(ZLinkSpotCloseReason reason, Instant deadline) {
+        host.awaitClosing(
+                closingCallback(
+                        () ->
+                                context.runClosing(
+                                        () ->
+                                                spot.onClosing(
+                                                        new ZLinkSpotClosingContext(
+                                                                reason, deadline)))));
     }
 
     CompletionStage<Boolean> closeExplicit() {
@@ -403,12 +412,15 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                             CompletionStage<Throwable> callback;
                             try {
                                 callback =
-                                        context.runLifecycleExecution(
+                                        closingCallback(
                                                         () ->
-                                                                spot.onClosing(
-                                                                        new ZLinkSpotClosingContext(
-                                                                                reason,
-                                                                                Instant.now())))
+                                                                context.runLifecycleExecution(
+                                                                        () ->
+                                                                                spot.onClosing(
+                                                                                        new ZLinkSpotClosingContext(
+                                                                                                reason,
+                                                                                                Instant
+                                                                                                        .now()))))
                                                 .handle((ignored, failure) -> failure);
                             } catch (RuntimeException failure) {
                                 callback = CompletableFuture.completedFuture(failure);
