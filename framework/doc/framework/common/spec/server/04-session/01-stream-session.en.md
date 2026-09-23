@@ -190,8 +190,8 @@ execution rules of filters on other dispatches are set by
 A session callback receives a dispatch context holding packet name, metadata,
 request information and the packet's counterpart bound Actor, along with the
 payload. The bound Actor is the packet's Actor slot resolved against the
-current bindings; without a slot, or with a slot that is not a current
-binding, there is none
+current bindings; without a slot there is none. A packet with a slot that is
+not a current binding is not delivered to the session callback
 ([Session–Actor Binding §5](02-session-actor-binding.en.md#5-bind-and-relay)).
 The runtime preserves request header values inside the dispatch context, so
 the application doesn't build a header object or pass it into a relay call
@@ -351,15 +351,15 @@ and the inter-node wire records. Each item leads to one contract test.
 
 **Connection and dispatch**
 
-- A packet a client sends reaches the session callback as a dispatch context
-  holding packet name, metadata, payload and, when it has an Actor slot, that
-  bound Actor.
+- A packet a client sends with no slot or with a slot that is a current
+  binding reaches the session callback as a dispatch context holding packet
+  name, metadata, payload and, when it has an Actor slot, that bound Actor.
 - The public surface and execution of session lifecycle, packet, and error
   callbacks do not change on the STREAM packet-pull path, and packets reach
   the public session callback.
 - While the session callback can't consume the managed queue, a client that
   keeps sending stalls at the Core receive pipe HWM on the client side. Once
-  the queue drains, packets reach the callback in order exactly once each —
+  the queue drains, packets delivered to the session callback reach it in order exactly once each —
   none are dropped or delivered twice. §2's `PACKET` mode rule and §4's managed
   queue rule are confirmed by this observation.
 - The dispatch context's [routing ID](../00-foundation/02-glossary.en.md#routing-id) equals

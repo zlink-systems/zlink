@@ -148,8 +148,10 @@ STREAM packet은 먼저 session의 typed handler registry로 dispatch된다. Fra
 `actor_slot`([Stream Connector 공통 스펙 §4.2](../../stream-connector/32-stream-connector.ko.md#42-header))을
 현재 binding으로 해석해 dispatch context의 Actor로 넣는다 — slot이 없으면 Actor 없음이다.
 **현재 binding이 아닌 slot을 실은 packet(unbind 뒤 늦게 도착한 packet)은 session handler에 전달하지
-않는다.** `Request`는 같은 sequence의 `Error` reply(code `InvalidOperation`)로 끝내고, `Send`는 버리고
-진단에 기록한다. 따라서 session handler가 받는 Actor 없음은 slot 없음과 같다. Request의
+않는다.** `Request`는 같은 sequence의 `Error` reply(code `InvalidOperation`)로 끝내며 message-flow의 `reply_error`로
+기록한다. `Send`는 버리고 message-flow에 `surface=stream`, `message_kind=send`, `outcome=dropped`,
+`reason=stale_target`으로 기록한다([Message-flow tracing](../06-observability/03-message-flow-tracing.ko.md)).
+따라서 session handler가 받는 Actor 없음은 slot 없음과 같다. handler에 전달된 Request의
 `Response`와 `Error`는 session handler가 만든 결과이고, handler가 terminal reply를 만들지 않으면
 기존 request timeout 규칙을 따른다. Session callback은 그 Actor로 relay하거나 다른 처리를 고른다. Handler가 Actor
 dispatch를 선택하면 Framework는 다음 값을 internal envelope에 보존한다.
@@ -750,7 +752,8 @@ lane 정책 타입, 검증 지점 하나)은 [§10](#10-실행과-수명)·[§11
 - Push와 Actor로 relay한 request의 reply가 binding의 Actor slot을 싣는다.
 - `actor_slot`이 있는 packet의 dispatch context가 그 binding의 Actor를 가리킨다.
 - 현재 binding이 아닌 slot으로 도착한 packet은 session handler에 도달하지 않는다. `Request`는
-  같은 sequence의 `Error`(`InvalidOperation`)로 끝나고 `Send`는 진단에 기록된다.
+  같은 sequence의 `Error`(`InvalidOperation`)로 끝나 `reply_error`로 기록되고, `Send`는
+  `outcome=dropped`, `reason=stale_target`으로 기록된다.
 - 두 Actor를 bind하면 서로 다른 slot을 받고, 같은 current binding을 다시 bind하면 같은 slot을
   유지하며 통지를 다시 보내지 않고, 끝난 binding의 slot을 다시 쓰지 않으며, `65535`까지 발급한
   session의 새 bind가 `InvalidOperation`으로 끝난다.
