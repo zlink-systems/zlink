@@ -612,7 +612,7 @@ When a host shuts down normally, it deletes the descriptors it published. If the
 stops before doing so, no entity remains to delete the descriptors, and the records
 remain in the Store — §11 defines the descriptor lifetime.
 
-A node's routing ID is newly generated for each host process. Therefore, a host restarted
+A node's automatic routing ID is newly generated for each host process. Therefore, a host restarted
 with the same configuration adds its own descriptor under a new routing ID, while the
 stopped host's descriptor remains and continues to point to the same endpoint. The Store
 then has two descriptors pointing to one endpoint. **This section owns only the decision
@@ -1488,12 +1488,13 @@ record isn't deleted merely because the host descriptor disappeared.
 
 **The owner-cleanup sweep (`removeAllByOwner`) reclaims authority rows only** — the rows
 matching the shutting-down host's owner id and lease generation. A host deletes its own
-descriptors when it shuts down normally. **Descriptors don't expire.** The replacement
-lifecycle publishes a new descriptor under a new routing ID, so it doesn't replace or
-delete the previous descriptor — the routing ID is part of the descriptor key. Therefore,
-if a host stops before a normal shutdown, no entity remains to delete that descriptor.
-The owner lease expires after renewals stop, but the descriptor remains in the Store.
-Section 4.1 defines the rule that prevents targeting the remaining descriptor. The two
+descriptors when it shuts down normally. **Descriptors don't expire.** A replacement
+lifecycle with an automatic RID publishes a new descriptor under a new routing ID, so it doesn't
+replace or delete the previous descriptor — the routing ID is part of the descriptor key. Therefore,
+if a host using an automatic RID stops before a normal shutdown, no entity remains to delete its
+previous descriptor. The owner lease expires after renewals stop, but that descriptor remains in
+the Store. Section 4.1 defines the rule that prevents targeting it. Fixed RID lifecycle rules are
+defined by [MeshNode §3.3](../03-spot-actor/03-mesh-node.en.md#33-fixed-rid). The two
 cleanup paths are independent and operate with different lifetimes.
 
 If the deadline passes, a `ForceStopped` result completes exactly once. Timers, Store

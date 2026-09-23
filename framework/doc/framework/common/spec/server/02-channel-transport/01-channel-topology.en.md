@@ -58,10 +58,10 @@ public interface IZLinkMeshNodeBuilder
     IZLinkMeshNodeBuilder SetBindHost(string bindHost);
     IZLinkMeshNodeBuilder SetAdvertiseHost(string advertiseHost);
 
-    // in automatic topology, only specify the prefix — the framework builds the full RID.
+    // For an automatic RID, specify only the prefix; the framework builds the full RID.
     IZLinkMeshNodeBuilder SetRoutingIdPrefix(string prefix);
 
-    // a fixed RID can only be used in manual topology.
+    // The application chooses the RID; MeshNode §3.3 defines where it can be used.
     IZLinkMeshNodeBuilder SetRoutingId(RoutingId routingId);
 
     IZLinkMeshNodeSocketConfig ConfigureRouterSocket();
@@ -546,8 +546,8 @@ identity, the connection isn't made ready.
 internal identifying value. A larger number alone isn't judged as a new lifecycle —
 only whether the values match is considered.
 
-When an Automatic MeshNode restarts, it uses a new RID and a new generation. In manual
-topology using a fixed RID, a new generation's connection is only made ready after
+When a MeshNode using an automatic RID restarts, it uses a new RID and a new generation. For a MeshNode
+using a fixed RID, a new generation's connection is only made ready after
 satisfying all of the following conditions.
 
 1. The application configuration explicitly states intent to reconnect to that peer.

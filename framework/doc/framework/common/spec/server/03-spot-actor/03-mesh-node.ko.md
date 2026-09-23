@@ -49,9 +49,9 @@ descriptor를 공개한 뒤에는 다음 설정을 바꿀 수 없다.
 
 ## 3. Routing ID
 
-### 3.1 Automatic discovery에서 사용하는 RID
+### 3.1 Automatic RID
 
-Automatic discovery를 사용하는 MeshNode의 RID는 Framework가 lifecycle마다 새로
+MeshNode가 automatic RID를 사용하면 Framework가 lifecycle마다 새 RID를
 만든다. Caller는 진단에 사용할 prefix만 지정할 수 있다. Prefix를 생략하면
 Framework가 listener 종류에 맞는 기본 prefix를 사용한다.
 
@@ -71,7 +71,7 @@ MeshNode descriptor의 owner를 확정하는 CAS는 같은 `(MeshName, RID)`를 
 owner가 사용하고 있는지 확인한다. Active conflict가 확인되면 기존 descriptor를 변경하지 않고 두 번째
 UUID나 claim을 만들지 않는다. Startup은 즉시 configuration error로 끝난다.
 
-Replacement lifecycle은 이전 lifecycle의 RID를 재사용하지 않고 새 RID를 만든다.
+Automatic RID를 쓰는 replacement lifecycle은 이전 lifecycle의 RID를 재사용하지 않고 새 RID를 만든다.
 
 ### 3.2 Entry Spot ID
 
@@ -107,11 +107,14 @@ Startup에서 Entry Spot을 준비하는 순서와 initialization이 끝나기 �
 
 ### 3.3 Fixed RID
 
-Fixed RID는 [Location Store](../00-foundation/02-glossary.ko.md#location-store)의 MeshNode descriptor와 [automatic discovery](../00-foundation/02-glossary.ko.md#automatic-discovery)를 사용하지
-않는 explicit manual topology에서만 허용한다.
+Fixed RID는 application이 MeshNode RID를 직접 정하는 설정이다. 구현·시험 시나리오가 peer를
+이름으로 지목해야 할 때가 있고 automatic RID로는 그럴 수 없으므로, manual topology와
+[automatic discovery](../00-foundation/02-glossary.ko.md#automatic-discovery) 모두에서, Object role과 관계없이 사용할 수
+있다. Fixed RID와 automatic RID prefix를 함께 설정하면 startup configuration error다.
 
-Object role이 `Client` 또는 `Server`인 MeshNode에 fixed RID를 설정하거나 automatic
-mode와 fixed RID를 함께 설정하면 startup configuration error다.
+Fixed RID를 쓰는 node가 재시작해 이전 lifecycle의 active owner claim과 충돌하면 automatic RID와 같은
+규칙으로 처리한다. 새 값을 만들어 다시 시도하지 않고 즉시 conflict로 startup이 실패하며, 이전
+owner lease가 만료된 뒤 시작한 lifecycle은 같은 RID를 claim한다.
 
 ## 4. Object role과 등록할 수 있는 기능
 
@@ -305,7 +308,7 @@ Peer handshake에서는 다음 정보를 교환한다.
 Lifecycle generation은 0이 아닌 opaque equality token이다. 숫자 크기로 어느
 lifecycle이 더 새로운지 판단하지 않는다.
 
-Manual topology에서 fixed RID로 다시 연결할 때는 다음 조건을 모두 만족한 뒤 다른
+Fixed RID로 다시 연결할 때는 다음 조건을 모두 만족한 뒤 다른
 generation의 connection을 target selection에 포함한다.
 
 1. Application 구성에 해당 peer와 연결하려는 의도가 있다.
@@ -466,10 +469,10 @@ runtime snapshot과 event)만으로 다음을 확인한다.
 - `None`, `Client`, `Server`가 manager, factory와 placement capability를 계약대로 제한한다.
 - Object role을 선택하지 않은 MeshNode는 `None`으로 시작하며 object manager, factory, Entry Spot과
   placement capability를 만들지 않는다.
-- Object role과 Location Store, automatic discovery와 fixed RID의 잘못된 조합이 startup에서 실패한다.
+- Object role과 Location Store의 잘못된 조합, fixed RID와 automatic RID prefix의 동시 설정이 startup에서 실패한다.
 - Automatic RID가 prefix와 lowercase canonical UUID v4 형식을 따르고 active conflict에서 두 번째 claim
   없이 startup configuration error로 실패한다.
-- Replacement lifecycle이 새 RID를 사용한다.
+- Automatic RID를 쓰는 replacement lifecycle이 새 RID를 사용한다.
 - Entry Spot type을 등록하지 않은 Object Server node의 descriptor에도 `entrySpotId`가 있고,
   `Server`가 아닌 node의 descriptor에는 없다.
 - Entry Spot ID가 MeshNode와 같은 diagnostic prefix, 별도로 생성한 UUID v4를 사용하며 descriptor가

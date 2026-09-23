@@ -557,7 +557,7 @@ message가 아니다.
 Host가 정상 종료할 때 자신이 게시한 descriptor를 직접 지운다. Process가 그 전에 멈추면
 descriptor를 지울 주체가 없고 기록은 Store에 남는다 — descriptor의 수명은 §11이 정한다.
 
-Node의 routing ID는 host process마다 새로 만든다. 그래서 같은 설정으로 다시 시작한 host는
+Automatic RID를 쓰는 node의 routing ID는 host process마다 새로 만든다. 그래서 같은 설정으로 다시 시작한 host는
 새 routing ID로 자신의 descriptor를 추가하며, 멈춘 host의 descriptor는 같은 endpoint를
 가리킨 채 남는다. Store에는 한 endpoint를 가리키는 descriptor가 둘이 된다. **이 절은 그런
 descriptor를 대상으로 삼지 않는 판정만 소유한다.**
@@ -1346,11 +1346,12 @@ object의 위치 record를 삭제하지 않는다.
 
 **Owner cleanup sweep(`removeAllByOwner`)은 authority row만 회수한다** — shutdown하는 host의
 owner id와 lease generation이 일치하는 row만 대상이다. Descriptor는 host가 정상 종료할 때
-자신이 직접 삭제한다. **Descriptor에는 만료를 걸지 않는다.** Replacement lifecycle은 새
-routing ID로 새 descriptor를 게시하므로 이전 descriptor를 대체하거나 삭제하지 않는다 —
-descriptor key에 routing ID가 들어가기 때문이다. 따라서 host가 정상 종료 전에 멈추면 그
-descriptor를 지울 주체가 없다. Owner lease는 갱신이 끊겨 만료되지만 descriptor는 Store에
-그대로 남는다. 남은 descriptor를 대상으로 삼지 않는 규칙은 §4.1이 정한다. 두 정리 경로는
+자신이 직접 삭제한다. **Descriptor에는 만료를 걸지 않는다.** Automatic RID를 쓰는 replacement lifecycle은
+새 routing ID로 새 descriptor를 게시하므로 이전 descriptor를 대체하거나 삭제하지 않는다 —
+descriptor key에 routing ID가 들어가기 때문이다. 따라서 automatic RID를 쓰는 host가 정상 종료 전에
+멈추면 이전 descriptor를 지울 주체가 없다. Owner lease는 갱신이 끊겨 만료되지만 그 descriptor는
+Store에 남는다. 이를 대상으로 삼지 않는 규칙은 §4.1이 정한다. Fixed RID의 lifecycle 규칙은
+[MeshNode §3.3](../03-spot-actor/03-mesh-node.ko.md#33-fixed-rid)이 정한다. 두 정리 경로는
 서로 독립적이며 서로 다른 lifetime으로 동작한다.
 
 Deadline을 넘으면 `ForceStopped` 결과를 한 번만 완료한다. Timer, Store callback, 재연결

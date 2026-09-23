@@ -75,7 +75,7 @@ authority로 사용할 수 없다. Framework는 Spot ID 문자열로 MeshNode �
 MeshNode descriptor가 게시한 Entry Spot ID mapping을 사용한다.
 
 Entry Spot ID는 같은 Object Server lifecycle 동안 유지한다. Endpoint가 같은 replacement
-lifecycle에서도 새 MeshNode RID와 새 Entry Spot ID를 각각 발급한다. Framework는 full MeshNode
+lifecycle에서도 새 Entry Spot ID를 발급하며, automatic RID이면 MeshNode RID도 새로 발급한다. Framework는 full MeshNode
 RID를 이어 붙여 Entry Spot ID를 만들지 않는다.
 
 Object Server descriptor의 `NewClaim`은 `(MeshName, NodeRid)` descriptor identity와

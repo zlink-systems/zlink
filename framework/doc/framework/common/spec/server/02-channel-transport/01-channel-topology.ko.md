@@ -54,10 +54,10 @@ public interface IZLinkMeshNodeBuilder
     IZLinkMeshNodeBuilder SetBindHost(string bindHost);
     IZLinkMeshNodeBuilder SetAdvertiseHost(string advertiseHost);
 
-    // Automatic topology에서는 prefix만 지정하고 Framework가 full RID를 만든다.
+    // Automatic RID를 사용할 때는 prefix만 지정하고 Framework가 full RID를 만든다.
     IZLinkMeshNodeBuilder SetRoutingIdPrefix(string prefix);
 
-    // Manual topology에서만 fixed RID를 사용할 수 있다.
+    // Application이 RID를 직접 정한다. 사용 범위는 MeshNode §3.3이 정한다.
     IZLinkMeshNodeBuilder SetRoutingId(RoutingId routingId);
 
     IZLinkMeshNodeSocketConfig ConfigureRouterSocket();
@@ -507,8 +507,8 @@ ready 상태로 만들지 않는다.
 [Lifecycle generation](../00-foundation/02-glossary.ko.md#lifecycle-generation)은 `0`이 아닌 내부 식별
 값이다. 숫자가 더 크다는 이유로 새 lifecycle이라고 판단하지 않고 값이 같은지만 비교한다.
 
-Automatic MeshNode가 재시작되면 새 RID와 새 generation을 사용한다. Fixed RID를 사용하는
-manual topology에서는 다음 조건을 모두 만족한 뒤 새 generation의 연결을 ready 상태로
+Automatic RID를 쓰는 MeshNode가 재시작되면 새 RID와 새 generation을 사용한다. Fixed RID를 사용하는
+MeshNode는 다음 조건을 모두 만족한 뒤 새 generation의 연결을 ready 상태로
 만든다.
 
 1. Application 구성에 해당 peer와 다시 연결하려는 의도가 명시되어 있다.
