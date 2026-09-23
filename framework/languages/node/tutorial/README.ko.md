@@ -504,12 +504,22 @@ connected: true
 round trip: 6ms          # STREAM request/reply
 actor bound: p1
 bound player: p1         # 연결을 player에 묶는다
+pushed: speedy, actor: p1 # connector에서 handle 없이 전송·수신
+actor bound: p2
+bound player: p2
 actor handle: p1
-pushed: speedy, actor: p1           # player가 그 연결로 밀어 준다
+actor handle: p2
+received actor id: p1
+received actor id: p2
+pushed: speedy-p1, actor: p1           # 각 handle이 자기 push를 수신한다
+pushed: speedy-p2, actor: p2
 actor unbound: p1
+actor unbound: p2
 ```
 
-`pushed`는 client가 nickname 변경 요청의 응답이 아닌 **player가 연결로 보낸 알림**을 받았음을 나타낸다.
+첫 `pushed` 줄은 p1만 묶인 동안 connector에서 handle 없이 전송·수신한 결과다. p2가
+묶인 뒤에는 각 Actor handle이 자기 push를 받고, connector callback도 같은 push의 ActorId를
+읽는다. 두 player는 하나의 연결을 공유하고 packet의 Actor slot이 수신할 player를 선택한다.
 
 ### 12. HTTP client
 
@@ -760,7 +770,7 @@ weight가 0인 동안 `profile` request는 `errno 0`으로, one-way send는 `One
 | `session-handler` | `Server/Sessions/ping-handler.ts` |
 | `session-actor-bind` | `Server/Sessions/authenticate-handler.ts` |
 | `stream-register` | `Server/main.ts` |
-| `stream-client` · `session-actor-client` | `StreamClient/main.ts` |
+| `stream-client` · `session-actor-client` · `single-actor-send` · `actor-id-receive` · `actor-handle-events` · `actor-handle-send` · `actor-handle-per-handle-receive` · `actor-handle-send-call` · `actor-handle-receive` | `StreamClient/main.ts` |
 | `http-client-create` | `HttpClient/main.ts` |
 | `http-first-request` | `HttpClient/main.ts` |
 | `http-request-shaping` | `HttpClient/main.ts` |

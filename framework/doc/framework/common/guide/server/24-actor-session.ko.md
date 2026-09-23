@@ -100,8 +100,11 @@ client가 자기 id를 보내면, 그 id의 Actor를 찾거나 만들어 이 연
 
 ### 3.2 남은 packet을 넘기기
 
-session이 처리하지 못한 packet을 묶인 Actor로 보낸다. 묶기 전에는 보낼 곳이 없으므로 **인증이
-먼저**라는 것이 여기서 강제된다.
+session이 처리하지 못한 packet을 묶인 Actor로 보낸다. 대상은 packet마다 dispatch context의 Actor가
+정한다 — client가 Actor handle로 보낸 packet은 그 Actor를 가리킨다. Actor handle 없이 보낸 packet은
+Actor가 비어 있으므로, 이 연결에 묶인 Actor가 하나이면 그 Actor로 보낸다. 묶인 Actor가 없으면 보낼
+곳이 없으므로 **인증이 먼저**라는 것이 여기서 강제된다. client 쪽 구분은
+[packet 수신 §8](../stream-connector/05-receiving.ko.md#8-actor가-여럿일-때--actor-handle로-구분한다)이 다룬다.
 
 === "C#/.NET"
 

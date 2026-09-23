@@ -16,8 +16,8 @@ import {
 } from '../../Shared/contracts';
 
 // --8<-- [start:session-actor-bind]
-// Ties this connection to one player. After this, packets without a session
-// handler reach that player, and the player can push to this connection.
+// Binds each authenticated player to this connection. Packets addressed to
+// that player's Actor reach it, and the player can push to this connection.
 @Injectable()
 @ZLinkPacket(PacketNames.authenticate)
 class AuthenticateHandler {

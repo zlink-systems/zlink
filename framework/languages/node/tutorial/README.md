@@ -514,13 +514,23 @@ connected: true
 round trip: 6ms          # STREAM request/reply
 actor bound: p1
 bound player: p1         # binds the connection to a player
+pushed: speedy, actor: p1 # connector send and receive without a handle
+actor bound: p2
+bound player: p2
 actor handle: p1
-pushed: speedy, actor: p1           # the player pushes over that connection
+actor handle: p2
+received actor id: p1
+received actor id: p2
+pushed: speedy-p1, actor: p1           # each handle receives its own push
+pushed: speedy-p2, actor: p2
 actor unbound: p1
+actor unbound: p2
 ```
 
-`pushed` is the key line. The client only sent a nickname change, and instead of a response, it
-received **a notification the player itself pushed**.
+The first `pushed` line uses the connector directly while only p1 is bound. Once p2 binds,
+each Actor handle receives its own push; a connector-level callback also reads the Actor ID
+on those same pushes. Both players share one connection, and the packet's Actor slot selects
+which player receives it.
 
 Things worth knowing on the Node side:
 
@@ -770,7 +780,7 @@ marked by `--8<--` markers in the source. Marker names match the .NET tutorial.
 | `session-handler` | `Server/Sessions/ping-handler.ts` |
 | `session-actor-bind` | `Server/Sessions/authenticate-handler.ts` |
 | `stream-register` | `Server/main.ts` |
-| `stream-client` / `session-actor-client` | `StreamClient/main.ts` |
+| `stream-client` / `session-actor-client` / `single-actor-send` / `actor-id-receive` / `actor-handle-events` / `actor-handle-send` / `actor-handle-per-handle-receive` / `actor-handle-send-call` / `actor-handle-receive` | `StreamClient/main.ts` |
 | `http-client-create` | `HttpClient/main.ts` |
 | `http-first-request` | `HttpClient/main.ts` |
 | `http-request-shaping` | `HttpClient/main.ts` |

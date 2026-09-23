@@ -148,24 +148,57 @@ connector는 받은 것을 계속 받아서 처리한다. 큐에 한도를 두�
 때문이다. 계속 쌓인다면 pump를 호출하지 않는 client 쪽 문제이므로, 수신 개수를 흐름 제어의 근거로
 사용하지 않는다.
 
-## 8. Actor handle로 주고받기
+## 8. Actor가 여럿일 때 — Actor handle로 구분한다
 
-Actor 하나만 쓰는 application은 기존 송수신 코드를 바꿀 필요가 없다. 서버가 한 연결에
-Actor 여러 개를 bind할 때는 Actor handle로 송신 대상을 고르고, 수신 message의 Actor ID로
-서버 쪽 상대를 확인한다. 서버가 Actor를 이 연결에 bind하면 bound 통지가 그 Actor의 첫 packet보다
-먼저 오고, bind가 끝나면 unbound 통지가 그 Actor의 마지막 packet 뒤에 온다.
+### 8.1 Actor가 하나일 때
 
-먼저 bound·unbound 통지를 등록한다. 다음 예제는 서버가 `p1`을 bind한 뒤 handle을 찾아
-그 Actor를 통해 보내고, 돌아온 message의 Actor ID를 읽는다.
+서버가 이 연결에 Actor를 하나만 bind하면 지금까지의 송수신 코드를 그대로 쓴다. connector에서
+보낸 packet에는 Actor slot이 없고, 서버 session은 slot이 없는 packet을 그 연결에 묶인 하나의
+Actor로 넘긴다([Session과 Actor 연결](../server/24-actor-session.ko.md#32-남은-packet을-넘기기)).
+
+```java
+--8<-- "framework/languages/java/tutorial/java/StreamClient/src/main/java/systems/zlink/tutorial/streamclient/StreamClientProgram.java:single-actor-send"
+```
+
+### 8.2 bound 통지로 handle을 받는다
+
+서버가 한 연결에 Actor를 여럿 bind하면, connector는 Actor마다 **Actor handle**을 만든다. 서버가
+Actor를 bind하면 bound 통지가 그 Actor의 첫 packet보다 먼저 오고, bind가 끝나면 unbound 통지가 그
+Actor의 마지막 packet 뒤에 온다. 다음 예제는 두 통지를 등록하고, 인증한 `p1`·`p2`의 handle을
+Actor ID로 찾는다.
 
 ```java
 --8<-- "framework/languages/java/tutorial/java/StreamClient/src/main/java/systems/zlink/tutorial/streamclient/StreamClientProgram.java:actor-handle-events"
 --8<-- "framework/languages/java/tutorial/java/StreamClient/src/main/java/systems/zlink/tutorial/streamclient/StreamClientProgram.java:actor-handle-send"
+```
+
+### 8.3 handle로 보내고 handle별로 받는다
+
+handle로 보낸 packet에는 그 Actor의 slot이 실리고, 서버 session은 그 slot의 Actor로 packet을
+넘긴다. handle에 등록한 수신 handler는 그 Actor가 보낸 message만 받는다.
+
+```java
+--8<-- "framework/languages/java/tutorial/java/StreamClient/src/main/java/systems/zlink/tutorial/streamclient/StreamClientProgram.java:actor-handle-per-handle-receive"
 --8<-- "framework/languages/java/tutorial/java/StreamClient/src/main/java/systems/zlink/tutorial/streamclient/StreamClientProgram.java:actor-handle-send-call"
 --8<-- "framework/languages/java/tutorial/java/StreamClient/src/main/java/systems/zlink/tutorial/streamclient/StreamClientProgram.java:actor-handle-receive"
 ```
 
-실행하면 `actor handle: p1`과 `pushed: speedy, actor: p1`이 출력된다.
+실행하면 `pushed: speedy-p1, actor: p1`과 `pushed: speedy-p2, actor: p2`가 출력된다.
+
+### 8.4 connector 수준에서 Actor ID로 가른다
+
+handle 없이 connector 수준에서 받을 수도 있다. 이때 message의 Actor ID가 서버 쪽 상대 Actor를
+알려 준다. slot 없이 온 message는 Actor ID가 비어 있다.
+
+```java
+--8<-- "framework/languages/java/tutorial/java/StreamClient/src/main/java/systems/zlink/tutorial/streamclient/StreamClientProgram.java:actor-id-receive"
+```
+
+### 8.5 unbind된 Actor로 보낸 packet
+
+unbind된 handle은 닫힌다. 닫힌 handle로 보내면 connector가 보내지 않고 `validationFailed`로 끝낸다.
+unbind 직전에 이미 보낸 packet이 서버에 늦게 도착하면 서버는 그 packet을 다른 Actor로 넘기지
+않는다 — request는 `InvalidOperation` 오류 응답으로 끝나고, 단방향 send는 버려진다.
 
 ## 9. 다음 장
 
