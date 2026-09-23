@@ -6,7 +6,8 @@ This Unreal Engine 5 C++ project connects to the same Engine Lobby server as the
 single `AZLinkClientActor` owns the C++ stream connector, pumps it from `Tick`, performs
 `PingReq` → `PingRes` → `JoinReq` → `JoinRes` → `ChatMsg`, and reports the `ChatNotify` result on
 screen and in the log.
-The actor subscribes to the `ChatNotify` push before connecting.
+The actor registers `On(ChatNotify, callback)` before connecting. Each `RequestJson` call supplies
+its own completion callback for either a reply or a failure.
 
 The [`engine-lobby` sample contract](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/sample/engine-lobby/README.md)
 owns the packet names and JSON fields. This project adds no engine-specific aliases or fields.
@@ -60,10 +61,10 @@ If the printed port differs from the default `22700`, change the `Endpoint` defa
 3. Confirm that the screen changes from `joined as unreal-player (...)` to
    `unreal-player: hello from Unreal`.
 4. Confirm the same status in the Output Log.
-5. Stopping Play removes the delegates and closes the connector.
+5. Stopping Play unsubscribes the push callback and closes the connector.
 6. Run `./run_sample.sh stop` in the server directory.
 
-The `connect`, `pump`, `handler`, and `lifecycle` markers in `EngineLobbyClientActor.cpp` are the
+The `connect-call`, `connect`, `pump`, `receive`, `send`, and `lifecycle` markers in `EngineLobbyClientActor.cpp` are the
 source boundaries consumed by the engine integration guide.
 
 ## Minimum source validation

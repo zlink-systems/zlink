@@ -53,18 +53,14 @@ AZLinkClientActor::AZLinkClientActor ()
     PrimaryActorTick.bCanEverTick = true;
 }
 
-// --8<-- [start:connect]
+// --8<-- [start:connect-call]
 void AZLinkClientActor::BeginPlay ()
 {
     Super::BeginPlay ();
-    // --8<-- [start:connect-call]
     Connector = NewObject<UZLinkStreamConnector> (this);
-    ResponseHandle =
-      Connector->OnRequestCompletedNative.AddUObject (this, &AZLinkClientActor::HandleResponse);
     PacketHandle =
-      Connector->OnPacketReceivedNative.AddUObject (this, &AZLinkClientActor::HandlePacket);
-
-    Connector->Subscribe (PacketName (engine_lobby::packet::chat_notify));
+      Connector->On (PacketName (engine_lobby::packet::chat_notify),
+                     [this] (const FZLinkStreamPacket &Packet) { HandlePacket (Packet); });
     SetStatus (TEXT ("Engine Lobby: connecting"));
     Connector->Connect (Endpoint);
     if (!Connector->IsConnected ()) {
@@ -72,14 +68,16 @@ void AZLinkClientActor::BeginPlay ()
         return;
     }
     SendPing ();
-    // --8<-- [end:connect-call]
 }
+// --8<-- [end:connect-call]
 
+// --8<-- [start:connect]
 void AZLinkClientActor::SendPing ()
 {
-    Connector->RequestJson (PacketName (engine_lobby::packet::ping_req),
-                            EncodeStringField (engine_lobby::field::sent_at_unix_ms, TEXT ("1000")),
-                            5.0F);
+    Connector->RequestJson (
+      PacketName (engine_lobby::packet::ping_req),
+      EncodeStringField (engine_lobby::field::sent_at_unix_ms, TEXT ("1000")), 5.0F,
+      [this] (const FZLinkStreamRequestResult &Result) { HandlePingResponse (Result); });
 }
 // --8<-- [end:connect]
 
@@ -93,41 +91,43 @@ void AZLinkClientActor::Tick (float DeltaSeconds)
 }
 // --8<-- [end:pump]
 
-// --8<-- [start:handler]
-void AZLinkClientActor::HandleResponse (const FZLinkStreamPacket &Packet)
+void AZLinkClientActor::HandlePingResponse (const FZLinkStreamRequestResult &Result)
 {
-    const TSharedPtr<FJsonObject> Json = DecodePayload (Packet);
-    if (Packet.PacketName == PacketName (engine_lobby::packet::ping_res)) {
-        FString SentAt;
-        if (!ReadRequiredString (Json, engine_lobby::field::sent_at_unix_ms, SentAt)
-            || SentAt != TEXT ("1000")) {
-            SetStatus (TEXT ("Engine Lobby: invalid PingRes"), FColor::Red);
-            return;
-        }
-        SendJoin ();
+    if (!Result.bSuccess) {
+        SetStatus (TEXT ("Engine Lobby: PingReq failed: ") + Result.ErrorMessage, FColor::Red);
         return;
     }
-
-    if (Packet.PacketName == PacketName (engine_lobby::packet::join_res)) {
-        FString ActorId;
-        FString Name;
-        if (!ReadRequiredString (Json, engine_lobby::field::actor_id, ActorId)
-            || !ReadRequiredString (Json, engine_lobby::field::name, Name) || Name != PlayerName) {
-            SetStatus (TEXT ("Engine Lobby: invalid JoinRes"), FColor::Red);
-            return;
-        }
-        SetStatus (FString::Printf (TEXT ("joined as %s (%s)"), *Name, *ActorId), FColor::Green);
-        SendChat ();
+    const TSharedPtr<FJsonObject> Json = DecodePayload (Result.Packet);
+    FString SentAt;
+    if (!ReadRequiredString (Json, engine_lobby::field::sent_at_unix_ms, SentAt)
+        || SentAt != TEXT ("1000")) {
+        SetStatus (TEXT ("Engine Lobby: invalid PingRes"), FColor::Red);
+        return;
     }
+    SendJoin ();
+}
+
+void AZLinkClientActor::HandleJoinResponse (const FZLinkStreamRequestResult &Result)
+{
+    if (!Result.bSuccess) {
+        SetStatus (TEXT ("Engine Lobby: JoinReq failed: ") + Result.ErrorMessage, FColor::Red);
+        return;
+    }
+    const TSharedPtr<FJsonObject> Json = DecodePayload (Result.Packet);
+    FString ActorId;
+    FString Name;
+    if (!ReadRequiredString (Json, engine_lobby::field::actor_id, ActorId)
+        || !ReadRequiredString (Json, engine_lobby::field::name, Name) || Name != PlayerName) {
+        SetStatus (TEXT ("Engine Lobby: invalid JoinRes"), FColor::Red);
+        return;
+    }
+    SetStatus (FString::Printf (TEXT ("joined as %s (%s)"), *Name, *ActorId), FColor::Green);
+    SendChat ();
 }
 
 // --8<-- [start:receive]
 void AZLinkClientActor::HandlePacket (const FZLinkStreamPacket &Packet)
 {
-    if (Packet.PacketName != PacketName (engine_lobby::packet::chat_notify)) {
-        return;
-    }
-
     const TSharedPtr<FJsonObject> Json = DecodePayload (Packet);
     FString ActorId;
     FString Name;
@@ -145,8 +145,10 @@ void AZLinkClientActor::HandlePacket (const FZLinkStreamPacket &Packet)
 // --8<-- [start:send]
 void AZLinkClientActor::SendJoin ()
 {
-    Connector->RequestJson (PacketName (engine_lobby::packet::join_req),
-                            EncodeStringField (engine_lobby::field::name, PlayerName), 5.0F);
+    Connector->RequestJson (
+      PacketName (engine_lobby::packet::join_req),
+      EncodeStringField (engine_lobby::field::name, PlayerName), 5.0F,
+      [this] (const FZLinkStreamRequestResult &Result) { HandleJoinResponse (Result); });
 }
 
 void AZLinkClientActor::SendChat ()
@@ -155,14 +157,12 @@ void AZLinkClientActor::SendChat ()
                          EncodeStringField (engine_lobby::field::text, FirstChat));
 }
 // --8<-- [end:send]
-// --8<-- [end:handler]
 
 // --8<-- [start:lifecycle]
 void AZLinkClientActor::EndPlay (const EEndPlayReason::Type EndPlayReason)
 {
     if (Connector != nullptr) {
-        Connector->OnPacketReceivedNative.Remove (PacketHandle);
-        Connector->OnRequestCompletedNative.Remove (ResponseHandle);
+        Connector->Unsubscribe (PacketHandle);
         Connector->ShutdownForMapUnload ();
     }
     Super::EndPlay (EndPlayReason);
