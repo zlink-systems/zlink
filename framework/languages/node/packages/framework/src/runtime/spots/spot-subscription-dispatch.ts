@@ -187,7 +187,8 @@ export class ZLinkSpotSubscriptionDispatch {
     const inboundFlow = createInboundFlow(
       envelope.header.flowId,
       envelope.header.flowOrigin,
-      this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
+      this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true,
+      undefined
     );
     try {
       await this.options.serial.execute(

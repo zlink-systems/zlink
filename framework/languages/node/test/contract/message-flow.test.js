@@ -422,6 +422,32 @@ test('spec 26 structured log projection uses only the exact keys', () => {
   assert.equal(traceRecords[0].attributes.duration_seconds, 0.125);
 });
 
+test('STREAM flow records carry the server session id through dispatch and reply', () => {
+  const { tracer } = makeTracer(diagnostics('normal'));
+  tracer.trace({ ...receivedEvent(), surface: 'streamSession' });
+  assert.equal(telemetryRecords[0].attributes.stream_session_id, undefined);
+  telemetryRecords.length = 0;
+  traceRecords.length = 0;
+  const inbound = flowContext.createInboundFlow(undefined, undefined, true, 'session-42');
+  flowContext.runWithFlow(inbound, () => {
+    tracer.trace({
+      ...receivedEvent(),
+      surface: 'streamSession'
+    });
+    tracer.trace({
+      ...receivedEvent(),
+      outcome: ZLinkMessageFlowOutcome.Replied,
+      surface: 'streamSession'
+    });
+  });
+  assert.equal(telemetryRecords.length, 2);
+  for (const record of telemetryRecords) {
+    assert.equal(record.attributes.stream_session_id, 'session-42');
+    assert.match(record.body, /session=session-42/);
+  }
+  assert.equal(traceRecords[0].attributes.stream_session_id, 'session-42');
+});
+
 test('spec 26 flow-less sampling does not create a flow context and backpressure bypasses sampling', () => {
   const { tracer } = makeTracer(diagnostics('normal', { sampleRate: 0 }));
   assert.equal(flowContext.currentFlowContext(), undefined);
@@ -1153,10 +1179,15 @@ test('MFLOW-EXT spec 27 \u00a74 Off stream decode skips and strips malformed flo
 });
 
 test('MFLOW-EXT absent disabled flow does not create an ambient context', () => {
-  const absent = flowContext.createInboundFlow(undefined, undefined, false);
+  const absent = flowContext.createInboundFlow(undefined, undefined, false, undefined);
   assert.equal(absent, undefined);
   assert.equal(
-    flowContext.createInboundFlow('018f2b63-9d4a-7abc-8def-0123456789ab', 'Inbound', false),
+    flowContext.createInboundFlow(
+      '018f2b63-9d4a-7abc-8def-0123456789ab',
+      'Inbound',
+      false,
+      undefined
+    ),
     undefined,
     'Off must not read an inbound wire flow into async-local context'
   );

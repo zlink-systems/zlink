@@ -66,6 +66,8 @@ public sealed class StreamFlowEndToEndTests
             var callback = await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.True(callback.Result.IsSuccess);
             Assert.Equal("reply", callback.Result.Value?.Value);
+            var sessionId = Assert.IsType<string>(callback.Result.Value?.SessionId);
+            Assert.False(string.IsNullOrWhiteSpace(sessionId));
             Assert.Equal(ZlinkStreamFlowOrigin.Application, callback.Origin);
             Assert.Null(ZlinkStreamFlowContext.Current);
 
@@ -90,6 +92,8 @@ public sealed class StreamFlowEndToEndTests
             var correlation = ReadToken(received, "corr");
             Assert.False(string.IsNullOrWhiteSpace(correlation));
             Assert.Equal(correlation, ReadToken(replied, "corr"));
+            Assert.Equal(sessionId, ReadToken(received, "session"));
+            Assert.Equal(sessionId, ReadToken(replied, "session"));
 
             await connector.Close.Async();
             await host.StopAsync();
@@ -114,7 +118,7 @@ public sealed class StreamFlowEndToEndTests
 
     private sealed record FlowRequest(string Value);
 
-    private sealed record FlowReply(string Value);
+    private sealed record FlowReply(string Value, string SessionId);
 
     private sealed class FlowLoggerProvider : ILoggerProvider
     {
@@ -179,7 +183,9 @@ public sealed class StreamFlowEndToEndTests
             CancellationToken cancellationToken
         )
         {
-            await Context.Client.Reply(new FlowReply("reply")).Async(cancellationToken);
+            await Context
+                .Client.Reply(new FlowReply("reply", Context.SessionId))
+                .Async(cancellationToken);
         }
     }
 }

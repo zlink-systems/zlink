@@ -23,30 +23,28 @@ title: "SupportChat 따라 읽기 · Java"
     SupportChat 샘플을 편집기에 열고, 고객의 상담 요청이 상담원에게 배정되고 대화가 닫히기까지
     메시지가 어느 서버의 어느 코드를 지나는지 따라갈 수 있다. 이 장의 코드는 [언어별 예제 저장소의 SupportChat 샘플](https://github.com/zlink-systems/zlink-java-examples/tree/main/samples/SupportChat)에서 가져온다.
 
-[샘플 고르기](14-samples.ko.md#5-supportchat--라이브-채팅-상담-시스템-구축)가 이 샘플이 무엇을
-보여 주는지 소개했다. 이 장은 그 소개 다음에 읽는 자리다 — 역할과 코드 위치, 주요 시나리오의
-메시지 흐름, 각 흐름에 등장하는 framework 기능과 그것을 설명하는 장을 소스가 놓인 순서대로
-따라간다. 이 장은 SupportChat 샘플의 역할과 코드 위치, 주요 메시지 흐름, 실행 검증을 소스 순서대로
-설명한다. 요구사항, 메시지 계약과 검증 기준은 [SupportChat 시나리오](../../../common/sample/supportchat/README.ko.md)에서 참고한다.
+[샘플 고르기](14-samples.ko.md#5-supportchat--라이브-채팅-상담-시스템-구축)가 이 샘플을 소개한다.
+이 장은 역할과 코드 위치, 주요 메시지 흐름, 실행 검증을 소스 순서대로 설명한다. 요구사항과
+메시지 계약은 [SupportChat 시나리오](../../../common/sample/supportchat/README.ko.md)에서 참고한다.
 
 ## 1. 이 샘플이 보여 주는 것
 
 고객과 상담원은 각각 Session 서버의 STREAM 연결 하나만 유지한다. 인증은 API가, 대화 상태는
 Support의 conversation Spot이 소유한다. 상담원 한 명이 여러 대화를 동시에 처리하므로, 상담원의
-연결 하나에 roster Actor와 대화별 conversation Actor가 함께 묶이고, 들어오는 packet은 stream
-metadata의 `ConversationId`로 어느 Actor에 갈지 정해진다.
+연결 하나에 roster Actor와 대화별 conversation Actor가 함께 묶인다. 상담원은 방별 Actor handle로
+packet을 보내고, Session은 packet의 Actor slot으로 relay 대상을 고른다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/14-supportchat.html" title="SupportChat 샘플 토폴로지" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/14-supportchat.html" target="_blank">↗ 크게 보기</a></p>
 
 이 장이 따라가는 흐름은 인증과 identity Actor bind → 상담 열기와 배정 → 상담원의 대화 join →
-metadata로 relay되는 채팅 → idle timer와 종료 순서다.
+Actor slot으로 relay되는 채팅 → idle timer와 종료 순서다.
 
 ## 2. 역할과 코드 위치
 
 | 역할 | process 수 | 소유하는 것 | 코드 위치 |
 | --- | ---: | --- | --- |
-| Session | 1 | STREAM 연결, 인증 packet, Actor bind와 metadata relay | `Server/Session` |
+| Session | 1 | STREAM 연결, 인증·join packet, Actor bind와 Actor slot relay | `Server/Session` |
 | API | 1 | token 검증, conversation Spot 생성 요청 | `Server/Api` |
 | Support | 1 | Entry Spot, conversation Spot, identity·roster·conversation Actor, 배정과 push | `Server/Support/Infrastructure` |
 | Client | 1 | 고객 시나리오와 상담원 시나리오, self-check | `Client` |
@@ -65,17 +63,13 @@ Session은 Support mesh의 object를 호출하고 API channel을 호출하며 ST
 --8<-- "framework/languages/java/samples/java/SupportChat/Server/Session/src/main/java/systems/zlink/samples/supportchat/server/session/Program.java:doc-sc-session-register"
 ```
 
-Support는 Entry Spot, Actor factory와 conversation Spot factory를 등록하고, session과 Actor 사이에
-오갈 수 있는 metadata key를 허용한다.
+Support는 Entry Spot, Actor factory와 conversation Spot factory를 등록한다.
 
 `Server/Support/src/main/java/systems/zlink/samples/supportchat/server/support/Program.java`
 
 ```java
 --8<-- "framework/languages/java/samples/java/SupportChat/Server/Support/src/main/java/systems/zlink/samples/supportchat/server/support/Program.java:doc-sc-support-register"
 ```
-
-metadata를 허용하지 않으면 session이 붙인 `ConversationId`는 오류 없이 값만 전달되지 않는다.
-허용 key는 [Options](16-options.ko.md#10-반드시-지정하는-값)에 반드시 지정하는 값으로 있다.
 
 ## 4. 인증과 identity Actor
 
@@ -161,20 +155,21 @@ User Spot 생성은 [Spot](21-spot.ko.md#4-호출하는-쪽--spot을-호출하�
 [Session 묶음의 동작 원리](39-session-binding.ko.md#1-묶을-수-있는-개수--session-하나에-actor-여럿-actor-하나에-session-하나)가
 다룬다.
 
-## 7. 채팅 — metadata로 고르는 relay
+## 7. 채팅 — Actor로 고르는 relay
 
-채팅 packet은 payload를 해석하지 않고 stream metadata의 `ConversationId`로 대상 Actor를 고른다.
-상담원의 map에 있으면 그 conversation Actor로, 없으면 identity Actor로 relay한다.
+상담원은 `JoinConversationRes.actorId`로 방의 Actor handle을 찾아 그 handle로 채팅 packet을 보낸다.
+고객은 연결에 묶인 단일 Actor로 보낸다. 인증과 `JoinConversationReq(conversationId)`는 Session
+handler가 직접 처리하는 binding packet이다. 그 밖의 packet은 Session이 payload를 해석하지 않고
+relay한다. packet의 Actor slot이 있으면 dispatch context에 묶인 해당 Actor로, 없으면 연결의
+identity Actor로 보낸다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-chat-typing.html" title="채팅과 typing" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-supportchat-chat-typing.html" target="_blank">↗ 크게 보기</a></p>
 
-`ConversationId` metadata가 상담원의 여러 conversation Actor 중 하나를 고르므로 payload를 해석하지 않아도 relay 대상이 정해진다.
-
 `Server/Session/src/main/java/systems/zlink/samples/supportchat/server/session/sessions/SupportChatSession.java`
 
 ```java
---8<-- "framework/languages/java/samples/java/SupportChat/Server/Session/src/main/java/systems/zlink/samples/supportchat/server/session/sessions/SupportChatSession.java:doc-sc-metadata-relay"
+--8<-- "framework/languages/java/samples/java/SupportChat/Server/Session/src/main/java/systems/zlink/samples/supportchat/server/session/sessions/SupportChatSession.java:doc-sc-actor-relay"
 ```
 
 conversation Spot은 메시지에 `MessageSeq`를 부여하고, 보낸 사람을 제외한 참가자의 bound session으로

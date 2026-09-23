@@ -335,7 +335,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkActorRuntimeState runtimeState,
         ZlinkStreamHeader header,
         Message payload,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken,
+        RoutingId? sourceSessionRid
     )
     {
         return ExecuteOperationAsync(() =>
@@ -346,7 +347,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                 actor,
                 header,
                 payload,
-                cancellationToken
+                cancellationToken,
+                sourceSessionRid
             );
         });
     }
@@ -358,7 +360,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         Message payload,
         bool callerOwnsDispatchTurn,
         bool relocationReplay,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken,
+        RoutingId? sourceSessionRid
     )
     {
         return ExecuteOperationAsync(() =>
@@ -372,7 +375,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                 payload,
                 callerOwnsDispatchTurn,
                 relocationReplay,
-                cancellationToken
+                cancellationToken,
+                sourceSessionRid
             );
         });
     }

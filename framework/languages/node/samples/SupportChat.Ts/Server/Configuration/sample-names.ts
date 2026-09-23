@@ -4,8 +4,7 @@ const SampleNames = {
   conversationSpotMesh: 'supportchat-conversations',
   meshName: 'supportchat-conversations',
   conversationSpotType: 'supportchat.conversation',
-  supportActorType: 'support.user',
-  conversationIdMetadataKey: 'conversation-id'
+  supportActorType: 'support.user'
 } as const;
 
 const SampleTimings = {

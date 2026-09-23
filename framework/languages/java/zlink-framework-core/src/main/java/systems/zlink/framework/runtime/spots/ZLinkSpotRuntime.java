@@ -4953,15 +4953,25 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
      * starts instead. The frame itself is never rejected for this.
      */
     private static ZLinkFlowContext.State actorPacketHeaderFlowPair(
-            ActorPacketFrames.Header packetHeader) {
-        if (packetHeader.flowId().isEmpty() || packetHeader.flowOrigin().isEmpty()) {
-            return null;
+            ActorPacketFrames.Header packetHeader, RoutingId sourceSessionRid) {
+        ZLinkFlowContext.State flow = null;
+        if (packetHeader.flowId().isPresent() && packetHeader.flowOrigin().isPresent()) {
+            String flowId = packetHeader.flowId().orElseThrow();
+            if (ZLinkFlowContext.isValidFlowId(flowId)) {
+                flow =
+                        new ZLinkFlowContext.State(
+                                flowId,
+                                packetHeader.flowOrigin().orElseThrow(),
+                                null);
+            }
         }
-        String flowId = packetHeader.flowId().orElseThrow();
-        if (!ZLinkFlowContext.isValidFlowId(flowId)) {
-            return null;
+        if (flow == null) {
+            flow = ZLinkFlowContext.create(ZLinkFlowOrigin.INBOUND);
         }
-        return new ZLinkFlowContext.State(flowId, packetHeader.flowOrigin().orElseThrow());
+        return sourceSessionRid == null
+                ? flow
+                : new ZLinkFlowContext.State(
+                        flow.flowId(), flow.origin(), sourceSessionRid.toHex());
     }
 
     private CompletionStage<Void> enqueueLocalActorPacket(
@@ -5003,9 +5013,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         //  flow state instead of reading the header fields.
                         try (var ignored =
                                 flowCaptureEnabled()
-                                        ? ZLinkFlowContext.enterOrCreate(
-                                                actorPacketHeaderFlowPair(packetHeader),
-                                                ZLinkFlowOrigin.INBOUND)
+                                        ? ZLinkFlowContext.enter(
+                                                actorPacketHeaderFlowPair(
+                                                        packetHeader,
+                                                        headerCopy.sourceSessionRid()))
                                         : ZLinkFlowContext.suppress()) {
                             return dispatchActorPacketToHandler(
                                     dispatchLine.dispatchOutbound(),

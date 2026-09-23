@@ -41,7 +41,6 @@ public sealed class RegressionTests
         "14-samples.ko.md",
         "15-e2e-testing.ko.md",
         "16-options.ko.md",
-        "17-alternative.ko.md",
         "20-channel-messaging.ko.md",
         "21-spot.ko.md",
         "22-actor.ko.md",
@@ -269,7 +268,6 @@ public sealed class RegressionTests
         "01-overview.ko.md",
         "03-concepts.ko.md",
         "16-options.ko.md",
-        "17-alternative.ko.md",
     ];
 
     /// <summary>

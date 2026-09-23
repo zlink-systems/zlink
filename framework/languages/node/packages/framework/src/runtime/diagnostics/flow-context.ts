@@ -5,6 +5,7 @@ import type { ZLinkFlowOrigin } from '../../contracts';
 export interface ZLinkFlowContextValue {
   readonly flowId: string;
   readonly flowOrigin: ZLinkFlowOrigin;
+  readonly streamSessionId?: string;
 }
 
 const flowStorage = new AsyncLocalStorage<ZLinkFlowContextValue | undefined>();
@@ -71,14 +72,15 @@ export function runWithOutboundFlow<T>(enabled: boolean, callback: () => T): T {
 }
 
 export function createInboundFlow(
-  flowId?: string,
-  flowOrigin?: ZLinkFlowOrigin,
-  createIfAbsent = true
+  flowId: string | undefined,
+  flowOrigin: ZLinkFlowOrigin | undefined,
+  createIfAbsent: boolean,
+  streamSessionId: string | undefined
 ): ZLinkFlowContextValue | undefined {
   if (!createIfAbsent) {
     return undefined;
   }
-  return { flowId: flowId ?? createFlowId(), flowOrigin: flowOrigin ?? 'Inbound' };
+  return { flowId: flowId ?? createFlowId(), flowOrigin: flowOrigin ?? 'Inbound', streamSessionId };
 }
 
 function createFlowId(): string {

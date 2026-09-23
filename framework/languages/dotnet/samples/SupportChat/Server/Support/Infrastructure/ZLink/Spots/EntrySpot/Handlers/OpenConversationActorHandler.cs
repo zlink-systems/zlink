@@ -48,7 +48,12 @@ internal sealed class OpenConversationActorHandler(ILogger<OpenConversationActor
         actor
             .Context.JoinSpot(
                 opened.State.ConversationId,
-                new JoinConversationReq(actor.ParticipantId, actor.Role, actor.DisplayName)
+                new JoinConversationReq(
+                    opened.State.ConversationId,
+                    actor.ParticipantId,
+                    actor.Role,
+                    actor.DisplayName
+                )
             )
             .Defer();
         // --8<-- [end:doc-sc-open-actor]

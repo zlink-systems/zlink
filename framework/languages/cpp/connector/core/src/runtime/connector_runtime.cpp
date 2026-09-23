@@ -361,17 +361,6 @@ result_t<transport_t> validate_options (const connector_options_t &options)
             return result_t<transport_t>::failure (
               error_code_t::validation_failed, "stream connector dispatch_mode is out of range");
     }
-    switch (options.diagnostics_level) {
-        case diagnostics_level_t::off:
-        case diagnostics_level_t::errors:
-        case diagnostics_level_t::normal:
-        case diagnostics_level_t::detailed:
-            break;
-        default:
-            return result_t<transport_t>::failure (
-              error_code_t::validation_failed,
-              "stream connector diagnostics_level is out of range");
-    }
     if (options.typed_codec) {
         switch (options.typed_codec->codec_id ()) {
             case codec_t::raw:
@@ -581,6 +570,8 @@ void remove_subscription (const std::shared_ptr<void> &state_handle, std::uint64
     };
     drop (state->state_handlers);
     drop (state->error_handlers);
+    drop (state->request_sending_handlers);
+    drop (state->reply_received_handlers);
     drop (state->disconnected_handlers);
     drop (state->actor_bound_handlers);
     drop (state->actor_unbound_handlers);
@@ -613,35 +604,86 @@ void note_received_packet (connector_state_t &state, const packet_t &packet)
     ++state.received_counts[packet.name];
 }
 
-/* Thread-local because the connector runs a handler on one thread and the
- * outbound call it starts runs on that same thread; flow-correlation §6
- * forbids a process-global or connector-field guess at the current flow. */
-current_flow_t &mutable_current_flow () noexcept
-{
-    static thread_local current_flow_t flow;
-    return flow;
-}
-
-const current_flow_t &current_flow () noexcept
-{
-    return mutable_current_flow ();
-}
-
-flow_scope_t::flow_scope_t (const packet_t &packet) : _previous (mutable_current_flow ())
-{
-    auto &flow = mutable_current_flow ();
-    flow.flow_id = packet.flow_id;
-    flow.flow_origin = packet.flow_origin;
-}
-
-flow_scope_t::~flow_scope_t ()
-{
-    mutable_current_flow () = std::move (_previous);
-}
-
 void schedule_delivery (std::shared_ptr<void> state, std::function<void ()> callback)
 {
     schedule_delivery (state_from (state), std::move (callback));
+}
+
+void run_request_sending (const std::shared_ptr<void> &state_handle,
+                          request_sending_context_t &context)
+{
+    auto state = state_from (state_handle);
+    std::vector<handler_entry_t<std::function<void (request_sending_context_t &)>>> handlers;
+    {
+        std::lock_guard<std::mutex> lock (state->lifecycle_mutex);
+        handlers = state->request_sending_handlers;
+    }
+    for (const auto &entry : handlers) {
+        try {
+            entry.handler (context);
+        }
+        catch (const std::exception &error) {
+            publish_error (*state, {error_code_t::user_callback_failed, error.what ()});
+        }
+        catch (...) {
+            publish_error (*state,
+                           {error_code_t::user_callback_failed, "request sending hook failed"});
+        }
+    }
+}
+
+std::vector<std::uint64_t> capture_reply_hook_ids (const std::shared_ptr<void> &state_handle)
+{
+    auto state = state_from (state_handle);
+    std::vector<std::uint64_t> ids;
+    std::lock_guard<std::mutex> lock (state->lifecycle_mutex);
+    for (const auto &entry : state->reply_received_handlers) {
+        ids.push_back (entry.id);
+    }
+    return ids;
+}
+
+void run_reply_received (const std::shared_ptr<void> &state_handle,
+                         const reply_received_context_t &context,
+                         const std::vector<std::uint64_t> &handler_ids)
+{
+    auto state = state_from (state_handle);
+    std::vector<handler_entry_t<std::function<void (const reply_received_context_t &)>>> handlers;
+    {
+        std::lock_guard<std::mutex> lock (state->lifecycle_mutex);
+        for (const auto &entry : state->reply_received_handlers) {
+            if (std::find (handler_ids.begin (), handler_ids.end (), entry.id)
+                != handler_ids.end ()) {
+                handlers.push_back (entry);
+            }
+        }
+    }
+    for (const auto &entry : handlers) {
+        try {
+            entry.handler (context);
+        }
+        catch (const std::exception &error) {
+            publish_error (*state, {error_code_t::user_callback_failed, error.what ()});
+        }
+        catch (...) {
+            publish_error (*state,
+                           {error_code_t::user_callback_failed, "reply received hook failed"});
+        }
+    }
+}
+
+void schedule_reply_received (const std::shared_ptr<void> &state_handle,
+                              reply_received_context_t context)
+{
+    auto state = state_from (state_handle);
+    auto handler_ids = capture_reply_hook_ids (state_handle);
+    if (handler_ids.empty ()) {
+        return;
+    }
+    schedule_delivery (
+      state, [state_handle, handler_ids = std::move (handler_ids), context = std::move (context)] {
+          run_reply_received (state_handle, context, handler_ids);
+      });
 }
 
 void schedule_lifecycle_delivery (std::shared_ptr<connector_state_t> state,
@@ -969,33 +1011,7 @@ std::size_t connector_t::received_count (std::string_view packet_name) const
 connector_options_t connector_t::options () const
 {
     auto state = detail::state_from (_state);
-    auto snapshot = state->options;
-    // The struct field only carries the value the connector was created
-    // with; the effective level lives in the atomic cell so it can change
-    // at runtime (stream-connector §13). Do not expose a stale value here.
-    snapshot.diagnostics_level = state->diagnostics_level_cell.load (std::memory_order_acquire);
-    return snapshot;
-}
-
-diagnostics_level_t connector_t::diagnostics_level () const
-{
-    return detail::state_from (_state)->diagnostics_level_cell.load (std::memory_order_acquire);
-}
-
-void connector_t::set_diagnostics_level (diagnostics_level_t level)
-{
-    /* stream-connector §13: the synchronous surface writes the value and
-     * returns. Implementing it as a blocking call over the asynchronous pair
-     * would make a call from inside a receive callback wait for its own
-     * completion. */
-    detail::state_from (_state)->diagnostics_level_cell.store (level, std::memory_order_release);
-}
-
-void connector_t::set_diagnostics_level_async (diagnostics_level_t level,
-                                               std::function<void (result_t<void>)> callback)
-{
-    detail::state_from (_state)->diagnostics_level_cell.store (level, std::memory_order_release);
-    callback (result_t<void>::success ());
+    return state->options;
 }
 
 std::size_t connector_t::pending_dispatch_count () const
@@ -1502,6 +1518,9 @@ result_t<void> close_state (std::shared_ptr<detail::connector_state_t> state)
         }
         for (auto &[_, request] : state->pending_requests) {
             detail::cancel_timer (request.timeout_timer);
+            if (request.reply_hook_ids) {
+                *request.reply_hook_ids = detail::capture_reply_hook_ids (state);
+            }
             if (request.callback) {
                 closed_request_callbacks.push_back (
                   [callback = std::move (request.callback)] () mutable {
@@ -1525,12 +1544,6 @@ result_t<void> close_state (std::shared_ptr<detail::connector_state_t> state)
         state->inbound_buffer.clear ();
         state->dispatch_queue.clear ();
         ++state->dispatch_queue_generation;
-        {
-            // delivery_queue is guarded by delivery_mutex, not by
-            // transport_mutex. Lock order: transport -> delivery.
-            std::lock_guard<std::mutex> delivery_lock (state->delivery_mutex);
-            state->delivery_queue.clear ();
-        }
     }
     detail::close_bound_actors (state);
     detail::change_state (state, connection_state_t::closed);
@@ -1540,7 +1553,6 @@ result_t<void> close_state (std::shared_ptr<detail::connector_state_t> state)
         state->error_handlers.clear ();
         state->disconnected_handlers.clear ();
         state->actor_bound_handlers.clear ();
-        state->actor_unbound_handlers.clear ();
     }
     state->state_changed.notify_all ();
     for (auto &delivery : closed_write_callbacks) {
@@ -1610,6 +1622,30 @@ subscription_t connector_t::on_error (std::function<void (const error_t &)> hand
     {
         std::lock_guard<std::mutex> lock (state->lifecycle_mutex);
         state->error_handlers.push_back ({id, std::move (handler)});
+    }
+    return subscription_t (_state, id);
+}
+
+subscription_t
+connector_t::on_request_sending (std::function<void (request_sending_context_t &)> handler)
+{
+    auto state = detail::state_from (_state);
+    const auto id = state->next_subscription_id.fetch_add (1, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock (state->lifecycle_mutex);
+        state->request_sending_handlers.push_back ({id, std::move (handler)});
+    }
+    return subscription_t (_state, id);
+}
+
+subscription_t
+connector_t::on_reply_received (std::function<void (const reply_received_context_t &)> handler)
+{
+    auto state = detail::state_from (_state);
+    const auto id = state->next_subscription_id.fetch_add (1, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock (state->lifecycle_mutex);
+        state->reply_received_handlers.push_back ({id, std::move (handler)});
     }
     return subscription_t (_state, id);
 }

@@ -47,6 +47,7 @@ internal static class ZLinkTelemetry
             ZLinkTraceFormat.ActivationStateKey(flow.ActivationState)
         );
         activity.SetTag("actor_id", flow.ActorId);
+        activity.SetTag("stream_session_id", flow.StreamSessionId);
         activity.SetTag("source_rid", flow.SourceRid);
         activity.SetTag("target_rid", flow.TargetRid ?? flow.PeerRid);
         activity.SetTag("server_rid", flow.ServerRid);
@@ -99,6 +100,7 @@ internal static class ZLinkTelemetry
             ZLinkTraceFormat.ActivationStateKey(error.ActivationState)
         );
         activity.SetTag("actor_id", error.ActorId);
+        activity.SetTag("stream_session_id", error.StreamSessionId);
         activity.SetTag("source_rid", error.SourceRid);
         activity.SetTag("target_rid", error.TargetRid);
         activity.SetTag("server_rid", error.ServerRid);

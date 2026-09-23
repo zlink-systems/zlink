@@ -20,9 +20,8 @@ internal sealed class ConversationSpot(
 {
     internal static readonly TimeSpan IdleCheckPeriod = TimeSpan.FromMilliseconds(200);
 
-    // Push recipients keyed by participant id. Customer events go to the customer's
-    // actor, while agent events go to the roster actor that represents the human agent
-    // across all rooms. ConversationId on each notification disambiguates the room.
+    // Push recipients keyed by participant id. Each participant's bound actor owns the
+    // push route: the customer identity actor or this room's agent conversation actor.
     private readonly Dictionary<string, SupportUserActor> _actors = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ConversationChange> _pendingJoinChanges = new(
         StringComparer.Ordinal
@@ -105,12 +104,16 @@ internal sealed class ConversationSpot(
             _pendingJoinChanges[actorId] = change;
             await ValueTask.CompletedTask;
             return ZLinkSpotActorJoinResult.Accept(
-                new JoinConversationRes(false, ConversationContracts.ToState(change.State))
+                new JoinConversationRes(false, actorId, ConversationContracts.ToState(change.State))
             );
         }
 
         return ZLinkSpotActorJoinResult.Accept(
-            new JoinConversationRes(false, ConversationContracts.ToState(conversation.Snapshot()))
+            new JoinConversationRes(
+                false,
+                actorId,
+                ConversationContracts.ToState(conversation.Snapshot())
+            )
         );
     }
 
@@ -124,7 +127,7 @@ internal sealed class ConversationSpot(
         if (string.Equals(actor.Role, SupportChatRoles.Agent, StringComparison.Ordinal))
         {
             actor.JoinConversation(conversation.ConversationId);
-            _actors[actor.ParticipantId] = directory.Get(actor.ParticipantId).Actor;
+            _actors[actor.ParticipantId] = actor;
             if (_pendingJoinChanges.Remove(actor.ActorId, out var change))
                 await PublishChangeAsync(change, cancellationToken);
             logger.LogInformation(
@@ -189,6 +192,7 @@ internal sealed class ConversationSpot(
         );
         return new JoinConversationRes(
             false,
+            actor.ActorId,
             ConversationContracts.ToState(conversation.Snapshot())
         );
     }

@@ -58,8 +58,7 @@ Packages to add when you need them:
 
 The license differs by layer — core/binding is
 MPL-2.0, framework is FSL-1.1-ALv2, and `Zlink.HttpClient` is Apache-2.0. There is no cost to
-building and selling a service
-([Where ZLink Applies](guide/server/17-alternative.en.md#8-license--the-cost-of-using-it)).
+building and selling a service.
 
 ## 2. Shared contract
 

@@ -175,6 +175,7 @@ the following values.
 | `source_rid`, `target_rid` | Included when a routed hop has that identity. |
 | `packet_name` | Included when there's a [packet name](../00-foundation/02-glossary.en.md#packet-name) used to find a typed handler. |
 | `topic`, `spot_id`, `actor_id` | Included when that surface uses a logical target. |
+| `stream_session_id` | Included for a STREAM session's receive, dispatch started by that receive, and replies and pushes to that session. The value is the server's existing routing ID for that session rendered as lowercase hexadecimal, and the same value is used in local and remote records for that session. It correlates server records only and isn't sent to the client. |
 | `instance_spot_type`, `activation_state` | Included when Instance Spot processing has that value. |
 | `correlation_id` | Included when linking a request and terminal reply. |
 | `flow_id`, `flow_origin` | Both included together when recording a message flow continuing from the same cause. |
@@ -193,7 +194,7 @@ An implementation providing a structured log as a substitute uses the
 
 `event`, `phase`, `surface`, `kind`, `mesh`, `channel`, `channel_route`,
 `source_rid`, `target_rid`, `server_rid`, `packet`, `topic`, `spot`,
-`instance_type`, `activation_state`, `actor`, `corr`, `flow`, `origin`,
+`instance_type`, `activation_state`, `actor`, `session`, `corr`, `flow`, `origin`,
 `outcome`, `reason`, `error_type`, `error_message`, `size`.
 
 Normal publish and subscriber delivery for Logical Multicast and Classic

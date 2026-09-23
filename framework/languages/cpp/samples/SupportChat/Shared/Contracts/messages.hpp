@@ -174,8 +174,6 @@ struct ensure_agent_conversation_res_t
 {
     static constexpr const char *packet_name = "EnsureAgentConversationRes";
     actor_location_t actor;
-    bool scheduled{false};
-    conversation_state_t state;
 };
 
 struct open_conversation_req_t
@@ -206,6 +204,7 @@ struct set_agent_available_res_t
 struct join_conversation_req_t
 {
     static constexpr const char *packet_name = "JoinConversationReq";
+    std::string conversation_id;
     std::string participant_id;
     std::string role;
     std::string display_name;
@@ -215,6 +214,7 @@ struct join_conversation_res_t
 {
     static constexpr const char *packet_name = "JoinConversationRes";
     bool scheduled{false};
+    std::string actor_id;
     conversation_state_t state;
 };
 
@@ -516,14 +516,12 @@ inline void from_json (const nlohmann::json &json, ensure_agent_conversation_req
 
 inline void to_json (nlohmann::json &json, const ensure_agent_conversation_res_t &value)
 {
-    json = {{"actor", value.actor}, {"scheduled", value.scheduled}, {"state", value.state}};
+    json = {{"actor", value.actor}};
 }
 
 inline void from_json (const nlohmann::json &json, ensure_agent_conversation_res_t &value)
 {
     value.actor = json.value ("actor", actor_location_t{});
-    value.scheduled = json.value ("scheduled", false);
-    value.state = json.value ("state", conversation_state_t{});
 }
 
 inline void to_json (nlohmann::json &json, const open_conversation_res_t &value)
@@ -559,13 +557,15 @@ inline void from_json (const nlohmann::json &json, set_agent_available_res_t &va
 
 inline void to_json (nlohmann::json &json, const join_conversation_req_t &value)
 {
-    json = {{"participantId", value.participant_id},
+    json = {{"conversationId", value.conversation_id},
+            {"participantId", value.participant_id},
             {"role", value.role},
             {"displayName", value.display_name}};
 }
 
 inline void from_json (const nlohmann::json &json, join_conversation_req_t &value)
 {
+    value.conversation_id = json.value ("conversationId", "");
     value.participant_id = json.value ("participantId", "");
     value.role = json.value ("role", "");
     value.display_name = json.value ("displayName", "");
@@ -573,12 +573,13 @@ inline void from_json (const nlohmann::json &json, join_conversation_req_t &valu
 
 inline void to_json (nlohmann::json &json, const join_conversation_res_t &value)
 {
-    json = {{"scheduled", value.scheduled}, {"state", value.state}};
+    json = {{"scheduled", value.scheduled}, {"actorId", value.actor_id}, {"state", value.state}};
 }
 
 inline void from_json (const nlohmann::json &json, join_conversation_res_t &value)
 {
     value.scheduled = json.value ("scheduled", false);
+    value.actor_id = json.value ("actorId", "");
     value.state = json.value ("state", conversation_state_t{});
 }
 

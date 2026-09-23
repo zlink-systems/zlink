@@ -57,7 +57,8 @@ internal sealed class ZLinkActorDispatchRouter(
                 header,
                 payload,
                 relocationReplay,
-                cancellationToken
+                cancellationToken,
+                null
             )
             .ConfigureAwait(false);
     }
@@ -74,7 +75,7 @@ internal sealed class ZLinkActorDispatchRouter(
             ZLinkActorId.FromBoundary(actor.Context.ActorId, nameof(actor))
         );
 
-        await Async(actor, state, header, payload, relocationReplay, cancellationToken)
+        await Async(actor, state, header, payload, relocationReplay, cancellationToken, null)
             .ConfigureAwait(false);
     }
 
@@ -84,7 +85,8 @@ internal sealed class ZLinkActorDispatchRouter(
         ZlinkStreamHeader header,
         Message payload,
         bool relocationReplay,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken,
+        RoutingId? sourceSessionRid
     )
     {
         using var flow = ZLinkFlowContext.Enter(
@@ -110,7 +112,8 @@ internal sealed class ZLinkActorDispatchRouter(
                             header,
                             payload,
                             relocationReplay,
-                            ct
+                            ct,
+                            sourceSessionRid
                         ),
                     countAsPendingRequest: false,
                     allowRelocationReplay: relocationReplay,
@@ -158,7 +161,8 @@ internal sealed class ZLinkActorDispatchRouter(
         ZlinkStreamHeader header,
         Message payload,
         bool relocationReplay,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        RoutingId? sourceSessionRid
     )
     {
         using var flow = ZLinkFlowContext.Enter(
@@ -179,7 +183,8 @@ internal sealed class ZLinkActorDispatchRouter(
                         header,
                         payload,
                         relocationReplay,
-                        ct
+                        ct,
+                        sourceSessionRid
                     ),
                 countAsPendingRequest: true,
                 allowRelocationReplay: relocationReplay,
@@ -194,9 +199,18 @@ internal sealed class ZLinkActorDispatchRouter(
         ZlinkStreamHeader header,
         Message payload,
         bool relocationReplay,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken,
+        RoutingId? sourceSessionRid
     ) =>
-        SubmitForReplyCoreAsync(actor, state, header, payload, relocationReplay, cancellationToken);
+        SubmitForReplyCoreAsync(
+            actor,
+            state,
+            header,
+            payload,
+            relocationReplay,
+            cancellationToken,
+            sourceSessionRid
+        );
 
     private async ValueTask<bool> SubmitByCurrentLocationAsync(
         IZLinkActor actor,
@@ -204,7 +218,8 @@ internal sealed class ZLinkActorDispatchRouter(
         ZlinkStreamHeader header,
         Message payload,
         bool relocationReplay,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        RoutingId? sourceSessionRid
     )
     {
         var placement = await state
@@ -214,14 +229,23 @@ internal sealed class ZLinkActorDispatchRouter(
         if (placement.Activation is null)
         {
             var handled = await runtime
-                .TrySubmitEntrySpotActorAsync(actor, state, header, payload, cancellationToken)
+                .TrySubmitEntrySpotActorAsync(
+                    actor,
+                    state,
+                    header,
+                    payload,
+                    cancellationToken,
+                    sourceSessionRid
+                )
                 .ConfigureAwait(false);
             if (!handled)
                 ReportMissingHandler(
                     actor,
                     header,
                     ZLinkDispatchMessageKind.ActorSend,
-                    ZLinkDispatchErrorAction.Drop
+                    ZLinkDispatchErrorAction.Drop,
+                    exception: null,
+                    sourceSessionRid: sourceSessionRid
                 );
             return placement.Prune;
         }
@@ -242,7 +266,8 @@ internal sealed class ZLinkActorDispatchRouter(
                 header,
                 payload,
                 replayAdmission,
-                cancellationToken
+                cancellationToken,
+                sourceSessionRid
             )
             .ConfigureAwait(false);
         return placement.Prune;
@@ -254,7 +279,8 @@ internal sealed class ZLinkActorDispatchRouter(
         ZlinkStreamHeader header,
         Message payload,
         bool relocationReplay,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        RoutingId? sourceSessionRid
     )
     {
         var placement = await state
@@ -285,7 +311,8 @@ internal sealed class ZLinkActorDispatchRouter(
                     header,
                     payload,
                     replayAdmission,
-                    cancellationToken
+                    cancellationToken,
+                    sourceSessionRid
                 )
                 .ConfigureAwait(false);
             ZLinkFrameworkDebugLog.SpotDiscovery(
@@ -306,7 +333,8 @@ internal sealed class ZLinkActorDispatchRouter(
                 payload,
                 callerOwnsDispatchTurn: true,
                 relocationReplay: false,
-                cancellationToken
+                cancellationToken,
+                sourceSessionRid
             )
             .ConfigureAwait(false);
         if (entryResult.Handled)
@@ -317,7 +345,7 @@ internal sealed class ZLinkActorDispatchRouter(
             var replyPathError = new InvalidOperationException(
                 $"Entry Spot actor request handler for '{header.Name}' returned no reply."
             );
-            ReportReplyPathMissing(actor, header, replyPathError);
+            ReportReplyPathMissing(actor, header, replyPathError, sourceSessionRid);
             return ZLinkActorReply.FromError(replyPathError);
         }
 
@@ -330,7 +358,8 @@ internal sealed class ZLinkActorDispatchRouter(
             header,
             ZLinkDispatchMessageKind.ActorRequest,
             ZLinkDispatchErrorAction.ReplyError,
-            error
+            error,
+            sourceSessionRid
         );
         return ZLinkActorReply.FromError(error);
     }
@@ -363,7 +392,8 @@ internal sealed class ZLinkActorDispatchRouter(
         ZlinkStreamHeader header,
         ZLinkDispatchMessageKind kind,
         ZLinkDispatchErrorAction action,
-        Exception? exception = null
+        Exception? exception,
+        RoutingId? sourceSessionRid
     )
     {
         var scope = new ZLinkDispatchFlowScope(
@@ -372,7 +402,11 @@ internal sealed class ZLinkActorDispatchRouter(
             kind,
             header.Name,
             correlationId: header.CorrelationId,
-            actorId: actor.Context.ActorId
+            actorId: actor.Context.ActorId,
+            streamSessionId: _dispatchErrors.Enabled
+            && sourceSessionRid is { IsEmpty: false } sessionRid
+                ? sessionRid.ToHex()
+                : null
         );
 
         scope.HandlerMissing(_dispatchErrors, action, exception);
@@ -381,7 +415,8 @@ internal sealed class ZLinkActorDispatchRouter(
     private void ReportReplyPathMissing(
         IZLinkActor actor,
         ZlinkStreamHeader header,
-        Exception exception
+        Exception exception,
+        RoutingId? sourceSessionRid
     )
     {
         var scope = new ZLinkDispatchFlowScope(
@@ -390,7 +425,11 @@ internal sealed class ZLinkActorDispatchRouter(
             ZLinkDispatchMessageKind.ActorRequest,
             header.Name,
             correlationId: header.CorrelationId,
-            actorId: actor.Context.ActorId
+            actorId: actor.Context.ActorId,
+            streamSessionId: _dispatchErrors.Enabled
+            && sourceSessionRid is { IsEmpty: false } sessionRid
+                ? sessionRid.ToHex()
+                : null
         );
 
         scope.ReplyPathMissing(_dispatchErrors, exception);

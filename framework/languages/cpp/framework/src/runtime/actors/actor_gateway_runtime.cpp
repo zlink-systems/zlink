@@ -137,13 +137,19 @@ void trace_detached_bound_session_send_failure (
   const std::shared_ptr<detail::actor_gateway_state_t> &state,
   const std::string &actor_id,
   std::string_view result,
-  message_flow_reason_t reason = message_flow_reason_t::target_closed)
+  message_flow_reason_t reason,
+  const zlink::routing_id_t *session_rid,
+  const std::string *session_rid_hex)
 {
     detail::message_flow_tracer_t (state->dispatch).trace (message_flow_outcome_t::dropped, [&] {
         auto event = message_flow_event_t{
           message_flow_outcome_t::dropped, dispatch_error_surface_t::stream_session,
           dispatch_message_kind_t::send, std::string ("bound_session_push")};
         event.actor_id = actor_id;
+        if (session_rid)
+            event.stream_session_id = session_rid->to_hex ();
+        else if (session_rid_hex)
+            event.stream_session_id = *session_rid_hex;
         event.detail_stage = "detached_delivery";
         event.detail_result = std::string (result);
         event.reason = reason;
@@ -155,7 +161,9 @@ void trace_detached_bound_session_send_stage (
   const std::shared_ptr<detail::actor_gateway_state_t> &state,
   const std::string &actor_id,
   std::string_view stage,
-  std::string_view result)
+  std::string_view result,
+  const zlink::routing_id_t *session_rid,
+  const std::string *session_rid_hex)
 {
     const detail::message_flow_tracer_t tracer (state->dispatch);
     tracer.trace (message_flow_log_mode_t::detailed, message_flow_outcome_t::admitted, [&] {
@@ -163,6 +171,10 @@ void trace_detached_bound_session_send_stage (
           message_flow_outcome_t::admitted, dispatch_error_surface_t::stream_session,
           dispatch_message_kind_t::send, std::string ("bound_session_push")};
         event.actor_id = actor_id;
+        if (session_rid)
+            event.stream_session_id = session_rid->to_hex ();
+        else if (session_rid_hex)
+            event.stream_session_id = *session_rid_hex;
         event.detail_stage = std::string (stage);
         if (!result.empty ())
             event.detail_result = std::string (result);
@@ -170,9 +182,10 @@ void trace_detached_bound_session_send_stage (
     });
 }
 
-bool drain_bound_session_sends (const std::shared_ptr<detail::actor_gateway_state_t> &state,
-                                const std::string &queue_key,
-                                const std::string &actor_id)
+bool drain_bound_session_sends (
+  const std::shared_ptr<detail::actor_gateway_state_t> &state,
+  const detail::actor_gateway_state_t::bound_session_send_queue_key_t &queue_key,
+  const std::string &actor_id)
 {
     for (;;) {
         const auto pending = state->sync (
@@ -198,8 +211,9 @@ bool drain_bound_session_sends (const std::shared_ptr<detail::actor_gateway_stat
                        * offload_sender_begin/send_bound_session_enter pair
                        * described the same instant and paid the detailed-gate
                        * assembly twice. */
-                    trace_detached_bound_session_send_stage (state, actor_id,
-                                                             "send_bound_session_enter", "entered");
+                    trace_detached_bound_session_send_stage (
+                      state, actor_id, "send_bound_session_enter", "entered", nullptr,
+                      queue_key.session_rid ? &*queue_key.session_rid : nullptr);
                     auto task = std::make_shared<task_t<result_t<void>>> (pending.dispatch ());
                     detail::observe_task_terminal (
                       *task, [state, queue_key, actor_id, task,
@@ -207,10 +221,13 @@ bool drain_bound_session_sends (const std::shared_ptr<detail::actor_gateway_stat
                                const result_t<result_t<void>> &terminal) {
                           trace_detached_bound_session_send_stage (
                             state, actor_id, "detached_delivery_complete",
-                            terminal && terminal.value () ? "ok" : "failed");
+                            terminal && terminal.value () ? "ok" : "failed", nullptr,
+                            queue_key.session_rid ? &*queue_key.session_rid : nullptr);
                           if (!terminal || !terminal.value ()) {
                               trace_detached_bound_session_send_failure (
-                                state, actor_id, "accepted=true detached=true");
+                                state, actor_id, "accepted=true detached=true",
+                                message_flow_reason_t::target_closed, nullptr,
+                                queue_key.session_rid ? &*queue_key.session_rid : nullptr);
                           }
                           if (completion_fence) {
                               if (terminal && terminal.value ()) {
@@ -238,14 +255,18 @@ bool drain_bound_session_sends (const std::shared_ptr<detail::actor_gateway_stat
                                                    "bound Session delivery raised an exception"));
                     }
                     trace_detached_bound_session_send_failure (
-                      state, actor_id, "accepted=true detached=true exception=true");
+                      state, actor_id, "accepted=true detached=true exception=true",
+                      message_flow_reason_t::target_closed, nullptr,
+                      queue_key.session_rid ? &*queue_key.session_rid : nullptr);
                     (void) drain_bound_session_sends (state, queue_key, actor_id);
                 }
             })) {
             return true;
         }
-        trace_detached_bound_session_send_failure (state, actor_id,
-                                                   "accepted=false executor_stopping=true");
+        trace_detached_bound_session_send_failure (
+          state, actor_id, "accepted=false executor_stopping=true",
+          message_flow_reason_t::target_closed, nullptr,
+          queue_key.session_rid ? &*queue_key.session_rid : nullptr);
         if (completion_fence) {
             completion_fence->complete (
               result_t<void>::failure (framework_error_kind_t::shutting_down,
@@ -258,7 +279,7 @@ bool drain_bound_session_sends (const std::shared_ptr<detail::actor_gateway_stat
 
 bool enqueue_bound_session_send (
   const std::shared_ptr<detail::actor_gateway_state_t> &state,
-  const std::string &queue_key,
+  const detail::actor_gateway_state_t::bound_session_send_queue_key_t &queue_key,
   const std::string &actor_id,
   detail::actor_gateway_state_t::pending_bound_session_send_t pending)
 {
@@ -267,16 +288,23 @@ bool enqueue_bound_session_send (
         queue.push_back (std::move (pending));
         return state->active_bound_session_sends.insert (queue_key).second;
     });
-    trace_detached_bound_session_send_stage (state, actor_id, "fifo_accepted", "accepted");
+    trace_detached_bound_session_send_stage (state, actor_id, "fifo_accepted", "accepted", nullptr,
+                                             queue_key.session_rid ? &*queue_key.session_rid
+                                                                   : nullptr);
     return !start_drain || drain_bound_session_sends (state, queue_key, actor_id);
 }
 
-std::string bound_session_send_queue_key (const std::string &actor_id,
-                                          const detail::actor_bound_session_route_t &route)
+detail::actor_gateway_state_t::bound_session_send_queue_key_t
+bound_session_send_queue_key (const std::string &actor_id,
+                              const detail::actor_bound_session_route_t &route)
 {
-    return actor_id + "/" + route.node_rid.to_hex () + "/"
-           + (route.session_rid ? route.session_rid->to_hex () : std::string ("none")) + "/"
-           + std::to_string (route.binding_generation) + "/" + std::to_string (route.binding_token);
+    return {actor_id,
+            route.node_rid.to_hex (),
+            route.session_rid ? std::optional<std::string> (route.session_rid->to_hex ())
+                              : std::nullopt,
+            route.binding_generation,
+            route.binding_token,
+            false};
 }
 
 void drain_session_relay (const std::shared_ptr<detail::actor_gateway_state_t> &state,
@@ -653,7 +681,7 @@ bound_session_send_call_t bound_session_t::send_erased (std::string packet_name,
     detail::actor_gateway_state_t::bound_session_sender_t remote_sender;
     stream_header_t header;
     const auto actor_id = std::string (_actor_ref->actor_id ().value ());
-    std::string queue_key;
+    detail::actor_gateway_state_t::bound_session_send_queue_key_t queue_key;
     const auto admission = _state->sync ([&] () -> std::optional<result_t<void>> {
         const auto found = _state->actors_by_id.find (actor_id);
         if (const auto fence = _state->join_completion_delivery_fences.find (
@@ -702,8 +730,15 @@ bound_session_send_call_t bound_session_t::send_erased (std::string packet_name,
                 const auto &route = *found->second.bound_session_route;
                 queue_key = bound_session_send_queue_key (actor_id, route);
             } else {
-                queue_key =
-                  actor_id + "/remote/" + std::to_string (found->second.source_binding_generation);
+                queue_key = {
+                  actor_id,
+                  {},
+                  found->second.source_session_rid
+                    ? std::optional<std::string> (found->second.source_session_rid->to_hex ())
+                    : std::nullopt,
+                  found->second.source_binding_generation,
+                  0,
+                  true};
             }
         }
         return std::nullopt;
@@ -714,8 +749,8 @@ bound_session_send_call_t bound_session_t::send_erased (std::string packet_name,
         return bound_session_send_call_t (send_call_t (result_t<void>::failure (
           framework_error_kind_t::not_configured, "actor bound session has no send sink")));
     }
-    if (queue_key.empty ()) {
-        queue_key = actor_id + "/remote/" + std::to_string (_expected_binding_generation);
+    if (queue_key.actor_id.empty ()) {
+        queue_key = {actor_id, {}, std::nullopt, _expected_binding_generation, 0, true};
     }
     return bound_session_send_call_t (send_call_t (
       std::move (packet_name),
@@ -1978,6 +2013,8 @@ make_session_owner_sink (std::weak_ptr<actor_gateway_state_t> weak_state,
                                     : "live=" + describe (*found->second.bound_session_route)
                                         + " staged=" + describe (staged_route);
                                 event.actor_id = actor_id;
+                                if (staged_route.session_rid)
+                                    event.stream_session_id = staged_route.session_rid->to_hex ();
                                 event.reason = message_flow_reason_t::stale_target;
                                 return event;
                             });
@@ -2275,9 +2312,10 @@ actor_gateway_runtime_t::resolve_bound_session_push_route (
                + (route->session_rid ? route->session_rid->to_hex () : std::string ("none"))
                + "/bg=" + std::to_string (route->binding_generation);
     };
-    trace_detached_bound_session_send_stage (_state, actor_id, "actor_owner_push_target",
-                                             "current=" + describe (current)
-                                               + " staged=" + describe (staged_route));
+    trace_detached_bound_session_send_stage (
+      _state, actor_id, "actor_owner_push_target",
+      "current=" + describe (current) + " staged=" + describe (staged_route),
+      staged_route.session_rid ? &*staged_route.session_rid : nullptr, nullptr);
     return current;
 }
 
@@ -3046,7 +3084,7 @@ void actor_gateway_runtime_t::unbind_session_stream (std::string actor_id,
 {
     std::optional<stream_t> stream;
     std::uint16_t actor_slot = 0;
-    std::string queue_key;
+    detail::actor_gateway_state_t::bound_session_send_queue_key_t queue_key;
     _state->sync ([&] {
         auto found = _state->actors_by_id.find (actor_id);
         if (found != _state->actors_by_id.end ()) {
@@ -3061,8 +3099,15 @@ void actor_gateway_runtime_t::unbind_session_stream (std::string actor_id,
                 const auto &route = *found->second.bound_session_route;
                 queue_key = bound_session_send_queue_key (actor_id, route);
             } else {
-                queue_key =
-                  actor_id + "/remote/" + std::to_string (found->second.source_binding_generation);
+                queue_key = {
+                  actor_id,
+                  {},
+                  found->second.source_session_rid
+                    ? std::optional<std::string> (found->second.source_session_rid->to_hex ())
+                    : std::nullopt,
+                  found->second.source_binding_generation,
+                  0,
+                  true};
             }
             found->second.bound_session_stream_sink = false;
             found->second.bound_session_route.reset ();
@@ -3188,6 +3233,8 @@ actor_gateway_runtime_t::admit_bound_session_delivery (const actor_ref_t &actor_
     const bool trace_resolution =
       detail::message_flow_tracer_t (_state->dispatch).capture_enabled ();
     std::string resolution;
+    std::optional<zlink::routing_id_t> traced_session_rid;
+    std::optional<zlink::routing_id_t> admitted_session_rid;
     _state->sync ([&] {
         const auto found = _state->actors_by_id.find (actor_id);
         if (found == _state->actors_by_id.end ()) {
@@ -3209,6 +3256,7 @@ actor_gateway_runtime_t::admit_bound_session_delivery (const actor_ref_t &actor_
             const auto &route = *found->second.bound_session_route;
             const auto found_sink = _state->bound_session_sinks.find (actor_id);
             if (trace_resolution) {
+                traced_session_rid = route.session_rid;
                 resolution =
                   "binding_present=true route_present=true session_rid="
                   + (route.session_rid ? route.session_rid->to_hex () : std::string ("none"))
@@ -3222,6 +3270,7 @@ actor_gateway_runtime_t::admit_bound_session_delivery (const actor_ref_t &actor_
                     || binding_generation == route.binding_generation)
                 && found_sink != _state->bound_session_sinks.end ()) {
                 sink = found_sink->second;
+                admitted_session_rid = route.session_rid;
                 if (trace_resolution)
                     resolution += " match=true";
             } else if (trace_resolution) {
@@ -3230,39 +3279,46 @@ actor_gateway_runtime_t::admit_bound_session_delivery (const actor_ref_t &actor_
         }
     });
     if (trace_resolution) {
-        trace_detached_bound_session_send_stage (_state, actor_id, "session_node_binding_resolve",
-                                                 resolution);
+        trace_detached_bound_session_send_stage (
+          _state, actor_id, "session_node_binding_resolve", resolution,
+          traced_session_rid ? &*traced_session_rid : nullptr, nullptr);
     }
     if (!sink) {
         if (trace_resolution) {
             trace_detached_bound_session_send_failure (
-              _state, actor_id, "session_node_binding_resolve " + resolution);
+              _state, actor_id, "session_node_binding_resolve " + resolution,
+              message_flow_reason_t::target_closed,
+              traced_session_rid ? &*traced_session_rid : nullptr, nullptr);
         }
         return std::nullopt;
     }
-    return admitted_bound_session_delivery_t{[state = _state, actor_id, sink = std::move (sink)] (
-                                               std::string packet_name, stream_codec_t codec,
-                                               const zlink::message_t &payload) {
-        trace_detached_bound_session_send_stage (state, actor_id,
-                                                 "session_node_stream_write_submit", "begin");
-        auto sent = (*sink) (std::move (packet_name), codec, payload).result ();
-        if (!sent) {
-            //  The error kind alone does not name a site: `unavailable` is returned from several
-            //  places in the STREAM host. Carry the message so a trace identifies which one.
-            trace_detached_bound_session_send_stage (
-              state, actor_id, "session_node_stream_write_terminal",
-              "failed error_kind=" + std::to_string (static_cast<int> (sent.error_kind ()))
-                + " error=" + (sent.error () ? sent.error ()->what () : "none"));
-            trace_detached_bound_session_send_failure (state, actor_id,
-                                                       "session_node_stream_write_terminal failed");
-            return result_t<void>::failure (sent.error_kind (),
-                                            sent.error () ? sent.error ()->what ()
-                                                          : "actor bound session dispatch failed");
-        }
-        trace_detached_bound_session_send_stage (state, actor_id,
-                                                 "session_node_stream_write_terminal", "ok");
-        return result_t<void>::success ();
-    }};
+    return admitted_bound_session_delivery_t{
+      [state = _state, actor_id, sink = std::move (sink),
+       admitted_session_rid = std::move (admitted_session_rid)] (
+        std::string packet_name, stream_codec_t codec, const zlink::message_t &payload) {
+          const auto *session_rid = admitted_session_rid ? &*admitted_session_rid : nullptr;
+          trace_detached_bound_session_send_stage (
+            state, actor_id, "session_node_stream_write_submit", "begin", session_rid, nullptr);
+          auto sent = (*sink) (std::move (packet_name), codec, payload).result ();
+          if (!sent) {
+              //  The error kind alone does not name a site: `unavailable` is returned from several
+              //  places in the STREAM host. Carry the message so a trace identifies which one.
+              trace_detached_bound_session_send_stage (
+                state, actor_id, "session_node_stream_write_terminal",
+                "failed error_kind=" + std::to_string (static_cast<int> (sent.error_kind ()))
+                  + " error=" + (sent.error () ? sent.error ()->what () : "none"),
+                session_rid, nullptr);
+              trace_detached_bound_session_send_failure (
+                state, actor_id, "session_node_stream_write_terminal failed",
+                message_flow_reason_t::target_closed, session_rid, nullptr);
+              return result_t<void>::failure (
+                sent.error_kind (),
+                sent.error () ? sent.error ()->what () : "actor bound session dispatch failed");
+          }
+          trace_detached_bound_session_send_stage (
+            state, actor_id, "session_node_stream_write_terminal", "ok", session_rid, nullptr);
+          return result_t<void>::success ();
+      }};
 }
 
 std::shared_ptr<bound_session_replacement_handler_t>
@@ -3407,11 +3463,13 @@ bool actor_gateway_runtime_t::trace_bound_session_send_stage_enabled () const no
       .enabled (message_flow_log_mode_t::detailed);
 }
 
-void actor_gateway_runtime_t::trace_bound_session_send_stage (const std::string &actor_id,
-                                                              std::string_view stage,
-                                                              std::string_view result) const
+void actor_gateway_runtime_t::trace_bound_session_send_stage (
+  const std::string &actor_id,
+  std::string_view stage,
+  std::string_view result,
+  const zlink::routing_id_t *session_rid) const
 {
-    trace_detached_bound_session_send_stage (_state, actor_id, stage, result);
+    trace_detached_bound_session_send_stage (_state, actor_id, stage, result, session_rid, nullptr);
 }
 
 void actor_gateway_runtime_t::on_membership (actor_gateway_state_t::membership_query_t query)

@@ -12347,7 +12347,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 Tag("target_rid") ?? Tag("zlink.peer.rid"),
                 Tag("spot_id") ?? Tag("zlink.spot.id"),
                 Normalize(Tag("reason") ?? Tag("zlink.reason")),
-                Normalize(Tag("action") ?? Tag("zlink.action"))
+                Normalize(Tag("action") ?? Tag("zlink.action")),
+                Tag("stream_session_id")
             );
             _events.Enqueue(flow);
             _observed.TrySetResult(flow);
@@ -12386,7 +12387,8 @@ public sealed partial class EntrySpotActorDispatchTests
         string? TargetRid,
         string? SpotId,
         string? Reason,
-        string? Action
+        string? Action,
+        string? StreamSessionId
     );
 
     private sealed class ThrowingBackendAdapterFactory : IZLinkBackendAdapterFactory

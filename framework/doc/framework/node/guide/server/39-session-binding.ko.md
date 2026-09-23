@@ -10,7 +10,7 @@ title: "Session 묶음의 동작 원리 · Node/TypeScript"
 # Session 묶음의 동작 원리
 
 <!-- framework-adapter-nav:start -->
-[가이드 홈](README.ko.md) | [이전: STREAM의 동작 원리](38-stream-boundary.ko.md) | [다음: 17. ZLink의 적용 범위 — 내부 서비스 통신과 실시간 상태 서버](17-alternative.ko.md)
+[가이드 홈](README.ko.md) | [이전: STREAM의 동작 원리](38-stream-boundary.ko.md) | [다음: 12. 운영 — 런타임 메트릭 · graceful drain · readiness](12-operations.ko.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->

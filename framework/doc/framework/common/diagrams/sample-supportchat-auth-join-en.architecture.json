@@ -35,7 +35,7 @@
     { "from": "S", "to": "C", "y": 880, "label": "OpenConversationRes", "variant": "return" },
     { "from": "P", "to": "S", "y": 928, "label": "ConversationAssignedNotify", "variant": "return" },
     { "from": "S", "to": "A", "y": 976, "label": "ConversationAssignedNotify", "variant": "return" },
-    { "from": "A", "to": "S", "y": 1024, "label": "JoinConversationReq(metadata ConversationId)", "variant": "default" },
+    { "from": "A", "to": "S", "y": 1024, "label": "JoinConversationReq(conversationId)", "variant": "default" },
     { "from": "S", "to": "P", "y": 1072, "label": "JoinConversationReq", "variant": "default" },
     { "from": "P", "to": "S", "y": 1120, "label": "JoinConversationRes(scheduled=true)", "variant": "return" },
     { "from": "S", "to": "A", "y": 1168, "label": "JoinConversationRes(scheduled=true)", "variant": "return" },
@@ -49,7 +49,7 @@
       "title": "Judging join completion",
       "items": [
         "scheduled=true means the join was scheduled, not that membership commit is complete. Agent join should only be judged complete once both clients confirm the Active ParticipantJoinedNotify.",
-        "The ConversationId of JoinConversationReq is a required stream-metadata value and isn't put into the payload as a route. participantId, role, and displayName are values needed for the actor join."
+        "JoinConversationReq is a Session binding packet without an Actor slot and sends conversationId in its payload. JoinConversationRes.actorId identifies the Actor handle for that room. participantId, role, and displayName are values needed for the actor join."
       ]
     },
     {

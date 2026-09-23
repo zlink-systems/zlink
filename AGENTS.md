@@ -11,6 +11,8 @@
   작업 단위는 Issue 브랜치(`<area>/<issue번호>-<slug>`)와 worktree이며, main은 PR로만 바뀐다
   (`doc/principal/dev/development-workflow.ko.md`). 간단한 작업은 worktree 없이 main에서 한다 — 무엇이
   간단한 작업인지는 그 문서 §6이 정한다.
+- **작업 중에 드러난 결함·누락은 새 Issue를 만들지 않고 그 작업의 Issue·PR 안에서 처리한다.** 여러 언어에 걸친
+  결함도 Issue 하나에서 함께 고친다. 새 Issue는 이번 릴리스에서 다루지 않고 넘기는 일에만 연다.
 - 작업 상태가 바뀔 때마다(시작, 리뷰 대기, 머지, 보류) [Project 보드](https://github.com/users/zlink-systems/projects/1/views/10)의
   상태를 바로 갱신한다. 새 Issue는 만들 때 보드에 올린다.
 - worktree 위치와 정리 절차는 [`doc/principal/dev/worktree-setup.ko.md`](./doc/principal/dev/worktree-setup.ko.md)를 따른다.
@@ -203,8 +205,9 @@ sub-agent는 codex에 이슈가 있을 때 쓴다 — 쿼터 소진, 콘텐츠 �
 - 완료 보고에는 결과, 변경 파일, 실행한 test와 남은 실패만 적는다. 진행 이력을 반복하지 않는다.
 - Runtime 변경의 완료 보고에는 소유 계층·spec 조항·교차언어 대조 결과·변경 분류(A/B/C/D)를 한 줄씩
   함께 적는다. 이 네 줄이 없거나 분류가 C/D인 변경은 감독이 커밋하지 않는다.
-- 사용자와의 한국어 기술 설명은
-  [`doc/principal/documentation/documentation-principles.ko.md`](./doc/principal/documentation/documentation-principles.ko.md)를 따른다.
+- **글의 문체는 [`documentation-principles.ko.md`](./doc/principal/documentation/documentation-principles.ko.md) 원칙 7을 따른다.**
+  문서뿐 아니라 이슈·PR·커밋 본문, 코드 주석, 리뷰 코멘트, 완료 보고, 사용자에게 보내는 답변까지 적용 대상이며
+  (원칙 7.11), sub-agent도 같다 — 브리프에 이 링크를 넣는다. 비유·구어 표현의 판정과 바꿔 쓴 예는 원칙 7.7의 표가 소유한다.
 
 ### 4.1 간헐 실패 디버깅 (message tracking·file log)
 
