@@ -1,4 +1,7 @@
 import type { Message } from '../../contracts/Common/Message';
+import { ZLinkFrameworkErrorKind, ZLinkFrameworkException } from '../../contracts';
+import { channelErrorCodeName } from '../channels/channel-envelope';
+import { ZLinkRouteDisconnectedError } from '../channels/route-disconnected-error';
 import { ZLinkSubmitStatus, type ZLinkSubmitResult } from '../messaging/submission-result';
 import { ZLinkStreamMessageKind } from './protocol';
 import type { ZLinkStreamFrameMessageFactory } from './stream-frame-factory';
@@ -96,7 +99,13 @@ export function boundSessionErrorPayload(error: unknown): {
   readonly message: string;
 } {
   return {
-    code: error instanceof Error ? error.constructor.name : 'RemoteError',
+    code: channelErrorCodeName(
+      error instanceof ZLinkFrameworkException
+        ? error.kind
+        : error instanceof ZLinkRouteDisconnectedError
+          ? ZLinkFrameworkErrorKind.Unavailable
+          : ZLinkFrameworkErrorKind.InternalFailure
+    ),
     message: errorMessage(error)
   };
 }

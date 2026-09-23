@@ -415,7 +415,7 @@ test('stream session dispatch resolves only current Actor slots for sends and re
   const staleReply = decodeServerSentFrame(socket.sent[2]);
   assert.equal(staleReply.header.kind, connector.ZlinkStreamMessageKind.Error);
   assert.equal(staleReply.header.requestSeq, 2n);
-  assert.equal(JSON.parse(new TextDecoder().decode(staleReply.payload)).code, 'InvalidOperation');
+  assert.equal(JSON.parse(new TextDecoder().decode(staleReply.payload)).code, 'invalid_operation');
   const staleRecords = telemetryRecords.filter((record) =>
     (record.attributes.packet_name === 'StaleRequest' ||
       record.attributes.packet_name === 'StaleSend') &&
@@ -1885,7 +1885,7 @@ test('stream session runtime replies to dispatch errors without session onError 
   assert.equal(header.requestSeq, 7n);
   assert.equal(header.name, '');
   assert.deepEqual(JSON.parse(new TextDecoder().decode(frame.payload)), {
-    code: 'Error',
+    code: 'internal_failure',
     message: 'dispatch failed'
   });
   assert.equal(ownerCloses, 1);
@@ -1920,7 +1920,7 @@ test('stream session runtime encodes Framework error kinds as string error codes
 
   const frame = protocolCodecs.ZlinkStreamFrameCodec.decode(socket.sent[0].payload.data());
   assert.deepEqual(JSON.parse(new TextDecoder().decode(frame.payload)), {
-    code: 'NotFound',
+    code: 'not_found',
     message: 'spot route is not ready'
   });
 });
@@ -1956,7 +1956,7 @@ test('stream session runtime replies with the admission error when a new request
   assert.equal(header.kind, connector.ZlinkStreamMessageKind.Error);
   assert.equal(header.requestSeq, 10n);
   assert.deepEqual(JSON.parse(new TextDecoder().decode(frame.payload)), {
-    code: 'ShuttingDown',
+    code: 'shutting_down',
     message: 'STREAM dispatch was rejected because the framework is draining.'
   });
 });
@@ -1993,7 +1993,7 @@ test('stream session runtime keeps request streams open after route disconnect e
   assert.equal(header.requestSeq, 9n);
   assert.equal(header.name, '');
   assert.deepEqual(JSON.parse(new TextDecoder().decode(frame.payload)), {
-    code: 'ZLinkRouteDisconnectedError',
+    code: 'unavailable',
     message: 'yield.spot.route'
   });
 });

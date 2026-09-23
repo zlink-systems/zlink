@@ -140,7 +140,6 @@ test('node topology samples implement the common sample role layout', () => {
       'Client/supportchat-client-scenario.ts',
       'Client/main.ts',
       'Client/Configuration/sample-config.ts',
-      'Client/Configuration/sample-names.ts',
       'Server/Api/Handlers/open-conversation-handler.ts',
       'Server/Api/Handlers/authenticate-user-handler.ts',
       'Server/Api/supportchat-api-module.ts',

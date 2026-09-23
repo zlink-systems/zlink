@@ -18,16 +18,13 @@ async function connect(endpoint: string): Promise<void> {
   await client.connect();
 }
 
-async function request(value: string, explicitFlowId?: string): Promise<unknown> {
+async function request(value: string): Promise<unknown> {
   if (!client) throw new Error('Connector has not been created.');
   const push = client
     .waitFor<{ value: string }>('EchoPush')
     .where((message) => message.payload.value === value)
     .submit();
-  let call = client.request({ value }, Object).packetName('EchoReq');
-  if (explicitFlowId !== undefined) {
-    call = call.flowFrom({ flowId: explicitFlowId, flowOrigin: 'Application' });
-  }
+  const call = client.request({ value }, Object).packetName('EchoReq');
   const reply = await call.submit<{ value: string }>();
   await push;
   return reply;

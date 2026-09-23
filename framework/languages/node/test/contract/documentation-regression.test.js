@@ -274,10 +274,9 @@ test('typescript stream connector specification matches the browser package decl
   assert.match(specification, /expectNone<TPayload = ZlinkStreamEncodedPayload>\(nameOrType: string \| Function\)/);
   assert.match(specification, /waitForSequence<TPayload = ZlinkStreamEncodedPayload>\(nameOrType: string \| Function\)/);
   assert.match(specification, /receivedCount\(name: string\): number/);
-  assert.match(specification, /setDiagnosticsLevelAsync\(level: ZlinkStreamDiagnosticsLevel\): Promise<void>/);
+  assert.doesNotMatch(specification, /setDiagnosticsLevelAsync\(/);
   assert.match(specification, /on<TPayload = ZlinkStreamEncodedPayload>\(/);
-  assert.match(specification, /flowFrom\(flow: ZlinkStreamFlow\): ZlinkStreamSendCall/);
-  assert.match(specification, /flowFrom\(flow: ZlinkStreamFlow\): ZlinkStreamRequestCall/);
+  assert.doesNotMatch(specification, /flowFrom\(/);
 });
 
 test('canonical common spec owns server semantics without the deleted duplicate tree', () => {
