@@ -54,9 +54,11 @@ on:
 # Named explicitly: in a called workflow `github.workflow` is the caller's
 # name, so `${{ github.workflow }}-${{ inputs.ref }}` here equalled
 # examples-mirror.yml's own group on a workflow_dispatch (both see the same
-# `inputs.ref`) and the call could not be scheduled.
+# `inputs.ref`) and the call could not be scheduled. The language set is part of the
+# group: framework-java/vX calls this twice (java, kotlin) with the same ref, and a
+# ref-only group cancelled the first call.
 concurrency:
-  group: examples-smoke-${{ inputs.ref || github.ref }}
+  group: examples-smoke-${{ inputs.ref || github.ref }}-${{ inputs.languages || 'all' }}
   cancel-in-progress: true
 
 permissions:
