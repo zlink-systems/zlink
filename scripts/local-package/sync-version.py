@@ -187,6 +187,21 @@ FRAMEWORK_SCALAR_FIELDS = (
         "Godot validation Zlink.Stream.Connector",
         rf'(<PackageReference Include="Zlink\.Stream\.Connector" Version=")(?P<version>{SEMVER})("\s*/>)',
     ),
+    # The Godot C++ sample downloads the C++ Framework release assets.
+    FrameworkField(
+        "framework/languages/engines/Godot/cpp/README.ko.md",
+        "cpp",
+        "Godot C++ README (ko) framework-cpp release",
+        rf"(zlink-framework-cpp-|framework-cpp/v|framework-cpp%2Fv|framework v|\[v)(?P<version>{SEMVER})()",
+        expected=12,
+    ),
+    FrameworkField(
+        "framework/languages/engines/Godot/cpp/README.md",
+        "cpp",
+        "Godot C++ README framework-cpp release",
+        rf"(zlink-framework-cpp-|framework-cpp/v|framework-cpp%2Fv|framework v|\[v)(?P<version>{SEMVER})()",
+        expected=12,
+    ),
     # Cocos Creator's connector dependency follows the Node Framework release lane.
     FrameworkField(
         "framework/languages/engines/CocosCreator/package.json",

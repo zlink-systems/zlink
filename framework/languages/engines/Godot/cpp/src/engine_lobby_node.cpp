@@ -3,6 +3,7 @@
 #include <godot_cpp/classes/json.hpp>
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
+#include <godot_cpp/variant/utility_functions.hpp>
 
 #include <string>
 
@@ -130,6 +131,7 @@ void EngineLobbyNode::handle_ping_response (
         fail ("invalid PingRes");
         return;
     }
+    UtilityFunctions::print ("PingRes sentAtUnixMs=", sent_at);
     connector_.request_json (join_req, encode_field ("name", player_name_), 5.0,
                              [this] (const auto &reply) { handle_join_response (reply); });
 }
@@ -152,6 +154,7 @@ void EngineLobbyNode::handle_join_response (
         return;
     }
     status_->set_text (String ("joined as ") + name + " (" + actor_id + ")");
+    UtilityFunctions::print ("JoinRes name=", name, " actorId=", actor_id);
     connector_.send_json (chat_msg, encode_field ("text", first_chat_));
 }
 // --8<-- [end:join-handler]
@@ -169,6 +172,7 @@ void EngineLobbyNode::handle_packet (const zlink::godot_stream_connector::packet
         return;
     }
     status_->set_text (name + ": " + text);
+    UtilityFunctions::print ("ChatNotify ", name, ": ", text);
 }
 // --8<-- [end:receive]
 
@@ -176,6 +180,7 @@ void EngineLobbyNode::fail (const String &message)
 {
     failed_ = true;
     status_->set_text (String ("Engine Lobby failed: ") + message);
+    UtilityFunctions::printerr ("Engine Lobby failed: ", message);
     set_process (false);
 }
 

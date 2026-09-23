@@ -27,6 +27,7 @@ public partial class EngineLobbyNode : Control
             _client = new EngineLobbyClient(Endpoint);
             _client.ChatReceived += OnChatReceived;
             await _client.ConnectAndJoinAsync(PlayerName);
+            GD.Print($"JoinRes name={_client.Joined!.Name} actorId={_client.Joined.ActorId}");
             if (!_exiting && !_chatShown)
                 _status.Text = $"joined as {_client.Joined!.Name} ({_client.Joined.ActorId})";
             await _client.SendChatAsync(FirstChat);
@@ -69,6 +70,7 @@ public partial class EngineLobbyNode : Control
     private void OnChatReceived(ChatNotify chat)
     {
         _chatShown = true;
+        GD.Print($"ChatNotify name={chat.Name} text={chat.Text}");
         if (!_exiting)
             _status.Text = $"{chat.Name}: {chat.Text}";
     }
