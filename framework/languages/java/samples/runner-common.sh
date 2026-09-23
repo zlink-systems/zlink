@@ -224,11 +224,33 @@ STOPPED_NONE=${stopped_count} FORCE_STOPPED=${force_stopped_count}" >&2
   return 0
 }
 
+zlink_sample_capture_node_thread_dump() {
+  local name="$1" pid="$2" log_dir="$3"
+  if kill -0 "${pid}" >/dev/null 2>&1; then
+    jcmd "${pid}" Thread.print >"${log_dir}/${name}-shutdown-${pid}.threads.txt" 2>&1 || true
+  fi
+}
+
+zlink_sample_wait_node_shutdown() {
+  local name="$1" pid="$2" log_dir="$3" attempt
+  local shutdown_started_us=${EPOCHREALTIME/./} dump_captured=0
+  for attempt in $(seq 1 "${ZLINK_SAMPLE_CLEANUP_WAIT_ATTEMPTS:-900}"); do
+    kill -0 "${pid}" >/dev/null 2>&1 || return 0
+    if (( !dump_captured && ${EPOCHREALTIME/./} - shutdown_started_us >= 20000000 )); then
+      zlink_sample_capture_node_thread_dump "${name}" "${pid}" "${log_dir}"
+      dump_captured=1
+    fi
+    sleep 0.1
+  done
+  kill -9 "${pid}" >/dev/null 2>&1 || true
+}
+
 cleanup() {
   local status="$?"
   local cleanup_status=0
   local force_killed=0
   local zlink_sample_log_dir="${log_dir:-${LOG_DIR:-}}"
+  local shutdown_started_us dump_captured=0
   set +e
   zlink_sample_print_logs "${status}"
   local pid_list_name=""
@@ -246,11 +268,12 @@ cleanup() {
       done
       kill "${pid}" >/dev/null 2>&1 || true
     done
+    shutdown_started_us=${EPOCHREALTIME/./}
     local any_alive=1
     # Runtime drain uses the public 30-second deadline and may then finish its
     # bounded owner/resource cleanup. The default 90-second observation window
     # must complete before the runner uses SIGKILL.
-    for _ in $(seq 1 "${ZLINK_SAMPLE_CLEANUP_WAIT_ATTEMPTS:-900}"); do
+    for attempt in $(seq 1 "${ZLINK_SAMPLE_CLEANUP_WAIT_ATTEMPTS:-900}"); do
       any_alive=0
       for pid in "${zlink_sample_pids[@]}"; do
         if kill -0 "${pid}" >/dev/null 2>&1; then
@@ -266,6 +289,14 @@ cleanup() {
       done
       if [[ "${any_alive}" == "0" ]]; then
         break
+      fi
+      if (( !dump_captured && ${EPOCHREALTIME/./} - shutdown_started_us >= 20000000 )) \
+          && declare -p node_pid >/dev/null 2>&1; then
+        for name in "${!node_pid[@]}"; do
+          zlink_sample_capture_node_thread_dump "${name}" "${node_pid[$name]}" \
+            "${zlink_sample_log_dir}"
+        done
+        dump_captured=1
       fi
       sleep 0.1
     done
