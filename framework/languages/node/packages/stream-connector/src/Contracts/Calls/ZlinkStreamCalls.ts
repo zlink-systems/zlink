@@ -1,7 +1,6 @@
 import type { ZlinkStreamMetadata } from '../ZlinkStreamMetadata';
 import type {
   ZlinkStreamEncodedPayload,
-  ZlinkStreamFlow,
   ZlinkStreamMessage,
   ZlinkStreamResultOf
 } from '../ZlinkStreamModels';
@@ -11,7 +10,6 @@ export interface ZlinkStreamSendCall {
   metadata(key: string, value: string): ZlinkStreamSendCall;
   metadata(metadata: ZlinkStreamMetadata): ZlinkStreamSendCall;
   compress(): ZlinkStreamSendCall;
-  flowFrom(flow: ZlinkStreamFlow): ZlinkStreamSendCall;
   submit(): Promise<void>;
 }
 
@@ -21,7 +19,6 @@ export interface ZlinkStreamRequestCall {
   metadata(metadata: ZlinkStreamMetadata): ZlinkStreamRequestCall;
   timeout(timeoutMs: number): ZlinkStreamRequestCall;
   compress(): ZlinkStreamRequestCall;
-  flowFrom(flow: ZlinkStreamFlow): ZlinkStreamRequestCall;
   submit<TReply = unknown>(signal?: AbortSignal): Promise<TReply>;
   submitEncoded(signal?: AbortSignal): Promise<ZlinkStreamEncodedPayload>;
   submit(callback: (result: ZlinkStreamResultOf<ZlinkStreamEncodedPayload>) => void): void;
