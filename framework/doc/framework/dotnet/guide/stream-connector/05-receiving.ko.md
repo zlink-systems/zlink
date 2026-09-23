@@ -30,8 +30,7 @@ title: "packet 수신 · C#/.NET"
 ## 1. handler 등록
 
 handler가 받는 것은 payload만이 아니라 **message**다. message에는 packet 이름, decode한 payload,
-metadata, 흐름 식별자가 함께 담긴다. 어떤 packet을 받을지는 payload 타입에서 정하거나 이름으로
-지정한다.
+metadata가 함께 담긴다. 어떤 packet을 받을지는 payload 타입에서 정하거나 이름으로 지정한다.
 
 ```csharp
 using var subscription = connector.On<LeaderboardUpdate>((message, cancellationToken) =>
@@ -40,9 +39,6 @@ using var subscription = connector.On<LeaderboardUpdate>((message, cancellationT
     return ValueTask.CompletedTask;
 });
 ```
-
-handler 안에서 같은 connector로 다시 송신할 수 있다. 그 송신은 처리 중인 message의 흐름을
-이어받으므로 client의 log와 서버의 추적이 같은 흐름으로 이어진다.
 
 ## 2. 등록 해제
 
@@ -86,6 +82,8 @@ while (running)
 시나리오의 특정 지점에서 packet 하나를 기다릴 때는 handler를 등록하지 않고 대기 표면을 사용한다.
 조건에 맞는 packet을 소비하고 그 message를 돌려주며, 조건에 맞지 않는 packet은 큐에 남아 이후의
 handler나 대기가 처리한다. timeout을 지정하지 않으면 connector의 기본 대기 timeout을 사용한다.
+
+packet 이름은 명시하거나 payload 타입에서 정할 수 있다.
 
 ```csharp
 var found = await connector.WaitFor<MatchFound>()

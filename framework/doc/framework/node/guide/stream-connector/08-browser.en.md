@@ -38,24 +38,3 @@ async function updateFrame(): Promise<void> {
   await client.dispatch(); // In Manual mode, the main loop decides when the receive handler runs.
 }
 ```
-
-## Flow Propagation For Related Outbound
-
-The browser has no standard feature that isolates the current value per asynchronous task. Only mark
-an outbound related to an inbound handler that started it with `flowFrom(message)`. An unmarked
-outbound from a timer or UI callback starts a new application flow, so even if it runs concurrently,
-the inbound flow doesn't leak.
-
-```ts
-client.on('MatchAssigned', async (message) => {
-  await refreshView(message.payload);
-
-  client.send({ accepted: true })
-    .packetName('MatchAccepted')
-    .flowFrom(message) // Even after the await, this makes explicit that this outbound belongs to the inbound flow.
-    .submit();
-});
-```
-
-The application must not store the flow id in a global variable, or modify how Promises and timers
-behave. Don't call `flowFrom(...)` on an unrelated outbound.

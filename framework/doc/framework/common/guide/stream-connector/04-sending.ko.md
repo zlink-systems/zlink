@@ -127,9 +127,84 @@ request마다 부여되는 sequence로 맞춰지므로, 여러 request를 동시
 연결이 끊기면 대기 중이던 request는 모두 실패한다. 재연결한 뒤에도 자동으로 다시 보내지 않으므로,
 다시 보내야 하는 request는 application이 판단해 보낸다.
 
+### 요청 hook
+
+모든 request에 공통 metadata를 추가할 때는 request sending hook을 등록한다. 이 hook은 request
+호출 중 frame을 만들기 전에 동기로 실행된다. 모든 요청 결과를 기록할 때는 reply received
+hook을 등록한다. 이 hook은 응답, 실패, timeout 또는 연결 종료로 request가 끝날 때 dispatch mode에
+따라 실행된다. 두 hook은 Actor handle로 보낸 request에도 적용된다.
+
+등록 표면은 다음과 같다.
+
+=== "C++"
+
+    ```cpp
+    subscription_t on_request_sending(std::function<void(request_sending_context_t&)> callback);
+    subscription_t on_reply_received(std::function<void(const reply_received_context_t&)> callback);
+    ```
+
+=== "C#/.NET"
+
+    ```csharp
+    IDisposable OnRequestSending(Action<ZlinkStreamRequestSendingContext> handler);
+    IDisposable OnReplyReceived(Func<ZlinkStreamReplyReceivedContext, CancellationToken, ValueTask> handler);
+    ```
+
+=== "Java"
+
+    ```java
+    AutoCloseable onRequestSending(ZLinkStreamRequestSendingHandler handler);
+    AutoCloseable onReplyReceived(ZLinkStreamReplyReceivedHandler handler);
+    ```
+
+=== "Kotlin"
+
+    ```kotlin
+    fun onRequestSending(handler: ZLinkStreamRequestSendingHandler): AutoCloseable
+    fun repliesReceived(): Flow<ZLinkStreamReplyReceivedContext>
+    ```
+
+    Kotlin은 `connector.onRequestSending { context -> context.setMetadata("source", "kotlin") }`
+    형태로 등록한다.
+
+=== "Node/TypeScript"
+
+    ```typescript
+    onRequestSending(handler: (context: ZlinkStreamRequestSendingContext) => void): Disposable;
+    onReplyReceived(
+      handler: (context: ZlinkStreamReplyReceivedContext, signal?: AbortSignal) => Promise<void> | void
+    ): Disposable;
+    ```
+
+등록된 request sending hook은 전송할 metadata를 추가한다. reply received hook은 요청 결과를
+읽으며 바꾸지 않는다.
+
 ## 3. packet 이름 결정
 
 서버는 packet 이름으로 handler를 고른다. 이름은 다음 순서로 정해진다.
+
+`send`와 `request`는 packet 이름을 명시하거나 payload 타입에서 정할 수 있다.
+
+=== "C++"
+
+    이름을 명시할 때는 builder의 `packet_name(name)`을 사용한다.
+
+=== "C#/.NET"
+
+    이름을 명시할 때는 builder의 `PacketName(string)`을 사용한다.
+
+=== "Java"
+
+    이름을 명시할 때는 `send(String, Object)`·`request(String, Object)` 또는 builder의
+    `packetName(name)`을 사용한다.
+
+=== "Kotlin"
+
+    이름을 명시할 때는 builder의 `packetName(name)`을 사용한다.
+
+=== "Node/TypeScript"
+
+    이름을 명시할 때는 builder의 `packetName(name)`을 사용한다.
 
 1. 호출자가 builder에 명시한 이름
 2. payload 타입에 붙인 이름

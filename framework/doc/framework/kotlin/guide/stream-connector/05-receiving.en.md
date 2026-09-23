@@ -31,8 +31,8 @@ connection itself.
 ## 1. Registering a Handler
 
 A handler receives a **message**, not a payload alone. The message carries the packet name, the
-decoded payload, the metadata, and the flow identifier. Which packets it receives is decided by the
-payload type or by an explicit name.
+decoded payload, and the metadata. Which packets it receives is decided by the payload type or by
+an explicit name.
 
 ```kotlin
 val subscription = connector.on<LeaderboardUpdate> { message ->
@@ -40,9 +40,6 @@ val subscription = connector.on<LeaderboardUpdate> { message ->
     CompletableFuture.completedFuture(null)
 }
 ```
-
-A handler may send again over the same connector. That send continues the flow of the message
-being handled, so client logs and server traces line up on one flow.
 
 ## 2. Releasing a Registration
 
@@ -89,6 +86,8 @@ To wait for a single packet at a point in a scenario, use a wait surface instead
 handler. It consumes the matching packet and returns that message; a packet that does not match
 stays in the queue for a later handler or wait. Without an explicit timeout, the connector's default
 wait timeout applies.
+
+A packet name can be explicit or derived from the payload type.
 
 ```kotlin
 val found = connector.waitFor<MatchFound>()
