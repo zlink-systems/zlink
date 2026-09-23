@@ -159,7 +159,7 @@ received count is not a basis for flow control.
 
 ## 8. Sending and Receiving with an Actor Handle
 
-An application with one Actor needs no changes to its existing send and receive code. When the server binds several Actors to one connection, use a handle to choose the Actor for a send and read the received message’s Actor ID to identify its server-side counterpart. The bound notice precedes that Actor’s first packet; the unbound notice follows its last packet. The connector maps slots to Actor IDs, so application code does not handle slots.
+An application with one Actor needs no changes to its existing send and receive code. When the server binds several Actors to one connection, use a handle to choose the Actor for a send and read the received message’s Actor ID to identify its server-side counterpart. When the server binds an Actor to this connection, the bound notice arrives before that Actor's first packet; when the binding ends, the unbound notice arrives after its last packet.
 
 Register for bound and unbound notices first. The tutorial server then binds `p1`; the client looks up its handle, sends through it, and reads the Actor ID on the returned message.
 

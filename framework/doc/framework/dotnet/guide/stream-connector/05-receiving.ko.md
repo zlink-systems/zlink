@@ -148,9 +148,8 @@ connector는 받은 것을 계속 받아서 처리한다. 큐에 한도를 두�
 
 Actor 하나만 쓰는 application은 기존 송수신 코드를 바꿀 필요가 없다. 서버가 한 연결에
 Actor 여러 개를 bind할 때는 Actor handle로 송신 대상을 고르고, 수신 message의 Actor ID로
-서버 쪽 상대를 확인한다. 서버의 bound 통지는 그 Actor의 첫 packet보다 먼저 오고,
-unbound 통지는 그 Actor의 마지막 packet 뒤에 온다. connector가 slot과 Actor ID를
-대응시키므로 application은 slot을 직접 다루지 않는다.
+서버 쪽 상대를 확인한다. 서버가 Actor를 이 연결에 bind하면 bound 통지가 그 Actor의 첫 packet보다
+먼저 오고, bind가 끝나면 unbound 통지가 그 Actor의 마지막 packet 뒤에 온다.
 
 먼저 bound·unbound 통지를 등록한다. 다음 예제는 서버가 `p1`을 bind한 뒤 handle을 찾아
 그 Actor를 통해 보내고, 돌아온 message의 Actor ID를 읽는다.
