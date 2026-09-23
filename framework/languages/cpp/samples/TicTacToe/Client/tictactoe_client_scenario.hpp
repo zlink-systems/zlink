@@ -156,7 +156,7 @@ class tictactoe_client_scenario_t
             trace ("authenticate client1");
             const auto client1_auth_request = authenticate_req_t{options.x_actor_id};
             auto client1_auth = co_await client1.request (client1_auth_request)
-                                   .async<authenticate_res_t> ();
+                                  .async<authenticate_res_t> ();
             // --8<-- [end:doc-e2e-connect-request]
             ensure (client1_auth.player.actor_id == options.x_actor_id);
             ensure (client1_auth.player.display_name == options.x_actor_id);

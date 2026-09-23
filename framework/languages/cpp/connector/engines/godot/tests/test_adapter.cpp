@@ -11,8 +11,11 @@
 #include <thread>
 #include <vector>
 
+using zlink::godot_stream_connector::error_code_t;
 using zlink::godot_stream_connector::packet_t;
+using zlink::godot_stream_connector::request_result_t;
 using zlink::godot_stream_connector::stream_connector_t;
+using zlink::godot_stream_connector::subscription_t;
 
 namespace
 {
@@ -56,38 +59,41 @@ int main (int argc, char **argv)
 
     stream_connector_t alice;
     stream_connector_t bob;
-    std::vector<packet_t> alice_requests;
-    std::vector<packet_t> bob_requests;
+    std::vector<request_result_t> alice_ping;
+    std::vector<request_result_t> alice_join;
+    std::vector<request_result_t> bob_join;
     std::vector<packet_t> alice_pushes;
     std::vector<packet_t> bob_pushes;
-    alice.on_request_completed (
-      [&] (const packet_t &packet) { alice_requests.push_back (packet); });
-    bob.on_request_completed ([&] (const packet_t &packet) { bob_requests.push_back (packet); });
-    alice.on_packet ([&] (const packet_t &packet) { alice_pushes.push_back (packet); });
-    bob.on_packet ([&] (const packet_t &packet) { bob_pushes.push_back (packet); });
-
-    alice.subscribe ("ChatNotify");
+    auto alice_chat =
+      alice.on ("ChatNotify", [&] (const packet_t &packet) { alice_pushes.push_back (packet); });
+    auto alice_other =
+      alice.on ("OtherNotify", [&] (const packet_t &packet) { bob_pushes.push_back (packet); });
     alice.connect (argv[1]);
     bob.connect (argv[1]);
 
-    alice.request_json ("PingReq", R"({"sentAtUnixMs":"1000"})", 5.0);
-    if (!require (until (alice, bob, [&] { return alice_requests.size () == 1; }),
+    alice.request_json ("PingReq", R"({"sentAtUnixMs":"1000"})", 5.0,
+                        [&] (const request_result_t &result) { alice_ping.push_back (result); });
+    if (!require (until (alice, bob, [&] { return alice_ping.size () == 1; }),
                   "PingReq completion missing")
-        || !require (alice_requests[0].name == "PingReq", "PingReq completion name wrong")
-        || !require (nlohmann::json::parse (payload (alice_requests[0])).at ("sentAtUnixMs")
+        || !require (alice_ping[0].reply.has_value () && !alice_ping[0].error_code.has_value (),
+                     "PingReq failed")
+        || !require (nlohmann::json::parse (payload (*alice_ping[0].reply)).at ("sentAtUnixMs")
                        == "1000",
                      "PingReq response payload wrong")) {
         return 1;
     }
 
-    alice.request_json ("JoinReq", R"({"name":"alice"})", 5.0);
-    bob.request_json ("JoinReq", R"({"name":"bob"})", 5.0);
-    if (!require (until (alice, bob,
-                         [&] { return alice_requests.size () == 2 && bob_requests.size () == 1; }),
-                  "JoinReq completions missing")
-        || !require (alice_requests[1].name == "JoinReq" && bob_requests[0].name == "JoinReq",
-                     "JoinReq completion name wrong")
-        || !require (nlohmann::json::parse (payload (alice_requests[1])).at ("name") == "alice",
+    alice.request_json ("JoinReq", R"({"name":"alice"})", 5.0,
+                        [&] (const request_result_t &result) { alice_join.push_back (result); });
+    bob.request_json ("JoinReq", R"({"name":"bob"})", 5.0,
+                      [&] (const request_result_t &result) { bob_join.push_back (result); });
+    if (!require (
+          until (alice, bob, [&] { return alice_join.size () == 1 && bob_join.size () == 1; }),
+          "JoinReq completions missing")
+        || !require (alice_ping.size () == 1 && alice_join[0].reply.has_value ()
+                       && bob_join[0].reply.has_value (),
+                     "JoinReq failed")
+        || !require (nlohmann::json::parse (payload (*alice_join[0].reply)).at ("name") == "alice",
                      "JoinReq response payload wrong")) {
         return 1;
     }
@@ -112,11 +118,61 @@ int main (int argc, char **argv)
         bob.dispatch ();
         std::this_thread::sleep_for (std::chrono::milliseconds (10));
     }
-    if (!require (bob_pushes.empty (), "unsubscribed ChatNotify reached callback")) {
+    if (!require (bob_pushes.empty (), "different packet name reached callback")) {
+        return 1;
+    }
+
+    alice.connect (argv[1]);
+    if (!require (alice_chat.active (), "ChatNotify subscription lost after reconnect")) {
+        return 1;
+    }
+    std::vector<request_result_t> alice_rejoin;
+    alice.request_json ("JoinReq", R"({"name":"alice"})", 5.0,
+                        [&] (const request_result_t &result) { alice_rejoin.push_back (result); });
+    if (!require (until (alice, bob, [&] { return alice_rejoin.size () == 1; }),
+                  "JoinReq after reconnect missing")
+        || !require (alice_rejoin[0].reply.has_value (), "JoinReq after reconnect failed")) {
+        return 1;
+    }
+    alice.send_json ("ChatMsg", R"({"text":"reconnected"})");
+    if (!require (until (alice, bob, [&] { return alice_pushes.size () == 2; }),
+                  "ChatNotify registration did not survive reconnect")) {
+        return 1;
+    }
+
+    subscription_t self_subscription;
+    std::size_t self_calls = 0;
+    self_subscription = alice.on ("ChatNotify", [&] (const packet_t &) {
+        ++self_calls;
+        self_subscription.unsubscribe ();
+    });
+    alice.send_json ("ChatMsg", R"({"text":"self-unsubscribe"})");
+    if (!require (until (alice, bob, [&] { return self_calls == 1; }),
+                  "self-unsubscribe callback missing")
+        || !require (!self_subscription.active (), "self-unsubscribe handle remained active")) {
+        return 1;
+    }
+    alice.send_json ("ChatMsg", R"({"text":"after-unsubscribe"})");
+    if (!require (until (alice, bob, [&] { return alice_pushes.size () == 4; }),
+                  "follow-up ChatNotify missing")
+        || !require (self_calls == 1, "self-unsubscribed callback ran again")) {
         return 1;
     }
 
     alice.close ();
+    std::vector<request_result_t> failures;
+    alice.request_json ("PingReq", R"({"sentAtUnixMs":"1000"})", 5.0,
+                        [&] (const request_result_t &result) { failures.push_back (result); });
+    if (!require (failures.empty (), "failed request callback ran before dispatch")
+        || !require (until (alice, bob, [&] { return failures.size () == 1; }),
+                     "failed request completion missing")
+        || !require (!failures[0].reply.has_value ()
+                       && failures[0].error_code == error_code_t::disconnected
+                       && !failures[0].error_message.empty (),
+                     "failed request lost error")) {
+        return 1;
+    }
+
     bob.close ();
     std::cout << "godot adapter Ping/Join/Chat/ChatNotify passed\n";
     return 0;

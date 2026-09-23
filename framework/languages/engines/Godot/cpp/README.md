@@ -6,7 +6,7 @@ This Godot 4.4 GDExtension scene uses the existing C++ Godot stream connector ad
 `EngineLobbyNode` calls `dispatch()` in `_process`, so callbacks update the `Status` label on the
 Godot main thread. The intended flow is `PingReq` → `PingRes` → `JoinReq` → `JoinRes` → `ChatMsg` →
 `ChatNotify`. Packet names and JSON fields follow the [shared Engine Lobby contract](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/sample/engine-lobby/README.md).
-The node subscribes to the `ChatNotify` push before connecting.
+The node registers a `ChatNotify` callback with `on` before connecting and keeps its subscription handle.
 
 ## Dependencies and build
 
@@ -47,8 +47,8 @@ Godot adapter header and a thin stand-in for Godot C++ headers. A deliberately m
 `dispatch()` call fails that compile check. Godot, `godot-cpp`, and a runnable GDExtension are not
 installed here, so an editor build, scene run, and rendered label were not verified.
 
-The node subscribes to `ChatNotify` before connecting. The adapter delivers that push through the
-registered packet callback.
+The node registers `ChatNotify` before connecting. Each `request_json` call supplies its own
+completion callback, which receives either a reply or an error code and message.
 
 The C# variant under [`../csharp`](../csharp) did run against the real shared server in WSL: two
 clients verified Ping, Join, and both ChatNotify payloads. A connection to an unused port failed as

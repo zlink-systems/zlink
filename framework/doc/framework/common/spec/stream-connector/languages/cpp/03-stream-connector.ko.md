@@ -451,18 +451,17 @@ encode·decode된 frame에는 소급 적용하지 않는다. 각 처리 지점�
 ## 7. 엔진 어댑터
 
 Unreal plugin, Godot GDExtension, Axmol adapter는 `connector_t`를 private 구현으로 소유하고 엔진의
-타입과 thread 규칙에 맞춘 표면을 노출한다. 세 어댑터는 다음 세 규칙을 따른다.
+타입과 thread 규칙에 맞춘 표면을 노출한다. 수신과 요청의 모양은 다른 connector와 같다 — push는 packet
+이름과 callback을 함께 등록해 받고, 요청은 그 호출이 응답을 받는다. 세 어댑터는 다음 두 규칙을 따른다.
 
 - **callback과 delegate는 engine main thread에서만 실행한다.** 어댑터는 core callback을 자기 queue에
   넣고, engine이 frame마다 부르는 `dispatch` 또는 application이 등록한 main thread dispatcher(Godot
   `set_main_thread_dispatcher`, Axmol `set_axmol_thread_dispatcher`)로 전달한다.
-- **push는 packet 이름으로 구독한다.** core의 `on`처럼 어댑터도 이름을 받는 구독 호출을 둔다(Unreal
-  `Subscribe(PacketName)`, Godot·Axmol `subscribe(packet_name)`). 구독한 이름의
-  push만 어댑터의 수신 창구(Unreal `OnPacketReceived`, Godot·Axmol `on_packet` callback)로
-  packet 이름과 함께 전달한다.
-- **요청 완료는 그 요청의 packet 이름을 싣는다.** Response frame에는 packet 이름이 없으므로([공통 스펙
-  §4.2](../../32-stream-connector.ko.md#42-header)) 어댑터는 요청할 때의 이름을 완료 창구(Unreal
-  `OnRequestCompleted`, Godot·Axmol `on_request_completed` callback)에 붙여 전달한다.
+- **결과는 호출마다 받는 callback으로 전달한다.** push는 core의 `on`처럼
+  packet 이름과 callback을 한 번에 등록하고(Unreal `On(PacketName, Delegate)`, Godot·Axmol
+  `on(packet_name, callback)`), 등록은 해제 handle을 돌려준다. 요청은 호출할 때 완료 callback을 함께 받아
+  그 요청의 응답 또는 실패를 그 callback으로 전달한다(Unreal `RequestJson(..., OnCompleted)`, Godot·Axmol
+  `request_json(..., callback)`).
 
 ## 8. 검증
 
