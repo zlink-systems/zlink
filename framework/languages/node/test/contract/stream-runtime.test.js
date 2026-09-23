@@ -2996,6 +2996,121 @@ test('M1 actorJoin command 42 waits for every pre-seal accepted Actor frame to f
   });
 });
 
+test('route replacement survives retired unbound rejection and reports it', async () => {
+  const reports = [];
+  const registry = new ZLinkActorSessionBindingRegistry(16, 16, 50, () => ({
+    reportRuntimeTaskException(task, error) { reports.push({ task, error }); }
+  }));
+  const actor = { actorId: 'actor-rebind-disconnected' };
+  const oldFailure = new Error('NotConnected');
+  const oldControls = [];
+  const newControls = [];
+  const oldContext = {
+    routingId: 'old-session',
+    actorSlotControls: {
+      async enqueueBound(slot, actorId) { oldControls.push(['bound', slot, actorId]); },
+      async enqueueUnbound(slot) {
+        oldControls.push(['unbound', slot]);
+        throw oldFailure;
+      }
+    },
+    bindLocal() {},
+    unbindLocal() {}
+  };
+  const newContext = {
+    routingId: 'new-session',
+    actorSlotControls: {
+      async enqueueBound(slot, actorId) { newControls.push(['bound', slot, actorId]); },
+      async enqueueUnbound(slot) { newControls.push(['unbound', slot]); }
+    },
+    bindLocal() {},
+    unbindLocal() {}
+  };
+
+  await registry.bind(oldContext, actor, 'old-token');
+  const previous = await registry.requireRoute(actor.actorId);
+  await registry.replace(previous, newContext, actor, 'new-token');
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(oldControls, [['bound', 1, actor.actorId], ['unbound', 1]]);
+  assert.deepEqual(newControls, [['bound', 1, actor.actorId]]);
+  const current = await registry.requireRoute(actor.actorId);
+  assert.equal(current.context, newContext);
+  assert.equal(current.bindingToken, 'new-token');
+  assert.deepEqual(reports, [{ task: 'retired session actor unbound', error: oldFailure }]);
+});
+
+test('route replacement survives synchronous retired unbound failure', async () => {
+  const reports = [];
+  const registry = new ZLinkActorSessionBindingRegistry(16, 16, 50, () => ({
+    reportRuntimeTaskException(task, error) { reports.push({ task, error }); }
+  }));
+  const actor = { actorId: 'actor-rebind-sync-failure' };
+  const oldFailure = new Error('NotConnected');
+  const oldContext = {
+    actorSlotControls: {
+      async enqueueBound() {},
+      enqueueUnbound() { throw oldFailure; }
+    },
+    bindLocal() {},
+    unbindLocal() {}
+  };
+  const bound = [];
+  const newContext = {
+    actorSlotControls: {
+      async enqueueBound(slot, actorId) { bound.push([slot, actorId]); },
+      async enqueueUnbound() {}
+    },
+    bindLocal() {},
+    unbindLocal() {}
+  };
+
+  await registry.bind(oldContext, actor, 'old-token');
+  await registry.replace(await registry.requireRoute(actor.actorId), newContext, actor, 'new-token');
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(bound, [[1, actor.actorId]]);
+  assert.equal((await registry.requireRoute(actor.actorId)).context, newContext);
+  assert.deepEqual(reports, [{ task: 'retired session actor unbound', error: oldFailure }]);
+});
+
+test('route replacement completes while retired unbound is pending', async () => {
+  const registry = new ZLinkActorSessionBindingRegistry();
+  const actor = { actorId: 'actor-rebind-pending-unbound' };
+  let finishUnbound;
+  const pendingUnbound = new Promise((resolve) => { finishUnbound = resolve; });
+  const oldContext = {
+    actorSlotControls: {
+      async enqueueBound() {},
+      enqueueUnbound() { return pendingUnbound; }
+    },
+    bindLocal() {},
+    unbindLocal() {}
+  };
+  let newBound = false;
+  const newContext = {
+    actorSlotControls: {
+      async enqueueBound() { newBound = true; },
+      async enqueueUnbound() {}
+    },
+    bindLocal() {},
+    unbindLocal() {}
+  };
+
+  await registry.bind(oldContext, actor, 'old-token');
+  const replacement = registry.replace(
+    await registry.requireRoute(actor.actorId), newContext, actor, 'new-token'
+  );
+  try {
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(newBound, true);
+  } finally {
+    finishUnbound();
+    await replacement;
+  }
+  assert.equal((await registry.requireRoute(actor.actorId)).context, newContext);
+});
+
 test('route replacement shares the pre-bind active-frame drain with command 42', async () => {
   const registry = new ZLinkActorSessionBindingRegistry(16, 16, 50);
   const actorId = 'actor-replaced-active-frame';
