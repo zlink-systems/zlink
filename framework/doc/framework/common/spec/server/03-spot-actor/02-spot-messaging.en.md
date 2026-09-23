@@ -727,6 +727,9 @@ A Spot subscription is registered with the following values.
 - `topic`: the value selecting a Spot within that Channel
 - packet name: the value selecting a typed handler
 
+A missing or empty `topic` prevents the host from starting, whichever registration path
+(explicit registration or package scan) registered the handler.
+
 If a registered Spot doesn't participate in that ChannelName, the host can't
 start.
 

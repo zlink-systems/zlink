@@ -1253,7 +1253,7 @@ std::shared_ptr<service::spot_t> detail::spot_node_runtime_t::attach_native_spot
     }
 
     for (const auto &handler : plan.handlers) {
-        if (handler.kind == spot_handler_kind_t::subscription && !handler.topic.empty ()) {
+        if (handler.kind == spot_handler_kind_t::subscription) {
             /* The node creates its subscription receiver lazily on the first
                subscription, and that creation waits a bounded time for the
                inproc attachment pipe. Under congestion the wait can expire, and
@@ -3879,6 +3879,12 @@ spot_handler_registry_t &spot_handler_registry_t::add_handler_erased (spot_handl
                                                                       std::type_index reply_type,
                                                                       invoker_t invoker)
 {
+    if (kind == spot_handler_kind_t::subscription && topic.empty ()) {
+        throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                     "SPOT subscription handler topic is required for '"
+                                       + std::string (handler_type.name ()) + "' (packet '"
+                                       + packet_name + "')");
+    }
     const auto duplicate =
       std::any_of (_state->handlers.begin (), _state->handlers.end (),
                    [&] (const spot_handler_descriptor_t &descriptor) {
@@ -3895,7 +3901,7 @@ spot_handler_registry_t &spot_handler_registry_t::add_handler_erased (spot_handl
                                                           payload_type, actor_type, reply_type});
     _state->handler_invokers.push_back (std::move (invoker));
     const auto &descriptor = _state->handlers.back ();
-    if (descriptor.kind == spot_handler_kind_t::subscription && !descriptor.topic.empty ()) {
+    if (descriptor.kind == spot_handler_kind_t::subscription) {
         const auto topic = descriptor.topic;
         const auto subscription =
           _state->node

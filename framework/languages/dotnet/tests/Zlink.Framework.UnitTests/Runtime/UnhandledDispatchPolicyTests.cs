@@ -867,6 +867,7 @@ public sealed partial class UnhandledDispatchPolicyTests
         public int NonOwnerSkipped;
     }
 
+    [ZLinkSpotSubscriptionHandler("events", "events")]
     private sealed class TestSubscriptionHandler
         : IZLinkSpotSubscriptionHandler<TestSubscriptionSpot, TestSubscriptionEvent>
     {

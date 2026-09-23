@@ -11,6 +11,7 @@ import systems.zlink.framework.handlers.ZLinkSpotRequest;
 import systems.zlink.framework.handlers.ZLinkSpotSubscription;
 import systems.zlink.framework.runtime.handlers.ZLinkGenericTypeResolver;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerMethodInvoker;
+import systems.zlink.framework.runtime.handlers.ZLinkHandlerScanValidation;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandler;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerCatalog;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerKind;
@@ -116,7 +117,9 @@ final class ZLinkSpotHandlerLoader {
                 addConfiguredSubscriptionHandler(
                         subscriptionHandlers,
                         createSpotSubscriptionRegistration(
-                                requireTopic(subscription.topic()), handlerType, expectedSpotType));
+                                ZLinkHandlerScanValidation.requireTopic(handlerType, subscription),
+                                handlerType,
+                                expectedSpotType));
                 matched = true;
             }
         }
@@ -162,12 +165,10 @@ final class ZLinkSpotHandlerLoader {
     private static SpotSubscriptionHandlerRegistration createConfiguredSpotSubscriptionRegistration(
             Class<?> handlerType, Class<?> expectedSpotType) {
         ZLinkSpotSubscription annotation = handlerType.getAnnotation(ZLinkSpotSubscription.class);
-        if (annotation == null) {
-            throw new ZLinkConfigurationException(
-                    "SPOT subscription handler topic is required: " + handlerType.getName());
-        }
         return createSpotSubscriptionRegistration(
-                requireTopic(annotation.topic()), handlerType, expectedSpotType);
+                ZLinkHandlerScanValidation.requireTopic(handlerType, annotation),
+                handlerType,
+                expectedSpotType);
     }
 
     private static boolean isSpotPacketHandlerType(Class<?> handlerType) {
@@ -404,13 +405,6 @@ final class ZLinkSpotHandlerLoader {
 
     private static String resolvePacketName(Class<?> messageType, String explicitPacketName) {
         return ZLinkPacketNames.resolve(messageType, explicitPacketName);
-    }
-
-    private static String requireTopic(String topic) {
-        if (topic == null || topic.isBlank()) {
-            throw new ZLinkConfigurationException("SPOT subscription topic must not be empty");
-        }
-        return topic;
     }
 
     interface ScannedTimerRegistrar {
