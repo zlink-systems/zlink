@@ -18,8 +18,7 @@ internal sealed class ZLinkSpotSubscriptionRegistry
             throw new ZLinkConfigurationException(
                 "SPOT subscription channel name must not be empty."
             );
-        if (string.IsNullOrWhiteSpace(topic))
-            throw new ZLinkConfigurationException("SPOT subscription topic must not be empty.");
+        topic = RequireTopic(topic, handlerType);
 
         _registrations.Add(new ZLinkSpotSubscriptionRegistration(channelName, topic, handlerType));
     }
@@ -35,11 +34,20 @@ internal sealed class ZLinkSpotSubscriptionRegistry
             throw new ZLinkConfigurationException(
                 "SPOT subscription channel name must not be empty."
             );
-        if (string.IsNullOrWhiteSpace(topic))
-            throw new ZLinkConfigurationException("SPOT subscription topic must not be empty.");
+        topic = RequireTopic(topic, spotType);
         _registrations.Add(
             new ZLinkSpotSubscriptionRegistration(channelName, topic, spotType, method)
         );
+    }
+
+    internal static string RequireTopic(string? topic, Type handlerType)
+    {
+        if (string.IsNullOrWhiteSpace(topic))
+            throw new ZLinkConfigurationException(
+                $"SPOT subscription handler '{handlerType}' topic is required."
+            );
+
+        return topic;
     }
 
     public async ValueTask BindAsync(

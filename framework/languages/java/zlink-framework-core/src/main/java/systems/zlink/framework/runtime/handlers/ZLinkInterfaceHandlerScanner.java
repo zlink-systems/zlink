@@ -233,9 +233,7 @@ final class ZLinkInterfaceHandlerScanner {
             return;
         }
         ZLinkSpotSubscription annotation = candidate.getAnnotation(ZLinkSpotSubscription.class);
-        if (annotation == null) {
-            return;
-        }
+        String topic = ZLinkHandlerScanValidation.requireTopic(candidate, annotation);
         Type[] arguments = matched.getActualTypeArguments();
         Class<?> spotType = requireClassArgument(candidate, arguments[0]);
         Class<?> messageType = requireClassArgument(candidate, arguments[1]);
@@ -249,7 +247,7 @@ final class ZLinkInterfaceHandlerScanner {
                         messageType,
                         Void.class,
                         resolvePacketName(messageType),
-                        ZLinkHandlerScanValidation.requireTopic(candidate, annotation.topic()),
+                        topic,
                         "",
                         null,
                         groups));

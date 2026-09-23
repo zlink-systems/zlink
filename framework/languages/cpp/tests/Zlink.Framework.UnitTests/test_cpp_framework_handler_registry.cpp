@@ -738,7 +738,28 @@ int main ()
 
     zlink::framework::spot_handler_registry_t spot_handlers;
     spot_handlers.add_handler<&dispatch_spot_t::on_packet> ("spot-packet");
+    bool missing_topic_failed = false;
+    try {
+        spot_handlers.add_subscribe<&dispatch_spot_t::on_topic_event> ("");
+    }
+    catch (const zlink::framework::framework_exception_t &error) {
+        missing_topic_failed =
+          error.kind () == zlink::framework::framework_error_kind_t::protocol_error
+          && std::string (error.what ()).find ("SPOT subscription handler topic is required")
+               != std::string::npos
+          && std::string (error.what ()).find (typeid (dispatch_spot_t).name ())
+               != std::string::npos;
+    }
+    if (!missing_topic_failed || spot_handlers.descriptors ().size () != 1) {
+        return 47;
+    }
     spot_handlers.add_subscribe<&dispatch_spot_t::on_topic_event> ("spot-topic");
+    const auto registered_handlers = spot_handlers.descriptors ();
+    if (registered_handlers.size () != 2
+        || registered_handlers.back ().kind != zlink::framework::spot_handler_kind_t::subscription
+        || registered_handlers.back ().topic != "spot-topic") {
+        return 48;
+    }
     spot_handlers.add_actor_send<&dispatch_spot_t::on_actor_packet> ("spot-actor-packet");
 
     zlink::framework::spot_inbound_message_t spot_inbound;
