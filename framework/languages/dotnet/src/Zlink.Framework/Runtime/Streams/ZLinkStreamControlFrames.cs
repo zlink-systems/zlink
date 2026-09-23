@@ -100,12 +100,7 @@ internal static class ZLinkStreamControlFrames
             name,
             ZlinkStreamMetadata.Empty
         );
-        var frame = ZLinkStreamFrameCodec.Encode(
-            ZLinkStreamProtocolDefaults.EncodeHeader(header).Span,
-            payload
-        );
-        if (!stream.Write(ZLinkMessage.From(frame)))
-            throw new InvalidOperationException("Actor control packet send failed.");
+        ZLinkStreamFrameWriter.Write(stream, header, payload, "Actor control packet send failed.");
     }
 }
 
