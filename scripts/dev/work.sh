@@ -512,7 +512,7 @@ ensure_closes_cleanup_safe() {
 }
 
 done_command() {
-    local verified="" branch issue pr_number pr_url state head_oid base first_line mode worktree primary remote_sha issue_state
+    local verified="" branch issue pr_number pr_url state head_oid base first_line mode worktree primary remote_sha issue_state cpp_build_tree="" powershell_cmd="" checkout_windows common_windows common_for_powershell build_result ps_compute
     while (($#)); do
         case "$1" in
             --verified) [[ $# -ge 2 ]] || die 2 "--verified에 SHA가 필요합니다."; verified=$2; shift 2 ;;
@@ -548,6 +548,42 @@ done_command() {
 
     if [[ "$mode" == closes ]]; then
         ensure_closes_cleanup_safe "$worktree" "$branch" "$state"
+        if [[ -n "${ZLINK_CPP_BUILD_DIR:-}" ]]; then
+            printf 'Windows C++ build tree 삭제 건너뜀: ZLINK_CPP_BUILD_DIR가 설정되어 있습니다.\n'
+        elif command -v powershell.exe >/dev/null 2>&1; then
+            powershell_cmd=$(command -v powershell.exe)
+        elif command -v pwsh >/dev/null 2>&1; then
+            powershell_cmd=$(command -v pwsh)
+        fi
+        if [[ -n "$powershell_cmd" ]]; then
+            checkout_windows=$(wslpath -w "/mnt/d/worktree/$(basename "$worktree")")
+            common_windows=$(wslpath -w "$(repo_root)/framework/languages/cpp/windows-build-common.ps1")
+            if [[ "$powershell_cmd" == *powershell.exe ]]; then
+                common_for_powershell=$common_windows
+            else
+                common_for_powershell="$(repo_root)/framework/languages/cpp/windows-build-common.ps1"
+            fi
+            ps_compute=$(cat <<'POWERSHELL'
+ $ErrorActionPreference = 'Stop'
+ . $env:ZLINK_DONE_COMMON
+ if ($env:ZLINK_CPP_BUILD_DIR) { 'SKIP_ENV'; exit 0 }
+ $drive = Split-Path -Qualifier $env:ZLINK_DONE_CHECKOUT
+ if (-not $drive) { $drive = [IO.Path]::GetTempPath() }
+ $token = Get-ZlinkStableBuildToken -Path $env:ZLINK_DONE_CHECKOUT
+ [IO.Path]::GetFullPath((Join-Path $drive ".zlink-build/cpp-$token"))
+POWERSHELL
+            )
+            build_result=$(WSLENV="${WSLENV:+${WSLENV}:}ZLINK_DONE_CHECKOUT:ZLINK_DONE_COMMON" \
+                ZLINK_DONE_CHECKOUT="$checkout_windows" ZLINK_DONE_COMMON="$common_for_powershell" \
+                "$powershell_cmd" -NoProfile -ExecutionPolicy Bypass -Command "$ps_compute")
+            if [[ "$build_result" == SKIP_ENV ]]; then
+                printf 'Windows C++ build tree 삭제 건너뜀: ZLINK_CPP_BUILD_DIR가 설정되어 있습니다.\n'
+            else
+                cpp_build_tree=$(printf '%s\n' "$build_result" | tail -n 1 | tr -d '\r')
+            fi
+        else
+            [[ -n "${ZLINK_CPP_BUILD_DIR:-}" ]] || printf 'Windows C++ build tree 삭제 건너뜀: PowerShell을 찾을 수 없습니다.\n'
+        fi
     fi
 
     if [[ "$state" == OPEN ]]; then
@@ -580,6 +616,15 @@ done_command() {
         cd "$primary"
         git worktree remove "$worktree"
         WORKTREE_PATH=""
+    fi
+    if [[ -n "$cpp_build_tree" ]]; then
+        if ((DRY_RUN)); then
+            print_command "$powershell_cmd" -NoProfile -Command "Remove-Item -LiteralPath \$args[0] -Recurse -Force" "$cpp_build_tree"
+        elif [[ -e "$(wslpath -u "$cpp_build_tree" 2>/dev/null || printf '%s' "$cpp_build_tree")" ]]; then
+            "$powershell_cmd" -NoProfile -Command "Remove-Item -LiteralPath \$args[0] -Recurse -Force -ErrorAction SilentlyContinue" "$cpp_build_tree"
+        else
+            printf 'Windows C++ build tree 삭제 건너뜀: 이미 없습니다.\n'
+        fi
     fi
     if git show-ref --verify --quiet "refs/heads/$branch"; then
         run_mutation git -C "$primary" branch -D "$branch"

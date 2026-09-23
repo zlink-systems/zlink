@@ -16,6 +16,8 @@ $ProjectNumber = Get-Setting 'ZLINK_PROJECT_NUMBER' '1'
 $ProjectField = Get-Setting 'ZLINK_PROJECT_STATUS_FIELD' 'Status'
 $ProjectFieldId = Get-Setting 'ZLINK_PROJECT_STATUS_FIELD_ID' 'PVTSSF_lAHOErOLTs4Bi-blzhh0gcI'
 $WorktreeRoot = 'D:\worktree'
+$CppBuildCommon = Join-Path $PSScriptRoot '../../framework/languages/cpp/windows-build-common.ps1'
+. (Resolve-Path -LiteralPath $CppBuildCommon).Path
 
 function Invoke-Tool([string]$File, [string[]]$Arguments, [switch]$AllowFailure) {
     # Native stderr is diagnostic output, not the PowerShell 5.1 verdict.
@@ -247,6 +249,13 @@ function Finish-Work([string[]]$Values) {
         $remote = Get-RemoteSha $branch; $local = Invoke-Tool git @('rev-parse',$branch)
         if ((-not $remote -and $pr.state -ne 'MERGED') -or ($remote -and $remote -ne $local)) { throw '원격에 push되지 않은 커밋이 있거나 원격 상태를 검증할 수 없습니다.' }
     }
+    $cppBuildTree = ''
+    if ($closes -and -not $env:ZLINK_CPP_BUILD_DIR) {
+        $token = Get-ZlinkStableBuildToken -Path $target
+        $buildDrive = Split-Path -Qualifier $target
+        if (-not $buildDrive) { $buildDrive = [IO.Path]::GetTempPath() }
+        $cppBuildTree = [IO.Path]::GetFullPath((Join-Path $buildDrive ".zlink-build/cpp-$token"))
+    }
     if ($pr.state -eq 'OPEN') { Invoke-Change gh @('pr','merge',$prNumber,'--merge','--match-head-commit',$verified) | Out-Host }
     elseif ($pr.state -ne 'MERGED') { throw "merge할 수 없는 PR 상태: $($pr.state)" }
     if (-not $closes) { Write-Host 'Refs PR: Issue와 worktree를 유지합니다.'; return }
@@ -255,6 +264,14 @@ function Finish-Work([string[]]$Values) {
     # Change cwd before removing the registered worktree. No shell-composed deletion.
     if (-not $script:DryRun) { Set-Location -LiteralPath $primary }
     Invoke-Change git @('-C',$primary,'worktree','remove',$target) | Out-Host
+    if ($closes -and $env:ZLINK_CPP_BUILD_DIR) {
+        Write-Host 'Windows C++ build tree 삭제 건너뜀: ZLINK_CPP_BUILD_DIR가 설정되어 있습니다.'
+    } elseif ($cppBuildTree) {
+        if (Test-Path -LiteralPath $cppBuildTree) {
+            if ($script:DryRun) { Write-Host "[dry-run] Remove-Item -LiteralPath '$cppBuildTree' -Recurse -Force" }
+            else { Remove-Item -LiteralPath $cppBuildTree -Recurse -Force }
+        } else { Write-Host 'Windows C++ build tree 삭제 건너뜀: 이미 없습니다.' }
+    }
     Invoke-Tool git @('-C',$primary,'show-ref','--verify','--quiet',"refs/heads/$branch") -AllowFailure | Out-Null
     if ($script:ToolExitCode -eq 0) { Invoke-Change git @('-C',$primary,'branch','-D',$branch) | Out-Host }
     else { Write-Host '로컬 브랜치 삭제 건너뜀: 이미 없습니다.' }
