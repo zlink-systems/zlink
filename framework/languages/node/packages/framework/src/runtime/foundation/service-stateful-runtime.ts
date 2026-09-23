@@ -686,6 +686,13 @@ export class ServiceStatefulRuntime {
     }
   }
 
+  completeClosedInstance(spotId: string, objectGeneration: bigint): void {
+    const current = this.instanceIntents.get(spotId);
+    if (current !== undefined && current.route.objectGeneration === objectGeneration) {
+      this.forgetClosedInstanceRoute(current.route);
+    }
+  }
+
   registerInstanceActivationAuthority(authority: ServiceInstanceActivationAuthority): void {
     this.requireOpen();
     if (

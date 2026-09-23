@@ -1982,9 +1982,16 @@ export class ZLinkFrameworkRuntimeHost
         // coordinator after application initialization. The legacy location
         // claim would expose a Creating object before that Ready barrier.
         locationLifecycle: () => undefined,
-        releaseInstanceAuthority: (meshName, spotId, objectGeneration) =>
-          this.locationOwner.currentLifecycle?.releaseSpot(meshName, spotId, objectGeneration) ??
-          Promise.resolve(),
+        releaseInstanceAuthority: async (meshName, spotId, objectGeneration) => {
+          await this.locationOwner.currentLifecycle?.releaseSpot(
+            meshName,
+            spotId,
+            objectGeneration
+          );
+          this.spotNodeRuntime
+            ?.meshNode(meshName)
+            ?.completeClosedInstance?.(spotId, objectGeneration);
+        },
         beginInstanceIdleClosingAuthority: (meshName, spotId) =>
           this.locationOwner.currentLifecycle?.beginInstanceSpotClosing(meshName, spotId) ??
           Promise.resolve(undefined),
