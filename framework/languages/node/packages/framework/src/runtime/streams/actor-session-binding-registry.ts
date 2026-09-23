@@ -175,7 +175,9 @@ export class ZLinkActorSessionBindingRegistry<
     //  (the sealing side) must observe that bound; an unbounded wait here
     //  turns a lost control or a lifecycle interlock into a silent stall
     //  (spec 48:205 — transport/deadline limits apply during relocation).
-    private readonly sealWaitTimeoutMs = 3_000
+    private readonly sealWaitTimeoutMs = 3_000,
+    private readonly errorSink?: () =>
+      { reportRuntimeTaskException(taskName: string, error: unknown): void } | undefined
   ) {
     if (!Number.isSafeInteger(terminalRelocationCapacity) || terminalRelocationCapacity <= 0) {
       throw new RangeError('Session relocation terminal capacity must be a positive safe integer.');
@@ -240,7 +242,15 @@ export class ZLinkActorSessionBindingRegistry<
         this.routes.delete(actor.actorId);
         previous.context.unbindLocal(actor.actorId, previous.bindingToken);
         if (previous.actorSlot !== undefined) {
-          await previous.context.actorSlotControls?.enqueueUnbound(previous.actorSlot);
+          let unbound: Promise<void> | undefined;
+          try {
+            unbound = previous.context.actorSlotControls?.enqueueUnbound(previous.actorSlot);
+          } catch (error) {
+            unbound = Promise.reject(error);
+          }
+          void unbound?.catch((error) =>
+            this.errorSink?.()?.reportRuntimeTaskException('retired session actor unbound', error)
+          );
         }
       }
 

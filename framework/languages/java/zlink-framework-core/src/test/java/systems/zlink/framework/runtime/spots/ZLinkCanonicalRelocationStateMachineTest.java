@@ -15,6 +15,8 @@ import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.SubmitResult;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkActivationConcurrency;
 import systems.zlink.framework.locations.ZLinkCapacityUsage;
 import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
@@ -67,6 +69,106 @@ import java.util.function.IntConsumer;
 
 final class ZLinkCanonicalRelocationStateMachineTest {
     private static final ZLinkStoreCancellation OPEN = () -> false;
+
+    @Test
+    void targetDrainWaitsForAcceptedPublication() {
+        CompletableFuture<Void> publication = new CompletableFuture<>();
+        CountingEndpoint endpoint =
+                new CountingEndpoint() {
+                    @Override
+                    public CompletionStage<Void> publish(
+                            ZLinkSpotRetireControl.StageRequest request) {
+                        super.publish(request);
+                        return publication;
+                    }
+                };
+        Fixture fixture = fixture(null, endpoint);
+        ZLinkSpotRetireControl.StageRequest request = fixture.request(new byte[] {1});
+
+        fixture.source
+                .stage(fixture.targetRid, request, Duration.ofSeconds(2))
+                .toCompletableFuture()
+                .join();
+        CompletionStage<Void> publishing =
+                fixture.source.publish(fixture.targetRid, request.fence(), Duration.ofSeconds(2));
+        CompletionStage<Void> drain = fixture.target.awaitAcceptedTargetRelocations();
+
+        assertEquals(1, endpoint.published.get());
+        assertFalse(drain.toCompletableFuture().isDone(), "accepted publication must hold drain");
+        publication.complete(null);
+        publishing.toCompletableFuture().join();
+        drain.toCompletableFuture().join();
+    }
+
+    @Test
+    void drainingTargetRepliesFailedWithoutAdmittingPrepare() throws Exception {
+        Fixture fixture = fixture();
+        var request = fixture.request(new byte[] {1});
+        fixture.source
+                .stage(fixture.targetRid, request, Duration.ofSeconds(2))
+                .toCompletableFuture()
+                .join();
+        Object attempt = targetAttempt(fixture.target, request.fence());
+        var accepted = (ZLinkCanonicalRelocationProtocol.Prepare) attemptMember(attempt, "prepare");
+        fixture.targetState.set(MeshNodeState.DRAINING);
+        var late =
+                new ZLinkCanonicalRelocationProtocol.Prepare(
+                        UUID.randomUUID(),
+                        accepted.targetAttemptGeneration(),
+                        accepted.coordinator(),
+                        accepted.target(),
+                        accepted.initiatorRole(),
+                        accepted.object(),
+                        accepted.sourceNodeRid(),
+                        accepted.sourceNodeGeneration(),
+                        accepted.manifest(),
+                        accepted.applicationVersion());
+        byte[] encoded = ZLinkCanonicalRelocationProtocol.encodePrepare(late);
+
+        byte[] reply =
+                fixture.target
+                        .apply(
+                                fixture.sourceRid,
+                                2L,
+                                ServiceWireConstants.COMMAND_RELOCATION_PREPARE,
+                                encoded)
+                        .toCompletableFuture()
+                        .join();
+        var failed = ZLinkCanonicalRelocationProtocol.decodeFailed(reply);
+        assertEquals(late.id(), failed.id());
+        assertEquals(ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_FAILED, failed.failureCode());
+        assertEquals(1, fixture.endpoint.staged.get());
+
+        fixture.target
+                .apply(
+                        fixture.sourceRid,
+                        null,
+                        ServiceWireConstants.COMMAND_RELOCATION_PREPARE,
+                        encoded)
+                .toCompletableFuture()
+                .join();
+        assertTrue(fixture.targetCommands.contains(ServiceWireConstants.COMMAND_RELOCATION_FAILED));
+
+        Fixture rejectedSource = fixture();
+        rejectedSource.targetState.set(MeshNodeState.DRAINING);
+        RuntimeException sourceFailure =
+                assertThrows(
+                        RuntimeException.class,
+                        () ->
+                                rejectedSource
+                                        .source
+                                        .stage(
+                                                rejectedSource.targetRid,
+                                                rejectedSource.request(new byte[] {1}),
+                                                Duration.ofSeconds(2))
+                                        .toCompletableFuture()
+                                        .join());
+        ZLinkFrameworkException frameworkFailure =
+                assertInstanceOf(ZLinkFrameworkException.class, sourceFailure.getCause());
+        assertEquals(ZLinkFrameworkErrorKind.INTERNAL_FAILURE, frameworkFailure.kind());
+        assertEquals(0, rejectedSource.endpoint.staged.get());
+    }
+
     private static final AtomicReference<IntConsumer> canonicalControlHook =
             new AtomicReference<>();
 
@@ -730,6 +832,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
         AtomicReference<ZLinkCanonicalRelocationStateMachine> target = new AtomicReference<>();
         var sourceCommands = new CopyOnWriteArrayList<Integer>();
         var targetCommands = new CopyOnWriteArrayList<Integer>();
+        var targetState = new AtomicReference<>(MeshNodeState.READY);
         ZLinkInternalMeshNode sourceNode =
                 disconnectFirstPrepare
                         ? requestReplyNode(sourceRid, 11, target, sourceCommands)
@@ -752,7 +855,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                             delay));
             target.set(
                     new ZLinkCanonicalRelocationStateMachine(
-                            node(targetRid, 12, source, targetCommands),
+                            node(targetRid, 12, source, targetCommands, targetState),
                             "mesh",
                             "target-entry",
                             locations,
@@ -773,7 +876,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                             new CountingEndpoint()));
             target.set(
                     new ZLinkCanonicalRelocationStateMachine(
-                            node(targetRid, 12, source, targetCommands),
+                            node(targetRid, 12, source, targetCommands, targetState),
                             "mesh",
                             "target-entry",
                             locations,
@@ -791,7 +894,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                             retentionScheduler));
             target.set(
                     new ZLinkCanonicalRelocationStateMachine(
-                            node(targetRid, 12, source, targetCommands),
+                            node(targetRid, 12, source, targetCommands, targetState),
                             "mesh",
                             "target-entry",
                             locations,
@@ -812,7 +915,8 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                 target.get(),
                 endpoint,
                 sourceCommands,
-                targetCommands);
+                targetCommands,
+                targetState);
     }
 
     private record Fixture(
@@ -828,7 +932,8 @@ final class ZLinkCanonicalRelocationStateMachineTest {
             ZLinkCanonicalRelocationStateMachine target,
             CountingEndpoint endpoint,
             List<Integer> sourceCommands,
-            List<Integer> targetCommands) {
+            List<Integer> targetCommands,
+            AtomicReference<MeshNodeState> targetState) {
         byte[] root(byte[] applicationState) {
             return ZLinkCanonicalActorRelocationEnvelope.encode(
                     relocationId,
@@ -1035,30 +1140,39 @@ final class ZLinkCanonicalRelocationStateMachineTest {
             long generation,
             AtomicReference<ZLinkCanonicalRelocationStateMachine> peer,
             List<Integer> commands) {
-        MeshNodeStatus status =
-                new MeshNodeStatus(
-                        MeshNodeState.READY,
-                        localRid,
-                        "mesh",
-                        "",
-                        generation,
-                        1,
-                        0,
-                        1,
-                        1,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0);
+        return node(
+                localRid, generation, peer, commands, new AtomicReference<>(MeshNodeState.READY));
+    }
+
+    private static ZLinkInternalMeshNode node(
+            RoutingId localRid,
+            long generation,
+            AtomicReference<ZLinkCanonicalRelocationStateMachine> peer,
+            List<Integer> commands,
+            AtomicReference<MeshNodeState> state) {
         return (ZLinkInternalMeshNode)
                 Proxy.newProxyInstance(
                         ZLinkInternalMeshNode.class.getClassLoader(),
                         new Class<?>[] {ZLinkInternalMeshNode.class},
                         (proxy, method, args) ->
                                 switch (method.getName()) {
-                                    case "status" -> status;
+                                    case "status" ->
+                                            new MeshNodeStatus(
+                                                    state.get(),
+                                                    localRid,
+                                                    "mesh",
+                                                    "",
+                                                    generation,
+                                                    1,
+                                                    0,
+                                                    1,
+                                                    1,
+                                                    0,
+                                                    0,
+                                                    0,
+                                                    0,
+                                                    0,
+                                                    0);
                                     case "sendCanonicalRelocationControl" -> {
                                         byte[] encoded = (byte[]) args[1];
                                         int command = Byte.toUnsignedInt(encoded[3]);

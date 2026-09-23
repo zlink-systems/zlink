@@ -417,6 +417,9 @@ final class ZLinkSpotLifecycle {
 
     CompletionStage<Void> awaitApplicationTurns() {
         List<CompletableFuture<Void>> barriers = new ArrayList<>();
+        for (CompletionStage<ZLinkSpotCreateResult> pending : pendingCreates.values()) {
+            barriers.add(pending.handle((ignored, failure) -> (Void) null).toCompletableFuture());
+        }
         for (EntrySpotActivation activation : entrySpots) {
             barriers.add(activation.context.awaitAllLanes().toCompletableFuture());
         }
@@ -577,6 +580,15 @@ final class ZLinkSpotLifecycle {
 
     CompletionStage<Void> releaseRecreatableSpots() {
         return releaseRecreatableSpots(ZLinkSpotCloseReason.HOST_SHUTDOWN, Instant.now());
+    }
+
+    void notifyClosing(ZLinkSpotCloseReason reason, Instant deadline) {
+        for (EntrySpotActivation activation : List.copyOf(entrySpots)) {
+            activation.notifyClosing(deadline);
+        }
+        for (SpotActivation activation : List.copyOf(spots.values())) {
+            activation.notifyClosing(reason, deadline);
+        }
     }
 
     CompletionStage<Void> releaseRecreatableSpots(ZLinkSpotCloseReason reason, Instant deadline) {

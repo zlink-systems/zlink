@@ -11,7 +11,8 @@ internal sealed class ZLinkSpotActorPacketDispatcher(
         ZLinkActorRuntimeState runtimeState,
         ZlinkStreamHeader header,
         Message body,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        RoutingId? sourceSessionRid
     )
     {
         using var currentFlow = ZLinkFlowContext.Enter(
@@ -23,7 +24,12 @@ internal sealed class ZLinkSpotActorPacketDispatcher(
             ZLinkFlowOrigin.Inbound
         );
         using var dispatch = runtimeState.EnterDispatch(header);
-        var scope = CreateScope(actor, header, ZLinkDispatchMessageKind.ActorSend);
+        var scope = CreateScope(
+            actor,
+            header,
+            ZLinkDispatchMessageKind.ActorSend,
+            sourceSessionRid
+        );
 
         scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Received);
 
@@ -64,11 +70,17 @@ internal sealed class ZLinkSpotActorPacketDispatcher(
         ZLinkActorRuntimeState runtimeState,
         ZlinkStreamHeader header,
         Message body,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        RoutingId? sourceSessionRid
     )
     {
         using var dispatch = runtimeState.EnterDispatch(header);
-        var scope = CreateScope(actor, header, ZLinkDispatchMessageKind.ActorRequest);
+        var scope = CreateScope(
+            actor,
+            header,
+            ZLinkDispatchMessageKind.ActorRequest,
+            sourceSessionRid
+        );
 
         scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Received);
 
@@ -118,7 +130,8 @@ internal sealed class ZLinkSpotActorPacketDispatcher(
     private ZLinkDispatchFlowScope CreateScope(
         IZLinkActor actor,
         ZlinkStreamHeader header,
-        ZLinkDispatchMessageKind kind
+        ZLinkDispatchMessageKind kind,
+        RoutingId? sourceSessionRid
     )
     {
         return new ZLinkDispatchFlowScope(
@@ -127,7 +140,11 @@ internal sealed class ZLinkSpotActorPacketDispatcher(
             kind,
             header.Name,
             correlationId: header.CorrelationId,
-            actorId: actor.Context.ActorId
+            actorId: actor.Context.ActorId,
+            streamSessionId: dispatchErrors.Flow.CaptureEnabled
+            && sourceSessionRid is { IsEmpty: false } sessionRid
+                ? sessionRid.ToHex()
+                : null
         );
     }
 

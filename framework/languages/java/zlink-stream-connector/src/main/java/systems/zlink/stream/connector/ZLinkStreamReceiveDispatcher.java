@@ -50,18 +50,7 @@ final class ZLinkStreamReceiveDispatcher {
     }
 
     void dispatch(byte[] encodedHeader, byte[] payload) {
-        //  Single atomic read of the diagnostics level for this one inbound
-        //  frame. The derived boolean is threaded through header decode and
-        //  handler dispatch below instead of re-reading the level, so a
-        //  level flip mid-dispatch cannot desynchronize the two decisions
-        //  (server spec 26 §4.1 / common connector spec §13).
-        boolean captureFlow =
-                ZLinkStreamConnectorConfiguration.flowCaptureEnabled(
-                        configuration.diagnosticsLevel());
-        //  Spec 27 §4 Off rule: skip the trace-only inbound flow validation
-        //  while keeping every structural length check.
-        ZLinkStreamWireProtocol.Header header =
-                ZLinkStreamWireProtocol.decodeHeader(encodedHeader, captureFlow);
+        ZLinkStreamWireProtocol.Header header = ZLinkStreamWireProtocol.decodeHeader(encodedHeader);
         if (header.actorSlot() != null) {
             actors.actorId(header.actorSlot());
         }
@@ -78,11 +67,7 @@ final class ZLinkStreamReceiveDispatcher {
                         + " bytes="
                         + decodedPayload.length
                         + " correlation="
-                        + header.correlationId()
-                        + " flow="
-                        + header.flowId()
-                        + " origin="
-                        + flowOriginName(header.flowOrigin()));
+                        + header.correlationId());
         if (header.kind() == ZLinkStreamWireProtocol.KIND_CONTROL) {
             dispatchControl(header, decodedPayload);
             return;
@@ -97,18 +82,8 @@ final class ZLinkStreamReceiveDispatcher {
         }
         if (header.kind() == ZLinkStreamWireProtocol.KIND_SEND
                 || header.kind() == ZLinkStreamWireProtocol.KIND_REQUEST) {
-            dispatchToHandlers(header, decodedPayload, captureFlow);
+            dispatchToHandlers(header, decodedPayload);
         }
-    }
-
-    private static String flowOriginName(int origin) {
-        return switch (origin) {
-            case 1 -> "inbound";
-            case 2 -> "timer";
-            case 3 -> "application";
-            case 4 -> "lifecycle";
-            default -> null;
-        };
     }
 
     private void dispatchControl(ZLinkStreamWireProtocol.Header header, byte[] payload) {
@@ -184,25 +159,14 @@ final class ZLinkStreamReceiveDispatcher {
                             requestFailure);
         }
         if (header.requestSeq() == null
-                || !pendingRequests.fail(header.requestSeq(), requestFailure)) {
+                || !pendingRequests.fail(header.requestSeq(), new ZLinkStreamException(error))) {
             errorPublisher.accept(error);
         }
     }
 
     private record RemoteErrorPayload(String code, String message) {}
 
-    private void dispatchToHandlers(
-            ZLinkStreamWireProtocol.Header header, byte[] payload, boolean captureFlow) {
-        //  Spec 27 §4: at Off no inbound flow context is read, created or
-        //  installed; handlers observe no flow pair. `captureFlow` is the
-        //  single level read taken at the top of dispatch(), not a fresh
-        //  read of the level.
-        ZLinkConnectorFlowContext.State flow =
-                captureFlow
-                        ? ZLinkConnectorFlowContext.inbound(header.flowId(), header.flowOrigin())
-                        : null;
-        ZLinkFlowOrigin flowOrigin =
-                flow == null ? null : ZLinkFlowOrigin.fromWireValue(flow.flowOrigin());
+    private void dispatchToHandlers(ZLinkStreamWireProtocol.Header header, byte[] payload) {
         String actorId = header.actorSlot() == null ? null : actors.actorId(header.actorSlot());
         List<ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>> registered =
                 List.copyOf(handlers.getOrDefault(header.name(), List.of()));
@@ -219,8 +183,6 @@ final class ZLinkStreamReceiveDispatcher {
                                 header.metadata(),
                                 ZLinkStreamConnectorPayloadCodec.fromWireCodec(header.codec())),
                         header.metadata(),
-                        flow == null ? null : flow.flowId(),
-                        flowOrigin,
                         actorId);
         Supplier<CompletionStage<Void>> dispatch =
                 () -> {
@@ -249,23 +211,10 @@ final class ZLinkStreamReceiveDispatcher {
                     }
                     CompletionStage<Void> completion = CompletableFuture.completedFuture(null);
                     completion =
-                            invokeHandlers(
-                                    completion,
-                                    activeRegistered,
-                                    header,
-                                    payload,
-                                    flow,
-                                    flowOrigin,
-                                    actorId);
+                            invokeHandlers(completion, activeRegistered, header, payload, actorId);
                     completion =
                             invokeHandlers(
-                                    completion,
-                                    activeActorRegistered,
-                                    header,
-                                    payload,
-                                    flow,
-                                    flowOrigin,
-                                    actorId);
+                                    completion, activeActorRegistered, header, payload, actorId);
                     return completion.whenComplete(
                             (ignored, error) -> message.payload().payload().close());
                 };
@@ -292,8 +241,6 @@ final class ZLinkStreamReceiveDispatcher {
             List<ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>> registered,
             ZLinkStreamWireProtocol.Header header,
             byte[] payload,
-            ZLinkConnectorFlowContext.State flow,
-            ZLinkFlowOrigin flowOrigin,
             String actorId) {
         for (ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload> handler : registered) {
             ZLinkStreamMessage<ZLinkStreamEncodedPayload> handlerMessage =
@@ -305,24 +252,17 @@ final class ZLinkStreamReceiveDispatcher {
                                     header.metadata(),
                                     ZLinkStreamConnectorPayloadCodec.fromWireCodec(header.codec())),
                             header.metadata(),
-                            flow == null ? null : flow.flowId(),
-                            flowOrigin,
                             actorId);
             completion =
                     completion.thenCompose(
                             ignored ->
-                                    invokeUserCallback(
-                                            flow, () -> handler.handleAsync(handlerMessage)));
+                                    invokeUserCallback(() -> handler.handleAsync(handlerMessage)));
         }
         return completion;
     }
 
-    private CompletionStage<Void> invokeUserCallback(
-            ZLinkConnectorFlowContext.State flow, UserCallback callback) {
-        //  A null flow means diagnostics level Off: no flow context scope is
-        //  installed around the user callback (spec 27 §4).
-        try (ZLinkConnectorFlowContext.Scope ignored =
-                flow == null ? null : ZLinkConnectorFlowContext.enter(flow)) {
+    private CompletionStage<Void> invokeUserCallback(UserCallback callback) {
+        try {
             return callback.invoke()
                     .exceptionally(
                             ex -> {

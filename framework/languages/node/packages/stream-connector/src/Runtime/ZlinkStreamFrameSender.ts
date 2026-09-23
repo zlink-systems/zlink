@@ -1,21 +1,16 @@
 import type {
   ZlinkStreamConnection,
   ZlinkStreamEncodedPayload,
-  ZlinkStreamFlow,
   ZlinkStreamMetadata,
   ZlinkStreamMessageKind
 } from '../Contracts';
 import type { ZlinkStreamFrameProtocol } from './Protocol/ZlinkStreamFrameProtocol';
 import { throwIfAborted } from './ZlinkStreamSupport';
-import type { ZlinkFlowContext } from './ZlinkFlowContext';
 
 export class ZlinkStreamFrameSender {
   private readonly pendingWrites = new Set<Promise<void>>();
 
-  constructor(
-    private readonly protocol: ZlinkStreamFrameProtocol,
-    private readonly flowContext: ZlinkFlowContext
-  ) {}
+  constructor(private readonly protocol: ZlinkStreamFrameProtocol) {}
 
   async send(
     connection: ZlinkStreamConnection,
@@ -27,17 +22,9 @@ export class ZlinkStreamFrameSender {
     requestSeq: bigint | undefined,
     signal?: AbortSignal,
     correlationId?: string,
-    explicitFlow?: ZlinkStreamFlow,
     actorSlot?: number
   ): Promise<void> {
     throwIfAborted(signal);
-    // Spec 27 §4 / spec stream-connector 32 §13: the diagnostics level is read
-    // exactly once per send, at the point the frame is built, so a level
-    // change never rewrites a frame already in flight and never splits a
-    // single send across two levels.
-    const flow = this.protocol.flowEnabled()
-      ? this.flowContext.currentOrCreate(explicitFlow)
-      : undefined;
     await this.write(
       connection,
       this.protocol.encode(
@@ -48,8 +35,6 @@ export class ZlinkStreamFrameSender {
         compress,
         requestSeq,
         correlationId,
-        flow?.flowId,
-        flow?.flowOrigin,
         actorSlot
       ),
       signal

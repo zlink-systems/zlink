@@ -180,24 +180,9 @@ public sealed partial class StreamConnectorTests
                 .GetMethod(nameof(IZlinkStreamConnector.WaitForSequence))!
                 .ReturnType
         );
-        Assert.Equal(
-            typeof(ZlinkStreamDiagnosticsLevel),
-            typeof(IZlinkStreamConnector)
-                .GetProperty(nameof(IZlinkStreamConnector.DiagnosticsLevel))!
-                .PropertyType
-        );
-        AssertMethod(
-            typeof(IZlinkStreamConnector),
-            nameof(IZlinkStreamConnector.SetDiagnosticsLevel),
-            typeof(void),
-            (typeof(ZlinkStreamDiagnosticsLevel), false)
-        );
-        AssertMethod(
-            typeof(IZlinkStreamConnector),
-            nameof(IZlinkStreamConnector.SetDiagnosticsLevelAsync),
-            typeof(Task),
-            (typeof(ZlinkStreamDiagnosticsLevel), false)
-        );
+        Assert.Null(typeof(IZlinkStreamConnector).GetProperty("DiagnosticsLevel"));
+        Assert.Null(typeof(IZlinkStreamConnector).GetMethod("SetDiagnosticsLevel"));
+        Assert.Null(typeof(ZlinkStreamConnectorOptions).GetProperty("DiagnosticsLevel"));
         AssertMethod(
             typeof(ZlinkStreamAssert),
             nameof(ZlinkStreamAssert.Ensure),
@@ -282,7 +267,6 @@ public sealed partial class StreamConnectorTests
         Assert.False(options.SkipServerCertificateValidation);
         Assert.Equal(ZlinkStreamDispatchMode.Manual, options.DispatchMode);
         Assert.Equal(ZlinkStreamCompression.Lz4, options.Compression);
-        Assert.Equal(ZlinkStreamDiagnosticsLevel.Errors, options.DiagnosticsLevel);
         Assert.Null(options.CompressionCodec);
         Assert.IsType<ZlinkStreamPacketNameResolver>(options.NameResolver);
         Assert.Null(options.PayloadCodec);

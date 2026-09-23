@@ -80,6 +80,45 @@ final class ZLinkStreamJsonTest {
     }
 
     @Test
+    void explicitTypedNameBypassesRejectingResolver() {
+        ZLinkStreamConnectorOptions options =
+                new ZLinkStreamConnectorOptions(
+                        URI.create("tcp://127.0.0.1:1"),
+                        ZLinkStreamDispatchMode.MANUAL,
+                        Duration.ofSeconds(1),
+                        1,
+                        Duration.ofSeconds(1),
+                        64 * 1024,
+                        true,
+                        Duration.ofSeconds(1),
+                        Duration.ofSeconds(5),
+                        true,
+                        Duration.ofMillis(250),
+                        Duration.ofSeconds(5),
+                        2.0,
+                        false,
+                        payloadType -> {
+                            throw new IllegalArgumentException("resolver must not run");
+                        });
+        FakeConnector connector = new FakeConnector(options);
+        AnnotatedPayload payload = new AnnotatedPayload("hello");
+
+        connector.send(payload).packetName("explicit.send").submit();
+        assertEquals("explicit.send", connector.sent.packetName());
+        connector.request(payload).packetName("explicit.request").submit(AnnotatedPayload.class);
+        assertEquals("explicit.request", connector.requested.packetName());
+        connector.send("direct.send", payload).submit();
+        assertEquals("direct.send", connector.sent.packetName());
+        connector.request("direct.request", payload).submit(AnnotatedPayload.class);
+        assertEquals("direct.request", connector.requested.packetName());
+        ZLinkStreamJson.send(connector, "json.send", payload).submit();
+        assertEquals("json.send", connector.sent.packetName());
+        ZLinkStreamJson.request(connector, "json.request", payload).submit();
+        assertEquals("json.request", connector.requested.packetName());
+        assertThrows(IllegalArgumentException.class, () -> connector.send(payload).submit());
+    }
+
+    @Test
     void typedOnUsesConnectorNameResolver() {
         FakeConnector connector =
                 new FakeConnector(
@@ -263,7 +302,6 @@ final class ZLinkStreamJsonTest {
 
     private static final class FakeConnector implements ZLinkStreamConnector {
         private final ZLinkStreamConnectorOptions options;
-        private ZLinkStreamDiagnosticsLevel diagnosticsLevel;
         private ZLinkStreamEncodedPayload sent;
         private ZLinkStreamEncodedPayload requested;
         private String handlerName;
@@ -271,7 +309,6 @@ final class ZLinkStreamJsonTest {
 
         FakeConnector(ZLinkStreamConnectorOptions options) {
             this.options = options;
-            this.diagnosticsLevel = options.diagnosticsLevel();
         }
 
         @Override
@@ -290,24 +327,18 @@ final class ZLinkStreamJsonTest {
         }
 
         @Override
-        public ZLinkStreamDiagnosticsLevel diagnosticsLevel() {
-            return diagnosticsLevel;
-        }
-
-        @Override
         public java.util.Optional<ZLinkStreamCloseReason> closeReason() {
             return java.util.Optional.empty();
         }
 
         @Override
-        public void setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel level) {
-            this.diagnosticsLevel = java.util.Objects.requireNonNull(level, "diagnosticsLevel");
+        public AutoCloseable onRequestSending(ZLinkStreamRequestSendingHandler handler) {
+            return () -> {};
         }
 
         @Override
-        public CompletableFuture<Void> setDiagnosticsLevelAsync(ZLinkStreamDiagnosticsLevel level) {
-            setDiagnosticsLevel(level);
-            return CompletableFuture.completedFuture(null);
+        public AutoCloseable onReplyReceived(ZLinkStreamReplyReceivedHandler handler) {
+            return () -> {};
         }
 
         @Override

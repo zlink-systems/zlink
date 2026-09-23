@@ -152,7 +152,12 @@ export class ZLinkSpotTimerRegistry {
           normalizeTimerOptions(options),
           async (tick) => {
             callbackStarted = false;
-            const timerFlow = createInboundFlow(undefined, 'Timer', this.flowCreationEnabled());
+            const timerFlow = createInboundFlow(
+              undefined,
+              'Timer',
+              this.flowCreationEnabled(),
+              undefined
+            );
             const operation = () => {
               const current = this.timers.get(name);
               if (

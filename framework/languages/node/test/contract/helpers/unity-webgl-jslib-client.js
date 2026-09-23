@@ -13,6 +13,7 @@ const EVENT_DISCONNECTED = 4;
 const EVENT_STATE_CHANGED = 5;
 const EVENT_ACTOR_BOUND = 6;
 const EVENT_ACTOR_UNBOUND = 7;
+const EVENT_REPLY_RECEIVED = 8;
 
 class JslibConnector {
   constructor(harness, optionsJson) {
@@ -29,6 +30,8 @@ class JslibConnector {
     this.errors = [];
     this.disconnects = [];
     this.actorEvents = [];
+    this.replyEvents = [];
+    this.replyHandlers = new Set();
     this.actorBoundHandlers = new Set();
     this.actorUnboundHandlers = new Set();
     this.dispatchMode = JSON.parse(optionsJson).dispatchMode ?? 'manual';
@@ -91,9 +94,6 @@ class JslibConnector {
     return this.library.ZlinkStreamGetCloseReason(this.handle);
   }
 
-  get diagnosticsLevel() {
-    return this.library.ZlinkStreamGetDiagnosticsLevel(this.handle);
-  }
 
   get pendingDispatchCount() {
     return this.dispatchQueue.length;
@@ -165,6 +165,11 @@ class JslibConnector {
   onActorUnbound(handler) {
     this.actorUnboundHandlers.add(handler);
     return { dispose: () => this.actorUnboundHandlers.delete(handler) };
+  }
+
+  onReplyReceived(handler) {
+    this.replyHandlers.add(handler);
+    return { dispose: () => this.replyHandlers.delete(handler) };
   }
 
   receivedCount(name) {
@@ -306,6 +311,17 @@ class JslibConnector {
         this.dispatchOrQueue({ kind: 'actorUnbound', actor: JSON.parse(event.text) });
         return;
 
+      case EVENT_REPLY_RECEIVED: {
+        const detail = JSON.parse(event.text);
+        detail.reply = detail.succeeded ? {
+          name: detail.name,
+          metadata: detail.metadata,
+          payload: { codec: event.value, payload: event.bytes }
+        } : undefined;
+        this.dispatchOrQueue({ kind: 'replyReceived', detail });
+        return;
+      }
+
       default:
     }
   }
@@ -345,6 +361,16 @@ class JslibConnector {
         });
         break;
       }
+      case 'replyReceived':
+        for (const handler of [...this.replyHandlers]) {
+          try {
+            handler(item.detail);
+          } catch (cause) {
+            this.errors.push({ code: 'userCallbackFailed', message: cause.message });
+          }
+        }
+        this.replyEvents.push(item.detail);
+        break;
       default:
         this.stateChanges.push(item.change);
     }

@@ -3,7 +3,13 @@ import {
   createInternalFrameworkException,
   internalFrameworkErrorKind
 } from '../framework-errors-internal';
-import type { ActorRef, ZLinkActor, ZLinkMessageSerializer, ZLinkSpot } from '../../contracts';
+import type {
+  ActorRef,
+  RoutingId,
+  ZLinkActor,
+  ZLinkMessageSerializer,
+  ZLinkSpot
+} from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
 import { ZLinkFrameworkException, zlinkMessageMetadata } from '../../contracts';
 import {
@@ -14,7 +20,8 @@ import {
   ZLinkDispatchMessageKind
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
 import { flowIfEnabled } from '../diagnostics';
-import { createInboundFlow, runWithFlow } from '../diagnostics/flow-context';
+import { createInboundFlow, currentFlowContext, runWithFlow } from '../diagnostics/flow-context';
+import { streamSessionIdFromRoutingId } from '../streams/managed-stream';
 import type { ZLinkRemoteBoundSessionTarget } from '../actors';
 import {
   actorMessageFollowContext,
@@ -58,6 +65,7 @@ export interface ZLinkActorPacketDelivery {
   readonly fallbackActorRef?: ActorRef;
   readonly requestTerminal?: ZLinkActorRequestTerminal;
   readonly messageFollowOrigin?: ZLinkMessageFollowOrigin;
+  readonly sourceSessionRid?: RoutingId;
 }
 
 /**
@@ -176,7 +184,16 @@ export class ZLinkSpotActorPacketDispatch {
       throw error;
     }
     return runWithFlow(
-      createInboundFlow(header.flowId, header.flowOrigin, flowEnabled),
+      createInboundFlow(
+        header.flowId,
+        header.flowOrigin,
+        flowEnabled,
+        !flowEnabled
+          ? undefined
+          : delivery.sourceSessionRid === undefined
+            ? currentFlowContext()?.streamSessionId
+            : streamSessionIdFromRoutingId(delivery.sourceSessionRid)
+      ),
       async () => {
         const messageKind =
           header.kind === ZLinkStreamMessageKind.Request

@@ -3047,7 +3047,7 @@ export class ZLinkFrameworkRuntimeHost
     const flow =
       current?.flowOrigin === 'Lifecycle'
         ? current
-        : createInboundFlow(undefined, 'Lifecycle', this.flowCreationEnabled());
+        : createInboundFlow(undefined, 'Lifecycle', this.flowCreationEnabled(), undefined);
     return runWithFlow(flow, operation);
   }
 

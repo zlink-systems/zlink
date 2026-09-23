@@ -28,7 +28,7 @@ interface ActorConnector {
   ): ZlinkStreamRequestCall;
   onActorMessage<TPayload>(
     actor: DefaultZlinkStreamActor,
-    name: string,
+    nameOrType: string | Function,
     handler: (message: ZlinkStreamMessage<TPayload>, signal?: AbortSignal) => Promise<void> | void,
     messageType?: Function
   ): Disposable;
@@ -58,11 +58,11 @@ export class DefaultZlinkStreamActor implements ZlinkStreamActor {
   }
 
   on<TPayload = ZlinkStreamEncodedPayload>(
-    name: string,
+    nameOrType: string | Function,
     handler: (message: ZlinkStreamMessage<TPayload>, signal?: AbortSignal) => Promise<void> | void,
     messageType?: Function
   ): Disposable {
-    return this.connector.onActorMessage(this, name, handler, messageType);
+    return this.connector.onActorMessage(this, nameOrType, handler, messageType);
   }
 
   ensureBound(): void {

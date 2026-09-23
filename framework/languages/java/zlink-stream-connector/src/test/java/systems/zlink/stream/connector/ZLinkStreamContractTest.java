@@ -661,54 +661,15 @@ final class ZLinkStreamContractTest {
         }
     }
 
-    //  --- 13: the synchronous diagnostics surface ---
-
-    @Test
-    void diagnosticsLevelChangesFromInsideACallbackWithoutWaiting() throws Exception {
-        try (TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer()) {
-            ZLinkStreamConnector connector =
-                    ZLinkStreamConnectorFactory.create(
-                            server.options(ZLinkStreamDispatchMode.MANUAL));
-            try {
-                connector.on(
-                        "Push",
-                        message -> {
-                            message.payload().payload().close();
-                            //  Spec 32 13: the synchronous surface must not wait for
-                            //  its own completion, so this call inside a dispatch
-                            //  callback returns rather than deadlocking.
-                            connector.setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel.OFF);
-                            return CompletableFuture.completedFuture(null);
-                        });
-                ConnectorTestAwait.await(connector.connect());
-                server.sendAsync(send("Push"), TcpStreamConnectorTestServer.bytes("one")).join();
-                TcpStreamConnectorTestServer.awaitCondition(
-                        () -> connector.pendingDispatchCount() == 1);
-
-                ConnectorTestAwait.await(connector.dispatch());
-
-                assertEquals(ZLinkStreamDiagnosticsLevel.OFF, connector.diagnosticsLevel());
-                assertEquals(
-                        ZLinkStreamDiagnosticsLevel.OFF, connector.options().diagnosticsLevel());
-            } finally {
-                ConnectorTestAwait.await(connector.close());
-            }
-        }
-    }
-
     @Test
     void connectorInterfaceDeclaresTheContractSurface() throws Exception {
         assertNotNull(ZLinkStreamConnector.class.getMethod("closeReason"));
-        assertEquals(
-                void.class,
-                ZLinkStreamConnector.class
-                        .getMethod("setDiagnosticsLevel", ZLinkStreamDiagnosticsLevel.class)
-                        .getReturnType());
-        assertEquals(
-                java.util.concurrent.CompletionStage.class,
-                ZLinkStreamConnector.class
-                        .getMethod("setDiagnosticsLevelAsync", ZLinkStreamDiagnosticsLevel.class)
-                        .getReturnType());
+        assertNotNull(
+                ZLinkStreamConnector.class.getMethod(
+                        "onRequestSending", ZLinkStreamRequestSendingHandler.class));
+        assertNotNull(
+                ZLinkStreamConnector.class.getMethod(
+                        "onReplyReceived", ZLinkStreamReplyReceivedHandler.class));
         //  The instrumentation the client connector no longer owns.
         assertThrows(
                 ClassNotFoundException.class,

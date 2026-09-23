@@ -27,8 +27,6 @@ export class ZlinkStreamHeaderCodec {
         name: header.name,
         metadata: header.metadata.values,
         correlationId: header.correlationId,
-        flowId: header.flowId,
-        flowOrigin: encodeFlowOrigin(header.flowOrigin),
         actorSlot: header.actorSlot
       });
     } catch (cause) {
@@ -40,15 +38,10 @@ export class ZlinkStreamHeaderCodec {
     }
   }
 
-  /**
-   * `includeFlow=false` (diagnostics Off, spec 27 §4) skips reading and
-   * validating the inbound flow fields while the structural length checks in
-   * the wire decoder are preserved.
-   */
-  static decode(header: Uint8Array, includeFlow = true): ZlinkStreamHeader {
+  static decode(header: Uint8Array): ZlinkStreamHeader {
     let decoded: ZlinkStreamHeader;
     try {
-      const wire = decodeStreamWireHeader(header, undefined, includeFlow);
+      const wire = decodeStreamWireHeader(header, undefined, false);
       const metadata =
         wire.metadata.size === 0
           ? ZlinkStreamMetadataMap.empty
@@ -61,8 +54,6 @@ export class ZlinkStreamHeaderCodec {
         name: wire.name,
         metadata,
         correlationId: wire.correlationId,
-        flowId: wire.flowId,
-        flowOrigin: decodeFlowOrigin(wire.flowOrigin),
         actorSlot: wire.actorSlot
       };
     } catch (cause) {
@@ -97,8 +88,6 @@ export function buildHeader(
   compress: boolean,
   requestSeq: bigint | undefined,
   correlationId?: string,
-  flowId?: string,
-  flowOrigin?: import('../../Contracts').ZlinkFlowOrigin,
   actorSlot?: number
 ): ZlinkStreamHeader {
   let flags = ZlinkStreamHeaderFlags.None;
@@ -114,7 +103,6 @@ export function buildHeader(
   if (correlationId !== undefined && correlationId.length > 0) {
     flags |= ZlinkStreamHeaderFlags.HasCorrelationId;
   }
-  if (flowId !== undefined) flags |= ZlinkStreamHeaderFlags.HasFlowId;
   if (actorSlot !== undefined) flags |= ZlinkStreamHeaderFlags.HasActorSlot;
   return {
     kind,
@@ -124,8 +112,6 @@ export function buildHeader(
     name,
     metadata,
     correlationId,
-    flowId,
-    flowOrigin,
     actorSlot
   };
 }
@@ -162,10 +148,7 @@ function validateHeaderSemantics(header: ZlinkStreamHeader): void {
     const hasCorrelation =
       (header.correlationId !== undefined && header.correlationId.length > 0) ||
       (header.flags & ZlinkStreamHeaderFlags.HasCorrelationId) !== 0;
-    const hasFlow =
-      header.flowId !== undefined ||
-      header.flowOrigin !== undefined ||
-      (header.flags & ZlinkStreamHeaderFlags.HasFlowId) !== 0;
+    const hasFlow = (header.flags & ZlinkStreamHeaderFlags.HasFlowId) !== 0;
     const hasActorSlot =
       header.actorSlot !== undefined || (header.flags & ZlinkStreamHeaderFlags.HasActorSlot) !== 0;
     if (
@@ -206,20 +189,4 @@ function validateEnum(
   if ((flags & ~known) !== 0) {
     throw connectorError(ZlinkStreamErrorCode.FrameDecodeFailed, 'Unknown stream header flag.');
   }
-}
-
-function encodeFlowOrigin(
-  origin: import('../../Contracts').ZlinkFlowOrigin | undefined
-): number | undefined {
-  return origin === undefined
-    ? undefined
-    : ({ Inbound: 1, Timer: 2, Application: 3, Lifecycle: 4 } as const)[origin];
-}
-
-function decodeFlowOrigin(
-  origin: number | undefined
-): import('../../Contracts').ZlinkFlowOrigin | undefined {
-  return origin === undefined
-    ? undefined
-    : ({ 1: 'Inbound', 2: 'Timer', 3: 'Application', 4: 'Lifecycle' } as const)[origin];
 }

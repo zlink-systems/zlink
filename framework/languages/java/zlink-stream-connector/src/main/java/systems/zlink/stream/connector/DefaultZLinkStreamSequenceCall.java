@@ -351,8 +351,7 @@ final class DefaultZLinkStreamSequenceCall implements ZLinkStreamSequenceCall {
                 message.packetName(),
                 codec.decode(message.payload(), payloadType),
                 message.metadata(),
-                message.flowId(),
-                message.flowOrigin());
+                message.actorId());
     }
 
     private static void closeQuietly(AutoCloseable closeable) {

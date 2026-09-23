@@ -175,8 +175,7 @@ final class ConnectorCodecContractTest {
                 defaults.compression(),
                 defaults.compressionCodec(),
                 defaults.nameResolver(),
-                defaults.typedCodec(),
-                defaults.diagnosticsLevel());
+                defaults.typedCodec());
     }
 
     private static void awaitPendingDispatch(ZLinkStreamConnector connector) {

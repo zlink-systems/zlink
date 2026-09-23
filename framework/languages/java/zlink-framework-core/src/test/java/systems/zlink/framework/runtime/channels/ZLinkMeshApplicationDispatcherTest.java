@@ -712,7 +712,7 @@ final class ZLinkMeshApplicationDispatcherTest {
                         "application/json",
                         null,
                         Map.of(),
-                        new ZLinkFlowContext.State(FLOW_ID, ZLinkFlowOrigin.APPLICATION));
+                        new ZLinkFlowContext.State(FLOW_ID, ZLinkFlowOrigin.APPLICATION, null));
         return new ZLinkMeshDispatchRecord(
                 owner,
                 receive,

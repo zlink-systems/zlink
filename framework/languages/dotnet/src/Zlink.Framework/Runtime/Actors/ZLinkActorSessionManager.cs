@@ -350,7 +350,8 @@ internal sealed partial class ZLinkActorSessionManager(
         ZlinkStreamHeader header,
         Message payload,
         bool relocationReplay,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken,
+        RoutingId? sourceSessionRid
     )
     {
         return DispatchRouter.SubmitForReplyAsync(
@@ -359,7 +360,8 @@ internal sealed partial class ZLinkActorSessionManager(
             header,
             payload,
             relocationReplay,
-            cancellationToken
+            cancellationToken,
+            sourceSessionRid
         );
     }
 
@@ -382,7 +384,8 @@ internal sealed partial class ZLinkActorSessionManager(
         ZlinkStreamHeader header,
         Message payload,
         bool relocationReplay,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken,
+        RoutingId? sourceSessionRid
     )
     {
         return DispatchRouter.Async(
@@ -391,7 +394,8 @@ internal sealed partial class ZLinkActorSessionManager(
             header,
             payload,
             relocationReplay,
-            cancellationToken
+            cancellationToken,
+            sourceSessionRid
         );
     }
 

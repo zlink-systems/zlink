@@ -157,6 +157,7 @@ lease fencing은 `target_closed`로 기록한다.
 | `source_rid`, `target_rid` | Routed hop에 해당 identity가 있을 때 포함한다. |
 | `packet_name` | Typed handler를 찾는 [packet name](../00-foundation/02-glossary.ko.md#packet-name)이 있을 때 포함한다. |
 | `topic`, `spot_id`, `actor_id` | 해당 surface가 논리 target을 사용할 때 포함한다. |
+| `stream_session_id` | STREAM session의 수신, 그 수신에서 시작된 분배, 해당 session으로 가는 reply·push 기록에 포함한다. 값은 서버가 이미 가진 해당 session의 routing ID를 소문자 16진수 문자열로 표기하며, 한 session의 로컬·원격 기록에서 같은 값을 사용한다. 서버 기록 사이의 상관에만 사용하며 클라이언트에 전달하지 않는다. |
 | `instance_spot_type`, `activation_state` | Instance Spot 처리에 해당 값이 있을 때 포함한다. |
 | `correlation_id` | Request와 terminal reply를 연결할 때 포함한다. |
 | `flow_id`, `flow_origin` | 같은 원인에서 이어진 message 흐름을 기록할 때 두 값을 함께 포함한다. |
@@ -175,7 +176,7 @@ Structured log를 대신 제공하는 구현은 `zlink flow:` prefix와 다음 k
 
 `event`, `phase`, `surface`, `kind`, `mesh`, `channel`, `channel_route`, `source_rid`,
 `target_rid`, `server_rid`, `packet`, `topic`, `spot`, `instance_type`,
-`activation_state`, `actor`, `corr`, `flow`, `origin`, `outcome`, `reason`,
+`activation_state`, `actor`, `session`, `corr`, `flow`, `origin`, `outcome`, `reason`,
 `error_type`, `error_message`, `size`.
 
 Logical Multicast와 Classic fanout의 정상 publish·subscriber delivery는
