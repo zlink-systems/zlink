@@ -2,7 +2,10 @@ package systems.zlink.tutorial.streamclient
 
 import java.net.URI
 import java.time.Duration
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.framework.kotlin.request
@@ -44,6 +47,16 @@ fun main() = runBlocking {
     // --8<-- [end:stream-client]
 
     // --8<-- [start:session-actor-client]
+    // --8<-- [start:actor-handle-events]
+    val boundNotice =
+        launch(start = CoroutineStart.UNDISPATCHED) {
+            connector.actorBound().collect { actor -> println("actor bound: ${actor.actorId}") }
+        }
+    val unboundNotice =
+        launch(start = CoroutineStart.UNDISPATCHED) {
+            connector.actorUnbound().collect { actor -> println("actor unbound: ${actor.actorId}") }
+        }
+    // --8<-- [end:actor-handle-events]
     // Binds this connection to a player. Until then the server has no player to
     // forward packets to.
     val authenticated =
@@ -51,19 +64,30 @@ fun main() = runBlocking {
 
     println("bound player: ${authenticated.playerId}")
 
+    // --8<-- [start:actor-handle-send]
+    val player = requireNotNull(connector.actor(authenticated.playerId))
+    println("actor handle: ${player.actorId}")
+    // --8<-- [end:actor-handle-send]
+
     // Arrange to receive the push before sending, so a fast server cannot answer
     // before the client is listening.
     val changed = async {
         connector.waitFor<NicknameChanged>().timeout(Duration.ofSeconds(5)).await()
     }
 
-    // No session handler matches this packet, so the session relays it to the
-    // bound player, whose handler pushes the result back over this same
-    // connection.
-    connector.send(ChangeNickname("speedy")).await()
+    // The handle addresses this player directly. Its handler pushes the
+    // result back over the same connection.
+    // --8<-- [start:actor-handle-send-call]
+    player.send(ChangeNickname("speedy")).await()
+    // --8<-- [end:actor-handle-send-call]
 
-    println("pushed: ${changed.await().payload().nickname}")
+    // --8<-- [start:actor-handle-receive]
+    val pushed = changed.await()
+    println("pushed: ${pushed.payload().nickname}, actor: ${pushed.actorId()}")
+    // --8<-- [end:actor-handle-receive]
     // --8<-- [end:session-actor-client]
 
     connector.close().await()
+    boundNotice.cancelAndJoin()
+    unboundNotice.cancelAndJoin()
 }

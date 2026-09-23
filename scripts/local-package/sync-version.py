@@ -174,6 +174,26 @@ def node_internal_dependency_pattern() -> str:
 # patterns identify fields within each listed file; synchronization never scans
 # directories to discover additional targets.
 FRAMEWORK_SCALAR_FIELDS = (
+    # Godot's stream connector pin follows the .NET Framework release lane.
+    FrameworkField(
+        "framework/languages/engines/Godot/csharp/EngineLobby.csproj",
+        "dotnet",
+        "Godot Engine Lobby Zlink.Stream.Connector",
+        rf'(<PackageReference Include="Zlink\.Stream\.Connector" Version=")(?P<version>{SEMVER})("\s*/>)',
+    ),
+    FrameworkField(
+        "framework/languages/engines/Godot/csharp/Validation/EngineLobbyValidation.csproj",
+        "dotnet",
+        "Godot validation Zlink.Stream.Connector",
+        rf'(<PackageReference Include="Zlink\.Stream\.Connector" Version=")(?P<version>{SEMVER})("\s*/>)',
+    ),
+    # Cocos Creator's connector dependency follows the Node Framework release lane.
+    FrameworkField(
+        "framework/languages/engines/CocosCreator/package.json",
+        "node",
+        "Cocos Creator @zlink-systems/stream-connector",
+        rf'("@zlink-systems/stream-connector"\s*:\s*")(?P<version>{SEMVER})(")',
+    ),
     FrameworkField(
         "framework/languages/cpp/CMakeLists.txt",
         "cpp",
@@ -327,19 +347,19 @@ FRAMEWORK_SCALAR_FIELDS = (
     FrameworkField(
         "framework/languages/cpp/tutorial/bootstrap.cmake",
         "cpp",
-        "ZLINK_FRAMEWORK_CPP_VERSION (framework source archive the tutorial builds)",
+        "ZLINK_FRAMEWORK_CPP_VERSION (framework prebuilt the tutorial downloads)",
         rf'(set\(ZLINK_FRAMEWORK_CPP_VERSION ")(?P<version>{SEMVER})("\))',
     ),
     FrameworkField(
         "framework/languages/cpp/samples/bootstrap.cmake",
         "cpp",
-        "ZLINK_FRAMEWORK_CPP_VERSION (framework source archive the samples build)",
+        "ZLINK_FRAMEWORK_CPP_VERSION (framework prebuilt the samples download)",
         rf'(set\(ZLINK_FRAMEWORK_CPP_VERSION ")(?P<version>{SEMVER})("\))',
     ),
     FrameworkField(
         "framework/languages/cpp/quickstart/bootstrap.cmake",
         "cpp",
-        "ZLINK_FRAMEWORK_CPP_VERSION (framework source archive the quickstart builds)",
+        "ZLINK_FRAMEWORK_CPP_VERSION (framework prebuilt the quickstart downloads)",
         rf'(set\(ZLINK_FRAMEWORK_CPP_VERSION ")(?P<version>{SEMVER})("\))',
     ),
     # Engine samples (#935) consume the released .NET packages and the Unity WebGL package of

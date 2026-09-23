@@ -8,8 +8,8 @@
 
 ## 1. Purpose and scope
 
-Engine Lobby is the smallest real-time lobby flow intended for game engines such as Unity and
-Unreal. A client connects, checks the round trip, joins with a name, and sends chat. The server
+Engine Lobby is the smallest real-time lobby flow intended for game engines. The table in
+[Implementation structure](#8-implementation-structure) decides which engine clients exist. A client connects, checks the round trip, joins with a name, and sends chat. The server
 creates one
 Actor per connection, binds it to the session, and pushes each chat to every currently bound Actor
 in the lobby.
@@ -109,7 +109,7 @@ creation payload.
 numbers. `actorId` is an opaque application identity derived by the server from the session
 identity; clients do not parse its format.
 
-The Unity and Unreal clients use the packet names, fields, and directions in this table verbatim.
+Every engine client uses the packet names, fields, and directions in this table verbatim.
 They define no engine-specific aliases or extra wire fields and connect to the same .NET server
 endpoint.
 
@@ -159,21 +159,20 @@ each Actor in the current participant snapshot.
 
 Shared sources live under `framework/languages/engines/`.
 
-| Path | Content |
-|---|---|
-| `Server/` | .NET host, shared message declarations, session/Actor/Entry Spot implementation, probe, and runner |
-| `Unity/` | One-scene Unity project with the shared `ZLinkClient` MonoBehaviour and UI |
-| `Unreal/` | Unreal Engine 5 C++ project with a connector-owning Actor and on-screen status UI |
+| Path | Content | Build targets | Client flow | Connector | Pump location | Mirror repository |
+|---|---|---|---|---|---|---|
+| `Server/` | .NET host, shared message declarations, session/Actor/Entry Spot implementation, probe, and runner | .NET 8 | — | — | — | `zlink-engine-server` |
+| `Unity/` | Unity 6 LTS project with the shared `ZLinkClient` MonoBehaviour and UI | Unity Editor, native player, WebGL | join, chat, notification | native: `Zlink.Stream.Connector` NuGet, WebGL: `com.zlink.stream-connector.webgl` UPM | `Update()` | `zlink-unity-examples` |
+| `Unreal/` | Unreal Engine 5 C++ project with a connector-owning Actor and on-screen status UI | Unreal Editor project build | ping, join, chat, notification | the C++ connector's `ZLinkStreamConnector` plugin | `Tick()` | `zlink-unreal-examples` |
+| `Godot/` | Godot 4 .NET project with a connector-owning Control node and status label | Godot 4 .NET project | ping, join, chat, notification | `Zlink.Stream.Connector` NuGet | `_Process()` | `zlink-godot-examples` |
+| `Axmol/` | Axmol 2.3 C++ project with a connector-owning Scene and status label | Axmol native C++ project | ping, join, chat, notification | the C++ connector's Axmol adapter | scheduler update | `zlink-axmol-examples` |
+| `CocosCreator/` | Cocos Creator 3.8 web TypeScript project with a Component and Label | web | ping, join, chat, notification | `@zlink-systems/stream-connector` (browser WebSocket) | `update()` | `zlink-cocos-creator-examples` |
 
-The server uses only public `Zlink.Framework` package surfaces. Native Unity targets use the
-`Zlink.Stream.Connector` NuGet assembly; WebGL uses the
-`com.zlink.stream-connector.webgl` UPM package. The native assembly is excluded from WebGL so both
-implementations never compile into one target. The Unreal project uses the C++ connector's
-`ZLinkStreamConnector` plugin.
+The server uses only public `Zlink.Framework` package surfaces. The Unity project excludes the native
+assembly from WebGL so the two connector implementations never compile into one target.
 
-The guide reads the connect, pump, handler, and lifecycle regions from Unity's `ZLinkClient` and
-Unreal's `EngineLobbyClientActor` through `--8<--` markers. It does not keep a copied code sample
-in the guide.
+When the guide shows engine client code it excerpts it through `--8<--` markers and keeps no copied
+code sample in the guide.
 
 ## 9. Client self-check
 
@@ -201,8 +200,8 @@ build only; the Linux lane owns Redis-backed run/verify. The server runner owns 
 5. Run the C# probe with two connectors.
 6. On success or failure, clean up only the server PID and Redis container ID it created.
 
-Unity Editor/player builds and Unreal Editor/project builds are verified separately on runners
-with the corresponding engine installation and license. The ordinary server smoke proves the
+Each engine client's build is verified separately, for the build targets in the §8 table, on runners
+with that engine's installation and license. The ordinary server smoke proves the
 same connector contract with a C# probe and needs no engine installation.
 
 ## 11. Completion criteria
@@ -212,9 +211,9 @@ same connector contract with a C# probe and needs no engine installation.
 - The .NET server builds from public packages and passes its dedicated runner's client self-check.
 - The Linux lane runs install, build, run, verify, and stop. The Windows lane checks install and
   build only; the Linux lane owns Redis-backed run/verify.
-- At the documented Unity version, native and WebGL targets compile and use the same `ZLinkClient`
-  source for connect, pump, join, chat, and notification UI updates.
-- The Unreal project compiles with Unreal Engine 5 and uses the C++ connector for the same packet
-  contract's connect, pump, ping, join, chat, and notification UI update flow.
-- The exporter maps `Server/`, `Unity/`, and `Unreal/` to the `zlink-engine-server`,
-  `zlink-unity-examples`, and `zlink-unreal-examples` roots, respectively.
+- Each engine client in the [implementation structure](#8-implementation-structure) table compiles for
+  the table's build targets and, through the connector and pump location in that table, connects, pumps, and performs
+  its row's client flow for the same packet contract. Unity compiles its
+  native and WebGL targets from the same `ZLinkClient` source.
+- The exporter maps each path in the [implementation structure](#8-implementation-structure) table to
+  the root tree of that row's mirror repository.

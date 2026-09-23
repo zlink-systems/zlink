@@ -512,8 +512,11 @@ npm start
 ```
 connected: true
 round trip: 6ms          # STREAM request/reply
+actor bound: p1
 bound player: p1         # binds the connection to a player
-pushed: speedy           # the player pushes over that connection
+actor handle: p1
+pushed: speedy, actor: p1           # the player pushes over that connection
+actor unbound: p1
 ```
 
 `pushed` is the key line. The client only sent a nickname change, and instead of a response, it

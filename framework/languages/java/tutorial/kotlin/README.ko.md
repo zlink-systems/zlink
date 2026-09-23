@@ -545,8 +545,10 @@ HTTP/1.1 404
 $ kotlin/StreamClient/build/install/StreamClient/bin/StreamClient
 connected: true
 round trip: 339ms        # STREAM request/reply
+actor bound: p1
 bound player: p1         # 연결을 player에 묶는다
-pushed: speedy           # player가 그 연결로 밀어 준다
+actor handle: p1
+pushed: speedy, actor: p1           # player가 그 연결로 밀어 준다
 ```
 
 `pushed`가 핵심이다. client는 nickname 변경만 보냈고, 응답이 아니라 **player가 스스로 민
@@ -559,8 +561,8 @@ Kotlin 쪽에서 알아 둘 것은 다음과 같다.
 - **suspending session handler는 타입으로 등록된다.** `addSessionPacketHandler(Class<*>)`가
   타입 인자를 묶지 않기 때문이다. channel handler의 handler group 우회가 여기서는 필요 없다.
 - **`packetName()`을 직접 적는다.** Java의 session handler는 `messageType()` 하나로 끝난다.
-- **`StreamClient`는 coroutine을 쓰지 않는다.** connector에 Kotlin wrapper가 없고 이 process는
-  Spring도 없으므로, `CompletionStage`를 `join()`으로 기다린다.
+- **`StreamClient`는 Kotlin wrapper를 사용한다.** `actorBound()`와 `actorUnbound()`를
+  coroutine에서 수집하고, Actor handle의 `send(...).await()`로 메시지를 보낸다.
 
 ### 13. HTTP 표면 운영 기능
 

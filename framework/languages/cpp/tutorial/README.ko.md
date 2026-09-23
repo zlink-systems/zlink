@@ -8,7 +8,7 @@ filter, runtime weight 변경, Spot, Actor, Location, STREAM,
 HTTP client를 다룬다.
 
 이 디렉터리는 `zlink-cpp-examples` 저장소의 `tutorial/`이다. 아래 절차는 GitHub Release에
-공개된 Core·binding·framework 패키지와 Conan을 사용한다.
+공개된 플랫폼별 framework prebuilt를 사용한다.
 
 | | 목적 |
 |---|---|
@@ -39,33 +39,25 @@ bash 블록은 Linux·macOS·WSL에서, PowerShell 블록은 Windows PowerShell 
 
 | 도구 | Windows | Linux · WSL |
 |---|---|---|
-| C++20 컴파일러 | Visual Studio 2022 17.4 이상 또는 Visual Studio 2026, **Desktop development with C++** 워크로드. 2026-09 현재 2026의 msvc 195에는 ConanCenter 바이너리가 없어 첫 bootstrap이 서드파티 library를 source에서 빌드하므로 약 20분 걸린다. 2022는 바이너리를 내려받아 약 7분 걸린다 (2022는 MSVC 19.44로 확인) | GCC 13 이상 (13.3으로 확인) |
+| C++20 컴파일러 | Visual Studio 2022 17.4 이상 또는 Visual Studio 2026, **Desktop development with C++** 워크로드 | GCC 13 이상 (13.3으로 확인) |
 | CMake | 3.24 이상 (Visual Studio가 설치하는 3.31로 확인) | 3.24 이상 (3.28로 확인) |
 | Ninja | 필요 없음 | 권장. 없으면 Makefile로 빌드한다 |
-| Conan 2 | `pipx install conan` 뒤 `pipx ensurepath`를 실행하고 새 terminal을 연다. `py -m pip install --user conan`을 썼으면 Python `Scripts` directory를 PATH에 넣는다. `conan --version`으로 확인한다 | `pipx install conan` 뒤 `pipx ensurepath`를 실행하고 새 terminal을 연다. `python3 -m pip install --user conan`을 썼으면 Python user `bin` directory를 PATH에 넣는다. `conan --version`으로 확인한다 |
 | Docker Desktop | Redis container를 실행한다. 설치되어 실행 중이어야 한다 | 같다 (WSL integration 또는 Linux의 Docker Engine) |
 
-이 밖에는 아무것도 필요 없다. zlink 저장소, Node.js, 시스템 패키지의 Boost는 쓰지 않는다.
-Conan은 pipx(또는 pip)로 설치하며 ConanCenter의 서드파티 바이너리를 받는다. Visual Studio 2022에서는
-**첫 bootstrap에 약 7분**, 2026의 msvc 195처럼 바이너리가 없는 toolset에서는 서드파티를 source에서
-빌드하므로 **약 20분** 걸린다. 이후에는
-로컬 캐시를 재사용한다.
+이 밖에는 zlink 저장소, package manager, Node.js, 시스템 패키지의 Boost가 필요 없다.
+bootstrap은 공개 prefix를 내려받아 풀고, 이후 설치는 로컬에 남은 prefix를 재사용한다.
 
 ## 내려받기와 설치
 
 [`zlink-cpp-examples`](https://github.com/zlink-systems/zlink-cpp-examples) 저장소를 clone한다.
 아래 명령은 모두 그 저장소의 `tutorial/` 안에서 실행한다.
 
-설치는 [빌드](#빌드) 블록 첫 줄의 `bootstrap.cmake`로 처리한다. 이 script는 GitHub
-Release에서 이 플랫폼의 Core prebuilt(`core/v1.2.0`), C++ binding
-소스(`cpp/v1.2.0`), framework 소스(`framework-cpp/v0.18.0`) — 를 받아 binding과 framework를
-빌드해 `.zlink/install/`에 설치하고, 이 프로젝트를 `build/`에 구성한다. framework 버전만
-script에 적혀 있고, Core·binding 버전과 서드파티 목록은 framework 아카이브가 정한다.
-기본 package manager는 Conan이며 vcpkg fallback은 `-DZLINK_PACKAGE_MANAGER=vcpkg`로 선택한다.
-이후 실행에서는 받은 파일과 빌드 결과를 그대로 사용한다.
-
-병렬도는 논리 코어 수가 기본이며 `cmake -DZLINK_JOBS=4 -P bootstrap.cmake`처럼 `-P` 앞에
-두어 줄인다. 다시 처음부터 하려면 `.zlink/`와 `build/`를 지운다.
+설치는 [빌드](#빌드) 블록 첫 줄의 `bootstrap.cmake`로 처리한다. 이 script는
+`framework-cpp/v<version>`에서 이 플랫폼의 framework prebuilt를 받아 consumer prefix를
+`.zlink/install/`에 풀고, 이 프로젝트를 `build/`에 구성한다. 하나의 prefix에는 Core, C++ binding,
+framework library, `nlohmann_json`이 들어 있어 사용자 환경에서 package manager를 실행하지
+않는다. 이후 실행에서는 받은 아카이브와 푼 prefix를 그대로 사용한다. 다시 처음부터 하려면
+`.zlink/`와 `build/`를 지운다.
 
 ## 빌드
 
@@ -171,7 +163,7 @@ examples-smoke는 이 블록을 그대로 실행한다.
 | 첫 요청 | `curl http://127.0.0.1:5180/players/p1/profile`이 `{"level":1,"nickname":"rookie","playerId":"p1"}`를 낸다 |
 | Spot (Redis) | 방을 여는 요청이 방 id 문자열(`"9e78fd70-…"`)을 낸다 |
 | Instance Spot | 같은 대기열 id로 두 번 요청하면 `waiting`이 1, 2로 이어진다 |
-| STREAM | `tutorial_stream_client`가 `connected: true` … `pushed: speedy`를 기록하고 0으로 종료한다 |
+| STREAM | `tutorial_stream_client`가 `connected: true` … `pushed: speedy, actor: p1`를 기록하고 0으로 종료한다 |
 
 아래 블록은 [실행](#실행) 블록이 띄운 상태에서 첫 요청의 응답과 STREAM client의 종료 코드로
 이를 확인한다.
@@ -242,11 +234,9 @@ IDE가 같은 `build/`를 이어서 쓴다. 이 파일은 bootstrap이 매번 �
 
 | 증상 | 원인과 조치 |
 |---|---|
-| `bootstrap: could not find Conan` | `pipx install conan` 뒤 `pipx ensurepath`를 실행하고 새 terminal을 연다. `pip --user` 설치라면 Python `Scripts`/user `bin` directory를 PATH에 넣고 `conan --version`으로 확인한다 |
-| `ERROR: Invalid setting ...` | 선택한 컴파일러가 ConanCenter의 지원 바이너리 구성과 다르다. 표의 컴파일러 버전을 쓰거나 `-DZLINK_PACKAGE_MANAGER=vcpkg`를 지정한다 |
-| `bootstrap: download failed: https://github.com/...` | GitHub Release에 연결하지 못했다. proxy·방화벽을 확인한다. 다시 실행하면 처음부터 다시 받는다 |
+| `bootstrap: framework prebuilt is unavailable for this host platform: https://github.com/...` | GitHub Release에 연결하지 못했거나 이 platform archive가 없다. proxy·방화벽, release version, 지원 platform을 확인하고 다시 실행한다 |
 | `CMake Error ... No CMAKE_CXX_COMPILER could be found` / `Visual Studio 17 2022 could not find any instance` | 컴파일러가 없다. Windows는 **Desktop development with C++** 워크로드, Linux는 `g++`를 설치한다 |
-| `error LNK2038: mismatch detected for 'RuntimeLibrary'` | `.zlink/`가 다른 옵션으로 빌드된 잔재다. `.zlink/build`·`.zlink/cpp`·`.zlink/install`·`build`를 지우고 bootstrap부터 다시 한다 |
+| `error LNK2038: mismatch detected for 'RuntimeLibrary'` | 푼 prefix 또는 build tree가 선택한 toolchain과 맞지 않는다. `.zlink/`와 `build`를 지우고 bootstrap부터 다시 한다 |
 | Windows에서 실행 파일이 아무 출력 없이 즉시 끝난다 (종료 코드 `-1073741515`, `STATUS_DLL_NOT_FOUND`) | `zlink.dll`이 실행 파일 옆에 없다. `cmake --build build --config Release`를 다시 실행하면 post-build 단계가 `build\Release\`에 복사한다 |
 | `docker: error during connect` / `Cannot connect to the Docker daemon` | Docker Desktop이 실행 중이 아니다. 시작한 뒤 `docker run ...`을 다시 실행한다 |
 | `docker: Error response from daemon: ... port is already allocated` / `Bind for 127.0.0.1:6379 failed` | 6379를 다른 Redis가 쓰고 있다. 그 Redis를 그대로 써도 된다 — tutorial은 `127.0.0.1:6379`만 본다 |
@@ -625,8 +615,10 @@ HTTP/1.1 404 Not Found
 $ ./build/tutorial_stream_client
 connected: true
 round trip: 2ms          # STREAM request/reply
+actor bound: p1
 bound player: p1         # 연결을 player에 묶는다
-pushed: speedy           # player가 그 연결로 밀어 준다
+actor handle: p1
+pushed: speedy, actor: p1           # player가 그 연결로 밀어 준다
 ```
 
 `pushed`는 client가 nickname 변경 요청의 응답이 아닌 **player가 연결로 보낸 알림**을

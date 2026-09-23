@@ -1,5 +1,6 @@
 package systems.zlink.tutorial.streamclient;
 
+import systems.zlink.stream.connector.ZLinkStreamActor;
 import systems.zlink.stream.connector.ZLinkStreamConnector;
 import systems.zlink.stream.connector.ZLinkStreamConnectorFactory;
 import systems.zlink.stream.connector.ZLinkStreamConnectorOptions;
@@ -48,6 +49,20 @@ public final class StreamClientProgram {
         // --8<-- [end:stream-client]
 
         // --8<-- [start:session-actor-client]
+        // --8<-- [start:actor-handle-events]
+        AutoCloseable boundNotice =
+                connector.onActorBound(
+                        actor -> {
+                            System.out.println("actor bound: " + actor.actorId());
+                            return java.util.concurrent.CompletableFuture.completedFuture(null);
+                        });
+        AutoCloseable unboundNotice =
+                connector.onActorUnbound(
+                        actor -> {
+                            System.out.println("actor unbound: " + actor.actorId());
+                            return java.util.concurrent.CompletableFuture.completedFuture(null);
+                        });
+        // --8<-- [end:actor-handle-events]
         // Binds this connection to a player. Until then the server has no player
         // to forward packets to.
         Contracts.Authenticated authenticated =
@@ -60,6 +75,11 @@ public final class StreamClientProgram {
 
         System.out.println("bound player: " + authenticated.playerId());
 
+        // --8<-- [start:actor-handle-send]
+        ZLinkStreamActor player = connector.actor(authenticated.playerId()).orElseThrow();
+        System.out.println("actor handle: " + player.actorId());
+        // --8<-- [end:actor-handle-send]
+
         // Arrange to receive the push before sending, so a fast server cannot
         // answer before the client is listening.
         CompletionStage<ZLinkStreamMessage<Contracts.NicknameChanged>> changed =
@@ -68,16 +88,17 @@ public final class StreamClientProgram {
                         .timeout(Duration.ofSeconds(5))
                         .submit(Contracts.NicknameChanged.class);
 
-        // No session handler matches this packet, so the session relays it to the
-        // bound player, whose handler pushes the result back over this same
-        // connection.
-        connector
-                .send(new Contracts.ChangeNickname("speedy"))
-                .submit()
-                .toCompletableFuture()
-                .join();
+        // The handle addresses this player directly. Its handler pushes the
+        // result back over the same connection.
+        // --8<-- [start:actor-handle-send-call]
+        player.send(new Contracts.ChangeNickname("speedy")).submit().toCompletableFuture().join();
+        // --8<-- [end:actor-handle-send-call]
 
-        System.out.println("pushed: " + changed.toCompletableFuture().join().payload().nickname());
+        // --8<-- [start:actor-handle-receive]
+        ZLinkStreamMessage<Contracts.NicknameChanged> pushed = changed.toCompletableFuture().join();
+        System.out.println(
+                "pushed: " + pushed.payload().nickname() + ", actor: " + pushed.actorId());
+        // --8<-- [end:actor-handle-receive]
         // --8<-- [end:session-actor-client]
 
         connector.close().submit().toCompletableFuture().join();

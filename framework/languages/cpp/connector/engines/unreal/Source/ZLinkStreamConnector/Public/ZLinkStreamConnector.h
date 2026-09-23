@@ -160,6 +160,9 @@ class UZLinkStreamConnector : public UObject
     void Close ();
 
     UFUNCTION (BlueprintCallable, Category = "ZLink")
+    void Subscribe (FName PacketName);
+
+    UFUNCTION (BlueprintCallable, Category = "ZLink")
     void SendJson (FName PacketName, const FString &JsonPayload);
 
     UFUNCTION (BlueprintCallable, Category = "ZLink")

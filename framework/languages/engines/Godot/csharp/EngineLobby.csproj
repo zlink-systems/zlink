@@ -1,0 +1,11 @@
+<Project Sdk="Godot.NET.Sdk/4.4.1">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Zlink.Stream.Connector" Version="0.23.0" />
+    <Compile Remove="Validation/**/*.cs" />
+  </ItemGroup>
+</Project>
