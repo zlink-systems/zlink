@@ -65,6 +65,8 @@ public interface IZlinkStreamConnector : IAsyncDisposable
     IDisposable              On(string name, Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, CancellationToken, ValueTask> handler);
 
 
+    IDisposable OnRequestSending(Action<ZlinkStreamRequestSendingContext> handler);
+    IDisposable OnReplyReceived(Func<ZlinkStreamReplyReceivedContext, CancellationToken, ValueTask> handler);
     IDisposable OnConnectionStateChanged(Func<ZlinkStreamConnectionStateChanged, CancellationToken, ValueTask> handler);
     IDisposable OnDisconnected(Func<ZlinkStreamDisconnected, CancellationToken, ValueTask> handler);
     IDisposable OnErrorReceived(Func<ZlinkStreamError, CancellationToken, ValueTask> handler);
@@ -178,7 +180,32 @@ public interface IZlinkStreamWaitCall
   `On(...)`, sample·CLI·E2E의 대기는 `WaitFor(...)`를 사용한다.
 - **`Metadata`는 전송 시점에 불변 snapshot으로 복사된다.**
 
+### 4.1 요청 hook
+
+[공통 스펙 §5.7](../../32-stream-connector.ko.md#57-요청-hook)의 두 hook을 `OnRequestSending`·`OnReplyReceived`(§3)와 다음 context로 투영한다. 송신 hook은 dispatch mode를 따르지 않으므로 동기 `Action`이고, 응답 hook은 다른 수신 callback과 같은 형태다.
+
+```csharp
+public sealed class ZlinkStreamRequestSendingContext
+{
+    public string RequestPacketName { get; }
+    public string? ActorId { get; }
+    public void SetMetadata(string key, string value);
+}
+
+public sealed class ZlinkStreamReplyReceivedContext
+{
+    public string RequestPacketName { get; }
+    public string? ActorId { get; }
+    public bool Succeeded { get; }
+    public ZlinkStreamMessage<ZlinkStreamEncodedPayload>? Reply { get; }
+    public ZlinkStreamError? Error { get; }
+    public TimeSpan Elapsed { get; }
+}
+```
+
 ## 5. Typed 표면
+
+공통 스펙 §5의 이름 두 형태는 connector와 Actor handle의 typed `On`, connector의 `WaitFor`·`ExpectNone`·`WaitForSequence`에서 packet 이름을 받는 overload와 받지 않는 overload로 나타난다. typed `Send`·`Request`는 반환된 builder의 `PacketName(string)`으로 이름을 명시한다.
 
 `ZlinkStreamTypedConnectorExtensions`가 `Send<TPayload>`, `Request<TPayload>`, `On<TPayload>`,
 `WaitFor<TPayload>`, `ExpectNone<TPayload>`, `WaitForSequence<TPayload>`를 제공하고, 각각 typed
@@ -345,31 +372,15 @@ scheme → transport 매핑은 [공통 스펙 §3.1](../../32-stream-connector.k
 
 ## 11. Flow
 
-**connector outbound operation은 별도 public 옵션 없이 UUIDv7 `flow_id`를 한 번 생성한다.**
-callback 안에서 시작한 후속 operation은 **현재 inbound flow를 재사용하고, callback이 끝나면 ambient
-flow를 정리한다.** `.NET`은 ambient 실행 문맥을 제공하므로 송신 call에 flow를 명시하는 인자를
-두지 않는다([공통 스펙 §5.5](../../32-stream-connector.ko.md#55-flow-노출과-전파)).
-
-수신 message는 flow 한 쌍을 다음 property로 노출한다.
+Connector는 flow를 만들거나 보내거나 노출하거나 전파하지 않는다([공통 스펙 §5.5](../../32-stream-connector.ko.md#55-flow)). 수신 message는 Actor 식별자만 추가로 노출한다.
 
 ```csharp
 public sealed record ZlinkStreamMessage<TPayload>(
     string Name,
     ZlinkStreamMetadata Metadata,
     TPayload Payload,
-    string? FlowId = null,                    // diagnostics level이 Off이면 null(§13)
-    ZlinkStreamFlowOrigin? FlowOrigin = null,
-    string? ActorId = null);                  // 상대 bound Actor. slot 없는 frame은 null(공통 스펙 §5.6)
-
-public enum ZlinkStreamFlowOrigin { Inbound, Timer, Application, Lifecycle }
+    string? ActorId = null);
 ```
-
-**`flow_origin`의 wire 값은 1~4이고 `ZlinkStreamFlowOrigin`의 내부 ordinal은 0~3이다.** 종료
-사유(§10)와 같은 주의가 필요하다. codec이 둘을 명시적으로 변환하므로 **enum을 정수로 cast해
-wire 값으로 사용하지 않는다.**
-
-wire 표현은 [공통 스펙 §4.2](../../32-stream-connector.ko.md)와
-[flow-correlation](../../../server/06-observability/04-flow-correlation.ko.md)이 소유한다.
 
 ## 12. Options와 검증
 
@@ -383,47 +394,6 @@ nullable `int`의 `null`로 표현한다.**
 ```csharp
 public int? MaxAttempts { get; init; } = 3; // null이면 무제한. 그 밖에는 양수여야 한다
 ```
-
-공통 계약의 diagnostics level([공통 스펙 §13](../../32-stream-connector.ko.md#13-diagnostics-level))은
-다음 property로 투영한다. 미정의 enum 값은 검증에서 거부한다.
-
-```csharp
-public enum ZlinkStreamDiagnosticsLevel { Off = 0, Errors = 1, Normal = 2, Detailed = 3 }
-
-public ZlinkStreamDiagnosticsLevel DiagnosticsLevel { get; init; } // 기본 Errors
-```
-
-`Off`이면 outbound frame에 flow pair를 만들지 않고(0x10 미설정), inbound flow 필드는 구조
-길이 검사만 유지한 채 값 검증과 flow scope 설치를 생략한다. Request correlation은 level과
-무관하게 유지된다.
-
-공통 스펙 §13의 실행 중 level 변경은 `IZlinkStreamConnector`의 다음 read/write API로
-노출한다. Connector를 다시 만들 필요는 없다.
-
-```csharp
-public interface IZlinkStreamConnector : IAsyncDisposable
-{
-    ZlinkStreamDiagnosticsLevel DiagnosticsLevel { get; }
-
-    void SetDiagnosticsLevel(ZlinkStreamDiagnosticsLevel level);      // 기다리지 않고 값을 바꾼다
-    Task SetDiagnosticsLevelAsync(ZlinkStreamDiagnosticsLevel level); // 같은 값을 바꾸는 비동기 짝
-    // ...
-}
-```
-
-`SetDiagnosticsLevelAsync`는 `.NET`의 비동기 관용에 맞춘 짝이며
-[공통 스펙 §13](../../32-stream-connector.ko.md#13-diagnostics-level)이 요구하는 동기 표면을
-대신하지 않는다. 동기 표면은 비동기 짝의 완료를 기다리지 않으므로 receive callback 안에서
-호출해도 자기 완료를 기다리는 순환이 생기지 않는다.
-
-`DiagnosticsLevel`은 `Options.DiagnosticsLevel`을 그대로 읽는 값이며 항상 최근에
-`SetDiagnosticsLevel`로 적용한 level과 일치한다(`Options`가 노출하는 값도 마찬가지다).
-`SetDiagnosticsLevel`은 정의되지 않은 enum 값을 생성 시점 옵션 검증과 동일하게
-`ZlinkStreamErrorCode.ValidationFailed`로 거부한다. 저장은 원자적 cell(`Volatile.Read`/
-`Volatile.Write`)로 이뤄지며, 각 처리 지점(outbound frame 생성, inbound packet 처리 등)은
-그 처리를 시작할 때 level을 **한 번만** 읽어 그 값으로 처리 전체를 판단한다 — 처리 도중
-level이 다시 바뀌어도 이미 시작한 처리에는 영향을 주지 않고, 그 다음 처리 지점부터
-새 값이 적용된다.
 
 **`.NET`에만 있는 option:**
 
@@ -443,7 +413,6 @@ level이 다시 바뀌어도 이미 시작한 처리에는 영향을 주지 않�
 | 지원하지 않는 scheme, URI scheme과 `Transport` 불일치 | `ZlinkStreamException`의 `ConfigurationError` |
 | 압축을 끈 구성에 `CompressionCodec`을 함께 지정 | `ZlinkStreamException`의 `ConfigurationError` |
 | 유효하지 않은 timeout·queue 크기·heartbeat/reconnect 조합 | `ZlinkStreamException`의 `ValidationFailed` |
-| 정의되지 않은 `ZlinkStreamDiagnosticsLevel` 값 | `ZlinkStreamException`의 `ValidationFailed` |
 
 모든 timeout과 queue 크기 option은 **양수**여야 하고, preview 길이는 **음수일 수 없다.**
 `MaxAttempts`는 `null`이거나 양수여야 한다.
@@ -468,7 +437,11 @@ level이 다시 바뀌어도 이미 시작한 처리에는 영향을 주지 않�
 | `StreamConnectorTests.OneWayAsync_Waits_For_Bounded_Queue_Admission` | one-way terminal은 bounded queue 수락까지 비동기로 기다리고 결과값 없이 완료한다. |
 | `StreamConnectorTests.RequestQueueWaitsForEarlierAcceptedOneWaySend` | 먼저 수락된 one-way send와 뒤 request의 wire 전송 순서를 보존한다. |
 | `StreamConnectorTests.CallerCancellationDoesNotInterruptAnInProgressFrameWrite` | frame write가 시작된 뒤에는 caller cancellation이 partial frame을 만들지 않는다. |
-| `StreamConnectorTests.OutboundFrameCreatesFlowOnceAndCodecRemainsDeterministic` | outbound flow를 한 번 생성하고 header codec 결과를 고정한다. |
+| `StreamConnectorTests.ConnectorOutboundFramesNeverCarryFlowAndOnlyRequestsCarryCorrelation` | connector 송신에 flow flag가 없고 request에만 correlation id가 있다. |
+| `StreamConnectorTests.RequestHooksRunInOrderAddWireMetadataAndIsolateFailures` | hook 등록 순서와 metadata 추가, callback 실패 격리를 확인한다. |
+| `StreamConnectorTests.ReplyHookObservesRemoteFailureTimeoutAndClose` | reply hook이 원격 오류, timeout, 연결 종료를 관찰한다. |
+| `StreamConnectorTests.ManualSendingHookRunsOnRequestCallerAndReplyHookWaitsForDispatch` | Manual mode에서도 송신 hook은 요청 호출 스레드에서 실행하고 metadata는 dispatch 없이 전송한다. 응답 hook은 dispatch를 기다린다. |
+| `StreamConnectorTests.ActorHandlersIsolateMatchingNamesAndRequestHooksReportActorId` | Actor 수신 등록은 같은 이름의 다른 Actor 메시지를 받지 않고 hook은 Actor ID를 받는다. |
 | `StreamConnectorTests.HeaderProtocolEnforcesControlPacketContract` | control packet의 codec·flag·payload 계약을 고정한다. |
 
 Release 검증은 `scripts/verify_packaged_contract.sh`로 source assembly, API snapshot, 실제 NuGet

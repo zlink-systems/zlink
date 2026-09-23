@@ -4,8 +4,16 @@
 
 #include <zlink/stream_connector.hpp>
 
-#include <deque>
+#if __has_include(<godot_cpp/variant/utility_functions.hpp>)
+#include <godot_cpp/variant/utility_functions.hpp>
+#define ZLINK_GODOT_HAS_LOGGER 1
+#endif
+
 #include <chrono>
+#include <cstdio>
+#include <deque>
+#include <exception>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <utility>
@@ -33,84 +41,59 @@ packet_t to_godot_packet (const zlink::stream_connector::packet_t &source)
     return packet;
 }
 
-} // namespace
-
-request_sending_context_t::request_sending_context_t (
-  std::string name,
-  std::optional<std::string> actor,
-  std::function<void (std::string, std::string)> setter) :
-    request_packet_name (std::move (name)),
-    actor_id (std::move (actor)),
-    _setter (std::move (setter))
+void log_callback_error (const char *message)
 {
+#if defined(ZLINK_GODOT_HAS_LOGGER)
+    godot::UtilityFunctions::push_error (message);
+#else
+    std::fprintf (stderr, "ZLink stream connector callback failed: %s\n", message);
+#endif
 }
+
+template <typename Callback> void invoke_callback (Callback &&callback)
+{
+    try {
+        callback ();
+    }
+    catch (const std::exception &error) {
+        log_callback_error (error.what ());
+    }
+    catch (...) {
+        log_callback_error ("unknown exception");
+    }
+}
+
+} // namespace
 
 void request_sending_context_t::set_metadata (std::string key, std::string value)
 {
-    _setter (std::move (key), std::move (value));
-}
-
-subscription_t::subscription_t (std::function<void ()> release) : _release (std::move (release))
-{
-}
-
-subscription_t::~subscription_t ()
-{
-    unsubscribe ();
-}
-
-subscription_t::subscription_t (subscription_t &&other) noexcept :
-    _release (std::move (other._release))
-{
-    other._release = {};
-}
-
-subscription_t &subscription_t::operator= (subscription_t &&other) noexcept
-{
-    if (this != &other) {
-        unsubscribe ();
-        _release = std::move (other._release);
-        other._release = {};
-    }
-    return *this;
-}
-
-void subscription_t::unsubscribe ()
-{
-    if (_release) {
-        auto release = std::move (_release);
-        _release = {};
-        release ();
-    }
-}
-
-bool subscription_t::active () const noexcept
-{
-    return static_cast<bool> (_release);
+    _metadata[std::move (key)] = std::move (value);
 }
 
 class stream_connector_t::runtime_t
 {
   public:
-    struct sending_hook_t
+    struct registration_t
     {
-        std::function<void (request_sending_context_t &)> callback;
-        zlink::stream_connector::subscription_t subscription;
-    };
-
-    struct reply_hook_t
-    {
-        std::function<void (const reply_received_context_t &)> callback;
-        zlink::stream_connector::subscription_t subscription;
+        std::string name;
+        std::function<void (const packet_t &)> callback;
+        zlink::stream_connector::subscription_t handle;
     };
 
     zlink::stream_connector::connector_t connector;
-    std::vector<std::pair<std::string, zlink::stream_connector::subscription_t>> subscriptions;
-    std::vector<std::weak_ptr<sending_hook_t>> sending_hooks;
-    std::vector<std::weak_ptr<reply_hook_t>> reply_hooks;
+    std::map<std::uint64_t, registration_t> subscriptions;
+    std::uint64_t next_subscription_id = 1;
+    template <typename Callback> struct hook_entry_t
+    {
+        Callback callback;
+        zlink::stream_connector::subscription_t handle;
+    };
+    using sending_entry_t = hook_entry_t<std::function<void (request_sending_context_t &)>>;
+    using reply_entry_t = hook_entry_t<std::function<void (const reply_received_context_t &)>>;
+    std::map<std::uint64_t, std::shared_ptr<sending_entry_t>> sending_hooks;
+    std::map<std::uint64_t, std::shared_ptr<reply_entry_t>> reply_hooks;
+    std::uint64_t next_hook_id = 1;
     connection_state_t current_state = connection_state_t::created;
-    std::function<void (const packet_t &)> packet_callback;
-    std::function<void (const packet_t &)> request_callback;
     std::function<void (connection_state_t)> state_callback;
     std::function<void (std::function<void ()>)> main_thread_dispatcher;
     std::mutex pending_callbacks_mutex;
@@ -122,7 +105,8 @@ class stream_connector_t::runtime_t
             return;
         }
         if (main_thread_dispatcher) {
-            main_thread_dispatcher (std::move (callback));
+            main_thread_dispatcher (
+              [callback = std::move (callback)] { invoke_callback (callback); });
             return;
         }
         const std::lock_guard lock (pending_callbacks_mutex);
@@ -137,7 +121,7 @@ class stream_connector_t::runtime_t
             callbacks.swap (pending_callbacks);
         }
         for (auto &callback : callbacks) {
-            callback ();
+            invoke_callback (callback);
         }
     }
 
@@ -149,80 +133,100 @@ class stream_connector_t::runtime_t
         post_to_main_thread ([callback = state_callback, state] { callback (state); });
     }
 
-    void emit_request (packet_t packet)
-    {
-        if (!request_callback) {
-            return;
-        }
-        post_to_main_thread (
-          [callback = request_callback, packet = std::move (packet)] { callback (packet); });
-    }
-
-    void emit_packet (packet_t packet)
-    {
-        if (!packet_callback) {
-            return;
-        }
-        post_to_main_thread (
-          [callback = packet_callback, packet = std::move (packet)] { callback (packet); });
-    }
-
-    zlink::stream_connector::subscription_t bind_subscription (std::string packet_name,
+    zlink::stream_connector::subscription_t bind_subscription (std::uint64_t id,
+                                                               const std::string &packet_name,
                                                                std::weak_ptr<runtime_t> runtime)
     {
         return connector.on<zlink::stream_connector::packet_t> (
-          std::move (packet_name),
-          [runtime = std::move (runtime)] (
+          packet_name,
+          [runtime = std::move (runtime), id] (
             const zlink::stream_connector::message_t<zlink::stream_connector::packet_t> &message) {
               if (auto owner = runtime.lock ()) {
                   auto packet = to_godot_packet (message.packet_name, message.payload.payload);
                   packet.compressed = message.payload.compressed;
                   packet.metadata = message.metadata.values;
-                  owner->emit_packet (std::move (packet));
+                  owner->post_to_main_thread ([runtime, id, packet = std::move (packet)] {
+                      if (auto current = runtime.lock ()) {
+                          const auto found = current->subscriptions.find (id);
+                          if (found != current->subscriptions.end ()) {
+                              auto callback = found->second.callback;
+                              callback (packet);
+                          }
+                      }
+                  });
               }
           });
     }
 
-    void bind_sending_hook (const std::shared_ptr<sending_hook_t> &hook)
+    void register_sending_hook (const std::shared_ptr<sending_entry_t> &entry)
     {
-        hook->subscription = connector.on_request_sending (
-          [hook] (zlink::stream_connector::request_sending_context_t &core) {
-              request_sending_context_t context (core.request_packet_name, core.actor_id,
-                                                 [&core] (std::string key, std::string value) {
-                                                     core.set_metadata (std::move (key),
-                                                                        std::move (value));
-                                                 });
-              hook->callback (context);
+        entry->handle = connector.on_request_sending (
+          [weak_entry = std::weak_ptr<sending_entry_t> (entry)] (
+            zlink::stream_connector::request_sending_context_t &source) {
+              if (auto registered = weak_entry.lock ()) {
+                  request_sending_context_t context;
+                  context.request_packet_name = source.request_packet_name;
+                  context.actor_id = source.actor_id;
+                  invoke_callback ([&] { registered->callback (context); });
+                  for (const auto &[key, value] : context.metadata_values ()) {
+                      source.set_metadata (key, value);
+                  }
+              }
           });
     }
 
-    void bind_reply_hook (const std::shared_ptr<reply_hook_t> &hook,
-                          std::weak_ptr<runtime_t> runtime)
+    void register_reply_hook (const std::shared_ptr<reply_entry_t> &entry,
+                              std::weak_ptr<runtime_t> weak_owner)
     {
-        hook->subscription = connector.on_reply_received (
-          [runtime = std::move (runtime),
-           hook] (const zlink::stream_connector::reply_received_context_t &core) {
-              reply_received_context_t context;
-              context.request_packet_name = core.request_packet_name;
-              context.actor_id = core.actor_id;
-              context.succeeded = core.succeeded;
-              if (core.reply) {
-                  context.reply = to_godot_packet (*core.reply);
-              }
-              if (core.error) {
-                  context.error = error_t{core.error->code, core.error->message};
-              }
-              context.elapsed = core.elapsed;
-              if (auto owner = runtime.lock ()) {
-                  owner->post_to_main_thread ([hook, context = std::move (context)] {
-                      if (hook->subscription.active ()) {
-                          hook->callback (context);
+        entry->handle = connector.on_reply_received (
+          [weak_owner, weak_entry = std::weak_ptr<reply_entry_t> (entry)] (
+            const zlink::stream_connector::reply_received_context_t &source) {
+              if (auto owner = weak_owner.lock ()) {
+                  reply_received_context_t context;
+                  context.request_packet_name = source.request_packet_name;
+                  context.actor_id = source.actor_id;
+                  context.succeeded = source.succeeded;
+                  context.elapsed = source.elapsed;
+                  if (source.reply) {
+                      context.reply = to_godot_packet (*source.reply);
+                  }
+                  if (source.error) {
+                      context.error = error_t{source.error->code, source.error->message};
+                  }
+                  owner->post_to_main_thread ([weak_entry, context = std::move (context)] {
+                      if (auto registered = weak_entry.lock ()) {
+                          registered->callback (context);
                       }
                   });
               }
           });
     }
 };
+
+subscription_t::subscription_t (std::function<void ()> unsubscribe,
+                                std::function<bool ()> is_active) :
+    _unsubscribe (std::move (unsubscribe)), _is_active (std::move (is_active))
+{
+}
+subscription_t &subscription_t::operator= (subscription_t &&other) noexcept
+{
+    if (this != &other) {
+        unsubscribe ();
+        _unsubscribe = std::move (other._unsubscribe);
+        _is_active = std::move (other._is_active);
+    }
+    return *this;
+}
+void subscription_t::unsubscribe ()
+{
+    if (active ()) {
+        _unsubscribe ();
+    }
+}
+bool subscription_t::active () const
+{
+    return _is_active && _is_active ();
+}
 
 stream_connector_t::stream_connector_t () : _runtime (std::make_shared<runtime_t> ())
 {
@@ -238,35 +242,31 @@ stream_connector_t &stream_connector_t::operator= (stream_connector_t &&) noexce
 
 void stream_connector_t::connect (std::string endpoint)
 {
-    for (auto &[name, handle] : _runtime->subscriptions) {
-        handle.unsubscribe ();
-    }
     _runtime->connector.close ();
     while (_runtime->connector.pending_dispatch_count () != 0) {
         _runtime->connector.dispatch ();
+    }
+    for (auto &[id, registration] : _runtime->subscriptions) {
+        registration.handle.unsubscribe ();
+    }
+    for (auto &[id, entry] : _runtime->sending_hooks) {
+        entry->handle.unsubscribe ();
+    }
+    for (auto &[id, entry] : _runtime->reply_hooks) {
+        entry->handle.unsubscribe ();
     }
     zlink::stream_connector::connector_options_t options;
     options.endpoint = std::move (endpoint);
     _runtime->connector =
       zlink::stream_connector::connector_factory_t::create (std::move (options));
-    for (auto it = _runtime->sending_hooks.begin (); it != _runtime->sending_hooks.end ();) {
-        if (auto hook = it->lock ()) {
-            _runtime->bind_sending_hook (hook);
-            ++it;
-        } else {
-            it = _runtime->sending_hooks.erase (it);
-        }
+    for (auto &[id, registration] : _runtime->subscriptions) {
+        registration.handle = _runtime->bind_subscription (id, registration.name, _runtime);
     }
-    for (auto it = _runtime->reply_hooks.begin (); it != _runtime->reply_hooks.end ();) {
-        if (auto hook = it->lock ()) {
-            _runtime->bind_reply_hook (hook, _runtime);
-            ++it;
-        } else {
-            it = _runtime->reply_hooks.erase (it);
-        }
+    for (auto &[id, entry] : _runtime->sending_hooks) {
+        _runtime->register_sending_hook (entry);
     }
-    for (auto &[name, handle] : _runtime->subscriptions) {
-        handle = _runtime->bind_subscription (name, _runtime);
+    for (auto &[id, entry] : _runtime->reply_hooks) {
+        _runtime->register_reply_hook (entry, _runtime);
     }
     _runtime->current_state = connection_state_t::connecting;
     _runtime->emit_state (_runtime->current_state);
@@ -309,9 +309,12 @@ void stream_connector_t::send_json (std::string packet_name,
 
 void stream_connector_t::request_json (std::string packet_name,
                                        std::string json_payload,
-                                       double timeout_seconds)
+                                       double timeout_seconds,
+                                       std::function<void (const request_result_t &)> callback)
 {
-    auto reply_name = packet_name;
+    if (!callback) {
+        return;
+    }
     zlink::stream_connector::packet_t packet;
     packet.name = std::move (packet_name);
     packet.codec = zlink::stream_connector::codec_t::json;
@@ -319,25 +322,47 @@ void stream_connector_t::request_json (std::string packet_name,
     auto request = _runtime->connector.request (std::move (packet));
     request.timeout (std::chrono::milliseconds (static_cast<int> (timeout_seconds * 1000.0)));
     request.submit<zlink::message_t> (
-      [runtime = std::weak_ptr<runtime_t> (_runtime), reply_name = std::move (reply_name)] (
+      [runtime = std::weak_ptr<runtime_t> (_runtime), callback = std::move (callback)] (
         zlink::stream_connector::result_t<zlink::message_t> result) mutable {
-          if (!result) {
-              return;
-          }
           if (auto owner = runtime.lock ()) {
-              owner->emit_request (to_godot_packet (std::move (reply_name), result.value ()));
+              request_result_t delivered;
+              if (result) {
+                  delivered.reply = to_godot_packet ({}, result.value ());
+              } else {
+                  delivered.error_code = result.error ()->code;
+                  delivered.error_message = result.error ()->message;
+              }
+              owner->post_to_main_thread (
+                [callback = std::move (callback), delivered = std::move (delivered)] () mutable {
+                    callback (delivered);
+                });
           }
       });
 }
 
-void stream_connector_t::subscribe (std::string packet_name)
+subscription_t stream_connector_t::on (std::string packet_name,
+                                       std::function<void (const packet_t &)> callback)
 {
-    zlink::stream_connector::subscription_t handle;
+    const auto id = _runtime->next_subscription_id++;
+    runtime_t::registration_t registration{std::move (packet_name), std::move (callback), {}};
     if (_runtime->current_state != connection_state_t::created
         && _runtime->current_state != connection_state_t::closed) {
-        handle = _runtime->bind_subscription (packet_name, _runtime);
+        registration.handle = _runtime->bind_subscription (id, registration.name, _runtime);
     }
-    _runtime->subscriptions.emplace_back (std::move (packet_name), std::move (handle));
+    _runtime->subscriptions.emplace (id, std::move (registration));
+    auto runtime = std::weak_ptr<runtime_t> (_runtime);
+    return subscription_t (
+      [runtime, id] {
+          if (auto owner = runtime.lock ()) {
+              owner->subscriptions.erase (id);
+          }
+      },
+      [runtime, id] {
+          if (auto owner = runtime.lock ()) {
+              return owner->subscriptions.contains (id);
+          }
+          return false;
+      });
 }
 
 void stream_connector_t::dispatch ()
@@ -359,16 +384,6 @@ connection_state_t stream_connector_t::state () const
     return _runtime->current_state;
 }
 
-void stream_connector_t::on_packet (std::function<void (const packet_t &)> callback)
-{
-    _runtime->packet_callback = std::move (callback);
-}
-
-void stream_connector_t::on_request_completed (std::function<void (const packet_t &)> callback)
-{
-    _runtime->request_callback = std::move (callback);
-}
-
 void stream_connector_t::on_connection_state_changed (
   std::function<void (connection_state_t)> callback)
 {
@@ -378,21 +393,47 @@ void stream_connector_t::on_connection_state_changed (
 subscription_t
 stream_connector_t::on_request_sending (std::function<void (request_sending_context_t &)> callback)
 {
-    auto hook = std::make_shared<runtime_t::sending_hook_t> ();
-    hook->callback = std::move (callback);
-    _runtime->sending_hooks.push_back (hook);
-    _runtime->bind_sending_hook (hook);
-    return subscription_t ([hook] { hook->subscription.unsubscribe (); });
+    const auto id = _runtime->next_hook_id++;
+    auto entry = std::make_shared<runtime_t::sending_entry_t> ();
+    entry->callback = std::move (callback);
+    _runtime->sending_hooks.emplace (id, entry);
+    _runtime->register_sending_hook (entry);
+    auto runtime = std::weak_ptr<runtime_t> (_runtime);
+    return subscription_t (
+      [runtime, id] {
+          if (auto owner = runtime.lock ()) {
+              owner->sending_hooks.erase (id);
+          }
+      },
+      [runtime, id] {
+          if (auto owner = runtime.lock ()) {
+              return owner->sending_hooks.contains (id);
+          }
+          return false;
+      });
 }
 
 subscription_t stream_connector_t::on_reply_received (
   std::function<void (const reply_received_context_t &)> callback)
 {
-    auto hook = std::make_shared<runtime_t::reply_hook_t> ();
-    hook->callback = std::move (callback);
-    _runtime->reply_hooks.push_back (hook);
-    _runtime->bind_reply_hook (hook, _runtime);
-    return subscription_t ([hook] { hook->subscription.unsubscribe (); });
+    const auto id = _runtime->next_hook_id++;
+    auto entry = std::make_shared<runtime_t::reply_entry_t> ();
+    entry->callback = std::move (callback);
+    _runtime->reply_hooks.emplace (id, entry);
+    _runtime->register_reply_hook (entry, _runtime);
+    auto runtime = std::weak_ptr<runtime_t> (_runtime);
+    return subscription_t (
+      [runtime, id] {
+          if (auto owner = runtime.lock ()) {
+              owner->reply_hooks.erase (id);
+          }
+      },
+      [runtime, id] {
+          if (auto owner = runtime.lock ()) {
+              return owner->reply_hooks.contains (id);
+          }
+          return false;
+      });
 }
 
 } // namespace zlink::godot_stream_connector

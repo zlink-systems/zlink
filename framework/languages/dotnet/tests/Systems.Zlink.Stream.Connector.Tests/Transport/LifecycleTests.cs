@@ -1226,8 +1226,7 @@ public sealed partial class StreamConnectorTests
         var callbacks = new ZlinkStreamConnectorCallbacks(
             taskRunner,
             ZlinkStreamDispatchMode.Immediate,
-            32,
-            new ZlinkStreamConnectorOptions { Endpoint = new Uri("tcp://127.0.0.1:1") }
+            32
         );
         var firstEntered = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
@@ -1282,8 +1281,7 @@ public sealed partial class StreamConnectorTests
         var callbacks = new ZlinkStreamConnectorCallbacks(
             taskRunner,
             ZlinkStreamDispatchMode.Immediate,
-            32,
-            new ZlinkStreamConnectorOptions { Endpoint = new Uri("tcp://127.0.0.1:1") }
+            32
         );
         var writeEntered = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
@@ -1341,8 +1339,7 @@ public sealed partial class StreamConnectorTests
         var callbacks = new ZlinkStreamConnectorCallbacks(
             taskRunner,
             ZlinkStreamDispatchMode.Immediate,
-            32,
-            new ZlinkStreamConnectorOptions { Endpoint = new Uri("tcp://127.0.0.1:1") }
+            32
         );
         var lifecycle = new ZlinkStreamConnectorLifecycle(
             new ZlinkStreamConnectorOptions
@@ -1440,8 +1437,7 @@ public sealed partial class StreamConnectorTests
         var callbacks = new ZlinkStreamConnectorCallbacks(
             taskRunner,
             ZlinkStreamDispatchMode.Immediate,
-            32,
-            new ZlinkStreamConnectorOptions { Endpoint = new Uri("tcp://127.0.0.1:1") }
+            32
         );
         var lifecycle = new ZlinkStreamConnectorLifecycle(
             new ZlinkStreamConnectorOptions
@@ -1531,8 +1527,7 @@ public sealed partial class StreamConnectorTests
         var callbacks = new ZlinkStreamConnectorCallbacks(
             taskRunner,
             ZlinkStreamDispatchMode.Immediate,
-            32,
-            new ZlinkStreamConnectorOptions { Endpoint = new Uri("tcp://127.0.0.1:1") }
+            32
         );
         var lifecycle = new ZlinkStreamConnectorLifecycle(
             new ZlinkStreamConnectorOptions
@@ -1620,8 +1615,7 @@ public sealed partial class StreamConnectorTests
         var callbacks = new ZlinkStreamConnectorCallbacks(
             taskRunner,
             ZlinkStreamDispatchMode.Immediate,
-            32,
-            new ZlinkStreamConnectorOptions { Endpoint = new Uri("tcp://127.0.0.1:1") }
+            32
         );
         ZlinkStreamConnectorLifecycle? lifecycle = null;
         lifecycle = new ZlinkStreamConnectorLifecycle(
@@ -2454,8 +2448,7 @@ public sealed partial class StreamConnectorTests
         var callbacks = new ZlinkStreamConnectorCallbacks(
             taskRunner,
             ZlinkStreamDispatchMode.Immediate,
-            32,
-            new ZlinkStreamConnectorOptions { Endpoint = new Uri("tcp://127.0.0.1:1") }
+            32
         );
         var lifecycle = new ZlinkStreamConnectorLifecycle(
             new ZlinkStreamConnectorOptions

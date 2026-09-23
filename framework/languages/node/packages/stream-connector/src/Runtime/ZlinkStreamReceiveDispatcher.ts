@@ -11,7 +11,6 @@ import type { ZlinkStreamFrameSender } from './ZlinkStreamFrameSender';
 import type { ZlinkStreamPendingRequests } from './ZlinkStreamPendingRequests';
 import type { ZlinkStreamReceivedMessages } from './ZlinkStreamReceivedMessages';
 import { connectorError, toStreamError, utf8Decode } from './ZlinkStreamSupport';
-import type { ZlinkFlowContext } from './ZlinkFlowContext';
 import { decodeSessionClosing, ZLINK_SESSION_CLOSING } from './Protocol/ZlinkSessionClosing';
 import type { ZlinkStreamCloseReason } from '../Contracts';
 import { zlinkStreamActorBinding, type ZlinkStreamActors } from './ZlinkStreamActors';
@@ -28,7 +27,6 @@ export class ZlinkStreamReceiveDispatcher {
     private readonly receivedMessages: ZlinkStreamReceivedMessages,
     private readonly frameSender: ZlinkStreamFrameSender,
     private readonly events: ZlinkStreamConnectorEvents,
-    private readonly flowContext: ZlinkFlowContext,
     private readonly actors: ZlinkStreamActors,
     private readonly serverClosing?: (reason: ZlinkStreamCloseReason) => Promise<void>
   ) {}
@@ -62,15 +60,9 @@ export class ZlinkStreamReceiveDispatcher {
     if (frameBytes === undefined) {
       return { available: false, inbound: false };
     }
-    // Spec 26 §4.1 / spec stream-connector 32 §13: this inbound read is one
-    // processing point. The level is read exactly once here and threaded
-    // through header decode and dispatch for every frame in the batch, so a
-    // level change observed mid-batch by a handler can never split header
-    // parsing and flow installation across two levels for the same frame.
-    const flowEnabled = this.protocol.flowEnabled();
     let frames: ReturnType<ZlinkStreamFrameProtocol['decodeFrames']>;
     try {
-      frames = this.protocol.decodeFrames(frameBytes, flowEnabled);
+      frames = this.protocol.decodeFrames(frameBytes);
     } catch (cause) {
       throw cause;
     }
@@ -79,14 +71,7 @@ export class ZlinkStreamReceiveDispatcher {
         break;
       }
       try {
-        await this.dispatch(
-          connection,
-          frame.header,
-          frame.payload,
-          signal,
-          flowEnabled,
-          connectionForSend
-        );
+        await this.dispatch(connection, frame.header, frame.payload, signal, connectionForSend);
       } catch (cause) {
         if (
           frame.header.kind === ZlinkStreamMessageKind.Control &&
@@ -113,7 +98,6 @@ export class ZlinkStreamReceiveDispatcher {
     header: ZlinkStreamHeader,
     payload: Uint8Array,
     signal: AbortSignal | undefined,
-    flowEnabled: boolean,
     connectionForSend?: () => ZlinkStreamConnection
   ): Promise<void> {
     const actor =
@@ -121,10 +105,14 @@ export class ZlinkStreamReceiveDispatcher {
     if (header.kind === ZlinkStreamMessageKind.Response && header.requestSeq !== undefined) {
       try {
         if (
-          !this.pendingRequests.resolve(header.requestSeq, {
-            codec: header.codec,
-            payload: this.protocol.decodePayload(header, payload)
-          })
+          !this.pendingRequests.resolve(
+            header.requestSeq,
+            {
+              codec: header.codec,
+              payload: this.protocol.decodePayload(header, payload)
+            },
+            header.metadata
+          )
         ) {
           await this.events.publishError(
             {
@@ -173,20 +161,11 @@ export class ZlinkStreamReceiveDispatcher {
       return;
     }
     if (header.kind === ZlinkStreamMessageKind.Send) {
-      // Spec 27 §4: with diagnostics Off no inbound flow context is created
-      // or installed on delivered messages. Uses the level snapshot taken
-      // once for this whole inbound batch (see readAndDispatch), not a fresh
-      // read, so it always agrees with how the header was just decoded.
-      const flow = flowEnabled
-        ? this.flowContext.createInbound(header.flowId, header.flowOrigin)
-        : undefined;
       this.receivedMessages.enqueue(
         {
           name: header.name,
           metadata: header.metadata,
           payload: { codec: header.codec, payload: this.protocol.decodePayload(header, payload) },
-          flowId: flow?.flowId,
-          flowOrigin: flow?.flowOrigin,
           actorId: actor?.actorId,
           [zlinkStreamActorBinding]: actor
         } as import('../Contracts').ZlinkStreamMessage<

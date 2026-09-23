@@ -244,6 +244,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     // Shared flow tracer (installed by the host); null = no tracing wired.
     private ZLinkMessageFlowTracer flow;
     private volatile boolean draining;
+    private final AtomicReference<CompletableFuture<Void>> closeStage = new AtomicReference<>();
     private volatile boolean relocating;
     private volatile CreationSubmitter creationSubmitter;
     private final ConcurrentMap<String, Set<AcceptedHandoffOperation>> acceptedHandoffOperations =
@@ -4739,17 +4740,38 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     }
 
     public CompletionStage<Void> closeAsync() {
-        draining = true;
-        stopDirectJoinSessionRecovery(
-                "Actor runtime closed with a pending direct-Join Session abort");
-        handoff.close();
-        List<ActorEntry> snapshot = inStateLane(actorRegistry::entries);
-        CompletableFuture<?>[] closed =
-                snapshot.stream()
-                        .map(this::closeActorEntry)
-                        .map(CompletionStage::toCompletableFuture)
-                        .toArray(CompletableFuture[]::new);
-        return CompletableFuture.allOf(closed);
+        CompletableFuture<Void> existing = closeStage.get();
+        if (existing != null) {
+            return existing;
+        }
+        CompletableFuture<Void> result = new CompletableFuture<>();
+        if (!closeStage.compareAndSet(null, result)) {
+            return closeStage.get();
+        }
+        try {
+            draining = true;
+            stopDirectJoinSessionRecovery(
+                    "Actor runtime closed with a pending direct-Join Session abort");
+            handoff.close();
+            List<ActorEntry> snapshot = inStateLane(actorRegistry::entries);
+            CompletableFuture<?>[] closed =
+                    snapshot.stream()
+                            .map(this::closeActorEntry)
+                            .map(CompletionStage::toCompletableFuture)
+                            .toArray(CompletableFuture[]::new);
+            CompletableFuture.allOf(closed)
+                    .whenComplete(
+                            (ignored, failure) -> {
+                                if (failure == null) {
+                                    result.complete(null);
+                                } else {
+                                    result.completeExceptionally(failure);
+                                }
+                            });
+        } catch (RuntimeException failure) {
+            result.completeExceptionally(failure);
+        }
+        return result;
     }
 
     private void stopDirectJoinSessionRecovery(String message) {

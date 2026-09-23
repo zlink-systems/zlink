@@ -34,6 +34,19 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
     private final Set<ZLinkBackendReceived> activeRouteReceives =
             Collections.synchronizedSet(Collections.newSetFromMap(new IdentityHashMap<>()));
     private ZLinkBackendActorReceived pendingActorHeader;
+    private CompletionStage<Void> closingCallback;
+
+    final synchronized CompletionStage<Void> closingCallback(
+            Supplier<CompletionStage<Void>> callback) {
+        if (closingCallback == null) {
+            try {
+                closingCallback = callback.get();
+            } catch (RuntimeException failure) {
+                closingCallback = CompletableFuture.failedFuture(failure);
+            }
+        }
+        return closingCallback;
+    }
 
     SpotActivationBase(
             ZLinkSpotRuntime host,

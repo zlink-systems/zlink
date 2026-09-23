@@ -23,6 +23,15 @@ namespace Systems.Zlink.Stream.Connector.Contracts
     /// </remarks>
     public static class ZlinkStreamTypedConnectorExtensions
     {
+        public static int ReceivedCount<TPayload>(this IZlinkStreamConnector connector)
+        {
+            if (connector is null)
+                throw new ArgumentNullException(nameof(connector));
+            return connector.ReceivedCount(
+                connector.Options.NameResolver.Resolve(typeof(TPayload))
+            );
+        }
+
         public static ZlinkStreamTypedSendBuilder Send<TPayload>(
             this IZlinkStreamConnector connector,
             TPayload payload
@@ -30,8 +39,11 @@ namespace Systems.Zlink.Stream.Connector.Contracts
         {
             if (connector is null)
                 throw new ArgumentNullException(nameof(connector));
+            var encoded = EncodePayload(connector.Options.PayloadCodec, payload);
             return new ZlinkStreamTypedSendBuilder(
-                connector.Send(EncodePayload(connector.Options.PayloadCodec, payload))
+                connector
+                    .Send(encoded)
+                    .PacketName(connector.Options.NameResolver.Resolve(typeof(TPayload)))
             );
         }
 
@@ -42,8 +54,11 @@ namespace Systems.Zlink.Stream.Connector.Contracts
         {
             if (connector is null)
                 throw new ArgumentNullException(nameof(connector));
+            var encoded = EncodePayload(connector.Options.PayloadCodec, payload);
             return new ZlinkStreamTypedRequestBuilder(
-                connector.Request(EncodePayload(connector.Options.PayloadCodec, payload)),
+                connector
+                    .Request(encoded)
+                    .PacketName(connector.Options.NameResolver.Resolve(typeof(TPayload))),
                 connector.Options.PayloadCodec
             );
         }

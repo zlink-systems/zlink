@@ -31,19 +31,18 @@ import org.junit.jupiter.api.Test
 import systems.zlink.contracts.messaging.Message
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions
 import systems.zlink.framework.streams.ZLinkStreamCompressionCodec as FrameworkStreamCompressionCodec
-import systems.zlink.stream.connector.ZLinkFlowOrigin
 import systems.zlink.stream.connector.ZLinkStreamCloseReason
 import systems.zlink.stream.connector.ZLinkStreamCompression
 import systems.zlink.stream.connector.ZLinkStreamCompressionCodec
 import systems.zlink.stream.connector.ZLinkStreamConnectorFactory
 import systems.zlink.stream.connector.ZLinkStreamConnectorOptions
-import systems.zlink.stream.connector.ZLinkStreamDiagnosticsLevel
 import systems.zlink.stream.connector.ZLinkStreamDispatchMode
 import systems.zlink.stream.connector.ZLinkStreamEncodedPayload
 import systems.zlink.stream.connector.ZLinkStreamError
 import systems.zlink.stream.connector.ZLinkStreamErrorCode
 import systems.zlink.stream.connector.ZLinkStreamException
 import systems.zlink.stream.connector.ZLinkStreamMessage
+import systems.zlink.stream.connector.ZLinkStreamPacketNameResolver
 import systems.zlink.stream.connector.ZLinkTypedStreamRequestCall
 
 final class KotlinConnectorWrapperTest {
@@ -88,7 +87,6 @@ final class KotlinConnectorWrapperTest {
                 2.0,
                 false,
                 ZLinkStreamCompression.LZ4,
-                null,
                 null,
                 null,
                 null,
@@ -150,57 +148,6 @@ final class KotlinConnectorWrapperTest {
                 connector.send(payload("Echo", "a".repeat(64))).compress().await()
                 val compressed = server.readApplicationFrame()
                 assertEquals(0x04, compressed.flags and 0x04)
-            } finally {
-                connector.close().await()
-            }
-        }
-    }
-
-    @Test
-    fun kotlinFlowContextSurvivesSuspensionPoints() = runBlocking {
-        val flow =
-            ZLinkStreamMessage(
-                "Push",
-                payload("Push", "body"),
-                mapOf(),
-                "0192f0c2-1c3a-7000-8000-0123456789ab",
-                ZLinkFlowOrigin.INBOUND,
-            )
-
-        assertEquals(null, currentZLinkStreamFlow())
-
-        withZLinkStreamFlow(flow) {
-            assertEquals(flow.flowId(), currentZLinkStreamFlow()?.flowId())
-            assertEquals(ZLinkFlowOrigin.INBOUND, currentZLinkStreamFlow()?.flowOrigin())
-
-            //  A plain ThreadLocal would be lost here: the continuation may
-            //  resume on another thread (Java spec 03 7.1).
-            yield()
-            assertEquals(flow.flowId(), currentZLinkStreamFlow()?.flowId())
-
-            kotlinx.coroutines.withContext(Dispatchers.IO) {
-                assertEquals(flow.flowId(), currentZLinkStreamFlow()?.flowId())
-            }
-            assertEquals(flow.flowId(), currentZLinkStreamFlow()?.flowId())
-        }
-
-        //  The previous context is restored on the way out.
-        assertEquals(null, currentZLinkStreamFlow())
-    }
-
-    @Test
-    fun kotlinDiagnosticsLevelHasASuspendingPair() = runBlocking {
-        TcpServer().use { server ->
-            val connector = ZLinkStreamConnectorFactory.create(options(server.endpoint())).kotlin()
-            try {
-                //  Common connector spec 32 13: the two surfaces change the
-                //  same value.
-                connector.diagnosticsLevel = ZLinkStreamDiagnosticsLevel.NORMAL
-                assertEquals(ZLinkStreamDiagnosticsLevel.NORMAL, connector.diagnosticsLevel)
-
-                connector.setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel.OFF)
-                assertEquals(ZLinkStreamDiagnosticsLevel.OFF, connector.diagnosticsLevel)
-                assertEquals(ZLinkStreamDiagnosticsLevel.OFF, connector.options.diagnosticsLevel())
             } finally {
                 connector.close().await()
             }
@@ -320,6 +267,75 @@ final class KotlinConnectorWrapperTest {
                 assertEquals("remote failed", error.message())
                 collector.cancel()
             } finally {
+                connector.close().await()
+            }
+        }
+    }
+
+    @Test
+    fun replyReceivedFlowObservesRequestOutcomeOnManualDispatch() = runBlocking {
+        TcpServer().use { server ->
+            val connector = ZLinkStreamConnectorFactory.create(options(server.endpoint())).kotlin()
+            try {
+                connector.connect().await()
+                val observed = CompletableDeferred<String>()
+                val collector =
+                    launch(start = CoroutineStart.UNDISPATCHED) {
+                        connector.repliesReceived().collect { context ->
+                            observed.complete(context.requestPacketName())
+                            context.reply()?.payload()?.payload()?.close()
+                        }
+                    }
+                yield()
+                val request =
+                    async(Dispatchers.IO) { connector.request(payload("Echo", "body")).await() }
+                val sent = server.readApplicationFrame()
+                server.sendFrame(
+                    Frame(
+                        kind = 3,
+                        requestSeq = sent.requestSeq,
+                        name = "",
+                        payload = "reply".toByteArray(StandardCharsets.UTF_8),
+                    )
+                )
+                request.await().payload().close()
+                dispatchNext(connector)
+                assertEquals("Echo", withTimeout(1_000) { observed.await() })
+                collector.cancelAndJoin()
+            } finally {
+                connector.close().await()
+            }
+        }
+    }
+
+    @Test
+    fun requestSendingHookAddsMetadataBeforeManualDispatch() = runBlocking {
+        TcpServer().use { server ->
+            val connector = ZLinkStreamConnectorFactory.create(options(server.endpoint())).kotlin()
+            val observed = CompletableDeferred<Pair<String, String?>>()
+            val hook =
+                connector.onRequestSending { context ->
+                    observed.complete(context.requestPacketName() to context.actorId())
+                    context.setMetadata("source", "kotlin")
+                }
+            try {
+                connector.connect().await()
+                val request =
+                    async(Dispatchers.IO) { connector.request(payload("Echo", "body")).await() }
+                val sent = server.readApplicationFrame()
+                assertEquals("Echo" to null, withTimeout(1_000) { observed.await() })
+                assertEquals("kotlin", sent.metadata["source"])
+                server.sendFrame(
+                    Frame(
+                        kind = 3,
+                        requestSeq = sent.requestSeq,
+                        name = "",
+                        payload = "reply".toByteArray(StandardCharsets.UTF_8),
+                    )
+                )
+                request.await().payload().close()
+            } finally {
+                hook.close()
                 connector.close().await()
             }
         }
@@ -561,6 +577,149 @@ final class KotlinConnectorWrapperTest {
         }
     }
 
+    @Test
+    fun typedMessageFlowsResolveNamesOnConnectorAndActor() = runBlocking {
+        TcpServer().use { server ->
+            val connector = ZLinkStreamConnectorFactory.create(options(server.endpoint())).kotlin()
+            try {
+                connector.connect().await()
+                actorRegistryControl(connector, "bound", boundControl(7, "player-a"))
+                val actor = connector.actor("player-a")!!
+                connector.dispatch().await()
+                val connectorMessage =
+                    CompletableDeferred<ZLinkStreamMessage<Map<String, String>>>()
+                val actorMessage = CompletableDeferred<ZLinkStreamMessage<Map<String, String>>>()
+                val connectorCollector =
+                    launch(start = CoroutineStart.UNDISPATCHED) {
+                        connector.messages<Map<String, String>>().collect {
+                            connectorMessage.complete(it)
+                        }
+                    }
+                val actorCollector =
+                    launch(start = CoroutineStart.UNDISPATCHED) {
+                        actor.messages<Map<String, String>>().collect { actorMessage.complete(it) }
+                    }
+                yield()
+                server.sendFrame(
+                    Frame(
+                        kind = 1,
+                        codec = 1,
+                        requestSeq = null,
+                        name = "Map",
+                        payload = "{\"value\":\"typed\"}".toByteArray(StandardCharsets.UTF_8),
+                        actorSlot = 7,
+                    )
+                )
+                withTimeout(1_000) { while (connector.receivedCount("Map") == 0) yield() }
+                connector.dispatch().await()
+                assertEquals(
+                    "typed",
+                    withTimeout(1_000) { connectorMessage.await() }.payload()["value"],
+                )
+                assertEquals(
+                    "typed",
+                    withTimeout(1_000) { actorMessage.await() }.payload()["value"],
+                )
+
+                val namedMessage = CompletableDeferred<String>()
+                val namedCollector =
+                    launch(start = CoroutineStart.UNDISPATCHED) {
+                        actor.messages("Alias", String::class).collect {
+                            namedMessage.complete(it.payload())
+                        }
+                    }
+                yield()
+                server.sendFrame(
+                    Frame(
+                        kind = 1,
+                        codec = 1,
+                        requestSeq = null,
+                        name = "Alias",
+                        payload = "\"named\"".toByteArray(StandardCharsets.UTF_8),
+                        actorSlot = 7,
+                    )
+                )
+                withTimeout(1_000) { while (connector.receivedCount("Alias") == 0) yield() }
+                connector.dispatch().await()
+                assertEquals("named", withTimeout(1_000) { namedMessage.await() })
+
+                connectorCollector.cancelAndJoin()
+                actorCollector.cancelAndJoin()
+                namedCollector.cancelAndJoin()
+            } finally {
+                connector.close().await()
+            }
+        }
+    }
+
+    @Test
+    fun explicitPacketNamePrecedesRejectingResolverForTypedCalls() = runBlocking {
+        TcpServer().use { server ->
+            val resolver = ZLinkStreamPacketNameResolver {
+                throw IllegalArgumentException("reject")
+            }
+            val connector =
+                ZLinkStreamConnectorFactory.create(options(server.endpoint(), resolver)).kotlin()
+            try {
+                connector.connect().await()
+                actorRegistryControl(connector, "bound", boundControl(7, "player-a"))
+                val actor = connector.actor("player-a")!!
+                connector.dispatch().await()
+                val payload = mapOf("value" to "typed")
+
+                assertTrue(runCatching { connector.send(payload).await() }.isFailure)
+
+                connector.send(payload).packetName("ExplicitSend").await()
+                assertEquals("ExplicitSend", server.readApplicationFrame().name)
+                actor.send(payload).packetName("ActorSend").await()
+                assertEquals("ActorSend", server.readApplicationFrame().name)
+
+                val connectorRequest =
+                    async(Dispatchers.IO) {
+                        connector
+                            .request<Map<String, String>>(payload)
+                            .packetName("ExplicitRequest")
+                            .await()
+                    }
+                val sent = server.readApplicationFrame()
+                assertEquals("ExplicitRequest", sent.name)
+                server.sendFrame(
+                    Frame(
+                        kind = 3,
+                        codec = 1,
+                        requestSeq = sent.requestSeq,
+                        name = "",
+                        payload = "{\"value\":\"reply\"}".toByteArray(StandardCharsets.UTF_8),
+                    )
+                )
+                assertEquals("reply", connectorRequest.await()["value"])
+
+                val actorRequest =
+                    async(Dispatchers.IO) {
+                        actor
+                            .request<Map<String, String>>(payload)
+                            .packetName("ActorRequest")
+                            .await()
+                    }
+                val actorSent = server.readApplicationFrame()
+                assertEquals("ActorRequest", actorSent.name)
+                assertEquals(7, actorSent.actorSlot)
+                server.sendFrame(
+                    Frame(
+                        kind = 3,
+                        codec = 1,
+                        requestSeq = actorSent.requestSeq,
+                        name = "",
+                        payload = "{\"value\":\"reply\"}".toByteArray(StandardCharsets.UTF_8),
+                    )
+                )
+                assertEquals("reply", actorRequest.await()["value"])
+            } finally {
+                connector.close().await()
+            }
+        }
+    }
+
     private fun actorRegistryControl(
         connector: ZLinkKotlinStreamConnector,
         action: String,
@@ -781,7 +940,10 @@ final class KotlinConnectorWrapperTest {
         ZLinkKotlinStreamAssert.expectTimeout { throw TimeoutException("request timed out") }
     }
 
-    private fun options(endpoint: URI = URI.create("tcp://127.0.0.1:7200")) =
+    private fun options(
+        endpoint: URI = URI.create("tcp://127.0.0.1:7200"),
+        nameResolver: ZLinkStreamPacketNameResolver? = null,
+    ) =
         ZLinkStreamConnectorOptions(
             endpoint,
             ZLinkStreamDispatchMode.MANUAL,
@@ -801,7 +963,7 @@ final class KotlinConnectorWrapperTest {
             false,
             ZLinkStreamCompression.LZ4,
             null,
-            null,
+            nameResolver,
             null,
         )
 
@@ -967,9 +1129,19 @@ final class KotlinConnectorWrapperTest {
             val nameLength = buffer.get().toInt() and 0xff
             val nameBytes = ByteArray(nameLength)
             buffer.get(nameBytes)
+            val metadata = mutableMapOf<String, String>()
             if ((flags and 0x02) != 0) {
                 val metadataLength = buffer.short.toInt() and 0xffff
-                buffer.position(buffer.position() + metadataLength)
+                val end = buffer.position() + metadataLength
+                repeat(buffer.get().toInt() and 0xff) {
+                    val key = ByteArray(buffer.get().toInt() and 0xff)
+                    buffer.get(key)
+                    val value = ByteArray(buffer.short.toInt() and 0xffff)
+                    buffer.get(value)
+                    metadata[String(key, StandardCharsets.UTF_8)] =
+                        String(value, StandardCharsets.UTF_8)
+                }
+                assertEquals(end, buffer.position())
             }
             if ((flags and 0x08) != 0) {
                 val correlationLength = buffer.get().toInt() and 0xff
@@ -985,6 +1157,7 @@ final class KotlinConnectorWrapperTest {
                 name = String(nameBytes, StandardCharsets.UTF_8),
                 payload = ByteArray(0),
                 actorSlot = actorSlot,
+                metadata = metadata,
             )
         }
 
@@ -1023,5 +1196,6 @@ final class KotlinConnectorWrapperTest {
         val name: String,
         val payload: ByteArray,
         val actorSlot: Int? = null,
+        val metadata: Map<String, String> = mapOf(),
     )
 }

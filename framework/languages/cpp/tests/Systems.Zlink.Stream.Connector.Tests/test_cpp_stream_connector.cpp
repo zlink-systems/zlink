@@ -3613,6 +3613,38 @@ int main ()
     }
     error_reply_connector.close ();
 
+    /* An immediate request failure is already a queued completion in Manual
+     * mode. Closing before dispatch must preserve its reply hook and callback. */
+    zlink::stream_connector::connector_options_t queued_failure_options;
+    queued_failure_options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::manual;
+    auto queued_failure_connector =
+      zlink::stream_connector::connector_factory_t::create (queued_failure_options);
+    int queued_failure_reply_hooks = 0;
+    int queued_failure_callbacks = 0;
+    auto queued_failure_subscription = queued_failure_connector.on_reply_received (
+      [&] (const zlink::stream_connector::reply_received_context_t &ctx) {
+          if (ctx.request_packet_name == "queued.failure.before.close" && !ctx.succeeded
+              && ctx.error
+              && ctx.error->code == zlink::stream_connector::error_code_t::disconnected) {
+              ++queued_failure_reply_hooks;
+          }
+      });
+    queued_failure_connector.request (login_request_t{})
+      .packet_name ("queued.failure.before.close")
+      .submit<login_reply_t> ([&] (zlink::stream_connector::result_t<login_reply_t> result) {
+          if (!result
+              && result.error_code () == zlink::stream_connector::error_code_t::disconnected) {
+              ++queued_failure_callbacks;
+          }
+      });
+    if (queued_failure_connector.pending_dispatch_count () != 1 || queued_failure_reply_hooks != 0
+        || queued_failure_callbacks != 0 || !queued_failure_connector.close ()
+        || !queued_failure_connector.dispatch () || queued_failure_reply_hooks != 1
+        || queued_failure_callbacks != 1
+        || queued_failure_connector.pending_dispatch_count () != 0) {
+        return 302;
+    }
+
     zlink::stream_socket_t callback_response_server (context);
     callback_response_server.options ().recv_mode (zlink::stream_recv_mode_t::raw);
     callback_response_server.options ().notify (false);

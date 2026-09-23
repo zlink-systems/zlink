@@ -1544,12 +1544,6 @@ result_t<void> close_state (std::shared_ptr<detail::connector_state_t> state)
         state->inbound_buffer.clear ();
         state->dispatch_queue.clear ();
         ++state->dispatch_queue_generation;
-        {
-            // delivery_queue is guarded by delivery_mutex, not by
-            // transport_mutex. Lock order: transport -> delivery.
-            std::lock_guard<std::mutex> delivery_lock (state->delivery_mutex);
-            state->delivery_queue.clear ();
-        }
     }
     detail::close_bound_actors (state);
     detail::change_state (state, connection_state_t::closed);

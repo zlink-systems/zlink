@@ -80,16 +80,26 @@ public static class ZlinkStreamTypedConnectorExtensions
         ArgumentNullException.ThrowIfNull(actor);
         ArgumentNullException.ThrowIfNull(handler);
         var options = ((IZlinkStreamActorRuntime)actor).Options;
+        return actor.On(options.NameResolver.Resolve(typeof(TPayload)), handler);
+    }
+
+    public static IDisposable On<TPayload>(
+        this IZlinkStreamActor actor,
+        string name,
+        Func<ZlinkStreamMessage<TPayload>, CancellationToken, ValueTask> handler
+    )
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(handler);
+        var options = ((IZlinkStreamActorRuntime)actor).Options;
         return actor.On(
-            options.NameResolver.Resolve(typeof(TPayload)),
+            name,
             (message, cancellationToken) =>
                 handler(
                     new ZlinkStreamMessage<TPayload>(
                         message.Name,
                         message.Metadata,
                         DecodePayload<TPayload>(options.PayloadCodec, message.Payload),
-                        message.FlowId,
-                        message.FlowOrigin,
                         message.ActorId
                     ),
                     cancellationToken
@@ -166,8 +176,6 @@ public static class ZlinkStreamTypedConnectorExtensions
                         message.Name,
                         message.Metadata,
                         payload,
-                        message.FlowId,
-                        message.FlowOrigin,
                         message.ActorId
                     ),
                     cancellationToken
@@ -319,8 +327,6 @@ public sealed class ZlinkStreamTypedSequenceBuilder<TPayload>
         return messages.Select(Decode).ToArray();
     }
 
-    // The typed projection keeps the flow pair the frame carried; decoding the payload
-    // must not drop it (stream-connector spec §5.5).
     private ZlinkStreamMessage<TPayload> Decode(
         ZlinkStreamMessage<ZlinkStreamEncodedPayload> message
     )
@@ -329,8 +335,6 @@ public sealed class ZlinkStreamTypedSequenceBuilder<TPayload>
             message.Name,
             message.Metadata,
             ZlinkStreamTypedConnectorExtensions.DecodePayload<TPayload>(_codec, message.Payload),
-            message.FlowId,
-            message.FlowOrigin,
             message.ActorId
         );
     }
@@ -382,8 +386,6 @@ public sealed class ZlinkStreamTypedWaitBuilder<TPayload>
             message.Name,
             message.Metadata,
             ZlinkStreamTypedConnectorExtensions.DecodePayload<TPayload>(_codec, message.Payload),
-            message.FlowId,
-            message.FlowOrigin,
             message.ActorId
         );
     }

@@ -37,7 +37,9 @@ bool FZLinkStreamConnectorLifecycleTest::RunTest (const FString &)
       });
 
     Connector->SendJson (TEXT ("chat.send"), TEXT ("{\"text\":\"hello\"}"));
-    Connector->RequestJson (TEXT ("chat.request"), TEXT ("{\"text\":\"hello\"}"), 0.01f);
+    FZLinkStreamRequestDelegate OnCompleted;
+    Connector->RequestJson (TEXT ("chat.request"), TEXT ("{\"text\":\"hello\"}"), 0.01f,
+                            OnCompleted);
     TestEqual (TEXT ("sending hook runs in request call"), SendingCalls, 1);
     TestEqual (TEXT ("reply hook waits for dispatch"), ReplyCalls, 0);
     Connector->Dispatch ();

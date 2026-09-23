@@ -68,7 +68,6 @@ language can open an OS socket in a browser sandbox.
 | Game engine (common) | An engine object can't be handled off the main thread | The default of dispatch mode, which decides the receive callback's execution context, is **`Manual`**. It's explicitly pumped on the main thread (§7). |
 | Game engine (C++) | Some builds have exception/coroutine disabled | The C++ connector core is **no-exception/no-coroutine**. The public header doesn't expose `<coroutine>` |
 | **Browser · WASM** | **Can't open an OS socket** (security sandbox) | **`tcp`/`tls` unusable.** Only `ws`/`wss` are used, running on top of the platform's native WebSocket API (§3.2) |
-| **Browser JavaScript** | **No ambient execution context** equivalent to `AsyncLocalStorage` | To continue a received message's flow, the caller **passes that flow explicitly** to the send call (§5.5) |
 | Node.js | Not the TypeScript connector's product execution environment | Only handles the server process and browser test runner |
 
 ## 3. Transport
@@ -316,6 +315,10 @@ The user API doesn't handle raw header bytes.
   type name.
 - If the caller specifies a name **per operation**, that takes the
   highest priority.
+- **Every surface that takes a name offers both forms: the caller names it, or it is decided
+  from the payload type.** This covers receive registration, send and request at the connector level and the Actor
+  handle (§5.6) level, and the test wait surfaces (§10.1.1) at the connector level. Neither
+  form is offered alone.
 - If auxiliary information is needed, it's added as a metadata
   key-value.
 - **An API that handles arbitrary header bytes isn't put on the public
@@ -404,36 +407,15 @@ package's `./framework` subpath. The two entry points use the same
 codec number owned by `stream-wire`, but the browser module graph
 mustn't reference the server framework runtime.
 
-### 5.5 Flow Exposure And Propagation
+### 5.5 Flow
 
-**A received message exposes `flow_id`/`flow_origin` alongside the
-payload, the packet name, and the metadata.** All five languages expose
-them. The format and meaning of the two values are owned by
-[Flow correlation §3](../server/06-observability/04-flow-correlation.en.md#3-format-and-ownership),
-and when the diagnostics level is `Off` the connector doesn't deliver
-them, so both are empty (§13). The application reads these values to
-line up its own log with the server trace as one flow.
-
-A send or request started while a handler processes a received message
-**continues that message's flow.** How it is continued is decided by the
-execution environment.
-
-| Execution Environment | How the flow is continued |
-|---|---|
-| A runtime with an ambient execution context | The connector holds the current flow in the context it runs the handler on, and a send/request started on that same context uses the value with no argument |
-| A runtime with no ambient execution context (browser JavaScript) | The caller passes the flow of the message being processed to the send call explicitly. The name of that surface is owned by the per-language document |
-
-- **The difference between the two is the calling form, not the
-  guarantee.** Either way the built frame carries the same
-  `flow_id`/`flow_origin`, and a send that continues no flow starts a
-  new flow on both.
-- **Placing an explicit surface on a runtime with no ambient context
-  applies the requirement of
-  [Flow correlation §6](../server/06-observability/04-flow-correlation.en.md#6-async-work-and-execution-context)
-  to the connector.** Browser JavaScript has no surface equivalent to
-  `AsyncLocalStorage`, so a value can't be held on the execution
-  context (§2.2). As that same document forbids, the current flow isn't
-  guessed from a process-global variable or a mutable connector field.
+**The connector does not create, send, expose or propagate flow.** Outbound frames never carry
+`flow_id`/`flow_origin` and never set flag `0x10`. When an inbound frame has flow fields, only
+their structural length is checked (§4.2) and the values are dropped. Received messages do not
+expose flow values. The server starts the flow at STREAM ingress
+([Message flow correlation §4](../server/06-observability/04-flow-correlation.en.md#4-when-a-flow-is-created)).
+A request's correlation id is protocol information, so it is still created and preserved. A
+one-way `Send` creates no correlation id (flag `0x08` is not set).
 
 ### 5.6 Bound Actor
 
@@ -478,6 +460,27 @@ identifier into the payload for that.
   without handles. There is no surface that takes an Actor identifier as a
   string on every call — the handle keeps the Actor's address
   ([Public Contract Governance §7](../server/00-foundation/01-public-contract-governance.en.md#7-design-review-criteria)).
+
+### 5.7 Request Hooks
+
+An application registers two hooks that add common handling (common metadata, logging) to every
+request. They are registered like receive handlers (§5): registration returns a release handle, and several hooks run in registration order. **The request sending hook runs synchronously on
+the thread that calls the request, before the frame is built** — it does not follow the dispatch
+mode (§7). The reply received hook follows the dispatch mode like any other callback (§7). Both hooks apply to every request at the connector level and at the Actor handle
+(§5.6) level. They do not apply to sends or received pushes.
+
+| Hook | When it runs | What it receives |
+|---|---|---|
+| request sending | just before the request frame is built | the request packet name, the `actor_id` when sent through an Actor handle, a way to add metadata |
+| reply received | when the request ends (reply, failure, timeout, connection end) | the request packet name, `actor_id`, whether it succeeded, the reply message on success, the error (§9) on failure, the elapsed time |
+
+- **Metadata the request sending hook adds is carried by that request.** It is validated like
+  any other metadata (§4.4).
+- **The reply received hook only reads the outcome.** A hook cannot change or block the reply or
+  the error.
+- **A hook failure does not change the request result.** It is handled like any other callback
+  failure (§7).
+- The per-language document owns the names of the hooks and their contexts.
 
 ## 6. Connection Lifecycle
 
@@ -608,7 +611,6 @@ the same across every language.**
 | Compression | Lz4 (§8) |
 | Send/receive payload bound | 64KB each (§4.7) |
 | TLS certificate validation | On — the default of the validation-skip option is off, used only for a test's self-signed certificate |
-| Diagnostics level | `Errors` (§13) |
 
 ### 6.2 Close Reason
 
@@ -657,8 +659,8 @@ configuration mistake from a connection failure.
 - The endpoint/transport match (§3.1), the connect/request/wait
   timeouts, the heartbeat interval and timeout, the reconnect delays,
   backoff factor, and max attempts, the send/receive payload bounds,
-  the codec and compression settings, the dispatch mode, and the
-  diagnostics level are **all checked.** The values checked are the
+  the codec and compression settings, and the dispatch mode are **all
+  checked.** The values checked are the
   ones left after §6.1's defaults are applied.
 - **Validation happens at the earliest point the language can report
   the failure.** A language whose creation surface can return a failure
@@ -878,9 +880,7 @@ language's `Client/Support`.
 Something that can only be judged by observing the receive message
 queue (§10). A method of the connector instance.
 
-The surfaces below provide **both** paths for the packet name: naming
-it at the call site, and deriving it from the payload type. Neither
-path is offered alone. The exact argument and overload, and the
+The surfaces below offer both packet name forms (§5). The exact argument and overload, and the
 completion terminator (`.Async`/`.submit`/`.run`), are owned by each
 language's document, and the remaining conditions are narrowed by
 builder chaining.
@@ -991,50 +991,8 @@ test name differs, the meaning must be the same.
 | **Actor handle** | **`actors` is a read-only snapshot taken at the call and a closed handle still reads its `actor_id`. The list and the lookup are updated before the bound callback, which runs before that Actor's first packet callback, and a dropped transport closes every open handle in issue order with its unbound callback before the disconnected callback (§5.6, §7)** |
 | **Actor handle send and receive** | **A handle's send and request carry that slot and a handle's receive registration gets only that Actor's messages. Send/request on a closed handle are `ValidationFailed`, and an open handle gives the same timeout, cancellation and backpressure results as the connector-level builders (§5.6)** |
 | **Actor language projection** | **The .NET typed extensions, the Java named typed overload, the C++ templates and subscriptions, the TypeScript Disposable, and the Unity WebGL JSON boundary round trip are observable on the public surface (§5.6, language documents)** |
-| **Flow exposure and propagation** | **A received message exposes the flow identifier and origin, and a runtime without an ambient context provides an explicit means of passing it (§5.5)** |
+| **No flow sent** | **Outbound frames carry no flow field and no flag `0x10`, inbound flow fields are dropped after the structural check, and a one-way `Send` has no correlation id (§5.5)** |
+| **Request hooks** | **The request sending hook runs just before sending, in registration order, for both connector and Actor handle requests, and the metadata it adds is in the frame; the reply received hook runs once per success, failure, timeout and connection end and cannot change the outcome; a hook failure does not change the request result (§5.7)** |
+| **Both name forms** | **Receive registration, send and request at the connector and Actor handle levels, and the wait surfaces at the connector level, offer the named form and the type form, and both reach the same packet name (§5)** |
 | **Handlers and close** | **Push, error, disconnect, connection state, Actor bound and Actor unbound handlers and request callbacks all follow the registration order, callback failure and no-waiting rules, and the connector does not wait for a handler that never finishes. `close` returns after it has run the connection state handlers and the disconnect handlers. Disconnecting after the reconnect attempts are used up and on a transport error runs them in the same order and does not wait (§7)** |
 | **Close reason read surface** | **Code that did not receive the event reads the same value. A failed first connect still leaves a reason, and reconnecting does not clear it (§6.2)** |
-| Diagnostics level | `Off` outbound frames carry no flow field/flag (0x10), inbound flow value validation is skipped, the `Errors` default keeps the current wire, and one-way `Send` carries no correlation id (§13) |
-
-## 13. Diagnostics Level
-
-The connector takes a diagnostics level as a creation-time option. The values and their
-meaning are the four values `Off`/`Errors`/`Normal`/`Detailed` of
-[Message flow tracing §4](../server/06-observability/03-message-flow-tracing.en.md#4-how-the-application-sets-the-recording-scope--level-and-sampling),
-and **the default is `Errors`.** The connector is subject to the client connector rule of
-[Flow correlation §4](../server/06-observability/04-flow-correlation.en.md#4-when-a-flow-is-created), so a
-runtime level change follows
-[Message flow tracing §4.1](../server/06-observability/03-message-flow-tracing.en.md#5-changing-the-record-level-at-runtime-and-the-cost-rule)
-as is. The application can read and change the level without recreating the connector, the
-change applies from the processing points after it, and already-built frames are not
-retroactively changed. Each processing point reads the current level once and decides with
-that value.
-
-**A surface that reads the level and a synchronous surface that changes it are provided.**
-Changing the level alters one value, so there is no completion for the caller to wait on. Where
-asynchronous completion is that language's idiom, an asynchronous counterpart with the same
-meaning is placed alongside — both surfaces change the same value, and the asynchronous
-counterpart does not replace the synchronous one. Implementing the synchronous surface as a
-blocking call over the asynchronous counterpart would make that call wait on its own completion
-inside a receive callback, so the synchronous surface changes the value without waiting. The
-names of both surfaces are owned by the per-language document.
-
-When the level is not `Off`, the connector keeps the current behavior: it creates and
-attaches `flow_id`/`flow_origin` to outbound frames (§4.2, flag `0x10`) and validates the
-inbound frame's flow fields, delivering them on the received message.
-
-When the level is `Off`, the client connector rule of
-[Flow correlation §4](../server/06-observability/04-flow-correlation.en.md#4-when-a-flow-is-created) applies
-as is.
-
-- Outbound frames neither create nor attach `flow_id`/`flow_origin` (flag `0x10` is not
-  set).
-- Inbound flow fields keep **only the structural length check**; value validation
-  (UUIDv7/origin range) and delivery on the received message are skipped.
-- No observation-only work — flow creation, validation, propagation — is performed.
-
-The diagnostics level does not affect protocol information. A request's correlation id is
-created and preserved even at `Off`. Conversely, **a one-way `Send` never creates a
-correlation id at any level** — [Flow correlation §2](../server/06-observability/04-flow-correlation.en.md#2-the-role-of-the-two-identifiers)'s
-"a one-way message without a reply doesn't create a `correlation_id`" applies to the
-connector as well (flag `0x08` is not set).

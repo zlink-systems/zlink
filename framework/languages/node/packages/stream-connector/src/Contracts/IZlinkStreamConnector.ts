@@ -11,13 +11,11 @@ import type {
   ZlinkStreamConnectionStateChanged,
   ZlinkStreamEncodedPayload,
   ZlinkStreamError,
-  ZlinkStreamMessage
+  ZlinkStreamMessage,
+  ZlinkStreamRequestSendingContext,
+  ZlinkStreamReplyReceivedContext
 } from './ZlinkStreamModels';
-import type {
-  ZlinkStreamCloseReason,
-  ZlinkStreamConnectionState,
-  ZlinkStreamDiagnosticsLevel
-} from './ZlinkStreamEnums';
+import type { ZlinkStreamCloseReason, ZlinkStreamConnectionState } from './ZlinkStreamEnums';
 import type { ZlinkStreamActor } from './ZlinkStreamActor';
 
 export interface ZlinkStreamConnector {
@@ -26,11 +24,6 @@ export interface ZlinkStreamConnector {
   readonly closeReason?: ZlinkStreamCloseReason;
   readonly options: RequiredZlinkStreamConnectorOptions;
   readonly pendingDispatchCount: number;
-  /**
-   * Current diagnostics level (spec 26 §4.1, spec stream-connector 32 §13).
-   * Always equal to `options.diagnosticsLevel`.
-   */
-  readonly diagnosticsLevel: ZlinkStreamDiagnosticsLevel;
   readonly actors: readonly ZlinkStreamActor[];
   actor(actorId: string): ZlinkStreamActor | undefined;
   onActorBound(
@@ -39,22 +32,6 @@ export interface ZlinkStreamConnector {
   onActorUnbound(
     handler: (actor: ZlinkStreamActor, signal?: AbortSignal) => Promise<void> | void
   ): Disposable;
-  /**
-   * Changes the diagnostics level at runtime without recreating the
-   * connector (spec 26 §4.1, spec stream-connector 32 §13). Applies to
-   * processing points that read the level after this call returns; never
-   * applied retroactively to frames already built. Rejects unknown values
-   * with {@link import('./ZlinkStreamEnums').ZlinkStreamErrorCode.ConfigurationError}.
-   */
-  setDiagnosticsLevel(level: ZlinkStreamDiagnosticsLevel): void;
-  /**
-   * Asynchronous counterpart of {@link setDiagnosticsLevel} (spec
-   * stream-connector 32 §13). Both surfaces change the same value, and this
-   * one never replaces the synchronous surface: the synchronous call does not
-   * wait for a completion, so a caller whose idiom is an awaited completion
-   * uses this one instead. Rejects unknown values the same way.
-   */
-  setDiagnosticsLevelAsync(level: ZlinkStreamDiagnosticsLevel): Promise<void>;
   /**
    * Number of packets received under `name` on the current connection (spec
    * stream-connector 32 §10). Counts arrivals, so consuming a message through
@@ -72,13 +49,20 @@ export interface ZlinkStreamConnector {
       signal?: AbortSignal
     ) => Promise<void> | void
   ): Disposable;
+  onRequestSending(handler: (context: ZlinkStreamRequestSendingContext) => void): Disposable;
+  onReplyReceived(
+    handler: (
+      context: ZlinkStreamReplyReceivedContext,
+      signal?: AbortSignal
+    ) => Promise<void> | void
+  ): Disposable;
   connect(signal?: AbortSignal): Promise<void>;
   close(signal?: AbortSignal): Promise<void>;
   dispatch(signal?: AbortSignal): Promise<void>;
   send(payload: unknown, messageType?: Function): ZlinkStreamSendCall;
   request(payload: unknown, messageType?: Function): ZlinkStreamRequestCall;
   on<TPayload = ZlinkStreamEncodedPayload>(
-    name: string,
+    nameOrType: string | Function,
     handler: (message: ZlinkStreamMessage<TPayload>, signal?: AbortSignal) => Promise<void> | void,
     messageType?: Function
   ): Disposable;

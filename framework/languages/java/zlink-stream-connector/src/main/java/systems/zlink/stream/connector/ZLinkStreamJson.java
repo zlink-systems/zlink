@@ -32,8 +32,20 @@ public final class ZLinkStreamJson {
         return connector.send(encode(packetName(connector, payload), payload));
     }
 
+    public static ZLinkStreamSendCall send(
+            ZLinkStreamConnector connector, String name, Object payload) {
+        return connector.send(
+                encode(DefaultZLinkStreamConnector.validatePacketName(name), payload));
+    }
+
     public static ZLinkStreamRequestCall request(ZLinkStreamConnector connector, Object payload) {
         return connector.request(encode(packetName(connector, payload), payload));
+    }
+
+    public static ZLinkStreamRequestCall request(
+            ZLinkStreamConnector connector, String name, Object payload) {
+        return connector.request(
+                encode(DefaultZLinkStreamConnector.validatePacketName(name), payload));
     }
 
     public static <TPayload> AutoCloseable on(
@@ -60,8 +72,7 @@ public final class ZLinkStreamJson {
                                         message.packetName(),
                                         decode(message.payload(), payloadType),
                                         message.metadata(),
-                                        message.flowId(),
-                                        message.flowOrigin())));
+                                        message.actorId())));
     }
 
     public static ZLinkStreamEncodedPayload encode(String packetName, Object value) {
