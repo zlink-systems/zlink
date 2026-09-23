@@ -1,6 +1,6 @@
 {
   "name": "zlink-sample-supportchat",
-  "version-string": "0.22.0",
+  "version-string": "0.23.0",
   "dependencies": [
     "zlink",
     "zlink-framework"
