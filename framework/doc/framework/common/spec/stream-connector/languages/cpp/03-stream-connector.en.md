@@ -500,6 +500,8 @@ rules.
 - Request hooks (Common Spec §5.7) are Unreal `OnRequestSending`/`OnReplyReceived` delegates and
   Godot/Axmol `on_request_sending`/`on_reply_received` callbacks, each returning a release handle. The
   reply hook is delivered on the main thread like other results.
+- An exception thrown by an adapter callback, delegate, or request hook is recorded in the engine's error log at the
+  adapter boundary and doesn't change the request result or the delivery of other callbacks.
 
 ## 8. Verification
 

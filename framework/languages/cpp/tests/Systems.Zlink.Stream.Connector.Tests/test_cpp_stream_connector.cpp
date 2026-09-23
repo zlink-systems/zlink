@@ -16,6 +16,7 @@
 #include "runtime/protocol/packet_name_resolver.hpp"
 
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/read.hpp>
 #include <boost/asio/write.hpp>
 #include <boost/beast/core/buffers_to_string.hpp>
 #include <boost/beast/core/flat_buffer.hpp>
@@ -916,6 +917,87 @@ int main ()
     using zlink::stream_connector::detail::header_codec_t;
     using zlink::stream_connector::detail::stream_header_t;
 
+    /* stream-connector §5.6/§7: close queues unbound callbacks in issue order
+     * before the disconnected callback in both dispatch modes. */
+    for (const auto mode : {zlink::stream_connector::dispatch_mode_t::manual,
+                            zlink::stream_connector::dispatch_mode_t::immediate}) {
+        boost::asio::io_context close_actor_io;
+        boost::asio::ip::tcp::acceptor close_actor_acceptor (
+          close_actor_io, {boost::asio::ip::make_address ("127.0.0.1"), 0});
+        const auto close_actor_endpoint =
+          std::string ("tcp://127.0.0.1:")
+          + std::to_string (close_actor_acceptor.local_endpoint ().port ());
+        callback_latch_t close_actor_release;
+        joining_thread_t close_actor_server ([&] {
+            boost::asio::ip::tcp::socket socket (close_actor_acceptor.get_executor ());
+            close_actor_acceptor.accept (socket);
+            for (const auto [slot, name] :
+                 {std::pair<std::uint16_t, std::string_view>{7, "first"}, {2, "second"}}) {
+                std::string payload{static_cast<char> (1), static_cast<char> (0),
+                                    static_cast<char> (slot), static_cast<char> (name.size ())};
+                payload += name;
+                const auto frame =
+                  make_server_frame (message_kind_t::control, 0, "$zlink.actor.bound", payload);
+                boost::asio::write (socket, boost::asio::buffer (frame.to_string ()));
+            }
+            close_actor_release.wait_for (std::chrono::seconds (2));
+        });
+        zlink::stream_connector::connector_options_t close_actor_options;
+        close_actor_options.endpoint = close_actor_endpoint;
+        close_actor_options.dispatch_mode = mode;
+        close_actor_options.reconnect.enabled = false;
+        auto close_actor_connector =
+          zlink::stream_connector::connector_factory_t::create (close_actor_options);
+        std::mutex close_actor_events_mutex;
+        std::vector<std::string> close_actor_events;
+        callback_latch_t close_actor_disconnected;
+        auto close_actor_unbound_subscription = close_actor_connector.on_actor_unbound (
+          [&] (const std::shared_ptr<zlink::stream_connector::actor_t> &actor) {
+              std::lock_guard<std::mutex> lock (close_actor_events_mutex);
+              close_actor_events.push_back ("unbound:" + actor->actor_id ());
+          });
+        auto close_actor_disconnected_subscription = close_actor_connector.on_disconnected (
+          [&] (std::optional<zlink::stream_connector::close_reason_t>) {
+              {
+                  std::lock_guard<std::mutex> lock (close_actor_events_mutex);
+                  close_actor_events.push_back ("disconnected");
+              }
+              close_actor_disconnected.signal ();
+          });
+        if (!close_actor_connector.connect ()) {
+            close_actor_release.signal ();
+            return 287;
+        }
+        const auto close_actor_deadline =
+          std::chrono::steady_clock::now () + std::chrono::seconds (1);
+        while ((!close_actor_connector.actor ("first") || !close_actor_connector.actor ("second"))
+               && std::chrono::steady_clock::now () < close_actor_deadline) {
+            std::this_thread::sleep_for (std::chrono::milliseconds (1));
+        }
+        auto first_actor = close_actor_connector.actor ("first");
+        auto second_actor = close_actor_connector.actor ("second");
+        if (!first_actor || !second_actor || !close_actor_connector.close ()) {
+            close_actor_release.signal ();
+            return 288;
+        }
+        if (mode == zlink::stream_connector::dispatch_mode_t::manual) {
+            while (close_actor_connector.pending_dispatch_count () != 0)
+                (void) close_actor_connector.dispatch ();
+        } else if (!close_actor_disconnected.wait_for (std::chrono::seconds (1))) {
+            close_actor_release.signal ();
+            return 289;
+        }
+        close_actor_release.signal ();
+        close_actor_server.join ();
+        const std::vector<std::string> expected_close_actor_events{
+          "unbound:first", "unbound:second", "disconnected"};
+        std::lock_guard<std::mutex> lock (close_actor_events_mutex);
+        if (first_actor->is_bound () || second_actor->is_bound ()
+            || close_actor_events != expected_close_actor_events) {
+            return 290;
+        }
+    }
+
     if (!task_completion_before_suspend_resumes_value_task ()) {
         return 261;
     }
@@ -973,15 +1055,12 @@ int main ()
             return 272;
         }
         zlink::stream_connector::packet_t public_packet;
-        auto &[name, metadata, codec, compressed, payload, flow_id, flow_origin, actor_id] =
-          public_packet;
+        auto &[name, metadata, codec, compressed, payload, actor_id] = public_packet;
         (void) name;
         (void) metadata;
         (void) codec;
         (void) compressed;
         (void) payload;
-        (void) flow_id;
-        (void) flow_origin;
         (void) actor_id;
 
         using zlink::stream_connector::detail::actor_binding_control_codec_t;
@@ -1031,23 +1110,12 @@ int main ()
         }
     }
 
-    /* Diagnostics level surface (message-flow-tracing §4, flow-correlation §2/§4):
-     * - the option defaults to errors and keeps flow fields on outbound frames,
-     * - one-way sends never carry a correlation_id,
-     * - requests carry a correlation_id at every level (protocol information),
-     * - off omits flow fields from outbound frames (flag 0x10 clear) and skips
-     *   inbound flow-field validation while structural length checks stay. */
+    /* stream-connector §5.5: outbound flow is absent; inbound flow bytes are
+     * checked for structural length and then dropped. Correlation remains. */
     {
         using zlink::stream_connector::connector_options_t;
-        using zlink::stream_connector::diagnostics_level_t;
-        using zlink::stream_connector::flow_origin_t;
         using zlink::stream_connector::packet_t;
         using zlink::stream_connector::detail::connector_state_t;
-        using zlink::stream_connector::detail::flow_id_codec_t;
-
-        if (connector_options_t{}.diagnostics_level != diagnostics_level_t::errors) {
-            return 210;
-        }
 
         const auto wait_for_written_frame =
           [] (const std::shared_ptr<async_write_connection_t> &connection) {
@@ -1070,266 +1138,70 @@ int main ()
               frame.begin () + 6, frame.begin () + 6 + static_cast<std::ptrdiff_t> (header_size));
             return header_codec_t{}.decode (header_bytes);
         };
-        const auto has_header_flag = [] (const stream_header_t &header, header_flags_t flag) {
-            return (static_cast<std::uint8_t> (header.flags) & static_cast<std::uint8_t> (flag))
-                   != 0;
-        };
-
-        const auto send_frame_header =
-          [&] (diagnostics_level_t level) -> std::optional<stream_header_t> {
-            connector_options_t options;
-            options.diagnostics_level = level;
-            auto state = std::make_shared<connector_state_t> (options);
-            state->state = zlink::stream_connector::connection_state_t::connected;
-            auto connection = std::make_shared<async_write_connection_t> ();
-            state->connection = connection;
-            const auto submitted = zlink::stream_connector::detail::submit_send (
-              state, packet_t{.name = "diag.send", .payload = zlink::message_t::from ("payload")});
-            if (!submitted || !wait_for_written_frame (connection)) {
-                return std::nullopt;
-            }
-            auto decoded = decode_frame_header (connection->written.front ());
-            connection->shutdown_and_close ();
-            if (!decoded) {
-                return std::nullopt;
-            }
-            return decoded.value ();
-        };
-
-        const auto default_send = send_frame_header (diagnostics_level_t::errors);
-        if (!default_send || default_send->kind != message_kind_t::send
-            || !default_send->correlation_id.empty ()
-            || has_header_flag (*default_send, header_flags_t::has_correlation_id)
-            || !has_header_flag (*default_send, header_flags_t::has_flow_id)
-            || !flow_id_codec_t::is_valid (default_send->flow_id)
-            || default_send->flow_origin != flow_origin_t::application) {
+        auto state = std::make_shared<connector_state_t> (connector_options_t{});
+        state->state = zlink::stream_connector::connection_state_t::connected;
+        auto connection = std::make_shared<async_write_connection_t> ();
+        state->connection = connection;
+        const auto submitted = zlink::stream_connector::detail::submit_send (
+          state, packet_t{.name = "no.flow.send", .payload = zlink::message_t::from ("payload")});
+        if (!submitted || !wait_for_written_frame (connection)) {
             return 211;
         }
-
-        const auto off_send = send_frame_header (diagnostics_level_t::off);
-        if (!off_send || !off_send->correlation_id.empty ()
-            || has_header_flag (*off_send, header_flags_t::has_correlation_id)
-            || has_header_flag (*off_send, header_flags_t::has_flow_id)
-            || !off_send->flow_id.empty () || off_send->flow_origin.has_value ()) {
+        const auto sent = decode_frame_header (connection->written.front ());
+        if (!sent || sent.value ().kind != message_kind_t::send
+            || !sent.value ().correlation_id.empty ()
+            || (static_cast<std::uint8_t> (sent.value ().flags) & 0x18) != 0) {
             return 212;
         }
-
-        const auto request_frame_header =
-          [&] (diagnostics_level_t level) -> std::optional<stream_header_t> {
-            connector_options_t options;
-            options.diagnostics_level = level;
-            auto state = std::make_shared<connector_state_t> (options);
-            state->state = zlink::stream_connector::connection_state_t::connected;
-            auto connection = std::make_shared<async_write_connection_t> ();
-            state->connection = connection;
-            zlink::stream_connector::detail::submit_request_async (
-              state,
-              packet_t{.name = "diag.request", .payload = zlink::message_t::from ("payload")},
-              std::chrono::milliseconds (50),
-              [] (zlink::stream_connector::result_t<
-                  zlink::stream_connector::detail::request_reply_t>) {},
-              /*deliver_direct=*/true);
-            if (!wait_for_written_frame (connection)) {
-                return std::nullopt;
-            }
-            auto decoded = decode_frame_header (connection->written.front ());
-            {
-                std::lock_guard<std::mutex> lock (state->transport_mutex);
-                for (auto &[seq, pending] : state->pending_requests) {
-                    (void) seq;
-                    if (pending.timeout_timer) {
-                        try {
-                            (void) pending.timeout_timer->cancel ();
-                        }
-                        catch (const boost::system::system_error &) {
-                        }
-                    }
-                }
-                state->pending_requests.clear ();
-            }
-            connection->shutdown_and_close ();
-            if (!decoded) {
-                return std::nullopt;
-            }
-            return decoded.value ();
-        };
-
-        const auto default_request = request_frame_header (diagnostics_level_t::errors);
-        if (!default_request || default_request->kind != message_kind_t::request
-            || default_request->correlation_id.empty ()
-            || !has_header_flag (*default_request, header_flags_t::has_correlation_id)
-            || !has_header_flag (*default_request, header_flags_t::has_flow_id)
-            || !flow_id_codec_t::is_valid (default_request->flow_id)) {
+        connection->shutdown_and_close ();
+        state = std::make_shared<connector_state_t> (connector_options_t{});
+        state->state = zlink::stream_connector::connection_state_t::connected;
+        connection = std::make_shared<async_write_connection_t> ();
+        state->connection = connection;
+        zlink::stream_connector::detail::submit_request_async (
+          state, packet_t{.name = "no.flow.request", .payload = zlink::message_t::from ("payload")},
+          std::chrono::milliseconds (50),
+          [] (zlink::stream_connector::result_t<zlink::stream_connector::detail::request_reply_t>) {
+          },
+          /*deliver_direct=*/true);
+        if (!wait_for_written_frame (connection)) {
             return 213;
         }
-
-        const auto off_request = request_frame_header (diagnostics_level_t::off);
-        if (!off_request || off_request->correlation_id.empty ()
-            || !has_header_flag (*off_request, header_flags_t::has_correlation_id)
-            || has_header_flag (*off_request, header_flags_t::has_flow_id)
-            || !off_request->flow_id.empty ()) {
+        const auto requested = decode_frame_header (connection->written.front ());
+        if (!requested || requested.value ().kind != message_kind_t::request
+            || requested.value ().correlation_id.empty ()
+            || (static_cast<std::uint8_t> (requested.value ().flags) & 0x18) != 0x08) {
             return 214;
         }
+        {
+            std::lock_guard<std::mutex> lock (state->transport_mutex);
+            for (auto &[seq, pending] : state->pending_requests) {
+                (void) seq;
+                if (pending.timeout_timer) {
+                    (void) pending.timeout_timer->cancel ();
+                }
+            }
+            state->pending_requests.clear ();
+        }
+        connection->shutdown_and_close ();
 
-        /* Inbound flow-field handling at level off: value validation is
-         * skipped, structural length checks stay. */
-        stream_header_t flowed;
-        flowed.kind = message_kind_t::send;
-        flowed.codec = codec_t::raw;
-        flowed.name = "diag.inbound";
-        flowed.flow_id = flow_id_codec_t::create ();
-        flowed.flow_origin = flow_origin_t::application;
-        auto flowed_bytes = header_codec_t{}.encode (flowed);
-        if (!flowed_bytes) {
+        stream_header_t inbound;
+        inbound.kind = message_kind_t::send;
+        inbound.codec = codec_t::raw;
+        inbound.name = "no.flow.inbound";
+        const auto encoded = header_codec_t{}.encode (inbound);
+        if (!encoded) {
             return 215;
         }
-        auto malformed = flowed_bytes.value ();
-        /* Corrupt one flow_id byte (flow_id is the 37-byte tail: 36 id bytes
-         * + 1 origin byte). */
-        malformed[malformed.size () - 2] = static_cast<std::uint8_t> ('Z');
-        if (header_codec_t{}.decode (malformed)
-            || !header_codec_t{}.decode (malformed, /*validate_flow=*/false)) {
+        auto flowed = encoded.value ();
+        flowed[3] |= 0x10;
+        flowed.insert (flowed.end (), 37, static_cast<std::uint8_t> ('Z'));
+        if (!header_codec_t{}.decode (flowed)) {
             return 216;
         }
-        auto truncated = flowed_bytes.value ();
-        truncated.pop_back ();
-        if (header_codec_t{}.decode (truncated, /*validate_flow=*/false)) {
+        flowed.pop_back ();
+        if (header_codec_t{}.decode (flowed)) {
             return 217;
-        }
-
-        /* Live diagnostics level (stream-connector §13): connector_t::diagnostics_level() /
-         * set_diagnostics_level() read and write the level without recreating the connector. */
-        {
-            zlink::stream_connector::connector_t live_level_connector;
-            if (live_level_connector.diagnostics_level () != diagnostics_level_t::errors
-                || live_level_connector.options ().diagnostics_level
-                     != diagnostics_level_t::errors) {
-                return 230;
-            }
-            bool async_completed = false;
-            live_level_connector.set_diagnostics_level_async (
-              diagnostics_level_t::normal,
-              [&async_completed] (zlink::stream_connector::result_t<void> result) {
-                  async_completed = static_cast<bool> (result);
-              });
-            if (!async_completed
-                || live_level_connector.diagnostics_level () != diagnostics_level_t::normal) {
-                return 233;
-            }
-            live_level_connector.set_diagnostics_level (diagnostics_level_t::off);
-            if (live_level_connector.diagnostics_level () != diagnostics_level_t::off
-                || live_level_connector.options ().diagnostics_level != diagnostics_level_t::off) {
-                return 231;
-            }
-            live_level_connector.set_diagnostics_level (diagnostics_level_t::detailed);
-            if (live_level_connector.diagnostics_level () != diagnostics_level_t::detailed
-                || live_level_connector.options ().diagnostics_level
-                     != diagnostics_level_t::detailed) {
-                return 232;
-            }
-        }
-
-        /* Runtime level changes apply from the next processing point onward and never
-         * retroactively touch a frame already encoded (message-flow-tracing §4.1). One
-         * connector_state_t is reused across sends so the level cell mutation observed here is
-         * exactly what connector_t::set_diagnostics_level() performs internally. */
-        {
-            connector_options_t options;
-            auto state = std::make_shared<connector_state_t> (options);
-            state->state = zlink::stream_connector::connection_state_t::connected;
-            auto connection = std::make_shared<async_write_connection_t> ();
-            state->connection = connection;
-
-            const auto send_and_decode = [&] (const char *name) -> std::optional<stream_header_t> {
-                connection->written.clear ();
-                const auto submitted = zlink::stream_connector::detail::submit_send (
-                  state, packet_t{.name = name, .payload = zlink::message_t::from ("payload")});
-                if (!submitted || !wait_for_written_frame (connection)) {
-                    return std::nullopt;
-                }
-                auto decoded = decode_frame_header (connection->written.front ());
-                if (!decoded) {
-                    return std::nullopt;
-                }
-                return decoded.value ();
-            };
-
-            // errors (default): flow attached.
-            const auto before_toggle = send_and_decode ("diag.runtime.before");
-            if (!before_toggle || !has_header_flag (*before_toggle, header_flags_t::has_flow_id)
-                || !flow_id_codec_t::is_valid (before_toggle->flow_id)) {
-                return 233;
-            }
-
-            // on -> off applies to the next send only; the frame above is unaffected.
-            state->diagnostics_level_cell.store (diagnostics_level_t::off,
-                                                 std::memory_order_release);
-            const auto after_off = send_and_decode ("diag.runtime.after-off");
-            if (!after_off || has_header_flag (*after_off, header_flags_t::has_flow_id)
-                || !after_off->flow_id.empty () || after_off->flow_origin.has_value ()) {
-                return 234;
-            }
-
-            // off -> on: flow returns starting with the next send.
-            state->diagnostics_level_cell.store (diagnostics_level_t::errors,
-                                                 std::memory_order_release);
-            const auto after_on = send_and_decode ("diag.runtime.after-on");
-            if (!after_on || !has_header_flag (*after_on, header_flags_t::has_flow_id)
-                || !flow_id_codec_t::is_valid (after_on->flow_id)) {
-                return 235;
-            }
-        }
-
-        /* Each processing point reads the level once and uses that single value for the whole
-         * frame: concurrent toggling from another thread must never produce a torn frame (the
-         * flag set without a valid flow_id, or a flow_id present without the flag). */
-        {
-            connector_options_t options;
-            auto state = std::make_shared<connector_state_t> (options);
-            state->state = zlink::stream_connector::connection_state_t::connected;
-            auto connection = std::make_shared<async_write_connection_t> ();
-            state->connection = connection;
-
-            std::atomic_bool stop{false};
-            std::thread toggler ([&] {
-                while (!stop.load (std::memory_order_relaxed)) {
-                    state->diagnostics_level_cell.store (diagnostics_level_t::off,
-                                                         std::memory_order_release);
-                    state->diagnostics_level_cell.store (diagnostics_level_t::errors,
-                                                         std::memory_order_release);
-                }
-            });
-
-            bool consistent = true;
-            for (int i = 0; i < 200 && consistent; ++i) {
-                connection->written.clear ();
-                const auto submitted = zlink::stream_connector::detail::submit_send (
-                  state,
-                  packet_t{.name = "diag.race", .payload = zlink::message_t::from ("payload")});
-                if (!submitted || !wait_for_written_frame (connection)) {
-                    consistent = false;
-                    break;
-                }
-                auto decoded_result = decode_frame_header (connection->written.front ());
-                if (!decoded_result) {
-                    consistent = false;
-                    break;
-                }
-                const auto &decoded = decoded_result.value ();
-                const bool has_flag = has_header_flag (decoded, header_flags_t::has_flow_id);
-                const bool has_valid_flow = flow_id_codec_t::is_valid (decoded.flow_id)
-                                            && decoded.flow_origin == flow_origin_t::application;
-                const bool has_no_flow =
-                  decoded.flow_id.empty () && !decoded.flow_origin.has_value ();
-                if (has_flag ? !has_valid_flow : !has_no_flow) {
-                    consistent = false;
-                }
-            }
-            stop.store (true, std::memory_order_relaxed);
-            toggler.join ();
-            if (!consistent) {
-                return 236;
-            }
         }
     }
 
@@ -2941,7 +2813,8 @@ int main ()
           [&] (zlink::stream_connector::result_t<zlink::stream_connector::detail::request_reply_t>
                  result) {
               ++early_reply_callback_count;
-              early_reply_seen = result && result.value ().payload.to_string () == "early-reply";
+              early_reply_seen =
+                result && result.value ().packet.payload.to_string () == "early-reply";
           });
         if (!eventually ([&] {
                 return !early_reply_connection->written.empty ()
@@ -2980,7 +2853,7 @@ int main ()
           [&] (zlink::stream_connector::result_t<zlink::stream_connector::detail::request_reply_t>
                  result) {
               mismatched_reply_completed =
-                result && result.value ().payload.to_string () == "payload";
+                result && result.value ().packet.payload.to_string () == "payload";
           });
         if (!eventually ([&] {
                 return mismatched_reply_completed.load ()
@@ -3056,7 +2929,7 @@ int main ()
           [&] (zlink::stream_connector::result_t<zlink::stream_connector::detail::request_reply_t>
                  result) {
               interleaved_reply_seen =
-                result && result.value ().payload.to_string () == "reply-payload";
+                result && result.value ().packet.payload.to_string () == "reply-payload";
           });
         if (!eventually ([&] {
                 return !interleaved_connection->written.empty ()
@@ -3566,6 +3439,11 @@ int main ()
         zlink::stream_connector::codec_t::json,
         false,
         zlink::message_t::from_json (auto_payload_t{"callback"})});
+    if (auto_connector.received_count<auto_payload_t> () != 1
+        || auto_connector.received_count<auto_payload_t> ()
+             != auto_connector.received_count (auto_payload_t::packet_name)) {
+        return 285;
+    }
     if (auto_connector.pending_dispatch_count () != 1 || auto_dispatch_count != 0) {
         return 33;
     }
@@ -3669,7 +3547,8 @@ int main ()
     error_reply_server.options ().notify (false);
     error_reply_server.bind ("tcp://127.0.0.1:0");
     const auto error_reply_endpoint = error_reply_server.options ().last_endpoint ();
-    joining_thread_t error_reply_server_thread ([&error_reply_server] {
+    std::atomic_bool manual_hook_metadata_seen{false};
+    joining_thread_t error_reply_server_thread ([&] {
         zlink::received_t inbound;
         if (error_reply_server.recv (inbound) != 0) {
             return;
@@ -3677,6 +3556,8 @@ int main ()
         std::string buffer =
           inbound.parts ().empty () ? std::string{} : inbound.parts ()[0].to_string ();
         if (auto frame = try_read_server_frame (buffer)) {
+            manual_hook_metadata_seen.store (
+              frame->header.metadata.values.contains ("manual-hook"));
             auto reply = make_server_frame (zlink::stream_connector::message_kind_t::error,
                                             frame->header.request_seq.value (), frame->header.name,
                                             "{\"code\":\"server_closed\","
@@ -3688,30 +3569,89 @@ int main ()
     zlink::stream_connector::connector_options_t error_reply_options;
     error_reply_options.endpoint = error_reply_endpoint;
     error_reply_options.request_timeout = std::chrono::milliseconds (100);
+    error_reply_options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::manual;
     auto error_reply_connector =
       zlink::stream_connector::connector_factory_t::create (error_reply_options);
     if (!error_reply_connector.connect ()) {
         return 150;
     }
+    int early_reply_hook_calls = 0;
+    int late_reply_hook_calls = 0;
+    const auto manual_request_thread = std::this_thread::get_id ();
+    bool manual_sending_hook_seen = false;
+    auto manual_sending_hook = error_reply_connector.on_request_sending (
+      [&] (zlink::stream_connector::request_sending_context_t &ctx) {
+          manual_sending_hook_seen = std::this_thread::get_id () == manual_request_thread
+                                     && ctx.request_packet_name == "error.reply.request"
+                                     && !ctx.actor_id;
+          ctx.set_metadata ("manual-hook", "present");
+      });
+    auto early_reply_hook = error_reply_connector.on_reply_received (
+      [&] (const zlink::stream_connector::reply_received_context_t &) {
+          ++early_reply_hook_calls;
+      });
     auto error_reply = error_reply_connector.request (login_request_t{})
                          .packet_name ("error.reply.request")
                          .timeout (std::chrono::milliseconds (100))
                          .submit<login_reply_t> ();
     error_reply_server_thread.join ();
+    if (!manual_sending_hook_seen || !manual_hook_metadata_seen.load ()
+        || early_reply_hook_calls != 0) {
+        return 286;
+    }
+    auto late_reply_hook = error_reply_connector.on_reply_received (
+      [&] (const zlink::stream_connector::reply_received_context_t &) { ++late_reply_hook_calls; });
+    while (error_reply_connector.pending_dispatch_count () != 0) {
+        (void) error_reply_connector.dispatch ();
+    }
     if (error_reply
         || error_reply.error_code () != zlink::stream_connector::error_code_t::remote_error
         || !error_reply.error ()
-        || error_reply.error ()->message.find ("server closed request") == std::string::npos) {
+        || error_reply.error ()->message.find ("server closed request") == std::string::npos
+        || early_reply_hook_calls != 1 || late_reply_hook_calls != 0) {
         return 151;
     }
     error_reply_connector.close ();
+
+    /* An immediate request failure is already a queued completion in Manual
+     * mode. Closing before dispatch must preserve its reply hook and callback. */
+    zlink::stream_connector::connector_options_t queued_failure_options;
+    queued_failure_options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::manual;
+    auto queued_failure_connector =
+      zlink::stream_connector::connector_factory_t::create (queued_failure_options);
+    int queued_failure_reply_hooks = 0;
+    int queued_failure_callbacks = 0;
+    auto queued_failure_subscription = queued_failure_connector.on_reply_received (
+      [&] (const zlink::stream_connector::reply_received_context_t &ctx) {
+          if (ctx.request_packet_name == "queued.failure.before.close" && !ctx.succeeded
+              && ctx.error
+              && ctx.error->code == zlink::stream_connector::error_code_t::disconnected) {
+              ++queued_failure_reply_hooks;
+          }
+      });
+    queued_failure_connector.request (login_request_t{})
+      .packet_name ("queued.failure.before.close")
+      .submit<login_reply_t> ([&] (zlink::stream_connector::result_t<login_reply_t> result) {
+          if (!result
+              && result.error_code () == zlink::stream_connector::error_code_t::disconnected) {
+              ++queued_failure_callbacks;
+          }
+      });
+    if (queued_failure_connector.pending_dispatch_count () != 1 || queued_failure_reply_hooks != 0
+        || queued_failure_callbacks != 0 || !queued_failure_connector.close ()
+        || !queued_failure_connector.dispatch () || queued_failure_reply_hooks != 1
+        || queued_failure_callbacks != 1
+        || queued_failure_connector.pending_dispatch_count () != 0) {
+        return 302;
+    }
 
     zlink::stream_socket_t callback_response_server (context);
     callback_response_server.options ().recv_mode (zlink::stream_recv_mode_t::raw);
     callback_response_server.options ().notify (false);
     callback_response_server.bind ("tcp://127.0.0.1:0");
     const auto callback_response_endpoint = callback_response_server.options ().last_endpoint ();
-    joining_thread_t callback_response_thread ([&callback_response_server] {
+    bool request_hook_metadata_seen = false;
+    joining_thread_t callback_response_thread ([&] {
         zlink::received_t inbound;
         if (callback_response_server.recv (inbound) != 0) {
             return;
@@ -3719,9 +3659,21 @@ int main ()
         std::string buffer =
           inbound.parts ().empty () ? std::string{} : inbound.parts ()[0].to_string ();
         if (auto frame = try_read_server_frame (buffer)) {
-            auto reply =
-              make_server_frame (zlink::stream_connector::message_kind_t::response,
-                                 frame->header.request_seq.value (), frame->header.name, "ok");
+            request_hook_metadata_seen = frame->header.metadata.values.contains ("hook-first")
+                                         && frame->header.metadata.values.contains ("hook-second");
+            zlink::stream_connector::detail::stream_header_t reply_header;
+            reply_header.kind = zlink::stream_connector::message_kind_t::response;
+            reply_header.codec = zlink::stream_connector::codec_t::raw;
+            reply_header.request_seq = frame->header.request_seq;
+            reply_header.metadata.with ("reply-tag", "present");
+            const auto encoded_header =
+              zlink::stream_connector::detail::header_codec_t{}.encode (reply_header);
+            const std::vector<std::uint8_t> reply_payload{'o', 'k'};
+            const auto encoded_reply = zlink::stream_connector::detail::frame_codec_t::encode (
+              encoded_header.value (), reply_payload,
+              zlink::stream_connector::connector_options_t{});
+            auto reply = zlink::message_t::from (
+              std::string (encoded_reply.value ().begin (), encoded_reply.value ().end ()));
             inbound.send ().message (reply).submit ();
         }
         inbound.close ();
@@ -3734,6 +3686,45 @@ int main ()
     if (!callback_response_connector.connect ()) {
         return 60;
     }
+    std::vector<std::string> request_hook_order;
+    auto sending_first = callback_response_connector.on_request_sending (
+      [&] (zlink::stream_connector::request_sending_context_t &ctx) {
+          request_hook_order.push_back ("sending-first");
+          if (ctx.request_packet_name == "callback.response.request" && !ctx.actor_id) {
+              ctx.set_metadata ("hook-first", "one");
+          }
+      });
+    auto sending_second = callback_response_connector.on_request_sending (
+      [&] (zlink::stream_connector::request_sending_context_t &ctx) {
+          request_hook_order.push_back ("sending-second");
+          ctx.set_metadata ("hook-second", "two");
+      });
+    auto reply_first = callback_response_connector.on_reply_received (
+      [&] (const zlink::stream_connector::reply_received_context_t &ctx) {
+          request_hook_order.push_back ("reply-first");
+          if (ctx.request_packet_name != "callback.response.request" || ctx.actor_id
+              || !ctx.succeeded || !ctx.reply || ctx.error || ctx.elapsed.count () < 0
+              || !ctx.reply->name.empty ()
+              || ctx.reply->codec != zlink::stream_connector::codec_t::raw
+              || ctx.reply->payload.to_string () != "ok"
+              || ctx.reply->metadata.values.find ("reply-tag") == ctx.reply->metadata.values.end ()
+              || ctx.reply->metadata.values.at ("reply-tag") != "present") {
+              request_hook_order.push_back ("invalid-reply-context");
+          }
+      });
+    bool reply_hook_error_seen = false;
+    callback_latch_t reply_hook_error_latch;
+    auto reply_hook_error_subscription =
+      callback_response_connector.on_error ([&] (const zlink::stream_connector::error_t &error) {
+          reply_hook_error_seen =
+            error.code == zlink::stream_connector::error_code_t::user_callback_failed;
+          reply_hook_error_latch.signal ();
+      });
+    auto reply_second = callback_response_connector.on_reply_received (
+      [&] (const zlink::stream_connector::reply_received_context_t &) {
+          request_hook_order.push_back ("reply-second");
+          throw std::runtime_error ("expected reply hook failure");
+      });
     bool request_callback_response_seen = false;
     callback_latch_t request_callback_response_latch;
     callback_response_connector.request (login_request_t{})
@@ -3745,10 +3736,77 @@ int main ()
       });
     callback_response_thread.join ();
     request_callback_response_latch.wait_for (std::chrono::milliseconds (100));
-    if (!request_callback_response_seen) {
+    reply_hook_error_latch.wait_for (std::chrono::milliseconds (100));
+    const std::vector<std::string> expected_request_hook_order{"sending-first", "sending-second",
+                                                               "reply-first", "reply-second"};
+    if (!request_callback_response_seen || !request_hook_metadata_seen || !reply_hook_error_seen
+        || request_hook_order != expected_request_hook_order) {
         return 61;
     }
     callback_response_connector.close ();
+
+    zlink::stream_socket_t invalid_reply_server (context);
+    invalid_reply_server.options ().recv_mode (zlink::stream_recv_mode_t::raw);
+    invalid_reply_server.options ().notify (false);
+    invalid_reply_server.bind ("tcp://127.0.0.1:0");
+    joining_thread_t invalid_reply_thread ([&] {
+        zlink::received_t inbound;
+        if (invalid_reply_server.recv (inbound) != 0)
+            return;
+        std::string buffer =
+          inbound.parts ().empty () ? std::string{} : inbound.parts ()[0].to_string ();
+        if (auto frame = try_read_server_frame (buffer)) {
+            zlink::stream_connector::detail::stream_header_t invalid_header;
+            invalid_header.kind = zlink::stream_connector::message_kind_t::response;
+            invalid_header.codec = zlink::stream_connector::codec_t::json;
+            invalid_header.request_seq = frame->header.request_seq;
+            const auto encoded_header =
+              zlink::stream_connector::detail::header_codec_t{}.encode (invalid_header);
+            const std::string invalid_json = "not-json";
+            const std::vector<std::uint8_t> invalid_payload (invalid_json.begin (),
+                                                             invalid_json.end ());
+            const auto encoded_reply = zlink::stream_connector::detail::frame_codec_t::encode (
+              encoded_header.value (), invalid_payload,
+              zlink::stream_connector::connector_options_t{});
+            auto reply = zlink::message_t::from (
+              std::string (encoded_reply.value ().begin (), encoded_reply.value ().end ()));
+            inbound.send ().message (reply).submit ();
+        }
+        inbound.close ();
+    });
+    zlink::stream_connector::connector_options_t invalid_reply_options;
+    invalid_reply_options.endpoint = invalid_reply_server.options ().last_endpoint ();
+    invalid_reply_options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::immediate;
+    auto invalid_reply_connector =
+      zlink::stream_connector::connector_factory_t::create (invalid_reply_options);
+    if (!invalid_reply_connector.connect ()) {
+        return 283;
+    }
+    bool invalid_reply_hook_seen = false;
+    auto invalid_reply_hook = invalid_reply_connector.on_reply_received (
+      [&] (const zlink::stream_connector::reply_received_context_t &ctx) {
+          invalid_reply_hook_seen =
+            ctx.request_packet_name == "invalid.typed.reply" && !ctx.succeeded && !ctx.reply
+            && ctx.error
+            && ctx.error->code == zlink::stream_connector::error_code_t::frame_decode_failed;
+      });
+    callback_latch_t invalid_reply_latch;
+    bool invalid_reply_result_failed = false;
+    invalid_reply_connector.request (login_request_t{})
+      .packet_name ("invalid.typed.reply")
+      .timeout (std::chrono::milliseconds (100))
+      .submit<auto_payload_t> ([&] (zlink::stream_connector::result_t<auto_payload_t> result) {
+          invalid_reply_result_failed =
+            !result
+            && result.error_code () == zlink::stream_connector::error_code_t::frame_decode_failed;
+          invalid_reply_latch.signal ();
+      });
+    invalid_reply_thread.join ();
+    invalid_reply_latch.wait_for (std::chrono::milliseconds (100));
+    if (!invalid_reply_result_failed || !invalid_reply_hook_seen) {
+        return 284;
+    }
+    invalid_reply_connector.close ();
 
     zlink::stream_socket_t callback_timeout_server (context);
     callback_timeout_server.options ().recv_mode (zlink::stream_recv_mode_t::raw);
@@ -3774,6 +3832,15 @@ int main ()
     if (!callback_timeout_connector.connect ()) {
         return 62;
     }
+    bool timeout_hook_seen = false;
+    auto timeout_hook = callback_timeout_connector.on_reply_received (
+      [&] (const zlink::stream_connector::reply_received_context_t &ctx) {
+          timeout_hook_seen =
+            ctx.request_packet_name == "callback.timeout.request" && !ctx.actor_id && !ctx.succeeded
+            && !ctx.reply && ctx.error
+            && ctx.error->code == zlink::stream_connector::error_code_t::request_timeout
+            && ctx.elapsed.count () >= 0;
+      });
     bool request_callback_timeout_seen = false;
     callback_latch_t request_callback_timeout_latch;
     callback_timeout_connector.request (login_request_t{})
@@ -3787,7 +3854,7 @@ int main ()
       });
     callback_timeout_thread.join ();
     request_callback_timeout_latch.wait_for (std::chrono::milliseconds (100));
-    if (!request_callback_timeout_seen || !callback_timeout_request_seen) {
+    if (!request_callback_timeout_seen || !callback_timeout_request_seen || !timeout_hook_seen) {
         return 63;
     }
     callback_timeout_connector.close ();
@@ -4920,49 +4987,6 @@ int main ()
         subscription_connector.close ();
     }
 
-    /* stream-connector §5.5: the received message carries the flow identifier
-     * and its origin, and a call started while the handler runs continues that
-     * flow. */
-    {
-        using zlink::stream_connector::detail::flow_id_codec_t;
-        zlink::stream_connector::connector_options_t flow_options;
-        flow_options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::manual;
-        auto flow_connector = zlink::stream_connector::connector_factory_t::create (flow_options);
-        auto flow_runtime =
-          zlink::stream_connector::detail::connector_runtime_t::from (flow_connector);
-        const auto inbound_flow_id = flow_id_codec_t::create ();
-        std::string observed_flow_id;
-        std::optional<zlink::stream_connector::flow_origin_t> observed_origin;
-        std::string continued_flow_id;
-        auto flow_subscription = flow_connector.on<zlink::stream_connector::packet_t> (
-          "flow.push", [&] (const packet_message_t &message) {
-              observed_flow_id = message.flow_id;
-              observed_origin = message.flow_origin;
-              continued_flow_id = zlink::stream_connector::detail::current_flow ().flow_id;
-          });
-        zlink::stream_connector::packet_t flowed_packet{
-          "flow.push",
-          {},
-          zlink::stream_connector::codec_t::raw,
-          false,
-          zlink::message_t::from (std::string ("payload"))};
-        flowed_packet.flow_id = inbound_flow_id;
-        flowed_packet.flow_origin = zlink::stream_connector::flow_origin_t::inbound;
-        flow_runtime.receive_packet (flowed_packet);
-        while (flow_connector.pending_dispatch_count () != 0) {
-            if (!flow_connector.dispatch ()) {
-                return 243;
-            }
-        }
-        if (observed_flow_id != inbound_flow_id
-            || observed_origin != zlink::stream_connector::flow_origin_t::inbound
-            || continued_flow_id != inbound_flow_id
-            || !zlink::stream_connector::detail::current_flow ().flow_id.empty ()) {
-            return 244;
-        }
-        flow_connector.close ();
-    }
-
     /* stream-connector §5.4: the typed codec and the name resolver are injected
      * on the creation options. */
     {
@@ -5150,6 +5174,7 @@ int main ()
         callback_latch_t actor_rebind_allowed;
         callback_latch_t actor_rebound_sent;
         callback_latch_t actor_server_release;
+        std::atomic_bool actor_hook_metadata_seen{false};
         joining_thread_t actor_server ([&] {
             boost::asio::ip::tcp::socket socket (actor_acceptor.get_executor ());
             actor_acceptor.accept (socket);
@@ -5162,6 +5187,28 @@ int main ()
             actor_bound_sent.signal ();
             if (!actor_packets_allowed.wait_for (std::chrono::seconds (2)))
                 return;
+            std::array<std::uint8_t, 6> request_prefix{};
+            boost::asio::read (socket, boost::asio::buffer (request_prefix));
+            const auto request_header_size =
+              static_cast<std::size_t> ((request_prefix[0] << 8) | request_prefix[1]);
+            const auto request_payload_size =
+              static_cast<std::size_t> ((request_prefix[2] << 24) | (request_prefix[3] << 16)
+                                        | (request_prefix[4] << 8) | request_prefix[5]);
+            std::vector<std::uint8_t> request_bytes (request_header_size + request_payload_size);
+            boost::asio::read (socket, boost::asio::buffer (request_bytes));
+            std::vector<std::uint8_t> request_header_bytes (
+              request_bytes.begin (), request_bytes.begin () + request_header_size);
+            const auto actor_request_header = header_codec_t{}.decode (request_header_bytes);
+            if (!actor_request_header || !actor_request_header.value ().request_seq)
+                return;
+            actor_hook_metadata_seen.store (
+              actor_request_header.value ().name == "actor.hook.request"
+              && actor_request_header.value ().actor_slot == 7
+              && actor_request_header.value ().metadata.values.contains ("actor-hook"));
+            const auto actor_reply =
+              make_server_frame (message_kind_t::response,
+                                 *actor_request_header.value ().request_seq, "", "actor-reply");
+            boost::asio::write (socket, boost::asio::buffer (actor_reply.to_string ()));
             const auto packet = make_server_frame (message_kind_t::send, 0, "actor.push", "payload",
                                                    false, std::uint16_t{7});
             boost::asio::write (socket, boost::asio::buffer (packet.to_string ()));
@@ -5233,7 +5280,36 @@ int main ()
           actor_handle->on<packet_t> ("actor.push", [&] (const packet_message_t &) {
               actor_events.push_back ("actor-packet");
           });
+        bool actor_sending_hook_seen = false;
+        bool actor_reply_hook_seen = false;
+        auto actor_sending_hook = actor_connector.on_request_sending (
+          [&] (zlink::stream_connector::request_sending_context_t &ctx) {
+              actor_sending_hook_seen =
+                ctx.request_packet_name == "actor.hook.request" && ctx.actor_id == "actor";
+              ctx.set_metadata ("actor-hook", "present");
+          });
+        auto actor_reply_hook = actor_connector.on_reply_received (
+          [&] (const zlink::stream_connector::reply_received_context_t &ctx) {
+              actor_reply_hook_seen = ctx.request_packet_name == "actor.hook.request"
+                                      && ctx.actor_id == "actor" && ctx.succeeded && ctx.reply
+                                      && !ctx.error;
+          });
         actor_packets_allowed.signal ();
+        auto actor_request_result =
+          actor_handle
+            ->request (packet_t{.name = "actor.hook.request",
+                                .payload = zlink::message_t::from ("actor-request")})
+            .timeout (std::chrono::seconds (1))
+            .submit<zlink::message_t> ();
+        while (actor_connector.pending_dispatch_count () != 0) {
+            (void) actor_connector.dispatch ();
+        }
+        if (!actor_request_result || actor_request_result.value ().to_string () != "actor-reply"
+            || !actor_sending_hook_seen || !actor_reply_hook_seen
+            || !actor_hook_metadata_seen.load ()) {
+            actor_server_release.signal ();
+            return 282;
+        }
         const auto unbound_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (1);
         while (actor_connector.actor ("actor")
                && std::chrono::steady_clock::now () < unbound_deadline) {

@@ -61,6 +61,7 @@ struct pending_request_t
     // a promise, so it must run directly instead of riding the user delivery
     // queue (which the blocked caller can never dispatch in queued mode).
     bool deliver_direct = false;
+    std::shared_ptr<std::vector<std::uint64_t>> reply_hook_ids;
 };
 
 /* Lock order for connector_state_t (see the mutex members below).
@@ -117,7 +118,6 @@ class connector_state_t : public std::enable_shared_from_this<connector_state_t>
   public:
     explicit connector_state_t (connector_options_t options) :
         connector_id (next_connector_id.fetch_add (1, std::memory_order_relaxed)),
-        diagnostics_level_cell (options.diagnostics_level),
         options (std::move (options)),
         io_context (shared_io_context ()),
         write_strand (boost::asio::make_strand (io_context)),
@@ -127,13 +127,6 @@ class connector_state_t : public std::enable_shared_from_this<connector_state_t>
 
     inline static std::atomic_uint64_t next_connector_id{1};
     std::uint64_t connector_id = 0;
-    // Live diagnostics level cell (message-flow-tracing §4.1, stream-connector
-    // §13): seeded from options.diagnostics_level at construction, then read
-    // and written independently of options so connector_t::diagnostics_level()
-    // / set_diagnostics_level() can change it without recreating the
-    // connector. Each processing point loads this once and uses that single
-    // value for the whole operation; it never re-reads mid-operation.
-    std::atomic<diagnostics_level_t> diagnostics_level_cell;
     connector_options_t options;
     connection_state_t state = connection_state_t::created;
     std::uint64_t next_request_seq = 1;
@@ -162,9 +155,13 @@ class connector_state_t : public std::enable_shared_from_this<connector_state_t>
     std::vector<handler_entry_t<std::function<void (const connection_state_changed_t &)>>>
       state_handlers;
     std::vector<handler_entry_t<std::function<void (const error_t &)>>> error_handlers;
+    std::vector<handler_entry_t<std::function<void (request_sending_context_t &)>>>
+      request_sending_handlers;
+    std::vector<handler_entry_t<std::function<void (const reply_received_context_t &)>>>
+      reply_received_handlers;
     std::vector<handler_entry_t<std::function<void (std::optional<close_reason_t>)>>>
       disconnected_handlers;
-    std::map<std::uint16_t, std::shared_ptr<actor_t>> actors_by_slot;
+    std::vector<std::pair<std::uint16_t, std::shared_ptr<actor_t>>> actors_by_slot;
     std::map<std::string, std::shared_ptr<actor_t>, std::less<>> actors_by_id;
     std::vector<handler_entry_t<std::function<void (const std::shared_ptr<actor_t> &)>>>
       actor_bound_handlers;
@@ -293,27 +290,6 @@ std::chrono::milliseconds jittered_delay (std::chrono::milliseconds base);
 std::optional<transport_t> transport_from_scheme (const std::string &endpoint);
 result_t<transport_t> resolve_transport (const connector_options_t &options);
 result_t<transport_t> validate_options (const connector_options_t &options);
-/* Current inbound flow of the executing handler, if any (stream-connector
- * §5.5): an outbound call started while a received message is being handled
- * continues that message's flow. */
-struct current_flow_t
-{
-    std::string flow_id;
-    std::optional<flow_origin_t> flow_origin;
-};
-const current_flow_t &current_flow () noexcept;
-class flow_scope_t
-{
-  public:
-    explicit flow_scope_t (const packet_t &packet);
-    ~flow_scope_t ();
-
-    flow_scope_t (const flow_scope_t &) = delete;
-    flow_scope_t &operator= (const flow_scope_t &) = delete;
-
-  private:
-    current_flow_t _previous;
-};
 void post_runtime_operation (std::function<void ()> operation);
 void post_connect_operation (std::function<void ()> operation);
 std::shared_ptr<boost::asio::steady_timer>

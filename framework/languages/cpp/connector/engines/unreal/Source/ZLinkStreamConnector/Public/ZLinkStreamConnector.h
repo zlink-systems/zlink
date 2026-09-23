@@ -1,15 +1,16 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
+#include <cstdint>
+#include <functional>
+#include <memory>
+
 #if __has_include("CoreMinimal.h")
 #include "CoreMinimal.h"
 #include "UObject/Object.h"
 #include "ZLinkStreamConnector.generated.h"
 #else
-#include <cstdint>
-#include <functional>
 #include <map>
-#include <memory>
 #include <string>
 #include <vector>
 #define UCLASS(...)
@@ -92,6 +93,7 @@ class UObject
 using FString = std::string;
 using FName = std::string;
 using uint8 = std::uint8_t;
+using int64 = std::int64_t;
 template <typename T> using TArray = std::vector<T>;
 template <typename K, typename V> using TMap = std::map<K, V>;
 template <typename Signature> using TFunction = std::function<Signature>;
@@ -111,6 +113,24 @@ enum class EZLinkStreamConnectionState : std::uint8_t
     Reconnecting,
     Disconnected,
     Closed
+};
+
+UENUM (BlueprintType)
+enum class EZLinkStreamErrorCode : uint8
+{
+    Disconnected,
+    ConfigurationError,
+    ValidationFailed,
+    RequestTimeout,
+    ConnectTimeout,
+    FrameDecodeFailed,
+    FrameTooLarge,
+    SendFailed,
+    CompressionFailed,
+    TlsValidationFailed,
+    DecompressionFailed,
+    UserCallbackFailed,
+    RemoteError
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam (FZLinkStreamConnectionStateChanged,
@@ -146,6 +166,76 @@ struct FZLinkStreamSendOptions
     UPROPERTY (BlueprintReadWrite, Category = "ZLink")
     bool bCompress = false;
 };
+
+USTRUCT (BlueprintType)
+struct FZLinkStreamRequestSendingContext
+{
+    GENERATED_BODY ()
+
+    UPROPERTY (BlueprintReadOnly, Category = "ZLink")
+    FName RequestPacketName;
+
+    UPROPERTY (BlueprintReadOnly, Category = "ZLink")
+    FString ActorId;
+
+    UPROPERTY (BlueprintReadOnly, Category = "ZLink")
+    bool bHasActorId = false;
+
+    UPROPERTY (BlueprintReadOnly, Category = "ZLink")
+    TMap<FString, FString> Metadata;
+
+    void SetMetadata (const FString &Key, const FString &Value)
+    {
+#if __has_include("CoreMinimal.h")
+        Metadata.Add (Key, Value);
+#else
+        Metadata[Key] = Value;
+#endif
+    }
+};
+
+USTRUCT (BlueprintType)
+struct FZLinkStreamReplyReceivedContext
+{
+    GENERATED_BODY ()
+
+    UPROPERTY (BlueprintReadOnly, Category = "ZLink")
+    FName RequestPacketName;
+
+    UPROPERTY (BlueprintReadOnly, Category = "ZLink")
+    FString ActorId;
+
+    UPROPERTY (BlueprintReadOnly, Category = "ZLink")
+    bool bHasActorId = false;
+
+    UPROPERTY (BlueprintReadOnly, Category = "ZLink")
+    bool bSucceeded = false;
+
+    UPROPERTY (BlueprintReadOnly, Category = "ZLink")
+    bool bHasReply = false;
+
+    UPROPERTY (BlueprintReadOnly, Category = "ZLink")
+    FZLinkStreamPacket Reply;
+
+    UPROPERTY (BlueprintReadOnly, Category = "ZLink")
+    bool bHasError = false;
+
+    UPROPERTY (BlueprintReadOnly, Category = "ZLink")
+    EZLinkStreamErrorCode ErrorCode = EZLinkStreamErrorCode::Disconnected;
+
+    UPROPERTY (BlueprintReadOnly, Category = "ZLink")
+    FString ErrorMessage;
+
+    UPROPERTY (BlueprintReadOnly, Category = "ZLink")
+    int64 ElapsedMilliseconds = 0;
+};
+
+DECLARE_DYNAMIC_DELEGATE_OneParam (FZLinkStreamRequestSendingDelegate,
+                                   FZLinkStreamRequestSendingContext &,
+                                   Context);
+DECLARE_DYNAMIC_DELEGATE_OneParam (FZLinkStreamReplyReceivedDelegate,
+                                   const FZLinkStreamReplyReceivedContext &,
+                                   Context);
 
 USTRUCT (BlueprintType)
 struct FZLinkStreamSubscriptionHandle
@@ -256,6 +346,13 @@ class UZLinkStreamConnector : public UObject
     bool IsConnected () const;
     int PendingDispatchCount () const;
     EZLinkStreamConnectionState LastState () const;
+
+    FZLinkStreamSubscriptionHandle OnRequestSending (FZLinkStreamRequestSendingDelegate Delegate);
+    FZLinkStreamSubscriptionHandle
+    OnRequestSending (TFunction<void (FZLinkStreamRequestSendingContext &)> Callback);
+    FZLinkStreamSubscriptionHandle OnReplyReceived (FZLinkStreamReplyReceivedDelegate Delegate);
+    FZLinkStreamSubscriptionHandle
+    OnReplyReceived (TFunction<void (const FZLinkStreamReplyReceivedContext &)> Callback);
 
     UPROPERTY (BlueprintAssignable, Category = "ZLink")
     FZLinkStreamConnectionStateChanged OnConnectionStateChanged;

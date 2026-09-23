@@ -86,9 +86,7 @@ read_stream_packet (connector_state_t &state,
     }
     auto header_bytes = std::move (header_result.value ());
     auto payload_bytes = std::move (payload_result.value ());
-    const auto diagnostics_level = state.diagnostics_level_cell.load (std::memory_order_acquire);
-    auto decoded =
-      header_codec_t{}.decode (header_bytes, diagnostics_level != diagnostics_level_t::off);
+    auto decoded = header_codec_t{}.decode (header_bytes);
     if (!decoded) {
         return result_t<dispatch_envelope_t>::failure (decoded.error ()->code,
                                                        decoded.error ()->message);
@@ -109,9 +107,6 @@ void dispatch_packet (connector_state_t &state, const dispatch_envelope_t &envel
         }
         handlers = found->second;
     }
-    /* stream-connector §5.5: a send or request started while this handler runs
-     * continues the received message's flow. */
-    flow_scope_t flow (envelope.packet);
     for (const auto &entry : handlers) {
         try {
             entry.handler (envelope);
