@@ -16,6 +16,7 @@ import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.handlers.ZLinkSpotSubscription;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage;
@@ -265,6 +266,7 @@ final class ZLinkPayloadOwnershipConformanceTest {
 
     private record OtherProbe(String value) {}
 
+    @ZLinkSpotSubscription(topic = "topic")
     private static final class FirstHandler implements ZLinkSpotSubscriptionHandler<Object, Probe> {
         private Probe received;
 
@@ -275,6 +277,7 @@ final class ZLinkPayloadOwnershipConformanceTest {
         }
     }
 
+    @ZLinkSpotSubscription(topic = "topic")
     private static final class SecondHandler
             implements ZLinkSpotSubscriptionHandler<Object, Probe> {
         private Probe received;

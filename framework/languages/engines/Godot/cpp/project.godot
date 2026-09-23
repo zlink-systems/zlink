@@ -1,0 +1,7 @@
+config_version=5
+
+[application]
+
+config/name="ZLink Engine Lobby C++"
+run/main_scene="res://EngineLobby.tscn"
+config/features=PackedStringArray("4.4")

@@ -15,6 +15,8 @@ import systems.zlink.framework.handlers.ZLinkSpotSubscription;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerCatalog;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerKind;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import systems.zlink.framework.spots.ZLinkSpotSubscriptionHandler;
+import systems.zlink.testfixtures.subscriptionmissing.MissingTopicSubscription;
 
 import java.util.HashSet;
 import java.util.List;
@@ -68,6 +70,53 @@ final class ZLinkSpotHandlerLoaderTest {
                                         CompletableFuture.completedFuture(null)));
     }
 
+    @Test
+    void configuredInterfaceSubscriptionRequiresTopic() {
+        ZLinkScannedHandlerCatalog scannedHandlers = new ZLinkScannedHandlerCatalog(List.of());
+        ZLinkSpotHandlerLoader loader =
+                new ZLinkSpotHandlerLoader(
+                        scannedHandlers,
+                        new ZLinkSpotActorHandlerCatalog(scannedHandlers, new TrackingSerializer()),
+                        handlerType -> null);
+
+        ZLinkConfigurationException error =
+                assertThrows(
+                        ZLinkConfigurationException.class,
+                        () ->
+                                loader.load(
+                                        Object.class,
+                                        List.of(MissingTopicSubscription.class),
+                                        (name, period, handlerType, options) ->
+                                                CompletableFuture.completedFuture(null)));
+
+        assertEquals(
+                "SPOT subscription handler topic is required: "
+                        + MissingTopicSubscription.class.getName(),
+                error.getMessage());
+    }
+
+    @Test
+    void configuredInterfaceSubscriptionWithTopicRegisters() {
+        ZLinkScannedHandlerCatalog scannedHandlers = new ZLinkScannedHandlerCatalog(List.of());
+        ZLinkSpotHandlerLoader loader =
+                new ZLinkSpotHandlerLoader(
+                        scannedHandlers,
+                        new ZLinkSpotActorHandlerCatalog(scannedHandlers, new TrackingSerializer()),
+                        handlerType -> null);
+
+        ZLinkSpotHandlerCatalog.Registrations registrations =
+                loader.load(
+                        TestSpot.class,
+                        List.of(ConfiguredTopicSubscription.class),
+                        (name, period, handlerType, options) ->
+                                CompletableFuture.completedFuture(null));
+
+        assertEquals(1, registrations.subscriptionHandlers().get("shared-topic").size());
+        assertEquals(
+                ConfiguredTopicSubscription.class,
+                registrations.subscriptionHandlers().get("shared-topic").get(0).handlerType());
+    }
+
     private static ZLinkHandlerActivator trackingActivator(Set<Class<?>> preparedHandlers) {
         return new ZLinkHandlerActivator() {
             @Override
@@ -92,6 +141,15 @@ final class ZLinkSpotHandlerLoaderTest {
     private static final class TestSpot {}
 
     private static final class TestActor {}
+
+    @ZLinkSpotSubscription(topic = "shared-topic")
+    private static final class ConfiguredTopicSubscription
+            implements ZLinkSpotSubscriptionHandler<TestSpot, FirstEvent> {
+        @Override
+        public CompletionStage<Void> handle(TestSpot spot, FirstEvent event) {
+            return CompletableFuture.completedFuture(null);
+        }
+    }
 
     private static final class Request {}
 

@@ -1504,6 +1504,7 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
         }
     }
 
+    [ZLinkSpotSubscriptionHandler("duplicate-channel", "duplicate-topic")]
     private sealed class DuplicateSubscriptionHandler
         : IZLinkSpotSubscriptionHandler<DuplicateSubscriptionSpot, DuplicateSubscriptionMessage>
     {

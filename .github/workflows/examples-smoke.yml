@@ -127,6 +127,12 @@ jobs:
       - name: Export the examples trees at this ref
         run: python3 scripts/tutorial/export_examples.py .artifacts/examples "${{ needs.resolve.outputs.ref }}"
 
+      - name: Stage Axmol's public connector header for its source check
+        run: |
+          mkdir -p .artifacts/examples/cpp/connector/engines/axmol/include
+          cp framework/languages/cpp/connector/engines/axmol/include/zlink_axmol_stream_connector.hpp \
+            .artifacts/examples/cpp/connector/engines/axmol/include/
+
       - name: Verify language and engine trees and no repo-only file leaked in
         run: |
           python3 - <<'PY'
@@ -199,7 +205,7 @@ jobs:
   engine-server-linux:
     name: engine server / ubuntu-24.04 (no checkout)
     needs: export
-    if: contains(fromJSON(inputs.languages || '[]'), 'engine-server')
+    if: contains(fromJSON(inputs.languages || '[]'), 'engine-server') || contains(fromJSON(inputs.languages || '[]'), 'godot') || contains(fromJSON(inputs.languages || '[]'), 'cocos-creator')
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4
@@ -236,6 +242,36 @@ jobs:
       - name: Run (README's own 실행/linux block)
         working-directory: examples/zlink-engine-server
         run: bash ../run_readme_step.sh README.ko.md 실행 linux
+
+      - uses: actions/setup-dotnet@v5
+        if: contains(fromJSON(inputs.languages || '[]'), 'godot')
+        with:
+          dotnet-version: '8.0.x'
+      - name: Build the Godot validation project
+        if: contains(fromJSON(inputs.languages || '[]'), 'godot')
+        working-directory: examples/zlink-godot-examples/csharp
+        run: |
+          dotnet restore EngineLobby.csproj
+          dotnet build Validation/EngineLobbyValidation.csproj -c Release
+      - name: Godot validation against the running Engine Lobby server
+        if: contains(fromJSON(inputs.languages || '[]'), 'godot')
+        working-directory: examples/zlink-godot-examples/csharp
+        run: |
+          port="$(cat ../../zlink-engine-server/.run/stream.port)"
+          dotnet run --project Validation/EngineLobbyValidation.csproj -c Release -- "ws://127.0.0.1:${port}"
+
+      - uses: actions/setup-node@v5
+        if: contains(fromJSON(inputs.languages || '[]'), 'cocos-creator')
+        with:
+          node-version: '22'
+      - name: Install Cocos Creator probe dependencies
+        if: contains(fromJSON(inputs.languages || '[]'), 'cocos-creator')
+        working-directory: examples/zlink-cocos-creator-examples
+        run: npm install
+      - name: Cocos Creator probe against the running Engine Lobby server
+        if: contains(fromJSON(inputs.languages || '[]'), 'cocos-creator')
+        working-directory: examples/zlink-cocos-creator-examples
+        run: ENGINE_LOBBY_ENDPOINT="ws://127.0.0.1:$(cat ../zlink-engine-server/.run/stream.port)" npm run probe
 
       - name: Verify (README's own 검증/linux block)
         working-directory: examples/zlink-engine-server
@@ -594,6 +630,71 @@ jobs:
       - name: Sample verify (README's own 검증/linux block)
         working-directory: examples/zlink-node-examples/samples
         run: bash ../../run_readme_step.sh README.ko.md 검증 linux
+
+  godot-linux:
+    name: Godot / ubuntu-24.04 (no checkout)
+    needs: export
+    if: contains(fromJSON(inputs.languages || '[]'), 'godot')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: examples-trees
+      - name: Unpack the trees
+        run: tar -xf examples-trees.tar
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '8.0.x'
+      - name: Restore (Godot README)
+        working-directory: examples/zlink-godot-examples/csharp
+        run: dotnet restore EngineLobby.csproj
+      - name: Build both projects (Godot README)
+        working-directory: examples/zlink-godot-examples/csharp
+        run: |
+          dotnet build EngineLobby.csproj -c Release
+          dotnet build Validation/EngineLobbyValidation.csproj -c Release
+
+  cocos-creator-linux:
+    name: Cocos Creator / ubuntu-24.04 (no checkout)
+    needs: export
+    if: contains(fromJSON(inputs.languages || '[]'), 'cocos-creator')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: examples-trees
+      - name: Unpack the trees
+        run: tar -xf examples-trees.tar
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - name: Install (Cocos Creator README)
+        working-directory: examples/zlink-cocos-creator-examples
+        run: npm install
+      - name: Typecheck (Cocos Creator README)
+        working-directory: examples/zlink-cocos-creator-examples
+        run: npm run typecheck
+
+  axmol-source-check-linux:
+    name: Axmol source check / ubuntu-24.04 (no checkout)
+    needs: export
+    if: contains(fromJSON(inputs.languages || '[]'), 'axmol')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: examples-trees
+      - name: Unpack the trees
+        run: tar -xf examples-trees.tar
+      - name: Install the JSON header used by the source check
+        run: sudo apt-get update && sudo apt-get install -y nlohmann-json3-dev
+      - name: README minimum source check (not an engine build)
+        working-directory: examples/zlink-axmol-examples
+        run: |
+          g++-13 -std=c++20 -Wall -Wextra -Werror -fsyntax-only \
+            -I Validation -I Source \
+            -I ../../cpp/connector/engines/axmol/include \
+            Validation/ProtocolCompileCheck.cpp
 
   java-linux:
     name: ${{ matrix.lang }} / ubuntu-24.04 (no checkout)

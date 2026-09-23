@@ -64,6 +64,7 @@ void AZLinkClientActor::BeginPlay ()
     PacketHandle =
       Connector->OnPacketReceivedNative.AddUObject (this, &AZLinkClientActor::HandlePacket);
 
+    Connector->Subscribe (PacketName (engine_lobby::packet::chat_notify));
     SetStatus (TEXT ("Engine Lobby: connecting"));
     Connector->Connect (Endpoint);
     if (!Connector->IsConnected ()) {

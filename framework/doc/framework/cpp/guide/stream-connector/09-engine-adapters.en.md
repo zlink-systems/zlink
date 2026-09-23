@@ -6,14 +6,8 @@
 
 An engine adapter owns the core connector as a private implementation, exposing only a surface that
 fits each engine's types and thread rules. Core types like `result_t<T>`, `connector_t` aren't
-revealed in the adapter's public header.
-
-**Common principles:**
-- A callback always runs on the engine's main thread.
-- The core callback is put into an adapter queue, and pulled out on the engine's Tick/Update/
-  `Dispatch()` to deliver to the delegate.
-- No dependency on exceptions or coroutines.
-- Core private headers (`connector/core/src/runtime/`) are not included.
+revealed in the adapter's public header. See the [C++ contract §7](../../../common/spec/stream-connector/languages/cpp/03-stream-connector.en.md#7-engine-adapters)
+for main thread delivery, name based subscriptions, and request completion packet names.
 
 ---
 
@@ -34,49 +28,24 @@ Plugins/
 
 ### Basic Usage
 
-```cpp
-#include "ZLinkStreamConnector.h"
+The Engine Lobby sample's Actor creates the connector, binds the receive delegates, subscribes to the server push `ChatNotify` by name and connects.
 
-UCLASS()
-class AMyGameMode : public AGameModeBase
-{
-    GENERATED_BODY()
+```cpp title="Unreal/Source/EngineLobby/Private/EngineLobbyClientActor.cpp"
+--8<-- "framework/languages/engines/Unreal/Source/EngineLobby/Private/EngineLobbyClientActor.cpp:connect-call"
+```
 
-    UPROPERTY()
-    UZLinkStreamConnector* Connector;
+Pumping the connector from `Tick` runs the delegates on the Game Thread.
 
-    void BeginPlay() override
-    {
-        Connector = NewObject<UZLinkStreamConnector>(this);
-        Connector->OnPacketReceived.AddDynamic(this, &AMyGameMode::HandlePacket);
-        Connector->OnRequestCompleted.AddDynamic(this, &AMyGameMode::HandleReply);
-        Connector->Connect(TEXT("tcp://game.example.com:7000"));
-    }
-
-    void Tick(float DeltaSeconds) override
-    {
-        Connector->Dispatch();
-    }
-
-    UFUNCTION()
-    void HandlePacket(FName PacketName, const FString& JsonPayload)
-    {
-        // Runs on the Game Thread
-    }
-};
+```cpp title="Unreal/Source/EngineLobby/Private/EngineLobbyClientActor.cpp"
+--8<-- "framework/languages/engines/Unreal/Source/EngineLobby/Private/EngineLobbyClientActor.cpp:pump"
 ```
 
 ### Using It From Blueprint
 
-`Connect`, `Close`, `SendJson`, `RequestJson`, `Dispatch` are all `BlueprintCallable`.
+`Connect`, `Close`, `SendJson`, `RequestJson`, `Subscribe`, `Dispatch` are all `BlueprintCallable`.
 `OnPacketReceived`, `OnRequestCompleted` are `BlueprintAssignable` delegates.
 
-### Thread Rules
-
-Regardless of which thread a core callback comes from, `UObject` is never touched directly. The
-adapter puts it into the adapter queue and broadcasts the delegate on `Dispatch()` or a Game
-Thread-scheduled path. `Close()` is called automatically on PIE shutdown, map unload, and game
-instance shutdown.
+`Close()` is called automatically on PIE shutdown, map unload, and game instance shutdown.
 
 ### Running Automation Tests
 
@@ -97,35 +66,18 @@ Distributed as a GDExtension source package. Placed under the Godot project's
 
 The `.gdextension` file registers the built shared library.
 
-### Basic Usage (GDScript)
+### Basic Usage (C++)
 
-```gdscript
-extends Node
+The Engine Lobby sample's node registers the receive callback, subscribes to `ChatNotify` and connects.
 
-var connector: ZLinkStreamConnector
-
-func _ready():
-    connector = ZLinkStreamConnector.new()
-    connector.packet_received.connect(_on_packet)
-    connector.connect_to_server("tcp://game.example.com:7000")
-
-func _process(_delta):
-    connector.dispatch()
-
-func _on_packet(packet_name: StringName, payload: String):
-    # Runs on the Godot main thread
-    pass
+```cpp title="Godot/cpp/src/engine_lobby_node.cpp"
+--8<-- "framework/languages/engines/Godot/cpp/src/engine_lobby_node.cpp:connect"
 ```
 
-### Thread Rules
+It pumps the connector from `_process` on the Godot main thread.
 
-A signal is emitted only on the Godot main thread. The adapter puts the core callback into the
-adapter queue and emits the signal on `dispatch()` or a main-thread update.
-
-### Headless Testing
-
-```bash
-godot --headless --path TestProject --script res://run_tests.gd
+```cpp title="Godot/cpp/src/engine_lobby_node.cpp"
+--8<-- "framework/languages/engines/Godot/cpp/src/engine_lobby_node.cpp:pump"
 ```
 
 ---
@@ -144,30 +96,17 @@ target_link_libraries(${APP_NAME} PRIVATE zlink_axmol_connector)
 
 ### Basic Usage
 
-```cpp
-#include "zlink_axmol_stream_connector.hpp"
+The Engine Lobby sample's Scene registers the receive callback, subscribes to `ChatNotify` and connects.
 
-class GameScene : public ax::Scene
-{
-    ZLinkAxmolStreamConnector* _connector;
-
-    bool init() override
-    {
-        _connector = ZLinkAxmolStreamConnector::create();
-        _connector->setPacketCallback([this](const std::string& name, const std::string& json) {
-            // Runs on the Axmol main thread
-        });
-        _connector->connect("tcp://game.example.com:7000");
-        this->schedule([this](float) { _connector->dispatch(); }, "update");
-        return true;
-    }
-};
+```cpp title="Axmol/Source/EngineLobbyScene.cpp"
+--8<-- "framework/languages/engines/Axmol/Source/EngineLobbyScene.cpp:connect"
 ```
 
-### Thread Rules
+It pumps the connector from the Axmol scheduler update.
 
-A core background callback is delivered to the Axmol main thread via
-`ax::Scheduler::runOnAxmolThread` before running the user callback.
+```cpp title="Axmol/Source/EngineLobbyScene.cpp"
+--8<-- "framework/languages/engines/Axmol/Source/EngineLobbyScene.cpp:pump"
+```
 
 ---
 
@@ -175,10 +114,11 @@ A core background callback is delivered to the Axmol main thread via
 
 | Operation | Unreal | Godot | Axmol |
 |------|--------|-------|-------|
-| Connect | `Connect(Endpoint)` | `connect_to_server(url)` | `connect(endpoint)` |
+| Connect | `Connect(Endpoint)` | `connect(endpoint)` | `connect(endpoint)` |
 | Terminate | `Close()` | `close()` | `close()` |
-| One-way send | `SendJson(Name, Json)` | `send_json(name, json)` | `sendJson(name, json)` |
-| Request/reply | `RequestJson(Name, Json, Timeout)` | `request_json(name, json, timeout)` | `requestJson(name, json, timeout)` |
-| Dispatch | `Dispatch()` (called from Tick) | `dispatch()` (called from `_process`) | `dispatch()` (called from schedule) |
-| Push receive | `OnPacketReceived` delegate | `packet_received` signal | packet callback |
-| Status change | `OnConnectionStateChanged` delegate | `connection_state_changed` signal | state callback |
+| One-way send | `SendJson(Name, Json)` | `send_json(name, json)` | `send_json(name, json)` |
+| Request/reply | `RequestJson(Name, Json, Timeout)` | `request_json(name, json, timeout)` | `request_json(name, json, timeout)` |
+| Subscribe to push | `Subscribe(PacketName)` | `subscribe(packet_name)` | `subscribe(packet_name)` |
+| Dispatch | `Dispatch()` (called from Tick) | `dispatch()` (called per frame) | `dispatch()` (called per frame) |
+| Push receive | `OnPacketReceived` delegate | `on_packet` callback | `on_packet` callback |
+| Status change | `OnConnectionStateChanged` delegate | `on_connection_state_changed` callback | `on_connection_state_changed` callback |
