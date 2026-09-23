@@ -7,16 +7,25 @@ name: Prebuilt C++ framework check
 # path is the `prebuilt-cpp` job of framework-release.yml, which this mirrors.
 on:
   workflow_dispatch:
+  # Only the inputs that decide how the prebuilt archive is built and verified (#997). A runtime or
+  # sample change does not re-run four platforms here; the release job builds all four again.
   pull_request:
     branches: [main]
     paths:
-      - 'framework/languages/cpp/**'
-      - 'framework/runtime/**'
-      - 'bindings/cpp/**'
+      - 'framework/languages/cpp/CMakeLists.txt'
+      - 'framework/languages/cpp/cmake/**'
+      - 'framework/languages/cpp/packaging/**'
+      - 'framework/languages/cpp/scripts/package-prebuilt.sh'
+      - 'framework/languages/cpp/scripts/verify-apple-exports.py'
       - 'scripts/local-package/core/**'
       - 'VERSION'
       - '.github/actions/msvc-env/**'
       - '.github/workflows/framework-cpp-prebuilt-check.yml'
+
+# A new commit on the same PR cancels the older run.
+concurrency:
+  group: prebuilt-check-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
