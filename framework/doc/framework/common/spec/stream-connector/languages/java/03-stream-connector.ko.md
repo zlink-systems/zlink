@@ -669,11 +669,10 @@ class ZLinkStreamTypedSequenceCall<TPayload> {
 
 ```
 
-**wrapper만 사용하는 코드는 Java connector를 꺼내지 않는다.** Java의 `Optional`은 Kotlin의
-nullable로, `on...` 등록은 `Flow`로 옮긴다. 종료 사유는 한 번도 끊긴 적이 없으면 `null`이다.
-Actor handle([공통 스펙 §5.6](../../32-stream-connector.ko.md#56-bound-actor))도 같은 규칙을 따른다 — `actor(id)`는 bind되지 않은
-id에 `null`을, `actorBound()`·`actorUnbound()`와 Actor의 `messages(...)`는 Java의 `onActorBound`·
-`onActorUnbound`·`on(...)`을 `callbackFlow`로 감싼 `Flow`를 돌려준다.
+**종료 사유와 Actor handle은 wrapper에서 직접 얻는다.** wrapper만 사용하는 코드도 여기에 닿아야
+하므로 Java connector를 꺼내 쓰도록 두지 않는다. Java의 `Optional`은 Kotlin의 nullable로 옮긴다 —
+종료 사유는 한 번도 끊긴 적이 없으면 `null`이고, `actor(id)`는 bind되지 않은 id에 `null`이다
+([공통 스펙 §5.6](../../32-stream-connector.ko.md#56-bound-actor)).
 
 **대기 표면 셋은 이름을 명시하는 길과 payload type에서 결정하는 길을 모두 제공한다.** 이름을
 주지 않으면 `TPayload`의 이름 결정 규칙(§5)이 정한다. `waitFor`만 두 길을 갖고 `expectNone`과
@@ -681,7 +680,9 @@ id에 `null`을, `actorBound()`·`actorUnbound()`와 Actor의 `messages(...)`는
 
 Kotlin wrapper는 Java connector와 다른 상태 전이나 buffering 정책을 만들면 안 된다. options를
 복사하는 extension은 **현재 정의된 모든 option 값을 보존해야 한다.**
-`Flow`를 돌려주는 표면은 Java connector의 대응 handler를 `callbackFlow`로 감싼다. 따라서 manual [dispatch mode](../../../server/00-foundation/02-glossary.ko.md#dispatch-mode)에서는 Java와 마찬가지로
+`Flow`를 돌려주는 표면은 대응하는 Java 등록을 `callbackFlow`로 감싼다 — connector의 `messages(...)`·
+`errors()`·`actorBound()`·`actorUnbound()`는 `on(...)`·`onErrorReceived(...)`·`onActorBound(...)`·
+`onActorUnbound(...)`를, Actor의 `messages(...)`는 그 Actor handle의 `ZLinkStreamActor.on(...)`을 감싼다. 따라서 manual [dispatch mode](../../../server/00-foundation/02-glossary.ko.md#dispatch-mode)에서는 Java와 마찬가지로
 Kotlin wrapper의 `dispatch().await()`가 호출되어야 collector가 메시지나 error event를 받는다.
 
 ## 13. 검증 기준

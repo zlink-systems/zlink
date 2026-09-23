@@ -755,13 +755,11 @@ class ZLinkStreamTypedSequenceCall<TPayload> {
 
 ```
 
-**Code that uses only the wrapper does not pull the Java connector out.** A Java `Optional`
-becomes a Kotlin nullable and an `on...` registration becomes a `Flow`. The close reason is
-`null` when the connection has never ended. The Actor handle
-([common spec §5.6](../../32-stream-connector.en.md#56-bound-actor)) follows the same rule:
-`actor(id)` returns `null` for an id that is not bound, and `actorBound()`, `actorUnbound()` and an
-Actor's `messages(...)` return a `Flow` wrapping the Java `onActorBound`, `onActorUnbound` and
-`on(...)` with `callbackFlow`.
+**The close reason and the Actor handle are read from the wrapper itself.** Code that uses only
+the wrapper must reach them, so it is not left to pull the Java connector out. A Java `Optional`
+becomes a Kotlin nullable: the close reason is `null` when the connection has never ended, and
+`actor(id)` is `null` for an id that is not bound
+([common spec §5.6](../../32-stream-connector.en.md#56-bound-actor)).
 
 **All three wait surfaces offer both the named path and the payload-type
 path.** With no name, the name resolution rules for `TPayload` (§5) settle it.
@@ -771,8 +769,10 @@ demand a name, the three surfaces are called differently inside one test.
 The Kotlin wrapper must not build a different state transition or
 buffering policy from the Java connector. The extension copying options
 **must preserve every option value currently defined.**
-Every surface that returns a `Flow` wraps the Java connector's matching handler with
-`callbackFlow`. So in
+Every surface that returns a `Flow` wraps the corresponding Java registration with `callbackFlow`:
+the connector's `messages(...)`, `errors()`, `actorBound()` and `actorUnbound()` wrap `on(...)`,
+`onErrorReceived(...)`, `onActorBound(...)` and `onActorUnbound(...)`, and an Actor's `messages(...)`
+wraps that Actor handle's `ZLinkStreamActor.on(...)`. So in
 manual [dispatch mode](../../../server/00-foundation/02-glossary.en.md#dispatch-mode), just
 like Java, the Kotlin wrapper's `dispatch().await()` must be called for
 the collector to receive a message or error event.
