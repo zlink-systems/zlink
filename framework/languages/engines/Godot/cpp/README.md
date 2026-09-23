@@ -6,6 +6,7 @@ This Godot 4.4 GDExtension scene uses the existing C++ Godot stream connector ad
 `EngineLobbyNode` calls `dispatch()` in `_process`, so callbacks update the `Status` label on the
 Godot main thread. The intended flow is `PingReq` → `PingRes` → `JoinReq` → `JoinRes` → `ChatMsg` →
 `ChatNotify`. Packet names and JSON fields follow the [shared Engine Lobby contract](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/sample/engine-lobby/README.md).
+The node subscribes to the `ChatNotify` push before connecting.
 
 ## Dependencies and build
 
@@ -35,8 +36,8 @@ transport.
    Redis when Docker is available.
 2. Open `project.godot` in Godot 4.4. Set the `EngineLobbyNode` `endpoint` to
    `ws://127.0.0.1:<stream.port>` if the assigned port differs from 22700.
-3. Run the scene. Once the adapter defects below are fixed, the label should change from a joined
-   status to `godot-player: hello from Godot C++`.
+3. Run the scene. The label should change from a joined status to
+   `godot-player: hello from Godot C++`.
 4. Stop the server with `./run_sample.sh stop` if you started it through that runner.
 
 ## Current validation and blockers
@@ -46,10 +47,8 @@ Godot adapter header and a thin stand-in for Godot C++ headers. A deliberately m
 `dispatch()` call fails that compile check. Godot, `godot-cpp`, and a runnable GDExtension are not
 installed here, so an editor build, scene run, and rendered label were not verified.
 
-The existing adapter prevents the contract flow: its request callback reports the request packet
-name (`PingReq`) in place of the reply name (`PingRes`), and its registered packet callback is never
-called for `ChatNotify`. The sample checks the contract names and reports an unexpected reply; it
-does not rename replies or synthesize pushes. These adapter defects need a separate issue.
+The node subscribes to `ChatNotify` before connecting. The adapter delivers that push through the
+registered packet callback.
 
 The C# variant under [`../csharp`](../csharp) did run against the real shared server in WSL: two
 clients verified Ping, Join, and both ChatNotify payloads. A connection to an unused port failed as

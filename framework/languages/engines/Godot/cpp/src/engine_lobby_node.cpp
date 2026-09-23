@@ -93,6 +93,7 @@ void EngineLobbyNode::_ready ()
     status_ = get_node<Label> ("Status");
     connector_.on_request_completed ([this] (const auto &packet) { handle_response (packet); });
     connector_.on_packet ([this] (const auto &packet) { handle_packet (packet); });
+    connector_.subscribe (chat_notify);
     const CharString endpoint = endpoint_.utf8 ();
     connector_.connect (std::string (endpoint.get_data (), endpoint.length ()));
     if (connector_.state () != zlink::godot_stream_connector::connection_state_t::connected) {

@@ -6,6 +6,7 @@ Godot 4.4 GDExtension scene이 기존 C++ Godot stream connector adapter를 사�
 `EngineLobbyNode`는 `_process`에서 `dispatch()`를 호출하므로 callback이 Godot main thread에서
 `Status` Label을 갱신한다. 의도한 흐름은 `PingReq` → `PingRes` → `JoinReq` → `JoinRes` →
 `ChatMsg` → `ChatNotify`다. Packet 이름과 JSON field는 [Engine Lobby 공통 계약](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/sample/engine-lobby/README.ko.md)을 따른다.
+Node는 연결 전에 `ChatNotify` push를 구독한다.
 
 ## 의존성과 빌드
 
@@ -34,8 +35,7 @@ C++ connector와 WebSocket transport는 같은 빌드에서 source로 link한다
    `run_sample.sh`가 Redis를 준비한다.
 2. Godot 4.4에서 `project.godot`를 연다. 할당된 port가 22700과 다르면 `EngineLobbyNode`의
    `endpoint`를 `ws://127.0.0.1:<stream.port>`로 바꾼다.
-3. 아래 adapter 결함이 수정되면 Label이 joined 상태에서
-   `godot-player: hello from Godot C++`로 바뀌어야 한다.
+3. Label이 joined 상태에서 `godot-player: hello from Godot C++`로 바뀌는지 확인한다.
 4. runner로 시작한 server는 `./run_sample.sh stop`으로 종료한다.
 
 ## 현재 검증 범위와 차단 요인
@@ -45,10 +45,8 @@ C++ node와 GDExtension 등록 translation unit은 실제 Godot adapter header�
 실패한다. 이 머신에는 Godot와 `godot-cpp`가 없어 editor build, scene 실행, 실제 Label 갱신은
 확인하지 못했다.
 
-기존 adapter에는 계약 흐름을 막는 결함 두 개가 있다. Request callback이 reply 이름
-`PingRes` 대신 request 이름 `PingReq`를 전달하고, 등록된 packet callback은 `ChatNotify`에서
-호출되지 않는다. 샘플은 계약 이름을 검사하고 예상하지 못한 reply를 오류로 표시한다. Reply
-이름을 바꾸거나 push를 합성하지 않는다. 이 결함은 별도 issue가 필요하다.
+Node는 연결 전에 `ChatNotify`를 구독한다. Adapter는 이 push를 등록된 packet callback으로
+전달한다.
 
 [`../csharp`](../csharp)의 C# variant는 WSL의 실제 공용 server에 연결해 두 client의 Ping,
 Join, 양쪽 ChatNotify payload를 확인했다. 사용하지 않는 port에 연결한 검사는 예상대로

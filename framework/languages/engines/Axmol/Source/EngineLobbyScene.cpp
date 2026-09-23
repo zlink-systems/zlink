@@ -39,6 +39,7 @@ bool EngineLobbyScene::init() {
   connector_.on_request_completed(
       [this](const auto &packet) { handle_reply(packet); });
   connector_.on_packet([this](const auto &packet) { handle_packet(packet); });
+  connector_.subscribe(engine_lobby::packet::chat_notify);
   connector_.connect(endpoint);
   if (connector_.state() !=
       zlink::axmol_stream_connector::connection_state_t::connected) {

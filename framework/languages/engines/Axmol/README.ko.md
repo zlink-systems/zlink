@@ -5,6 +5,7 @@
 Axmol 2.3.0 C++ client가 공용 Engine Lobby server에 연결한다. `EngineLobbyScene`은 connector를
 소유하고 scheduler update에서 `dispatch()`를 호출한다. `PingReq` → `PingRes` → `JoinReq` →
 `JoinRes` → `ChatMsg` → `ChatNotify` 결과를 화면 중앙과 log에 표시한다.
+연결 전에 Engine Lobby push인 `ChatNotify`를 구독한다.
 
 Packet 이름과 JSON field는 [engine-lobby sample contract](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/sample/engine-lobby/README.ko.md)를 따른다.
 
@@ -66,6 +67,4 @@ g++-13 -std=c++20 -Wall -Wextra -Werror -fsyntax-only \
 이 검사는 Axmol engine link, 실제 scheduler 실행, connector link와 server 통신을 검증하지
 않는다. 이 workspace에는 Axmol이 없어 engine build와 실행을 하지 않았다.
 
-현재 connector runtime은 request callback의 packet 이름을 요청 이름으로 전달하고 push
-callback을 호출하지 않는다. 따라서 `PingRes`와 `ChatNotify`를 받는 정상 흐름은 해당 runtime
-결함을 고치기 전까지 실행할 수 없다.
+Scene은 연결 전에 `ChatNotify`를 구독하고 adapter callback으로 전달된 push를 표시한다.
