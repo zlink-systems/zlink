@@ -15,6 +15,7 @@ connector's product runtime; it is used by tests and tools.
 | 7 | [Error Handling](07-error-handling.en.md) | The closed set of error codes and how each language delivers them |
 | 8 | [Browser](08-browser.en.md) | Using it in a browser and the WebSocket constraints |
 | 9 | [Unity WebGL](09-unity-webgl.en.md) | Using it from a Unity WebGL build |
+| 10 | [Game Engine Integration](12-engine-integration.en.md) | Connector choice by engine and the Engine Lobby sample |
 
 The file number identifies the same chapter in every language. Chapters 1 to 7 are
 shared across all five.

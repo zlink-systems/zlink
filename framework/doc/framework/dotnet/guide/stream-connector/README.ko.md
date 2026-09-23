@@ -17,6 +17,7 @@
 | 7 | [오류 처리](07-error-handling.ko.md) | 닫힌 오류 코드 집합과 언어별 전달 방식 |
 | 8 | [Unity](08-unity.ko.md) | 네이티브 빌드 Unity에서의 사용 |
 | 9 | [Godot C#](09-godot-csharp.ko.md) | Godot C# 프로젝트에서의 사용 |
+| 10 | [게임 엔진 통합](12-engine-integration.ko.md) | 엔진별 connector 선택과 Engine Lobby sample |
 
 파일 번호는 언어에 상관없이 같은 장을 가리키는 식별자다. 1~7장은 다섯 언어가 공유한다.
 
