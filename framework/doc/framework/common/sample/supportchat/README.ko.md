@@ -128,8 +128,9 @@ ActorRef는 같은 binding operation에만 사용한다. Actor destroy 뒤 같�
 ## 6. Message 계약
 
 SupportChat은 typed JSON codec을 사용한다. 아래 declaration은 언어별 class, record와
-type alias가 공유해야 하는 wire 구조다. Session은 packet에 Actor slot이 있으면 그 bound Actor로,
-없으면 이 연결의 identity Actor(Customer identity, Agent roster)로 relay한다.
+type alias가 공유해야 하는 wire 구조다. 인증과 JoinConversationReq는 Session handler가 직접 받는
+binding packet이다. 그 밖의 packet은 relay한다 — Actor slot이 있으면 그 bound Actor로, 없으면 이
+연결의 identity Actor(Customer identity, Agent roster)로.
 
 ### 6.1 인증과 상담 시작
 
@@ -241,8 +242,9 @@ message CloseConversationRes {
 }
 ```
 
-JoinConversationReq는 Actor slot 없이 연결 수준으로 보낸다. Session은 Agent면 그 방의 conversation
-Actor를 이 연결에 bind한 뒤, Customer면 identity Actor로 join을 relay한다. JoinConversationRes의
+JoinConversationReq는 Actor slot 없이 연결 수준으로 보낸다. Session handler는 Agent면 `conversationId`로
+그 방의 conversation Actor를 GetOrCreate해 이 연결에 bind하고 그 Actor로, Customer면 identity Actor로
+join을 relay한다. JoinConversationRes의
 `actorId`는 이 연결에서 그 방을 맡는 Actor(Agent는 방별 conversation Actor, Customer는 identity
 Actor)이고, client는 이 값으로 Actor handle을 찾아 그 방의 SendChatMessageReq, SetTypingMsg,
 CloseConversationReq를 보낸다. Actor를 하나만 가진 Customer는 handle 없이 연결 수준으로 보내도
@@ -393,7 +395,7 @@ Actor slot으로 relay한다.
 | `Client/AgentScenario` | availability, 여러 conversation join, message와 reconnect assertion을 실행한다. | roster 저장소를 직접 수정하지 않는다. |
 | `Shared/Configuration` | role, Mesh·Channel, timeout과 smoke marker를 고정한다. | ActorRef와 binding token을 wire payload로 만들지 않는다. |
 | `Shared/JSON Contracts` | auth, conversation, chat, typing과 notify wire 의미를 소유한다. | 언어별 class·record를 공통 계약으로 삼지 않는다. |
-| `Server/Session/Application` | binding과 packet의 상대 Actor로의 relay를 소유한다. | domain payload와 MessageSeq를 해석하지 않는다. |
+| `Server/Session/Application` | binding packet(인증, join)을 처리하고 나머지를 packet의 상대 Actor로 relay한다. | binding packet 밖의 domain payload와 MessageSeq를 해석하지 않는다. |
 | `Server/Session/Infrastructure` | STREAM, packet handler, actor relay와 push adapter를 연결한다. | conversation state를 소유하지 않는다. |
 | `Server/Api/Application` | token 검증과 Conversation Spot 생성 요청을 조정한다. | session lifecycle과 conversation transition을 관리하지 않는다. |
 | `Server/Api/Infrastructure` | API handler와 Support client를 연결한다. | private route, ActorRef와 owner NodeRid를 payload로 만들지 않는다. |
@@ -402,8 +404,8 @@ Actor slot으로 relay한다.
 | `Server/Support/Infrastructure` | Entry Spot, Conversation Spot, actor와 timer adapter를 연결한다. | raw frame과 message별 codec registry를 사용하지 않는다. |
 
 Domain Conversation은 participant, MessageSeq, typing, idle와 close transition을 소유한다.
-AgentAssignmentService는 roster actor의 capacity만 판단한다. Session adapter는 binding과 Actor slot
-relay만 담당하며 domain payload를 해석하지 않는다. ConversationSpot adapter는 timer callback과
+AgentAssignmentService는 roster actor의 capacity만 판단한다. Session adapter는 binding packet과 Actor slot
+relay만 담당하며 그 밖의 domain payload를 해석하지 않는다. ConversationSpot adapter는 timer callback과
 typed request를 domain operation으로 변환하고, notification publisher는 domain event를 bound
 session push로 매핑한다.
 

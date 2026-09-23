@@ -131,9 +131,10 @@ recreated after an Actor destroy, the existing binding ends, so an explicit bind
 ## 6. Message Contract
 
 SupportChat uses a typed JSON codec. The declarations below are the wire structure that
-language-specific classes, records, and type aliases must share. Session relays a packet with an
-Actor slot to that bound Actor, and one without to this connection's identity Actor (the Customer
-identity, the Agent roster).
+language-specific classes, records, and type aliases must share. Authentication and
+`JoinConversationReq` are binding packets that a Session handler receives itself. Every other packet
+is relayed — to the bound Actor named by its Actor slot, or without a slot to this connection's
+identity Actor (the Customer identity, the Agent roster).
 
 ### 6.1 Authentication And Starting A Conversation
 
@@ -246,9 +247,9 @@ message CloseConversationRes {
 }
 ```
 
-`JoinConversationReq` is sent at the connection level, without an Actor slot. For an Agent,
-Session binds that room's conversation Actor to this connection and then relays the join; for a
-Customer it relays to the identity Actor. `JoinConversationRes.actorId` is the Actor that handles
+`JoinConversationReq` is sent at the connection level, without an Actor slot. For an Agent, the
+Session handler gets or creates that room's conversation Actor from `conversationId`, binds it to
+this connection, and relays the join to it; for a Customer it relays to the identity Actor. `JoinConversationRes.actorId` is the Actor that handles
 that room on this connection (the Agent's per-room conversation Actor, the Customer's identity
 Actor), and the client finds the Actor handle by this value and sends that room's
 `SendChatMessageReq`, `SetTypingMsg`, and `CloseConversationReq` through it. A Customer with a single
@@ -410,7 +411,7 @@ samples.
 | `Client/AgentScenario` | Runs availability, multi-conversation join, message, and reconnect assertions. | Doesn't directly modify the roster store. |
 | `Shared/Configuration` | Fixes role, Mesh/Channel, timeout, and the smoke marker. | Doesn't put an ActorRef or binding token into the wire payload. |
 | `Shared/JSON Contracts` | Owns the wire semantics of auth, conversation, chat, typing, and notify. | Doesn't treat a language-specific class/record as the common contract. |
-| `Server/Session/Application` | Owns binding and relay to the packet's Actor. | Doesn't interpret the domain payload or MessageSeq. |
+| `Server/Session/Application` | Handles binding packets (authentication, join) and relays the rest to the packet's Actor. | Doesn't interpret domain payload beyond binding packets, or MessageSeq. |
 | `Server/Session/Infrastructure` | Wires the STREAM, packet handler, actor relay, and push adapter. | Doesn't own conversation state. |
 | `Server/Api/Application` | Coordinates token validation and the Conversation Spot creation request. | Doesn't manage session lifecycle or conversation transitions. |
 | `Server/Api/Infrastructure` | Wires the API handler and the Support client. | Doesn't turn a private route, ActorRef, or owner NodeRid into payload. |
@@ -420,7 +421,7 @@ samples.
 
 Domain Conversation owns participant, MessageSeq, typing, and idle/close transitions.
 AgentAssignmentService only judges the roster actor's capacity. The Session adapter only handles
-binding and Actor-slot relay and doesn't interpret the domain payload. The ConversationSpot adapter
+binding packets and Actor-slot relay and doesn't interpret any other domain payload. The ConversationSpot adapter
 converts timer callbacks and typed requests into domain operations, and the notification publisher
 maps domain events to bound-session pushes.
 
