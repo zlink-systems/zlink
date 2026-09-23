@@ -21,6 +21,7 @@ public sealed class TicTacToeClientScenario(ILogger logger)
         CancellationToken cancellationToken = default
     )
     {
+        // --8<-- [start:doc-e2e-create-room]
         using var api = ZLinkHttpClient
             .Create(options.ApiUrl.ToString())
             .Timeout(options.HttpTimeout)
@@ -28,6 +29,7 @@ public sealed class TicTacToeClientScenario(ILogger logger)
         var room = await api.Post("/games")
             .Body(new CreateGameHttpReq(options.GameName))
             .Fetch<CreateGameHttpRes>(cancellationToken);
+        // --8<-- [end:doc-e2e-create-room]
 
         ZlinkStreamAssert.Ensure(
             !string.IsNullOrWhiteSpace(room.RoomId),
@@ -57,6 +59,7 @@ public sealed class TicTacToeClientScenario(ILogger logger)
             string.Equals(node.StreamEndpoint, observerPlayEndpoint, StringComparison.Ordinal)
         );
 
+        // --8<-- [start:doc-e2e-multi-client]
         await using var client1 = TicTacToeClientConnections.CreateStreamClient(
             hostPlayEndpoint,
             options
@@ -69,13 +72,16 @@ public sealed class TicTacToeClientScenario(ILogger logger)
             observerPlayEndpoint,
             options
         );
+        // --8<-- [end:doc-e2e-multi-client]
 
         // Client 1 connects, authenticates as player X, and joins the empty room.
+        // --8<-- [start:doc-e2e-connect-request]
         await client1.Connect.Async(cancellationToken);
 
         var client1Authentication = await client1
             .Request(new AuthenticateReq(options.XActorId))
             .Async<AuthenticateRes>(cancellationToken);
+        // --8<-- [end:doc-e2e-connect-request]
         ZlinkStreamAssert.Ensure(
             client1Authentication.Player.ActorId == options.XActorId,
             "Assertion failed: client1Authentication.Player.ActorId == options.XActorId"
@@ -110,6 +116,7 @@ public sealed class TicTacToeClientScenario(ILogger logger)
             observerSubscription.Subscribed.ToString().ToLowerInvariant()
         );
 
+        // --8<-- [start:doc-e2e-scenario]
         var client1Join = await JoinGameAsync(client1, room.RoomId, cancellationToken);
         ZlinkStreamAssert.Ensure(
             client1Join.State.RoomId == room.RoomId,
@@ -123,10 +130,13 @@ public sealed class TicTacToeClientScenario(ILogger logger)
             client1Join.State.XActorId == options.XActorId,
             "Assertion failed: client1Join.State.XActorId == options.XActorId"
         );
+        // --8<-- [start:doc-e2e-expect-none]
         await client1
             .ExpectNone<PlayerJoinedNotify>()
             .Within(TimeSpan.FromMilliseconds(250))
             .Async(cancellationToken);
+        // --8<-- [end:doc-e2e-expect-none]
+        // --8<-- [end:doc-e2e-scenario]
 
         // Client 2 connects, authenticates as player O, and joins the same room.
         await client2.Connect.Async(cancellationToken);
@@ -162,10 +172,12 @@ public sealed class TicTacToeClientScenario(ILogger logger)
         );
 
         // Existing room members receive push packets when another player joins.
+        // --8<-- [start:doc-e2e-wait-filter]
         var client1SawClient2Join = await client1
             .WaitFor<PlayerJoinedNotify>()
             .Where(message => message.Payload.ActorId == options.OActorId)
             .Async(cancellationToken);
+        // --8<-- [end:doc-e2e-wait-filter]
         ZlinkStreamAssert.Ensure(
             client1SawClient2Join.Payload.ActorId == options.OActorId,
             "Assertion failed: client1SawClient2Join.Payload.ActorId == options.OActorId"
@@ -482,8 +494,10 @@ public sealed class TicTacToeClientScenario(ILogger logger)
         CancellationToken cancellationToken
     )
     {
+        // --8<-- [start:doc-e2e-wait-before-send]
         var completion = connector.WaitFor<JoinGameNotify>().Async(cancellationToken);
         await connector.Send(new JoinGameMsg(roomId)).Async(cancellationToken);
         return (await completion).Payload;
+        // --8<-- [end:doc-e2e-wait-before-send]
     }
 }

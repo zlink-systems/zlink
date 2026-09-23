@@ -53,6 +53,7 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
     private final ZLinkMessageSerializer serializer;
     private final long bindingToken;
     private final long bindingGeneration;
+    private final int actorSlot;
     private final Predicate<RoutingId> routeReady;
     private final ZLinkSessionActorsRuntime.LocalActorDispatcher localActorDispatcher;
     private final boolean nativeSessionRelayAttached;
@@ -76,6 +77,7 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
             ZLinkMessageSerializer serializer,
             long bindingToken,
             long bindingGeneration,
+            int actorSlot,
             Predicate<RoutingId> routeReady,
             ZLinkSessionActorsRuntime.LocalActorDispatcher localActorDispatcher,
             boolean nativeSessionRelayAttached,
@@ -97,6 +99,10 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
             throw new IllegalArgumentException("bound Session binding generation must be positive");
         }
         this.bindingGeneration = bindingGeneration;
+        if (actorSlot <= 0 || actorSlot > 0xffff) {
+            throw new IllegalArgumentException("bound Session Actor slot must be in 1..65535");
+        }
+        this.actorSlot = actorSlot;
         this.routeReady = routeReady == null ? ignored -> true : routeReady;
         this.localActorDispatcher = localActorDispatcher;
         this.nativeSessionRelayAttached = nativeSessionRelayAttached;
@@ -108,6 +114,47 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                 ingressAdmission == null ? operation -> operation.apply(0) : ingressAdmission;
         this.metadataPolicy =
                 metadataPolicy == null ? ZLinkRelayMetadataPolicy.EMPTY : metadataPolicy;
+    }
+
+    ZLinkBoundActor(
+            ZLinkBackendStreamSocket stream,
+            RoutingId sessionRid,
+            ZLinkBackendActorRef ref,
+            String meshName,
+            Optional<ZLinkActor> managedActor,
+            ZLinkActorRuntime actors,
+            ZLinkMessageSerializer serializer,
+            long bindingToken,
+            long bindingGeneration,
+            Predicate<RoutingId> routeReady,
+            ZLinkSessionActorsRuntime.LocalActorDispatcher localActorDispatcher,
+            boolean nativeSessionRelayAttached,
+            ZLinkStreamCodec defaultCodec,
+            ZLinkSessionRelayHeaders relayHeaders,
+            ZLinkMessageFlowTracer flow,
+            BooleanSupplier currentBinding,
+            ZLinkSessionActorsRuntime.IngressAdmission ingressAdmission,
+            ZLinkRelayMetadataPolicy metadataPolicy) {
+        this(
+                stream,
+                sessionRid,
+                ref,
+                meshName,
+                managedActor,
+                actors,
+                serializer,
+                bindingToken,
+                bindingGeneration,
+                1,
+                routeReady,
+                localActorDispatcher,
+                nativeSessionRelayAttached,
+                defaultCodec,
+                relayHeaders,
+                flow,
+                currentBinding,
+                ingressAdmission,
+                metadataPolicy);
     }
 
     @Override
@@ -142,6 +189,10 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
 
     long bindingGeneration() {
         return bindingGeneration;
+    }
+
+    int actorSlot() {
+        return actorSlot;
     }
 
     CompletionStage<Void> prepareNativeActorRoute(
@@ -328,11 +379,12 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
             }
             ZLinkStreamHeader replyHeader =
                     ZLinkStreamHeader.createResponse(
-                            header,
-                            reply.codec(),
-                            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
-                            header.packetName(),
-                            Map.of());
+                                    header,
+                                    reply.codec(),
+                                    EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                                    header.packetName(),
+                                    Map.of())
+                            .withActorSlot(actorSlot);
             Message replyPart = Message.from(reply.payload());
             CompletionStage<Void> submission;
             try {
@@ -460,7 +512,8 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                             remoteHeader.metadata(),
                             requestHeader.correlationId(),
                             requestHeader.flowId(),
-                            requestHeader.flowOrigin());
+                            requestHeader.flowOrigin(),
+                            Optional.of(actorSlot));
             body = Message.from(decoded.body());
             Message replyBody = body;
             return stream.replyAsync(sessionRid, clientHeader, List.of(replyBody))

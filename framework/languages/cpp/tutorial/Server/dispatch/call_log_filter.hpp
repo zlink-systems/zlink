@@ -7,10 +7,10 @@
 
 namespace fw = zlink::framework;
 
-// --8<-- [start:filter-implementation]
 // Runs around every handler this node receives, so the same logging is not
 // repeated in each handler. Calling next() runs the handler; skipping it does
 // not.
+// --8<-- [start:filter-implementation]
 class call_log_filter_t
 {
   public:
@@ -23,8 +23,6 @@ class call_log_filter_t
 
         co_await next ();
 
-        // Everything after next() runs on the way back out, so the filters
-        // unwind in reverse registration order.
         const auto elapsed = std::chrono::steady_clock::now () - started_at;
         _logger.info ("dispatch done: " + context.packet_name + " in "
                       + std::to_string (

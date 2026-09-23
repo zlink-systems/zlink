@@ -48,10 +48,10 @@ several requests may be in flight and each completes on its own regardless of ar
 A timeout can be given per call; without one, the connector's default request timeout applies.
 
 ```kotlin
-val reply: LoginReply = connector.request(LoginRequest("player-1", "tok-abc123"))
+val reply = connector.request<LoginReply>(LoginRequest("player-1", "tok-abc123"))
     .packetName("auth.login")
     .timeout(Duration.ofSeconds(5))
-    .awaitReply()
+    .await()
 
 val sessionId = reply.sessionId
 ```

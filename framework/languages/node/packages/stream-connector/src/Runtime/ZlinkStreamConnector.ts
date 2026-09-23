@@ -18,6 +18,7 @@ import {
   ZlinkStreamMessageKind,
   ZlinkStreamMetadata,
   ZlinkStreamRequestCall,
+  ZlinkStreamActor,
   ZlinkStreamSendCall,
   ZlinkStreamSequenceCall,
   ZlinkStreamWaitCall
@@ -48,6 +49,11 @@ import { ZlinkStreamConnectorLifecycle } from './ZlinkStreamConnectorLifecycle';
 import { ZlinkStreamConnectorEvents } from './ZlinkStreamConnectorEvents';
 import { BrowserZlinkFlowContext, type ZlinkFlowContext } from './ZlinkFlowContext';
 import { BrowserStreamTransportFactory } from './Transport/BrowserWebSocketConnection';
+import {
+  DefaultZlinkStreamActor,
+  ZlinkStreamActors,
+  zlinkStreamActorBinding
+} from './ZlinkStreamActors';
 
 export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
   static readonly heartbeatPingName = ZLINK_STREAM_HEARTBEAT_PING;
@@ -61,6 +67,7 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
   private readonly frameSender: ZlinkStreamFrameSender;
   private readonly receiveDispatcher: ZlinkStreamReceiveDispatcher;
   private readonly diagnosticsLevelCell: ZlinkStreamDiagnosticsLevelCell;
+  private readonly boundActors: ZlinkStreamActors;
 
   readonly options: RequiredZlinkStreamConnectorOptions;
 
@@ -84,6 +91,7 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
       this.events,
       this.options.dispatchMode === ZlinkStreamDispatchMode.Immediate
     );
+    this.boundActors = new ZlinkStreamActors(this, this.receivedMessages, this.events);
     this.receiveDispatcher = new ZlinkStreamReceiveDispatcher(
       protocol,
       this.pendingRequests,
@@ -91,6 +99,7 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
       this.frameSender,
       this.events,
       flowContext,
+      this.boundActors,
       (reason) => this.lifecycle.serverClosing(reason)
     );
     this.lifecycle = new ZlinkStreamConnectorLifecycle(
@@ -99,6 +108,7 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
       this.frameSender,
       this.receiveDispatcher,
       this.receivedMessages,
+      this.boundActors,
       this.events
     );
   }
@@ -117,6 +127,26 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
 
   get pendingDispatchCount(): number {
     return this.pendingRequests.count;
+  }
+
+  get actors(): readonly ZlinkStreamActor[] {
+    return this.boundActors.snapshot;
+  }
+
+  actor(actorId: string): ZlinkStreamActor | undefined {
+    return this.boundActors.find(actorId);
+  }
+
+  onActorBound(
+    handler: (actor: ZlinkStreamActor, signal?: AbortSignal) => Promise<void> | void
+  ): Disposable {
+    return this.boundActors.onBound(handler);
+  }
+
+  onActorUnbound(
+    handler: (actor: ZlinkStreamActor, signal?: AbortSignal) => Promise<void> | void
+  ): Disposable {
+    return this.boundActors.onUnbound(handler);
   }
 
   /**
@@ -221,10 +251,75 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
           metadata: message.metadata,
           payload: this.decodePayload<TPayload>(message.payload, messageType),
           flowId: message.flowId,
-          flowOrigin: message.flowOrigin
+          flowOrigin: message.flowOrigin,
+          actorId: message.actorId
         },
         signal
       );
+    return this.receivedMessages.on(name, encodedHandler);
+  }
+
+  sendForActor(
+    actor: DefaultZlinkStreamActor,
+    payload: unknown,
+    messageType?: Function
+  ): ZlinkStreamSendCall {
+    const encoded = this.encodePayload(payload, messageType);
+    return new ZlinkStreamSendBuilder(
+      this,
+      this.resolveNameOrDefault(encoded),
+      encoded,
+      actor.slot,
+      () => actor.ensureBound()
+    );
+  }
+
+  requestForActor(
+    actor: DefaultZlinkStreamActor,
+    payload: unknown,
+    messageType?: Function
+  ): ZlinkStreamRequestCall {
+    const encoded = this.encodePayload(payload, messageType);
+    return new ZlinkStreamRequestBuilder(
+      this,
+      this.resolveNameOrDefault(encoded),
+      encoded,
+      actor.slot,
+      () => actor.ensureBound()
+    );
+  }
+
+  onActorMessage<TPayload>(
+    actor: DefaultZlinkStreamActor,
+    name: string,
+    handler: (message: ZlinkStreamMessage<TPayload>, signal?: AbortSignal) => Promise<void> | void,
+    messageType?: Function
+  ): Disposable {
+    const encodedHandler = (
+      message: ZlinkStreamMessage<ZlinkStreamEncodedPayload>,
+      signal?: AbortSignal
+    ) => {
+      if (
+        (
+          message as ZlinkStreamMessage<ZlinkStreamEncodedPayload> & {
+            [zlinkStreamActorBinding]?: DefaultZlinkStreamActor;
+          }
+        )[zlinkStreamActorBinding] !== actor
+      ) {
+        return;
+      }
+      return handler(
+        {
+          name: message.name,
+          metadata: message.metadata,
+          payload: this.decodePayload<TPayload>(message.payload, messageType),
+          flowId: message.flowId,
+          flowOrigin: message.flowOrigin,
+          actorId: message.actorId
+        },
+        signal
+      );
+    };
     return this.receivedMessages.on(name, encodedHandler);
   }
 
@@ -331,7 +426,8 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
               metadata: message.metadata,
               payload: this.decodeWaitPayload<TPayload>(message.payload),
               flowId: message.flowId,
-              flowOrigin: message.flowOrigin
+              flowOrigin: message.flowOrigin,
+              actorId: message.actorId
             };
             if (!predicate(decoded)) {
               return false;
@@ -387,7 +483,8 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
     requestSeq: bigint | undefined,
     signal?: AbortSignal,
     flow?: ZlinkStreamFlow,
-    correlationId?: string
+    correlationId?: string,
+    actorSlot?: number
   ): Promise<void> {
     await this.frameSender.send(
       this.lifecycle.connectionForSend(),
@@ -399,7 +496,8 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
       requestSeq,
       signal,
       correlationId,
-      flow
+      flow,
+      actorSlot
     );
   }
 
@@ -419,7 +517,8 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
     compress: boolean,
     timeoutMs: number,
     signal?: AbortSignal,
-    flow?: ZlinkStreamFlow
+    flow?: ZlinkStreamFlow,
+    actorSlot?: number
   ): Promise<ZlinkStreamEncodedPayload> {
     const pending = this.pendingRequests.create(name, timeoutMs);
     try {
@@ -432,7 +531,8 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
         pending.requestSeq,
         signal,
         flow,
-        this.nextCorrelationId()
+        this.nextCorrelationId(),
+        actorSlot
       );
       return await pending.promise;
     } catch (error) {

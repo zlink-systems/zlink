@@ -7,14 +7,16 @@ public sealed class ZLinkSessionDispatchContext
     public ZLinkSessionDispatchContext(
         string packetName,
         ZLinkMessageMetadata? metadata = null,
-        bool canReply = false
+        bool canReply = false,
+        IZLinkSessionActor? actor = null
     )
-        : this(packetName, metadata ?? ZLinkMessageMetadata.Empty, canReply, null) { }
+        : this(packetName, metadata ?? ZLinkMessageMetadata.Empty, canReply, actor, null) { }
 
     internal ZLinkSessionDispatchContext(
         string packetName,
         ZLinkMessageMetadata metadata,
         bool canReply,
+        IZLinkSessionActor? actor,
         object? runtimeState
     )
     {
@@ -23,6 +25,7 @@ public sealed class ZLinkSessionDispatchContext
         PacketName = packetName;
         Metadata = metadata;
         CanReply = canReply;
+        Actor = actor;
         RuntimeState = runtimeState;
     }
 
@@ -31,6 +34,8 @@ public sealed class ZLinkSessionDispatchContext
     public ZLinkMessageMetadata Metadata { get; }
 
     public bool CanReply { get; }
+
+    public IZLinkSessionActor? Actor { get; }
 
     internal object? RuntimeState { get; }
 

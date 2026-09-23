@@ -44,7 +44,9 @@ function createZoneNodeModule(includeZoneRuntime = true) {
           builder.addLocationStore(createZoneWorldLocationStore(config.shared));
           builder.addRelocationStore(createZoneWorldRelocationStore(config.shared));
           zoneWorldLocationOptions(builder.configureLocations(), config.shared);
+          // --8<-- [start:doc-monitoring-flow]
           builder.configureDispatch().messageFlow('normal');
+          // --8<-- [end:doc-monitoring-flow]
 
           if (node.zoneCapacity === 0) {
             builder

@@ -34,9 +34,11 @@ class play_session_t final : public packet_stream_session_t
     task_t<void> on_disconnected (stream_t &) override
     {
         if (_bound_actor_id) {
+            // --8<-- [start:session-disconnect-notify]
             if (auto actor = _actors.find (*_bound_actor_id)) {
                 co_await actor->notify_disconnected ();
             }
+            // --8<-- [end:session-disconnect-notify]
             _bound_actor_id.reset ();
         }
         co_return;

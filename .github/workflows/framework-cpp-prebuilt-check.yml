@@ -1,0 +1,134 @@
+name: Prebuilt C++ framework check
+
+# Builds the four prebuilt archives from the current branch (no tag, no
+# release upload) so a change to the packaging is verified on the native
+# runners before it ships (#855): every pull request that touches the
+# packaging inputs runs it, and it can be dispatched by hand. The release
+# path is the `prebuilt-cpp` job of framework-release.yml, which this mirrors.
+on:
+  workflow_dispatch:
+  # Only the inputs that decide how the prebuilt archive is built and verified (#997). A runtime or
+  # sample change does not re-run four platforms here; the release job builds all four again.
+  pull_request:
+    branches: [main]
+    paths:
+      - 'framework/languages/cpp/CMakeLists.txt'
+      - 'framework/languages/cpp/cmake/**'
+      - 'framework/languages/cpp/packaging/**'
+      - 'framework/languages/cpp/scripts/package-prebuilt.sh'
+      - 'framework/languages/cpp/scripts/verify-apple-exports.py'
+      - 'scripts/local-package/core/**'
+      - 'VERSION'
+      - '.github/actions/msvc-env/**'
+      - '.github/workflows/framework-cpp-prebuilt-check.yml'
+
+# A new commit on the same PR cancels the older run.
+concurrency:
+  group: prebuilt-check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  platforms:
+    name: Resolve prebuilt platform matrix
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: matrix
+        shell: bash
+        run: |
+          matrix="$(python3 -c 'import json; print(json.dumps(json.load(open("framework/languages/cpp/packaging/prebuilt-platforms.json")), separators=(",", ":")))')"
+          echo "matrix=${matrix}" >>"${GITHUB_OUTPUT}"
+
+  prebuilt-cpp:
+    name: Prebuilt C++ framework (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    needs: platforms
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.platforms.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install Conan
+        shell: bash
+        run: python -m pip install conan==2.32.0
+
+      - name: Set up MSVC
+        if: matrix.platform == 'windows-x64'
+        uses: ./.github/actions/msvc-env
+        with:
+          arch: x64
+
+      - name: Install Linux build tools
+        if: startsWith(matrix.platform, 'linux-')
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y "${{ matrix.c_compiler }}" "${{ matrix.cxx_compiler }}" ninja-build
+
+      - name: Install macOS build tools
+        if: matrix.platform == 'macos-arm64'
+        shell: bash
+        run: brew install ninja gnu-tar
+
+      - name: Fetch Core and build the C++ binding
+        id: inputs
+        shell: bash
+        env:
+          ZLINK_PLATFORM: ${{ matrix.platform }}
+          CC: ${{ matrix.c_compiler }}
+          CXX: ${{ matrix.cxx_compiler }}
+          RUNNER_TEMP_NATIVE: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          runner_temp="${RUNNER_TEMP_NATIVE}"
+          if command -v cygpath >/dev/null 2>&1; then
+            runner_temp="$(cygpath -u "${runner_temp}")"
+          fi
+          core_prefix="$(bash scripts/local-package/core/fetch-release.sh \
+            --platform "${ZLINK_PLATFORM}" --cache-dir "${runner_temp}/core")"
+          binding_version="$(sed -n 's/^ZLINK_BINDING_VERSION=//p' bindings/cpp/VERSION)"
+          binding_build="${runner_temp}/zlink-cpp-build"
+          binding_prefix="${runner_temp}/zlink-cpp-${binding_version}"
+          cmake -S bindings/cpp -B "${binding_build}" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="${binding_prefix}" \
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL \
+            -DZLINK_CPP_CORE_PACKAGE_PREFIX="${core_prefix}" \
+            -DZLINK_CPP_BUILD_TESTS=OFF \
+            -DZLINK_CPP_BUILD_SAMPLES=OFF
+          cmake --build "${binding_build}" --parallel 8
+          cmake --install "${binding_build}"
+          echo "core_prefix=${core_prefix}" >>"${GITHUB_OUTPUT}"
+          echo "binding_prefix=${binding_prefix}" >>"${GITHUB_OUTPUT}"
+
+      - name: Build and verify the prebuilt archive
+        shell: bash
+        env:
+          ZLINK_PLATFORM: ${{ matrix.platform }}
+          ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX: ${{ steps.inputs.outputs.core_prefix }}
+          ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX: ${{ steps.inputs.outputs.binding_prefix }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/framework-cpp-prebuilt
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          bash framework/languages/cpp/scripts/package-prebuilt.sh \
+            --platform "${ZLINK_PLATFORM}" dist/framework-cpp-prebuilt
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: framework-cpp-check-${{ matrix.platform }}
+          path: dist/framework-cpp-prebuilt/*

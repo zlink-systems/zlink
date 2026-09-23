@@ -10,7 +10,10 @@ import {
 } from './protocol';
 import { throwIfAborted } from '../abort';
 import { captureZLinkExecutionTurn } from '../execution';
-import { ZLinkActorSessionBindingRegistry } from './actor-session-binding-registry';
+import {
+  ZLinkActorSessionBindingRegistry,
+  ZLinkActorSessionBindingTermination
+} from './actor-session-binding-registry';
 import { ZLinkActorSessionLifecycleCoordinator } from './actor-session-lifecycle-coordinator';
 import { ZLinkManagedStream } from './managed-stream';
 import { DefaultZLinkSessionActor, DefaultZLinkSessionContext } from './session-context';
@@ -246,7 +249,12 @@ export class ZLinkBoundActorRelaySender {
           // The transport is already closed, so remove its exact route before
           // invoking application lifecycle code. A reconnect can then install
           // a successor while this best-effort notification is in flight.
-          await this.routes.unbind(actor.actorId, context, actor.bindingToken);
+          await this.routes.unbind(
+            actor.actorId,
+            context,
+            actor.bindingToken,
+            ZLinkActorSessionBindingTermination.PhysicalDisconnect
+          );
           return true;
         });
         if (!detached) return;

@@ -72,6 +72,41 @@ final class ZLinkStreamWireProtocolTest {
     }
 
     @Test
+    void actorSlotRoundTripsAndControlCannotCarryTheSlotFlag() {
+        ZLinkStreamWireProtocol.Header header =
+                new ZLinkStreamWireProtocol.Header(
+                        ZLinkStreamWireProtocol.KIND_SEND,
+                        ZLinkStreamWireProtocol.CODEC_JSON,
+                        0,
+                        null,
+                        "ActorPush",
+                        Map.of(),
+                        null,
+                        null,
+                        0,
+                        513);
+
+        byte[] encoded = ZLinkStreamWireProtocol.encodeHeader(header);
+        ZLinkStreamWireProtocol.Header decoded = ZLinkStreamWireProtocol.decodeHeader(encoded);
+
+        assertEquals(513, decoded.actorSlot());
+        assertEquals(
+                ZLinkStreamWireProtocol.FLAG_HAS_ACTOR_SLOT,
+                decoded.flags() & ZLinkStreamWireProtocol.FLAG_HAS_ACTOR_SLOT);
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        ZLinkStreamWireProtocol.decodeHeader(
+                                hex(
+                                        "f2 05 00 20 12 24 7a 6c 69 6e 6b 2e 61 63 74 6f 72 2e 62 6f 75 6e 64 00 01")));
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        ZLinkStreamWireProtocol.decodeHeader(
+                                hex("f2 01 01 20 09 41 63 74 6f 72 50 75 73 68 00 00")));
+    }
+
+    @Test
     void frameProtocol_matchesDotnetAndNodePrefixLayout() {
         byte[] header = hex("01 00 00 05 52 65 61 64 79");
         byte[] payload = "{\"ok\":true}".getBytes(StandardCharsets.UTF_8);

@@ -60,6 +60,7 @@ class SupportChatClientScenario {
       signal
     );
     zlinkStreamAssert.ensure(available.isAvailable, 'Sample scenario assertion failed.');
+    // --8<-- [start:doc-e2e-failure]
     await zlinkStreamAssert.expectFailure(async () => {
       await request(
         agent,
@@ -69,6 +70,7 @@ class SupportChatClientScenario {
         signal
       );
     });
+    // --8<-- [end:doc-e2e-failure]
 
     await customer1.connect(signal);
     const customer1Auth = await request<AuthenticateRes>(

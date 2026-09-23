@@ -19,78 +19,23 @@ E2E test comes down to just this much code.
 
 === "C#/.NET"
 
-    ```csharp
-    // A real connection
-    await client.Connect.Async(ct);
-    // A real request
-    var auth = await client.Request(new AuthenticateReq(actorId))
-        .Async<AuthenticateRes>(ct);
-    // Confirms a real push arrived
-    var push = await other.WaitFor<PlayerJoinedNotify>().Async(ct);
-    ZlinkStreamAssert.Ensure(push.Payload.ActorId == auth.Player.ActorId, "join push actor mismatch.");
-    ```
+    --8<-- "framework/languages/dotnet/samples/TicTacToe/Client/TicTacToeClientScenario.cs:doc-e2e-connect-request"
 
 === "C++"
 
-    ```cpp
-    // A real connection
-    co_await client.connect ().async ();
-    // A real request
-    auto auth = co_await client.request (authenticate_req_t{actor_id})
-                  .async<authenticate_res_t> ();
-    // Confirms a real push arrived
-    auto push = co_await other.wait_for<player_joined_notify_t> ().async ();
-    ensure (push.payload.actor_id == auth.player.actor_id);
-    ```
+    --8<-- "framework/languages/cpp/samples/TicTacToe/Client/tictactoe_client_scenario.hpp:doc-e2e-connect-request"
 
 === "Java"
 
-    ```java
-    // A real connection
-    client.connect().submit().toCompletableFuture().join();
-    // A real request
-    AuthenticateRes auth = client.request(new AuthenticateReq(actorId))
-        .submit(AuthenticateRes.class).toCompletableFuture().join();
-    // Confirms a real push arrived
-    var push = other.waitFor(PlayerJoinedNotify.class)
-        .submit(PlayerJoinedNotify.class).toCompletableFuture().join();
-    ZLinkStreamAssert.ensure(
-        push.payload().actorId().equals(auth.player().actorId()), "join push actor mismatch.");
-    ```
+    --8<-- "framework/languages/java/samples/java/TicTacToe/Client/src/main/java/systems/zlink/samples/tictactoe/client/TicTacToeClientScenario.java:doc-e2e-connect-request"
 
 === "Kotlin"
 
-    ```kotlin
-    // A real connection
-    val kotlinClient = client.kotlin()
-    val kotlinOther = other.kotlin()
-    kotlinClient.connect().await()
-    // A real request
-    val pushDeferred = async(start = CoroutineStart.UNDISPATCHED) {
-        kotlinOther.waitFor<PlayerJoinedNotify>().await()
-    }
-    val auth = kotlinClient.request(AuthenticateReq(actorId))
-        .awaitReply<AuthenticateRes>()
-    // Confirms a real push arrived
-    val push = pushDeferred.await()
-    ZLinkStreamAssert.ensure(
-        push.payload().actorId == auth.player.actorId, "join push actor mismatch.")
-    ```
+    --8<-- "framework/languages/java/samples/kotlin/TicTacToe/Client/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/client/TicTacToeClientScenario.kt:doc-e2e-connect-request"
 
 === "Node/TypeScript"
 
-    ```typescript
-    // A real connection
-    await client.connect(signal);
-    // A real request
-    const auth = await client.request(authenticateReq(actorId))
-      .submit<AuthenticateRes>(signal);
-    // Confirms a real push arrived
-    const push = await other.waitFor<PlayerJoinedNotify>(
-      PacketNames.playerJoinedNotify).submit(signal);
-    zlinkStreamAssert.ensure(
-      push.payload.actorId === auth.player.actorId, 'join push actor mismatch.');
-    ```
+    --8<-- "framework/languages/node/samples/TicTacToe.Ts/Client/tictactoe-client-scenario.ts:doc-e2e-connect-request"
 
 
 Because **the connector itself provides the wait functions verification needs**, like
@@ -117,113 +62,23 @@ using the endpoint returned in that response.
 
 === "C#/.NET"
 
-    ```csharp
-    using Zlink.HttpClient;
-    using Systems.Zlink.Stream.Connector.Contracts;
-
-    // Step 1 -- create a room through the gateway API.
-    using var api = ZLinkHttpClient.Create(options.ApiUrl.ToString())
-        .Timeout(options.HttpTimeout)
-        .Build();
-    var room = await api.Post("/games")
-        .Body(new CreateGameHttpReq(options.GameName))
-        // Fetch returns the deserialized body as-is.
-        .Fetch<CreateGameHttpRes>(ct);
-
-    // Step 2 -- open a real-time connection to the endpoint the response gave us.
-    await using var client = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-    {
-        Endpoint = new Uri(room.PlayEndpoints[0]),
-        ConnectTimeout = options.StreamTimeout,
-        RequestTimeout = options.StreamTimeout,
-        // Console scenarios use the automatic pump.
-        DispatchMode = ZlinkStreamDispatchMode.Immediate
-    });
-    ```
+    --8<-- "framework/languages/dotnet/samples/TicTacToe/Client/TicTacToeClientScenario.cs:doc-e2e-create-room"
 
 === "C++"
 
-    ```cpp
-    // Step 1 -- create a room through the gateway API.
-    auto api = zlink::http_client::client_builder_t (options.api_url)
-                 .timeout (options.http_timeout)
-                 .build ();
-    // fetch returns the deserialized body as-is.
-    auto room = api.post ("/games")
-                  .body (create_game_http_req_t{options.game_name})
-                  .fetch<create_game_http_res_t> ();
-
-    // Step 2 -- open a real-time connection to the endpoint the response gave us.
-    zlink::stream_connector::connector_options_t connector_options;
-    connector_options.endpoint = room.play_endpoints[0];
-    connector_options.connect_timeout = options.stream_timeout;
-    connector_options.request_timeout = options.stream_timeout;
-    // Console scenarios use the automatic pump.
-    connector_options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::immediate;
-    auto client = zlink::stream_connector::connector_factory_t::create (connector_options);
-    ```
+    --8<-- "framework/languages/cpp/samples/TicTacToe/Client/tictactoe_client_scenario.hpp:doc-e2e-create-room"
 
 === "Java"
 
-    ```java
-    // Step 1 -- create a room through the gateway API.
-    ZLinkHttpClient api = ZLinkHttpClient.create(options.apiUrl())
-        .timeout(options.httpTimeout())
-        .build();
-    // fetch returns the deserialized body as-is.
-    CreateGameHttpRes room = api.post("/games")
-        .body(new CreateGameHttpReq(options.gameName()))
-        .fetch(CreateGameHttpRes.class);
-
-    // Step 2 -- open a real-time connection to the endpoint the response gave us.
-    ZLinkStreamConnector client = ZLinkStreamConnectorFactory.create(
-        new ZLinkStreamConnectorOptions(
-            URI.create(room.playEndpoints().get(0)),
-            // Console scenarios use the automatic pump.
-            ZLinkStreamDispatchMode.IMMEDIATE,
-            options.streamTimeout()));
-    ```
+    --8<-- "framework/languages/java/samples/java/TicTacToe/Client/src/main/java/systems/zlink/samples/tictactoe/client/TicTacToeClientScenario.java:doc-e2e-create-room"
 
 === "Kotlin"
 
-    ```kotlin
-    // Step 1 -- create a room through the gateway API.
-    val api = ZLinkHttpClient.create(options.apiUrl)
-        .timeout(options.httpTimeout)
-        .build()
-    // fetch returns the deserialized body as-is.
-    val room = api.post("/games")
-        .body(CreateGameHttpReq(options.gameName))
-        .fetch(CreateGameHttpRes::class.java)
-
-    // Step 2 -- open a real-time connection to the endpoint the response gave us.
-    val client = ZLinkStreamConnectorFactory.create(
-        ZLinkStreamConnectorOptions(
-            URI.create(room.playEndpoints[0]),
-            // Console scenarios use the automatic pump.
-            ZLinkStreamDispatchMode.IMMEDIATE,
-            options.streamTimeout))
-    ```
+    --8<-- "framework/languages/java/samples/kotlin/TicTacToe/Client/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/client/TicTacToeClientScenario.kt:doc-e2e-create-room"
 
 === "Node/TypeScript"
 
-    ```typescript
-    // Step 1 -- create a room through the gateway API.
-    const api = ZLinkHttpClient.create(options.apiUrl).timeout(options.httpTimeout).build();
-    // fetch returns the deserialized body as-is.
-    const room = await api.post('/games')
-      .body(createGameHttpReq(options.gameName))
-      .fetch<CreateGameHttpRes>();
-
-    // Step 2 -- open a real-time connection to the endpoint the response gave us.
-    const client = zlinkStreamConnectorFactory.create({
-      endpoint: room.playEndpoints[0],
-      connectTimeoutMs: options.streamTimeoutMs,
-      requestTimeoutMs: options.streamTimeoutMs,
-      // Console scenarios use the automatic pump.
-      dispatchMode: ZlinkStreamDispatchMode.Immediate
-    });
-    ```
+    --8<-- "framework/languages/node/samples/TicTacToe.Ts/Client/tictactoe-client-scenario.ts:doc-e2e-create-room"
 
 
 When `DispatchMode` is `Immediate`, the connector handles receiving on its own, so the
@@ -263,50 +118,23 @@ condition.** Other, nonmatching pushes may arrive without affecting the scenario
 
 === "C#/.NET"
 
-    ```csharp
-    var joined = await client1.WaitFor<PlayerJoinedNotify>()
-        .Where(message => message.Payload.ActorId == options.OActorId)
-        .Async(ct);
-    ZlinkStreamAssert.Ensure(joined.Payload.Mark == TicTacToeMarks.O, "joined mark mismatch.");
-    ```
+    --8<-- "framework/languages/dotnet/samples/TicTacToe/Client/TicTacToeClientScenario.cs:doc-e2e-wait-filter"
 
 === "C++"
 
-    ```cpp
-    auto joined = co_await client1.wait_for<player_joined_notify_t> ()
-                    .where (&player_joined_notify_t::actor_id, options.o_actor_id)
-                    .async ();
-    ensure (joined.payload.mark == tictactoe_marks_t::o);
-    ```
+    --8<-- "framework/languages/cpp/samples/TicTacToe/Client/tictactoe_client_scenario.hpp:doc-e2e-wait-filter"
 
 === "Java"
 
-    ```java
-    var joined = client1.waitFor(PlayerJoinedNotify.class)
-        .where(PlayerJoinedNotify.class,
-            message -> message.payload().actorId().equals(options.oActorId()))
-        .submit(PlayerJoinedNotify.class)
-        .toCompletableFuture().join();
-    ZLinkStreamAssert.ensure(joined.payload().mark() == TicTacToeMarks.O, "joined mark mismatch.");
-    ```
+    --8<-- "framework/languages/java/samples/java/TicTacToe/Client/src/main/java/systems/zlink/samples/tictactoe/client/TicTacToeClientScenario.java:doc-e2e-wait-filter"
 
 === "Kotlin"
 
-    ```kotlin
-    val joined = client1.kotlin().waitFor<PlayerJoinedNotify>()
-        .where { it.payload().actorId == options.oActorId }
-        .await()
-    ZLinkStreamAssert.ensure(joined.payload().mark == TicTacToeMarks.O, "joined mark mismatch.")
-    ```
+    --8<-- "framework/languages/java/samples/kotlin/TicTacToe/Client/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/client/TicTacToeClientScenario.kt:doc-e2e-wait-filter"
 
 === "Node/TypeScript"
 
-    ```typescript
-    const joined = await client1.waitFor<PlayerJoinedNotify>(PacketNames.playerJoinedNotify)
-      .where((message) => message.payload.actorId === options.oActorId)
-      .submit(signal);
-    zlinkStreamAssert.ensure(joined.payload.mark === TicTacToeMarks.O, 'joined mark mismatch.');
-    ```
+    --8<-- "framework/languages/node/samples/TicTacToe.Ts/Client/tictactoe-client-scenario.ts:doc-e2e-wait-filter"
 
 
 ### 3.2 Confirming a Push Doesn't Arrive
@@ -316,49 +144,23 @@ must be specified. Omitting it is an error.
 
 === "C#/.NET"
 
-    ```csharp
-    // The player who just joined shouldn't receive their own join notification.
-    await client2.ExpectNone<PlayerJoinedNotify>()
-        .Within(TimeSpan.FromMilliseconds(250))
-        .Async(ct);
-    ```
+    --8<-- "framework/languages/dotnet/samples/TicTacToe/Client/TicTacToeClientScenario.cs:doc-e2e-expect-none"
 
 === "C++"
 
-    ```cpp
-    // The player who just joined shouldn't receive their own join notification.
-    co_await client2.expect_none<player_joined_notify_t> ()
-      .within (std::chrono::milliseconds (250))
-      .async ();
-    ```
+    --8<-- "framework/languages/cpp/samples/TicTacToe/Client/tictactoe_client_scenario.hpp:doc-e2e-expect-none"
 
 === "Java"
 
-    ```java
-    // The player who just joined shouldn't receive their own join notification.
-    client2.expectNone(PlayerJoinedNotify.class)
-        .within(Duration.ofMillis(250))
-        .submit()
-        .toCompletableFuture().join();
-    ```
+    --8<-- "framework/languages/java/samples/java/DeliveryDispatch/Client/src/main/java/systems/zlink/samples/deliverydispatch/client/DeliveryDispatchClientScenario.java:doc-e2e-expect-none"
 
 === "Kotlin"
 
-    ```kotlin
-    // The player who just joined shouldn't receive their own join notification.
-    client2.kotlin().expectNone<PlayerJoinedNotify>()
-        .within(Duration.ofMillis(250))
-        .await()
-    ```
+    --8<-- "framework/languages/java/samples/kotlin/TicTacToe/Client/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/client/TicTacToeClientScenario.kt:doc-e2e-expect-none"
 
 === "Node/TypeScript"
 
-    ```typescript
-    // The player who just joined shouldn't receive their own join notification.
-    await client2.expectNone<PlayerJoinedNotify>(PacketNames.playerJoinedNotify)
-      .within(250)
-      .run(signal);
-    ```
+    --8<-- "framework/languages/node/samples/TicTacToe.Ts/Client/tictactoe-client-scenario.ts:doc-e2e-expect-none"
 
 
 ### 3.3 Confirming Push Order
@@ -368,85 +170,23 @@ its **order.**
 
 === "C#/.NET"
 
-    ```csharp
-    var statusSequence = await customer.WaitForSequence<DeliveryStatusNotify>()
-        .Expect(message => message.Payload is { DeliveryId: var id, Status: DeliveryStatus.Assigned }
-                           && id == deliveryId)
-        .Expect(message => message.Payload is { DeliveryId: var id, Status: DeliveryStatus.Accepted }
-                           && id == deliveryId)
-        .Expect(message => message.Payload is { DeliveryId: var id, Status: DeliveryStatus.PickedUp }
-                           && id == deliveryId)
-        .Expect(message => message.Payload is { DeliveryId: var id, Status: DeliveryStatus.Delivered }
-                           && id == deliveryId)
-        .Timeout(customer.Options.WaitTimeout)
-        .Async(ct);
-    ```
+    --8<-- "framework/languages/dotnet/samples/DeliveryDispatch/Client/DeliveryDispatchClientScenario.cs:doc-e2e-sequence"
 
 === "C++"
 
-    ```cpp
-    auto status_sequence = co_await customer.wait_for_sequence<delivery_status_notify_t> ()
-                         .expect ([&] (const auto &m) {
-                             return m.delivery_id == delivery_id
-                                    && m.status == delivery_status_t::assigned;
-                         })
-                         .expect ([&] (const auto &m) {
-                             return m.delivery_id == delivery_id
-                                    && m.status == delivery_status_t::accepted;
-                         })
-                         .expect ([&] (const auto &m) {
-                             return m.delivery_id == delivery_id
-                                    && m.status == delivery_status_t::picked_up;
-                         })
-                         .expect ([&] (const auto &m) {
-                             return m.delivery_id == delivery_id
-                                    && m.status == delivery_status_t::delivered;
-                         })
-                         .timeout (customer.options ().wait_timeout)
-                         .async ();
-    ```
+    --8<-- "framework/languages/cpp/samples/DeliveryDispatch/Client/delivery_dispatch_client_scenario.hpp:doc-e2e-sequence"
 
 === "Java"
 
-    ```java
-    var statusSequence = customer.waitForSequence(DeliveryStatusNotify.class)
-        .expect(DeliveryStatusNotify.class,
-            message -> matchesStatus(message, deliveryId, DeliveryStatus.Assigned))
-        .expect(DeliveryStatusNotify.class,
-            message -> matchesStatus(message, deliveryId, DeliveryStatus.Accepted))
-        .expect(DeliveryStatusNotify.class,
-            message -> matchesStatus(message, deliveryId, DeliveryStatus.PickedUp))
-        .expect(DeliveryStatusNotify.class,
-            message -> matchesStatus(message, deliveryId, DeliveryStatus.Delivered))
-        .timeout(customer.options().waitTimeout())
-        .submit(DeliveryStatusNotify.class)
-        .toCompletableFuture().join();
-    ```
+    --8<-- "framework/languages/java/samples/java/DeliveryDispatch/Client/src/main/java/systems/zlink/samples/deliverydispatch/client/DeliveryDispatchClientScenario.java:doc-e2e-sequence"
 
 === "Kotlin"
 
-    ```kotlin
-    val statusSequence = customer.kotlin().waitForSequence<DeliveryStatusNotify>()
-        .expect { matchesStatus(it, deliveryId, DeliveryStatus.Assigned) }
-        .expect { matchesStatus(it, deliveryId, DeliveryStatus.Accepted) }
-        .expect { matchesStatus(it, deliveryId, DeliveryStatus.PickedUp) }
-        .expect { matchesStatus(it, deliveryId, DeliveryStatus.Delivered) }
-        .timeout(customer.options().waitTimeout)
-        .await()
-    ```
+    --8<-- "framework/languages/java/samples/kotlin/DeliveryDispatch/Client/src/main/kotlin/systems/zlink/samples/kotlin/deliverydispatch/client/Program.kt:doc-e2e-sequence"
 
 === "Node/TypeScript"
 
-    ```typescript
-    const statusSequence = await customer
-      .waitForSequence<DeliveryStatusNotify>(PacketNames.deliveryStatusNotify)
-      .expect((message) => matchesStatus(message, deliveryId, DeliveryStatus.Assigned))
-      .expect((message) => matchesStatus(message, deliveryId, DeliveryStatus.Accepted))
-      .expect((message) => matchesStatus(message, deliveryId, DeliveryStatus.PickedUp))
-      .expect((message) => matchesStatus(message, deliveryId, DeliveryStatus.Delivered))
-      .timeout(customer.options.waitTimeoutMs)
-      .submit(signal);
-    ```
+    --8<-- "framework/languages/node/samples/DeliveryDispatch.Ts/Client/deliverydispatch-client-scenario.ts:doc-e2e-sequence"
 
 
 ### 3.4 Confirming a Request Fails
@@ -456,57 +196,23 @@ part of the contract. Verifying only the success path leaves this path unverifie
 
 === "C#/.NET"
 
-    ```csharp
-    // Can't open a conversation before authenticating.
-    await ZlinkStreamAssert.ExpectFailureAsync(
-        async ct => _ = await agent.Request(new OpenConversationReq("unauthenticated"))
-            .Async<OpenConversationRes>(ct),
-        nameof(ZlinkStreamErrorCode.RemoteError));
-    ```
+    --8<-- "framework/languages/dotnet/samples/SupportChat/Client/SupportChatClientScenario.cs:doc-e2e-failure"
 
 === "C++"
 
-    ```cpp
-    // Can't open a conversation before authenticating.
-    bool failed = false;
-    try {
-        co_await agent.request (open_conversation_req_t{"unauthenticated"}).async<open_conversation_res_t> ();
-    } catch (const zlink::stream_connector::stream_error_t &error) {
-        failed = error.code == zlink::stream_connector::error_code_t::remote_error;
-    }
-    ensure (failed);
-    ```
+    --8<-- "framework/languages/cpp/samples/SupportChat/Client/supportchat_client_scenario.hpp:doc-e2e-failure"
 
 === "Java"
 
-    ```java
-    // Can't open a conversation before authenticating.
-    ZLinkStreamAssert.expectFailure(
-        () -> agent.request(new OpenConversationReq("unauthenticated"))
-            .submit(OpenConversationRes.class),
-        ZLinkStreamErrorCode.RemoteError);
-    ```
+    --8<-- "framework/languages/java/samples/java/SupportChat/Client/src/main/java/systems/zlink/samples/supportchat/client/Program.java:doc-e2e-failure"
 
 === "Kotlin"
 
-    ```kotlin
-    // Can't open a conversation before authenticating.
-    ZLinkKotlinStreamAssert.expectFailure(ZLinkStreamErrorCode.REMOTE_ERROR.name) {
-        agent.kotlin().request(OpenConversationReq("unauthenticated"))
-            .awaitReply<OpenConversationRes>()
-    }
-    ```
+    --8<-- "framework/languages/java/samples/kotlin/SupportChat/Client/src/main/kotlin/systems/zlink/samples/kotlin/supportchat/client/SupportChatClientScenario.kt:doc-e2e-failure"
 
 === "Node/TypeScript"
 
-    ```typescript
-    // Can't open a conversation before authenticating.
-    await zlinkStreamAssert.expectFailure(
-      () => agent.request(openConversationReq('unauthenticated'))
-        .submit<OpenConversationRes>(signal),
-      ZlinkStreamErrorCode.RemoteError
-    );
-    ```
+    --8<-- "framework/languages/node/samples/SupportChat.Ts/Client/supportchat-client-scenario.ts:doc-e2e-failure"
 
 
 ## 4. How to Handle Waiting for a Message
@@ -514,170 +220,32 @@ part of the contract. Verifying only the success path leaves this path unverifie
 Most E2E flakiness has the same cause. **You act first, then start waiting**, and miss a
 push that arrived in between.
 
-Reverse the order. Register the wait first, then run the action that triggers that push.
-
-=== "C#/.NET"
-
-    ```csharp
-    // Register the wait first -- don't await it yet.
-    var statusSequenceTask = customer.WaitForSequence<DeliveryStatusNotify>()
-        .Expect(message => message.Payload is { DeliveryId: var id, Status: DeliveryStatus.Assigned }
-                           && id == deliveryId)
-        .Timeout(customer.Options.WaitTimeout)
-        .Async(ct).AsTask();
-
-    // Then run the action that triggers the push.
-    var created = await http.Post("/deliveries")
-        .Body(new CreateDeliveryReq(deliveryId, "customer-1", "Kitchen 12", "Customer Lobby"))
-        .Fetch<CreateDeliveryRes>(ct);
-
-    // Receive the result last.
-    var statusSequence = await statusSequenceTask;
-    ```
-
-=== "C++"
-
-    ```cpp
-    // Register the wait first -- don't co_await it yet.
-    auto status_sequence_task = customer.wait_for_sequence<delivery_status_notify_t> ()
-                              .expect ([&] (const auto &m) {
-                                  return m.delivery_id == delivery_id
-                                         && m.status == delivery_status_t::assigned;
-                              })
-                              .timeout (customer.options ().wait_timeout)
-                              .async ();
-
-    // Then run the action that triggers the push.
-    auto created = http.post ("/deliveries")
-                 .body (
-                   create_delivery_req_t{delivery_id, "customer-1", "Kitchen 12", "Customer Lobby"})
-                 .fetch<create_delivery_res_t> ();
-
-    // Receive the result last.
-    auto status_sequence = co_await std::move (status_sequence_task);
-    ```
-
-=== "Java"
-
-    ```java
-    // Register the wait first -- don't join it yet.
-    var statusSequenceStage = customer.waitForSequence(DeliveryStatusNotify.class)
-        .expect(DeliveryStatusNotify.class,
-            message -> matchesStatus(message, deliveryId, DeliveryStatus.Assigned))
-        .timeout(customer.options().waitTimeout())
-        .submit(DeliveryStatusNotify.class);
-
-    // Then run the action that triggers the push.
-    CreateDeliveryRes created = http.post("/deliveries")
-        .body(new CreateDeliveryReq(deliveryId, "customer-1", "Kitchen 12", "Customer Lobby"))
-        .fetch(CreateDeliveryRes.class);
-
-    // Receive the result last.
-    var statusSequence = statusSequenceStage.toCompletableFuture().join();
-    ```
-
-=== "Kotlin"
-
-    ```kotlin
-    // Register the wait first -- don't await it yet.
-    val statusSequenceDeferred = async(start = CoroutineStart.UNDISPATCHED) {
-        customer.kotlin().waitForSequence<DeliveryStatusNotify>()
-        .expect { matchesStatus(it, deliveryId, DeliveryStatus.Assigned) }
-        .timeout(customer.options().waitTimeout)
-        .await()
-    }
-
-    // Then run the action that triggers the push.
-    val created = http.post("/deliveries")
-        .body(CreateDeliveryReq(deliveryId, "customer-1", "Kitchen 12", "Customer Lobby"))
-        .fetch(CreateDeliveryRes::class.java)
-
-    // Receive the result last.
-    val statusSequence = statusSequenceDeferred.await()
-    ```
-
-=== "Node/TypeScript"
-
-    ```typescript
-    // Register the wait first -- don't await it yet.
-    const statusSequencePromise = customer
-      .waitForSequence<DeliveryStatusNotify>(PacketNames.deliveryStatusNotify)
-      .expect((message) => matchesStatus(message, deliveryId, DeliveryStatus.Assigned))
-      .timeout(customer.options.waitTimeoutMs)
-      .submit(signal);
-
-    // Then run the action that triggers the push.
-    const created = await http.post('/deliveries')
-      .body(createDeliveryReq(deliveryId, 'customer-1', 'Kitchen 12', 'Customer Lobby'))
-      .fetch<CreateDeliveryRes>();
-
-    // Receive the result last.
-    const statusSequence = await statusSequencePromise;
-    ```
-
+Reverse the order. Register the wait first, then run the action that triggers that push. The
+`WaitForSequence` registration in [Confirming Push Order](#33-confirming-push-order) is
+exactly this order — the wait is built first, and the request is sent afterward.
 
 If multiple clients need to confirm the same event, register a wait for each and receive
 them together with `Task.WhenAll`.
 
 === "C#/.NET"
 
-    ```csharp
-    // Bingo -- once both players have joined the room starts, and both clients get the same push.
-    var client1StartedTask = client1.WaitFor<BingoGameStartedNotify>().Async(ct).AsTask();
-    var client2StartedTask = client2.WaitFor<BingoGameStartedNotify>().Async(ct).AsTask();
-
-    await Task.WhenAll(client1StartedTask, client2StartedTask);
-    ```
+    --8<-- "framework/languages/dotnet/samples/Bingo/Client/BingoClientScenario.cs:doc-e2e-multi-wait"
 
 === "C++"
 
-    ```cpp
-    // Bingo -- once both players have joined the room starts, and both clients get the same push.
-    auto client1_started = client1.wait_for<bingo_game_started_notify_t> ().async ();
-    auto client2_started = client2.wait_for<bingo_game_started_notify_t> ().async ();
-
-    co_await std::move (client1_started);
-    co_await std::move (client2_started);
-    ```
+    --8<-- "framework/languages/cpp/samples/Bingo/Client/bingo_client_scenario.hpp:doc-e2e-multi-wait"
 
 === "Java"
 
-    ```java
-    // Bingo -- once both players have joined the room starts, and both clients get the same push.
-    var client1Started = client1.waitFor(BingoGameStartedNotify.class).submit(BingoGameStartedNotify.class);
-    var client2Started = client2.waitFor(BingoGameStartedNotify.class)
-        .submit(BingoGameStartedNotify.class);
-
-    CompletableFuture.allOf(
-        client1Started.toCompletableFuture(), client2Started.toCompletableFuture()).join();
-    ```
+    --8<-- "framework/languages/java/samples/java/Bingo/Client/src/main/java/systems/zlink/samples/bingo/client/BingoClientScenario.java:doc-e2e-multi-wait"
 
 === "Kotlin"
 
-    ```kotlin
-    // Bingo -- once both players have joined the room starts, and both clients get the same push.
-    val client1Started = async(start = CoroutineStart.UNDISPATCHED) {
-        client1.kotlin().waitFor<BingoGameStartedNotify>().await()
-    }
-    val client2Started = async(start = CoroutineStart.UNDISPATCHED) {
-        client2.kotlin().waitFor<BingoGameStartedNotify>().await()
-    }
-
-    client1Started.await()
-    client2Started.await()
-    ```
+    --8<-- "framework/languages/java/samples/kotlin/Bingo/Client/src/main/kotlin/systems/zlink/samples/kotlin/bingo/client/BingoClientScenario.kt:doc-e2e-multi-wait"
 
 === "Node/TypeScript"
 
-    ```typescript
-    // Bingo -- once both players have joined the room starts, and both clients get the same push.
-    const client1Started = client1
-      .waitFor<BingoGameStartedNotify>(PacketNames.gameStartedNotify).submit(signal);
-    const client2Started = client2
-      .waitFor<BingoGameStartedNotify>(PacketNames.gameStartedNotify).submit(signal);
-
-    await Promise.all([client1Started, client2Started]);
-    ```
+    --8<-- "framework/languages/node/samples/Bingo.Ts/Client/bingo-client-scenario.ts:doc-e2e-multi-wait"
 
 
 Don't use `Sleep` to line up timing. Express every wait through the timeout on
@@ -692,254 +260,23 @@ move, in that order.
 
 === "C#/.NET"
 
-    ```csharp
-    public async ValueTask RunAsync(TicTacToeClientOptions options, CancellationToken ct = default)
-    {
-        // 1. Create a room through the gateway API and get the endpoint to connect to.
-        using var api = ZLinkHttpClient.Create(options.ApiUrl.ToString())
-            .Timeout(options.HttpTimeout)
-            .Build();
-        var room = await api.Post("/games")
-            .Body(new CreateGameHttpReq(options.GameName))
-            .Fetch<CreateGameHttpRes>(ct);
-        ZlinkStreamAssert.Ensure(room.PlayEndpoints.Count >= 2, "play endpoints are missing.");
-
-        // 2. Connect the two players to different Play nodes -- this verifies routing between nodes.
-        await using var client1 = CreateStreamClient(room.PlayEndpoints[0], options, "host", logger);
-        await using var client2 = CreateStreamClient(room.PlayEndpoints[1], options, "guest", logger);
-
-        // 3. Whoever connects first authenticates and enters the empty room.
-        await client1.Connect.Async(ct);
-        var auth1 = await client1.Request(new AuthenticateReq(options.XActorId)).Async<AuthenticateRes>(ct);
-        ZlinkStreamAssert.Ensure(auth1.Player.ActorId == options.XActorId, "player x actor id mismatch.");
-
-        // Register wait -> send -> receive (see §3)
-        var join1 = await JoinGameAsync(client1, room.RoomId, ct);
-        ZlinkStreamAssert.Ensure(join1.State.Status == TicTacToeGameStatuses.WaitingForPlayers,
-            "room should wait for the second player.");
-
-        // Being alone in the room, their own join notification shouldn't come back to them.
-        await client1.ExpectNone<PlayerJoinedNotify>()
-            .Within(TimeSpan.FromMilliseconds(250))
-            .Async(ct);
-
-        // 4. Once the second player joins, the room starts and a push reaches the first player.
-        await client2.Connect.Async(ct);
-        await client2.Request(new AuthenticateReq(options.OActorId)).Async<AuthenticateRes>(ct);
-
-        var join2 = await JoinGameAsync(client2, room.RoomId, ct);
-        ZlinkStreamAssert.Ensure(join2.State.Status == TicTacToeGameStatuses.InProgress,
-            "room should start with two players.");
-
-        var sawJoin = await client1.WaitFor<PlayerJoinedNotify>()
-            .Where(message => message.Payload.ActorId == options.OActorId)
-            .Async(ct);
-        ZlinkStreamAssert.Ensure(sawJoin.Payload.Mark == TicTacToeMarks.O, "second player should take O.");
-
-        // 5. Making a move -- the response and the push delivered to the opponent should point to the same state.
-        var move = await client1.Request(new PlaceMarkReq(0)).Async<PlaceMarkRes>(ct);
-        ZlinkStreamAssert.Ensure(move.State.Board == "X........", "board state mismatch after the first move.");
-
-        var sawMove = await client2.WaitFor<GameStateNotify>()
-            .Where(message => message.Payload.State.LastMoveCell == 0)
-            .Async(ct);
-        ZlinkStreamAssert.Ensure(sawMove.Payload.State.Board == move.State.Board, "board state mismatch.");
-    }
-
-    // The join completion arrives as a client push -- register the wait before the one-way send.
-    private static async ValueTask<JoinGameNotify> JoinGameAsync(
-        IZlinkStreamConnector connector, string roomId, CancellationToken ct)
-    {
-        var completion = connector.WaitFor<JoinGameNotify>().Async(ct);
-        await connector.Send(new JoinGameMsg(roomId)).Async(ct);
-        return (await completion).Payload;
-    }
-    ```
+    --8<-- "framework/languages/dotnet/samples/TicTacToe/Client/TicTacToeClientScenario.cs:doc-e2e-scenario"
 
 === "C++"
 
-    ```cpp
-    task_t<void> run (const tictactoe_client_options_t &options)
-    {
-        // 1. Create a room through the gateway API and get the endpoint to connect to.
-        auto api = zlink::http_client::client_builder_t (options.api_url)
-                     .timeout (options.http_timeout)
-                     .build ();
-        auto room = api.post ("/games")
-                      .body (create_game_http_req_t{options.game_name})
-                      .fetch<create_game_http_res_t> ();
-        ensure (room.play_endpoints.size () >= 2);
-
-        // 2. Connect the two players to different Play nodes -- this verifies routing between nodes.
-        auto client1 = create_stream_client (room.play_endpoints[0], options);
-        auto client2 = create_stream_client (room.play_endpoints[1], options);
-
-        // 3. Whoever connects first authenticates and enters the empty room.
-        co_await client1.connect ().async ();
-        co_await client1.request (authenticate_req_t{options.x_actor_id}).async<authenticate_res_t> ();
-        // Register wait -> send -> receive (see §3)
-        auto join1 = co_await join_game (client1, room.room_id);
-        ensure (join1.state.status == tictactoe_status_t::waiting_for_players);
-
-        // Being alone in the room, their own join notification shouldn't come back to them.
-        co_await client1.expect_none<player_joined_notify_t> ()
-          .within (std::chrono::milliseconds (250))
-          .async ();
-
-        // 4. Once the second player joins, the room starts and a push reaches the first player.
-        co_await client2.connect ().async ();
-        co_await client2.request (authenticate_req_t{options.o_actor_id}).async<authenticate_res_t> ();
-        auto join2 = co_await join_game (client2, room.room_id);
-        ensure (join2.state.status == tictactoe_status_t::in_progress);
-
-        // 5. Making a move -- the response and the push delivered to the opponent should point to the same state.
-        auto move = co_await client1.request (place_mark_req_t{0}).async<place_mark_res_t> ();
-        auto saw_move = co_await client2.wait_for<game_state_notify_t> ()
-                          .where ([] (const auto &m) { return m.state.last_move_cell == 0; })
-                          .async ();
-        ensure (saw_move.payload.state.board == move.state.board);
-    }
-    ```
+    --8<-- "framework/languages/cpp/samples/TicTacToe/Client/tictactoe_client_scenario.hpp:doc-e2e-scenario"
 
 === "Java"
 
-    ```java
-    public void run(TicTacToeClientOptions options) {
-        // 1. Create a room through the gateway API and get the endpoint to connect to.
-        ZLinkHttpClient api = ZLinkHttpClient.create(options.apiUrl()).timeout(options.httpTimeout()).build();
-        CreateGameHttpRes room = api.post("/games")
-            .body(new CreateGameHttpReq(options.gameName()))
-            .fetch(CreateGameHttpRes.class);
-        ZLinkStreamAssert.ensure(room.playEndpoints().size() >= 2, "play endpoints are missing.");
-
-        // 2. Connect the two players to different Play nodes -- this verifies routing between nodes.
-        ZLinkStreamConnector client1 = createStreamClient(room.playEndpoints().get(0), options);
-        ZLinkStreamConnector client2 = createStreamClient(room.playEndpoints().get(1), options);
-
-        // 3. Whoever connects first authenticates and enters the empty room.
-        client1.connect().submit().toCompletableFuture().join();
-        client1.request(new AuthenticateReq(options.xActorId()))
-            .submit(AuthenticateRes.class).toCompletableFuture().join();
-        // Register wait -> send -> receive (see §3)
-        JoinGameNotify join1 = joinGame(client1, room.roomId());
-        ZLinkStreamAssert.ensure(
-            join1.state().status() == TicTacToeGameStatuses.WaitingForPlayers,
-            "room should wait for the second player.");
-
-        // Being alone in the room, their own join notification shouldn't come back to them.
-        client1.expectNone(PlayerJoinedNotify.class)
-            .within(Duration.ofMillis(250)).submit().toCompletableFuture().join();
-
-        // 4. Once the second player joins, the room starts.
-        client2.connect().submit().toCompletableFuture().join();
-        client2.request(new AuthenticateReq(options.oActorId()))
-            .submit(AuthenticateRes.class).toCompletableFuture().join();
-        JoinGameNotify join2 = joinGame(client2, room.roomId());
-        ZLinkStreamAssert.ensure(
-            join2.state().status() == TicTacToeGameStatuses.InProgress,
-            "room should start with two players.");
-
-        // 5. Making a move -- the response and the push delivered to the opponent should point to the same state.
-        PlaceMarkRes move = client1.request(new PlaceMarkReq(0))
-            .submit(PlaceMarkRes.class).toCompletableFuture().join();
-        var sawMove = client2.waitFor(GameStateNotify.class)
-            .where(GameStateNotify.class, message -> message.payload().state().lastMoveCell() == 0)
-            .submit(GameStateNotify.class).toCompletableFuture().join();
-        ZLinkStreamAssert.ensure(
-            sawMove.payload().state().board().equals(move.state().board()), "board state mismatch.");
-    }
-    ```
+    --8<-- "framework/languages/java/samples/java/TicTacToe/Client/src/main/java/systems/zlink/samples/tictactoe/client/TicTacToeClientScenario.java:doc-e2e-scenario"
 
 === "Kotlin"
 
-    ```kotlin
-    suspend fun run(options: TicTacToeClientOptions) {
-        // 1. Create a room through the gateway API and get the endpoint to connect to.
-        val api = ZLinkHttpClient.create(options.apiUrl).timeout(options.httpTimeout).build()
-        val room = api.post("/games")
-            .body(CreateGameHttpReq(options.gameName))
-            .fetch(CreateGameHttpRes::class.java)
-        ZLinkStreamAssert.ensure(room.playEndpoints.size >= 2, "play endpoints are missing.")
-
-        // 2. Connect the two players to different Play nodes -- this verifies routing between nodes.
-        val client1 = createStreamClient(room.playEndpoints[0], options)
-        val client2 = createStreamClient(room.playEndpoints[1], options)
-
-        // 3. Whoever connects first authenticates and enters the empty room.
-        val kotlinClient1 = client1.kotlin()
-        val kotlinClient2 = client2.kotlin()
-        kotlinClient1.connect().await()
-        kotlinClient1.request(AuthenticateReq(options.xActorId)).awaitReply<AuthenticateRes>()
-        // Register wait -> send -> receive (see §3)
-        val join1 = joinGame(client1, room.roomId)
-        ZLinkStreamAssert.ensure(
-            join1.state.status == TicTacToeGameStatuses.WaitingForPlayers,
-            "room should wait for the second player.")
-
-        // Being alone in the room, their own join notification shouldn't come back to them.
-        client1.kotlin().expectNone<PlayerJoinedNotify>().within(Duration.ofMillis(250)).await()
-
-        // 4. Once the second player joins, the room starts.
-        kotlinClient2.connect().await()
-        kotlinClient2.request(AuthenticateReq(options.oActorId)).awaitReply<AuthenticateRes>()
-        val join2 = joinGame(client2, room.roomId)
-        ZLinkStreamAssert.ensure(
-            join2.state.status == TicTacToeGameStatuses.InProgress, "room should start with two players.")
-
-        // 5. Making a move -- the response and the push delivered to the opponent should point to the same state.
-        val sawMoveDeferred = async(start = CoroutineStart.UNDISPATCHED) {
-            kotlinClient2.waitFor<GameStateNotify>()
-                .where { it.payload().state.lastMoveCell == 0 }
-                .await()
-        }
-        val move = kotlinClient1.request(PlaceMarkReq(0)).awaitReply<PlaceMarkRes>()
-        val sawMove = sawMoveDeferred.await()
-        ZLinkStreamAssert.ensure(sawMove.payload().state.board == move.state.board, "board state mismatch.")
-    }
-    ```
+    --8<-- "framework/languages/java/samples/kotlin/TicTacToe/Client/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/client/TicTacToeClientScenario.kt:doc-e2e-scenario"
 
 === "Node/TypeScript"
 
-    ```typescript
-    async function run(options: TicTacToeClientOptions, signal: AbortSignal): Promise<void> {
-      // 1. Create a room through the gateway API and get the endpoint to connect to.
-      const api = ZLinkHttpClient.create(options.apiUrl).timeout(options.httpTimeout).build();
-      const room = await api.post('/games')
-        .body(createGameHttpReq(options.gameName))
-        .fetch<CreateGameHttpRes>();
-      zlinkStreamAssert.ensure(room.playEndpoints.length >= 2, 'play endpoints are missing.');
-
-      // 2. Connect the two players to different Play nodes -- this verifies routing between nodes.
-      const client1 = createStreamClient(room.playEndpoints[0], options);
-      const client2 = createStreamClient(room.playEndpoints[1], options);
-
-      // 3. Whoever connects first authenticates and enters the empty room.
-      await client1.connect(signal);
-      await client1.request(authenticateReq(options.xActorId)).submit<AuthenticateRes>(signal);
-      // Register wait -> send -> receive (see §3)
-      const join1 = await joinGame(client1, room.roomId, signal);
-      zlinkStreamAssert.ensure(
-        join1.state.status === TicTacToeGameStatuses.WaitingForPlayers,
-        'room should wait for the second player.');
-
-      // Being alone in the room, their own join notification shouldn't come back to them.
-      await client1.expectNone<PlayerJoinedNotify>(PacketNames.playerJoinedNotify).within(250).run(signal);
-
-      // 4. Once the second player joins, the room starts.
-      await client2.connect(signal);
-      await client2.request(authenticateReq(options.oActorId)).submit<AuthenticateRes>(signal);
-      const join2 = await joinGame(client2, room.roomId, signal);
-      zlinkStreamAssert.ensure(
-        join2.state.status === TicTacToeGameStatuses.InProgress, 'room should start with two players.');
-
-      // 5. Making a move -- the response and the push delivered to the opponent should point to the same state.
-      const move = await client1.request(placeMarkReq(0)).submit<PlaceMarkRes>(signal);
-      const sawMove = await client2.waitFor<GameStateNotify>(PacketNames.gameStateNotify)
-        .where((message) => message.payload.state.lastMoveCell === 0)
-        .submit(signal);
-      zlinkStreamAssert.ensure(sawMove.payload.state.board === move.state.board, 'board state mismatch.');
-    }
-    ```
+    --8<-- "framework/languages/node/samples/TicTacToe.Ts/Client/tictactoe-client-scenario.ts:doc-e2e-scenario"
 
 
 **Choose verification points by this rule.** Don't just check a request's own response —
@@ -960,60 +297,23 @@ client can't confirm.
 
 === "C#/.NET"
 
-    ```csharp
-    await using var client1  = CreateStreamClient(room.PlayEndpoints[0], options, "host", logger);
-    await using var client2  = CreateStreamClient(room.PlayEndpoints[1], options, "guest", logger);
-    await using var observer = CreateStreamClient(room.PlayEndpoints[1], options, "observer", logger);
-    ```
+    --8<-- "framework/languages/dotnet/samples/TicTacToe/Client/TicTacToeClientScenario.cs:doc-e2e-multi-client"
 
 === "C++"
 
-    ```cpp
-    // The join completion arrives as a client push -- register the wait before the one-way send.
-    task_t<join_game_notify_t> join_game (auto &connector, const std::string &room_id)
-    {
-        auto completion = connector.wait_for<join_game_notify_t> ().async ();
-        co_await connector.send (join_game_msg_t{room_id}).async ();
-        co_return (co_await std::move (completion)).payload;
-    }
-    ```
+    --8<-- "framework/languages/cpp/samples/TicTacToe/Client/tictactoe_client_scenario.hpp:doc-e2e-multi-client"
 
 === "Java"
 
-    ```java
-    // The join completion arrives as a client push -- register the wait before the one-way send.
-    private static JoinGameNotify joinGame(ZLinkStreamConnector connector, String roomId) {
-        var completion = connector.waitFor(JoinGameNotify.class).submit(JoinGameNotify.class);
-        connector.send(new JoinGameMsg(roomId)).submit().toCompletableFuture().join();
-        return completion.toCompletableFuture().join().payload();
-    }
-    ```
+    --8<-- "framework/languages/java/samples/java/TicTacToe/Client/src/main/java/systems/zlink/samples/tictactoe/client/TicTacToeClientScenario.java:doc-e2e-multi-client"
 
 === "Kotlin"
 
-    ```kotlin
-    // The join completion arrives as a client push -- register the wait before the one-way send.
-    private suspend fun joinGame(connector: ZLinkStreamConnector, roomId: String): JoinGameNotify {
-        val kotlinConnector = connector.kotlin()
-        val completion = async(start = CoroutineStart.UNDISPATCHED) {
-            kotlinConnector.waitFor<JoinGameNotify>().await()
-        }
-        kotlinConnector.send(JoinGameMsg(roomId)).await()
-        return completion.await().payload()
-    }
-    ```
+    --8<-- "framework/languages/java/samples/kotlin/TicTacToe/Client/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/client/TicTacToeClientScenario.kt:doc-e2e-multi-client"
 
 === "Node/TypeScript"
 
-    ```typescript
-    // The join completion arrives as a client push -- register the wait before the one-way send.
-    async function joinGame(
-      connector: ZlinkStreamConnector, roomId: string, signal: AbortSignal): Promise<JoinGameNotify> {
-      const completion = connector.waitFor<JoinGameNotify>(PacketNames.joinGameNotify).submit(signal);
-      await connector.send(joinGameMsg(roomId)).submit();
-      return (await completion).payload;
-    }
-    ```
+    --8<-- "framework/languages/node/samples/TicTacToe.Ts/Client/tictactoe-client-scenario.ts:doc-e2e-multi-client"
 
 
 The `Bingo` sample uses this composition as-is — it brings together two players and one

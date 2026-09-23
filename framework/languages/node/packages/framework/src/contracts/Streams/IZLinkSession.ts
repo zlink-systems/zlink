@@ -1,5 +1,5 @@
 import type { RoutingId, ZLinkMessage } from '../Common';
-import type { ZLinkSessionActors } from './IZLinkSessionActor';
+import type { ZLinkSessionActor, ZLinkSessionActors } from './IZLinkSessionActor';
 import type { ZLinkStreamError } from './ZLinkStreamError';
 import type { ZLinkSessionHandlerRegistry } from './IZLinkSessionPacketHandler';
 
@@ -16,6 +16,7 @@ export interface ZLinkSessionDispatchContext {
   readonly packetName: string;
   readonly metadata: ReadonlyMap<string, string>;
   readonly canReply: boolean;
+  readonly actor?: ZLinkSessionActor;
 }
 
 export interface ZLinkSessionFactory<TSession extends ZLinkSession = ZLinkSession> {

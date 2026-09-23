@@ -404,6 +404,7 @@ export interface ZLinkSessionDispatchContext {
  readonly packetName: string;
  readonly metadata: ZLinkMessageMetadata;
  readonly canReply: boolean;
+ readonly actor?: ZLinkSessionActor; // packet의 Actor slot이 가리키는 현재 binding. 없으면 undefined
 }
 
 export interface ZLinkSessionFactory<TSession extends ZLinkSession = ZLinkSession> {

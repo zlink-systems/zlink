@@ -9,6 +9,7 @@ ZLINK_PROJECT_NUMBER="${ZLINK_PROJECT_NUMBER:-1}"
 ZLINK_PROJECT_STATUS_FIELD="${ZLINK_PROJECT_STATUS_FIELD:-Status}"
 ZLINK_PROJECT_STATUS_FIELD_ID="${ZLINK_PROJECT_STATUS_FIELD_ID:-PVTSSF_lAHOErOLTs4Bi-blzhh0gcI}"
 ZLINK_BASELINE_ROOT="${ZLINK_BASELINE_ROOT:-${HOME}/project/zlink}"
+ZLINK_WORKTREE_ROOT="/home/hep7/worktree"
 
 DRY_RUN=0
 ISSUE_NUMBER=""
@@ -405,7 +406,7 @@ start_command() {
         warn "기존 Issue 브랜치 '$WORK_BRANCH'가 canonical 이름과 다르지만 재사용합니다."
     fi
     [[ -n "$WORK_BRANCH" ]] || WORK_BRANCH="$area/$ISSUE_NUMBER-$slug"
-    target="${HOME}/project/zlink-$ISSUE_NUMBER-$slug"
+    target="$ZLINK_WORKTREE_ROOT/zlink-$ISSUE_NUMBER-$slug"
     ensure_worktree "$root" "$WORK_BRANCH" "$target"
 
     if ((no_packages)); then
@@ -511,7 +512,7 @@ ensure_closes_cleanup_safe() {
 }
 
 done_command() {
-    local verified="" branch issue pr_number state head_oid base first_line mode worktree primary remote_sha
+    local verified="" branch issue pr_number pr_url state head_oid base first_line mode worktree primary remote_sha issue_state cpp_build_tree="" powershell_cmd="" checkout_windows common_windows common_for_powershell build_result ps_compute
     while (($#)); do
         case "$1" in
             --verified) [[ $# -ge 2 ]] || die 2 "--verified에 SHA가 필요합니다."; verified=$2; shift 2 ;;
@@ -534,6 +535,7 @@ done_command() {
     head_oid=$(gh pr view "$pr_number" --json headRefOid --jq '.headRefOid')
     base=$(gh pr view "$pr_number" --json baseRefName --jq '.baseRefName')
     first_line=$(gh pr view "$pr_number" --json body --jq '.body | split("\n")[0]')
+    pr_url=$(gh pr view "$pr_number" --json url --jq '.url')
     [[ "$base" == main ]] || die 1 "PR #$pr_number의 base가 main이 아닙니다: $base"
     [[ "${head_oid,,}" == "$verified" ]] \
         || die 1 "검증 SHA($verified)와 PR HEAD(${head_oid,,})가 다릅니다."
@@ -546,6 +548,46 @@ done_command() {
 
     if [[ "$mode" == closes ]]; then
         ensure_closes_cleanup_safe "$worktree" "$branch" "$state"
+        if [[ -n "${ZLINK_CPP_BUILD_DIR:-}" ]]; then
+            printf 'Windows C++ build tree 삭제 건너뜀: ZLINK_CPP_BUILD_DIR가 설정되어 있습니다.\n'
+        elif [[ -x /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe ]]; then
+            powershell_cmd=/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe
+        elif powershell_cmd=$(command -v pwsh.exe 2>/dev/null); then
+            :
+        elif powershell_cmd=$(command -v powershell.exe 2>/dev/null); then
+            :
+        elif command -v pwsh >/dev/null 2>&1; then
+            powershell_cmd=$(command -v pwsh)
+        fi
+        if [[ -n "$powershell_cmd" ]]; then
+            checkout_windows=$(wslpath -w "/mnt/d/worktree/$(basename "$worktree")")
+            common_windows=$(wslpath -w "$(repo_root)/framework/languages/cpp/windows-build-common.ps1")
+            if [[ "$powershell_cmd" == *powershell.exe ]]; then
+                common_for_powershell=$common_windows
+            else
+                common_for_powershell="$(repo_root)/framework/languages/cpp/windows-build-common.ps1"
+            fi
+            ps_compute=$(cat <<'POWERSHELL'
+ $ErrorActionPreference = 'Stop'
+ . $env:ZLINK_DONE_COMMON
+ if ($env:ZLINK_CPP_BUILD_DIR) { 'SKIP_ENV'; exit 0 }
+ $drive = Split-Path -Qualifier $env:ZLINK_DONE_CHECKOUT
+ if (-not $drive) { $drive = [IO.Path]::GetTempPath() }
+ $token = Get-ZlinkStableBuildToken -Path $env:ZLINK_DONE_CHECKOUT
+ [IO.Path]::GetFullPath((Join-Path $drive ".zlink-build/cpp-$token"))
+POWERSHELL
+            )
+            build_result=$(WSLENV="${WSLENV:+${WSLENV}:}ZLINK_DONE_CHECKOUT:ZLINK_DONE_COMMON" \
+                ZLINK_DONE_CHECKOUT="$checkout_windows" ZLINK_DONE_COMMON="$common_for_powershell" \
+                "$powershell_cmd" -NoProfile -ExecutionPolicy Bypass -Command "$ps_compute")
+            if [[ "$build_result" == SKIP_ENV ]]; then
+                printf 'Windows C++ build tree 삭제 건너뜀: ZLINK_CPP_BUILD_DIR가 설정되어 있습니다.\n'
+            else
+                cpp_build_tree=$(printf '%s\n' "$build_result" | tail -n 1 | tr -d '\r')
+            fi
+        else
+            [[ -n "${ZLINK_CPP_BUILD_DIR:-}" ]] || printf 'Windows C++ build tree 삭제 건너뜀: PowerShell을 찾을 수 없습니다.\n'
+        fi
     fi
 
     if [[ "$state" == OPEN ]]; then
@@ -579,8 +621,38 @@ done_command() {
         git worktree remove "$worktree"
         WORKTREE_PATH=""
     fi
+    if [[ -n "$cpp_build_tree" ]]; then
+        if ((DRY_RUN)); then
+            print_command "$powershell_cmd" -NoProfile -Command "Remove-Item -LiteralPath \$args[0] -Recurse -Force" "$cpp_build_tree"
+        elif [[ -e "$(wslpath -u "$cpp_build_tree" 2>/dev/null || printf '%s' "$cpp_build_tree")" ]]; then
+            "$powershell_cmd" -NoProfile -Command "Remove-Item -LiteralPath \$args[0] -Recurse -Force -ErrorAction SilentlyContinue" "$cpp_build_tree"
+        else
+            printf 'Windows C++ build tree 삭제 건너뜀: 이미 없습니다.\n'
+        fi
+    fi
+    if git show-ref --verify --quiet "refs/heads/$branch"; then
+        run_mutation git -C "$primary" branch -D "$branch"
+    else
+        printf '로컬 브랜치 삭제 건너뜀: 이미 없습니다.\n'
+    fi
+    issue_state=$(gh issue view "$issue" --json state --jq '.state')
+    if [[ "$issue_state" == OPEN ]]; then
+        run_mutation gh issue close "$issue" --comment "PR #$pr_number ($pr_url) was merged; closing this issue."
+    elif [[ "$issue_state" == CLOSED ]]; then
+        printf 'Issue #%s는 이미 닫혔습니다.\n' "$issue"
+    else
+        die 1 "Issue #$issue 상태를 확인할 수 없습니다: $issue_state"
+    fi
+    if ((DRY_RUN)); then
+        print_command find /home/hep7/worktree -maxdepth 1 -type d -name "zlink-$issue*" -exec rm -rf -- '{}' +
+    else
+        while IFS= read -r -d '' copy; do
+            rm -rf -- "$copy"
+            printf 'WSL 검증 사본 삭제: %s\n' "$copy"
+        done < <(find /home/hep7/worktree -mindepth 1 -maxdepth 1 -type d -name "zlink-$issue*" -print0 2>/dev/null || true)
+    fi
     project_status_best_effort "$ISSUE_URL" 'Done'
-    printf '정리 완료: 원격 브랜치와 worktree를 제거하고 Project Done 갱신을 시도했습니다.\n'
+    printf '정리 완료: 원격·로컬 브랜치, worktree, WSL 사본을 정리하고 Issue/Project 상태를 갱신했습니다.\n'
 }
 
 status_local_rows() {

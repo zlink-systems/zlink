@@ -11,6 +11,13 @@ const { ZLinkMeshCompletionTable } = require('../../packages/framework/dist/runt
 const wire = require('../../packages/framework/dist/runtime/foundation/service-stateful-wire-codec');
 const { encodeMultipartApplicationPayload } = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
 const { OperationKind } = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
+const {
+  registerServiceSessionBindingIngressPort
+} = require('../../packages/framework/dist/runtime/foundation/service-session-binding-ingress-port');
+const {
+  actorSessionBindingRuntimeOwner
+} = require('../../packages/framework/dist/runtime/streams/actor-session-binding-runtime-owner');
+const streamProtocol = require('../../packages/framework/dist/runtime/streams/protocol');
 
 function sessionFixture(disconnectFailure, nativeSocket, routingId = zlink.RoutingId.from(1)) {
   const actor = { nodeRid: 'actor-node', actorId: 'actor-a', generation: 7n };
@@ -48,6 +55,7 @@ function sessionFixture(disconnectFailure, nativeSocket, routingId = zlink.Routi
   const delivered = [];
   const native = {
     close() {},
+    recvPacket() { return false; },
     disconnectRid(rid) {
       disconnectCalls++;
       if (nativeSocket !== undefined) return nativeSocket.disconnectRid(rid);
@@ -81,6 +89,12 @@ function sessionFixture(disconnectFailure, nativeSocket, routingId = zlink.Routi
   let resolveRemoved;
   const removal = new Promise(resolve => { resolveRemoved = resolve; });
   const bindingRuntime = new framework.ZLinkStreamBindingRuntime();
+  const bindingOwner = actorSessionBindingRuntimeOwner(bindingRuntime);
+  registerServiceSessionBindingIngressPort(service, {
+    actorSlot: (actorId, sessionRid) => bindingOwner.actorSlot(actorId, sessionRid),
+    async retainOutbound() { return 'passThrough'; },
+    clearOutbound() {}
+  });
   const session = new framework.ZLinkStreamSessionRuntime({
     socket: wrapSocket(native), nativeSessionService: service, meshCompletions: completions,
     bindingRuntime,
@@ -94,19 +108,35 @@ function sessionFixture(disconnectFailure, nativeSocket, routingId = zlink.Routi
     drop() { dropped = true; },
     async bind() {
       await session.context.actors.bind({ ...actor, objectGeneration: actor.generation, meshName: 'play' });
+      assert.equal(await bindingOwner.actorSlot(actor.actorId, String(routingId)), 1);
     },
     async bindNext() {
       const stream = new framework.ZLinkManagedStream(
         wrapSocket(native), zlink.RoutingId.from(2), undefined, service, completions
       );
-      await stream.bindActor({ ...nextActor, objectGeneration: nextActor.generation, meshName: 'play' }, 1000);
+      const nextContext = bindingRuntime.createSessionContext(stream);
+      await nextContext.actors.bind({
+        ...nextActor,
+        objectGeneration: nextActor.generation,
+        meshName: 'play'
+      });
     },
     deliver(targetActor = actor) {
+      const frame = streamProtocol.encodeStreamFrame(
+        {
+          kind: streamProtocol.ZLinkStreamMessageKind.Send,
+          codec: streamProtocol.ZLinkStreamCodec.Raw,
+          flags: streamProtocol.ZLinkStreamHeaderFlags.None,
+          name: 'notice',
+          metadata: new Map()
+        },
+        Buffer.from('notice')
+      );
       return ingress({
         command: wire.M6bServiceWireCommand.boundSessionSend, flags: 0,
         sourceRoutingId: actor.nodeRid, sourceNodeGeneration: fence.targetNodeGeneration,
         parts: [wire.encodeBoundSessionSendHeader({ ...fence, actor: targetActor }, 11n),
-          encodeMultipartApplicationPayload([Buffer.from('notice')], 'notice', 'application/octet-stream')]
+          encodeMultipartApplicationPayload([frame], 'notice', 'application/octet-stream')]
       });
     },
     async dispose() {
@@ -126,7 +156,7 @@ for (const absent of [false, true]) {
       fixture.drop();
       assert.equal(await fixture.deliver(), 'application', 'remote command 36 must not throw out of ingress');
       assert.equal(await fixture.deliver(fixture.nextActor), 'application', 'the same ingress must process the next bound session');
-      assert.equal(fixture.delivered.length, 2);
+      assert.equal(fixture.delivered.length, 4);
       // The Core monitor already owns the disconnect observation, including
       // when its RID disappeared before the final command 36 was delivered.
       fixture.session.enqueueDisconnected();
@@ -188,6 +218,7 @@ test('raw bound delivery survives a RID already removed by installed Core', { ti
     socket.bind(`tcp://127.0.0.1:${port}`);
     client = net.createConnection({ host: '127.0.0.1', port });
     await once(client, 'connect');
+    client.resume();
     // Core STREAM framing: 16-bit header length, 32-bit body length, then bytes.
     client.write(Buffer.from([0, 1, 0, 0, 0, 1, 0, 0]));
     const deadline = performance.now() + 1000;

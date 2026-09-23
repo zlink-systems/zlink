@@ -65,9 +65,9 @@ read the code.**
 
     ```kotlin
     try {
-        val reply: LoginReply = connector
-            .request(LoginRequest("player-1", "tok-abc123"))
-            .awaitReply()
+        val reply = connector
+            .request<LoginReply>(LoginRequest("player-1", "tok-abc123"))
+            .await()
     } catch (failure: ZLinkStreamException) {
         if (failure.errorCode() == ZLinkStreamErrorCode.REQUEST_TIMEOUT) {
             retryLogin()

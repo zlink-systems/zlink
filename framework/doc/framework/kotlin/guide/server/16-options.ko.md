@@ -38,14 +38,7 @@ title: "옵션과 기본값 · Kotlin"
 | runtime option | 실행 중에 바꿀 수 있는 값 | 실행 중([§9](#9-실행-중-바꿀-수-있는-값)) |
 
 ```kotlin
-val configurer = ZLinkFrameworkConfigurer { options ->
-    options.configureNetwork().setBindHost("0.0.0.0")   // 루트 옵션
-    options.routeMesh("play") {                         // node builder
-        listen("tcp://0.0.0.0:5555")
-        setPlacementWeight(100)
-        channelName("room") { server() }
-    }
-}
+--8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:mesh-register"
 ```
 
 host가 시작된 뒤에 builder를 다시 호출하는 표면은 없다. 잘못된 조합은 첫 호출까지 미루지
@@ -203,8 +196,7 @@ STREAM node마다 한 번만 활성화하며 두 번 호출하면 오류가 난�
 | placement weight | 새 Spot · Actor가 이 node에 배치되는 비중 |
 
 ```kotlin
-runtimeOptions.mesh("play").setPlacementWeight(0)
-runtimeOptions.channel("room").weight(0)
+--8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/AdminEndpoints.kt:weight-runtime"
 ```
 
 두 값의 범위는 `0..10000`이고 기본값은 100이다. `0`으로 두면 **새 배정만 멈춘다** — 이미 있는

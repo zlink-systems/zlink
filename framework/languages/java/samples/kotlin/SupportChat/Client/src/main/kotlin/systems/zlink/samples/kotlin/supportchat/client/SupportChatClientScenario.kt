@@ -6,7 +6,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import systems.zlink.framework.kotlin.ZLinkKotlinStreamAssert
 import systems.zlink.framework.kotlin.ZLinkKotlinStreamConnector
-import systems.zlink.framework.kotlin.awaitReply
+import systems.zlink.framework.kotlin.request
 import systems.zlink.samples.kotlin.supportchat.server.configuration.ConversationStatuses
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleTimings
@@ -41,25 +41,21 @@ class SupportChatClientScenario {
         waitingCustomer: ZLinkKotlinStreamConnector,
     ) = coroutineScope {
         agent.connect().await()
-        val agentAuth = agent.request(AuthenticateReq("agent-1")).awaitReply<AuthenticateRes>()
+        val agentAuth = agent.request<AuthenticateRes>(AuthenticateReq("agent-1")).await()
         ensure(agentAuth.actorId == "agent-1")
         ensure(agentAuth.role == SupportChatRoles.Agent)
-        ensure(
-            agent.request(SetAgentAvailableReq(true)).awaitReply<SetAgentAvailableRes>().isAvailable
-        )
+        ensure(agent.request<SetAgentAvailableRes>(SetAgentAvailableReq(true)).await().isAvailable)
 
         customer1.connect().await()
         ensure(
-            customer1
-                .request(AuthenticateReq("customer-1"))
-                .awaitReply<AuthenticateRes>()
-                .actorId == "customer-1"
+            customer1.request<AuthenticateRes>(AuthenticateReq("customer-1")).await().actorId ==
+                "customer-1"
         )
         val assigned1ForAgent = async { agent.waitFor<ConversationAssignedNotify>().await() }
         val opened1 =
             customer1
-                .request(OpenConversationReq("checkout payment failed"))
-                .awaitReply<OpenConversationRes>()
+                .request<OpenConversationRes>(OpenConversationReq("checkout payment failed"))
+                .await()
         val cid1 = opened1.conversationId
         ensure(opened1.state.status == ConversationStatuses.WaitingForAgent)
         ensure(assigned1ForAgent.await().payload().conversationId == cid1)
@@ -91,16 +87,12 @@ class SupportChatClientScenario {
 
         customer2.connect().await()
         ensure(
-            customer2
-                .request(AuthenticateReq("customer-2"))
-                .awaitReply<AuthenticateRes>()
-                .actorId == "customer-2"
+            customer2.request<AuthenticateRes>(AuthenticateReq("customer-2")).await().actorId ==
+                "customer-2"
         )
         val assigned2ForAgent = async { agent.waitFor<ConversationAssignedNotify>().await() }
         val opened2 =
-            customer2
-                .request(OpenConversationReq("cannot log in"))
-                .awaitReply<OpenConversationRes>()
+            customer2.request<OpenConversationRes>(OpenConversationReq("cannot log in")).await()
         val cid2 = opened2.conversationId
         ensure(cid2 != cid1)
         ensure(opened2.state.status == ConversationStatuses.WaitingForAgent)
@@ -132,8 +124,8 @@ class SupportChatClientScenario {
         reconnectingCustomer.connect().await()
         ensure(
             reconnectingCustomer
-                .request(AuthenticateReq("customer-1"))
-                .awaitReply<AuthenticateRes>()
+                .request<AuthenticateRes>(AuthenticateReq("customer-1"))
+                .await()
                 .actorId == "customer-1"
         )
         customerRoom1 = ConversationClient(reconnectingCustomer, cid1)
@@ -147,14 +139,14 @@ class SupportChatClientScenario {
         reconnectingAgent.connect().await()
         ensure(
             reconnectingAgent
-                .request(AuthenticateReq("agent-1"))
-                .awaitReply<AuthenticateRes>()
+                .request<AuthenticateRes>(AuthenticateReq("agent-1"))
+                .await()
                 .actorId == "agent-1"
         )
         ensure(
             reconnectingAgent
-                .request(SetAgentAvailableReq(true))
-                .awaitReply<SetAgentAvailableRes>()
+                .request<SetAgentAvailableRes>(SetAgentAvailableReq(true))
+                .await()
                 .isAvailable
         )
         val reconnectedRoom1 = ConversationClient(reconnectingAgent, cid1)
@@ -210,7 +202,9 @@ class SupportChatClientScenario {
         ensure(closed2Agent.conversationId == cid2)
         ensure(closed2Agent.state.status == ConversationStatuses.Closed)
 
+        // --8<-- [start:doc-e2e-failure]
         ZLinkKotlinStreamAssert.expectFailure { customerRoom2.close("again") }
+        // --8<-- [end:doc-e2e-failure]
 
         ensure(
             idle1ForCustomer.await().payload().state.status == ConversationStatuses.WaitingForClose
@@ -237,19 +231,19 @@ class SupportChatClientScenario {
 
         ensure(
             !reconnectingAgent
-                .request(SetAgentAvailableReq(false))
-                .awaitReply<SetAgentAvailableRes>()
+                .request<SetAgentAvailableRes>(SetAgentAvailableReq(false))
+                .await()
                 .isAvailable
         )
         waitingCustomer.connect().await()
         ensure(
             waitingCustomer
-                .request(AuthenticateReq("customer-3"))
-                .awaitReply<AuthenticateRes>()
+                .request<AuthenticateRes>(AuthenticateReq("customer-3"))
+                .await()
                 .actorId == "customer-3"
         )
         ZLinkKotlinStreamAssert.expectFailure {
-            waitingCustomer.request(SetAgentAvailableReq(true)).awaitReply<SetAgentAvailableRes>()
+            waitingCustomer.request<SetAgentAvailableRes>(SetAgentAvailableReq(true)).await()
         }
         val noClosedNotification =
             async(start = CoroutineStart.UNDISPATCHED) {
@@ -262,8 +256,8 @@ class SupportChatClientScenario {
             }
         val noAgentOpen =
             waitingCustomer
-                .request(OpenConversationReq("agent unavailable"))
-                .awaitReply<OpenConversationRes>()
+                .request<OpenConversationRes>(OpenConversationReq("agent unavailable"))
+                .await()
         ensure(noAgentOpen.state.status == ConversationStatuses.WaitingForAgent)
         ensure(noAgentOpen.state.subject == "agent unavailable")
         noClosedNotification.await()
@@ -275,15 +269,15 @@ class SupportChatClientScenario {
     ) {
         suspend fun join(): JoinConversationRes =
             connector
-                .request(JoinConversationReq())
+                .request<JoinConversationRes>(JoinConversationReq())
                 .metadata(SampleNames.ConversationIdMetadataKey, conversationId)
-                .awaitReply<JoinConversationRes>()
+                .await()
 
         suspend fun sendChat(text: String): SendChatMessageRes =
             connector
-                .request(SendChatMessageReq(text = text))
+                .request<SendChatMessageRes>(SendChatMessageReq(text = text))
                 .metadata(SampleNames.ConversationIdMetadataKey, conversationId)
-                .awaitReply<SendChatMessageRes>()
+                .await()
 
         suspend fun sendTyping(isTyping: Boolean) {
             connector
@@ -294,9 +288,9 @@ class SupportChatClientScenario {
 
         suspend fun close(reason: String?): CloseConversationRes =
             connector
-                .request(CloseConversationReq(reason = reason))
+                .request<CloseConversationRes>(CloseConversationReq(reason = reason))
                 .metadata(SampleNames.ConversationIdMetadataKey, conversationId)
-                .awaitReply<CloseConversationRes>()
+                .await()
     }
 }
 

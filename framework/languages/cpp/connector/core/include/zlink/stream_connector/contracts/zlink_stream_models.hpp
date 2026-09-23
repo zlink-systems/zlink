@@ -41,6 +41,7 @@ struct packet_t
      * the connector fills them at encode time. */
     std::string flow_id;
     std::optional<flow_origin_t> flow_origin;
+    std::optional<std::string> actor_id;
 };
 
 /// A received message: the decoded payload with everything the receiving code
@@ -57,6 +58,7 @@ template <typename TPayload> struct message_t
     metadata_t metadata;
     std::string flow_id;
     std::optional<flow_origin_t> flow_origin;
+    std::optional<std::string> actor_id;
 };
 
 struct connection_state_changed_t

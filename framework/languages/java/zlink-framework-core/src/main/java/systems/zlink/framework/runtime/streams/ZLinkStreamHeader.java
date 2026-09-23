@@ -20,7 +20,8 @@ public record ZLinkStreamHeader(
         // UTF-8 bytes). Client-generated, server-echoed. Empty = absent.
         Optional<String> correlationId,
         Optional<String> flowId,
-        Optional<ZLinkFlowOrigin> flowOrigin) {
+        Optional<ZLinkFlowOrigin> flowOrigin,
+        Optional<Integer> actorSlot) {
     private static final int MAX_PACKET_NAME_BYTES = 255;
 
     public ZLinkStreamHeader {
@@ -73,7 +74,40 @@ public record ZLinkStreamHeader(
         } else {
             flags.remove(ZLinkStreamHeaderFlag.HAS_FLOW_ID);
         }
-        validateKindRules(kind, codec, flags, requestSequence, metadata, correlationId, flowId);
+        actorSlot = actorSlot == null ? Optional.empty() : actorSlot;
+        if (actorSlot.isPresent()) {
+            if (actorSlot.get() <= 0 || actorSlot.get() > 0xffff) {
+                throw new IllegalArgumentException("STREAM actor slot must be in 1..65535");
+            }
+            flags.add(ZLinkStreamHeaderFlag.HAS_ACTOR_SLOT);
+        } else {
+            flags.remove(ZLinkStreamHeaderFlag.HAS_ACTOR_SLOT);
+        }
+        validateKindRules(
+                kind, codec, flags, requestSequence, metadata, correlationId, flowId, actorSlot);
+    }
+
+    public ZLinkStreamHeader(
+            ZLinkStreamMessageKind kind,
+            ZLinkStreamCodec codec,
+            EnumSet<ZLinkStreamHeaderFlag> flags,
+            Optional<Long> requestSequence,
+            String name,
+            Map<String, String> metadata,
+            Optional<String> correlationId,
+            Optional<String> flowId,
+            Optional<ZLinkFlowOrigin> flowOrigin) {
+        this(
+                kind,
+                codec,
+                flags,
+                requestSequence,
+                name,
+                metadata,
+                correlationId,
+                flowId,
+                flowOrigin,
+                Optional.empty());
     }
 
     public ZLinkStreamHeader(
@@ -92,6 +126,7 @@ public record ZLinkStreamHeader(
                 name,
                 metadata,
                 correlationId,
+                Optional.empty(),
                 Optional.empty(),
                 Optional.empty());
     }
@@ -113,6 +148,7 @@ public record ZLinkStreamHeader(
                 metadata,
                 Optional.empty(),
                 Optional.empty(),
+                Optional.empty(),
                 Optional.empty());
     }
 
@@ -127,6 +163,7 @@ public record ZLinkStreamHeader(
                 requestSequence,
                 packetName,
                 metadata,
+                Optional.empty(),
                 Optional.empty(),
                 Optional.empty(),
                 Optional.empty());
@@ -158,6 +195,7 @@ public record ZLinkStreamHeader(
                 metadata,
                 requestHeader.correlationId(),
                 Optional.empty(),
+                Optional.empty(),
                 Optional.empty());
     }
 
@@ -175,6 +213,7 @@ public record ZLinkStreamHeader(
                 Map.of(),
                 requestHeader.correlationId(),
                 Optional.empty(),
+                Optional.empty(),
                 Optional.empty());
     }
 
@@ -190,7 +229,8 @@ public record ZLinkStreamHeader(
                 metadata,
                 correlationId == null ? Optional.empty() : Optional.of(correlationId),
                 flowId,
-                flowOrigin);
+                flowOrigin,
+                actorSlot);
     }
 
     public ZLinkStreamHeader withFlow(String id, ZLinkFlowOrigin origin) {
@@ -203,7 +243,22 @@ public record ZLinkStreamHeader(
                 metadata,
                 correlationId,
                 Optional.ofNullable(id),
-                Optional.ofNullable(origin));
+                Optional.ofNullable(origin),
+                actorSlot);
+    }
+
+    public ZLinkStreamHeader withActorSlot(int slot) {
+        return new ZLinkStreamHeader(
+                kind,
+                codec,
+                flags,
+                requestSequence,
+                name,
+                metadata,
+                correlationId,
+                flowId,
+                flowOrigin,
+                Optional.of(slot));
     }
 
     private static void validateKindRules(
@@ -213,7 +268,8 @@ public record ZLinkStreamHeader(
             Optional<Long> requestSequence,
             Map<String, String> metadata,
             Optional<String> correlationId,
-            Optional<String> flowId) {
+            Optional<String> flowId,
+            Optional<Integer> actorSlot) {
         if (requestSequence.isPresent() && requestSequence.get() == 0) {
             throw new IllegalArgumentException("STREAM request sequence must not be zero");
         }
@@ -235,7 +291,8 @@ public record ZLinkStreamHeader(
                         || requestSequence.isPresent()
                         || !metadata.isEmpty()
                         || correlationId.isPresent()
-                        || flowId.isPresent())) {
+                        || flowId.isPresent()
+                        || actorSlot.isPresent())) {
             throw new IllegalArgumentException(
                     "STREAM control packet must use raw codec and must not contain flags");
         }

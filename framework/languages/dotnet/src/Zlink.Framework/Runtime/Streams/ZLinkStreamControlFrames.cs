@@ -2,6 +2,8 @@ namespace Zlink.Framework.Runtime.Streams;
 
 internal static class ZLinkStreamControlFrames
 {
+    private const string ActorBoundName = "$zlink.actor.bound";
+    private const string ActorUnboundName = "$zlink.actor.unbound";
     private const string HeartbeatPingName = "$zlink.heartbeat.ping";
     private const string HeartbeatPongName = "$zlink.heartbeat.pong";
 
@@ -24,6 +26,29 @@ internal static class ZLinkStreamControlFrames
             ReadOnlySpan<byte>.Empty,
             "Stream heartbeat ping send failed."
         );
+    }
+
+    public static void SendActorBound(IZLinkStream stream, ushort slot, string actorId)
+    {
+        var actorIdBytes = System.Text.Encoding.UTF8.GetBytes(actorId);
+        if (slot == 0 || actorIdBytes.Length is 0 or > byte.MaxValue)
+            throw new InvalidOperationException("Actor binding control values are invalid.");
+        var payload = new byte[4 + actorIdBytes.Length];
+        payload[0] = 1;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(payload.AsSpan(1, 2), slot);
+        payload[3] = checked((byte)actorIdBytes.Length);
+        actorIdBytes.CopyTo(payload.AsSpan(4));
+        SendControl(stream, ActorBoundName, payload);
+    }
+
+    public static void SendActorUnbound(IZLinkStream stream, ushort slot)
+    {
+        if (slot == 0)
+            throw new InvalidOperationException("Actor slot must not be zero.");
+        Span<byte> payload = stackalloc byte[3];
+        payload[0] = 1;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(payload.Slice(1, 2), slot);
+        SendControl(stream, ActorUnboundName, payload);
     }
 
     public static void Dispatch(
@@ -62,6 +87,36 @@ internal static class ZLinkStreamControlFrames
             pong,
             ReadOnlySpan<byte>.Empty,
             "Stream heartbeat pong send failed."
+        );
+    }
+
+    private static void SendControl(IZLinkStream stream, string name, ReadOnlySpan<byte> payload)
+    {
+        var header = new ZlinkStreamHeader(
+            ZlinkStreamMessageKind.Control,
+            ZlinkStreamCodec.Raw,
+            ZlinkStreamHeaderFlags.None,
+            null,
+            name,
+            ZlinkStreamMetadata.Empty
+        );
+        ZLinkStreamFrameWriter.Write(stream, header, payload, "Actor control packet send failed.");
+    }
+}
+
+internal static class ZLinkStreamActorFrames
+{
+    internal static byte[] WithActorSlot(byte[] frame, ushort slot)
+    {
+        if (!ZLinkStreamFrameCodec.TryDecode(frame, out var headerBytes, out var payload))
+            throw new InvalidOperationException("Actor STREAM frame is invalid.");
+        var header = ZLinkStreamProtocolDefaults.DecodeHeader(headerBytes.ToArray()) with
+        {
+            ActorSlot = slot,
+        };
+        return ZLinkStreamFrameCodec.Encode(
+            ZLinkStreamProtocolDefaults.EncodeHeader(header).Span,
+            payload
         );
     }
 }

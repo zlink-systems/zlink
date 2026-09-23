@@ -40,12 +40,7 @@ set it.
 | Runtime option | Values that can change while running | While running ([§9](#9-values-that-can-change-while-running)) |
 
 ```java
-ZLinkFrameworkConfigurer configurer = options -> {
-    options.configureNetwork().setBindHost("0.0.0.0");         // root option
-    ZLinkMeshNodeBuilder mesh = options.addRouteMesh("play");  // node builder
-    mesh.listen("tcp://0.0.0.0:5555").setPlacementWeight(100);
-    mesh.channelName("room").server();
-};
+--8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:mesh-register"
 ```
 
 There is no surface that calls a builder again after the host has started. An invalid
@@ -212,8 +207,7 @@ host starts.
 | Placement weight | Share of new Spots and Actors placed on this node |
 
 ```java
-runtimeOptions.mesh("play").setPlacementWeight(0);
-runtimeOptions.channel("room").weight(0);
+--8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:weight-runtime"
 ```
 
 Both values range over `0..10000` and default to 100. Setting `0` **stops new assignments only**

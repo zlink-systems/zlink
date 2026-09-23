@@ -2324,10 +2324,10 @@ void app_t::_apply_zlink_framework ()
           });
         application_mesh->configure_bound_session_operations (
           runtime::host::bound_session_operations_t{
-            [actor_gateway_runtime, application_mesh,
-             stream_runtime] (const runtime::protocol::bound_session_bind_t &bind,
-                              const zlink::routing_id_t &session_owner,
-                              std::uint64_t session_owner_generation) mutable {
+            [actor_gateway_runtime, application_mesh, stream_runtime] (
+              const runtime::protocol::bound_session_bind_t &bind,
+              const zlink::routing_id_t &session_owner, std::uint64_t session_owner_generation,
+              std::function<bool ()> submit_terminal_reply) mutable {
                 const auto actor = detail::actor_ref_access_t::make (
                   node_rid_t::from_string (
                     zlink::routing_id_t::from (bind.actor.target_node_routing_id).to_string ()),
@@ -2408,7 +2408,7 @@ void app_t::_apply_zlink_framework ()
                     session_owner, session_rid, bind.actor.object_generation,
                     session_owner_generation, bind.actor.authority_owner_generation,
                     bind.actor.owner_lease_generation, bind.binding.generation, 0, 0},
-                  stream_codec_t::message_pack);
+                  stream_codec_t::message_pack, std::move (submit_terminal_reply));
                 if (!transition) {
                     return runtime::host::bound_session_bind_operation_result_t{
                       runtime::stateful::stateful_error_t::conflict, std::nullopt};

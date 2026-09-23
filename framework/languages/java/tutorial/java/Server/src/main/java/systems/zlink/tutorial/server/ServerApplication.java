@@ -133,6 +133,7 @@ public class ServerApplication {
             // rejected at startup.
             options.addFanoutChannel("broadcast")
                     .connect("tcp://127.0.0.1:7512")
+                    .subscribe(Contracts.MaintenanceNotice.class.getSimpleName())
                     .addPublishHandler(
                             MaintenanceNoticeSubscriber.class, Contracts.MaintenanceNotice.class);
             // --8<-- [end:fanout-subscribe]

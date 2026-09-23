@@ -873,6 +873,7 @@ class session_actor_t
   private:
     friend class session_actor_manager_t;
     friend class detail::actor_gateway_runtime_t;
+    friend class detail::session_actor_manager_access_t;
 
     explicit session_actor_t (std::shared_ptr<detail::actor_gateway_state_t> state,
                               actor_ref_t ref,

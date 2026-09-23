@@ -14,6 +14,7 @@ import { connectorError, toStreamError, utf8Decode } from './ZlinkStreamSupport'
 import type { ZlinkFlowContext } from './ZlinkFlowContext';
 import { decodeSessionClosing, ZLINK_SESSION_CLOSING } from './Protocol/ZlinkSessionClosing';
 import type { ZlinkStreamCloseReason } from '../Contracts';
+import { zlinkStreamActorBinding, type ZlinkStreamActors } from './ZlinkStreamActors';
 
 export interface ZlinkStreamReceiveResult {
   readonly available: boolean;
@@ -28,6 +29,7 @@ export class ZlinkStreamReceiveDispatcher {
     private readonly frameSender: ZlinkStreamFrameSender,
     private readonly events: ZlinkStreamConnectorEvents,
     private readonly flowContext: ZlinkFlowContext,
+    private readonly actors: ZlinkStreamActors,
     private readonly serverClosing?: (reason: ZlinkStreamCloseReason) => Promise<void>
   ) {}
 
@@ -70,11 +72,7 @@ export class ZlinkStreamReceiveDispatcher {
     try {
       frames = this.protocol.decodeFrames(frameBytes, flowEnabled);
     } catch (cause) {
-      await this.events.publishError(
-        toStreamError(cause, ZlinkStreamErrorCode.FrameDecodeFailed, 'Frame decode failed.'),
-        signal
-      );
-      return { available: true, inbound: false };
+      throw cause;
     }
     for (const frame of frames) {
       if (isCurrent !== undefined && !isCurrent()) {
@@ -96,10 +94,15 @@ export class ZlinkStreamReceiveDispatcher {
         ) {
           throw cause;
         }
-        await this.events.publishError(
-          toStreamError(cause, ZlinkStreamErrorCode.FrameDecodeFailed, 'Frame dispatch failed.'),
-          signal
+        const error = toStreamError(
+          cause,
+          ZlinkStreamErrorCode.FrameDecodeFailed,
+          'Frame dispatch failed.'
         );
+        if (error.code === ZlinkStreamErrorCode.FrameDecodeFailed) {
+          throw cause;
+        }
+        await this.events.publishError(error, signal);
       }
     }
     return { available: true, inbound: true };
@@ -113,6 +116,8 @@ export class ZlinkStreamReceiveDispatcher {
     flowEnabled: boolean,
     connectionForSend?: () => ZlinkStreamConnection
   ): Promise<void> {
+    const actor =
+      header.actorSlot === undefined ? undefined : this.actors.resolve(header.actorSlot);
     if (header.kind === ZlinkStreamMessageKind.Response && header.requestSeq !== undefined) {
       try {
         if (
@@ -181,8 +186,12 @@ export class ZlinkStreamReceiveDispatcher {
           metadata: header.metadata,
           payload: { codec: header.codec, payload: this.protocol.decodePayload(header, payload) },
           flowId: flow?.flowId,
-          flowOrigin: flow?.flowOrigin
-        },
+          flowOrigin: flow?.flowOrigin,
+          actorId: actor?.actorId,
+          [zlinkStreamActorBinding]: actor
+        } as import('../Contracts').ZlinkStreamMessage<
+          import('../Contracts').ZlinkStreamEncodedPayload
+        >,
         signal
       );
     }
@@ -195,6 +204,9 @@ export class ZlinkStreamReceiveDispatcher {
     signal?: AbortSignal,
     connectionForSend?: () => ZlinkStreamConnection
   ): Promise<void> {
+    if (this.actors.processControl(header.name, payload, signal)) {
+      return;
+    }
     if (header.name === ZLINK_SESSION_CLOSING) {
       const closing = decodeSessionClosing(payload);
       await this.serverClosing?.(closing.closeReason);

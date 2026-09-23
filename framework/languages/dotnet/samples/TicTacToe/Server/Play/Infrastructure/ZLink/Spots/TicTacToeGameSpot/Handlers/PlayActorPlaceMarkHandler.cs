@@ -6,7 +6,7 @@ using Zlink.Framework.Contracts.Spots;
 namespace TicTacToe.Server.Play.Infrastructure.ZLink.Spots.TicTacToeGameSpot.Handlers;
 
 // --8<-- [start:doc-actor-packet-handler]
-internal sealed class PlayActorPlaceMarkHandler(ILogger<PlayActorPlaceMarkHandler> logger)
+internal sealed class PlayActorPlaceMarkHandler
     : IZLinkSpotActorRequestHandler<TicTacToeGame, PlayActor, PlaceMarkReq, PlaceMarkRes>
 {
     public async ValueTask<PlaceMarkRes> HandleAsync(
@@ -17,24 +17,8 @@ internal sealed class PlayActorPlaceMarkHandler(ILogger<PlayActorPlaceMarkHandle
         CancellationToken cancellationToken
     )
     {
-        var roomId = actor.RequireJoinedRoom();
-        logger.LogInformation(
-            "actor: PlaceMarkReq received. actor={ActorId}, roomId={RoomId}, cell={Cell}",
-            actor.ActorId,
-            roomId,
-            message.Cell
-        );
-
-        var reply = await spot.PlaceMarkAsync(actor, message.Cell, cancellationToken);
-
-        logger.LogInformation(
-            "actor -> client: PlaceMarkRes returned. actor={ActorId}, roomId={RoomId}, board={Board}, status={Status}",
-            actor.ActorId,
-            reply.State.RoomId,
-            reply.State.Board,
-            reply.State.Status
-        );
-        return reply;
+        actor.RequireJoinedRoom();
+        return await spot.PlaceMarkAsync(actor, message.Cell, cancellationToken);
     }
 }
 // --8<-- [end:doc-actor-packet-handler]

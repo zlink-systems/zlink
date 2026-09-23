@@ -108,3 +108,4 @@ Unity 네이티브와 Godot C#은 별도 package 없이 `.NET` connector를 그�
 - 설치하고 첫 packet을 주고받기 — [설치와 첫 연결](02-getting-started.ko.md)
 - 기본값과 검증 시점 — [Connector 옵션](03-connector-options.ko.md)
 - 연결 상태와 재연결 — [연결 생명주기](06-lifecycle.ko.md)
+- 엔진과 빌드 대상별 통합 경로 — [게임 엔진 통합](12-engine-integration.ko.md)

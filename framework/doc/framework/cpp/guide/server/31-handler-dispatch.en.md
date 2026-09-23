@@ -239,43 +239,6 @@ it touches state directly, with no lock.
 --8<-- "framework/languages/cpp/samples/TicTacToe/Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/Handlers/play_actor_place_mark_handler.hpp:doc-actor-packet-handler"
 ```
 
-The four branches in their minimal form look like this.
-
-```cpp
-// C++ registers a Spot member function instead of a handler class. The first argument is the target Spot.
-class game_room_t : public spot_t<player_actor_t>
-{
-  public:
-    // A packet addressed to the Spot.
-    task_t<void> chat (const chat_t &message)
-    {
-        // Touches Spot state directly. No lock needed.
-        append_chat (message.text);
-        co_return;
-    }
-
-    // A request addressed to the Spot -- the return value is the reply.
-    room_state_t get_room_state (const get_room_state_t &) { return snapshot (); }
-
-    // A subscription event -- arrives on the channel/topic registered with add_subscribe.
-    task_t<void> score (const score_changed_t &event)
-    {
-        apply_score (event);
-        co_return;
-    }
-
-    // A packet addressed to a member Actor -- receives the Spot and the Actor together.
-    // The Actor that received this message.
-    task_t<void> place_mark (player_actor_t &actor,
-                             message_context_t &,
-                             const place_mark_t &message)
-    {
-        place (actor.actor_id, message.cell);
-        co_return;
-    }
-};
-```
-
 An Actor request handler takes the same arguments; the only difference is that its return
 value is the reply.
 
@@ -283,43 +246,7 @@ Register handlers in `configure()` and perform initialization and cleanup in lif
 callbacks.
 
 ```cpp
-class game_room_t : public spot_t<player_actor_t>
-{
-  public:
-    spot_context_t &context () noexcept override { return _context; }
-
-    void configure () override
-    {
-        // Registers the Spot send handler.
-        _context.handlers ().add_handler<&game_room_t::chat> ();
-        _context.handlers ().add_subscribe<&game_room_t::score> (
-          // Registers a Logical Multicast subscription.
-          "game-events", "score.changed");
-    }
-
-    task_t<spot_create_response_t> on_create (const message_t &request) override
-    {
-        const auto create = request.decode<create_game_t> ();
-        co_return (create.mode == "ranked" || create.mode == "casual")
-                  ? spot_create_response_t::accept (game_created_t{create.mode})
-                  : spot_create_response_t::reject (invalid_mode_t{create.mode});
-    }
-
-    task_t<void> on_initialize () override
-    {
-        // Finishes whatever's needed after creation is approved, before receiving messages.
-        co_return;
-    }
-
-    task_t<void> on_closing (const spot_closing_context_t &) override
-    {
-        // Cleans up application resources by the deadline.
-        co_return;
-    }
-
-  private:
-    spot_context_t _context;
-};
+--8<-- "framework/languages/cpp/samples/GameQuest/Server/QuestMission/main.cpp:doc-gq-spot-init"
 ```
 
 `on_closing`'s reason distinguishes explicit close, host shutdown, and relocation out. The

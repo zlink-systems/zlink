@@ -236,65 +236,6 @@ it touches state directly, with no lock.
 --8<-- "framework/languages/dotnet/samples/TicTacToe/Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/Handlers/PlayActorPlaceMarkHandler.cs:doc-actor-packet-handler"
 ```
 
-The four branches in their minimal form look like this.
-
-```csharp
-// A packet addressed to the Spot -- the first argument is the target Spot instance.
-public sealed class ChatHandler : IZLinkSpotPacketHandler<GameRoom, Chat>
-{
-    public ValueTask HandleAsync(
-        GameRoom spot,
-        Chat message,
-        CancellationToken cancellationToken)
-    {
-        // Touches Spot state directly. No lock needed.
-        spot.AppendChat(message.Text);
-        return ValueTask.CompletedTask;
-    }
-}
-
-// A request addressed to the Spot -- the return value is the reply.
-public sealed class GetRoomStateHandler
-    : IZLinkSpotRequestHandler<GameRoom, GetRoomState, RoomState>
-{
-    public ValueTask<RoomState> HandleAsync(
-        GameRoom spot,
-        GetRoomState request,
-        CancellationToken cancellationToken)
-        => ValueTask.FromResult(spot.Snapshot());
-}
-
-// A subscription event -- arrives on the channel/topic registered with AddSubscribe.
-public sealed class ScoreHandler : IZLinkSpotSubscriptionHandler<GameRoom, ScoreChanged>
-{
-    public ValueTask HandleAsync(
-        GameRoom spot,
-        ScoreChanged @event,
-        CancellationToken cancellationToken)
-    {
-        spot.ApplyScore(@event);
-        return ValueTask.CompletedTask;
-    }
-}
-
-// A packet addressed to a member Actor -- receives the Spot and the Actor together.
-public sealed class PlaceMarkHandler
-    : IZLinkSpotActorSendHandler<GameRoom, PlayerActor, PlaceMark>
-{
-    public ValueTask HandleAsync(
-        GameRoom spot,
-        // The Actor that received this message.
-        PlayerActor actor,
-        IZLinkMessageContext messageContext,
-        PlaceMark message,
-        CancellationToken cancellationToken)
-    {
-        spot.Place(actor.ActorId, message.Cell);
-        return ValueTask.CompletedTask;
-    }
-}
-```
-
 An Actor request handler takes the same arguments; the only difference is that its return
 value is the reply.
 
@@ -302,45 +243,7 @@ Register handlers in `Configure()` and perform initialization and cleanup in lif
 callbacks.
 
 ```csharp
-public sealed class GameRoom(IZLinkSpotContext context) : IZLinkSpot
-{
-    public IZLinkSpotContext Context { get; } = context;
-
-    public void Configure()
-    {
-        // Registers the Spot send handler.
-        Context.Handlers.AddPacket<ChatHandler>();
-        Context.Handlers.AddSubscribe<ScoreHandler>(
-            "game-events",
-            // Registers a Logical Multicast subscription.
-            "score.changed");
-    }
-
-    public ValueTask<ZLinkSpotCreateResponse> OnCreateAsync(
-        ZLinkMessage request,
-        CancellationToken cancellationToken)
-    {
-        var create = request.Decode<CreateGame>();
-        return ValueTask.FromResult(
-            create.Mode is "ranked" or "casual"
-                ? ZLinkSpotCreateResponse.Accept(new GameCreated(create.Mode))
-                : ZLinkSpotCreateResponse.Reject(new InvalidMode(create.Mode)));
-    }
-
-    public ValueTask OnInitializeAsync(CancellationToken cancellationToken)
-    {
-        // Finishes whatever's needed after creation is approved, before receiving messages.
-        return ValueTask.CompletedTask;
-    }
-
-    public ValueTask OnClosingAsync(
-        ZLinkSpotClosingContext closing,
-        CancellationToken cleanupCancellationToken)
-    {
-        // Cleans up application resources by the deadline.
-        return ValueTask.CompletedTask;
-    }
-}
+--8<-- "framework/languages/dotnet/samples/GameQuest/Server/QuestMission/Infrastructure/ZLink/Spots/PlayerQuestSpot/PlayerQuestSpot.cs:doc-gq-spot-init"
 ```
 
 `OnClosingAsync`'s reason distinguishes explicit close, host shutdown, and relocation out. The

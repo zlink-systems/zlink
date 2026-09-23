@@ -36,7 +36,7 @@ User 값을 쓰지만 `java` 명령은 PATH 순서를 따른다).
 ## 3. worktree 만들기 — 로컬 패키지는 링크다
 
 `scripts/dev/work.sh start --issue <N>`(Windows `work.ps1`)이 브랜치와
-`~/project/zlink-<N>-<slug>` worktree를 만들고 로컬 패키지를 준비한다. 이때 binding 패키지는
+WSL `/home/hep7/worktree/zlink-<N>-<slug>` 또는 Windows `D:\worktree\zlink-<N>-<slug>` worktree를 만들고 로컬 패키지를 준비한다. 이때 binding 패키지는
 **빌드하지 않고 링크한다**.
 
 - binding 패키지(nuget `Zlink.*`, npm `@zlink-systems/zlink`, maven `systems.zlink:zlink*`, C++
@@ -89,7 +89,11 @@ gate가 필요로 하는 빌드 산출물(Java cross-language `Host/installDist`
 
 ## 6. 정리
 
-`work.sh done --verified <sha>`가 merge 뒤 worktree와 링크를 지운다(캐시는 남는다).
+`work.sh done --verified <sha>`(Windows `work.ps1`)는 PR HEAD SHA를 확인하고, 열린 PR을 merge하거나
+이미 merge된 PR을 이어서 정리한다. `Closes #N`이면 원격 브랜치와 worktree를 지운 뒤 로컬 브랜치를
+삭제하고 Issue가 열려 있으면 PR 링크를 댓글로 남겨 닫는다. 해당 Issue의 `/home/hep7/worktree/zlink-<N>*`
+검증 사본도 지운다. Project를 Done으로 갱신하며, 이미 끝난 삭제와 닫기는 건너뛴다. 패키지 캐시는 남는다.
+또한 worktree 제거 전에 계산한 checkout별 Windows C++ 빌드 트리(`.zlink-build/cpp-<token>`)를 정리한다(`ZLINK_CPP_BUILD_DIR`가 설정된 경우 제외).
 `scripts/local-package/cache-prune.sh --keep 5`는 존재하는 worktree가 링크한 키를 지우지
 않는다. 방치된 worktree는 `scripts/dev/worktree-sweep.sh`로 판정한다. worktree를 지우기 전에
 거기서 도는 job이 없는지 본다.

@@ -2498,6 +2498,17 @@ identity, from being accepted as current work after a restart.
 | Creation/management | Issued by the Location Store provider on a new owner lease claim. |
 | Lifetime | Kept for that host process owner lease's lifecycle. A restart under the same OwnerId uses a new value. |
 
+<a id="actor-slot"></a>
+### Actor Slot
+
+A non-zero `u16` address that points at one binding within one STREAM
+session. Issuing, lifetime, announcing and the server-side resolution are
+owned by [Session–Actor Binding §4·§5](../04-session/02-session-actor-binding.en.md#4-what-binding-connects-and-what-it-stores),
+the byte representation by
+[Stream Connector common spec §4](../../stream-connector/32-stream-connector.en.md#4-wire-contract),
+and the client's table and handles by
+[Stream Connector common spec §5.6](../../stream-connector/32-stream-connector.en.md#56-bound-actor).
+
 <a id="session-sequence"></a>
 ### Session Sequence
 

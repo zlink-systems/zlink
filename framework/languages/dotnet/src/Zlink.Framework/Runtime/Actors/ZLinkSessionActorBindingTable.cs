@@ -541,9 +541,13 @@ internal sealed class ZLinkSessionActorBindingTable
                     ZLinkSessionOutboundAdmissionKind.WrongSession
                 );
 
-            var capability = new ZLinkSessionOutboundCapability(entry.Context, frame);
+            var capability = new ZLinkSessionOutboundCapability(
+                entry.Context,
+                ZLinkStreamActorFrames.WithActorSlot(frame, entry.ActorRef.Slot)
+            );
             if (MatchesOutboundTenure(entry.Route, tenure))
             {
+                capability.Settle(deliver: true);
                 return new ZLinkSessionOutboundAdmission(
                     ZLinkSessionOutboundAdmissionKind.Immediate,
                     capability
@@ -574,6 +578,40 @@ internal sealed class ZLinkSessionActorBindingTable
             );
         });
     }
+
+    internal ValueTask<ZLinkSessionOutboundAdmission> DeliverReplyAsync(
+        string actorId,
+        ZLinkSessionBindingEntry expected,
+        byte[] frame
+    ) =>
+        _lane.RunAsync(() =>
+        {
+            var key = ZLinkSessionBindingKey.FromBoundary(actorId, expected.BindingToken);
+            if (!_entries.TryGetValue(key, out var entry))
+                return new ZLinkSessionOutboundAdmission(
+                    _entries.Keys.Any(candidate => candidate.ActorId == key.ActorId)
+                        ? ZLinkSessionOutboundAdmissionKind.WrongSession
+                        : ZLinkSessionOutboundAdmissionKind.NoBinding
+                );
+            if (
+                entry.ObjectGeneration != expected.ObjectGeneration
+                || entry.BindingGeneration != expected.BindingGeneration
+                || entry.Context.RoutingId != expected.Context.RoutingId
+            )
+                return new ZLinkSessionOutboundAdmission(
+                    ZLinkSessionOutboundAdmissionKind.WrongSession
+                );
+
+            var capability = new ZLinkSessionOutboundCapability(
+                entry.Context,
+                ZLinkStreamActorFrames.WithActorSlot(frame, entry.ActorRef.Slot)
+            );
+            capability.Settle(deliver: true);
+            return new ZLinkSessionOutboundAdmission(
+                ZLinkSessionOutboundAdmissionKind.Immediate,
+                capability
+            );
+        });
 
     private static bool MatchesPhysicalSession(
         ZLinkSessionBindingEntry entry,
@@ -627,7 +665,9 @@ internal sealed class ZLinkSessionActorBindingTable
         ulong sessionOwnerNodeGeneration,
         RoutingId sessionOwnerNodeRid = default,
         string sessionOwnerId = "",
-        ulong sessionOwnerLeaseGeneration = 0
+        ulong sessionOwnerLeaseGeneration = 0,
+        Action<IReadOnlyList<ZLinkSessionBindingEntry>>? preparePublish = null,
+        Action<IReadOnlyList<ZLinkSessionBindingEntry>>? afterPublish = null
     )
     {
         if (!string.Equals(actorId.Value, route.Ref.ActorId, StringComparison.Ordinal))
@@ -658,6 +698,7 @@ internal sealed class ZLinkSessionActorBindingTable
                 .Where(entry => entry.Key.ActorId == key.ActorId)
                 .Select(entry => entry.Value)
                 .ToArray();
+            preparePublish?.Invoke(replaced);
             foreach (var entry in replaced)
             {
                 var replacedKey = new ZLinkSessionBindingKey(actorId, entry.BindingToken);
@@ -688,6 +729,7 @@ internal sealed class ZLinkSessionActorBindingTable
                     ? sessionOwnerNodeGeneration
                     : sessionOwnerLeaseGeneration
             );
+            afterPublish?.Invoke(replaced);
             return replaced;
         });
     }
@@ -1615,7 +1657,8 @@ internal sealed class ZLinkSessionActorBindingTable
     public ValueTask UnbindAsync(
         string actorId,
         ZLinkSessionContext context,
-        string bindingToken
+        string bindingToken,
+        Action<ZLinkSessionBindingEntry>? afterRemove = null
     ) =>
         _lane.RunAsync(() =>
         {
@@ -1631,6 +1674,7 @@ internal sealed class ZLinkSessionActorBindingTable
                 SettleOutbound(RemoveOutbound(key), route: null);
                 existing.DrainSignal?.TrySetResult();
                 existing.RouteAvailableSignal?.TrySetResult();
+                afterRemove?.Invoke(existing);
             }
         });
 

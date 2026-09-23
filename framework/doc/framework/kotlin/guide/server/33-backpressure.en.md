@@ -165,10 +165,7 @@ never infers ordering from arrival order.
 slot to send into.**
 
 ```kotlin
-val kotlinClient = client.kotlin()
-kotlinClient.sendToChannel("orders", CancelOrder("order-1042")).await()
-// This await finishing means only "my runtime accepted the submission."
-// It doesn't mean the peer received it or the handler finished.
+--8<-- "framework/languages/java/tutorial/kotlin/Client/src/main/kotlin/systems/zlink/tutorial/client/PlayerEndpoints.kt:channel-send-call"
 ```
 
 The framework starts one binding operation. If there is no room, Core owns the HWM wait and
@@ -181,16 +178,7 @@ whether to start a new operation, drop it, or tell the user it failed is up to t
 application.
 
 ```kotlin
-val kotlinClient = client.kotlin()
-try {
-    kotlinClient.sendToChannel("orders", command).await()
-} catch (ex: ZLinkFrameworkException) {
-    if (ex.kind() != ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED) throw ex
-    // Only this operation's DeadlineExceeded terminal is certain. The peer's state is unknown.
-    // canSafelyRetry is an application-owned predicate that checks whether the command tolerates duplication.
-    if (!canSafelyRetry(command)) throw ex
-    pending += command
-}
+--8<-- "framework/languages/java/tutorial/kotlin/Client/src/main/kotlin/systems/zlink/tutorial/client/PlayerEndpoints.kt:channel-request-call"
 ```
 
 Whether it's OK to resend is judged by the application's business rules. Retry is safe
@@ -224,16 +212,7 @@ stretch, `timeout(...)` is the real ceiling. In particular, **always give a fini
 to a flow that sends another request from inside a handler.**
 
 ```kotlin
-suspend fun handle(request: PlaceOrder, context: ZLinkMessageContext): PlaceOrderReply {
-    // While the handler waits for the reply, this handler's execution slot stays occupied.
-    // If both nodes' processing is delayed at the same time, a finite timeout is the only place recovery starts.
-    val reserved = client.kotlin()
-        .requestToChannel<StockReserved>("inventory", ReserveStock(request.sku, request.quantity))
-        .timeout(Duration.ofSeconds(3))
-        .await()
-
-    return PlaceOrderReply(request.orderId, reserved.reservationId)
-}
+--8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:mesh-register"
 ```
 
 A timeout isn't a knob to tune backpressure — it's **the boundary where you stop waiting.**
@@ -388,9 +367,7 @@ Terminal reply/error completion identifiable before receive does not use this pe
 ## 6. How to Confirm Congestion Is Happening
 
 ```kotlin
-// Kotlin uses the Java surface as-is.
-// Default — records errors and backpressure.
-options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.ERRORS)
+--8<-- "framework/languages/java/samples/kotlin/ZoneWorld/Server/src/main/kotlin/systems/zlink/samples/kotlin/zoneworld/server/Program.kt:doc-monitoring-flow"
 ```
 
 If `backpressured` shows up in the message flow record, it means waiting for a send slot

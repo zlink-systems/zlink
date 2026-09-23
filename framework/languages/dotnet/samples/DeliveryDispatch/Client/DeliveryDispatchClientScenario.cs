@@ -88,6 +88,7 @@ internal sealed class DeliveryDispatchClientScenario(ILogger logger)
             subscribed.DeliveryId == deliveryId,
             "success subscription id mismatch."
         );
+        // --8<-- [start:doc-e2e-sequence]
         var statusSequenceTask = customer
             .WaitForSequence<DeliveryStatusNotify>()
             .Expect(message =>
@@ -109,6 +110,7 @@ internal sealed class DeliveryDispatchClientScenario(ILogger logger)
             .Timeout(customer.Options.WaitTimeout)
             .Async(cancellationToken)
             .AsTask();
+        // --8<-- [end:doc-e2e-sequence]
 
         var created = await http.Post("/deliveries")
             .Body(new CreateDeliveryReq(deliveryId, "customer-1", "Kitchen 12", "Customer Lobby"))

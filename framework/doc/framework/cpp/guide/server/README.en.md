@@ -210,7 +210,7 @@ room_mesh.objects ()
 
 | Order | Document | Content |
 |----|------|------|
-| 1 | [Overview](01-overview.en.md) | What it solves and how it differs from the usual way |
+| 1 | [Overview](01-overview.en.md) | A quick map of the core surface, layers, and topology |
 | 2 | [Quickstart](../../quickstart.en.md) | Install, a minimal project where two processes call each other, first-run checks |
 | 3 | [Core Concepts](03-concepts.en.md) | What a channel, a Spot, an Actor and a session each are |
 | 4 | [Channel Messaging](20-channel-messaging.en.md) | The path that calls by name — registering and calling |
@@ -230,7 +230,7 @@ room_mesh.objects ()
 | 18 | [Handlers and Message Processing](31-handler-dispatch.en.md) | Registration variants, filters, codecs, handler kinds |
 | 19 | [How STREAM Works](38-stream-boundary.en.md) | Startup checks, error ownership, reply tokens, execution mode |
 | 20 | [How Session Binding Works](39-session-binding.en.md) | How many bindings, route refresh, disconnect, failures |
-| 21 | [Where ZLink Applies](17-alternative.en.md) | Where it fits, the signals, the boundary, the license |
+| 21 | [Where ZLink Applies](17-alternative.en.md) | Use cases, alternative comparisons, boundaries, and licensing |
 | 22 | [Operations and Lifecycle](12-operations.en.md) | Runtime metrics, relocate, drain, readiness wiring |
 | 23 | [Options](16-options.en.md) | The option list, the defaults and when to change them |
 | 24 | [Picking a Sample](14-samples.en.md) | Choosing which sample to read first and how to run it |

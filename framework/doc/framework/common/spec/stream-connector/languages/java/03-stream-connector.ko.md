@@ -97,6 +97,33 @@ public interface ZLinkStreamConnector {
     AutoCloseable onErrorReceived(ZLinkStreamErrorHandler handler);
     AutoCloseable onDisconnected(ZLinkStreamDisconnectedHandler handler);
     AutoCloseable onConnectionStateChanged(ZLinkStreamConnectionStateHandler handler);
+
+    // 지금 bind되어 있는 Actor handle(공통 스펙 §5.6). application이 만들지 않는다.
+    List<ZLinkStreamActor> actors();
+    Optional<ZLinkStreamActor> actor(String actorId);
+    AutoCloseable onActorBound(ZLinkStreamActorHandler handler);
+    AutoCloseable onActorUnbound(ZLinkStreamActorHandler handler);
+}
+
+public interface ZLinkStreamActor {
+    String actorId();
+    boolean isBound();                          // unbound 통지 뒤 false
+
+    ZLinkStreamSendCall send(ZLinkStreamEncodedPayload payload);      // 이 Actor의 slot을 싣는다
+    ZLinkStreamRequestCall request(ZLinkStreamEncodedPayload payload);
+    ZLinkTypedStreamSendCall send(Object payload);
+    ZLinkTypedStreamRequestCall request(Object payload);
+    AutoCloseable on(String name, ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload> handler); // 이 Actor가 상대인 message만
+    <TPayload> AutoCloseable on(Class<TPayload> payloadType, ZLinkStreamMessageHandler<TPayload> handler);
+    <TPayload> AutoCloseable on(
+        String name,
+        Class<TPayload> payloadType,
+        ZLinkStreamMessageHandler<TPayload> handler);
+}
+
+@FunctionalInterface
+public interface ZLinkStreamActorHandler {
+    CompletionStage<Void> handle(ZLinkStreamActor actor);
 }
 
 public interface ZLinkStreamLifecycleCall {
@@ -267,7 +294,8 @@ public record ZLinkStreamMessage<TPayload>(
     TPayload payload,
     Map<String, String> metadata,
     String flowId,                // diagnostics level이 OFF이면 null(§4.1)
-    ZLinkFlowOrigin flowOrigin) implements ZLinkStreamFlow {
+    ZLinkFlowOrigin flowOrigin,
+    String actorId) implements ZLinkStreamFlow { // 상대 bound Actor. slot 없는 frame은 null(공통 스펙 §5.6)
 }
 ```
 
@@ -569,7 +597,29 @@ class ZLinkKotlinStreamConnector {
     fun <TPayload> waitForSequence(name: String): ZLinkStreamTypedSequenceCall<TPayload>
     fun messages(packetName: String): Flow<ZLinkStreamMessage<ZLinkStreamEncodedPayload>>
     fun errors(): Flow<ZLinkStreamError>
+    fun actors(): List<ZLinkKotlinStreamActor>
+    fun actor(actorId: String): ZLinkKotlinStreamActor?
+    fun actorBound(): Flow<ZLinkKotlinStreamActor>
+    fun actorUnbound(): Flow<ZLinkKotlinStreamActor>
 }
+
+class ZLinkKotlinStreamActor {
+    val actorId: String
+    val isBound: Boolean
+    fun send(payload: ZLinkStreamEncodedPayload): ZLinkKotlinSendCall
+    fun send(payload: Any): ZLinkKotlinSendCall
+    fun request(payload: ZLinkStreamEncodedPayload): ZLinkKotlinRawRequestCall
+    fun <TReply : Any> request(
+        payload: Any,
+        replyType: KClass<TReply>,
+    ): ZLinkKotlinRequestCall<TReply>
+    fun messages(packetName: String): Flow<ZLinkStreamMessage<ZLinkStreamEncodedPayload>>
+}
+
+inline fun <reified TReply : Any> ZLinkKotlinStreamActor.request(
+    payload: Any,
+): ZLinkKotlinRequestCall<TReply> =
+    request(payload, TReply::class)
 
 class ZLinkKotlinLifecycleCall {
     suspend fun await()
@@ -619,9 +669,10 @@ class ZLinkStreamTypedSequenceCall<TPayload> {
 
 ```
 
-**종료 사유는 wrapper에서 직접 읽는다.** Java connector의 `Optional<ZLinkStreamCloseReason>`을
-Kotlin의 nullable로 옮긴다. 한 번도 끊긴 적이 없으면 `null`이다. wrapper만 사용하는 코드도
-사유에 닿아야 하므로 Java connector를 꺼내 읽도록 두지 않는다.
+**종료 사유와 Actor handle은 wrapper에서 직접 얻는다.** wrapper만 사용하는 코드도 여기에 닿아야
+하므로 Java connector를 꺼내 쓰도록 두지 않는다. Java의 `Optional`은 Kotlin의 nullable로 옮긴다 —
+종료 사유는 한 번도 끊긴 적이 없으면 `null`이고, `actor(id)`는 bind되지 않은 id에 `null`이다
+([공통 스펙 §5.6](../../32-stream-connector.ko.md#56-bound-actor)).
 
 **대기 표면 셋은 이름을 명시하는 길과 payload type에서 결정하는 길을 모두 제공한다.** 이름을
 주지 않으면 `TPayload`의 이름 결정 규칙(§5)이 정한다. `waitFor`만 두 길을 갖고 `expectNone`과
@@ -629,8 +680,9 @@ Kotlin의 nullable로 옮긴다. 한 번도 끊긴 적이 없으면 `null`이다
 
 Kotlin wrapper는 Java connector와 다른 상태 전이나 buffering 정책을 만들면 안 된다. options를
 복사하는 extension은 **현재 정의된 모든 option 값을 보존해야 한다.**
-`messages(...)`와 `errors()`는 Java connector의 `on(...)`, `onErrorReceived(...)`
-handler를 `callbackFlow`로 감싼다. 따라서 manual [dispatch mode](../../../server/00-foundation/02-glossary.ko.md#dispatch-mode)에서는 Java와 마찬가지로
+`Flow`를 돌려주는 표면은 대응하는 Java 등록을 `callbackFlow`로 감싼다 — connector의 `messages(...)`·
+`errors()`·`actorBound()`·`actorUnbound()`는 `on(...)`·`onErrorReceived(...)`·`onActorBound(...)`·
+`onActorUnbound(...)`를, Actor의 `messages(...)`는 그 Actor handle의 `ZLinkStreamActor.on(...)`을 감싼다. 따라서 manual [dispatch mode](../../../server/00-foundation/02-glossary.ko.md#dispatch-mode)에서는 Java와 마찬가지로
 Kotlin wrapper의 `dispatch().await()`가 호출되어야 collector가 메시지나 error event를 받는다.
 
 ## 13. 검증 기준

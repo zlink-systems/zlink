@@ -3,29 +3,39 @@ namespace Zlink.Framework.Runtime.Streams;
 internal sealed class ZLinkSessionActor : IZLinkSessionActor
 {
     private readonly Lazy<Task> _disconnectTask;
+    private int _slot;
 
     internal ZLinkSessionContext Context { get; }
 
     internal RoutingId SessionRid { get; }
 
     internal string BindingToken { get; }
+    internal ushort Slot => checked((ushort)Volatile.Read(ref _slot));
     public string ActorId { get; }
 
     internal ZLinkSessionActor(
         ZLinkSessionContext context,
         string actorId,
         RoutingId sessionRid,
-        string bindingToken
+        string bindingToken,
+        ushort slot = 1
     )
     {
         Context = context;
         ActorId = actorId;
         SessionRid = sessionRid;
         BindingToken = bindingToken;
+        _slot = slot;
         _disconnectTask = new Lazy<Task>(
             () => Context.NotifyActorRefDisconnectedAsync(this, CancellationToken.None).AsTask(),
             LazyThreadSafetyMode.ExecutionAndPublication
         );
+    }
+
+    internal void AssignSlot(ushort slot)
+    {
+        if (slot == 0 || Interlocked.CompareExchange(ref _slot, slot, 0) != 0)
+            throw new InvalidOperationException("Session Actor slot is already assigned.");
     }
 
     public ActorRef Ref => Route.Ref;

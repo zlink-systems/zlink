@@ -6,6 +6,7 @@
 #include <service_wire_constants.hpp>
 #include <opentelemetry/metrics/meter.h>
 #include <opentelemetry/metrics/async_instruments.h>
+#include <opentelemetry/metrics/sync_instruments.h>
 
 #include <cstdint>
 #include <functional>

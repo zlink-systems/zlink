@@ -30,38 +30,31 @@ runtime의 사건을 handler로 받는 표면은 없다. 운영 endpoint에는 �
 === "C#/.NET"
 
     ```csharp
-    var meshRuntime = app.Services.GetRequiredService<IZLinkRouteMeshRuntime>();
-
-    var status = meshRuntime.GetStatus("game.room");
-    var ready = meshRuntime.IsReady("game.room");
+    --8<-- "framework/languages/dotnet/samples/ZoneWorld/Server/Ops/Infrastructure/ZLink/Monitoring/OpsEventHandlers.cs:doc-zw-snapshot-peers"
     ```
 
 === "C++"
 
     ```cpp
-    auto snapshot = mesh_runtime.snapshot ("game.room");
-    const bool ready = mesh_runtime.is_ready ("game.room");
+    --8<-- "framework/languages/cpp/samples/ZoneWorld/Server/Ops/main.cpp:doc-zw-snapshot-peers"
     ```
 
 === "Java"
 
     ```java
-    ZLinkMeshNodeSnapshot snapshot = meshRuntime.snapshot("game.room");
-    boolean ready = meshRuntime.isReady("game.room");
+    --8<-- "framework/languages/java/samples/java/ZoneWorld/Server/src/main/java/systems/zlink/samples/zoneworld/server/ops/NodeLivenessObserver.java:doc-zw-snapshot-peers"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    val snapshot = meshRuntime.snapshot("game.room")
-    val ready = meshRuntime.isReady("game.room")
+    --8<-- "framework/languages/java/samples/kotlin/ZoneWorld/Server/src/main/kotlin/systems/zlink/samples/kotlin/zoneworld/server/ops/NodeLivenessObserver.kt:doc-zw-snapshot-peers"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    const snapshot = this.meshRuntime.snapshot('game.room');
-    const ready = this.meshRuntime.isReady('game.room');
+    --8<-- "framework/languages/node/samples/ZoneWorld/Server/Ops/ops-runtime-events.ts:doc-zw-snapshot-peers"
     ```
 
 **준비 여부와 상태 값을 함께 읽는다.** 준비되지 않았다는 것만으로는 무엇을 할지 정할 수
@@ -79,45 +72,31 @@ socket 내부 상태는 공개 계약이 아니다.
 === "C#/.NET"
 
     ```csharp
-    // 한도를 넘기면 느린 소비자는 중간 값을 건너뛴다.
-    await foreach (var observed in meshRuntime.ObserveAsync("game.room", cancellationToken: ct))
-    {
-        Record(observed.Status);
-    }
+    --8<-- "framework/languages/dotnet/samples/ZoneWorld/Server/Ops/Infrastructure/ZLink/Monitoring/OpsEventHandlers.cs:doc-zw-observe-peers"
     ```
 
 === "C++"
 
     ```cpp
-    // observation 객체를 살려 두는 동안만 callback이 온다. 버리면 구독이 끝난다.
-    auto observation = mesh_runtime.observe (
-      "game.room", 64, [] (const mesh_node_snapshot_t &next) {
-          record (next);
-      });
+    --8<-- "framework/languages/cpp/samples/ZoneWorld/Server/Ops/main.cpp:doc-zw-observe-peers"
     ```
 
 === "Java"
 
     ```java
-    // capacity를 넘기면 느린 구독자는 중간 값을 건너뛴다.
-    meshRuntime.observe("game.room", 64).subscribe(subscriber);
+    --8<-- "framework/languages/java/samples/java/ZoneWorld/Server/src/main/java/systems/zlink/samples/zoneworld/server/ops/NodeLivenessObserver.java:doc-zw-observe-peers"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    meshRuntime.observe("game.room", 64).asFlow().collect { observed ->
-        record(observed.status)
-    }
+    --8<-- "framework/languages/java/samples/kotlin/ZoneWorld/Server/src/main/kotlin/systems/zlink/samples/kotlin/zoneworld/server/ops/NodeLivenessObserver.kt:doc-zw-observe-peers"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    // 구독을 끝내려면 signal을 끊는다.
-    for await (const observed of this.meshRuntime.observe('game.room', 64, signal)) {
-      this.record(observed.status);
-    }
+    --8<-- "framework/languages/node/samples/ZoneWorld/Server/Ops/ops-runtime-events.ts:doc-zw-observe-peers"
     ```
 
 **놓칠 수 있다.** 받는 쪽이 느리면 보관 한도를 넘는 중간 값을 건너뛴다. 놓친 개수는 항목마다
@@ -139,48 +118,31 @@ message 하나가 어디서 어떻게 끝났는지는 진단이 남긴다. 수�
 === "C#/.NET"
 
     ```csharp
-    builder.Services.AddZLinkFramework(options =>
-    {
-        options.ConfigureDispatch().Diagnostics
-            .SetLevel(ZLinkDiagnosticsLevel.Errors)
-            .SetSampleRate(1.0)
-            .IncludeMessageSizes(true);
-    });
+    --8<-- "framework/languages/dotnet/samples/ZoneWorld/Server/ZoneNode/Program.cs:doc-monitoring-flow"
     ```
 
 === "C++"
 
     ```cpp
-    options.configure_dispatch ()
-      .message_flow (message_flow_log_mode_t::errors)
-      .trace_sample_rate (1.0)
-      .include_message_sizes (true);
+    --8<-- "framework/languages/cpp/samples/TicTacToe/Server/Play/play_server_host_factory.hpp:doc-monitoring-flow"
     ```
 
 === "Java"
 
     ```java
-    options.configureDispatch()
-        .messageFlow(ZLinkMessageFlowLogMode.ERRORS)
-        .traceSampleRate(1.0)
-        .includeMessageSizes(true);
+    --8<-- "framework/languages/java/samples/java/ZoneWorld/Server/src/main/java/systems/zlink/samples/zoneworld/server/Program.java:doc-monitoring-flow"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    options.configureDispatch {
-        messageFlow(ZLinkMessageFlowLogMode.ERRORS)
-        traceSampleRate(1.0)
-        includeMessageSizes(true)
-    }
+    --8<-- "framework/languages/java/samples/kotlin/ZoneWorld/Server/src/main/kotlin/systems/zlink/samples/kotlin/zoneworld/server/Program.kt:doc-monitoring-flow"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    builder.configureDispatch()
-      .messageFlow("errors");
+    --8<-- "framework/languages/node/samples/ZoneWorld/Server/ZoneNode/zone-node-module.ts:doc-monitoring-flow"
     ```
 
 | 수준 | 남기는 것 |

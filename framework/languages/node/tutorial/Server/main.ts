@@ -114,6 +114,7 @@ import { PingHandler } from './Sessions/ping-handler';
         builder
           .addFanoutChannel(TutorialNames.broadcastChannel)
           .enableSubscriber('tcp://127.0.0.1:7712')
+          .subscribe(PacketNames.maintenanceNotice)
           .addPublishHandler(PacketNames.maintenanceNotice, MaintenanceNoticeSubscriber);
         // --8<-- [end:fanout-subscribe]
 

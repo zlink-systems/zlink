@@ -29,8 +29,8 @@ or Akka/Orleans, ZLink is a candidate to take their place.
 
 It applies when "where the service is", "where the client is connected" and "how to serialize a
 state unit such as a room, a zone or a symbol" keep coming up as recurring problems. Where
-[Overview](01-overview.en.md) covered why they are needed, this chapter checks that judgement at
-the level of choosing a technology.
+[Overview](01-overview.en.md) describes the main surfaces and structure. This chapter explains
+when those use cases fit ZLink.
 
 ## 1. Where It's Used, at a Glance
 
@@ -108,13 +108,13 @@ them, a team picks its genre's pattern and rebuilds that structure from the sock
   splits this into Spot (an execution-isolation unit) and Actor (a domain entity). What's
   closer to Orleans's virtual actor/grain isn't ZLink's Actor — it's the **Instance Spot**
   this approach uses. The detailed comparison is covered in
-  [Chapter 17 §6](17-alternative.en.md).
+  [Comparison with distributed actor frameworks](#7-reference--comparison-with-distributed-actor-frameworks-orleansakka).
 
-**What ZLink provides.** A feature answers each difficulty, one by one.
+**ZLink features.** The table maps each problem to a feature and its detailed explanation.
 
 | Difficulty | ZLink feature | Details |
 | --- | --- | --- |
-| Building a genre's topology from raw sockets | **Declare topology by combining channels** — 1:N request/response, fan-out, a node-addressed route mesh, a room-scoped spot mesh, all composed in a few lines of registration; the location store keeps connections up automatically | [Layering and registration points](01-overview.en.md#33-layering-and-registration-points) · [Channel Messaging](20-channel-messaging.en.md) · [Spot](21-spot.en.md) · [Location](25-location.en.md) |
+| Building a genre's topology from raw sockets | **Declare topology by combining channels** — 1:N request/response, fan-out, a node-addressed route mesh, a room-scoped spot mesh, all composed in a few lines of registration; the location store keeps connections up automatically | [Layering and registration points](01-overview.en.md#32-layering-and-registration-points) · [Channel Messaging](20-channel-messaging.en.md) · [Spot](21-spot.en.md) · [Location](25-location.en.md) |
 | Locks/contention on in-memory state | **SPOT serial execution** — every message for one room enters its Spot queue and runs in order. Locks disappear from business logic | The code below · [Spot](21-spot.en.md) |
 | Implementing socket framing/session lifetime directly | **STREAM** — the framework owns connection lifetime, framing, and packet codec (TCP/TLS/WS/WSS) | [09](23-stream.en.md) |
 | Tracking a reconnected user's location | **Actor binding** — a new connection after reconnect picks up the same actor | [08](24-actor-session.en.md) |
@@ -123,23 +123,22 @@ them, a team picks its genre's pattern and rebuilds that structure from the sock
 The patterns above all become combinations on **the same declarative model.**
 There's no need to rebuild from the socket for each one.
 
-- **① Zone-sharding** — set up a zone with `add_route_mesh` + a node-addressed route mesh. A
+- **① Zone-sharding** — set up a zone by registering a node-addressed route mesh. A
   player crossing a boundary is handed off by **cross-node actor relocation**
   ([Relocation](37-relocation.en.md)) instead. [ZoneWorld](../../../common/sample/zoneworld/README.en.md)
   is exactly this approach.
-- **② Lobby + room** — entry/matching is the Entry Spot, and a room is a room spot created
-  with `get_or_create`. [Bingo](../../../common/sample/bingo/README.en.md) is exactly this
+- **② Lobby + room** — entry/matching is the Entry Spot, and a room is a room spot created on demand. [Bingo](../../../common/sample/bingo/README.en.md) is exactly this
   approach.
 - **③ Matchmaker + dedicated** — matching is implemented as a channel handler (HTTP, etc.).
   **Instead of spinning up a new process per match**, the client connects over STREAM to the
-  room spot that was `get_or_create`d as the matching result.
+  room spot created earlier as the matching result.
   [TicTacToe](../../../common/sample/tictactoe/README.en.md) is closest to this flow —
   matching request → room/connection info response → connect to the already-prepared room
   spot.
 - **④ Actor service** — an **Instance Spot** is cold-activated by entity ID and serially
   processes the state of an entity that several users access at the same time, with no Redis
   distributed lock. Continued in the
-  [guild service example](#22-concurrent-access-to-one-entity).
+  [order service example](#22-concurrent-access-to-one-order).
 
 Where the "existing approaches" diagram above split into four, here's how each approach
 assembles with ZLink, in the same spots.
@@ -156,7 +155,7 @@ means no new runtime to learn.
 > A Twitch-scale FPS's **ultra-low-latency snapshot netcode** uses unreliable transport that
 > tolerates loss. STREAM provides TCP, TLS, and WebSocket transports. Even for that kind of game, though,
 > matching/lobby/meta/social are handled by these approaches today. Exactly
-> where the line falls is covered in [Chapter 17](17-alternative.en.md) §4.
+> where the line falls is covered in [What ZLink Doesn't Do — the Boundary](#5-what-zlink-doesnt-do--the-boundary).
 
 **How is this different from a game server engine or service?** Alternatives to building
 everything yourself include engines and managed services. Comparing what each provides by
@@ -180,43 +179,24 @@ framework you already use.**
   them directly with a channel handler and spot. There's less pre-built for you, but the
   ownership and freedom over the logic stay with the app.
 
-Instead of rebuilding for each language, ZLink puts the hard runtime in a single **native
-Core (C API)** and wraps it in per-language layers. Per-language **`bindings`** connect that
-C API to each language's socket API, and on top a per-language **ZLink Framework** provides
-surfaces like RouteMesh · SPOT · actor · STREAM. The reason for this thin 3-layer split is
-**multi-language support** — implement the Core once and swap only the language surface, and
-C++, .NET, the JVM, and Node share the same core. `bindings` and the Core are the framework's
-internal implementation, not exposed on the public API, and application code doesn't change
-even if they're replaced later — this backend boundary is explained separately by
-[internals/backend-dependency-policy](../../internals/backend-dependency-policy.en.md).
+The Core, binding, and Framework layers and their roles are described in
+[Core Concepts](03-concepts.en.md#9-what-the-framework-owns-and-what-it-doesnt).
 
 <iframe class="zlink-diagram" src="/common/diagrams/overview-stack-en.html" title="ZLink internal layers — a thin 3-layer stack for multi-language" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/overview-stack-en.html" target="_blank">↗ View larger</a></p>
 
-**As code.** Declare one room, and write that room's progression logic.
+**As code.** First register the room Spot factory.
 
 ```cpp
-// Registration — one room mesh and a room type
-auto node = options.add_route_mesh ("game.room");
-node.listen ("tcp://0.0.0.0:9001");
-// A mesh has at least 1 logical membership
-node.channel_name ("game.room").server ();
-node.add_spot_factory<bingo_room_spot_t> (
-  "room",
-  [] (spot_context_t context) { return std::make_shared<bingo_room_spot_t> (std::move (context)); },
-  [] (auto &factory) { factory.recreate_on_relocation (); });
+--8<-- "framework/languages/cpp/samples/Bingo/Server/Play/play_server_host_factory.hpp:doc-bingo-play-register"
 ```
 
+When a player enters, the Spot's progression logic reads the player's record through a
+channel. Because a new Spot turn begins after the external call, the sample then rechecks
+membership.
+
 ```cpp
-// Bingo room progression code — no concurrency exists inside this.
-// A C++ Spot handler is a Spot member function. The Spot arrives as `this`.
-task_t<mark_result_t> bingo_room_spot_t::mark_number (const mark_number_t &request)
-{
-    // No lock
-    _board.mark (request.number);
-    _last_activity = std::chrono::system_clock::now ();
-    co_return mark_result_t{_board.has_bingo ()};
-}
+--8<-- "framework/languages/cpp/samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/bingo_room_spot.hpp:doc-bingo-room-join"
 ```
 
 Several players send requests at the same time and a timer runs in this room, yet there's no
@@ -228,18 +208,16 @@ every message for one room (requests, subscription events, timer ticks, actor pa
 Runnable reference samples: [TicTacToe](../../../common/sample/tictactoe/README.en.md) ·
 [Bingo](../../../common/sample/bingo/README.en.md) · [GameQuest](../../../common/sample/event/gamequest.en.md)
 
-### 2.2 Concurrent Access to One Entity
+### 2.2 Concurrent Access to One Order
 
-**Why it's hard.** There are cases, like a guild, where **several different users need to
-modify the same entity at the same time.** Just like two users applying to join at the same
-time can exceed the roster cap, or two donations landing at once can lose one of them,
-several stateless API servers touching the same row at the same time creates a race
-condition.
+**Why it's hard.** Payment, cancellation, and dispatch can all **modify the same order at the
+same time.** If several stateless API servers read-modify-write the same order row, state
+transitions can reverse or one update can be lost.
 
-- **Concurrent modifications collide.** If several API instances read-modify-write the same
-  guild row at the same time, a lost update happens.
+- **Concurrent modifications collide.** Overlapping load-modify-store operations from
+  several API instances create lost updates.
 - **You have to assemble your own serialization mechanism.** A Redis distributed lock or DB
-  row lock has to build a per-guild critical section.
+  row lock has to build a per-order critical section.
 - **The lock itself is a new failure mode.** Lock acquisition failure, timeout, deadlock, and
   a stale write after lock expiry all land on the app to handle.
 
@@ -248,39 +226,22 @@ execution unit.
 
 | What you used to assemble | ZLink feature | Details |
 | --- | --- | --- |
-| A Redis distributed lock per guild id | **Instance Spot** — one spot, cold-activated by guild id, processes every request for that guild serially | [Spot](21-spot.en.md) |
+| A Redis distributed lock per order id | **Instance Spot** — one `OrderWorkflowSpot`, cold-activated by order id, processes every request for that order serially | [Spot](21-spot.en.md) |
 | Lock acquire/release/timeout handling | **Serial execution** — the lock concept disappears entirely; everything is always processed in spot queue order | [The Execution Model](32-execution-model.en.md) |
-| Inter-server calls/LB to find the guild spot | **channel name + location store** | [05](20-channel-messaging.en.md)·[10](25-location.en.md) |
-| Pre-provisioning a new guild | Cold-activated on the spot when the first request arrives — no separate preparation needed | |
+| Inter-server calls/LB to find the order owner | **channel name + location store** | [Channel Messaging](20-channel-messaging.en.md)·[Location](25-location.en.md) |
+| Pre-provisioning a new order | Cold-activated on the spot when the first request arrives — no separate preparation needed | |
 
-**The existing approach** — lock acquire/release makes a round trip on every request.
-
-<iframe class="zlink-diagram" src="/common/diagrams/01-guild-existing-en.html" title="Guild state change — existing approach" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/01-guild-existing-en.html" target="_blank">↗ View larger</a></p>
-
-**The ZLink approach** — the lock disappears, and the guild id itself becomes the spot
-address the request will arrive at.
-
-<iframe class="zlink-diagram" src="/common/diagrams/01-guild-zlink-en.html" title="Guild state change — ZLink approach" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/01-guild-zlink-en.html" target="_blank">↗ View larger</a></p>
-
-A request for the same guild always passes through the same GuildSpot's queue, so the second
-request is only processed once the first finishes — it's not that another request is blocked
-for as long as the lock is held; two requests can never touch the same state at the
-same time in the first place.
+In ShoppingMall, the `OrderId` is the owner Spot address. Requests for the same order always
+pass through the same `OrderWorkflowSpot` queue, so the second request runs only after the
+first one finishes.
 
 **As code.** Where lock acquire/release used to sit, one call remains.
 
 ```cpp
-// Applying to join a guild — request directly by guild id. No prior lock, no prior creation.
-co_await spots.request_to_spot (guild_id, join_guild_req_t{user_id})
-  .instance_spot ("guild")
-  .in_mesh ("social")
-  .async<join_guild_res_t> ();
+--8<-- "framework/languages/cpp/samples/ShoppingMall/Server/CommerceApi/main.cpp:doc-sm-api-request"
 ```
 
-There's no runnable reference sample for this scenario yet — the code above applies the same
-API surface as GameQuest's `PlayerQuestSpot` registration/call approach to a guild.
+Runnable reference sample: [ShoppingMall](../../../common/sample/event/shoppingmall.en.md)
 
 ### 2.3 Adding Real-Time Features to an Existing Web Service
 
@@ -336,25 +297,14 @@ disappear. An **Instance Spot** preserves ordering, **Session servers** (STREAM)
 real-time connections instead of shell servers, and **direct runtime connections** handle
 inter-server delivery. The **location store is the only new infrastructure.**
 
-**As code.** Where the distributed lock and sticky routing used to sit, the following code
-remains.
+**As code.** DeliveryDispatch's status-push path sends the notification through the session
+bound to the customer Actor. The app does not query a sticky-routing table.
 
 ```cpp
-// Inside an HTTP handler — route an order event to that order's workflow Spot.
-// The first request cold-activates the spot keyed on order_id, and later requests arrive
-// at the same already-created spot, always processed serially in one place (no distributed lock).
-// request is already a start_order_workflow_req_t body.
-co_await spots.request_to_spot (request.order_id, request)
-  .instance_spot ("order-workflow")
-  .in_mesh ("commerce")
-  .async<start_order_workflow_res_t> ();
-
-// Inside an actor handler — push to a client that's still tied to the same actor after reconnect (no sticky LB).
-co_await actor.context ().bound_session ().send (order_status_changed_t{order_id, status}).async ();
+--8<-- "framework/languages/cpp/samples/DeliveryDispatch/Server/CustomerGateway/main.cpp:doc-dd-bound-session-push"
 ```
 
-Runnable reference samples: [SupportChat](../../../common/sample/supportchat/README.en.md) ·
-[DeliveryDispatch](../../../common/sample/deliverydispatch/README.en.md)
+Runnable reference samples: [DeliveryDispatch](../../../common/sample/deliverydispatch/README.en.md)
 
 ### 2.4 Simplifying Event-Driven Business Processing
 
@@ -421,7 +371,7 @@ gone in the after picture.
 **What stays, stays.** Client HTTP ingress is still stateless, so an L7 LB/Ingress
 distributes to API servers as usual (gray), and order state is still stored in the DB.
 Unlike gRPC, this HTTP ingress path also doesn't **additionally** require an L7 distribution
-device (the reason is covered in [Chapter 17 §5.1](17-alternative.en.md)).
+device (the reason is covered in [The Limits of gRPC Alone](#61-the-limits-of-grpc-alone)).
 
 **What ZLink provides.** Solving "gather the same key in one place, in order" with **owner
 routing** instead of a log means most of the pieces above never need to be assembled.
@@ -440,7 +390,7 @@ event stream, and Redis stays as cache/persistence support. What ZLink cuts is t
 
 **The boundary stays where it is.** Where a durable log is genuinely needed — event replay,
 long-term retention, broad fan-out to independent systems — Kafka is the right fit and stays
-exactly there ([Chapter 17 §4](17-alternative.en.md)). What ZLink cuts is the case where a
+exactly there ([What ZLink Doesn't Do — the Boundary](#5-what-zlink-doesnt-do--the-boundary)). What ZLink cuts is the case where a
 log pipeline was assembled **only** for entity-scoped ordered processing. If order and
 consistency were the entire goal, owner routing achieves that goal directly, with no
 pipeline.
@@ -448,15 +398,7 @@ pipeline.
 **As code.** Where the partition consumer used to sit, an owner Spot handler comes instead.
 
 ```cpp
-// Processing for the same order_id always executes serially inside this Spot —
-// no partition, no offset, no distributed lock, no idempotency retry policy to assemble.
-// A C++ Spot handler is a Spot member function.
-task_t<start_order_workflow_res_t>
-order_workflow_spot_t::start_order_workflow (const start_order_workflow_req_t &request)
-{
-    // Accesses spot state without a lock
-    co_return co_await start_workflow (request);
-}
+--8<-- "framework/languages/cpp/samples/ShoppingMall/Server/OrderWorkflow/main.cpp:doc-sm-spot-start"
 ```
 
 Runnable reference sample: [ShoppingMall](../../../common/sample/event/shoppingmall.en.md) —
@@ -510,6 +452,44 @@ server in .NET or Java**, and message over the same channel/Spot contract.
 > **design goal** of ZLink — the call contract doesn't depend on the binding's
 > implementation language.
 
+### 3.2 How It Feels Compared with the Existing Approach
+
+The difference in the amount of code needed to wire up the same "inter-server
+request/response."
+
+**Directly with raw bindings (conceptual)** — not runnable code, but the list of work a
+direct implementation would require. Supported languages use the same list, so it isn't
+split into language tabs.
+
+```text
+Location-store lookup, connecting the endpoint, reconnect management,
+correlation id matching, serialization, receive loop ... dozens of lines of connection/setup code
+```
+
+**ZLink Framework** — the blocks below are the tutorial's real "profile" channel code. The
+only difference from a price lookup is that the target is a player profile lookup instead.
+First, the handler that receives the request on the server.
+
+```cpp
+--8<-- "framework/languages/cpp/tutorial/Server/channel/get_player_profile_handler.hpp:channel-request-handler"
+```
+
+This handler is registered on the mesh and the channel.
+
+```cpp
+--8<-- "framework/languages/cpp/tutorial/Server/main.cpp:mesh-register"
+--8<-- "framework/languages/cpp/tutorial/Server/main.cpp:channel-register"
+```
+
+The client calls this channel like this.
+
+```cpp
+--8<-- "framework/languages/cpp/tutorial/Client/main.cpp:channel-request-call"
+```
+
+The connection/setup code disappears, leaving a handler and a few lines of channel
+registration.
+
 ## 4. Symptoms That Make ZLink a Candidate
 
 Judge by **symptoms**, not by technology names. If the following keep recurring, ZLink is a
@@ -544,7 +524,8 @@ responsibility.
 
 ## 6. Reference — Comparison with the gRPC/Service-Mesh Stack
 
-To see why "internal services calling each other often" in §1 makes ZLink a candidate,
+To see why "internal services calling each other often" in
+[Where It's Used, at a Glance](#1-where-its-used-at-a-glance) makes ZLink a candidate,
 compare it with the gRPC stack.
 
 ### 6.1 The Limits of gRPC Alone
@@ -630,10 +611,11 @@ keep the existing mesh/LB alongside it.
 
 ## 7. Reference — Comparison with Distributed Actor Frameworks (Orleans/Akka)
 
-Microsoft Orleans and Akka are representative frameworks used for the ④ stateful-actor
-pattern in `01. Overview` §2. Because ZLink's Spot/actor offers the same
-primitives (mailbox serialization + location transparency), the candidates overlap for this
-workload.
+Microsoft Orleans and Akka are representative frameworks actually used for the ④
+stateful-actor approach in
+[Building a Real-Time Game Server](#21-building-a-real-time-game-server). Because ZLink's
+Spot/actor offers the same primitives (mailbox serialization + location transparency), the
+candidates overlap for this workload.
 
 ### 7.1 The Limits of Orleans/Akka Alone
 
@@ -679,7 +661,7 @@ differences in the availability of this kind of pre-built tooling.
 | Create a missing Actor or use an existing one | ✅ | ✅ `get_or_create` coordinates concurrent creation of the same ActorId |
 | Waking a dormant actor at a scheduled time (reminder) | ✅ One API call (Orleans Reminder) | ❌ No dedicated API — compose with a distributed scheduler (② below) |
 | Distributed transactions | Orleans has experimental support | ❌ None (the app composes a saga) — this is an inherent protocol challenge that can't be worked around with existing primitives |
-| License | Orleans MIT / Akka BSL (a paid trigger based on annual revenue) | framework is FSL-1.1-ALv2, core/binding are MPL-2.0 — no revenue-based paid trigger (§7) |
+| License | Orleans MIT / Akka BSL (a paid trigger based on annual revenue) | framework is FSL-1.1-ALv2, core/binding are MPL-2.0 — no revenue-based paid trigger |
 | Time proven in production | 10+ years (Halo, Microsoft 365, Skype) | Short — this project itself is still in progress |
 
 ① **Actor state persistence** — lifecycle hooks like `on_create`/`on_closing` are provided,

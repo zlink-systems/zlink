@@ -91,7 +91,7 @@ does not run the Spot's disconnect callback twice. Call the Actor directly only 
 is still up but the application protocol treats it as disconnected.
 
 ```cpp
-co_await actor.notify_disconnected ();
+--8<-- "framework/languages/cpp/samples/TicTacToe/Server/Play/Infrastructure/ZLink/Sessions/play_session.hpp:session-disconnect-notify"
 ```
 
 ## 4. When a Bind Fails or Becomes Void

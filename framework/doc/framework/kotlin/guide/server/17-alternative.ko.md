@@ -27,8 +27,7 @@ ZLink는 서버 간·실시간 메시징 계층이다. 논리 channel, 연결 �
 gRPC나 Akka/Orleans를 고민하고 있다면 ZLink가 그 자리를 대체할 후보다.
 
 "서비스가 어디 있는지", "client가 어디에 연결돼 있는지", "room·zone·symbol 같은 상태 단위를
-어떻게 직렬 처리할지"가 반복 문제로 나올 때 적용 대상이다. [개요](01-overview.ko.md)가 "왜
-필요한가"를 다뤘다면, 이 장은 그 판단을 기술 선택 수준에서 확인한다.
+어떻게 직렬 처리할지"가 반복 문제로 나올 때 적용 대상이다. [개요](01-overview.ko.md)는 주요 표면과 구조를 설명하며, 이 장은 기술 선택의 적용 기준을 설명한다.
 
 ## 1. 한눈에 보는 사용처
 
@@ -68,13 +67,13 @@ framework가 없다. 우연이 아니라 이유가 있다.
   세션 수명을 직접 다루고, 재접속하면 어느 서버의 어느 room에 있었는지 이어 줘야
   하고, 배포·축소 때 접속 유저와 진행 중인 게임 상태를 유지해야 한다.
 
-그래서 지금까지는 이걸 전부 직접 만들거나, 게임 서버 엔진이라는
+그래서 기존에는 필요한 기능을 직접 모두 만들거나, 게임 서버 엔진이라는
 **별도 runtime으로 옮겨가** 로직 작성 방식·설정·배포·운영을 엔진 방식으로 다시
 배우는 수밖에 없었다.
 
 **실제로는 어떻게 만들어 왔나.** 업계에서 통용되는 이름이 붙은 패턴으로 묶인다.
 어느 패턴이든 login/auth, gateway, DB cache 같은 상자가 반복해서
-등장하지만 — 그걸 받쳐 주는 공통 framework는 없어서, 팀은 자기 장르의 방식을
+등장하지만 — 이를 뒷받침하는 공통 framework가 없어, 팀은 자기 장르의 방식을
 골라 그 구조를 소켓부터 다시 만든다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/01-arch-existing.html" title="게임 백엔드 4가지 유형 — 기존 방식" style="width:100%;border:0"></iframe>
@@ -96,16 +95,16 @@ framework가 없다. 우연이 아니라 이유가 있다.
   유지하고, DB는 주기적 저장소 역할만 한다. 읽기 편중 부하가 줄고 별도 캐싱
   계층이 필요 없어져, 메타·소셜 백엔드에서 흔히 쓰인다. 대표 framework는
   Orleans·Akka다. **개념 차이 하나** — Akka의 actor는 사용자 하나가 아니라 어디에나
-  사용하는 범용 동시성 단위이고, ZLink는 이걸 Spot(실행 격리 단위)과 Actor(도메인
+  사용하는 범용 동시성 단위이며, ZLink는 이를 Spot(실행 격리 단위)과 Actor(도메인
   엔티티)로 나눴다. Orleans의 virtual actor·grain에 더 가까운 건 ZLink Actor가
   아니라 이 방식이 사용하는 **Instance Spot**이다. 세부 비교는
   [분산 actor framework와의 비교](#7-참고--분산-actor-frameworkorleansakka와의-비교)가 다룬다.
 
-**ZLink가 제공하는 것.** 어려움 하나하나에 기능이 대응한다.
+**ZLink가 제공하는 기능.** 다음 표는 각 문제에 대응하는 기능과 관련 설명을 연결한다.
 
 | 어려움 | ZLink 기능 | 자세히 |
 | --- | --- | --- |
-| 장르별 토폴로지를 소켓부터 직접 만듦 | **channel 조합으로 토폴로지 선언** — 1:N 요청/응답, fan-out, node 지목 route mesh, room 단위 spot mesh를 등록 몇 줄로 조합, 연결은 location store가 자동 유지 | [계층 구조와 등록 지점](01-overview.ko.md#33-계층-구조와-등록-지점) · [Channel 메시징](20-channel-messaging.ko.md) · [Spot](21-spot.ko.md) · [Location](25-location.ko.md) |
+| 장르별 토폴로지를 소켓부터 직접 만듦 | **channel 조합으로 토폴로지 선언** — 1:N 요청/응답, fan-out, node 지목 route mesh, room 단위 spot mesh를 등록 몇 줄로 조합, 연결은 location store가 자동 유지 | [계층 구조와 등록 지점](01-overview.ko.md#32-계층-구조와-등록-지점) · [Channel 메시징](20-channel-messaging.ko.md) · [Spot](21-spot.ko.md) · [Location](25-location.ko.md) |
 | in-memory 상태의 lock·경합 | **SPOT 직렬 실행** — 한 room의 모든 message가 Spot queue에 들어가 순서대로 실행된다. lock이 업무 로직에서 사라진다 | 아래 코드 · [Spot](21-spot.ko.md) |
 | 소켓 framing·세션 수명 직접 구현 | **STREAM** — 연결 수명·framing·packet codec을 framework가 소유(TCP/TLS/WS/WSS) | [STREAM](23-stream.ko.md) |
 | 재접속 유저 위치 추적 | **actor binding** — 재접속한 새 연결이 같은 actor로 이어진다 | [Session과 Actor 연결](24-actor-session.ko.md) |
@@ -114,18 +113,18 @@ framework가 없다. 우연이 아니라 이유가 있다.
 위 네 방식은 전부 같은 선언 모델 **위의 조합**이 된다. 방식마다 소켓부터
 다시 만들 필요가 없다.
 
-- **① zone 분할** — zone을 `addRouteMesh` + node 지목 route mesh로 잡는다. 경계를 넘는
+- **① zone 분할** — node를 지정하는 route mesh로 zone을 구성한다. 경계를 넘는
   플레이어는 **actor 크로스node relocation**이 대신 넘겨준다([Relocation](37-relocation.ko.md)).
   [ZoneWorld](../../../common/sample/zoneworld/README.ko.md)가 이 방식 그대로다.
-- **② lobby + room** — 입장·매칭은 Entry Spot, 방은 `getOrCreate`로 만드는 room spot이다.
+- **② lobby + room** — 입장·매칭은 Entry Spot, 방은 필요할 때 생성하는 room spot이다.
   [Bingo](../../../common/sample/bingo/README.ko.md)가 이 방식 그대로다.
 - **③ matchmaker + dedicated** — 매칭은 channel handler(HTTP 등)로 구현한다. **판마다 새
-  process를 띄우는 대신** 매칭 결과로 `getOrCreate`된 room spot에 client가 STREAM으로
+  process를 띄우는 대신** 매칭 결과로 앞서 생성한 room spot에 client가 STREAM으로
   접속한다. [TicTacToe](../../../common/sample/tictactoe/README.ko.md)가 이 흐름에 가장
   가깝다 — 매칭 요청 → room·접속 정보 응답 → 이미 준비된 room spot에 접속.
 - **④ actor 서비스** — **Instance Spot**이 엔티티 ID로 cold activation되어, 여러 유저가
   동시에 건드리는 엔티티 상태를 Redis 분산 락 없이 직렬로 처리한다.
-  [길드 서비스 예시](#22-하나의-엔티티에-대한-동시-접근)에서 이어진다.
+  [주문 서비스 예시](#22-주문-하나에-대한-동시-접근)에서 이어진다.
 
 위 "기존 방식" 그림과 같은 자리에서, ZLink로는 각 방식이 이렇게 구성된다.
 
@@ -163,44 +162,22 @@ ZLink는 이 중 **연결·세션(STREAM), room·상태 단위(SPOT), 서버 간
   handler와 spot으로 직접 작성한다. 미리 만들어진 기능은 적지만, 로직의 소유권과
   자유도가 앱에 남는다.
 
-ZLink는 언어마다 처음부터 다시 만드는 대신, 어려운 runtime을 담은 **native Core(C API)**
-하나를 두고 그 위를 언어별 계층으로 감싼다. 언어별 **`bindings`** 가 그 C API를 각 언어의
-소켓 API로 잇고, 그 위에 언어별 **ZLink Framework** 가 RouteMesh · SPOT · actor · STREAM
-같은 표면을 제공한다. 이렇게 얇은 계층 구조로 나눈 이유는 **다중 언어 지원**이다 — Core를
-한 번만 구현하고 언어 표면만 갈아 끼우면 C++ · .NET · JVM · Node가 같은 코어를 공유한다.
-`bindings`와 Core는 framework 내부 구현이라 public API에 노출되지 않고, 나중에 교체돼도
-application 코드는 바뀌지 않는다 — 이 backend 경계는
-[internals/backend-dependency-policy](../../../java/internals/backend-dependency-policy.ko.md)가
-별도로 설명한다.
+Core, binding, Framework 계층과 각 역할은 [핵심 개념](03-concepts.ko.md#9-framework가-맡는-것과-맡지-않는-것)에서 설명한다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/overview-stack.html" title="ZLink 계층 관계 — 다중 언어를 위한 얇은 3계층" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/overview-stack.html" target="_blank">↗ 크게 보기</a></p>
 
-**코드로 보면.** room 하나를 선언하고, 그 room의 진행 로직을 사용한다.
+**코드로 보면.** 먼저 room Spot factory를 등록한다.
 
 ```kotlin
-// 등록 — room mesh 하나와 room 타입
-val node = options.addRouteMesh("game.room")
-node.listen("tcp://0.0.0.0:9001")
-// mesh는 최소 1개 logical membership을 갖는다
-node.channelName("game.room").server()
-node.objects().server()
-    .addSpotFactory("room", BingoRoomSpot::class.java) { factory ->
-        factory.recreateOnRelocation()
-    }
+--8<-- "framework/languages/java/samples/kotlin/Bingo/Server/Play/src/main/kotlin/systems/zlink/samples/kotlin/bingo/server/play/PlayServerApplication.kt:doc-bingo-play-register"
 ```
 
-```kotlin
-// bingo room의 진행 코드 — 이 안에서 동시성은 존재하지 않는다.
-class MarkNumberHandler : ZLinkSpotRequestHandler<BingoRoomSpot, MarkNumber, MarkResult> {
+room에 플레이어가 들어오면 Spot의 진행 로직이 channel을 통해 플레이어 기록을 조회한다.
+외부 호출 뒤에는 새 Spot turn이 시작되므로, 샘플은 이어서 membership을 다시 확인한다.
 
-    override suspend fun handle(room: BingoRoomSpot, request: MarkNumber): MarkResult {
-        // lock 없음
-        room.board.mark(request.number)
-        room.lastActivity = Instant.now()
-        return MarkResult(room.board.hasBingo())
-    }
-}
+```kotlin
+--8<-- "framework/languages/java/samples/kotlin/Bingo/Server/Play/src/main/kotlin/systems/zlink/samples/kotlin/bingo/server/play/infrastructure/zlink/spots/bingoroomspot/BingoRoomSpot.kt:doc-bingo-room-join"
 ```
 
 여러 플레이어가 동시에 요청을 보내고 timer가 도는 room인데 `lock`도,
@@ -212,55 +189,38 @@ class MarkNumberHandler : ZLinkSpotRequestHandler<BingoRoomSpot, MarkNumber, Mar
 실행되는 근거 샘플: [TicTacToe](../../../common/sample/tictactoe/README.ko.md) ·
 [Bingo](../../../common/sample/bingo/README.ko.md) · [GameQuest](../../../common/sample/event/gamequest.ko.md)
 
-### 2.2 하나의 엔티티에 대한 동시 접근
+### 2.2 주문 하나에 대한 동시 접근
 
-**왜 어려운가.** 길드처럼 **서로 다른 여러 유저가 같은 엔티티를 동시에 수정**해야
-하는 경우가 있다. 두 유저가 동시에 가입을 신청해 정원을 넘기거나, 두 기부가 동시에
-반영돼 하나가 유실되는 것처럼, stateless API 서버 여러 대가 같은 row를 동시에
-수정하면 race condition이 생긴다.
+**왜 어려운가.** 결제·취소·배송 시작처럼 **서로 다른 요청이 같은 주문을 동시에
+수정**할 수 있다. stateless API 서버 여러 대가 같은 주문 row를 읽고-고치고-저장하면
+상태 전이가 뒤집히거나 한 변경이 유실된다.
 
-- **동시 수정이 충돌한다.** 여러 API 인스턴스가 같은 길드 row를 동시에
-  읽고-고치고-사용하면 lost update가 생긴다.
-- **직렬화 장치를 직접 만들어야 한다.** Redis 분산 락이나 DB row lock으로 길드
-  단위 critical section을 만들어야 한다.
-- **락 자체가 새 실패 모드다.** 락 획득 실패·타임아웃·데드락·락 만료 후 stale
-  write 처리가 application의 책임으로 남는다.
+- **동시 수정이 충돌한다.** 여러 API 인스턴스의 load-modify-store가 겹치면 lost
+  update가 생긴다.
+- **직렬화 장치를 직접 만들어야 한다.** Redis 분산 락이나 DB row lock으로 주문 단위
+  critical section을 만들어야 한다.
+- **락 자체가 새 실패 모드다.** 락 획득 실패·타임아웃·데드락·락 만료 후 stale write
+  처리가 application의 책임으로 남는다.
 
 **ZLink가 제공하는 것.** 락을 직접 구성하는 대신 그 엔티티를 직렬 실행 단위로 만든다.
 
 | 직접 갖추던 것 | ZLink 기능 | 자세히 |
 | --- | --- | --- |
-| 길드 id별 Redis 분산 락 | **Instance Spot** — 길드 id로 cold activation되는 spot 하나가 그 길드의 모든 요청을 직렬 처리 | [Spot](21-spot.ko.md) |
+| 주문 id별 Redis 분산 락 | **Instance Spot** — 주문 id로 cold activation되는 `OrderWorkflowSpot` 하나가 그 주문의 모든 요청을 직렬 처리 | [Spot](21-spot.ko.md) |
 | 락 획득·해제·타임아웃 처리 | **직렬 실행** — 락 개념 자체가 없어지고, 항상 spot queue 순서대로 처리된다 | [실행 모델](32-execution-model.ko.md) |
-| 길드 spot을 찾는 서버 간 호출·LB | **channel name + location store** | [Channel 메시징](20-channel-messaging.ko.md)·[Location](25-location.ko.md) |
-| 새 길드의 사전 프로비저닝 | 첫 요청이 오면 그 자리에서 cold activation — 별도 준비 불필요 | |
+| 주문 owner를 찾는 서버 간 호출·LB | **channel name + location store** | [Channel 메시징](20-channel-messaging.ko.md)·[Location](25-location.ko.md) |
+| 새 주문의 사전 프로비저닝 | 첫 요청이 오면 그 자리에서 cold activation — 별도 준비 불필요 | |
 
-**기존 방식** — 락 획득·해제가 매 요청마다 왕복한다.
-
-<iframe class="zlink-diagram" src="/common/diagrams/01-guild-existing.html" title="길드 상태 변경 — 기존 방식" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/01-guild-existing.html" target="_blank">↗ 크게 보기</a></p>
-
-**ZLink 방식** — 락이 사라지고, 길드 id가 곧 그 요청이 도착할 spot 주소가 된다.
-
-<iframe class="zlink-diagram" src="/common/diagrams/01-guild-zlink.html" title="길드 상태 변경 — ZLink 방식" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/01-guild-zlink.html" target="_blank">↗ 크게 보기</a></p>
-
-같은 길드로 온 요청은 항상 같은 GuildSpot의 queue를 통과하므로, 두 번째 요청은 첫
-번째가 끝난 뒤에야 처리된다 — 락을 잡고 있는 시간만큼 다른 요청이 막히는 게 아니라,
-동시에 두 요청이 같은 상태를 만질 수 없다.
+ShoppingMall에서는 `OrderId`가 곧 owner Spot의 주소다. 같은 주문으로 온 요청은 항상
+같은 `OrderWorkflowSpot` queue를 통과하므로 두 번째 요청은 첫 번째가 끝난 뒤에 처리된다.
 
 **코드로 보면.** 락 획득·해제가 있던 자리에 한 호출이 남는다.
 
 ```kotlin
-// 길드 가입 신청 — 길드 id로 바로 요청한다. 사전 락도, 사전 생성도 없다.
-spots.kotlin().requestToSpot<JoinGuildRes>(guildId, JoinGuildReq(userId))
-    .instanceSpot("guild")
-    .inMesh("social")
-    .await()
+--8<-- "framework/languages/java/samples/kotlin/ShoppingMall/Server/CommerceApi/src/main/kotlin/systems/zlink/samples/kotlin/shoppingmall/server/commerceapi/OrderWorkflowRouter.kt:doc-sm-api-request"
 ```
 
-이 시나리오는 아직 실행 가능한 기준 샘플이 없다 — 위 코드는 GameQuest의
-`PlayerQuestSpot` 등록·호출 방식과 같은 API 표면을 길드에 적용한 것이다.
+실행되는 근거 샘플: [ShoppingMall](../../../common/sample/event/shoppingmall.ko.md)
 
 ### 2.3 기존 웹 서비스의 실시간 기능 추가
 
@@ -309,24 +269,14 @@ sticky LB · pub/sub 브로커 · 분산 락 — 이 인프라 구성 요소가 
 **Instance Spot**이, 실시간 연결은 shell 서버 대신 **Session 서버**(STREAM)가, 서버 간
 전달은 **runtime 직접 연결**이 맡는다. 새로 두는 인프라는 **location store 하나**뿐이다.
 
-**코드로 보면.** 분산 락과 sticky 라우팅이 있던 자리에 다음 코드가 남는다.
+**코드로 보면.** DeliveryDispatch의 상태 push 경로는 customer actor에 bound된 session으로
+알림을 보낸다. application이 sticky routing 테이블을 조회하지 않는다.
 
 ```kotlin
-// HTTP handler 안 — 주문 이벤트를 그 주문의 workflow Spot으로.
-// 첫 요청이 OrderId 기준 spot을 cold-activate하고, 이후 요청은 이미 만들어진
-// 같은 spot에 도착해 항상 한 곳에서 순서대로 처리된다(분산 락 없음).
-// request는 이미 StartOrderWorkflowReq 바디다.
-spots.kotlin().requestToSpot<StartOrderWorkflowRes>(request.orderId, request)
-    .instanceSpot("order-workflow")
-    .inMesh("commerce")
-    .await()
-
-// actor handler 안 — 재접속해도 같은 actor로 이어진 client에 push(sticky LB 없음).
-actor.context().boundSession().kotlin().send(OrderStatusChanged(orderId, status)).await()
+--8<-- "framework/languages/java/samples/kotlin/DeliveryDispatch/Server/CustomerGateway/src/main/kotlin/systems/zlink/samples/kotlin/deliverydispatch/server/customergateway/CustomerActor.kt:doc-dd-bound-session-push"
 ```
 
-실행되는 근거 샘플: [SupportChat](../../../common/sample/supportchat/README.ko.md) ·
-[DeliveryDispatch](../../../common/sample/deliverydispatch/README.ko.md)
+실행되는 근거 샘플: [DeliveryDispatch](../../../common/sample/deliverydispatch/README.ko.md)
 
 ### 2.4 이벤트 중심 업무 처리 단순화
 
@@ -410,16 +360,7 @@ ZLink가 줄이는 것은 "엔티티 단위 순서 처리"만을 위해 log 파�
 **코드로 보면.** partition 소비자 자리에 owner Spot handler가 온다.
 
 ```kotlin
-// 같은 OrderId의 처리는 항상 이 Spot 안에서 순서대로 실행된다 —
-// partition도, offset도, 분산 락도, 멱등성 재시도 정책도 직접 갖추지 않는다.
-class StartOrderWorkflowHandler :
-    ZLinkSpotRequestHandler<OrderWorkflowSpot, StartOrderWorkflowReq, StartOrderWorkflowRes> {
-
-    override suspend fun handle(
-        spot: OrderWorkflowSpot, request: StartOrderWorkflowReq): StartOrderWorkflowRes =
-        // spot 상태에 lock 없이 접근
-        workflow.startInSpot(spot, request)
-}
+--8<-- "framework/languages/java/samples/kotlin/ShoppingMall/Server/OrderWorkflow/src/main/kotlin/systems/zlink/samples/kotlin/shoppingmall/server/orderworkflow/handlers/StartOrderWorkflowHandler.kt:doc-sm-spot-start"
 ```
 
 실행되는 근거 샘플: [ShoppingMall](../../../common/sample/event/shoppingmall.ko.md) — 실시간 push
@@ -467,6 +408,41 @@ channel/spot 계약으로 메시징할 수 있다.
     같은 channel·packet 계약을 언어별 binding이 자기 언어로 구현한다. 이 가이드의 예제는
     언어 탭으로 나뉘며, 어느 탭을 보든 같은 계약을 설명한다. 호출 계약이 binding 구현 언어와
     무관하다는 것이 ZLink의 설계 목표다.
+
+### 3.2 기존 방식 대비 체감 난이도
+
+같은 "서버 간 요청/응답"을 붙이는 코드량 차이다.
+
+**raw 바인딩으로 직접 (개념적)** — 실행되는 코드가 아니라 직접 구성해야 할 작업
+목록이다. 지원 언어에서 같은 목록을 사용하므로 언어 탭으로 나누지 않는다.
+
+```text
+위치 저장소 조회, endpoint 연결, 재연결 관리,
+correlation id 매칭, 직렬화, 수신 루프 ... 수십 줄의 연결·설정 코드
+```
+
+**ZLink Framework** — 아래는 tutorial의 실제 "profile" channel 코드다. 대상이 가격 조회가
+아니라 플레이어 프로필 조회로 바뀐 것 말고는 같은 모양이다. 먼저 서버가 요청을 받는
+handler다.
+
+```kotlin
+--8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/channel/GetPlayerProfileHandler.kt:channel-request-handler"
+```
+
+이 handler를 mesh와 channel에 등록한다.
+
+```kotlin
+--8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:mesh-register"
+--8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:channel-register"
+```
+
+클라이언트는 이 channel을 이렇게 호출한다.
+
+```kotlin
+--8<-- "framework/languages/java/tutorial/kotlin/Client/src/main/kotlin/systems/zlink/tutorial/client/PlayerEndpoints.kt:channel-request-call"
+```
+
+연결·설정 코드가 사라지고 남는 것은 handler와 channel 등록 몇 줄이다.
 
 ## 4. ZLink 후보가 되는 증상
 
@@ -607,8 +583,8 @@ Orleans·Akka는 **actor primitive 하나에** 깊이 집중한다. 그런데 �
 client 연결·서비스 메시징·actor 상태를 한 framework가 함께 제공한다.
 다만 이 그림에 나타나지 않는 차이가 있다 — Orleans/Akka가 오랜 기간에 걸쳐 미리
 구현해 둔 persistence connector·reminder scheduler 같은 부가 도구까지 하나로 내려오는
-건 아니다. 아래 표에서 어디까지가 원시 기능 차이고 어디부터가 이런 미리 구현된
-도구의 유무 차이인지 나눠서 본다.
+것은 아니다. 아래 표는 원시 기능의 차이와 미리 구현된 도구의 유무에서 비롯된 차이를
+나눠서 보여 준다.
 
 ### 7.3 기능 비교 — 유리한 점과 불리한 점
 

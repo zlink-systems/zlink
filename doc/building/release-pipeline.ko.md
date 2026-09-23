@@ -18,12 +18,12 @@
 | Binding Node | `@zlink-systems/zlink` (linux-x64 prebuild 포함) | npm | `bindings-release.yml` | `node/v*` 태그 또는 dispatch | npm Trusted Publishing(OIDC, provenance) |
 | Binding Java | `systems.zlink:zlink`, `zlink-ext-netty` | Maven Central, GitHub Packages | `bindings-release.yml` | `java/v*` 태그 또는 dispatch | `MAVEN_CENTRAL_*`, `SIGNING_*`(GPG) |
 | Binding .NET | `Zlink` nupkg (+snupkg) | nuget.org | `release-dotnet.yml` (target `binding`) | `dotnet/v*` 태그 또는 dispatch | nuget Trusted Publishing(`NuGet/login`, 정책 `zlink-dotnet-release`) |
-| Framework C++ | source archive + sha256(`cmake -P framework/languages/cpp/cmake/prepare-source-archive.cmake`: `framework/languages/cpp` + `framework/runtime` + `framework/LICENSE`, generated protocol header를 `--check`로 검증) | GitHub Release `framework-cpp/vA.B.C` | `framework-release.yml` | `framework-cpp/v*` 태그 또는 `target=cpp` dispatch | `GITHUB_TOKEN` |
+| Framework C++ | source archive + sha256(`cmake -P framework/languages/cpp/cmake/prepare-source-archive.cmake`: `framework/languages/cpp` + `framework/runtime` + `framework/LICENSE`, generated protocol header를 `--check`로 검증), 4개 지원 플랫폼의 shared prebuilt archive + sha256(Framework shared library·header·CMake config와 해당 플랫폼의 Core prebuilt·C++ binding 포함). 모든 자산은 하나로 결정한 릴리스 ref(태그 실행은 `framework/v*` 또는 `framework-cpp/v*`, dispatch는 `framework-cpp/vA.B.C`)에서 빌드한다. | 결정된 릴리스 ref의 GitHub Release | `framework-release.yml`, runner·compiler matrix는 `framework/languages/cpp/packaging/prebuilt-platforms.json` | `framework/v*`·`framework-cpp/v*` 태그 또는 `target=cpp` dispatch(`cpp_platform`으로 단일 플랫폼 재실행) | `GITHUB_TOKEN` |
 | Framework Node | `@zlink-systems/*` 8개 | npm | `framework-release.yml` | `framework-node/v*` 태그 또는 `target=node` dispatch | npm Trusted Publishing(패키지별 등록) |
 | Framework JVM | `systems.zlink:zlink-framework-*` 13개(Kotlin 포함) | Maven Central | `framework-release.yml` | `framework-java/v*` 태그 또는 `target=java` dispatch | `MAVEN_CENTRAL_*`, `SIGNING_*` |
 | Framework .NET | `Zlink.Framework*`, `Zlink.HttpClient`, `Zlink.Stream.Connector` 등 9개 | nuget.org | `release-dotnet.yml` (target `framework`) | `framework-dotnet/v*` 태그 또는 dispatch | nuget Trusted Publishing |
 | 문서 사이트 | mkdocs 정적 사이트 | GitHub Pages | `docs.yml` | `main` push(문서 경로) | `GITHUB_TOKEN` |
-| Examples 미러 | `framework/languages/<lang>/{quickstart,tutorial,samples}`를 `scripts/tutorial/export_examples.py`로 내보낸 tree | 읽기 전용 저장소 `zlink-systems/zlink-<lang>-examples` 5개. Java와 Kotlin은 tree는 분리하지만 Java framework 릴리스를 함께 쓴다. `main` = 최신 릴리스 + 그 뒤의 수정, 태그 `vA.B.C` | `examples-mirror.yml` | 릴리스 워크플로(`framework-release.yml`·`release-dotnet.yml`)가 그 언어의 패키지 게시·tutorial 검증 뒤 `workflow_call`로 호출(미러에도 태그; 태그 push 자체는 이 워크플로를 돌리지 않는다 — 그 시점엔 패키지가 아직 없다, #884), 예제 경로를 건드린 `main` push(커밋만, `VERSION`이 이미 태그된 언어만), 또는 `ref` dispatch. push 전에 `examples-smoke.yml`이 같은 tree를 checkout 없이 그 언어 lane만 빌드·실행한다 | 미러별 write deploy key(`EXAMPLES_MIRROR_KEY_<LANG>`) |
+| Examples 미러 | `framework/languages/<lang>/{quickstart,tutorial,samples}`를 `scripts/tutorial/export_examples.py`로 내보낸 tree | 읽기 전용 저장소 `zlink-systems/zlink-<lang>-examples` 5개. Java와 Kotlin은 tree는 분리하지만 Java framework 릴리스를 함께 쓴다. `main` = 최신 릴리스 + 그 뒤의 수정, 태그 `vA.B.C` | `examples-mirror.yml` | 릴리스 워크플로(`framework-release.yml`·`release-dotnet.yml`)가 그 언어의 패키지 게시·tutorial 검증 뒤 `workflow_call`로 호출(미러에도 태그; 태그 push 자체는 이 워크플로를 돌리지 않는다 — 그 시점엔 패키지가 아직 없다, #884) 또는 `ref` dispatch. `main` push로는 돌지 않는다 — 릴리스 사이의 main 예제는 게시 전 API를 써서 smoke가 실패한다(#997). push 전에 `examples-smoke.yml`이 같은 tree를 checkout 없이 그 언어 lane만 빌드·실행한다 | 미러별 write deploy key(`EXAMPLES_MIRROR_KEY_<LANG>`) |
 
 Python·Go·Rust binding은 `bindings-release.yml`에 job이 있으나 공개 배포 범위 밖이다.
 `core-conan-release.yml`은 사내 Conan remote용 legacy 워크플로우로, secret이 없어 동작하지 않는다.
@@ -35,7 +35,7 @@ Python·Go·Rust binding은 `bindings-release.yml`에 job이 있으나 공개 �
 | Core | `scripts/build-core.sh dev\|release\|release-gate` (트리 `core/build-dev`, `core/build-release`). CMake 직접 빌드는 [빌드 가이드](./build-guide.ko.md)·[CMake 옵션](./cmake-options.ko.md) | `build.yml`의 플랫폼 job이 `core/`를 CMake로 빌드해 `core/dist/<platform>/`를 아카이브 | GitHub Release `core/vX.Y.Z` 자산 |
 | Core 로컬 prefix | `scripts/local-package/core/fetch-release.sh --version V --platform P` (릴리스 아카이브 → `~/.cache/zlink/core/<V>/<P>`), `scripts/gate/materialize-local-core-prefix.sh` (dev 빌드 → prefix) | 모든 binding·framework job이 같은 `fetch-release.sh`를 사용 | `~/.cache/zlink/core/`, CI는 `.artifacts/core-release/` |
 | Bindings 7언어 | `scripts/local-package/build-wsl.sh [cpp\|node\|java\|dotnet\|python\|go\|rust\|c]` (Windows `build-windows.ps1`); 언어별 테스트 `bindings/<lang>/tests/run_tests.sh` | `bindings-release.yml`·`release-dotnet.yml` 각 job의 "Build and test" 단계 | `.artifacts/wsl/{npm,nuget,maven,install}/` |
-| Framework C++ | `framework/languages/cpp/CMakePresets.json` preset, Windows `build-windows.ps1`; 샘플 `samples/<name>/run_sample.sh` | `framework-release.yml`은 source archive만 만든다 | GitHub Release `framework-cpp/vA.B.C` |
+| Framework C++ | `framework/languages/cpp/CMakePresets.json` preset, Windows `build-windows.ps1`; 샘플 `samples/<name>/run_sample.sh` | `framework-release.yml`이 source archive와 linux-x64·linux-arm64·macos-arm64·windows-x64 shared prebuilt archive를 만든다 | GitHub Release `framework-cpp/vA.B.C` |
 | Framework .NET | `dotnet build framework/languages/dotnet/Zlink.Framework.sln` (`ZLINK_LOCAL_PACKAGE_ROOT` 필요); 샘플 `samples/<name>/<name>.sln` | `framework-dotnet.yml`(검증), `release-dotnet.yml` target `framework`(pack·push) | nuget.org |
 | Framework JVM | `framework/languages/java/gradlew assemble` (테스트는 `test`); Central bundle `scripts/upload-central-bundle.sh` | `framework-release.yml` `release-java` | Maven Central |
 | Framework Node | `framework/languages/node`에서 `npm ci && npm run build`; http-client 로컬 tgz는 `scripts/local-package/http-client/build-wsl.sh node`; 게이트 `npm run verify:ci`, 릴리스 게이트 `verify:release` | `framework-node.yml`(검증), `framework-release.yml` `release-node`(pack·publish) | npm |
@@ -124,17 +124,25 @@ gh release view core/v0.17.5 --json assets -q '.assets[].name'
 
 ## 7. 지원 플랫폼과 런타임 요구
 
-| 플랫폼 | Core 릴리스 | Node prebuild | .NET runtimes | 비고 |
-| --- | --- | --- | --- | --- |
-| linux-x64 | ✅ | ✅ | ✅ | 릴리스 러너 ubuntu-24.04, glibc ≥ 2.38 필요 |
-| linux-arm64 | ✅ | 소스 빌드 | Core 아카이브 | |
-| macos-arm64 | ✅ | 소스 빌드 | Core 아카이브 | |
-| windows-x64 | ✅ | 소스 빌드 | Core 아카이브 | 아카이브에 OpenSSL DLL 포함 |
-| windows-arm64 | ❌ | ❌ | ❌ | 미지원(2026-09-14 결정) |
-| macos-x64 (Intel) | ❌ | ❌ | ❌ | Core부터 미지원(2026-09-09 결정) |
+| 플랫폼 | Core 릴리스 | Framework C++ prebuilt | Node prebuild | .NET runtimes | 비고 |
+| --- | --- | --- | --- | --- | --- |
+| linux-x64 | ✅ | ✅ | ✅ | ✅ | ubuntu-24.04, GCC 13, glibc ≥ 2.38 필요 |
+| linux-arm64 | ✅ | ✅ | 소스 빌드 | Core 아카이브 | ubuntu-24.04-arm, GCC 13 |
+| macos-arm64 | ✅ | ✅ | 소스 빌드 | Core 아카이브 | macos-15, Xcode 16.4 / Apple Clang, 사전 빌드 패키지에는 macOS 아카이브가 재배치 가능한 Core 릴리스(Core ≥ 1.3) 필요 |
+| windows-x64 | ✅ | ✅ | 소스 빌드 | Core 아카이브 | windows-2022, MSVC, Core 아카이브에 OpenSSL DLL 포함 |
+| windows-arm64 | ❌ | ❌ | ❌ | ❌ | 미지원(2026-09-14 결정) |
+| macos-x64 (Intel) | ❌ | ❌ | ❌ | ❌ | Core부터 미지원(2026-09-09 결정) |
 
 "소스 빌드"는 패키지 설치 시 `ZLINK_CORE_SOURCE=release`와 `ZLINK_CORE_PACKAGE_PREFIX`로 가리킨 Core
 릴리스 아카이브에 대해 addon을 컴파일한다는 뜻이다.
+
+`macos-arm64` 사전 빌드 패키지를 사용하려면 Xcode 16.4의 Apple Clang이 필요하다. 공개 헤더가
+`std::stop_token`을 사용하므로 설치된 `zlink::framework` CMake target이 소비자의 컴파일·링크 명령
+양쪽에 `-fexperimental-library`를 전파한다. CMake target을 사용하지 않는 소비자는 컴파일·링크 명령
+양쪽에 `-fexperimental-library`를 직접 추가해야 한다.
+
+Conan pin은 커밋된 lockfile의 recipe revision과 플랫폼 파일의 package ID를 고정하며, runner에서
+소스로 빌드한 binary는 실행마다 byte 단위로 동일하지 않다.
 
 ## 8. CI(검증) 워크플로우
 
@@ -152,7 +160,7 @@ TicTacToe·ZoneWorld)도 framework 빌드·CI·배포에 포함하지 않는다.
 | `framework-node.yml` | Node framework gate, Chromium STREAM e2e, Node↔.NET cross-language smoke | 4 플랫폼(win-x64·linux-x64·linux-arm64·darwin-arm64) × Node 20/22 |
 | `pr-verify.yml` | Core ctest와 binding smoke, Java framework unit·contract 테스트, Windows x64 정적 계약 | ubuntu-24.04, Windows 정적 계약만 windows-2022 |
 | `build.yml` | Core 빌드·검증(릴리스 겸용) | 4 플랫폼 |
-| `framework-tutorial.yml` | tutorial·quickstart를 **publish된 패키지로, publish 뒤에** 검증한다. `framework-release.yml`·`release-dotnet.yml`이 registry index(npm view / Maven Central pom / nuget flatcontainer / GitHub Release asset, 최대 30분 대기)를 확인한 뒤 `workflow_call(language)`로 호출한다. PR·main push는 tutorial 소스가 바뀔 때만 돌고 버전 pin 파일만 바뀐 커밋(`sync-version`)에는 돌지 않는다(#862) | ubuntu-24.04 4언어 |
+| `framework-tutorial.yml` | tutorial·quickstart를 **publish된 패키지로, publish 뒤에** 검증한다. `framework-release.yml`·`release-dotnet.yml`이 registry index(npm view / Maven Central pom / nuget flatcontainer / GitHub Release asset, 최대 30분 대기)를 확인한 뒤 `workflow_call(language)`로 호출한다. PR·main push로는 돌지 않는다 — 게시 전 API를 쓰는 변경은 릴리스 전까지 실패할 수밖에 없다(#997). 그 밖에는 수동 실행 | ubuntu-24.04 4언어 |
 | `examples-smoke.yml` | 내보낸 examples tree를 checkout 없는 job에서 README 명령만으로 빌드·실행(quickstart 빌드, tutorial 기동·검증, 샘플 하나 완주). `examples-mirror.yml`이 push 전에 호출하고, 매일 최신 framework 태그로 다시 돈다 | ubuntu-24.04 5언어, windows-2022는 dotnet·java·kotlin |
 | `docs.yml` | 문서 사이트 빌드·배포 | ubuntu |
 

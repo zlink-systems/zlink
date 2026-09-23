@@ -9,6 +9,7 @@
 #include <zlink/stream_connector/contracts/zlink_stream_models.hpp>
 
 #include <chrono>
+#include <atomic>
 #include <functional>
 #if ZLINK_STREAM_CONNECTOR_HAS_EXCEPTIONS
 #include <future>
@@ -26,6 +27,12 @@ namespace zlink::stream_connector
 
 namespace detail
 {
+struct actor_binding_ref_t
+{
+    std::uint16_t slot = 0;
+    std::shared_ptr<std::atomic_bool> bound;
+};
+
 struct request_reply_t
 {
     codec_t codec = codec_t::raw;
@@ -53,6 +60,7 @@ result_t<message_t<TMessage>> decode_message (const std::shared_ptr<void> &state
     message.metadata = packet.metadata;
     message.flow_id = packet.flow_id;
     message.flow_origin = packet.flow_origin;
+    message.actor_id = packet.actor_id;
     if constexpr (std::is_same_v<TMessage, packet_t>) {
         message.payload = std::move (packet);
     } else {
@@ -71,11 +79,16 @@ result_t<message_t<TMessage>> decode_message (const std::shared_ptr<void> &state
 
 result_t<request_reply_t>
 submit_request (std::shared_ptr<void> state, packet_t packet, std::chrono::milliseconds timeout);
+result_t<request_reply_t> submit_request (std::shared_ptr<void> state,
+                                          packet_t packet,
+                                          std::chrono::milliseconds timeout,
+                                          std::optional<actor_binding_ref_t> actor_binding);
 void submit_request_async (std::shared_ptr<void> state,
                            packet_t packet,
                            std::chrono::milliseconds timeout,
                            std::function<void (result_t<request_reply_t>)> callback,
-                           bool deliver_direct = false);
+                           bool deliver_direct = false,
+                           std::optional<actor_binding_ref_t> actor_binding = std::nullopt);
 result_t<packet_t> submit_wait (std::shared_ptr<void> state,
                                 std::string packet_name,
                                 std::function<bool (const packet_t &)> predicate,
@@ -121,10 +134,12 @@ class send_call_t
 
   private:
     friend class connector_t;
+    friend class actor_t;
     send_call_t (std::shared_ptr<void> state, packet_t packet);
 
     std::shared_ptr<void> _state;
     packet_t _packet;
+    std::optional<detail::actor_binding_ref_t> _actor_binding;
 };
 
 class request_call_t
@@ -194,19 +209,22 @@ class request_call_t
         auto state = _state;
         auto packet = std::move (_packet);
         const auto timeout = _timeout;
-        detail::submit_request_async (state, std::move (packet), timeout,
-                                      [state, callback = std::move (callback)] (
-                                        result_t<detail::request_reply_t> reply) mutable {
-                                          erased_result_t erased (state, std::move (reply));
-                                          auto result = erased.template as<TReply> ();
-                                          if (callback) {
-                                              callback (std::move (result));
-                                          }
-                                      });
+        detail::submit_request_async (
+          state, std::move (packet), timeout,
+          [state,
+           callback = std::move (callback)] (result_t<detail::request_reply_t> reply) mutable {
+              erased_result_t erased (state, std::move (reply));
+              auto result = erased.template as<TReply> ();
+              if (callback) {
+                  callback (std::move (result));
+              }
+          },
+          false, _actor_binding);
     }
 
   private:
     friend class connector_t;
+    friend class actor_t;
 
     class erased_result_t
     {
@@ -247,13 +265,14 @@ class request_call_t
 
     erased_result_t submit_erased ()
     {
-        return erased_result_t (_state,
-                                detail::submit_request (_state, std::move (_packet), _timeout));
+        return erased_result_t (
+          _state, detail::submit_request (_state, std::move (_packet), _timeout, _actor_binding));
     }
 
     std::shared_ptr<void> _state;
     packet_t _packet;
     std::chrono::milliseconds _timeout{0};
+    std::optional<detail::actor_binding_ref_t> _actor_binding;
 };
 
 template <typename TMessage> class wait_call_t

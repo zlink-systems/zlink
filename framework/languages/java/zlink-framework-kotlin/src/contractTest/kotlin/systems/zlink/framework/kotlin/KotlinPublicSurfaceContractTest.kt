@@ -248,7 +248,7 @@ class KotlinPublicSurfaceContractTest {
     }
 
     @Test
-    fun `typed and raw connector requests have coroutine terminators without signature clashes`() {
+    fun `connector Java request calls expose no typed coroutine terminator`() {
         val methods =
             Class.forName("systems.zlink.framework.kotlin.ZLinkConnectorExtensionsKt")
                 .declaredMethods
@@ -256,10 +256,9 @@ class KotlinPublicSurfaceContractTest {
 
         val signatures = methods.map { method -> method.name to method.parameterTypes.toList() }
         assertEqualsDistinct(signatures)
-        // The typed terminator is awaitReply and the raw terminator is await. Keeping a typed
-        // await() overload is what produced the JvmName("awaitTyped") clash, so the raw name
-        // must never carry a typed receiver.
-        assertEquals(2, methods.count { it.name == "awaitReply" })
+        // Connector requests return Kotlin builders, whose await() methods own the typed
+        // and raw coroutine terminators. No Java call awaitReply extension belongs here.
+        assertFalse(methods.any { it.name == "awaitReply" })
         assertEquals(2, methods.count { it.name == "await" })
         assertFalse(methods.any { it.name == "awaitTyped" })
         assertFalse(
@@ -463,10 +462,10 @@ class KotlinPublicSurfaceContractTest {
                 "withStreamCompression" to 1,
                 "withoutStreamCompression" to 1,
                 "await" to 2,
-                "awaitReply" to 2,
                 "waitFor" to 1,
                 "messages" to 1,
                 "errors" to 1,
+                "request" to 2,
                 // The connector keeps its current flow in a thread local
                 // (stream-connector/languages/java/03-stream-connector.ko.md 7.1).
                 // A coroutine resumes on whatever thread is free, so these
@@ -620,7 +619,23 @@ class KotlinPublicSurfaceContractTest {
                 "waitForSequence" to 2,
                 "messages" to 1,
                 "errors" to 1,
+                "actors" to 1,
+                "actor" to 1,
+                "actorBound" to 1,
+                "actorUnbound" to 1,
             ),
+        )
+        assertPublicMethodCounts(
+            "ZLinkKotlinStreamActor",
+            mapOf("getActorId" to 1, "isBound" to 1, "send" to 2, "request" to 2, "messages" to 1),
+        )
+        assertPublicMethodCounts(
+            "ZLinkKotlinRawRequestCall",
+            mapOf("packetName" to 1, "metadata" to 1, "timeout" to 1, "compress" to 1, "await" to 1),
+        )
+        assertPublicMethodCounts(
+            "systems.zlink.framework.kotlin.stream.ZLinkKotlinRequestCall",
+            mapOf("packetName" to 1, "metadata" to 1, "timeout" to 1, "compress" to 1, "await" to 1),
         )
         assertPublicMethodCounts("ZLinkKotlinLifecycleCall", mapOf("await" to 1))
         assertPublicMethodCounts(
@@ -672,7 +687,7 @@ class KotlinPublicSurfaceContractTest {
         val expectedHashes =
             mapOf(
                 "ZLinkConnectorExtensionsKt" to
-                    "39fdd5a75da4800236ac22699b124c48d7c36082a8dea82a7fb6e26ea2dab3cc",
+                    "06fe63e1abe658acfcebc9374e875deb0b9a525060448a9fc39ebefbf18fbc54",
                 "ZLinkCoroutineHandlerOptionsKt" to
                     "67fda6a26015bcd374098db883ec13f012b2536da914e6b3e8fb0f6aea9e86f4",
                 "ZLinkCoroutineTurnAwaitKt" to
@@ -705,8 +720,16 @@ class KotlinPublicSurfaceContractTest {
                 //  Measured both ways: the 29 signatures hash to the value below, and
                 //  dropping those three walks it back to the 86e827b8… this pin held
                 //  before #600, so nothing else moved.
+                //  #933 adds Actor handles and aligns connector request calls
+                //  with the suspending Kotlin builders declared in §12.
                 "ZLinkKotlinStreamConnector" to
-                    "116f64143e82413d00fa07fcc332a291f74062d49ed873675f52c5574688853d",
+                    "c55dd1ed32d466b6d4d859407206d0d0d8fa5c950821bd31ab2ab553cbfa33ac",
+                "ZLinkKotlinStreamActor" to
+                    "d470a4f1f206a81d304e43a22a7a44778c7def9027be4545be558ab72f1d74bc",
+                "ZLinkKotlinRawRequestCall" to
+                    "058cc51936de4e054bba28decc643dd4854d8c48b25434bb639fec569a4bc44b",
+                "systems.zlink.framework.kotlin.stream.ZLinkKotlinRequestCall" to
+                    "dd6909047da7ea8e7341ae0c692feb08a5198c886992a1b8bd42b5ffe647d754",
                 "ZLinkKotlinLifecycleCall" to
                     "bef9eb581a23386b7802f54c64e3fec57c9920a17745c00c59195f7e67949aa5",
                 "ZLinkKotlinSendCall" to
@@ -736,7 +759,7 @@ class KotlinPublicSurfaceContractTest {
     }
 
     private fun publicJvmSignatures(typeName: String): List<String> =
-        Class.forName("systems.zlink.framework.kotlin.$typeName")
+        Class.forName(if ('.' in typeName) typeName else "systems.zlink.framework.kotlin.$typeName")
             .declaredMethods
             .filter { method ->
                 Modifier.isPublic(method.modifiers) &&
@@ -778,9 +801,15 @@ class KotlinPublicSurfaceContractTest {
 
     private fun assertPublicMethodCounts(typeName: String, expected: Map<String, Int>) {
         val actual =
-            Class.forName("systems.zlink.framework.kotlin.$typeName")
+            Class.forName(
+                    if ('.' in typeName) typeName else "systems.zlink.framework.kotlin.$typeName"
+                )
                 .declaredMethods
-                .filter { Modifier.isPublic(it.modifiers) && !it.name.startsWith("getInner") }
+                .filter {
+                    Modifier.isPublic(it.modifiers) &&
+                        !it.name.startsWith("getInner") &&
+                        !it.name.startsWith("access\$")
+                }
                 .groupingBy { it.name }
                 .eachCount()
         assertEquals(expected, actual, "$typeName public method overloads changed")

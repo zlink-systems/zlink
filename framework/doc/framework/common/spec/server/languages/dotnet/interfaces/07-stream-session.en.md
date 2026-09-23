@@ -126,10 +126,12 @@ public sealed class ZLinkSessionDispatchContext
  public ZLinkSessionDispatchContext(
  string packetName,
  ZLinkMessageMetadata? metadata = null,
- bool canReply = false) { }
+ bool canReply = false,
+ IZLinkSessionActor? actor = null) { }
  public string PacketName { get; }
  public ZLinkMessageMetadata Metadata { get; }
  public bool CanReply { get; }
+ public IZLinkSessionActor? Actor { get; } // the current binding the packet's Actor slot points at; null when there is none
 }
 ```
 

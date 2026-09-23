@@ -35,18 +35,7 @@ open a socket, assemble frames, and wait for a response for every scenario. ZLin
 that work. **The client library your real users use is itself the verification tool.** An
 E2E test comes down to just this much code.
 
-```java
-// A real connection
-client.connect().submit().toCompletableFuture().join();
-// A real request
-AuthenticateRes auth = client.request(new AuthenticateReq(actorId))
-    .submit(AuthenticateRes.class).toCompletableFuture().join();
-// Confirms a real push arrived
-var push = other.waitFor(PlayerJoinedNotify.class)
-    .submit(PlayerJoinedNotify.class).toCompletableFuture().join();
-ZLinkStreamAssert.ensure(
-    push.payload().actorId().equals(auth.player().actorId()), "join push actor mismatch.");
-```
+--8<-- "framework/languages/java/samples/java/TicTacToe/Client/src/main/java/systems/zlink/samples/tictactoe/client/TicTacToeClientScenario.java:doc-e2e-connect-request"
 
 Because **the connector itself provides the wait functions verification needs**, like
 `waitFor`, you don't implement a separate test harness. Every sample in this repository is
@@ -70,24 +59,7 @@ The two libraries used for verification don't overlap in role.
 Most scenarios chain the two together — create a target over HTTP, then connect to STREAM
 using the endpoint returned in that response.
 
-```java
-// Step 1 -- create a room through the gateway API.
-ZLinkHttpClient api = ZLinkHttpClient.create(options.apiUrl())
-    .timeout(options.httpTimeout())
-    .build();
-// fetch returns the deserialized body as-is.
-CreateGameHttpRes room = api.post("/games")
-    .body(new CreateGameHttpReq(options.gameName()))
-    .fetch(CreateGameHttpRes.class);
-
-// Step 2 -- open a real-time connection to the endpoint the response gave us.
-ZLinkStreamConnector client = ZLinkStreamConnectorFactory.create(
-    new ZLinkStreamConnectorOptions(
-        URI.create(room.playEndpoints().get(0)),
-        // Console scenarios use the automatic pump.
-        ZLinkStreamDispatchMode.IMMEDIATE,
-        options.streamTimeout()));
-```
+--8<-- "framework/languages/java/samples/java/TicTacToe/Client/src/main/java/systems/zlink/samples/tictactoe/client/TicTacToeClientScenario.java:doc-e2e-create-room"
 
 When `dispatchMode` is `Immediate`, the connector handles receiving on its own, so the
 scenario code never runs a separate pump. Environments that must pump manually to match a
@@ -124,97 +96,42 @@ failure the scenario ends with an exception carrying that message.
 Specify a condition with `where(...)` to **wait for the first message matching that
 condition.** Other, nonmatching pushes may arrive without affecting the scenario.
 
-```java
-var joined = client1.waitFor(PlayerJoinedNotify.class)
-    .where(PlayerJoinedNotify.class,
-        message -> message.payload().actorId().equals(options.oActorId()))
-    .submit(PlayerJoinedNotify.class)
-    .toCompletableFuture().join();
-ZLinkStreamAssert.ensure(joined.payload().mark() == TicTacToeMarks.O, "joined mark mismatch.");
-```
+--8<-- "framework/languages/java/samples/java/TicTacToe/Client/src/main/java/systems/zlink/samples/tictactoe/client/TicTacToeClientScenario.java:doc-e2e-wait-filter"
 
 ### 3.2 Confirming a Push Doesn't Arrive
 
 You can't confirm something never arrives without an observation window, so `within(...)`
 must be specified. Omitting it is an error.
 
-```java
-// The player who just joined shouldn't receive their own join notification.
-client2.expectNone(PlayerJoinedNotify.class)
-    .within(Duration.ofMillis(250))
-    .submit()
-    .toCompletableFuture().join();
-```
+--8<-- "framework/languages/java/samples/java/DeliveryDispatch/Client/src/main/java/systems/zlink/samples/deliverydispatch/client/DeliveryDispatchClientScenario.java:doc-e2e-expect-none"
 
 ### 3.3 Confirming Push Order
 
 In a flow where state changes in stages, the contract isn't whether something arrives but
 its **order.**
 
-```java
-var statusSequence = customer.waitForSequence(DeliveryStatusNotify.class)
-    .expect(DeliveryStatusNotify.class,
-        message -> matchesStatus(message, deliveryId, DeliveryStatus.Assigned))
-    .expect(DeliveryStatusNotify.class,
-        message -> matchesStatus(message, deliveryId, DeliveryStatus.Accepted))
-    .expect(DeliveryStatusNotify.class,
-        message -> matchesStatus(message, deliveryId, DeliveryStatus.PickedUp))
-    .expect(DeliveryStatusNotify.class,
-        message -> matchesStatus(message, deliveryId, DeliveryStatus.Delivered))
-    .timeout(customer.options().waitTimeout())
-    .submit(DeliveryStatusNotify.class)
-    .toCompletableFuture().join();
-```
+--8<-- "framework/languages/java/samples/java/DeliveryDispatch/Client/src/main/java/systems/zlink/samples/deliverydispatch/client/DeliveryDispatchClientScenario.java:doc-e2e-sequence"
 
 ### 3.4 Confirming a Request Fails
 
 Whether a request with no permission or an out-of-order request **gets rejected** is also
 part of the contract. Verifying only the success path leaves this path unverified.
 
-```java
-// Can't open a conversation before authenticating.
-ZLinkStreamAssert.expectFailure(
-    () -> agent.request(new OpenConversationReq("unauthenticated"))
-        .submit(OpenConversationRes.class),
-    ZLinkStreamErrorCode.RemoteError);
-```
+--8<-- "framework/languages/java/samples/java/SupportChat/Client/src/main/java/systems/zlink/samples/supportchat/client/Program.java:doc-e2e-failure"
 
 ## 4. How to Handle Waiting for a Message
 
 Most E2E flakiness has the same cause. **You act first, then start waiting**, and miss a
 push that arrived in between.
 
-Reverse the order. Register the wait first, then run the action that triggers that push.
-
-```java
-// Register the wait first -- don't join it yet.
-var statusSequenceStage = customer.waitForSequence(DeliveryStatusNotify.class)
-    .expect(DeliveryStatusNotify.class,
-        message -> matchesStatus(message, deliveryId, DeliveryStatus.Assigned))
-    .timeout(customer.options().waitTimeout())
-    .submit(DeliveryStatusNotify.class);
-
-// Then run the action that triggers the push.
-CreateDeliveryRes created = http.post("/deliveries")
-    .body(new CreateDeliveryReq(deliveryId, "customer-1", "Kitchen 12", "Customer Lobby"))
-    .fetch(CreateDeliveryRes.class);
-
-// Receive the result last.
-var statusSequence = statusSequenceStage.toCompletableFuture().join();
-```
+Reverse the order. Register the wait first, then run the action that triggers that push. The
+`waitForSequence` registration in [Confirming Push Order](#33-confirming-push-order) is
+exactly this order — the wait is built first, and the request is sent afterward.
 
 If multiple clients need to confirm the same event, register a wait for each and receive
 them together with `Task.WhenAll`.
 
-```java
-// Bingo -- once both players have joined the room starts, and both clients get the same push.
-var client1Started = client1.waitFor(BingoGameStartedNotify.class).submit(BingoGameStartedNotify.class);
-var client2Started = client2.waitFor(BingoGameStartedNotify.class)
-    .submit(BingoGameStartedNotify.class);
-
-CompletableFuture.allOf(
-    client1Started.toCompletableFuture(), client2Started.toCompletableFuture()).join();
-```
+--8<-- "framework/languages/java/samples/java/Bingo/Client/src/main/java/systems/zlink/samples/bingo/client/BingoClientScenario.java:doc-e2e-multi-wait"
 
 Don't use `Sleep` to line up timing. Express every wait through the timeout on
 `waitFor`/`expectNone`/`waitForSequence`. `Sleep` fails on slow hardware and wastes time on
@@ -226,52 +143,7 @@ The `TicTacToe` sample is the shortest. Create a room over HTTP → both players
 authenticate → confirm the join push → make a move → confirm the opponent observes that
 move, in that order.
 
-```java
-public void run(TicTacToeClientOptions options) {
-    // 1. Create a room through the gateway API and get the endpoint to connect to.
-    ZLinkHttpClient api = ZLinkHttpClient.create(options.apiUrl()).timeout(options.httpTimeout()).build();
-    CreateGameHttpRes room = api.post("/games")
-        .body(new CreateGameHttpReq(options.gameName()))
-        .fetch(CreateGameHttpRes.class);
-    ZLinkStreamAssert.ensure(room.playEndpoints().size() >= 2, "play endpoints are missing.");
-
-    // 2. Connect the two players to different Play nodes -- this verifies routing between nodes.
-    ZLinkStreamConnector client1 = createStreamClient(room.playEndpoints().get(0), options);
-    ZLinkStreamConnector client2 = createStreamClient(room.playEndpoints().get(1), options);
-
-    // 3. Whoever connects first authenticates and enters the empty room.
-    client1.connect().submit().toCompletableFuture().join();
-    client1.request(new AuthenticateReq(options.xActorId()))
-        .submit(AuthenticateRes.class).toCompletableFuture().join();
-    // Register wait -> send -> receive (see §3)
-    JoinGameNotify join1 = joinGame(client1, room.roomId());
-    ZLinkStreamAssert.ensure(
-        join1.state().status() == TicTacToeGameStatuses.WaitingForPlayers,
-        "room should wait for the second player.");
-
-    // Being alone in the room, their own join notification shouldn't come back to them.
-    client1.expectNone(PlayerJoinedNotify.class)
-        .within(Duration.ofMillis(250)).submit().toCompletableFuture().join();
-
-    // 4. Once the second player joins, the room starts.
-    client2.connect().submit().toCompletableFuture().join();
-    client2.request(new AuthenticateReq(options.oActorId()))
-        .submit(AuthenticateRes.class).toCompletableFuture().join();
-    JoinGameNotify join2 = joinGame(client2, room.roomId());
-    ZLinkStreamAssert.ensure(
-        join2.state().status() == TicTacToeGameStatuses.InProgress,
-        "room should start with two players.");
-
-    // 5. Making a move -- the response and the push delivered to the opponent should point to the same state.
-    PlaceMarkRes move = client1.request(new PlaceMarkReq(0))
-        .submit(PlaceMarkRes.class).toCompletableFuture().join();
-    var sawMove = client2.waitFor(GameStateNotify.class)
-        .where(GameStateNotify.class, message -> message.payload().state().lastMoveCell() == 0)
-        .submit(GameStateNotify.class).toCompletableFuture().join();
-    ZLinkStreamAssert.ensure(
-        sawMove.payload().state().board().equals(move.state().board()), "board state mismatch.");
-}
-```
+--8<-- "framework/languages/java/samples/java/TicTacToe/Client/src/main/java/systems/zlink/samples/tictactoe/client/TicTacToeClientScenario.java:doc-e2e-scenario"
 
 **Choose verification points by this rule.** Don't just check a request's own response —
 also check *whether another client observes the same fact.* Making **the result that
@@ -289,14 +161,7 @@ client can't confirm.
 - **Two connected to different nodes** — whether routing and location resolution between
   nodes actually work
 
-```java
-// The join completion arrives as a client push -- register the wait before the one-way send.
-private static JoinGameNotify joinGame(ZLinkStreamConnector connector, String roomId) {
-    var completion = connector.waitFor(JoinGameNotify.class).submit(JoinGameNotify.class);
-    connector.send(new JoinGameMsg(roomId)).submit().toCompletableFuture().join();
-    return completion.toCompletableFuture().join().payload();
-}
-```
+--8<-- "framework/languages/java/samples/java/TicTacToe/Client/src/main/java/systems/zlink/samples/tictactoe/client/TicTacToeClientScenario.java:doc-e2e-multi-client"
 
 The `Bingo` sample uses this composition as-is — it brings together two players and one
 spectator, and even confirms the win notification is delivered only to the spectator.

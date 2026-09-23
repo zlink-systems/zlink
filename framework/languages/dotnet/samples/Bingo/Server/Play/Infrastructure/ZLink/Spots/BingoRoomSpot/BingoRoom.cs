@@ -90,10 +90,10 @@ internal sealed class BingoRoom(
         }
         else
         {
-            // --8<-- [start:doc-bingo-room-join]
             GetPlayerRecordRes record;
             try
             {
+                // --8<-- [start:doc-bingo-room-join]
                 // Yield releases the Spot execution turn while the API owns the player record lookup.
                 record = await Context
                     .Outbound.RequestToChannel(
@@ -101,6 +101,7 @@ internal sealed class BingoRoom(
                         new GetPlayerRecordReq { ActorId = actor.ActorId }
                     )
                     .Yield<GetPlayerRecordRes>(cancellationToken);
+                // --8<-- [end:doc-bingo-room-join]
             }
             catch
             {
@@ -119,7 +120,6 @@ internal sealed class BingoRoom(
                 await Context.LeaveActorAsync(actor, cancellationToken);
                 return;
             }
-            // --8<-- [end:doc-bingo-room-join]
 
             _pendingJoins.Remove(actor.ActorId);
             actor.SetDisplayName(join.DisplayName);

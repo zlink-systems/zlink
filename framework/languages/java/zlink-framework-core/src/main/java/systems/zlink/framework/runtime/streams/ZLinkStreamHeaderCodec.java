@@ -94,6 +94,18 @@ public final class ZLinkStreamHeaderCodec {
             offset += 36;
             flowOrigin = Optional.of(decodeFlowOrigin(Byte.toUnsignedInt(bytes[offset++])));
         }
+        Optional<Integer> actorSlot = Optional.empty();
+        if ((flags & ZLinkStreamHeaderFlag.HAS_ACTOR_SLOT.value()) != 0) {
+            if (bytes.length - offset < Short.BYTES) {
+                throw new IllegalArgumentException("STREAM header actor slot is incomplete");
+            }
+            int value = Short.toUnsignedInt(ByteBuffer.wrap(bytes, offset, Short.BYTES).getShort());
+            if (value == 0) {
+                throw new IllegalArgumentException("STREAM actor slot must not be zero");
+            }
+            actorSlot = Optional.of(value);
+            offset += Short.BYTES;
+        }
         if (offset != bytes.length) {
             throw new IllegalArgumentException("STREAM header contains trailing bytes");
         }
@@ -103,7 +115,8 @@ public final class ZLinkStreamHeaderCodec {
                         || requestSeq.isPresent()
                         || !metadata.isEmpty()
                         || correlationId.isPresent()
-                        || flowId.isPresent())) {
+                        || flowId.isPresent()
+                        || actorSlot.isPresent())) {
             throw new IllegalArgumentException(
                     "STREAM control packet must use raw codec and must not contain flags");
         }
@@ -116,7 +129,8 @@ public final class ZLinkStreamHeaderCodec {
                 metadata,
                 correlationId,
                 flowId,
-                flowOrigin);
+                flowOrigin,
+                actorSlot);
     }
 
     public static byte[] encode(ZLinkStreamHeader header) {
@@ -139,7 +153,8 @@ public final class ZLinkStreamHeaderCodec {
                 effective.metadata(),
                 effective.correlationId(),
                 effective.flowId(),
-                effective.flowOrigin());
+                effective.flowOrigin(),
+                effective.actorSlot());
     }
 
     private static byte[] encode(
@@ -151,7 +166,8 @@ public final class ZLinkStreamHeaderCodec {
             Map<String, String> metadata,
             Optional<String> correlationId,
             Optional<String> flowId,
-            Optional<ZLinkFlowOrigin> flowOrigin) {
+            Optional<ZLinkFlowOrigin> flowOrigin,
+            Optional<Integer> actorSlot) {
         boolean reply = isReply(kind);
         if (!reply && (packetName == null || packetName.isBlank())) {
             throw new IllegalArgumentException("packetName is required");
@@ -176,6 +192,11 @@ public final class ZLinkStreamHeaderCodec {
             throw new IllegalArgumentException(
                     "STREAM control packet must not contain flow fields");
         }
+        boolean hasActorSlot = actorSlot != null && actorSlot.isPresent();
+        if (kind == KIND_CONTROL && hasActorSlot) {
+            throw new IllegalArgumentException(
+                    "STREAM control packet must not contain an actor slot");
+        }
         byte[] correlationBytes =
                 hasCorrelationId
                         ? correlationId.get().getBytes(StandardCharsets.UTF_8)
@@ -199,6 +220,10 @@ public final class ZLinkStreamHeaderCodec {
                 hasFlow
                         ? flags | ZLinkStreamHeaderFlag.HAS_FLOW_ID.value()
                         : flags & ~ZLinkStreamHeaderFlag.HAS_FLOW_ID.value();
+        flags =
+                hasActorSlot
+                        ? flags | ZLinkStreamHeaderFlag.HAS_ACTOR_SLOT.value()
+                        : flags & ~ZLinkStreamHeaderFlag.HAS_ACTOR_SLOT.value();
         ByteBuffer buffer =
                 ByteBuffer.allocate(
                         4
@@ -207,7 +232,8 @@ public final class ZLinkStreamHeaderCodec {
                                 + name.length
                                 + (hasMetadata ? 2 + metadataBytes.length : 0)
                                 + (hasCorrelationId ? 1 + correlationBytes.length : 0)
-                                + (hasFlow ? 37 : 0));
+                                + (hasFlow ? 37 : 0)
+                                + (hasActorSlot ? Short.BYTES : 0));
         buffer.put((byte) FORMAT_MARKER);
         buffer.put((byte) kind);
         buffer.put((byte) codec);
@@ -233,6 +259,13 @@ public final class ZLinkStreamHeaderCodec {
         if (hasFlow) {
             buffer.put(flowId.get().getBytes(StandardCharsets.US_ASCII));
             buffer.put((byte) encodeFlowOrigin(flowOrigin.get()));
+        }
+        if (hasActorSlot) {
+            int value = actorSlot.orElseThrow();
+            if (value <= 0 || value > 0xffff) {
+                throw new IllegalArgumentException("STREAM actor slot must be in 1..65535");
+            }
+            buffer.putShort((short) value);
         }
         return buffer.array();
     }

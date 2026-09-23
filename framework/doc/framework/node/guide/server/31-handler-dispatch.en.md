@@ -236,47 +236,6 @@ it touches state directly, with no lock.
 --8<-- "framework/languages/node/samples/TicTacToe.Ts/Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/Handlers/play-actor-place-mark-handler.ts:doc-actor-packet-handler"
 ```
 
-The four branches in their minimal form look like this.
-
-```typescript
-// A packet addressed to the Spot -- the first argument is the target Spot instance.
-export class ChatHandler implements ZLinkSpotPacketHandler<GameRoom, Chat> {
-  async handle(spot: GameRoom, message: Chat): Promise<void> {
-    // Touches Spot state directly. No lock needed.
-    spot.appendChat(message.text);
-  }
-}
-
-// A request addressed to the Spot -- the return value is the reply.
-export class GetRoomStateHandler
-  implements ZLinkSpotRequestHandler<GameRoom, GetRoomState, RoomState> {
-  async handle(spot: GameRoom, request: GetRoomState): Promise<RoomState> {
-    return spot.snapshot();
-  }
-}
-
-// A subscription event -- arrives on the channel/topic registered with addSubscribe.
-export class ScoreHandler implements ZLinkSpotSubscriptionHandler<GameRoom, ScoreChanged> {
-  async handle(spot: GameRoom, event: ScoreChanged): Promise<void> {
-    spot.applyScore(event);
-  }
-}
-
-// A packet addressed to a member Actor -- receives the Spot and the Actor together.
-export class PlaceMarkHandler
-  implements ZLinkSpotActorSendHandler<GameRoom, PlayerActor, PlaceMark> {
-  async handle(
-    spot: GameRoom,
-    // The Actor that received this message.
-    actor: PlayerActor,
-    messageContext: ZLinkMessageContext,
-    message: PlaceMark
-  ): Promise<void> {
-    spot.place(actor.actorId, message.cell);
-  }
-}
-```
-
 An Actor request handler takes the same arguments; the only difference is that its return
 value is the reply.
 
@@ -284,34 +243,7 @@ Register handlers in `configure()` and perform initialization and cleanup in lif
 callbacks.
 
 ```typescript
-export class GameRoom implements ZLinkSpot {
-  readonly context!: ZLinkSpotContext;
-
-  configure(): void {
-    // Registers the Spot send handler.
-    this.context.handlers.addPacket(ChatHandler);
-    this.context.handlers.addSubscribe(
-      ScoreHandler,
-      'game-events',
-      // Registers a Logical Multicast subscription.
-      'score.changed');
-  }
-
-  async onCreate(request: ZLinkMessage): Promise<ZLinkSpotCreateResponse> {
-    const create = request.decode<CreateGame>(Object as never);
-    return create.mode === 'ranked' || create.mode === 'casual'
-      ? ZLinkSpotCreateResponse.accept(gameCreated(create.mode))
-      : ZLinkSpotCreateResponse.reject(invalidMode(create.mode));
-  }
-
-  async onInitialize(): Promise<void> {
-    // Finishes whatever's needed after creation is approved, before receiving messages.
-  }
-
-  async onClosing(closing: ZLinkSpotClosingContext): Promise<void> {
-    // Cleans up application resources by the deadline.
-  }
-}
+--8<-- "framework/languages/node/samples/GameQuest.Ts/Server/QuestMission/Infrastructure/ZLink/Spots/PlayerQuestSpot/player-quest-spot.ts:doc-gq-spot-init"
 ```
 
 `onClosing`'s reason distinguishes explicit close, host shutdown, and relocation out. The

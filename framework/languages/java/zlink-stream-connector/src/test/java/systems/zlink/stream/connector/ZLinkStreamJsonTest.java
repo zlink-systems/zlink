@@ -13,7 +13,9 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
@@ -365,6 +367,26 @@ final class ZLinkStreamJsonTest {
 
         @Override
         public AutoCloseable onConnectionStateChanged(ZLinkStreamConnectionStateHandler handler) {
+            return () -> {};
+        }
+
+        @Override
+        public List<ZLinkStreamActor> actors() {
+            return List.of();
+        }
+
+        @Override
+        public Optional<ZLinkStreamActor> actor(String actorId) {
+            return Optional.empty();
+        }
+
+        @Override
+        public AutoCloseable onActorBound(ZLinkStreamActorHandler handler) {
+            return () -> {};
+        }
+
+        @Override
+        public AutoCloseable onActorUnbound(ZLinkStreamActorHandler handler) {
             return () -> {};
         }
 

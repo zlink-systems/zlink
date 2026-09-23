@@ -96,10 +96,11 @@ final class ZLinkBoundSessionReplyCapabilityRuntimePortTest {
             originalSession.startSessionService();
             replacementSession.startSessionService();
             originalSession
-                    .bindActor(sessionRid, actor)
+                    .bindActor(sessionRid, actor, 1)
                     .submit(Duration.ofSeconds(1))
                     .toCompletableFuture()
                     .get(1, TimeUnit.SECONDS);
+            originalSession.publishBoundActor(sessionRid, actor.actorId());
             long originalBinding =
                     originalSession.boundActorBindingGeneration(sessionRid, actor.actorId());
             ZLinkStreamHeader requestHeader =
@@ -121,10 +122,11 @@ final class ZLinkBoundSessionReplyCapabilityRuntimePortTest {
 
             List<ZLinkBackendActorReceived> frames = accepted.get(1, TimeUnit.SECONDS);
             replacementSession
-                    .bindActor(sessionRid, actor)
+                    .bindActor(sessionRid, actor, 2)
                     .submit(Duration.ofSeconds(1))
                     .toCompletableFuture()
                     .get(1, TimeUnit.SECONDS);
+            replacementSession.publishBoundActor(sessionRid, actor.actorId());
             assertTrue(
                     replacementSession.boundActorBindingGeneration(sessionRid, actor.actorId())
                             > originalBinding);

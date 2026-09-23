@@ -127,6 +127,8 @@ The leading 2 bytes of a STREAM frame are `header_size`.
 +----------------+---------+----------+----------+------------------+
 | name u8+n | meta u16+n? | corr u8+n? | flow_id 36B + origin u8?   |
 +-----------+-------------+------------+----------------------------+
+| actor_slot u16? |
++-----------------+
 ```
 
 - **The header's first byte is `format_marker = 0xF2`.** A different
@@ -144,6 +146,9 @@ The leading 2 bytes of a STREAM frame are `header_size`.
 - The flow field's **36-byte `flow_id` and 1-byte `flow_origin`
   always exist together** or are both absent. The meaning is owned by
   [Message Flow Correlation §3](../server/06-observability/04-flow-correlation.en.md#3-format-and-ownership).
+- `actor_slot` is the [Actor slot](#56-bound-actor) of the binding when the
+  packet's server-side counterpart is an Actor bound to that session. The
+  value `0` is never used.
 - **Every multi-byte integer is network byte order.**
 
 Application code doesn't build or modify this header directly — the
@@ -158,6 +163,7 @@ connector runtime owns it.
 | payload compressed | `0x04` | The payload is compressed |
 | has correlation id | `0x08` | The correlation id field is present |
 | has flow id | `0x10` | The `flow_id`/`flow_origin` fields are present |
+| has actor slot | `0x20` | The `actor_slot` field is present |
 
 `has flow id` isn't set on a `Control` packet
 ([flow-correlation §3](../server/06-observability/04-flow-correlation.en.md#3-format-and-ownership)).
@@ -196,8 +202,8 @@ tenant id.
 The following are all decode errors.
 
 - An unknown `kind`/`codec`/flag bit
-- A mismatch between the `has request seq`/`has metadata` flag and
-  actual field presence
+- A mismatch between the `has request seq`/`has metadata`/`has actor slot`
+  flag and actual field presence
 - `Response` or `Error` whose `name_len` isn't `0`
 
 ### 4.6 Control Frame
@@ -212,14 +218,18 @@ application uses a string identical to a control name below as
 confusion, don't use `session-closing` for an application packet. A
 new control packet uses the `$zlink.` prefix.
 
-A control frame has `Raw` codec, no request sequence, no metadata, and
-no flow flag. **The payload differs per control packet.**
+A control frame has `Raw` codec and no request sequence, metadata, flow
+field or flag, or Actor slot field or flag. The slot of
+`$zlink.actor.bound` and `$zlink.actor.unbound` lives in the control
+payload only. **The payload differs per control packet.**
 
 | Control Packet | Payload |
 |---|---|
 | `$zlink.heartbeat.ping` | **Empty** |
 | `$zlink.heartbeat.pong` | **Empty** |
 | `session-closing` | **Not empty** — see below |
+| `$zlink.actor.bound` | **Not empty** — see below |
+| `$zlink.actor.unbound` | **Not empty** — see below |
 
 `session-closing` is a control packet the server sends right before
 closing a session, and the client reads it to confirm `closeReason`
@@ -243,6 +253,29 @@ closing a session, and the client reads it to confirm `closeReason`
 
 An unknown version/reason, or `diag_len` exceeding 512 or mismatching
 the actual payload length, is a decode error.
+
+`$zlink.actor.bound` is the control packet the server sends when it has
+bound an Actor to this session, and `$zlink.actor.unbound` when that
+binding ends. §5.6 owns the meaning; when they are sent and in what order
+is owned by
+[Session–Actor Binding §5](../server/04-session/02-session-actor-binding.en.md#5-bind-and-relay).
+
+```text
+$zlink.actor.bound
++------------+---------------+--------------+-------------------+
+| version u8 | actor_slot u16| id_len u8    | actor_id bytes    |
+| = 1        | 1..65535      | 1..255       | UTF-8             |
++------------+---------------+--------------+-------------------+
+
+$zlink.actor.unbound
++------------+---------------+
+| version u8 | actor_slot u16|
+| = 1        | 1..65535      |
++------------+---------------+
+```
+
+An unknown version, `actor_slot = 0`, `id_len = 0`, or a mismatch with the
+actual payload length is a decode error.
 
 ### 4.7 Payload Size Bound
 
@@ -401,6 +434,50 @@ execution environment.
   `AsyncLocalStorage`, so a value can't be held on the execution
   context (§2.2). As that same document forbids, the current flow isn't
   guessed from a process-global variable or a mutable connector field.
+
+### 5.6 Bound Actor
+
+The server can bind several Actors to one STREAM session
+([Session–Actor Binding §4](../server/04-session/02-session-actor-binding.en.md#4-what-binding-connects-and-what-it-stores)).
+**The connector tells which Actor a packet's server-side counterpart is by
+a value the Framework provides** — the application does not put an
+identifier into the payload for that.
+
+- The connector consumes the `$zlink.actor.bound` and
+  `$zlink.actor.unbound` announcements that
+  [Session–Actor Binding §5](../server/04-session/02-session-actor-binding.en.md#5-bind-and-relay)
+  defines and keeps the `actor_slot ↔ actor_id` table from them. A bound
+  announcement for an already open slot, a bound announcement for an
+  `actor_id` another open slot already uses, an unbound announcement for a
+  slot missing from the table, and a packet carrying an `actor_slot` missing
+  from the table are all `FrameDecodeFailed` and end the connection per §9.
+- **A received message exposes `actor_id`.** A frame with `has actor slot`
+  set carries the `actor_id` found in the table; a frame without it carries
+  none.
+- An **Actor handle** is the connector object that stands for one bound
+  Actor. The connector owns the handle's state, and the application can read
+  its reference and `actor_id` after it closes. The list of open handles is a
+  read-only snapshot taken at the time of the call.
+- Handling a bound control, the connector updates the table and the list
+  first and then queues the bound callback; a later packet callback for that
+  Actor on the same connection is queued after it. An unbound control removes
+  the entry, closes the handle, and queues the unbound callback, after which
+  that handle's receive handlers no longer run. When the transport drops, the
+  connector closes every open handle in issue order and queues their unbound
+  callbacks before it queues the connection-state and disconnected callbacks.
+- The handle's send and request carry that Actor's `actor_slot`, and a
+  receive registration on the handle is given only the messages whose
+  counterpart is that Actor. Send and request on a closed handle are
+  `ValidationFailed`; otherwise the timeout, cancellation and backpressure
+  meanings are those of the connector-level builders. Actor lifecycle
+  callbacks and a handle's receive registrations follow §7's dispatch mode,
+  registration order, deregistration, callback failure and "doesn't wait for
+  completion" rules as they are.
+- The connector-level send, request and receive registration work without a
+  slot; an application that binds one Actor keeps using them as before,
+  without handles. There is no surface that takes an Actor identifier as a
+  string on every call — the handle keeps the Actor's address
+  ([Public Contract Governance §7](../server/00-foundation/01-public-contract-governance.en.md#7-design-review-criteria)).
 
 ## 6. Connection Lifecycle
 
@@ -615,8 +692,8 @@ The `waitFor`/`expectNone`/`waitForSequence` family isn't a registered
 callback. Since this surface directly observes and consumes an
 unconsumed packet in the receive message queue in both dispatch modes,
 it doesn't need a separate dispatch pump even in `Manual`. `dispatch`
-only runs a registered push handler, error/disconnect handler, and
-request callback.
+only runs a registered push handler, error/disconnect handler, request
+callback, and Actor lifecycle callback (§5.6).
 
 **Handler registration returns a value that can unregister it.** This
 holds for the push handler and for the error/disconnect/connection
@@ -636,7 +713,8 @@ explicitly.
 
 **The connector does not wait for a handler to finish.** Running a
 registered handler — push handler, error handler, disconnect handler,
-connection state handler and request callback — is the connector's work;
+connection state handler, request callback and Actor lifecycle callback —
+is the connector's work;
 waiting for it to finish is not. No kind is an exception. `close` returns
 once it has **run** the connection state handlers and the disconnect
 handlers, without looking at whether they finished. Disconnecting after
@@ -904,11 +982,17 @@ test name differs, the meaning must be the same.
 | **Transport inference** | **An unspecified transport is settled by the endpoint scheme, and a specified one that conflicts with the scheme is `ConfigurationError` (§3.1)** |
 | **Error delivery** | **The receiver can tell which of §9's thirteen it is. A language's standard exception type is not used as is (§9.2)** |
 | **Reconnect delay** | **The wait between attempts falls between 50% and 100% of the base delay. When the attempts run out the state becomes `Disconnected` and disconnect handlers run (§6)** |
-| **Unregistration** | **All four registrations — push, error, disconnect, connection state — return a value that unregisters, and an unregistered handler is not run by later dispatches (§7)** |
+| **Unregistration** | **Every registration — connector and handle push, error, disconnect, connection state, Actor bound and unbound — returns a value that unregisters, and an unregistered handler is not run by later dispatches (§7)** |
 | **Received count** | **`receivedCount(name)` counts what arrived, does not fall on consumption, and is independent of dispatch mode. It restarts at zero when the connection is established (§10)** |
 | **Wait surfaces** | **Both the named path and the payload-type path exist, the predicate and the return value carry messages, a failed condition is `ValidationFailed`, and an ended connection is `Disconnected` (§10.1)** |
+| **Actor slot wire** | **The `actor_slot` flag and field encode and decode both ways, a control header carries no slot, and a mismatch between the flag and field presence is a decode error (§4.2, §4.5, §4.6)** |
+| **Actor lifecycle control** | **A malformed bound/unbound payload, a bound announcement for an already open slot, a bound announcement for an `actor_id` already in use, and an unbound announcement for a slot missing from the table all end the connection as `FrameDecodeFailed` (§4.6, §5.6, §9)** |
+| **Actor table** | **`$zlink.actor.bound` arrives before the first packet carrying that slot, a received message's `actor_id` is resolved through the table, and a frame without a slot carries no `actor_id` (§5.6)** |
+| **Actor handle** | **`actors` is a read-only snapshot taken at the call and a closed handle still reads its `actor_id`. The list and the lookup are updated before the bound callback, which runs before that Actor's first packet callback, and a dropped transport closes every open handle in issue order with its unbound callback before the disconnected callback (§5.6, §7)** |
+| **Actor handle send and receive** | **A handle's send and request carry that slot and a handle's receive registration gets only that Actor's messages. Send/request on a closed handle are `ValidationFailed`, and an open handle gives the same timeout, cancellation and backpressure results as the connector-level builders (§5.6)** |
+| **Actor language projection** | **The .NET typed extensions, the Java named typed overload, the C++ templates and subscriptions, the TypeScript Disposable, and the Unity WebGL JSON boundary round trip are observable on the public surface (§5.6, language documents)** |
 | **Flow exposure and propagation** | **A received message exposes the flow identifier and origin, and a runtime without an ambient context provides an explicit means of passing it (§5.5)** |
-| **Handlers and close** | **For all five kinds — push, error, disconnect and connection state handlers and request callbacks — the connector does not wait for a handler that never finishes. `close` returns after it has run the connection state handlers and the disconnect handlers. Disconnecting after the reconnect attempts are used up and on a transport error runs them in the same order and does not wait (§7)** |
+| **Handlers and close** | **Push, error, disconnect, connection state, Actor bound and Actor unbound handlers and request callbacks all follow the registration order, callback failure and no-waiting rules, and the connector does not wait for a handler that never finishes. `close` returns after it has run the connection state handlers and the disconnect handlers. Disconnecting after the reconnect attempts are used up and on a transport error runs them in the same order and does not wait (§7)** |
 | **Close reason read surface** | **Code that did not receive the event reads the same value. A failed first connect still leaves a reason, and reconnecting does not clear it (§6.2)** |
 | Diagnostics level | `Off` outbound frames carry no flow field/flag (0x10), inbound flow value validation is skipped, the `Errors` default keeps the current wire, and one-way `Send` carries no correlation id (§13) |
 

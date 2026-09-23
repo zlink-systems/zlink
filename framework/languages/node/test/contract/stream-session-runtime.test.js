@@ -277,6 +277,93 @@ test('stream session node runtime dispatches framed packets through one session 
   ]);
 });
 
+test('stream session dispatch resolves only current Actor slots for sends and requests', async (t) => {
+  const socket = new FakeStreamSocket();
+  const dispatches = [];
+  let boundActor;
+  let bindingReady;
+  const bindingReadyPromise = new Promise((resolve) => { bindingReady = resolve; });
+  const runtime = createStreamRuntime({
+    socket,
+    bindingRuntime: new framework.ZLinkStreamBindingRuntime({
+      messageFactory: {
+        createTextMessage(payload) { return zlink.Message.from(Buffer.from(payload)); },
+        createBinaryMessage(payload) { return zlink.Message.from(Buffer.from(payload)); }
+      }
+    }),
+    sessionFactory(context) {
+      return {
+        context,
+        async onConnected() {
+          boundActor = await context.actors.bind({
+            nodeRid: 'node-a',
+            actorId: 'actor-slot-a',
+            generation: 1n
+          });
+          bindingReady();
+        },
+        async onDispatch(dispatch) {
+          dispatches.push({ packetName: dispatch.packetName, actor: dispatch.actor });
+          if (dispatch.canReply) {
+            await context.client.reply({ accepted: true }).submit();
+          }
+        }
+      };
+    }
+  });
+  t.after(() => runtime.dispose());
+
+  runtime.start();
+  runtime.markConnected('session-actor-slots', 'tcp://local', 'tcp://remote');
+  await bindingReadyPromise;
+  socket.emitPacket(
+    'session-actor-slots',
+    fakeHeader({ name: 'CurrentSend', actorSlot: 1 }),
+    fakeJsonMessage('current-send')
+  );
+  socket.emitPacket(
+    'session-actor-slots',
+    fakeHeader({
+      kind: connector.ZlinkStreamMessageKind.Request,
+      requestSeq: 1n,
+      name: 'CurrentRequest',
+      actorSlot: 1
+    }),
+    fakeJsonMessage('current-request')
+  );
+  socket.emitPacket(
+    'session-actor-slots',
+    fakeHeader({ name: 'StaleSend', actorSlot: 99 }),
+    fakeJsonMessage('stale-send')
+  );
+  socket.emitPacket(
+    'session-actor-slots',
+    fakeHeader({
+      kind: connector.ZlinkStreamMessageKind.Request,
+      requestSeq: 2n,
+      name: 'StaleRequest',
+      actorSlot: 99
+    }),
+    fakeJsonMessage('stale-request')
+  );
+  await waitForCondition(() => dispatches.length === 4, 'Actor slot dispatches');
+
+  assert.deepEqual(dispatches.map((dispatch) => dispatch.packetName), [
+    'CurrentSend',
+    'CurrentRequest',
+    'StaleSend',
+    'StaleRequest'
+  ]);
+  assert.equal(dispatches[0].actor, boundActor);
+  assert.equal(dispatches[1].actor, boundActor);
+  assert.equal(dispatches[2].actor, undefined);
+  assert.equal(dispatches[3].actor, undefined);
+  assert.equal(socket.sent.length, 3);
+  assert.equal(decodeServerSentFrame(socket.sent[0]).header.name, '$zlink.actor.bound');
+  assert.equal(decodeServerSentFrame(socket.sent[1]).header.actorSlot, 1);
+  assert.equal(decodeServerSentFrame(socket.sent[2]).header.actorSlot, undefined);
+});
+
 test('Actor binding replacement callback can send before close and does not block another session lane', async () => {
   const socket = new FakeStreamSocket();
   const events = [];
@@ -2156,7 +2243,12 @@ class FakeStreamSocket {
   }
 
   async submit(routingId, payload, timeoutMs) {
-    this.sent.push({ routingId, payload, timeoutMs });
+    this.sent.push({
+      routingId,
+      payload,
+      bytes: Uint8Array.from(payload.toBytes()),
+      timeoutMs
+    });
   }
 
   disconnectPeer(routingId) {
@@ -2307,6 +2399,14 @@ function decodeSessionClosing(sent) {
   const frame = protocolCodecs.ZlinkStreamFrameCodec.decode(sent.payload.data());
   return {
     header: protocolCodecs.ZlinkStreamHeaderCodec.decode(frame.header),
+    payload: frame.payload
+  };
+}
+
+function decodeServerSentFrame(sent) {
+  const frame = streamProtocol.decodeStreamFrame(sent.bytes ?? sent.payload.data());
+  return {
+    header: streamProtocol.decodeStreamHeader(frame.header),
     payload: frame.payload
   };
 }
