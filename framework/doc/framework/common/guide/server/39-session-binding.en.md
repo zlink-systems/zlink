@@ -101,31 +101,31 @@ is still up but the application protocol treats it as disconnected.
 === "C#/.NET"
 
     ```csharp
-    await actor.NotifyDisconnectedAsync(cancellationToken);
+    --8<-- "framework/languages/dotnet/samples/TicTacToe/Server/Play/Infrastructure/ZLink/Sessions/PlaySession.cs:session-disconnect-notify"
     ```
 
 === "C++"
 
     ```cpp
-    co_await actor.notify_disconnected ();
+    --8<-- "framework/languages/cpp/samples/TicTacToe/Server/Play/Infrastructure/ZLink/Sessions/play_session.hpp:session-disconnect-notify"
     ```
 
 === "Java"
 
     ```java
-    actor.notifyDisconnected();
+    --8<-- "framework/languages/java/samples/java/TicTacToe/Server/src/main/java/systems/zlink/samples/tictactoe/server/play/infrastructure/zlink/sessions/PlaySession.java:session-disconnect-notify"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    actor.notifyDisconnected().await()
+    --8<-- "framework/languages/java/samples/kotlin/TicTacToe/Server/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/server/play/infrastructure/zlink/sessions/PlaySession.kt:session-disconnect-notify"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    await actor.notifyDisconnected();
+    --8<-- "framework/languages/node/samples/TicTacToe.Ts/Server/Play/Infrastructure/ZLink/Sessions/play-session.ts:session-disconnect-notify"
     ```
 
 ## 4. When a Bind Fails or Becomes Void

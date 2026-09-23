@@ -1,5 +1,9 @@
+using System.Reflection;
 using System.Text;
 using Systems.Zlink.Stream.Connector.Contracts;
+using Zlink.Framework.Runtime.Backend.Contracts;
+using Zlink.Framework.Runtime.Codecs;
+using Zlink.Framework.Runtime.Streams;
 using ConnectorClosingCodec = Systems.Zlink.Stream.Connector.Runtime.Protocol.ZlinkStreamSessionClosingCodec;
 using ConnectorFrameCodec = Systems.Zlink.Stream.Connector.Runtime.Protocol.Framing.ZlinkStreamFrameCodec;
 using ConnectorHeaderCodec = Systems.Zlink.Stream.Connector.Runtime.Protocol.ZlinkStreamHeaderCodec;
@@ -10,6 +14,55 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class StreamWireInteropTests
 {
+    [Theory]
+    [InlineData(true, "$zlink.actor.bound")]
+    [InlineData(false, "$zlink.actor.unbound")]
+    public void ActorControlFrame_IsSentAsRawWireFrame(bool bound, string name)
+    {
+        var socket = DispatchProxy.Create<IZLinkBackendStreamSocket, CapturingStreamSocketProxy>();
+        var capture = (CapturingStreamSocketProxy)(object)socket;
+        var stream = new ZLinkManagedStream(
+            socket,
+            RoutingId.From("actor-control-session"),
+            new ZLinkCodecRegistryBuilder(),
+            "test"
+        );
+
+        if (bound)
+            ZLinkStreamControlFrames.SendActorBound(stream, 0x1234, "actor-한");
+        else
+            ZLinkStreamControlFrames.SendActorUnbound(stream, 0x1234);
+
+        var frame = Assert.Single(capture.Frames);
+        Assert.True(CoreFrameCodec.TryDecode(frame, out var headerBytes, out var payload));
+        var header = new ConnectorHeaderCodec().Decode(headerBytes.ToArray());
+        Assert.Equal(ZlinkStreamMessageKind.Control, header.Kind);
+        Assert.Equal(ZlinkStreamCodec.Raw, header.Codec);
+        Assert.Equal(ZlinkStreamHeaderFlags.None, header.Flags);
+        Assert.Equal(name, header.Name);
+        Assert.Null(header.ActorSlot);
+        var expected = bound
+            ? new byte[] { 1, 0x12, 0x34, 9, 97, 99, 116, 111, 114, 45, 237, 149, 156 }
+            : new byte[] { 1, 0x12, 0x34 };
+        Assert.Equal(expected, payload.ToArray());
+    }
+
+    private class CapturingStreamSocketProxy : DispatchProxy
+    {
+        public List<byte[]> Frames { get; } = [];
+
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+        {
+            if (targetMethod?.Name == "SendAsync")
+            {
+                Frames.Add(((Message)args![1]!).ToArray());
+                return Task.CompletedTask;
+            }
+
+            throw new NotSupportedException(targetMethod?.Name);
+        }
+    }
+
     [Theory]
     [InlineData(0L)]
     [InlineData(1L)]

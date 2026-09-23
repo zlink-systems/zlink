@@ -122,12 +122,14 @@ class BingoClientScenario {
       .waitFor<PlayerJoinedNotify>(PacketNames.playerJoinedNotify)
       .where((message) => message.payload.actorId === client2Auth.actorId)
       .submit(signal);
+    // --8<-- [start:doc-e2e-multi-wait]
     const client1StartedTask = client1
       .waitFor<StateEnvelope>(PacketNames.gameStartedNotify)
       .submit(signal);
     const client2StartedTask = client2
       .waitFor<StateEnvelope>(PacketNames.gameStartedNotify)
       .submit(signal);
+    // --8<-- [end:doc-e2e-multi-wait]
     const [client2MatchRes] = await Promise.all([
       client2
         .request(new MatchBingoReq({ mode: 'two-player' }))

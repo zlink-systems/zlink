@@ -6,7 +6,6 @@ import systems.zlink.framework.ZLinkHandlerFilter
 import systems.zlink.framework.ZLinkHandlerFilterContext
 import systems.zlink.framework.ZLinkHandlerFilterNext
 
-// --8<-- [start:filter-implementation]
 // Runs around every handler this node receives, so the same logging is not
 // repeated in each handler. Calling next.invoke() runs the handler; skipping it
 // does not.
@@ -14,6 +13,7 @@ import systems.zlink.framework.ZLinkHandlerFilterNext
 // There is no Kotlin filter interface. This is the Java ZLinkHandlerFilter, so
 // the method is not a suspend fun: it takes and returns a CompletionStage, and
 // the generic parameter belongs to the method, not to the class.
+// --8<-- [start:filter-implementation]
 class CallLogFilter : ZLinkHandlerFilter {
 
     private val log = LoggerFactory.getLogger(CallLogFilter::class.java)

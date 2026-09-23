@@ -225,97 +225,13 @@ handler는 대상 Spot instance를 첫 인자로 받는다. Spot 안에서 실�
 --8<-- "framework/languages/java/samples/java/TicTacToe/Server/src/main/java/systems/zlink/samples/tictactoe/server/play/infrastructure/zlink/spots/tictactoegamespot/handlers/PlayActorPlaceMarkHandler.java:doc-actor-packet-handler"
 ```
 
-최소 형태로 보면 이렇다.
-
-```java
-// Spot 앞 packet — 첫 인자가 대상 Spot instance다.
-public final class ChatHandler implements ZLinkSpotPacketHandler<GameRoom, Chat> {
-    @Override
-    public CompletionStage<Void> handle(GameRoom spot, Chat message) {
-        // Spot 상태를 직접 만진다. 락은 필요 없다.
-        spot.appendChat(message.text());
-        return CompletableFuture.completedFuture(null);
-    }
-}
-
-// Spot 앞 request — 반환값이 reply다.
-public final class GetRoomStateHandler
-    implements ZLinkSpotRequestHandler<GameRoom, GetRoomState, RoomState> {
-    @Override
-    public CompletionStage<RoomState> handle(GameRoom spot, GetRoomState request) {
-        return CompletableFuture.completedFuture(spot.snapshot());
-    }
-}
-
-// 구독 이벤트 — @ZLinkSpotSubscription의 topic으로 들어온다.
-public final class ScoreHandler
-    implements ZLinkSpotSubscriptionHandler<GameRoom, ScoreChanged> {
-    @Override
-    public CompletionStage<Void> handle(GameRoom spot, ScoreChanged event) {
-        spot.applyScore(event);
-        return CompletableFuture.completedFuture(null);
-    }
-}
-
-// member Actor 앞 packet — Spot과 Actor를 함께 받는다.
-public final class PlaceMarkHandler
-    implements ZLinkSpotActorSendHandler<GameRoom, PlayerActor, PlaceMark> {
-    @Override
-    public CompletionStage<Void> handle(
-        GameRoom spot,
-        // 이 메시지를 받은 Actor다.
-        PlayerActor actor,
-        ZLinkMessageContext messageContext,
-        PlaceMark message) {
-        spot.place(actor.actorId(), message.cell());
-        return CompletableFuture.completedFuture(null);
-    }
-}
-```
-
 Actor 앞 request는 actor request handler이며
 같은 인자에 반환값이 reply라는 점만 다르다.
 
 `configure()`에서 handler를 등록하고 lifecycle callback에서 초기화와 정리를 수행한다.
 
 ```java
-public final class GameRoom implements ZLinkSpot {
-    private final ZLinkSpotContext context;
-
-    @Override
-    public ZLinkSpotContext context() {
-        return context;
-    }
-
-    @Override
-    public void configure() {
-        // Spot send handler를 등록한다.
-        context.handlers().addHandler(ChatHandler.class);
-        // 구독 topic은 ScoreHandler에 붙인 @ZLinkSpotSubscription이 정한다.
-        context.handlers().addHandler(ScoreHandler.class);
-    }
-
-    @Override
-    public CompletionStage<ZLinkSpotCreateResponse> onCreate(ZLinkMessage request) {
-        CreateGame create = request.decode(CreateGame.class);
-        boolean known = "ranked".equals(create.mode()) || "casual".equals(create.mode());
-        return CompletableFuture.completedFuture(known
-            ? ZLinkSpotCreateResponse.accept(new GameCreated(create.mode()))
-            : ZLinkSpotCreateResponse.reject(new InvalidMode(create.mode())));
-    }
-
-    @Override
-    public CompletionStage<Void> onInitialize() {
-        // 생성 승인 뒤 메시지를 받기 전에 필요한 준비를 끝낸다.
-        return CompletableFuture.completedFuture(null);
-    }
-
-    @Override
-    public CompletionStage<Void> onClosing(ZLinkSpotClosingContext closing) {
-        // Deadline까지 application resource를 정리한다.
-        return CompletableFuture.completedFuture(null);
-    }
-}
+--8<-- "framework/languages/java/samples/java/GameQuest/Server/QuestMission/src/main/java/systems/zlink/samples/gamequest/server/questmission/spots/PlayerQuestSpot.java:doc-gq-spot-init"
 ```
 
 `onClosing`의 reason은 explicit close, host shutdown, relocation out을 구분한다.

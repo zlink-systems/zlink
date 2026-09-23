@@ -6,7 +6,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import systems.zlink.framework.kotlin.ZLinkKotlinStreamConnector
 import systems.zlink.framework.kotlin.await
-import systems.zlink.framework.kotlin.awaitReply
+import systems.zlink.framework.kotlin.request
 import systems.zlink.samples.kotlin.bingo.client.configuration.SampleNames
 import systems.zlink.samples.kotlin.bingo.shared.contracts.AuthenticateReq
 import systems.zlink.samples.kotlin.bingo.shared.contracts.AuthenticateRes
@@ -38,7 +38,7 @@ class BingoClientScenario {
         client1.connect().await()
         client2.connect().await()
         observer.connect().await()
-        val client1Auth = client1.request(AuthenticateReq("player-1")).awaitReply<AuthenticateRes>()
+        val client1Auth = client1.request<AuthenticateRes>(AuthenticateReq("player-1")).await()
         ensure(client1Auth.actorId == "player-1")
 
         val client1NoSelfJoin =
@@ -48,18 +48,17 @@ class BingoClientScenario {
                     .within(Duration.ofMillis(400))
                     .await()
             }
-        val client1Match = client1.request(MatchBingoReq("two-player")).awaitReply<MatchBingoRes>()
+        val client1Match = client1.request<MatchBingoRes>(MatchBingoReq("two-player")).await()
         ensure(client1Match.state.status == "WaitingForPlayers")
         ensure(client1Match.state.hostActorId == client1Auth.actorId)
         client1NoSelfJoin.await()
 
-        val observerAuth =
-            observer.request(AuthenticateReq("observer")).awaitReply<AuthenticateRes>()
+        val observerAuth = observer.request<AuthenticateRes>(AuthenticateReq("observer")).await()
         ensure(observerAuth.actorId == "observer")
         val observed =
             observer
-                .request(ObserveBingoEventsReq(client1Match.roomId))
-                .awaitReply<ObserveBingoEventsRes>()
+                .request<ObserveBingoEventsRes>(ObserveBingoEventsReq(client1Match.roomId))
+                .await()
         ensure(observed.subscribed)
         // Register the observer wait before the second player can start the draw loop.
         val rewardAnnounced =
@@ -73,6 +72,7 @@ class BingoClientScenario {
                 .waitFor<PlayerJoinedNotify>()
                 .where { message -> message.payload().actorId == "player-2" }
                 .let { wait -> async(start = CoroutineStart.UNDISPATCHED) { wait.await() } }
+        // --8<-- [start:doc-e2e-multi-wait]
         val client1Started =
             async(start = CoroutineStart.UNDISPATCHED) {
                 client1.waitFor<BingoGameStartedNotify>().await()
@@ -81,8 +81,9 @@ class BingoClientScenario {
             async(start = CoroutineStart.UNDISPATCHED) {
                 client2.waitFor<BingoGameStartedNotify>().await()
             }
+        // --8<-- [end:doc-e2e-multi-wait]
 
-        val client2Auth = client2.request(AuthenticateReq("player-2")).awaitReply<AuthenticateRes>()
+        val client2Auth = client2.request<AuthenticateRes>(AuthenticateReq("player-2")).await()
         ensure(client2Auth.actorId == "player-2")
         ensure(client2Auth.actorId != client1Auth.actorId)
 
@@ -93,7 +94,7 @@ class BingoClientScenario {
                     .within(Duration.ofMillis(400))
                     .await()
             }
-        val client2Match = client2.request(MatchBingoReq("two-player")).awaitReply<MatchBingoRes>()
+        val client2Match = client2.request<MatchBingoRes>(MatchBingoReq("two-player")).await()
         ensure(client2Match.roomId == client1Match.roomId)
         ensure(client2Match.state.status == "WaitingForPlayers")
 
@@ -111,8 +112,10 @@ class BingoClientScenario {
 
         val client2Card =
             client2
-                .request(SubmitBingoCardReq(client2Match.roomId, BingoClientCards.Player2))
-                .awaitReply<SubmitBingoCardRes>()
+                .request<SubmitBingoCardRes>(
+                    SubmitBingoCardReq(client2Match.roomId, BingoClientCards.Player2)
+                )
+                .await()
         ensure(client2Card.state.status == "Running")
         ensure(
             client2Card.state.players
@@ -151,8 +154,10 @@ class BingoClientScenario {
 
         val client1Card =
             client1
-                .request(SubmitBingoCardReq(client1Match.roomId, BingoClientCards.Player1))
-                .awaitReply<SubmitBingoCardRes>()
+                .request<SubmitBingoCardRes>(
+                    SubmitBingoCardReq(client1Match.roomId, BingoClientCards.Player1)
+                )
+                .await()
         ensure(client1Card.state.status == "Running")
         ensure(client1Card.state.players.size == 2)
         ensure(client1Card.state.players.all { player -> player.card.size == 9 })
@@ -201,8 +206,10 @@ class BingoClientScenario {
 
         val stopped =
             observer
-                .request(StopObservingBingoEventsReq(client1Match.roomId))
-                .awaitReply<StopObservingBingoEventsRes>()
+                .request<StopObservingBingoEventsRes>(
+                    StopObservingBingoEventsReq(client1Match.roomId)
+                )
+                .await()
         ensure(stopped.stopped)
         println("bingo=completed")
     }

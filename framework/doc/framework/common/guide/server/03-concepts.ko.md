@@ -361,7 +361,7 @@ edge의 정책은 그 앞단이 소유한다.
   [Channel 메시징](20-channel-messaging.ko.md)
 - Spot 종류·생성 시점·주입 수명: [활성화와 수명](34-activation-lifetime.ko.md)
 - host 수명주기와 운영: [12-operations](12-operations.ko.md)
-- 등록 지점과 계층 구조: [계층 구조와 등록 지점](01-overview.ko.md#33-계층-구조와-등록-지점)
+- 등록 지점과 계층 구조: [계층 구조와 등록 지점](01-overview.ko.md#32-계층-구조와-등록-지점)
 - 전체 interface·attribute·context: [주요 타입 사용 색인](13-interface-catalog.ko.md)
 - 실행 코드로 보고 싶을 때 고를 샘플: [14-samples](14-samples.ko.md)
 

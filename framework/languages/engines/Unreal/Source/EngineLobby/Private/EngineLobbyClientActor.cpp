@@ -57,6 +57,7 @@ AZLinkClientActor::AZLinkClientActor ()
 void AZLinkClientActor::BeginPlay ()
 {
     Super::BeginPlay ();
+    // --8<-- [start:connect-call]
     Connector = NewObject<UZLinkStreamConnector> (this);
     ResponseHandle =
       Connector->OnRequestCompletedNative.AddUObject (this, &AZLinkClientActor::HandleResponse);
@@ -70,6 +71,7 @@ void AZLinkClientActor::BeginPlay ()
         return;
     }
     SendPing ();
+    // --8<-- [end:connect-call]
 }
 
 void AZLinkClientActor::SendPing ()
@@ -118,6 +120,7 @@ void AZLinkClientActor::HandleResponse (const FZLinkStreamPacket &Packet)
     }
 }
 
+// --8<-- [start:receive]
 void AZLinkClientActor::HandlePacket (const FZLinkStreamPacket &Packet)
 {
     if (Packet.PacketName != PacketName (engine_lobby::packet::chat_notify)) {
@@ -136,7 +139,9 @@ void AZLinkClientActor::HandlePacket (const FZLinkStreamPacket &Packet)
     }
     SetStatus (FString::Printf (TEXT ("%s: %s"), *Name, *Text), FColor::Green);
 }
+// --8<-- [end:receive]
 
+// --8<-- [start:send]
 void AZLinkClientActor::SendJoin ()
 {
     Connector->RequestJson (PacketName (engine_lobby::packet::join_req),
@@ -148,6 +153,7 @@ void AZLinkClientActor::SendChat ()
     Connector->SendJson (PacketName (engine_lobby::packet::chat_msg),
                          EncodeStringField (engine_lobby::field::text, FirstChat));
 }
+// --8<-- [end:send]
 // --8<-- [end:handler]
 
 // --8<-- [start:lifecycle]

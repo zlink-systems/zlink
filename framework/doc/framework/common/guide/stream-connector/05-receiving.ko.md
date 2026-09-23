@@ -416,8 +416,6 @@ unbound 통지는 그 Actor의 마지막 packet 뒤에 온다. connector가 slot
     --8<-- "framework/languages/node/tutorial/StreamClient/main.ts:actor-handle-receive"
     ```
 
-Kotlin의 coroutine connector는 같은 Java connector를 감싼다. 위 코드의 `javaConnector`는
-`connector`를 만들 때 보관한 원본이며, Actor handle은 그 공개 표면에서 얻는다.
 실행하면 `actor handle: p1`과 `pushed: speedy, actor: p1`이 출력된다.
 
 ## 9. 다음 장

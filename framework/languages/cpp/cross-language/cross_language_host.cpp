@@ -1677,6 +1677,7 @@ int main (int argc, char **argv)
                    * Spot exists. */
                   .set_placement_weight (100);
                 mesh.channel_name (mesh_name).server ();
+                mesh.objects ().server ();
                 mesh.add_route_request_handler<user_spot_discovery_probe_handler_t,
                                                user_spot_discovery_probe_req_t,
                                                user_spot_discovery_probe_res_t> (

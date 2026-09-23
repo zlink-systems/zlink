@@ -683,7 +683,29 @@ class ZLinkKotlinStreamConnector {
     fun <TPayload> waitForSequence(name: String): ZLinkStreamTypedSequenceCall<TPayload>
     fun messages(packetName: String): Flow<ZLinkStreamMessage<ZLinkStreamEncodedPayload>>
     fun errors(): Flow<ZLinkStreamError>
+    fun actors(): List<ZLinkKotlinStreamActor>
+    fun actor(actorId: String): ZLinkKotlinStreamActor?
+    fun actorBound(): Flow<ZLinkKotlinStreamActor>
+    fun actorUnbound(): Flow<ZLinkKotlinStreamActor>
 }
+
+class ZLinkKotlinStreamActor {
+    val actorId: String
+    val isBound: Boolean
+    fun send(payload: ZLinkStreamEncodedPayload): ZLinkKotlinSendCall
+    fun send(payload: Any): ZLinkKotlinSendCall
+    fun request(payload: ZLinkStreamEncodedPayload): ZLinkKotlinRawRequestCall
+    fun <TReply : Any> request(
+        payload: Any,
+        replyType: KClass<TReply>,
+    ): ZLinkKotlinRequestCall<TReply>
+    fun messages(packetName: String): Flow<ZLinkStreamMessage<ZLinkStreamEncodedPayload>>
+}
+
+inline fun <reified TReply : Any> ZLinkKotlinStreamActor.request(
+    payload: Any,
+): ZLinkKotlinRequestCall<TReply> =
+    request(payload, TReply::class)
 
 class ZLinkKotlinLifecycleCall {
     suspend fun await()
@@ -733,10 +755,11 @@ class ZLinkStreamTypedSequenceCall<TPayload> {
 
 ```
 
-**The close reason is read from the wrapper itself.** The Java
-connector's `Optional<ZLinkStreamCloseReason>` becomes a Kotlin nullable; it
-is `null` when the connection has never ended. Code that uses only the wrapper
-must reach the reason, so it is not left to pull the Java connector out.
+**The close reason and the Actor handle are read from the wrapper itself.** Code that uses only
+the wrapper must reach them, so it is not left to pull the Java connector out. A Java `Optional`
+becomes a Kotlin nullable: the close reason is `null` when the connection has never ended, and
+`actor(id)` is `null` for an id that is not bound
+([common spec §5.6](../../32-stream-connector.en.md#56-bound-actor)).
 
 **All three wait surfaces offer both the named path and the payload-type
 path.** With no name, the name resolution rules for `TPayload` (§5) settle it.
@@ -746,8 +769,10 @@ demand a name, the three surfaces are called differently inside one test.
 The Kotlin wrapper must not build a different state transition or
 buffering policy from the Java connector. The extension copying options
 **must preserve every option value currently defined.**
-`messages(...)` and `errors()` wrap the Java connector's
-`on(...)`, `onErrorReceived(...)` handler with `callbackFlow`. So in
+Every surface that returns a `Flow` wraps the corresponding Java registration with `callbackFlow`:
+the connector's `messages(...)`, `errors()`, `actorBound()` and `actorUnbound()` wrap `on(...)`,
+`onErrorReceived(...)`, `onActorBound(...)` and `onActorUnbound(...)`, and an Actor's `messages(...)`
+wraps that Actor handle's `ZLinkStreamActor.on(...)`. So in
 manual [dispatch mode](../../../server/00-foundation/02-glossary.en.md#dispatch-mode), just
 like Java, the Kotlin wrapper's `dispatch().await()` must be called for
 the collector to receive a message or error event.

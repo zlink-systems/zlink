@@ -45,6 +45,11 @@ public final class NodeLivenessObserver implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
+        // --8<-- [start:doc-zw-snapshot-peers]
+        ZLinkMeshNodeSnapshot initial = runtime.snapshot(ZoneWorldNames.MESH);
+        registry.applyLiveRoutingIds(readyRoutingIds(initial));
+        // --8<-- [end:doc-zw-snapshot-peers]
+
         // --8<-- [start:doc-zw-observe-peers]
         observation = runtime.observe(ZoneWorldNames.MESH, 32);
         observation.subscribe(

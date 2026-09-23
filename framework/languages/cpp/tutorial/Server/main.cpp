@@ -99,6 +99,7 @@ int main (int argc, char **argv)
 
         options.add_fanout_channel ("broadcast")
           .connect ("tcp://127.0.0.1:7412")
+          .subscribe (maintenance_notice_t::packet_name)
           .use_handler_group ("broadcast");
         // --8<-- [end:fanout-subscribe]
 

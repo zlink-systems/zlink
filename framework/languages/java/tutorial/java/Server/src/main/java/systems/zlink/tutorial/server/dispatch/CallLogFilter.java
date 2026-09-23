@@ -9,10 +9,10 @@ import systems.zlink.framework.ZLinkHandlerFilterNext;
 
 import java.util.concurrent.CompletionStage;
 
-// --8<-- [start:filter-implementation]
 // Runs around every handler this node receives, so the same logging is not
 // repeated in each handler. Invoking next runs the handler; skipping it does
 // not.
+// --8<-- [start:filter-implementation]
 public final class CallLogFilter implements ZLinkHandlerFilter {
 
     private static final Logger LOG = LoggerFactory.getLogger(CallLogFilter.class);
@@ -23,10 +23,6 @@ public final class CallLogFilter implements ZLinkHandlerFilter {
         long startedAt = System.nanoTime();
         LOG.info("dispatch start: {}", context.packetName());
 
-        // The filter returns a stage instead of awaiting one, so what the .NET
-        // filter writes after `await next()` is attached here as a completion
-        // step. It still runs on the way back out, so the filters unwind in
-        // reverse registration order.
         return next.invoke()
                 .whenComplete(
                         (reply, failure) -> {

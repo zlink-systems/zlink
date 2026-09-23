@@ -310,12 +310,14 @@ class supportchat_client_scenario_t
         expect (second_closed_notify.get ().state.status == conversation_status_t::closed,
                 "agent did not receive the closed notification");
 
+        // --8<-- [start:doc-e2e-failure]
         (void) zlink::stream_connector::assertions::expect_failure ([&] {
             return second_customer.request (close_conversation_req_t{"resolved"})
               .metadata (conversation_id_metadata_key, second_opened.conversation_id)
               .async<close_conversation_res_t> ()
               .result ();
         });
+        // --8<-- [end:doc-e2e-failure]
         (void) zlink::stream_connector::assertions::expect_failure ([&] {
             return second_customer.request (send_chat_message_req_t{"anyone there?"})
               .metadata (conversation_id_metadata_key, second_opened.conversation_id)

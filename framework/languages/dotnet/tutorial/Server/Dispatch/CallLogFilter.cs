@@ -3,10 +3,10 @@ using Zlink.Framework.Contracts.Handlers;
 
 namespace Tutorial.Server.Dispatch;
 
-// --8<-- [start:filter-implementation]
 // Runs around every handler this node receives, so the same logging is not
 // repeated in each handler. Calling next() runs the handler; skipping it does
 // not.
+// --8<-- [start:filter-implementation]
 public sealed class CallLogFilter(ILogger<CallLogFilter> logger) : IZLinkHandlerFilter
 {
     public async ValueTask InvokeAsync(

@@ -18,12 +18,12 @@ Every release runs in GitHub Actions; nothing is published from a local machine.
 | Binding Node | `@zlink-systems/zlink` (with linux-x64 prebuild) | npm | `bindings-release.yml` | `node/v*` tag or dispatch | npm Trusted Publishing (OIDC, provenance) |
 | Binding Java | `systems.zlink:zlink`, `zlink-ext-netty` | Maven Central, GitHub Packages | `bindings-release.yml` | `java/v*` tag or dispatch | `MAVEN_CENTRAL_*`, `SIGNING_*` (GPG) |
 | Binding .NET | `Zlink` nupkg (+snupkg) | nuget.org | `release-dotnet.yml` (target `binding`) | `dotnet/v*` tag or dispatch | nuget Trusted Publishing (`NuGet/login`, policy `zlink-dotnet-release`) |
-| Framework C++ | source archive + sha256 (`cmake -P framework/languages/cpp/cmake/prepare-source-archive.cmake`: `framework/languages/cpp` + `framework/runtime` + `framework/LICENSE`, generated protocol headers verified with `--check`) | GitHub Release `framework-cpp/vA.B.C` | `framework-release.yml` | `framework-cpp/v*` tag or `target=cpp` dispatch | `GITHUB_TOKEN` |
+| Framework C++ | source archive + sha256 (`cmake -P framework/languages/cpp/cmake/prepare-source-archive.cmake`: `framework/languages/cpp` + `framework/runtime` + `framework/LICENSE`, generated protocol headers verified with `--check`), plus shared prebuilt archives + sha256 for the four supported platforms (Framework shared libraries, headers, and CMake config with that platform's Core prebuilt and C++ binding); all assets are built from the single resolved release ref (`framework/v*` or `framework-cpp/v*` for a tag run, `framework-cpp/vA.B.C` for a dispatch) | GitHub Release at the resolved release ref | `framework-release.yml`; runner and compiler matrix in `framework/languages/cpp/packaging/prebuilt-platforms.json` | `framework/v*` or `framework-cpp/v*` tag, or `target=cpp` dispatch (`cpp_platform` reruns one platform) | `GITHUB_TOKEN` |
 | Framework Node | 8 `@zlink-systems/*` packages | npm | `framework-release.yml` | `framework-node/v*` tag or `target=node` dispatch | npm Trusted Publishing (registered per package) |
 | Framework JVM | 13 `systems.zlink:zlink-framework-*` artifacts (incl. Kotlin) | Maven Central | `framework-release.yml` | `framework-java/v*` tag or `target=java` dispatch | `MAVEN_CENTRAL_*`, `SIGNING_*` |
 | Framework .NET | 9 packages (`Zlink.Framework*`, `Zlink.HttpClient`, `Zlink.Stream.Connector`, ...) | nuget.org | `release-dotnet.yml` (target `framework`) | `framework-dotnet/v*` tag or dispatch | nuget Trusted Publishing |
 | Documentation site | mkdocs static site | GitHub Pages | `docs.yml` | push to `main` (doc paths) | `GITHUB_TOKEN` |
-| Examples mirrors | the tree `scripts/tutorial/export_examples.py` exports from `framework/languages/<lang>/{quickstart,tutorial,samples}` | five read-only repositories `zlink-systems/zlink-<lang>-examples`; Java and Kotlin have separate exported trees but share the Java framework release; `main` = latest release plus later fixes, tags `vA.B.C` | `examples-mirror.yml` | called (`workflow_call`) by the release workflows (`framework-release.yml`, `release-dotnet.yml`) after that language's packages are published and its tutorial verified (tagged on the mirror too; a tag push itself does not run this workflow — the packages do not exist yet at that moment, #884), a `main` push touching an examples path (commit only, and only for a language whose `VERSION` is already tagged), or a `ref` dispatch; `examples-smoke.yml` builds and runs the same tree's lane for that language without a checkout before the push | one write deploy key per mirror (`EXAMPLES_MIRROR_KEY_<LANG>`) |
+| Examples mirrors | the tree `scripts/tutorial/export_examples.py` exports from `framework/languages/<lang>/{quickstart,tutorial,samples}` | five read-only repositories `zlink-systems/zlink-<lang>-examples`; Java and Kotlin have separate exported trees but share the Java framework release; `main` = latest release plus later fixes, tags `vA.B.C` | `examples-mirror.yml` | called (`workflow_call`) by the release workflows (`framework-release.yml`, `release-dotnet.yml`) after that language's packages are published and its tutorial verified (tagged on the mirror too; a tag push itself does not run this workflow — the packages do not exist yet at that moment, #884), or a `ref` dispatch; a `main` push does not run it — between releases main's examples use unpublished APIs and the smoke fails (#997); `examples-smoke.yml` builds and runs the same tree's lane for that language without a checkout before the push | one write deploy key per mirror (`EXAMPLES_MIRROR_KEY_<LANG>`) |
 
 Python, Go, and Rust bindings have jobs in `bindings-release.yml` but are outside the public release
 scope. `core-conan-release.yml` is a legacy workflow for a private Conan remote and has no secrets.
@@ -35,7 +35,7 @@ scope. `core-conan-release.yml` is a legacy workflow for a private Conan remote 
 | Core | `scripts/build-core.sh dev\|release\|release-gate` (trees `core/build-dev`, `core/build-release`). Direct CMake: [build guide](./build-guide.md), [CMake options](./cmake-options.md) | the platform jobs of `build.yml` build `core/` with CMake and archive `core/dist/<platform>/` | GitHub Release `core/vX.Y.Z` assets |
 | Core local prefix | `scripts/local-package/core/fetch-release.sh --version V --platform P` (release archive → `~/.cache/zlink/core/<V>/<P>`), `scripts/gate/materialize-local-core-prefix.sh` (dev build → prefix) | every binding and framework job uses the same `fetch-release.sh` | `~/.cache/zlink/core/`; CI uses `.artifacts/core-release/` |
 | Bindings (7 languages) | `scripts/local-package/build-wsl.sh [cpp\|node\|java\|dotnet\|python\|go\|rust\|c]` (Windows: `build-windows.ps1`); per-language tests `bindings/<lang>/tests/run_tests.sh` | the "Build and test" step of each `bindings-release.yml` / `release-dotnet.yml` job | `.artifacts/wsl/{npm,nuget,maven,install}/` |
-| Framework C++ | presets in `framework/languages/cpp/CMakePresets.json`, Windows `build-windows.ps1`; samples `samples/<name>/run_sample.sh` | `framework-release.yml` only produces the source archive | GitHub Release `framework-cpp/vA.B.C` |
+| Framework C++ | presets in `framework/languages/cpp/CMakePresets.json`, Windows `build-windows.ps1`; samples `samples/<name>/run_sample.sh` | `framework-release.yml` produces the source archive and shared prebuilt archives for linux-x64, linux-arm64, macos-arm64, and windows-x64 | GitHub Release `framework-cpp/vA.B.C` |
 | Framework .NET | `dotnet build framework/languages/dotnet/Zlink.Framework.sln` (needs `ZLINK_LOCAL_PACKAGE_ROOT`); samples `samples/<name>/<name>.sln` | `framework-dotnet.yml` (verification), `release-dotnet.yml` target `framework` (pack and push) | nuget.org |
 | Framework JVM | `framework/languages/java/gradlew assemble` (`test` for tests); Central bundle via `scripts/upload-central-bundle.sh` | `framework-release.yml` `release-java` | Maven Central |
 | Framework Node | `npm ci && npm run build` in `framework/languages/node`; the http-client local tarball via `scripts/local-package/http-client/build-wsl.sh node`; gate `npm run verify:ci`, release gate `verify:release` | `framework-node.yml` (verification), `framework-release.yml` `release-node` (pack and publish) | npm |
@@ -111,17 +111,25 @@ gh release view core/v0.17.5 --json assets -q '.assets[].name'
 
 ## 7. Supported platforms and runtime requirements
 
-| Platform | Core release | Node prebuild | .NET runtimes | Notes |
-| --- | --- | --- | --- | --- |
-| linux-x64 | ✅ | ✅ | ✅ | release runner ubuntu-24.04, needs glibc ≥ 2.38 |
-| linux-arm64 | ✅ | source build | Core archive | |
-| macos-arm64 | ✅ | source build | Core archive | |
-| windows-x64 | ✅ | source build | Core archive | archive bundles the OpenSSL DLLs |
-| windows-arm64 | ❌ | ❌ | ❌ | Unsupported (decided 2026-09-14) |
-| macos-x64 (Intel) | ❌ | ❌ | ❌ | unsupported from Core up (decided 2026-09-09) |
+| Platform | Core release | Framework C++ prebuilt | Node prebuild | .NET runtimes | Notes |
+| --- | --- | --- | --- | --- | --- |
+| linux-x64 | ✅ | ✅ | ✅ | ✅ | ubuntu-24.04, GCC 13; needs glibc ≥ 2.38 |
+| linux-arm64 | ✅ | ✅ | source build | Core archive | ubuntu-24.04-arm, GCC 13 |
+| macos-arm64 | ✅ | ✅ | source build | Core archive | macos-15, Xcode 16.4 / Apple Clang; the prebuilt requires a Core release whose macOS archive is relocatable (Core ≥ 1.3) |
+| windows-x64 | ✅ | ✅ | source build | Core archive | windows-2022, MSVC; the Core archive bundles the OpenSSL DLLs |
+| windows-arm64 | ❌ | ❌ | ❌ | ❌ | unsupported (decided 2026-09-14) |
+| macos-x64 (Intel) | ❌ | ❌ | ❌ | ❌ | unsupported from Core up (decided 2026-09-09) |
 
 "Source build" means the addon is compiled at install time against the Core release archive named by
 `ZLINK_CORE_SOURCE=release` and `ZLINK_CORE_PACKAGE_PREFIX`.
+
+The macos-arm64 prebuilt requires Xcode 16.4 / Apple Clang. The installed `zlink::framework` CMake
+target propagates `-fexperimental-library` to both consumer compile and link lines because its public
+headers use `std::stop_token`. A non-CMake consumer must add `-fexperimental-library` to both its
+compile and link commands.
+
+The Conan pin fixes recipe revisions in the committed lockfile and package IDs in the platform file;
+binaries built from source on the runner are not byte-identical between runs.
 
 ## 8. CI (verification) workflows
 
@@ -141,7 +149,7 @@ likewise outside the framework build, CI and releases; they are verified only by
 | `framework-node.yml` | Node framework gate, Chromium STREAM e2e, Node↔.NET cross-language smoke | 4 platforms (win-x64, linux-x64, linux-arm64, darwin-arm64) × Node 20/22 |
 | `pr-verify.yml` | Core ctest and binding smoke, Java framework unit and contract tests, Windows x64 static contracts | ubuntu-24.04; only the Windows static contract job runs on windows-2022 |
 | `build.yml` | Core build and verification (also the release workflow) | 4 platforms |
-| `framework-tutorial.yml` | verifies the tutorial and quickstart **with the published packages, after publish**: `framework-release.yml` and `release-dotnet.yml` call it with `workflow_call(language)` once the registry index (npm view / Maven Central pom / nuget flatcontainer / GitHub Release asset, up to 30 min) serves the version. PR and main pushes run it only when tutorial sources change, not on version-pin-only commits (`sync-version`) (#862) | ubuntu-24.04, four languages |
+| `framework-tutorial.yml` | verifies the tutorial and quickstart **with the published packages, after publish**: `framework-release.yml` and `release-dotnet.yml` call it with `workflow_call(language)` once the registry index (npm view / Maven Central pom / nuget flatcontainer / GitHub Release asset, up to 30 min) serves the version. PRs and main pushes do not run it — a change that uses an unpublished API cannot pass before its release (#997); otherwise run it by hand | ubuntu-24.04, four languages |
 | `examples-smoke.yml` | builds and runs the exported examples trees in jobs with no checkout, from the README commands alone (quickstart build, tutorial start and verify, one sample end to end); called by `examples-mirror.yml` before the push and rerun daily on the newest framework tag | ubuntu-24.04 for all five languages; windows-2022 for dotnet, java and kotlin |
 | `docs.yml` | documentation site build and deploy | ubuntu |
 

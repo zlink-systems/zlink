@@ -165,9 +165,7 @@ never infers ordering from arrival order.
 slot to send into.**
 
 ```cpp
-co_await client.send_to_channel ("orders", cancel_order_t{"order-1042"}).async ();
-// This co_await finishing means only "my runtime accepted the submission."
-// It doesn't mean the peer received it or the handler finished.
+--8<-- "framework/languages/cpp/tutorial/Client/main.cpp:channel-send-call"
 ```
 
 The framework starts one binding operation. If there is no room, Core owns the HWM wait and
@@ -180,17 +178,7 @@ whether to start a new operation, drop it, or tell the user it failed is up to t
 application.
 
 ```cpp
-try {
-    co_await client.send_to_channel ("orders", command).async ();
-} catch (const framework_exception_t &ex) {
-    if (ex.kind () != framework_error_kind_t::deadline_exceeded)
-        throw;
-    // Only this operation's DeadlineExceeded terminal is certain. The peer's state is unknown.
-    // can_safely_retry is an application-owned predicate that checks whether the command tolerates duplication.
-    if (!can_safely_retry (command))
-        throw;
-    _pending.push_back (command);
-}
+--8<-- "framework/languages/cpp/tutorial/Client/main.cpp:channel-request-call"
 ```
 
 Whether it's OK to resend is judged by the application's business rules. Retry is safe
@@ -224,18 +212,7 @@ stretch, `timeout(...)` is the real ceiling. In particular, **always give a fini
 to a flow that sends another request from inside a handler.**
 
 ```cpp
-task_t<place_order_reply_t> handle (const place_order_t &request)
-{
-    // While the handler waits for the reply, this handler's execution slot stays occupied.
-    // If both nodes' processing is delayed at the same time, a finite timeout is the only place recovery starts.
-    auto reserved = co_await _client
-                      .request_to_channel ("inventory",
-                                           reserve_stock_t{request.sku, request.quantity})
-                      .timeout (std::chrono::seconds (3))
-                      .async<stock_reserved_t> ();
-
-    co_return place_order_reply_t{request.order_id, reserved.reservation_id};
-}
+--8<-- "framework/languages/cpp/tutorial/Server/main.cpp:mesh-register"
 ```
 
 A timeout isn't a knob to tune backpressure — it's **the boundary where you stop waiting.**
@@ -390,9 +367,7 @@ Terminal reply/error completion identifiable before receive does not use this pe
 ## 6. How to Confirm Congestion Is Happening
 
 ```cpp
-// C++ sets the level as a message flow log mode.
-// Default — records errors and backpressure.
-options.configure_dispatch ().message_flow (message_flow_log_mode_t::errors);
+--8<-- "framework/languages/cpp/samples/TicTacToe/Server/Play/play_server_host_factory.hpp:doc-monitoring-flow"
 ```
 
 If `backpressured` shows up in the message flow record, it means waiting for a send slot

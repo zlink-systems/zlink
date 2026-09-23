@@ -10,7 +10,7 @@ title: "Error Handling · Kotlin"
 # Error Handling
 
 <!-- framework-adapter-nav:start -->
-[Contents](README.en.md) | [Previous: Connection Lifecycle](06-lifecycle.en.md)
+[Contents](README.en.md) | [Previous: Connection Lifecycle](06-lifecycle.en.md) | [Next: Game Engine Integration](12-engine-integration.en.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
@@ -36,9 +36,9 @@ read the code.**
 
 ```kotlin
 try {
-    val reply: LoginReply = connector
-        .request(LoginRequest("player-1", "tok-abc123"))
-        .awaitReply()
+    val reply = connector
+        .request<LoginReply>(LoginRequest("player-1", "tok-abc123"))
+        .await()
 } catch (failure: ZLinkStreamException) {
     if (failure.errorCode() == ZLinkStreamErrorCode.REQUEST_TIMEOUT) {
         retryLogin()

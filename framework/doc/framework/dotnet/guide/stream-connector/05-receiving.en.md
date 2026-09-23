@@ -166,7 +166,7 @@ Register for bound and unbound notices first. The tutorial server then binds `p1
 --8<-- "framework/languages/dotnet/tutorial/StreamClient/Program.cs:actor-handle-receive"
 ```
 
-The Kotlin coroutine connector wraps the same Java connector. `javaConnector` above is the original instance retained when creating `connector`; its public API provides the Actor handle. The output includes `actor handle: p1` and `pushed: speedy, actor: p1`.
+The output includes `actor handle: p1` and `pushed: speedy, actor: p1`.
 
 ## 9. Next Chapters
 

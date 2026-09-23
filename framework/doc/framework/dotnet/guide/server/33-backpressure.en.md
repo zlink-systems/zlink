@@ -165,9 +165,7 @@ never infers ordering from arrival order.
 slot to send into.**
 
 ```csharp
-await client.SendToChannel("orders", new CancelOrder("order-1042")).Async(ct);
-// This await finishing means only "my runtime accepted the submission."
-// It doesn't mean the peer received it or the handler finished.
+--8<-- "framework/languages/dotnet/tutorial/Client/Program.cs:channel-send-call"
 ```
 
 The framework starts one binding operation. If there is no room, Core owns the HWM wait and
@@ -180,19 +178,7 @@ whether to start a new operation, drop it, or tell the user it failed is up to t
 application.
 
 ```csharp
-try
-{
-    await client.SendToChannel("orders", command).Async(ct);
-}
-catch (ZLinkFrameworkException ex)
-    when (ex.Kind == ZLinkFrameworkErrorKind.DeadlineExceeded)
-{
-    // Only this operation's DeadlineExceeded terminal is certain. The peer's state is unknown.
-    // CanSafelyRetry is an application-owned predicate that checks whether the command tolerates duplication.
-    if (!CanSafelyRetry(command))
-        throw;
-    _pending.Enqueue(command);
-}
+--8<-- "framework/languages/dotnet/tutorial/Client/Program.cs:channel-request-call"
 ```
 
 Whether it's OK to resend is judged by the application's business rules. Retry is safe
@@ -226,18 +212,7 @@ stretch, `Timeout(...)` is the real ceiling. In particular, **always give a fini
 to a flow that sends another request from inside a handler.**
 
 ```csharp
-public async ValueTask<PlaceOrderReply> HandleAsync(
-    PlaceOrder request, IZLinkMessageContext context, CancellationToken ct)
-{
-    // While the handler waits for the reply, this handler's execution slot stays occupied.
-    // If both nodes' processing is delayed at the same time, a finite timeout is the only place recovery starts.
-    var reserved = await _client
-        .RequestToChannel("inventory", new ReserveStock(request.Sku, request.Quantity))
-        .Timeout(TimeSpan.FromSeconds(3))
-        .Async<StockReserved>(ct);
-
-    return new PlaceOrderReply(request.OrderId, reserved.ReservationId);
-}
+--8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:mesh-register"
 ```
 
 A timeout isn't a knob to tune backpressure — it's **the boundary where you stop waiting.**
@@ -392,9 +367,7 @@ Terminal reply/error completion identifiable before receive does not use this pe
 ## 6. How to Confirm Congestion Is Happening
 
 ```csharp
-options.ConfigureDispatch().Diagnostics
-    // Default — records errors and backpressure.
-    .SetLevel(ZLinkDiagnosticsLevel.Errors);
+--8<-- "framework/languages/dotnet/samples/ZoneWorld/Server/ZoneNode/Program.cs:doc-monitoring-flow"
 ```
 
 If `backpressured` shows up in the message flow record, it means waiting for a send slot

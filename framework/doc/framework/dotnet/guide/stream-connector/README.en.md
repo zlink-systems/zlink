@@ -17,6 +17,7 @@ Web builds do not use this connector. Unity WebGL and Godot Web use the
 | 7 | [Error Handling](07-error-handling.en.md) | The closed set of error codes and how each language delivers them |
 | 8 | [Unity](08-unity.en.md) | Using it from a native Unity build |
 | 9 | [Godot C#](09-godot-csharp.en.md) | Using it from a Godot C# project |
+| 10 | [Game Engine Integration](12-engine-integration.en.md) | Connector choice by engine and the Engine Lobby sample |
 
 The file number identifies the same chapter in every language. Chapters 1 to 7 are
 shared across all five.

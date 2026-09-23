@@ -81,7 +81,8 @@ public class ClientApplication {
             // no change here.
             options.addFanoutChannel("broadcast")
                     .setRoutingIdPrefix("game-client-broadcast")
-                    .enablePublisher("tcp://127.0.0.1:7512");
+                    .enablePublisher("tcp://127.0.0.1:7512")
+                    .setNoDrop(true);
             // --8<-- [end:fanout-publish-register]
 
             // --8<-- [start:spot-client-register]

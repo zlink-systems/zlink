@@ -23,7 +23,9 @@ public final class CustomerActor implements ZLinkActor {
         return context;
     }
 
+    // --8<-- [start:doc-dd-bound-session-push]
     public CompletionStage<Void> push(Object message) {
         return context.boundSession().send(message).submit();
     }
+    // --8<-- [end:doc-dd-bound-session-push]
 }

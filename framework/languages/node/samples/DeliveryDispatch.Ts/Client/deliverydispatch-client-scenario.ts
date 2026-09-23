@@ -77,6 +77,7 @@ class DeliveryDispatchClientScenario {
       .waitFor<OfferDeliveryNotify>(PacketNames.offerDeliveryNotify)
       .where((message) => message.payload.deliveryId === deliveryId)
       .submit(signal);
+    // --8<-- [start:doc-e2e-sequence]
     const statuses = ['Assigned', 'Accepted', 'PickedUp', 'Delivered'] as const;
     const statusSequence = statuses
       .reduce(
@@ -88,6 +89,7 @@ class DeliveryDispatchClientScenario {
         customer.waitForSequence<DeliveryStatusNotify>(PacketNames.deliveryStatusNotify)
       )
       .run(signal);
+    // --8<-- [end:doc-e2e-sequence]
 
     const subscribed = await customer
       .request(subscribeDelivery(deliveryId), Object)

@@ -40,14 +40,7 @@ set it.
 | Runtime option | Values that can change while running | While running ([§9](#9-values-that-can-change-while-running)) |
 
 ```kotlin
-val configurer = ZLinkFrameworkConfigurer { options ->
-    options.configureNetwork().setBindHost("0.0.0.0")   // root option
-    options.routeMesh("play") {                         // node builder
-        listen("tcp://0.0.0.0:5555")
-        setPlacementWeight(100)
-        channelName("room") { server() }
-    }
-}
+--8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:mesh-register"
 ```
 
 There is no surface that calls a builder again after the host has started. An invalid
@@ -214,8 +207,7 @@ host starts.
 | Placement weight | Share of new Spots and Actors placed on this node |
 
 ```kotlin
-runtimeOptions.mesh("play").setPlacementWeight(0)
-runtimeOptions.channel("room").weight(0)
+--8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/AdminEndpoints.kt:weight-runtime"
 ```
 
 Both values range over `0..10000` and default to 100. Setting `0` **stops new assignments only**

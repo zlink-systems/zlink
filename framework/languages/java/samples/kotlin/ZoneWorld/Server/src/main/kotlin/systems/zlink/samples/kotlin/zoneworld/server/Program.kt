@@ -113,7 +113,9 @@ class Program {
         options.addLocationStore(locations)
         options.addRelocationStore(relocation)
         options.addHandlersFromPackageOf<Program>()
+        // --8<-- [start:doc-monitoring-flow]
         options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+        // --8<-- [end:doc-monitoring-flow]
         if (topology.isRole("zone") && topology.isSubscriberOnly()) {
             options
                 .addFanoutChannel(ZoneWorldNames.BROADCAST_CHANNEL)

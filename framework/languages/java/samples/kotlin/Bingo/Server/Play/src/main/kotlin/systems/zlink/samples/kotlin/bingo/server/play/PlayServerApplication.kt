@@ -60,7 +60,6 @@ class PlayServerApplication {
                         .setKeyPrefix(topology.redisKeyPrefix + "relocation:")
                 )
             )
-            // --8<-- [start:doc-bingo-play-register]
             val node = options.addRouteMesh(SampleNames.Mesh)
             node.listen(topology.selectedPlaySpotRouterEndpoint()).setRoutingIdPrefix("play")
             options.addClientServerChannel(SampleNames.ApiChannel).client()
@@ -72,6 +71,7 @@ class PlayServerApplication {
                 // --8<-- [start:doc-execution-mode]
                 // SPOT_WIDE is the default. Naming it here keeps the choice visible:
                 // every callback of this room runs through one gate.
+                // --8<-- [start:doc-bingo-play-register]
                 .addSpotFactory<BingoRoomSpot>(SampleNames.RoomSpotType) {
                     executionMode(ZLinkUserSpotExecutionMode.SPOT_WIDE)
                     relocationCoordinationMode(
@@ -79,11 +79,11 @@ class PlayServerApplication {
                     )
                     preserveStateWith<BingoRoomSpot, BingoRoomRelocationAdapter>()
                 }
+                // --8<-- [end:doc-bingo-play-register]
                 // --8<-- [end:doc-execution-mode]
                 .addActorFactory<PlayerActor, PlayerActorFactory>(SampleNames.PlayerActorType) {
                     preserveStateWith<PlayerActor, PlayerActorRelocationAdapter>()
                 }
-            // --8<-- [end:doc-bingo-play-register]
         }
 
     @Bean

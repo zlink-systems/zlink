@@ -40,12 +40,7 @@ set it.
 | Runtime option | Values that can change while running | While running ([§9](#9-values-that-can-change-while-running)) |
 
 ```cpp
-app.add_zlink_framework ([] (zlink_framework_options_t &options) {
-    options.configure_network ().set_bind_host ("0.0.0.0");   // root option
-    auto mesh = options.add_route_mesh ("play");              // node builder
-    mesh.listen ("tcp://0.0.0.0:5555").set_placement_weight (100);
-    mesh.channel_name ("room").server ();
-});
+--8<-- "framework/languages/cpp/tutorial/Server/main.cpp:mesh-register"
 ```
 
 There is no surface that calls a builder again after the host has started. An invalid
@@ -212,8 +207,7 @@ host starts.
 | Placement weight | Share of new Spots and Actors placed on this node |
 
 ```cpp
-runtime_options.placement_weight (0);
-runtime_options.channel ("room").weight (0);
+--8<-- "framework/languages/cpp/tutorial/Server/ops/channel_weight_handler.hpp:weight-runtime"
 ```
 
 Both values range over `0..10000` and default to 100. Setting `0` **stops new assignments only**

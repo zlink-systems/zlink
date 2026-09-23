@@ -40,14 +40,7 @@ set it.
 | Runtime option | Values that can change while running | While running ([§9](#9-values-that-can-change-while-running)) |
 
 ```csharp
-builder.Services.AddZLinkFramework(options =>
-{
-    options.ConfigureNetwork().BindHost = "0.0.0.0";   // root option
-    var mesh = options.AddRouteMesh("play")            // node builder
-        .Listen("tcp://0.0.0.0:5555")
-        .SetPlacementWeight(100);
-    mesh.Channel("room").Server();
-});
+--8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:mesh-register"
 ```
 
 There is no surface that calls a builder again after the host has started. An invalid
@@ -214,8 +207,7 @@ host starts.
 | Placement weight | Share of new Spots and Actors placed on this node |
 
 ```csharp
-runtime.Mesh("play").PlacementWeight = 0;
-runtime.Channel("room").Weight = 0;
+--8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:weight-runtime"
 ```
 
 Both values range over `0..10000` and default to 100. Setting `0` **stops new assignments only**

@@ -39,10 +39,12 @@ class OpsRuntimeStatusObserver implements OnApplicationBootstrap, OnApplicationS
     this.expiryTimer = undefined;
   }
 
-  // --8<-- [start:doc-zw-observe-peers]
   private async observeReadiness(): Promise<void> {
+    // --8<-- [start:doc-zw-snapshot-peers]
     const initial = this.routeMeshRuntime.snapshot(ZoneWorldNames.zoneMesh);
     this.publish(this.nodes.applyLiveRoutingIds(this.liveRoutingIds(initial)));
+    // --8<-- [end:doc-zw-snapshot-peers]
+    // --8<-- [start:doc-zw-observe-peers]
     for await (const observed of this.routeMeshRuntime.observe(
       ZoneWorldNames.zoneMesh,
       64,
@@ -50,6 +52,7 @@ class OpsRuntimeStatusObserver implements OnApplicationBootstrap, OnApplicationS
     )) {
       this.publish(this.nodes.applyLiveRoutingIds(this.liveRoutingIds(observed.status)));
     }
+    // --8<-- [end:doc-zw-observe-peers]
   }
 
   private liveRoutingIds(status: ZLinkRouteMeshStatus): ReadonlySet<string> {
@@ -57,7 +60,6 @@ class OpsRuntimeStatusObserver implements OnApplicationBootstrap, OnApplicationS
       status.peers.filter((peer) => peer.state === ZLinkPeerState.Ready).map((peer) => peer.nodeRid)
     );
   }
-  // --8<-- [end:doc-zw-observe-peers]
 
   private publish(nodes: readonly NodeView[]): void {
     for (const node of nodes) this.consoles.publish(node);

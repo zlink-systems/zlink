@@ -91,7 +91,7 @@ does not run the Spot's disconnect callback twice. Call the Actor directly only 
 is still up but the application protocol treats it as disconnected.
 
 ```java
-actor.notifyDisconnected();
+--8<-- "framework/languages/java/samples/java/TicTacToe/Server/src/main/java/systems/zlink/samples/tictactoe/server/play/infrastructure/zlink/sessions/PlaySession.java:session-disconnect-notify"
 ```
 
 ## 4. When a Bind Fails or Becomes Void
