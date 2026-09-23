@@ -1,6 +1,7 @@
 package systems.zlink.stream.connector;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -8,48 +9,45 @@ import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.messaging.Message;
 
+import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 final class ZLinkStreamFlowWireContractTest {
     @Test
-    void connectorCreatesCanonicalApplicationFlowAndRoundTripsIt() {
-        String flowId = ZLinkConnectorFlowIds.next();
+    void inboundFlowIsStructurallyCheckedAndDiscarded() {
         var header =
                 new ZLinkStreamWireProtocol.Header(
                         ZLinkStreamWireProtocol.KIND_SEND,
-                        ZLinkStreamWireProtocol.CODEC_JSON,
+                        ZLinkStreamWireProtocol.CODEC_RAW,
                         0,
                         null,
                         "Move",
                         Map.of(),
-                        "corr-1",
-                        flowId,
-                        3);
+                        null,
+                        "not-a-uuid-xxxxxxxxxxxxxxxxxxxxxxxxx",
+                        255);
         byte[] encoded = ZLinkStreamWireProtocol.encodeHeader(header);
-        assertEquals(0xF2, Byte.toUnsignedInt(encoded[0]));
         ZLinkStreamWireProtocol.Header decoded = ZLinkStreamWireProtocol.decodeHeader(encoded);
-        assertEquals(flowId, decoded.flowId());
-        assertEquals(3, decoded.flowOrigin());
-        assertEquals("corr-1", decoded.correlationId());
-        assertTrue(
-                flowId.matches(
-                        "[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"));
+        assertNull(decoded.flowId());
+        assertEquals(0, decoded.flowOrigin());
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        ZLinkStreamWireProtocol.decodeHeader(
+                                Arrays.copyOf(encoded, encoded.length - 1)));
     }
 
     @Test
-    void outboundCallInsideInboundCallbackPreservesFlow() throws Exception {
+    void outboundSendFromInboundHandlerHasNoFlowFlag() throws Exception {
         try (TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer()) {
             ZLinkStreamConnector connector =
                     ZLinkStreamConnectorFactory.create(
                             server.options(ZLinkStreamDispatchMode.IMMEDIATE));
             try {
-                String inboundFlow = ZLinkConnectorFlowIds.next();
                 connector.on(
                         "Inbound",
                         message -> {
-                            assertEquals(inboundFlow, message.flowId());
-                            assertEquals(ZLinkFlowOrigin.INBOUND, message.flowOrigin());
                             message.payload().payload().close();
                             connector
                                     .send(
@@ -69,30 +67,19 @@ final class ZLinkStreamFlowWireContractTest {
                                         "Inbound",
                                         Map.of(),
                                         null,
-                                        inboundFlow,
-                                        1),
+                                        "not-a-uuid-xxxxxxxxxxxxxxxxxxxxxxxxx",
+                                        255),
                                 TcpStreamConnectorTestServer.bytes("request"))
                         .join();
-
                 TcpStreamConnectorTestServer.ReceivedFrame sent = outbound.join();
-                assertEquals(inboundFlow, sent.header().flowId());
-                assertEquals(1, sent.header().flowOrigin());
+                assertEquals(0, sent.header().flags() & ZLinkStreamWireProtocol.FLAG_HAS_FLOW_ID);
+                assertNull(sent.header().flowId());
+                assertTrue(
+                        Arrays.stream(ZLinkStreamMessage.class.getRecordComponents())
+                                .noneMatch(component -> component.getName().startsWith("flow")));
             } finally {
                 ConnectorTestAwait.await(connector.close());
             }
         }
-    }
-
-    @Test
-    void rejectsLegacyAndUnknownMandatoryFormats() {
-        assertThrows(
-                IllegalArgumentException.class,
-                () -> ZLinkStreamWireProtocol.decodeHeader(new byte[] {1, 0, 0, 1, 'x'}));
-        byte[] header =
-                ZLinkStreamWireProtocol.encodeHeader(
-                        new ZLinkStreamWireProtocol.Header(1, 0, 0, null, "x", Map.of(), null));
-        header[3] |= 0x20;
-        assertThrows(
-                IllegalArgumentException.class, () -> ZLinkStreamWireProtocol.decodeHeader(header));
     }
 }

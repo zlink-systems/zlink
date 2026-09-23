@@ -3,7 +3,6 @@ package systems.zlink.stream.connector;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.concurrent.CompletionStage;
 
 public interface ZLinkStreamConnector {
     boolean isConnected();
@@ -20,36 +19,6 @@ public interface ZLinkStreamConnector {
      */
     Optional<ZLinkStreamCloseReason> closeReason();
 
-    /**
-     * Current diagnostics level. Application can read this without recreating the connector: server
-     * spec 26 §4.1 runtime-control requirement, applied to the STREAM connector via common
-     * connector spec §13. The value returned by {@link #options()}{@code .diagnosticsLevel()}
-     * always agrees with this method.
-     */
-    ZLinkStreamDiagnosticsLevel diagnosticsLevel();
-
-    /**
-     * Atomically installs a new diagnostics level without recreating the connector (server spec 26
-     * §4.1). The change applies to processing points that read the level after this call returns;
-     * frames already built under the previous level are never retroactively changed, and each
-     * processing point reads the level exactly once so a flip mid-way through one send/receive
-     * never produces an inconsistent decision.
-     */
-    /**
-     * Changes the diagnostics level without waiting (common connector spec 32 13). Changing a level
-     * is a single value write, so there is no completion for a caller to wait on; implementing this
-     * on top of the asynchronous pair would make a call inside a receive callback wait for its own
-     * completion. Safe to call from a handler or callback.
-     */
-    void setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel level);
-
-    /**
-     * The asynchronous pair of {@link #setDiagnosticsLevel}, returning the same kind of terminal
-     * every other operation returns. It changes the same value and does not replace the synchronous
-     * surface.
-     */
-    CompletionStage<Void> setDiagnosticsLevelAsync(ZLinkStreamDiagnosticsLevel level);
-
     int pendingDispatchCount();
 
     int receivedCount(String name);
@@ -63,15 +32,23 @@ public interface ZLinkStreamConnector {
     ZLinkStreamSendCall send(ZLinkStreamEncodedPayload payload);
 
     default ZLinkTypedStreamSendCall send(Object payload) {
-        Objects.requireNonNull(payload, "payload");
-        return new ZLinkTypedStreamConnectorSendCall(send(encodeTypedPayload(payload)));
+        return new ZLinkTypedStreamConnectorSendCall(this, null, payload, null);
+    }
+
+    default ZLinkTypedStreamSendCall send(String name, Object payload) {
+        return new ZLinkTypedStreamConnectorSendCall(
+                this, null, payload, DefaultZLinkStreamConnector.validatePacketName(name));
     }
 
     ZLinkStreamRequestCall request(ZLinkStreamEncodedPayload payload);
 
     default ZLinkTypedStreamRequestCall request(Object payload) {
-        Objects.requireNonNull(payload, "payload");
-        return new ZLinkTypedStreamConnectorRequestCall(request(encodeTypedPayload(payload)));
+        return new ZLinkTypedStreamConnectorRequestCall(this, null, payload, null);
+    }
+
+    default ZLinkTypedStreamRequestCall request(String name, Object payload) {
+        return new ZLinkTypedStreamConnectorRequestCall(
+                this, null, payload, DefaultZLinkStreamConnector.validatePacketName(name));
     }
 
     default ZLinkStreamWaitCall waitFor(String name) {
@@ -123,12 +100,14 @@ public interface ZLinkStreamConnector {
                                         message.packetName(),
                                         codec.decode(message.payload(), payloadType),
                                         message.metadata(),
-                                        message.flowId(),
-                                        message.flowOrigin(),
                                         message.actorId())));
     }
 
     AutoCloseable onErrorReceived(ZLinkStreamErrorHandler handler);
+
+    AutoCloseable onRequestSending(ZLinkStreamRequestSendingHandler handler);
+
+    AutoCloseable onReplyReceived(ZLinkStreamReplyReceivedHandler handler);
 
     AutoCloseable onDisconnected(ZLinkStreamDisconnectedHandler handler);
 
@@ -154,16 +133,5 @@ public interface ZLinkStreamConnector {
                                     + " ZLinkStreamConnectorOptions.typedCodec"));
         }
         return codec;
-    }
-
-    private ZLinkStreamEncodedPayload encodeTypedPayload(Object payload) {
-        if (payload instanceof ZLinkStreamEncodedPayload) {
-            throw new ZLinkStreamException(
-                    new ZLinkStreamError(
-                            ZLinkStreamErrorCode.VALIDATION_FAILED,
-                            "raw encoded payload must use the ZLinkStreamEncodedPayload overload"));
-        }
-        return requireTypedCodec()
-                .encode(options().nameResolver().resolve(payload.getClass()), payload);
     }
 }
