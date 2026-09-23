@@ -6,8 +6,7 @@ Full walkthrough (all 12 stages, the Kotlin/Java surface split, and the
 release CI job runs verbatim: prerequisites, download and install, build,
 run, verify, and troubleshooting.
 
-Kotlin has no directory of its own in this repository; it lives next to the
-Java sources in the `zlink-java-examples` repository, under `tutorial/kotlin/`.
+The Kotlin sources are in the `kotlin/` language subdirectory of this Gradle project.
 
 ## Prerequisites
 
@@ -44,14 +43,14 @@ libraries, so no extra native setup is needed on Windows either.
 
 ## Download and install
 
-This tutorial runs from `tutorial/kotlin/` in the `zlink-java-examples` repository and only
+This tutorial runs from `tutorial/kotlin/` in the `zlink-kotlin-examples` repository and only
 references `systems.zlink:zlink-framework-*` packages from Maven Central. `kotlin/`
 builds standalone as long as it travels with `../` (the tutorial root)'s
 `settings.gradle.kts`, `gradle/libs.versions.toml`, and wrapper. There is
 nothing separate to download or install: the Gradle wrapper fetches Gradle,
 and Gradle fetches the packages above from Maven Central.
 
-Clone the `zlink-java-examples` repository and run all commands below from its tutorial root;
+Clone the `zlink-kotlin-examples` repository and run all commands below from its tutorial root;
 `../` from here is the `tutorial/kotlin/` project.
 
 ## Build

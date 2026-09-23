@@ -49,14 +49,14 @@ Kotlin source는 이 Gradle project의 language subdirectory에 있다. [`../../
 ## 내려받기와 설치
 
 문서가 보여주는 코드와 독자가 Maven Central에서 받는 라이브러리를 같은 것으로 유지한다.
-이 tutorial은 `zlink-java-examples` 저장소의 `tutorial/kotlin/`에서 실행하고
+이 tutorial은 `zlink-kotlin-examples` 저장소의 `tutorial/kotlin/`에서 실행하고
 `systems.zlink:zlink-framework-*` 패키지만 참조한다. `kotlin/`은 `../`(tutorial 루트)의 `settings.gradle.kts`·
 `gradle/libs.versions.toml`·wrapper와 함께 옮기면 그대로 빌드된다. 버전은
 [`../gradle/libs.versions.toml`](../gradle/libs.versions.toml)에 있다. 별도로 내려받거나
 설치할 것은 없다 — Gradle wrapper가 Gradle을, Gradle이 위 패키지를 Maven Central에서
 내려받는다.
 
-아래 명령은 `zlink-java-examples` 저장소를 clone한 뒤 tutorial 루트를 현재 위치로 두고
+아래 명령은 `zlink-kotlin-examples` 저장소를 clone한 뒤 tutorial 루트를 현재 위치로 두고
 실행한다. `../` 아래에 이 README가 있는 `tutorial/kotlin/`이 있다.
 
 ## 빌드
