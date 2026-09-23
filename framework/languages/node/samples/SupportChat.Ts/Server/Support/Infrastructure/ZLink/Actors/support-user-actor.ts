@@ -23,10 +23,7 @@ import { JoinConversationFailedNotify } from '../../../../../Shared/Contracts/me
 class DeliverSupportNotificationMsg {
   readonly packetName: string;
 
-  constructor(
-    readonly message: unknown,
-    readonly conversationId: string
-  ) {
+  constructor(readonly message: unknown) {
     this.packetName =
       typeof message === 'object' && message !== null ? message.constructor.name : '';
   }
@@ -50,12 +47,9 @@ class SupportUserActor implements ZLinkActor {
     readonly context: ZLinkActorContext
   ) {}
 
-  async push(message: unknown, conversationId: string): Promise<void> {
+  async push(message: unknown): Promise<void> {
     try {
-      await this.context.boundSession
-        .send(message)
-        .metadata('conversation-id', conversationId)
-        .submit();
+      await this.context.boundSession.send(message).submit();
     } catch {
       // Conversation state remains in the Spot and is returned after reconnect.
     }
@@ -63,6 +57,7 @@ class SupportUserActor implements ZLinkActor {
 
   scheduleConversationJoin(message: JoinSupportConversation): {
     readonly scheduled: true;
+    readonly actorId: string;
     readonly state: ConversationState;
   } {
     if (this.pendingConversationId !== undefined) {
@@ -72,11 +67,17 @@ class SupportUserActor implements ZLinkActor {
     this.context
       .joinSpot(
         message.conversationId,
-        joinConversation(message.participantId, message.role, message.displayName)
+        joinConversation(
+          message.conversationId,
+          message.participantId,
+          message.role,
+          message.displayName
+        )
       )
       .defer();
     return {
       scheduled: true,
+      actorId: this.actorId,
       state: {
         conversationId: message.conversationId,
         subject: '',
@@ -103,15 +104,11 @@ class SupportUserActor implements ZLinkActor {
       return;
     }
     if (completion.status === 'rejected') {
-      await this.push(
-        new JoinConversationFailedNotify(conversationId, 'Rejected', false),
-        conversationId
-      );
+      await this.push(new JoinConversationFailedNotify(conversationId, 'Rejected', false));
       return;
     }
     await this.push(
-      new JoinConversationFailedNotify(conversationId, String(completion.kind), false),
-      conversationId
+      new JoinConversationFailedNotify(conversationId, String(completion.kind), false)
     );
   }
 }
@@ -133,10 +130,7 @@ class DeliverSupportNotificationMsgHandler {
     _context: ZLinkMessageContext,
     message: DeliverSupportNotificationMsg
   ): Promise<void> {
-    await actor.push(
-      rehydrateSupportNotification(message.packetName, message.message),
-      message.conversationId
-    );
+    await actor.push(rehydrateSupportNotification(message.packetName, message.message));
   }
 }
 

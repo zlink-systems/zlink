@@ -6,7 +6,6 @@ import systems.zlink.framework.actors.ZLinkActorJoinOperationId
 import systems.zlink.framework.kotlin.ZLinkSuspendingActor
 import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.samples.kotlin.supportchat.server.configuration.ConversationStatuses
-import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleTimings
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SupportChatRoles
 import systems.zlink.samples.kotlin.supportchat.shared.contracts.ConversationState
@@ -63,6 +62,7 @@ class SupportUserActor(val actorId: String, override val context: ZLinkActorCont
         context.joinSpot(conversationId, request).timeout(SampleTimings.RequestTimeout).defer()
         return JoinConversationRes(
             scheduled = true,
+            actorId = actorId,
             state =
                 ConversationState(
                     conversationId = conversationId,
@@ -102,14 +102,12 @@ class SupportUserActor(val actorId: String, override val context: ZLinkActorCont
                     .boundSession()
                     .kotlin()
                     .send(JoinConversationFailedNotify(pending, "Rejected", false))
-                    .metadata(SampleNames.ConversationIdMetadataKey, pending)
                     .await()
             is ZLinkActorJoinCompletion.Failed ->
                 context
                     .boundSession()
                     .kotlin()
                     .send(JoinConversationFailedNotify(pending, completion.kind().name, false))
-                    .metadata(SampleNames.ConversationIdMetadataKey, pending)
                     .await()
         }
     }

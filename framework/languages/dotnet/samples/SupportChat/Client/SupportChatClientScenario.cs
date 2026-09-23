@@ -6,8 +6,6 @@ namespace SupportChat.Client;
 
 internal sealed class SupportChatClientScenario
 {
-    private const string Cid = SampleNames.ConversationIdMetadataKey;
-
     // End-to-end client story for one agent : many customers (§16, §17):
     // 1. One agent registers availability.
     // 2. Two customers open conversations; the same agent is assigned to both and joins each.
@@ -39,7 +37,6 @@ internal sealed class SupportChatClientScenario
             async ct =>
                 _ = await agent
                     .Request(new SendChatMessageReq("unauthenticated"))
-                    .Metadata(Cid, "missing-conversation")
                     .Async<SendChatMessageRes>(ct),
             nameof(ZlinkStreamErrorCode.RemoteError)
         );
@@ -105,12 +102,20 @@ internal sealed class SupportChatClientScenario
             .WaitFor<ParticipantJoinedNotify>()
             .Where(message => message.Payload.ConversationId == cid1)
             .Async(cancellationToken);
-        var agentRoom1 = Conversation(agent, cid1);
+        var agentRoom1 = Conversation(agent, cid1, agentRoom: true);
         var customerRoom1 = Conversation(customer1, cid1);
         var agentJoin1 = await agentRoom1.JoinAsync(cancellationToken);
         ZlinkStreamAssert.Ensure(agentJoin1.Scheduled, "Assertion failed: agentJoin1.Scheduled");
+        ZlinkStreamAssert.Ensure(
+            agentRoom1.ActorId == agentJoin1.ActorId,
+            "Assertion failed: agent room 1 resolved its joined Actor handle"
+        );
         var joined1 = await joined1ForCustomer;
         var joined1Agent = await joined1ForAgent;
+        ZlinkStreamAssert.Ensure(
+            joined1Agent.ActorId == agentJoin1.ActorId,
+            "Assertion failed: room 1 push arrived on its Actor"
+        );
         ZlinkStreamAssert.Ensure(
             joined1.Payload.ConversationId == cid1,
             "Assertion failed: joined1.Payload.ConversationId == cid1"
@@ -157,6 +162,10 @@ internal sealed class SupportChatClientScenario
         );
         var reply1Push = await reply1ForAgent;
         ZlinkStreamAssert.Ensure(
+            reply1Push.ActorId == agentJoin1.ActorId,
+            "Assertion failed: room 1 chat push arrived on its Actor"
+        );
+        ZlinkStreamAssert.Ensure(
             reply1Push.Payload.ConversationId == cid1,
             "Assertion failed: reply1Push.Payload.ConversationId == cid1"
         );
@@ -199,17 +208,23 @@ internal sealed class SupportChatClientScenario
             .WaitFor<ParticipantJoinedNotify>()
             .Where(message => message.Payload.ConversationId == cid2)
             .Async(cancellationToken);
-        var agentRoom2 = Conversation(agent, cid2);
+        var agentRoom2 = Conversation(agent, cid2, agentRoom: true);
         var customerRoom2 = Conversation(customer2, cid2);
         var agentJoin2 = await agentRoom2.JoinAsync(cancellationToken);
         ZlinkStreamAssert.Ensure(agentJoin2.Scheduled, "Assertion failed: agentJoin2.Scheduled");
+        ZlinkStreamAssert.Ensure(
+            agentRoom2.ActorId == agentJoin2.ActorId && agentJoin2.ActorId != agentJoin1.ActorId,
+            "Assertion failed: two rooms resolved distinct Actor handles"
+        );
         ZlinkStreamAssert.Ensure(
             (await joined2ForCustomer).Payload.ConversationId == cid2,
             "Assertion failed: (await joined2ForCustomer).Payload.ConversationId == cid2"
         );
         ZlinkStreamAssert.Ensure(
-            (await joined2ForAgent).Payload.State.Subject == "cannot log in",
-            "Assertion failed: (await joined2ForAgent).Payload.State.Subject == \"cannot log in\""
+            (await joined2ForAgent) is { } joined2Agent
+                && joined2Agent.ActorId == agentJoin2.ActorId
+                && joined2Agent.Payload.State.Subject == "cannot log in",
+            "Assertion failed: room 2 push arrived on its Actor with the expected subject"
         );
 
         // The rooms are independent: cid2 starts its own MessageSeq at 1.
@@ -300,10 +315,15 @@ internal sealed class SupportChatClientScenario
             ).IsAvailable,
             "Assertion failed: (await reconnectingAgent.Request(new SetAgentAvailableReq(true)) .Async<SetAgentAvailableRes>(cancellationToken)).IsAvailable"
         );
-        var reconnectedRoom1 = Conversation(reconnectingAgent, cid1);
-        var reconnectedRoom2 = Conversation(reconnectingAgent, cid2);
+        var reconnectedRoom1 = Conversation(reconnectingAgent, cid1, agentRoom: true);
+        var reconnectedRoom2 = Conversation(reconnectingAgent, cid2, agentRoom: true);
         var rejoinedRoom1 = await reconnectedRoom1.JoinAsync(cancellationToken);
         var rejoinedRoom2 = await reconnectedRoom2.JoinAsync(cancellationToken);
+        ZlinkStreamAssert.Ensure(
+            reconnectedRoom1.ActorId == rejoinedRoom1.ActorId
+                && reconnectedRoom2.ActorId == rejoinedRoom2.ActorId,
+            "Assertion failed: reconnect resolved both room Actor handles"
+        );
         ZlinkStreamAssert.Ensure(
             !rejoinedRoom1.Scheduled,
             "Assertion failed: !rejoinedRoom1.Scheduled"
@@ -330,7 +350,7 @@ internal sealed class SupportChatClientScenario
             .Async(cancellationToken);
         var idle1ForAgent = reconnectingAgent
             .WaitFor<ConversationIdleNotify>()
-            .Where(m => m.Payload.ConversationId == cid1)
+            .Where(m => m.ActorId == rejoinedRoom1.ActorId)
             .Timeout(idleTimeout)
             .Async(cancellationToken);
         var closed1ForCustomer = reconnectingCustomer
@@ -339,14 +359,14 @@ internal sealed class SupportChatClientScenario
             .Async(cancellationToken);
         var closed1ForAgent = reconnectingAgent
             .WaitFor<ConversationClosedNotify>()
-            .Where(m => m.Payload.ConversationId == cid1)
+            .Where(m => m.ActorId == rejoinedRoom1.ActorId)
             .Timeout(idleTimeout)
             .Async(cancellationToken);
 
         // Explicitly close cid2 from the customer; only the agent is notified.
         var closed2ForAgent = reconnectingAgent
             .WaitFor<ConversationClosedNotify>()
-            .Where(m => m.Payload.ConversationId == cid2)
+            .Where(m => m.ActorId == rejoinedRoom2.ActorId)
             .Timeout(idleTimeout)
             .Async(cancellationToken);
         var closed2 = await customerRoom2.CloseAsync("resolved", cancellationToken);
@@ -449,15 +469,10 @@ internal sealed class SupportChatClientScenario
             noAgentOpen.State.Subject == "agent unavailable",
             "Assertion failed: noAgentOpen.State.Subject == \"agent unavailable\""
         );
-        // customer-3 now belongs to its own room. Supplying cid2 must not silently send this
-        // message to customer-3's current room.
-        await ZlinkStreamAssert.ExpectFailureAsync(
-            async ct =>
-                _ = await waitingCustomer
-                    .Request(new SendChatMessageReq("not a participant"))
-                    .Metadata(Cid, cid2)
-                    .Async<SendChatMessageRes>(ct),
-            nameof(ZlinkStreamErrorCode.RemoteError)
+        // A different customer's connection has no Actor handle for agent room 2.
+        ZlinkStreamAssert.Ensure(
+            waitingCustomer.Actor(agentJoin2.ActorId) is null,
+            "Assertion failed: foreign room Actor is not bound on customer-3's connection"
         );
         await waitingCustomer
             .ExpectNone<ConversationClosedNotify>()
@@ -467,27 +482,32 @@ internal sealed class SupportChatClientScenario
 
     private static ConversationClient Conversation(
         IZlinkStreamConnector connector,
-        string conversationId
-    ) => new(connector, conversationId);
+        string conversationId,
+        bool agentRoom = false
+    ) => new(connector, conversationId, agentRoom);
 
-    private readonly struct ConversationClient(
+    private sealed class ConversationClient(
         IZlinkStreamConnector connector,
-        string conversationId
+        string conversationId,
+        bool agentRoom
     )
     {
-        // ConversationId rides in stream metadata, not in the body. Keeping that detail
-        // here lets the scenario read as conversation work instead of route wiring.
-        public ValueTask<JoinConversationRes> JoinAsync(CancellationToken cancellationToken)
-        {
-            return JoinCoreAsync(cancellationToken);
-        }
+        private IZlinkStreamActor? _actor;
 
-        private ValueTask<JoinConversationRes> JoinCoreAsync(CancellationToken cancellationToken)
+        public string? ActorId => _actor?.ActorId;
+
+        public async ValueTask<JoinConversationRes> JoinAsync(CancellationToken cancellationToken)
         {
-            return connector
-                .Request(new JoinConversationReq())
-                .Metadata(Cid, conversationId)
+            var joined = await connector
+                .Request(new JoinConversationReq(conversationId))
                 .Async<JoinConversationRes>(cancellationToken);
+            if (agentRoom)
+                _actor =
+                    connector.Actor(joined.ActorId)
+                    ?? throw new InvalidOperationException(
+                        $"Joined room Actor '{joined.ActorId}' is not bound to this connection."
+                    );
+            return joined;
         }
 
         public ValueTask<SendChatMessageRes> SendChatAsync(
@@ -495,18 +515,20 @@ internal sealed class SupportChatClientScenario
             CancellationToken cancellationToken
         )
         {
-            return connector
-                .Request(new SendChatMessageReq(text))
-                .Metadata(Cid, conversationId)
-                .Async<SendChatMessageRes>(cancellationToken);
+            return _actor is { } actor
+                ? actor
+                    .Request(new SendChatMessageReq(text))
+                    .Async<SendChatMessageRes>(cancellationToken)
+                : connector
+                    .Request(new SendChatMessageReq(text))
+                    .Async<SendChatMessageRes>(cancellationToken);
         }
 
         public ValueTask SendTypingAsync(bool isTyping, CancellationToken cancellationToken)
         {
-            return connector
-                .Send(new SetTypingMsg(isTyping))
-                .Metadata(Cid, conversationId)
-                .Async(cancellationToken);
+            return _actor is { } actor
+                ? actor.Send(new SetTypingMsg(isTyping)).Async(cancellationToken)
+                : connector.Send(new SetTypingMsg(isTyping)).Async(cancellationToken);
         }
 
         public ValueTask<CloseConversationRes> CloseAsync(
@@ -514,10 +536,13 @@ internal sealed class SupportChatClientScenario
             CancellationToken cancellationToken
         )
         {
-            return connector
-                .Request(new CloseConversationReq(reason))
-                .Metadata(Cid, conversationId)
-                .Async<CloseConversationRes>(cancellationToken);
+            return _actor is { } actor
+                ? actor
+                    .Request(new CloseConversationReq(reason))
+                    .Async<CloseConversationRes>(cancellationToken)
+                : connector
+                    .Request(new CloseConversationReq(reason))
+                    .Async<CloseConversationRes>(cancellationToken);
         }
     }
 }

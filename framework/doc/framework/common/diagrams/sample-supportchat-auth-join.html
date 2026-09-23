@@ -5188,11 +5188,11 @@
         </g>
         </g>
 
-        <g data-edge-from="A" data-edge-to="S" data-edge-label="JoinConversationReq(metadata ConversationId)" data-edge-key="18">
+        <g data-edge-from="A" data-edge-to="S" data-edge-label="JoinConversationReq(conversationId)" data-edge-key="18">
           <path data-composition-edge-from="A" data-composition-edge-to="S" data-composition-points="334.25,1024;509,1024" d="M 334.25 1024 L 509 1024" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <g data-detail="context">
           <rect x="301.225" y="1004" width="240.8" height="16" rx="3" class="c-mask"/>
-          <text x="421.625" y="1014" class="t-backend" font-size="9" text-anchor="middle">JoinConversationReq(metadata ConversationId)</text>
+          <text x="421.625" y="1014" class="t-backend" font-size="9" text-anchor="middle">JoinConversationReq(conversationId)</text>
         </g>
         </g>
 
@@ -5503,7 +5503,7 @@
         </div>
         <ul>
           <li>&bull; scheduled=true는 join 예약을 의미하며 membership commit 완료가 아니다. 양쪽 client가 Active 상태의 ParticipantJoinedNotify를 확인해야 agent join을 완료로 판정한다.</li>
-          <li>&bull; JoinConversationReq의 ConversationId는 stream metadata 필수 값이며 payload에 route를 넣지 않는다. participantId·role·displayName은 actor join에 필요한 값이다.</li>
+          <li>&bull; JoinConversationReq는 Actor slot 없는 Session binding packet이며 conversationId를 payload로 보낸다. JoinConversationRes.actorId로 방별 Actor handle을 찾는다. participantId·role·displayName은 actor join에 필요한 값이다.</li>
         </ul>
       </div>
 

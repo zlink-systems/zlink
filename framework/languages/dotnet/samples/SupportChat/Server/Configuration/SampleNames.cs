@@ -17,9 +17,6 @@ public static class SampleNames
     // One agent handles up to this many conversations concurrently (§9).
     public const int AgentCapacity = 3;
 
-    // Stream metadata key that carries ConversationId for session routing (§9.2).
-    public const string ConversationIdMetadataKey = "ConversationId";
-
     public const string ParticipantJoinedPacket = nameof(ParticipantJoinedNotify);
     public const string ConversationAssignedPacket = nameof(ConversationAssignedNotify);
     public const string ChatMessagePacket = nameof(ChatMessageNotify);

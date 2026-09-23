@@ -39,6 +39,7 @@ public final class OpenConversationActorHandler
                                             opened.conversationId(),
                                             request.subject(),
                                             new Messages.JoinConversationReq(
+                                                    opened.conversationId(),
                                                     actor.participantId(),
                                                     actor.role(),
                                                     actor.displayName()));

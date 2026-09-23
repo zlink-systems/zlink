@@ -10,9 +10,8 @@ using Zlink.Framework.Contracts.Streams;
 namespace SupportChat.Server.Session.Sessions;
 
 // Owns one client connection. It authenticates the client and binds an identity actor
-// (customer actor, or agent roster actor), then routes each conversation packet to the
-// right bound actor using the ConversationId carried in stream metadata (§9.2). One
-// agent session can hold many per-conversation actors at once.
+// (customer actor, or agent roster actor). Each packet's Actor slot selects a bound
+// conversation actor; packets without a slot go to the identity actor.
 internal sealed class SupportChatSession(
     IZLinkSessionContext context,
     IZLinkRouteClient channels,
@@ -20,9 +19,6 @@ internal sealed class SupportChatSession(
     ILogger<SupportChatSession> logger
 ) : IZLinkSession
 {
-    private readonly Dictionary<string, IZLinkSessionActor> _conversationActors = new(
-        StringComparer.Ordinal
-    );
     private IZLinkSessionActor? _identityActor;
     private string _identityActorId = string.Empty;
     private string _identityDisplayName = string.Empty;
@@ -33,15 +29,8 @@ internal sealed class SupportChatSession(
     public ValueTask OnConnectedAsync(CancellationToken cancellationToken) =>
         ValueTask.CompletedTask;
 
-    public async ValueTask OnDisconnectedAsync(CancellationToken cancellationToken)
-    {
-        // Propagate the disconnect to every bound actor so each actor's spot can clean up.
-        // The agent roster leaves the assignable list via
-        // SupportEntrySpot.OnDisconnectActorAsync (§9); customer/per-conversation actors
-        // simply detach — their conversations persist for reconnect.
-        foreach (var actor in Context.Actors.Bound)
-            await actor.NotifyDisconnectedAsync(cancellationToken);
-    }
+    public ValueTask OnDisconnectedAsync(CancellationToken cancellationToken) =>
+        ValueTask.CompletedTask;
 
     public ValueTask OnErrorAsync(ZLinkStreamError error, CancellationToken cancellationToken) =>
         ValueTask.CompletedTask;
@@ -59,7 +48,7 @@ internal sealed class SupportChatSession(
                 await AuthenticateAsync(payload, cancellationToken);
                 return;
             case nameof(JoinConversationReq):
-                await JoinConversationAsync(dispatch, payload, cancellationToken);
+                await JoinConversationAsync(payload, cancellationToken);
                 return;
             default:
                 await RelayConversationPacketAsync(dispatch, payload, cancellationToken);
@@ -120,11 +109,14 @@ internal sealed class SupportChatSession(
     }
 
     private async ValueTask JoinConversationAsync(
-        ZLinkSessionDispatchContext dispatch,
         ZLinkMessage payload,
         CancellationToken cancellationToken
     )
     {
+        var join = payload.Decode<JoinConversationReq>();
+        if (string.IsNullOrWhiteSpace(join.ConversationId))
+            throw new InvalidOperationException("Conversation join requires a conversationId.");
+
         // A customer's identity actor is itself the conversation participant, so a
         // customer join just refreshes state on the bound identity actor.
         if (string.Equals(_identityRole, SupportChatRoles.Customer, StringComparison.Ordinal))
@@ -133,18 +125,11 @@ internal sealed class SupportChatSession(
             return;
         }
 
-        var conversationId = RequireConversationId(dispatch);
-        if (_conversationActors.TryGetValue(conversationId, out var existing))
-        {
-            await existing.RelayAsync(payload, cancellationToken);
-            return;
-        }
-
         // --8<-- [start:doc-sc-agent-join]
         // An agent joins each conversation through its own per-conversation actor. Ask
         // the Support server to create it and join it into the ConversationSpot, then
         // bind it onto this session so the agent client receives that room's pushes.
-        var conversationActorId = $"{_identityActorId}@{conversationId}";
+        var conversationActorId = $"{_identityActorId}@{join.ConversationId}";
         var actor = await GetOrCreateActorAsync(
             conversationActorId,
             new SupportUserActorCreateReq(
@@ -156,36 +141,27 @@ internal sealed class SupportChatSession(
             cancellationToken
         );
 
-        _conversationActors[conversationId] = await Context.Actors.BindOrGetAsync(
-            actor,
-            cancellationToken
-        );
-        await _conversationActors[conversationId].RelayAsync(payload, cancellationToken);
+        var boundActor = await Context.Actors.BindOrGetAsync(actor, cancellationToken);
+        await boundActor.RelayAsync(payload, cancellationToken);
         // --8<-- [end:doc-sc-agent-join]
         logger.LogInformation(
             "session: agent conversation join submitted. roster={RosterActorId}, conversation={ConversationId}",
             _identityActorId,
-            conversationId
+            join.ConversationId
         );
     }
 
-    // --8<-- [start:doc-sc-metadata-relay]
     private async ValueTask RelayConversationPacketAsync(
         ZLinkSessionDispatchContext dispatch,
         ZLinkMessage payload,
         CancellationToken cancellationToken
     )
     {
-        var conversationId = dispatch.Metadata.Find(SampleNames.ConversationIdMetadataKey);
-        var target =
-            conversationId is not null
-            && _conversationActors.TryGetValue(conversationId, out var conversationActor)
-                ? conversationActor
-                : RequireIdentityActor();
+        // --8<-- [start:doc-sc-actor-relay]
+        var target = dispatch.Actor ?? RequireIdentityActor();
+        // --8<-- [end:doc-sc-actor-relay]
         await target.RelayAsync(payload, cancellationToken);
     }
-
-    // --8<-- [end:doc-sc-metadata-relay]
 
     private IZLinkSessionActor RequireIdentityActor()
     {
@@ -216,18 +192,5 @@ internal sealed class SupportChatSession(
                 $"Support Actor '{actorId}' returned an unknown creation result."
             ),
         };
-    }
-
-    private static string RequireConversationId(ZLinkSessionDispatchContext dispatch)
-    {
-        var conversationId = dispatch.Metadata.Find(SampleNames.ConversationIdMetadataKey);
-        if (conversationId is null)
-        {
-            throw new InvalidOperationException(
-                "Conversation packet is missing the ConversationId metadata."
-            );
-        }
-
-        return conversationId;
     }
 }
