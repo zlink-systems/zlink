@@ -30,7 +30,7 @@ bash 블록은 Linux·macOS·WSL에서, PowerShell 블록은 Windows PowerShell 
 
 Python은 필요 없다. Linux 포트 예약 도우미(`runner-common.sh`의
 `zlink_sample_reserve_ports_in_range`)와 Windows ZoneWorld ZW-B8 fault proxy
-(`ZoneWorld/Support/SessionRouteBlockProxy.java`) 모두 JDK single-file source
+(`Support/SessionRouteBlockProxy.java`) 모두 JDK single-file source
 program(`java <file>.java ...`)으로 돌아 위 JDK 25만 있으면 된다.
 
 ## 내려받기와 설치

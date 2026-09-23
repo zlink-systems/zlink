@@ -438,7 +438,7 @@ try {
             @{ Name = "proxy-zone-node-2"; Port = $Mesh2 },
             @{ Name = "proxy-gateway"; Port = $GatewayMesh })) {
             $arguments = @(
-                (Join-Path $SampleDir "../../java/ZoneWorld/Support/SessionRouteBlockProxy.java"),
+                (Join-Path $PSScriptRoot "../../Support/SessionRouteBlockProxy.java"),
                 "--listen-host", "127.0.0.1", "--listen-port", "$($proxy.Port)",
                 "--target-host", "127.0.0.2", "--target-port", "$($proxy.Port)",
                 "--arm-file", (Join-Path $RunDir "b8-block-command-44"))

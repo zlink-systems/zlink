@@ -37,7 +37,7 @@ Bash blocks run on Linux, macOS, and WSL; PowerShell blocks run on Windows Power
 
 No Python is required. The Linux port-reservation helper
 (`runner-common.sh`'s `zlink_sample_reserve_ports_in_range`) and the Windows
-ZoneWorld ZW-B8 fault proxy (`ZoneWorld/Support/SessionRouteBlockProxy.java`)
+ZoneWorld ZW-B8 fault proxy (`Support/SessionRouteBlockProxy.java`)
 both run as JDK single-file source programs (`java <file>.java ...`), so the
 JDK 25 above is the only runtime either one needs.
 
