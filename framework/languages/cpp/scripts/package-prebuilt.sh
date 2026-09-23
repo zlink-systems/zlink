@@ -401,6 +401,8 @@ case "$platform" in
       if grep -Eq ' (_ZN5boost|_ZN6google8protobuf|_ZN4absl|_ZN13opentelemetry)' <<<"$exports"; then
         echo "third-party dynamic export found in $library" >&2; exit 1
       fi
+      "$python_command" "$source_dir/scripts/verify-apple-exports.py" \
+        "$source_dir/cmake/zlink-framework-shared-symbols.map" "$binary"
     done
     ;;
   macos-arm64)

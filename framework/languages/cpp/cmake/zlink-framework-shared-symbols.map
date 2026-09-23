@@ -1,4 +1,7 @@
 # APPLE_EXPORT: __ZN5zlink*
+# APPLE_EXPORT: __ZNK5zlink*
+# APPLE_EXPORT: __ZZN5zlink*
+# APPLE_EXPORT: __ZZNK5zlink*
 # APPLE_EXPORT: __ZTVN5zlink*
 # APPLE_EXPORT: __ZTIN5zlink*
 # APPLE_EXPORT: __ZTSN5zlink*
