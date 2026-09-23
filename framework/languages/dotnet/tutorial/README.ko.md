@@ -156,17 +156,24 @@ Rider 또는 Visual Studio 2022·2026에서 `Tutorial.sln`을 연다. `Server`�
 - **Docker가 실행 중이 아니다 / Redis에 연결할 수 없다** — Docker Desktop(또는
   Docker Engine)을 시작하고 위 "전제 조건"의 `docker run` 명령으로 Redis를 다시
   실행한다.
-- **6379 포트가 이미 쓰이고 있다** — 이전 실행의 Redis 컨테이너가 아직 떠 있는지
-  `docker ps`로 확인한다. 이 tutorial은 샘플과 달리 고정된 `redis://127.0.0.1:6379`를
-  사용하므로 container를 재사용한다(`docker rm -f zlink-tutorial-dotnet-redis`로
-  제거한 뒤 다시 실행하면 깨끗한 상태로 시작한다).
+- **6379 포트가 이미 쓰이고 있다** — `redis-cli -h 127.0.0.1 -p 6379 ping`의 응답이
+  `PONG`이면 기존 Redis를 사용할 수 있다. 이 경우 위 `docker run` 명령을 생략하고,
+  이전 tutorial process를 종료한 뒤 아래 `zlink-tutorial:*` 키 정리 명령을 실행한다.
+  그런 다음 Server와 Client를 다시 실행한다. 기존 Redis를 사용했다면 "종료" 절의
+  `docker rm` 명령은 실행하지 않는다.
 - **`dotnet`이 호환되는 SDK가 없다고 한다** — .NET 8.0 이상 SDK를 설치한다.
 - **RID 등록이 `RejectedConflict`로 거부된다** — 이전 실행이 남긴 오래된 키가 같은
-  Redis에 남아 있을 때 나타난다. 이 tutorial이 쓰는 키만 골라 지운다(다른 곳에
-  같은 Redis를 쓰고 있다면 그 데이터는 건드리지 않는다).
+  Redis에 남아 있을 때 나타난다. Server와 Client를 종료한 뒤 이 tutorial의
+  `zlink-tutorial:*` 키만 지우고 다시 실행한다. 같은 Redis의 다른 키는 지우지 않는다.
 
   ```bash
   redis-cli --scan --pattern 'zlink-tutorial:*' | xargs -r redis-cli del
+  ```
+
+  Windows에서는 같은 Redis에 연결된 `redis-cli`로 다음 명령을 실행한다.
+
+  ```powershell
+  redis-cli --scan --pattern 'zlink-tutorial:*' | ForEach-Object { redis-cli DEL $_ | Out-Null }
   ```
 
 ## 프로젝트

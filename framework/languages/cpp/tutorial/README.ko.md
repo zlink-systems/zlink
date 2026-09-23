@@ -239,10 +239,23 @@ IDE가 같은 `build/`를 이어서 쓴다. 이 파일은 bootstrap이 매번 �
 | `error LNK2038: mismatch detected for 'RuntimeLibrary'` | 푼 prefix 또는 build tree가 선택한 toolchain과 맞지 않는다. `.zlink/`와 `build`를 지우고 bootstrap부터 다시 한다 |
 | Windows에서 실행 파일이 아무 출력 없이 즉시 끝난다 (종료 코드 `-1073741515`, `STATUS_DLL_NOT_FOUND`) | `zlink.dll`이 실행 파일 옆에 없다. `cmake --build build --config Release`를 다시 실행하면 post-build 단계가 `build\Release\`에 복사한다 |
 | `docker: error during connect` / `Cannot connect to the Docker daemon` | Docker Desktop이 실행 중이 아니다. 시작한 뒤 `docker run ...`을 다시 실행한다 |
-| `docker: Error response from daemon: ... port is already allocated` / `Bind for 127.0.0.1:6379 failed` | 6379를 다른 Redis가 쓰고 있다. 그 Redis를 그대로 써도 된다 — tutorial은 `127.0.0.1:6379`만 본다 |
+| `docker: Error response from daemon: ... port is already allocated` / `Bind for 127.0.0.1:6379 failed` | 6379를 다른 Redis가 쓰고 있다. 아래와 같이 이 tutorial의 키를 삭제한 뒤 사용하거나, 6379에서 새 Redis를 실행한다 |
 | Server 로그에 `Location Store` 연결 실패 | Redis가 없다. Channel 단계까지는 그대로 돌지만 Spot·Actor·Location 단계는 실패한다 |
 | `bind: Address already in use` / `Only one usage of each socket address` | 위 표의 port를 다른 process가 사용 중이다. 이전 실행의 `tutorial_server`·`tutorial_client`가 아직 실행 중인지 확인한다 |
 | `curl: (7) Failed to connect to 127.0.0.1 port 5180` | Client가 아직 뜨지 않았거나 죽었다. Client의 stderr를 본다 |
+
+기존 Redis를 사용하려면 이전에 실행한 이 tutorial의 process를 먼저 종료하고 Location Store와
+Relocation Store의 기록을 삭제한다. 사용하는 셸에서 다음 명령을 실행한 뒤 [실행](#실행) 블록에서
+`docker run` 행만 생략한다. 이 명령은 이 tutorial의 `zlink-tutorial-cpp:` 접두사에 속한 키만
+삭제하며, 6379의 Redis에 연결된 `redis-cli`가 필요하다.
+
+```bash title="linux"
+redis-cli --scan --pattern 'zlink-tutorial-cpp:*' | while IFS= read -r key; do redis-cli DEL "$key" >/dev/null; done
+```
+
+```powershell title="windows"
+redis-cli --scan --pattern 'zlink-tutorial-cpp:*' | ForEach-Object { redis-cli DEL $_ | Out-Null }
+```
 
 ## 프로젝트 구성
 

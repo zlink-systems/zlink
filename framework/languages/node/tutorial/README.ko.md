@@ -45,14 +45,14 @@ npm install
 npm install
 ```
 
-| 패키지 | 고정한 버전 | 근거 |
+| 패키지 | 버전 기준 | 용도 |
 |---|---|---|
-| `@zlink-systems/framework` | `0.18.0` | `npm view @zlink-systems/framework versions` → `0.10.0`부터 `0.18.0`까지 |
-| `@zlink-systems/framework-locations-redis` | `0.18.0` | 같은 목록. Spot 단계의 Location Store·Relocation Store 구현이다 |
-| `@zlink-systems/nestjs` | `0.18.0` | 같은 목록. `@zlink-systems/framework: '0.18.0'`을 정확히 고정해 의존한다 |
-| `@nestjs/common`·`@nestjs/core` | `10.4.22` | `@zlink-systems/nestjs@0.18.0`이 `^10.4.22`를 의존·peer 의존한다 |
-| `reflect-metadata` | `0.2.2` | `@zlink-systems/nestjs@0.18.0`의 `^0.2.2` 범위를 만족한다 |
-| `@zlink-systems/zlink` | 고정하지 않는다 | `@zlink-systems/framework`가 정확히 고정한다. 0.18.0은 `1.2.0`, 0.18.1부터는 win32-x64 prebuild(#656)가 있는 `1.2.1`이다. 전이 해석에 맡긴다 |
+| `@zlink-systems/framework` | `package.json` | Framework runtime |
+| `@zlink-systems/framework-locations-redis` | `package.json` | Spot 단계의 Location Store와 Relocation Store |
+| `@zlink-systems/nestjs` | `package.json` | NestJS 통합 |
+| `@nestjs/common`·`@nestjs/core` | `package.json` | NestJS 의존성 주입 |
+| `reflect-metadata` | `package.json` | decorator metadata |
+| `@zlink-systems/zlink` | 전이 의존성 | `@zlink-systems/framework`가 Core binding 버전을 고정한다 |
 
 `@zlink-systems` package 버전은 저장소의 `scripts/local-package/sync-version.py`가
 `framework/languages/node/VERSION`에 맞춰 갱신한다(저장소 안에서만 해당). 직접 수정하지 않는다.
@@ -200,12 +200,26 @@ WebStorm에서 `tutorial/` project를 연다. npm tool window 또는 각 script�
 | 증상 | 원인과 조치 |
 |---|---|
 | `docker: Cannot connect to the Docker daemon` | Docker Desktop(또는 dockerd)이 실행 중이 아니다. 시작한 뒤 다시 실행한다 |
+| `docker: Error response from daemon: ... port is already allocated` / `Bind for 127.0.0.1:6379 failed` | 6379를 다른 Redis가 쓰고 있다. 아래와 같이 이 tutorial의 키를 삭제한 뒤 사용하거나, 6379에서 새 Redis를 실행한다 |
 | `curl`이 `Connection refused`를 반환한다 | Server(`npm run server`)가 아직 시작하지 않았거나 종료됐다. 해당 터미널의 로그를 확인한다 |
 | `EADDRINUSE`(포트 충돌) | 아래 「포트」 표의 포트 중 하나를 다른 프로세스가 이미 쓰고 있다. 그 프로세스를 종료하거나 이 tutorial의 다른 실행 중인 인스턴스를 먼저 정리한다 |
 | `npm error gyp ERR! ... ZLINK_CORE_INSTALL_PREFIX must name an absolute installed Core ... package prefix`(Windows) | 이전 framework release가 고정한 `@zlink-systems/framework`가 아직 0.18.1 미만이라 `zlink@1.2.0`만 받는다 — win32-x64 prebuild(#656)는 framework 0.18.1(`zlink@1.2.1`)부터다. 그 버전으로 다시 받거나 WSL에서 실행한다 |
 | 위와 같은 오류(macOS) | `@zlink-systems/zlink@1.2.1`에도 아직 `darwin-*` prebuild가 없다. Linux(x64)나 Windows(0.18.1부터)에서 실행한다 |
 | `EBADENGINE`(Node 버전 경고) | Node.js 22 미만이다. 위 「전제 조건」대로 22 이상으로 올린다 |
 | `server listening`이 표시되기까지 20~45초가 걸린다 | 프로젝트가 `/mnt/d` 같은 WSL의 9p mount 위에 있으면 module load에 이 시간이 걸린다. Linux 파일 시스템(`~/` 등)으로 옮기면 줄어든다 |
+
+기존 Redis를 사용하려면 이전에 실행한 이 tutorial의 process를 먼저 종료하고 Location Store와
+Relocation Store의 기록을 삭제한다. 사용하는 셸에서 다음 명령을 실행한 뒤 [실행](#실행) 블록에서
+`docker run` 행만 생략한다. 이 명령은 이 tutorial의 `zlink-tutorial-node:` 접두사에 속한 키만
+삭제하며, 6379의 Redis에 연결된 `redis-cli`가 필요하다.
+
+```bash title="linux"
+redis-cli --scan --pattern 'zlink-tutorial-node:*' | while IFS= read -r key; do redis-cli DEL "$key" >/dev/null; done
+```
+
+```powershell title="windows"
+redis-cli --scan --pattern 'zlink-tutorial-node:*' | ForEach-Object { redis-cli DEL $_ | Out-Null }
+```
 
 ## 포트
 
