@@ -16,6 +16,7 @@ engines (Unreal, Godot, Cocos), desktop and server applications, and e2e test to
 | 9 | [Engine Adapters](09-engine-adapters.en.md) | The Unreal, Godot and Cocos adapters |
 | 10 | [Packaging](10-packaging.en.md) | Build configuration and the published artifacts |
 | 11 | [Performance](11-performance.en.md) | Where to measure and what can be tuned |
+| 12 | [Game Engine Integration](12-engine-integration.en.md) | Connector choice by engine and the Engine Lobby sample |
 
 The file number identifies the same chapter in every language. Chapters 1 to 7 are
 shared across all five.

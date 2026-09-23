@@ -58,6 +58,7 @@ namespace EngineLobby
                         Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
                     }
                 );
+                // --8<-- [start:receive]
                 _chatSubscription = _connector.On<ChatNotify>(
                     (message, cancellationToken) =>
                     {
@@ -65,15 +66,18 @@ namespace EngineLobby
                         return default;
                     }
                 );
+                // --8<-- [end:receive]
                 // --8<-- [end:handler]
 
                 // --8<-- [start:connect]
                 await _connector.Connect.Async();
                 _pumping = true;
+                // --8<-- [end:connect]
+                // --8<-- [start:send]
                 var joined = await _connector.Request(new JoinReq(playerName)).Async<JoinRes>();
                 _statusText.text = $"joined as {joined.name} ({joined.actorId})";
                 await _connector.Send(new ChatMsg(firstChat)).Async();
-                // --8<-- [end:connect]
+                // --8<-- [end:send]
             }
             catch (Exception error)
             {

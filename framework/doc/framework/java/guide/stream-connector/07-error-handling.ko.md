@@ -10,7 +10,7 @@ title: "오류 처리 · Java"
 # 오류 처리
 
 <!-- framework-adapter-nav:start -->
-[목차](README.ko.md) | [이전: 연결 생명주기](06-lifecycle.ko.md)
+[목차](README.ko.md) | [이전: 연결 생명주기](06-lifecycle.ko.md) | [다음: 게임 엔진 통합](12-engine-integration.ko.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
