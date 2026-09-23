@@ -78,7 +78,7 @@ builder.Services.AddZLinkFramework(options =>
         // relying on a console scroll.
         // --8<-- [start:doc-monitoring-flow]
         .Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
-        // --8<-- [end:doc-monitoring-flow]
+    // --8<-- [end:doc-monitoring-flow]
     options.AddHandlersFromAssemblyOf(typeof(ZoneSpot));
 
     // The node that hosts no zone registers the broadcast subscriber and nothing else — no

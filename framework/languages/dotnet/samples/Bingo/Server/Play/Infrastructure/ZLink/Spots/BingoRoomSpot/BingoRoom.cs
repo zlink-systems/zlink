@@ -256,6 +256,7 @@ internal sealed class BingoRoom(
     {
         Context.RelocationReady().Defer();
     }
+
     // --8<-- [end:doc-relocation-ready]
 
     internal async ValueTask PublishAsync(

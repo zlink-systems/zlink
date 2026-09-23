@@ -6,7 +6,8 @@ This Axmol 2.3.0 C++ client connects to the shared Engine Lobby server. `EngineL
 the connector and calls `dispatch()` from a scheduled update. It displays the result of
 `PingReq` → `PingRes` → `JoinReq` → `JoinRes` → `ChatMsg` → `ChatNotify` in the center of the screen
 and in the log.
-Before connecting, it subscribes to `ChatNotify`, the Engine Lobby push.
+Before connecting, it registers `on("ChatNotify", callback)` and keeps the returned subscription
+handle. Each `request_json` call supplies its own completion callback for the reply or failure.
 
 The [engine-lobby sample contract](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/sample/engine-lobby/README.md) owns packet names and JSON fields.
 
@@ -63,11 +64,12 @@ one translation unit:
 g++-13 -std=c++20 -Wall -Wextra -Werror -fsyntax-only \
   -I Validation -I Source \
   -I ../../cpp/connector/engines/axmol/include \
+  -I ../../cpp/connector/core/include \
   Validation/ProtocolCompileCheck.cpp
 ```
 
 This does not verify an Axmol engine link, scheduler execution, connector link, or server
 communication. Axmol is absent from this workspace, so an engine build and run were not performed.
 
-The scene subscribes to `ChatNotify` before connecting, then displays the push delivered through
-the adapter callback.
+The scene registers `ChatNotify` before connecting, then displays the push delivered through its
+named callback.

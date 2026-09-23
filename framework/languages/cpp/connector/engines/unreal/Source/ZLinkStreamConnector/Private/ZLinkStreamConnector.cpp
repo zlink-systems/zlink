@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -107,7 +109,7 @@ class FZLinkStreamConnectorRuntime
     void Connect (const FString &Endpoint)
     {
         for (auto &subscription : PacketSubscriptions) {
-            subscription.second.unsubscribe ();
+            subscription.second.Handle.unsubscribe ();
         }
         StateSubscription.unsubscribe ();
         Connector.close ();
@@ -123,7 +125,7 @@ class FZLinkStreamConnectorRuntime
         options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::manual;
         Connector = zlink::stream_connector::connector_factory_t::create (std::move (options));
         for (auto &subscription : PacketSubscriptions) {
-            subscription.second = RegisterPacket (subscription.first);
+            subscription.second.Handle = RegisterPacket (subscription.first);
         }
         auto pending = Pending;
         /* stream-connector §7: the handle owns the registration, so it is kept
@@ -163,26 +165,36 @@ class FZLinkStreamConnectorRuntime
         EnqueueState (Pending, EZLinkStreamConnectionState::Closed);
     }
 
-    void Subscribe (const FName &PacketName)
+    FZLinkStreamSubscriptionHandle On (const FName &PacketName,
+                                       TFunction<void (const FZLinkStreamPacket &)> Callback)
     {
 #if __has_include("CoreMinimal.h")
         const auto name = to_utf8 (PacketName.ToString ());
 #else
         const auto name = to_utf8 (PacketName);
 #endif
-        auto &subscription =
-          PacketSubscriptions.emplace_back (name, zlink::stream_connector::subscription_t{});
+        const auto id = NextSubscriptionId++;
+        auto &subscription = PacketSubscriptions.emplace (id, subscription_entry_t{}).first->second;
+        subscription.Name = name;
+        subscription.Callback =
+          std::make_shared<TFunction<void (const FZLinkStreamPacket &)>> (std::move (Callback));
         if (!Connector.options ().endpoint.empty ()) {
-            subscription.second = RegisterPacket (name);
+            subscription.Handle = RegisterPacket (id);
         }
+        return {id};
     }
 
-    zlink::stream_connector::subscription_t RegisterPacket (const std::string &name)
+    void Unsubscribe (FZLinkStreamSubscriptionHandle Handle)
+    {
+        PacketSubscriptions.erase (Handle.Id);
+    }
+
+    zlink::stream_connector::subscription_t RegisterPacket (int32 id)
     {
         auto pending = Pending;
         return Connector.on<zlink::stream_connector::packet_t> (
-          name,
-          [pending] (
+          PacketSubscriptions.at (id).Name,
+          [pending, id] (
             const zlink::stream_connector::message_t<zlink::stream_connector::packet_t> &message) {
               FZLinkStreamPacket packet = ToUnrealPacket (message.payload);
 #if __has_include("CoreMinimal.h")
@@ -192,7 +204,7 @@ class FZLinkStreamConnectorRuntime
 #endif
               std::lock_guard<std::mutex> lock (pending->Mutex);
               if (!pending->CancelCallbacks) {
-                  pending->Packets.push_back (std::move (packet));
+                  pending->Packets.emplace_back (id, std::move (packet));
               }
           });
     }
@@ -213,15 +225,20 @@ class FZLinkStreamConnectorRuntime
         call.submit ();
     }
 
-    void RequestJson (const FName &PacketName, const FString &JsonPayload, float TimeoutSeconds)
+    void RequestJson (const FName &PacketName,
+                      const FString &JsonPayload,
+                      float TimeoutSeconds,
+                      TFunction<void (const FZLinkStreamRequestResult &)> Callback)
     {
-        RequestJson (PacketName, JsonPayload, TimeoutSeconds, FZLinkStreamSendOptions{});
+        RequestJson (PacketName, JsonPayload, TimeoutSeconds, FZLinkStreamSendOptions{},
+                     std::move (Callback));
     }
 
     void RequestJson (const FName &PacketName,
                       const FString &JsonPayload,
                       float TimeoutSeconds,
-                      const FZLinkStreamSendOptions &Options)
+                      const FZLinkStreamSendOptions &Options,
+                      TFunction<void (const FZLinkStreamRequestResult &)> Callback)
     {
         auto request = Connector.request (MakePacket (PacketName, JsonPayload, Options));
         request.timeout (
@@ -230,28 +247,28 @@ class FZLinkStreamConnectorRuntime
             request.compress ();
         }
         auto pending = Pending;
+        auto completion = std::make_shared<request_callback_t> (std::move (Callback));
+        request.submit<zlink::message_t> (
+          [pending, completion] (zlink::stream_connector::result_t<zlink::message_t> result) {
+              FZLinkStreamRequestResult completed;
+              completed.bSuccess = static_cast<bool> (result);
+              if (result) {
+                  zlink::stream_connector::packet_t reply;
+                  reply.payload = std::move (result.value ());
+                  completed.Packet = ToUnrealPacket (reply);
+              } else if (result.error ()) {
+                  completed.ErrorCode = static_cast<int32> (result.error ()->code);
 #if __has_include("CoreMinimal.h")
-        const auto request_name = to_utf8 (PacketName.ToString ());
+                  completed.ErrorMessage = UTF8_TO_TCHAR (result.error ()->message.c_str ());
 #else
-        const auto request_name = to_utf8 (PacketName);
+                  completed.ErrorMessage = result.error ()->message;
 #endif
-        request.submit<zlink::stream_connector::packet_t> (
-          [pending, request_name] (
-            zlink::stream_connector::result_t<zlink::stream_connector::packet_t> result) {
-              if (!result) {
-                  return;
               }
-              FZLinkStreamPacket packet = ToUnrealPacket (result.value ());
-#if __has_include("CoreMinimal.h")
-              packet.PacketName = FName (UTF8_TO_TCHAR (request_name.c_str ()));
-#else
-              packet.PacketName = request_name;
-#endif
               std::lock_guard<std::mutex> lock (pending->Mutex);
               if (pending->CancelCallbacks) {
                   return;
               }
-              pending->Requests.push_back (std::move (packet));
+              pending->Requests.emplace_back (std::move (completion), std::move (completed));
           });
     }
 
@@ -259,8 +276,9 @@ class FZLinkStreamConnectorRuntime
     {
         Connector.dispatch ();
         std::vector<EZLinkStreamConnectionState> pending_states;
-        std::vector<FZLinkStreamPacket> pending_packets;
-        std::vector<FZLinkStreamPacket> pending_requests;
+        std::vector<std::pair<int32, FZLinkStreamPacket>> pending_packets;
+        std::vector<std::pair<std::shared_ptr<request_callback_t>, FZLinkStreamRequestResult>>
+          pending_requests;
         bool cancel_callbacks = false;
         UZLinkStreamConnector *owner = nullptr;
         {
@@ -291,12 +309,18 @@ class FZLinkStreamConnectorRuntime
             return;
         }
         for (auto &packet : pending_packets) {
-            owner->OnPacketReceived.Broadcast (packet);
-            owner->OnPacketReceivedNative.Broadcast (packet);
+            const auto found = PacketSubscriptions.find (packet.first);
+            if (found != PacketSubscriptions.end ()) {
+                auto callback = found->second.Callback;
+                if (callback && *callback) {
+                    (*callback) (packet.second);
+                }
+            }
         }
-        for (auto &packet : pending_requests) {
-            owner->OnRequestCompleted.Broadcast (packet);
-            owner->OnRequestCompletedNative.Broadcast (packet);
+        for (auto &request : pending_requests) {
+            if (*request.first) {
+                (*request.first) (request.second);
+            }
         }
     }
 
@@ -320,6 +344,14 @@ class FZLinkStreamConnectorRuntime
     }
 
   private:
+    using request_callback_t = TFunction<void (const FZLinkStreamRequestResult &)>;
+
+    struct subscription_entry_t
+    {
+        std::string Name;
+        std::shared_ptr<TFunction<void (const FZLinkStreamPacket &)>> Callback;
+        zlink::stream_connector::subscription_t Handle;
+    };
     zlink::stream_connector::packet_t MakePacket (const FName &PacketName,
                                                   const FString &JsonPayload,
                                                   const FZLinkStreamSendOptions &Options)
@@ -345,7 +377,12 @@ class FZLinkStreamConnectorRuntime
         converted.PacketName = packet.name;
 #endif
         const auto payload = packet.payload.to_string ();
+#if __has_include("CoreMinimal.h")
+        converted.Payload.Append (reinterpret_cast<const uint8 *> (payload.data ()),
+                                  static_cast<int32> (payload.size ()));
+#else
         converted.Payload.assign (payload.begin (), payload.end ());
+#endif
 #if __has_include("CoreMinimal.h")
         for (const auto &entry : packet.metadata.values) {
             converted.Metadata.Add (FString (UTF8_TO_TCHAR (entry.first.c_str ())),
@@ -373,8 +410,9 @@ class FZLinkStreamConnectorRuntime
         bool CancelCallbacks = false;
         EZLinkStreamConnectionState LastConnectionState = EZLinkStreamConnectionState::Created;
         std::vector<EZLinkStreamConnectionState> States;
-        std::vector<FZLinkStreamPacket> Packets;
-        std::vector<FZLinkStreamPacket> Requests;
+        std::vector<std::pair<int32, FZLinkStreamPacket>> Packets;
+        std::vector<std::pair<std::shared_ptr<request_callback_t>, FZLinkStreamRequestResult>>
+          Requests;
     };
 
     static void EnqueueState (const std::shared_ptr<pending_state_t> &PendingState,
@@ -401,8 +439,8 @@ class FZLinkStreamConnectorRuntime
 
     zlink::stream_connector::connector_t Connector;
     zlink::stream_connector::subscription_t StateSubscription;
-    std::vector<std::pair<std::string, zlink::stream_connector::subscription_t>>
-      PacketSubscriptions;
+    std::map<int32, subscription_entry_t> PacketSubscriptions;
+    int32 NextSubscriptionId = 1;
     std::shared_ptr<pending_state_t> Pending;
 };
 
@@ -431,9 +469,22 @@ void UZLinkStreamConnector::Close ()
     _runtime->Close ();
 }
 
-void UZLinkStreamConnector::Subscribe (FName PacketName)
+FZLinkStreamSubscriptionHandle UZLinkStreamConnector::On (FName PacketName,
+                                                          FZLinkStreamPacketDelegate Delegate)
 {
-    _runtime->Subscribe (PacketName);
+    return On (PacketName,
+               [Delegate] (const FZLinkStreamPacket &Packet) { Delegate.ExecuteIfBound (Packet); });
+}
+
+FZLinkStreamSubscriptionHandle
+UZLinkStreamConnector::On (FName PacketName, TFunction<void (const FZLinkStreamPacket &)> Callback)
+{
+    return _runtime->On (PacketName, std::move (Callback));
+}
+
+void UZLinkStreamConnector::Unsubscribe (FZLinkStreamSubscriptionHandle Handle)
+{
+    _runtime->Unsubscribe (Handle);
 }
 
 void UZLinkStreamConnector::SendJson (FName PacketName, const FString &JsonPayload)
@@ -450,17 +501,45 @@ void UZLinkStreamConnector::SendJsonWithOptions (FName PacketName,
 
 void UZLinkStreamConnector::RequestJson (FName PacketName,
                                          const FString &JsonPayload,
-                                         float TimeoutSeconds)
+                                         float TimeoutSeconds,
+                                         FZLinkStreamRequestDelegate OnCompleted)
 {
-    _runtime->RequestJson (PacketName, JsonPayload, TimeoutSeconds);
+    RequestJson (PacketName, JsonPayload, TimeoutSeconds,
+                 [OnCompleted] (const FZLinkStreamRequestResult &Result) {
+                     OnCompleted.ExecuteIfBound (Result);
+                 });
+}
+
+void UZLinkStreamConnector::RequestJson (
+  FName PacketName,
+  const FString &JsonPayload,
+  float TimeoutSeconds,
+  TFunction<void (const FZLinkStreamRequestResult &)> OnCompleted)
+{
+    _runtime->RequestJson (PacketName, JsonPayload, TimeoutSeconds, std::move (OnCompleted));
 }
 
 void UZLinkStreamConnector::RequestJsonWithOptions (FName PacketName,
                                                     const FString &JsonPayload,
                                                     float TimeoutSeconds,
-                                                    const FZLinkStreamSendOptions &Options)
+                                                    const FZLinkStreamSendOptions &Options,
+                                                    FZLinkStreamRequestDelegate OnCompleted)
 {
-    _runtime->RequestJson (PacketName, JsonPayload, TimeoutSeconds, Options);
+    RequestJsonWithOptions (PacketName, JsonPayload, TimeoutSeconds, Options,
+                            [OnCompleted] (const FZLinkStreamRequestResult &Result) {
+                                OnCompleted.ExecuteIfBound (Result);
+                            });
+}
+
+void UZLinkStreamConnector::RequestJsonWithOptions (
+  FName PacketName,
+  const FString &JsonPayload,
+  float TimeoutSeconds,
+  const FZLinkStreamSendOptions &Options,
+  TFunction<void (const FZLinkStreamRequestResult &)> OnCompleted)
+{
+    _runtime->RequestJson (PacketName, JsonPayload, TimeoutSeconds, Options,
+                           std::move (OnCompleted));
 }
 
 void UZLinkStreamConnector::Dispatch ()

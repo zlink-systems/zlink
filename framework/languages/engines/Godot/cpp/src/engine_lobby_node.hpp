@@ -27,11 +27,13 @@ class EngineLobbyNode : public Control
     static void _bind_methods ();
 
   private:
-    void handle_response (const zlink::godot_stream_connector::packet_t &packet);
+    void handle_ping_response (const zlink::godot_stream_connector::request_result_t &result);
+    void handle_join_response (const zlink::godot_stream_connector::request_result_t &result);
     void handle_packet (const zlink::godot_stream_connector::packet_t &packet);
     void fail (const String &message);
 
     zlink::godot_stream_connector::stream_connector_t connector_;
+    zlink::godot_stream_connector::subscription_t chat_subscription_;
     Label *status_ = nullptr;
     String endpoint_ = "ws://127.0.0.1:22700";
     String player_name_ = "godot-player";
