@@ -1331,20 +1331,21 @@ test('MFLOW-011 control packets reject a correlation id', () => {
 
 test('MFLOW-EXT-005/006 stream flow fields use mandatory marker and reject old or unknown formats', () => {
   const flowId = '018f2b63-9d4a-7abc-8def-0123456789ab';
-  const encoded = protocolCodecs.ZlinkStreamHeaderCodec.encode({
-    kind: connector.ZlinkStreamMessageKind.Send,
-    codec: connector.ZlinkStreamCodec.Json,
-    flags: connector.ZlinkStreamHeaderFlags.None,
+  const encoded = streamProtocol.encodeStreamHeader({
+    kind: streamProtocol.ZLinkStreamMessageKind.Send,
+    codec: streamProtocol.ZLinkStreamCodec.Json,
+    flags: streamProtocol.ZLinkStreamHeaderFlags.None,
     name: 'FlowEvent',
-    metadata: connector.ZlinkStreamMetadataMap.empty,
+    metadata: new Map(),
     flowId,
     flowOrigin: 'Application'
   });
   assert.equal(encoded[0], 0xf2);
-  assert.notEqual(encoded[3] & connector.ZlinkStreamHeaderFlags.HasFlowId, 0);
+  assert.notEqual(encoded[3] & streamProtocol.ZLinkStreamHeaderFlags.HasFlowId, 0);
   const decoded = streamProtocol.decodeStreamHeader(encoded);
   assert.equal(decoded.flowId, flowId);
   assert.equal(decoded.flowOrigin, 'Application');
+  assert.equal(protocolCodecs.ZlinkStreamHeaderCodec.decode(encoded).flowId, undefined);
 
   assert.throws(
     () => protocolCodecs.ZlinkStreamHeaderCodec.decode(encoded.subarray(1)),

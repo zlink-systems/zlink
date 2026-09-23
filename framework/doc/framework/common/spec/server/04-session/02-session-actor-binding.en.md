@@ -166,7 +166,7 @@ against the current bindings and puts that Actor into the dispatch context —
 no slot means no Actor. **A packet carrying a slot that is not a current
 binding (one that arrives late, after the unbind) is not delivered to the
 session handler.** A `Request` ends with an `Error` reply on the same sequence
-(code `InvalidOperation`), recorded as `zlink.dispatch_error` with `surface=stream`,
+(`InvalidOperation`), recorded as `zlink.dispatch_error` with `surface=stream`,
 `message_kind=request`, `outcome=failed`, `reason=stale_target`, `action=reply_error`. A `Send` is
 dropped and recorded in message-flow with `surface=stream`, `message_kind=send`,
 `outcome=dropped`, `reason=stale_target`

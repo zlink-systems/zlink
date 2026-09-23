@@ -59,9 +59,7 @@ final class ZLinkChannelFlowFrame {
             }
             try {
                 return new ZLinkFlowContext.State(
-                        fields[1],
-                        ZLinkFlowOrigin.valueOf(fields[2]),
-                        null);
+                        fields[1], ZLinkFlowOrigin.valueOf(fields[2]), null);
             } catch (IllegalArgumentException invalidOrigin) {
                 throw invalidFlow("Channel flow origin is invalid", invalidOrigin);
             }

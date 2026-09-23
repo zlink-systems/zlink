@@ -10,6 +10,8 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime;
 import systems.zlink.framework.runtime.configuration.ZLinkDispatchOptionsRegistration;
@@ -44,6 +46,24 @@ import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 final class ZLinkStreamSessionContextStateTest {
+    @Test
+    void streamErrorPayloadUsesCanonicalErrorKinds() {
+        ZLinkStreamErrorPayload.Decoded rejected =
+                ZLinkStreamErrorPayload.decode(
+                        ZLinkStreamErrorPayload.encode(
+                                new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.REJECTED, "request rejected")));
+        assertEquals("rejected", rejected.code());
+        assertEquals(ZLinkFrameworkErrorKind.REJECTED, rejected.frameworkKind());
+
+        ZLinkStreamErrorPayload.Decoded unexpected =
+                ZLinkStreamErrorPayload.decode(
+                        ZLinkStreamErrorPayload.encode(
+                                new IllegalStateException("handler failed")));
+        assertEquals("internal_failure", unexpected.code());
+        assertEquals(ZLinkFrameworkErrorKind.INTERNAL_FAILURE, unexpected.frameworkKind());
+    }
+
     @Test
     void replyHeaderCanBeClaimedOnlyOnce() {
         ZLinkStreamSessionContextState context = context(new AtomicInteger());
@@ -173,7 +193,8 @@ final class ZLinkStreamSessionContextStateTest {
         assertEquals(1, asyncSubmits.get());
         assertEquals(Optional.of(11L), replyHeader.get().requestSequence());
         assertEquals(ZLinkStreamMessageKind.ERROR, replyHeader.get().kind());
-        assertEquals("InvalidOperation", ZLinkStreamErrorPayload.decode(replyPayload.get()).code());
+        assertEquals(
+                "invalid_operation", ZLinkStreamErrorPayload.decode(replyPayload.get()).code());
         assertTrue(
                 records.stream()
                         .anyMatch(

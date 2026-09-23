@@ -4,7 +4,6 @@ import {
 } from '../framework-errors-internal';
 import type { ZLinkMessageSerializer, RoutingId, ZLinkSession } from '../../contracts';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
-import { ZLinkFrameworkErrorKind, ZLinkFrameworkException } from '../../contracts';
 import { ZLinkSocketNativeEventType } from '../diagnostics/internal-event-contracts';
 import {
   ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome,
@@ -16,6 +15,7 @@ import {
 import type { Message } from '../../contracts/Common/Message';
 import { throwIfAborted } from '../abort';
 import { ZLinkDispatchErrorReporter, ZLinkRouteDisconnectedError } from '../channels';
+import { boundSessionErrorPayload } from './bound-session-response-target';
 import { flowIfEnabled } from '../diagnostics';
 import type { ZLinkRuntimeMetrics } from '../diagnostics';
 import { wrapFrameworkPayloadMessage } from '../messaging/payload-codec';
@@ -745,15 +745,7 @@ export class ZLinkStreamSessionRuntime {
       ZLinkStreamMessageKind.Error,
       new Map(),
       false,
-      {
-        code:
-          error instanceof ZLinkFrameworkException
-            ? ZLinkFrameworkErrorKind[error.kind]
-            : error instanceof Error
-              ? error.constructor.name
-              : 'RemoteError',
-        message: error instanceof Error ? error.message : String(error)
-      }
+      boundSessionErrorPayload(error)
     );
     try {
       if (!this.context.stream.writeRaw(message, ZLINK_SEND_DONT_WAIT)) {

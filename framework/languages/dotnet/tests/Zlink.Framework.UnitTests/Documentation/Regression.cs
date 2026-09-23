@@ -243,76 +243,15 @@ public sealed class RegressionTests
     }
 
     /// <summary>
-    /// 두 층으로 다시 쓰는 장이다(`doc/plan/guide-rewrite.ko.md`). 작성 가이드 §1.4가
-    /// "독자를 스펙으로 내보내지 않는다"를 정하므로 이 장들은 소유 스펙 머리말을 두지
-    /// 않는다. 옛 형식의 장과 섞이지 않게 여기서 갈라 둔다.
-    /// </summary>
-    private static readonly string[] RewriteLayerGuideDocuments =
-    [
-        "20-channel-messaging.ko.md",
-        "21-spot.ko.md",
-        "22-actor.ko.md",
-        "23-stream.ko.md",
-        "24-actor-session.ko.md",
-        "25-location.ko.md",
-        "30-channel-patterns.ko.md",
-        "31-handler-dispatch.ko.md",
-        "32-execution-model.ko.md",
-        "34-activation-lifetime.ko.md",
-        "35-actor-membership.ko.md",
-        "36-timer-worker.ko.md",
-        "37-relocation.ko.md",
-        "38-stream-boundary.ko.md",
-        "39-session-binding.ko.md",
-        "26-monitoring.ko.md",
-        "01-overview.ko.md",
-        "03-concepts.ko.md",
-        "16-options.ko.md",
-    ];
-
-    /// <summary>
-    /// 공통 정본은 코드가 스니펫이라 코드 층위는 체커가 보지만 산문은 아무도 대조하지
-    /// 않는다. 그래서 옛 형식의 챕터는 계약을 소유하는 스펙 문서를 머리에 밝히고 그것과
-    /// 맞춘다(런북 §11 게이트 4). 소유 문서가 없는 챕터는 없다고 밝힌다. 다시 쓰는 층의
-    /// 장은 반대로 그 머리말을 두지 않는다.
+    /// 공통 가이드 장은 계약 소유 문서 머리말을 두지 않는다(#947). 계약은 스펙이 소유한다.
     /// </summary>
     [Fact]
-    public void CommonGuideNarrative_DeclareTheSpecThatOwnsTheirContract()
+    public void CommonGuideNarrative_DoNotCarryContractOwnerCallouts()
     {
-        // 계약이 아니라 안내가 본질인 챕터다. 소유 스펙이 없다고 밝히는 쪽이 맞다.
-        var withoutOwningSpec = new[]
-        {
-            "14-samples.ko.md",
-            "15-e2e-testing.ko.md",
-            "50-bingo.ko.md",
-            "51-tictactoe.ko.md",
-            "52-supportchat.ko.md",
-            "53-deliverydispatch.ko.md",
-            "54-shoppingmall.ko.md",
-            "55-gamequest.ko.md",
-            "56-zoneworld.ko.md",
-        };
-
         foreach (var document in CommonGuideDocuments)
         {
             var text = File.ReadAllText(Path.Combine(GetCommonGuideServerRoot(), document));
-            if (RewriteLayerGuideDocuments.Contains(document, StringComparer.Ordinal))
-            {
-                Assert.DoesNotContain("**이 장의 계약 소유 문서**", text, StringComparison.Ordinal);
-                continue;
-            }
-
-            if (withoutOwningSpec.Contains(document, StringComparer.Ordinal))
-            {
-                Assert.Contains(
-                    "이 장에는 계약을 소유하는 스펙 문서가 없다",
-                    text,
-                    StringComparison.Ordinal
-                );
-                continue;
-            }
-
-            Assert.Contains("**이 장의 계약 소유 문서**", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("**이 장의 계약 소유 문서**", text, StringComparison.Ordinal);
         }
     }
 

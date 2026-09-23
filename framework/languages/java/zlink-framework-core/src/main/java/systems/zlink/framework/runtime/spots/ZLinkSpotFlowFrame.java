@@ -75,9 +75,7 @@ final class ZLinkSpotFlowFrame {
             }
             try {
                 return new ZLinkFlowContext.State(
-                        fields[1],
-                        ZLinkFlowOrigin.valueOf(fields[2]),
-                        null);
+                        fields[1], ZLinkFlowOrigin.valueOf(fields[2]), null);
             } catch (IllegalArgumentException invalidOrigin) {
                 throw invalidFlow("SPOT route flow origin is invalid", invalidOrigin);
             }

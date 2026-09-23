@@ -14,7 +14,7 @@ const serverScript = path.join(__dirname, 'support/stream-server.js');
 const certificate = path.join(workspaceRoot, 'test/fixtures/tls/server-cert.pem');
 const key = path.join(workspaceRoot, 'test/fixtures/tls/server-key.pem');
 
-test('actual Chromium uses ws/wss, explicit flow, reconnect, drain, and browser trust', { timeout: 120_000 }, async (t) => {
+test('actual Chromium uses ws/wss, reconnect, drain, and browser trust', { timeout: 120_000 }, async (t) => {
   let staticServer;
   let wsServer;
   let wssServer;
@@ -56,8 +56,7 @@ test('actual Chromium uses ws/wss, explicit flow, reconnect, drain, and browser 
       untrustedPage.goto(staticServer.url)
     ]);
     await page.evaluate((endpoint) => window.browserConnectorTest.connect(endpoint), `ws://127.0.0.1:${wsPort}`);
-    const explicitFlowId = '019f5c16-14f8-7701-9438-753e036a9b94';
-    assert.deepEqual(await requestFromPage(page, 'plain-ws', wsServer, explicitFlowId), { value: 'plain-ws' });
+    assert.deepEqual(await requestFromPage(page, 'plain-ws', wsServer), { value: 'plain-ws' });
 
     await stopStreamServer(wsServer);
     await page.waitForFunction(() => window.browserConnectorTest.state().connectionState !== 'connected', null, { timeout: 10_000 });
@@ -150,12 +149,9 @@ function startStreamServer(endpoint, cert, privateKey) {
   });
 }
 
-async function requestFromPage(page, value, server, explicitFlowId) {
+async function requestFromPage(page, value, server) {
   try {
-    return await page.evaluate(
-      ([requestValue, flow]) => window.browserConnectorTest.request(requestValue, flow),
-      [value, explicitFlowId]
-    );
+    return await page.evaluate((requestValue) => window.browserConnectorTest.request(requestValue), value);
   } catch (error) {
     error.message += `\nstream server output for '${value}':\n${server.capturedOutput?.() ?? '<unavailable>'}`;
     throw error;

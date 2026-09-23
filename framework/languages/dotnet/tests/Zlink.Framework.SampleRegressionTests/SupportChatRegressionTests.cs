@@ -88,7 +88,7 @@ public sealed partial class RegressionTests
         );
 
         Assert.Equal(
-            7,
+            6,
             scenario.Split("ZlinkStreamAssert.ExpectFailureAsync(", StringSplitOptions.None).Length
                 - 1
         );
@@ -108,7 +108,7 @@ public sealed partial class RegressionTests
             StringComparison.Ordinal
         );
         Assert.Contains(
-            "new SendChatMessageReq(\"not a participant\")",
+            "waitingCustomer.Actor(agentJoin2.ActorId) is null",
             scenario,
             StringComparison.Ordinal
         );
@@ -726,8 +726,13 @@ public sealed partial class RegressionTests
             StringComparison.Ordinal
         );
         Assert.Contains(
-            NormalizeWhitespace("connector.Request(new JoinConversationReq())"),
+            NormalizeWhitespace(".Request(new JoinConversationReq(conversationId))"),
             NormalizeWhitespace(clientScenario),
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "connector.Actor(joined.ActorId)",
+            clientScenario,
             StringComparison.Ordinal
         );
         Assert.Contains(

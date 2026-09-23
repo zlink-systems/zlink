@@ -317,9 +317,8 @@ public sealed partial class StreamConnectorTests
             Func<IZlinkStreamActor, CancellationToken, ValueTask> handler
         ) => new NoopRegistration();
 
-        public IDisposable OnRequestSending(
-            Action<ZlinkStreamRequestSendingContext> handler
-        ) => new NoopRegistration();
+        public IDisposable OnRequestSending(Action<ZlinkStreamRequestSendingContext> handler) =>
+            new NoopRegistration();
 
         public IDisposable OnReplyReceived(
             Func<ZlinkStreamReplyReceivedContext, CancellationToken, ValueTask> handler

@@ -546,8 +546,11 @@ TEST (CppFrameworkSampleParity, SamplesConformToLifecycleAndDeliveryContracts)
     EXPECT_NE (tictactoe_host.find (".enable_actor_dispatch ()"), std::string::npos);
 
     const auto support = read_text_file (samples / "SupportChat/Server/Support/main.cpp");
-    EXPECT_NE (support.find ("add_forwarded_metadata_key (conversation_id_metadata_key)"),
+    const auto support_session = read_text_file (samples / "SupportChat/Server/Session/main.cpp");
+    EXPECT_EQ (support.find ("add_forwarded_metadata_key (conversation_id_metadata_key)"),
                std::string::npos);
+    EXPECT_NE (support_session.find ("request.conversation_id.empty ()"), std::string::npos);
+    EXPECT_NE (support_session.find ("dispatch.actor"), std::string::npos);
     EXPECT_NE (support.find ("on_disconnect_actor (support_user_actor_t &actor)"),
                std::string::npos);
     EXPECT_NE (support.find ("set_agent_available (actor.actor_id, actor.display_name, false)"),
@@ -1910,8 +1913,9 @@ TEST (CppFrameworkSampleParity, SupportChatConversationJoinCarriesParticipantIde
     EXPECT_NE (contracts.find ("std::string role;"), std::string::npos);
     EXPECT_NE (contracts.find ("std::string display_name;"), std::string::npos);
     EXPECT_NE (contracts.find ("{\"participantId\", value.participant_id}"), std::string::npos);
-    EXPECT_NE (support.find ("join_conversation_req_t{participant_id, role, display_name}"),
-               std::string::npos)
+    EXPECT_NE (
+      support.find ("join_conversation_req_t{conversation_id, participant_id, role, display_name}"),
+      std::string::npos)
       << "Support Actor must fill participant identity for the deferred conversation Join";
 }
 
@@ -1930,13 +1934,13 @@ TEST (CppFrameworkSampleParity, SupportChatConversationJoinIsDeferred)
     EXPECT_NE (contracts.find ("JoinConversationFailedNotify"), std::string::npos);
     EXPECT_NE (support.find (".defer ();"), std::string::npos);
     EXPECT_NE (support.find ("on_join_completed"), std::string::npos);
-    EXPECT_NE (
-      support.find ("add_actor_request<&support_entry_spot_t::schedule_conversation_join>"),
-      std::string::npos)
+    EXPECT_NE (support.find ("add_actor_request<&support_entry_spot_t::join_conversation>"),
+               std::string::npos)
       << "The conversation join handler must be registered on the Actor request surface";
     EXPECT_NE (support.find ("actor.schedule_conversation_join"), std::string::npos)
       << "Channel handlers must enter an Actor turn before they defer a Join";
-    EXPECT_NE (session.find ("joined.scheduled"), std::string::npos);
+    EXPECT_NE (session.find ("joined.actor_id = std::string (actor.actor_id ())"),
+               std::string::npos);
     EXPECT_NE (scenario.find ("expect (agent_joined.scheduled"), std::string::npos);
     EXPECT_NE (scenario.find ("expect (!rejoined_first.scheduled"), std::string::npos);
 }

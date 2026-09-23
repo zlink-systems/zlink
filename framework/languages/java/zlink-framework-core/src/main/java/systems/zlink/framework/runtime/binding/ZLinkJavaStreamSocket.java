@@ -754,6 +754,7 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
                                                 bindingGeneration,
                                                 source.actorSlot(),
                                                 timeout)
+                                        .thenRun(() -> publishBoundActor(sessionRid, actorId))
                                         .handle(
                                                 (restored, restoreFailure) -> {
                                                     Throwable cause = unwrapFailure(failure);
@@ -775,6 +776,7 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
                                 throw new IllegalStateException(
                                         "bound Session route changed during relocation");
                             }
+                            publishBoundActor(sessionRid, actorId);
                         });
     }
 

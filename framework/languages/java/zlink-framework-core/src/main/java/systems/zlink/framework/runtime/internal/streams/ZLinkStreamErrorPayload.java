@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 
 import java.io.IOException;
 import java.util.Map;
@@ -22,8 +23,9 @@ public final class ZLinkStreamErrorPayload {
         Throwable error = unwrap(failure);
         String code =
                 error instanceof ZLinkFrameworkException frameworkError
-                        ? frameworkCode(frameworkError.kind())
-                        : error.getClass().getSimpleName();
+                        ? ZLinkChannelEnvelope.errorCodeName(frameworkError.kind())
+                        : ZLinkChannelEnvelope.errorCodeName(
+                                ZLinkFrameworkErrorKind.INTERNAL_FAILURE);
         String message = error.getMessage();
         if (message == null || message.isBlank()) {
             message = error.getClass().getSimpleName();
@@ -71,25 +73,11 @@ public final class ZLinkStreamErrorPayload {
 
     private static ZLinkFrameworkErrorKind frameworkKind(String code) {
         for (ZLinkFrameworkErrorKind kind : ZLinkFrameworkErrorKind.values()) {
-            if (frameworkCode(kind).equals(code)) {
+            if (ZLinkChannelEnvelope.errorCodeName(kind).equals(code)) {
                 return kind;
             }
         }
         return null;
-    }
-
-    private static String frameworkCode(ZLinkFrameworkErrorKind kind) {
-        StringBuilder result = new StringBuilder();
-        boolean uppercase = true;
-        for (char value : kind.name().toCharArray()) {
-            if (value == '_') {
-                uppercase = true;
-                continue;
-            }
-            result.append(uppercase ? value : Character.toLowerCase(value));
-            uppercase = false;
-        }
-        return result.toString();
     }
 
     private static Throwable unwrap(Throwable failure) {

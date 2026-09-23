@@ -9,6 +9,7 @@ internal sealed class ZlinkStreamSequenceBuilder : IZlinkStreamSequenceCall
         Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, bool>
     > _expectations = [];
     private readonly ZlinkStreamCallBuilderState _state;
+
     internal ZlinkStreamSequenceBuilder(IZlinkStreamConnectorInternal connector, string name)
     {
         _connector = connector;

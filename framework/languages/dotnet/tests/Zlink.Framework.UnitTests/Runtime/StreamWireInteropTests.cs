@@ -133,7 +133,7 @@ public sealed class StreamWireInteropTests
     }
 
     [Fact]
-    public void Framework_error_wire_code_preserves_the_public_error_kind()
+    public void Framework_error_wire_code_uses_the_snake_case_error_kind()
     {
         var error = ZLinkStreamWireError.FromException(
             new ZLinkFrameworkException(
@@ -142,7 +142,7 @@ public sealed class StreamWireInteropTests
             )
         );
 
-        Assert.Equal("Unavailable", error.Code);
+        Assert.Equal("unavailable", error.Code);
         Assert.Equal("session binding is changing.", error.Message);
     }
 

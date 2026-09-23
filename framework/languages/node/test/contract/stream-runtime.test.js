@@ -7940,7 +7940,7 @@ test('local bound session error response rejects pending actor request', async (
   const frame = decodeFrame(stream.writes[0].bytes);
   assert.equal(frame.header.kind, connector.ZlinkStreamMessageKind.Error);
   assert.deepEqual(JSON.parse(new TextDecoder().decode(frame.payload)), {
-    code: 'Error',
+    code: 'internal_failure',
     message: 'remote actor failed',
   });
   const header = {

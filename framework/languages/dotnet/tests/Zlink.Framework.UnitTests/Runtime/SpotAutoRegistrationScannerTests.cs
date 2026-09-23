@@ -15,7 +15,7 @@ public sealed class SpotAutoRegistrationScannerTests
     [Fact]
     public void RegistrationRejectsScannedSubscriptionHandlerWithoutTopic()
     {
-        var (assembly, handlerType) = CreateSubscriptionHandlerAssembly(withTopic: false);
+        var (assembly, handlerType) = CreateSubscriptionHandlerAssembly(topic: "");
         var registration = new ZLinkFrameworkRegistration();
         registration.HandlerAssemblies.Add(assembly);
 
@@ -30,7 +30,7 @@ public sealed class SpotAutoRegistrationScannerTests
     [Fact]
     public void RegistrationIncludesScannedSubscriptionHandlerWithTopic()
     {
-        var (assembly, handlerType) = CreateSubscriptionHandlerAssembly(withTopic: true);
+        var (assembly, handlerType) = CreateSubscriptionHandlerAssembly(topic: "room.events");
         var registration = new ZLinkFrameworkRegistration();
         registration.HandlerAssemblies.Add(assembly);
 
@@ -45,8 +45,23 @@ public sealed class SpotAutoRegistrationScannerTests
         );
     }
 
+    [Fact]
+    public void RegistrationSkipsUnannotatedSubscriptionHandler()
+    {
+        var (assembly, handlerType) = CreateSubscriptionHandlerAssembly(topic: null);
+        var registration = new ZLinkFrameworkRegistration();
+        registration.HandlerAssemblies.Add(assembly);
+
+        ZLinkFrameworkRegistrationValidator.Validate(registration);
+
+        Assert.DoesNotContain(
+            registration.ScannedHandlerCatalog.SpotHandlers,
+            handler => handler.HandlerType == handlerType
+        );
+    }
+
     private static (Assembly Assembly, Type HandlerType) CreateSubscriptionHandlerAssembly(
-        bool withTopic
+        string? topic
     )
     {
         var assembly = AssemblyBuilder.DefineDynamicAssembly(
@@ -57,14 +72,14 @@ public sealed class SpotAutoRegistrationScannerTests
         var builder = module.DefineType("ScannedSubscriptionHandler", TypeAttributes.Public);
         var contract = typeof(IZLinkSpotSubscriptionHandler<object, string>);
         builder.AddInterfaceImplementation(contract);
-        if (withTopic)
+        if (topic is not null)
         {
             var constructor = typeof(ZLinkSpotSubscriptionHandlerAttribute).GetConstructor([
                 typeof(string),
                 typeof(string),
             ])!;
             builder.SetCustomAttribute(
-                new CustomAttributeBuilder(constructor, ["room-events", "room.events"])
+                new CustomAttributeBuilder(constructor, ["room-events", topic])
             );
         }
 
