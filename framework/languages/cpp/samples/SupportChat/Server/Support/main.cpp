@@ -27,23 +27,6 @@ namespace zlink::samples::supportchat
 using namespace zlink::framework;
 
 inline constexpr const char *support_user_actor_type = "support-user";
-inline constexpr const char *conversation_id_metadata_key = "ConversationId";
-
-struct schedule_conversation_join_req_t
-{
-    static constexpr const char *packet_name = "ScheduleConversationJoinReq";
-    std::string conversation_id;
-};
-
-inline void to_json (nlohmann::json &json, const schedule_conversation_join_req_t &value)
-{
-    json = {{"conversationId", value.conversation_id}};
-}
-
-inline void from_json (const nlohmann::json &json, schedule_conversation_join_req_t &value)
-{
-    value.conversation_id = json.value ("conversationId", "");
-}
 
 class support_user_actor_t : public actor_t
 {
@@ -64,8 +47,9 @@ class support_user_actor_t : public actor_t
         _pending_joins.push_back ({conversation_id, notify_bound_session});
         try {
             actor_context
-              .join_spot (spot_id_t (conversation_id),
-                          join_conversation_req_t{participant_id, role, display_name})
+              .join_spot (
+                spot_id_t (conversation_id),
+                join_conversation_req_t{conversation_id, participant_id, role, display_name})
               .defer ();
         }
         catch (...) {
@@ -73,6 +57,7 @@ class support_user_actor_t : public actor_t
             throw;
         }
         return {true,
+                actor_id,
                 conversation_state_t{conversation_id,
                                      {},
                                      conversation_status_t::waiting_for_agent,
@@ -125,14 +110,12 @@ class support_user_actor_t : public actor_t
             if (std::holds_alternative<actor_join_rejected_t> (completion)) {
                 co_await actor_context.bound_session ()
                   .send (join_conversation_failed_notify_t{conversation_id, "Rejected"})
-                  .metadata (conversation_id_metadata_key, conversation_id)
                   .async ();
             } else {
                 const auto &failed = std::get<actor_join_failed_t> (completion);
                 co_await actor_context.bound_session ()
                   .send (join_conversation_failed_notify_t{
                     conversation_id, std::to_string (static_cast<int> (failed.error_kind))})
-                  .metadata (conversation_id_metadata_key, conversation_id)
                   .async ();
             }
         }
@@ -234,6 +217,12 @@ class support_user_actor_relocation_adapter_t final
 class supportchat_conversation_runtime_t
 {
   public:
+    static std::string conversation_actor_id (const std::string &roster_actor_id,
+                                              const std::string &conversation_id)
+    {
+        return roster_actor_id + "@" + conversation_id;
+    }
+
     struct actor_profile_t
     {
         std::string actor_id;
@@ -286,10 +275,16 @@ class supportchat_conversation_runtime_t
                                found->second.participant_id};
     }
 
-    std::optional<support_user_actor_t *> actor_for (const std::string &participant_id) const
+    std::optional<support_user_actor_t *> actor_for (const std::string &participant_id,
+                                                     const std::string &conversation_id = {}) const
     {
         std::lock_guard lock (_mutex);
-        const auto actor_id = actor_id_for_participant (participant_id);
+        auto actor_id = actor_id_for_participant (participant_id);
+        const auto identity = _actors.find (participant_id);
+        if (!conversation_id.empty () && identity != _actors.end ()
+            && identity->second.role == role_t::agent) {
+            actor_id = conversation_actor_id (actor_id, conversation_id);
+        }
         const auto found = _live_actors.find (actor_id);
         if (found == _live_actors.end ()) {
             return std::nullopt;
@@ -433,7 +428,8 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
             }
         }
         _pending_actor_joins.insert (std::string (actor_id));
-        co_return spot_actor_join_result_t::accept (join_conversation_res_t{true, admission_state});
+        co_return spot_actor_join_result_t::accept (
+          join_conversation_res_t{true, std::string (actor_id), admission_state});
         // --8<-- [end:doc-sc-assign]
     }
 
@@ -458,8 +454,14 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
     task_t<void> on_leave_actor (support_user_actor_t &) override { co_return; }
 
     task_t<join_conversation_res_t>
-    join (support_user_actor_t &actor, message_context_t &, const join_conversation_req_t &)
+    join (support_user_actor_t &actor, message_context_t &, const join_conversation_req_t &request)
     {
+        if (request.conversation_id != require_conversation ().snapshot ().conversation_id
+            || request.participant_id != actor.participant_id || request.role != actor.role
+            || request.display_name != actor.display_name) {
+            throw framework_exception_t (framework_error_kind_t::rejected,
+                                         "join does not match the conversation actor");
+        }
         auto current = co_await join_actor (actor);
         current.scheduled = false;
         co_return current;
@@ -534,7 +536,7 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
               participant_joined_notify_t{
                 joined.conversation_id, actor.participant_id, actor.role, joined.state},
               participant_joined_notify_t::packet_name);
-            co_return join_conversation_res_t{false, joined.state};
+            co_return join_conversation_res_t{false, actor.actor_id, joined.state};
         }
 
         auto joined = require_conversation ().join_customer (actor.participant_id,
@@ -545,14 +547,18 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
             const auto assigned = pending->second;
             _pending_agent_assignments.erase (pending);
             auto assignment = require_conversation ().assign_agent (assigned);
-            co_await send_to_actor (
-              assigned,
-              conversation_assigned_notify_t{assignment.state.conversation_id, assignment.state},
-              conversation_assigned_notify_t::packet_name);
-            co_return join_conversation_res_t{false, assignment.state};
+            if (auto roster = _runtime.actor_for (assigned)) {
+                co_await (*roster)
+                  ->context ()
+                  .bound_session ()
+                  .send (conversation_assigned_notify_t{assignment.state.conversation_id,
+                                                        assignment.state})
+                  .async ();
+            }
+            co_return join_conversation_res_t{false, actor.actor_id, assignment.state};
         }
         // --8<-- [end:doc-sc-roster-push]
-        co_return join_conversation_res_t{false, joined.state};
+        co_return join_conversation_res_t{false, actor.actor_id, joined.state};
     }
 
     template <typename TMessage>
@@ -603,7 +609,8 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
                                 const TMessage &message,
                                 const char *packet_name)
     {
-        auto actor = _runtime.actor_for (participant_id);
+        auto actor = _runtime.actor_for (participant_id,
+                                         require_conversation ().snapshot ().conversation_id);
         if (!actor) {
             const std::string missing_actor_line = std::format (
               "supportchat conversation: missing actor packet={} participant={}\n",
@@ -686,8 +693,8 @@ class support_entry_spot_t : public entry_spot_t<support_user_actor_t>
         _context.handlers ()
           .add_actor_request<&support_entry_spot_t::set_available> (
             set_agent_available_req_t::packet_name)
-          .add_actor_request<&support_entry_spot_t::schedule_conversation_join> (
-            schedule_conversation_join_req_t::packet_name)
+          .add_actor_request<&support_entry_spot_t::join_conversation> (
+            join_conversation_req_t::packet_name)
           .add_actor_request<&support_entry_spot_t::open_conversation> (
             open_conversation_req_t::packet_name);
     }
@@ -742,14 +749,18 @@ class support_entry_spot_t : public entry_spot_t<support_user_actor_t>
     }
     // --8<-- [end:doc-sc-set-available]
 
-    join_conversation_res_t
-    schedule_conversation_join (support_user_actor_t &actor,
-                                message_context_t &,
-                                const schedule_conversation_join_req_t &request)
+    join_conversation_res_t join_conversation (support_user_actor_t &actor,
+                                               message_context_t &,
+                                               const join_conversation_req_t &request)
     {
         if (request.conversation_id.empty ()) {
             throw framework_exception_t (framework_error_kind_t::protocol_error,
-                                         "ScheduleConversationJoinReq is missing ConversationId");
+                                         "JoinConversationReq is missing conversationId");
+        }
+        if (request.participant_id != actor.participant_id || request.role != actor.role
+            || request.display_name != actor.display_name) {
+            throw framework_exception_t (framework_error_kind_t::rejected,
+                                         "join participant does not match the bound actor");
         }
         return actor.schedule_conversation_join (request.conversation_id,
                                                  actor.role == role_t::agent);
@@ -848,18 +859,13 @@ class ensure_agent_conversation_handler_t
     using reply_type = ensure_agent_conversation_res_t;
     static constexpr const char *topic_name = "EnsureAgentConversationReq";
 
-    ensure_agent_conversation_handler_t (actor_manager_t &actors,
-                                         actor_client_t &actor_client,
-                                         supportchat_conversation_runtime_t &runtime) :
-        _actors (actors), _actor_client (actor_client), _runtime (runtime)
-    {
-    }
+    explicit ensure_agent_conversation_handler_t (actor_manager_t &actors) : _actors (actors) {}
 
     task_t<ensure_agent_conversation_res_t> handle (const ensure_agent_conversation_req_t &request)
     {
-        const auto conversation_actor_id = request.roster_actor_id + "@" + request.conversation_id;
-        const auto already_exists = (co_await _actors.find (actor_id_t (conversation_actor_id)))
-                                      .has_value ();
+        const auto
+          conversation_actor_id = supportchat_conversation_runtime_t::conversation_actor_id (
+            request.roster_actor_id, request.conversation_id);
         auto created = co_await _actors
                          .get_or_create (actor_id_t (conversation_actor_id),
                                          support_user_actor_type)
@@ -878,27 +884,11 @@ class ensure_agent_conversation_handler_t
         else
             throw framework_exception_t (framework_error_kind_t::rejected,
                                          "support conversation actor creation was rejected");
-        join_conversation_res_t joined;
-        if (already_exists) {
-            joined = co_await _actor_client
-                       .request (actor->actor_id (),
-                                 join_conversation_req_t{
-                                   request.roster_actor_id, role_t::agent, request.display_name})
-                       .async<join_conversation_res_t> ();
-        } else {
-            joined = co_await _actor_client
-                       .request (actor->actor_id (),
-                                 schedule_conversation_join_req_t{request.conversation_id})
-                       .async<join_conversation_res_t> ();
-        }
-        co_return ensure_agent_conversation_res_t{
-          actor_location_t::from (*actor), joined.scheduled, joined.state};
+        co_return ensure_agent_conversation_res_t{actor_location_t::from (*actor)};
     }
 
   private:
     actor_manager_t &_actors;
-    actor_client_t &_actor_client;
-    supportchat_conversation_runtime_t &_runtime;
 };
 
 } // namespace zlink::samples::supportchat
@@ -916,7 +906,6 @@ int main (int argc, char **argv)
     app.logging ().use_file (configuration.flow_log_path ());
     auto &options = app.add_zlink_framework ();
     options.configure_dispatch ().message_flow (message_flow_log_mode_t::normal);
-    options.metadata ().add_forwarded_metadata_key (conversation_id_metadata_key);
     options.add_location_store<redis::redis_location_store_t> ()
       .set_connection_string (topology.redis_endpoint)
       .set_key_prefix (topology.redis_key_prefix + "location:");

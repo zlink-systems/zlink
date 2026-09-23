@@ -92,6 +92,7 @@ public final class SupportUserActor implements ZLinkActor {
         context.joinSpot(conversationId, request).timeout(SampleTimings.RequestTimeout).defer();
         return new Messages.JoinConversationRes(
                 true,
+                actorId,
                 new Messages.ConversationState(
                         conversationId,
                         subject,
@@ -129,7 +130,6 @@ public final class SupportUserActor implements ZLinkActor {
         if (completion instanceof ZLinkActorJoinCompletion.Rejected) {
             return context.boundSession()
                     .send(new Messages.JoinConversationFailedNotify(pending, "Rejected", false))
-                    .metadata(SampleNames.ConversationIdMetadataKey, pending)
                     .submit();
         }
         if (completion instanceof ZLinkActorJoinCompletion.Failed failed) {
@@ -137,7 +137,6 @@ public final class SupportUserActor implements ZLinkActor {
                     .send(
                             new Messages.JoinConversationFailedNotify(
                                     pending, failed.kind().name(), false))
-                    .metadata(SampleNames.ConversationIdMetadataKey, pending)
                     .submit();
         }
         return CompletableFuture.completedFuture(null);

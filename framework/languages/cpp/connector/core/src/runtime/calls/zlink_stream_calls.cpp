@@ -105,11 +105,8 @@ void trace_connector_write (const connector_state_t &state,
                             const char *stage,
                             std::string_view detail = {})
 {
-    /* Debug-only stderr trace, opt-in via ZLINK_CPP_STREAM_TRACE. Level Off
-     * additionally suppresses it (message-flow-tracing §4.1: no trace-only
-     * work at Off). One atomic read for this processing point. */
-    const auto diagnostics_level = state.diagnostics_level_cell.load (std::memory_order_acquire);
-    if (!stream_trace_enabled () || diagnostics_level == diagnostics_level_t::off) {
+    /* Debug-only stderr trace, opt-in via ZLINK_CPP_STREAM_TRACE. */
+    if (!stream_trace_enabled ()) {
         return;
     }
     static std::mutex trace_mutex;
@@ -249,14 +246,16 @@ result_t<dispatch_envelope_t> decode_packet (connector_state_t &state,
         std::vector<std::uint64_t> handler_ids;
         {
             std::lock_guard<std::mutex> lock (state.lifecycle_mutex);
-            if (state.actors_by_slot.contains (bound.value ().actor_slot)
+            if (std::any_of (
+                  state.actors_by_slot.begin (), state.actors_by_slot.end (),
+                  [&] (const auto &entry) { return entry.first == bound.value ().actor_slot; })
                 || state.actors_by_id.contains (bound.value ().actor_id)) {
                 return result_t<dispatch_envelope_t>::failure (
                   error_code_t::frame_decode_failed, "Actor bound control is duplicated.");
             }
             actor = actor_access_t::create (state.shared_from_this (), bound.value ().actor_id,
                                             bound.value ().actor_slot);
-            state.actors_by_slot.emplace (bound.value ().actor_slot, actor);
+            state.actors_by_slot.emplace_back (bound.value ().actor_slot, actor);
             state.actors_by_id.emplace (bound.value ().actor_id, actor);
             handler_ids.reserve (state.actor_bound_handlers.size ());
             for (const auto &entry : state.actor_bound_handlers)
@@ -294,7 +293,9 @@ result_t<dispatch_envelope_t> decode_packet (connector_state_t &state,
         std::vector<std::uint64_t> handler_ids;
         {
             std::lock_guard<std::mutex> lock (state.lifecycle_mutex);
-            const auto found = state.actors_by_slot.find (slot.value ());
+            const auto found =
+              std::find_if (state.actors_by_slot.begin (), state.actors_by_slot.end (),
+                            [&] (const auto &entry) { return entry.first == slot.value (); });
             if (found == state.actors_by_slot.end ()) {
                 return result_t<dispatch_envelope_t>::failure (
                   error_code_t::frame_decode_failed, "Actor unbound slot is not registered.");
@@ -332,12 +333,13 @@ result_t<dispatch_envelope_t> decode_packet (connector_state_t &state,
                                schedule_delivery (connector_state, std::move (delivery));
                            });
     }
-    packet_t packet{header.name, header.metadata, header.codec,      compressed,
-                    payload,     header.flow_id,  header.flow_origin};
+    packet_t packet{header.name, header.metadata, header.codec, compressed, payload};
     std::optional<std::uint16_t> actor_slot;
     if (header.actor_slot) {
         std::lock_guard<std::mutex> lock (state.lifecycle_mutex);
-        const auto actor = state.actors_by_slot.find (*header.actor_slot);
+        const auto actor =
+          std::find_if (state.actors_by_slot.begin (), state.actors_by_slot.end (),
+                        [&] (const auto &entry) { return entry.first == *header.actor_slot; });
         if (actor == state.actors_by_slot.end ()) {
             return result_t<dispatch_envelope_t>::failure (error_code_t::frame_decode_failed,
                                                            "Packet Actor slot is not registered.");
@@ -420,7 +422,7 @@ std::optional<error_t> take_inbound_error (connector_state_t &state)
  * released: LZ4 compression of a large payload takes as long as the payload is
  * big, and the read pump needs that same lock to make progress. It is safe to
  * run unlocked because it reads only state that is fixed at construction
- * (options, compression_codec) plus the atomic diagnostics cell, and mutates
+ * (options, compression_codec), and mutates
  * nothing in connector_state_t. The packet it is handed must be owned by the
  * caller, not borrowed from a container the lock protects. */
 result_t<std::vector<std::uint8_t>>
@@ -445,31 +447,8 @@ encode_packet_frame (connector_state_t &state,
         header_data.actor_slot = actor_binding->slot;
     }
     if (kind == message_kind_t::request) {
-        /* correlation_id links a request to its terminal reply and is protocol
-         * information kept at every diagnostics level (flow-correlation §4).
-         * One-way sends carry no reply, so they never carry a correlation_id
-         * (flow-correlation §2). */
+        /* correlation_id links a request to its terminal reply. */
         header_data.correlation_id = next_correlation_id ();
-    }
-    /* One atomic read for this outbound frame: stream-connector §13 requires
-     * a single level read per processing point, applied to the whole frame,
-     * with no retroactive effect on frames already encoded. */
-    const auto diagnostics_level = state.diagnostics_level_cell.load (std::memory_order_acquire);
-    if (kind != message_kind_t::control && diagnostics_level != diagnostics_level_t::off) {
-        /* stream-connector §5.5: a call started while a received message is
-         * being handled continues that message's flow; the connector keeps the
-         * current flow in the handler's execution context, so the call needs no
-         * argument for it. Outside such a context the connector is the first
-         * hop and starts a new flow (flow-correlation §2.1). Level Off omits
-         * both flow fields from the frame (flow-correlation §4). */
-        const auto &inbound_flow = current_flow ();
-        if (!inbound_flow.flow_id.empty () && inbound_flow.flow_origin) {
-            header_data.flow_id = inbound_flow.flow_id;
-            header_data.flow_origin = inbound_flow.flow_origin;
-        } else {
-            header_data.flow_id = flow_id_codec_t::create ();
-            header_data.flow_origin = flow_origin_t::application;
-        }
     }
     auto header = header_codec.encode (header_data);
     if (!header) {
@@ -554,11 +533,7 @@ result_t<inbound_frame_t> read_inbound_frame (std::shared_ptr<connector_state_t>
                                                      : "stream connector payload read failed");
     }
     header_codec_t header_codec;
-    /* One atomic read for this inbound frame (stream-connector §13): the
-     * value decided here governs flow-field validation for the whole frame. */
-    const auto diagnostics_level = state->diagnostics_level_cell.load (std::memory_order_acquire);
-    auto decoded =
-      header_codec.decode (header_bytes.value (), diagnostics_level != diagnostics_level_t::off);
+    auto decoded = header_codec.decode (header_bytes.value ());
     if (!decoded) {
         return result_t<inbound_frame_t>::failure (decoded.error ()->code,
                                                    decoded.error ()->message);
@@ -785,11 +760,7 @@ std::optional<result_t<inbound_frame_t>> try_take_inbound_frame (connector_state
                                   + static_cast<std::ptrdiff_t> (frame_size));
 
     header_codec_t header_codec;
-    /* One atomic read for this inbound frame (stream-connector §13): see
-     * read_inbound_frame() above for the same rule on the synchronous path. */
-    const auto diagnostics_level = state.diagnostics_level_cell.load (std::memory_order_acquire);
-    auto decoded =
-      header_codec.decode (header_bytes, diagnostics_level != diagnostics_level_t::off);
+    auto decoded = header_codec.decode (header_bytes);
     if (!decoded) {
         return result_t<inbound_frame_t>::failure (decoded.error ()->code,
                                                    decoded.error ()->message);
@@ -808,6 +779,7 @@ void complete_pending_request (std::shared_ptr<connector_state_t> state,
                                result_t<request_reply_t> result)
 {
     std::function<void (result_t<request_reply_t>)> callback;
+    std::shared_ptr<std::vector<std::uint64_t>> reply_hook_ids;
     std::string packet_name;
     bool deliver_direct = false;
     const bool succeeded = static_cast<bool> (result);
@@ -821,6 +793,7 @@ void complete_pending_request (std::shared_ptr<connector_state_t> state,
         }
         packet_name = found->second.packet.name;
         callback = std::move (found->second.callback);
+        reply_hook_ids = found->second.reply_hook_ids;
         deliver_direct = found->second.deliver_direct;
         cancel_timer (found->second.timeout_timer);
         state->pending_requests.erase (found);
@@ -829,6 +802,9 @@ void complete_pending_request (std::shared_ptr<connector_state_t> state,
                    succeeded
                      ? "result=success"
                      : "result=failure error=" + std::to_string (static_cast<int> (error_code)));
+    if (reply_hook_ids) {
+        *reply_hook_ids = capture_reply_hook_ids (state);
+    }
     if (deliver_direct) {
         if (callback) {
             callback (std::move (result));
@@ -1033,9 +1009,8 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
                 && pending != state->pending_requests.end ()) {
                 if (value.kind == message_kind_t::response) {
                     completed_requests.emplace_back (
-                      *value.request_seq,
-                      result_t<request_reply_t>::success (request_reply_t{
-                        value.envelope.packet.codec, std::move (value.envelope.packet.payload)}));
+                      *value.request_seq, result_t<request_reply_t>::success (
+                                            request_reply_t{std::move (value.envelope.packet)}));
                 } else if (auto remote_error =
                              decode_remote_error_message (value.envelope.packet)) {
                     completed_requests.emplace_back (
@@ -1526,7 +1501,8 @@ void submit_request_async (std::shared_ptr<void> state_handle,
                            std::chrono::milliseconds timeout,
                            std::function<void (result_t<request_reply_t>)> callback,
                            bool deliver_direct,
-                           std::optional<actor_binding_ref_t> actor_binding);
+                           std::optional<actor_binding_ref_t> actor_binding,
+                           std::shared_ptr<std::vector<std::uint64_t>> reply_hook_ids);
 
 result_t<void> submit_send (std::shared_ptr<connector_state_t> state,
                             packet_t packet,
@@ -1615,12 +1591,11 @@ result_t<request_reply_t> submit_request (std::shared_ptr<void> state_handle,
     if (use_async_request_pump) {
         auto promise = std::make_shared<std::promise<result_t<request_reply_t>>> ();
         auto future = promise->get_future ();
-        submit_request_async (
-          state, std::move (packet), timeout,
-          [promise] (result_t<request_reply_t> result) mutable {
-              promise->set_value (std::move (result));
-          },
-          /*deliver_direct=*/true, actor_binding);
+        submit_request_async (state, std::move (packet), timeout,
+                              [promise] (result_t<request_reply_t> result) mutable {
+                                  promise->set_value (std::move (result));
+                              },
+                              /*deliver_direct=*/true, actor_binding, {});
         return future.get ();
     }
     std::unique_lock<std::mutex> lock (state->transport_mutex);
@@ -1707,8 +1682,8 @@ result_t<request_reply_t> submit_request (std::shared_ptr<void> state_handle,
         if (frame.kind == message_kind_t::response && frame.request_seq == seq) {
             state->pending_requests.erase (seq);
             trace_request ("pending-complete", seq, request_packet_name, "result=success");
-            return complete_request (result_t<request_reply_t>::success (request_reply_t{
-              frame.envelope.packet.codec, std::move (frame.envelope.packet.payload)}));
+            return complete_request (result_t<request_reply_t>::success (
+              request_reply_t{std::move (frame.envelope.packet)}));
         }
         if (frame.kind == message_kind_t::error && frame.request_seq == seq) {
             state->pending_requests.erase (seq);
@@ -1747,7 +1722,8 @@ void submit_request_async (std::shared_ptr<void> state_handle,
                            std::chrono::milliseconds timeout,
                            std::function<void (result_t<request_reply_t>)> callback,
                            bool deliver_direct,
-                           std::optional<actor_binding_ref_t> actor_binding)
+                           std::optional<actor_binding_ref_t> actor_binding,
+                           std::shared_ptr<std::vector<std::uint64_t>> reply_hook_ids)
 {
     if (!state_handle) {
         if (callback) {
@@ -1788,8 +1764,8 @@ void submit_request_async (std::shared_ptr<void> state_handle,
                                                         "stream connector request timed out"));
               });
             state->pending_requests.emplace (
-              seq,
-              pending_request_t{seq, packet, std::move (callback), timeout_timer, deliver_direct});
+              seq, pending_request_t{seq, packet, std::move (callback), timeout_timer,
+                                     deliver_direct, reply_hook_ids});
             /* Encoding and LZ4 compression run with transport_mutex released.
              * `packet` is this call's own argument - pending_requests holds a
              * copy - so nothing another thread can reach is read unlocked. */
@@ -1814,6 +1790,9 @@ void submit_request_async (std::shared_ptr<void> state_handle,
     }
 
     if (immediate_result) {
+        if (reply_hook_ids) {
+            *reply_hook_ids = capture_reply_hook_ids (state);
+        }
         if (deliver_direct) {
             if (callback) {
                 callback (std::move (*immediate_result));
@@ -1881,7 +1860,7 @@ drain_sync_available_pushes (const std::shared_ptr<connector_state_t> &state,
 result_t<void> dispatch_pending (std::shared_ptr<connector_state_t> state)
 {
     std::deque<std::function<void ()>> deliveries;
-    std::deque<std::function<void ()>> packet_deliveries;
+    std::deque<dispatch_envelope_t> packets;
     std::optional<error_t> inbound_error;
     std::shared_ptr<stream_connection_t> inbound_error_connection;
     std::shared_ptr<stream_connection_t> sync_connection;
@@ -1910,23 +1889,7 @@ result_t<void> dispatch_pending (std::shared_ptr<connector_state_t> state)
          * the lock released cannot disturb the batch being dispatched: a
          * packet that arrives meanwhile lands in the now-empty queue and waits
          * for the next dispatch pass. */
-        std::deque<dispatch_envelope_t> packets;
         packets.swap (state->dispatch_queue);
-        while (!packets.empty ()) {
-            auto envelope = std::move (packets.front ());
-            packets.pop_front ();
-            if (auto wait = take_matching_wait (*state, lock, envelope.packet)) {
-                packet_deliveries.push_back (
-                  [wait = std::move (*wait), packet = std::move (envelope.packet)] () mutable {
-                      if (wait.callback) {
-                          wait.callback (result_t<packet_t>::success (std::move (packet)));
-                      }
-                  });
-            } else {
-                packet_deliveries.push_back (
-                  [state, envelope = std::move (envelope)] { dispatch_packet (*state, envelope); });
-            }
-        }
     }
     if (inbound_error) {
         connection_ended (state, *inbound_error);
@@ -1940,10 +1903,6 @@ result_t<void> dispatch_pending (std::shared_ptr<connector_state_t> state)
         std::lock_guard<std::mutex> lock (state->delivery_mutex);
         deliveries.swap (state->delivery_queue);
     }
-    while (!packet_deliveries.empty ()) {
-        deliveries.push_back (std::move (packet_deliveries.front ()));
-        packet_deliveries.pop_front ();
-    }
     while (!deliveries.empty ()) {
         auto delivery = std::move (deliveries.front ());
         deliveries.pop_front ();
@@ -1953,6 +1912,33 @@ result_t<void> dispatch_pending (std::shared_ptr<connector_state_t> state)
             }
             catch (...) {
             }
+        }
+    }
+    /* Complete each queued packet before selecting the next. A sequence wait
+     * registers its next step from the completion callback; selecting the
+     * whole batch first would dispatch the next packet before that wait exists. */
+    while (!packets.empty ()) {
+        auto envelope = std::move (packets.front ());
+        packets.pop_front ();
+        std::optional<pending_wait_t> wait;
+        {
+            std::unique_lock<std::mutex> lock (state->transport_mutex);
+            wait = take_matching_wait (*state, lock, envelope.packet);
+        }
+        try {
+            if (wait) {
+                if (wait->callback) {
+                    wait->callback (result_t<packet_t>::success (std::move (envelope.packet)));
+                }
+            } else {
+                dispatch_packet (*state, envelope);
+            }
+        }
+        catch (const std::exception &error) {
+            publish_error (*state, {error_code_t::user_callback_failed, error.what ()});
+        }
+        catch (...) {
+            publish_error (*state, {error_code_t::user_callback_failed, "packet callback failed"});
         }
     }
     return result_t<void>::success ();

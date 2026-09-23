@@ -2,7 +2,6 @@ package systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.z
 
 import systems.zlink.framework.ZLinkMessageContext
 import systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpotActorRequestHandler
-import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SupportChatRoles
 import systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zlink.actors.SupportUserActor
 import systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zlink.spots.entryspot.SupportEntrySpot
@@ -28,14 +27,12 @@ class JoinConversationActorHandler :
             )
         }
         val conversationId =
-            context.metadata()[SampleNames.ConversationIdMetadataKey]?.takeIf(String::isNotBlank)
-                ?: throw IllegalStateException(
-                    "Conversation Join is missing the conversation ID metadata"
-                )
+            request.conversationId.takeIf(String::isNotBlank)
+                ?: throw IllegalStateException("Conversation Join requires a conversation ID")
         return actor.scheduleConversationJoin(
             conversationId,
             "",
-            JoinConversationReq(actor.participantId, actor.role, actor.displayName),
+            JoinConversationReq(conversationId, actor.participantId, actor.role, actor.displayName),
         )
     }
 }

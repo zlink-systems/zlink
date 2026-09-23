@@ -80,7 +80,6 @@ internal sealed class SupportUserActor(string actorId, IZLinkActorContext contex
                         .BoundSession.Send(
                             new JoinConversationFailedNotify(pending.ConversationId, "Rejected")
                         )
-                        .Metadata(SampleNames.ConversationIdMetadataKey, pending.ConversationId)
                         .Async(cancellationToken);
                 }
                 if (hasPendingIntent)
@@ -98,7 +97,6 @@ internal sealed class SupportUserActor(string actorId, IZLinkActorContext contex
                                 failed.Kind.ToString()
                             )
                         )
-                        .Metadata(SampleNames.ConversationIdMetadataKey, pending.ConversationId)
                         .Async(cancellationToken);
                 }
                 if (hasPendingIntent)

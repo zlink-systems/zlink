@@ -4,6 +4,7 @@
 #include <zlink/Contracts/Messaging/message.hpp>
 #include <zlink/stream_connector/contracts/zlink_stream_enums.hpp>
 
+#include <chrono>
 #include <map>
 #include <optional>
 #include <string>
@@ -36,19 +37,45 @@ struct packet_t
     codec_t codec = codec_t::raw;
     bool compressed = false;
     zlink::message_t payload;
-    /* Flow of the received message (stream-connector §5.5). Both values are
-     * empty when the diagnostics level is off (§13), and on an outbound packet
-     * the connector fills them at encode time. */
-    std::string flow_id;
-    std::optional<flow_origin_t> flow_origin;
     std::optional<std::string> actor_id;
+};
+
+class request_sending_context_t
+{
+  public:
+    request_sending_context_t (std::string name,
+                               std::optional<std::string> actor,
+                               metadata_t &metadata) :
+        request_packet_name (std::move (name)), actor_id (std::move (actor)), _metadata (metadata)
+    {
+    }
+
+    const std::string request_packet_name;
+    const std::optional<std::string> actor_id;
+
+    void set_metadata (std::string key, std::string value)
+    {
+        _metadata.with (std::move (key), std::move (value));
+    }
+
+  private:
+    metadata_t &_metadata;
+};
+
+struct reply_received_context_t
+{
+    std::string request_packet_name;
+    std::optional<std::string> actor_id;
+    bool succeeded = false;
+    std::optional<packet_t> reply;
+    std::optional<error_t> error;
+    std::chrono::milliseconds elapsed{0};
 };
 
 /// A received message: the decoded payload with everything the receiving code
 /// needs to place it (stream-connector §5.5).
 ///
-/// `flow_id` and `flow_origin` are empty when the diagnostics level is off
-/// (§13). Predicates and returns of the wait surfaces deal in this type, not in
+/// Predicates and returns of the wait surfaces deal in this type, not in
 /// the payload alone, so a predicate can also read the packet name and the
 /// metadata (§10.1).
 template <typename TPayload> struct message_t
@@ -56,8 +83,6 @@ template <typename TPayload> struct message_t
     std::string packet_name;
     TPayload payload{};
     metadata_t metadata;
-    std::string flow_id;
-    std::optional<flow_origin_t> flow_origin;
     std::optional<std::string> actor_id;
 };
 

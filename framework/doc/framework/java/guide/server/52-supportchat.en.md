@@ -24,34 +24,31 @@ View in another language — [C++](../../../cpp/guide/server/52-supportchat.en.m
     request to open a conversation, through agent assignment, to the conversation closing, through
     the code of each server it passes. The code in this chapter comes from the [SupportChat sample in the per-language example repositories](https://github.com/zlink-systems/zlink-java-examples/tree/main/samples/SupportChat).
 
-[Picking a Sample](14-samples.en.md#5-supportchat--building-a-live-chat-support-system) introduced
-what this sample demonstrates. This chapter is what you read after that introduction — the roles and
-where their code lives, the message flow of the main scenarios, and, for each flow, the framework
-feature it uses and the chapter that explains it, in the order the source is laid out. This chapter
-explains the SupportChat sample's roles and code locations, its main message flows, and its run
+[Picking a Sample](14-samples.en.md#5-supportchat--building-a-live-chat-support-system) introduces
+this sample. This chapter explains its roles and code locations, main message flows, and run
 verification in source order. See the [SupportChat scenario](../../../common/sample/supportchat/README.en.md)
-for requirements, message contracts, and verification criteria.
+for requirements and message contracts.
 
 ## 1. What This Sample Demonstrates
 
 The customer and the agent each keep a single STREAM connection to the Session server. API handles
 authentication, and the conversation state is owned by a conversation Spot on Support. One agent
 handles several conversations at once, so the agent's single connection has a roster Actor and one
-conversation Actor per conversation bound to it, and an incoming packet is routed to the right Actor
-by the `ConversationId` in the stream metadata.
+conversation Actor per conversation bound to it. The agent sends through each room's Actor handle,
+and Session selects the relay target from the packet's Actor slot.
 
 <iframe class="zlink-diagram" src="/common/diagrams/14-supportchat-en.html" title="SupportChat sample topology" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/14-supportchat-en.html" target="_blank">↗ View larger</a></p>
 
 The flow this chapter follows is authentication and the identity Actor binding → opening a
-conversation and assignment → the agent joining the conversation → chat relayed by metadata → the idle
+conversation and assignment → the agent joining the conversation → chat relayed by Actor slot → the idle
 timer and closing.
 
 ## 2. Roles and Where the Code Lives
 
 | Role | Processes | Owns | Code |
 | --- | ---: | --- | --- |
-| Session | 1 | STREAM connections, authentication packets, Actor binding and metadata relay | `Server/Session` |
+| Session | 1 | STREAM connections, authentication and join packets, Actor binding and Actor slot relay | `Server/Session` |
 | API | 1 | Token verification, the request to create a conversation Spot | `Server/Api` |
 | Support | 1 | Entry Spot, conversation Spot, identity, roster and conversation Actors, assignment and pushes | `Server/Support/Infrastructure` |
 | Client | 1 | The customer and agent scenarios, with self-checks | `Client` |
@@ -70,18 +67,13 @@ Session calls objects in the Support mesh, calls the API channel, and receives S
 --8<-- "framework/languages/java/samples/java/SupportChat/Server/Session/src/main/java/systems/zlink/samples/supportchat/server/session/Program.java:doc-sc-session-register"
 ```
 
-Support registers the Entry Spot, the Actor factory and the conversation Spot factory, and allows the
-metadata key that may travel between a session and an Actor.
+Support registers the Entry Spot, the Actor factory and the conversation Spot factory.
 
 `Server/Support/src/main/java/systems/zlink/samples/supportchat/server/support/Program.java`
 
 ```java
 --8<-- "framework/languages/java/samples/java/SupportChat/Server/Support/src/main/java/systems/zlink/samples/supportchat/server/support/Program.java:doc-sc-support-register"
 ```
-
-Without that allowance, the `ConversationId` the session attaches is silently dropped rather than
-rejected. The allowed key is listed among the values that must be set in
-[Options](16-options.en.md#10-values-that-must-be-set).
 
 ## 4. Authentication and the Identity Actor
 
@@ -170,11 +162,14 @@ From then on the pushes of that conversation arrive at the conversation Actor's 
 agent's same connection. How many may be bound and the rules are covered by
 [How Session Binding Works](39-session-binding.en.md#1-how-many-may-be-bound--several-per-session-one-per-actor).
 
-## 7. Chat — Relay Chosen by Metadata
+## 7. Chat — Actor-Based Relay
 
-A chat packet is not decoded; the target Actor is chosen by the `ConversationId` in the stream
-metadata. If the agent's map has it, the packet is relayed to that conversation Actor, otherwise to
-the identity Actor.
+The agent finds a room's Actor handle using `JoinConversationRes.actorId` and sends chat packets
+through that handle. The customer sends through the single Actor bound to its connection.
+Authentication and `JoinConversationReq(conversationId)` are binding packets handled directly by the
+Session handler. Session relays the other packets without decoding their payloads. If a packet has an
+Actor slot, Session relays it to that Actor bound in the dispatch context; otherwise, it uses the
+connection's identity Actor.
 
 <iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-chat-typing-en.html" title="Chat and typing" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-supportchat-chat-typing-en.html" target="_blank">↗ View larger</a></p>
@@ -182,7 +177,7 @@ the identity Actor.
 `Server/Session/src/main/java/systems/zlink/samples/supportchat/server/session/sessions/SupportChatSession.java`
 
 ```java
---8<-- "framework/languages/java/samples/java/SupportChat/Server/Session/src/main/java/systems/zlink/samples/supportchat/server/session/sessions/SupportChatSession.java:doc-sc-metadata-relay"
+--8<-- "framework/languages/java/samples/java/SupportChat/Server/Session/src/main/java/systems/zlink/samples/supportchat/server/session/sessions/SupportChatSession.java:doc-sc-actor-relay"
 ```
 
 The conversation Spot assigns a `MessageSeq` to the message and pushes a notify to the bound session

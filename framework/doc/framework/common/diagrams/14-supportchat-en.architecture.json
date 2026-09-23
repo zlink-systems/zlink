@@ -125,6 +125,7 @@
       "items": [
         "agent client ↔ session is one stream connection (bidirectional)",
         "that session binds the roster actor (Entry Spot) + a per-conversation conversation actor together (dashed)",
+        "the agent sends through each room's Actor handle found from JoinConversationRes.actorId; Session relays to the bound Actor when the packet has an Actor slot, or to the identity Actor when it does not",
         "roster·conversation·customer nodes are circle actors in the original — drawn as boxes here"
       ]
     },

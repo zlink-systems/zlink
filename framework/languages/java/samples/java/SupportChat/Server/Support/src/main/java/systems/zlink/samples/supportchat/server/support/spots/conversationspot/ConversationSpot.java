@@ -99,6 +99,7 @@ public final class ConversationSpot implements ZLinkSpot<SupportUserActor> {
                 ZLinkSpotActorJoinResult.accept(
                         new Messages.JoinConversationRes(
                                 false,
+                                actorId,
                                 ConversationContracts.state(requireConversation().snapshot()))));
     }
 
@@ -110,6 +111,7 @@ public final class ConversationSpot implements ZLinkSpot<SupportUserActor> {
         }
         directory.remember(actor);
         if (SampleNames.Roles.Agent.equals(actor.role())) {
+            actors.put(actor.participantId(), actor);
             publish(
                     requireConversation()
                             .joinAgent(
@@ -136,13 +138,11 @@ public final class ConversationSpot implements ZLinkSpot<SupportUserActor> {
     }
 
     public Messages.JoinConversationRes refreshMembership(SupportUserActor actor) {
-        SupportUserActor participant =
-                SampleNames.Roles.Agent.equals(actor.role())
-                        ? directory.require(actor.participantId())
-                        : actor;
-        actors.put(actor.participantId(), participant);
+        actors.put(actor.participantId(), actor);
         return new Messages.JoinConversationRes(
-                false, ConversationContracts.state(requireConversation().snapshot()));
+                false,
+                actor.actorId(),
+                ConversationContracts.state(requireConversation().snapshot()));
     }
 
     public Messages.SendChatMessageRes sendMessage(
@@ -196,7 +196,7 @@ public final class ConversationSpot implements ZLinkSpot<SupportUserActor> {
     // --8<-- [end:doc-sc-assign]
 
     private void publish(Conversation.Change change) {
-        notifications.publish(change, actors, directory, assignment);
+        notifications.publish(change, actors, assignment);
         for (Conversation.Event event : change.events()) {
             Messages.ConversationState state = ConversationContracts.state(event.state());
             logger.info(

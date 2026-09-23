@@ -65,34 +65,13 @@ class connector_t
     /// restarts the count at zero.
     std::size_t received_count (std::string_view packet_name) const;
 
+    template <typename TMessage> std::size_t received_count () const
+    {
+        return received_count (resolve_packet_name<TMessage> ());
+    }
+
     /// Returns a copy of the options used by this connector.
-    ///
-    /// diagnostics_level reflects the current effective level, not necessarily the value the
-    /// connector was created with — see diagnostics_level()/set_diagnostics_level().
     connector_options_t options () const;
-
-    /// Returns the diagnostics level currently in effect (stream-connector §13).
-    ///
-    /// A processing point (one outbound frame encode, one inbound frame decode) reads this once
-    /// and uses that single value for the whole operation.
-    diagnostics_level_t diagnostics_level () const;
-
-    /// Changes the diagnostics level without waiting (stream-connector §13).
-    ///
-    /// Changing the level writes one value, so there is no completion to wait
-    /// for. This surface is safe inside a receive callback precisely because it
-    /// does not wait on the asynchronous pair below: it never waits for its own
-    /// completion. The change applies from the next processing point on and is
-    /// not applied retroactively to frames already encoded or decoded
-    /// (message-flow-tracing §4.1).
-    void set_diagnostics_level (diagnostics_level_t level);
-
-    /// Asynchronous pair of set_diagnostics_level() on the connector's existing
-    /// no-coroutine callback boundary. It changes the same value and does not
-    /// stand in for the synchronous surface. The callback runs after the level
-    /// is installed.
-    void set_diagnostics_level_async (diagnostics_level_t level,
-                                      std::function<void (result_t<void>)> callback);
 
     /// Returns the number of received packets waiting for manual callback dispatch.
     std::size_t pending_dispatch_count () const;
@@ -200,6 +179,11 @@ class connector_t
 
     /// Registers an error callback (stream-connector §7).
     [[nodiscard]] subscription_t on_error (std::function<void (const error_t &)> handler);
+
+    [[nodiscard]] subscription_t
+    on_request_sending (std::function<void (request_sending_context_t &)> handler);
+    [[nodiscard]] subscription_t
+    on_reply_received (std::function<void (const reply_received_context_t &)> handler);
 
     /// Registers a disconnected callback (stream-connector §6.2, §7).
     ///
@@ -332,14 +316,14 @@ class actor_t
     template <typename TMessage> send_call_t send (const TMessage &message)
     {
         auto call = _connector.send (message);
-        call._actor_binding = detail::actor_binding_ref_t{_actor_slot, _bound};
+        call._actor_binding = detail::actor_binding_ref_t{_actor_slot, _bound, _actor_id};
         return call;
     }
 
     template <typename TRequest> request_call_t request (const TRequest &request)
     {
         auto call = _connector.request (request);
-        call._actor_binding = detail::actor_binding_ref_t{_actor_slot, _bound};
+        call._actor_binding = detail::actor_binding_ref_t{_actor_slot, _bound, _actor_id};
         return call;
     }
 

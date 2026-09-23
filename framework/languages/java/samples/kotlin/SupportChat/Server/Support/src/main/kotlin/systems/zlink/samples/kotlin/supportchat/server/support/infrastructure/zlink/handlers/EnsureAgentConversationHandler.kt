@@ -4,29 +4,21 @@ import org.slf4j.LoggerFactory
 import systems.zlink.framework.ZLinkMessageContext
 import systems.zlink.framework.actors.ActorRef
 import systems.zlink.framework.actors.ActorRefSnapshot
-import systems.zlink.framework.actors.ZLinkActorClient
 import systems.zlink.framework.actors.ZLinkActorCreateResult
 import systems.zlink.framework.actors.ZLinkActorManager
 import systems.zlink.framework.handlers.ZLinkHandlerGroup
 import systems.zlink.framework.kotlin.ZLinkSuspendingRequestHandler
 import systems.zlink.framework.kotlin.await
 import systems.zlink.framework.kotlin.kotlin
-import systems.zlink.framework.kotlin.requestToActor
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleNames
-import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleTimings
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SupportChatRoles
 import systems.zlink.samples.kotlin.supportchat.shared.contracts.EnsureAgentConversationReq
 import systems.zlink.samples.kotlin.supportchat.shared.contracts.EnsureAgentConversationRes
 import systems.zlink.samples.kotlin.supportchat.shared.contracts.EnsureSupportUserActorReq
-import systems.zlink.samples.kotlin.supportchat.shared.contracts.JoinConversationReq
-import systems.zlink.samples.kotlin.supportchat.shared.contracts.JoinConversationRes
 
 @ZLinkHandlerGroup(SampleNames.SupportChannel)
-class EnsureAgentConversationHandler(
-    private val actorClient: ZLinkActorClient,
-    private val actors: ZLinkActorManager,
-) : ZLinkSuspendingRequestHandler<EnsureAgentConversationReq, EnsureAgentConversationRes> {
-    private val kotlinActorClient = actorClient.kotlin()
+class EnsureAgentConversationHandler(private val actors: ZLinkActorManager) :
+    ZLinkSuspendingRequestHandler<EnsureAgentConversationReq, EnsureAgentConversationRes> {
 
     override suspend fun handle(
         request: EnsureAgentConversationReq,
@@ -51,30 +43,12 @@ class EnsureAgentConversationHandler(
                     .requireActor()
         val actorRef: ActorRef = zlinkActorRef
 
-        val joined =
-            kotlinActorClient
-                .requestToActor<JoinConversationRes>(
-                    actorRef.actorId(),
-                    JoinConversationReq(
-                        request.rosterActorId,
-                        SupportChatRoles.Agent,
-                        request.displayName,
-                    ),
-                )
-                .metadata(SampleNames.ConversationIdMetadataKey, request.conversationId)
-                .timeout(SampleTimings.RequestTimeout)
-                .await()
-
         logger.info(
-            "support agent conversation: joined. conversation={}, roster={}",
+            "support agent conversation: ensured. conversation={}, roster={}",
             request.conversationId,
             request.rosterActorId,
         )
-        return EnsureAgentConversationRes(
-            ActorRefSnapshot.from(actorRef),
-            joined.scheduled,
-            joined.state,
-        )
+        return EnsureAgentConversationRes(ActorRefSnapshot.from(actorRef))
     }
 
     private fun ZLinkActorCreateResult.requireActor(): ActorRef =
