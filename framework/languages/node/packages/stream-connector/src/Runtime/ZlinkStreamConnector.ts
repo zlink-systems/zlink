@@ -6,15 +6,15 @@ import {
   ZlinkStreamConnectionStateChanged,
   ZlinkStreamConnector,
   ZlinkStreamConnectorOptions,
-  ZlinkStreamDiagnosticsLevel,
   ZlinkStreamDispatchMode,
   ZlinkStreamEncodedPayload,
   ZlinkStreamError,
   ZlinkStreamErrorCode,
   ZlinkStreamExpectNoneCall,
-  ZlinkStreamFlow,
   zlinkStreamJsonCodec,
   ZlinkStreamMessage,
+  ZlinkStreamRequestSendingContext,
+  ZlinkStreamReplyReceivedContext,
   ZlinkStreamMessageKind,
   ZlinkStreamMetadata,
   ZlinkStreamRequestCall,
@@ -39,15 +39,19 @@ import {
 } from './Protocol/ZlinkStreamFrameProtocol';
 import { validateName } from './Protocol/ZlinkStreamPacketNameValidator';
 import { normalizeOptions } from './ZlinkStreamConnectorOptions';
-import { ZlinkStreamDiagnosticsLevelCell } from './ZlinkStreamDiagnosticsLevelCell';
-import { connectorError, throwIfAborted } from './ZlinkStreamSupport';
+import {
+  connectorError,
+  throwIfAborted,
+  toStreamError,
+  unwrapStreamError,
+  subscription
+} from './ZlinkStreamSupport';
 import { ZlinkStreamPendingRequests } from './ZlinkStreamPendingRequests';
 import { ZlinkStreamReceivedMessages } from './ZlinkStreamReceivedMessages';
 import { ZlinkStreamFrameSender } from './ZlinkStreamFrameSender';
 import { ZlinkStreamReceiveDispatcher } from './ZlinkStreamReceiveDispatcher';
 import { ZlinkStreamConnectorLifecycle } from './ZlinkStreamConnectorLifecycle';
 import { ZlinkStreamConnectorEvents } from './ZlinkStreamConnectorEvents';
-import { BrowserZlinkFlowContext, type ZlinkFlowContext } from './ZlinkFlowContext';
 import { BrowserStreamTransportFactory } from './Transport/BrowserWebSocketConnection';
 import {
   DefaultZlinkStreamActor,
@@ -66,27 +70,20 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
   private readonly pendingRequests = new ZlinkStreamPendingRequests();
   private readonly frameSender: ZlinkStreamFrameSender;
   private readonly receiveDispatcher: ZlinkStreamReceiveDispatcher;
-  private readonly diagnosticsLevelCell: ZlinkStreamDiagnosticsLevelCell;
+  private readonly requestSendingHandlers = new Set<
+    (context: ZlinkStreamRequestSendingContext) => void
+  >();
+  private readonly replyReceivedHandlers = new Set<
+    (context: ZlinkStreamReplyReceivedContext, signal?: AbortSignal) => Promise<void> | void
+  >();
   private readonly boundActors: ZlinkStreamActors;
 
   readonly options: RequiredZlinkStreamConnectorOptions;
 
   constructor(options: ZlinkStreamConnectorOptions) {
-    const flowContext: ZlinkFlowContext = new BrowserZlinkFlowContext();
     this.options = normalizeOptions(options, new BrowserStreamTransportFactory());
-    // Spec 26 §4.1 / spec stream-connector 32 §13: the level is a runtime
-    // control, not a construction-time constant. `options.diagnosticsLevel`
-    // is redefined as a live getter over the cell so every reader of
-    // `this.options` (protocol, application code) observes the
-    // current level instead of the value captured at connector creation.
-    this.diagnosticsLevelCell = new ZlinkStreamDiagnosticsLevelCell(this.options.diagnosticsLevel);
-    Object.defineProperty(this.options, 'diagnosticsLevel', {
-      enumerable: true,
-      configurable: true,
-      get: () => this.diagnosticsLevelCell.level
-    });
     const protocol = new ZlinkStreamFrameProtocol(this.options);
-    this.frameSender = new ZlinkStreamFrameSender(protocol, flowContext);
+    this.frameSender = new ZlinkStreamFrameSender(protocol);
     this.receivedMessages = new ZlinkStreamReceivedMessages(
       this.events,
       this.options.dispatchMode === ZlinkStreamDispatchMode.Immediate
@@ -98,7 +95,6 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
       this.receivedMessages,
       this.frameSender,
       this.events,
-      flowContext,
       this.boundActors,
       (reason) => this.lifecycle.serverClosing(reason)
     );
@@ -161,40 +157,6 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
     return this.receivedMessages.receivedCount(name);
   }
 
-  /**
-   * Current diagnostics level (spec 26 §4.1, spec stream-connector 32 §13).
-   * Reflects the level set by the most recent {@link setDiagnosticsLevel}
-   * call, or the construction-time option (default
-   * {@link ZlinkStreamDiagnosticsLevel.Errors}) if it was never changed.
-   */
-  get diagnosticsLevel(): ZlinkStreamDiagnosticsLevel {
-    return this.diagnosticsLevelCell.level;
-  }
-
-  /**
-   * Changes the diagnostics level in place without recreating the connector
-   * (spec 26 §4.1, spec stream-connector 32 §13). The change is an atomic
-   * state update: it applies to processing points that read the level after
-   * this call returns and is never applied retroactively to frames already
-   * built. Rejects unknown values with {@link ZlinkStreamErrorCode.ConfigurationError}.
-   * Spec stream-connector 32 §13: this surface changes the value without
-   * waiting for anything; it is not a blocking call over the asynchronous pair,
-   * which a receive callback would otherwise make wait for its own completion.
-   */
-  setDiagnosticsLevel(level: ZlinkStreamDiagnosticsLevel): void {
-    this.diagnosticsLevelCell.set(level);
-  }
-
-  /**
-   * Asynchronous counterpart of {@link setDiagnosticsLevel} (spec
-   * stream-connector 32 §13). It changes the same value; awaiting it is how a
-   * caller observes the change, and it never replaces the synchronous surface.
-   */
-  setDiagnosticsLevelAsync(level: ZlinkStreamDiagnosticsLevel): Promise<void> {
-    this.setDiagnosticsLevel(level);
-    return Promise.resolve();
-  }
-
   onErrorReceived(
     handler: (error: ZlinkStreamError, signal?: AbortSignal) => Promise<void> | void
   ): Disposable {
@@ -212,6 +174,21 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
     ) => Promise<void> | void
   ): Disposable {
     return this.events.onStateChanged(handler);
+  }
+
+  onRequestSending(handler: (context: ZlinkStreamRequestSendingContext) => void): Disposable {
+    this.requestSendingHandlers.add(handler);
+    return subscription(() => this.requestSendingHandlers.delete(handler));
+  }
+
+  onReplyReceived(
+    handler: (
+      context: ZlinkStreamReplyReceivedContext,
+      signal?: AbortSignal
+    ) => Promise<void> | void
+  ): Disposable {
+    this.replyReceivedHandlers.add(handler);
+    return subscription(() => this.replyReceivedHandlers.delete(handler));
   }
 
   async connect(signal?: AbortSignal): Promise<void> {
@@ -237,7 +214,7 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
   }
 
   on<TPayload = ZlinkStreamEncodedPayload>(
-    name: string,
+    nameOrType: string | Function,
     handler: (message: ZlinkStreamMessage<TPayload>, signal?: AbortSignal) => Promise<void> | void,
     messageType?: Function
   ): Disposable {
@@ -249,14 +226,15 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
         {
           name: message.name,
           metadata: message.metadata,
-          payload: this.decodePayload<TPayload>(message.payload, messageType),
-          flowId: message.flowId,
-          flowOrigin: message.flowOrigin,
+          payload: this.decodePayload<TPayload>(
+            message.payload,
+            messageType ?? (typeof nameOrType === 'function' ? nameOrType : undefined)
+          ),
           actorId: message.actorId
         },
         signal
       );
-    return this.receivedMessages.on(name, encodedHandler);
+    return this.receivedMessages.on(this.observedName(nameOrType), encodedHandler);
   }
 
   sendForActor(
@@ -291,7 +269,7 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
 
   onActorMessage<TPayload>(
     actor: DefaultZlinkStreamActor,
-    name: string,
+    nameOrType: string | Function,
     handler: (message: ZlinkStreamMessage<TPayload>, signal?: AbortSignal) => Promise<void> | void,
     messageType?: Function
   ): Disposable {
@@ -312,15 +290,16 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
         {
           name: message.name,
           metadata: message.metadata,
-          payload: this.decodePayload<TPayload>(message.payload, messageType),
-          flowId: message.flowId,
-          flowOrigin: message.flowOrigin,
+          payload: this.decodePayload<TPayload>(
+            message.payload,
+            messageType ?? (typeof nameOrType === 'function' ? nameOrType : undefined)
+          ),
           actorId: message.actorId
         },
         signal
       );
     };
-    return this.receivedMessages.on(name, encodedHandler);
+    return this.receivedMessages.on(this.observedName(nameOrType), encodedHandler);
   }
 
   waitFor<TPayload = ZlinkStreamEncodedPayload>(
@@ -425,8 +404,6 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
               name: message.name,
               metadata: message.metadata,
               payload: this.decodeWaitPayload<TPayload>(message.payload),
-              flowId: message.flowId,
-              flowOrigin: message.flowOrigin,
               actorId: message.actorId
             };
             if (!predicate(decoded)) {
@@ -482,7 +459,6 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
     compress: boolean,
     requestSeq: bigint | undefined,
     signal?: AbortSignal,
-    flow?: ZlinkStreamFlow,
     correlationId?: string,
     actorSlot?: number
   ): Promise<void> {
@@ -496,14 +472,13 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
       requestSeq,
       signal,
       correlationId,
-      flow,
       actorSlot
     );
   }
 
   /**
    * Per-connector monotonic correlation id (hex). The client generates it on each request
-   * and the server echoes it back on the reply, so flows can be joined across the wire.
+   * and the server echoes it back on the reply.
    */
   private nextCorrelationId(): string {
     this.correlationCounter += 1n;
@@ -517,28 +492,99 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
     compress: boolean,
     timeoutMs: number,
     signal?: AbortSignal,
-    flow?: ZlinkStreamFlow,
     actorSlot?: number
   ): Promise<ZlinkStreamEncodedPayload> {
-    const pending = this.pendingRequests.create(name, timeoutMs);
+    const startedAt = Date.now();
+    const actorId =
+      actorSlot === undefined ? undefined : this.boundActors.resolve(actorSlot).actorId;
+    let requestMetadata = metadata;
+    const sendingContext: ZlinkStreamRequestSendingContext = {
+      requestPacketName: name,
+      actorId,
+      setMetadata(key, value) {
+        requestMetadata = requestMetadata.with(key, value);
+      }
+    };
+    let pending: ReturnType<ZlinkStreamPendingRequests['create']> | undefined;
     try {
+      throwIfAborted(signal);
+      for (const handler of [...this.requestSendingHandlers]) {
+        try {
+          handler(sendingContext);
+        } catch (cause) {
+          queueMicrotask(() => {
+            void this.events.publishError(
+              toStreamError(
+                cause,
+                ZlinkStreamErrorCode.UserCallbackFailed,
+                'Request sending hook failed.'
+              ),
+              signal
+            );
+          });
+        }
+      }
+      pending = this.pendingRequests.create(name, timeoutMs);
       await this.sendEncoded(
         ZlinkStreamMessageKind.Request,
         name,
         payload,
-        metadata,
+        requestMetadata,
         compress,
         pending.requestSeq,
         signal,
-        flow,
         this.nextCorrelationId(),
         actorSlot
       );
-      return await pending.promise;
+      const reply = await pending.promise;
+      this.publishReplyReceived(
+        {
+          requestPacketName: name,
+          actorId,
+          succeeded: true,
+          reply: { ...reply, actorId },
+          elapsed: Date.now() - startedAt
+        },
+        signal
+      );
+      return reply.payload;
     } catch (error) {
-      this.pendingRequests.cancel(pending.requestSeq);
+      if (pending !== undefined) this.pendingRequests.cancel(pending.requestSeq);
+      this.publishReplyReceived(
+        {
+          requestPacketName: name,
+          actorId,
+          succeeded: false,
+          error: unwrapStreamError(error),
+          elapsed: Date.now() - startedAt
+        },
+        signal
+      );
       throw error;
     }
+  }
+
+  private publishReplyReceived(
+    context: ZlinkStreamReplyReceivedContext,
+    signal?: AbortSignal
+  ): void {
+    if (this.replyReceivedHandlers.size === 0) return;
+    this.receivedMessages.enqueueCallback(async () => {
+      for (const handler of [...this.replyReceivedHandlers]) {
+        try {
+          await handler(context, signal);
+        } catch (cause) {
+          await this.events.publishError(
+            toStreamError(
+              cause,
+              ZlinkStreamErrorCode.UserCallbackFailed,
+              'Reply received hook failed.'
+            ),
+            signal
+          );
+        }
+      }
+    });
   }
 
   private resolveNameOrDefault(payload: ZlinkStreamEncodedPayload): string | undefined {

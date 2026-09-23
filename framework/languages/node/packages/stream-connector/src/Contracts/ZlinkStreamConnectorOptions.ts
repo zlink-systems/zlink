@@ -1,6 +1,5 @@
 import type {
   ZlinkStreamCompression,
-  ZlinkStreamDiagnosticsLevel,
   ZlinkStreamDispatchMode,
   ZlinkStreamTransport
 } from './ZlinkStreamEnums';
@@ -22,15 +21,6 @@ export interface ZlinkStreamConnectorOptions {
   readonly compression?: ZlinkStreamCompression;
   readonly compressionCodec?: ZlinkStreamCompressionCodec;
   readonly nameResolver?: ZlinkStreamPacketNameResolver;
-  /**
-   * Initial diagnostics level (spec 26 §4); defaults to
-   * {@link ZlinkStreamDiagnosticsLevel.Errors}, which preserves the current
-   * wire behavior. `Off` suppresses all observation-only flow handling
-   * (spec 27 §4). This is only the level at construction time — spec 26
-   * §4.1 / spec stream-connector 32 §13 require runtime read/write, provided
-   * by `ZlinkStreamConnector.diagnosticsLevel` / `setDiagnosticsLevel(...)`.
-   */
-  readonly diagnosticsLevel?: ZlinkStreamDiagnosticsLevel;
 }
 
 export interface ZlinkStreamHeartbeatOptions {
@@ -94,5 +84,4 @@ export interface RequiredZlinkStreamConnectorOptions {
   readonly nameResolver: ZlinkStreamPacketNameResolver;
   readonly transportFactory: ZlinkStreamTransportFactory;
   readonly codec?: ZlinkStreamPayloadCodec;
-  readonly diagnosticsLevel: ZlinkStreamDiagnosticsLevel;
 }

@@ -184,7 +184,9 @@ test('jslib boundary drives a real STREAM server over ws', { timeout: 120_000 },
   // Spec 32 section 2.2 and section 6.1: manual dispatch is the game-engine default and
   // the connector starts in Created.
   assert.equal(connector.state, 0);
-  assert.equal(connector.diagnosticsLevel, 1);
+  const replies = [];
+  connector.onReplyReceived(() => { throw new Error('hook failure'); });
+  connector.onReplyReceived((context) => replies.push(context));
 
   await connector.connect();
   assert.equal(connector.isConnected, true);
@@ -195,6 +197,13 @@ test('jslib boundary drives a real STREAM server over ws', { timeout: 120_000 },
     { codec: 1, packetName: 'EchoReq', metadata: { tenant: 'unity' }, timeoutMs: 10_000 }
   );
   assert.equal(JSON.parse(decoder.decode(reply.payload)).value, 'jslib-request');
+  assert.deepEqual(replies, [], 'manual dispatch holds reply hooks');
+  await connector.dispatch();
+  assert.equal(replies.length, 1);
+  assert.equal(replies[0].requestPacketName, 'EchoReq');
+  assert.equal(replies[0].succeeded, true);
+  assert.equal(JSON.parse(decoder.decode(replies[0].reply.payload.payload)).value, 'jslib-request');
+  assert.equal(connector.errors.at(-1).code, 'userCallbackFailed');
 
   // Spec 32 section 10.1.1: with no handler registered, the push waits in the unread
   // queue and the wait surface consumes it directly - no Dispatch in between.
@@ -321,9 +330,9 @@ function installActorConnector(harness, dispatchMode) {
     isConnected: true,
     state: 'connected',
     closeReason: null,
-    diagnosticsLevel: 'errors',
     pendingDispatchCount: 0,
     onErrorReceived: () => ({ dispose() {} }),
+    onReplyReceived: () => ({ dispose() {} }),
     onDisconnected: () => ({ dispose() {} }),
     onConnectionStateChanged: () => ({ dispose() {} }),
     onActorBound(handler) {
@@ -352,8 +361,7 @@ function installActorConnector(harness, dispatchMode) {
     dispatch() {
       while (queued.length > 0) queued.shift()();
       return Promise.resolve();
-    },
-    setDiagnosticsLevel() {}
+    }
   };
   harness.context.ZlinkStreamConnectorBundle = {
     zlinkStreamConnectorFactory: { create: () => connector }

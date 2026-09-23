@@ -8,7 +8,7 @@ export interface ZlinkStreamActor {
   send(payload: unknown, messageType?: Function): ZlinkStreamSendCall;
   request(payload: unknown, messageType?: Function): ZlinkStreamRequestCall;
   on<TPayload = ZlinkStreamEncodedPayload>(
-    name: string,
+    nameOrType: string | Function,
     handler: (message: ZlinkStreamMessage<TPayload>, signal?: AbortSignal) => Promise<void> | void,
     messageType?: Function
   ): Disposable;

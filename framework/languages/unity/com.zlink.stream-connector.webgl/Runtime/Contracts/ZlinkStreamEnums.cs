@@ -13,7 +13,7 @@ namespace Systems.Zlink.Stream.Connector.Contracts
         Tcp,
         Tls,
         WebSocket,
-        WebSocketSecure
+        WebSocketSecure,
     }
 
     public enum ZlinkStreamCodec : byte
@@ -21,32 +21,19 @@ namespace Systems.Zlink.Stream.Connector.Contracts
         Raw = 0,
         Json = 1,
         MessagePack = 2,
-        Protobuf = 3
+        Protobuf = 3,
     }
 
     public enum ZlinkStreamCompression
     {
         None,
-        Lz4
+        Lz4,
     }
 
     public enum ZlinkStreamDispatchMode
     {
         Manual,
-        Immediate
-    }
-
-    /// <summary>
-    ///     Diagnostics level of the connector. Mirrors the server-side message-flow
-    ///     tracing levels: <see cref="Off" /> disables every trace-only operation,
-    ///     including outbound flow_id/flow_origin stamping and inbound flow capture.
-    /// </summary>
-    public enum ZlinkStreamDiagnosticsLevel
-    {
-        Off = 0,
-        Errors = 1,
-        Normal = 2,
-        Detailed = 3
+        Immediate,
     }
 
     public enum ZlinkStreamMessageKind : byte
@@ -55,7 +42,7 @@ namespace Systems.Zlink.Stream.Connector.Contracts
         Request = 2,
         Response = 3,
         Error = 4,
-        Control = 5
+        Control = 5,
     }
 
     public enum ZlinkStreamErrorCode
@@ -72,7 +59,7 @@ namespace Systems.Zlink.Stream.Connector.Contracts
         TlsValidationFailed,
         DecompressionFailed,
         UserCallbackFailed,
-        RemoteError
+        RemoteError,
     }
 
     public enum ZlinkStreamConnectionState
@@ -82,7 +69,7 @@ namespace Systems.Zlink.Stream.Connector.Contracts
         Connected,
         Reconnecting,
         Disconnected,
-        Closed
+        Closed,
     }
 
     public enum ZlinkStreamCloseReason
@@ -92,6 +79,6 @@ namespace Systems.Zlink.Stream.Connector.Contracts
         HeartbeatTimeout = 2,
         ServerDrain = 3,
         ProtocolError = 4,
-        TransportError = 5
+        TransportError = 5,
     }
 }
