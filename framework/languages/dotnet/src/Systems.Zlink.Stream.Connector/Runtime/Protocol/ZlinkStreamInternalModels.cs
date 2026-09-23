@@ -1,5 +1,14 @@
 namespace Systems.Zlink.Stream.Connector.Contracts;
 
+/// <summary>Flow origin values used by the Framework stream runtime.</summary>
+internal enum ZlinkStreamFlowOrigin
+{
+    Inbound,
+    Timer,
+    Application,
+    Lifecycle,
+}
+
 [Flags]
 internal enum ZlinkStreamHeaderFlags : byte
 {
