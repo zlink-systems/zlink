@@ -28,37 +28,16 @@ Plugins/
 
 ### Basic Usage
 
-```cpp
-#include "ZLinkStreamConnector.h"
+The Engine Lobby sample's Actor creates the connector, binds the receive delegates, subscribes to the server push `ChatNotify` by name and connects.
 
-UCLASS()
-class AMyGameMode : public AGameModeBase
-{
-    GENERATED_BODY()
+```cpp title="Unreal/Source/EngineLobby/Private/EngineLobbyClientActor.cpp"
+--8<-- "framework/languages/engines/Unreal/Source/EngineLobby/Private/EngineLobbyClientActor.cpp:connect-call"
+```
 
-    UPROPERTY()
-    UZLinkStreamConnector* Connector;
+Pumping the connector from `Tick` runs the delegates on the Game Thread.
 
-    void BeginPlay() override
-    {
-        Connector = NewObject<UZLinkStreamConnector>(this);
-        Connector->OnPacketReceived.AddDynamic(this, &AMyGameMode::HandlePacket);
-        Connector->OnRequestCompleted.AddDynamic(this, &AMyGameMode::HandleReply);
-        Connector->Connect(TEXT("tcp://game.example.com:7000"));
-        Connector->Subscribe(TEXT("chat.notify"));
-    }
-
-    void Tick(float DeltaSeconds) override
-    {
-        Connector->Dispatch();
-    }
-
-    UFUNCTION()
-    void HandlePacket(FName PacketName, const FString& JsonPayload)
-    {
-        // Runs on the Game Thread
-    }
-};
+```cpp title="Unreal/Source/EngineLobby/Private/EngineLobbyClientActor.cpp"
+--8<-- "framework/languages/engines/Unreal/Source/EngineLobby/Private/EngineLobbyClientActor.cpp:pump"
 ```
 
 ### Using It From Blueprint
@@ -89,20 +68,16 @@ The `.gdextension` file registers the built shared library.
 
 ### Basic Usage (C++)
 
-```cpp
-#include "zlink_godot_stream_connector.hpp"
+The Engine Lobby sample's node registers the receive callback, subscribes to `ChatNotify` and connects.
 
-zlink::godot_stream_connector::stream_connector_t connector;
-void start()
-{
-    connector.on_packet([](const zlink::godot_stream_connector::packet_t& packet) {
-        // Handle packet.name and packet.payload.
-    });
-    connector.connect("tcp://game.example.com:7000");
-    connector.subscribe("chat.notify");
-}
+```cpp title="Godot/cpp/src/engine_lobby_node.cpp"
+--8<-- "framework/languages/engines/Godot/cpp/src/engine_lobby_node.cpp:connect"
+```
 
-void frame() { connector.dispatch(); } // Call on the Godot main thread.
+It pumps the connector from `_process` on the Godot main thread.
+
+```cpp title="Godot/cpp/src/engine_lobby_node.cpp"
+--8<-- "framework/languages/engines/Godot/cpp/src/engine_lobby_node.cpp:pump"
 ```
 
 ---
@@ -121,20 +96,16 @@ target_link_libraries(${APP_NAME} PRIVATE zlink_axmol_connector)
 
 ### Basic Usage
 
-```cpp
-#include "zlink_axmol_stream_connector.hpp"
+The Engine Lobby sample's Scene registers the receive callback, subscribes to `ChatNotify` and connects.
 
-zlink::axmol_stream_connector::stream_connector_t connector;
-void start()
-{
-    connector.on_packet([](const zlink::axmol_stream_connector::packet_t& packet) {
-        // Handle packet.name and packet.payload.
-    });
-    connector.connect("tcp://game.example.com:7000");
-    connector.subscribe("chat.notify");
-}
+```cpp title="Axmol/Source/EngineLobbyScene.cpp"
+--8<-- "framework/languages/engines/Axmol/Source/EngineLobbyScene.cpp:connect"
+```
 
-void frame() { connector.dispatch(); } // Call on the Axmol main thread.
+It pumps the connector from the Axmol scheduler update.
+
+```cpp title="Axmol/Source/EngineLobbyScene.cpp"
+--8<-- "framework/languages/engines/Axmol/Source/EngineLobbyScene.cpp:pump"
 ```
 
 ---

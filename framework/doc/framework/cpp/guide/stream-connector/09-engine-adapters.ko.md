@@ -25,37 +25,16 @@ Plugins/
 
 ### 기본 사용법
 
-```cpp
-#include "ZLinkStreamConnector.h"
+Engine Lobby 샘플의 Actor는 connector를 만들고 수신 delegate를 연결한 뒤, 서버 push인 `ChatNotify`를 이름으로 구독하고 연결한다.
 
-UCLASS()
-class AMyGameMode : public AGameModeBase
-{
-    GENERATED_BODY()
+```cpp title="Unreal/Source/EngineLobby/Private/EngineLobbyClientActor.cpp"
+--8<-- "framework/languages/engines/Unreal/Source/EngineLobby/Private/EngineLobbyClientActor.cpp:connect-call"
+```
 
-    UPROPERTY()
-    UZLinkStreamConnector* Connector;
+`Tick`에서 connector를 pump하면 delegate가 Game Thread에서 실행된다.
 
-    void BeginPlay() override
-    {
-        Connector = NewObject<UZLinkStreamConnector>(this);
-        Connector->OnPacketReceived.AddDynamic(this, &AMyGameMode::HandlePacket);
-        Connector->OnRequestCompleted.AddDynamic(this, &AMyGameMode::HandleReply);
-        Connector->Connect(TEXT("tcp://game.example.com:7000"));
-        Connector->Subscribe(TEXT("chat.notify"));
-    }
-
-    void Tick(float DeltaSeconds) override
-    {
-        Connector->Dispatch();
-    }
-
-    UFUNCTION()
-    void HandlePacket(FName PacketName, const FString& JsonPayload)
-    {
-        // Game Thread에서 실행됨
-    }
-};
+```cpp title="Unreal/Source/EngineLobby/Private/EngineLobbyClientActor.cpp"
+--8<-- "framework/languages/engines/Unreal/Source/EngineLobby/Private/EngineLobbyClientActor.cpp:pump"
 ```
 
 ### Blueprint에서 사용
@@ -84,20 +63,16 @@ GDExtension source package로 배포한다. Godot project의 `addons/zlink_strea
 
 ### 기본 사용법 (C++)
 
-```cpp
-#include "zlink_godot_stream_connector.hpp"
+Engine Lobby 샘플의 node는 수신 callback을 등록하고 `ChatNotify`를 구독한 뒤 연결한다.
 
-zlink::godot_stream_connector::stream_connector_t connector;
-void start()
-{
-    connector.on_packet([](const zlink::godot_stream_connector::packet_t& packet) {
-        // packet.name과 packet.payload를 처리한다.
-    });
-    connector.connect("tcp://game.example.com:7000");
-    connector.subscribe("chat.notify");
-}
+```cpp title="Godot/cpp/src/engine_lobby_node.cpp"
+--8<-- "framework/languages/engines/Godot/cpp/src/engine_lobby_node.cpp:connect"
+```
 
-void frame() { connector.dispatch(); } // Godot main thread에서 호출한다.
+Godot main thread의 `_process`에서 connector를 pump한다.
+
+```cpp title="Godot/cpp/src/engine_lobby_node.cpp"
+--8<-- "framework/languages/engines/Godot/cpp/src/engine_lobby_node.cpp:pump"
 ```
 
 ---
@@ -115,20 +90,16 @@ target_link_libraries(${APP_NAME} PRIVATE zlink_axmol_connector)
 
 ### 기본 사용법
 
-```cpp
-#include "zlink_axmol_stream_connector.hpp"
+Engine Lobby 샘플의 Scene은 수신 callback을 등록하고 `ChatNotify`를 구독한 뒤 연결한다.
 
-zlink::axmol_stream_connector::stream_connector_t connector;
-void start()
-{
-    connector.on_packet([](const zlink::axmol_stream_connector::packet_t& packet) {
-        // packet.name과 packet.payload를 처리한다.
-    });
-    connector.connect("tcp://game.example.com:7000");
-    connector.subscribe("chat.notify");
-}
+```cpp title="Axmol/Source/EngineLobbyScene.cpp"
+--8<-- "framework/languages/engines/Axmol/Source/EngineLobbyScene.cpp:connect"
+```
 
-void frame() { connector.dispatch(); } // Axmol main thread에서 호출한다.
+Axmol scheduler update에서 connector를 pump한다.
+
+```cpp title="Axmol/Source/EngineLobbyScene.cpp"
+--8<-- "framework/languages/engines/Axmol/Source/EngineLobbyScene.cpp:pump"
 ```
 
 ---
