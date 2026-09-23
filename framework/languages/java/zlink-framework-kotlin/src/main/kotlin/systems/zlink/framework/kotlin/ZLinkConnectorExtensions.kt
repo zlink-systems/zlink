@@ -8,8 +8,10 @@ import java.util.concurrent.CompletionStage
 import kotlin.coroutines.CoroutineContext
 import kotlin.reflect.KClass
 import kotlinx.coroutines.ThreadContextElement
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.future.await
 import systems.zlink.framework.kotlin.stream.ZLinkKotlinRequestCall as ZLinkKotlinStreamRequestCall
@@ -215,23 +217,27 @@ class ZLinkKotlinStreamConnector(@PublishedApi internal val inner: ZLinkStreamCo
     fun actor(actorId: String): ZLinkKotlinStreamActor? =
         inner.actor(actorId).orElse(null)?.let(::wrapActor)
 
-    fun actorBound(): Flow<ZLinkKotlinStreamActor> = callbackFlow {
-        val registration =
-            inner.onActorBound { actor ->
-                trySend(wrapActor(actor))
-                CompletableFuture.completedFuture(null)
+    fun actorBound(): Flow<ZLinkKotlinStreamActor> =
+        callbackFlow {
+                val registration =
+                    inner.onActorBound { actor ->
+                        trySend(wrapActor(actor))
+                        CompletableFuture.completedFuture(null)
+                    }
+                awaitClose { registration.close() }
             }
-        awaitClose { registration.close() }
-    }
+            .buffer(Channel.UNLIMITED)
 
-    fun actorUnbound(): Flow<ZLinkKotlinStreamActor> = callbackFlow {
-        val registration =
-            inner.onActorUnbound { actor ->
-                trySend(wrapActor(actor))
-                CompletableFuture.completedFuture(null)
+    fun actorUnbound(): Flow<ZLinkKotlinStreamActor> =
+        callbackFlow {
+                val registration =
+                    inner.onActorUnbound { actor ->
+                        trySend(wrapActor(actor))
+                        CompletableFuture.completedFuture(null)
+                    }
+                awaitClose { registration.close() }
             }
-        awaitClose { registration.close() }
-    }
+            .buffer(Channel.UNLIMITED)
 }
 
 class ZLinkKotlinStreamActor internal constructor(private val inner: ZLinkStreamActor) {

@@ -8,8 +8,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import systems.zlink.framework.kotlin.ZLinkKotlinStreamConnector
 import systems.zlink.framework.kotlin.await
-import systems.zlink.framework.kotlin.awaitReply
 import systems.zlink.framework.kotlin.kotlin
+import systems.zlink.framework.kotlin.request
 import systems.zlink.samples.kotlin.zoneworld.shared.Messages
 import systems.zlink.samples.kotlin.zoneworld.shared.ZoneWorldSpec
 import systems.zlink.stream.connector.ZLinkStreamConnectorFactory
@@ -191,7 +191,10 @@ private constructor(val connector: ZLinkKotlinStreamConnector, val playerId: Str
 
 internal class Ops private constructor(val connector: ZLinkKotlinStreamConnector) : AsyncCloseable {
     suspend fun watch(): Messages.WatchNodesRes =
-        connector.request(Messages.WatchNodesReq()).timeout(REQUEST_TIMEOUT).awaitReply()
+        connector
+            .request<Messages.WatchNodesRes>(Messages.WatchNodesReq())
+            .timeout(REQUEST_TIMEOUT)
+            .await()
 
     suspend fun maintenance(nodeId: String, enabled: Boolean): Messages.SetMaintenanceRes =
         coroutineScope {
@@ -207,9 +210,11 @@ internal class Ops private constructor(val connector: ZLinkKotlinStreamConnector
                 }
             val result =
                 connector
-                    .request(Messages.SetMaintenanceReq(nodeId, enabled))
+                    .request<Messages.SetMaintenanceRes>(
+                        Messages.SetMaintenanceReq(nodeId, enabled)
+                    )
                     .timeout(REQUEST_TIMEOUT)
-                    .awaitReply<Messages.SetMaintenanceRes>()
+                    .await()
             if (result.error == null) observed.await() else observed.cancel()
             result
         }
@@ -224,13 +229,22 @@ internal class Ops private constructor(val connector: ZLinkKotlinStreamConnector
 internal class Probes private constructor(val connector: ZLinkKotlinStreamConnector) :
     AsyncCloseable {
     suspend fun pair(): Messages.RelocationPairRes =
-        connector.request(Messages.RelocationPairReq()).timeout(REQUEST_TIMEOUT).awaitReply()
+        connector
+            .request<Messages.RelocationPairRes>(Messages.RelocationPairReq())
+            .timeout(REQUEST_TIMEOUT)
+            .await()
 
     suspend fun actor(id: String): Messages.ActorLocationProbeRes =
-        connector.request(Messages.ActorLocationProbeReq(id)).timeout(REQUEST_TIMEOUT).awaitReply()
+        connector
+            .request<Messages.ActorLocationProbeRes>(Messages.ActorLocationProbeReq(id))
+            .timeout(REQUEST_TIMEOUT)
+            .await()
 
     suspend fun fresh(id: String): Messages.FreshActorProbeRes =
-        connector.request(Messages.FreshActorProbeReq(id)).timeout(REQUEST_TIMEOUT).awaitReply()
+        connector
+            .request<Messages.FreshActorProbeRes>(Messages.FreshActorProbeReq(id))
+            .timeout(REQUEST_TIMEOUT)
+            .await()
 
     suspend fun probe(
         actor: String,
@@ -238,9 +252,11 @@ internal class Probes private constructor(val connector: ZLinkKotlinStreamConnec
         payload: ByteArray,
     ): Messages.MessageFollowProbeRes =
         connector
-            .request(Messages.MessageFollowProbeReq(actor, id, payload))
+            .request<Messages.MessageFollowProbeRes>(
+                Messages.MessageFollowProbeReq(actor, id, payload)
+            )
             .timeout(REQUEST_TIMEOUT)
-            .awaitReply()
+            .await()
 
     suspend fun sendProbe(actor: String, id: String, payload: ByteArray) =
         connector.send(Messages.MessageFollowProbeMsg(actor, id, payload)).await()

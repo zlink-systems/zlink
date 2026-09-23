@@ -4,8 +4,8 @@ import java.net.URI
 import java.time.Duration
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
-import systems.zlink.framework.kotlin.awaitReply
 import systems.zlink.framework.kotlin.kotlin
+import systems.zlink.framework.kotlin.request
 import systems.zlink.stream.connector.ZLinkStreamConnectorFactory
 import systems.zlink.stream.connector.ZLinkStreamConnectorOptions
 import systems.zlink.stream.connector.ZLinkStreamDispatchMode
@@ -38,7 +38,7 @@ fun main() = runBlocking {
     // then answers with client().send rather than reply.
     val sentAt = System.currentTimeMillis()
     val pong =
-        connector.request(Ping(sentAt.toString())).timeout(Duration.ofSeconds(5)).awaitReply<Pong>()
+        connector.request<Pong>(Ping(sentAt.toString())).timeout(Duration.ofSeconds(5)).await()
 
     println("round trip: ${System.currentTimeMillis() - pong.sentAtUnixMs.toLong()}ms")
     // --8<-- [end:stream-client]
@@ -47,10 +47,7 @@ fun main() = runBlocking {
     // Binds this connection to a player. Until then the server has no player to
     // forward packets to.
     val authenticated =
-        connector
-            .request(Authenticate("p1"))
-            .timeout(Duration.ofSeconds(5))
-            .awaitReply<Authenticated>()
+        connector.request<Authenticated>(Authenticate("p1")).timeout(Duration.ofSeconds(5)).await()
 
     println("bound player: ${authenticated.playerId}")
 

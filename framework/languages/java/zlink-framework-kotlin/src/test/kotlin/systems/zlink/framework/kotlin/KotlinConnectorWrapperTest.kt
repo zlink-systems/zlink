@@ -383,6 +383,102 @@ final class KotlinConnectorWrapperTest {
     }
 
     @Test
+    fun actorBoundFlowKeepsEventsWhileCollectorIsBehind() = runBlocking {
+        TcpServer().use { server ->
+            val connector = ZLinkStreamConnectorFactory.create(options(server.endpoint())).kotlin()
+            val eventCount = 80
+            try {
+                connector.connect().await()
+
+                val firstBound = CompletableDeferred<Unit>()
+                val releaseBound = CompletableDeferred<Unit>()
+                val allBound = CompletableDeferred<List<String>>()
+                val boundIds = mutableListOf<String>()
+                val boundCollector =
+                    launch(start = CoroutineStart.UNDISPATCHED) {
+                        connector.actorBound().collect { actor ->
+                            if (boundIds.isEmpty()) {
+                                firstBound.complete(Unit)
+                                releaseBound.await()
+                            }
+                            boundIds.add(actor.actorId)
+                            if (boundIds.size == eventCount) allBound.complete(boundIds.toList())
+                        }
+                    }
+                try {
+                    yield()
+                    actorRegistryControl(connector, "bound", boundControl(1, "actor-1"))
+                    connector.dispatch().await()
+                    withTimeout(1_000) { firstBound.await() }
+                    for (slot in 2..eventCount) {
+                        actorRegistryControl(connector, "bound", boundControl(slot, "actor-$slot"))
+                    }
+                    connector.dispatch().await()
+                    releaseBound.complete(Unit)
+                    assertEquals(
+                        (1..eventCount).map { "actor-$it" },
+                        withTimeout(2_000) { allBound.await() },
+                    )
+                } finally {
+                    boundCollector.cancelAndJoin()
+                }
+            } finally {
+                connector.close().await()
+            }
+        }
+    }
+
+    @Test
+    fun actorUnboundFlowKeepsEventsWhileCollectorIsBehind() = runBlocking {
+        TcpServer().use { server ->
+            val connector = ZLinkStreamConnectorFactory.create(options(server.endpoint())).kotlin()
+            val eventCount = 80
+            try {
+                connector.connect().await()
+                for (slot in 1..eventCount) {
+                    actorRegistryControl(connector, "bound", boundControl(slot, "actor-$slot"))
+                }
+                val firstUnbound = CompletableDeferred<Unit>()
+                val releaseUnbound = CompletableDeferred<Unit>()
+                val allUnbound = CompletableDeferred<List<String>>()
+                val unboundIds = mutableListOf<String>()
+                val unboundCollector =
+                    launch(start = CoroutineStart.UNDISPATCHED) {
+                        connector.actorUnbound().collect { actor ->
+                            if (unboundIds.isEmpty()) {
+                                firstUnbound.complete(Unit)
+                                releaseUnbound.await()
+                            }
+                            unboundIds.add(actor.actorId)
+                            if (unboundIds.size == eventCount) {
+                                allUnbound.complete(unboundIds.toList())
+                            }
+                        }
+                    }
+                try {
+                    yield()
+                    actorRegistryControl(connector, "unbound", unboundControl(1))
+                    connector.dispatch().await()
+                    withTimeout(1_000) { firstUnbound.await() }
+                    for (slot in 2..eventCount) {
+                        actorRegistryControl(connector, "unbound", unboundControl(slot))
+                    }
+                    connector.dispatch().await()
+                    releaseUnbound.complete(Unit)
+                    assertEquals(
+                        (1..eventCount).map { "actor-$it" },
+                        withTimeout(2_000) { allUnbound.await() },
+                    )
+                } finally {
+                    unboundCollector.cancelAndJoin()
+                }
+            } finally {
+                connector.close().await()
+            }
+        }
+    }
+
+    @Test
     fun actorMessagesAndCallsUseOnlyTheirActorSlot() = runBlocking {
         TcpServer().use { server ->
             val connector = ZLinkStreamConnectorFactory.create(options(server.endpoint())).kotlin()

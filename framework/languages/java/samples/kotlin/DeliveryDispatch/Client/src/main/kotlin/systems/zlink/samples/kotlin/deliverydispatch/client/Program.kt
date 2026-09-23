@@ -9,8 +9,8 @@ import kotlinx.coroutines.runBlocking
 import systems.zlink.framework.kotlin.ZLinkKotlinStreamAssert
 import systems.zlink.framework.kotlin.ZLinkKotlinStreamConnector
 import systems.zlink.framework.kotlin.await
-import systems.zlink.framework.kotlin.awaitReply
 import systems.zlink.framework.kotlin.kotlin
+import systems.zlink.framework.kotlin.request
 import systems.zlink.httpclient.ZLinkHttpClient
 import systems.zlink.httpclient.kotlin.fetch
 import systems.zlink.samples.kotlin.deliverydispatch.server.configuration.SampleNames
@@ -53,18 +53,14 @@ class DeliveryDispatchClientScenario {
             courierB.connect().await()
 
             val courierABound =
-                courierA
-                    .request(BindCourierSessionReq("courier-a"))
-                    .awaitReply<BindCourierSessionRes>()
+                courierA.request<BindCourierSessionRes>(BindCourierSessionReq("courier-a")).await()
             ZLinkKotlinStreamAssert.ensure(
                 courierABound.courierId == "courier-a",
                 "courier-a binding id mismatch",
             )
             println("deliverydispatch-bind=courier-a")
             val courierBBound =
-                courierB
-                    .request(BindCourierSessionReq("courier-b"))
-                    .awaitReply<BindCourierSessionRes>()
+                courierB.request<BindCourierSessionRes>(BindCourierSessionReq("courier-b")).await()
             ZLinkKotlinStreamAssert.ensure(
                 courierBBound.courierId == "courier-b",
                 "courier-b binding id mismatch",
@@ -127,7 +123,7 @@ class DeliveryDispatchClientScenario {
         // --8<-- [end:doc-e2e-sequence]
 
         val subscribed =
-            customer.request(SubscribeDeliveryReq(deliveryId)).awaitReply<SubscribeDeliveryRes>()
+            customer.request<SubscribeDeliveryRes>(SubscribeDeliveryReq(deliveryId)).await()
         ZLinkKotlinStreamAssert.ensure(
             subscribed.deliveryId == deliveryId,
             "success subscription id mismatch",
@@ -217,7 +213,7 @@ class DeliveryDispatchClientScenario {
             }
 
         val subscribed =
-            customer.request(SubscribeDeliveryReq(deliveryId)).awaitReply<SubscribeDeliveryRes>()
+            customer.request<SubscribeDeliveryRes>(SubscribeDeliveryReq(deliveryId)).await()
         ZLinkKotlinStreamAssert.ensure(
             subscribed.deliveryId == deliveryId,
             "reassignment subscription id mismatch",
@@ -308,7 +304,7 @@ class DeliveryDispatchClientScenario {
             }
 
         val subscribed =
-            customer.request(SubscribeDeliveryReq(deliveryId)).awaitReply<SubscribeDeliveryRes>()
+            customer.request<SubscribeDeliveryRes>(SubscribeDeliveryReq(deliveryId)).await()
         ZLinkKotlinStreamAssert.ensure(
             subscribed.deliveryId == deliveryId,
             "exhausted subscription id mismatch",
