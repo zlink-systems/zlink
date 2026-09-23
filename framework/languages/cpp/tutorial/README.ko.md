@@ -171,7 +171,7 @@ examples-smoke는 이 블록을 그대로 실행한다.
 | 첫 요청 | `curl http://127.0.0.1:5180/players/p1/profile`이 `{"level":1,"nickname":"rookie","playerId":"p1"}`를 낸다 |
 | Spot (Redis) | 방을 여는 요청이 방 id 문자열(`"9e78fd70-…"`)을 낸다 |
 | Instance Spot | 같은 대기열 id로 두 번 요청하면 `waiting`이 1, 2로 이어진다 |
-| STREAM | `tutorial_stream_client`가 `connected: true` … `pushed: speedy`를 기록하고 0으로 종료한다 |
+| STREAM | `tutorial_stream_client`가 `connected: true` … `pushed: speedy, actor: p1`를 기록하고 0으로 종료한다 |
 
 아래 블록은 [실행](#실행) 블록이 띄운 상태에서 첫 요청의 응답과 STREAM client의 종료 코드로
 이를 확인한다.
@@ -625,8 +625,10 @@ HTTP/1.1 404 Not Found
 $ ./build/tutorial_stream_client
 connected: true
 round trip: 2ms          # STREAM request/reply
+actor bound: p1
 bound player: p1         # 연결을 player에 묶는다
-pushed: speedy           # player가 그 연결로 밀어 준다
+actor handle: p1
+pushed: speedy, actor: p1           # player가 그 연결로 밀어 준다
 ```
 
 `pushed`는 client가 nickname 변경 요청의 응답이 아닌 **player가 연결로 보낸 알림**을

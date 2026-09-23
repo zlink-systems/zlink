@@ -510,8 +510,10 @@ HTTP/1.1 404
 $ ./java/StreamClient/build/install/StreamClient/bin/StreamClient
 connected: true
 round trip: 178ms        # STREAM request/reply
+actor bound: p1
 bound player: p1         # 연결을 player에 묶는다
-pushed: speedy           # player가 그 연결로 밀어 준다
+actor handle: p1
+pushed: speedy, actor: p1           # player가 그 연결로 밀어 준다
 ```
 
 `pushed`가 핵심이다. client는 nickname 변경만 보냈고, 응답이 아니라 **player가 스스로 민

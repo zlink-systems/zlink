@@ -144,7 +144,26 @@ connector는 받은 것을 계속 받아서 처리한다. 큐에 한도를 두�
 때문이다. 계속 쌓인다면 pump를 호출하지 않는 client 쪽 문제이므로, 수신 개수를 흐름 제어의 근거로
 사용하지 않는다.
 
-## 8. 다음 장
+## 8. Actor handle로 주고받기
+
+Actor 하나만 쓰는 application은 기존 송수신 코드를 바꿀 필요가 없다. 서버가 한 연결에
+Actor 여러 개를 bind할 때는 Actor handle로 송신 대상을 고르고, 수신 message의 Actor ID로
+서버 쪽 상대를 확인한다. 서버가 Actor를 이 연결에 bind하면 bound 통지가 그 Actor의 첫 packet보다
+먼저 오고, bind가 끝나면 unbound 통지가 그 Actor의 마지막 packet 뒤에 온다.
+
+먼저 bound·unbound 통지를 등록한다. 다음 예제는 서버가 `p1`을 bind한 뒤 handle을 찾아
+그 Actor를 통해 보내고, 돌아온 message의 Actor ID를 읽는다.
+
+```cpp
+--8<-- "framework/languages/cpp/tutorial/StreamClient/main.cpp:actor-handle-events"
+--8<-- "framework/languages/cpp/tutorial/StreamClient/main.cpp:actor-handle-send"
+--8<-- "framework/languages/cpp/tutorial/StreamClient/main.cpp:actor-handle-send-call"
+--8<-- "framework/languages/cpp/tutorial/StreamClient/main.cpp:actor-handle-receive"
+```
+
+실행하면 `actor handle: p1`과 `pushed: speedy, actor: p1`이 출력된다.
+
+## 9. 다음 장
 
 - 연결 상태와 재연결, 종료 사유 — [연결 생명주기](06-lifecycle.ko.md)
 - 수신 경로에서 나는 오류 — [오류 처리](07-error-handling.ko.md)

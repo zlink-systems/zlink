@@ -31,6 +31,23 @@ Console.WriteLine($"round trip: {elapsed}ms");
 // --8<-- [end:stream-client]
 
 // --8<-- [start:session-actor-client]
+// --8<-- [start:actor-handle-events]
+using var boundNotice = connector.OnActorBound(
+    (actor, _) =>
+    {
+        Console.WriteLine($"actor bound: {actor.ActorId}");
+        return ValueTask.CompletedTask;
+    }
+);
+using var unboundNotice = connector.OnActorUnbound(
+    (actor, _) =>
+    {
+        Console.WriteLine($"actor unbound: {actor.ActorId}");
+        return ValueTask.CompletedTask;
+    }
+);
+
+// --8<-- [end:actor-handle-events]
 // Binds this connection to a player. Until then the server has no player to
 // forward packets to.
 var authenticated = await connector
@@ -40,13 +57,27 @@ var authenticated = await connector
 
 Console.WriteLine($"bound player: {authenticated.PlayerId}");
 
+// --8<-- [start:actor-handle-send]
+var player =
+    connector.Actor(authenticated.PlayerId)
+    ?? throw new InvalidOperationException("Player Actor was not bound");
+Console.WriteLine($"actor handle: {player.ActorId}");
+
+// --8<-- [end:actor-handle-send]
+
 // Arrange to receive the push before sending, so a fast server cannot answer
 // before the client is listening.
 var changed = connector.WaitFor<NicknameChanged>().Async();
 
-// No session handler matches this packet, so the session relays it to the bound
-// player, whose handler pushes the result back over this same connection.
-await connector.Send(new ChangeNickname("speedy")).Async();
+// The handle addresses this player directly. Its handler pushes the result
+// back over the same connection.
+// --8<-- [start:actor-handle-send-call]
+await player.Send(new ChangeNickname("speedy")).Async();
 
-Console.WriteLine($"pushed: {(await changed).Payload.Nickname}");
+// --8<-- [end:actor-handle-send-call]
+
+// --8<-- [start:actor-handle-receive]
+var pushed = await changed;
+Console.WriteLine($"pushed: {pushed.Payload.Nickname}, actor: {pushed.ActorId}");
+// --8<-- [end:actor-handle-receive]
 // --8<-- [end:session-actor-client]

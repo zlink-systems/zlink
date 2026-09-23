@@ -171,7 +171,7 @@ Examples smoke runs this block exactly as written.
 | First request | `curl http://127.0.0.1:5180/players/p1/profile` prints `{"level":1,"nickname":"rookie","playerId":"p1"}` |
 | Spot (Redis) | the request that opens a room prints a room id string (`"9e78fd70-..."`) |
 | Instance Spot | two requests for the same queue id return `waiting` 1, then 2 |
-| STREAM | `tutorial_stream_client` prints the four lines `connected: true` ... `pushed: speedy` and exits with 0 |
+| STREAM | `tutorial_stream_client` prints the connector and Actor lines `connected: true` ... `pushed: speedy, actor: p1` and exits with 0 |
 
 The block below checks this against the processes the [Run](#run) block started: the first
 request's answer and the STREAM client's exit code.
@@ -472,8 +472,10 @@ An external client attaches over TCP, linking the connector only.
 $ ./build/tutorial_stream_client
 connected: true
 round trip: 2ms          # STREAM request/reply
+actor bound: p1
 bound player: p1         # the connection is bound to a player
-pushed: speedy           # the player pushes over that connection
+actor handle: p1
+pushed: speedy, actor: p1           # the player pushes over that connection
 ```
 
 `pushed` is the point: the client only sent a nickname change and received a push the player

@@ -66,24 +66,43 @@ int main ()
         // --8<-- [end:stream-client]
 
         // --8<-- [start:session-actor-client]
+        // --8<-- [start:actor-handle-events]
+        auto bound_notice = connector.on_actor_bound ([] (const auto &actor) {
+            std::cout << "actor bound: " << actor->actor_id () << std::endl;
+        });
+        auto unbound_notice = connector.on_actor_unbound ([] (const auto &actor) {
+            std::cout << "actor unbound: " << actor->actor_id () << std::endl;
+        });
+        // --8<-- [end:actor-handle-events]
         // Binds this connection to a player. Until then the server has no player
         // to forward packets to.
         const auto authenticated = value_of (
           connector.request (authenticate_t{"p1"}).submit<authenticated_t> (), "authenticate");
 
+        require (connector.dispatch (), "dispatch bound notice");
         std::cout << "bound player: " << authenticated.player_id << std::endl;
 
-        // No branch of the session answers this packet, so the session relays it
-        // to the bound player, whose handler pushes the result back over this same
-        // connection. This connector uses manual dispatch, so a push that lands
-        // before the wait starts is queued rather than dropped, and the wait can
-        // follow the send.
-        connector.send (change_nickname_t{"speedy"}).submit ();
+        // --8<-- [start:actor-handle-send]
+        auto player = connector.actor (authenticated.player_id);
+        if (!player)
+            throw std::runtime_error ("Player Actor was not bound");
+        std::cout << "actor handle: " << player->actor_id () << std::endl;
+        // --8<-- [end:actor-handle-send]
+
+        // The handle addresses this player directly. Its handler pushes the
+        // result back over the same connection. In manual dispatch mode, a push
+        // that lands before the wait starts remains queued for the wait.
+        // --8<-- [start:actor-handle-send-call]
+        player->send (change_nickname_t{"speedy"}).submit ();
+        // --8<-- [end:actor-handle-send-call]
 
         const auto changed = value_of (connector.wait_for<nickname_changed_t> ().submit (),
                                        "nickname push");
 
-        std::cout << "pushed: " << changed.payload.nickname << std::endl;
+        // --8<-- [start:actor-handle-receive]
+        std::cout << "pushed: " << changed.payload.nickname
+                  << ", actor: " << changed.actor_id.value_or ("none") << std::endl;
+        // --8<-- [end:actor-handle-receive]
         // --8<-- [end:session-actor-client]
 
         require (connector.close (), "close");
