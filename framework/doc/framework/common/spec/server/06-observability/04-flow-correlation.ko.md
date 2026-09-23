@@ -89,7 +89,8 @@ message를 받는 논리 대상을 [Spot](../00-foundation/02-glossary.ko.md#spo
 Diagnostics level이 `Off`이면 관측 전용 flow 처리를 모두 생략한다. 새
 `flow_id`를 만들지 않고 inbound message의 flow field를 flow context로 만들거나
 다음 message에 복사하지 않는다. Outbound envelope에도 두 field를 추가하지 않는다.
-Client connector가 시작한 outbound request도 같은 규칙을 따른다.
+Client connector는 flow를 만들지 않으며, STREAM client의 흐름은 서버가 STREAM ingress에서 시작한다
+([Stream connector §5.5](../../stream-connector/32-stream-connector.ko.md#55-flow)).
 
 `correlation_id`는 request와 terminal reply를 연결하는 protocol 정보다. Diagnostics
 level이 `Off`여도 request마다 만들고 reply까지 보존한다. 이 값은 tracing을 끌 때
