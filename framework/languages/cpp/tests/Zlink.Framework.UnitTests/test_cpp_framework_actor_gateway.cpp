@@ -301,6 +301,55 @@ int replaced_session_find_is_exact_and_disconnects_once ()
     return disconnected == 1 ? 0 : 4;
 }
 
+int bound_actors_are_current_ordered_snapshot ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    auto state = std::make_shared<actor_gateway_state_t> ();
+    actor_gateway_runtime_t gateway (state);
+    auto manager = gateway.manager ();
+    if (!manager.bound ().empty ())
+        return 1;
+
+    zlink_builder_t builder;
+    builder.stream ("bound-snapshot").bind ("tcp://127.0.0.1:0");
+    auto runtime = stream_runtime_t::from (builder);
+    auto stream = runtime.open_session ("bound-snapshot");
+    const auto session_id = stream.session_id ();
+    runtime.attach_transport_writer (stream, [] (const stream_header_t &, const zlink::message_t &,
+                                                 std::optional<std::chrono::milliseconds>) {
+        return task_t<void> (result_t<void>::success ());
+    });
+    session_actor_manager_access_t::attach (manager, std::move (stream));
+    session_actor_manager_access_t::bind_native (manager, [] (actor_ref_t, std::uint64_t) {
+        return task_t<void> (result_t<void>::success ());
+    });
+
+    const auto first = test_actor_ref ("actor-node", "player", "z-bound-first", 1);
+    const auto second = test_actor_ref ("actor-node", "player", "a-bound-second", 1);
+    if (!manager.bind (first).async ().result () || manager.bound ().size () != 1
+        || manager.bound ().front ().actor_id () != "z-bound-first")
+        return 2;
+    if (!manager.bind (second).async ().result ())
+        return 3;
+    const auto snapshot = manager.bound ();
+    if (snapshot.size () != 2 || snapshot[0].actor_id () != "z-bound-first"
+        || snapshot[1].actor_id () != "a-bound-second")
+        return 4;
+
+    const auto first_token =
+      state->sync ([&] { return state->actors_by_id.at ("z-bound-first").binding_token; });
+    gateway.unbind_session_stream ("z-bound-first", session_id, first_token);
+    const auto after_unbind = manager.bound ();
+    if (after_unbind.size () != 1 || after_unbind[0].actor_id () != "a-bound-second"
+        || manager.find ("z-bound-first"))
+        return 5;
+    if (snapshot.size () != 2 || snapshot[0].actor_id () != "z-bound-first")
+        return 6;
+    return 0;
+}
+
 int bind_or_get_reuses_same_physical_session_generation ()
 {
     using namespace zlink::framework;
@@ -5416,6 +5465,9 @@ int main (int argc, char **argv)
     if (const auto replaced = replaced_session_find_is_exact_and_disconnects_once ();
         replaced != 0) {
         return 10 + replaced;
+    }
+    if (const auto bound = bound_actors_are_current_ordered_snapshot (); bound != 0) {
+        return 10 + bound;
     }
     if (const auto idempotent = bind_or_get_reuses_same_physical_session_generation ();
         idempotent != 0) {

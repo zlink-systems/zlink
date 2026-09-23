@@ -1433,6 +1433,40 @@ result_t<session_actor_t> session_actor_manager_t::create_erased (
     return result_t<session_actor_t>::success (session_actor_t (_state, *ref));
 }
 
+std::vector<session_actor_t> session_actor_manager_t::bound () const
+{
+    if (!_binding_context)
+        return {};
+    std::vector<std::pair<std::uint16_t, session_actor_t>> bindings;
+    {
+        const std::lock_guard binding_lock (_binding_context->mutex);
+        bindings = _state->sync ([&] {
+            std::vector<std::pair<std::uint16_t, session_actor_t>> current;
+            current.reserve (_binding_context->actor_tokens.size ());
+            for (const auto &[actor_id, token] : _binding_context->actor_tokens) {
+                if (!_binding_context->ready_actors.contains (actor_id))
+                    continue;
+                const auto found = _state->actors_by_id.find (actor_id);
+                if (found == _state->actors_by_id.end () || !found->second.bound
+                    || found->second.disconnected
+                    || found->second.binding_session_id != _binding_context->session_id
+                    || found->second.binding_token != token)
+                    continue;
+                current.emplace_back (found->second.actor_slot,
+                                      session_actor_t (_state, found->second.ref, token));
+            }
+            return current;
+        });
+    }
+    std::sort (bindings.begin (), bindings.end (),
+               [] (const auto &left, const auto &right) { return left.first < right.first; });
+    std::vector<session_actor_t> result;
+    result.reserve (bindings.size ());
+    for (auto &binding : bindings)
+        result.push_back (std::move (binding.second));
+    return result;
+}
+
 std::optional<session_actor_t> session_actor_manager_t::find (std::string actor_id) const
 {
     std::uint64_t session_binding_token = 0;

@@ -163,7 +163,7 @@ examples-smoke는 이 블록을 그대로 실행한다.
 | 첫 요청 | `curl http://127.0.0.1:5180/players/p1/profile`이 `{"level":1,"nickname":"rookie","playerId":"p1"}`를 낸다 |
 | Spot (Redis) | 방을 여는 요청이 방 id 문자열(`"9e78fd70-…"`)을 낸다 |
 | Instance Spot | 같은 대기열 id로 두 번 요청하면 `waiting`이 1, 2로 이어진다 |
-| STREAM | `tutorial_stream_client`가 `connected: true` … `pushed: speedy, actor: p1`를 기록하고 0으로 종료한다 |
+| STREAM | `tutorial_stream_client`가 `pushed: speedy, actor: p1`을 기록한 뒤 p1·p2의 handle별 push를 기록하고 0으로 종료한다 |
 
 아래 블록은 [실행](#실행) 블록이 띄운 상태에서 첫 요청의 응답과 STREAM client의 종료 코드로
 이를 확인한다.
@@ -609,18 +609,28 @@ HTTP/1.1 404 Not Found
 
 ### 11. STREAM과 Session-Actor 연결
 
-외부 client가 TCP로 붙는다. framework가 아니라 connector만 링크한다.
+외부 client가 TCP로 붙는다. framework가 아니라 connector만 링크한다. 아래는 server와
+StreamClient를 끝까지 실행한 출력이다. 왕복 시간은 실행마다 달라진다.
 
 ```console
 $ ./build/tutorial_stream_client
 connected: true
-round trip: 2ms          # STREAM request/reply
+round trip: 0ms
+bound player: p1
 actor bound: p1
-bound player: p1         # 연결을 player에 묶는다
+pushed: speedy, actor: p1
+actor bound: p2
+bound player: p2
 actor handle: p1
-pushed: speedy, actor: p1           # player가 그 연결로 밀어 준다
+actor handle: p2
+received actor id: p1
+received actor id: p2
+pushed: speedy-p1, actor: p1
+pushed: speedy-p2, actor: p2
 ```
 
+첫 nickname 변경은 p1만 묶인 상태에서 connector로 직접 보낸다. p2를 묶은 뒤에는
+각 handle로 보내고 받으며, connector 수준의 수신 callback도 같은 push의 Actor ID를 보여 준다.
 `pushed`는 client가 nickname 변경 요청의 응답이 아닌 **player가 연결로 보낸 알림**을
 받았음을 나타낸다.
 
@@ -630,8 +640,8 @@ C++ 쪽에서 알아 둘 것은 다음과 같다.
   packet 이름으로 처리 경로를 구분한다. .NET·Java·Kotlin·Node는 handler를 별도로 등록한다.
 - **`reply_packet`은 Request에만 답한다.** 기다리는 요청이 없는 client에 밀 때는 actor 쪽에서
   `bound_session().send(...)`를 쓴다.
-- **connector는 manual dispatch로 시작한다.** wait를 등록하기 전에 도착한 push가 버려지지
-  않고 queue에 남기 위해서다.
+- **Actor handle마다 수신 callback을 등록한다.** connector의 immediate dispatch가 각 push를
+  해당 handle의 callback으로 전달한다.
 
 ### 12. HTTP client
 
@@ -765,7 +775,7 @@ Spot 단계가 더한 마커는 아래와 같다.
 | `stream-contracts` · `session-actor-contracts` | `Shared/contracts.hpp` |
 | `session-class` · `session-handler` · `session-actor-bind` · `session-actor-relay` | `Server/sessions/game_session.hpp` |
 | `stream-register` | `Server/main.cpp` |
-| `stream-client` · `session-actor-client` | `StreamClient/main.cpp` |
+| `stream-client` · `session-actor-client` · `single-actor-send` · `actor-handle-events` · `actor-handle-send` · `actor-handle-per-handle-receive` · `actor-id-receive` · `actor-handle-send-call` · `actor-handle-receive` | `StreamClient/main.cpp` |
 | `http-client-create` | `HttpClient/main.cpp` |
 | `http-first-request` | `HttpClient/main.cpp` |
 | `http-request-shaping` | `HttpClient/main.cpp` |

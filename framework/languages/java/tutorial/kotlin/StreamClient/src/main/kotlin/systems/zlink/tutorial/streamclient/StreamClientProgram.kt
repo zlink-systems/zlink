@@ -2,16 +2,18 @@ package systems.zlink.tutorial.streamclient
 
 import java.net.URI
 import java.time.Duration
+import java.util.concurrent.CompletableFuture
 import kotlinx.coroutines.CoroutineStart
-import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import systems.zlink.framework.kotlin.await
 import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.framework.kotlin.request
 import systems.zlink.stream.connector.ZLinkStreamConnectorFactory
 import systems.zlink.stream.connector.ZLinkStreamConnectorOptions
 import systems.zlink.stream.connector.ZLinkStreamDispatchMode
+import systems.zlink.stream.connector.ZLinkStreamMessage
 import systems.zlink.tutorial.shared.Authenticate
 import systems.zlink.tutorial.shared.Authenticated
 import systems.zlink.tutorial.shared.ChangeNickname
@@ -57,37 +59,27 @@ fun main() = runBlocking {
             connector.actorUnbound().collect { actor -> println("actor unbound: ${actor.actorId}") }
         }
     // --8<-- [end:actor-handle-events]
-    // Binds this connection to a player. Until then the server has no player to
-    // forward packets to.
-    val authenticated =
+    // With one Actor bound, the connector can send without an Actor handle.
+    val authenticatedP1 =
         connector.request<Authenticated>(Authenticate("p1")).timeout(Duration.ofSeconds(5)).await()
 
-    println("bound player: ${authenticated.playerId}")
+    println("bound player: ${authenticatedP1.playerId}")
 
-    // --8<-- [start:actor-handle-send]
-    val player = requireNotNull(connector.actor(authenticated.playerId))
-    println("actor handle: ${player.actorId}")
-    // --8<-- [end:actor-handle-send]
-
-    // Arrange to receive the push before sending, so a fast server cannot answer
-    // before the client is listening.
-    val changed = async {
-        connector.waitFor<NicknameChanged>().timeout(Duration.ofSeconds(5)).await()
-    }
-
-    // The handle addresses this player directly. Its handler pushes the
-    // result back over the same connection.
-    // --8<-- [start:actor-handle-send-call]
-    player.send(ChangeNickname("speedy")).await()
-    // --8<-- [end:actor-handle-send-call]
-
-    // --8<-- [start:actor-handle-receive]
-    val pushed = changed.await()
+    // --8<-- [start:single-actor-send]
+    val singleChanged = CompletableFuture<ZLinkStreamMessage<NicknameChanged>>()
+    val singleReceive =
+        connector.on<NicknameChanged> { message ->
+            singleChanged.complete(message)
+            CompletableFuture.completedFuture(null)
+        }
+    connector.send(ChangeNickname("speedy")).await()
+    val pushed = singleChanged.await()
     println("pushed: ${pushed.payload().nickname}, actor: ${pushed.actorId()}")
-    // --8<-- [end:actor-handle-receive]
+    singleReceive.close()
+    // --8<-- [end:single-actor-send]
     // --8<-- [end:session-actor-client]
 
-    connector.close().await()
     boundNotice.cancelAndJoin()
     unboundNotice.cancelAndJoin()
+    connector.close().await()
 }

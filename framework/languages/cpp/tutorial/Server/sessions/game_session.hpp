@@ -4,7 +4,6 @@
 
 #include <zlink/framework.hpp>
 
-#include <chrono>
 #include <iostream>
 #include <string>
 
@@ -26,7 +25,6 @@ class game_session_t final : public fw::packet_stream_session_t
     fw::task_t<void> on_disconnected (fw::stream_t &stream) override
     {
         std::cout << "client disconnected: " << stream.session_id () << std::endl;
-        _player_id.reset ();
         co_return;
     }
 
@@ -55,9 +53,7 @@ class game_session_t final : public fw::packet_stream_session_t
         // --8<-- [end:session-handler]
 
         // --8<-- [start:session-actor-bind]
-        // Ties this connection to one player. After this, packets handled by no
-        // branch above reach that player, and the player can push to this
-        // connection.
+        // Each authenticate packet binds its player to this connection.
         if (packet == authenticate_t::packet_name) {
             const auto request = payload.parse_json<authenticate_t> ();
 
@@ -70,31 +66,29 @@ class game_session_t final : public fw::packet_stream_session_t
                                                  "Player creation was rejected.");
 
             auto bound = co_await actors.bind_or_get (located.value ().ref ()).async ();
-            _player_id = std::string (bound.actor_id ());
-
-            stream.reply_packet (zlink::message_t::from_json (authenticated_t{*_player_id}))
+            stream
+              .reply_packet (
+                zlink::message_t::from_json (authenticated_t{std::string (bound.actor_id ())}))
               .async ();
             co_return;
         }
         // --8<-- [end:session-actor-bind]
 
         // --8<-- [start:session-actor-relay]
-        // Anything this class does not answer itself is forwarded to the player
-        // bound to this connection, which is why authentication has to come first.
-        if (!_player_id)
-            throw fw::framework_exception_t (fw::framework_error_kind_t::invalid_operation,
-                                             "Authenticate before sending player packets.");
+        // The packet's Actor slot selects one binding on this connection.
+        if (dispatch.actor) {
+            co_await dispatch.actor->relay (packet, payload);
+            co_return;
+        }
 
-        auto player = stream.actors ().find (*_player_id);
-        if (!player)
-            throw fw::framework_exception_t (fw::framework_error_kind_t::not_found,
-                                             "The bound player is gone.");
+        auto bound = stream.actors ().bound ();
+        if (bound.size () != 1)
+            throw fw::framework_exception_t (
+              fw::framework_error_kind_t::invalid_operation,
+              "Specify an Actor when the session has no unique binding.");
 
-        co_await player->relay (packet, payload);
+        co_await bound.front ().relay (packet, payload);
         // --8<-- [end:session-actor-relay]
     }
-
-  private:
-    std::optional<std::string> _player_id;
 };
 // --8<-- [end:session-class]
