@@ -43,22 +43,6 @@ internal sealed class Program
     }
 }
 
-internal sealed class StartupSpotCreationHostedService(
-    IZLinkSpotManager spotManager,
-    string meshName
-) : IHostedService
-{
-    public async Task StartAsync(CancellationToken cancellationToken)
-    {
-        _ = await spotManager.Create("startup-stage").InMesh(meshName).Async(cancellationToken);
-    }
-
-    public Task StopAsync(CancellationToken cancellationToken)
-    {
-        return Task.CompletedTask;
-    }
-}
-
 internal sealed class ChannelStartupPublishHostedService(
     IZLinkFanoutClient publisher,
     string channelName,
@@ -105,33 +89,6 @@ internal sealed class ChannelClientStartupRequestHostedService(
     public Task StopAsync(CancellationToken cancellationToken)
     {
         return Task.CompletedTask;
-    }
-}
-
-internal sealed class SpotStartupPublishHostedService(
-    IZLinkSpotPublisherClient publisher,
-    string channelName,
-    string topic,
-    string value
-) : BackgroundService
-{
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-    {
-        while (!stoppingToken.IsCancellationRequested)
-        {
-            await publisher
-                .Publish(channelName, topic, new StartupStageEvent(value))
-                .Async(stoppingToken);
-
-            try
-            {
-                await Task.Delay(TimeSpan.FromMilliseconds(200), stoppingToken);
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                return;
-            }
-        }
     }
 }
 
@@ -800,39 +757,6 @@ internal sealed class TestHostEventSink(string? path)
         }
     }
 }
-
-internal sealed class StartupStageSpot(IZLinkSpotContext context) : IZLinkSpot
-{
-    public IZLinkSpotContext Context { get; } = context;
-
-    public void Configure()
-    {
-        Context.Handlers.AddSubscribe<StartupStageSubscriptionHandler>(
-            Context.MeshName,
-            "stage.monitor"
-        );
-    }
-}
-
-internal sealed class StartupStageSubscriptionHandler(TestHostEventSink sink)
-    : IZLinkSpotSubscriptionHandler<StartupStageSpot, StartupStageEvent>
-{
-    public ValueTask HandleAsync(
-        StartupStageSpot spot,
-        StartupStageEvent message,
-        ZLinkPublishMessageContext context,
-        CancellationToken cancellationToken
-    )
-    {
-        _ = spot;
-        _ = context;
-        _ = cancellationToken;
-        sink.Append(message.Value);
-        return ValueTask.CompletedTask;
-    }
-}
-
-internal sealed record StartupStageEvent(string Value);
 
 internal sealed record TestHostProfileRequest(string Value);
 

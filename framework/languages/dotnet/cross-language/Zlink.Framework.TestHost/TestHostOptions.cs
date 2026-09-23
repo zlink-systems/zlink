@@ -8,20 +8,13 @@ internal sealed record TestHostOptions(
     string? RegistryPubEndpoint,
     string? RegistryRouterEndpoint,
     uint? RegistryId,
-    string? DiscoveryEndpoint,
-    string? DiscoveryChannelName,
     string? ChannelName,
     string? ServerEndpoint,
     string? PublisherEndpoint,
-    string? SpotNodeName,
-    string? SpotBindEndpoint,
     string? PeerRid,
     bool EnablePubSub,
-    bool EnableSpotFactory,
-    bool CreateSpot,
     string? PublishTopic,
     string? PublishValue,
-    string? AttachSpotPublisherChannel,
     string? StreamEndpoint,
     string? MeshName,
     string? NodeRid,
@@ -73,20 +66,13 @@ internal sealed record TestHostOptions(
         public string? RegistryPubEndpoint { get; set; }
         public string? RegistryRouterEndpoint { get; set; }
         public uint? RegistryId { get; set; }
-        public string? DiscoveryEndpoint { get; set; }
-        public string? DiscoveryChannelName { get; set; }
         public string? ChannelName { get; set; }
         public string? ServerEndpoint { get; set; }
         public string? PublisherEndpoint { get; set; }
-        public string? SpotNodeName { get; set; }
-        public string? SpotBindEndpoint { get; set; }
         public string? PeerRid { get; set; }
         public bool EnablePubSub { get; set; }
-        public bool EnableSpotFactory { get; set; }
-        public bool CreateSpot { get; set; }
         public string? PublishTopic { get; set; }
         public string? PublishValue { get; set; }
-        public string? AttachSpotPublisherChannel { get; set; }
         public string? StreamEndpoint { get; set; }
         public string? MeshName { get; set; }
         public string? NodeRid { get; set; }
@@ -121,12 +107,6 @@ internal sealed record TestHostOptions(
                 case "--registry-id":
                     RegistryId = uint.Parse(readValue(), CultureInfo.InvariantCulture);
                     break;
-                case "--discovery-endpoint":
-                    DiscoveryEndpoint = readValue();
-                    break;
-                case "--discovery-channel":
-                    DiscoveryChannelName = readValue();
-                    break;
                 case "--channel-name":
                     ChannelName = readValue();
                     break;
@@ -136,34 +116,17 @@ internal sealed record TestHostOptions(
                 case "--publisher-endpoint":
                     PublisherEndpoint = readValue();
                     break;
-                case "--spot-node-name":
-                    SpotNodeName = readValue();
-                    break;
-                case "--spot-bind-endpoint":
-                    SpotBindEndpoint = readValue();
-                    break;
                 case "--peer-rid":
                     PeerRid = readValue();
                     break;
                 case "--enable-pubsub":
                     EnablePubSub = true;
                     break;
-                case "--spot-factory":
-                    _ = readValue();
-                    EnableSpotFactory = true;
-                    break;
-                case "--create-spot":
-                    _ = readValue();
-                    CreateSpot = true;
-                    break;
                 case "--publish-topic":
                     PublishTopic = readValue();
                     break;
                 case "--publish-value":
                     PublishValue = readValue();
-                    break;
-                case "--attach-spot-publisher-channel":
-                    AttachSpotPublisherChannel = readValue();
                     break;
                 case "--stream-endpoint":
                     StreamEndpoint = readValue();
@@ -211,20 +174,13 @@ internal sealed record TestHostOptions(
                 RegistryPubEndpoint,
                 RegistryRouterEndpoint,
                 RegistryId,
-                DiscoveryEndpoint,
-                DiscoveryChannelName,
                 ChannelName,
                 ServerEndpoint,
                 PublisherEndpoint,
-                SpotNodeName,
-                SpotBindEndpoint,
                 PeerRid,
                 EnablePubSub,
-                EnableSpotFactory,
-                CreateSpot,
                 PublishTopic,
                 PublishValue,
-                AttachSpotPublisherChannel,
                 StreamEndpoint,
                 MeshName,
                 NodeRid,

@@ -33,9 +33,6 @@ internal static class TestHostScenarioConfigurator
             case "spot-route-client":
                 ConfigureSpotRouteClient(services, options);
                 return;
-            case "spot-node":
-                ConfigureSpotNode(services, options);
-                return;
             case "entry-spot-source":
                 ConfigureEntryRelocation(services, options, isSource: true);
                 return;
@@ -281,69 +278,6 @@ internal static class TestHostScenarioConfigurator
             options.ChannelName!,
             options.PublishValue ?? "dotnet-route-to-node"
         ));
-    }
-
-    private static void ConfigureSpotNode(IServiceCollection services, TestHostOptions options)
-    {
-        services.AddSingleton(new TestHostEventSink(options.EventFilePath));
-        services.AddScoped<StartupStageSubscriptionHandler>();
-        services.AddZLinkFramework(framework =>
-        {
-            {
-                var mesh = framework.AddRouteMesh(
-                    options.DiscoveryChannelName
-                        ?? throw new InvalidOperationException(
-                            "SPOT node mode requires --discovery-channel."
-                        )
-                );
-                mesh.Channel(
-                        options.DiscoveryChannelName
-                            ?? throw new InvalidOperationException(
-                                "SPOT node mode requires --discovery-channel."
-                            )
-                    )
-                    .Client();
-                _ =
-                    options.SpotNodeName
-                    ?? throw new InvalidOperationException(
-                        "SPOT node mode requires --spot-node-name."
-                    );
-                var spotBindEndpoint =
-                    options.SpotBindEndpoint
-                    ?? throw new InvalidOperationException(
-                        "SPOT node mode requires --spot-bind-endpoint."
-                    );
-                mesh.Listen(spotBindEndpoint);
-
-                if (options.EnableSpotFactory)
-                    mesh.Objects()
-                        .Server()
-                        .AddSpotFactory<StartupStageSpot>(
-                            "startup-stage",
-                            factory => factory.DisableRelocation()
-                        );
-            }
-        });
-
-        if (options.CreateSpot)
-            services.AddHostedService(provider => new StartupSpotCreationHostedService(
-                provider.GetRequiredService<IZLinkSpotManager>(),
-                options.DiscoveryChannelName
-                    ?? throw new InvalidOperationException(
-                        "SPOT node mode requires --discovery-channel."
-                    )
-            ));
-
-        if (
-            !string.IsNullOrWhiteSpace(options.AttachSpotPublisherChannel)
-            && !string.IsNullOrWhiteSpace(options.PublishTopic)
-        )
-            services.AddHostedService(provider => new SpotStartupPublishHostedService(
-                provider.GetRequiredService<IZLinkSpotPublisherClient>(),
-                options.AttachSpotPublisherChannel!,
-                options.PublishTopic!,
-                options.PublishValue ?? "startup"
-            ));
     }
 
     private static void ConfigureEntryRelocation(
