@@ -25,7 +25,7 @@ project에 직접 설치하는 패키지가 아니다. 따라서 이 project의 
 Node.js 22와 npm이 필요하다. Cocos Creator 3.8 Editor는 scene 실행에 필요하다.
 
 ```bash
-npm ci
+npm install
 ```
 
 ## 타입 검사

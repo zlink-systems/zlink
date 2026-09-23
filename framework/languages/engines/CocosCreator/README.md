@@ -26,7 +26,7 @@ and implementation.
 Node.js 22 and npm are required. Running the scene also requires Cocos Creator 3.8 Editor.
 
 ```bash
-npm ci
+npm install
 ```
 
 ## Typecheck
