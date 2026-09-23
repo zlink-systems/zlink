@@ -43,6 +43,7 @@ import systems.zlink.framework.runtime.internal.transport.ZLinkEndpointNotation;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 import java.lang.reflect.Method;
+import java.net.ServerSocket;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -960,6 +961,68 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                 MeshPeerEntry admitted = awaitState(local, MeshPeerState.ADMITTED);
                 assertEquals(replacementIntent, admitted.connectionIntentId());
             }
+        }
+    }
+
+    @Test
+    void replacementClosesIntentThatNeverConnected() throws Exception {
+        RoutingId localRid = RoutingId.from("jvm-never-connected-replace-local");
+        RoutingId peerRid = RoutingId.from("jvm-never-connected-replace-peer");
+        int port;
+        try (var reservation = new ServerSocket(0)) {
+            port = reservation.getLocalPort();
+        }
+        String peerEndpoint = "tcp://127.0.0.1:" + port;
+        try (var context = Zlink.createContext();
+                var local = meshNode(context);
+                var peer = meshNode(context)) {
+            local.setRoutingId(localRid);
+            local.setBind("inproc://jvm-never-connected-replace-local-" + System.nanoTime());
+            peer.setRoutingId(peerRid);
+            peer.setBind(peerEndpoint);
+            local.start();
+
+            long originalIntent = local.connectPeer(peerEndpoint);
+            try {
+                local.replacePeerConnection(
+                        peerEndpoint,
+                        peerRid,
+                        1,
+                        ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
+            } catch (IllegalStateException closing) {
+                // The host observes the same close and retries on its next directory read.
+            }
+            Method drain = ZLinkJavaRawMeshNode.class.getDeclaredMethod("drainPeerCloseRequests");
+            drain.setAccessible(true);
+            drain.invoke(local);
+            // Keep the listener absent until Core has retired the original intent.
+            awaitIntentClosed(local, originalIntent);
+            peer.start();
+            long replacementIntent = 0;
+            long deadline = System.nanoTime() + Duration.ofSeconds(3).toNanos();
+            while (System.nanoTime() < deadline) {
+                try {
+                    replacementIntent =
+                            local.replacePeerConnection(
+                                    peerEndpoint,
+                                    peerRid,
+                                    peer.status().lifecycleGeneration(),
+                                    ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
+                    break;
+                } catch (IllegalStateException closing) {
+                    Thread.sleep(10);
+                }
+            }
+            assertTrue(replacementIntent != 0, "replacement remained blocked after disconnect");
+            assertTrue(replacementIntent != originalIntent);
+            assertEquals(
+                    replacementIntent,
+                    awaitState(local, MeshPeerState.ADMITTED).connectionIntentId());
+            long readyDeadline = System.nanoTime() + Duration.ofSeconds(3).toNanos();
+            while (local.readyPeerCount() == 0 && System.nanoTime() < readyDeadline) {
+                Thread.sleep(10);
+            }
+            assertEquals(1, local.readyPeerCount());
         }
     }
 

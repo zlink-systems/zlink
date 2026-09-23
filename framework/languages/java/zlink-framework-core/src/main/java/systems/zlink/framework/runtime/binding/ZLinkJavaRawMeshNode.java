@@ -981,9 +981,12 @@ final class ZLinkJavaRawMeshNode
             }
             try {
                 current.disconnect(request.endpoint());
-                // Core completes every physical close asynchronously, including
-                // inproc. The existing monitor path owns the terminal pair
-                // snapshot and is the only place that may open replacement.
+                Set<TransportIdentity> transports =
+                        peerIntentTransports.get(request.connectionIntentId());
+                if (transports == null || transports.isEmpty()) {
+                    // No observed physical connection can provide a close edge.
+                    finishPeerIntentClose(request.connectionIntentId(), intent);
+                }
             } catch (RuntimeException failure) {
                 if (!request.endpoint().startsWith("inproc://")) {
                     closeRequestedPeerIntents.remove(request.connectionIntentId());
@@ -6784,13 +6787,17 @@ final class ZLinkJavaRawMeshNode
                             && !closeRequestedPeerIntents.contains(intentId)) {
                         return;
                     }
-                    cleanupClosedPeerEndpoint(intent.endpoint());
-                    closeRequestedPeerIntents.remove(intentId);
-                    // Publishing closed releases replacePeerConnection on the caller
-                    // thread. Finish endpoint retirement first, so this close cannot
-                    // disconnect the replacement intent that publication permits.
-                    closedPeerIntents.add(intentId);
+                    finishPeerIntentClose(intentId, intent);
                 });
+    }
+
+    private void finishPeerIntentClose(long intentId, PeerIntent intent) {
+        cleanupClosedPeerEndpoint(intent.endpoint());
+        closeRequestedPeerIntents.remove(intentId);
+        // Publishing closed releases replacePeerConnection on the caller
+        // thread. Finish endpoint retirement first, so this close cannot
+        // disconnect the replacement intent that publication permits.
+        closedPeerIntents.add(intentId);
     }
 
     private void cleanupClosedPeerEndpoint(String endpoint) {
