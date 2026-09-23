@@ -85,17 +85,20 @@ internal static class ZLinkScannedSpotHandlerScanner
             }
             else if (definition == typeof(IZLinkSpotSubscriptionHandler<,>))
             {
-                var subscription =
-                    handlerType.GetCustomAttribute<ZLinkSpotSubscriptionHandlerAttribute>();
+                if (
+                    handlerType.GetCustomAttribute<ZLinkSpotSubscriptionHandlerAttribute>()
+                    is not { } subscription
+                )
+                    continue;
                 var topic = ZLinkSpotSubscriptionRegistry.RequireTopic(
-                    subscription?.Topic,
+                    subscription.Topic,
                     handlerType
                 );
                 yield return new ZLinkScannedSpotHandler(
                     ZLinkScannedSpotHandlerKind.Subscription,
                     handlerType,
                     arguments[0],
-                    ChannelName: subscription!.ChannelName,
+                    ChannelName: subscription.ChannelName,
                     Topic: topic
                 );
             }

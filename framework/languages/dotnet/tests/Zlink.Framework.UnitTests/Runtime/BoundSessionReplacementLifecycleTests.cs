@@ -41,7 +41,7 @@ public sealed class BoundSessionReplacementLifecycleTests
 
         Assert.Equal(ZlinkStreamMessageKind.Error, reply.Kind);
         Assert.Equal(new ZlinkStreamRequestSeq(41), reply.RequestSeq);
-        Assert.Equal("InvalidOperation", error?.Code);
+        Assert.Equal("invalid_operation", error?.Code);
         Assert.Empty(fixture.Lifetime.Dispatches);
         Assert.Contains(
             activities,
