@@ -76,6 +76,10 @@ Python·Go·Rust binding은 `bindings-release.yml`에 job이 있으나 공개 �
    태그가 나온 뒤에만 계산할 수 있으므로 이 단계는 3번 뒤에 온다.
    upstream 저장소(`microsoft/vcpkg`·`conan-io/conan-center-index`)에 PR을 내는 것은 여전히
    사람이 한다. 초안 본문은 `doc/building/pr-drafts/`에 있다.
+5. Node lockfile: Framework Node를 게시한 뒤 `framework/languages/node`의 `tutorial`·`tutorial/StreamClient`·
+   `tutorial/HttpClient`·`quickstart`에서 `npm install --package-lock-only`로 lockfile을 다시 만들어
+   `main`에 넣는다. 릴리스 bump는 `package.json`만 올리며, 새 버전을 가리키는 lockfile은 패키지가
+   게시된 뒤에만 만들 수 있다(#1002).
 
 dispatch 예시:
 

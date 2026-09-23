@@ -65,6 +65,10 @@ so the order never inverts.
 4. Conan and vcpkg: update `core/packaging/conan/conandata.yml` and
    `vcpkg/ports/zlink/portfile.cmake` with the source tarball hashes and open PRs upstream. Draft
    bodies are in `doc/building/pr-drafts/`.
+5. Node lockfiles: after Framework Node is published, run `npm install --package-lock-only` in
+   `tutorial`, `tutorial/StreamClient`, `tutorial/HttpClient`, and `quickstart` under
+   `framework/languages/node`, and commit the lockfiles to `main`. The release bump updates only
+   `package.json`; a lockfile that points to the new version can be created only after publishing (#1002).
 
 ```bash
 gh workflow run build.yml --ref core/v0.17.5 -f libzlink_version=0.17.5
