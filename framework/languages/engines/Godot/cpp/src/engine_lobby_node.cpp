@@ -11,9 +11,7 @@ namespace godot
 namespace
 {
 constexpr char ping_req[] = "PingReq";
-constexpr char ping_res[] = "PingRes";
 constexpr char join_req[] = "JoinReq";
-constexpr char join_res[] = "JoinRes";
 constexpr char chat_msg[] = "ChatMsg";
 constexpr char chat_notify[] = "ChatNotify";
 
@@ -91,16 +89,16 @@ String EngineLobbyNode::get_first_chat () const
 void EngineLobbyNode::_ready ()
 {
     status_ = get_node<Label> ("Status");
-    connector_.on_request_completed ([this] (const auto &packet) { handle_response (packet); });
-    connector_.on_packet ([this] (const auto &packet) { handle_packet (packet); });
-    connector_.subscribe (chat_notify);
+    chat_subscription_ =
+      connector_.on (chat_notify, [this] (const auto &packet) { handle_packet (packet); });
     const CharString endpoint = endpoint_.utf8 ();
     connector_.connect (std::string (endpoint.get_data (), endpoint.length ()));
     if (connector_.state () != zlink::godot_stream_connector::connection_state_t::connected) {
         fail ("connection failed");
         return;
     }
-    connector_.request_json (ping_req, encode_field ("sentAtUnixMs", "1000"), 5.0);
+    connector_.request_json (ping_req, encode_field ("sentAtUnixMs", "1000"), 5.0,
+                             [this] (const auto &result) { handle_ping_response (result); });
     set_process (true);
 }
 // --8<-- [end:connect]
@@ -114,43 +112,53 @@ void EngineLobbyNode::_process (double)
 }
 // --8<-- [end:pump]
 
-// --8<-- [start:handler]
-void EngineLobbyNode::handle_response (const zlink::godot_stream_connector::packet_t &packet)
+// --8<-- [start:ping-handler]
+void EngineLobbyNode::handle_ping_response (
+  const zlink::godot_stream_connector::request_result_t &result)
 {
+    if (!result.reply) {
+        fail (String (result.error_message.c_str ()));
+        return;
+    }
     Dictionary object;
-    if (!decode_fields (packet, object)) {
+    if (!decode_fields (*result.reply, object)) {
         fail ("invalid reply JSON");
         return;
     }
-    if (packet.name == ping_res) {
-        String sent_at;
-        if (!required_string (object, "sentAtUnixMs", sent_at) || sent_at != "1000") {
-            fail ("invalid PingRes");
-            return;
-        }
-        connector_.request_json (join_req, encode_field ("name", player_name_), 5.0);
+    String sent_at;
+    if (!required_string (object, "sentAtUnixMs", sent_at) || sent_at != "1000") {
+        fail ("invalid PingRes");
         return;
     }
-    if (packet.name == join_res) {
-        String actor_id;
-        String name;
-        if (!required_string (object, "actorId", actor_id)
-            || !required_string (object, "name", name) || name != player_name_) {
-            fail ("invalid JoinRes");
-            return;
-        }
-        status_->set_text (String ("joined as ") + name + " (" + actor_id + ")");
-        connector_.send_json (chat_msg, encode_field ("text", first_chat_));
-        return;
-    }
-    fail (String ("unexpected reply: ") + String (packet.name.c_str ()));
+    connector_.request_json (join_req, encode_field ("name", player_name_), 5.0,
+                             [this] (const auto &reply) { handle_join_response (reply); });
 }
+// --8<-- [end:ping-handler]
 
+// --8<-- [start:join-handler]
+void EngineLobbyNode::handle_join_response (
+  const zlink::godot_stream_connector::request_result_t &result)
+{
+    if (!result.reply) {
+        fail (String (result.error_message.c_str ()));
+        return;
+    }
+    Dictionary object;
+    String actor_id;
+    String name;
+    if (!decode_fields (*result.reply, object) || !required_string (object, "actorId", actor_id)
+        || !required_string (object, "name", name) || name != player_name_) {
+        fail ("invalid JoinRes");
+        return;
+    }
+    status_->set_text (String ("joined as ") + name + " (" + actor_id + ")");
+    connector_.send_json (chat_msg, encode_field ("text", first_chat_));
+}
+// --8<-- [end:join-handler]
+
+// --8<-- [start:receive]
 void EngineLobbyNode::handle_packet (const zlink::godot_stream_connector::packet_t &packet)
 {
-    if (packet.name != chat_notify) {
-        return;
-    }
     Dictionary object;
     String actor_id;
     String name;
@@ -162,7 +170,7 @@ void EngineLobbyNode::handle_packet (const zlink::godot_stream_connector::packet
     }
     status_->set_text (name + ": " + text);
 }
-// --8<-- [end:handler]
+// --8<-- [end:receive]
 
 void EngineLobbyNode::fail (const String &message)
 {
@@ -174,8 +182,7 @@ void EngineLobbyNode::fail (const String &message)
 // --8<-- [start:lifecycle]
 void EngineLobbyNode::_exit_tree ()
 {
-    connector_.on_packet ({});
-    connector_.on_request_completed ({});
+    chat_subscription_.unsubscribe ();
     connector_.close ();
 }
 // --8<-- [end:lifecycle]

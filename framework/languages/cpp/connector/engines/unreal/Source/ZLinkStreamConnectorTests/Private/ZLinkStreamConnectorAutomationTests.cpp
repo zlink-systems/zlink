@@ -23,7 +23,9 @@ bool FZLinkStreamConnectorLifecycleTest::RunTest (const FString &)
     TestFalse (TEXT ("unreachable endpoint is not connected"), Connector->IsConnected ());
 
     Connector->SendJson (TEXT ("chat.send"), TEXT ("{\"text\":\"hello\"}"));
-    Connector->RequestJson (TEXT ("chat.request"), TEXT ("{\"text\":\"hello\"}"), 0.01f);
+    FZLinkStreamRequestDelegate OnCompleted;
+    Connector->RequestJson (TEXT ("chat.request"), TEXT ("{\"text\":\"hello\"}"), 0.01f,
+                            OnCompleted);
     Connector->Dispatch ();
 
     Connector->ShutdownForPie ();
