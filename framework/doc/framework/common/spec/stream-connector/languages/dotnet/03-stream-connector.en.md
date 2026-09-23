@@ -74,6 +74,8 @@ public interface IZlinkStreamConnector : IAsyncDisposable
     IDisposable              On(string name, Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, CancellationToken, ValueTask> handler);
 
 
+    IDisposable OnRequestSending(Action<ZlinkStreamRequestSendingContext> handler);
+    IDisposable OnReplyReceived(Func<ZlinkStreamReplyReceivedContext, CancellationToken, ValueTask> handler);
     IDisposable OnConnectionStateChanged(Func<ZlinkStreamConnectionStateChanged, CancellationToken, ValueTask> handler);
     IDisposable OnDisconnected(Func<ZlinkStreamDisconnected, CancellationToken, ValueTask> handler);
     IDisposable OnErrorReceived(Func<ZlinkStreamError, CancellationToken, ValueTask> handler);
@@ -201,7 +203,32 @@ public interface IZlinkStreamWaitCall
   sample/CLI/E2E waiting uses `WaitFor(...)`.
 - **`Metadata` is copied as an immutable snapshot at send time.**
 
+### 4.1 Request Hooks
+
+The two hooks of [Common Spec §5.7](../../32-stream-connector.en.md#57-request-hooks) are projected as `OnRequestSending`/`OnReplyReceived` (§3) with the contexts below. The sending hook does not follow the dispatch mode, so it is a synchronous `Action`; the reply hook has the same shape as other receive callbacks.
+
+```csharp
+public sealed class ZlinkStreamRequestSendingContext
+{
+    public string RequestPacketName { get; }
+    public string? ActorId { get; }
+    public void SetMetadata(string key, string value);
+}
+
+public sealed class ZlinkStreamReplyReceivedContext
+{
+    public string RequestPacketName { get; }
+    public string? ActorId { get; }
+    public bool Succeeded { get; }
+    public ZlinkStreamMessage<ZlinkStreamEncodedPayload>? Reply { get; }
+    public ZlinkStreamError? Error { get; }
+    public TimeSpan Elapsed { get; }
+}
+```
+
 ## 5. Typed Surface
+
+The two name forms of Common Spec §5 appear as an overload that takes a packet name and one that doesn't, on the typed `On`/`Send`/`Request` of the connector and Actor handle and on the connector's `WaitFor`/`ExpectNone`/`WaitForSequence`.
 
 `ZlinkStreamTypedConnectorExtensions` provides `Send<TPayload>`,
 `Request<TPayload>`, `On<TPayload>`, `WaitFor<TPayload>`,
@@ -421,35 +448,15 @@ and the close reason as `ZlinkStreamCloseReason.TransportError`.
 
 ## 11. Flow
 
-**A connector outbound operation generates a UUIDv7 `flow_id` once,
-with no separate public option.** A follow-up operation started inside
-a callback **reuses the current inbound flow, and once the callback
-ends, cleans up the ambient flow.** Since `.NET` provides an ambient
-execution context, a send call carries no argument stating the flow
-([Common Spec §5.5](../../32-stream-connector.en.md#55-flow-exposure-and-propagation)).
-
-A received message exposes the flow pair through the properties below.
+The connector never creates, sends, exposes, or propagates flow ([Common Spec §5.5](../../32-stream-connector.en.md#55-flow)). A received message additionally exposes only the Actor identity.
 
 ```csharp
 public sealed record ZlinkStreamMessage<TPayload>(
     string Name,
     ZlinkStreamMetadata Metadata,
     TPayload Payload,
-    string? FlowId = null,                    // null when the diagnostics level is Off (§13)
-    ZlinkStreamFlowOrigin? FlowOrigin = null,
-    string? ActorId = null);                  // the counterpart bound Actor; null for a frame without a slot (common spec §5.6)
-
-public enum ZlinkStreamFlowOrigin { Inbound, Timer, Application, Lifecycle }
+    string? ActorId = null);
 ```
-
-**The `flow_origin` wire value is 1–4, and the `ZlinkStreamFlowOrigin` internal
-ordinal is 0–3.** The same care the close reason needs (§10) applies here. The
-codec converts between the two explicitly, so **the enum is never cast to an
-integer and used as the wire value.**
-
-The wire representation is owned by
-[Common Spec §4.2](../../32-stream-connector.en.md) and
-[flow-correlation](../../../server/06-observability/04-flow-correlation.en.md).
 
 ## 12. Options And Validation
 
@@ -465,50 +472,6 @@ requires is expressed as `null` on a nullable `int`.
 ```csharp
 public int? MaxAttempts { get; init; } = 3; // null means unlimited; otherwise it must be positive
 ```
-
-The common contract's diagnostics level
-([common spec §13](../../32-stream-connector.en.md#13-diagnostics-level)) is projected as
-the following property. Undefined enum values are rejected by validation.
-
-```csharp
-public enum ZlinkStreamDiagnosticsLevel { Off = 0, Errors = 1, Normal = 2, Detailed = 3 }
-
-public ZlinkStreamDiagnosticsLevel DiagnosticsLevel { get; init; } // default Errors
-```
-
-At `Off`, outbound frames create no flow pair (0x10 not set), and inbound flow fields keep
-only the structural length check — value validation and flow scope installs are skipped.
-The request correlation is kept regardless of the level.
-
-The live level change from common spec §13 is exposed through the following read/write API on
-`IZlinkStreamConnector`. The connector never needs to be recreated.
-
-```csharp
-public interface IZlinkStreamConnector : IAsyncDisposable
-{
-    ZlinkStreamDiagnosticsLevel DiagnosticsLevel { get; }
-
-    void SetDiagnosticsLevel(ZlinkStreamDiagnosticsLevel level);      // changes the value without waiting
-    Task SetDiagnosticsLevelAsync(ZlinkStreamDiagnosticsLevel level); // the async pair changing the same value
-    // ...
-}
-```
-
-`SetDiagnosticsLevelAsync` is the pair matching `.NET`'s async idiom,
-and it does not replace the synchronous surface
-[Common Spec §13](../../32-stream-connector.en.md#13-diagnostics-level)
-requires. The synchronous surface does not wait for the async pair to
-complete, so calling it inside a receive callback never makes that call
-wait on its own completion.
-
-`DiagnosticsLevel` reads straight through to `Options.DiagnosticsLevel`, and it always matches
-the level most recently applied by `SetDiagnosticsLevel` (so does the value `Options` exposes).
-`SetDiagnosticsLevel` rejects an undefined enum value the same way construction-time option
-validation does, with `ZlinkStreamErrorCode.ValidationFailed`. The value is stored in an atomic
-cell (`Volatile.Read`/`Volatile.Write`), and every processing point (building an outbound frame,
-dispatching an inbound packet, etc.) reads the level **exactly once** at the start of that
-operation and judges the whole operation by that one value — a level change mid-processing never
-affects work already under way, only the next processing point that starts after it.
 
 **`.NET`-only option:**
 
@@ -530,7 +493,6 @@ instance and delivers the failure to the caller.
 | Unsupported scheme, URI scheme/`Transport` mismatch | `ZlinkStreamException`'s `ConfigurationError` |
 | A `CompressionCodec` given together with compression turned off | `ZlinkStreamException`'s `ConfigurationError` |
 | An invalid timeout/queue size/heartbeat/reconnect combination | `ZlinkStreamException`'s `ValidationFailed` |
-| An undefined `ZlinkStreamDiagnosticsLevel` value | `ZlinkStreamException`'s `ValidationFailed` |
 
 Every timeout and queue size option must be **positive**, and the
 preview length **can't be negative.** `MaxAttempts` must be `null` or
@@ -556,7 +518,11 @@ positive.
 | `StreamConnectorTests.OneWayAsync_Waits_For_Bounded_Queue_Admission` | The one-way terminal waits asynchronously up to bounded queue acceptance and completes with no result value. |
 | `StreamConnectorTests.RequestQueueWaitsForEarlierAcceptedOneWaySend` | Preserves the wire send order of an earlier-accepted one-way send and a later request. |
 | `StreamConnectorTests.CallerCancellationDoesNotInterruptAnInProgressFrameWrite` | Once a frame write starts, caller cancellation doesn't create a partial frame. |
-| `StreamConnectorTests.OutboundFrameCreatesFlowOnceAndCodecRemainsDeterministic` | Generates the outbound flow once and fixes the header codec result. |
+| `StreamConnectorTests.ConnectorOutboundFramesNeverCarryFlowAndOnlyRequestsCarryCorrelation` | Connector outbound frames omit the flow flag and only requests carry correlation IDs. |
+| `StreamConnectorTests.RequestHooksRunInOrderAddWireMetadataAndIsolateFailures` | Checks hook registration order, wire metadata, and callback failure isolation. |
+| `StreamConnectorTests.ReplyHookObservesRemoteFailureTimeoutAndClose` | Checks remote-error, timeout, and close outcomes observed by the reply hook. |
+| `StreamConnectorTests.ManualSendingHookRunsOnRequestCallerAndReplyHookWaitsForDispatch` | In Manual mode the sending hook runs on the request caller and puts metadata on the wire without dispatch; the reply hook waits for dispatch. |
+| `StreamConnectorTests.ActorHandlersIsolateMatchingNamesAndRequestHooksReportActorId` | Actor handlers isolate messages under the same name and hooks receive the Actor ID. |
 | `StreamConnectorTests.HeaderProtocolEnforcesControlPacketContract` | Fixes a control packet's codec/flag/payload contract. |
 
 Release verification confirms with `scripts/verify_packaged_contract.sh`
