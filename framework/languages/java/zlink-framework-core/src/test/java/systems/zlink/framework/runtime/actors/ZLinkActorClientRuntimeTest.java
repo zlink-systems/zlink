@@ -478,7 +478,7 @@ final class ZLinkActorClientRuntimeTest {
                         () ->
                                 new RecordingSpotNode(
                                         errorReply(
-                                                "{\"code\":\"NotFound\",\"message\":\"remote actor"
+                                                "{\"code\":\"not_found\",\"message\":\"remote actor"
                                                         + " is missing\"}")),
                         new ZLinkStoreLocationResolvers(
                                 ZLinkRegisteredLocationStores.fromUnified(

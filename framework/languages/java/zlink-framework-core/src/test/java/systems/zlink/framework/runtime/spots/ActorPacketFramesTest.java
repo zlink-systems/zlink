@@ -162,7 +162,7 @@ final class ActorPacketFramesTest {
             assertEquals(ZLinkStreamCodec.JSON, decoded.header().codec());
             try {
                 var json = new ObjectMapper().readTree(decoded.body());
-                assertEquals("IllegalStateException", json.get("code").asText());
+                assertEquals("internal_failure", json.get("code").asText());
                 assertEquals("handler failed", json.get("message").asText());
             } catch (IOException failure) {
                 throw new AssertionError("error payload is not JSON", failure);
@@ -191,7 +191,7 @@ final class ActorPacketFramesTest {
 
             try {
                 var json = new ObjectMapper().readTree(decoded.body());
-                assertEquals("NotFound", json.get("code").asText());
+                assertEquals("not_found", json.get("code").asText());
                 assertEquals("actor was not found", json.get("message").asText());
             } catch (IOException failure) {
                 throw new AssertionError("error payload is not JSON", failure);

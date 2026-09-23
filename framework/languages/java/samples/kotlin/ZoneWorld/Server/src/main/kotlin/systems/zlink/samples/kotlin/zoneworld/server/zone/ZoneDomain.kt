@@ -24,7 +24,6 @@ import systems.zlink.framework.channels.ZLinkRouteClient
 import systems.zlink.framework.handlers.ZLinkHandlerGroup
 import systems.zlink.framework.handlers.ZLinkSpotActorRequest
 import systems.zlink.framework.handlers.ZLinkSpotActorSend
-import systems.zlink.framework.handlers.ZLinkSpotSubscription
 import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.kotlin.ZLinkSuspendingActor
 import systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpotActorRequestHandler
@@ -34,7 +33,6 @@ import systems.zlink.framework.kotlin.ZLinkSuspendingSpot
 import systems.zlink.framework.kotlin.ZLinkSuspendingSpotActorRequestHandler
 import systems.zlink.framework.kotlin.ZLinkSuspendingSpotActorSendHandler
 import systems.zlink.framework.kotlin.ZLinkSuspendingSpotPacketHandler
-import systems.zlink.framework.kotlin.ZLinkSuspendingSpotSubscriptionHandler
 import systems.zlink.framework.kotlin.ZLinkSuspendingSpotTimerHandler
 import systems.zlink.framework.kotlin.await
 import systems.zlink.framework.kotlin.decode
@@ -47,9 +45,9 @@ import systems.zlink.framework.spots.ZLinkEntrySpotContext
 import systems.zlink.framework.spots.ZLinkSpotActorJoinResult
 import systems.zlink.framework.spots.ZLinkSpotContext
 import systems.zlink.framework.spots.ZLinkSpotCreateResponse
-import systems.zlink.framework.spots.ZLinkSpotHandlerRegistry
 import systems.zlink.framework.spots.ZLinkTimer
 import systems.zlink.framework.spots.ZLinkTimerTick
+import systems.zlink.samples.kotlin.zoneworld.dynamic.BorderSubscriptionHandlers
 import systems.zlink.samples.kotlin.zoneworld.server.configuration.MaintenanceStore
 import systems.zlink.samples.kotlin.zoneworld.server.configuration.NodeCensus
 import systems.zlink.samples.kotlin.zoneworld.server.configuration.NodeMaintenanceState
@@ -410,6 +408,7 @@ class ZoneSpot(
     override fun configure() {
         // The topic selects the two incoming routes for this Zone Spot, so payload handling
         // does not repeat that routing decision by filtering on its destination zone.
+        // --8<-- [start:doc-zw-border-subscribe]
         ZoneWorldSpec.adjacentZones(context.spotId()).forEach { fromZoneId ->
             BorderSubscriptionHandlers.registerForRoute(
                 context.handlers(),
@@ -417,6 +416,7 @@ class ZoneSpot(
                 context.spotId(),
             )
         }
+        // --8<-- [end:doc-zw-border-subscribe]
     }
 
     override suspend fun onCreateSuspending(request: ZLinkMessage): ZLinkSpotCreateResponse =
@@ -912,91 +912,6 @@ class ProbeCrashHandler :
         message: Messages.CrashRelocationProbeMsg,
     ) = spot.crashProbe(actor, message.x, message.y)
 }
-
-// --8<-- [start:doc-zw-border-subscribe]
-class BorderSubscriptionHandlers {
-    companion object {
-        fun registerForRoute(
-            handlers: ZLinkSpotHandlerRegistry,
-            fromZoneId: String,
-            toZoneId: String,
-        ) {
-            when (ZoneWorldNames.borderTopic(fromZoneId, toZoneId)) {
-                ZoneWorldNames.NW_NE -> handlers.addHandler<NorthWestToNorthEast>()
-                ZoneWorldNames.NW_SW -> handlers.addHandler<NorthWestToSouthWest>()
-                ZoneWorldNames.NE_NW -> handlers.addHandler<NorthEastToNorthWest>()
-                ZoneWorldNames.NE_SE -> handlers.addHandler<NorthEastToSouthEast>()
-                ZoneWorldNames.SW_NW -> handlers.addHandler<SouthWestToNorthWest>()
-                ZoneWorldNames.SW_SE -> handlers.addHandler<SouthWestToSouthEast>()
-                ZoneWorldNames.SE_NE -> handlers.addHandler<SouthEastToNorthEast>()
-                ZoneWorldNames.SE_SW -> handlers.addHandler<SouthEastToSouthWest>()
-                else -> error("unknown border route: $fromZoneId -> $toZoneId")
-            }
-        }
-
-        suspend fun apply(spot: ZoneSpot, event: Messages.ZoneBorderEvent) {
-            spot.applyBorder(event)
-        }
-    }
-
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.NW_NE)
-    class NorthWestToNorthEast :
-        ZLinkSuspendingSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
-        override suspend fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) =
-            apply(spot, event)
-    }
-
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.NW_SW)
-    class NorthWestToSouthWest :
-        ZLinkSuspendingSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
-        override suspend fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) =
-            apply(spot, event)
-    }
-
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.NE_NW)
-    class NorthEastToNorthWest :
-        ZLinkSuspendingSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
-        override suspend fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) =
-            apply(spot, event)
-    }
-
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.NE_SE)
-    class NorthEastToSouthEast :
-        ZLinkSuspendingSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
-        override suspend fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) =
-            apply(spot, event)
-    }
-
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.SW_NW)
-    class SouthWestToNorthWest :
-        ZLinkSuspendingSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
-        override suspend fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) =
-            apply(spot, event)
-    }
-
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.SW_SE)
-    class SouthWestToSouthEast :
-        ZLinkSuspendingSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
-        override suspend fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) =
-            apply(spot, event)
-    }
-
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.SE_NE)
-    class SouthEastToNorthEast :
-        ZLinkSuspendingSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
-        override suspend fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) =
-            apply(spot, event)
-    }
-
-    @ZLinkSpotSubscription(topic = ZoneWorldNames.SE_SW)
-    class SouthEastToSouthWest :
-        ZLinkSuspendingSpotSubscriptionHandler<ZoneSpot, Messages.ZoneBorderEvent> {
-        override suspend fun handle(spot: ZoneSpot, event: Messages.ZoneBorderEvent) =
-            apply(spot, event)
-    }
-}
-
-// --8<-- [end:doc-zw-border-subscribe]
 
 @ZLinkHandlerGroup(ZoneWorldNames.BROADCAST_HANDLER_GROUP)
 class WorldAnnounceSubscriber(

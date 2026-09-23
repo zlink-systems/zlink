@@ -4960,9 +4960,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             if (ZLinkFlowContext.isValidFlowId(flowId)) {
                 flow =
                         new ZLinkFlowContext.State(
-                                flowId,
-                                packetHeader.flowOrigin().orElseThrow(),
-                                null);
+                                flowId, packetHeader.flowOrigin().orElseThrow(), null);
             }
         }
         if (flow == null) {
