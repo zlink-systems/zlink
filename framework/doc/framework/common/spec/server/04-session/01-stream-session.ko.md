@@ -167,9 +167,12 @@ STREAM session dispatch에는 Handler filter를 적용하지
 않는다. 다른 dispatch의 filter 적용 범위와 실행 규칙은
 [Framework API §8.1](../00-foundation/06-framework-api.ko.md#10-handler-filter)이 정한다.
 
-Session callback은 packet name, metadata와 request 정보를 담은 dispatch context와 payload를
-받는다. Runtime은 request header 값을 dispatch context 안에 보존하므로 application이 header
-객체를 만들거나 relay 호출에 다시 넘기지 않는다. `recv` 결과에서 얻은 peer 식별 값인
+Session callback은 packet name, metadata, request 정보와 packet의 상대인 bound Actor를 담은
+dispatch context와 payload를 받는다. bound Actor는 packet의 Actor slot을 현재 binding으로 해석한
+값이며 slot이 없거나 현재 binding이 아니면 없다
+([Session과 Actor binding §5](02-session-actor-binding.ko.md#5-bind와-relay)). Runtime은 request
+header 값을 dispatch context 안에 보존하므로 application이 header 객체를 만들거나 relay 호출에
+다시 넘기지 않는다. `recv` 결과에서 얻은 peer 식별 값인
 [routing ID](../00-foundation/02-glossary.ko.md#routing-id)는 session dispatch까지 정보 손실 없이 전달된다.
 
 ### 4.1 Transport 종료 경계
@@ -298,8 +301,8 @@ STREAM packet과 cross-node Session record가 공유하는 host permit 규칙은
 
 **연결과 dispatch**
 
-- Client가 보낸 packet은 packet name, metadata와 payload를 담은 dispatch context로 session
-  callback에 도달한다.
+- Client가 보낸 packet은 packet name, metadata, payload와 (Actor slot이 있으면) 그 bound Actor를
+  담은 dispatch context로 session callback에 도달한다.
 - STREAM packet pull 경로에서도 session lifecycle·packet·오류 callback의 공개 표면과
   실행은 바뀌지 않으며, packet은 public session callback에 도달한다.
 - Session callback이 managed queue를 소비하지 못하는 동안 client가 계속 보내면 client 쪽 send가

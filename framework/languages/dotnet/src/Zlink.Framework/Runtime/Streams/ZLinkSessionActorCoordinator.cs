@@ -25,12 +25,7 @@ internal sealed class ZLinkSessionActorCoordinator(
         CancellationToken cancellationToken
     )
     {
-        return BindActorSerializedAsync(
-            context,
-            actor,
-            allowExisting: false,
-            cancellationToken: cancellationToken
-        );
+        return BindActorSerializedAsync(context, actor, cancellationToken);
     }
 
     public ValueTask<IZLinkSessionActor> BindOrGetActorAsync(
@@ -39,18 +34,12 @@ internal sealed class ZLinkSessionActorCoordinator(
         CancellationToken cancellationToken
     )
     {
-        return BindActorSerializedAsync(
-            context,
-            actor,
-            allowExisting: true,
-            cancellationToken: cancellationToken
-        );
+        return BindActorSerializedAsync(context, actor, cancellationToken);
     }
 
     private async ValueTask<IZLinkSessionActor> BindActorSerializedAsync(
         ZLinkSessionContext context,
         ActorRef actor,
-        bool allowExisting,
         CancellationToken cancellationToken
     )
     {
@@ -66,7 +55,7 @@ internal sealed class ZLinkSessionActorCoordinator(
         try
         {
             lease = await operation.AcquireAsync(cancellationToken).ConfigureAwait(false);
-            return await BindActorWithinGateAsync(context, actor, allowExisting, cancellationToken)
+            return await BindActorWithinGateAsync(context, actor, cancellationToken)
                 .ConfigureAwait(false);
         }
         finally
@@ -207,13 +196,12 @@ internal sealed class ZLinkSessionActorCoordinator(
     private async ValueTask<IZLinkSessionActor> BindActorWithinGateAsync(
         ZLinkSessionContext context,
         ActorRef actor,
-        bool allowExisting,
         CancellationToken cancellationToken
     )
     {
         if (_bindings.FindActor(actor.ActorId) is { } existing)
         {
-            if (allowExisting && ActorRefsEqual(existing.Ref, actor))
+            if (ActorRefsEqual(existing.Ref, actor))
                 return existing;
 
             if (existing is not ZLinkSessionActor existingActor)
@@ -570,6 +558,11 @@ internal sealed class ZLinkSessionActorCoordinator(
     {
         return _bindings.FindActor(actorId);
     }
+
+    internal IZLinkSessionActor? FindActor(ushort slot) =>
+        BoundActors.FirstOrDefault(actor =>
+            actor is ZLinkSessionActor runtimeActor && runtimeActor.Slot == slot
+        );
 
     public async ValueTask RelayToActorAsync(
         IZLinkSessionActor actor,

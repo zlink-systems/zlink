@@ -148,6 +148,7 @@ The session owner keeps the following information as one binding per Actor.
 | `NodeGeneration`, `AuthorityOwnerGeneration`, `OwnerLeaseGeneration` | Verified to avoid sending to a node before restart or a previous owner. |
 | Session owner RID and lifecycle generation, binding generation and token | Rejects late messages from a previous connection or a replaced binding. |
 | [Session sequence](../00-foundation/02-glossary.en.md#session-sequence) | Preserves the order of messages accepted on the same session. |
+| Actor slot | A non-zero `u16` address that points at one binding within this STREAM session. Only a new binding is given the next value not yet issued, and a value is never reused within the same session. Binding the current binding of the same physical session again, or obtaining it with `BindOrGet`, keeps its existing slot. When a session that has issued up to `65535` needs a new binding, the bind ends as `InvalidOperation` without changing the existing bindings. |
 
 Binding identity uses the session owner Node RID, that node's lifecycle
 generation, and an owner-local binding generation together. Comparing
@@ -159,8 +160,19 @@ smaller than the previous value.
 ## 5. Bind and Relay
 
 A STREAM packet is first dispatched to the session's typed handler
-registry. If the handler chooses Actor dispatch, the framework preserves
-the following values in the internal envelope.
+registry. The framework resolves the packet's `actor_slot`
+([Stream Connector common spec §4.2](../../stream-connector/32-stream-connector.en.md#42-header))
+against the current bindings and puts that Actor into the dispatch context —
+no slot, or a slot that is not a current binding, means no Actor. This
+resolution is the same for `Send` and `Request`: a slot that arrives late,
+after the unbind, also reaches the session handler with no Actor, and the
+framework neither relays on its behalf nor synthesizes an `Error` reply. A
+request's `Response` and `Error` are results the session handler produced, and
+when the handler produces no terminal reply the existing request timeout rule
+applies. The session callback relays to that Actor or chooses another
+handling. If the handler
+chooses Actor dispatch, the framework preserves the following values in the
+internal envelope.
 
 - The original request correlation
 - The registered binding generation. The binding token is a handle the
@@ -182,7 +194,18 @@ identifying the target node's process lifecycle), and
 `AuthorityOwnerGeneration`, all together, then registers a
 [binding generation](../00-foundation/02-glossary.en.md#binding-generation) and returns a
 terminal reply exactly once. **The admission decision uses these three values
-only.** `OwnerLeaseGeneration` is a value preserved in the envelope, not an
+only.** When the bind completes, the session owner sends the binding's Actor
+slot and `ActorId` to the client as the `$zlink.actor.bound` control packet.
+**The session owner submits `$zlink.actor.bound` before the first STREAM
+packet that carries that slot, and `$zlink.actor.unbound` after the last
+STREAM packet that carries it.** A push and the reply of a relayed request are
+instances of that one rule. A binding ends with the replacement in §6, the
+tombstone in §7, or an Actor destroy. Binding the same current binding again
+keeps its slot by the §4 rule and doesn't send `$zlink.actor.bound` again. The
+format of both control packets is owned by
+[Stream Connector common spec §4.6](../../stream-connector/32-stream-connector.en.md#46-control-frame).
+
+`OwnerLeaseGeneration` is a value preserved in the envelope, not an
 input to the bind admission decision — a bind is never rejected because the
 lease copy carried by the caller-side lookup or projection differs from the
 Actor owner's current lease. The lease belongs to route-fence
@@ -219,29 +242,34 @@ A push sent by the Actor to the session is delivered to the session owner as
 a `boundSessionSend(36)` record. The session owner only submits it to the
 actual STREAM connection when the source Actor `ObjectGeneration`, source
 `NodeGeneration`, `AuthorityOwnerGeneration`, and expected binding
-generation are all current.
+generation are all current. The submitted frame carries the binding's Actor
+slot.
 
 **Binding completion and its recognition are defined by two linearization
 points that leave no room for interpretation. A push's current judgment never
 uses a copy outside those linearization points.**
 
-1. **Actor-owner-side completion — before returning the terminal reply.** The
-   Actor owner finishes the validated binding registration — including every
-   piece of state the Actor-to-session send path on that node consults —
-   **within one owning turn, before returning the terminal reply.** Once the
-   reply is observable, no component on that node remains unaware of this
-   binding. A push sent by an Actor handler that runs after the binding is
-   established (including a join callback) is therefore always observed
-   against the registered binding on that node.
+1. **Actor-owner-side completion — published after the terminal reply is
+   submitted.** The Actor owner prepares the validated binding state **within
+   one owning turn**, submits the `boundSessionBind(38)` terminal reply to that
+   Node pair's ordered connection first, and only then publishes the binding to
+   the `boundSessionSend(36)` send path. A command 36 for the same binding
+   therefore never overtakes the terminal reply, and a push sent by an Actor
+   handler that runs after the binding is established (including a join
+   callback) is always observed against the registered binding on that node.
 2. **Session-owner-side completion = the point at which binding completion is
-   recognized.** After receiving the reply, the session owner publishes the
-   registry's binding commit and **every derived state the push-judgment and
-   STREAM-submission paths consult (projections, route copies) together at one
-   linearization point.** That linearization point is when "the binding is
-   complete" is recognized, and the bind caller's successful completion is
-   observable only after it. A record that arrives after the commit became
-   observable is never judged against derived state that has not yet been
-   updated.
+   recognized.** In the turn that handles the reply, the session owner commits
+   the registry's binding, puts `$zlink.actor.bound` into that session's single
+   ordered STREAM submission queue first, and only then publishes the binding
+   to the command 36 and relayed-reply submission paths. The end of that order
+   is when "the binding is complete" is recognized, and the bind caller's
+   successful completion is observable only after it. Publishing exposes
+   **every derived state the push-judgment and STREAM-submission paths consult
+   (projections, route copies) at the same linearization point**, so a record
+   that arrives after the commit became observable is never judged against
+   derived state that has not yet been updated. Ending a binding runs the
+   reverse order: new slotted submissions are stopped first, the frames already
+   accepted are submitted, and `$zlink.actor.unbound` goes into the same queue.
 3. **There is one judging authority.** A push's current judgment uses only the
    session-owner validation items enumerated by
    [§8.1](#81-seal-held-messages-and-route-switchover) (the four generation
@@ -870,6 +898,20 @@ here.
 
 - `EnableActorDispatch()` doesn't take a `MeshName`. Without an object role
   or Location Store, startup fails as a configuration error.
+- For both a local bind and a bind on another MeshNode, `$zlink.actor.bound`
+  arrives before the first STREAM packet carrying that slot, and
+  `$zlink.actor.unbound` after the last one.
+- A push and the reply of a request relayed to the Actor carry the binding's
+  Actor slot.
+- The dispatch context of a packet with an `actor_slot` points at that
+  binding's Actor.
+- A `Send` and a `Request` that arrive with a slot that is not a current
+  binding both reach the session handler with no Actor, and the framework
+  synthesizes no reply.
+- Binding two Actors gives them different slots, binding the same current
+  binding again keeps the slot and sends no second announcement, a retired
+  slot is never reused, and a new bind on a session that has issued up to
+  `65535` ends as `InvalidOperation`.
 - Binding two Actors on one session binds both, and each is relayed with
   its own independent route and binding token.
 - Binding an `ActorRef` whose location is stale relays exactly once via a

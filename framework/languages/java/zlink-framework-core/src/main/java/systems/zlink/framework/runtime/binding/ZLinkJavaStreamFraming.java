@@ -66,6 +66,21 @@ final class ZLinkJavaStreamFraming {
                         ZLinkStreamHeaderCodec.encode(header), parts.get(0).toByteArray()));
     }
 
+    static Message withActorSlot(List<Message> parts, int actorSlot) {
+        if (parts == null || parts.size() != 1) {
+            throw new IllegalArgumentException("bound Actor push requires one STREAM frame");
+        }
+        ZLinkStreamFrameCodec.DecodedFrame decoded =
+                ZLinkStreamFrameCodec.tryDecode(parts.getFirst().toByteArray())
+                        .orElseThrow(
+                                () ->
+                                        new IllegalArgumentException(
+                                                "bound Actor push is not a STREAM frame"));
+        ZLinkStreamHeader header =
+                ZLinkStreamHeaderCodec.decodeOrPlain(decoded.header()).withActorSlot(actorSlot);
+        return Message.from(ZLinkStreamFrameCodec.encode(header, decoded.body()));
+    }
+
     private static StreamPayload streamPayload(String packetName, List<Message> parts) {
         if (parts == null || parts.isEmpty()) {
             throw new IllegalArgumentException("stream payload requires at least one part");

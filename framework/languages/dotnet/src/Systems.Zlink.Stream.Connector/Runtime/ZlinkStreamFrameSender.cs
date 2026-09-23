@@ -16,7 +16,8 @@ internal sealed class ZlinkStreamFrameSender(
         ZlinkStreamEncodedPayload payload,
         ZlinkStreamMetadata metadata,
         bool compress,
-        ZlinkStreamRequestSeq? requestSeq
+        ZlinkStreamRequestSeq? requestSeq,
+        ushort? actorSlot = null
     )
     {
         var payloadBytes = payload.Payload;
@@ -66,7 +67,8 @@ internal sealed class ZlinkStreamFrameSender(
             metadata,
             null,
             flowId,
-            flowOrigin
+            flowOrigin,
+            actorSlot
         );
         return new ZlinkStreamOutboundFrame(
             headerCodec.Encode(header, correlationId[..correlationLength]),

@@ -7,6 +7,7 @@ using System.Runtime.ExceptionServices;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Systems.Zlink.Stream.Connector.Contracts;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Contracts.Configuration;
 using Zlink.Framework.Contracts.Messaging;
@@ -2848,6 +2849,13 @@ internal sealed class RelocationBehaviorStream(RoutingId routingId) : IZLinkStre
 
     public bool Write(ZLinkMessage payload, SendFlags flags = SendFlags.None)
     {
+        var frame = payload.Decode<byte[]>();
+        if (ZLinkStreamFrameCodec.TryDecode(frame, out var headerBytes, out _))
+        {
+            var header = ZLinkStreamProtocolDefaults.DecodeHeader(headerBytes.ToArray());
+            if (header.Kind == ZlinkStreamMessageKind.Control)
+                return true;
+        }
         Interlocked.Increment(ref _writeCount);
         FirstWrite.TrySetResult();
         return true;

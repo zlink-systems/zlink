@@ -10,8 +10,8 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import systems.zlink.framework.kotlin.ZLinkKotlinStreamConnector
 import systems.zlink.framework.kotlin.await
-import systems.zlink.framework.kotlin.awaitReply
 import systems.zlink.framework.kotlin.kotlin
+import systems.zlink.framework.kotlin.request
 import systems.zlink.httpclient.kotlin.fetch
 import systems.zlink.httpclient.kotlin.zlinkHttpClient
 import systems.zlink.samples.kotlin.tictactoe.shared.contracts.AuthenticateReq
@@ -67,7 +67,7 @@ class TicTacToeClientScenario {
             ensure(game.playNodes.map { it.streamEndpoint }.toSet() == game.playEndpoints.toSet())
 
             val xAuthentication =
-                hostStream.request(AuthenticateReq(options.xActorId)).awaitReply<AuthenticateRes>()
+                hostStream.request<AuthenticateRes>(AuthenticateReq(options.xActorId)).await()
             ensure(xAuthentication.player.actorId == options.xActorId)
             ensure(xAuthentication.player.displayName.isNotBlank())
             ensure(xAuthentication.player.level >= game.requiredLevel)
@@ -75,7 +75,7 @@ class TicTacToeClientScenario {
             // --8<-- [end:doc-e2e-connect-request]
 
             val oAuthentication =
-                guestStream.request(AuthenticateReq(options.oActorId)).awaitReply<AuthenticateRes>()
+                guestStream.request<AuthenticateRes>(AuthenticateReq(options.oActorId)).await()
             ensure(oAuthentication.player.actorId == options.oActorId)
             ensure(oAuthentication.player.actorId != xAuthentication.player.actorId)
             ensure(oAuthentication.player.displayName.isNotBlank())
@@ -83,12 +83,12 @@ class TicTacToeClientScenario {
 
             val observerAuthentication =
                 observerStream
-                    .request(AuthenticateReq(options.observerActorId))
-                    .awaitReply<AuthenticateRes>()
+                    .request<AuthenticateRes>(AuthenticateReq(options.observerActorId))
+                    .await()
             ensure(observerAuthentication.player.actorId == options.observerActorId)
             println("observer-connected endpoint=${game.playEndpoints[1]}")
             val subscription =
-                observerStream.request(ObserveMilestoneReq()).awaitReply<ObserveMilestoneRes>()
+                observerStream.request<ObserveMilestoneRes>(ObserveMilestoneReq()).await()
             ensure(subscription.subscribed)
             println("observer-subscription=verified subscribed=${subscription.subscribed}")
 
@@ -165,7 +165,7 @@ class TicTacToeClientScenario {
                     .waitFor<GameStateNotify>()
                     .where { message -> message.payload().state.lastMoveCell == 0 }
                     .let { wait -> async { wait.await() } }
-            val hostMove1 = hostStream.request(PlaceMarkReq(0)).awaitReply<PlaceMarkRes>()
+            val hostMove1 = hostStream.request<PlaceMarkRes>(PlaceMarkReq(0)).await()
             ensure(hostMove1.state.board == "X........")
             ensure(hostMove1.state.nextTurn == "O")
             ensure(hostMove1.state.lastMoveActorId == options.xActorId)
@@ -183,7 +183,7 @@ class TicTacToeClientScenario {
                     .where { message -> message.payload().state.lastMoveCell == 3 }
                     .let { wait -> async { wait.await() } }
 
-            val guestMove1 = guestStream.request(PlaceMarkReq(3)).awaitReply<PlaceMarkRes>()
+            val guestMove1 = guestStream.request<PlaceMarkRes>(PlaceMarkReq(3)).await()
             ensure(guestMove1.state.board == "X..O.....")
             ensure(guestMove1.state.nextTurn == "X")
             ensure(guestMove1.state.lastMoveActorId == options.oActorId)
@@ -200,7 +200,7 @@ class TicTacToeClientScenario {
                     .waitFor<GameStateNotify>()
                     .where { message -> message.payload().state.lastMoveCell == 1 }
                     .let { wait -> async { wait.await() } }
-            val hostMove2 = hostStream.request(PlaceMarkReq(1)).awaitReply<PlaceMarkRes>()
+            val hostMove2 = hostStream.request<PlaceMarkRes>(PlaceMarkReq(1)).await()
             ensure(hostMove2.state.board == "XX.O.....")
             ensure(hostMove2.state.nextTurn == "O")
             ensure(hostMove2.state.lastMoveActorId == options.xActorId)
@@ -217,7 +217,7 @@ class TicTacToeClientScenario {
                     .waitFor<GameStateNotify>()
                     .where { message -> message.payload().state.lastMoveCell == 4 }
                     .let { wait -> async { wait.await() } }
-            val guestMove2 = guestStream.request(PlaceMarkReq(4)).awaitReply<PlaceMarkRes>()
+            val guestMove2 = guestStream.request<PlaceMarkRes>(PlaceMarkReq(4)).await()
             ensure(guestMove2.state.board == "XX.OO....")
             ensure(guestMove2.state.nextTurn == "X")
             ensure(guestMove2.state.lastMoveActorId == options.oActorId)
@@ -242,7 +242,7 @@ class TicTacToeClientScenario {
                             message.payload().wins == 100
                     }
                     .let { wait -> async { wait.await() } }
-            val hostWin = hostStream.request(PlaceMarkReq(2)).awaitReply<PlaceMarkRes>()
+            val hostWin = hostStream.request<PlaceMarkRes>(PlaceMarkReq(2)).await()
             ensure(hostWin.state.board == "XXXOO....")
             ensure(hostWin.state.status == "Won")
             ensure(hostWin.state.winner == options.xActorId)
@@ -270,9 +270,7 @@ class TicTacToeClientScenario {
             reconnectedHostStream = freshHostStream
             freshHostStream.connect().await()
             val reconnectedAuthentication =
-                freshHostStream
-                    .request(AuthenticateReq(options.xActorId))
-                    .awaitReply<AuthenticateRes>()
+                freshHostStream.request<AuthenticateRes>(AuthenticateReq(options.xActorId)).await()
             ensure(reconnectedAuthentication.player == xAuthentication.player)
 
             // JoinGameMsg stays one-way on reconnect. Start the public wait

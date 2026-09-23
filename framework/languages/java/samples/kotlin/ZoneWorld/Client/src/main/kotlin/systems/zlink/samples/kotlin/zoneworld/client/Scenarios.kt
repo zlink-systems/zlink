@@ -10,7 +10,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import systems.zlink.framework.kotlin.await
-import systems.zlink.framework.kotlin.awaitReply
+import systems.zlink.framework.kotlin.request
 import systems.zlink.samples.kotlin.zoneworld.shared.Messages
 import systems.zlink.samples.kotlin.zoneworld.shared.ZoneWorldSpec
 
@@ -380,9 +380,11 @@ internal object Scenarios {
                 withResources(ops) {
                     val published =
                         ops.connector
-                            .request(Messages.AnnounceWorldReq("maintenance in 10 minutes"))
+                            .request<Messages.AnnounceWorldRes>(
+                                Messages.AnnounceWorldReq("maintenance in 10 minutes")
+                            )
                             .timeout(REQUEST_TIMEOUT)
-                            .awaitReply<Messages.AnnounceWorldRes>()
+                            .await()
                     waits.forEach {
                         ensure(
                             it.await().announcementId == published.announcementId,
@@ -522,9 +524,11 @@ internal object Scenarios {
             val target = ops.watch().nodes.first { it.registered }
             val result =
                 ops.connector
-                    .request(Messages.NodeDiagnosticsReq(target.nodeId))
+                    .request<Messages.NodeDiagnosticsRes>(
+                        Messages.NodeDiagnosticsReq(target.nodeId)
+                    )
                     .timeout(REQUEST_TIMEOUT)
-                    .awaitReply<Messages.NodeDiagnosticsRes>()
+                    .await()
             ensure(
                 result.error == null &&
                     result.nodeId == target.nodeId &&
@@ -619,9 +623,11 @@ internal object Scenarios {
         withResources(player, ops) {
             ensure(player.join().error == null, "JoinWorld succeeds")
             ops.connector
-                .request(Messages.AnnounceWorldReq("bots receive nothing"))
+                .request<Messages.AnnounceWorldRes>(
+                    Messages.AnnounceWorldReq("bots receive nothing")
+                )
                 .timeout(REQUEST_TIMEOUT)
-                .awaitReply<Messages.AnnounceWorldRes>()
+                .await()
             reject(player, -40, player.y, "OutOfRange")
             val state =
                 player.connector
@@ -768,9 +774,9 @@ internal object Scenarios {
                 replacementReady.await()
                 val diagnostics =
                     ops.connector
-                        .request(Messages.NodeDiagnosticsReq(nodeId))
+                        .request<Messages.NodeDiagnosticsRes>(Messages.NodeDiagnosticsReq(nodeId))
                         .timeout(REQUEST_TIMEOUT)
-                        .awaitReply<Messages.NodeDiagnosticsRes>()
+                        .await()
                 try {
                     ensure(
                         diagnostics.error == null && diagnostics.maintenance,
@@ -792,9 +798,11 @@ internal object Scenarios {
             try {
                 val diagnostics =
                     ops.connector
-                        .request(Messages.NodeDiagnosticsReq(node.nodeId))
+                        .request<Messages.NodeDiagnosticsRes>(
+                            Messages.NodeDiagnosticsReq(node.nodeId)
+                        )
                         .timeout(REQUEST_TIMEOUT)
-                        .awaitReply<Messages.NodeDiagnosticsRes>()
+                        .await()
                 ensure(
                     diagnostics.error == null && diagnostics.nodeId == node.nodeId,
                     "reverse-started node accepts operations",

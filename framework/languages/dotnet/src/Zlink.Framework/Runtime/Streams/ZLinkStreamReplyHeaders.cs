@@ -24,7 +24,8 @@ internal static class ZLinkStreamReplyHeaders
             metadata,
             requestHeader.CorrelationId,
             null,
-            null
+            null,
+            requestHeader.ActorSlot
         );
     }
 }

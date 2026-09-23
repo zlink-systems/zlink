@@ -25,6 +25,22 @@ struct stream_header_t
     /* Optional pair (flow-correlation §3.2): both present or both absent. */
     std::string flow_id;
     std::optional<flow_origin_t> flow_origin;
+    std::optional<std::uint16_t> actor_slot;
+};
+
+struct actor_bound_t
+{
+    std::uint16_t actor_slot = 0;
+    std::string actor_id;
+};
+
+class actor_binding_control_codec_t
+{
+  public:
+    static constexpr const char *bound_name = "$zlink.actor.bound";
+    static constexpr const char *unbound_name = "$zlink.actor.unbound";
+    static result_t<actor_bound_t> decode_bound (const std::vector<std::uint8_t> &payload);
+    static result_t<std::uint16_t> decode_unbound (const std::vector<std::uint8_t> &payload);
 };
 
 /* Versioned session-closing control payload (graceful-drain-handoff §7.1):

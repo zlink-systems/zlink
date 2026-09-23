@@ -44,6 +44,9 @@ public interface ZLinkBackendStreamSocket extends ZLinkBackendSocket, ZLinkBacke
         return 0;
     }
 
+    /** Publishes a prepared native route after the Actor-bound control has been submitted. */
+    default void publishBoundActor(RoutingId sessionRid, String actorId) {}
+
     void onTransportError(ZLinkBackendStreamErrorHandler handler);
 
     void startSessionService();
@@ -54,6 +57,11 @@ public interface ZLinkBackendStreamSocket extends ZLinkBackendSocket, ZLinkBacke
     default boolean sendBoundSessionPush(
             RoutingId routingId, List<Message> parts, SendFlags flags) {
         return send(routingId, parts, flags);
+    }
+
+    default boolean sendBoundSessionPush(
+            RoutingId routingId, int actorSlot, List<Message> parts, SendFlags flags) {
+        return sendBoundSessionPush(routingId, parts, flags);
     }
 
     /**
@@ -70,6 +78,11 @@ public interface ZLinkBackendStreamSocket extends ZLinkBackendSocket, ZLinkBacke
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
         }
+    }
+
+    default CompletionStage<Void> sendBoundSessionPushAsync(
+            RoutingId routingId, int actorSlot, List<Message> parts) {
+        return sendBoundSessionPushAsync(routingId, parts);
     }
 
     boolean send(RoutingId routingId, String packetName, List<Message> parts, SendFlags flags);
@@ -95,6 +108,12 @@ public interface ZLinkBackendStreamSocket extends ZLinkBackendSocket, ZLinkBacke
 
     default CompletionStage<Void> sendAsync(
             RoutingId routingId, ZLinkStreamHeader header, List<Message> parts, Duration timeout) {
+        return sendAsync(routingId, header, parts);
+    }
+
+    /** Admits an ordered Session control synchronously and returns its physical terminal. */
+    default CompletionStage<Void> admitSessionControl(
+            RoutingId routingId, ZLinkStreamHeader header, List<Message> parts) {
         return sendAsync(routingId, header, parts);
     }
 
@@ -125,6 +144,11 @@ public interface ZLinkBackendStreamSocket extends ZLinkBackendSocket, ZLinkBacke
     }
 
     ZLinkBackendActorBindOperation bindActor(RoutingId sessionRid, ZLinkBackendActorRef actor);
+
+    default ZLinkBackendActorBindOperation bindActor(
+            RoutingId sessionRid, ZLinkBackendActorRef actor, int actorSlot) {
+        return bindActor(sessionRid, actor);
+    }
 
     ZLinkBackendActorUnbindOperation unbindActor(RoutingId sessionRid, String actorId);
 

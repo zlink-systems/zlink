@@ -133,7 +133,6 @@ export class ZLinkSessionActorCoordinator {
       reuseActor ??
       new DefaultZLinkSessionActor(this.sessionActorRuntime, boundActorRef, bindingToken);
     const sessionIdentity = String(this.actorBindingRoutingId(context));
-    sessionActor.updateRef(boundActorRef);
     if (previous === undefined) {
       if (releaseSeal !== undefined) {
         throw createInternalFrameworkException(
@@ -142,7 +141,14 @@ export class ZLinkSessionActorCoordinator {
           true
         );
       }
-      await this.routes.bind(context, sessionActor, bindingToken, authorityFence, sessionIdentity);
+      await this.routes.bind(
+        context,
+        sessionActor,
+        bindingToken,
+        authorityFence,
+        sessionIdentity,
+        () => sessionActor.updateRef(boundActorRef)
+      );
     } else if (releaseSeal !== undefined) {
       await this.routes.replaceAndReleaseSeal(
         previous,
@@ -151,7 +157,8 @@ export class ZLinkSessionActorCoordinator {
         bindingToken,
         releaseSeal.sealId,
         authorityFence,
-        sessionIdentity
+        sessionIdentity,
+        () => sessionActor.updateRef(boundActorRef)
       );
     } else {
       await this.routes.replace(
@@ -160,7 +167,8 @@ export class ZLinkSessionActorCoordinator {
         sessionActor,
         bindingToken,
         authorityFence,
-        sessionIdentity
+        sessionIdentity,
+        () => sessionActor.updateRef(boundActorRef)
       );
     }
     if (

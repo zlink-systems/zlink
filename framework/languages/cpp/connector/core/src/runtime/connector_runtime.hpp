@@ -24,6 +24,15 @@
 namespace zlink::stream_connector::detail
 {
 
+class actor_access_t
+{
+  public:
+    static std::shared_ptr<actor_t>
+    create (std::shared_ptr<void> connector_state, std::string actor_id, std::uint16_t actor_slot);
+    static void close (const std::shared_ptr<actor_t> &actor);
+    static std::uint16_t slot (const std::shared_ptr<actor_t> &actor);
+};
+
 boost::asio::io_context &shared_io_context ();
 boost::asio::io_context &shared_callback_io_context ();
 bool configure_shared_runtime_worker_count (std::size_t worker_count);
@@ -32,6 +41,7 @@ struct pending_send_t
 {
     packet_t packet;
     std::function<void (result_t<void>)> callback;
+    std::optional<actor_binding_ref_t> actor_binding;
 };
 
 struct pending_write_t
@@ -75,10 +85,16 @@ struct pending_request_t
 
 /* Handler registrations carry an id so a subscription_t can remove exactly its
  * own registration (stream-connector §7). */
+struct dispatch_envelope_t
+{
+    packet_t packet;
+    std::optional<std::uint16_t> actor_slot;
+};
+
 struct packet_handler_entry_t
 {
     std::uint64_t id = 0;
-    std::function<void (const packet_t &)> handler;
+    std::function<void (const dispatch_envelope_t &)> handler;
 };
 
 template <typename THandler> struct handler_entry_t
@@ -133,7 +149,7 @@ class connector_state_t : public std::enable_shared_from_this<connector_state_t>
     std::deque<pending_write_t> pending_writes;
     std::optional<pending_write_t> active_write;
     std::vector<std::uint8_t> inbound_buffer;
-    std::deque<packet_t> dispatch_queue;
+    std::deque<dispatch_envelope_t> dispatch_queue;
     /* Bumped whenever dispatch_queue is dropped wholesale (a new connection,
      * or close). A scan that evaluates user predicates outside transport_mutex
      * re-reads this before putting the packets it did not take back, so a
@@ -148,6 +164,12 @@ class connector_state_t : public std::enable_shared_from_this<connector_state_t>
     std::vector<handler_entry_t<std::function<void (const error_t &)>>> error_handlers;
     std::vector<handler_entry_t<std::function<void (std::optional<close_reason_t>)>>>
       disconnected_handlers;
+    std::map<std::uint16_t, std::shared_ptr<actor_t>> actors_by_slot;
+    std::map<std::string, std::shared_ptr<actor_t>, std::less<>> actors_by_id;
+    std::vector<handler_entry_t<std::function<void (const std::shared_ptr<actor_t> &)>>>
+      actor_bound_handlers;
+    std::vector<handler_entry_t<std::function<void (const std::shared_ptr<actor_t> &)>>>
+      actor_unbound_handlers;
     std::atomic_uint64_t next_subscription_id{1};
     /* Per-name receive counts for the current connection (stream-connector
      * §10). Guarded by its own mutex because the frame decode paths that
@@ -229,10 +251,13 @@ class connector_runtime_t
     std::shared_ptr<connector_state_t> _state;
 };
 
-result_t<void> submit_send (std::shared_ptr<connector_state_t> state, packet_t packet);
+result_t<void> submit_send (std::shared_ptr<connector_state_t> state,
+                            packet_t packet,
+                            std::optional<actor_binding_ref_t> actor_binding = std::nullopt);
 void submit_send_async (std::shared_ptr<connector_state_t> state,
                         packet_t packet,
-                        std::function<void (result_t<void>)> callback);
+                        std::function<void (result_t<void>)> callback,
+                        std::optional<actor_binding_ref_t> actor_binding = std::nullopt);
 void start_read_loop (std::shared_ptr<connector_state_t> state);
 void start_heartbeat_monitor (std::shared_ptr<connector_state_t> state);
 void stop_heartbeat_monitor (std::shared_ptr<connector_state_t> state);
@@ -252,11 +277,12 @@ result_t<packet_t> wait_for_packet (std::shared_ptr<connector_state_t> state,
  * it, so the caller must hold no connector lock. */
 void deliver_received_packet (connector_state_t &state, packet_t packet);
 /* Appends to dispatch_queue. The caller must already hold transport_mutex. */
-void enqueue_received_message (connector_state_t &state, packet_t packet);
+void enqueue_received_message (connector_state_t &state, dispatch_envelope_t envelope);
 void schedule_delivery (std::shared_ptr<connector_state_t> state, std::function<void ()> callback);
 void schedule_lifecycle_delivery (std::shared_ptr<connector_state_t> state,
                                   std::function<void ()> callback);
 void publish_error (connector_state_t &state, error_t error) noexcept;
+void close_bound_actors (const std::shared_ptr<connector_state_t> &state);
 /* Counts one received application packet by name (stream-connector §10). */
 void note_received_packet (connector_state_t &state, const packet_t &packet);
 /* Randomized reconnect wait: a value between 50% and 100% of the base delay

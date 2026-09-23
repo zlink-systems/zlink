@@ -46,6 +46,7 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
     private final Predicate<RoutingId> routeReady;
     private final ZLinkRelayMetadataPolicy metadataPolicy;
     private long bindingToken;
+    private int actorSlot;
     private Runnable unbindListener = () -> {};
     private Consumer<ZLinkBackendActorRef> rebindListener = ignored -> {};
 
@@ -75,6 +76,10 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
 
     void setBindingToken(long bindingToken) {
         this.bindingToken = bindingToken;
+    }
+
+    void setActorSlot(int actorSlot) {
+        this.actorSlot = actorSlot;
     }
 
     void setUnbindListener(Runnable unbindListener) {
@@ -117,7 +122,9 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
         return ignoreMissingBinding(stream.unbindActor(sessionRid, actorId).submit(timeout))
                 .thenCompose(unbound -> awaitRouteReady(targetActor, timeout))
                 .thenCompose(
-                        ignored -> bindActorWithRetry(stream, sessionRid, targetActor, timeout))
+                        ignored ->
+                                bindActorWithRetry(
+                                        stream, sessionRid, targetActor, actorSlot, timeout))
                 .thenCompose(ignored -> relayBoundSessionBind(header))
                 .thenRun(() -> rebindListener.accept(targetActor));
     }
@@ -158,6 +165,15 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
         return stream.bindActor(sessionRid, targetActor).submit(timeout);
     }
 
+    static CompletionStage<Void> bindActorWithRetry(
+            ZLinkBackendStreamSocket stream,
+            RoutingId sessionRid,
+            ZLinkBackendActorRef targetActor,
+            int actorSlot,
+            Duration timeout) {
+        return stream.bindActor(sessionRid, targetActor, actorSlot).submit(timeout);
+    }
+
     static CompletionStage<Void> ignoreMissingBinding(CompletionStage<Void> stage) {
         return stage.handle(
                         (ignored, error) -> {
@@ -186,6 +202,7 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
                 actorRuntime,
                 encoded.payload(),
                 options,
+                actorSlot,
                 metadataPolicy);
     }
 
@@ -207,6 +224,7 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
             ZLinkActorRuntime actorRuntime,
             Message payload,
             ZLinkBoundSessionSendOptions options,
+            int actorSlot,
             ZLinkRelayMetadataPolicy metadataPolicy,
             AtomicBoolean submitGate)
             implements ZLinkBoundSessionSendCall {
@@ -217,6 +235,7 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
                 ZLinkActorRuntime actorRuntime,
                 Message payload,
                 ZLinkBoundSessionSendOptions options,
+                int actorSlot,
                 ZLinkRelayMetadataPolicy metadataPolicy) {
             this(
                     stream,
@@ -225,6 +244,7 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
                     actorRuntime,
                     payload,
                     options,
+                    actorSlot,
                     metadataPolicy,
                     new AtomicBoolean());
         }
@@ -237,6 +257,7 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
                     actorRuntime,
                     payload,
                     options.withPacketName(packetName),
+                    actorSlot,
                     metadataPolicy,
                     submitGate);
         }
@@ -250,6 +271,7 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
                     actorRuntime,
                     payload,
                     options.withMetadata(key, value),
+                    actorSlot,
                     metadataPolicy,
                     submitGate);
         }
@@ -263,6 +285,9 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
             try (ZLinkFlowContext.Scope flowScope =
                     actorRuntime != null ? actorRuntime.enterApplicationFlow() : null) {
                 ZLinkStreamHeader header = metadataPolicy.actorToSession(options).header();
+                if (actorSlot != 0) {
+                    header = header.withActorSlot(actorSlot);
+                }
                 Message payloadPart;
                 try {
                     payloadPart = Message.from(payload);

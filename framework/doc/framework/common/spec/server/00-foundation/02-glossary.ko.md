@@ -2386,6 +2386,15 @@ ObjectGeneration과는 다른 값이다.
 | 생성·관리 | Location Store provider가 새 owner lease claim에서 발급한다. |
 | 수명 | 해당 host process owner lease lifecycle 동안 유지된다. 같은 OwnerId가 재시작해도 새 값을 사용한다. |
 
+<a id="actor-slot"></a>
+### Actor slot
+
+STREAM session 하나 안에서 binding 하나를 가리키는 `0`이 아닌 `u16` 주소다. 발급·수명·통지와
+server 쪽 해석은 [Session과 Actor binding §4·§5](../04-session/02-session-actor-binding.ko.md#4-binding이-잇는-값과-보관하는-정보)가,
+byte 표현은 [Stream Connector 공통 스펙 §4](../../stream-connector/32-stream-connector.ko.md#4-wire-계약)가,
+client의 대응표와 handle은 [Stream Connector 공통 스펙 §5.6](../../stream-connector/32-stream-connector.ko.md#56-bound-actor)이
+소유한다.
+
 <a id="session-sequence"></a>
 ### Session sequence
 

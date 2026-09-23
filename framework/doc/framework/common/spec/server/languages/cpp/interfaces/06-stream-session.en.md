@@ -57,6 +57,7 @@ struct session_message_context_t {
     std::string packet_name;
     message_metadata_t metadata;
     bool can_reply;
+    std::shared_ptr<session_actor_t> actor; // the current binding the packet's Actor slot points at; nullptr when there is none
 };
 
 class stream_t {

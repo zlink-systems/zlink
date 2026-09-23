@@ -13,6 +13,7 @@ import type {
 } from './actor-session-binding-registry';
 
 export interface ZLinkActorSessionBindingRuntimeOwner {
+  actorSlot(actorId: string, sessionRid: string): Promise<number | undefined>;
   sealRelocation(
     claim: ZLinkActorSessionRelocationClaim,
     expected: ZLinkActorSessionRouteFence,

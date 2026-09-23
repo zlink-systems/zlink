@@ -264,6 +264,7 @@ export class ZLinkStreamRuntimeManager {
           const service = createService.call(meshNode, socket.nativeInstance as never);
           const bindingOwner = actorSessionBindingRuntimeOwner(this.options.bindingRuntime);
           registerServiceSessionBindingIngressPort(service, {
+            actorSlot: (actorId, sessionRid) => bindingOwner.actorSlot(actorId, sessionRid),
             retainOutbound: (claim, delivery) =>
               bindingOwner.admitRelocationOutbound(claim, delivery),
             clearOutbound: (actorId, error) => bindingOwner.clearRelocation(actorId, error)
@@ -441,6 +442,12 @@ export class ZLinkStreamBindingRuntime {
       actorSessionLifecycle
     );
     registerActorSessionBindingRuntimeOwner(this, {
+      actorSlot: async (actorId, sessionRid) => {
+        const route = await this.routes.route(actorId);
+        return route !== undefined && route.sessionIdentity === sessionRid
+          ? route.actorSlot
+          : undefined;
+      },
       sealRelocation: (claim, expected, signal) =>
         this.routes.sealRelocation(claim, expected, signal),
       relocationSnapshot: (actorId, sealId) => this.routes.relocationSnapshot(actorId, sealId),

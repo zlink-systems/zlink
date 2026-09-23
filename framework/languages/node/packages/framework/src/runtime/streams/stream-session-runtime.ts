@@ -467,6 +467,7 @@ export class ZLinkStreamSessionRuntime {
   ): Promise<void> {
     let dispatchPayload = payload;
     let enteredDispatch = false;
+    let dispatchHeader = decodedHeader;
     try {
       if (decodedHeader.kind === ZLinkStreamMessageKind.Control) {
         await this.handleControl(decodedHeader, payload);
@@ -477,15 +478,20 @@ export class ZLinkStreamSessionRuntime {
       if (this.context.tryCompleteResponse(decodedHeader, dispatchPayload)) {
         return;
       }
-      this.context.enterDispatch(decodedHeader);
+      const dispatchActor = this.context.actorForSlot(decodedHeader.actorSlot);
+      if (decodedHeader.actorSlot !== undefined && dispatchActor === undefined) {
+        const { actorSlot: _staleActorSlot, ...headerWithoutActor } = decodedHeader;
+        dispatchHeader = headerWithoutActor;
+      }
+      this.context.enterDispatch(dispatchHeader);
       enteredDispatch = true;
       const session = await this.requireSession();
       const streamKind =
         decodedHeader.kind === ZLinkStreamMessageKind.Request
           ? ZLinkDispatchMessageKind.Request
           : ZLinkDispatchMessageKind.Send;
-      const streamCorr = decodedHeader.correlationId;
-      const inboundHeader = decodedHeader;
+      const streamCorr = dispatchHeader.correlationId;
+      const inboundHeader = dispatchHeader;
       await runWithFlow(
         createInboundFlow(
           inboundHeader.flowId,
@@ -529,7 +535,7 @@ export class ZLinkStreamSessionRuntime {
               this.context.routingId === undefined ? undefined : String(this.context.routingId)
           });
           await session.onDispatch?.(
-            createSessionDispatchContext(inboundHeader),
+            createSessionDispatchContext(inboundHeader, dispatchActor),
             wrapFrameworkPayloadMessage(
               dispatchPayload,
               this.options.messageSerializers,
@@ -574,7 +580,7 @@ export class ZLinkStreamSessionRuntime {
         error
       });
       this.options.onError?.(error);
-      await this.replyDispatchError(decodedHeader, error);
+      await this.replyDispatchError(dispatchHeader, error);
       if (error instanceof ZLinkRouteDisconnectedError && decodedHeader.requestSeq === undefined) {
         await this.context.close();
       }

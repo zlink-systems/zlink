@@ -34,6 +34,32 @@ regardless of language.** Unity WebGL uses the
 the npm package root's browser bundle and the jslib/C# call boundary.
 This adapter doesn't provide a separate wire runtime.
 
+The Unity WebGL C# adapter projects the bound Actor surface with the same
+meaning.
+
+```csharp
+public partial class ZlinkStreamConnector
+{
+    public IReadOnlyList<ZlinkStreamActor> Actors { get; }
+    public ZlinkStreamActor? Actor(string actorId);
+    public IDisposable OnActorBound(Action<ZlinkStreamActor> handler);
+    public IDisposable OnActorUnbound(Action<ZlinkStreamActor> handler);
+}
+
+public sealed class ZlinkStreamActor
+{
+    public string ActorId { get; }
+    public bool IsBound { get; }
+    public ZlinkStreamSendCall Send(object payload);
+    public ZlinkStreamRequestCall Request(object payload);
+    public IDisposable On<TPayload>(string name, Action<ZlinkStreamMessage<TPayload>> handler);
+}
+```
+
+The jslib JSON boundary carries only `actorId` and the bound/unbound
+lifecycle events. `actor_slot` stays inside the TypeScript wire runtime and
+is never exposed as a public C# value.
+
 ## 2. Entrypoint
 
 The public entrypoint is a single package root,
@@ -115,6 +141,24 @@ interface ZlinkStreamConnector {
   onConnectionStateChanged(
     handler: (change: ZlinkStreamConnectionStateChanged, signal?: AbortSignal) => Promise<void> | void
   ): Disposable;
+
+  // The Actor handles bound right now (common spec §5.6). The application never creates one.
+  readonly actors: readonly ZlinkStreamActor[];
+  actor(actorId: string): ZlinkStreamActor | undefined;
+  onActorBound(handler: (actor: ZlinkStreamActor, signal?: AbortSignal) => Promise<void> | void): Disposable;
+  onActorUnbound(handler: (actor: ZlinkStreamActor, signal?: AbortSignal) => Promise<void> | void): Disposable;
+}
+
+interface ZlinkStreamActor {
+  readonly actorId: string;
+  readonly isBound: boolean;                    // false after the unbound announcement
+  send(payload: unknown, messageType?: Function): ZlinkStreamSendCall;       // carries this Actor's slot
+  request(payload: unknown, messageType?: Function): ZlinkStreamRequestCall;
+  on<TPayload = ZlinkStreamEncodedPayload>(
+    name: string,
+    handler: (message: ZlinkStreamMessage<TPayload>, signal?: AbortSignal) => Promise<void> | void,
+    messageType?: Function
+  ): Disposable;                                // only messages whose counterpart is this Actor
 }
 
 interface ZlinkStreamSendCall {
@@ -176,6 +220,7 @@ interface ZlinkStreamMessage<TPayload = unknown> extends ZlinkStreamFlow {
   readonly name: string;
   readonly metadata: ZlinkStreamMetadata;
   readonly payload: TPayload;
+  readonly actorId?: string;                   // the counterpart bound Actor; undefined for a frame without a slot (common spec §5.6)
 }
 
 interface ZlinkStreamError {
@@ -200,7 +245,7 @@ enum ZlinkStreamDispatchMode { Manual = 'manual', Immediate = 'immediate' }
 enum ZlinkStreamMessageKind { Send = 1, Request = 2, Response = 3, Error = 4, Control = 5 }
 enum ZlinkStreamHeaderFlags {
   None = 0, HasRequestSeq = 0x01, HasMetadata = 0x02,
-  PayloadCompressed = 0x04, HasCorrelationId = 0x08, HasFlowId = 0x10
+  PayloadCompressed = 0x04, HasCorrelationId = 0x08, HasFlowId = 0x10, HasActorSlot = 0x20
 }
 enum ZlinkStreamConnectionState {
   Created = 'created', Connecting = 'connecting', Connected = 'connected',

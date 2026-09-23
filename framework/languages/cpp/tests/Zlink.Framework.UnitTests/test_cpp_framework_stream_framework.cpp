@@ -74,6 +74,8 @@ class sample_session_t final : public zlink::framework::packet_stream_session_t
                           + payload.to_string ());
         last_can_reply = dispatch.can_reply;
         last_metadata = dispatch.metadata;
+        last_actor_id =
+          dispatch.actor ? std::optional<std::string> (dispatch.actor->actor_id ()) : std::nullopt;
         stream.reply_packet (payload).async ().result ().value ();
         return zlink::framework::task_t<void> (zlink::framework::result_t<void>::success ());
     }
@@ -81,6 +83,7 @@ class sample_session_t final : public zlink::framework::packet_stream_session_t
     std::vector<std::string> events;
     bool last_can_reply = false;
     zlink::framework::message_metadata_t last_metadata;
+    std::optional<std::string> last_actor_id;
 };
 
 class reentrant_session_t final : public zlink::framework::packet_stream_session_t
@@ -959,6 +962,7 @@ int main ()
       77, "move", metadata);
     // correlation_id is now a first-class stream-header field (not a metadata key).
     request_header.with_correlation_id ("abc");
+    request_header.with_actor_slot (9);
 
     const auto encoded = runtime.encode_header (request_header);
     if (!encoded) {
@@ -968,7 +972,7 @@ int main ()
     if (!decoded || decoded.value ().kind () != stream_message_kind_t::request
         || decoded.value ().codec () != stream_codec_t::json
         || decoded.value ().request_seq () != 77 || decoded.value ().packet_name () != "move"
-        || decoded.value ().correlation_id () != "abc"
+        || decoded.value ().correlation_id () != "abc" || decoded.value ().actor_slot () != 9
         || decoded.value ().content_type () != "application/json"
         || decoded.value ().metadata ("trace") != "42") {
         return 3;
@@ -1033,6 +1037,26 @@ int main ()
     if (runtime.validate_header (missing_request_seq) || runtime.validate_header (zero_request_seq)
         || runtime.validate_header (invalid_error) || runtime.validate_header (invalid_control)) {
         return 20;
+    }
+    zlink::framework::detail::stream_header_t zero_actor_slot (
+      stream_message_kind_t::send, stream_codec_t::raw, stream_header_flags_t::none, std::nullopt,
+      "zero-actor");
+    zero_actor_slot.with_actor_slot (0);
+    zlink::framework::detail::stream_header_t control_actor_slot (
+      stream_message_kind_t::control, stream_codec_t::raw, stream_header_flags_t::none,
+      std::nullopt, "$zlink.actor.bound");
+    control_actor_slot.with_actor_slot (1);
+    auto truncated_actor_slot = encoded.value ();
+    truncated_actor_slot.pop_back ();
+    if (runtime.validate_header (zero_actor_slot) || runtime.validate_header (control_actor_slot)
+        || runtime.decode_header (truncated_actor_slot)) {
+        return 294;
+    }
+    if (zlink::framework::detail::stream_runtime_t::encode_actor_bound_payload (7, "actor")
+          != std::vector<std::uint8_t> ({1, 0, 7, 5, 'a', 'c', 't', 'o', 'r'})
+        || zlink::framework::detail::stream_runtime_t::encode_actor_unbound_payload (7)
+             != std::vector<std::uint8_t> ({1, 0, 7})) {
+        return 295;
     }
     zlink::framework::detail::stream_metadata_t large_metadata;
     large_metadata.with ("trace", std::string (65536, 'x'));
@@ -1207,7 +1231,8 @@ int main ()
                                   zlink::message_t::from (std::string ("payload")))) {
         return 8;
     }
-    if (!session.last_can_reply || session.last_metadata.find ("trace") != "42"
+    if (!session.last_can_reply || session.last_actor_id
+        || session.last_metadata.find ("trace") != "42"
         || session.last_metadata.find ("content_type") != "application/json") {
         return 228;
     }
@@ -1237,9 +1262,86 @@ int main ()
     /* stream connector §5.2: Response는 request의 packet name을 그대로 되돌린다. */
     if (runtime.written_headers (stream)[0].kind () != stream_message_kind_t::response
         || runtime.written_headers (stream)[0].request_seq () != 77
+        || runtime.written_headers (stream)[0].actor_slot ()
         || !runtime.written_headers (stream)[0].packet_name ().empty ()) {
         return 15;
     }
+    const auto stale_error_header =
+      zlink::framework::detail::stream_runtime_t::make_terminal_header (
+        stream, stream_message_kind_t::error, request_header);
+    if (stale_error_header.actor_slot ()) {
+        return 321;
+    }
+
+    /* Session Actor binding §5: the owner issues one stable slot, publishes
+     * bound before the first slotted packet, resolves current ingress into the
+     * dispatch context, and copies the slot to the terminal reply. */
+    auto actor_stream = runtime.open_session ("client-stream");
+    zlink::framework::detail::actor_gateway_runtime_t actor_gateway;
+    auto actor_manager = actor_gateway.manager ();
+    zlink::framework::detail::session_actor_manager_access_t::attach (actor_manager, actor_stream);
+    auto actor_ref = zlink::framework::detail::actor_ref_access_t::make (
+      zlink::framework::node_rid_t::from_string ("actor-node"), "PlayerActor", "slot-actor", 1);
+    const auto first_bind = actor_manager.bind (actor_ref).async ().result ();
+    const auto repeated_bind = actor_manager.bind (actor_ref).async ().result ();
+    if (!first_bind || !repeated_bind || runtime.written_headers (actor_stream).size () != 1
+        || runtime.written_headers (actor_stream)[0].kind () != stream_message_kind_t::control
+        || runtime.written_headers (actor_stream)[0].packet_name () != "$zlink.actor.bound"
+        || runtime.written_headers (actor_stream)[0].actor_slot ()) {
+        return 296;
+    }
+    const auto bound_payload = runtime.written_payloads (actor_stream)[0].to_string ();
+    if (std::vector<std::uint8_t> (bound_payload.begin (), bound_payload.end ())
+        != zlink::framework::detail::stream_runtime_t::encode_actor_bound_payload (1,
+                                                                                   "slot-actor")) {
+        return 297;
+    }
+    auto actor_request_header = request_header;
+    actor_request_header.with_actor_slot (1);
+    sample_session_t actor_session;
+    if (!runtime.dispatch_packet (actor_session, actor_stream, actor_request_header,
+                                  zlink::message_t::from (std::string ("actor-payload")))) {
+        return 298;
+    }
+    const auto actor_written_headers = runtime.written_headers (actor_stream);
+    if (actor_session.last_actor_id != "slot-actor" || actor_written_headers.size () != 2
+        || actor_written_headers[1].kind () != stream_message_kind_t::response
+        || actor_written_headers[1].actor_slot () != 1) {
+        return 299;
+    }
+    const auto actor_error_header =
+      zlink::framework::detail::stream_runtime_t::make_terminal_header (
+        actor_stream, stream_message_kind_t::error, actor_request_header);
+    if (actor_error_header.actor_slot () != 1) {
+        return 322;
+    }
+    bool hidden_until_bound = false;
+    zlink::framework::detail::session_actor_manager_access_t::bind_native (
+      actor_manager, [&actor_manager, &hidden_until_bound] (zlink::framework::actor_ref_t actor,
+                                                            std::uint64_t, std::uint16_t slot) {
+          hidden_until_bound =
+            slot == 2
+            && !actor_manager.find (std::string (actor.actor_id ().value ())).has_value ();
+          return zlink::framework::task_t<void> (zlink::framework::result_t<void>::success ());
+      });
+    auto publish_actor = zlink::framework::detail::actor_ref_access_t::make (
+      zlink::framework::node_rid_t::from_string ("actor-node"), "PlayerActor",
+      "publish-after-bound", 1);
+    if (!actor_manager.bind (std::move (publish_actor)).async ().result () || !hidden_until_bound
+        || !actor_manager.find ("publish-after-bound"))
+        return 300;
+    for (std::uint32_t slot = 3; slot <= std::numeric_limits<std::uint16_t>::max (); ++slot) {
+        auto next_actor = zlink::framework::detail::actor_ref_access_t::make (
+          zlink::framework::node_rid_t::from_string ("actor-node"), "PlayerActor",
+          "slot-actor-" + std::to_string (slot), 1);
+        if (!actor_manager.bind (std::move (next_actor)).async ().result ())
+            return 301;
+    }
+    auto exhausted_actor = zlink::framework::detail::actor_ref_access_t::make (
+      zlink::framework::node_rid_t::from_string ("actor-node"), "PlayerActor", "slot-overflow", 1);
+    const auto exhausted = actor_manager.bind (std::move (exhausted_actor)).async ().result ();
+    if (exhausted || exhausted.error_kind () != framework_error_kind_t::invalid_operation)
+        return 302;
 
     auto push_codec_stream = runtime.open_session ("client-stream");
     sample_session_t push_codec_session;

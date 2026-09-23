@@ -90,6 +90,7 @@ struct message_t {
     metadata_t metadata;
     std::string flow_id;                       // empty when the diagnostics level is off (§6)
     std::optional<flow_origin_t> flow_origin;  // an empty value under the same condition
+    std::optional<std::string> actor_id;       // the counterpart bound Actor; empty for a frame without a slot (common spec §5.6)
 };
 ```
 
@@ -126,6 +127,30 @@ subscription_t on_error(std::function<void(const error_t&)> callback);
 subscription_t on_disconnected(std::function<void(std::optional<stream_close_reason_t>)> callback);
 subscription_t on_connection_state_changed(
     std::function<void(const connection_state_changed_t&)> callback);
+
+// The Actor handles bound right now (common spec §5.6). The application never creates one.
+std::vector<std::shared_ptr<actor_t>> actors() const;
+std::shared_ptr<actor_t> actor(std::string_view actor_id) const;   // nullptr when there is none
+subscription_t on_actor_bound(std::function<void(const std::shared_ptr<actor_t>&)> callback);
+subscription_t on_actor_unbound(std::function<void(const std::shared_ptr<actor_t>&)> callback);
+```
+
+```cpp
+class actor_t {                 // one bound Actor. The connector owns it and closes it on the unbound announcement
+public:
+    const std::string& actor_id() const noexcept;
+    bool is_bound() const noexcept;            // false after the unbound announcement
+
+    template <typename TMessage>
+    send_call_t send(const TMessage& message);       // carries this Actor's slot
+    template <typename TRequest>
+    request_call_t request(const TRequest& request);
+    template <typename TMessage>
+    subscription_t on(std::function<void(const message_t<TMessage>&)> callback);   // only messages whose counterpart is this Actor
+    template <typename TMessage>
+    subscription_t on(std::string packet_name,
+                      std::function<void(const message_t<TMessage>&)> callback);
+};
 ```
 
 A deregistered handler isn't run by a later `dispatch()`.

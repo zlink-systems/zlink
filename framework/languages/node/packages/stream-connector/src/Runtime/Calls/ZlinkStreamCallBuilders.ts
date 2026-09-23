@@ -26,7 +26,9 @@ interface ZlinkStreamConnectorSubmitter {
     compress: boolean,
     requestSeq: bigint | undefined,
     signal?: AbortSignal,
-    flow?: ZlinkStreamFlow
+    flow?: ZlinkStreamFlow,
+    correlationId?: string,
+    actorSlot?: number
   ): Promise<void>;
   requestEncoded(
     name: string,
@@ -35,7 +37,8 @@ interface ZlinkStreamConnectorSubmitter {
     compress: boolean,
     timeoutMs: number,
     signal?: AbortSignal,
-    flow?: ZlinkStreamFlow
+    flow?: ZlinkStreamFlow,
+    actorSlot?: number
   ): Promise<ZlinkStreamEncodedPayload>;
   waitForMessage<TPayload>(
     name: string,
@@ -53,7 +56,11 @@ class ZlinkStreamCallBuilderState {
   compress = false;
   flow: ZlinkStreamFlow | undefined;
 
-  constructor(name: string | undefined) {
+  constructor(
+    name: string | undefined,
+    readonly actorSlot?: number,
+    private readonly validateActor?: () => void
+  ) {
     this.name = name;
   }
 
@@ -65,6 +72,7 @@ class ZlinkStreamCallBuilderState {
       );
     }
     this.executed = true;
+    this.validateActor?.();
   }
 
   resolveMessageName(): string {
@@ -84,9 +92,11 @@ export class ZlinkStreamSendBuilder implements ZlinkStreamSendCall {
   constructor(
     private readonly connector: ZlinkStreamConnectorSubmitter,
     name: string | undefined,
-    private readonly payload: ZlinkStreamEncodedPayload
+    private readonly payload: ZlinkStreamEncodedPayload,
+    actorSlot?: number,
+    validateActor?: () => void
   ) {
-    this.state = new ZlinkStreamCallBuilderState(name);
+    this.state = new ZlinkStreamCallBuilderState(name, actorSlot, validateActor);
   }
 
   packetName(name: string): this {
@@ -126,7 +136,9 @@ export class ZlinkStreamSendBuilder implements ZlinkStreamSendCall {
       this.state.compress,
       undefined,
       signal,
-      this.state.flow
+      this.state.flow,
+      undefined,
+      this.state.actorSlot
     );
   }
 }
@@ -137,9 +149,11 @@ export class ZlinkStreamRequestBuilder implements ZlinkStreamRequestCall {
   constructor(
     private readonly connector: ZlinkStreamConnectorSubmitter,
     name: string | undefined,
-    private readonly payload: ZlinkStreamEncodedPayload
+    private readonly payload: ZlinkStreamEncodedPayload,
+    actorSlot?: number,
+    validateActor?: () => void
   ) {
-    this.state = new ZlinkStreamCallBuilderState(name);
+    this.state = new ZlinkStreamCallBuilderState(name, actorSlot, validateActor);
   }
 
   packetName(name: string): this {
@@ -187,7 +201,8 @@ export class ZlinkStreamRequestBuilder implements ZlinkStreamRequestCall {
       this.state.compress,
       this.state.timeoutMs ?? this.connector.options.requestTimeoutMs,
       typeof signalOrCallback === 'function' ? undefined : signalOrCallback,
-      this.state.flow
+      this.state.flow,
+      this.state.actorSlot
     );
     if (typeof signalOrCallback === 'function') {
       operation.then(
@@ -210,7 +225,8 @@ export class ZlinkStreamRequestBuilder implements ZlinkStreamRequestCall {
       this.state.compress,
       this.state.timeoutMs ?? this.connector.options.requestTimeoutMs,
       signal,
-      this.state.flow
+      this.state.flow,
+      this.state.actorSlot
     );
   }
 }

@@ -39,6 +39,7 @@
         <Compile Include="Protocol/HeaderCodecTests.cs"/>
         <Compile Include="Support/StreamConnectorTestSupport.cs"/>
         <Compile Include="Transport/DiagnosticsLevelLiveTests.cs"/>
+        <Compile Include="Transport/ActorBindingTests.cs"/>
         <Compile Include="Transport/DispatchTests.cs"/>
         <Compile Include="Transport/LifecycleTests.cs"/>
         <Compile Include="Transport/ReceiveQueueConcurrencyTests.cs"/>

@@ -190,7 +190,12 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
         }
         ZLinkSessionDispatchContext dispatch =
                 new ZLinkSessionDispatchContext(
-                        header.name(), header.metadata(), header.requestSequence().isPresent());
+                        header.name(),
+                        header.metadata(),
+                        header.requestSequence().isPresent(),
+                        actors instanceof ZLinkSessionActorsRuntime runtime
+                                ? header.actorSlot().flatMap(runtime::findBySlot).orElse(null)
+                                : null);
         CompletionStage<Void> stage;
         try {
             ZLinkSessionActorsRuntime.enterRelayDispatch(dispatch, header);

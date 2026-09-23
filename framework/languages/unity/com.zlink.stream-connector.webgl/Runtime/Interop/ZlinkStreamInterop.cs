@@ -56,6 +56,8 @@ namespace Systems.Zlink.Stream.Connector.Runtime
         public const int EventErrorReceived = 3;
         public const int EventDisconnected = 4;
         public const int EventStateChanged = 5;
+        public const int EventActorBound = 6;
+        public const int EventActorUnbound = 7;
 
         /// <summary>
         ///     Signature of the JavaScript to C# event sink. Marshalled as a function
@@ -68,7 +70,8 @@ namespace Systems.Zlink.Stream.Connector.Runtime
             int value,
             IntPtr text,
             IntPtr bytes,
-            int bytesLength);
+            int bytesLength
+        );
 
 #if UNITY_WEBGL && !UNITY_EDITOR
         [DllImport("__Internal", EntryPoint = "ZlinkStreamCreate")]
@@ -106,10 +109,22 @@ namespace Systems.Zlink.Stream.Connector.Runtime
         public static extern void Cancel(int handle, int callId);
 
         [DllImport("__Internal", EntryPoint = "ZlinkStreamSend")]
-        public static extern void Send(int handle, int callId, string callJson, IntPtr payload, int payloadLength);
+        public static extern void Send(
+            int handle,
+            int callId,
+            string callJson,
+            IntPtr payload,
+            int payloadLength
+        );
 
         [DllImport("__Internal", EntryPoint = "ZlinkStreamRequest")]
-        public static extern void Request(int handle, int callId, string callJson, IntPtr payload, int payloadLength);
+        public static extern void Request(
+            int handle,
+            int callId,
+            string callJson,
+            IntPtr payload,
+            int payloadLength
+        );
 
         [DllImport("__Internal", EntryPoint = "ZlinkStreamObserve")]
         public static extern int Observe(int handle, string name);
@@ -140,54 +155,127 @@ namespace Systems.Zlink.Stream.Connector.Runtime
         // platform filter. A native or Editor build uses the Zlink.Stream.Connector
         // NuGet package instead; the two assemblies are never compiled together.
         private const string NotWebGl =
-            "com.zlink.stream-connector.webgl runs in WebGL player builds only. " +
-            "Use the Zlink.Stream.Connector NuGet package for the Editor and native builds.";
+            "com.zlink.stream-connector.webgl runs in WebGL player builds only. "
+            + "Use the Zlink.Stream.Connector NuGet package for the Editor and native builds.";
 
-        public static int Create(string optionsJson) { throw new PlatformNotSupportedException(NotWebGl); }
+        public static int Create(string optionsJson)
+        {
+            throw new PlatformNotSupportedException(NotWebGl);
+        }
 
-        public static void Destroy(int handle) { throw new PlatformNotSupportedException(NotWebGl); }
+        public static void Destroy(int handle)
+        {
+            throw new PlatformNotSupportedException(NotWebGl);
+        }
 
-        public static IntPtr TakeLastError() { throw new PlatformNotSupportedException(NotWebGl); }
+        public static IntPtr TakeLastError()
+        {
+            throw new PlatformNotSupportedException(NotWebGl);
+        }
 
-        public static void FreeBuffer(IntPtr buffer) { throw new PlatformNotSupportedException(NotWebGl); }
+        public static void FreeBuffer(IntPtr buffer)
+        {
+            throw new PlatformNotSupportedException(NotWebGl);
+        }
 
-        public static int SetEventSink(int handle, IntPtr callback) { throw new PlatformNotSupportedException(NotWebGl); }
+        public static int SetEventSink(int handle, IntPtr callback)
+        {
+            throw new PlatformNotSupportedException(NotWebGl);
+        }
 
-        public static int Pump(int handle, int maxEvents) { throw new PlatformNotSupportedException(NotWebGl); }
+        public static int Pump(int handle, int maxEvents)
+        {
+            throw new PlatformNotSupportedException(NotWebGl);
+        }
 
-        public static void Connect(int handle, int callId) { throw new PlatformNotSupportedException(NotWebGl); }
+        public static void Connect(int handle, int callId)
+        {
+            throw new PlatformNotSupportedException(NotWebGl);
+        }
 
-        public static void Close(int handle, int callId) { throw new PlatformNotSupportedException(NotWebGl); }
+        public static void Close(int handle, int callId)
+        {
+            throw new PlatformNotSupportedException(NotWebGl);
+        }
 
-        public static void Dispatch(int handle, int callId) { throw new PlatformNotSupportedException(NotWebGl); }
+        public static void Dispatch(int handle, int callId)
+        {
+            throw new PlatformNotSupportedException(NotWebGl);
+        }
 
-        public static void Cancel(int handle, int callId) { throw new PlatformNotSupportedException(NotWebGl); }
+        public static void Cancel(int handle, int callId)
+        {
+            throw new PlatformNotSupportedException(NotWebGl);
+        }
 
-        public static void Send(int handle, int callId, string callJson, IntPtr payload, int payloadLength) { throw new PlatformNotSupportedException(NotWebGl); }
+        public static void Send(
+            int handle,
+            int callId,
+            string callJson,
+            IntPtr payload,
+            int payloadLength
+        )
+        {
+            throw new PlatformNotSupportedException(NotWebGl);
+        }
 
-        public static void Request(int handle, int callId, string callJson, IntPtr payload, int payloadLength) { throw new PlatformNotSupportedException(NotWebGl); }
+        public static void Request(
+            int handle,
+            int callId,
+            string callJson,
+            IntPtr payload,
+            int payloadLength
+        )
+        {
+            throw new PlatformNotSupportedException(NotWebGl);
+        }
 
-        public static int Observe(int handle, string name) { throw new PlatformNotSupportedException(NotWebGl); }
+        public static int Observe(int handle, string name)
+        {
+            throw new PlatformNotSupportedException(NotWebGl);
+        }
 
-        public static void Unobserve(int handle, string name) { throw new PlatformNotSupportedException(NotWebGl); }
+        public static void Unobserve(int handle, string name)
+        {
+            throw new PlatformNotSupportedException(NotWebGl);
+        }
 
-        public static int IsConnected(int handle) { throw new PlatformNotSupportedException(NotWebGl); }
+        public static int IsConnected(int handle)
+        {
+            throw new PlatformNotSupportedException(NotWebGl);
+        }
 
-        public static int GetState(int handle) { throw new PlatformNotSupportedException(NotWebGl); }
+        public static int GetState(int handle)
+        {
+            throw new PlatformNotSupportedException(NotWebGl);
+        }
 
-        public static int GetCloseReason(int handle) { throw new PlatformNotSupportedException(NotWebGl); }
+        public static int GetCloseReason(int handle)
+        {
+            throw new PlatformNotSupportedException(NotWebGl);
+        }
 
-        public static int GetPendingDispatchCount(int handle) { throw new PlatformNotSupportedException(NotWebGl); }
+        public static int GetPendingDispatchCount(int handle)
+        {
+            throw new PlatformNotSupportedException(NotWebGl);
+        }
 
-        public static int GetDiagnosticsLevel(int handle) { throw new PlatformNotSupportedException(NotWebGl); }
+        public static int GetDiagnosticsLevel(int handle)
+        {
+            throw new PlatformNotSupportedException(NotWebGl);
+        }
 
-        public static int SetDiagnosticsLevel(int handle, int level) { throw new PlatformNotSupportedException(NotWebGl); }
+        public static int SetDiagnosticsLevel(int handle, int level)
+        {
+            throw new PlatformNotSupportedException(NotWebGl);
+        }
 #endif
 
         public static string TakeLastErrorText()
         {
             var pointer = TakeLastError();
-            if (pointer == IntPtr.Zero) return null;
+            if (pointer == IntPtr.Zero)
+                return null;
             try
             {
                 return Marshal.PtrToStringUTF8(pointer);

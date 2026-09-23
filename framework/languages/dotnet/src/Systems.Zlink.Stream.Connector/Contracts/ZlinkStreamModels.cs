@@ -26,12 +26,14 @@ public sealed record ZlinkStreamMessage(string Name, ZlinkStreamMetadata Metadat
 ///     Origin of <paramref name="FlowId" />, or <see langword="null" /> under the same
 ///     conditions.
 /// </param>
+/// <param name="ActorId">The bound Actor on the server side, or <see langword="null" />.</param>
 public sealed record ZlinkStreamMessage<TPayload>(
     string Name,
     ZlinkStreamMetadata Metadata,
     TPayload Payload,
     string? FlowId = null,
-    ZlinkStreamFlowOrigin? FlowOrigin = null
+    ZlinkStreamFlowOrigin? FlowOrigin = null,
+    string? ActorId = null
 );
 
 public sealed record ZlinkStreamError(

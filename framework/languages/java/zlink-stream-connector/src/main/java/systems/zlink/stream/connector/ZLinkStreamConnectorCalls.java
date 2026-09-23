@@ -11,12 +11,20 @@ import java.util.concurrent.CompletionStage;
 record ZLinkStreamConnectorSendCall(
         DefaultZLinkStreamConnector connector,
         ZLinkStreamEncodedPayload payload,
-        boolean compressed)
+        boolean compressed,
+        ZLinkStreamActorRegistry.DefaultActor actor)
         implements ZLinkStreamSendCall {
+    ZLinkStreamConnectorSendCall(
+            DefaultZLinkStreamConnector connector,
+            ZLinkStreamEncodedPayload payload,
+            boolean compressed) {
+        this(connector, payload, compressed, null);
+    }
+
     @Override
     public ZLinkStreamSendCall packetName(String name) {
         return new ZLinkStreamConnectorSendCall(
-                connector, ZLinkStreamCallPayload.withPacketName(payload, name), compressed);
+                connector, ZLinkStreamCallPayload.withPacketName(payload, name), compressed, actor);
     }
 
     @Override
@@ -35,17 +43,18 @@ record ZLinkStreamConnectorSendCall(
                         payload.payload(),
                         Map.copyOf(Objects.requireNonNull(metadata, "metadata")),
                         payload.codec()),
-                compressed);
+                compressed,
+                actor);
     }
 
     @Override
     public ZLinkStreamSendCall compress() {
-        return new ZLinkStreamConnectorSendCall(connector, payload, true);
+        return new ZLinkStreamConnectorSendCall(connector, payload, true, actor);
     }
 
     @Override
     public CompletionStage<Void> submit() {
-        return connector.submit(payload, compressed);
+        return connector.submit(payload, compressed, actor);
     }
 }
 
@@ -53,15 +62,25 @@ record ZLinkStreamConnectorRequestCall(
         DefaultZLinkStreamConnector connector,
         ZLinkStreamEncodedPayload payload,
         Duration timeout,
-        boolean compressed)
+        boolean compressed,
+        ZLinkStreamActorRegistry.DefaultActor actor)
         implements ZLinkStreamRequestCall {
+    ZLinkStreamConnectorRequestCall(
+            DefaultZLinkStreamConnector connector,
+            ZLinkStreamEncodedPayload payload,
+            Duration timeout,
+            boolean compressed) {
+        this(connector, payload, timeout, compressed, null);
+    }
+
     @Override
     public ZLinkStreamRequestCall packetName(String name) {
         return new ZLinkStreamConnectorRequestCall(
                 connector,
                 ZLinkStreamCallPayload.withPacketName(payload, name),
                 timeout,
-                compressed);
+                compressed,
+                actor);
     }
 
     @Override
@@ -81,23 +100,24 @@ record ZLinkStreamConnectorRequestCall(
                         Map.copyOf(Objects.requireNonNull(metadata, "metadata")),
                         payload.codec()),
                 timeout,
-                compressed);
+                compressed,
+                actor);
     }
 
     @Override
     public ZLinkStreamRequestCall compress() {
-        return new ZLinkStreamConnectorRequestCall(connector, payload, timeout, true);
+        return new ZLinkStreamConnectorRequestCall(connector, payload, timeout, true, actor);
     }
 
     @Override
     public ZLinkStreamRequestCall timeout(Duration timeout) {
         requirePositive(timeout, "timeout");
-        return new ZLinkStreamConnectorRequestCall(connector, payload, timeout, compressed);
+        return new ZLinkStreamConnectorRequestCall(connector, payload, timeout, compressed, actor);
     }
 
     @Override
     public CompletionStage<ZLinkStreamEncodedPayload> submit() {
-        return connector.submitRequest(payload, timeout, compressed);
+        return connector.submitRequest(payload, timeout, compressed, actor);
     }
 
     @Override

@@ -70,7 +70,8 @@ export enum ZLinkStreamHeaderFlags {
   HasMetadata = 0x02,
   PayloadCompressed = 0x04,
   HasCorrelationId = 0x08,
-  HasFlowId = 0x10
+  HasFlowId = 0x10,
+  HasActorSlot = 0x20
 }
 
 export enum ZLinkStreamCloseReasonCode {
@@ -95,6 +96,7 @@ export interface ZLinkStreamFrameHeader {
   readonly correlationId?: string;
   readonly flowId?: string;
   readonly flowOrigin?: ZLinkFlowOrigin;
+  readonly actorSlot?: number;
 }
 
 export type ZLinkStreamReplyMessageKind =
@@ -139,6 +141,28 @@ export function encodeStreamControlFrame(name: string): Uint8Array {
   );
 }
 
+export function encodeActorBoundFrame(actorSlot: number, actorId: string): Uint8Array {
+  const actorIdBytes = utf8Encode(actorId);
+  if (actorIdBytes.length < 1 || actorIdBytes.length > 0xff) {
+    throw new Error('Actor id length is invalid for a STREAM binding control packet.');
+  }
+  const payload = new Uint8Array(4 + actorIdBytes.length);
+  payload[0] = 1;
+  payload[1] = actorSlot >>> 8;
+  payload[2] = actorSlot & 0xff;
+  payload[3] = actorIdBytes.length;
+  payload.set(actorIdBytes, 4);
+  return encodeStreamFrame(controlHeader('$zlink.actor.bound'), payload);
+}
+
+export function encodeActorUnboundFrame(actorSlot: number): Uint8Array {
+  const payload = new Uint8Array(3);
+  payload[0] = 1;
+  payload[1] = actorSlot >>> 8;
+  payload[2] = actorSlot & 0xff;
+  return encodeStreamFrame(controlHeader('$zlink.actor.unbound'), payload);
+}
+
 export function encodeSessionClosingFrame(
   diagnostic = '',
   reason = ZLinkStreamCloseReasonCode.ServerDrain
@@ -176,9 +200,10 @@ export function encodeStreamHeader(header: ZLinkStreamFrameHeader): Uint8Array {
   const hasMetadata = header.metadata.size > 0;
   const hasCorrelation = header.correlationId !== undefined && header.correlationId.length > 0;
   const hasFlow = header.flowId !== undefined || header.flowOrigin !== undefined;
+  const hasActorSlot = header.actorSlot !== undefined;
   if (
     header.kind === ZLinkStreamMessageKind.Control &&
-    (hasCorrelation || hasRequestSeq || hasMetadata || hasFlow)
+    (hasCorrelation || hasRequestSeq || hasMetadata || hasFlow || hasActorSlot)
   ) {
     throw new Error(
       'Control packet must not contain a request sequence, metadata, correlation id, or flow id.'
@@ -195,7 +220,8 @@ export function encodeStreamHeader(header: ZLinkStreamFrameHeader): Uint8Array {
     metadata: header.metadata,
     correlationId: header.correlationId,
     flowId: header.flowId,
-    flowOrigin: encodeFlowOrigin(header.flowOrigin)
+    flowOrigin: encodeFlowOrigin(header.flowOrigin),
+    actorSlot: header.actorSlot
   });
 }
 
@@ -207,9 +233,10 @@ export function decodeStreamHeader(header: Uint8Array, flowEnabled = true): ZLin
   const hasMetadata = (flags & ZLinkStreamHeaderFlags.HasMetadata) !== 0;
   const hasCorrelation = (flags & ZLinkStreamHeaderFlags.HasCorrelationId) !== 0;
   const hasFlow = (flags & ZLinkStreamHeaderFlags.HasFlowId) !== 0;
+  const hasActorSlot = (flags & ZLinkStreamHeaderFlags.HasActorSlot) !== 0;
   if (
     kind === ZLinkStreamMessageKind.Control &&
-    (hasCorrelation || hasRequestSeq || hasMetadata || hasFlow)
+    (hasCorrelation || hasRequestSeq || hasMetadata || hasFlow || hasActorSlot)
   ) {
     throw new Error(
       'Control packet must not contain a request sequence, metadata, correlation id, or flow id.'
@@ -227,7 +254,8 @@ export function decodeStreamHeader(header: Uint8Array, flowEnabled = true): ZLin
     metadata,
     correlationId: decoded.correlationId,
     flowId: decoded.flowId,
-    flowOrigin: decodeFlowOrigin(decoded.flowOrigin)
+    flowOrigin: decodeFlowOrigin(decoded.flowOrigin),
+    actorSlot: decoded.actorSlot
   };
 }
 
@@ -275,7 +303,18 @@ export function createStreamReplyHeader(
     // observation-only and is not copied into the reply when tracing is Off
     // (spec 27 §4, §7).
     correlationId: requestHeader.correlationId,
+    actorSlot: requestHeader.actorSlot,
     ...(includeFlow ? { flowId: requestHeader.flowId, flowOrigin: requestHeader.flowOrigin } : {})
+  };
+}
+
+function controlHeader(name: string): ZLinkStreamFrameHeader {
+  return {
+    kind: ZLinkStreamMessageKind.Control,
+    codec: ZLinkStreamCodec.Raw,
+    flags: ZLinkStreamHeaderFlags.None,
+    name,
+    metadata: EMPTY_STREAM_METADATA
   };
 }
 

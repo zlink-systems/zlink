@@ -77,7 +77,13 @@ function bindFixture(request) {
     deadline = performance.now() + args[2];
     return bindActor(...args);
   };
-  const stream = new framework.ZLinkManagedStream({}, 'session-rid', undefined, service, completions);
+  const stream = new framework.ZLinkManagedStream(
+    { async submit() {} },
+    'session-rid',
+    undefined,
+    service,
+    completions
+  );
   return {
     attempts, runtime, completions, diagnostics,
     bind(timeoutMs) {

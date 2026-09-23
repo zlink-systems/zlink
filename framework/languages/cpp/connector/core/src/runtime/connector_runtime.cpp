@@ -398,12 +398,12 @@ connector_runtime_t connector_runtime_t::from (const connector_t &connector)
     return connector_runtime_t (state_from (connector_internal_handle (connector)));
 }
 
-void enqueue_received_message (connector_state_t &state, packet_t packet)
+void enqueue_received_message (connector_state_t &state, dispatch_envelope_t envelope)
 {
     /* Precondition: the caller holds transport_mutex. dispatch_queue is a
      * std::deque shared with the read pump and with every synchronous
      * receive/wait caller, so an unguarded push_back is a data race. */
-    state.dispatch_queue.push_back (std::move (packet));
+    state.dispatch_queue.push_back (std::move (envelope));
     state.state_changed.notify_all ();
 }
 
@@ -415,18 +415,19 @@ void deliver_received_packet (connector_state_t &state, packet_t packet)
     /* Packets injected through connector_runtime_t::receive_packet never pass
      * a frame decode, so this is where they are counted (§10). */
     note_received_packet (state, packet);
+    dispatch_envelope_t envelope{std::move (packet), std::nullopt};
     /* This entry point is called with no connector lock held, unlike the frame
      * decode paths. Take transport_mutex for the queue mutation, and leave the
      * immediate-mode handlers outside it: a handler that calls back into the
      * connector surface would otherwise re-enter a non-recursive mutex. */
     if (state.options.dispatch_mode == dispatch_mode_t::immediate) {
-        dispatch_packet (state, packet);
+        dispatch_packet (state, envelope);
         std::lock_guard<std::mutex> lock (state.transport_mutex);
         state.state_changed.notify_all ();
         return;
     }
     std::lock_guard<std::mutex> lock (state.transport_mutex);
-    enqueue_received_message (state, std::move (packet));
+    enqueue_received_message (state, std::move (envelope));
 }
 
 void schedule_delivery (std::shared_ptr<connector_state_t> state, std::function<void ()> callback)
@@ -473,6 +474,46 @@ void publish_error (connector_state_t &state, error_t error) noexcept
                                          }
                                      }
                                  });
+}
+
+void close_bound_actors (const std::shared_ptr<connector_state_t> &state)
+{
+    std::vector<std::shared_ptr<actor_t>> actors;
+    std::vector<std::uint64_t> handler_ids;
+    {
+        std::lock_guard<std::mutex> lock (state->lifecycle_mutex);
+        actors.reserve (state->actors_by_slot.size ());
+        for (const auto &[_, actor] : state->actors_by_slot) {
+            actor_access_t::close (actor);
+            actors.push_back (actor);
+        }
+        state->actors_by_slot.clear ();
+        state->actors_by_id.clear ();
+        handler_ids.reserve (state->actor_unbound_handlers.size ());
+        for (const auto &entry : state->actor_unbound_handlers)
+            handler_ids.push_back (entry.id);
+    }
+    for (const auto &actor : actors) {
+        schedule_delivery (state, [state, handler_ids, actor] {
+            std::vector<handler_entry_t<std::function<void (const std::shared_ptr<actor_t> &)>>>
+              handlers;
+            {
+                std::lock_guard<std::mutex> lock (state->lifecycle_mutex);
+                for (const auto &entry : state->actor_unbound_handlers) {
+                    if (std::find (handler_ids.begin (), handler_ids.end (), entry.id)
+                        != handler_ids.end ())
+                        handlers.push_back (entry);
+                }
+            }
+            for (const auto &entry : handlers) {
+                try {
+                    entry.handler (actor);
+                }
+                catch (...) {
+                }
+            }
+        });
+    }
 }
 
 zlink::message_t encode_typed_payload (const std::shared_ptr<void> &state_handle,
@@ -541,6 +582,8 @@ void remove_subscription (const std::shared_ptr<void> &state_handle, std::uint64
     drop (state->state_handlers);
     drop (state->error_handlers);
     drop (state->disconnected_handlers);
+    drop (state->actor_bound_handlers);
+    drop (state->actor_unbound_handlers);
 }
 
 /* stream-connector §6: the wait between attempts is a value picked between 50%
@@ -828,7 +871,7 @@ void send_call_t::submit ()
     if (!_state) {
         return;
     }
-    (void) detail::submit_send (detail::state_from (_state), std::move (_packet));
+    (void) detail::submit_send (detail::state_from (_state), std::move (_packet), _actor_binding);
 }
 
 connector_t::connector_t () : connector_t (connector_options_t{})
@@ -860,6 +903,31 @@ connector_t::connector_t (connector_options_t options) :
 #else
     state->lz4_enabled = true;
 #endif
+}
+
+connector_t::connector_t (std::shared_ptr<void> state) :
+    _state (std::move (state)), _codecs (_state)
+{
+}
+
+std::shared_ptr<actor_t> detail::actor_access_t::create (std::shared_ptr<void> connector_state,
+                                                         std::string actor_id,
+                                                         std::uint16_t actor_slot)
+{
+    return std::shared_ptr<actor_t> (new actor_t (connector_t (connector_state),
+                                                  std::move (actor_id), actor_slot,
+                                                  std::make_shared<std::atomic_bool> (true)));
+}
+
+void detail::actor_access_t::close (const std::shared_ptr<actor_t> &actor)
+{
+    if (actor)
+        actor->_bound->store (false, std::memory_order_release);
+}
+
+std::uint16_t detail::actor_access_t::slot (const std::shared_ptr<actor_t> &actor)
+{
+    return actor ? actor->_actor_slot : 0;
 }
 
 connector_t::~connector_t () = default;
@@ -1463,15 +1531,18 @@ result_t<void> close_state (std::shared_ptr<detail::connector_state_t> state)
             std::lock_guard<std::mutex> delivery_lock (state->delivery_mutex);
             state->delivery_queue.clear ();
         }
-        detail::change_state (state, connection_state_t::closed);
-        {
-            std::lock_guard<std::mutex> lifecycle_lock (state->lifecycle_mutex);
-            state->state_handlers.clear ();
-            state->error_handlers.clear ();
-            state->disconnected_handlers.clear ();
-        }
-        state->state_changed.notify_all ();
     }
+    detail::close_bound_actors (state);
+    detail::change_state (state, connection_state_t::closed);
+    {
+        std::lock_guard<std::mutex> lifecycle_lock (state->lifecycle_mutex);
+        state->state_handlers.clear ();
+        state->error_handlers.clear ();
+        state->disconnected_handlers.clear ();
+        state->actor_bound_handlers.clear ();
+        state->actor_unbound_handlers.clear ();
+    }
+    state->state_changed.notify_all ();
     for (auto &delivery : closed_write_callbacks) {
         delivery ();
     }
@@ -1555,6 +1626,49 @@ connector_t::on_disconnected (std::function<void (std::optional<close_reason_t>)
     return subscription_t (_state, id);
 }
 
+std::vector<std::shared_ptr<actor_t>> connector_t::actors () const
+{
+    const auto state = detail::state_from (_state);
+    std::lock_guard<std::mutex> lock (state->lifecycle_mutex);
+    std::vector<std::shared_ptr<actor_t>> actors;
+    actors.reserve (state->actors_by_slot.size ());
+    for (const auto &[_, actor] : state->actors_by_slot)
+        actors.push_back (actor);
+    return actors;
+}
+
+std::shared_ptr<actor_t> connector_t::actor (std::string_view actor_id) const
+{
+    const auto state = detail::state_from (_state);
+    std::lock_guard<std::mutex> lock (state->lifecycle_mutex);
+    const auto found = state->actors_by_id.find (actor_id);
+    return found == state->actors_by_id.end () ? nullptr : found->second;
+}
+
+subscription_t
+connector_t::on_actor_bound (std::function<void (const std::shared_ptr<actor_t> &)> handler)
+{
+    auto state = detail::state_from (_state);
+    const auto id = state->next_subscription_id.fetch_add (1, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock (state->lifecycle_mutex);
+        state->actor_bound_handlers.push_back ({id, std::move (handler)});
+    }
+    return subscription_t (_state, id);
+}
+
+subscription_t
+connector_t::on_actor_unbound (std::function<void (const std::shared_ptr<actor_t> &)> handler)
+{
+    auto state = detail::state_from (_state);
+    const auto id = state->next_subscription_id.fetch_add (1, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock (state->lifecycle_mutex);
+        state->actor_unbound_handlers.push_back ({id, std::move (handler)});
+    }
+    return subscription_t (_state, id);
+}
+
 std::string connector_t::resolve_type_packet_name (std::string type_name) const
 {
     const auto state = detail::state_from (_state);
@@ -1584,7 +1698,28 @@ subscription_t connector_t::on_packet_erased (std::string packet_name,
     const auto id = state->next_subscription_id.fetch_add (1, std::memory_order_relaxed);
     {
         std::lock_guard<std::mutex> lock (state->lifecycle_mutex);
-        state->packet_handlers[std::move (packet_name)].push_back ({id, std::move (handler)});
+        state->packet_handlers[std::move (packet_name)].push_back (
+          {id, [handler = std::move (handler)] (const detail::dispatch_envelope_t &envelope) {
+               handler (envelope.packet);
+           }});
+    }
+    return subscription_t (_state, id);
+}
+
+subscription_t connector_t::on_actor_packet_erased (std::string packet_name,
+                                                    std::uint16_t actor_slot,
+                                                    std::function<void (const packet_t &)> handler)
+{
+    auto state = detail::state_from (_state);
+    const auto id = state->next_subscription_id.fetch_add (1, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock (state->lifecycle_mutex);
+        state->packet_handlers[std::move (packet_name)].push_back (
+          {id, [actor_slot,
+                handler = std::move (handler)] (const detail::dispatch_envelope_t &envelope) {
+               if (envelope.actor_slot == actor_slot)
+                   handler (envelope.packet);
+           }});
     }
     return subscription_t (_state, id);
 }
