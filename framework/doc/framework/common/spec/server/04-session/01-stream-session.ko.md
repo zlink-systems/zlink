@@ -157,8 +157,9 @@ Core receive pipe (PACKET mode)
   Framework의 dispatch, DI와 logging을 일관되게 적용할 수 있기 때문이다.
 - **Framework는 permit을 확보하지 못한 동안 `zlink_stream_recv_packet()`을 호출하지 않는다.**
   Queue에 넣을 수 없는 상태에서 다음 packet을 계속 drain하면 Core receive pipe의 HWM이 더
-  이상 backpressure 경계로 동작하지 못한다. Pull한 packet을 버리거나 같은 packet을 callback으로
-  재전달하지 않는다. Permit은 host 전체가 공유하므로 이 중단은 그 연결 하나가 아니라 지원
+  이상 backpressure 경계로 동작하지 못한다. Pull한 packet을 backpressure 때문에 버리거나 같은 packet을
+  callback으로 재전달하지 않는다(현재 binding이 아닌 slot의 packet은
+  [Session과 Actor binding §5](02-session-actor-binding.ko.md#5-bind와-relay)가 정한다). Permit은 host 전체가 공유하므로 이 중단은 그 연결 하나가 아니라 지원
   socket 전체에 적용된다. 임계값과 상태 전이는
   [Application job queue와 backpressure §6](../01-execution/04-application-job-queue-and-backpressure.ko.md#6-pressure-상태와-socket-제어)이
   소유한다.
@@ -304,10 +305,11 @@ STREAM packet과 cross-node Session record가 공유하는 host permit 규칙은
 - Client가 보낸 packet은 slot이 없거나 현재 binding인 slot이면 packet name, metadata, payload와
   (Actor slot이 있으면) 그 bound Actor를 담은 dispatch context로 session callback에 도달한다.
 - STREAM packet pull 경로에서도 session lifecycle·packet·오류 callback의 공개 표면과
-  실행은 바뀌지 않으며, packet은 public session callback에 도달한다.
+  실행은 바뀌지 않으며, slot이 없거나 현재 binding인 slot의 packet은 public session callback에
+  도달한다.
 - Session callback이 managed queue를 소비하지 못하는 동안 client가 계속 보내면 client 쪽 send가
   Core receive pipe HWM에 걸려 멈춘다. Queue가 풀리면 session callback에 전달되는 packet은 순서대로 한 번씩만 callback에
-  도달한다 — 폐기되거나 두 번 전달되는 packet이 없다. §2의 PACKET mode 규칙과 §4의 managed queue
+  도달한다 — backpressure로 폐기되거나 두 번 전달되는 packet이 없다. §2의 PACKET mode 규칙과 §4의 managed queue
   규칙은 이 관찰로 확인한다.
 - Dispatch context의 [routing ID](../00-foundation/02-glossary.ko.md#routing-id)는 recv 결과의 peer 식별 값과
   같다.

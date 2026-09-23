@@ -166,7 +166,8 @@ against the current bindings and puts that Actor into the dispatch context —
 no slot means no Actor. **A packet carrying a slot that is not a current
 binding (one that arrives late, after the unbind) is not delivered to the
 session handler.** A `Request` ends with an `Error` reply on the same sequence
-(code `InvalidOperation`), recorded as message-flow `reply_error`. A `Send` is
+(code `InvalidOperation`), recorded as `zlink.dispatch_error` with `surface=stream`,
+`message_kind=request`, `outcome=failed`, `reason=stale_target`, `action=reply_error`. A `Send` is
 dropped and recorded in message-flow with `surface=stream`, `message_kind=send`,
 `outcome=dropped`, `reason=stale_target`
 ([Message-flow tracing](../06-observability/03-message-flow-tracing.en.md)).
@@ -911,7 +912,8 @@ here.
   binding's Actor.
 - A packet that arrives with a slot that is not a current binding doesn't
   reach the session handler. A `Request` ends with `Error` (`InvalidOperation`)
-  on the same sequence, recorded as `reply_error`, and a `Send` is recorded
+  on the same sequence, recorded as `zlink.dispatch_error` (`outcome=failed`,
+  `reason=stale_target`, `action=reply_error`), and a `Send` is recorded
   with `outcome=dropped`, `reason=stale_target`.
 - Binding two Actors gives them different slots, binding the same current
   binding again keeps the slot and sends no second announcement, a retired
