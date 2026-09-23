@@ -326,6 +326,172 @@ final class KotlinConnectorWrapperTest {
     }
 
     @Test
+    fun actorFlowsKeepHandleIdentityAndUnboundState() = runBlocking {
+        TcpServer().use { server ->
+            val connector = ZLinkStreamConnectorFactory.create(options(server.endpoint())).kotlin()
+            try {
+                connector.connect().await()
+                assertNull(connector.actor("missing"))
+                assertTrue(connector.actors().isEmpty())
+
+                val bound = CompletableDeferred<ZLinkKotlinStreamActor>()
+                val unbound = CompletableDeferred<ZLinkKotlinStreamActor>()
+                val eventOrder = java.util.Collections.synchronizedList(mutableListOf<String>())
+                val boundCollector =
+                    launch(start = CoroutineStart.UNDISPATCHED) {
+                        connector.actorBound().collect {
+                            eventOrder.add("bound")
+                            bound.complete(it)
+                        }
+                    }
+                val unboundCollector =
+                    launch(start = CoroutineStart.UNDISPATCHED) {
+                        connector.actorUnbound().collect {
+                            eventOrder.add("unbound")
+                            unbound.complete(it)
+                        }
+                    }
+                yield()
+
+                actorRegistryControl(connector, "bound", boundControl(7, "player-a"))
+                val actor = connector.actor("player-a")!!
+                assertSame(actor, connector.actors().single())
+                assertTrue(actor.isBound)
+                assertTrue(!bound.isCompleted)
+                connector.dispatch().await()
+                assertSame(actor, withTimeout(1_000) { bound.await() })
+
+                actorRegistryControl(connector, "unbound", unboundControl(7))
+                assertTrue(!actor.isBound)
+                assertNull(connector.actor("player-a"))
+                assertTrue(!unbound.isCompleted)
+                connector.dispatch().await()
+                assertSame(actor, withTimeout(1_000) { unbound.await() })
+                assertEquals(listOf("bound", "unbound"), eventOrder)
+                val stale =
+                    Assertions.assertThrows(ZLinkStreamException::class.java) {
+                        runBlocking { actor.send(payload("Ping", "stale")).await() }
+                    }
+                assertEquals(ZLinkStreamErrorCode.VALIDATION_FAILED, stale.errorCode())
+
+                boundCollector.cancelAndJoin()
+                unboundCollector.cancelAndJoin()
+            } finally {
+                connector.close().await()
+            }
+        }
+    }
+
+    @Test
+    fun actorMessagesAndCallsUseOnlyTheirActorSlot() = runBlocking {
+        TcpServer().use { server ->
+            val connector = ZLinkStreamConnectorFactory.create(options(server.endpoint())).kotlin()
+            try {
+                connector.connect().await()
+                actorRegistryControl(connector, "bound", boundControl(7, "player-a"))
+                actorRegistryControl(connector, "bound", boundControl(8, "player-b"))
+                val actor = connector.actor("player-a")!!
+                connector.dispatch().await()
+
+                val received = CompletableDeferred<ZLinkStreamMessage<ZLinkStreamEncodedPayload>>()
+                val collector =
+                    launch(start = CoroutineStart.UNDISPATCHED) {
+                        actor.messages("Ping").collect { received.complete(it) }
+                    }
+                yield()
+                server.sendFrame(
+                    Frame(
+                        1,
+                        requestSeq = null,
+                        name = "Ping",
+                        payload = byteArrayOf(8),
+                        actorSlot = 8,
+                    )
+                )
+                withTimeout(1_000) { while (connector.receivedCount("Ping") < 1) yield() }
+                connector.dispatch().await()
+                assertTrue(!received.isCompleted)
+                server.sendFrame(
+                    Frame(
+                        1,
+                        requestSeq = null,
+                        name = "Ping",
+                        payload = byteArrayOf(7),
+                        actorSlot = 7,
+                    )
+                )
+                withTimeout(1_000) { while (connector.receivedCount("Ping") < 2) yield() }
+                connector.dispatch().await()
+                val message = withTimeout(1_000) { received.await() }
+                assertEquals("player-a", message.actorId())
+                assertEquals("\u0007", message.payload().payload().toUtf8String())
+                message.payload().payload().close()
+                collector.cancelAndJoin()
+
+                actor.send(payload("Ping", "send")).await()
+                assertEquals(7, server.readApplicationFrame().actorSlot)
+
+                actor.send(mapOf("value" to "typed-send")).await()
+                assertEquals(7, server.readApplicationFrame().actorSlot)
+
+                val rawRequest =
+                    async(Dispatchers.IO) { actor.request(payload("Ping", "raw")).await() }
+                val rawFrame = server.readApplicationFrame()
+                assertEquals(7, rawFrame.actorSlot)
+                server.sendFrame(
+                    Frame(3, requestSeq = rawFrame.requestSeq, name = "", payload = byteArrayOf(1))
+                )
+                rawRequest.await().payload().close()
+
+                val typedRequest =
+                    async(Dispatchers.IO) {
+                        actor.request<Map<String, String>>(mapOf("value" to "typed")).await()
+                    }
+                val typedFrame = server.readApplicationFrame()
+                assertEquals(7, typedFrame.actorSlot)
+                server.sendFrame(
+                    Frame(
+                        3,
+                        codec = 1,
+                        requestSeq = typedFrame.requestSeq,
+                        name = "",
+                        payload = "{\"value\":\"reply\"}".toByteArray(StandardCharsets.UTF_8),
+                    )
+                )
+                assertEquals("reply", typedRequest.await()["value"])
+            } finally {
+                connector.close().await()
+            }
+        }
+    }
+
+    private fun actorRegistryControl(
+        connector: ZLinkKotlinStreamConnector,
+        action: String,
+        payload: ByteArray,
+    ) {
+        val registryField = connector.inner.javaClass.getDeclaredField("actorRegistry")
+        registryField.isAccessible = true
+        val registry = registryField.get(connector.inner)
+        val method = registry.javaClass.getDeclaredMethod(action, ByteArray::class.java)
+        method.isAccessible = true
+        method.invoke(registry, payload)
+    }
+
+    private fun boundControl(slot: Int, actorId: String): ByteArray {
+        val id = actorId.toByteArray(StandardCharsets.UTF_8)
+        return ByteBuffer.allocate(4 + id.size)
+            .put(1)
+            .putShort(slot.toShort())
+            .put(id.size.toByte())
+            .put(id)
+            .array()
+    }
+
+    private fun unboundControl(slot: Int): ByteArray =
+        ByteBuffer.allocate(3).put(1).putShort(slot.toShort()).array()
+
+    @Test
     fun kotlinObservationBuildersPreserveJavaQueueSemantics() = runBlocking {
         TcpServer().use { server ->
             val connector = ZLinkStreamConnectorFactory.create(options(server.endpoint())).kotlin()
@@ -705,6 +871,16 @@ final class KotlinConnectorWrapperTest {
             val nameLength = buffer.get().toInt() and 0xff
             val nameBytes = ByteArray(nameLength)
             buffer.get(nameBytes)
+            if ((flags and 0x02) != 0) {
+                val metadataLength = buffer.short.toInt() and 0xffff
+                buffer.position(buffer.position() + metadataLength)
+            }
+            if ((flags and 0x08) != 0) {
+                val correlationLength = buffer.get().toInt() and 0xff
+                buffer.position(buffer.position() + correlationLength)
+            }
+            if ((flags and 0x10) != 0) buffer.position(buffer.position() + 37)
+            val actorSlot = if ((flags and 0x20) != 0) buffer.short.toInt() and 0xffff else null
             return Frame(
                 kind = kind,
                 codec = codec,
@@ -712,14 +888,23 @@ final class KotlinConnectorWrapperTest {
                 requestSeq = requestSeq,
                 name = String(nameBytes, StandardCharsets.UTF_8),
                 payload = ByteArray(0),
+                actorSlot = actorSlot,
             )
         }
 
         private fun encodeHeader(frame: Frame): ByteArray {
             val name = frame.name.toByteArray(StandardCharsets.UTF_8)
-            val flags = if (frame.requestSeq == null) 0 else 0x01
+            val flags =
+                (if (frame.requestSeq == null) 0 else 0x01) or
+                    (if (frame.actorSlot == null) 0 else 0x20)
             val buffer =
-                ByteBuffer.allocate(4 + (if (frame.requestSeq == null) 0 else 8) + 1 + name.size)
+                ByteBuffer.allocate(
+                    4 +
+                        (if (frame.requestSeq == null) 0 else 8) +
+                        1 +
+                        name.size +
+                        (if (frame.actorSlot == null) 0 else 2)
+                )
             buffer.put(0xF2.toByte())
             buffer.put(frame.kind.toByte())
             buffer.put(frame.codec.toByte())
@@ -729,6 +914,7 @@ final class KotlinConnectorWrapperTest {
             }
             buffer.put(name.size.toByte())
             buffer.put(name)
+            if (frame.actorSlot != null) buffer.putShort(frame.actorSlot.toShort())
             return buffer.array()
         }
     }
@@ -740,5 +926,6 @@ final class KotlinConnectorWrapperTest {
         val requestSeq: Long?,
         val name: String,
         val payload: ByteArray,
+        val actorSlot: Int? = null,
     )
 }

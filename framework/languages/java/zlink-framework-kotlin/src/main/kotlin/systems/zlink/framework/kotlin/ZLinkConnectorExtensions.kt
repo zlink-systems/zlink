@@ -1,14 +1,19 @@
 package systems.zlink.framework.kotlin
 
+import java.lang.ref.WeakReference
 import java.time.Duration
+import java.util.WeakHashMap
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
 import kotlin.coroutines.CoroutineContext
+import kotlin.reflect.KClass
 import kotlinx.coroutines.ThreadContextElement
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.future.await
+import systems.zlink.framework.kotlin.stream.ZLinkKotlinRequestCall as ZLinkKotlinStreamRequestCall
+import systems.zlink.stream.connector.ZLinkStreamActor
 import systems.zlink.stream.connector.ZLinkStreamAssert
 import systems.zlink.stream.connector.ZLinkStreamCloseReason
 import systems.zlink.stream.connector.ZLinkStreamCompression
@@ -80,6 +85,15 @@ private fun ZLinkStreamConnectorOptions.copyStreamCompression(
     )
 
 class ZLinkKotlinStreamConnector(@PublishedApi internal val inner: ZLinkStreamConnector) {
+    private val actorHandles =
+        WeakHashMap<ZLinkStreamActor, WeakReference<ZLinkKotlinStreamActor>>()
+
+    private fun wrapActor(actor: ZLinkStreamActor): ZLinkKotlinStreamActor =
+        synchronized(actorHandles) {
+            actorHandles[actor]?.get()
+                ?: ZLinkKotlinStreamActor(actor).also { actorHandles[actor] = WeakReference(it) }
+        }
+
     val isConnected: Boolean
         get() = inner.isConnected
 
@@ -147,9 +161,14 @@ class ZLinkKotlinStreamConnector(@PublishedApi internal val inner: ZLinkStreamCo
 
     fun send(payload: Any): ZLinkKotlinSendCall = ZLinkKotlinSendCall(inner.send(payload))
 
-    fun request(payload: ZLinkStreamEncodedPayload): ZLinkStreamRequestCall = inner.request(payload)
+    fun request(payload: ZLinkStreamEncodedPayload): ZLinkKotlinRawRequestCall =
+        ZLinkKotlinRawRequestCall(inner.request(payload))
 
-    fun request(payload: Any): ZLinkTypedStreamRequestCall = inner.request(payload)
+    fun <TReply : Any> request(
+        payload: Any,
+        replyType: KClass<TReply>,
+    ): ZLinkKotlinStreamRequestCall<TReply> =
+        ZLinkKotlinStreamRequestCall(inner.request(payload), replyType)
 
     inline fun <reified TPayload> waitFor(): ZLinkStreamTypedWaitCall<TPayload> =
         ZLinkStreamTypedWaitCall(inner.waitFor(TPayload::class.java), TPayload::class.java)
@@ -190,6 +209,86 @@ class ZLinkKotlinStreamConnector(@PublishedApi internal val inner: ZLinkStreamCo
         inner.messages(packetName)
 
     fun errors(): Flow<ZLinkStreamError> = inner.errors()
+
+    fun actors(): List<ZLinkKotlinStreamActor> = inner.actors().map(::wrapActor)
+
+    fun actor(actorId: String): ZLinkKotlinStreamActor? =
+        inner.actor(actorId).orElse(null)?.let(::wrapActor)
+
+    fun actorBound(): Flow<ZLinkKotlinStreamActor> = callbackFlow {
+        val registration =
+            inner.onActorBound { actor ->
+                trySend(wrapActor(actor))
+                CompletableFuture.completedFuture(null)
+            }
+        awaitClose { registration.close() }
+    }
+
+    fun actorUnbound(): Flow<ZLinkKotlinStreamActor> = callbackFlow {
+        val registration =
+            inner.onActorUnbound { actor ->
+                trySend(wrapActor(actor))
+                CompletableFuture.completedFuture(null)
+            }
+        awaitClose { registration.close() }
+    }
+}
+
+class ZLinkKotlinStreamActor internal constructor(private val inner: ZLinkStreamActor) {
+    val actorId: String
+        get() = inner.actorId()
+
+    val isBound: Boolean
+        get() = inner.isBound
+
+    fun send(payload: ZLinkStreamEncodedPayload): ZLinkKotlinSendCall =
+        ZLinkKotlinSendCall(inner.send(payload))
+
+    fun send(payload: Any): ZLinkKotlinSendCall = ZLinkKotlinSendCall(inner.send(payload))
+
+    fun request(payload: ZLinkStreamEncodedPayload): ZLinkKotlinRawRequestCall =
+        ZLinkKotlinRawRequestCall(inner.request(payload))
+
+    fun <TReply : Any> request(
+        payload: Any,
+        replyType: KClass<TReply>,
+    ): ZLinkKotlinStreamRequestCall<TReply> =
+        ZLinkKotlinStreamRequestCall(inner.request(payload), replyType)
+
+    fun messages(packetName: String): Flow<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> =
+        callbackFlow {
+            val registration =
+                inner.on(packetName) { message ->
+                    if (trySend(message).isFailure) {
+                        message.payload().payload().close()
+                    }
+                    CompletableFuture.completedFuture(null)
+                }
+            awaitClose { registration.close() }
+        }
+}
+
+inline fun <reified TReply : Any> ZLinkKotlinStreamActor.request(
+    payload: Any
+): ZLinkKotlinStreamRequestCall<TReply> = request(payload, TReply::class)
+
+inline fun <reified TReply : Any> ZLinkKotlinStreamConnector.request(
+    payload: Any
+): ZLinkKotlinStreamRequestCall<TReply> = request(payload, TReply::class)
+
+class ZLinkKotlinRawRequestCall(private val inner: ZLinkStreamRequestCall) {
+    fun packetName(name: String): ZLinkKotlinRawRequestCall =
+        ZLinkKotlinRawRequestCall(inner.packetName(name))
+
+    fun metadata(key: String, value: String): ZLinkKotlinRawRequestCall =
+        ZLinkKotlinRawRequestCall(inner.metadata(key, value))
+
+    fun timeout(timeout: Duration): ZLinkKotlinRawRequestCall =
+        ZLinkKotlinRawRequestCall(inner.timeout(timeout))
+
+    fun compress(): ZLinkKotlinRawRequestCall = ZLinkKotlinRawRequestCall(inner.compress())
+
+    suspend fun await(): ZLinkStreamEncodedPayload = inner.submit().await()
 }
 
 class ZLinkKotlinLifecycleCall(private val inner: ZLinkStreamLifecycleCall) {
