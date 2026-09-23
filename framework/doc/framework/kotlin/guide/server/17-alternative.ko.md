@@ -27,8 +27,7 @@ ZLink는 서버 간·실시간 메시징 계층이다. 논리 channel, 연결 �
 gRPC나 Akka/Orleans를 고민하고 있다면 ZLink가 그 자리를 대체할 후보다.
 
 "서비스가 어디 있는지", "client가 어디에 연결돼 있는지", "room·zone·symbol 같은 상태 단위를
-어떻게 직렬 처리할지"가 반복 문제로 나올 때 적용 대상이다. [개요](01-overview.ko.md)가 "왜
-필요한가"를 다뤘다면, 이 장은 그 판단을 기술 선택 수준에서 확인한다.
+어떻게 직렬 처리할지"가 반복 문제로 나올 때 적용 대상이다. [개요](01-overview.ko.md)는 주요 표면과 구조를 설명하며, 이 장은 기술 선택의 적용 기준을 설명한다.
 
 ## 1. 한눈에 보는 사용처
 
@@ -68,13 +67,13 @@ framework가 없다. 우연이 아니라 이유가 있다.
   세션 수명을 직접 다루고, 재접속하면 어느 서버의 어느 room에 있었는지 이어 줘야
   하고, 배포·축소 때 접속 유저와 진행 중인 게임 상태를 유지해야 한다.
 
-그래서 지금까지는 이걸 전부 직접 만들거나, 게임 서버 엔진이라는
+그래서 기존에는 필요한 기능을 직접 모두 만들거나, 게임 서버 엔진이라는
 **별도 runtime으로 옮겨가** 로직 작성 방식·설정·배포·운영을 엔진 방식으로 다시
 배우는 수밖에 없었다.
 
 **실제로는 어떻게 만들어 왔나.** 업계에서 통용되는 이름이 붙은 패턴으로 묶인다.
 어느 패턴이든 login/auth, gateway, DB cache 같은 상자가 반복해서
-등장하지만 — 그걸 받쳐 주는 공통 framework는 없어서, 팀은 자기 장르의 방식을
+등장하지만 — 이를 뒷받침하는 공통 framework가 없어, 팀은 자기 장르의 방식을
 골라 그 구조를 소켓부터 다시 만든다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/01-arch-existing.html" title="게임 백엔드 4가지 유형 — 기존 방식" style="width:100%;border:0"></iframe>
@@ -96,12 +95,12 @@ framework가 없다. 우연이 아니라 이유가 있다.
   유지하고, DB는 주기적 저장소 역할만 한다. 읽기 편중 부하가 줄고 별도 캐싱
   계층이 필요 없어져, 메타·소셜 백엔드에서 흔히 쓰인다. 대표 framework는
   Orleans·Akka다. **개념 차이 하나** — Akka의 actor는 사용자 하나가 아니라 어디에나
-  사용하는 범용 동시성 단위이고, ZLink는 이걸 Spot(실행 격리 단위)과 Actor(도메인
+  사용하는 범용 동시성 단위이며, ZLink는 이를 Spot(실행 격리 단위)과 Actor(도메인
   엔티티)로 나눴다. Orleans의 virtual actor·grain에 더 가까운 건 ZLink Actor가
   아니라 이 방식이 사용하는 **Instance Spot**이다. 세부 비교는
   [분산 actor framework와의 비교](#7-참고--분산-actor-frameworkorleansakka와의-비교)가 다룬다.
 
-**ZLink가 제공하는 것.** 어려움 하나하나에 기능이 대응한다.
+**ZLink가 제공하는 기능.** 다음 표는 각 문제에 대응하는 기능과 관련 설명을 연결한다.
 
 | 어려움 | ZLink 기능 | 자세히 |
 | --- | --- | --- |
@@ -114,13 +113,13 @@ framework가 없다. 우연이 아니라 이유가 있다.
 위 네 방식은 전부 같은 선언 모델 **위의 조합**이 된다. 방식마다 소켓부터
 다시 만들 필요가 없다.
 
-- **① zone 분할** — zone을 `addRouteMesh` + node 지목 route mesh로 잡는다. 경계를 넘는
+- **① zone 분할** — node를 지정하는 route mesh로 zone을 구성한다. 경계를 넘는
   플레이어는 **actor 크로스node relocation**이 대신 넘겨준다([Relocation](37-relocation.ko.md)).
   [ZoneWorld](../../../common/sample/zoneworld/README.ko.md)가 이 방식 그대로다.
-- **② lobby + room** — 입장·매칭은 Entry Spot, 방은 `getOrCreate`로 만드는 room spot이다.
+- **② lobby + room** — 입장·매칭은 Entry Spot, 방은 필요할 때 생성하는 room spot이다.
   [Bingo](../../../common/sample/bingo/README.ko.md)가 이 방식 그대로다.
 - **③ matchmaker + dedicated** — 매칭은 channel handler(HTTP 등)로 구현한다. **판마다 새
-  process를 띄우는 대신** 매칭 결과로 `getOrCreate`된 room spot에 client가 STREAM으로
+  process를 띄우는 대신** 매칭 결과로 앞서 생성한 room spot에 client가 STREAM으로
   접속한다. [TicTacToe](../../../common/sample/tictactoe/README.ko.md)가 이 흐름에 가장
   가깝다 — 매칭 요청 → room·접속 정보 응답 → 이미 준비된 room spot에 접속.
 - **④ actor 서비스** — **Instance Spot**이 엔티티 ID로 cold activation되어, 여러 유저가
@@ -163,15 +162,7 @@ ZLink는 이 중 **연결·세션(STREAM), room·상태 단위(SPOT), 서버 간
   handler와 spot으로 직접 작성한다. 미리 만들어진 기능은 적지만, 로직의 소유권과
   자유도가 앱에 남는다.
 
-ZLink는 언어마다 처음부터 다시 만드는 대신, 어려운 runtime을 담은 **native Core(C API)**
-하나를 두고 그 위를 언어별 계층으로 감싼다. 언어별 **`bindings`** 가 그 C API를 각 언어의
-소켓 API로 잇고, 그 위에 언어별 **ZLink Framework** 가 RouteMesh · SPOT · actor · STREAM
-같은 표면을 제공한다. 이렇게 얇은 계층 구조로 나눈 이유는 **다중 언어 지원**이다 — Core를
-한 번만 구현하고 언어 표면만 갈아 끼우면 C++ · .NET · JVM · Node가 같은 코어를 공유한다.
-`bindings`와 Core는 framework 내부 구현이라 public API에 노출되지 않고, 나중에 교체돼도
-application 코드는 바뀌지 않는다 — 이 backend 경계는
-[internals/backend-dependency-policy](../../../java/internals/backend-dependency-policy.ko.md)가
-별도로 설명한다.
+Core, binding, Framework 계층과 각 역할은 [핵심 개념](03-concepts.ko.md#9-framework가-맡는-것과-맡지-않는-것)에서 설명한다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/overview-stack.html" title="ZLink 계층 관계 — 다중 언어를 위한 얇은 3계층" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/overview-stack.html" target="_blank">↗ 크게 보기</a></p>
@@ -592,8 +583,8 @@ Orleans·Akka는 **actor primitive 하나에** 깊이 집중한다. 그런데 �
 client 연결·서비스 메시징·actor 상태를 한 framework가 함께 제공한다.
 다만 이 그림에 나타나지 않는 차이가 있다 — Orleans/Akka가 오랜 기간에 걸쳐 미리
 구현해 둔 persistence connector·reminder scheduler 같은 부가 도구까지 하나로 내려오는
-건 아니다. 아래 표에서 어디까지가 원시 기능 차이고 어디부터가 이런 미리 구현된
-도구의 유무 차이인지 나눠서 본다.
+것은 아니다. 아래 표에서 어디까지가 원시 기능 차이고 어디부터가 이런 미리 구현된
+도구의 유무에서 비롯된 차이를 나눠서 본다.
 
 ### 7.3 기능 비교 — 유리한 점과 불리한 점
 
