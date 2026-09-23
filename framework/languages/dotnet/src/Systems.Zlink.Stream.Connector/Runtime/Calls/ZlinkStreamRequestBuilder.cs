@@ -6,17 +6,20 @@ internal sealed class ZlinkStreamRequestBuilder : IZlinkStreamRequestCall
     private readonly IZlinkStreamConnectorInternal _connector;
     private readonly ZlinkStreamCallBuilderState _state;
     private readonly Func<ushort?> _actorSlot;
+    private readonly string? _actorId;
 
     internal ZlinkStreamRequestBuilder(
         IZlinkStreamConnectorInternal connector,
         string? name,
         ZlinkStreamEncodedPayload payload,
-        Func<ushort?>? actorSlot = null
+        Func<ushort?>? actorSlot = null,
+        string? actorId = null
     )
     {
         _connector = connector;
         _body = payload;
         _actorSlot = actorSlot ?? (() => null);
+        _actorId = actorId;
         _state = new ZlinkStreamCallBuilderState(name);
     }
 
@@ -63,6 +66,7 @@ internal sealed class ZlinkStreamRequestBuilder : IZlinkStreamRequestCall
                 _state.Compress,
                 _state.Timeout ?? _connector.Options.RequestTimeout,
                 _actorSlot(),
+                _actorId,
                 cancellationToken
             )
             .ConfigureAwait(false);
@@ -79,6 +83,7 @@ internal sealed class ZlinkStreamRequestBuilder : IZlinkStreamRequestCall
             _state.Compress,
             _state.Timeout ?? _connector.Options.RequestTimeout,
             _actorSlot(),
+            _actorId,
             callback
         );
     }
@@ -94,6 +99,7 @@ internal sealed class ZlinkStreamRequestBuilder : IZlinkStreamRequestCall
             _state.Compress,
             _state.Timeout ?? _connector.Options.RequestTimeout,
             _actorSlot(),
+            _actorId,
             callback
         );
     }

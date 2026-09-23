@@ -3,7 +3,6 @@ using System.Text.Json;
 namespace Systems.Zlink.Stream.Connector.Runtime;
 
 internal sealed class ZlinkStreamReceiveDispatcher(
-    ZlinkStreamConnectorOptions options,
     ZlinkStreamHeaderCodec headerCodec,
     ZlinkStreamPendingRequests pending,
     ZlinkStreamTypedHandlerRegistry typedHandlers,
@@ -21,17 +20,7 @@ internal sealed class ZlinkStreamReceiveDispatcher(
         CancellationToken cancellationToken
     )
     {
-        // Read the diagnostics level exactly once for this packet's processing so a
-        // concurrent level change never splits header decode from flow-scope
-        // installation within the same dispatch.
-        var diagnosticsLevel = options.DiagnosticsLevel;
-
-        // At Off, inbound flow fields are framing only: keep the structural length
-        // checks but skip validation, allocation, and flow-context installation.
-        var header = headerCodec.Decode(
-            frame.Header,
-            diagnosticsLevel != ZlinkStreamDiagnosticsLevel.Off
-        );
+        var header = headerCodec.Decode(frame.Header, captureFlow: false);
         if (header.Kind == ZlinkStreamMessageKind.Control)
         {
             await DispatchControlAsync(header, frame.Payload, cancellationToken)
@@ -55,13 +44,7 @@ internal sealed class ZlinkStreamReceiveDispatcher(
             return;
         }
 
-        await DispatchTypedHandlersAsync(
-                header,
-                frame.Payload,
-                actor,
-                diagnosticsLevel,
-                cancellationToken
-            )
+        await DispatchTypedHandlersAsync(header, frame.Payload, actor, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -118,21 +101,15 @@ internal sealed class ZlinkStreamReceiveDispatcher(
         ZlinkStreamHeader header,
         ReadOnlyMemory<byte> wirePayload,
         ZlinkStreamActor? actor,
-        ZlinkStreamDiagnosticsLevel diagnosticsLevel,
         CancellationToken cancellationToken
     )
     {
         var payload = frameSender.DecompressIfNeeded(header, wirePayload);
         var payloadObject = new ZlinkStreamEncodedPayload(header.Codec, payload);
-        // The flow pair travels with the message so application code can align its own
-        // logs with the server trace (stream-connector spec §5.5). At Off the header
-        // carries no captured flow, so both values stay null.
         var message = new ZlinkStreamMessage<ZlinkStreamEncodedPayload>(
             header.Name,
             header.Metadata,
             payloadObject,
-            header.FlowId,
-            header.FlowOrigin,
             actor?.ActorId
         );
 
@@ -146,14 +123,7 @@ internal sealed class ZlinkStreamReceiveDispatcher(
         foreach (var handler in handlers)
             await callbacks
                 .DispatchUserCallbackAsync(
-                    async dispatchedToken =>
-                    {
-                        using var flow =
-                            diagnosticsLevel == ZlinkStreamDiagnosticsLevel.Off
-                                ? null
-                                : ZlinkStreamFlowContext.Enter(header.FlowId, header.FlowOrigin);
-                        await handler.Invoke(message, dispatchedToken).ConfigureAwait(false);
-                    },
+                    dispatchedToken => handler.Invoke(message, dispatchedToken),
                     cancellationToken
                 )
                 .ConfigureAwait(false);
@@ -166,19 +136,7 @@ internal sealed class ZlinkStreamReceiveDispatcher(
                         foreach (var handler in actor.Handlers(header.Name))
                             await callbacks
                                 .InvokeUserCallbackInlineAsync(
-                                    async handlerToken =>
-                                    {
-                                        using var flow =
-                                            diagnosticsLevel == ZlinkStreamDiagnosticsLevel.Off
-                                                ? null
-                                                : ZlinkStreamFlowContext.Enter(
-                                                    header.FlowId,
-                                                    header.FlowOrigin
-                                                );
-                                        await handler
-                                            .Invoke(message, handlerToken)
-                                            .ConfigureAwait(false);
-                                    },
+                                    handlerToken => handler.Invoke(message, handlerToken),
                                     dispatchedToken
                                 )
                                 .ConfigureAwait(false);

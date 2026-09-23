@@ -3,8 +3,7 @@ import type {
   ZlinkStreamConnectionState,
   ZlinkStreamErrorCode,
   ZlinkStreamHeaderFlags,
-  ZlinkStreamMessageKind,
-  ZlinkFlowOrigin
+  ZlinkStreamMessageKind
 } from './ZlinkStreamEnums';
 import type { ZlinkStreamMetadata } from './ZlinkStreamMetadata';
 
@@ -14,23 +13,26 @@ export interface ZlinkStreamEncodedPayload {
   readonly messageType?: Function;
 }
 
-export interface ZlinkStreamFlow {
-  readonly flowId: string;
-  readonly flowOrigin: ZlinkFlowOrigin;
-}
-
 export interface ZlinkStreamMessage<TPayload = unknown> {
   readonly name: string;
   readonly metadata: ZlinkStreamMetadata;
   readonly payload: TPayload;
-  /**
-   * Present while diagnostics are enabled (the default). With
-   * `diagnosticsLevel: Off` inbound flow fields are neither read nor
-   * installed (spec 27 §4), so delivered messages carry no flow pair.
-   */
-  readonly flowId?: string;
-  readonly flowOrigin?: ZlinkFlowOrigin;
   readonly actorId?: string;
+}
+
+export interface ZlinkStreamRequestSendingContext {
+  readonly requestPacketName: string;
+  readonly actorId?: string;
+  setMetadata(key: string, value: string): void;
+}
+
+export interface ZlinkStreamReplyReceivedContext {
+  readonly requestPacketName: string;
+  readonly actorId?: string;
+  readonly succeeded: boolean;
+  readonly reply?: ZlinkStreamMessage<ZlinkStreamEncodedPayload>;
+  readonly error?: ZlinkStreamError;
+  readonly elapsed: number;
 }
 
 export interface ZlinkStreamHeader {
@@ -41,8 +43,6 @@ export interface ZlinkStreamHeader {
   readonly name: string;
   readonly metadata: ZlinkStreamMetadata;
   readonly correlationId?: string;
-  readonly flowId?: string;
-  readonly flowOrigin?: ZlinkFlowOrigin;
   readonly actorSlot?: number;
 }
 

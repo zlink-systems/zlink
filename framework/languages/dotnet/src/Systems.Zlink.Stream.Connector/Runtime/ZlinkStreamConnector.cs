@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 
 namespace Systems.Zlink.Stream.Connector.Runtime;
@@ -43,8 +44,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         _callbacks = new ZlinkStreamConnectorCallbacks(
             _taskRunner,
             options.DispatchMode,
-            options.MaxPendingDispatchCallbacks,
-            options
+            options.MaxPendingDispatchCallbacks
         );
         _actors = new ZlinkStreamActors(this, _callbacks);
         _headerCodec = new ZlinkStreamHeaderCodec();
@@ -78,7 +78,6 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
                 ((IZlinkStreamConnectorInternal)this).SendFrameAsync(frame, cancellationToken)
         );
         _receiveDispatcher = new ZlinkStreamReceiveDispatcher(
-            options,
             _headerCodec,
             _pending,
             _typedHandlers,
@@ -124,6 +123,20 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         return _callbacks.AddConnectionStateChanged(handler);
     }
 
+    public IDisposable OnRequestSending(Action<ZlinkStreamRequestSendingContext> handler)
+    {
+        ThrowIfDisposed();
+        return _callbacks.AddRequestSending(handler);
+    }
+
+    public IDisposable OnReplyReceived(
+        Func<ZlinkStreamReplyReceivedContext, CancellationToken, ValueTask> handler
+    )
+    {
+        ThrowIfDisposed();
+        return _callbacks.AddReplyReceived(handler);
+    }
+
     public bool IsConnected => _lifecycle.IsConnected;
 
     public ZlinkStreamConnectionState State => _lifecycle.State;
@@ -131,8 +144,6 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
     public ZlinkStreamCloseReason? CloseReason => _lifecycle.LastCloseReason;
 
     public ZlinkStreamConnectorOptions Options { get; }
-
-    public ZlinkStreamDiagnosticsLevel DiagnosticsLevel => Options.DiagnosticsLevel;
 
     public int PendingDispatchCount => _callbacks.PendingDispatchCount;
 
@@ -169,28 +180,6 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         ThrowIfDisposed();
         ValidateName(name);
         return _receivedMessages.Count(name);
-    }
-
-    /// <remarks>
-    ///     The synchronous surface writes the value and returns. It does not run the
-    ///     asynchronous pair and block on it, so a receive callback that changes the level
-    ///     never waits on its own completion (stream-connector spec §13).
-    /// </remarks>
-    public void SetDiagnosticsLevel(ZlinkStreamDiagnosticsLevel level)
-    {
-        ThrowIfDisposed();
-        if (!Enum.IsDefined(level))
-            throw Error(ZlinkStreamErrorCode.ValidationFailed, "DiagnosticsLevel is invalid.");
-
-        // The change applies to processing points that read the level after this
-        // write; frames already built are not revisited (stream-connector spec §13).
-        Options.SetDiagnosticsLevelLive(level);
-    }
-
-    public Task SetDiagnosticsLevelAsync(ZlinkStreamDiagnosticsLevel level)
-    {
-        SetDiagnosticsLevel(level);
-        return Task.CompletedTask;
     }
 
     public IZlinkStreamSendCall Send(ZlinkStreamEncodedPayload payload)
@@ -306,13 +295,18 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         bool compress,
         TimeSpan timeout,
         ushort? actorSlot,
+        string? actorId,
         CancellationToken cancellationToken
     )
     {
+        var started = Stopwatch.GetTimestamp();
+        var requestMetadata = PrepareRequest(name, actorId, metadata);
         var completion = await RequestEncodedCoreAsync(
                 name,
                 payload,
-                metadata,
+                requestMetadata,
+                actorId,
+                started,
                 compress,
                 timeout,
                 actorSlot,
@@ -331,16 +325,21 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         bool compress,
         TimeSpan timeout,
         ushort? actorSlot,
+        string? actorId,
         Action<ZlinkStreamResult> callback
     )
     {
         ThrowIfDisposed();
+        var started = Stopwatch.GetTimestamp();
+        var requestMetadata = PrepareRequest(name, actorId, metadata);
         _callbacks.QueueRequestCallback(
             () =>
                 RequestEncodedCoreAsync(
                     name,
                     payload,
-                    metadata,
+                    requestMetadata,
+                    actorId,
+                    started,
                     compress,
                     timeout,
                     actorSlot,
@@ -359,16 +358,21 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         bool compress,
         TimeSpan timeout,
         ushort? actorSlot,
+        string? actorId,
         Action<ZlinkStreamResult<ZlinkStreamEncodedPayload>> callback
     )
     {
         ThrowIfDisposed();
+        var started = Stopwatch.GetTimestamp();
+        var requestMetadata = PrepareRequest(name, actorId, metadata);
         _callbacks.QueueRequestCallback(
             () =>
                 RequestEncodedCoreAsync(
                     name,
                     payload,
-                    metadata,
+                    requestMetadata,
+                    actorId,
+                    started,
                     compress,
                     timeout,
                     actorSlot,
@@ -457,6 +461,87 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         string name,
         ZlinkStreamEncodedPayload payload,
         ZlinkStreamMetadata metadata,
+        string? actorId,
+        long started,
+        bool compress,
+        TimeSpan timeout,
+        ushort? actorSlot,
+        CancellationToken cancellationToken
+    )
+    {
+        ZlinkStreamRequestCompletion result;
+        try
+        {
+            result = await SendRequestCoreAsync(
+                    name,
+                    payload,
+                    metadata,
+                    compress,
+                    timeout,
+                    actorSlot,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            var error = ex is ZlinkStreamException streamError
+                ? streamError.Error
+                : new ZlinkStreamError(ZlinkStreamErrorCode.SendFailed, ex.Message, ex);
+            await _callbacks
+                .NotifyReplyReceivedAsync(
+                    new ZlinkStreamReplyReceivedContext(
+                        name,
+                        actorId,
+                        false,
+                        null,
+                        error,
+                        Stopwatch.GetElapsedTime(started)
+                    ),
+                    CancellationToken.None
+                )
+                .ConfigureAwait(false);
+            throw;
+        }
+        await _callbacks
+            .NotifyReplyReceivedAsync(
+                new ZlinkStreamReplyReceivedContext(
+                    name,
+                    actorId,
+                    result.Error is null,
+                    result.Error is null
+                        ? new ZlinkStreamMessage<ZlinkStreamEncodedPayload>(
+                            name,
+                            result.Metadata,
+                            result.Payload!,
+                            actorId
+                        )
+                        : null,
+                    result.Error,
+                    Stopwatch.GetElapsedTime(started)
+                ),
+                CancellationToken.None
+            )
+            .ConfigureAwait(false);
+        return result;
+    }
+
+    private ZlinkStreamMetadata PrepareRequest(
+        string name,
+        string? actorId,
+        ZlinkStreamMetadata metadata
+    )
+    {
+        ThrowIfDisposed();
+        var sending = new ZlinkStreamRequestSendingContext(name, actorId, metadata);
+        _callbacks.NotifyRequestSending(sending);
+        return sending.Metadata;
+    }
+
+    private async ValueTask<ZlinkStreamRequestCompletion> SendRequestCoreAsync(
+        string name,
+        ZlinkStreamEncodedPayload payload,
+        ZlinkStreamMetadata metadata,
         bool compress,
         TimeSpan timeout,
         ushort? actorSlot,
@@ -464,18 +549,17 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
     )
     {
         var pending = _pending.Create(name);
-        var frame = _frameSender.BuildOutboundFrame(
-            ZlinkStreamMessageKind.Request,
-            name,
-            payload,
-            metadata,
-            compress,
-            pending.RequestSeq,
-            actorSlot
-        );
-
         try
         {
+            var frame = _frameSender.BuildOutboundFrame(
+                ZlinkStreamMessageKind.Request,
+                name,
+                payload,
+                metadata,
+                compress,
+                pending.RequestSeq,
+                actorSlot
+            );
             _frameSender.ValidateSendReady(frame.HeaderBytes, frame.PayloadBytes);
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(
                 cancellationToken
@@ -488,12 +572,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
                 .ConfigureAwait(false);
             var replyHeader = pendingCompletion.Header;
             if (pendingCompletion.Error is { } remoteError)
-                return new ZlinkStreamRequestCompletion(
-                    null,
-                    remoteError,
-                    replyHeader.FlowId,
-                    replyHeader.FlowOrigin
-                );
+                return new ZlinkStreamRequestCompletion(null, remoteError, replyHeader.Metadata);
 
             var replyBody = _frameSender.DecompressIfNeeded(
                 replyHeader,
@@ -502,8 +581,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
             return new ZlinkStreamRequestCompletion(
                 new ZlinkStreamEncodedPayload(replyHeader.Codec, replyBody),
                 null,
-                replyHeader.FlowId,
-                replyHeader.FlowOrigin
+                replyHeader.Metadata
             );
         }
         catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
@@ -609,6 +687,5 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
 internal sealed record ZlinkStreamRequestCompletion(
     ZlinkStreamEncodedPayload? Payload,
     ZlinkStreamError? Error,
-    string? FlowId,
-    ZlinkStreamFlowOrigin? FlowOrigin
+    ZlinkStreamMetadata Metadata
 );

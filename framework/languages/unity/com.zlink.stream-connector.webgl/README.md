@@ -101,7 +101,8 @@ with emcc directly, where that pass does run, and reports which levels they surv
 
 Everything else - `Connect`/`Close`/`Dispatch`, `Send`/`Request`, `On`, `WaitFor`,
 `ExpectNone`, `WaitForSequence`, `ReceivedCount`, `IsConnected`, `State`, `Options`,
-`ErrorReceived`, `Disconnected`, `ConnectionStateChanged`, `SetDiagnosticsLevel` - has
+`ErrorReceived`, `Disconnected`, `ConnectionStateChanged`, `OnRequestSending`,
+`OnReplyReceived` - has
 the native signature and the native meaning.
 
 ## What is verified where

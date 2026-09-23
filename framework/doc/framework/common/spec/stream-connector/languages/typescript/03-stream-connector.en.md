@@ -44,21 +44,43 @@ public partial class ZlinkStreamConnector
     public ZlinkStreamActor? Actor(string actorId);
     public IDisposable OnActorBound(Action<ZlinkStreamActor> handler);
     public IDisposable OnActorUnbound(Action<ZlinkStreamActor> handler);
+    public IDisposable OnRequestSending(Action<ZlinkStreamRequestSendingContext> handler);
+    public IDisposable OnReplyReceived(Action<ZlinkStreamReplyReceivedContext> handler);
 }
 
 public sealed class ZlinkStreamActor
 {
     public string ActorId { get; }
     public bool IsBound { get; }
-    public ZlinkStreamSendCall Send(object payload);
-    public ZlinkStreamRequestCall Request(object payload);
+    public IZlinkStreamSendCall Send(object payload);
+    public IZlinkStreamRequestCall Request(object payload);
+    public IZlinkStreamSendCall Send(object payload, string name);
+    public IZlinkStreamRequestCall Request(object payload, string name);
     public IDisposable On<TPayload>(string name, Action<ZlinkStreamMessage<TPayload>> handler);
+    public IDisposable On<TPayload>(Action<ZlinkStreamMessage<TPayload>> handler);
+}
+
+public sealed class ZlinkStreamRequestSendingContext
+{
+    public string RequestPacketName { get; }
+    public string ActorId { get; } // null when no Actor handle was used
+    public void SetMetadata(string key, string value);
+}
+
+public sealed class ZlinkStreamReplyReceivedContext
+{
+    public string RequestPacketName { get; }
+    public string ActorId { get; } // null when no Actor handle was used
+    public bool Succeeded { get; }
+    public ZlinkStreamMessage<ZlinkStreamEncodedPayload> Reply { get; } // null on failure
+    public ZlinkStreamError Error { get; } // null on success
+    public TimeSpan Elapsed { get; }
 }
 ```
 
-The jslib JSON boundary carries only `actorId` and the bound/unbound
-lifecycle events. `actor_slot` stays inside the TypeScript wire runtime and
-is never exposed as a public C# value.
+The jslib JSON boundary carries `actorId`, bound/unbound lifecycle events,
+and request-hook metadata and outcomes. `actor_slot` stays inside the TypeScript wire runtime and
+is never exposed as a public C# value. Connector type-based `Send<T>`/`Request<T>` and `On<T>`/`WaitFor<T>`/`ExpectNone<T>`/`WaitForSequence<T>` are typed extensions. Actor `Send`/`Request` also derive names from payload types by default; an explicit name uses the two-argument overload or the builder’s `PacketName`.
 
 ## 2. Entrypoint
 
@@ -104,25 +126,17 @@ Node transport compatibility point.
 The public type the package root exposes is below.
 
 ```ts
-interface ZlinkStreamFlow {
-  readonly flowId: string;
-  readonly flowOrigin: ZlinkFlowOrigin;
-}
-
 interface ZlinkStreamConnector {
   readonly isConnected: boolean;
   readonly state: ZlinkStreamConnectionState;
   readonly closeReason?: ZlinkStreamCloseReason;
   readonly options: RequiredZlinkStreamConnectorOptions;
   readonly pendingDispatchCount: number;
-  readonly diagnosticsLevel: ZlinkStreamDiagnosticsLevel;
 
   connect(signal?: AbortSignal): Promise<void>;
   close(signal?: AbortSignal): Promise<void>;
   dispatch(signal?: AbortSignal): Promise<void>;
   receivedCount(name: string): number;                                  // the received count per packet name (§5)
-  setDiagnosticsLevel(level: ZlinkStreamDiagnosticsLevel): void;        // changes the value without waiting
-  setDiagnosticsLevelAsync(level: ZlinkStreamDiagnosticsLevel): Promise<void>; // the async pair changing the same value
 
   send(payload: unknown, messageType?: Function): ZlinkStreamSendCall;
   request(payload: unknown, messageType?: Function): ZlinkStreamRequestCall;
@@ -131,9 +145,14 @@ interface ZlinkStreamConnector {
   expectNone<TPayload = ZlinkStreamEncodedPayload>(nameOrType: string | Function): ZlinkStreamExpectNoneCall<TPayload>;
   waitForSequence<TPayload = ZlinkStreamEncodedPayload>(nameOrType: string | Function): ZlinkStreamSequenceCall<TPayload>;
   on<TPayload = ZlinkStreamEncodedPayload>(
-    name: string,
+    nameOrType: string | Function,
     handler: (message: ZlinkStreamMessage<TPayload>, signal?: AbortSignal) => Promise<void> | void,
     messageType?: Function
+  ): Disposable;
+
+  onRequestSending(handler: (context: ZlinkStreamRequestSendingContext) => void): Disposable;
+  onReplyReceived(
+    handler: (context: ZlinkStreamReplyReceivedContext, signal?: AbortSignal) => Promise<void> | void
   ): Disposable;
 
   onErrorReceived(handler: (error: ZlinkStreamError, signal?: AbortSignal) => Promise<void> | void): Disposable;
@@ -155,7 +174,7 @@ interface ZlinkStreamActor {
   send(payload: unknown, messageType?: Function): ZlinkStreamSendCall;       // carries this Actor's slot
   request(payload: unknown, messageType?: Function): ZlinkStreamRequestCall;
   on<TPayload = ZlinkStreamEncodedPayload>(
-    name: string,
+    nameOrType: string | Function,
     handler: (message: ZlinkStreamMessage<TPayload>, signal?: AbortSignal) => Promise<void> | void,
     messageType?: Function
   ): Disposable;                                // only messages whose counterpart is this Actor
@@ -166,7 +185,6 @@ interface ZlinkStreamSendCall {
   metadata(key: string, value: string): ZlinkStreamSendCall;
   metadata(metadata: ZlinkStreamMetadata): ZlinkStreamSendCall;
   compress(): ZlinkStreamSendCall;
-  flowFrom(flow: ZlinkStreamFlow): ZlinkStreamSendCall;
   submit(): Promise<void>;
 }
 
@@ -176,7 +194,6 @@ interface ZlinkStreamRequestCall {
   metadata(metadata: ZlinkStreamMetadata): ZlinkStreamRequestCall;
   timeout(timeoutMs: number): ZlinkStreamRequestCall;
   compress(): ZlinkStreamRequestCall;
-  flowFrom(flow: ZlinkStreamFlow): ZlinkStreamRequestCall;
   submit<TReply = unknown>(signal?: AbortSignal): Promise<TReply>;
   submitEncoded(signal?: AbortSignal): Promise<ZlinkStreamEncodedPayload>;
   submit(callback: (result: ZlinkStreamResultOf<ZlinkStreamEncodedPayload>) => void): void;
@@ -216,11 +233,26 @@ interface ZlinkStreamEncodedPayload {
   readonly messageType?: Function;
 }
 
-interface ZlinkStreamMessage<TPayload = unknown> extends ZlinkStreamFlow {
+interface ZlinkStreamMessage<TPayload = unknown> {
   readonly name: string;
   readonly metadata: ZlinkStreamMetadata;
   readonly payload: TPayload;
   readonly actorId?: string;                   // the counterpart bound Actor; undefined for a frame without a slot (common spec §5.6)
+}
+
+interface ZlinkStreamRequestSendingContext {
+  readonly requestPacketName: string;
+  readonly actorId?: string;
+  setMetadata(key: string, value: string): void;
+}
+
+interface ZlinkStreamReplyReceivedContext {
+  readonly requestPacketName: string;
+  readonly actorId?: string;
+  readonly succeeded: boolean;
+  readonly reply?: ZlinkStreamMessage<ZlinkStreamEncodedPayload>;
+  readonly error?: ZlinkStreamError;
+  readonly elapsed: number; // milliseconds
 }
 
 interface ZlinkStreamError {
@@ -262,7 +294,6 @@ enum ZlinkStreamErrorCode {
   RemoteError = 'remoteError'
 }
 
-type ZlinkFlowOrigin = 'Inbound' | 'Timer' | 'Application' | 'Lifecycle';
 type ZlinkStreamCloseReason =
   | 'ClientClose' | 'IdleTimeout' | 'HeartbeatTimeout'
   | 'ServerDrain' | 'ProtocolError' | 'TransportError';
@@ -324,27 +355,6 @@ interface ZlinkStreamConnectorOptions {
   readonly compression?: ZlinkStreamCompression;
   readonly compressionCodec?: ZlinkStreamCompressionCodec;
   readonly nameResolver?: ZlinkStreamPacketNameResolver; // the name resolver injection point of common spec §5.4
-  readonly diagnosticsLevel?: ZlinkStreamDiagnosticsLevel; // initial value at construction, default Errors
-}
-
-// The contract is owned by common spec §13. Default Errors; unknown values are a
-// configuration error. Off: outbound frames create no flow pair (0x10 not set), and
-// inbound flow value validation/delivery is skipped (structural length check kept,
-// ZlinkStreamMessage.flowId/flowOrigin are undefined).
-// Runtime read/write is provided by the connector's `diagnosticsLevel` getter and
-// `setDiagnosticsLevel(level)`, with `setDiagnosticsLevelAsync(level)` as the async pair
-// changing the same value; the synchronous surface does not wait for the async pair to
-// complete (common spec §13, server spec 26 §4.1). Unknown values
-// passed to `setDiagnosticsLevel` are rejected with the same ConfigurationError as at
-// construction, leaving the previous value in place. A change applies starting with
-// processing points that read the level afterward and is never applied retroactively
-// to frames already built. `options.diagnosticsLevel` always matches the current
-// effective level.
-enum ZlinkStreamDiagnosticsLevel {
-  Off = 'off',
-  Errors = 'errors',
-  Normal = 'normal',
-  Detailed = 'detailed',
 }
 
 interface ZlinkStreamHeartbeatOptions {
@@ -395,7 +405,6 @@ interface RequiredZlinkStreamConnectorOptions {
   readonly nameResolver: ZlinkStreamPacketNameResolver;
   readonly transportFactory: ZlinkStreamTransportFactory;
   readonly codec?: ZlinkStreamPayloadCodec;
-  readonly diagnosticsLevel: ZlinkStreamDiagnosticsLevel;
 }
 ```
 
@@ -422,26 +431,8 @@ support, and a `compressionCodec` given together with
   `submit()`. `send`'s `submit()` doesn't wait for a response, and
   only delivers async completion and failure, without transport result
   or admission status.
-- A received message exposes `flowId` and `flowOrigin`
-  ([Common Spec §5.5](../../32-stream-connector.en.md#55-flow-exposure-and-propagation)).
-  Both are `undefined` when `diagnosticsLevel` is `Off`.
-- For an outbound triggered by an inbound handler, call
-  `flowFrom(message)`. This method copies the message's `flowId` and
-  `flowOrigin` as a pair. An outbound that doesn't call it starts a new
-  flow with `origin=application`. For the detailed async-context
-  boundary, follow
-  [Flow Correlation §6](../../../server/06-observability/04-flow-correlation.en.md#6-async-work-and-execution-context).
-- **Stating the flow explicitly through `flowFrom(message)` is a
-  browser JavaScript environment constraint.** The browser has no
-  ambient execution context corresponding to `AsyncLocalStorage`, so
-  the connector cannot hold the current flow in the context where it
-  runs a handler
-  ([Common Spec §2.2](../../32-stream-connector.en.md#22-the-effect-of-environment-constraint-on-the-contract),
-  [§5.5](../../32-stream-connector.en.md#55-flow-exposure-and-propagation)).
-  Explicit delivery and ambient propagation differ only in how the call
-  is written — the flow value on the built frame is the same. The
-  current flow is never guessed from a mutable field on the connector
-  or a module-global variable.
+- The connector neither creates nor exposes flow ([Common Spec §5.5](../../32-stream-connector.en.md#55-flow)).
+- `onRequestSending`/`onReplyReceived` are the two hooks of [Common Spec §5.7](../../32-stream-connector.en.md#57-request-hooks). `elapsed` is in milliseconds.
 
 The default value of an option is owned by
 [Common Spec §6.1](../../32-stream-connector.en.md). TypeScript

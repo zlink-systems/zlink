@@ -125,7 +125,9 @@ final class ZLinkActorRelocationStagingTest {
                 runtime.drainComplete(),
                 "an idle Actor without a Message Follow source is not unfinished accepted work");
 
-        runtime.closeAsync().toCompletableFuture().join();
+        CompletionStage<Void> close = runtime.closeAsync();
+        assertSame(close, runtime.closeAsync(), "Actor teardown has one completion owner");
+        close.toCompletableFuture().join();
         assertEquals(1, closes.get());
         assertTrue(runtime.localActor(prepared.actorId()).isEmpty());
     }

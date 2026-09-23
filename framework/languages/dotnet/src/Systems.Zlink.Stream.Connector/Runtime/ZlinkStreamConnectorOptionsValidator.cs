@@ -47,8 +47,6 @@ internal static class ZlinkStreamConnectorOptionsValidator
             throw Validation("MaxPendingDispatchCallbacks must be positive.");
         if (!Enum.IsDefined(options.DispatchMode))
             throw Validation("DispatchMode is invalid.");
-        if (!Enum.IsDefined(options.DiagnosticsLevel))
-            throw Validation("DiagnosticsLevel is invalid.");
 
         ValidateCompression(options);
     }

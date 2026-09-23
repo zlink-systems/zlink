@@ -2082,6 +2082,16 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
             effectiveTerminationIntent.compareAndSet(null, ZLinkTerminationIntent.SHUTDOWN);
             terminationDeadline.compareAndSet(null, Instant.now().plus(deadline));
             meshDrains.sealAll();
+            meshNodes
+                    .nodesByName()
+                    .values()
+                    .forEach(
+                            systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode
+                                    ::markServiceDraining);
+            CompletionStage<Void> acceptedTargetRelocations =
+                    spotRetire == null
+                            ? CompletableFuture.completedFuture(null)
+                            : spotRetire.awaitAcceptedTargetRelocations();
             if (streams != null) {
                 streams.beginDrain();
             }
@@ -2092,7 +2102,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                 actors.beginDrain();
             }
             publishRuntimeState(ZLinkFrameworkRuntimeState.DRAINING);
-            runDrain();
+            runDrain(acceptedTargetRelocations);
             CompletableFuture.delayedExecutor(deadline.toMillis(), TimeUnit.MILLISECONDS)
                     .execute(() -> forceStop(InternalDrainForceReason.DEADLINE_EXCEEDED));
         }
@@ -2115,13 +2125,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         return locationRuntime == null || locationRuntime.isOwnerAdmissionOpen();
     }
 
-    private void runDrain() {
-        meshNodes
-                .nodesByName()
-                .values()
-                .forEach(
-                        systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode
-                                ::markServiceDraining);
+    private void runDrain(CompletionStage<Void> acceptedTargetRelocations) {
         CompletionStage<Void> markerPublished =
                 locationAutoConnectHost == null
                         ? CompletableFuture.completedFuture(null)
@@ -2136,23 +2140,27 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                         return;
                     }
                     CompletionStage<Void> meshBarrier = meshDrains.awaitAllZero();
-                    CompletionStage<Void> spotBarrier =
-                            spots == null
-                                    ? CompletableFuture.completedFuture(null)
-                                    : spots.awaitDrainBarrier();
-                    CompletionStage<Void> actorBarrier =
-                            actors == null
-                                    ? CompletableFuture.completedFuture(null)
-                                    : actors.awaitDrainBarrier();
-                    CompletionStage<Void> initialStreamBarrier =
-                            streams == null
-                                    ? CompletableFuture.completedFuture(null)
-                                    : streams.awaitDrainBarrier();
                     CompletionStage<Void> applicationBarrier =
                             meshBarrier
-                                    .thenCompose(barrierStep -> spotBarrier)
-                                    .thenCompose(barrierStep -> actorBarrier)
-                                    .thenCompose(barrierStep -> initialStreamBarrier);
+                                    .thenCompose(barrierStep -> acceptedTargetRelocations)
+                                    .thenCompose(
+                                            barrierStep ->
+                                                    spots == null
+                                                            ? CompletableFuture.completedFuture(
+                                                                    null)
+                                                            : spots.awaitDrainBarrier())
+                                    .thenCompose(
+                                            barrierStep ->
+                                                    actors == null
+                                                            ? CompletableFuture.completedFuture(
+                                                                    null)
+                                                            : actors.awaitDrainBarrier())
+                                    .thenCompose(
+                                            barrierStep ->
+                                                    streams == null
+                                                            ? CompletableFuture.completedFuture(
+                                                                    null)
+                                                            : streams.awaitDrainBarrier());
                     applicationBarrier.whenComplete(
                             (barrierIgnored, barrierFailure) -> {
                                 if (barrierFailure != null) {
@@ -2173,9 +2181,26 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                                                                 streamIgnored ->
                                                                                         streams
                                                                                                 .notifyServerDrain()));
-                                CompletionStage<Void> actorShutdown =
+                                CompletionStage<Void> spotClosing =
                                         serverStreamBarrier.thenCompose(
                                                 streamIgnored ->
+                                                        spots == null
+                                                                ? CompletableFuture.completedFuture(
+                                                                        null)
+                                                                : ZLinkFrameworkShutdown.atStage(
+                                                                        "spot_closing",
+                                                                        () ->
+                                                                                spots.notifyClosing(
+                                                                                        Optional
+                                                                                                .ofNullable(
+                                                                                                        terminationDeadline
+                                                                                                                .get())
+                                                                                                .orElseGet(
+                                                                                                        Instant
+                                                                                                                ::now))));
+                                CompletionStage<Void> actorShutdown =
+                                        spotClosing.thenCompose(
+                                                closingIgnored ->
                                                         actors == null
                                                                 ? CompletableFuture.completedFuture(
                                                                         null)
