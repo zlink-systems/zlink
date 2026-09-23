@@ -24,6 +24,12 @@ on:
         required: true
         default: false
         type: boolean
+      cpp_platform:
+        description: 'C++ prebuilt platform (single-platform release retry)'
+        required: true
+        default: all
+        type: choice
+        options: [all, linux-x64, linux-arm64, macos-arm64, windows-x64]
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -37,6 +43,8 @@ jobs:
       node_version: ${{ steps.version.outputs.node_version }}
       java_version: ${{ steps.version.outputs.java_version }}
       cpp_version: ${{ steps.version.outputs.cpp_version }}
+      cpp_platforms: ${{ steps.version.outputs.cpp_platforms }}
+      cpp_release_ref: ${{ steps.version.outputs.cpp_release_ref }}
       publish_registry: ${{ steps.version.outputs.publish_registry }}
     steps:
       - uses: actions/checkout@v5
@@ -47,6 +55,7 @@ jobs:
           REQUESTED_TARGET: ${{ inputs.target }}
           REQUESTED_VERSION: ${{ inputs.version }}
           REQUESTED_PUBLISH: ${{ inputs.publish_registry }}
+          REQUESTED_CPP_PLATFORM: ${{ inputs.cpp_platform }}
         run: |
           if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
             version="${GITHUB_REF_NAME##*/v}"
@@ -58,12 +67,24 @@ jobs:
               *) echo "Unsupported framework tag" >&2; exit 1 ;;
             esac
             publish_registry=true
+            cpp_platform=all
           else
             target="${REQUESTED_TARGET:-all}"
             version="${REQUESTED_VERSION}"
             publish_registry="${REQUESTED_PUBLISH}"
+            cpp_platform="${REQUESTED_CPP_PLATFORM:-all}"
           fi
           case "${target}" in cpp|java|node|all) ;; *) echo "Invalid target: ${target}" >&2; exit 1 ;; esac
+          case "${cpp_platform}" in
+            all)
+              cpp_platforms="$(python3 -c 'import json; print(json.dumps(json.load(open("framework/languages/cpp/packaging/prebuilt-platforms.json")), separators=(",", ":")))')"
+              ;;
+            linux-x64|linux-arm64|macos-arm64|windows-x64)
+              [ "${target}" = cpp ] || { echo "A single cpp_platform requires target=cpp" >&2; exit 1; }
+              cpp_platforms="$(python3 -c 'import json,sys; entries=[entry for entry in json.load(open("framework/languages/cpp/packaging/prebuilt-platforms.json"))["include"] if entry["platform"] == sys.argv[1]]; len(entries) == 1 or sys.exit("missing platform definition: " + sys.argv[1]); print(json.dumps({"include": entries}, separators=(",", ":")))' "${cpp_platform}")"
+              ;;
+            *) echo "Invalid C++ platform: ${cpp_platform}" >&2; exit 1 ;;
+          esac
           for language in cpp java node; do
             if [ "${target}" != "${language}" ] && [ "${target}" != "all" ]; then
               continue
@@ -78,7 +99,7 @@ jobs:
             fi
             case "${language}" in
               node) manifest=$(node -p "require('./framework/languages/node/packages/framework/package.json').version") ;;
-              cpp) manifest=$(node -p "require('./framework/languages/cpp/vcpkg.json')['version-string']") ;;
+              cpp) manifest=$(node -p "require('./framework/languages/cpp/vcpkg.json')['version-string']"); cpp_version="${declared}" ;;
               java) manifest="${declared}" ;;
             esac
             if [ "${manifest}" != "${declared}" ]; then
@@ -87,6 +108,15 @@ jobs:
             echo "${language}_version=${declared}" >> "${GITHUB_OUTPUT}"
           done
           echo "target=${target}" >> "${GITHUB_OUTPUT}"
+          echo "cpp_platforms=${cpp_platforms}" >> "${GITHUB_OUTPUT}"
+          if [ "${target}" = cpp ] || [ "${target}" = all ]; then
+            if [ "${GITHUB_EVENT_NAME}" = push ]; then
+              cpp_release_ref="${GITHUB_REF_NAME}"
+            else
+              cpp_release_ref="framework-cpp/v${cpp_version}"
+            fi
+            echo "cpp_release_ref=${cpp_release_ref}" >>"${GITHUB_OUTPUT}"
+          fi
           echo "publish_registry=${publish_registry}" >> "${GITHUB_OUTPUT}"
 
   release-node:
@@ -445,6 +475,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.resolve.outputs.cpp_release_ref }}
 
       - uses: actions/setup-node@v5
         with:
@@ -480,9 +512,132 @@ jobs:
         if: github.event_name == 'push'
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ needs.resolve.outputs.cpp_release_ref }}
           name: ZLink Framework v${{ needs.resolve.outputs.cpp_version }}
           files: dist/framework-cpp/*
+
+  prebuilt-cpp:
+    if: needs.resolve.outputs.target == 'cpp' || needs.resolve.outputs.target == 'all'
+    name: Prebuilt C++ framework (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    needs: [resolve, release-cpp]
+    strategy:
+      fail-fast: true
+      matrix: ${{ fromJSON(needs.resolve.outputs.cpp_platforms) }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.resolve.outputs.cpp_release_ref }}
+          fetch-depth: 0
+
+      - name: Verify the checkout is the release tag commit
+        shell: bash
+        env:
+          CPP_RELEASE_REF: ${{ needs.resolve.outputs.cpp_release_ref }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "${CPP_RELEASE_REF}^{commit}")"
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install Conan
+        shell: bash
+        run: python -m pip install conan==2.32.0
+
+      - name: Set up MSVC
+        if: matrix.platform == 'windows-x64'
+        uses: ./.github/actions/msvc-env
+        with:
+          arch: x64
+
+      - name: Install Linux build tools
+        if: startsWith(matrix.platform, 'linux-')
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y "${{ matrix.c_compiler }}" "${{ matrix.cxx_compiler }}" ninja-build
+
+      - name: Install macOS build tools
+        if: matrix.platform == 'macos-arm64'
+        shell: bash
+        run: brew install ninja gnu-tar
+
+      - name: Fetch Core and build the C++ binding
+        id: inputs
+        shell: bash
+        env:
+          ZLINK_PLATFORM: ${{ matrix.platform }}
+          CC: ${{ matrix.c_compiler }}
+          CXX: ${{ matrix.cxx_compiler }}
+          RUNNER_TEMP_NATIVE: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          runner_temp="${RUNNER_TEMP_NATIVE}"
+          if command -v cygpath >/dev/null 2>&1; then
+            runner_temp="$(cygpath -u "${runner_temp}")"
+          fi
+          core_prefix="$(bash scripts/local-package/core/fetch-release.sh \
+            --platform "${ZLINK_PLATFORM}" --cache-dir "${runner_temp}/core")"
+          binding_version="$(sed -n 's/^ZLINK_BINDING_VERSION=//p' bindings/cpp/VERSION)"
+          binding_build="${runner_temp}/zlink-cpp-build"
+          binding_prefix="${runner_temp}/zlink-cpp-${binding_version}"
+          cmake -S bindings/cpp -B "${binding_build}" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="${binding_prefix}" \
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL \
+            -DZLINK_CPP_CORE_PACKAGE_PREFIX="${core_prefix}" \
+            -DZLINK_CPP_BUILD_TESTS=OFF \
+            -DZLINK_CPP_BUILD_SAMPLES=OFF
+          cmake --build "${binding_build}" --parallel 8
+          cmake --install "${binding_build}"
+          echo "core_prefix=${core_prefix}" >>"${GITHUB_OUTPUT}"
+          echo "binding_prefix=${binding_prefix}" >>"${GITHUB_OUTPUT}"
+
+      - name: Build and verify the prebuilt archive
+        shell: bash
+        env:
+          ZLINK_PLATFORM: ${{ matrix.platform }}
+          ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX: ${{ steps.inputs.outputs.core_prefix }}
+          ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX: ${{ steps.inputs.outputs.binding_prefix }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/framework-cpp-prebuilt
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          bash framework/languages/cpp/scripts/package-prebuilt.sh \
+            --platform "${ZLINK_PLATFORM}" dist/framework-cpp-prebuilt
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: framework-cpp-${{ needs.resolve.outputs.cpp_version }}-${{ matrix.platform }}
+          path: dist/framework-cpp-prebuilt/*
+          if-no-files-found: error
+
+  publish-prebuilt-cpp:
+    if: needs.resolve.outputs.target == 'cpp' || needs.resolve.outputs.target == 'all'
+    name: Attach prebuilt C++ framework archives
+    runs-on: ubuntu-24.04
+    needs: [resolve, prebuilt-cpp]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: framework-cpp-${{ needs.resolve.outputs.cpp_version }}-*
+          path: dist/framework-cpp-prebuilt
+          merge-multiple: true
+
+      - name: Attach archives and checksums to the C++ framework release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.resolve.outputs.cpp_release_ref }}
+          files: dist/framework-cpp-prebuilt/*
+          overwrite_files: true
 
   wait-tutorial-cpp:
     if: github.event_name == 'push' && needs.release-cpp.result == 'success'

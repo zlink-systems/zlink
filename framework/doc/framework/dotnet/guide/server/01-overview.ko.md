@@ -46,14 +46,13 @@ correlation은 framework가 처리한다.
 > (Java/Kotlin)과 NestJS(Node) 위에도 똑같이 올라가고, 호출 계약이 언어 중립 wire
 > protocol(ZMP) + codec + 논리 channel/packet이라 서로 다른 언어로 구현된 서비스가
 > 같은 channel 위에서 상호 호출한다(예: room 서버 C++, API 서버 .NET·Java). 이
-> 가이드는 `.NET` 기준이며 `.NET` 구현을 reference implementation(기준 구현)으로
-> 삼는다. cross-language 모델은 [ZLink를 사용하는 상황](17-alternative.ko.md#2-zlink를-사용하는-상황)에서 다룬다.
+> 각 언어의 가이드는 같은 공개 계약을 설명한다. 언어별 사용 예제는 해당 언어의 실제 API를 따른다.
 
-## 2. 도입 판단은 적용 범위 장에서 한다
+## 2. 도입 판단
 
-ZLink가 필요한 상황, 기존 gRPC·service mesh·Orleans·Akka와의 비교, 도입하지 않아야 할
-경계는 [ZLink의 적용 범위](17-alternative.ko.md)가 소유한다. 이 개요에서는 기술 선택을
-반복하지 않고, 선택한 뒤 알아야 할 표면과 구조만 설명한다.
+ZLink의 적용 상황과 기술 선택 기준은 [적용 범위](17-alternative.ko.md)에서 확인한다.
+이 장은 ZLink를 선택한 뒤 사용하는 주요 표면과 구조를 설명한다.
+
 ## 3. 표면과 구조
 
 ### 3.1 호출 단위 — MeshName과 ChannelName
@@ -76,20 +75,15 @@ application에서는 "`services` mesh의 `orders` channel로 요청을 보낸다
 | 서버 주소 관리·연결 결정 | location store를 통해 현재 활성 endpoint 추적 |
 | 설정·로그·모니터링 | ASP.NET Core 설정·logging·hosted service와 통합 |
 
-### 3.2 기술 선택과 비교
-
-기존 방식과의 차이, 대안별 장단점, 적용 신호는
-[ZLink의 적용 범위](17-alternative.ko.md)에서 한 번에 비교한다.
-### 3.3 계층 구조와 등록 지점
+### 3.2 계층 구조와 등록 지점
 
 <iframe class="zlink-diagram" src="/common/diagrams/01-layers.html" title="계층 구조 — host 위에 ZLink, 그 위에 비즈니스 로직" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-layers.html" target="_blank">↗ 크게 보기</a></p>
 
-쓰던 host framework(ASP.NET Core · Spring Boot · NestJS · C++ host)를 바닥에 두고, 거기에
-ZLink Framework를 `AddZLinkFramework`로 등록한다 — 엔진을 새로 들여와 별도 생태계로
-옮겨가는 것과는 정반대로, 이 전부가 쓰던 프레임워크 안에서 돌아간다. 그 위에서 내가
-작성하는 건 맨 위 **비즈니스 로직**(Spot · Actor · handler)뿐이고, Framework는 자신의
-기능을 **DI · hosted service · handler · attribute** 모델로 제공한다.
+기존 host framework(ASP.NET Core · Spring Boot · NestJS · C++ host)에 ZLink Framework를
+등록하면 별도 런타임 없이 해당 framework 안에서 실행된다. application은 그 위에
+**비즈니스 로직**(Spot · Actor · handler)을 작성한다. Framework는 **DI · hosted service ·
+handler · attribute**를 통해 기능을 제공한다.
 
 application이 이 스택과 만나는 지점은 **등록 코드 한 곳**이다. 여기서 location
 store, MeshNode, fanout과 STREAM node를 선언한다. 아래는 tutorial의 실제 등록
