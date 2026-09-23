@@ -446,7 +446,7 @@ User Spot 생성은 [Spot](21-spot.ko.md#4-호출하는-쪽--spot을-호출하�
 
 이후 그 대화의 push는 conversation Actor의 bound session, 곧 상담원의 같은 연결로 도착한다. 묶을
 수 있는 개수와 규칙은
-[Session 묶음의 동작 원리](39-session-binding.ko.md#1-묶을-수-있는-개수--session은-여럿-actor는-하나)가
+[Session 묶음의 동작 원리](39-session-binding.ko.md#1-묶을-수-있는-개수--session-하나에-actor-여럿-actor-하나에-session-하나)가
 다룬다.
 
 ## 7. 채팅 — metadata로 고르는 relay

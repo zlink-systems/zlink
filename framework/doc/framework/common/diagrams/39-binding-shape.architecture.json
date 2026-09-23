@@ -2,7 +2,7 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "session은 여럿을 묶고, Actor는 하나에만 묶인다",
+    "title": "session 하나는 Actor 여럿을 묶고, Actor 하나는 session 하나에만 묶인다",
     "subtitle": "Actor가 옮겨 가도 다시 묶지 않는다 · Framework가 보관한 경로를 갱신한다",
     "output": "39-binding-shape.html",
     "legend": {
