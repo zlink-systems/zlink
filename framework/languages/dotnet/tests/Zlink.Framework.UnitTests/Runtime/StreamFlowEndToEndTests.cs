@@ -56,6 +56,8 @@ public sealed class StreamFlowEndToEndTests
             var callback = await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.True(callback.IsSuccess);
             Assert.Equal("reply", callback.Value?.Value);
+            var sessionId = Assert.IsType<string>(callback.Value?.SessionId);
+            Assert.False(string.IsNullOrWhiteSpace(sessionId));
 
             var received = Assert.Single(
                 flowLogs.Messages.Where(line =>
@@ -96,7 +98,7 @@ public sealed class StreamFlowEndToEndTests
         using var sendGate = new SemaphoreSlim(1, 1);
         var headerCodec = new ZlinkStreamHeaderCodec();
         var sender = new ZlinkStreamFrameSender(
-            new ZlinkStreamConnectorOptions(),
+            new ZlinkStreamConnectorOptions { Endpoint = new Uri("tcp://127.0.0.1:1") },
             headerCodec,
             null,
             sendGate,

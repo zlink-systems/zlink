@@ -479,11 +479,13 @@ export class ZLinkStreamSessionRuntime {
       }
       const dispatchActor = this.context.actorForSlot(decodedHeader.actorSlot);
       if (decodedHeader.actorSlot !== undefined && dispatchActor === undefined) {
+        const staleFlowEnabled = this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true;
         await runWithFlow(
           createInboundFlow(
             decodedHeader.flowId,
             decodedHeader.flowOrigin,
-            this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
+            staleFlowEnabled,
+            staleFlowEnabled ? this.stream.sessionId : undefined
           ),
           async () => {
             if (decodedHeader.kind === ZLinkStreamMessageKind.Request) {
