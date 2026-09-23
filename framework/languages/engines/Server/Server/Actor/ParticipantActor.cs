@@ -1,6 +1,6 @@
 using Zlink.Framework.Contracts.Actors;
 
-namespace EngineLobby;
+namespace EngineLobby.Server;
 
 public sealed class ParticipantActor(IZLinkActorContext context) : IZLinkActor
 {

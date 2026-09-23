@@ -1,4 +1,4 @@
-namespace EngineLobby;
+namespace EngineLobby.Shared;
 
 public sealed record PingReq(string SentAtUnixMs);
 

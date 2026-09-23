@@ -1,8 +1,9 @@
+using EngineLobby.Shared;
 using Zlink.Framework.Contracts.Actors;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Contracts.Streams;
 
-namespace EngineLobby;
+namespace EngineLobby.Server;
 
 public sealed class LobbySession(IZLinkSessionContext context, ILogger<LobbySession> logger)
     : IZLinkSession

@@ -39,10 +39,10 @@ stop_run() {
 
 case "$action" in
   install)
-    dotnet restore EngineLobby.csproj
+    dotnet restore EngineLobby.sln
     ;;
   build)
-    dotnet build EngineLobby.csproj -c Release
+    dotnet build EngineLobby.sln -c Release
     ;;
   run)
     mkdir -p "$run_dir"
@@ -100,8 +100,8 @@ JSON
     printf '%s\n' "$stream_port" > "$run_dir/stream.port"
     printf '%s\n' "$http_port" > "$run_dir/http.port"
 
-    dotnet run --project EngineLobby.csproj -c Release --no-build -- \
-      server "$run_dir/settings.json" > "$run_dir/server.log" 2> "$run_dir/server.err.log" &
+    dotnet run --project Server/EngineLobby.Server.csproj -c Release --no-build -- \
+      server "$PWD/$run_dir/settings.json" > "$run_dir/server.log" 2> "$run_dir/server.err.log" &
     printf '%s\n' "$!" > "$run_dir/server.pid"
 
     ready=0
@@ -126,7 +126,7 @@ JSON
     http_port="$(cat "$run_dir/http.port")"
     stream_port="$(cat "$run_dir/stream.port")"
     curl -sf "http://127.0.0.1:${http_port}/ready" | grep -q '"ready":true'
-    dotnet run --project EngineLobby.csproj -c Release --no-build -- \
+    dotnet run --project Server/EngineLobby.Server.csproj -c Release --no-build -- \
       probe "ws://127.0.0.1:${stream_port}"
     ;;
   stop)

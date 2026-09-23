@@ -1,6 +1,7 @@
+using EngineLobby.Shared;
 using Systems.Zlink.Stream.Connector.Contracts;
 
-namespace EngineLobby;
+namespace EngineLobby.Server;
 
 public static class EngineLobbyProbe
 {

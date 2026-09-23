@@ -10,6 +10,9 @@ Actor bound to each session performs lobby fan-out.
 Prerequisites are the .NET 8 SDK, Docker, curl, and Python 3. This directory references only public
 NuGet packages, so the same commands work after the directory is exported from the monorepo.
 
+`EngineLobby.sln` contains the executable `Server/EngineLobby.Server.csproj` and the message contracts
+in `Shared/EngineLobby.Shared.csproj`.
+
 ## Download and install
 
 **Linux · macOS · WSL — bash**
@@ -57,7 +60,7 @@ and HTTP readiness ports, and starts the server.
 
 ## Verify
 
-The step checks readiness with curl first. A small C# probe in the same project then uses two
+The step checks readiness with curl first. A small C# probe in the Server project then uses two
 connectors to verify `PingReq`, both `JoinReq` replies, `ChatMsg`, and both clients'
 `ChatNotify` payloads.
 
