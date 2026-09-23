@@ -10,31 +10,64 @@ public sealed record ZlinkStreamEncodedPayload(
 
 public sealed record ZlinkStreamMessage(string Name, ZlinkStreamMetadata Metadata, object? Payload);
 
-/// <summary>
-///     A received stream message: payload, packet name, metadata and the flow pair the
-///     frame carried (stream-connector spec §5.5, .NET spec §11).
-/// </summary>
+/// <summary>A received stream message.</summary>
 /// <param name="Name">Packet name the frame carried.</param>
 /// <param name="Metadata">Metadata key-value pairs the frame carried.</param>
 /// <param name="Payload">Decoded payload.</param>
-/// <param name="FlowId">
-///     Flow identifier the frame carried, or <see langword="null" /> when the connector's
-///     diagnostics level is <see cref="ZlinkStreamDiagnosticsLevel.Off" /> or the frame
-///     carried no flow pair.
-/// </param>
-/// <param name="FlowOrigin">
-///     Origin of <paramref name="FlowId" />, or <see langword="null" /> under the same
-///     conditions.
-/// </param>
 /// <param name="ActorId">The bound Actor on the server side, or <see langword="null" />.</param>
 public sealed record ZlinkStreamMessage<TPayload>(
     string Name,
     ZlinkStreamMetadata Metadata,
     TPayload Payload,
-    string? FlowId = null,
-    ZlinkStreamFlowOrigin? FlowOrigin = null,
     string? ActorId = null
 );
+
+public sealed class ZlinkStreamRequestSendingContext
+{
+    internal ZlinkStreamRequestSendingContext(
+        string requestPacketName,
+        string? actorId,
+        ZlinkStreamMetadata metadata
+    )
+    {
+        RequestPacketName = requestPacketName;
+        ActorId = actorId;
+        Metadata = metadata;
+    }
+
+    public string RequestPacketName { get; }
+    public string? ActorId { get; }
+    internal ZlinkStreamMetadata Metadata { get; private set; }
+
+    public void SetMetadata(string key, string value) => Metadata = Metadata.With(key, value);
+}
+
+public sealed class ZlinkStreamReplyReceivedContext
+{
+    internal ZlinkStreamReplyReceivedContext(
+        string requestPacketName,
+        string? actorId,
+        bool succeeded,
+        ZlinkStreamMessage<ZlinkStreamEncodedPayload>? reply,
+        ZlinkStreamError? error,
+        TimeSpan elapsed
+    )
+    {
+        RequestPacketName = requestPacketName;
+        ActorId = actorId;
+        Succeeded = succeeded;
+        Reply = reply;
+        Error = error;
+        Elapsed = elapsed;
+    }
+
+    public string RequestPacketName { get; }
+    public string? ActorId { get; }
+    public bool Succeeded { get; }
+    public ZlinkStreamMessage<ZlinkStreamEncodedPayload>? Reply { get; }
+    public ZlinkStreamError? Error { get; }
+    public TimeSpan Elapsed { get; }
+}
 
 public sealed record ZlinkStreamError(
     ZlinkStreamErrorCode Code,
