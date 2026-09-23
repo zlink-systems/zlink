@@ -248,7 +248,7 @@ class KotlinPublicSurfaceContractTest {
     }
 
     @Test
-    fun `typed and raw connector requests have coroutine terminators without signature clashes`() {
+    fun `connector Java request calls expose no typed coroutine terminator`() {
         val methods =
             Class.forName("systems.zlink.framework.kotlin.ZLinkConnectorExtensionsKt")
                 .declaredMethods
@@ -256,10 +256,9 @@ class KotlinPublicSurfaceContractTest {
 
         val signatures = methods.map { method -> method.name to method.parameterTypes.toList() }
         assertEqualsDistinct(signatures)
-        // The typed terminator is awaitReply and the raw terminator is await. Keeping a typed
-        // await() overload is what produced the JvmName("awaitTyped") clash, so the raw name
-        // must never carry a typed receiver.
-        assertEquals(2, methods.count { it.name == "awaitReply" })
+        // Connector requests return Kotlin builders, whose await() methods own the typed
+        // and raw coroutine terminators. No Java call awaitReply extension belongs here.
+        assertFalse(methods.any { it.name == "awaitReply" })
         assertEquals(2, methods.count { it.name == "await" })
         assertFalse(methods.any { it.name == "awaitTyped" })
         assertFalse(
@@ -463,7 +462,6 @@ class KotlinPublicSurfaceContractTest {
                 "withStreamCompression" to 1,
                 "withoutStreamCompression" to 1,
                 "await" to 2,
-                "awaitReply" to 2,
                 "waitFor" to 1,
                 "messages" to 1,
                 "errors" to 1,
@@ -689,7 +687,7 @@ class KotlinPublicSurfaceContractTest {
         val expectedHashes =
             mapOf(
                 "ZLinkConnectorExtensionsKt" to
-                    "e0fa7b465b9d4f53d0160a871c66f843b812ba9c5033de3efc60b9f3e9d57595",
+                    "06fe63e1abe658acfcebc9374e875deb0b9a525060448a9fc39ebefbf18fbc54",
                 "ZLinkCoroutineHandlerOptionsKt" to
                     "67fda6a26015bcd374098db883ec13f012b2536da914e6b3e8fb0f6aea9e86f4",
                 "ZLinkCoroutineTurnAwaitKt" to

@@ -40,7 +40,6 @@ import systems.zlink.stream.connector.ZLinkStreamRequestCall
 import systems.zlink.stream.connector.ZLinkStreamSendCall
 import systems.zlink.stream.connector.ZLinkStreamSequenceCall
 import systems.zlink.stream.connector.ZLinkStreamWaitCall
-import systems.zlink.stream.connector.ZLinkTypedStreamRequestCall
 import systems.zlink.stream.connector.ZLinkTypedStreamSendCall
 
 fun ZLinkStreamConnector.kotlin(): ZLinkKotlinStreamConnector = ZLinkKotlinStreamConnector(this)
@@ -335,13 +334,7 @@ private constructor(
     }
 }
 
-suspend inline fun <reified TReply> ZLinkTypedStreamRequestCall.awaitReply(): TReply =
-    submit(TReply::class.java).await()
-
 suspend fun ZLinkStreamRequestCall.await(): ZLinkStreamEncodedPayload = submit().await()
-
-suspend inline fun <reified TReply> ZLinkStreamRequestCall.awaitReply(): TReply =
-    submit(TReply::class.java).await()
 
 suspend inline fun <reified TPayload> ZLinkStreamWaitCall.await(): ZLinkStreamMessage<TPayload> =
     submit(TPayload::class.java).await()

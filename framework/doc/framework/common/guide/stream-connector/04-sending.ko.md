@@ -104,10 +104,10 @@ request마다 부여되는 sequence로 맞춰지므로, 여러 request를 동시
 === "Kotlin"
 
     ```kotlin
-    val reply: LoginReply = connector.request(LoginRequest("player-1", "tok-abc123"))
+    val reply = connector.request<LoginReply>(LoginRequest("player-1", "tok-abc123"))
         .packetName("auth.login")
         .timeout(Duration.ofSeconds(5))
-        .awaitReply()
+        .await()
 
     val sessionId = reply.sessionId
     ```
