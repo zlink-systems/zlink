@@ -163,11 +163,16 @@ A STREAM packet is first dispatched to the session's typed handler
 registry. The framework resolves the packet's `actor_slot`
 ([Stream Connector common spec §4.2](../../stream-connector/32-stream-connector.en.md#42-header))
 against the current bindings and puts that Actor into the dispatch context —
-no slot, or a slot that is not a current binding, means no Actor. This
-resolution is the same for `Send` and `Request`: a slot that arrives late,
-after the unbind, also reaches the session handler with no Actor, and the
-framework neither relays on its behalf nor synthesizes an `Error` reply. A
-request's `Response` and `Error` are results the session handler produced, and
+no slot means no Actor. **A packet carrying a slot that is not a current
+binding (one that arrives late, after the unbind) is not delivered to the
+session handler.** A `Request` ends with an `Error` reply on the same sequence
+(code `InvalidOperation`), recorded as `zlink.dispatch_error` with `surface=stream`,
+`message_kind=request`, `outcome=failed`, `reason=stale_target`, `action=reply_error`. A `Send` is
+dropped and recorded in message-flow with `surface=stream`, `message_kind=send`,
+`outcome=dropped`, `reason=stale_target`
+([Message-flow tracing](../06-observability/03-message-flow-tracing.en.md)).
+So no Actor in the session handler always means no slot. For a request
+delivered to the handler, its `Response` and `Error` are results the session handler produced, and
 when the handler produces no terminal reply the existing request timeout rule
 applies. The session callback relays to that Actor or chooses another
 handling. If the handler
@@ -905,9 +910,11 @@ here.
   Actor slot.
 - The dispatch context of a packet with an `actor_slot` points at that
   binding's Actor.
-- A `Send` and a `Request` that arrive with a slot that is not a current
-  binding both reach the session handler with no Actor, and the framework
-  synthesizes no reply.
+- A packet that arrives with a slot that is not a current binding doesn't
+  reach the session handler. A `Request` ends with `Error` (`InvalidOperation`)
+  on the same sequence, recorded as `zlink.dispatch_error` (`outcome=failed`,
+  `reason=stale_target`, `action=reply_error`), and a `Send` is recorded
+  with `outcome=dropped`, `reason=stale_target`.
 - Binding two Actors gives them different slots, binding the same current
   binding again keeps the slot and sends no second announcement, a retired
   slot is never reused, and a new bind on a session that has issued up to

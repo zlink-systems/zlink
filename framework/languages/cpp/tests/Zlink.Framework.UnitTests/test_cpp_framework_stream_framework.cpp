@@ -967,6 +967,13 @@ int main ()
         || snapshots[0].packet_session_name != "client")
         return 1;
 
+    std::vector<zlink::framework::message_flow_event_t> stream_flow_events;
+    zlink::framework::dispatch_options_t stream_dispatch_options;
+    stream_dispatch_options.message_flow (zlink::framework::message_flow_log_mode_t::errors);
+    zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
+      stream_dispatch_options,
+      [&stream_flow_events] (const auto &event) { stream_flow_events.push_back (event); });
+    zlink::framework::detail::apply_dispatch_options (zlink, stream_dispatch_options);
     auto runtime = zlink::framework::detail::stream_runtime_t::from (zlink);
     zlink::framework::detail::stream_metadata_t metadata;
     metadata.with ("trace", "42").with ("content_type", "application/json");
@@ -1225,6 +1232,10 @@ int main ()
         return 225;
     }
 
+    request_header = zlink::framework::detail::stream_header_t (
+      stream_message_kind_t::request, stream_codec_t::json, stream_header_flags_t::has_request_seq,
+      77, "move", metadata);
+    request_header.with_correlation_id ("abc");
     auto stream = runtime.open_session ("client-stream");
     if (stream.routing_id () || stream.local_address () || stream.remote_address ()) {
         return 226;
@@ -1329,6 +1340,30 @@ int main ()
         actor_stream, stream_message_kind_t::error, actor_request_header);
     if (actor_error_header.actor_slot () != 1) {
         return 322;
+    }
+    auto stale_request_header = actor_request_header;
+    stale_request_header.with_actor_slot (2);
+    const auto stale_request =
+      runtime.dispatch_packet (actor_session, actor_stream, stale_request_header,
+                               zlink::message_t::from (std::string ("stale-request")));
+    if (stale_request || stale_request.error_kind () != framework_error_kind_t::invalid_operation
+        || actor_session.events.size () != 1) {
+        return 323;
+    }
+    zlink::framework::detail::stream_header_t stale_send_header (
+      stream_message_kind_t::send, stream_codec_t::json, stream_header_flags_t::none, std::nullopt,
+      "move", {});
+    stale_send_header.with_actor_slot (2);
+    if (!runtime.dispatch_packet (actor_session, actor_stream, stale_send_header,
+                                  zlink::message_t::from (std::string ("stale-send")))
+        || actor_session.events.size () != 1
+        || std::none_of (
+          stream_flow_events.begin (), stream_flow_events.end (), [] (const auto &event) {
+              return event.outcome == zlink::framework::message_flow_outcome_t::dropped
+                     && event.message_kind == zlink::framework::dispatch_message_kind_t::send
+                     && event.reason == zlink::framework::message_flow_reason_t::stale_target;
+          })) {
+        return 324;
     }
     bool hidden_until_bound = false;
     zlink::framework::detail::session_actor_manager_access_t::bind_native (
@@ -1852,6 +1887,22 @@ int main ()
     transport_stream_options.configure_socket ().max_message_size = 0;
     transport_stream_options.bind (transport_endpoint).register_session ("transport-session");
     transport_options.apply ();
+    std::mutex stale_diagnostics_mutex;
+    std::vector<zlink::framework::message_dispatch_error_event_t> stale_dispatch_errors;
+    std::vector<zlink::framework::message_flow_event_t> stale_flow_events;
+    zlink::framework::dispatch_options_t transport_dispatch_options;
+    transport_dispatch_options.message_flow (zlink::framework::message_flow_log_mode_t::errors);
+    zlink::framework::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+      transport_dispatch_options, [&] (const auto &event) {
+          const std::lock_guard lock (stale_diagnostics_mutex);
+          stale_dispatch_errors.push_back (event);
+      });
+    zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
+      transport_dispatch_options, [&] (const auto &event) {
+          const std::lock_guard lock (stale_diagnostics_mutex);
+          stale_flow_events.push_back (event);
+      });
+    zlink::framework::detail::apply_dispatch_options (transport_zlink, transport_dispatch_options);
     auto transport_provider = transport_services.build_provider ();
     transport_error_session_t transport_session;
     zlink::framework::runtime::stream_host_service_t transport_host (
@@ -1987,6 +2038,104 @@ int main ()
         return 44;
     }
     close_native_client (buffered_client, true);
+
+    auto stale_client = connect_loopback (transport_port);
+    if (!stale_client || !transport_session.wait_connected (7)) {
+        close_native_client (stale_client);
+        transport_host.stop ();
+        return 325;
+    }
+    zlink::framework::detail::stream_header_t stale_wire_send (
+      stream_message_kind_t::send, stream_codec_t::raw, stream_header_flags_t::none, std::nullopt,
+      "stale-wire-send");
+    stale_wire_send.with_actor_slot (42);
+    send_native_bytes (stale_client,
+                       make_native_stream_frame (transport_runtime, stale_wire_send,
+                                                 zlink::message_t::from ("stale-send")));
+    zlink::framework::detail::stream_header_t stale_wire_request (
+      stream_message_kind_t::request, stream_codec_t::raw, stream_header_flags_t::has_request_seq,
+      91, "stale-wire-request");
+    stale_wire_request.with_actor_slot (42);
+    send_native_bytes (stale_client,
+                       make_native_stream_frame (transport_runtime, stale_wire_request,
+                                                 zlink::message_t::from ("stale-request")));
+    boost::system::error_code stale_read_error;
+    stale_client->socket.non_blocking (true, stale_read_error);
+    std::vector<std::uint8_t> stale_reply_bytes;
+    const auto stale_reply_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    while (!stale_read_error && std::chrono::steady_clock::now () < stale_reply_deadline) {
+        std::array<std::uint8_t, 4096> chunk{};
+        const auto size =
+          stale_client->socket.read_some (boost::asio::buffer (chunk), stale_read_error);
+        if (!stale_read_error) {
+            stale_reply_bytes.insert (stale_reply_bytes.end (), chunk.begin (),
+                                      chunk.begin () + static_cast<std::ptrdiff_t> (size));
+            if (stale_reply_bytes.size () >= 6) {
+                const auto header_size =
+                  (static_cast<std::size_t> (stale_reply_bytes[0]) << 8) | stale_reply_bytes[1];
+                const auto payload_size = (static_cast<std::size_t> (stale_reply_bytes[2]) << 24)
+                                          | (static_cast<std::size_t> (stale_reply_bytes[3]) << 16)
+                                          | (static_cast<std::size_t> (stale_reply_bytes[4]) << 8)
+                                          | stale_reply_bytes[5];
+                if (stale_reply_bytes.size () >= 6 + header_size + payload_size)
+                    break;
+            }
+        } else if (stale_read_error == boost::asio::error::would_block
+                   || stale_read_error == boost::asio::error::try_again) {
+            stale_read_error.clear ();
+            std::this_thread::sleep_for (std::chrono::milliseconds (1));
+        }
+    }
+    close_native_client (stale_client, true);
+    if (stale_read_error || stale_reply_bytes.size () < 6 || transport_session.packets () != 68) {
+        transport_host.stop ();
+        return 326;
+    }
+    const auto stale_header_size =
+      (static_cast<std::size_t> (stale_reply_bytes[0]) << 8) | stale_reply_bytes[1];
+    const auto stale_payload_size = (static_cast<std::size_t> (stale_reply_bytes[2]) << 24)
+                                    | (static_cast<std::size_t> (stale_reply_bytes[3]) << 16)
+                                    | (static_cast<std::size_t> (stale_reply_bytes[4]) << 8)
+                                    | stale_reply_bytes[5];
+    if (stale_reply_bytes.size () < 6 + stale_header_size + stale_payload_size) {
+        transport_host.stop ();
+        return 327;
+    }
+    const std::vector<std::uint8_t> stale_header_bytes (
+      stale_reply_bytes.begin () + 6, stale_reply_bytes.begin () + 6 + stale_header_size);
+    const auto stale_reply_header = transport_runtime.decode_header (stale_header_bytes);
+    const std::string stale_reply_payload (stale_reply_bytes.begin () + 6 + stale_header_size,
+                                           stale_reply_bytes.begin () + 6 + stale_header_size
+                                             + stale_payload_size);
+    if (!stale_reply_header || stale_reply_header.value ().kind () != stream_message_kind_t::error
+        || stale_reply_header.value ().request_seq () != 91
+        || stale_reply_payload.find ("\"code\":\"InvalidOperation\"") == std::string::npos) {
+        transport_host.stop ();
+        return 328;
+    }
+    bool stale_diagnostics_recorded = false;
+    {
+        const std::lock_guard lock (stale_diagnostics_mutex);
+        stale_diagnostics_recorded =
+          std::any_of (
+            stale_dispatch_errors.begin (), stale_dispatch_errors.end (),
+            [] (const auto &event) {
+                return event.surface == zlink::framework::dispatch_error_surface_t::stream_session
+                       && event.message_kind == zlink::framework::dispatch_message_kind_t::request
+                       && event.reason == zlink::framework::dispatch_error_reason_t::stale_target
+                       && event.action == zlink::framework::dispatch_error_action_t::reply_error;
+            })
+          && std::any_of (
+            stale_flow_events.begin (), stale_flow_events.end (), [] (const auto &event) {
+                return event.outcome == zlink::framework::message_flow_outcome_t::dropped
+                       && event.message_kind == zlink::framework::dispatch_message_kind_t::send
+                       && event.reason == zlink::framework::message_flow_reason_t::stale_target;
+            });
+    }
+    if (!stale_diagnostics_recorded) {
+        transport_host.stop ();
+        return 329;
+    }
 
     transport_host.stop ();
 
