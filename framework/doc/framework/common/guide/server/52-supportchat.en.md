@@ -448,7 +448,7 @@ session as well.
 
 From then on the pushes of that conversation arrive at the conversation Actor's bound session — the
 agent's same connection. How many may be bound and the rules are covered by
-[How Session Binding Works](39-session-binding.en.md#1-how-many-may-be-bound--several-per-session-one-per-actor).
+[How Session Binding Works](39-session-binding.en.md#1-how-many-may-be-bound--several-actors-per-session-one-session-per-actor).
 
 ## 7. Chat — Actor-Based Relay
 

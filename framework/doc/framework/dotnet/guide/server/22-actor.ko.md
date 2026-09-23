@@ -29,11 +29,11 @@ title: "Actor · C#/.NET"
 만들어 호출하기까지 다루며, 방 사이 이동과 membership은
 [Actor membership](35-actor-membership.ko.md)이 다룬다.
 
-## 1. Actor의 자리 — 언제나 어떤 Spot 안에 있다
+## 1. Actor는 언제나 어떤 Spot에 속한다
 
 Actor는 반드시 어떤 Spot에 속한다. 만들어진 직후에는 **Entry Spot**에 속하고, 방에 들어가면 그
 User Spot으로 옮겨 간다. Entry Spot은 Object Server가 시작할 때 Framework가 만드는 Spot이고,
-아직 어느 방에도 속하지 않은 Actor의 기본 자리다.
+아직 어느 방에도 속하지 않은 Actor가 속하는 기본 Spot이다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/22-actor-membership.html" title="Actor는 Spot 안에서 산다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/22-actor-membership.html" target="_blank">↗ 크게 보기</a></p>

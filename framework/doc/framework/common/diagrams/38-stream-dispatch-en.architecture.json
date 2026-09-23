@@ -95,7 +95,7 @@
       "title": "Where an error belongs differs",
       "items": [
         "The session error callback receives only transport errors that belong to that session. A handshake failure has no session to call yet, and a socket-level or node-level error cannot be pinned to one session, so both go to runtime observation.",
-        "An application handler's exception goes to the handler exception path. There is no surface that runs a receive loop directly."
+        "An application handler's exception goes to the handler exception path."
       ]
     }
   ]

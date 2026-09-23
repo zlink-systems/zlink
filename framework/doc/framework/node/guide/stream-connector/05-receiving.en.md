@@ -31,8 +31,12 @@ connection itself.
 ## 1. Registering a Handler
 
 A handler receives a **message**, not a payload alone. The message carries the packet name, the
-decoded payload, the metadata, and the flow identifier. Which packets it receives is decided by the
-payload type or by an explicit name.
+decoded payload, and the metadata. Which packets it receives is decided by the payload type or by
+an explicit name.
+
+Pass a name or payload type to `on<T>(nameOrType, handler)`.
+
+The example below registers a handler by payload type.
 
 ```typescript
 // A TypeScript type does not survive to run time, so the name and the constructor are given.
@@ -42,9 +46,6 @@ const subscription = connector.on<LeaderboardUpdate>(
   LeaderboardUpdate
 );
 ```
-
-A handler may send again over the same connector. That send continues the flow of the message
-being handled, so client logs and server traces line up on one flow.
 
 ## 2. Releasing a Registration
 
@@ -91,6 +92,12 @@ To wait for a single packet at a point in a scenario, use a wait surface instead
 handler. It consumes the matching packet and returns that message; a packet that does not match
 stays in the queue for a later handler or wait. Without an explicit timeout, the connector's default
 wait timeout applies.
+
+A packet name can be explicit or derived from the payload type.
+
+Pass a name or payload type to `waitFor<T>(nameOrType)`.
+
+The example below waits for one packet by payload type.
 
 ```typescript
 const found = await connector

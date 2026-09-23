@@ -61,9 +61,30 @@ if (reply) {
 When the connection drops, every pending request fails. None of them is retransmitted after a
 reconnect, so the application decides which requests to send again.
 
+### Request Hooks
+
+Register a request sending hook to add common metadata to every request. It runs synchronously
+during the request call, before the frame is built. Register a reply received hook to log
+every request result. It runs through the dispatch mode when the request ends with a reply, failure,
+timeout, or connection close. Both hooks also cover requests sent through an Actor handle.
+
+The registration signatures are:
+
+```cpp
+subscription_t on_request_sending(std::function<void(request_sending_context_t&)> callback);
+subscription_t on_reply_received(std::function<void(const reply_received_context_t&)> callback);
+```
+
+The request sending hook adds metadata to the frame. The reply received hook reads the result
+without changing it.
+
 ## 3. How the Packet Name Is Decided
 
 The server picks its handler by packet name. The name is decided in this order.
+
+`send` and `request` can take an explicit packet name or derive one from the payload type.
+
+Set an explicit name with the builder's `packet_name(name)`.
 
 1. The name the caller set on the builder
 2. The name declared on the payload type

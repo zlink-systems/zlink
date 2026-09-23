@@ -26,9 +26,9 @@ title: "Session 묶음의 동작 원리 · Java"
 [Session과 Actor 연결](24-actor-session.ko.md)은 연결 하나를 Actor 하나에 묶고 알림을 받기까지
 다뤘다. 이 장은 그 묶음이 지키는 규칙을 다룬다.
 
-## 1. 묶을 수 있는 개수 — session은 여럿, Actor는 하나
+## 1. 묶을 수 있는 개수 — session 하나에 Actor 여럿, Actor 하나에 session 하나
 
-<iframe class="zlink-diagram" src="/common/diagrams/39-binding-shape.html" title="session은 여럿을 묶고, Actor는 하나에만 묶인다" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/39-binding-shape.html" title="session 하나는 Actor 여럿을 묶고, Actor 하나는 session 하나에만 묶인다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/39-binding-shape.html" target="_blank">↗ 크게 보기</a></p>
 
 **session 하나는 여러 Actor를 동시에 묶을 수 있다.** 한 연결이 플레이어 Actor와 파티 Actor를

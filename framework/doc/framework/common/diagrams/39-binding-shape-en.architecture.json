@@ -2,7 +2,7 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "A Session Binds Several; an Actor Binds to One",
+    "title": "One Session Binds Several Actors; an Actor Binds to One Session",
     "subtitle": "No rebinding when an Actor moves · the framework refreshes the route it kept",
     "output": "39-binding-shape-en.html",
     "legend": {

@@ -11,7 +11,7 @@ process one thing at a time; what differs is that an Actor **is always inside so
 chapter goes as far as creating one Actor and calling it; moving between rooms and membership are
 covered by [Actor Membership](35-actor-membership.en.md).
 
-## 1. Where an Actor Sits — Always Inside Some Spot
+## 1. An Actor Always Belongs to a Spot
 
 An Actor does not float on its own. Right after creation it belongs to an **Entry Spot**, and
 entering a room moves it to that User Spot. The Entry Spot is the Spot the Framework creates when
