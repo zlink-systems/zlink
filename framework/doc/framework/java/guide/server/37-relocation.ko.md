@@ -82,11 +82,11 @@ join할 때와 운영에서 node를 비울 때 모두 이 정책을 따른다.
 등록 호출의 이름은 언어를 따른다 — [`preserveStateWith`를 지정하는 Spot 등록](21-spot.ko.md#33-등록)이
 그 자리다.
 
-## 3. 상태를 담는 시점 — factory 등록이 정한다
+## 3. 상태를 저장하는 시점 — factory 등록이 정한다
 
 handler 한 번·tick 한 번은 각각 하나의 [turn](32-execution-model.ko.md#1-작업이-대기하는-queue)이고,
-한 turn이 끝나야 다음 turn이 시작한다. Framework는 실행 중인 turn을 중단하지 않으므로 상태를 담을
-수 있는 순간은 turn 사이뿐이다. **상태를 담는 그 시점**을 누가 정하는지는 factory 등록에서 고른다.
+한 turn이 끝나야 다음 turn이 시작한다. Framework는 실행 중인 turn을 중단하지 않으므로 상태를 저장할
+수 있는 순간은 turn 사이뿐이다. **상태를 저장하는 그 시점**을 누가 정하는지는 factory 등록에서 고른다.
 
 | 모드 | 시점을 정하는 쪽 | 사용하는 자리 |
 | --- | --- | --- |

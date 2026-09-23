@@ -395,7 +395,7 @@ stopped · error)을 그대로 관측한다. 표기는 언어를 따른다. Stat
 - 이 챕터 계약의 실행 검증 예문: [주요 타입 사용 색인](13-interface-catalog.ko.md) — 검증 클래스 `FrameworkRuntimeContracts`
 - 정식 계약: [Host relocation 전체 흐름](../../../common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md) · [Runtime Metrics](../../../common/spec/server/06-observability/02-runtime-metrics.ko.md)
 - 상태 관측과 진단: `11. Monitoring` 장
-- relocation 경계를 application이 정하는 Spot: [상태를 담는 시점](37-relocation.ko.md#3-상태를-담는-시점--factory-등록이-정한다)
+- relocation 경계를 application이 정하는 Spot: [상태를 담는 시점](37-relocation.ko.md#3-상태를-저장하는-시점--factory-등록이-정한다)
 
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();

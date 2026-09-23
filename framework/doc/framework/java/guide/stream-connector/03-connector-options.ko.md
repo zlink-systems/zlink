@@ -25,7 +25,7 @@ title: "Connector 옵션 · Java"
 option은 connector를 만들 때 한 번 전달한다. 만들어진 connector는 그 값을 복사해 두고, 읽기
 표면으로 지금 사용 중인 값을 그대로 돌려준다. 실행 중에 바꿀 수 있는 값은 진단 수준이다.
 
-## 1. option을 정하는 자리
+## 1. option 지정과 기본값
 
 지정하지 않은 항목은 기본값을 사용한다. 최소 구성은 endpoint 하나다.
 

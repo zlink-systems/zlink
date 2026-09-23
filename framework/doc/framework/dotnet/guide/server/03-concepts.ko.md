@@ -196,7 +196,7 @@ Relocate는 spot과 actor의 state를 그대로 유지하면서 다른 node로 �
 고정하며, 실행 중에는 바꾸지 않는다.
 
 policy 종류와 선택 기준은 [Relocation](37-relocation.ko.md#21-factory-등록이-고르는-이동-정책), actor join 호출과
-완료 결과 수신은 [Actor membership](35-actor-membership.ko.md#23-결과를-받는-자리), 무중단 점검·배포로서의
+완료 결과 수신은 [Actor membership](35-actor-membership.ko.md#23-결과를-받는-callback), 무중단 점검·배포로서의
 Host Relocate와 이전 단위 구분은
 [Relocate](12-operations.ko.md#3-relocate--상태를-유지한-채-다른-host로-옮기기)가 다룬다.
 
