@@ -1748,6 +1748,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     ${ZLINK_FRAMEWORK_CPP_DIR}/tests/support)
   target_link_libraries(zlink_cpp_framework_mesh_node_vertical_test PRIVATE
     zlink::framework
+    zlink::stream_connector
     Threads::Threads)
   zlink_framework_cpp_add_boost_headers(
     zlink_cpp_framework_mesh_node_vertical_test)
