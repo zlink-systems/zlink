@@ -55,7 +55,7 @@ result_t<void> terminal_result (const result_t<void> &result)
 
 void ensure_blocking_submit_allowed ()
 {
-    if (application_job_context_t::current () != nullptr || current_serial_turn_handle
+    if (application_job_context_t::current () != nullptr || capture_current_serial_turn ()
         || current_callback_context || !runtime::current_actor_execution.actor_key.empty ()
         || !runtime::current_actor_execution.spot_id.empty ()
         || runtime::state_lane_t::current () != nullptr) {

@@ -1,12 +1,33 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #include <zlink/locations/redis.hpp>
 
+#include <atomic>
+#include <random>
+
 #if defined(ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT)
 #include <sw/redis++/redis++.h>
 #endif
 
 namespace zlink::framework::redis
 {
+
+namespace detail
+{
+namespace
+{
+
+std::uint64_t next_scan_epoch ()
+{
+    static std::atomic<std::uint64_t> next = [] {
+        std::random_device source;
+        const auto high = static_cast<std::uint64_t> (source ()) << 32;
+        return high ^ static_cast<std::uint64_t> (source ());
+    }();
+    return next.fetch_add (1, std::memory_order_relaxed);
+}
+
+} // namespace
+} // namespace detail
 
 #if defined(ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT)
 namespace detail

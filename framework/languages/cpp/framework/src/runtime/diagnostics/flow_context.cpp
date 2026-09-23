@@ -6,6 +6,7 @@
 #include <zlink/framework/contracts/dispatch/task.hpp>
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <memory>
 #include <random>
@@ -73,7 +74,7 @@ constexpr framework::detail::ambient_context_hooks_t ambient_flow_hooks{&capture
                                                                         &enter_ambient_flow};
 
 const bool ambient_flow_hooks_installed = [] {
-    framework::detail::ambient_context_hooks.store (&ambient_flow_hooks);
+    framework::detail::set_ambient_context_hooks (&ambient_flow_hooks);
     return true;
 }();
 
