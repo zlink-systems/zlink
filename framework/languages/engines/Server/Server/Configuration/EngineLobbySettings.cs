@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace EngineLobby;
+namespace EngineLobby.Server;
 
 public sealed record EngineLobbySettings(
     string RedisEndpoint,

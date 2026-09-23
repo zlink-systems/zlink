@@ -47,6 +47,7 @@ source_roots() { # <lang>
             "$root/quickstart" "$root/tutorial" "$root/samples"
             "$root/src" "$root/tests" "$root/contract"
             "$root/cross-language" "$root/testapps"
+            "$Z/framework/languages/engines/Server"
         ) ;;
         java) SOURCE_ROOTS=("$root/quickstart" "$root/tutorial" "$root/samples" "$root"/zlink-*) ;;
         node) SOURCE_ROOTS=(
@@ -88,10 +89,15 @@ fetch_jar() { # <name> <url> -> path
 
 format_dotnet() {
     local mode=format; ((CHECK)) && mode=check
+    local dir="$Z/framework/languages/dotnet"
     local files=()
     mapfile -t files < <(sources dotnet '*.cs')
     ((${#files[@]})) || return 0
-    (cd "$Z/framework/languages/dotnet" && dotnet tool restore >/dev/null && dotnet csharpier "$mode" "${files[@]}")
+    (
+        cd "$dir"
+        dotnet tool restore >/dev/null
+        dotnet csharpier "$mode" --config-path "$dir/.csharpierrc" "${files[@]}"
+    )
 }
 
 format_node() {

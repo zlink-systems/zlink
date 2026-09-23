@@ -1,8 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
   <PropertyGroup>
-    <RootNamespace>EngineLobby</RootNamespace>
+    <RootNamespace>EngineLobby.Server</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="../Shared/EngineLobby.Shared.csproj" />
     <PackageReference Include="Zlink.Framework.AspNetCore" />
     <PackageReference Include="Zlink.Framework.Locations.Redis" />
     <PackageReference Include="Zlink.Stream.Connector" />

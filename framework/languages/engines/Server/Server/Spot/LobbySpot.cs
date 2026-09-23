@@ -1,10 +1,11 @@
 using System.Collections.Concurrent;
+using EngineLobby.Shared;
 using Zlink.Framework.Contracts.Errors;
 using Zlink.Framework.Contracts.Handlers;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Contracts.Spots;
 
-namespace EngineLobby;
+namespace EngineLobby.Server;
 
 public sealed class LobbySpot(IZLinkEntrySpotContext context) : IZLinkEntrySpot<ParticipantActor>
 {

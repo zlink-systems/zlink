@@ -1,4 +1,4 @@
-using EngineLobby;
+using EngineLobby.Server;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Locations.Redis;
 

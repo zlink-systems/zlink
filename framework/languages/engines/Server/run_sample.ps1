@@ -43,8 +43,8 @@ function Stop-Run {
 Push-Location $PSScriptRoot
 try {
     switch ($Action) {
-        'install' { dotnet restore EngineLobby.csproj }
-        'build' { dotnet build EngineLobby.csproj -c Release }
+        'install' { dotnet restore EngineLobby.sln }
+        'build' { dotnet build EngineLobby.sln -c Release }
         'run' {
             New-Item -ItemType Directory -Force -Path $RunDirectory | Out-Null
             $redisPort = Find-FreePort 22000 22099
@@ -86,7 +86,7 @@ try {
                 $httpPort | Out-File (Join-Path $RunDirectory 'http.port') -NoNewline
 
                 $server = Start-Process dotnet -ArgumentList @(
-                    'run', '--project', 'EngineLobby.csproj', '-c', 'Release', '--no-build',
+                    'run', '--project', 'Server/EngineLobby.Server.csproj', '-c', 'Release', '--no-build',
                     '--', 'server', (Join-Path $RunDirectory 'settings.json')
                 ) -RedirectStandardOutput (Join-Path $RunDirectory 'server.log') `
                   -RedirectStandardError (Join-Path $RunDirectory 'server.err.log') `
@@ -113,7 +113,7 @@ try {
             $streamPort = (Get-Content -Raw (Join-Path $RunDirectory 'stream.port')).Trim()
             $response = Invoke-RestMethod -Uri "http://127.0.0.1:$httpPort/ready"
             if (-not $response.ready) { throw 'Engine Lobby readiness check failed' }
-            dotnet run --project EngineLobby.csproj -c Release --no-build -- `
+            dotnet run --project Server/EngineLobby.Server.csproj -c Release --no-build -- `
                 probe "ws://127.0.0.1:$streamPort"
         }
         'stop' { Stop-Run }
