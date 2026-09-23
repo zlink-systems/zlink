@@ -208,11 +208,13 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:5380/players/p1/profile'
 
 - **`ZLinkConfigurationException: MeshNode descriptor publication failed
   [mesh=game, status=REJECTED_CONFLICT]`, or the profile call keeps
-  returning `503 one-way route is not connected`.** This happens when
-  another run left a mesh descriptor behind under the
-  `zlink-tutorial-kotlin:` key prefix in the same Redis. Stop any previous
-  tutorial processes, clear only that prefix, and
-  restart the Server. Leave other languages' tutorial keys intact.
+  returning `503 one-way route is not connected`.** After a forced stop, the
+  previous owner lease can remain valid for up to 15 seconds
+  ([default owner lease TTL](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md#L670-L674)).
+  Wait for it to expire, then start the Server again; a failed start does not
+  retry. To restart immediately, stop earlier tutorial processes and clear
+  only the `zlink-tutorial-kotlin:` keys with the command below. Leave other
+  languages' tutorial keys intact.
 
   ```bash
   redis-cli --scan --pattern 'zlink-tutorial-kotlin:*' | xargs -r redis-cli del

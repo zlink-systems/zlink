@@ -279,6 +279,13 @@ export class ZLinkInMemoryLocationStore
       return stored(this.meshNodes.generations.get(key) ?? 1n, current.updatedAt);
     }
     if (
+      intent === ZLinkLocationWriteIntent.NewClaim &&
+      currentLease !== undefined &&
+      currentLease.leaseExpiresAt.getTime() > updatedAt.getTime()
+    ) {
+      return rejectedConflict();
+    }
+    if (
       current.ownerId !== descriptor.ownerId ||
       current.leaseGeneration !== descriptor.leaseGeneration ||
       current.lifecycleGeneration !== descriptor.lifecycleGeneration ||

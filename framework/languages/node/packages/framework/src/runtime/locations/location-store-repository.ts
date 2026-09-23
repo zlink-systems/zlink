@@ -2329,7 +2329,10 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       const renew = intent === 2 && canRenew(stored, descriptor);
       if (!takeover && !renew) {
         return {
-          status: WriteStatus.IgnoredStale,
+          status:
+            intent === ZLinkLocationWriteIntent.NewClaim && currentLeaseGeneration !== undefined
+              ? WriteStatus.RejectedConflict
+              : WriteStatus.IgnoredStale,
           generation,
           updatedAt: current.value.storeNow
         };

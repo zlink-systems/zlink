@@ -202,6 +202,7 @@ WebStorm에서 `tutorial/` project를 연다. npm tool window 또는 각 script�
 | `docker: Cannot connect to the Docker daemon` | Docker Desktop(또는 dockerd)이 실행 중이 아니다. 시작한 뒤 다시 실행한다 |
 | `docker: Error response from daemon: ... port is already allocated` / `Bind for 127.0.0.1:6379 failed` | 6379를 다른 Redis가 쓰고 있다. 아래와 같이 이 tutorial의 키를 삭제한 뒤 사용하거나, 6379에서 새 Redis를 실행한다 |
 | `curl`이 `Connection refused`를 반환한다 | Server(`npm run server`)가 아직 시작하지 않았거나 종료됐다. 해당 터미널의 로그를 확인한다 |
+| 강제 종료 후 Server가 시작하지 못한다 | 이전 owner lease는 최대 15초 동안 유효할 수 있다([owner lease TTL 기본값](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md#L670-L674)). 만료될 때까지 기다린 뒤 Server를 다시 실행한다. 시작에 실패한 process는 자동으로 재시도하지 않는다. 즉시 다시 시작하려면 이전 tutorial process를 종료하고 아래 명령으로 이 tutorial의 키를 삭제한다 |
 | `EADDRINUSE`(포트 충돌) | 아래 「포트」 표의 포트 중 하나를 다른 프로세스가 이미 쓰고 있다. 그 프로세스를 종료하거나 이 tutorial의 다른 실행 중인 인스턴스를 먼저 정리한다 |
 | `npm error gyp ERR! ... ZLINK_CORE_INSTALL_PREFIX must name an absolute installed Core ... package prefix`(Windows) | 이전 framework release가 고정한 `@zlink-systems/framework`가 아직 0.18.1 미만이라 `zlink@1.2.0`만 받는다 — win32-x64 prebuild(#656)는 framework 0.18.1(`zlink@1.2.1`)부터다. 그 버전으로 다시 받거나 WSL에서 실행한다 |
 | 위와 같은 오류(macOS) | `@zlink-systems/zlink@1.2.1`에도 아직 `darwin-*` prebuild가 없다. Linux(x64)나 Windows(0.18.1부터)에서 실행한다 |
