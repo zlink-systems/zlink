@@ -24,15 +24,19 @@ int main ()
     send_options.Metadata.emplace ("traceId", "send-1");
     send_options.bCompress = true;
     connector.SendJsonWithOptions ("chat.send.metadata", "{\"text\":\"hello\"}", send_options);
-    connector.RequestJson ("chat.request", "{\"text\":\"hello\"}", 0.01f);
+    int request_completed_count = 0;
+    connector.RequestJson ("chat.request", "{\"text\":\"hello\"}", 0.01f,
+                           [&request_completed_count] (const FZLinkStreamRequestResult &) {
+                               ++request_completed_count;
+                           });
     FZLinkStreamSendOptions request_options;
     request_options.Metadata.emplace ("traceId", "request-1");
     request_options.bCompress = true;
-    connector.RequestJsonWithOptions ("chat.request.metadata", "{\"text\":\"hello\"}", 0.01f,
-                                      request_options);
-    int request_completed_count = 0;
-    connector.OnRequestCompletedNative.AddLambda (
-      [&request_completed_count] (const FZLinkStreamPacket &) { ++request_completed_count; });
+    connector.RequestJsonWithOptions (
+      "chat.request.metadata", "{\"text\":\"hello\"}", 0.01f, request_options,
+      [&request_completed_count] (const FZLinkStreamRequestResult &) {
+          ++request_completed_count;
+      });
     connector.Dispatch ();
     connector.Tick (0.016f);
     if (connector.PendingDispatchCount () != 0) {

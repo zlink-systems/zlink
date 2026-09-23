@@ -6,7 +6,7 @@ Godot 4.4 GDExtension scene이 기존 C++ Godot stream connector adapter를 사�
 `EngineLobbyNode`는 `_process`에서 `dispatch()`를 호출하므로 callback이 Godot main thread에서
 `Status` Label을 갱신한다. 의도한 흐름은 `PingReq` → `PingRes` → `JoinReq` → `JoinRes` →
 `ChatMsg` → `ChatNotify`다. Packet 이름과 JSON field는 [Engine Lobby 공통 계약](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/sample/engine-lobby/README.ko.md)을 따른다.
-Node는 연결 전에 `ChatNotify` push를 구독한다.
+Node는 연결 전에 `on`으로 `ChatNotify` callback을 등록하고 subscription handle을 보관한다.
 
 ## 의존성과 빌드
 
@@ -45,8 +45,8 @@ C++ node와 GDExtension 등록 translation unit은 실제 Godot adapter header�
 실패한다. 이 머신에는 Godot와 `godot-cpp`가 없어 editor build, scene 실행, 실제 Label 갱신은
 확인하지 못했다.
 
-Node는 연결 전에 `ChatNotify`를 구독한다. Adapter는 이 push를 등록된 packet callback으로
-전달한다.
+Node는 연결 전에 `ChatNotify`를 등록한다. 각 `request_json` 호출은 자체 완료 callback을
+전달하고, callback은 응답 또는 오류 코드와 메시지를 받는다.
 
 [`../csharp`](../csharp)의 C# variant는 WSL의 실제 공용 server에 연결해 두 client의 Ping,
 Join, 양쪽 ChatNotify payload를 확인했다. 사용하지 않는 port에 연결한 검사는 예상대로

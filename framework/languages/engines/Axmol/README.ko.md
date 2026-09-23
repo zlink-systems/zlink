@@ -5,7 +5,8 @@
 Axmol 2.3.0 C++ client가 공용 Engine Lobby server에 연결한다. `EngineLobbyScene`은 connector를
 소유하고 scheduler update에서 `dispatch()`를 호출한다. `PingReq` → `PingRes` → `JoinReq` →
 `JoinRes` → `ChatMsg` → `ChatNotify` 결과를 화면 중앙과 log에 표시한다.
-연결 전에 Engine Lobby push인 `ChatNotify`를 구독한다.
+연결 전에 `on("ChatNotify", callback)`을 등록하고 반환된 구독 handle을 보관한다.
+각 `request_json` 호출은 응답 또는 실패를 받을 완료 callback을 함께 전달한다.
 
 Packet 이름과 JSON field는 [engine-lobby sample contract](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/sample/engine-lobby/README.ko.md)를 따른다.
 
@@ -61,10 +62,11 @@ unit으로 compile한다.
 g++-13 -std=c++20 -Wall -Wextra -Werror -fsyntax-only \
   -I Validation -I Source \
   -I ../../cpp/connector/engines/axmol/include \
+  -I ../../cpp/connector/core/include \
   Validation/ProtocolCompileCheck.cpp
 ```
 
 이 검사는 Axmol engine link, 실제 scheduler 실행, connector link와 server 통신을 검증하지
 않는다. 이 workspace에는 Axmol이 없어 engine build와 실행을 하지 않았다.
 
-Scene은 연결 전에 `ChatNotify`를 구독하고 adapter callback으로 전달된 push를 표시한다.
+Scene은 연결 전에 `ChatNotify`를 등록하고 이름에 연결된 callback으로 전달된 push를 표시한다.

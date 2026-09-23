@@ -23,7 +23,8 @@ class ENGINELOBBY_API AZLinkClientActor final : public AActor
     void SendPing ();
     void SendJoin ();
     void SendChat ();
-    void HandleResponse (const FZLinkStreamPacket &Packet);
+    void HandlePingResponse (const FZLinkStreamRequestResult &Result);
+    void HandleJoinResponse (const FZLinkStreamRequestResult &Result);
     void HandlePacket (const FZLinkStreamPacket &Packet);
     void SetStatus (const FString &Status, FColor Color = FColor::White);
 
@@ -39,6 +40,5 @@ class ENGINELOBBY_API AZLinkClientActor final : public AActor
     UPROPERTY ()
     TObjectPtr<UZLinkStreamConnector> Connector;
 
-    FDelegateHandle PacketHandle;
-    FDelegateHandle ResponseHandle;
+    FZLinkStreamSubscriptionHandle PacketHandle;
 };
