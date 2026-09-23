@@ -83,7 +83,7 @@ error.
 | Framework message envelope | Completes that operation with `ProtocolError`. |
 | STREAM frame received by the server | Terminates the connection with `ProtocolError`. |
 
-The flow fields of a STREAM frame received by a client connector are governed by [Stream Connector §5.5](../stream-connector/32-stream-connector.en.md#55-flow).
+The flow fields of a STREAM frame received by a client connector are governed by [Stream Connector §5.5](../../stream-connector/32-stream-connector.en.md#55-flow).
 
 ## 4. When A Flow Is Created
 
