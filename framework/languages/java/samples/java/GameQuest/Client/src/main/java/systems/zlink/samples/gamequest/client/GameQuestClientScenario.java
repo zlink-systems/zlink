@@ -557,7 +557,7 @@ public final class GameQuestClientScenario {
             }
             if (current instanceof IllegalStateException remote
                     && remote.getMessage() != null
-                    && remote.getMessage().startsWith("Unavailable:")) {
+                    && remote.getMessage().startsWith("unavailable:")) {
                 return true;
             }
             current = current.getCause();
