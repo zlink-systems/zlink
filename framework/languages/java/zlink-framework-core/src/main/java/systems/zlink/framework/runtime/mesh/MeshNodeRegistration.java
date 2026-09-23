@@ -80,6 +80,7 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
     // The lazy routing ID and its prefix invalidation form one C2 state group.
     private final ZLinkStateLane routingIdStateLane = new ZLinkStateLane();
     private RoutingId routingId;
+    private boolean hasExplicitRoutingId;
     private String routingIdPrefix;
     private String entrySpotId;
     private int placementWeight = 100;
@@ -345,7 +346,12 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
         RoutingId next = Objects.requireNonNull(value, "routingId");
         inRoutingIdStateLane(
                 () -> {
+                    if (routingIdPrefix != null) {
+                        throw new ZLinkConfigurationException(
+                                "MeshNode cannot configure both a fixed routing ID and an automatic routing ID prefix.");
+                    }
                     routingId = next;
+                    hasExplicitRoutingId = true;
                     return null;
                 });
         return this;
@@ -367,6 +373,10 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
         String next = requireText(value, "routing ID prefix");
         inRoutingIdStateLane(
                 () -> {
+                    if (hasExplicitRoutingId) {
+                        throw new ZLinkConfigurationException(
+                                "MeshNode cannot configure both a fixed routing ID and an automatic routing ID prefix.");
+                    }
                     routingIdPrefix = next;
                     routingId = null;
                     entrySpotId = null;
