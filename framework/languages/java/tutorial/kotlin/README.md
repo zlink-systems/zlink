@@ -191,6 +191,12 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:5380/players/p1/profile'
   running in another terminal until its log shows
   `Ready to accept connections`, then run the tutorial.
 
+- **Port 6379 is already in use by Redis.** If
+  `redis-cli -h 127.0.0.1 -p 6379 ping` returns `PONG`, use that Redis and
+  skip `docker run`. Stop any processes from a previous tutorial run, execute
+  the `zlink-tutorial-kotlin:*` key cleanup command below, then restart the
+  Server and Client. Do not stop the existing Redis when the tutorial ends.
+
 - **`Address already in use`
   (5380/5381/7601/7602/7611/7612/7621).** A previous run is still up. Stop
   both processes and run again.
@@ -204,10 +210,16 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:5380/players/p1/profile'
   [mesh=game, status=REJECTED_CONFLICT]`, or the profile call keeps
   returning `503 one-way route is not connected`.** This happens when
   another run left a mesh descriptor behind under the
-  `zlink-tutorial-kotlin:` key prefix in the same Redis. Clear only that
-  prefix and restart the Server — leave other languages' tutorial keys
-  alone.
+  `zlink-tutorial-kotlin:` key prefix in the same Redis. Stop any previous
+  tutorial processes, clear only that prefix, and
+  restart the Server. Leave other languages' tutorial keys intact.
 
   ```bash
   redis-cli --scan --pattern 'zlink-tutorial-kotlin:*' | xargs -r redis-cli del
+  ```
+
+  On Windows, run this with `redis-cli` connected to the same Redis:
+
+  ```powershell
+  redis-cli --scan --pattern 'zlink-tutorial-kotlin:*' | ForEach-Object { redis-cli DEL $_ | Out-Null }
   ```

@@ -152,6 +152,11 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:5380/players/p1/profile'
   기동 중이다. `docker run --rm -p 6379:6379 redis`를 다른 터미널에 띄워 두고, 로그에
   `Ready to accept connections`가 뜬 뒤 tutorial을 실행한다.
 
+- **Redis용 6379 포트가 이미 사용 중이다.** `redis-cli -h 127.0.0.1 -p 6379 ping`의
+  응답이 `PONG`이면 기존 Redis를 사용한다. `docker run`을 생략하고 이전 tutorial
+  process를 종료한 뒤 아래 `zlink-tutorial-kotlin:*` 키 정리 명령을 실행한다. 그런 다음
+  Server와 Client를 다시 실행한다. 기존 Redis는 tutorial 종료 시에도 중지하지 않는다.
+
 - **`Address already in use` (5380/5381/7601/7602/7611/7612/7621).** 이전 실행이 아직
   떠 있다. 두 process를 모두 종료한 뒤 다시 실행한다.
 
@@ -163,11 +168,17 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:5380/players/p1/profile'
 - **`ZLinkConfigurationException: MeshNode descriptor publication failed [mesh=game,
   status=REJECTED_CONFLICT]`, 또는 프로필 호출이 계속 `503 one-way route is not
   connected`를 낸다.** 같은 Redis를 다른 실행이 먼저 써서 `zlink-tutorial-kotlin:` 키
-  아래 mesh descriptor가 남아 있을 때 나온다. 그 키만 지우고 Server부터 다시 실행한다 —
-  다른 언어의 tutorial은 건드리지 않는다.
+  아래 mesh descriptor가 남아 있을 때 나온다. 이전 tutorial process를 종료한 뒤 그 키만
+  지우고 Server부터 다시 실행한다. 다른 언어의 tutorial 키는 지우지 않는다.
 
   ```bash
   redis-cli --scan --pattern 'zlink-tutorial-kotlin:*' | xargs -r redis-cli del
+  ```
+
+  Windows에서는 같은 Redis에 연결된 `redis-cli`로 다음 명령을 실행한다.
+
+  ```powershell
+  redis-cli --scan --pattern 'zlink-tutorial-kotlin:*' | ForEach-Object { redis-cli DEL $_ | Out-Null }
   ```
 
 ## 프로젝트

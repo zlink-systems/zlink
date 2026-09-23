@@ -167,20 +167,27 @@ order. Stop with the IDE's Stop button.
 - **Docker is not running / cannot connect to Redis** -- start Docker Desktop
   (or your Docker Engine) and start Redis again with the `docker run` command
   under Prerequisites.
-- **Port 6379 is already in use** -- check whether an earlier run's Redis
-  container is still up with `docker ps`. Unlike the samples, this tutorial
-  uses a fixed `redis://127.0.0.1:6379`, so it expects exactly one such
-  container reused across runs (`docker rm -f zlink-tutorial-dotnet-redis`
-  then start it again for a clean state).
+- **Port 6379 is already in use** -- if `redis-cli -h 127.0.0.1 -p 6379 ping`
+  returns `PONG`, use the existing Redis and skip the `docker run` command
+  above. Stop any processes from a previous tutorial run, execute the
+  `zlink-tutorial:*` key cleanup command below, then restart the Server and
+  Client. When using an existing Redis, skip the `docker rm` command under
+  Stop.
 - **`dotnet` reports no compatible SDK** -- install the .NET 8.0 (or newer)
   SDK.
 - **RID registration is rejected with `RejectedConflict`** -- an earlier
-  run's stale keys are still in the same Redis. Clear only the keys this
-  tutorial uses (leave any other data in that Redis alone if you share it
-  with something else):
+  run's stale keys are still in the same Redis. Stop the Server and Client,
+  clear only this tutorial's `zlink-tutorial:*` keys, then restart them.
+  Leave other keys in that Redis intact:
 
   ```bash
   redis-cli --scan --pattern 'zlink-tutorial:*' | xargs -r redis-cli del
+  ```
+
+  On Windows, run this with `redis-cli` connected to the same Redis:
+
+  ```powershell
+  redis-cli --scan --pattern 'zlink-tutorial:*' | ForEach-Object { redis-cli DEL $_ | Out-Null }
   ```
 
 ## HttpClient
