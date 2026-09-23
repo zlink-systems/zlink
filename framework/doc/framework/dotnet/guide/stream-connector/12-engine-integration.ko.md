@@ -33,17 +33,16 @@ Unreal과 Godot C#은 각각 C++와 .NET connector를 사용한다. 다음 표�
 | Unity WebGL | TypeScript connector와 UPM 어댑터 | [Unity WebGL](../../../node/guide/stream-connector/09-unity-webgl.ko.md) | [Unity sample의 WebGL build](https://github.com/zlink-systems/zlink/blob/main/framework/languages/engines/Unity/README.ko.md) |
 | Unreal | C++ connector의 Unreal plugin | [엔진 어댑터](../../../cpp/guide/stream-connector/09-engine-adapters.ko.md) | [C++ 배포](../../../cpp/guide/stream-connector/10-packaging.ko.md) |
 | Godot C# | `.NET` | [Godot C#](../../../dotnet/guide/stream-connector/09-godot-csharp.ko.md) | Godot C# 장은 배포 절차를 다루지 않는다 |
+| Godot C++ | C++ connector의 GDExtension 어댑터 | [엔진 어댑터](../../../cpp/guide/stream-connector/09-engine-adapters.ko.md) | [C++ 배포](../../../cpp/guide/stream-connector/10-packaging.ko.md) |
+| Axmol | C++ connector의 Axmol 어댑터 | [엔진 어댑터](../../../cpp/guide/stream-connector/09-engine-adapters.ko.md) | [C++ 배포](../../../cpp/guide/stream-connector/10-packaging.ko.md) |
+| Cocos Creator web | TypeScript connector | [브라우저](../../../node/guide/stream-connector/08-browser.ko.md) | [Cocos Creator sample](https://github.com/zlink-systems/zlink/blob/main/framework/languages/engines/CocosCreator/README.ko.md) |
 
 ## 1. Engine Lobby sample
 
 [Engine Lobby 계약](../../../common/sample/engine-lobby/README.ko.md)은 server와 client가 주고받는
-packet을 정의한다. [.NET server](https://github.com/zlink-systems/zlink-engine-server),
-[Unity project](https://github.com/zlink-systems/zlink-unity-examples),
-[Unreal project](https://github.com/zlink-systems/zlink-unreal-examples)는 각각 별도 저장소에도
-제공된다. 이 저장소의 원본과 실행 순서는
-[server](https://github.com/zlink-systems/zlink/blob/main/framework/languages/engines/Server/README.ko.md),
-[Unity](https://github.com/zlink-systems/zlink/blob/main/framework/languages/engines/Unity/README.ko.md),
-[Unreal](https://github.com/zlink-systems/zlink/blob/main/framework/languages/engines/Unreal/README.ko.md) README에 있다.
+packet을 정의한다. 어떤 engine client가 있고 각각 어느 미러 저장소로 제공되는지는 그 계약의
+[구현 구조](../../../common/sample/engine-lobby/README.ko.md#8-구현-구조) 표가 정한다. 이 장은 Unity와 Unreal
+client의 코드를 인용한다.
 
 Unity sample은 같은 client source를 native와 WebGL 빌드에 사용한다. 다음 코드는
 연결한 뒤 `JoinReq`로 응답을 받고 `ChatMsg`를 보낸다.

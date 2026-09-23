@@ -36,7 +36,7 @@ and `samples/` of `zlink-cpp-examples` automates it.
 
 | Path | Where it stands |
 |---|---|
-| GitHub Release | One Core prebuilt and two source archives installed in order. Verified end to end on Windows and Linux |
+| GitHub Release | Downloads and extracts this platform's one framework prebuilt. Core, the C++ binding, the framework libraries and `nlohmann_json` share one prefix |
 | vcpkg overlay port | Refreshed by `sync-recipes` at every release. Outside what this page verifies |
 | Conan recipe | Refreshed by `sync-recipes` at every release. Outside what this page verifies |
 
@@ -142,9 +142,9 @@ An HTTP handler does not receive route parameters as arguments. It takes an
 
 ## 6. Run
 
-`bootstrap.cmake` replaces the installation in §1 and configures this project into `build/`. The
-first run takes about 20 minutes because vcpkg builds the third-party libraries; if `tutorial/`
-was bootstrapped first, reuse its result with
+`bootstrap.cmake` replaces the installation in §1 and configures this project into `build/`. It
+downloads this platform's framework prebuilt and extracts it into `.zlink/install/`; it builds
+nothing. If `tutorial/` was bootstrapped first, reuse its prefix with
 `cmake -DZLINK_ROOT=../tutorial/.zlink -P bootstrap.cmake`.
 
 ```bash
@@ -166,15 +166,14 @@ The response is `"hello, world"` with status 200.
 ## 7. Opening it in an IDE
 
 It is a CMake project, so an IDE reads `CMakeLists.txt` and the preset as they are. `bootstrap.cmake`
-records the exact arguments it configured this folder with (Conan toolchain, framework install
-prefix, compile flags, generator) as the preset **`zlink`** in `CMakeUserPresets.json`, so **run
+records the exact arguments it configured this folder with (framework install prefix, C++
+standard, generator) as the preset **`zlink`** in `CMakeUserPresets.json`, so **run
 §6's `cmake -P bootstrap.cmake` once, open the folder and pick that preset** — that is all. No
 environment variable is needed. The preset configures into the same `build/` as §6, so the IDE
 continues from the terminal build. `CMakeUserPresets.json` is rewritten by every bootstrap and
-ignored by git; it is not edited by hand — to change a value, change the bootstrap's options
-(`-DZLINK_PACKAGE_MANAGER=vcpkg` and so on) and run it again. The Windows preset is Release only:
-the framework is a static library, a Debug consumer cannot link against Release objects, and `/Od`
-keeps it debuggable.
+ignored by git; it is not edited by hand — to change a value, run the bootstrap again. The
+Windows preset is Release only: the prebuilt is built Release, and a Debug consumer cannot link
+against it.
 
 ### 7.1 Visual Studio 2022 or 2026
 
@@ -214,7 +213,7 @@ Stop with the IDE's Stop button.
 
 | Symptom | What to check |
 | --- | --- |
-| `find_package` fails | Check that `cmake -P bootstrap.cmake` ended with `bootstrap done` and that `.zlink/install/lib/cmake/zlink_framework/` exists. If you installed by hand, check that `CMAKE_PREFIX_PATH` points at the framework install prefix |
+| `find_package` fails | Check that `cmake -P bootstrap.cmake` ended with `bootstrap complete` and that `.zlink/install/lib/cmake/zlink_framework/` exists. If you installed by hand, check that `CMAKE_PREFIX_PATH` points at the framework install prefix |
 | The server requires a location store | Check that `set_object_role` is set to `none` |
 | Startup fails | Check that both processes name the same mesh and that `routing_id` is set |
 | A message does not serialize | Check that the message type carries `NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE` |

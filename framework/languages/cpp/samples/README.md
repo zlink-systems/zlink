@@ -13,7 +13,7 @@ and the Redis container it started. Sample code never starts another server role
 process.
 
 This directory is `samples/` in the `zlink-cpp-examples` repository. The procedure below uses
-the Core, binding and framework packages published on GitHub Releases, Conan, and Docker for Redis.
+the platform-specific framework prebuilt published on GitHub Releases and Docker for Redis.
 
 ## Contents
 
@@ -36,18 +36,15 @@ Bash blocks run on Linux, macOS, and WSL; PowerShell blocks run on Windows Power
 
 | Tool | Windows | Linux / WSL |
 |---|---|---|
-| C++20 compiler | Visual Studio 2022 17.4 or later or Visual Studio 2026 with the **Desktop development with C++** workload. As of 2026-09, 2026's msvc 195 has no ConanCenter binary, so the first bootstrap builds third-party libraries from source and takes about 20 minutes. 2022 downloads binaries and takes about 7 minutes (verified with MSVC 19.44) | GCC 13 or later (verified with 13.3) |
+| C++20 compiler | Visual Studio 2022 17.4 or later or Visual Studio 2026 with the **Desktop development with C++** workload | GCC 13 or later (verified with 13.3) |
 | CMake | 3.24 or later (the 3.31 Visual Studio installs was used) | 3.24 or later (3.28 was used) |
 | Ninja | not needed | recommended; Makefiles are used when it is absent |
-| Conan 2 | Run `pipx install conan`, then `pipx ensurepath` and open a new terminal. If you used `py -m pip install --user conan`, put Python's `Scripts` directory on `PATH`. Check with `conan --version` | Run `pipx install conan`, then `pipx ensurepath` and open a new terminal. If you used `python3 -m pip install --user conan`, put Python's user `bin` directory on `PATH`. Check with `conan --version` |
 | Docker Desktop | each runner starts one Redis container. Must be installed and running | same (WSL integration, or Docker Engine on Linux) |
 | `curl` | included since Windows 10 | distribution package |
 
-Nothing else is needed: no zlink repository or Node.js. Even ZoneWorld's ZW-B8 fault proxy is C++
-built with the sample. Conan is installed by pipx (or pip) and downloads ConanCenter binaries for
-the third-party libraries. Visual Studio 2022 takes **about 7 minutes for the first bootstrap**; a
-toolset without binaries, such as 2026's msvc 195, builds third-party libraries from source and
-takes **about 20 minutes**. Later installs reuse its local cache.
+Nothing else is needed: no zlink repository, package manager, or Node.js. Even ZoneWorld's ZW-B8
+fault proxy is C++ built with the sample. The bootstrap downloads and extracts the published prefix;
+later installs reuse it locally.
 
 ## Download and install
 
@@ -55,15 +52,11 @@ Clone the [`zlink-cpp-examples`](https://github.com/zlink-systems/zlink-cpp-exam
 Every command below runs inside its `samples/` directory.
 
 One script, `bootstrap.cmake`, does the install -- it is the first line of the [Build](#build)
-block. It downloads three GitHub Release assets -- this platform's Core prebuilt
-(`core/v1.2.0`), the C++ binding source (`cpp/v1.2.0`) and the framework source
-(`framework-cpp/v0.18.0`) -- builds the binding and the framework into `.zlink/install/`, and
-configures the seven samples as one project into `build/`. Conan is the default package manager;
-pass `-DZLINK_PACKAGE_MANAGER=vcpkg` for the vcpkg fallback. From the second run on it reuses what
-it downloaded and built.
-
-Parallelism defaults to the logical core count; lower it as `cmake -DZLINK_JOBS=4 -P
-bootstrap.cmake`. To start over, delete `.zlink/` and `build/`.
+block. It downloads this platform's framework prebuilt from `framework-cpp/v<version>`, extracts
+its consumer prefix into `.zlink/install/`, and configures the seven samples as one project into
+`build/`. The prefix includes Core, the C++ binding, framework libraries, and `nlohmann_json`, so
+no package manager runs on the consumer machine. From the second run on it reuses the downloaded
+archive and extracted prefix. To start over, delete `.zlink/` and `build/`.
 
 ## Build
 
@@ -187,9 +180,7 @@ and verifying stay with the runner in the [Run](#run) section.
 
 | Symptom | Cause and fix |
 |---|---|
-| `bootstrap: could not find Conan` | Run `pipx install conan`, then `pipx ensurepath` and open a new terminal. For a `pip --user` install, put Python's `Scripts`/user `bin` directory on `PATH`, then check with `conan --version` |
-| `ERROR: Invalid setting ...` | The selected compiler is not a supported ConanCenter binary configuration. Use the listed compiler version, or pass `-DZLINK_PACKAGE_MANAGER=vcpkg` |
-| `bootstrap: download failed: https://github.com/...` | GitHub Releases is unreachable; check proxy and firewall, then rerun |
+| `bootstrap: framework prebuilt is unavailable for this host platform: https://github.com/...` | GitHub Releases is unreachable, or the release has no archive for this platform. Check proxy, firewall, release version, and platform support, then rerun |
 | `CMake Error ... No CMAKE_CXX_COMPILER could be found` / `Visual Studio 17 2022 could not find any instance` | No compiler. Install the **Desktop development with C++** workload on Windows, `g++` on Linux |
 | `No configured build tree at .../build.` (Linux) / `Missing executable: ... Build C++ samples first or set ZLINK_CPP_BUILD_DIR.` (Windows) | Install or build was skipped. Run `cmake -P bootstrap.cmake`, and on Windows `cmake --build build --config Release` |
 | On Windows a role process exits at once with an empty log and the runner ends with `Timed out waiting for <role>` (exit code `-1073741515`, `STATUS_DLL_NOT_FOUND`) | `zlink.dll` is not beside the executables. Rerun `cmake --build build --config Release`; the post-build step copies it into `build\Release\` |

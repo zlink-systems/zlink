@@ -34,17 +34,16 @@ The packaging column points to the package and build steps for each target.
 | Unity WebGL | TypeScript connector and UPM adapter | [Unity WebGL](../../../node/guide/stream-connector/09-unity-webgl.en.md) | [Unity sample WebGL build](https://github.com/zlink-systems/zlink/blob/main/framework/languages/engines/Unity/README.md) |
 | Unreal | C++ connector's Unreal plugin | [Engine adapters](../../../cpp/guide/stream-connector/09-engine-adapters.en.md) | [C++ packaging](../../../cpp/guide/stream-connector/10-packaging.en.md) |
 | Godot C# | `.NET` | [Godot C#](../../../dotnet/guide/stream-connector/09-godot-csharp.en.md) | The Godot C# chapter does not cover deployment |
+| Godot C++ | The C++ connector's GDExtension adapter | [Engine adapters](../../../cpp/guide/stream-connector/09-engine-adapters.en.md) | [C++ packaging](../../../cpp/guide/stream-connector/10-packaging.en.md) |
+| Axmol | The C++ connector's Axmol adapter | [Engine adapters](../../../cpp/guide/stream-connector/09-engine-adapters.en.md) | [C++ packaging](../../../cpp/guide/stream-connector/10-packaging.en.md) |
+| Cocos Creator web | TypeScript connector | [Browser](../../../node/guide/stream-connector/08-browser.en.md) | [Cocos Creator sample](https://github.com/zlink-systems/zlink/blob/main/framework/languages/engines/CocosCreator/README.md) |
 
 ## 1. Engine Lobby Sample
 
 The [Engine Lobby contract](../../../common/sample/engine-lobby/README.md) defines the packets
-exchanged by the server and clients. The [.NET server](https://github.com/zlink-systems/zlink-engine-server),
-[Unity project](https://github.com/zlink-systems/zlink-unity-examples), and
-[Unreal project](https://github.com/zlink-systems/zlink-unreal-examples) also have separate
-repositories. The source in this repository and run steps are in the
-[server](https://github.com/zlink-systems/zlink/blob/main/framework/languages/engines/Server/README.md),
-[Unity](https://github.com/zlink-systems/zlink/blob/main/framework/languages/engines/Unity/README.md), and
-[Unreal](https://github.com/zlink-systems/zlink/blob/main/framework/languages/engines/Unreal/README.md) READMEs.
+exchanged by the server and clients. Its [implementation structure](../../../common/sample/engine-lobby/README.md#8-implementation-structure)
+table decides which engine clients exist and which mirror repository ships each one. This chapter
+quotes the Unity and Unreal clients.
 
 The Unity sample uses the same client source for native and WebGL builds. It connects,
 waits for a `JoinReq` response, and sends a `ChatMsg`.

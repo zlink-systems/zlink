@@ -51,6 +51,9 @@ ENGINE_EXPORTS = {
     "Server": "zlink-engine-server",
     "Unity": "zlink-unity-examples",
     "Unreal": "zlink-unreal-examples",
+    "Godot": "zlink-godot-examples",
+    "Axmol": "zlink-axmol-examples",
+    "CocosCreator": "zlink-cocos-creator-examples",
 }
 
 #  미러 루트에 놓이는 디렉터리. 저장소 경로 `framework/languages/<lang>/<section>`과 같다.

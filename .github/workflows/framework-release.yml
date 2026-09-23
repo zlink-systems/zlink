@@ -640,22 +640,29 @@ jobs:
           overwrite_files: true
 
   wait-tutorial-cpp:
-    if: github.event_name == 'push' && needs.release-cpp.result == 'success'
-    name: Wait for the published C++ framework release asset
+    if: github.event_name == 'push' && needs.publish-prebuilt-cpp.result == 'success'
+    name: Wait for the published C++ framework prebuilt
     runs-on: ubuntu-24.04
-    needs: [resolve, release-cpp]
+    needs: [resolve, publish-prebuilt-cpp]
     permissions:
       contents: read
     steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: framework-cpp-${{ needs.resolve.outputs.cpp_version }}-linux-x64
+          path: ${{ runner.temp }}/framework-cpp-prebuilt
+
       - name: Wait for the GitHub Release asset (external propagation, not a publish retry)
         env:
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.resolve.outputs.cpp_version }}
+          PREBUILT_DIR: ${{ runner.temp }}/framework-cpp-prebuilt
         shell: bash
         run: |
           set -euo pipefail
-          asset="zlink-framework-cpp-${VERSION}.tar.gz"
+          mapfile -t archives < <(find "${PREBUILT_DIR}" -maxdepth 1 -type f -name '*.tar.gz' -printf '%f\n')
+          [ "${#archives[@]}" -eq 1 ] || { echo "::error::expected one Linux x64 prebuilt archive" >&2; exit 1; }
+          asset="${archives[0]}"
           for attempt in $(seq 1 60); do
             assets="$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name' 2>/dev/null || true)"
             if printf '%s\n' "${assets}" | grep -Fxq "${asset}"; then

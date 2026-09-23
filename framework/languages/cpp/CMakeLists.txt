@@ -864,61 +864,62 @@ add_zlink_framework_codec_extension(
 find_package(redis++ CONFIG QUIET)
 find_package(libuv CONFIG QUIET)
 
-add_library(zlink_framework_locations_redis INTERFACE)
+# The Redis client (redis-plus-plus, hiredis, libuv) is private to this
+# library: its public header names no third-party type, so the shared package
+# embeds the client and its consumers link zlink::framework_locations_redis
+# like the other Framework libraries.
+add_library(zlink_framework_locations_redis ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
+  extensions/framework-locations-redis/src/redis.cpp)
 add_library(zlink::framework_locations_redis ALIAS zlink_framework_locations_redis)
 set_target_properties(zlink_framework_locations_redis PROPERTIES
   EXPORT_NAME framework_locations_redis)
-target_compile_features(zlink_framework_locations_redis INTERFACE cxx_std_20)
-target_include_directories(zlink_framework_locations_redis INTERFACE
+zlink_framework_cpp_configure_shared_library(zlink_framework_locations_redis)
+zlink_framework_cpp_configure_msvc_target(zlink_framework_locations_redis)
+target_compile_features(zlink_framework_locations_redis PUBLIC cxx_std_20)
+target_include_directories(zlink_framework_locations_redis PUBLIC
   $<BUILD_INTERFACE:${ZLINK_FRAMEWORK_CPP_DIR}/extensions/framework-locations-redis/include>
   $<BUILD_INTERFACE:${ZLINK_FRAMEWORK_CPP_DIR}/connector/core/include>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-target_link_libraries(zlink_framework_locations_redis INTERFACE
+target_link_libraries(zlink_framework_locations_redis PUBLIC
   zlink::framework_provider_abstractions)
 if(TARGET redis++::redis++)
-  target_link_libraries(zlink_framework_locations_redis INTERFACE
+  target_link_libraries(zlink_framework_locations_redis PRIVATE
     redis++::redis++)
-  target_compile_definitions(zlink_framework_locations_redis INTERFACE
+  target_compile_definitions(zlink_framework_locations_redis PRIVATE
     ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT=1)
 elseif(TARGET redis++::redis++_static)
-  target_link_libraries(zlink_framework_locations_redis INTERFACE
+  target_link_libraries(zlink_framework_locations_redis PRIVATE
     redis++::redis++_static)
-  target_compile_definitions(zlink_framework_locations_redis INTERFACE
+  target_compile_definitions(zlink_framework_locations_redis PRIVATE
     ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT=1)
 endif()
 if(TARGET libuv::uv_a)
-  target_link_libraries(zlink_framework_locations_redis INTERFACE
+  target_link_libraries(zlink_framework_locations_redis PRIVATE
     libuv::uv_a)
 elseif(TARGET libuv::uv)
-  target_link_libraries(zlink_framework_locations_redis INTERFACE
+  target_link_libraries(zlink_framework_locations_redis PRIVATE
     libuv::uv)
 endif()
 
 set(ZLINK_FRAMEWORK_REDIS_EXPORT_DEPENDENCIES "")
 set(ZLINK_FRAMEWORK_REDIS_EXPORTS_REDIS_PLUS_PLUS OFF)
 set(ZLINK_FRAMEWORK_REDIS_EXPORTS_LIBUV OFF)
-set(ZLINK_FRAMEWORK_REDIS_EXPORT_REDIS_TARGET "")
-set(ZLINK_FRAMEWORK_REDIS_EXPORT_LIBUV_TARGET "")
 if(TARGET redis++::redis++)
   set(ZLINK_FRAMEWORK_REDIS_EXPORTS_REDIS_PLUS_PLUS ON)
-  set(ZLINK_FRAMEWORK_REDIS_EXPORT_REDIS_TARGET "redis++::redis++")
   string(APPEND ZLINK_FRAMEWORK_REDIS_EXPORT_DEPENDENCIES
     "find_dependency(redis++ CONFIG)\n")
 elseif(TARGET redis++::redis++_static)
   set(ZLINK_FRAMEWORK_REDIS_EXPORTS_REDIS_PLUS_PLUS ON)
-  set(ZLINK_FRAMEWORK_REDIS_EXPORT_REDIS_TARGET "redis++::redis++_static")
   string(APPEND ZLINK_FRAMEWORK_REDIS_EXPORT_DEPENDENCIES
     "find_dependency(redis++ CONFIG)\n")
 endif()
 
 if(TARGET libuv::uv_a)
   set(ZLINK_FRAMEWORK_REDIS_EXPORTS_LIBUV ON)
-  set(ZLINK_FRAMEWORK_REDIS_EXPORT_LIBUV_TARGET "libuv::uv_a")
   string(APPEND ZLINK_FRAMEWORK_REDIS_EXPORT_DEPENDENCIES
     "find_dependency(libuv CONFIG)\n")
 elseif(TARGET libuv::uv)
   set(ZLINK_FRAMEWORK_REDIS_EXPORTS_LIBUV ON)
-  set(ZLINK_FRAMEWORK_REDIS_EXPORT_LIBUV_TARGET "libuv::uv")
   string(APPEND ZLINK_FRAMEWORK_REDIS_EXPORT_DEPENDENCIES
     "find_dependency(libuv CONFIG)\n")
 endif()
@@ -2422,7 +2423,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     LABELS "framework-unit;framework-regression;gtest"
     TIMEOUT 30)
   add_executable(test_cpp_framework_redis_blob_bound
-    tests/Zlink.Framework.UnitTests/test_cpp_framework_redis_blob_bound.cpp)
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_redis_blob_bound.cpp
+    extensions/framework-locations-redis/src/redis.cpp)
   zlink_enable_coverage(test_cpp_framework_redis_blob_bound)
   target_compile_features(test_cpp_framework_redis_blob_bound PRIVATE cxx_std_20)
   target_compile_definitions(test_cpp_framework_redis_blob_bound PRIVATE
@@ -2605,6 +2607,21 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     TIMEOUT 30
     PROPERTIES
       RESOURCE_LOCK zlink_cpp_heavy_runtime)
+
+  add_zlink_connector_test(
+    test_unreal_adapter_push
+    connector/engines/unreal/tests/test_unreal_stream_connector.cpp
+    "connector-unreal-contract;connector-unreal-smoke"
+    integration)
+  target_link_libraries(test_unreal_adapter_push PRIVATE
+    zlink_unreal_stream_connector)
+
+  if(ZLINK_STREAM_CONNECTOR_BUILD_GODOT)
+    add_subdirectory(connector/engines/godot/tests)
+  endif()
+  if(ZLINK_STREAM_CONNECTOR_BUILD_AXMOL)
+    add_subdirectory(connector/engines/axmol/tests)
+  endif()
 
   set(ZLINK_UNREAL_PACKAGE_CONFIGURATION "${CMAKE_BUILD_TYPE}")
   if(NOT ZLINK_UNREAL_PACKAGE_CONFIGURATION)

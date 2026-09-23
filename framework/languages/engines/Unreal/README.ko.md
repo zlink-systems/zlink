@@ -6,6 +6,7 @@ Unreal Engine 5 C++ project가 Unity sample과 같은 Engine Lobby server에 연
 `AZLinkClientActor`가 C++ stream connector를 소유하고, `Tick`에서 connector를 pump하며,
 `PingReq` → `PingRes` → `JoinReq` → `JoinRes` → `ChatMsg` 순서와 `ChatNotify` 수신 결과를
 화면과 log에 표시한다.
+Actor는 연결 전에 Engine Lobby push인 `ChatNotify`를 구독한다.
 
 Packet 이름과 JSON field의 소유 문서는
 [`engine-lobby` sample contract](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/sample/engine-lobby/README.ko.md)다.
