@@ -8,7 +8,8 @@
 
 ## 1. 목적과 범위
 
-Engine Lobby는 Unity와 Unreal 같은 게임 엔진에서 사용하는 가장 작은 실시간 lobby 흐름을 보여 준다.
+Engine Lobby는 게임 엔진에서 사용하는 가장 작은 실시간 lobby 흐름을 보여 준다. 어떤 engine client가 있는지는
+[구현 구조](#8-구현-구조)의 표가 정한다.
 Client는 server에 연결해 왕복 상태를 확인하고, 이름으로 참가한 뒤 chat을 보낸다. Server는 연결마다
 Actor를 만들고 session에 bind하며, lobby에 현재 연결된 모든 Actor에게 chat 알림을 보낸다.
 
@@ -108,8 +109,8 @@ Actor factory는 `DisableRelocation`을 선택한다. Sample은 server 하나만
 전달한다. `actorId`는 server가 session identity에서 만든 opaque application identity이며 client는
 형식을 parsing하지 않는다.
 
-Unity와 Unreal client는 이 표의 packet 이름, field와 방향을 그대로 사용한다. 엔진별 alias나
-추가 wire field를 만들지 않으며 두 client는 같은 .NET server endpoint에 연결한다.
+모든 engine client는 이 표의 packet 이름, field와 방향을 그대로 사용한다. 엔진별 alias나
+추가 wire field를 만들지 않으며 모든 client는 같은 .NET server endpoint에 연결한다.
 
 ## 7. 업무 흐름
 
@@ -156,20 +157,20 @@ sequenceDiagram
 
 공통 source는 `framework/languages/engines/` 아래에 둔다.
 
-| 경로 | 내용 |
-|---|---|
-| `Server/` | .NET host, shared message declaration, session·Actor·Entry Spot 구현, probe와 runner |
-| `Unity/` | 한 scene의 Unity project, 공통 `ZLinkClient` MonoBehaviour와 UI |
-| `Unreal/` | Unreal Engine 5 C++ project, connector를 소유하는 Actor와 on-screen status UI |
+| 경로 | 내용 | connector | pump 위치 | 미러 저장소 |
+|---|---|---|---|---|
+| `Server/` | .NET host, shared message declaration, session·Actor·Entry Spot 구현, probe와 runner | — | — | `zlink-engine-server` |
+| `Unity/` | Unity 6 LTS project, 공통 `ZLinkClient` MonoBehaviour와 UI | native: `Zlink.Stream.Connector` NuGet, WebGL: `com.zlink.stream-connector.webgl` UPM | `Update()` | `zlink-unity-examples` |
+| `Unreal/` | Unreal Engine 5 C++ project, connector를 소유하는 Actor와 on-screen status UI | C++ connector의 `ZLinkStreamConnector` plugin | `Tick()` | `zlink-unreal-examples` |
+| `Godot/` | Godot 4 .NET project, connector를 소유하는 Control node와 status label | `Zlink.Stream.Connector` NuGet | `_Process()` | `zlink-godot-examples` |
+| `Axmol/` | Axmol 2.3 C++ project, connector를 소유하는 Scene과 status label | C++ connector의 Axmol adapter | scheduler update | `zlink-axmol-examples` |
+| `CocosCreator/` | Cocos Creator 3.8 web TypeScript project, Component와 Label | `@zlink-systems/stream-connector`(브라우저 WebSocket) | `update()` | `zlink-cocos-creator-examples` |
 
-Server는 public `Zlink.Framework` package surface만 사용한다. Unity project는 native target에서
-`Zlink.Stream.Connector` NuGet assembly를 사용하고 WebGL target에서는
-`com.zlink.stream-connector.webgl` UPM package를 사용한다. 두 assembly가 같은 build에 함께
-들어오지 않도록 native assembly를 WebGL에서 제외한다. Unreal project는 C++ connector의
-`ZLinkStreamConnector` plugin을 사용한다.
+Server는 public `Zlink.Framework` package surface만 사용한다. Unity project는 native와 WebGL 두
+connector 구현이 한 target에 함께 들어오지 않도록 native assembly를 WebGL에서 제외한다.
 
-가이드는 Unity `ZLinkClient`와 Unreal `EngineLobbyClientActor`의 connect, pump, handler와 lifecycle
-구간을 `--8<--` marker로 발췌한다. 가이드 안에 별도 사본의 예제 코드를 두지 않는다.
+가이드는 각 engine client의 connect, pump, handler와 lifecycle 구간을 `--8<--` marker로 발췌한다.
+가이드 안에 별도 사본의 예제 코드를 두지 않는다.
 
 ## 9. Client self-check
 
@@ -196,8 +197,7 @@ Linux lane은 install, build, run, verify, stop을 실행한다. Windows lane은
 5. 두 connector를 사용하는 C# probe를 실행한다.
 6. 성공과 실패 모두에서 자신이 시작한 server PID와 Redis container ID만 정리한다.
 
-Unity Editor/player build와 Unreal Editor/project build는 각 engine 설치와 license가 있는 runner에서
-별도로 검증한다. 일반 server smoke는 engine 설치가 없어도 같은 connector contract를 C# probe로
+각 engine의 editor·player build는 그 engine 설치와 license가 있는 runner에서 별도로 검증한다. 일반 server smoke는 engine 설치가 없어도 같은 connector contract를 C# probe로
 검증한다.
 
 ## 11. 완료 기준
@@ -206,9 +206,7 @@ Unity Editor/player build와 Unreal Editor/project build는 각 engine 설치와
 - .NET server가 public package만 사용해 build되고 전용 runner의 client self-check를 통과한다.
 - Linux lane은 install, build, run, verify, stop을 실행한다. Windows lane은 install과 build만
   확인하며 Redis 기반 run/verify는 Linux lane이 소유한다.
-- Unity project가 지정 Unity version에서 native와 WebGL target을 각각 compile하고, 같은
-  `ZLinkClient` source로 connect, pump, join, chat과 notification UI 갱신을 수행한다.
-- Unreal project가 Unreal Engine 5에서 compile되고 C++ connector로 같은 packet contract의
-  connect, pump, ping, join, chat과 notification UI 갱신을 수행한다.
-- Exporter가 `Server/`, `Unity/`, `Unreal/`을 각각 `zlink-engine-server`,
-  `zlink-unity-examples`, `zlink-unreal-examples`의 root tree로 내보낸다.
+- [구현 구조](#8-구현-구조) 표의 각 engine client가 그 engine에서 compile되고, 표의 connector와 pump 위치로
+  같은 packet contract의 connect, pump, ping, join, chat과 notification 표시를 수행한다. Unity는
+  native와 WebGL target을 같은 `ZLinkClient` source로 각각 compile한다.
+- Exporter가 [구현 구조](#8-구현-구조) 표의 각 경로를 그 행의 미러 저장소 root tree로 내보낸다.
