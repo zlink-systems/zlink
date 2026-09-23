@@ -550,8 +550,12 @@ done_command() {
         ensure_closes_cleanup_safe "$worktree" "$branch" "$state"
         if [[ -n "${ZLINK_CPP_BUILD_DIR:-}" ]]; then
             printf 'Windows C++ build tree 삭제 건너뜀: ZLINK_CPP_BUILD_DIR가 설정되어 있습니다.\n'
-        elif command -v powershell.exe >/dev/null 2>&1; then
-            powershell_cmd=$(command -v powershell.exe)
+        elif [[ -x /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe ]]; then
+            powershell_cmd=/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe
+        elif powershell_cmd=$(command -v pwsh.exe 2>/dev/null); then
+            :
+        elif powershell_cmd=$(command -v powershell.exe 2>/dev/null); then
+            :
         elif command -v pwsh >/dev/null 2>&1; then
             powershell_cmd=$(command -v pwsh)
         fi
