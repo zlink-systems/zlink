@@ -14,6 +14,7 @@
 #include <future>
 #include <iostream>
 #include <functional>
+#include <memory>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <string>
@@ -22,8 +23,6 @@
 
 namespace zlink::samples::supportchat
 {
-
-inline constexpr const char *conversation_id_metadata_key = "ConversationId";
 
 class supportchat_client_scenario_t
 {
@@ -95,16 +94,22 @@ class supportchat_client_scenario_t
           customer, opened.conversation_id, "customer participant join wait failed");
         auto joined_agent = wait_joined (
           agent, opened.conversation_id, "agent participant join wait failed");
-        auto agent_joined = request_in_conversation<join_conversation_res_t> (
+        auto agent_joined = request<join_conversation_res_t> (
           agent,
-          opened.conversation_id,
-          join_conversation_req_t{"agent-1", role_t::agent, "Agent One"},
+          join_conversation_req_t{opened.conversation_id, "agent-1", role_t::agent, "Agent One"},
           "agent join failed");
+        auto agent_room = agent_core.actor (agent_joined.actor_id);
+        expect (agent_room && agent_room->is_bound (), "agent room actor was not bound");
         expect (agent_joined.scheduled, "agent join must report a deferred membership operation");
         expect (agent_joined.state.status == conversation_status_t::waiting_for_agent,
                 "scheduled agent join must return the pre-commit state");
-        const auto customer_joined_notify = joined_customer.get ();
-        const auto agent_joined_notify = joined_agent.get ();
+        const auto customer_joined_packet = joined_customer.get ();
+        const auto agent_joined_packet = joined_agent.get ();
+        const auto &customer_joined_notify = customer_joined_packet.payload;
+        const auto &agent_joined_notify = agent_joined_packet.payload;
+        expect (agent_joined_packet.actor_id == agent_joined.actor_id,
+                "first room push used the wrong agent actor");
+        expect (agent_joined_notify.actor_id == "agent-1", "agent participant identity mismatch");
         expect (customer_joined_notify.actor_id == "agent-1"
                   && customer_joined_notify.state.status == conversation_status_t::active,
                 "customer did not receive an active participant notification");
@@ -120,11 +125,8 @@ class supportchat_client_scenario_t
 
         auto greeting_for_customer = wait_chat (
           customer, opened.conversation_id, "How can I help?");
-        auto greeting = request_in_conversation<send_chat_message_res_t> (
-          agent,
-          opened.conversation_id,
-          send_chat_message_req_t{"How can I help?"},
-          "agent greeting failed");
+        auto greeting = request<send_chat_message_res_t> (
+          agent_room, send_chat_message_req_t{"How can I help?"}, "agent greeting failed");
         expect (greeting.message.message_seq == 1
                   && greeting.state.status == conversation_status_t::active,
                 "agent greeting sequence mismatch");
@@ -138,16 +140,16 @@ class supportchat_client_scenario_t
         expect_public_contract (greeting_notify, "customer greeting notification");
         std::cout << "supportchat bound-push=verified" << std::endl;
 
-        auto reply_for_agent = wait_chat (agent, opened.conversation_id, "Payment keeps failing.");
-        auto reply = request_in_conversation<send_chat_message_res_t> (
-          customer,
-          opened.conversation_id,
-          send_chat_message_req_t{"Payment keeps failing."},
-          "customer reply failed");
+        auto reply_for_agent = wait_chat (
+          agent, opened.conversation_id, "Payment keeps failing.", agent_joined.actor_id);
+        auto reply = request<send_chat_message_res_t> (
+          customer, send_chat_message_req_t{"Payment keeps failing."}, "customer reply failed");
         expect (reply.message.message_seq == 2
                   && reply.state.status == conversation_status_t::active,
                 "customer reply sequence mismatch");
         const auto reply_notify = reply_for_agent.get ();
+        expect (reply_notify.state.conversation_id == opened.conversation_id,
+                "agent room push conversation mismatch");
         expect (reply_notify.message.message_seq == 2
                   && reply_notify.message.sender_actor_id == "customer-1",
                 "agent did not receive customer reply");
@@ -179,25 +181,32 @@ class supportchat_client_scenario_t
                                                    "second customer participant join wait failed");
         auto second_joined_agent = wait_joined (
           agent, second_opened.conversation_id, "second agent participant join wait failed");
-        auto second_agent_joined = request_in_conversation<join_conversation_res_t> (
+        auto second_agent_joined = request<join_conversation_res_t> (
           agent,
-          second_opened.conversation_id,
-          join_conversation_req_t{"agent-1", role_t::agent, "Agent One"},
+          join_conversation_req_t{
+            second_opened.conversation_id, "agent-1", role_t::agent, "Agent One"},
           "agent join of second conversation failed");
+        auto second_agent_room = agent_core.actor (second_agent_joined.actor_id);
+        expect (second_agent_room && second_agent_room->is_bound (),
+                "second agent room actor was not bound");
+        expect (second_agent_joined.actor_id != agent_joined.actor_id,
+                "agent rooms must use different actors");
         expect (second_agent_joined.scheduled,
                 "second agent join must report a deferred membership operation");
         expect (second_agent_joined.state.status == conversation_status_t::waiting_for_agent,
                 "second scheduled join must return the pre-commit state");
-        expect (second_joined_customer.get ().state.status == conversation_status_t::active,
+        expect (second_joined_customer.get ().payload.state.status == conversation_status_t::active,
                 "second customer did not receive active participant notification");
-        expect (second_joined_agent.get ().state.subject == "refund not received",
+        const auto second_joined_agent_packet = second_joined_agent.get ();
+        expect (second_joined_agent_packet.actor_id == second_agent_joined.actor_id,
+                "second room push used the wrong agent actor");
+        expect (second_joined_agent_packet.payload.state.subject == "refund not received",
                 "second agent participant notification subject mismatch");
 
         auto second_greeting_for_customer = wait_chat (
           second_customer, second_opened.conversation_id, "Let me check your account.");
-        auto second_greeting = request_in_conversation<send_chat_message_res_t> (
-          agent,
-          second_opened.conversation_id,
+        auto second_greeting = request<send_chat_message_res_t> (
+          second_agent_room,
           send_chat_message_req_t{"Let me check your account."},
           "second conversation greeting failed");
         expect (second_greeting.message.message_seq == 1
@@ -205,12 +214,23 @@ class supportchat_client_scenario_t
                 "second conversation sequence must start at 1");
         expect (second_greeting_for_customer.get ().message.message_seq == 1,
                 "second customer did not receive agent greeting");
+        auto second_reply_for_agent = wait_chat (agent,
+                                                 second_opened.conversation_id,
+                                                 "I still need the refund.",
+                                                 second_agent_joined.actor_id);
+        auto second_reply = request<send_chat_message_res_t> (
+          second_customer,
+          send_chat_message_req_t{"I still need the refund."},
+          "second customer reply failed");
+        expect (second_reply.message.message_seq == 2
+                  && second_reply.state.conversation_id == second_opened.conversation_id,
+                "second room reply sequence mismatch");
+        expect (second_reply_for_agent.get ().message.message_seq == 2,
+                "second room push did not reach its actor");
 
         auto customer_typing = wait_typing (customer, opened.conversation_id, "agent-1", true);
         auto agent_typing_none = wait_no_typing (agent);
-        agent.send (set_typing_msg_t{true})
-          .metadata (conversation_id_metadata_key, opened.conversation_id)
-          .submit ();
+        agent_room->send (set_typing_msg_t{true}).submit ();
         expect (customer_typing.get ().is_typing, "customer did not receive typing notification");
         agent_typing_none.get ();
 
@@ -218,10 +238,9 @@ class supportchat_client_scenario_t
          * reconnect assertions run. This is a real domain message, so the
          * reconnect check observes the latest committed sequence. */
         auto reconnect_keepalive_for_agent = wait_chat (
-          agent, opened.conversation_id, "Still looking into it.");
-        auto reconnect_keepalive = request_in_conversation<send_chat_message_res_t> (
+          agent, opened.conversation_id, "Still looking into it.", agent_joined.actor_id);
+        auto reconnect_keepalive = request<send_chat_message_res_t> (
           customer,
-          opened.conversation_id,
           send_chat_message_req_t{"Still looking into it."},
           "reconnect keepalive failed");
         expect (reconnect_keepalive.message.message_seq == 3
@@ -242,11 +261,13 @@ class supportchat_client_scenario_t
           "customer re-authentication failed");
         expect (reconnected_customer_auth.actor_id == customer_auth.actor_id,
                 "reconnected customer must bind the same actor");
-        auto customer_rejoined = request_in_conversation<join_conversation_res_t> (
+        auto customer_rejoined = request<join_conversation_res_t> (
           reconnected_customer,
-          opened.conversation_id,
-          join_conversation_req_t{"customer-1", role_t::customer, "Customer One"},
+          join_conversation_req_t{
+            opened.conversation_id, "customer-1", role_t::customer, "Customer One"},
           "reconnected customer could not re-join the first conversation");
+        expect (customer_rejoined.actor_id == customer_auth.actor_id,
+                "customer join must use the identity actor");
         expect (!customer_rejoined.scheduled
                   && customer_rejoined.state.status == conversation_status_t::active
                   && customer_rejoined.state.subject == conversation_subject
@@ -266,24 +287,32 @@ class supportchat_client_scenario_t
           reconnected_agent, set_agent_available_req_t{true}, "agent re-availability failed");
         expect (reconnected_available.is_available, "reconnected agent was not made available");
 
-        auto rejoined_first = request_in_conversation<join_conversation_res_t> (
+        auto rejoined_first = request<join_conversation_res_t> (
           reconnected_agent,
-          opened.conversation_id,
-          join_conversation_req_t{"agent-1", role_t::agent, "Agent One"},
+          join_conversation_req_t{opened.conversation_id, "agent-1", role_t::agent, "Agent One"},
           "reconnected agent could not re-join the first conversation");
+        auto rejoined_first_room = reconnected_core.actor (rejoined_first.actor_id);
+        expect (rejoined_first_room && rejoined_first_room->is_bound (),
+                "reconnected first agent room actor was not bound");
         expect (!rejoined_first.scheduled, "reconnect must not schedule an already committed Join");
         expect (rejoined_first.state.status == conversation_status_t::active,
                 "first conversation state must survive the reconnect");
         expect (rejoined_first.state.subject == conversation_subject
                   && rejoined_first.state.last_message_seq == 3,
                 "first conversation history must survive the reconnect");
-        auto rejoined_second = request_in_conversation<join_conversation_res_t> (
+        auto rejoined_second = request<join_conversation_res_t> (
           reconnected_agent,
-          second_opened.conversation_id,
-          join_conversation_req_t{"agent-1", role_t::agent, "Agent One"},
+          join_conversation_req_t{
+            second_opened.conversation_id, "agent-1", role_t::agent, "Agent One"},
           "reconnected agent could not re-join the second conversation");
+        auto rejoined_second_room = reconnected_core.actor (rejoined_second.actor_id);
+        expect (rejoined_second_room && rejoined_second_room->is_bound (),
+                "reconnected second agent room actor was not bound");
+        expect (rejoined_first.actor_id == agent_joined.actor_id
+                  && rejoined_second.actor_id == second_agent_joined.actor_id,
+                "reconnect must recover both room actors");
         expect (!rejoined_second.scheduled, "second reconnect must return current state");
-        expect (rejoined_second.state.last_message_seq == 1,
+        expect (rejoined_second.state.last_message_seq == 2,
                 "second conversation history must survive the reconnect");
         std::cout << "supportchat reconnect=verified" << std::endl;
 
@@ -292,42 +321,42 @@ class supportchat_client_scenario_t
          * transition is allowed to close the conversation. */
         auto first_idle_customer = wait_idle (
           reconnected_customer, opened.conversation_id, "customer idle notification wait failed");
-        auto first_idle_agent = wait_idle (
-          reconnected_agent, opened.conversation_id, "agent idle notification wait failed");
+        auto first_idle_agent = wait_idle (reconnected_agent,
+                                           opened.conversation_id,
+                                           "agent idle notification wait failed",
+                                           rejoined_first.actor_id);
 
         /* 명시적 close와 closed 대화 오류(§17-22, 명시적 close 시나리오). */
         auto second_closed_notify = wait_closed (
           reconnected_agent,
           second_opened.conversation_id,
-          "reconnected agent second conversation closed notification wait failed");
-        auto closed = request_in_conversation<close_conversation_res_t> (
-          second_customer,
-          second_opened.conversation_id,
-          close_conversation_req_t{"resolved"},
-          "explicit close failed");
+          "reconnected agent second conversation closed notification wait failed",
+          rejoined_second.actor_id);
+        auto second_closed_customer = wait_closed (
+          second_customer, second_opened.conversation_id, "second customer close wait failed");
+        auto closed = request<close_conversation_res_t> (
+          rejoined_second_room, close_conversation_req_t{"resolved"}, "explicit close failed");
         expect (closed.state.status == conversation_status_t::closed,
                 "explicit close did not close the conversation");
         expect (second_closed_notify.get ().state.status == conversation_status_t::closed,
                 "agent did not receive the closed notification");
+        expect (second_closed_customer.get ().state.status == conversation_status_t::closed,
+                "second customer did not receive the closed notification");
 
         // --8<-- [start:doc-e2e-failure]
         (void) zlink::stream_connector::assertions::expect_failure ([&] {
             return second_customer.request (close_conversation_req_t{"resolved"})
-              .metadata (conversation_id_metadata_key, second_opened.conversation_id)
               .async<close_conversation_res_t> ()
               .result ();
         });
         // --8<-- [end:doc-e2e-failure]
         (void) zlink::stream_connector::assertions::expect_failure ([&] {
             return second_customer.request (send_chat_message_req_t{"anyone there?"})
-              .metadata (conversation_id_metadata_key, second_opened.conversation_id)
               .async<send_chat_message_res_t> ()
               .result ();
         });
         auto closed_typing_none = wait_no_typing (reconnected_agent);
-        second_customer.send (set_typing_msg_t{true})
-          .metadata (conversation_id_metadata_key, second_opened.conversation_id)
-          .submit ();
+        second_customer.send (set_typing_msg_t{true}).submit ();
         closed_typing_none.get ();
         std::cout << "supportchat-closed-typing-ignore=verified" << std::endl;
 
@@ -335,11 +364,12 @@ class supportchat_client_scenario_t
                 "customer did not receive idle notification");
         expect (first_idle_agent.get ().state.status == conversation_status_t::waiting_for_close,
                 "agent did not receive idle notification");
-        auto resumed_for_agent = wait_chat (
-          reconnected_agent, opened.conversation_id, "The customer resumed the conversation.");
-        auto resumed = request_in_conversation<send_chat_message_res_t> (
+        auto resumed_for_agent = wait_chat (reconnected_agent,
+                                            opened.conversation_id,
+                                            "The customer resumed the conversation.",
+                                            rejoined_first.actor_id);
+        auto resumed = request<send_chat_message_res_t> (
           reconnected_customer,
-          opened.conversation_id,
           send_chat_message_req_t{"The customer resumed the conversation."},
           "idle conversation resume failed");
         expect (resumed.message.message_seq == 4
@@ -352,12 +382,16 @@ class supportchat_client_scenario_t
         auto second_idle_customer = wait_idle (reconnected_customer,
                                                opened.conversation_id,
                                                "resumed customer idle notification wait failed");
-        auto second_idle_agent = wait_idle (
-          reconnected_agent, opened.conversation_id, "resumed agent idle notification wait failed");
+        auto second_idle_agent = wait_idle (reconnected_agent,
+                                            opened.conversation_id,
+                                            "resumed agent idle notification wait failed",
+                                            rejoined_first.actor_id);
         auto first_closed_customer = wait_closed (
           reconnected_customer, opened.conversation_id, "customer closed notification wait failed");
-        auto first_closed_agent = wait_closed (
-          reconnected_agent, opened.conversation_id, "agent closed notification wait failed");
+        auto first_closed_agent = wait_closed (reconnected_agent,
+                                               opened.conversation_id,
+                                               "agent closed notification wait failed",
+                                               rejoined_first.actor_id);
         expect (second_idle_customer.get ().state.status
                   == conversation_status_t::waiting_for_close,
                 "resumed customer did not receive idle notification");
@@ -371,7 +405,6 @@ class supportchat_client_scenario_t
 
         (void) zlink::stream_connector::assertions::expect_failure ([&] {
             return reconnected_customer.request (send_chat_message_req_t{"are you there?"})
-              .metadata (conversation_id_metadata_key, opened.conversation_id)
               .async<send_chat_message_res_t> ()
               .result ();
         });
@@ -397,8 +430,7 @@ class supportchat_client_scenario_t
         std::cout << "supportchat=completed" << std::endl;
     }
 
-    /* The wait surface hands back a message (stream-connector §5.5); these
-     * helpers keep their payload-shaped futures. */
+    /* Keep the envelope for joins so the Agent can verify the received Actor ID. */
     template <typename TPayload>
     static std::future<TPayload>
     unwrap_payload (std::future<zlink::stream_connector::message_t<TPayload>> source)
@@ -408,22 +440,36 @@ class supportchat_client_scenario_t
         });
     }
 
-    static std::future<conversation_idle_notify_t>
-    wait_idle (connector_t &connector, std::string conversation_id, const char *failure_message)
+    static std::future<conversation_idle_notify_t> wait_idle (connector_t &connector,
+                                                              std::string conversation_id,
+                                                              const char *failure_message,
+                                                              std::string actor_id = {})
     {
         return unwrap_payload (
           connector.wait_for<conversation_idle_notify_t> ()
-            .where (&conversation_idle_notify_t::conversation_id, std::move (conversation_id))
+            .where (
+              [conversation_id = std::move (conversation_id), actor_id = std::move (actor_id)] (
+                const zlink::stream_connector::message_t<conversation_idle_notify_t> &message) {
+                  return message.payload.conversation_id == conversation_id
+                         && (actor_id.empty () || message.actor_id == actor_id);
+              })
             .timeout (notification_wait_timeout)
             .to_future (failure_message));
     }
 
-    static std::future<conversation_closed_notify_t>
-    wait_closed (connector_t &connector, std::string conversation_id, const char *failure_message)
+    static std::future<conversation_closed_notify_t> wait_closed (connector_t &connector,
+                                                                  std::string conversation_id,
+                                                                  const char *failure_message,
+                                                                  std::string actor_id = {})
     {
         return unwrap_payload (
           connector.wait_for<conversation_closed_notify_t> ()
-            .where (&conversation_closed_notify_t::conversation_id, std::move (conversation_id))
+            .where (
+              [conversation_id = std::move (conversation_id), actor_id = std::move (actor_id)] (
+                const zlink::stream_connector::message_t<conversation_closed_notify_t> &message) {
+                  return message.payload.conversation_id == conversation_id
+                         && (actor_id.empty () || message.actor_id == actor_id);
+              })
             .timeout (notification_wait_timeout)
             .to_future (failure_message));
     }
@@ -439,15 +485,11 @@ class supportchat_client_scenario_t
     }
 
     template <typename TReply, typename TRequest>
-    static TReply request_in_conversation (connector_t &connector,
-                                           const std::string &conversation_id,
-                                           const TRequest &request,
-                                           const char *message)
+    static TReply request (const std::shared_ptr<zlink::stream_connector::actor_t> &actor,
+                           const TRequest &request,
+                           const char *message)
     {
-        auto reply = connector.request (request)
-                       .metadata (conversation_id_metadata_key, conversation_id)
-                       .template async<TReply> ()
-                       .result ();
+        auto reply = actor->request (request).template submit<TReply> ();
         if (!reply) {
             throw std::runtime_error (reply.error () ? reply.error ()->message : message);
         }
@@ -465,25 +507,29 @@ class supportchat_client_scenario_t
         });
     }
 
-    static std::future<participant_joined_notify_t>
+    static std::future<zlink::stream_connector::message_t<participant_joined_notify_t>>
     wait_joined (connector_t &connector, std::string conversation_id, const char *failure_message)
     {
-        return unwrap_payload (
-          connector.wait_for<participant_joined_notify_t> ()
-            .where (&participant_joined_notify_t::conversation_id, std::move (conversation_id))
-            .timeout (std::chrono::seconds (12))
-            .to_future (failure_message));
+        return connector.wait_for<participant_joined_notify_t> ()
+          .where (&participant_joined_notify_t::conversation_id, std::move (conversation_id))
+          .timeout (std::chrono::seconds (12))
+          .to_future (failure_message);
     }
 
-    static std::future<chat_message_notify_t>
-    wait_chat (connector_t &connector, std::string conversation_id, std::string text)
+    static std::future<chat_message_notify_t> wait_chat (connector_t &connector,
+                                                         std::string conversation_id,
+                                                         std::string text,
+                                                         std::string actor_id = {})
     {
         return unwrap_payload (
           connector.wait_for<chat_message_notify_t> ()
-            .where ([conversation_id = std::move (conversation_id), text = std::move (text)] (
+            .where ([conversation_id = std::move (conversation_id),
+                     text = std::move (text),
+                     actor_id = std::move (actor_id)] (
                       const zlink::stream_connector::message_t<chat_message_notify_t> &message) {
                 return message.payload.conversation_id == conversation_id
-                       && message.payload.message.text == text;
+                       && message.payload.message.text == text
+                       && (actor_id.empty () || message.actor_id == actor_id);
             })
             .timeout (std::chrono::seconds (12))
             .to_future ("chat message wait failed"));

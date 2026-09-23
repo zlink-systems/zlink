@@ -32,8 +32,7 @@ public final class Messages {
     public record EnsureAgentConversationReq(
             String rosterActorId, String displayName, String conversationId) {}
 
-    public record EnsureAgentConversationRes(
-            ActorRefSnapshot actor, boolean scheduled, ConversationState state) {}
+    public record EnsureAgentConversationRes(ActorRefSnapshot actor) {}
 
     public record OpenConversationReq(String subject) {}
 
@@ -43,13 +42,10 @@ public final class Messages {
 
     public record SetAgentAvailableRes(boolean isAvailable) {}
 
-    public record JoinConversationReq(String participantId, String role, String displayName) {
-        public JoinConversationReq() {
-            this("", "", "");
-        }
-    }
+    public record JoinConversationReq(
+            String conversationId, String participantId, String role, String displayName) {}
 
-    public record JoinConversationRes(boolean scheduled, ConversationState state) {}
+    public record JoinConversationRes(boolean scheduled, String actorId, ConversationState state) {}
 
     public record JoinConversationFailedNotify(
             String conversationId, String error, boolean isRetriable) {}

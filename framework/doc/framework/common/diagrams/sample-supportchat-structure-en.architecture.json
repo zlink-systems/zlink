@@ -17,7 +17,7 @@
     { "id": "sh-json", "type": "external", "label": "JSON Contracts", "sublabel": "auth·conversation·chat·notify", "row": 1, "col": 1 },
 
     { "id": "se-prog", "type": "external", "label": "Program", "row": 2, "col": 0 },
-    { "id": "se-app", "type": "external", "label": "Application", "sublabel": "SessionBinding·MetadataRouting", "row": 2, "col": 1 },
+    { "id": "se-app", "type": "external", "label": "Application", "sublabel": "SessionBinding·ActorSlotRelay", "row": 2, "col": 1 },
     { "id": "se-infra", "type": "external", "label": "Infrastructure", "sublabel": "Stream·Packet·ActorRelay", "row": 2, "col": 2 },
 
     { "id": "api-prog", "type": "frontend", "label": "Program", "row": 3, "col": 0 },
@@ -49,7 +49,7 @@
       "dot": "slate",
       "title": "Server / Session·Api subfiles",
       "items": [
-        "Session { Program, Application{SessionBinding, MetadataRouting}, Infrastructure{StreamSession, PacketHandlers, ActorRelay} }.",
+        "Session { Program, Application{SessionBinding, ActorSlotRelay}, Infrastructure{StreamSession, PacketHandlers, ActorRelay} }.",
         "Api { Program, Application{Authentication, ConversationCreation}, Infrastructure{ApiHandlers, SupportClient} }."
       ]
     },

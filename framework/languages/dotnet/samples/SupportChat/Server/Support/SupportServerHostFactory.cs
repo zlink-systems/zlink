@@ -49,10 +49,6 @@ public static class SupportServerHostFactory
             );
             options.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
             // --8<-- [start:doc-sc-support-register]
-            options
-                .ConfigureMetadata()
-                .AllowSessionToActor(SampleNames.ConversationIdMetadataKey)
-                .AllowActorToSession(SampleNames.ConversationIdMetadataKey);
             options.AddHandlersFromAssemblyOf(typeof(SupportServerHostFactory));
             var mesh = options
                 .AddRouteMesh(SampleNames.MeshName)

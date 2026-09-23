@@ -39,14 +39,14 @@ public sealed record SetAgentAvailableReq(bool IsAvailable);
 
 public sealed record SetAgentAvailableRes(bool IsAvailable);
 
-// ConversationId travels as stream message metadata (§9.2), not in these bodies.
 public sealed record JoinConversationReq(
+    string ConversationId,
     string ParticipantId = "",
     string Role = "",
     string DisplayName = ""
 );
 
-public sealed record JoinConversationRes(bool Scheduled, ConversationState State);
+public sealed record JoinConversationRes(bool Scheduled, string ActorId, ConversationState State);
 
 public sealed record JoinConversationFailedNotify(string ConversationId, string Error);
 

@@ -5115,11 +5115,11 @@
         </g>
         </g>
 
-        <g data-edge-from="C" data-edge-to="S" data-edge-label="JoinConversationReq(metadata ConversationId)" data-edge-key="9">
+        <g data-edge-from="C" data-edge-to="S" data-edge-label="JoinConversationReq(conversationId)" data-edge-key="9">
           <path data-composition-edge-from="C" data-composition-edge-to="S" data-composition-points="154,592;349.33333333333337,592" d="M 154 592 L 349.33333333333337 592" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <g data-detail="context">
           <rect x="131.26666666666668" y="572" width="240.8" height="16" rx="3" class="c-mask"/>
-          <text x="251.66666666666669" y="582" class="t-backend" font-size="9" text-anchor="middle">JoinConversationReq(metadata ConversationId)</text>
+          <text x="251.66666666666669" y="582" class="t-backend" font-size="9" text-anchor="middle">JoinConversationReq(conversationId)</text>
         </g>
         </g>
 
@@ -5404,7 +5404,7 @@
         </div>
         <ul>
           <li>&bull; reconnect는 actor와 Conversation state를 새로 만들지 않는다. scheduled=false로 현재 state를 반환한다. Agent는 roster actor를 다시 bind하고 SetAgentAvailableReq(true)를 보낸 뒤 열려 있던 conversation마다 JoinConversationReq를 보낸다.</li>
-          <li>&bull; Session은 metadata ConversationId가 agent conversation actor map에 있으면 그 actor로 relay하고, customer의 map miss는 customer identity actor로 relay한다.</li>
+          <li>&bull; Session은 JoinConversationReq를 binding packet으로 처리한다. 다른 packet은 Actor slot이 있으면 dispatch context에 bound된 Actor로, 없으면 연결의 identity Actor로 relay한다. Agent는 재join의 JoinConversationRes.actorId로 방별 Actor handle을 다시 찾는다.</li>
           <li>&bull; 여러 process의 준비·재연결 검증이 idle deadline보다 오래 걸리면 runner는 일반 typed SendChatMessageReq로 traffic 유효를 갱신할 수 있다 — 이는 heartbeat·keepalive가 아니며 control packet·sleep·log line으로 deadline을 대신 늘리지 않는다. 실제 idle·grace 동작은 별도 bounded wait로 확인한다.</li>
         </ul>
       </div>

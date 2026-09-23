@@ -25,7 +25,7 @@
     { "from": "C", "to": "S", "y": 448, "label": "STREAM reconnect", "variant": "default" },
     { "from": "C", "to": "S", "y": 496, "label": "AuthenticateReq(same token)", "variant": "default" },
     { "from": "S", "to": "C", "y": 544, "label": "AuthenticateRes", "variant": "return" },
-    { "from": "C", "to": "S", "y": 592, "label": "JoinConversationReq(metadata ConversationId)", "variant": "default" },
+    { "from": "C", "to": "S", "y": 592, "label": "JoinConversationReq(conversationId)", "variant": "default" },
     { "from": "S", "to": "P", "y": 640, "label": "JoinConversationReq", "variant": "default" },
     { "from": "P", "to": "S", "y": 688, "label": "JoinConversationRes(scheduled=false)", "variant": "return" },
     { "from": "S", "to": "C", "y": 736, "label": "JoinConversationRes(scheduled=false)", "variant": "return" }
@@ -44,7 +44,7 @@
       "title": "Reconnect relay rules",
       "items": [
         "Reconnecting doesn't recreate the actor or the Conversation state — it returns the current state with scheduled=false. The Agent re-binds the roster actor, sends SetAgentAvailableReq(true), and then sends JoinConversationReq for each conversation that was open.",
-        "Session relays to the agent's conversation actor when the metadata ConversationId is found in the agent conversation-actor map, and relays a customer map miss to the customer identity actor.",
+        "Session handles JoinConversationReq as a binding packet. For other packets, it relays to the Actor bound in the dispatch context when the Actor slot is present, or to the connection's identity Actor when absent. The agent finds each room's Actor handle again from JoinConversationRes.actorId after rejoin.",
         "When preparation and reconnect assertions across several processes take longer than the idle deadline, the runner may send a normal typed SendChatMessageReq to renew valid application traffic — this is not a heartbeat or keepalive, and a control packet, sleep, or log line must not replace it. The actual idle and grace behavior is checked with a separate bounded wait."
       ]
     }

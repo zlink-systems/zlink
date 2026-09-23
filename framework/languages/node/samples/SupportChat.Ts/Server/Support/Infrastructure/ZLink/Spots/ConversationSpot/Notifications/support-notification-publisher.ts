@@ -14,12 +14,7 @@ class SupportNotificationPublisher {
   async publish(event: ConversationEvent, recipients: Iterable<string>): Promise<void> {
     const message = this.mapper.map(event);
     for (const actorId of recipients) {
-      await this.actors
-        .sendToActor(
-          actorId,
-          new DeliverSupportNotificationMsg(message, event.state.conversationId)
-        )
-        .submit();
+      await this.actors.sendToActor(actorId, new DeliverSupportNotificationMsg(message)).submit();
     }
   }
 }

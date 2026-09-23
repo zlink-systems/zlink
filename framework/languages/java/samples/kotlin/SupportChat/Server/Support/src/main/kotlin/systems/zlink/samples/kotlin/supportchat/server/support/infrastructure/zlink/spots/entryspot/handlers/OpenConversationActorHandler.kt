@@ -49,7 +49,12 @@ class OpenConversationActorHandler(routes: ZLinkRouteClient) :
             actor.scheduleConversationJoin(
                 opened.conversationId,
                 request.subject,
-                JoinConversationReq(actor.participantId, actor.role, actor.displayName),
+                JoinConversationReq(
+                    opened.conversationId,
+                    actor.participantId,
+                    actor.role,
+                    actor.displayName,
+                ),
             )
         return OpenConversationRes(opened.conversationId, joined.state)
         // --8<-- [end:doc-sc-open-actor]

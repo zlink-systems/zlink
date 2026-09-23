@@ -26,17 +26,19 @@ public final class JoinConversationActorHandler
             throw new IllegalStateException(
                     "Only agent conversation actors can join through the Entry Spot");
         }
-        String conversationId = context.metadata().get(SampleNames.ConversationIdMetadataKey);
+        String conversationId = request.conversationId();
         if (conversationId == null || conversationId.isBlank()) {
-            throw new IllegalStateException(
-                    "Conversation Join is missing the conversation ID metadata");
+            throw new IllegalStateException("Conversation Join is missing conversationId");
         }
         Messages.JoinConversationRes scheduled =
                 actor.scheduleConversationJoin(
                         conversationId,
                         "",
                         new Messages.JoinConversationReq(
-                                actor.participantId(), actor.role(), actor.displayName()));
+                                conversationId,
+                                actor.participantId(),
+                                actor.role(),
+                                actor.displayName()));
         return CompletableFuture.completedFuture(scheduled);
     }
 }

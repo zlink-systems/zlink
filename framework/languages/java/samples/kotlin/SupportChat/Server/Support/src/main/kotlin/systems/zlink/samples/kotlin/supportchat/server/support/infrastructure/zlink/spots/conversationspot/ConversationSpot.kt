@@ -99,6 +99,7 @@ class ConversationSpot(
         return ZLinkSpotActorJoinResult.accept(
             JoinConversationRes(
                 scheduled = false,
+                actorId = actorId,
                 state = ConversationContracts.toState(conversation.snapshot()),
             )
         )
@@ -154,6 +155,7 @@ class ConversationSpot(
         )
         return JoinConversationRes(
             scheduled = false,
+            actorId = actor.actorId,
             state = ConversationContracts.toState(conversation.snapshot()),
         )
     }
@@ -214,7 +216,7 @@ class ConversationSpot(
                 System.currentTimeMillis(),
             )
         agent.joinConversation(conversation.conversationId)
-        actors[agent.participantId] = directory.get(agent.participantId).actor
+        actors[agent.participantId] = agent
         return change
     }
 
