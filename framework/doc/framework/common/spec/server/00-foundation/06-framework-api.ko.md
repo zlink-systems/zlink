@@ -210,7 +210,7 @@ fallback과 재전송 창의 동작 계약은
 RouteMesh 등록은 MeshName 하나를 받고 MeshNode builder를 반환한다. MeshNode builder는 다음 설정을
 소유한다.
 
-- explicit manual topology의 고정 routing ID 또는 automatic topology의 diagnostic prefix
+- 고정 routing ID 또는 automatic RID의 diagnostic prefix. Fixed RID 계약은 [MeshNode §3.3](../03-spot-actor/03-mesh-node.ko.md#33-fixed-rid)이 정한다.
 - ROUTER bind endpoint와 transport option
 - 0개 이상의 immutable ChannelName server membership과 outbound Channel route 선언
 - manual peer connection intent
@@ -724,7 +724,7 @@ Spot factory와 typed Actor factory는 Object Server builder에 등록한다. Us
 Entry Spot ID는 Framework가 Object Server MeshNode lifecycle마다
 `<prefix>-entry-<lowercase-canonical-uuid-v4>` 형식으로 발급하고 caller가 생성하지 않는다. MeshNode와
 Entry Spot은 같은 diagnostic prefix를 사용하되 각각 별도의 UUID v4를 생성한다. 같은 lifecycle에서는 같은
-Entry Spot ID를 유지하고 replacement lifecycle에서는 새 RID를 발급한다. MeshNode descriptor가 그 Entry
+Entry Spot ID를 유지하고 replacement lifecycle에서는 새 Entry Spot ID를 발급한다. MeshNode descriptor가 그 Entry
 Spot ID와 lifecycle generation의 관계를 게시하며 Actor placement와 Entry Spot join은 이 mapping을
 사용한다. Spot ID 문자열을 parsing하여 node 관계를 추론하지 않는다.
 
@@ -1024,7 +1024,7 @@ Framework는 host가 message를 받기 전에 최소한 다음 설정을 검증�
 - channel 종류와 handler 종류의 일치
 - Object Client·Server 또는 automatic location 기능을 사용할 때 location store 등록
 - manual peer endpoint와 expected RID 형식
-- fixed RID는 Object role `None`인 explicit manual topology에서만 사용하며 automatic RID prefix는
+- fixed RID와 automatic RID prefix를 함께 설정하지 않으며 automatic RID prefix는
   ASCII `[A-Za-z0-9._-]` 1..64자로 제한
 - Object role과 manager·factory·placement target의 일치
 - Spot, Actor, STREAM session factory와 owner 관계

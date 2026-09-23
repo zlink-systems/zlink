@@ -125,7 +125,7 @@ lifecycle마다 발급한다. MeshNode와 Entry Spot은 같은 prefix를 사용�
 Descriptor가 MeshNode와 해당 Entry Spot ID의 관계를 기록하며 application은 Spot ID 문자열을 parsing해 node
 관계를 추론하지 않는다.
 
-같은 lifecycle에서는 RID를 유지하고 replacement lifecycle에서는 새 RID를
+같은 lifecycle에서는 Entry Spot ID를 유지하고 replacement lifecycle에서는 새 Entry Spot ID를
 발급한다.
 
 Global Spot ID authority가 충돌하면 새 UUID나 reservation을 만들지 않고 startup을 즉시
@@ -2217,17 +2217,16 @@ AdvertiseHost와 실제 bound port를 결합하여 remote process에 제공하�
 <a id="routing-id"></a>
 ### Routing ID
 
-같은 RouteMesh 안에서 MeshNode를 식별하는 byte 값이다. Automatic discovery에서는
-Framework가 lifecycle마다 새 값을 만들고 manual topology에서는 명시적 fixed RID를
-사용할 수 있다.
+같은 RouteMesh 안에서 MeshNode를 식별하는 byte 값이다. Framework가 lifecycle마다 새 값을
+만들거나(automatic RID) application이 fixed RID를 지정한다.
 
 | 항목 | 내용 |
 |---|---|
 | 형태 | Opaque byte identifier |
 | .NET 표기 | `RoutingId` |
 | 공개 구성 | Full RID는 최대 255 byte다. Core raw socket automatic RID는 16-byte binary UUID v4다. Diagnostic prefix를 제공하는 Framework automatic RID는 prefix와 36자리 lowercase canonical UUID v4로 구성한다. |
-| 생성·관리 | Automatic mode에서는 Framework가 lifecycle마다 만든다. Active conflict에서는 새 UUID나 두 번째 claim을 만들지 않는다. Manual topology에서는 application이 fixed RID를 지정할 수 있다. |
-| 수명 | MeshNode lifecycle 동안 바뀌지 않는다. Replacement lifecycle은 endpoint가 같아도 새 Automatic RID를 사용한다. |
+| 생성·관리 | Automatic mode에서는 Framework가 lifecycle마다 만든다. Active conflict에서는 새 UUID나 두 번째 claim을 만들지 않는다. Application은 fixed RID를 지정할 수 있다([MeshNode §3.3](../03-spot-actor/03-mesh-node.ko.md#33-fixed-rid)). |
+| 수명 | MeshNode lifecycle 동안 바뀌지 않는다. Automatic RID는 replacement lifecycle마다 endpoint가 같아도 새 값이다. Fixed RID의 lifecycle 규칙은 [MeshNode §3.3](../03-spot-actor/03-mesh-node.ko.md#33-fixed-rid)이 정한다. |
 
 Transport RID와 Spot ID의 발급 형식과 namespace 경계는
 [시스템 전체 Routing ID 정책](../02-channel-transport/04-network-listener-identity.ko.md#6-시스템-전체-transport-rid와-spot-id-정책)을 따른다.

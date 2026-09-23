@@ -439,8 +439,8 @@ bytes or fewer. UUID v4 is expressed as a lowercase canonical string of
 `8-4-4-4-12` digits. If the active descriptor
 [owner](../../../00-foundation/02-glossary.en.md#owner) CAS conflicts, it doesn't
 retry with a new UUID — it immediately fails startup with
-`routing_id_conflict`. A fixed RID is allowed only in explicit manual
-topology with Object role `none`.
+`routing_id_conflict`. [Common MeshNode §3.3](../../../03-spot-actor/03-mesh-node.en.md#33-fixed-rid)
+defines where a fixed RID can be used and how its restart conflicts are handled.
 
 Object role `server` includes `client` capability. `client` and
 `server` require a Location Store, and `none` doesn't create a

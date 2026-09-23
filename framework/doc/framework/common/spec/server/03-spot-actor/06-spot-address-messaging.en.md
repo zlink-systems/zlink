@@ -93,8 +93,8 @@ relationship from the Spot ID string — it uses the Entry Spot ID
 mapping the MeshNode descriptor published.
 
 The Entry Spot ID is kept for the same Object Server lifecycle. Even on a
-replacement lifecycle at the same endpoint, a new MeshNode RID and a new
-Entry Spot ID are each issued. The framework doesn't build the Entry Spot
+replacement lifecycle at the same endpoint, a new Entry Spot ID is issued, and with an automatic
+RID a new MeshNode RID is issued as well. The framework doesn't build the Entry Spot
 ID by concatenating the full MeshNode RID.
 
 The Object Server descriptor's `NewClaim` creates, in one Location Store

@@ -350,15 +350,14 @@ the same `(MeshName, RID)` is already in use.
   claim were silently replaced, an already-connected peer couldn't know
   which descriptor is valid.
 
-A replacement MeshNode uses a new lifecycle and a new UUID RID even if
+A replacement MeshNode with an automatic RID uses a new lifecycle and a new UUID RID even if
 the endpoint is the same. UUID doesn't replace
 [lifecycle generation](../00-foundation/02-glossary.en.md#lifecycle-generation).
 Generation continues to be used as the fence blocking a stale descriptor,
 connection, and owner transition.
 
-Fixed RID is only allowed in an explicit manual RouteMesh topology that
-doesn't use the MeshNode descriptor and automatic discovery. Fixed RID
-and automatic discovery can't be configured together.
+[MeshNode §3.3](../03-spot-actor/03-mesh-node.en.md#33-fixed-rid) defines where a fixed RID can
+be used and how its restart conflicts are handled.
 
 ### 6.3 Entry Spot ID
 
@@ -442,7 +441,7 @@ result.
   canonical UUID v4 format.
 - If an active RID conflict occurs, the existing descriptor is kept and
   it ends with a startup configuration error without a second claim.
-- A replacement MeshNode uses a new RID.
+- A replacement MeshNode using an automatic RID uses a new RID.
 - The Entry Spot ID uses the same diagnostic prefix and a separately
   generated UUID v4.
 - A replacement MeshNode lifecycle issues a new Entry Spot ID and the
@@ -450,7 +449,6 @@ result.
 - On Entry Spot ID conflict, a second reservation isn't attempted, and a
   caller-provided Spot ID in the reserved format is rejected before
   Store access.
-- Fixed RID and automatic discovery can't be configured together.
 
 **Kubernetes Deployment**
 

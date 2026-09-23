@@ -422,8 +422,8 @@ Automatic RID prefix는 `[A-Za-z0-9._-]` 1..64자다. Runtime은
 `prefix-<lowercase-canonical-uuid-v4>` 형식으로 RID를 만들고 전체 RID를 255 byte 이하로 제한한다.
 UUID v4는 `8-4-4-4-12` 자리의 lowercase canonical 문자열로 표현한다. Active descriptor
 [owner](../../../00-foundation/02-glossary.ko.md#owner) CAS가 충돌하면 새 UUID로 다시 시도하지 않고 즉시
-`routing_id_conflict`로 startup을 실패한다. Fixed RID는
-Object role `none`인 explicit manual topology에서만 허용한다.
+`routing_id_conflict`로 startup을 실패한다. Fixed RID의 사용 범위와 재시작 충돌은
+[공통 MeshNode §3.3](../../../03-spot-actor/03-mesh-node.ko.md#33-fixed-rid)이 정한다.
 
 Object role `server`는 `client` 기능을 포함한다. `client`와 `server`는 Location Store가 필수이며 `none`은
 manager, factory와 hidden local object runtime을 만들지 않는다. Placement [weight](../../../00-foundation/02-glossary.ko.md#weight)는 `0..10000`, 기본값은 100이고

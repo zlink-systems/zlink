@@ -53,9 +53,9 @@ MeshNode descriptor is published, the following settings can't be changed.
 
 ## 3. Routing ID
 
-### 3.1 The RID Used by Automatic Discovery
+### 3.1 Automatic RID
 
-For a MeshNode using automatic discovery, the framework generates a new RID
+When a MeshNode uses an automatic RID, the framework generates a new RID
 for each lifecycle. The caller can only specify a prefix used for
 diagnostics. If the prefix is omitted, the framework uses a default prefix
 matching the listener kind.
@@ -79,8 +79,8 @@ conflict is confirmed, the existing descriptor isn't changed, and a second
 UUID or claim isn't created. Startup ends immediately with a configuration
 error.
 
-A replacement lifecycle doesn't reuse the previous lifecycle's RID — it
-generates a new RID.
+A replacement lifecycle using an automatic RID doesn't reuse the previous
+lifecycle's RID — it generates a new RID.
 
 ### 3.2 Entry Spot ID
 
@@ -124,13 +124,17 @@ defined by [§6](#6-registration-and-startup-order).
 
 ### 3.3 Fixed RID
 
-Fixed RID is only allowed in an explicit manual topology that doesn't use the
-[Location Store](../00-foundation/02-glossary.en.md#location-store)'s MeshNode descriptor
-and [automatic discovery](../00-foundation/02-glossary.en.md#automatic-discovery).
-
-Setting a fixed RID on a MeshNode whose object role is `Client` or `Server`,
-or setting automatic mode and fixed RID together, is a startup configuration
+A fixed RID is a setting in which the application chooses the MeshNode RID itself. Implementation
+and test scenarios sometimes need to name a specific peer, which an automatic RID cannot do, so a
+fixed RID can be used in manual topology and in
+[automatic discovery](../00-foundation/02-glossary.en.md#automatic-discovery), regardless of the
+object role. Setting a fixed RID and an automatic RID prefix together is a startup configuration
 error.
+
+When a node using a fixed RID restarts and collides with the previous lifecycle's active owner
+claim, the same rule as an automatic RID applies: it does not retry with a new value but fails
+startup immediately with a conflict, and a lifecycle started after the previous owner lease expires
+claims the same RID.
 
 ## 4. Object Role and the Features That Can Be Registered
 
@@ -336,7 +340,7 @@ lifecycle identity, it isn't admitted.
 Lifecycle generation is a non-zero opaque equality token. Which lifecycle is
 newer isn't judged by numeric magnitude.
 
-When reconnecting with a fixed RID in a manual topology, a connection of a
+When reconnecting with a fixed RID, a connection of a
 different generation is only included in target selection after all of the
 following conditions are met.
 
@@ -526,15 +530,15 @@ runtime snapshot and event).
   capability as contracted.
 - A MeshNode with no selected object role starts as `None` and creates no
   object manager, factory, Entry Spot, or placement capability.
-- An invalid combination of object role with Location Store, automatic
-  discovery, and fixed RID fails at startup.
+- An invalid combination of object role and Location Store, or a fixed RID set together with an
+  automatic RID prefix, fails at startup.
 - Automatic RID follows the prefix and lowercase canonical UUID v4 format,
   and fails with a startup configuration error on active conflict without a
   second claim.
 - An Object Server node that registered no Entry Spot type still carries
   `entrySpotId` on its descriptor, and a node whose role isn't `Server` carries
   none.
-- A replacement lifecycle uses a new RID.
+- A replacement lifecycle using an automatic RID uses a new RID.
 - The Entry Spot ID uses the same diagnostic prefix as the MeshNode and a
   separately generated UUID v4, and the descriptor publishes the
   lifecycle mapping.

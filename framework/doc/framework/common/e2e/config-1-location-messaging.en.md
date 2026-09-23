@@ -231,7 +231,7 @@ connection?
   public application evidence. The consumer isn't restarted, and it's
   a failure if v1 remains a ready peer or target in public status.
 - Detailed behavior: verifies
-  [MeshNode §3.1](../spec/server/03-spot-actor/03-mesh-node.en.md#31-the-rid-used-by-automatic-discovery)
+  [MeshNode §3.1](../spec/server/03-spot-actor/03-mesh-node.en.md#31-automatic-rid)
   and
   [Transport Liveness §6](../spec/server/02-channel-transport/05-transport-liveness.en.md#6-connection-loss-and-reconnect).
 

@@ -440,12 +440,7 @@ UUID v4 is represented as a lowercase canonical string in `8-4-4-4-12`
 digit groups. Prefix is ASCII `[A-Za-z0-9._-]` 1..64 characters, and on
 conflict with an active [owner](../../../00-foundation/02-glossary.en.md#owner), it
 fails immediately with `ROUTING_ID_CONFLICT` instead of retrying with a
-new UUID. A fixed RID is allowed in an automatic discovery topology and on a MeshNode that has an
-object role. Implementation and test scenarios sometimes need to name a specific peer, and an
-auto-assigned UUID cannot be named. When a node using a fixed RID restarts and collides with the
-previous active owner claim, the same rule as an automatic RID applies — it does not retry with a
-new value but fails immediately with a conflict, and the restart succeeds once the previous owner
-lease expires. Slot count, allocation group, and a public
+new UUID. [Common MeshNode §3.3](../../../03-spot-actor/03-mesh-node.en.md#33-fixed-rid) defines where a fixed RID can be used and how its restart conflicts are handled. Slot count, allocation group, and a public
 allocation provider aren't provided.
 
 The fully encoded MeshNode descriptor the framework builds from every

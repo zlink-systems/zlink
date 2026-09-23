@@ -305,12 +305,11 @@ MeshNode descriptor를 게시할 때 Location Store는 같은 `(MeshName, RID)`�
   startup configuration error로 즉시 끝낸다. 낡은 claim을 조용히 대체하면 이미
   연결된 peer가 어느 descriptor가 유효한지 알 수 없기 때문이다.
 
-Replacement MeshNode는 endpoint가 같아도 새 lifecycle과 새 UUID RID를 사용한다. UUID는
+Automatic RID를 쓰는 replacement MeshNode는 endpoint가 같아도 새 lifecycle과 새 UUID RID를 사용한다. UUID는
 [lifecycle generation](../00-foundation/02-glossary.ko.md#lifecycle-generation)을 대체하지 않는다. Generation은 stale
 descriptor, connection과 owner transition을 차단하는 fence로 계속 사용한다.
 
-Fixed RID는 MeshNode descriptor와 automatic discovery를 사용하지 않는 명시적 manual RouteMesh
-topology에서만 허용한다. Fixed RID와 automatic discovery를 함께 설정할 수 없다.
+Fixed RID의 사용 범위와 재시작 충돌은 [MeshNode §3.3](../03-spot-actor/03-mesh-node.ko.md#33-fixed-rid)이 정한다.
 
 ### 6.3 Entry Spot ID
 
@@ -378,13 +377,12 @@ endpoint, 그리고 RID·Spot ID 발급 결과만으로 다음을 확인한다.
 - Framework automatic MeshNode RID가 prefix와 lowercase canonical UUID v4 형식을 사용한다.
 - Active RID 충돌이 발생하면 기존 descriptor를 유지하고 두 번째 claim 없이 startup
   configuration error로 끝난다.
-- Replacement MeshNode는 새 RID를 사용한다.
+- Automatic RID를 쓰는 replacement MeshNode는 새 RID를 사용한다.
 - Entry Spot ID가 같은 diagnostic prefix와 별도로 생성한 UUID v4를 사용한다.
 - Replacement MeshNode lifecycle이 새 Entry Spot ID를 발급하고 descriptor가 그
   mapping을 게시한다.
 - Entry Spot ID 충돌에서 두 번째 reservation을 시도하지 않고, 예약 형식의
   caller-provided Spot ID를 Store 접근 전에 거부한다.
-- Fixed RID와 automatic discovery를 함께 설정할 수 없다.
 
 **Kubernetes 배포**
 
