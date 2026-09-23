@@ -49,6 +49,8 @@ callback unchanged.
 
 ## 2. When Processing Falls Behind — Order and Backpressure
 
+### 2.1 Client → Server
+
 **One connection's packets reach the session callback once each, in arrival order.** No packet is
 dropped or delivered twice.
 
@@ -57,6 +59,14 @@ taken stays in Core's receive buffer, and when that buffer reaches its limit (HW
 stops. When a slot frees up, the held packets flow again in order. The queue slots are shared by the
 whole host, so this applies to every connection on the host, not just one. Limits and state
 transitions are covered in [Backpressure](33-backpressure.en.md).
+
+### 2.2 Server → Client
+
+Replies and pushes the server sends to a session are subject to backpressure too, per **connection**.
+When the client doesn't read and that connection's send buffer reaches its limit (HWM), a send to that
+connection waits until space frees up. Sends to other connections aren't affected. If the deadline
+passes while waiting, the send ends with `DeadlineExceeded`, and the framework doesn't resend the same
+content. The receive size limit (§4) doesn't apply in this direction.
 
 ## 3. The Lifetime of a Reply Token
 

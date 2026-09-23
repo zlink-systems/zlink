@@ -29,6 +29,8 @@ routing ID이며, session callback까지 그대로 전달된다.
 
 ## 2. 처리가 밀릴 때 — 순서와 backpressure
 
+### 2.1 client → 서버
+
 **한 연결의 packet은 도착한 순서대로 한 번씩 session callback에 닿는다.** 버려지거나 두 번
 전달되는 packet은 없다.
 
@@ -36,6 +38,14 @@ routing ID이며, session callback까지 그대로 전달된다.
 수신 buffer에 남고, buffer가 한도(HWM)에 이르면 client의 송신이 멈춘다. 자리가 나면 멈췄던
 packet이 순서대로 다시 흐른다. queue 자리는 host 전체가 함께 쓰므로 한 연결이 아니라 host의
 모든 연결에 같이 적용된다. 한도와 상태 전이는 [Backpressure](33-backpressure.ko.md)가 다룬다.
+
+### 2.2 서버 → client
+
+서버가 session으로 보내는 응답과 push에도 backpressure가 걸린다. 단위는 **연결 하나**다.
+client가 읽지 않아 그 연결의 송신 buffer가 한도(HWM)에 이르면 그 연결로 보내는 send가 자리가 날
+때까지 기다린다. 다른 연결로 보내는 send는 영향을 받지 않는다. 기다리다 deadline이 지나면 send는
+`DeadlineExceeded`로 끝나며, Framework는 같은 내용을 다시 보내지 않는다. 받는 쪽 크기 상한(§4)은 이
+방향에 적용하지 않는다.
 
 ## 3. 응답 token의 수명
 
