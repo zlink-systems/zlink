@@ -107,6 +107,11 @@ OTHER_LANGUAGE_IDENTIFIER_EXCEPTIONS: frozenset[str] = frozenset()
 #  소유자는 이 둘이고, 미러에 두 번째 사본을 손으로 관리하지 않는다.
 ROOT_FILES = (".gitignore", ".gitattributes")
 
+#  Files under framework/languages/<source language>/ that a mirror needs at its root.
+LANGUAGE_ROOT_FILES = {
+    "kotlin": ("gradle/kotlin-detekt.gradle", "config/detekt/kotlin-java-terminals.yml"),
+}
+
 README_KO = """[English](./README.md) | **한국어**
 
 # ZLink {title} examples
@@ -317,6 +322,13 @@ def export_section(lang: str, section: str, ref: str, root: pathlib.Path) -> int
 def export_root_files(lang: str, ref: str, root: pathlib.Path) -> None:
     for name in ROOT_FILES:
         data = run(["git", "-c", "core.autocrlf=false", "show", "%s:%s" % (ref, name)])
+        write(root / name, normalize(name, data), 0o644)
+    #  Kotlin sections apply ../gradle/kotlin-detekt.gradle, which looks upward for the shared
+    #  terminal configuration. Both live beside the sections in the repository, so the mirror
+    #  keeps the same relative layout.
+    for name in LANGUAGE_ROOT_FILES.get(lang, ()):
+        src = "framework/languages/%s/%s" % (source_language(lang), name)
+        data = run(["git", "-c", "core.autocrlf=false", "show", "%s:%s" % (ref, src)])
         write(root / name, normalize(name, data), 0o644)
     title = LANGUAGE_TITLES[lang]
     write(root / "README.ko.md", README_KO.format(title=title).encode(), 0o644)
