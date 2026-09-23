@@ -57,7 +57,7 @@ idle timeout, it goes through WaitingForClose and becomes Closed.
 |---|---|---|
 | State ownership | A conversation's participant, message sequence, typing, and close state change within one Spot turn. | Sample domain + Spot |
 | Multi-room | The agent roster actor and the conversation actor are separated, and capacity is managed separately. | Application |
-| Routing | ConversationId is used as stream message metadata and isn't put into the payload as a transport route. | Session application |
+| Routing | The packet's Actor slot decides which Actor a per-room packet is for — the Agent sends through that room's Actor handle. ConversationId isn't used as a transport route in metadata or payload. | Session application |
 | Request completion | A chat response means acceptance, validation, and MessageSeq confirmation — it doesn't mean the counterpart read it. | Sample contract |
 | Typing | Normal completion of a typing send is source-local admission and doesn't guarantee the counterpart received it. | Framework contract |
 | Reconnect | Existing actor state is kept, and the new stream binding is used. | Framework contract |
@@ -97,7 +97,7 @@ authentication/assignment/typing belongs to the §7 sequence diagrams.
 |---|---:|---|---|
 | Customer Client | 1 per scenario | Authentication, starting a conversation, messages, typing, close, and reconnect | Doesn't directly choose internal actors or Spots. |
 | Agent Client | 1 | Registering availability, joining multiple rooms, messages, and reconnect | Uses the roster and per-room actors on one session. |
-| Session | 1+ | STREAM, authentication packets, actor binding, and ConversationId relay | Separates transport lifetime from support rules. |
+| Session | 1+ | STREAM, authentication packets, actor binding, and relay to the packet's Actor | Separates transport lifetime from support rules. |
 | Api | 1+ | Token validation and requesting Conversation Spot creation | Doesn't directly own the client stream. |
 | Support | 1+ | The actor factory, Entry Spot, Conversation Spot, and notification adapter | The execution owner of the conversation domain. |
 | SupportEntrySpot | 1 per Support | Initial admission and disconnect lifecycle for customer/agent actors | Connects to the roster actor's availability lifetime. |
@@ -121,7 +121,7 @@ Relocation Store is registered.
 | Create the logical address of a new conversation. | User Spot manager Create | The Framework issues the global SpotId and selects the owner. [Framework API](../../spec/server/00-foundation/06-framework-api.en.md) |
 | Join an actor to the ConversationSpot. | Public actor join | Doesn't send the ActorRef or owner NodeRid as application payload. [Spot/Actor membership](../../spec/server/03-spot-actor/05-spot-actor-membership.en.md) |
 | Change conversation state in order. | Spot turn | Changes the domain aggregate's mutable state within one execution gate. [Async execution policy](../../spec/server/01-execution/README.en.md) |
-| Relay to the current ConversationId's actor. | Session metadata routing | Session picks the bound actor from metadata without decoding the domain payload. [Session-Actor dispatch](../../spec/server/04-session/02-session-actor-binding.en.md) |
+| Relay to the packet's Actor. | The dispatch context's bound Actor | Session relays to the bound Actor named by the packet's Actor slot without decoding the payload. [Session-Actor dispatch](../../spec/server/04-session/02-session-actor-binding.en.md) |
 | Express an owner failure. | Failure/failover policy | A Ready owner failure is not automatic replacement. [Failure policy](../../spec/server/05-location-relocation/06-failure-failover-policy.en.md#42-an-existing-actor-and-spot) |
 
 Session doesn't directly cache the binding token or the current ActorRef. It uses the exact
@@ -131,8 +131,9 @@ recreated after an Actor destroy, the existing binding ends, so an explicit bind
 ## 6. Message Contract
 
 SupportChat uses a typed JSON codec. The declarations below are the wire structure that
-language-specific classes, records, and type aliases must share. The ConversationId of a
-conversation-scoped inbound packet lives in stream metadata, not the payload.
+language-specific classes, records, and type aliases must share. Session relays a packet with an
+Actor slot to that bound Actor, and one without to this connection's identity Actor (the Customer
+identity, the Agent roster).
 
 ### 6.1 Authentication And Starting A Conversation
 
@@ -206,6 +207,7 @@ message SetAgentAvailableRes {
 }
 
 message JoinConversationReq {
+  conversationId: string
   participantId: string
   role: SupportRole
   displayName: string
@@ -213,6 +215,7 @@ message JoinConversationReq {
 
 message JoinConversationRes {
   scheduled: bool
+  actorId: string
   state: ConversationState
 }
 
@@ -243,9 +246,14 @@ message CloseConversationRes {
 }
 ```
 
-The ConversationId of `JoinConversationReq`, `SendChatMessageReq`, `SetTypingMsg`, and
-`CloseConversationReq` is a required metadata value. `JoinConversationReq`'s participantId, role,
-and displayName are values needed for the actor join; on reconnect, if membership already exists,
+`JoinConversationReq` is sent at the connection level, without an Actor slot. For an Agent,
+Session binds that room's conversation Actor to this connection and then relays the join; for a
+Customer it relays to the identity Actor. `JoinConversationRes.actorId` is the Actor that handles
+that room on this connection (the Agent's per-room conversation Actor, the Customer's identity
+Actor), and the client finds the Actor handle by this value and sends that room's
+`SendChatMessageReq`, `SetTypingMsg`, and `CloseConversationReq` through it. A Customer with a single
+Actor may send at the connection level without the handle and reaches the same Actor. participantId,
+role, and displayName are values needed for the actor join; on reconnect, if membership already exists,
 it returns the current state with `scheduled=false`.
 
 `SetTypingMsg` is a one-way send with no response. After source-local admission, it doesn't
@@ -377,9 +385,8 @@ wait.
 
 Reconnecting doesn't recreate the actor or the Conversation state. The Agent re-binds the roster
 actor, sends `SetAgentAvailableReq(true)`, and then sends `JoinConversationReq` for each
-conversation that was open. Session relays to the agent's conversation actor when the metadata
-ConversationId is found in the agent conversation-actor map, and relays a customer map miss to the
-customer identity actor.
+conversation that was open. It finds each room's Actor handle again from the rejoin's
+`JoinConversationRes.actorId`, and Session relays by the packet's Actor slot.
 
 ## 8. Implementation Structure
 
@@ -401,9 +408,9 @@ samples.
 | `Client/Program` | Composes the customer/agent connector and scenario execution entry point. | Doesn't create a Session binding token or a Support private type. |
 | `Client/CustomerScenario` | Runs authentication, open, message, typing, close, and reconnect assertions. | Doesn't directly choose a ConversationSpot or binding token. |
 | `Client/AgentScenario` | Runs availability, multi-conversation join, message, and reconnect assertions. | Doesn't directly modify the roster store. |
-| `Shared/Configuration` | Fixes role, Mesh/Channel, timeout, and the smoke marker. | Doesn't duplicate session metadata as wire payload. |
+| `Shared/Configuration` | Fixes role, Mesh/Channel, timeout, and the smoke marker. | Doesn't put an ActorRef or binding token into the wire payload. |
 | `Shared/JSON Contracts` | Owns the wire semantics of auth, conversation, chat, typing, and notify. | Doesn't treat a language-specific class/record as the common contract. |
-| `Server/Session/Application` | Chooses the current binding, metadata routing, and the relay target. | Doesn't interpret the domain payload or MessageSeq. |
+| `Server/Session/Application` | Owns binding and relay to the packet's Actor. | Doesn't interpret the domain payload or MessageSeq. |
 | `Server/Session/Infrastructure` | Wires the STREAM, packet handler, actor relay, and push adapter. | Doesn't own conversation state. |
 | `Server/Api/Application` | Coordinates token validation and the Conversation Spot creation request. | Doesn't manage session lifecycle or conversation transitions. |
 | `Server/Api/Infrastructure` | Wires the API handler and the Support client. | Doesn't turn a private route, ActorRef, or owner NodeRid into payload. |
@@ -413,7 +420,7 @@ samples.
 
 Domain Conversation owns participant, MessageSeq, typing, and idle/close transitions.
 AgentAssignmentService only judges the roster actor's capacity. The Session adapter only handles
-metadata routing and binding and doesn't interpret the domain payload. The ConversationSpot adapter
+binding and Actor-slot relay and doesn't interpret the domain payload. The ConversationSpot adapter
 converts timer callbacks and typed requests into domain operations, and the notification publisher
 maps domain events to bound-session pushes.
 
@@ -421,7 +428,7 @@ Language-specific implementations don't merge Session/Api/Support into one serve
 they duplicate Conversation state into Session. The same logical component can live in one file, but
 the component and its dependency direction must be findable from the package/namespace/module name.
 What can differ per language is host/DI configuration, async expression, and the stream connector
-wrapper — metadata routing, MessageSeq, timer transitions, and self-check order must match the
+wrapper — Actor separation, MessageSeq, timer transitions, and self-check order must match the
 common document.
 
 .NET attributes, Java/Kotlin annotations, and Node.js decorators auto-register handlers through
@@ -436,13 +443,15 @@ registration method and doesn't change the message or processing responsibility.
 3. Confirm the Customer sends `OpenConversationReq` and gets either WaitingForAgent or an
    assignment result.
 4. Confirm the Agent receives `ConversationAssignedNotify`, sends
-   `JoinConversationReq(metadata ConversationId)`, and gets `scheduled=true`.
+   `JoinConversationReq(conversationId)`, gets `scheduled=true`, and finds that room's Actor handle
+   from `JoinConversationRes.actorId`.
 5. Confirm both sides receive an Active `ParticipantJoinedNotify` with the same Subject.
 6. Confirm the Agent greeting's `SendChatMessageRes(MessageSeq=1)` and the Customer's
    `ChatMessageNotify`.
 7. Confirm the Customer reply's MessageSeq=2 and the Agent's notify.
-8. Confirm the same Agent joins a second customer conversation and that the two rooms' ConversationId,
-   MessageSeq, and state don't get mixed up.
+8. Confirm the same Agent joins a second customer conversation, sends through each room's Actor
+   handle, tells rooms apart by the Actor ID of received pushes, and that the two rooms'
+   ConversationId, MessageSeq, and state don't get mixed up.
 9. Confirm `SetTypingMsg` produces `TypingChangedNotify` for the counterpart and that the requester
    receives no response.
 10. After reconnecting, confirm the customer gets `JoinConversationRes(scheduled=false)` and the
@@ -550,7 +559,7 @@ it does not print this marker.
 
 ## 11. Completion Criteria
 
-- Every supported language implements the same JSON declarations, metadata routing rules, and state
+- Every supported language implements the same JSON declarations, Actor-slot relay rules, and state
   transitions.
 - The topology expresses only the Client and server components and their structural connections.
 - One conversation's state and MessageSeq change within a single ConversationSpot.
