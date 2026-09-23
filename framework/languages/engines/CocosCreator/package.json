@@ -1,0 +1,17 @@
+{
+  "name": "zlink-engine-lobby-cocos-creator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Cocos Creator web client for the Engine Lobby sample",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.validation.json",
+    "probe": "npm run typecheck && node Validation/probe.mjs"
+  },
+  "dependencies": {
+    "@zlink-systems/stream-connector": "0.22.0"
+  },
+  "devDependencies": {
+    "typescript": "5.8.3"
+  }
+}
