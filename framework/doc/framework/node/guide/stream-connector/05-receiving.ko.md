@@ -32,6 +32,10 @@ title: "packet 수신 · Node/TypeScript"
 handler가 받는 것은 payload만이 아니라 **message**다. message에는 packet 이름, decode한 payload,
 metadata가 함께 담긴다. 어떤 packet을 받을지는 payload 타입에서 정하거나 이름으로 지정한다.
 
+`on<T>(nameOrType, handler)`에 이름이나 payload 타입을 전달한다.
+
+다음 예제는 payload 타입으로 handler를 등록한다.
+
 ```typescript
 // TypeScript의 type은 실행 시점에 남지 않으므로 이름과 생성자를 함께 준다.
 const subscription = connector.on<LeaderboardUpdate>(
@@ -84,6 +88,10 @@ while (running) {
 handler나 대기가 처리한다. timeout을 지정하지 않으면 connector의 기본 대기 timeout을 사용한다.
 
 packet 이름은 명시하거나 payload 타입에서 정할 수 있다.
+
+`waitFor<T>(nameOrType)`에 이름이나 payload 타입을 전달한다.
+
+다음 예제는 payload 타입으로 packet 하나를 기다린다.
 
 ```typescript
 const found = await connector

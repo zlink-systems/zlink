@@ -34,6 +34,10 @@ A handler receives a **message**, not a payload alone. The message carries the p
 decoded payload, and the metadata. Which packets it receives is decided by the payload type or by
 an explicit name.
 
+Use `On<T>(handler)` or an overload that takes a name.
+
+The example below registers a handler by payload type.
+
 ```csharp
 using var subscription = connector.On<LeaderboardUpdate>((message, cancellationToken) =>
 {
@@ -90,6 +94,10 @@ stays in the queue for a later handler or wait. Without an explicit timeout, the
 wait timeout applies.
 
 A packet name can be explicit or derived from the payload type.
+
+Use `WaitFor<T>()` or `WaitFor<T>(name)`.
+
+The example below waits for one packet by payload type.
 
 ```csharp
 var found = await connector.WaitFor<MatchFound>()

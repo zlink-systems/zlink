@@ -34,6 +34,8 @@ metadata가 함께 담긴다. 어떤 packet을 받을지는 payload 타입에서
 
     `on<T>(nameOrType, handler)`에 이름이나 payload 타입을 전달한다.
 
+다음 예제는 payload 타입으로 handler를 등록한다.
+
 === "C++"
 
     ```cpp
@@ -210,6 +212,8 @@ packet 이름은 명시하거나 payload 타입에서 정할 수 있다.
 === "Node/TypeScript"
 
     `waitFor<T>(nameOrType)`에 이름이나 payload 타입을 전달한다.
+
+다음 예제는 payload 타입으로 packet 하나를 기다린다.
 
 === "C++"
 

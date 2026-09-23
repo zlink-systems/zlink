@@ -34,6 +34,10 @@ A handler receives a **message**, not a payload alone. The message carries the p
 decoded payload, and the metadata. Which packets it receives is decided by the payload type or by
 an explicit name.
 
+Use `on<T>(handler)` or an overload that takes a name.
+
+The example below registers a handler by payload type.
+
 ```cpp
 auto subscription = connector.on<leaderboard_update_t> (
   [] (const sc::message_t<leaderboard_update_t> &message) {
@@ -88,6 +92,10 @@ stays in the queue for a later handler or wait. Without an explicit timeout, the
 wait timeout applies.
 
 A packet name can be explicit or derived from the payload type.
+
+Use `wait_for<T>()` or `wait_for<T>(name)`.
+
+The example below waits for one packet by payload type.
 
 ```cpp
 auto found = connector.wait_for<match_found_t> ()

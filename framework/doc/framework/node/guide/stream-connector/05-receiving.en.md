@@ -34,6 +34,10 @@ A handler receives a **message**, not a payload alone. The message carries the p
 decoded payload, and the metadata. Which packets it receives is decided by the payload type or by
 an explicit name.
 
+Pass a name or payload type to `on<T>(nameOrType, handler)`.
+
+The example below registers a handler by payload type.
+
 ```typescript
 // A TypeScript type does not survive to run time, so the name and the constructor are given.
 const subscription = connector.on<LeaderboardUpdate>(
@@ -90,6 +94,10 @@ stays in the queue for a later handler or wait. Without an explicit timeout, the
 wait timeout applies.
 
 A packet name can be explicit or derived from the payload type.
+
+Pass a name or payload type to `waitFor<T>(nameOrType)`.
+
+The example below waits for one packet by payload type.
 
 ```typescript
 const found = await connector

@@ -32,6 +32,10 @@ title: "packet 수신 · Kotlin"
 handler가 받는 것은 payload만이 아니라 **message**다. message에는 packet 이름, decode한 payload,
 metadata가 함께 담긴다. 어떤 packet을 받을지는 payload 타입에서 정하거나 이름으로 지정한다.
 
+`on<T> { }` 또는 이름을 받는 `on(name, payloadType, handler)`를 사용한다.
+
+다음 예제는 payload 타입으로 handler를 등록한다.
+
 ```kotlin
 val subscription = connector.on<LeaderboardUpdate> { message ->
     updateBoard(message.packetName, message.payload.rank)
@@ -82,6 +86,10 @@ while (running) {
 handler나 대기가 처리한다. timeout을 지정하지 않으면 connector의 기본 대기 timeout을 사용한다.
 
 packet 이름은 명시하거나 payload 타입에서 정할 수 있다.
+
+`waitFor<T>()`와 `waitFor<T>(name)`을 사용한다.
+
+다음 예제는 payload 타입으로 packet 하나를 기다린다.
 
 ```kotlin
 val found = connector.waitFor<MatchFound>()

@@ -34,6 +34,10 @@ A handler receives a **message**, not a payload alone. The message carries the p
 decoded payload, and the metadata. Which packets it receives is decided by the payload type or by
 an explicit name.
 
+Use `on(Class<T>, handler)` or `on(String, Class<T>, handler)` to give a name.
+
+The example below registers a handler by payload type.
+
 ```java
 AutoCloseable subscription = connector.on(LeaderboardUpdate.class, message -> {
     updateBoard(message.packetName(), message.payload().rank());
@@ -88,6 +92,10 @@ stays in the queue for a later handler or wait. Without an explicit timeout, the
 wait timeout applies.
 
 A packet name can be explicit or derived from the payload type.
+
+Use `waitFor(Class<?>)` or `waitFor(String)`.
+
+The example below waits for one packet by payload type.
 
 ```java
 ZLinkStreamMessage<MatchFound> found = connector.waitFor(MatchFound.class)

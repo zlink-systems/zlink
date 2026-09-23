@@ -36,6 +36,8 @@ an explicit name.
 
     Pass a name or payload type to `on<T>(nameOrType, handler)`.
 
+The example below registers a handler by payload type.
+
 === "C++"
 
     ```cpp
@@ -216,6 +218,8 @@ A packet name can be explicit or derived from the payload type.
 === "Node/TypeScript"
 
     Pass a name or payload type to `waitFor<T>(nameOrType)`.
+
+The example below waits for one packet by payload type.
 
 === "C++"
 
