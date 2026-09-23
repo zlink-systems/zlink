@@ -1,5 +1,7 @@
+using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Systems.Zlink.Stream.Connector.Contracts;
@@ -18,6 +20,83 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class BoundSessionReplacementLifecycleTests
 {
+    [Fact]
+    public async Task StaleSlotRequestRepliesInvalidOperationWithoutCallingSessionHandler()
+    {
+        using var listener = CaptureStreamActivities(out var activities);
+        await using var fixture = await ReplacementFixture.CreateAsync(
+            ReplacementCallbackBehavior.Success
+        );
+        fixture.EnqueuePacket(ZlinkStreamMessageKind.Request, "stale.request", 99, 41);
+
+        await WaitUntilAsync(() => !fixture.Socket.SentFrames.IsEmpty);
+        var frame = Assert.Single(fixture.Socket.SentFrames);
+        var headerSize = BinaryPrimitives.ReadUInt16BigEndian(frame.AsSpan(0, 2));
+        var payloadSize = BinaryPrimitives.ReadUInt32BigEndian(frame.AsSpan(2, 4));
+        var reply = ZLinkStreamProtocolDefaults.DecodeHeader(frame.AsMemory(6, headerSize));
+        var error = JsonSerializer.Deserialize<ZLinkStreamWireError>(
+            frame.AsSpan(6 + headerSize, checked((int)payloadSize)),
+            ZLinkJsonSerializerOptions.Default
+        );
+
+        Assert.Equal(ZlinkStreamMessageKind.Error, reply.Kind);
+        Assert.Equal(new ZlinkStreamRequestSeq(41), reply.RequestSeq);
+        Assert.Equal("InvalidOperation", error?.Code);
+        Assert.Empty(fixture.Lifetime.Dispatches);
+        Assert.Contains(
+            activities,
+            activity =>
+                Equals(activity.GetTagItem("event_id"), "zlink.dispatch_error")
+                && Equals(activity.GetTagItem("surface"), "stream")
+                && Equals(activity.GetTagItem("message_kind"), "request")
+                && Equals(activity.GetTagItem("outcome"), "failed")
+                && Equals(activity.GetTagItem("reason"), "stale_target")
+                && Equals(activity.GetTagItem("action"), "reply_error")
+        );
+    }
+
+    [Fact]
+    public async Task StaleSlotSendDropsAndNoSlotSendStillDispatches()
+    {
+        using var listener = CaptureStreamActivities(out var activities);
+        await using var fixture = await ReplacementFixture.CreateAsync(
+            ReplacementCallbackBehavior.Success
+        );
+        fixture.EnqueuePacket(ZlinkStreamMessageKind.Send, "stale.send", 99);
+        fixture.EnqueuePacket(ZlinkStreamMessageKind.Send, "plain.send");
+
+        await WaitUntilAsync(() => fixture.Lifetime.Dispatches.Count == 1);
+        var dispatch = Assert.Single(fixture.Lifetime.Dispatches);
+        Assert.Equal("plain.send", dispatch.PacketName);
+        Assert.Null(dispatch.Actor);
+        Assert.Contains(
+            activities,
+            activity =>
+                Equals(activity.GetTagItem("surface"), "stream")
+                && Equals(activity.GetTagItem("message_kind"), "send")
+                && Equals(activity.GetTagItem("phase"), "dropped")
+                && Equals(activity.GetTagItem("outcome"), "dropped")
+                && Equals(activity.GetTagItem("reason"), "stale_target")
+        );
+    }
+
+    private static ActivityListener CaptureStreamActivities(
+        out ConcurrentQueue<Activity> activities
+    )
+    {
+        activities = new ConcurrentQueue<Activity>();
+        var captured = activities;
+        var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == ZLinkTelemetry.ActivitySourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = captured.Enqueue,
+        };
+        ActivitySource.AddActivityListener(listener);
+        return listener;
+    }
+
     [Fact]
     public async Task Replacement_Closes_Application_Ingress_Allows_Guidance_And_Deduplicates_Callback()
     {
@@ -547,7 +626,11 @@ public sealed class BoundSessionReplacementLifecycleTests
             ZLinkSessionDispatchContext dispatch,
             ZLinkMessage payload,
             CancellationToken cancellationToken
-        ) => ValueTask.CompletedTask;
+        )
+        {
+            lifetime.Dispatches.Enqueue((dispatch.PacketName, dispatch.Actor));
+            return ValueTask.CompletedTask;
+        }
     }
 
     private sealed record ReplacementGuidance(string ActorId);
@@ -571,6 +654,9 @@ public sealed class BoundSessionReplacementLifecycleTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public ConcurrentQueue<string> CallbackActorIds { get; } = new();
+
+        public ConcurrentQueue<(string PacketName, IZLinkSessionActor? Actor)> Dispatches { get; } =
+            new();
 
         public TaskCompletionSource ActorBCallback { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -624,6 +710,34 @@ public sealed class BoundSessionReplacementLifecycleTests
         internal ReplacementLifetime Lifetime { get; }
         internal RoutingId SessionRid { get; }
 
+        internal void EnqueuePacket(
+            ZlinkStreamMessageKind kind,
+            string name,
+            ushort? slot = null,
+            uint? sequence = null
+        )
+        {
+            var flags =
+                (slot is not null ? ZlinkStreamHeaderFlags.HasActorSlot : 0)
+                | (sequence is not null ? ZlinkStreamHeaderFlags.HasRequestSeq : 0);
+            var header = new ZlinkStreamHeader(
+                kind,
+                ZlinkStreamCodec.Json,
+                flags,
+                sequence is { } value ? new ZlinkStreamRequestSeq(value) : null,
+                name,
+                ZlinkStreamMetadata.Empty,
+                ActorSlot: slot
+            );
+            Assert.Equal(
+                ZLinkSerialPostAdmission.Accepted,
+                Session.TryEnqueuePacket(
+                    Message.From(ZLinkStreamProtocolDefaults.EncodeHeader(header).Span),
+                    Message.From("{}")
+                )
+            );
+        }
+
         internal static async Task<ReplacementFixture> CreateAsync(
             ReplacementCallbackBehavior behavior,
             TimeSpan? sessionReplacementCallbackTimeout = null
@@ -635,6 +749,7 @@ public sealed class BoundSessionReplacementLifecycleTests
                 SessionReplacementCallbackTimeout =
                     sessionReplacementCallbackTimeout ?? TimeSpan.FromSeconds(5),
             };
+            registration.DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
             var lifetime = new ReplacementLifetime(behavior);
             ZLinkFrameworkRuntime runtime = null!;
             var services = new ServiceCollection()
@@ -879,6 +994,8 @@ public sealed class BoundSessionReplacementLifecycleTests
         internal TaskCompletionSource FrameSent { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        internal ConcurrentQueue<byte[]> SentFrames { get; } = new();
+
         public void Bind(string endpoint) { }
 
         public void SetTlsServer(string certPath, string keyPath, bool requireClientCert) { }
@@ -901,6 +1018,7 @@ public sealed class BoundSessionReplacementLifecycleTests
         )
         {
             cancellationToken.ThrowIfCancellationRequested();
+            SentFrames.Enqueue(payload.AsReadOnlyMemory().ToArray());
             Interlocked.Increment(ref _sendCount);
             FrameSent.TrySetResult();
             payload.Dispose();

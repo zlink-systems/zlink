@@ -48,7 +48,8 @@ enum class failure_origin_t
     none,
     payload_encode,
     payload_decode,
-    actor_transfer_in_progress
+    actor_transfer_in_progress,
+    stale_actor_slot
 };
 
 /* Who produced the failure. `framework` marks errors the framework runtime

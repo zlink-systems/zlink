@@ -3679,7 +3679,7 @@ int main ()
         if (auto frame = try_read_server_frame (buffer)) {
             auto reply = make_server_frame (zlink::stream_connector::message_kind_t::error,
                                             frame->header.request_seq.value (), frame->header.name,
-                                            "{\"code\":\"server_closed\","
+                                            "{\"code\":\"InvalidOperation\","
                                             "\"message\":\"server closed request\"}");
             inbound.send ().message (reply).submit ();
         }

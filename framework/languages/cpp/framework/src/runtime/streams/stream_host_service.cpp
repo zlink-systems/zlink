@@ -550,38 +550,39 @@ const char *stream_error_code (framework_error_kind_t kind)
 {
     switch (kind) {
         case framework_error_kind_t::not_found:
-            return "not_found";
+            return "NotFound";
         case framework_error_kind_t::already_exists:
-            return "already_exists";
+            return "AlreadyExists";
         case framework_error_kind_t::type_mismatch:
-            return "type_mismatch";
+            return "TypeMismatch";
         case framework_error_kind_t::not_configured:
-            return "not_configured";
+            return "NotConfigured";
         case framework_error_kind_t::rejected:
-            return "rejected";
+            return "Rejected";
         case framework_error_kind_t::unavailable:
-            return "unavailable";
+            return "Unavailable";
         case framework_error_kind_t::deadline_exceeded:
-            return "deadline_exceeded";
+            return "DeadlineExceeded";
         case framework_error_kind_t::shutting_down:
-            return "shutting_down";
+            return "ShuttingDown";
         case framework_error_kind_t::protocol_error:
-            return "protocol_error";
+            return "ProtocolError";
         case framework_error_kind_t::invalid_operation:
-            return "invalid_operation";
+            return "InvalidOperation";
         case framework_error_kind_t::data_lost:
-            return "data_lost";
+            return "DataLost";
         case framework_error_kind_t::internal_failure:
-            return "internal_failure";
+            return "InternalFailure";
     }
-    return "internal_failure";
+    return "InternalFailure";
 }
 
 zlink::message_t stream_error_payload (const result_t<void> &error)
 {
     const auto *failure = error.error ();
     nlohmann::json payload;
-    payload["code"] = failure ? stream_error_code (failure->kind ()) : "internal_failure";
+    payload["code"] =
+      stream_error_code (failure ? failure->kind () : framework_error_kind_t::internal_failure);
     payload["message"] = failure ? failure->what () : "STREAM request failed";
     return zlink::message_t::from (payload.dump ());
 }
@@ -1210,7 +1211,7 @@ class stream_host_service_t::listener_t
               dispatch_error_surface_t::stream_session,
               header.kind () == stream_message_kind_t::request ? dispatch_message_kind_t::request
                                                                : dispatch_message_kind_t::send,
-              detail::dispatch_reason_from_error (dispatched.error_kind ()),
+              detail::dispatch_reason_from_error (dispatched.error ()),
               header.kind () == stream_message_kind_t::request
                 ? dispatch_error_action_t::reply_error
                 : dispatch_error_action_t::drop,

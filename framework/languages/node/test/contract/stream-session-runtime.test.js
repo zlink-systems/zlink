@@ -2,6 +2,17 @@ const assert = require('node:assert/strict');
 const { once } = require('node:events');
 const net = require('node:net');
 const test = require('node:test');
+const { logs } = require('@opentelemetry/api-logs');
+const { LoggerProvider } = require('@opentelemetry/sdk-logs');
+
+const telemetryRecords = [];
+logs.setGlobalLoggerProvider(new LoggerProvider({
+  processors: [{
+    onEmit(record) { telemetryRecords.push(record); },
+    forceFlush() { return Promise.resolve(); },
+    shutdown() { return Promise.resolve(); }
+  }]
+}));
 
 const zlink = require('@zlink-systems/zlink');
 const connector = require('../../packages/stream-connector/dist');
@@ -280,11 +291,21 @@ test('stream session node runtime dispatches framed packets through one session 
 test('stream session dispatch resolves only current Actor slots for sends and requests', async (t) => {
   const socket = new FakeStreamSocket();
   const dispatches = [];
+  telemetryRecords.length = 0;
+  const dispatch = {
+    diagnostics: { messageFlow: 'normal', sampleRate: 1, includeMessageSizes: false }
+  };
+  const cell = framework.createMessageFlowModeCell(dispatch);
+  const diagnostics = framework.createDiagnosticsContext(dispatch, undefined, cell);
+  const reporter = new ZLinkDispatchErrorReporter(
+    undefined, undefined, { reportRuntimeTaskException() {} }, diagnostics
+  );
   let boundActor;
   let bindingReady;
   const bindingReadyPromise = new Promise((resolve) => { bindingReady = resolve; });
   const runtime = createStreamRuntime({
     socket,
+    dispatchErrors: reporter,
     bindingRuntime: new framework.ZLinkStreamBindingRuntime({
       messageFactory: {
         createTextMessage(payload) { return zlink.Message.from(Buffer.from(payload)); },
@@ -338,6 +359,11 @@ test('stream session dispatch resolves only current Actor slots for sends and re
   );
   socket.emitPacket(
     'session-actor-slots',
+    fakeHeader({ name: 'NoSlotSend' }),
+    fakeJsonMessage('no-slot-send')
+  );
+  socket.emitPacket(
+    'session-actor-slots',
     fakeHeader({
       kind: connector.ZlinkStreamMessageKind.Request,
       requestSeq: 2n,
@@ -346,22 +372,48 @@ test('stream session dispatch resolves only current Actor slots for sends and re
     }),
     fakeJsonMessage('stale-request')
   );
-  await waitForCondition(() => dispatches.length === 4, 'Actor slot dispatches');
+  await waitForCondition(() => socket.sent.length === 3, 'stale slot error reply');
+  await waitForCondition(() => telemetryRecords.some((record) =>
+    record.eventName === 'zlink.dispatch_error' && record.attributes.packet_name === 'StaleRequest'
+  ), 'stale slot diagnostics');
 
   assert.deepEqual(dispatches.map((dispatch) => dispatch.packetName), [
     'CurrentSend',
     'CurrentRequest',
-    'StaleSend',
-    'StaleRequest'
+    'NoSlotSend'
   ]);
   assert.equal(dispatches[0].actor, boundActor);
   assert.equal(dispatches[1].actor, boundActor);
   assert.equal(dispatches[2].actor, undefined);
-  assert.equal(dispatches[3].actor, undefined);
   assert.equal(socket.sent.length, 3);
   assert.equal(decodeServerSentFrame(socket.sent[0]).header.name, '$zlink.actor.bound');
   assert.equal(decodeServerSentFrame(socket.sent[1]).header.actorSlot, 1);
-  assert.equal(decodeServerSentFrame(socket.sent[2]).header.actorSlot, undefined);
+  const staleReply = decodeServerSentFrame(socket.sent[2]);
+  assert.equal(staleReply.header.kind, connector.ZlinkStreamMessageKind.Error);
+  assert.equal(staleReply.header.requestSeq, 2n);
+  assert.equal(JSON.parse(new TextDecoder().decode(staleReply.payload)).code, 'InvalidOperation');
+  const staleRecords = telemetryRecords.filter((record) =>
+    (record.attributes.packet_name === 'StaleRequest' ||
+      record.attributes.packet_name === 'StaleSend') &&
+    (record.eventName === 'zlink.dispatch_error' || record.attributes.outcome === 'dropped')
+  );
+  assert.deepEqual(staleRecords.map((record) => ({
+    eventName: record.eventName,
+    surface: record.attributes.surface,
+    messageKind: record.attributes.message_kind,
+    outcome: record.attributes.outcome,
+    reason: record.attributes.reason,
+    action: record.attributes.action
+  })), [
+    {
+      eventName: 'zlink.message_flow', surface: 'stream', messageKind: 'send',
+      outcome: 'dropped', reason: 'stale_target', action: undefined
+    },
+    {
+      eventName: 'zlink.dispatch_error', surface: 'stream', messageKind: 'request',
+      outcome: 'failed', reason: 'stale_target', action: 'reply_error'
+    }
+  ]);
 });
 
 test('Actor binding replacement callback can send before close and does not block another session lane', async () => {
@@ -2238,7 +2290,7 @@ class FakeStreamSocket {
   }
 
   send(routingId, payload, flags) {
-    this.sent.push({ routingId, payload, flags });
+    this.sent.push({ routingId, payload, bytes: Uint8Array.from(payload.toBytes()), flags });
     return true;
   }
 
@@ -2533,9 +2585,12 @@ function streamHeader(overrides) {
   return {
     kind: connector.ZlinkStreamMessageKind.Send,
     codec: connector.ZlinkStreamCodec.Json,
-    flags: overrides.requestSeq === undefined
+    flags: (overrides.requestSeq === undefined
       ? connector.ZlinkStreamHeaderFlags.None
-      : connector.ZlinkStreamHeaderFlags.HasRequestSeq,
+      : connector.ZlinkStreamHeaderFlags.HasRequestSeq) |
+      (overrides.actorSlot === undefined
+        ? connector.ZlinkStreamHeaderFlags.None
+        : connector.ZlinkStreamHeaderFlags.HasActorSlot),
     name: 'Packet',
     metadata: new Map(),
     ...overrides

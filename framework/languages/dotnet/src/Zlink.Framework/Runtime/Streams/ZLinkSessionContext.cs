@@ -123,15 +123,18 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
             Runtime.CleanupActorSessionsForSession(sessionRid);
     }
 
-    internal ZLinkSessionDispatchContext EnterDispatch(ZlinkStreamHeader header)
+    internal ZLinkSessionDispatchContext? EnterDispatch(ZlinkStreamHeader header)
     {
+        var actor = header.ActorSlot is { } slot ? ActorCoordinator.FindActor(slot) : null;
+        if (header.ActorSlot is not null && actor is null)
+            return null;
+
         var metadata =
             header.Metadata.Count == 0
                 ? ZLinkMessageMetadata.Empty
                 : new ZLinkMessageMetadata(
                     new Dictionary<string, string>(header.Metadata.Values, StringComparer.Ordinal)
                 );
-        var actor = header.ActorSlot is { } slot ? ActorCoordinator.FindActor(slot) : null;
         _currentDispatch = new ZLinkSessionDispatchContext(
             header.Name,
             metadata,

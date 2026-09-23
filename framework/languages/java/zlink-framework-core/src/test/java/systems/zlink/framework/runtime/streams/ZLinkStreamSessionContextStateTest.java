@@ -2,32 +2,46 @@ package systems.zlink.framework.runtime.streams;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.messaging.ZLinkMessage;
+import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime;
 import systems.zlink.framework.runtime.configuration.ZLinkDispatchOptionsRegistration;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorBindOperation;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import systems.zlink.framework.runtime.internal.streams.ZLinkStreamErrorPayload;
+import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 import systems.zlink.framework.streams.ZLinkSession;
+import systems.zlink.framework.streams.ZLinkSessionActor;
 import systems.zlink.framework.streams.ZLinkSessionContext;
 import systems.zlink.framework.streams.ZLinkSessionDispatchContext;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 import systems.zlink.framework.streams.ZLinkStreamError;
+import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
 import java.lang.reflect.Proxy;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 final class ZLinkStreamSessionContextStateTest {
     @Test
@@ -121,21 +135,180 @@ final class ZLinkStreamSessionContextStateTest {
         assertEquals(0, submitted.get().size());
     }
 
+    @Test
+    void staleActorSlotRequestDoesNotReachSessionHandler() throws Exception {
+        CompletableFuture<Void> physicalTerminal = CompletableFuture.completedFuture(null);
+        AtomicInteger asyncSubmits = new AtomicInteger();
+        AtomicReference<systems.zlink.contracts.messaging.Message> submitted =
+                new AtomicReference<>();
+        AtomicReference<ZLinkStreamHeader> replyHeader = new AtomicReference<>();
+        AtomicReference<byte[]> replyPayload = new AtomicReference<>();
+        ZLinkBackendStreamSocket stream =
+                stream(
+                        asyncSubmits,
+                        new AtomicInteger(),
+                        physicalTerminal,
+                        submitted,
+                        replyHeader,
+                        replyPayload);
+        ZLinkSessionActorsRuntime actors =
+                new ZLinkSessionActorsRuntime(stream, RoutingId.from("client-a"), null, null);
+        ZLinkStreamSessionContextState context =
+                context(new AtomicInteger(), stream, actors, tracedFlow());
+        AtomicInteger dispatches = new AtomicInteger();
+        ZLinkStreamHeader request =
+                new ZLinkStreamHeader("Request", Map.of(), Optional.of(11L)).withActorSlot(1);
+
+        List<String> records =
+                captureFlow(
+                        () ->
+                                context.dispatchStage(
+                                                request,
+                                                ZLinkMessage.empty(),
+                                                new RecordingSession(context, dispatches))
+                                        .toCompletableFuture()
+                                        .join());
+
+        assertEquals(0, dispatches.get());
+        assertEquals(1, asyncSubmits.get());
+        assertEquals(Optional.of(11L), replyHeader.get().requestSequence());
+        assertEquals(ZLinkStreamMessageKind.ERROR, replyHeader.get().kind());
+        assertEquals("InvalidOperation", ZLinkStreamErrorPayload.decode(replyPayload.get()).code());
+        assertTrue(
+                records.stream()
+                        .anyMatch(
+                                record ->
+                                        record.contains("event_id=zlink.dispatch_error")
+                                                && record.contains("surface=stream")
+                                                && record.contains("kind=request")
+                                                && record.contains("outcome=failed")
+                                                && record.contains("reason=stale_target")
+                                                && record.contains("action=reply_error")));
+    }
+
+    @Test
+    void staleActorSlotSendIsDroppedAndRecorded() {
+        AtomicInteger dispatches = new AtomicInteger();
+        AtomicInteger replies = new AtomicInteger();
+        ZLinkBackendStreamSocket stream =
+                stream(
+                        replies,
+                        new AtomicInteger(),
+                        CompletableFuture.completedFuture(null),
+                        new AtomicReference<>());
+        ZLinkSessionActorsRuntime actors =
+                new ZLinkSessionActorsRuntime(stream, RoutingId.from("client-a"), null, null);
+        ZLinkStreamSessionContextState context =
+                context(new AtomicInteger(), stream, actors, tracedFlow());
+        ZLinkStreamHeader send =
+                new ZLinkStreamHeader("Send", Map.of(), Optional.empty()).withActorSlot(1);
+
+        List<String> records =
+                captureFlow(
+                        () ->
+                                context.dispatchStage(
+                                                send,
+                                                ZLinkMessage.empty(),
+                                                new RecordingSession(context, dispatches))
+                                        .toCompletableFuture()
+                                        .join());
+
+        assertEquals(0, dispatches.get());
+        assertEquals(0, replies.get());
+        assertTrue(
+                records.stream()
+                        .anyMatch(
+                                record ->
+                                        record.contains("phase=dropped")
+                                                && record.contains("surface=stream")
+                                                && record.contains("kind=send")
+                                                && record.contains("outcome=dropped")
+                                                && record.contains("reason=stale_target")));
+    }
+
+    @Test
+    void packetWithoutActorSlotStillReachesSessionHandler() {
+        ZLinkBackendStreamSocket stream =
+                stream(
+                        new AtomicInteger(),
+                        new AtomicInteger(),
+                        CompletableFuture.completedFuture(null),
+                        new AtomicReference<>());
+        ZLinkSessionActorsRuntime actors =
+                new ZLinkSessionActorsRuntime(stream, RoutingId.from("client-a"), null, null);
+        ZLinkStreamSessionContextState context =
+                context(new AtomicInteger(), stream, actors, flow());
+        AtomicInteger dispatches = new AtomicInteger();
+        AtomicReference<ZLinkSessionActor> dispatchedActor = new AtomicReference<>();
+        ZLinkStreamHeader send = new ZLinkStreamHeader("Send", Map.of(), Optional.empty());
+
+        context.dispatchStage(
+                        send,
+                        ZLinkMessage.empty(),
+                        new RecordingSession(context, dispatches, dispatchedActor))
+                .toCompletableFuture()
+                .join();
+
+        assertEquals(1, dispatches.get());
+        assertNull(dispatchedActor.get());
+    }
+
+    @Test
+    void currentActorSlotStillReachesSessionHandlerWithBoundActor() {
+        ZLinkBackendStreamSocket stream =
+                stream(
+                        new AtomicInteger(),
+                        new AtomicInteger(),
+                        CompletableFuture.completedFuture(null),
+                        new AtomicReference<>());
+        ZLinkSessionActorsRuntime actors =
+                new ZLinkSessionActorsRuntime(
+                        stream, RoutingId.from("client-a"), null, new ZLinkJsonMessageSerializer());
+        ZLinkSessionActor bound =
+                actors.bind(new ActorRef("actor-1", 1, "mesh", RoutingId.from("node-a")))
+                        .toCompletableFuture()
+                        .join();
+        ZLinkStreamSessionContextState context =
+                context(new AtomicInteger(), stream, actors, flow());
+        AtomicInteger dispatches = new AtomicInteger();
+        AtomicReference<ZLinkSessionActor> dispatchedActor = new AtomicReference<>();
+        ZLinkStreamHeader send =
+                new ZLinkStreamHeader("Send", Map.of(), Optional.empty()).withActorSlot(1);
+
+        context.dispatchStage(
+                        send,
+                        ZLinkMessage.empty(),
+                        new RecordingSession(context, dispatches, dispatchedActor))
+                .toCompletableFuture()
+                .join();
+
+        assertEquals(1, dispatches.get());
+        assertEquals(bound, dispatchedActor.get());
+    }
+
     private static ZLinkStreamSessionContextState context(AtomicInteger closes) {
         return context(closes, null);
     }
 
     private static ZLinkStreamSessionContextState context(
             AtomicInteger closes, ZLinkBackendStreamSocket stream) {
+        return context(closes, stream, null, flow());
+    }
+
+    private static ZLinkStreamSessionContextState context(
+            AtomicInteger closes,
+            ZLinkBackendStreamSocket stream,
+            ZLinkSessionActorsRuntime actors,
+            ZLinkMessageFlowTracer flow) {
         return new ZLinkStreamSessionContextState(
                 "session",
                 stream,
                 RoutingId.from("client-a"),
-                null,
+                actors,
                 null,
                 ZLinkStreamCodec.JSON,
                 null,
-                flow(),
+                flow,
                 () -> {
                     closes.incrementAndGet();
                     return CompletableFuture.completedFuture(null);
@@ -144,8 +317,16 @@ final class ZLinkStreamSessionContextStateTest {
     }
 
     private static ZLinkMessageFlowTracer flow() {
+        return flow(ZLinkMessageFlowLogMode.OFF);
+    }
+
+    private static ZLinkMessageFlowTracer tracedFlow() {
+        return flow(ZLinkMessageFlowLogMode.NORMAL);
+    }
+
+    private static ZLinkMessageFlowTracer flow(ZLinkMessageFlowLogMode mode) {
         ZLinkDispatchOptionsRegistration options = new ZLinkDispatchOptionsRegistration();
-        options.messageFlow(ZLinkMessageFlowLogMode.OFF);
+        options.messageFlow(mode);
         return new ZLinkMessageFlowTracer(
                 options, ZLinkHandlerActivator.reflection(), Runnable::run);
     }
@@ -155,6 +336,16 @@ final class ZLinkStreamSessionContextStateTest {
             AtomicInteger syncSubmits,
             CompletableFuture<Void> physicalTerminal,
             AtomicReference<systems.zlink.contracts.messaging.Message> submitted) {
+        return stream(asyncSubmits, syncSubmits, physicalTerminal, submitted, null, null);
+    }
+
+    private static ZLinkBackendStreamSocket stream(
+            AtomicInteger asyncSubmits,
+            AtomicInteger syncSubmits,
+            CompletableFuture<Void> physicalTerminal,
+            AtomicReference<systems.zlink.contracts.messaging.Message> submitted,
+            AtomicReference<ZLinkStreamHeader> replyHeader,
+            AtomicReference<byte[]> replyPayload) {
         return (ZLinkBackendStreamSocket)
                 Proxy.newProxyInstance(
                         ZLinkBackendStreamSocket.class.getClassLoader(),
@@ -162,8 +353,20 @@ final class ZLinkStreamSessionContextStateTest {
                         (proxy, method, arguments) ->
                                 switch (method.getName()) {
                                     case "name" -> "test-stream";
+                                    case "bindActor" ->
+                                            (ZLinkBackendActorBindOperation)
+                                                    timeout ->
+                                                            CompletableFuture.completedFuture(null);
+                                    case "admitSessionControl" ->
+                                            CompletableFuture.completedFuture(null);
+                                    case "requestBoundActor" ->
+                                            CompletableFuture.completedFuture(List.of());
+                                    case "boundActorBindingGeneration" -> 1L;
                                     case "replyAsync" -> {
                                         asyncSubmits.incrementAndGet();
+                                        if (replyHeader != null) {
+                                            replyHeader.set((ZLinkStreamHeader) arguments[1]);
+                                        }
                                         @SuppressWarnings("unchecked")
                                         java.util.List<systems.zlink.contracts.messaging.Message>
                                                 parts =
@@ -172,6 +375,9 @@ final class ZLinkStreamSessionContextStateTest {
                                                                                 .messaging.Message>)
                                                                 arguments[2];
                                         submitted.set(parts.getFirst());
+                                        if (replyPayload != null) {
+                                            replyPayload.set(parts.getFirst().toByteArray());
+                                        }
                                         yield physicalTerminal;
                                     }
                                     case "reply" -> {
@@ -188,6 +394,34 @@ final class ZLinkStreamSessionContextStateTest {
                                             null;
                                     default -> defaultValue(method.getReturnType());
                                 });
+    }
+
+    private static List<String> captureFlow(Runnable action) {
+        Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
+        List<String> records = new CopyOnWriteArrayList<>();
+        Handler handler =
+                new Handler() {
+                    @Override
+                    public void publish(LogRecord record) {
+                        records.add(record.getMessage());
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        Level level = logger.getLevel();
+        logger.addHandler(handler);
+        logger.setLevel(Level.ALL);
+        try {
+            action.run();
+        } finally {
+            logger.removeHandler(handler);
+            logger.setLevel(level);
+        }
+        return records;
     }
 
     private static Object defaultValue(Class<?> type) {
@@ -234,6 +468,53 @@ final class ZLinkStreamSessionContextStateTest {
         public CompletionStage<Void> onDispatch(
                 ZLinkSessionDispatchContext dispatch, ZLinkMessage payload) {
             return CompletableFuture.failedFuture(new IllegalStateException("handler failure"));
+        }
+    }
+
+    private static final class RecordingSession implements ZLinkSession {
+        private final ZLinkSessionContext context;
+        private final AtomicInteger dispatches;
+        private final AtomicReference<ZLinkSessionActor> dispatchedActor;
+
+        private RecordingSession(ZLinkSessionContext context, AtomicInteger dispatches) {
+            this(context, dispatches, new AtomicReference<>());
+        }
+
+        private RecordingSession(
+                ZLinkSessionContext context,
+                AtomicInteger dispatches,
+                AtomicReference<ZLinkSessionActor> dispatchedActor) {
+            this.context = context;
+            this.dispatches = dispatches;
+            this.dispatchedActor = dispatchedActor;
+        }
+
+        @Override
+        public ZLinkSessionContext context() {
+            return context;
+        }
+
+        @Override
+        public CompletionStage<Void> onConnected() {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<Void> onDisconnected() {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<Void> onError(ZLinkStreamError error) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<Void> onDispatch(
+                ZLinkSessionDispatchContext dispatch, ZLinkMessage payload) {
+            dispatches.incrementAndGet();
+            dispatchedActor.set(dispatch.actor());
+            return CompletableFuture.completedFuture(null);
         }
     }
 

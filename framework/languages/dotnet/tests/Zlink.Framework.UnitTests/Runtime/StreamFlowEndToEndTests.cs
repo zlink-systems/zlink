@@ -14,7 +14,7 @@ namespace Zlink.Framework.UnitTests;
 public sealed class StreamFlowEndToEndTests
 {
     [Fact]
-    public async Task Connector_Request_Server_Log_Reply_And_Callback_Share_One_Flow()
+    public async Task Connector_Request_Starts_Server_Flow_At_Stream_Ingress()
     {
         var port = FindFreeTcpPort();
         var builder = Host.CreateApplicationBuilder();
@@ -43,50 +43,41 @@ public sealed class StreamFlowEndToEndTests
                 }
             );
             await connector.Connect.Async();
-            var completed = new TaskCompletionSource<(
-                ZlinkStreamResult<FlowReply> Result,
-                string FlowId,
-                ZlinkStreamFlowOrigin Origin
-            )>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var completed = new TaskCompletionSource<ZlinkStreamResult<FlowReply>>(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
 
             connector
                 .Request(new FlowRequest("request"))
                 .PacketName(nameof(FlowRequest))
                 .Timeout(TimeSpan.FromSeconds(5))
-                .Submit<FlowReply>(result =>
-                {
-                    var flow =
-                        ZlinkStreamFlowContext.Current
-                        ?? throw new InvalidOperationException(
-                            "Connector reply callback did not receive the echoed flow context."
-                        );
-                    completed.TrySetResult((result, flow.FlowId, flow.Origin));
-                });
+                .Submit<FlowReply>(result => completed.TrySetResult(result));
 
             var callback = await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.True(callback.Result.IsSuccess);
-            Assert.Equal("reply", callback.Result.Value?.Value);
-            Assert.Equal(ZlinkStreamFlowOrigin.Application, callback.Origin);
-            Assert.Null(ZlinkStreamFlowContext.Current);
+            Assert.True(callback.IsSuccess);
+            Assert.Equal("reply", callback.Value?.Value);
 
-            var lines = flowLogs
-                .Messages.Where(line =>
-                    line.Contains($"flow={callback.FlowId}", StringComparison.Ordinal)
+            var received = Assert.Single(
+                flowLogs.Messages.Where(line =>
+                    line.Contains($"packet={nameof(FlowRequest)}", StringComparison.Ordinal)
+                    && line.Contains("phase=received", StringComparison.Ordinal)
                 )
+            );
+            var flowId = ReadToken(received, "flow");
+            Assert.NotNull(flowId);
+            Assert.True(ZlinkStreamFlowId.IsValid(flowId));
+            var lines = flowLogs
+                .Messages.Where(line => line.Contains($"flow={flowId}", StringComparison.Ordinal))
                 .ToArray();
             Assert.Equal(2, lines.Length);
-            var received = Assert.Single(
-                lines.Where(line => line.Contains("phase=received", StringComparison.Ordinal))
-            );
             var replied = Assert.Single(
                 lines.Where(line => line.Contains("phase=replied", StringComparison.Ordinal))
             );
             Assert.Contains($"packet={nameof(FlowRequest)}", received, StringComparison.Ordinal);
             Assert.Null(ReadToken(replied, "packet"));
-            Assert.Contains($"flow={callback.FlowId}", received, StringComparison.Ordinal);
-            Assert.Contains($"flow={callback.FlowId}", replied, StringComparison.Ordinal);
-            Assert.Contains("origin=application", received, StringComparison.Ordinal);
-            Assert.Contains("origin=application", replied, StringComparison.Ordinal);
+            Assert.Equal(flowId, ReadToken(replied, "flow"));
+            Assert.Contains("origin=inbound", received, StringComparison.Ordinal);
+            Assert.Contains("origin=inbound", replied, StringComparison.Ordinal);
             var correlation = ReadToken(received, "corr");
             Assert.False(string.IsNullOrWhiteSpace(correlation));
             Assert.Equal(correlation, ReadToken(replied, "corr"));
@@ -95,6 +86,35 @@ public sealed class StreamFlowEndToEndTests
             await host.StopAsync();
         }
         finally { }
+    }
+
+    [Fact]
+    public void Connector_Request_Frame_Carries_Correlation_But_No_Flow()
+    {
+        using var sendGate = new SemaphoreSlim(1, 1);
+        var headerCodec = new ZlinkStreamHeaderCodec();
+        var sender = new ZlinkStreamFrameSender(
+            new ZlinkStreamConnectorOptions(),
+            headerCodec,
+            null,
+            sendGate,
+            () => null
+        );
+        var frame = sender.BuildOutboundFrame(
+            ZlinkStreamMessageKind.Request,
+            nameof(FlowRequest),
+            new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, ReadOnlyMemory<byte>.Empty),
+            ZlinkStreamMetadata.Empty,
+            false,
+            new ZlinkStreamRequestSeq(1)
+        );
+
+        var header = headerCodec.Decode(frame.HeaderBytes);
+        Assert.True(header.Flags.HasFlag(ZlinkStreamHeaderFlags.HasCorrelationId));
+        Assert.False(header.Flags.HasFlag(ZlinkStreamHeaderFlags.HasFlowId));
+        Assert.NotNull(header.CorrelationId);
+        Assert.Null(header.FlowId);
+        Assert.Null(header.FlowOrigin);
     }
 
     private static string? ReadToken(string line, string key)

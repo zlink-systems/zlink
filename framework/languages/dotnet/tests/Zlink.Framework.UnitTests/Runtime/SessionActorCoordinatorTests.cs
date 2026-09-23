@@ -44,15 +44,17 @@ public sealed class SessionActorCoordinatorTests
         Assert.NotEqual(firstActor.Slot, secondActor.Slot);
         Assert.Equal(2, stream.ControlWrites.Count);
 
-        var dispatch = context.EnterDispatch(
-            new ZlinkStreamHeader(
-                ZlinkStreamMessageKind.Send,
-                ZlinkStreamCodec.Raw,
-                ZlinkStreamHeaderFlags.HasActorSlot,
-                null,
-                "actor.inbound",
-                ZlinkStreamMetadata.Empty,
-                ActorSlot: firstActor.Slot
+        var dispatch = Assert.IsType<ZLinkSessionDispatchContext>(
+            context.EnterDispatch(
+                new ZlinkStreamHeader(
+                    ZlinkStreamMessageKind.Send,
+                    ZlinkStreamCodec.Raw,
+                    ZlinkStreamHeaderFlags.HasActorSlot,
+                    null,
+                    "actor.inbound",
+                    ZlinkStreamMetadata.Empty,
+                    ActorSlot: firstActor.Slot
+                )
             )
         );
         Assert.Same(first, dispatch.Actor);
@@ -60,15 +62,16 @@ public sealed class SessionActorCoordinatorTests
 
         Assert.True(runtime.TryGetSessionActorBinding(firstRef.ActorId, out var binding));
         runtime.UnbindSessionActor(firstRef.ActorId, context, binding.BindingToken);
-        dispatch = context.EnterDispatch(
-            new ZlinkStreamHeader(
-                ZlinkStreamMessageKind.Send,
-                ZlinkStreamCodec.Raw,
-                ZlinkStreamHeaderFlags.HasActorSlot,
-                null,
-                "actor.stale",
-                ZlinkStreamMetadata.Empty,
-                ActorSlot: firstActor.Slot
+        dispatch = Assert.IsType<ZLinkSessionDispatchContext>(
+            context.EnterDispatch(
+                new ZlinkStreamHeader(
+                    ZlinkStreamMessageKind.Send,
+                    ZlinkStreamCodec.Raw,
+                    ZlinkStreamHeaderFlags.None,
+                    null,
+                    "session.unbound",
+                    ZlinkStreamMetadata.Empty
+                )
             )
         );
         Assert.Null(dispatch.Actor);
