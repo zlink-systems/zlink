@@ -252,11 +252,9 @@ curl -i http://127.0.0.1:5380/ops/nodes/no-such-node/status
 
 1. 받는 node가 `setRoutingId`로 id를 고정해야 한다. 고정하지 않으면 생성된 id라 부르는
    쪽이 적을 수 없다.
-2. `peerConnections().connect(RoutingId, endpoint)`를 쓴다면, 받는 node가
-   `setAdvertiseHost`로 **부르는 쪽이 적은 것과 같은 endpoint 문자열**을 알려야 한다.
-   이 형태의 connect는 상대가 알리는 endpoint를 문자열 그대로 비교한다.
-   `listen("tcp://0.0.0.0:7601")`만 해 두면 node는 `tcp://0.0.0.0:7601`을 알리는데 부르는
-   쪽은 `tcp://127.0.0.1:7601`을 적으므로 peer가 거부된다.
+2. `peerConnections().connect(RoutingId, endpoint)`를 쓴다면, 받는 node가 광고하는
+   endpoint는 **부르는 쪽이 적은 것과 같은 endpoint 문자열**이어야 한다.
+   이 예제의 listen 주소와 `setAdvertiseHost`는 모두 `127.0.0.1`이다.
 
 `connect(RoutingId, endpoint)`는 **node 직접 호출의 전제가 아니다.** peer가 붙고 나면
 `connect(endpoint)`만 쓴 client도 routing id로 그 node를 부를 수 있다. 확인한 결과다.

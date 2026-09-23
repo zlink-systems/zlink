@@ -63,7 +63,7 @@ cmake --build build --config Release --parallel
 
 ## 실행
 
-server는 `tcp://0.0.0.0:7301`에서 대기한다. client는 `7302`에서 대기하고 server에 연결한 뒤
+server는 `tcp://127.0.0.1:7301`에서 대기한다. client는 `127.0.0.1:7302`에서 대기하고 server에 연결한 뒤
 `http://127.0.0.1:5083`에서 `GET /hello/{name}`을 제공한다.
 
 **Linux · macOS · WSL — bash**

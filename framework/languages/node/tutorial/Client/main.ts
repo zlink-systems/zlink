@@ -71,7 +71,7 @@ import { withZLinkErrorResponse, type HttpResult } from './zlink-error-response'
         // This node opens an endpoint too. Both sides listen to become peers.
         const mesh = builder
           .addRouteMesh(TutorialNames.mesh)
-          .listen('tcp://0.0.0.0:7702')
+          .listen('tcp://127.0.0.1:7702')
           .setAdvertiseHost('127.0.0.1');
 
         // client() means this node exposes no handler for the channel; it only calls.

@@ -27,7 +27,7 @@ public class ClientApplication {
         return options -> {
             // This process also needs its own endpoint.
             ZLinkMeshNodeBuilder mesh =
-                    options.addRouteMesh("services").listen("tcp://0.0.0.0:7102");
+                    options.addRouteMesh("services").listen("tcp://127.0.0.1:7102");
             // This side only calls; it does not handle "greeting".
             mesh.channelName("greeting").client();
             // Manual connection -- the server's endpoint is given directly.

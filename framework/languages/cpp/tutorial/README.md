@@ -641,7 +641,6 @@ Places where the meaning changed in the port; renamings alone (`AddRouteMesh` ->
 | Fanout handler registration | `AddFanoutChannel(...).AddHandler<...>()` | through a handler group; the channel builder has no direct handler API |
 | ClientServer caller | `IZLinkRouteClient` covers mesh and ClientServer channels | two types: `route_client_t` for the mesh, `channel_client_t` for ClientServer |
 | Fanout publish topic | `Publish("broadcast", notice)` | `publish("broadcast", topic, notice)`; the topic is the event's packet name, the subscriber handler's default |
-| Mesh advertise host | `Listen("tcp://0.0.0.0:7201")` is enough | a wildcard bind needs `set_advertise_host`; the fanout publisher binds `tcp://127.0.0.1:7412` for the same reason |
 | `NodeStatus.ProcessId` | present | absent; standard C++ has no process id API |
 | `NodeStatus.Uptime` origin | `Process.StartTime` | static initialization; handler objects are created per call |
 | Empty `ChannelName` | `null`, shown as `"(none)"` | empty `std::optional`, shown as `""` via `value_or("")` |

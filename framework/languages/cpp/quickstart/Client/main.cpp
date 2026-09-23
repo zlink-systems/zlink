@@ -28,7 +28,7 @@ int main (int argc, char **argv)
     app.add_zlink_framework ([] (fw::zlink_framework_options_t &options) {
         // This process also needs its own endpoint.
         auto mesh = options.add_route_mesh ("services")
-                      .listen ("tcp://0.0.0.0:7302")
+                      .listen ("tcp://127.0.0.1:7302")
                       .set_object_role (fw::object_role_t::none)
                       .set_routing_id (zlink::routing_id_t::from ("quickstart-client"))
                       .set_advertise_host ("127.0.0.1");
@@ -38,7 +38,7 @@ int main (int argc, char **argv)
         mesh.peer_connections ().connect ("tcp://127.0.0.1:7301");
 
         options.http ()
-          .listen ("http://0.0.0.0:5083")
+          .listen ("http://127.0.0.1:5083")
           .map_get<hello_http_handler_t> ("/hello/{name}");
     });
     return app.run (argc, argv);

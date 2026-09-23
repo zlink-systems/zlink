@@ -65,8 +65,9 @@ npm install @zlink-systems/nestjs      # DI·모듈 등록
 ## 3. 처리하는 쪽
 
 handler는 두 곳에 등록한다 — Nest의 `providers`와 `channel(...).server()`의
-`addRequestHandler`. `0.0.0.0`으로 bind하고 `setAdvertiseHost`를 생략하면 `127.0.0.1`을 광고한다.
-다른 host에서 접속해야 하면 `setAdvertiseHost`로 접속 가능한 주소를 지정한다.
+`addRequestHandler`. 이 예제는 `127.0.0.1`에 bind하므로 같은 host의 process만 접속하며, Windows에서
+방화벽 허용 창이 뜨지 않는다. 다른 host에서 접속해야 하면 접속 가능한 주소에 bind하고
+`setAdvertiseHost`로 그 주소를 광고한다.
 
 ```typescript title="Server/main.ts"
 --8<-- "framework/languages/node/quickstart/Server/main.ts"

@@ -20,11 +20,10 @@ class HelloHandler implements ZLinkRequestHandler<Hello, Greeting> {
       useFactory: () => {
         const builder = zlinkFramework();
         // Names the mesh and opens this process's endpoint for peers to connect to.
-        // A wildcard bind host needs an explicit advertise host -- see README
-        // "differences".
+        // Advertise the loopback address used by this local example.
         const mesh = builder
           .addRouteMesh('services')
-          .listen('tcp://0.0.0.0:7101')
+          .listen('tcp://127.0.0.1:7101')
           .setAdvertiseHost('127.0.0.1');
         // This process handles the "greeting" channel. IZLinkRequestHandler classes
         // register on the channel builder explicitly -- see README "differences".
@@ -39,7 +38,7 @@ class ServerModule {}
 
 async function main(): Promise<void> {
   await NestFactory.createApplicationContext(ServerModule, { logger: ['error', 'warn', 'log'] });
-  console.log('server listening on tcp://0.0.0.0:7101 (channel "greeting")');
+  console.log('server listening on tcp://127.0.0.1:7101 (channel "greeting")');
 }
 
 main().catch((error: unknown) => {

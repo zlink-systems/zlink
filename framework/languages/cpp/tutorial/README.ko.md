@@ -813,7 +813,6 @@ Spot 단계가 더한 마커는 아래와 같다.
 | fanout handler 등록 | `AddFanoutChannel(...).AddHandler<...>()` | handler group을 거친다. channel builder에 handler를 직접 다는 API가 없다 |
 | ClientServer 호출자 | `IZLinkRouteClient`가 mesh channel과 ClientServer channel을 함께 다룬다 | 타입이 나뉜다. mesh는 `route_client_t`, ClientServer는 `channel_client_t` |
 | fanout publish의 topic | `Publish("broadcast", notice)` — topic을 적지 않는다 | `publish("broadcast", topic, notice)` — topic을 적는다. 구독자 handler가 듣는 topic의 기본값이 event 타입의 packet 이름이므로 그 값을 적는다 |
-| mesh advertise host | `Listen("tcp://0.0.0.0:7201")`만으로 동작한다 | wildcard bind에는 `set_advertise_host`가 필요하다. fanout publisher도 마찬가지여서 `tcp://127.0.0.1:7412`로 bind한다. wildcard로 두면 startup에서 `Fanout wildcard bind host requires an advertise host`로 죽는다 |
 | `NodeStatus`의 `ProcessId` | 있다 | 없다. process id를 얻는 표준 C++ API가 없어 뺐다 |
 | `NodeStatus`의 `Uptime` 기준 | `Process.StartTime` | 정적 초기화 시점. handler 객체는 호출마다 새로 만들어지므로 handler의 멤버로 재면 언제나 `0s`다 |
 | `ChannelName`의 빈 값 | `null`이므로 `?? "(none)"`로 바꾼다 | `std::optional`이 비어 있고, `value_or("")`로 빈 문자열을 낸다 |

@@ -46,8 +46,8 @@ dotnet build
 ## Run
 
 Start the server first and the client second in separate terminals. The server listens on
-`tcp://0.0.0.0:7101` and uses the `greeting` channel. The client listens on
-`tcp://0.0.0.0:7102`, connects to `tcp://127.0.0.1:7101`, and serves
+`tcp://127.0.0.1:7101` and uses the `greeting` channel. The client listens on
+`tcp://127.0.0.1:7102`, connects to `tcp://127.0.0.1:7101`, and serves
 `GET /hello/{name}` on `http://127.0.0.1:5080`.
 
 **Linux · macOS · WSL — bash**

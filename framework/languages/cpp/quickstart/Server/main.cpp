@@ -20,7 +20,7 @@ int main (int argc, char **argv)
     app.add_zlink_framework ([] (fw::zlink_framework_options_t &options) {
         // Names the mesh and opens this process's endpoint for peers to connect to.
         auto mesh = options.add_route_mesh ("services")
-                      .listen ("tcp://0.0.0.0:7301")
+                      .listen ("tcp://127.0.0.1:7301")
                       // No Object Server/Client role, so no Location Store is required for
                       // this endpoint-only quickstart.
                       .set_object_role (fw::object_role_t::none)

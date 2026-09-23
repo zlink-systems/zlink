@@ -37,7 +37,7 @@ public class ServerApplication {
             ZLinkMeshNodeBuilder mesh =
                     options.addRouteMesh("services")
                             // This process's own endpoint, for peers to connect to.
-                            .listen("tcp://0.0.0.0:7101");
+                            .listen("tcp://127.0.0.1:7101");
             // This process handles the "greeting" channel.
             mesh.channelName("greeting")
                     .server()

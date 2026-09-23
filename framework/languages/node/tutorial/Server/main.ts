@@ -68,11 +68,11 @@ import { PingHandler } from './Sessions/ping-handler';
         // --8<-- [start:mesh-register]
         // Both sides must name the mesh identically, or they never see each other
         // as peers. The routing id names this node; without it the Framework assigns
-        // a generated one, which a caller cannot type into a URL. A wildcard bind
-        // host needs an advertise host of its own.
+        // a generated one, which a caller cannot type into a URL. This local
+        // example binds and advertises a loopback endpoint.
         const mesh = builder
           .addRouteMesh(TutorialNames.mesh)
-          .listen('tcp://0.0.0.0:7701')
+          .listen('tcp://127.0.0.1:7701')
           .setAdvertiseHost('127.0.0.1')
           .routingId(TutorialNames.serverRoutingId);
         // --8<-- [end:mesh-register]
@@ -159,7 +159,7 @@ import { PingHandler } from './Sessions/ping-handler';
         builder
           .addStreamNode(TutorialNames.clientStreamNode)
           .enableActorDispatch()
-          .bind('ws://0.0.0.0:7721')
+          .bind('ws://127.0.0.1:7721')
           .registerSession(GameSessionFactory);
         // --8<-- [end:stream-register]
 
@@ -260,7 +260,7 @@ async function main(): Promise<void> {
     app.get<ZLinkRouteMeshRuntimeOptions>(ZLINK_ROUTE_MESH_RUNTIME_OPTIONS, { strict: false })
   );
   console.log(
-    `server listening on tcp://0.0.0.0:7701 (mesh "${TutorialNames.mesh}",` +
+    `server listening on tcp://127.0.0.1:7701 (mesh "${TutorialNames.mesh}",` +
       ` routing id "${TutorialNames.serverRoutingId}")`
   );
   console.log('server admin listening on http://127.0.0.1:5481');

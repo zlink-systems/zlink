@@ -53,10 +53,9 @@ int main (int argc, char **argv)
         // assigns a generated one, which a caller cannot type into a URL.
         zlink::routing_id_t routing_id = zlink::routing_id_t::from ("game-server-1");
         auto mesh = options.add_route_mesh ("game")
-                      .listen ("tcp://0.0.0.0:7401")
+                      .listen ("tcp://127.0.0.1:7401")
                       .set_routing_id (routing_id)
-                      // A wildcard bind host leaves peers with no address to dial
-                      // back, so the address to publish is given here.
+                      // Publish the same loopback address that this node listens on.
                       .set_advertise_host ("127.0.0.1");
         // --8<-- [end:mesh-register]
 
@@ -135,7 +134,7 @@ int main (int argc, char **argv)
         // The port game clients connect to. One session type per stream node,
         // and actor dispatch must be on for a session to relay to its player.
         options.add_stream_node ("client-stream")
-          .bind ("tcp://0.0.0.0:7421")
+          .bind ("tcp://127.0.0.1:7421")
           .enable_actor_dispatch ()
           .register_session<game_session_t> ();
         // --8<-- [end:stream-register]

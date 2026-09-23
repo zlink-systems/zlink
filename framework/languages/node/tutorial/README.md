@@ -130,7 +130,7 @@ Examples smoke runs this block exactly as written.
 The server and client each print a line like this on a healthy start.
 
 ```
-server listening on tcp://0.0.0.0:7701 (mesh "game", routing id "game-server-1")
+server listening on tcp://127.0.0.1:7701 (mesh "game", routing id "game-server-1")
 server admin listening on http://127.0.0.1:5481
 ```
 
@@ -230,11 +230,11 @@ redis-cli --scan --pattern 'zlink-tutorial-node:*' | ForEach-Object { redis-cli 
 |---|---|
 | Client's HTTP | `127.0.0.1:5480` |
 | Server's admin HTTP | `127.0.0.1:5481` |
-| Server's mesh listen | `0.0.0.0:7701` (advertises `127.0.0.1`) |
-| Client's mesh listen | `0.0.0.0:7702` (advertises `127.0.0.1`) |
+| Server's mesh listen | `127.0.0.1:7701` (advertises `127.0.0.1`) |
+| Client's mesh listen | `127.0.0.1:7702` (advertises `127.0.0.1`) |
 | ClientServer channel | `127.0.0.1:7711` |
 | Fanout publisher | `127.0.0.1:7712` |
-| Server's stream listen | `0.0.0.0:7721` (WebSocket) |
+| Server's stream listen | `127.0.0.1:7721` (WebSocket) |
 
 ## Project layout
 
@@ -617,7 +617,7 @@ $ node dist/Server/main.js
 [Nest] ... LOG [InstanceLoader] ServerModule dependencies initialized
 [Nest] ... LOG [InstanceLoader] DiscoveryModule dependencies initialized
 [Nest] ... LOG [InstanceLoader] ZLinkModule dependencies initialized
-server listening on tcp://0.0.0.0:7701 (mesh "game", routing id "game-server-1")
+server listening on tcp://127.0.0.1:7701 (mesh "game", routing id "game-server-1")
 server admin listening on http://127.0.0.1:5481
 $ node dist/Client/main.js
 [Nest] ... LOG [NestFactory] Starting Nest application...
@@ -820,7 +820,6 @@ Same idea, different names and locations.
 | Handler construction | The DI container finds it in the assembly | Registered directly as a NestJS `provider`. Filters are the same |
 | Filter registration | `options.UseFilter<CallLogFilter>()` | `builder.options({ filters: [CallLogFilter] })`. Array order is execution order |
 | Pinning a routing id | `SetRoutingId(RoutingId.From("game-server-1"))` | `routingId('game-server-1')`. Node's `RoutingId` is a `string` alias |
-| Wildcard bind | `Listen("tcp://0.0.0.0:7201")` alone works | The advertise host must be given too. Without it, `ZLinkConfigurationException` blocks startup |
 | Direct-node handler | `mesh.AddRouteRequestHandler<...>()` | `mesh.addRequestHandler(packetName, Type)` — the same name as the channel side; distinguished by not going through `mesh.channel(...)` |
 | Fanout subscription handler | `AddHandler<TSub, TMsg>()` | `addPublishHandler(packetName, Type)` |
 | ClientServer call | `IZLinkRouteClient.RequestToChannel(...)` handles both mesh channel and ClientServer | **The client differs.** Mesh channel and direct-node calls use `ZLINK_ROUTE_CLIENT`; ClientServer uses `ZLINK_CHANNEL_CLIENT`. `ZLinkRouteClient.requestToChannel` only finds mesh channels |
